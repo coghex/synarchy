@@ -1,0 +1,75 @@
+cabal-version:      3.4
+-- The name of the package.
+name: synarchy
+-- The package version.
+version: 0.1.0.0
+-- URL for the project homepage or repository.
+homepage: https://github.com/coghex/synarchy
+-- The license under which the package is released.
+license: MIT
+-- The file containing the license text.
+license-file: LICENSE
+-- The package author(s).
+author: coghex
+-- An email address to which users can send suggestions, bug reports, and patches.
+maintainer: vincecoghlan@gmail.com
+category: Game
+build-type: Simple
+-- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
+extra-doc-files: CHANGELOG.md
+
+common warnings
+    ghc-options: -Wall -threaded
+
+executable synarchy
+    -- Import common warning flags.
+    import: warnings
+    -- .hs or .lhs file containing the Main module.
+    main-is: Main.hs
+    -- Modules included in this executable, other than Main.
+    other-modules: UPrelude
+                   Synarchy.Graphics.Error
+                   Synarchy.Graphics.Types
+                   Synarchy.Graphics.Vulkan.Types
+                   Synarchy.Graphics.Resource
+    -- LANGUAGE extensions used by modules in this package.
+    default-extensions: DefaultSignatures
+                      , DuplicateRecordFields
+                      , MagicHash
+                      , NoMonomorphismRestriction
+                      , NumDecimals
+                      , OverloadedStrings
+                      , PatternSynonyms
+                      , QuantifiedConstraints
+                      , RecordWildCards
+                      , TypeFamilyDependencies
+                      , UnicodeSyntax
+                      , ViewPatterns
+    other-extensions: Strict
+                    , StrictData
+                    , TemplateHaskell
+    -- Other library packages from which modules are imported.
+    build-depends: base
+                 , base-unicode-symbols
+                 , bytestring
+                 , containers
+                 , filepath
+                 , GLFW-b
+                 , hslua
+                 , JuicyPixels
+                 , monad-logger
+                 , mtl
+                 , network
+                 , stm
+                 , text
+                 , time
+                 , vector
+                 , vulkan
+                 , vulkan-utils
+                 , template-haskell
+                 , unliftio
+                 , unliftio-core
+    -- Directories containing source files.
+    hs-source-dirs: src
+    -- Base language which the package is written in.
+    default-language: GHC2024
