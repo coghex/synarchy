@@ -28,15 +28,12 @@ executable synarchy
     main-is: Main.hs
     -- Modules included in this executable, other than Main.
     other-modules: UPrelude
-                   Synarchy.Graphics.Error
-                   Synarchy.Graphics.Types
-                   Synarchy.Graphics.Vulkan.Types
-                   Synarchy.Graphics.Resource
     -- LANGUAGE extensions used by modules in this package.
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields
                       , MagicHash
                       , NoMonomorphismRestriction
+                      , NoImplicitPrelude
                       , NumDecimals
                       , OverloadedStrings
                       , PatternSynonyms
@@ -70,6 +67,6 @@ executable synarchy
                  , unliftio
                  , unliftio-core
     -- Directories containing source files.
-    hs-source-dirs: src
+    hs-source-dirs: src, app
     -- Base language which the package is written in.
     default-language: GHC2024
