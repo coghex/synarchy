@@ -21,16 +21,91 @@ extra-doc-files: CHANGELOG.md
 common warnings
     ghc-options: -Wall -threaded
 
+test-suite synarchy-test
+    import: warnings
+    type: exitcode-stdio-1.0
+    hs-source-dirs: test
+    main-is: Spec.hs
+    other-modules: Engine.GraphicsSpec
+    default-extensions: DefaultSignatures
+                     , DuplicateRecordFields
+                     , MagicHash
+                     , NoMonomorphismRestriction
+                     , NoImplicitPrelude
+                     , NumDecimals
+                     , OverloadedStrings
+                     , PatternSynonyms
+                     , QuantifiedConstraints
+                     , RecordWildCards
+                     , TypeFamilyDependencies
+                     , UnicodeSyntax
+                     , ViewPatterns
+    build-depends: base
+                , base-unicode-symbols
+                , hspec
+                , synarchy
+                , text
+    default-language: GHC2024
+
+library
+    import: warnings
+    -- Expose the modules you want to test
+    exposed-modules: UPrelude
+                     Engine.Event.Types
+                     Engine.Graphics.Vulkan.Instance
+                     Engine.Graphics.Types
+                     Engine.Graphics.Vulkan.Types
+                     Engine.Core.Monad
+                     Engine.Core.Types
+                     Engine.Core.Error.Exception
+                     Engine.Concurrent.Var
+    -- Use the same extensions as your executable
+    default-extensions: DefaultSignatures
+                      , DuplicateRecordFields
+                      , MagicHash
+                      , NoMonomorphismRestriction
+                      , NoImplicitPrelude
+                      , NumDecimals
+                      , OverloadedStrings
+                      , PatternSynonyms
+                      , QuantifiedConstraints
+                      , RecordWildCards
+                      , TypeFamilyDependencies
+                      , UnicodeSyntax
+                      , ViewPatterns
+    other-extensions: Strict
+                    , StrictData
+                    , TemplateHaskell
+    -- Same dependencies as your executable
+    build-depends: base
+                 , base-unicode-symbols
+                 , bytestring
+                 , containers
+                 , filepath
+                 , GLFW-b
+                 , hslua
+                 , JuicyPixels
+                 , monad-logger
+                 , mtl
+                 , network
+                 , stm
+                 , text
+                 , time
+                 , vector
+                 , vulkan
+                 , vulkan-utils
+                 , template-haskell
+                 , unliftio
+                 , unliftio-core
+                 , utf8-string
+    hs-source-dirs: src
+    default-language: GHC2024
+
 executable synarchy
     -- Import common warning flags.
     import: warnings
     -- .hs or .lhs file containing the Main module.
     main-is: Main.hs
-    -- Modules included in this executable, other than Main.
-    other-modules: UPrelude
-                   Engine.Graphics.Vulkan.Instance
-                   Engine.Graphics.Types
-                   Engine.Graphics.Vulkan.Types
     -- LANGUAGE extensions used by modules in this package.
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields
@@ -61,6 +136,7 @@ executable synarchy
                  , mtl
                  , network
                  , stm
+                 , synarchy
                  , text
                  , time
                  , vector
@@ -71,6 +147,6 @@ executable synarchy
                  , unliftio-core
                  , utf8-string
     -- Directories containing source files.
-    hs-source-dirs: src, app
+    hs-source-dirs: app
     -- Base language which the package is written in.
     default-language: GHC2024
