@@ -28,6 +28,9 @@ executable synarchy
     main-is: Main.hs
     -- Modules included in this executable, other than Main.
     other-modules: UPrelude
+                   Engine.Graphics.Vulkan.Instance
+                   Engine.Graphics.Types
+                   Engine.Graphics.Vulkan.Types
     -- LANGUAGE extensions used by modules in this package.
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields
@@ -66,6 +69,7 @@ executable synarchy
                  , template-haskell
                  , unliftio
                  , unliftio-core
+                 , utf8-string
     -- Directories containing source files.
     hs-source-dirs: src, app
     -- Base language which the package is written in.
