@@ -1,7 +1,7 @@
 module Engine.Core.Monad 
   ( EngineM(..)
   , EngineM'
-  , runEngine
+  , runEngineM
   ) where
 
 import UPrelude
@@ -33,12 +33,12 @@ newtype EngineM ε σ α = EngineM
 type EngineM' ε α = EngineM ε (Either EngineException α) α
 
 -- | Run the engine monad
-runEngine ∷ EngineM ε σ α 
+runEngineM ∷ EngineM ε σ α 
          → Var EngineEnv 
          → Var EngineState 
          → (Either EngineException α → IO σ) 
          → IO σ
-runEngine = unEngineM
+runEngineM = unEngineM
 
 instance Functor (EngineM ε σ) where
   fmap f m = EngineM $ \e s c → unEngineM m e s (c ∘ fmap f)

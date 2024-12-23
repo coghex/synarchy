@@ -71,7 +71,7 @@ runTest = do
   stateVar ← newTVarIO initialState
   
   -- Run the Vulkan test within the EngineM monad
-  result ← runEngine 
+  result ← runEngineM
     (do
       -- Initialize GLFW (needed for Vulkan extension info)
       GLFW.initializeGLFW

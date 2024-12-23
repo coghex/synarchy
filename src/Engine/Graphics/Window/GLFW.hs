@@ -1,10 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Window.GLFW
-  ( -- * Types
-    Window
-  , WindowConfig(..)
-    -- * Window Management
-  , createWindow
+  ( -- * Window Management
+    createWindow
   , destroyWindow
   , showWindow
   , hideWindow
@@ -29,27 +26,19 @@ import Control.Exception (IOException, catch, ioError)
 import Control.Monad (unless)
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.ByteString as BS
+import qualified Data.Text as T
 import Foreign.Ptr (castPtr, nullPtr)
 import Foreign.Marshal.Alloc (alloca)
 import Foreign.Storable (peek)
 import qualified Graphics.UI.GLFW as GLFW
-import Engine.Core.Monad (EngineM)
+import Engine.Core.Monad
+import Engine.Core.Resource
 import Engine.Core.Error.Exception (throwEngineException, EngineException(..)
                                    , ExceptionType(..))
 import Engine.Graphics.Types (GraphicsConfig(..))
+import Engine.Graphics.Window.Types
 import Vulkan.Core10 (Instance(..), AllocationCallbacks)
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
-
--- | Window configuration
-data WindowConfig = WindowConfig
-  { wcWidth     ∷ Int      -- ^ Window width
-  , wcHeight    ∷ Int      -- ^ Window title
-  , wcTitle     ∷ String   -- ^ Window title
-  , wcResizable ∷ Bool     -- ^ Whether window can be resized
-  }
-
--- | Re-export GLFW Window type
-type Window = GLFW.Window
 
 -- | Initialize GLFW with error handling
 initializeGLFW ∷ EngineM ε σ ()
@@ -63,50 +52,56 @@ initializeGLFW = do
     GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI
     GLFW.windowHint $ GLFW.WindowHint'Resizable True
 
--- | Create a window with the given configuration
+-- | Creates a GLFW window with given configuration
 createWindow ∷ WindowConfig → EngineM ε σ Window
-createWindow WindowConfig{..} = do
+createWindow config = EngineM $ \e s c → do
   -- Set window hints
-  liftIO $ do
-    GLFW.windowHint $ GLFW.WindowHint'Resizable wcResizable
-    GLFW.windowHint $ GLFW.WindowHint'Visible False  -- Start hidden
-    
+  GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
+  GLFW.windowHint $ GLFW.WindowHint'Visible False
+  
   -- Create the window
-  maybeWindow ← liftIO $ GLFW.createWindow 
-    wcWidth 
-    wcHeight 
-    wcTitle 
-    Nothing     -- monitor (Nothing = windowed mode)
-    Nothing     -- share (Nothing = no shared context)
+  mbWindow ← GLFW.createWindow 
+    (wcWidth config) 
+    (wcHeight config) 
+    (T.unpack $ wcTitle config)
+    Nothing  -- monitor (None for windowed mode)
+    Nothing  -- share (None for no shared context)
+    
+  case mbWindow of
+    Nothing → c $ Left $ error "Failed to create GLFW window"
+    Just window → c $ Right $ Window window
 
-  case maybeWindow of
-    Just window → return window
-    Nothing     → throwEngineException $ EngineException
-                    ExGraphics "Failed to create GLFW window"
+-- | Clean up GLFW window resources
+destroyWindow ∷ Window → EngineM' ε ()
+destroyWindow (Window win) = liftIO $ GLFW.destroyWindow win
 
--- | Destroy a window and free its resources
-destroyWindow ∷ Window → EngineM ε σ ()
-destroyWindow = liftIO ∘ GLFW.destroyWindow
+-- | Safely create window with automatic cleanup
+initWindow ∷ WindowConfig → EngineM ε σ Window
+initWindow config = allocResource destroyWindow $ createWindow config
 
 -- | Show a window
-showWindow ∷ Window → EngineM ε σ ()
-showWindow = liftIO ∘ GLFW.showWindow
+showWindow ∷ GLFW.Window → EngineM ε σ ()
+showWindow win = liftIO $ GLFW.showWindow win
 
 -- | Hide a window
-hideWindow ∷ Window → EngineM ε σ ()
-hideWindow = liftIO ∘ GLFW.hideWindow
+hideWindow ∷ GLFW.Window → EngineM ε σ ()
+hideWindow win = liftIO $ GLFW.hideWindow win
 
 -- | Check if a window should close
-windowShouldClose ∷ Window → EngineM ε σ Bool
+windowShouldClose ∷ GLFW.Window → EngineM ε σ Bool
 windowShouldClose = liftIO ∘ GLFW.windowShouldClose
 
 -- | Set whether a window should close
-setWindowShouldClose ∷ Window → Bool → EngineM ε σ ()
+setWindowShouldClose ∷ GLFW.Window → Bool → EngineM ε σ ()
 setWindowShouldClose win = liftIO ∘ GLFW.setWindowShouldClose win
 
 -- | Get the current window size
-getWindowSize ∷ Window → EngineM ε σ (Int, Int)
+getWindowSize ∷ GLFW.Window → EngineM ε σ (Int, Int)
 getWindowSize = liftIO ∘ GLFW.getWindowSize
+
+-- | Set a window's title
+setWindowTitle ∷ GLFW.Window → T.Text → EngineM ε σ ()
+setWindowTitle win title = liftIO $ GLFW.setWindowTitle win ( T.unpack title )
 
 -- | Poll for pending events
 pollEvents ∷ EngineM ε σ ()
@@ -127,7 +122,7 @@ getRequiredInstanceExtensions = do
   liftIO $ traverse BS.packCString exts
 
 -- | Create a Vulkan surface for a window
-createWindowSurface ∷ Window 
+createWindowSurface ∷ GLFW.Window 
                    → Instance  -- ^ Raw Vulkan instance handle
                    → EngineM ε σ SurfaceKHR  -- ^ Raw Vulkan surface handle
 createWindowSurface win inst = do

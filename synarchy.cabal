@@ -52,13 +52,16 @@ library
     -- Expose the modules you want to test
     exposed-modules: UPrelude
                      Engine.Event.Types
-                     Engine.Graphics.Vulkan.Instance
                      Engine.Graphics.Types
+                     Engine.Graphics.Vulkan.Instance
+                     Engine.Graphics.Vulkan.Device
                      Engine.Graphics.Vulkan.Types
                      Engine.Graphics.Window.GLFW
+                     Engine.Graphics.Window.Types
                      Engine.Core.Monad
                      Engine.Core.Types
                      Engine.Core.Error.Exception
+                     Engine.Core.Resource
                      Engine.Concurrent.Var
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
