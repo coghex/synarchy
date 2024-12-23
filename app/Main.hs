@@ -3,6 +3,7 @@ module Main where
 import UPrelude
 import Control.Concurrent.STM (newTVarIO)
 import Control.Monad (when)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader.Class (ask)
 import Control.Monad.State.Class (modify')
 import qualified Data.Text as T
@@ -11,6 +12,18 @@ import Engine.Core.Types
 import Engine.Core.Error.Exception
 import Engine.Concurrent.Var
 import Engine.Event.Types
+import Engine.Graphics.Types
+import Engine.Graphics.Vulkan.Instance
+import qualified Engine.Graphics.Window.GLFW as GLFW
+
+-- | Initial graphics configuration
+initialGraphicsConfig ∷ GraphicsConfig
+initialGraphicsConfig = GraphicsConfig
+  { gcAppName   = "Synarchy"
+  , gcWidth     = 800
+  , gcHeight    = 600
+  , gcDebugMode = True
+  }
 
 -- | Initial engine environment
 initialEnv ∷ EngineEnv
@@ -21,7 +34,7 @@ initialEnv = EngineEnv
       , enableVSync  = True
       , enableDebug  = True
       }
-  , vulkanInstance = undefined  -- We'll implement Vulkan setup later
+  , vulkanInstance = undefined  -- Will be set during initialization
   , vulkanDevice   = undefined
   }
 
@@ -34,25 +47,21 @@ initialState = EngineState
   , deltaTime     = 0
   }
 
--- | Test computation in our EngineM monad
-testComputation ∷ EngineM ε σ T.Text
-testComputation = do
-  -- Test state manipulation
-  modify' $ \s → s { frameCount = frameCount s + 1 }
+-- | Test Vulkan instance creation and destruction
+testVulkan ∷ EngineM ε σ T.Text
+testVulkan = do
+  -- Create Vulkan instance
+  liftIO $ putStrLn "Creating Vulkan instance..."
+  instance' ← createVulkanInstance initialGraphicsConfig
   
-  -- Test environment access
-  env ← ask
-  let config = engineConfig env
+  -- Do some basic testing
+  liftIO $ putStrLn "Vulkan instance created successfully"
   
-  -- Test error handling
-  when (windowWidth config < 100) $
-    throwEngineException $ EngineException
-      { errorType = ExSystem
-      , errorMsg  = "Window too small"
-      }
-      
-  -- Return success message
-  pure "Test computation completed successfully"
+  -- Clean up
+  liftIO $ putStrLn "Cleaning up Vulkan instance..."
+  destroyVulkanInstance instance'
+  
+  pure "Vulkan test completed successfully"
 
 -- | Run the engine monad
 runTest ∷ IO ()
@@ -61,21 +70,30 @@ runTest = do
   envVar ← newTVarIO initialEnv
   stateVar ← newTVarIO initialState
   
-  -- Run the test computation
-  result ← runEngine testComputation envVar stateVar $ \case
-    Left err → do
-      putStrLn $ "Error: " ⧺ show err
-      pure $ Left err
-    Right val → do
-      putStrLn $ "Success: " ⧺ show val
-      pure $ Right val
-      
-  -- Print final state
-  finalState ← atomically $ readVar stateVar
-  putStrLn $ "Final frame count: " ⧺ show (frameCount finalState)
+  -- Run the Vulkan test within the EngineM monad
+  result ← runEngine 
+    (do
+      -- Initialize GLFW (needed for Vulkan extension info)
+      GLFW.initializeGLFW
+      -- Run the test
+      result ← testVulkan
+      -- Cleanup GLFW
+      GLFW.terminateGLFW
+      pure result
+    ) 
+    envVar 
+    stateVar 
+    $ \case
+      Left err → do
+        putStrLn $ "Error: " ⧺ show err
+        pure $ Left err
+      Right val → do
+        putStrLn $ "Success: " ⧺ show val
+        pure $ Right val
+  pure ()
 
 main ∷ IO ()
 main = do
-  putStrLn "Starting engine monad test..."
+  putStrLn "Starting Vulkan test..."
   runTest
   putStrLn "Test complete"

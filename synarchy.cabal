@@ -55,6 +55,7 @@ library
                      Engine.Graphics.Vulkan.Instance
                      Engine.Graphics.Types
                      Engine.Graphics.Vulkan.Types
+                     Engine.Graphics.Window.GLFW
                      Engine.Core.Monad
                      Engine.Core.Types
                      Engine.Core.Error.Exception

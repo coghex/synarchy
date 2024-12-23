@@ -5,7 +5,7 @@ module Engine.Graphics.Vulkan.Instance
   ) where
 
 import UPrelude
-import Control.Monad (when, unless)
+import Control.Monad (when, unless, void)
 import Control.Monad.IO.Class (MonadIO(..))
 import Data.Bits ((.|.))
 import qualified Data.ByteString as BS
@@ -17,57 +17,97 @@ import Foreign.Ptr (nullPtr)
 import Foreign.C.String (peekCString)
 import Engine.Core.Error.Exception
 import Engine.Core.Monad
+import Engine.Core.Resource
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Types
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Vulkan.Core10
 import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_EXT_debug_utils
+import Vulkan.Extensions.VK_KHR_portability_subset
+import Vulkan.Extensions.VK_KHR_portability_enumeration
 import Vulkan.Utils.Debug (debugCallbackPtr)
 import Vulkan.Zero
 
-createVulkanInstance ∷ GraphicsConfig → EngineM ε σ Instance
-createVulkanInstance config = do
-  instCI ← vulkanInstanceCreateInfo config
-  instance' ← liftIO $ createInstance instCI Nothing
-  when (gcDebugMode config) $ do
-    messenger ← liftIO $ createDebugUtilsMessengerEXT instance' debugUtilsMessengerCreateInfo Nothing
-    return ()
-  return instance'
-
-destroyVulkanInstance ∷ Instance → EngineM ε σ ()
-destroyVulkanInstance inst = liftIO $ destroyInstance inst Nothing
-
+-- | Create Vulkan instance create info with proper portability support
 vulkanInstanceCreateInfo ∷ GraphicsConfig → EngineM ε σ (InstanceCreateInfo '[DebugUtilsMessengerCreateInfoEXT])
 vulkanInstanceCreateInfo config = do
-  glfwReqExts ← GLFW.getRequiredInstanceExtensions
-  availableExts ← getAvailableExtensions
-  availableLayers ← getAvailableLayers
-  
-  let debugExts = if gcDebugMode config 
-                  then [EXT_DEBUG_UTILS_EXTENSION_NAME]
-                  else []
-      allReqExts = glfwReqExts ⧺ debugExts
-      
-      validationLayers = if gcDebugMode config
-                        then [BSU.fromString "VK_LAYER_KHRONOS_validation"]
+  -- Get GLFW required extensions
+  glfwExts ← GLFW.getRequiredInstanceExtensions
+  -- Get all available extensions
+  (_count, exts) ← liftIO $ enumerateInstanceExtensionProperties Nothing
+  let availableExts = map extensionName $ V.toList exts
+  -- Get all available layers
+  (_count, layers) ← liftIO $ enumerateInstanceLayerProperties
+  let availableLayers = map layerName $ V.toList layers
+  -- Basic required extensions (including debug if enabled)
+  let baseExts = if gcDebugMode config 
+                 then [EXT_DEBUG_UTILS_EXTENSION_NAME]
+                 else []
+  -- Combine with GLFW extensions
+  let requiredExts = baseExts <> glfwExts
+  -- Check if portability enumeration is available and needed
+  let needsPortability = KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME `elem` availableExts
+      portabilityExts  = if needsPortability 
+                        then [KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME]
                         else []
-                        
-  filteredExts ← filterExtensions availableExts allReqExts
-  filteredLayers ← filterExtensions availableLayers validationLayers
-  
-  let appName = BSU.fromString $ T.unpack $ gcAppName config
-
+  -- Combine all extensions
+  let finalExts = V.fromList $ requiredExts <> portabilityExts
+  -- Set up validation layers if debug mode is enabled
+  let validationLayer = "VK_LAYER_KHRONOS_validation"
+      layers' = if gcDebugMode config && validationLayer `elem` availableLayers
+               then V.fromList [validationLayer]
+               else V.empty
+  -- Set up flags - include portability bit if needed
+  let flags = if needsPortability 
+              then INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+              else zero
+  -- Create the final instance info
   pure $ zero 
     { applicationInfo = Just $ zero 
-        { applicationName = Just appName
-        , apiVersion = API_VERSION_1_0 
+        { applicationName = Just $ BSU.fromString $ T.unpack $ gcAppName config
+        , engineName     = Just "Synarchy Engine"
+        , apiVersion     = API_VERSION_1_0
         }
-    , enabledLayerNames = V.fromList filteredLayers
-    , enabledExtensionNames = V.fromList filteredExts
+    , enabledLayerNames     = layers'
+    , enabledExtensionNames = finalExts
+    , flags                 = flags
     }
     ::& debugUtilsMessengerCreateInfo
     :& ()
+
+-- | Create and initialize Vulkan instance with optional debug messenger
+createVulkanInstance ∷ GraphicsConfig → EngineM ε σ (Instance, Maybe DebugUtilsMessengerEXT)
+createVulkanInstance config = do
+  instCI ← vulkanInstanceCreateInfo config
+  
+  -- Create instance first
+  inst ← createInstance instCI Nothing
+  
+  -- Create debug messenger if debug mode is enabled
+  dbgMessenger ← if gcDebugMode config 
+    then do
+      messenger ← createDebugUtilsMessengerEXT inst debugUtilsMessengerCreateInfo Nothing
+      return $ Just messenger
+    else return Nothing
+    
+  return (inst, dbgMessenger)
+
+-- | Clean up Vulkan instance and debug messenger
+destroyVulkanInstance ∷ (Instance, Maybe DebugUtilsMessengerEXT) → EngineM ε σ ()
+destroyVulkanInstance (inst, mbMessenger) = do
+  -- First destroy debug messenger if it exists
+  case mbMessenger of
+    Just messenger → liftIO $ destroyDebugUtilsMessengerEXT inst messenger Nothing
+    Nothing → return ()
+  -- Then destroy instance
+  liftIO $ destroyInstance inst Nothing
+
+-- | Use this in your main initialization
+initVulkan ∷ GraphicsConfig → EngineM ε σ Instance
+initVulkan config = do
+  (inst, _) ← allocResource destroyVulkanInstance $ createVulkanInstance config
+  return inst
 
 getAvailableExtensions ∷ EngineM ε σ [BS.ByteString]
 getAvailableExtensions = do
@@ -87,12 +127,14 @@ filterExtensions available required = do
       $ "Required extensions not available"
   return required
 
+-- | Debug messenger info for validation layers
 debugUtilsMessengerCreateInfo ∷ DebugUtilsMessengerCreateInfoEXT
 debugUtilsMessengerCreateInfo = zero
-  { messageSeverity = DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT 
+  { messageSeverity = DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT
+                    .|. DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
                     .|. DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
-  , messageType = DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
-                 .|. DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
-                 .|. DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT
+  , messageType     = DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
+                    .|. DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+                    .|. DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT
   , pfnUserCallback = debugCallbackPtr
   }
