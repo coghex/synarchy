@@ -1,99 +1,102 @@
 module Main where
 
 import UPrelude
-import Control.Concurrent.STM (newTVarIO)
-import Control.Monad (when)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Reader.Class (ask)
-import Control.Monad.State.Class (modify')
+import Control.Exception (displayException)
+import Control.Monad (void)
 import qualified Data.Text as T
-import Engine.Core.Monad
+import System.Exit ( exitFailure )
+import Engine.Core.Monad (runEngineM, EngineM')
 import Engine.Core.Types
+import Engine.Core.Resource
 import Engine.Core.Error.Exception
 import Engine.Concurrent.Var
-import Engine.Event.Types
 import Engine.Graphics.Types
-import Engine.Graphics.Vulkan.Instance
+import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
+                                   , createWindow, destroyWindow, createWindowSurface)
+import Engine.Graphics.Window.Types (WindowConfig(..))
+import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
+import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice, DeviceQueues(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
+import Vulkan.Core10
+import Control.Monad.IO.Class (liftIO)
 
--- | Initial graphics configuration
-initialGraphicsConfig ∷ GraphicsConfig
-initialGraphicsConfig = GraphicsConfig
-  { gcAppName   = "Synarchy"
+defaultEngineConfig ∷ EngineConfig
+defaultEngineConfig = EngineConfig 
+  { windowWidth  = 800
+  , windowHeight = 600
+  , enableVSync  = True
+  , enableDebug  = True
+  }
+
+defaultGraphicsConfig ∷ GraphicsConfig
+defaultGraphicsConfig = GraphicsConfig 
+  { gcAppName   = T.pack "Vulkan Device Test"
+  , gcDebugMode = True
   , gcWidth     = 800
   , gcHeight    = 600
-  , gcDebugMode = True
   }
 
--- | Initial engine environment
-initialEnv ∷ EngineEnv
-initialEnv = EngineEnv
-  { engineConfig = EngineConfig
-      { windowWidth  = 800
-      , windowHeight = 600
-      , enableVSync  = True
-      , enableDebug  = True
-      }
-  , vulkanInstance = undefined  -- Will be set during initialization
-  , vulkanDevice   = undefined
+defaultWindowConfig ∷ WindowConfig
+defaultWindowConfig = WindowConfig 
+  { wcWidth     = 800
+  , wcHeight    = 600
+  , wcTitle     = T.pack "Vulkan Test"
+  , wcResizable = True
   }
 
--- | Initial engine state
-initialState ∷ EngineState
-initialState = EngineState
+defaultEngineState ∷ EngineState
+defaultEngineState = EngineState
   { frameCount    = 0
   , engineRunning = True
-  , currentTime   = 0
-  , deltaTime     = 0
+  , currentTime   = 0.0
+  , deltaTime     = 0.0
   }
-
--- | Test Vulkan instance creation and destruction
-testVulkan ∷ EngineM ε σ T.Text
-testVulkan = do
-  -- Create Vulkan instance
-  liftIO $ putStrLn "Creating Vulkan instance..."
-  instance' ← createVulkanInstance initialGraphicsConfig
-  
-  -- Do some basic testing
-  liftIO $ putStrLn "Vulkan instance created successfully"
-  
-  -- Clean up
-  liftIO $ putStrLn "Cleaning up Vulkan instance..."
-  destroyVulkanInstance instance'
-  
-  pure "Vulkan test completed successfully"
-
--- | Run the engine monad
-runTest ∷ IO ()
-runTest = do
-  -- Create initial TVars for environment and state
-  envVar ← newTVarIO initialEnv
-  stateVar ← newTVarIO initialState
-  
-  -- Run the Vulkan test within the EngineM monad
-  result ← runEngineM
-    (do
-      -- Initialize GLFW (needed for Vulkan extension info)
-      GLFW.initializeGLFW
-      -- Run the test
-      result ← testVulkan
-      -- Cleanup GLFW
-      GLFW.terminateGLFW
-      pure result
-    ) 
-    envVar 
-    stateVar 
-    $ \case
-      Left err → do
-        putStrLn $ "Error: " ⧺ show err
-        pure $ Left err
-      Right val → do
-        putStrLn $ "Success: " ⧺ show val
-        pure $ Right val
-  pure ()
 
 main ∷ IO ()
 main = do
-  putStrLn "Starting Vulkan test..."
-  runTest
-  putStrLn "Test complete"
+  putStrLn "Starting Vulkan device test..."
+  
+  -- Initialize engine environment and state
+  envVar ←   atomically $ newVar (undefined ∷ EngineEnv)
+  stateVar ← atomically $ newVar defaultEngineState
+  
+  let engineAction ∷ EngineM' EngineEnv ()
+      engineAction = do
+        -- Initialize GLFW
+        initializeGLFW
+        
+        -- Create window using the correct WindowConfig structure
+        window ← GLFW.createWindow defaultWindowConfig
+        
+        -- Create Vulkan instance
+        (vkInstance, _debugMessenger) ← createVulkanInstance defaultGraphicsConfig
+        
+        -- Create surface
+        surface ← createWindowSurface window vkInstance
+        
+        -- Select physical device and create logical device
+        physicalDevice ← pickPhysicalDevice vkInstance surface
+        (device, queues) ← createVulkanDevice vkInstance physicalDevice surface
+        
+        -- Print some info about the device
+        props ← liftIO $ getPhysicalDeviceProperties physicalDevice
+        liftIO $ do
+          putStrLn $ "Selected device: " ++ show (deviceName props)
+          --putStrLn $ "Graphics queue: " ++ show (graphicsQueue queues)
+          --putStrLn $ "Present queue: " ++ show (presentQueue queues)
+        
+        -- Cleanup
+        GLFW.destroyWindow window
+        terminateGLFW
+        
+  
+  result ← runEngineM engineAction envVar stateVar checkStatus
+  case result of
+    Left err → putStrLn $ displayException err
+    Right _  → putStrLn "Test completed successfully!"
+
+checkStatus ∷ Either EngineException () → IO (Either EngineException ())
+checkStatus (Right ()) = pure (Right ())
+checkStatus (Left err) = do
+  putStrLn $ displayException err
+  exitFailure

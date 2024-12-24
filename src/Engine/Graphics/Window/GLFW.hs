@@ -122,10 +122,10 @@ getRequiredInstanceExtensions = do
   liftIO $ traverse BS.packCString exts
 
 -- | Create a Vulkan surface for a window
-createWindowSurface ∷ GLFW.Window 
+createWindowSurface ∷ Window 
                    → Instance  -- ^ Raw Vulkan instance handle
                    → EngineM ε σ SurfaceKHR  -- ^ Raw Vulkan surface handle
-createWindowSurface win inst = do
+createWindowSurface (Window win) inst = do
   surfaceOrError ← liftIO $ alloca $ \surfacePtr → do
     result ← GLFW.createWindowSurface 
       (instanceHandle inst)

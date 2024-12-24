@@ -26,6 +26,7 @@ import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_EXT_debug_utils
 import Vulkan.Extensions.VK_KHR_portability_subset
 import Vulkan.Extensions.VK_KHR_portability_enumeration
+import Vulkan.Extensions.VK_KHR_get_physical_device_properties2
 import Vulkan.Utils.Debug (debugCallbackPtr)
 import Vulkan.Zero
 
@@ -79,10 +80,31 @@ vulkanInstanceCreateInfo config = do
 -- | Create and initialize Vulkan instance with optional debug messenger
 createVulkanInstance ∷ GraphicsConfig → EngineM ε σ (Instance, Maybe DebugUtilsMessengerEXT)
 createVulkanInstance config = do
-  instCI ← vulkanInstanceCreateInfo config
+  -- Get GLFW required extensions
+  glfwExts ← GLFW.getRequiredInstanceExtensions
   
-  -- Create instance first
-  inst ← createInstance instCI Nothing
+  -- Add macOS required extensions (following madrigal's pattern)
+  let baseExtensions = if gcDebugMode config 
+                      then [EXT_DEBUG_UTILS_EXTENSION_NAME]
+                      else []
+      allExtensions = baseExtensions 
+                     <> glfwExts
+                     <> [KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME]
+                     <> [KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME]  -- Required for macOS
+      
+  let instCreateInfo = zero 
+        { applicationInfo = Just $ zero 
+            { applicationName = Just $ BSU.fromString $ T.unpack $ gcAppName config
+            , engineName     = Just "Synarchy Engine"
+            , apiVersion     = API_VERSION_1_0
+            }
+        , enabledExtensionNames = V.fromList allExtensions
+        , flags = INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR  -- Required for portability
+        }
+        ::& debugUtilsMessengerCreateInfo
+        :& ()
+
+  inst ← createInstance instCreateInfo Nothing
   
   -- Create debug messenger if debug mode is enabled
   dbgMessenger ← if gcDebugMode config 

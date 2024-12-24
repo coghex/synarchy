@@ -28,6 +28,8 @@ import Vulkan.Zero
 import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_KHR_surface
 import Vulkan.Extensions.VK_KHR_swapchain
+import Vulkan.Extensions.VK_KHR_portability_subset
+import Vulkan.Extensions.VK_KHR_get_physical_device_properties2
 
 -- | Indices of queue families we need
 data QueueFamilyIndices = QueueFamilyIndices
@@ -41,10 +43,9 @@ data DeviceQueues = DeviceQueues
   , presentQueue  ∷ Queue  -- ^ Queue for presentation
   } deriving (Show)
 
--- | Create a logical device and get required queues
 createVulkanDevice ∷ Instance 
                    → PhysicalDevice 
-                   → SurfaceKHR     -- ^ Window surface for present queue
+                   → SurfaceKHR     
                    → EngineM ε σ (Device, DeviceQueues)
 createVulkanDevice inst physicalDevice surface = do
   -- Find queue families
@@ -60,8 +61,10 @@ createVulkanDevice inst physicalDevice surface = do
         , queuePriorities = V.singleton queuePriority
         })) uniqueFamilies
   
-  -- Get device extensions
-  let deviceExtensions = [KHR_SWAPCHAIN_EXTENSION_NAME]
+  -- Get device extensions - note how madrigal specifies both extensions upfront
+  let deviceExtensions = [ KHR_SWAPCHAIN_EXTENSION_NAME
+                        , KHR_PORTABILITY_SUBSET_EXTENSION_NAME  -- Required for macOS
+                        ]
   
   -- Create the logical device
   let deviceCreateInfo = (zero ∷ DeviceCreateInfo '[])

@@ -38,7 +38,7 @@ runEngineM ∷ EngineM ε σ α
          → Var EngineState 
          → (Either EngineException α → IO σ) 
          → IO σ
-runEngineM = unEngineM
+runEngineM action env st cont = unEngineM action env st cont
 
 instance Functor (EngineM ε σ) where
   fmap f m = EngineM $ \e s c → unEngineM m e s (c ∘ fmap f)
