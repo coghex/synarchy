@@ -26,7 +26,10 @@ test-suite synarchy-test
     type: exitcode-stdio-1.0
     hs-source-dirs: test
     main-is: Spec.hs
-    other-modules: Engine.GraphicsSpec
+    other-modules: Test.Engine.Graphics.Vulkan.Instance
+                   Test.Engine.Graphics.Vulkan.Device
+                   Test.Engine.Core.Monad
+                   Test.Engine.Graphics.Window.GLFW
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash
@@ -42,10 +45,19 @@ test-suite synarchy-test
                      , ViewPatterns
     build-depends: base
                 , base-unicode-symbols
+                , bytestring
                 , hspec
                 , synarchy
                 , text
+                , stm
+                , mtl
+                , vector
+                , GLFW-b
+                , vulkan
     default-language: GHC2024
+    if os(darwin)
+        cpp-options: -DDARWIN
+        ghc-options: -optP-Wno-nonportable-include-path
 
 library
     import: warnings
