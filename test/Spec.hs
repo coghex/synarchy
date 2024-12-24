@@ -4,6 +4,9 @@ module Main where
 import UPrelude
 import Test.Hspec
 import qualified Test.Engine.Graphics.Vulkan.Device as VulkanDevice
+import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
+import qualified Test.Engine.Core.Monad as CoreMonad
+import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
 import qualified Graphics.UI.GLFW as GLFW
 import System.IO (stderr, hPutStrLn)
@@ -37,9 +40,12 @@ initGLFW = do
         Just window -> pure window
 
 main ∷ IO ()
-main = bracket
+main = do
+  bracket
     initGLFW           -- setup
     GLFW.destroyWindow -- cleanup
     (\window -> hspec $ do
+        describe "Core Monad" CoreMonad.spec
+        describe "Vulkan Instance" VulkanInstance.spec
         describe "Vulkan Device" VulkanDevice.spec
     )

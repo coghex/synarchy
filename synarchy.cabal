@@ -29,7 +29,6 @@ test-suite synarchy-test
     other-modules: Test.Engine.Graphics.Vulkan.Instance
                    Test.Engine.Graphics.Vulkan.Device
                    Test.Engine.Core.Monad
-                   Test.Engine.Graphics.Window.GLFW
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash
