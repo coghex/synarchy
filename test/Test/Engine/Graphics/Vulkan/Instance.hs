@@ -16,6 +16,7 @@ spec = describe "Vulkan Instance" $ do
           , gcDebugMode = True
           , gcWidth     = 800
           , gcHeight    = 600
+          , gcMaxFrames = 2
           }
         envVar   = undefined  -- you'll need to mock these
         stateVar = undefined

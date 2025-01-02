@@ -36,7 +36,7 @@ import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.Error.Exception (throwEngineException, EngineException(..)
-                                   , ExceptionType(..))
+                                   , ExceptionType(..), logInfo, logExcept)
 import Engine.Graphics.Types (GraphicsConfig(..))
 import Engine.Graphics.Window.Types
 import Vulkan.Core10 (Instance(..), AllocationCallbacks)
@@ -56,22 +56,27 @@ initializeGLFW = do
 
 -- | Creates a GLFW window with given configuration
 createWindow ∷ WindowConfig → EngineM ε σ Window
-createWindow config = EngineM $ \e s c → do
+createWindow config = do
+  -- initialize glfw
+  allocResource (\_ → do
+                  terminateGLFW
+                  logInfo "GLFW terminated")
+                initializeGLFW
+
   -- Set window hints
-  GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
-  GLFW.windowHint $ GLFW.WindowHint'Visible False
+  liftIO $ GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
+  liftIO $ GLFW.windowHint $ GLFW.WindowHint'Visible False
   
   -- Create the window
-  mbWindow ← GLFW.createWindow 
-    (wcWidth config) 
-    (wcHeight config) 
-    (T.unpack $ wcTitle config)
-    Nothing  -- monitor (None for windowed mode)
-    Nothing  -- share (None for no shared context)
-    
-  case mbWindow of
-    Nothing → c $ Left $ error "Failed to create GLFW window"
-    Just window → c $ Right $ Window window
+  allocResource (\w0 → destroyWindow w0) $ do
+    mw ← liftIO $ GLFW.createWindow (wcWidth config) (wcHeight config)
+                                    (T.unpack $ wcTitle config) Nothing Nothing
+    case mw of
+      Nothing → throwEngineException
+                  $ EngineException ExGraphics "Failed to create window"
+      Just win → do
+        logInfo "Window created"
+        pure $ Window win
 
 -- | Clean up GLFW window resources
 destroyWindow ∷ Window → EngineM' ε ()

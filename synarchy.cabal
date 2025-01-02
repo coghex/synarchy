@@ -29,6 +29,7 @@ test-suite synarchy-test
     other-modules: Test.Engine.Graphics.Vulkan.Instance
                    Test.Engine.Graphics.Vulkan.Device
                    Test.Engine.Graphics.Vulkan.Swapchain
+                   Test.Engine.Graphics.Vulkan.Sync
                    Test.Engine.Core.Monad
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
@@ -68,6 +69,7 @@ library
                      Engine.Graphics.Vulkan.Instance
                      Engine.Graphics.Vulkan.Device
                      Engine.Graphics.Vulkan.Swapchain
+                     Engine.Graphics.Vulkan.Sync
                      Engine.Graphics.Vulkan.Types
                      Engine.Graphics.Window.GLFW
                      Engine.Graphics.Window.Types

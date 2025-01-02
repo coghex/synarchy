@@ -4,11 +4,15 @@ module Engine.Core.Error.Exception
   , ExceptionType(..)
   , Exceptable
   , throwEngineException
+  , logInfo, logExcept
   ) where
 
 import UPrelude
 import Control.Exception (Exception, displayException)
 import Control.Monad.Error.Class (MonadError, throwError)
+import qualified Control.Monad.Logger.CallStack as LoggerCS
+import Data.String (fromString)
+import GHC.Stack ( HasCallStack, prettyCallStack, callStack )
 import qualified Data.Text as T
 import Type.Reflection
 
@@ -33,7 +37,13 @@ instance Exception EngineException where
     [ " exception:"
     , "*** " ⧺ T.unpack msg
     ]
-
+logInfo ∷ ( HasCallStack, MonadError EngineException m
+          , LoggerCS.MonadLogger m ) ⇒ String → m ()
+logInfo = LoggerCS.logInfoCS callStack ∘ fromString
+logExcept ∷ (HasCallStack, MonadError EngineException m)
+  ⇒ ExceptionType → String → m α
+logExcept exType msg = throwError
+  $ EngineException exType $ T.pack (msg ⧺ "\n" ⧺ prettyCallStack callStack ⧺ "\n")
 -- | Throw an EngineException in any MonadError context
 throwEngineException ∷ MonadError EngineException m ⇒ EngineException → m α
 throwEngineException = throwError

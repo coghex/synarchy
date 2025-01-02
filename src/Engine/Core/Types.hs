@@ -3,9 +3,11 @@ module Engine.Core.Types
   , EngineEnv(..)
   , EngineError(..)
   , EngineConfig(..)
+  , LoggingFunc
   ) where
 
 import UPrelude
+import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Text as T
 import Data.Word (Word64)
 import qualified Vulkan.Core10 as Vk
@@ -23,7 +25,11 @@ data EngineState = EngineState
   , engineRunning  ∷ Bool
   , currentTime    ∷ Double
   , deltaTime      ∷ Double
+  , logFunc        ∷ LoggingFunc
   }
+
+type LoggingFunc = Logger.Loc → Logger.LogSource → Logger.LogLevel
+                              → Logger.LogStr → IO ()
 
 -- | Engine configuration
 data EngineConfig = EngineConfig

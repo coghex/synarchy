@@ -10,7 +10,7 @@ import Control.Monad ((>>=))
 import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.Reader.Class (MonadReader(..))
-import Control.Monad.State.Class (MonadState(..))
+import Control.Monad.State.Class (MonadState(..), gets)
 import qualified Control.Monad.Logger.CallStack as Logger
 import Engine.Core.Types
   ( EngineState(..)
@@ -74,3 +74,8 @@ instance MonadState EngineState (EngineM ε σ) where
     atomically (readVar s) >>= \st → c (Right st)
   put newSt = EngineM $ \_ s c →
     atomically (writeVar s newSt) >>= \_ → c (Right ())
+
+instance Logger.MonadLogger (EngineM ε σ) where
+  monadLoggerLog loc ls ll msg = do
+    lf ← gets logFunc
+    liftIO $ lf loc ls ll (Logger.toLogStr msg)

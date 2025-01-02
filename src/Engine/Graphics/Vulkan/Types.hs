@@ -16,3 +16,9 @@ data VulkanLayers = VulkanLayers
   { vlRequired ∷ V.Vector String  -- ^ Required layers
   , vlOptional ∷ V.Vector String  -- ^ Optional layers
   }
+
+data SyncObjects = SyncObjects
+  { imageAvailableSemaphores ∷ V.Vector Semaphore
+  , renderFinishedSemaphores ∷ V.Vector Semaphore
+  , inFlightFences           ∷ V.Vector Fence
+  } deriving (Show)

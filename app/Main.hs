@@ -3,6 +3,7 @@ module Main where
 import UPrelude
 import Control.Exception (displayException)
 import Control.Monad (void)
+import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Text as T
 import System.Exit ( exitFailure )
 import Engine.Core.Monad (runEngineM, EngineM')
@@ -17,6 +18,7 @@ import Engine.Graphics.Window.Types (WindowConfig(..))
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
 import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
 import Engine.Graphics.Vulkan.Swapchain (createVulkanSwapchain, querySwapchainSupport)
+import Engine.Graphics.Vulkan.Sync (createSyncObjects)
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Vulkan.Core10
 import Control.Monad.IO.Class (liftIO)
@@ -35,6 +37,7 @@ defaultGraphicsConfig = GraphicsConfig
   , gcDebugMode = True
   , gcWidth     = 800
   , gcHeight    = 600
+  , gcMaxFrames = 2
   }
 
 defaultWindowConfig ∷ WindowConfig
@@ -45,12 +48,13 @@ defaultWindowConfig = WindowConfig
   , wcResizable = True
   }
 
-defaultEngineState ∷ EngineState
-defaultEngineState = EngineState
+defaultEngineState ∷ LoggingFunc → EngineState
+defaultEngineState lf = EngineState
   { frameCount    = 0
   , engineRunning = True
   , currentTime   = 0.0
   , deltaTime     = 0.0
+  , logFunc       = lf
   }
 
 main ∷ IO ()
@@ -59,13 +63,11 @@ main = do
   
   -- Initialize engine environment and state
   envVar ←   atomically $ newVar (undefined ∷ EngineEnv)
-  stateVar ← atomically $ newVar defaultEngineState
+  lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
+  stateVar ← atomically $ newVar $ defaultEngineState lf
   
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
-        -- Initialize GLFW
-        initializeGLFW
-        
         -- Create window using the correct WindowConfig structure
         window ← GLFW.createWindow defaultWindowConfig
         
@@ -92,15 +94,15 @@ main = do
 
         -- Test swapchain support query
         support ← querySwapchainSupport physicalDevice surface
+
+        -- Create sync objects
+        syncObjects ← createSyncObjects device defaultGraphicsConfig
+
         liftIO $ do
           putStrLn $ "Swapchain Format: " ++ show (siSwapImgFormat swapInfo)
           putStrLn $ "Available Formats: " ++ show (length $ formats support)
           putStrLn $ "Available Present Modes: " ++ show (presentModes support)
 
-        -- Cleanup
-        GLFW.destroyWindow window
-        terminateGLFW
-        
   
   result ← runEngineM engineAction envVar stateVar checkStatus
   case result of

@@ -14,6 +14,7 @@ import Data.Word (Word32, Word64)
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource)
 import Engine.Graphics.Types
+import Engine.Graphics.Vulkan.Sync
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends

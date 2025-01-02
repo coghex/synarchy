@@ -7,6 +7,7 @@ import qualified Test.Engine.Graphics.Vulkan.Device as VulkanDevice
 import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import qualified Test.Engine.Core.Monad as CoreMonad
 import qualified Test.Engine.Graphics.Vulkan.Swapchain as Swapchain
+import qualified Test.Engine.Graphics.Vulkan.Sync as Sync
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
 import qualified Graphics.UI.GLFW as GLFW
@@ -51,4 +52,5 @@ main = do
         describe "Vulkan Instance" VulkanInstance.spec
         describe "Vulkan Device" VulkanDevice.spec
         describe "Swapchain" (Swapchain.spec (Window window))
+        describe "Sync" (Sync.spec (Window window))
     )

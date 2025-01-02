@@ -5,6 +5,7 @@ import UPrelude
 import qualified Data.Vector as V
 import Data.Word (Word32)
 import qualified Data.Text as T
+import Engine.Graphics.Vulkan.Types
 import Vulkan.Core10
 import Vulkan.Extensions.VK_KHR_surface
 import Vulkan.Extensions.VK_KHR_swapchain
@@ -14,6 +15,7 @@ data GraphicsConfig = GraphicsConfig
   , gcWidth      ∷ Int      -- ^ Initial window width
   , gcHeight     ∷ Int      -- ^ Initial window height
   , gcDebugMode  ∷ Bool     -- ^ Enable Vulkan validation layers
+  , gcMaxFrames  ∷ Int      -- ^ Maximum number of frames in flight
   }
 
 data VulkanState = VulkanState
@@ -21,6 +23,8 @@ data VulkanState = VulkanState
   , vsPhysicalDevice  ∷ Maybe PhysicalDevice
   , vsDevice          ∷ Maybe Device
   , vsSurface         ∷ Maybe SurfaceKHR
+  , vsSwapchainInfo   ∷ Maybe SwapchainInfo
+  , vsSyncObjects     ∷ Maybe SyncObjects
   }
 
 -- | Device Queue Information

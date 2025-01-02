@@ -29,6 +29,7 @@ spec window = before initTestEnv $ do
           , gcWidth = 1
           , gcHeight = 1
           , gcDebugMode = True
+          , gcMaxFrames = 2
           }
         surface ← createWindowSurface window inst
         pdev ← pickPhysicalDevice inst surface
