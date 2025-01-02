@@ -4,6 +4,8 @@ module Engine.Graphics.Vulkan.Command
   , createVulkanCommandCollection
   , allocateVulkanCommandBuffers
   , destroyVulkanCommandPool
+  , beginVulkanCommandBuffer
+  , endVulkanCommandBuffer
   , VulkanCommandCollection(..)
   ) where
 
@@ -67,3 +69,18 @@ createVulkanCommandCollection device queues numBuffers = do
 destroyVulkanCommandPool ∷ Device → CommandPool → EngineM ε σ ()
 destroyVulkanCommandPool device pool =
   liftIO $ destroyCommandPool device pool Nothing
+
+-- | Begin recording a command buffer
+beginVulkanCommandBuffer ∷ CommandBuffer → EngineM ε σ ()
+beginVulkanCommandBuffer cmdBuf = do
+  let beginInfo = zero 
+        { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+        , inheritanceInfo = Nothing
+        } ∷ CommandBufferBeginInfo '[]
+  
+  liftIO $ beginCommandBuffer cmdBuf beginInfo
+
+-- | End recording a command buffer
+endVulkanCommandBuffer ∷ CommandBuffer → EngineM ε σ ()
+endVulkanCommandBuffer cmdBuf = 
+  liftIO $ endCommandBuffer cmdBuf
