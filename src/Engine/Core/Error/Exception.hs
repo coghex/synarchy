@@ -1,10 +1,11 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 module Engine.Core.Error.Exception
   ( EngineException(..)
   , ExceptionType(..)
   , Exceptable
   , throwEngineException
-  , logInfo, logExcept
+  , logInfo, logExcept, logDebug
   ) where
 
 import UPrelude
@@ -40,6 +41,13 @@ instance Exception EngineException where
 logInfo ∷ ( HasCallStack, MonadError EngineException m
           , LoggerCS.MonadLogger m ) ⇒ String → m ()
 logInfo = LoggerCS.logInfoCS callStack ∘ fromString
+logDebug ∷ ( HasCallStack, MonadError EngineException m
+           , LoggerCS.MonadLogger m ) ⇒ String → m ()
+#ifdef DEVELOPMENT
+logDebug = LoggerCS.logDebugCS callStack ∘ fromString
+#else
+logDebug = const $ pure ()
+#endif
 logExcept ∷ (HasCallStack, MonadError EngineException m)
   ⇒ ExceptionType → String → m α
 logExcept exType msg = throwError

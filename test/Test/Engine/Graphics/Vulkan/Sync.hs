@@ -4,6 +4,7 @@ module Test.Engine.Graphics.Vulkan.Sync (spec) where
 import UPrelude
 import Test.Hspec
 import System.Info (os)
+import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Vector as V
 import qualified Vulkan as Vk
 import Engine.Graphics.Types
@@ -49,16 +50,18 @@ spec window = before initTestEnv $ do
 initTestEnv ∷ IO (Var EngineEnv, Var EngineState)
 initTestEnv = do
   envVar ← atomically $ newVar (undefined ∷ EngineEnv)
-  stateVar ← atomically $ newVar defaultEngineState
+  lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
+  stateVar ← atomically $ newVar $ defaultEngineState lf
   -- Initialize other necessary components
   pure (envVar, stateVar)
 
-defaultEngineState ∷ EngineState
-defaultEngineState = EngineState
+defaultEngineState ∷ LoggingFunc → EngineState
+defaultEngineState lf = EngineState
   { frameCount    = 0
   , engineRunning = True
   , currentTime   = 0.0
   , deltaTime     = 0.0
+  , logFunc       = lf
   }
 
 -- | Run a test with the engine monad

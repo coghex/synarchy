@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 module Main where
 
 import UPrelude
@@ -5,6 +6,7 @@ import Control.Exception (displayException)
 import Control.Monad (void)
 import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Text as T
+import System.Environment (setEnv)
 import System.Exit ( exitFailure )
 import Engine.Core.Monad (runEngineM, EngineM')
 import Engine.Core.Types
@@ -28,13 +30,21 @@ defaultEngineConfig = EngineConfig
   { windowWidth  = 800
   , windowHeight = 600
   , enableVSync  = True
+#ifdef DEVELOPMENT
   , enableDebug  = True
+#else
+  , enableDebug  = False
+#endif
   }
 
 defaultGraphicsConfig ∷ GraphicsConfig
 defaultGraphicsConfig = GraphicsConfig 
   { gcAppName   = T.pack "Vulkan Device Test"
+#ifdef DEVELOPMENT
   , gcDebugMode = True
+#else
+  , gcDebugMode = False
+#endif
   , gcWidth     = 800
   , gcHeight    = 600
   , gcMaxFrames = 2
@@ -59,8 +69,12 @@ defaultEngineState lf = EngineState
 
 main ∷ IO ()
 main = do
-  putStrLn "Starting Vulkan device test..."
-  
+#ifdef DEVELOPMENT
+  setEnv "VK_LOADER_DEBUG" "none"
+  setEnv "VK_LOADER_MESSAGE_LEVEL" "error"
+  setEnv "VK_LOADER_LOG_LEVEL" "0"
+#else
+#endif
   -- Initialize engine environment and state
   envVar ←   atomically $ newVar (undefined ∷ EngineEnv)
   lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
@@ -83,10 +97,7 @@ main = do
         
         -- Print some info about the device
         props ← liftIO $ getPhysicalDeviceProperties physicalDevice
-        liftIO $ do
-          putStrLn $ "Selected device: " ++ show (deviceName props)
-          --putStrLn $ "Graphics queue: " ++ show (graphicsQueue queues)
-          --putStrLn $ "Present queue: " ++ show (presentQueue queues)
+        logDebug $ "Selected device: " ++ show (deviceName props)
         
         -- Test swapchain creation
         swapInfo ← createVulkanSwapchain physicalDevice device
@@ -98,16 +109,15 @@ main = do
         -- Create sync objects
         syncObjects ← createSyncObjects device defaultGraphicsConfig
 
-        liftIO $ do
-          putStrLn $ "Swapchain Format: " ++ show (siSwapImgFormat swapInfo)
-          putStrLn $ "Available Formats: " ++ show (length $ formats support)
-          putStrLn $ "Available Present Modes: " ++ show (presentModes support)
+        logDebug $ "Swapchain Format: " ++ show (siSwapImgFormat swapInfo)
+        logDebug $ "Available Formats: " ++ show (length $ formats support)
+        logDebug $ "Available Present Modes: " ++ show (presentModes support)
 
   
   result ← runEngineM engineAction envVar stateVar checkStatus
   case result of
     Left err → putStrLn $ displayException err
-    Right _  → putStrLn "Test completed successfully!"
+    Right _  → pure ()
 
 checkStatus ∷ Either EngineException () → IO (Either EngineException ())
 checkStatus (Right ()) = pure (Right ())

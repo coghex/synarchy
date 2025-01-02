@@ -9,7 +9,9 @@ TODO
 
 ## Building
 
-cabal build synarchy
+for regular use, cabal build synarchy, for development use cabal build -f dev all and you will get validation layers and debug output
+
+```bash
 
 ## Usage
 

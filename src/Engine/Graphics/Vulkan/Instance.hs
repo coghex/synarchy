@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Engine.Graphics.Vulkan.Instance
   ( createVulkanInstance
@@ -104,7 +105,8 @@ createVulkanInstance config = do
         ::& debugUtilsMessengerCreateInfo
         :& ()
 
-  inst ← createInstance instCreateInfo Nothing
+  inst ← allocResource (\i0 → destroyInstance i0 Nothing)
+           $ createInstance instCreateInfo Nothing
   
   -- Create debug messenger if debug mode is enabled
   dbgMessenger ← if gcDebugMode config 
@@ -152,6 +154,7 @@ filterExtensions available required = do
 -- | Debug messenger info for validation layers
 debugUtilsMessengerCreateInfo ∷ DebugUtilsMessengerCreateInfoEXT
 debugUtilsMessengerCreateInfo = zero
+#ifdef DEVELOPMENT
   { messageSeverity = DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT
                     .|. DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
                     .|. DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
@@ -160,3 +163,9 @@ debugUtilsMessengerCreateInfo = zero
                     .|. DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT
   , pfnUserCallback = debugCallbackPtr
   }
+#else
+  { messageSeverity = DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
+  , messageType     = DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+                    .|. DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT
+  , pfnUserCallback = debugCallbackPtr }
+#endif

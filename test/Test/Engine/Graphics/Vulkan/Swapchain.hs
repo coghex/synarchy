@@ -4,6 +4,7 @@ import UPrelude
 import Test.Hspec
 import Control.Concurrent (runInBoundThread, forkOS, putMVar, takeMVar, newEmptyMVar)
 import Control.Exception (displayException)
+import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Text as T
 import System.Info ( os )
 import System.Exit ( exitFailure )
@@ -43,19 +44,21 @@ spec window = before initTestEnv $ do
           length (formats support) `shouldSatisfy` (> 0)
           length (presentModes support) `shouldSatisfy` (> 0)
 
-defaultState ∷ EngineState
-defaultState = EngineState
+defaultState ∷ LoggingFunc → EngineState
+defaultState lf = EngineState
   { frameCount = 0
   , engineRunning = True
   , currentTime = 0.0
   , deltaTime = 0.0
+  , logFunc = lf
   }
 
 -- | Initialize test environment
 initTestEnv ∷ IO (Var EngineEnv, Var EngineState)
 initTestEnv = do
   envVar ← atomically $ newVar (undefined ∷ EngineEnv)
-  stateVar ← atomically $ newVar defaultState
+  lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
+  stateVar ← atomically $ newVar $ defaultState lf
   liftIO $ GLFW.init
   liftIO $ do
     GLFW.windowHint $ GLFW.WindowHint'Visible False

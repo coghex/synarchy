@@ -66,7 +66,8 @@ createVulkanDevice inst physicalDevice surface = do
         , enabledFeatures = Just zero
         }
   
-  device ← createDevice physicalDevice deviceCreateInfo Nothing
+  device ← allocResource (\d0 → destroyDevice d0 Nothing)
+             $ createDevice physicalDevice deviceCreateInfo Nothing
   
   -- Get queue handles
   graphicsQ ← getDeviceQueue device (graphicsFamily indices) 0

@@ -17,12 +17,11 @@ category: Game
 build-type: Simple
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files: CHANGELOG.md
-
-common warnings
-    ghc-options: -Wall -threaded
+-- defaults to no debug
+flag dev
+    default: False
 
 test-suite synarchy-test
-    import: warnings
     type: exitcode-stdio-1.0
     hs-source-dirs: test
     main-is: Spec.hs
@@ -50,18 +49,64 @@ test-suite synarchy-test
                 , hspec
                 , synarchy
                 , text
+                , monad-logger
                 , stm
                 , mtl
                 , vector
                 , GLFW-b
                 , vulkan
     default-language: GHC2024
-    if os(darwin)
-        cpp-options: -DDARWIN
-        ghc-options: -optP-Wno-nonportable-include-path -threaded -rtsopts -with-rtsopts=-N
+    if flag(dev)
+      if os(darwin)
+          cpp-options: -DDARWIN -DDEVELOPMENT
+          ghc-options: -optP-Wno-nonportable-include-path
+                       -O0
+                       -Wall
+                       -Wcompat
+                       -Wincomplete-record-updates
+                       -Wincomplete-uni-patterns
+                       -threaded
+                       -eventlog
+                       -fprof-auto
+                       -haddock
+                       -rtsopts
+                       -with-rtsopts=-N
+      else
+          cpp-options: -DDEVELOPMENT
+          ghc-options: -O0
+                       -Wall
+                       -Wcompat
+                       -Wincomplete-record-updates
+                       -Wincomplete-uni-patterns
+                       -threaded
+                       -eventlog
+                       -fprof-auto
+                       -haddock
+                       -rtsopts
+                       -with-rtsopts=-N
+    else
+      if os(darwin)
+          cpp-options: -DDARWIN
+          ghc-options: -optP-Wno-nonportable-include-path
+                       -O2
+                       -optc-O3
+                       -fexcess-precision
+                       -threaded
+                       -eventlog
+                       -feager-blackholing
+                       -rtsopts
+                       -with-rtsopts=-N
+      else
+          ghc-options: -O2
+                       -optc-O3
+                       -fexcess-precision
+                       -threaded
+                       -eventlog
+                       -feager-blackholing
+                       -rtsopts
+                       -with-rtsopts=-N
 
 library
-    import: warnings
     -- Expose the modules you want to test
     exposed-modules: UPrelude
                      Engine.Event.Types
@@ -119,10 +164,59 @@ library
                  , utf8-string
     hs-source-dirs: src
     default-language: GHC2024
+    if flag(dev)
+      if os(darwin)
+          cpp-options: -DDARWIN -DDEVELOPMENT
+          ghc-options: -optP-Wno-nonportable-include-path
+                       -O0
+                       -Wall
+                       -Wcompat
+                       -Wincomplete-record-updates
+                       -Wincomplete-uni-patterns
+                       -threaded
+                       -eventlog
+                       -fprof-auto
+                       -haddock
+                       -rtsopts
+                       -with-rtsopts=-N
+      else
+          cpp-options: -DDEVELOPMENT
+          ghc-options: -O0
+                       -Wall
+                       -Wcompat
+                       -Wincomplete-record-updates
+                       -Wincomplete-uni-patterns
+                       -threaded
+                       -eventlog
+                       -fprof-auto
+                       -haddock
+                       -rtsopts
+                       -with-rtsopts=-N
+    else
+      if os(darwin)
+          cpp-options: -DDARWIN
+          ghc-options: -optP-Wno-nonportable-include-path
+                       -O2
+                       -optc-O3
+                       -fexcess-precision
+                       -threaded
+                       -eventlog
+                       -feager-blackholing
+                       -rtsopts
+                       -with-rtsopts=-N
+      else
+          ghc-options: -O2
+                       -optc-O3
+                       -fexcess-precision
+                       -threaded
+                       -eventlog
+                       -feager-blackholing
+                       -rtsopts
+                       -with-rtsopts=-N
+
+
 
 executable synarchy
-    -- Import common warning flags.
-    import: warnings
     -- .hs or .lhs file containing the Main module.
     main-is: Main.hs
     -- LANGUAGE extensions used by modules in this package.
@@ -169,3 +263,54 @@ executable synarchy
     hs-source-dirs: app
     -- Base language which the package is written in.
     default-language: GHC2024
+    if flag(dev)
+      if os(darwin)
+          cpp-options: -DDARWIN -DDEVELOPMENT
+          ghc-options: -optP-Wno-nonportable-include-path
+                       -O0
+                       -Wall
+                       -Wcompat
+                       -Wincomplete-record-updates
+                       -Wincomplete-uni-patterns
+                       -threaded
+                       -eventlog
+                       -fprof-auto
+                       -haddock
+                       -rtsopts
+                       -with-rtsopts=-N
+      else
+          cpp-options: -DDEVELOPMENT
+          ghc-options: -O0
+                       -Wall
+                       -Wcompat
+                       -Wincomplete-record-updates
+                       -Wincomplete-uni-patterns
+                       -threaded
+                       -eventlog
+                       -fprof-auto
+                       -haddock
+                       -rtsopts
+                       -with-rtsopts=-N
+    else
+      if os(darwin)
+          cpp-options: -DDARWIN
+          ghc-options: -optP-Wno-nonportable-include-path
+                       -O2
+                       -optc-O3
+                       -fexcess-precision
+                       -threaded
+                       -eventlog
+                       -feager-blackholing
+                       -rtsopts
+                       -with-rtsopts=-N
+      else
+          ghc-options: -O2
+                       -optc-O3
+                       -fexcess-precision
+                       -threaded
+                       -eventlog
+                       -feager-blackholing
+                       -rtsopts
+                       -with-rtsopts=-N
+
+

@@ -35,12 +35,11 @@ import Foreign.Storable (peek)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
 import Engine.Core.Resource
-import Engine.Core.Error.Exception (throwEngineException, EngineException(..)
-                                   , ExceptionType(..), logInfo, logExcept)
+import Engine.Core.Error.Exception
 import Engine.Graphics.Types (GraphicsConfig(..))
 import Engine.Graphics.Window.Types
 import Vulkan.Core10 (Instance(..), AllocationCallbacks)
-import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
+import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR, destroySurfaceKHR)
 
 -- | Initialize GLFW with error handling
 initializeGLFW ∷ EngineM ε σ ()
@@ -60,7 +59,7 @@ createWindow config = do
   -- initialize glfw
   allocResource (\_ → do
                   terminateGLFW
-                  logInfo "GLFW terminated")
+                  logDebug "GLFW terminated")
                 initializeGLFW
 
   -- Set window hints
@@ -75,7 +74,7 @@ createWindow config = do
       Nothing → throwEngineException
                   $ EngineException ExGraphics "Failed to create window"
       Just win → do
-        logInfo "Window created"
+        logDebug "Window created"
         pure $ Window win
 
 -- | Clean up GLFW window resources
@@ -141,23 +140,27 @@ getRequiredInstanceExtensions = do
 createWindowSurface ∷ Window 
                    → Instance  -- ^ Raw Vulkan instance handle
                    → EngineM ε σ SurfaceKHR  -- ^ Raw Vulkan surface handle
-createWindowSurface (Window win) inst = do
-  surfaceOrError ← liftIO $ alloca $ \surfacePtr → do
-    result ← GLFW.createWindowSurface 
-      (instanceHandle inst)
-      win
-      nullPtr
-      surfacePtr
-    if result == 0  -- VK_SUCCESS
-      then Right <$> peek surfacePtr
-      else pure $ Left "Failed to create window surface"
+createWindowSurface (Window win) inst = allocResource
+  (\surface → do
+      logDebug "Destroying window surface"
+      liftIO $ destroySurfaceKHR inst surface Nothing)
+  $ do
+    surfaceOrError ← liftIO $ alloca $ \surfacePtr → do
+      result ← GLFW.createWindowSurface 
+        (instanceHandle inst)
+        win
+        nullPtr
+        surfacePtr
+      if result == 0  -- VK_SUCCESS
+        then Right <$> peek surfacePtr
+        else pure $ Left "Failed to create window surface"
 
-  case surfaceOrError of
-    Right surface → pure surface
-    Left err → throwEngineException $ EngineException 
-      { errorType = ExGraphics
-      , errorMsg = err
-      }
+    case surfaceOrError of
+      Right surface → pure surface
+      Left err → throwEngineException $ EngineException 
+        { errorType = ExGraphics
+        , errorMsg = err
+        }
 
 -- | Terminate GLFW
 terminateGLFW ∷ EngineM ε σ ()
