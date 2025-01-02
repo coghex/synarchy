@@ -6,9 +6,11 @@ import Test.Hspec
 import qualified Test.Engine.Graphics.Vulkan.Device as VulkanDevice
 import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import qualified Test.Engine.Core.Monad as CoreMonad
+import qualified Test.Engine.Graphics.Vulkan.Swapchain as Swapchain
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
 import qualified Graphics.UI.GLFW as GLFW
+import Engine.Graphics.Window.Types (Window(..))
 import System.IO (stderr, hPutStrLn)
 import Control.Monad (unless)
 
@@ -48,4 +50,5 @@ main = do
         describe "Core Monad" CoreMonad.spec
         describe "Vulkan Instance" VulkanInstance.spec
         describe "Vulkan Device" VulkanDevice.spec
+        describe "Swapchain" (Swapchain.spec (Window window))
     )

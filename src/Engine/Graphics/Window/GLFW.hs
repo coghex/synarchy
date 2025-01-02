@@ -5,6 +5,7 @@ module Engine.Graphics.Window.GLFW
   , destroyWindow
   , showWindow
   , hideWindow
+  , makeContextCurrent
     -- * Window State
   , windowShouldClose
   , setWindowShouldClose
@@ -16,6 +17,7 @@ module Engine.Graphics.Window.GLFW
     -- * Vulkan Integration
   , getRequiredInstanceExtensions
   , createWindowSurface
+  , mainThreadHint
     -- * Initialization
   , initializeGLFW
   , terminateGLFW
@@ -114,6 +116,15 @@ waitEvents = liftIO GLFW.waitEvents
 -- | Wait for events with timeout
 waitEventsTimeout ∷ Double → EngineM ε σ ()
 waitEventsTimeout = liftIO ∘ GLFW.waitEventsTimeout
+
+-- | Make a window's context current
+makeContextCurrent ∷ Maybe GLFW.Window → EngineM ε σ ()
+makeContextCurrent = liftIO ∘ GLFW.makeContextCurrent
+
+-- | Hint that we're on the main thread
+mainThreadHint ∷ EngineM ε σ ()
+mainThreadHint = liftIO $ GLFW.setErrorCallback $ Just $ \_ msg →
+  putStrLn $ "GLFW error: " ⧺ msg
 
 -- | Get required Vulkan instance extensions
 getRequiredInstanceExtensions ∷ EngineM ε σ [BS.ByteString]

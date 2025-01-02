@@ -51,7 +51,7 @@ spec = describe "Vulkan Device" $ do
                   , enabledExtensionNames = V.fromList macExtensions
                   }
 
-            -- Create instance following madrigal's pattern
+            -- Create instance
             inst ← Vk.createInstance createInfo Nothing
             
             -- Find physical devices, handling the result tuple

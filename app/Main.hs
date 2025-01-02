@@ -15,7 +15,8 @@ import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
                                    , createWindow, destroyWindow, createWindowSurface)
 import Engine.Graphics.Window.Types (WindowConfig(..))
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
-import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice, DeviceQueues(..))
+import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
+import Engine.Graphics.Vulkan.Swapchain (createVulkanSwapchain, querySwapchainSupport)
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Vulkan.Core10
 import Control.Monad.IO.Class (liftIO)
@@ -85,6 +86,17 @@ main = do
           --putStrLn $ "Graphics queue: " ++ show (graphicsQueue queues)
           --putStrLn $ "Present queue: " ++ show (presentQueue queues)
         
+        -- Test swapchain creation
+        swapInfo ← createVulkanSwapchain physicalDevice device
+                                         queues surface
+
+        -- Test swapchain support query
+        support ← querySwapchainSupport physicalDevice surface
+        liftIO $ do
+          putStrLn $ "Swapchain Format: " ++ show (siSwapImgFormat swapInfo)
+          putStrLn $ "Available Formats: " ++ show (length $ formats support)
+          putStrLn $ "Available Present Modes: " ++ show (presentModes support)
+
         -- Cleanup
         GLFW.destroyWindow window
         terminateGLFW

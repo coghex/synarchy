@@ -2,7 +2,6 @@
 module Engine.Graphics.Vulkan.Device
   ( -- * Types
     QueueFamilyIndices(..)
-  , DeviceQueues(..)
     -- * Device Creation
   , createVulkanDevice
   , destroyVulkanDevice
@@ -37,16 +36,10 @@ data QueueFamilyIndices = QueueFamilyIndices
   , presentFamily  ∷ Word32  -- ^ Index of present queue family
   } deriving (Show, Eq)
 
--- | Handles to the device queues we'll use
-data DeviceQueues = DeviceQueues
-  { graphicsQueue ∷ Queue  -- ^ Queue for graphics operations
-  , presentQueue  ∷ Queue  -- ^ Queue for presentation
-  } deriving (Show)
-
 createVulkanDevice ∷ Instance 
                    → PhysicalDevice 
                    → SurfaceKHR     
-                   → EngineM ε σ (Device, DeviceQueues)
+                   → EngineM ε σ (Device, DevQueues)
 createVulkanDevice inst physicalDevice surface = do
   -- Find queue families
   indices ← findQueueFamilies physicalDevice surface
@@ -79,9 +72,11 @@ createVulkanDevice inst physicalDevice surface = do
   graphicsQ ← getDeviceQueue device (graphicsFamily indices) 0
   presentQ ← getDeviceQueue device (presentFamily indices) 0
   
-  let queues = DeviceQueues
+  let queues = DevQueues
         { graphicsQueue = graphicsQ
         , presentQueue = presentQ
+        , graphicsFamIdx = graphicsFamily indices
+        , presentFamIdx = presentFamily indices
         }
   
   return (device, queues)
