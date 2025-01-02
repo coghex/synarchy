@@ -3,6 +3,7 @@ module Main where
 
 import UPrelude
 import Test.Hspec
+import qualified Test.Engine.Graphics.Vulkan.Command as Command
 import qualified Test.Engine.Graphics.Vulkan.Device as VulkanDevice
 import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import qualified Test.Engine.Core.Monad as CoreMonad
@@ -53,4 +54,5 @@ main = do
         describe "Vulkan Device" VulkanDevice.spec
         describe "Swapchain" (Swapchain.spec (Window window))
         describe "Sync" (Sync.spec (Window window))
+        describe "Command" (Command.spec (Window window))
     )

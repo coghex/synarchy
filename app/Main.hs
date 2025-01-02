@@ -17,7 +17,10 @@ import Engine.Graphics.Types
 import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
                                    , createWindow, destroyWindow, createWindowSurface)
 import Engine.Graphics.Window.Types (WindowConfig(..))
+import Engine.Graphics.Vulkan.Types (SyncObjects(..))
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
+import Engine.Graphics.Vulkan.Command (createVulkanCommandCollection
+                                      , VulkanCommandCollection(..))
 import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
 import Engine.Graphics.Vulkan.Swapchain (createVulkanSwapchain, querySwapchainSupport)
 import Engine.Graphics.Vulkan.Sync (createSyncObjects)
@@ -109,9 +112,14 @@ main = do
         -- Create sync objects
         syncObjects ← createSyncObjects device defaultGraphicsConfig
 
+        -- Create command pool and buffers
+        cmdCollection ← createVulkanCommandCollection device queues
+                          (fromIntegral $ length $ imageAvailableSemaphores syncObjects)
+
         logDebug $ "Swapchain Format: " ++ show (siSwapImgFormat swapInfo)
         logDebug $ "Available Formats: " ++ show (length $ formats support)
         logDebug $ "Available Present Modes: " ++ show (presentModes support)
+        logDebug $ "CommandPool: " ++ show (length $ vccCommandBuffers cmdCollection)
 
   
   result ← runEngineM engineAction envVar stateVar checkStatus

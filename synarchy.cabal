@@ -112,6 +112,7 @@ library
                      Engine.Event.Types
                      Engine.Graphics.Types
                      Engine.Graphics.Vulkan.Instance
+                     Engine.Graphics.Vulkan.Command
                      Engine.Graphics.Vulkan.Device
                      Engine.Graphics.Vulkan.Swapchain
                      Engine.Graphics.Vulkan.Sync

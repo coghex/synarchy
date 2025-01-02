@@ -44,21 +44,20 @@ spec window = before initTestEnv $ do
           length (formats support) `shouldSatisfy` (> 0)
           length (presentModes support) `shouldSatisfy` (> 0)
 
-defaultState ∷ LoggingFunc → EngineState
-defaultState lf = EngineState
+defaultState ∷ EngineState
+defaultState = EngineState
   { frameCount = 0
   , engineRunning = True
   , currentTime = 0.0
   , deltaTime = 0.0
-  , logFunc = lf
+  , logFunc       = \_ _ _ _ → pure ()
   }
 
 -- | Initialize test environment
 initTestEnv ∷ IO (Var EngineEnv, Var EngineState)
 initTestEnv = do
   envVar ← atomically $ newVar (undefined ∷ EngineEnv)
-  lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
-  stateVar ← atomically $ newVar $ defaultState lf
+  stateVar ← atomically $ newVar defaultState
   liftIO $ GLFW.init
   liftIO $ do
     GLFW.windowHint $ GLFW.WindowHint'Visible False

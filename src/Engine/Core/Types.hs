@@ -9,14 +9,17 @@ module Engine.Core.Types
 import UPrelude
 import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import Data.Word (Word64)
 import qualified Vulkan.Core10 as Vk
 
 -- | Engine environment (read-only)
 data EngineEnv = EngineEnv
-  { engineConfig    ∷ EngineConfig
-  , vulkanInstance  ∷ Vk.Instance
-  , vulkanDevice    ∷ Vk.Device
+  { engineConfig     ∷ EngineConfig
+  , vulkanInstance   ∷ Vk.Instance
+  , vulkanDevice     ∷ Vk.Device
+  , vulkanCmdPool    ∷ Vk.CommandPool
+  , vulkanCmdBuffers ∷ V.Vector Vk.CommandBuffer
   }
 
 -- | Engine state (mutable)

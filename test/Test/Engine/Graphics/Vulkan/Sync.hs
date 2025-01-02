@@ -50,18 +50,17 @@ spec window = before initTestEnv $ do
 initTestEnv ∷ IO (Var EngineEnv, Var EngineState)
 initTestEnv = do
   envVar ← atomically $ newVar (undefined ∷ EngineEnv)
-  lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
-  stateVar ← atomically $ newVar $ defaultEngineState lf
+  stateVar ← atomically $ newVar defaultEngineState
   -- Initialize other necessary components
   pure (envVar, stateVar)
 
-defaultEngineState ∷ LoggingFunc → EngineState
-defaultEngineState lf = EngineState
+defaultEngineState ∷ EngineState
+defaultEngineState = EngineState
   { frameCount    = 0
   , engineRunning = True
   , currentTime   = 0.0
   , deltaTime     = 0.0
-  , logFunc       = lf
+  , logFunc       = \_ _ _ _ → pure ()
   }
 
 -- | Run a test with the engine monad
