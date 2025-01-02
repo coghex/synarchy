@@ -26,6 +26,7 @@ test-suite synarchy-test
     hs-source-dirs: test
     main-is: Spec.hs
     other-modules: Test.Engine.Graphics.Vulkan.Instance
+                   Test.Engine.Graphics.Vulkan.Command
                    Test.Engine.Graphics.Vulkan.Device
                    Test.Engine.Graphics.Vulkan.Swapchain
                    Test.Engine.Graphics.Vulkan.Sync
@@ -113,6 +114,7 @@ library
                      Engine.Graphics.Types
                      Engine.Graphics.Vulkan.Instance
                      Engine.Graphics.Vulkan.Command
+                     Engine.Graphics.Vulkan.Descriptor
                      Engine.Graphics.Vulkan.Device
                      Engine.Graphics.Vulkan.Swapchain
                      Engine.Graphics.Vulkan.Sync

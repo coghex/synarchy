@@ -21,6 +21,7 @@ import Engine.Graphics.Vulkan.Types (SyncObjects(..))
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
 import Engine.Graphics.Vulkan.Command (createVulkanCommandCollection
                                       , VulkanCommandCollection(..))
+import Engine.Graphics.Vulkan.Descriptor (createVulkanDescriptorSetLayout)
 import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
 import Engine.Graphics.Vulkan.Swapchain (createVulkanSwapchain, querySwapchainSupport)
 import Engine.Graphics.Vulkan.Sync (createSyncObjects)
@@ -105,9 +106,12 @@ main = do
         -- Test swapchain creation
         swapInfo ← createVulkanSwapchain physicalDevice device
                                          queues surface
+        logDebug $ "Swapchain Format: " ++ show (siSwapImgFormat swapInfo)
 
         -- Test swapchain support query
         support ← querySwapchainSupport physicalDevice surface
+        logDebug $ "Available Formats: " ++ show (length $ formats support)
+        logDebug $ "Available Present Modes: " ++ show (presentModes support)
 
         -- Create sync objects
         syncObjects ← createSyncObjects device defaultGraphicsConfig
@@ -115,11 +119,12 @@ main = do
         -- Create command pool and buffers
         cmdCollection ← createVulkanCommandCollection device queues
                           (fromIntegral $ length $ imageAvailableSemaphores syncObjects)
-
-        logDebug $ "Swapchain Format: " ++ show (siSwapImgFormat swapInfo)
-        logDebug $ "Available Formats: " ++ show (length $ formats support)
-        logDebug $ "Available Present Modes: " ++ show (presentModes support)
         logDebug $ "CommandPool: " ++ show (length $ vccCommandBuffers cmdCollection)
+
+        -- Create descriptor set layout
+        descSetLayout ← createVulkanDescriptorSetLayout device
+        logDebug $ "DescriptorSetLayout: " ++ show descSetLayout
+
 
   
   result ← runEngineM engineAction envVar stateVar checkStatus

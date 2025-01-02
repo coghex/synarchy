@@ -46,7 +46,8 @@ allocateVulkanCommandBuffers device cmdPool numBuffers = do
         , commandBufferCount = fromIntegral numBuffers
         }
   
-  liftIO $ allocateCommandBuffers device allocInfo
+  allocResource (\cb0 → freeCommandBuffers device cmdPool cb0)
+                $ allocateCommandBuffers device allocInfo
 
 -- | Create a complete Vulkan command buffer collection
 createVulkanCommandCollection ∷ Device 

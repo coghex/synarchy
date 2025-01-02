@@ -22,3 +22,9 @@ data SyncObjects = SyncObjects
   , renderFinishedSemaphores ∷ V.Vector Semaphore
   , inFlightFences           ∷ V.Vector Fence
   } deriving (Show)
+
+data VulkanDescriptorInfo = VulkanDescriptorInfo
+  { vdiLayout  ∷ DescriptorSetLayout
+  , vdiPool    ∷ DescriptorPool
+  , vdiSets    ∷ V.Vector DescriptorSet
+  }
