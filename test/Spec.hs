@@ -10,6 +10,7 @@ import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import qualified Test.Engine.Core.Monad as CoreMonad
 import qualified Test.Engine.Graphics.Vulkan.Swapchain as Swapchain
 import qualified Test.Engine.Graphics.Vulkan.Sync as Sync
+import qualified Test.Engine.Graphics.Vulkan.Texture as Texture
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
 import qualified Graphics.UI.GLFW as GLFW
@@ -57,4 +58,5 @@ main = do
         describe "Sync" (Sync.spec (Window window))
         describe "Command" (Command.spec (Window window))
         describe "Descriptor" (Descriptor.spec (Window window))
+        describe "Texture" (Texture.spec (Window window))
     )

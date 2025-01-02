@@ -28,3 +28,11 @@ data VulkanDescriptorInfo = VulkanDescriptorInfo
   , vdiPool    ∷ DescriptorPool
   , vdiSets    ∷ V.Vector DescriptorSet
   }
+
+data TextureInfo = TextureInfo
+  { tiImage    ∷ Image
+  , tiView     ∷ ImageView
+  , tiSampler  ∷ Sampler
+  , tiMemory   ∷ DeviceMemory
+  , tiLayout   ∷ ImageLayout
+  }

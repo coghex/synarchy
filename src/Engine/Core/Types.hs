@@ -4,6 +4,7 @@ module Engine.Core.Types
   , EngineError(..)
   , EngineConfig(..)
   , LoggingFunc
+  , TextureState(..)
   ) where
 
 import UPrelude
@@ -12,6 +13,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word64)
 import qualified Vulkan.Core10 as Vk
+import Engine.Graphics.Vulkan.Types.Texture (TextureState(..))
 
 -- | Engine environment (read-only)
 data EngineEnv = EngineEnv
@@ -29,6 +31,7 @@ data EngineState = EngineState
   , currentTime    ∷ Double
   , deltaTime      ∷ Double
   , logFunc        ∷ LoggingFunc
+  , textureState   ∷ TextureState
   }
 
 type LoggingFunc = Logger.Loc → Logger.LogSource → Logger.LogLevel

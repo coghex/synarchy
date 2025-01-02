@@ -2,10 +2,13 @@
 module Engine.Graphics.Vulkan.Command
   ( createVulkanCommandPool
   , createVulkanCommandCollection
+  , allocateVulkanCommandBuffer
   , allocateVulkanCommandBuffers
   , destroyVulkanCommandPool
   , beginVulkanCommandBuffer
   , endVulkanCommandBuffer
+  , runCommandsOnce
+  , submitToQueue
   , VulkanCommandCollection(..)
   ) where
 
@@ -13,9 +16,10 @@ import UPrelude
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.Vector as V
 import Engine.Core.Monad
-import Engine.Core.Resource (allocResource)
+import Engine.Core.Resource (allocResource, locally)
 import Engine.Core.Error.Exception
 import Engine.Graphics.Types
+import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Zero
 
@@ -84,3 +88,67 @@ beginVulkanCommandBuffer cmdBuf = do
 endVulkanCommandBuffer ∷ CommandBuffer → EngineM ε σ ()
 endVulkanCommandBuffer cmdBuf = 
   liftIO $ endCommandBuffer cmdBuf
+
+-- | Allocate a single command buffer
+allocateVulkanCommandBuffer ∷ Device → CommandPool → EngineM ε σ CommandBuffer
+allocateVulkanCommandBuffer device cmdPool = do
+  buffers ← allocateVulkanCommandBuffers device cmdPool 1
+  pure $ V.head buffers
+
+-- | Submit a command buffer to a queue and wait for it to complete
+submitToQueue ∷ Device → Queue → CommandBuffer → EngineM ε σ ()
+submitToQueue device queue cmdBuf = locally $ do
+  fence ← allocResource (\f → destroyFence device f Nothing) $
+    createFence device zero Nothing
+  
+  let submitInfo = zero
+        { waitSemaphores = V.empty
+        , commandBuffers = V.singleton (commandBufferHandle cmdBuf)
+        , signalSemaphores = V.empty
+        }
+  
+  queueSubmit queue (V.singleton (SomeStruct submitInfo)) fence
+  
+  -- Wait for the fence with timeout
+  waitForFences device (V.singleton fence) True maxBound
+  pure ()
+
+-- | Run commands once and wait for completion
+runCommandsOnce ∷ Device → CommandPool → Queue
+  → (CommandBuffer → EngineM ε σ α) → EngineM ε σ α
+runCommandsOnce device commandPool cmdQueue action = do
+  -- Allocate command buffer
+  let allocInfo = zero 
+        { level = COMMAND_BUFFER_LEVEL_PRIMARY
+        , commandPool = commandPool
+        , commandBufferCount = 1 
+        }
+  buffer' ← allocResource (freeCommandBuffers device commandPool)
+    $ allocateCommandBuffers device allocInfo
+  let buffer = V.head buffer'
+      beginInfo = zero 
+        { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+        , inheritanceInfo = Nothing 
+        }
+  
+  -- Record commands
+  beginCommandBuffer buffer beginInfo
+  result ← action buffer
+  endCommandBuffer buffer
+  
+  -- Submit and wait
+  locally $ do
+    fence ← allocResource (\f → destroyFence device f Nothing) $
+      createFence device zero Nothing
+    
+    let submitInfo = zero
+          { waitSemaphores = V.empty
+          , waitDstStageMask = V.empty
+          , commandBuffers = V.singleton (commandBufferHandle buffer)
+          , signalSemaphores = V.empty 
+          }
+    
+    queueSubmit cmdQueue (V.singleton (SomeStruct submitInfo)) fence
+    waitForFences device (V.singleton fence) True maxBound
+  
+  pure result

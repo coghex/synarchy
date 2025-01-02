@@ -6,6 +6,7 @@ import Control.Exception (displayException)
 import Control.Monad (void)
 import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import System.Environment (setEnv)
 import System.Exit ( exitFailure )
 import Engine.Core.Monad (runEngineM, EngineM')
@@ -18,6 +19,7 @@ import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
                                    , createWindow, destroyWindow, createWindowSurface)
 import Engine.Graphics.Window.Types (WindowConfig(..))
 import Engine.Graphics.Vulkan.Types (SyncObjects(..))
+import Engine.Graphics.Vulkan.Types.Texture (TexturePoolState(..))
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
 import Engine.Graphics.Vulkan.Command (createVulkanCommandCollection
                                       , VulkanCommandCollection(..))
@@ -27,6 +29,7 @@ import Engine.Graphics.Vulkan.Swapchain (createVulkanSwapchain, querySwapchainSu
 import Engine.Graphics.Vulkan.Sync (createSyncObjects)
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Vulkan.Core10
+import Vulkan.Zero
 import Control.Monad.IO.Class (liftIO)
 
 defaultEngineConfig ∷ EngineConfig
@@ -69,6 +72,7 @@ defaultEngineState lf = EngineState
   , currentTime   = 0.0
   , deltaTime     = 0.0
   , logFunc       = lf
+  , textureState  = (TexturePoolState zero zero, V.empty)
   }
 
 main ∷ IO ()
@@ -124,7 +128,6 @@ main = do
         -- Create descriptor set layout
         descSetLayout ← createVulkanDescriptorSetLayout device
         logDebug $ "DescriptorSetLayout: " ++ show descSetLayout
-
 
   
   result ← runEngineM engineAction envVar stateVar checkStatus
