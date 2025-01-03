@@ -130,7 +130,6 @@ library
                      Engine.Graphics.Vulkan.Command
                      Engine.Graphics.Vulkan.Descriptor
                      Engine.Graphics.Vulkan.Device
-                     Engine.Graphics.Vulkan.Framebuffer
                      Engine.Graphics.Window.GLFW
                      Engine.Graphics.Vulkan.Image
                      Engine.Graphics.Vulkan.Instance
