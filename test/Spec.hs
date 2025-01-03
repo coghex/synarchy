@@ -8,6 +8,7 @@ import qualified Test.Engine.Graphics.Vulkan.Descriptor as Descriptor
 import qualified Test.Engine.Graphics.Vulkan.Device as VulkanDevice
 import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import qualified Test.Engine.Core.Monad as CoreMonad
+import qualified Test.Engine.Graphics.Vulkan.Shader as Shader
 import qualified Test.Engine.Graphics.Vulkan.Swapchain as Swapchain
 import qualified Test.Engine.Graphics.Vulkan.Sync as Sync
 import qualified Test.Engine.Graphics.Vulkan.Texture as Texture
@@ -59,4 +60,5 @@ main = do
         describe "Command" (Command.spec (Window window))
         describe "Descriptor" (Descriptor.spec (Window window))
         describe "Texture" (Texture.spec (Window window))
+        describe "Shader" (Shader.spec (Window window))
     )
