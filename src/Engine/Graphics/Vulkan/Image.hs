@@ -4,7 +4,6 @@ module Engine.Graphics.Vulkan.Image
   , createVulkanImageView
   , destroyVulkanImage
   , destroyVulkanImageView
-  , transitionImageLayout
   , createTextureImage
   , copyBufferToImage
   , VulkanImage(..)
@@ -111,19 +110,6 @@ createTextureImage device pDevice graphicsQueue cmdPool imageData (width, height
   -- TODO: Copy data to staging buffer and transition image layout
   
   pure image
-
--- | Transition image layout
-transitionImageLayout ∷ Device
-                     → Queue
-                     → CommandPool
-                     → Image
-                     → Format
-                     → ImageLayout  -- ^ Old layout
-                     → ImageLayout  -- ^ New layout
-                     → EngineM ε σ ()
-transitionImageLayout device queue cmdPool image format oldLayout newLayout = do
-  -- TODO: Implement layout transition using command buffer
-  pure ()
 
 -- | Clean up image resources
 destroyVulkanImage ∷ Device → VulkanImage → EngineM ε σ ()

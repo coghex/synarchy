@@ -5,10 +5,12 @@ import UPrelude
 import Control.Exception (displayException)
 import Control.Monad (void)
 import qualified Control.Monad.Logger.CallStack as Logger
+import Control.Monad.State (modify)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import System.Environment (setEnv)
 import System.Exit ( exitFailure )
+import System.FilePath ((</>))
 import Engine.Core.Monad (runEngineM, EngineM')
 import Engine.Core.Types
 import Engine.Core.Resource
@@ -27,6 +29,8 @@ import Engine.Graphics.Vulkan.Descriptor (createVulkanDescriptorSetLayout)
 import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
 import Engine.Graphics.Vulkan.Swapchain (createVulkanSwapchain, querySwapchainSupport)
 import Engine.Graphics.Vulkan.Sync (createSyncObjects)
+import Engine.Graphics.Vulkan.Texture
+import Engine.Graphics.Vulkan.Types.Texture
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Vulkan.Core10
 import Vulkan.Zero
@@ -129,6 +133,9 @@ main = do
         descSetLayout ← createVulkanDescriptorSetLayout device
         logDebug $ "DescriptorSetLayout: " ++ show descSetLayout
 
+        -- Initialize textures
+        initializeTextures device physicalDevice (vccCommandPool cmdCollection) (graphicsQueue queues)
+
   
   result ← runEngineM engineAction envVar stateVar checkStatus
   case result of
@@ -140,3 +147,29 @@ checkStatus (Right ()) = pure (Right ())
 checkStatus (Left err) = do
   putStrLn $ displayException err
   exitFailure
+
+initializeTextures ∷ Device → PhysicalDevice → CommandPool → Queue → EngineM' EngineEnv ()
+initializeTextures device physicalDevice cmdPool queue = do
+  -- Create descriptor pool and layout first
+  descriptorPool ← createTextureDescriptorPool device
+  descriptorSetLayout ← createTextureDescriptorSetLayout device
+  
+  logDebug "Created descriptor pool and layout"
+  
+  -- Update engine state with pool and layout
+  let poolState = TexturePoolState descriptorPool descriptorSetLayout
+  modify $ \s → s { textureState = (poolState, V.empty) }
+  
+  -- Load texture with proper error handling
+  let texturePath = "dat/tile01.png"
+  textureData ← createTextureWithDescriptor device physicalDevice cmdPool queue texturePath
+  
+  logDebug "Created texture with descriptor"
+  
+  -- Update engine state with the new texture
+  modify $ \s → s { textureState = 
+    let (poolState', _) = textureState s
+    in (poolState', V.singleton textureData)
+  }
+  
+  logDebug "Textures initialized successfully"

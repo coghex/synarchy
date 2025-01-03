@@ -169,7 +169,6 @@ createTextureSampler dev pdev = do
   allocResource (\s → destroySampler dev s Nothing) $
     createSampler dev samplerInfo Nothing
 
--- | Create a descriptor set for a texture
 createTextureDescriptorSet ∷ Device 
                           → DescriptorPool 
                           → DescriptorSetLayout 
@@ -177,41 +176,51 @@ createTextureDescriptorSet ∷ Device
                           → Sampler 
                           → EngineM ε σ DescriptorSet
 createTextureDescriptorSet device pool layout textureImageView textureSampler = do
-  -- Allocate descriptor set
+  -- First allocate descriptor set
   let allocInfo = zero 
         { descriptorPool = pool
         , setLayouts = V.singleton layout
         }
   
   descriptorSets ← allocateDescriptorSets device allocInfo
+  let descriptorSet = V.head descriptorSets
   
-  -- Update descriptor set with texture info
+  -- Create image info for the descriptor write
   let imageInfo = zero 
-        { imageView = textureImageView
-        , imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        { imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        , imageView = textureImageView
         , sampler = textureSampler
         }
-      writeSet = zero 
-        { dstSet = V.head descriptorSets
-        , dstBinding = 0
+      
+      -- Create write descriptor set
+      write = zero 
+        { dstSet = descriptorSet
+        , dstBinding = 0  -- matches binding in layout
         , dstArrayElement = 0
+        , descriptorCount = 1  -- important: must match vector length
         , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-        , imageInfo = V.singleton imageInfo
+        , imageInfo = V.singleton imageInfo  -- vector must have descriptorCount elements
+        , bufferInfo = V.empty
+        , texelBufferView = V.empty
         }
   
-  updateDescriptorSets device (V.singleton (SomeStruct writeSet)) V.empty
+  -- Update the descriptor set
+  updateDescriptorSets device 
+    (V.singleton $ SomeStruct write)  -- writes
+    V.empty                           -- copies
   
-  pure $ V.head descriptorSets
+  pure descriptorSet
 
 createTextureDescriptorPool ∷ Device → EngineM ε σ DescriptorPool
 createTextureDescriptorPool device = do
   let poolSize = zero
         { type' = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-        , descriptorCount = 1
+        , descriptorCount = 100  -- increased for multiple textures
         }
       poolInfo = zero
-        { maxSets = 1
+        { maxSets = 100  -- increased for multiple textures
         , poolSizes = V.singleton poolSize
+        , flags = zero  -- or DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT if needed
         }
   
   allocResource (\pool → destroyDescriptorPool device pool Nothing) $
@@ -221,8 +230,8 @@ createTextureDescriptorSetLayout ∷ Device → EngineM ε σ DescriptorSetLayou
 createTextureDescriptorSetLayout device = do
   let binding = zero
         { binding = 0
-        , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
         , descriptorCount = 1
+        , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
         , stageFlags = SHADER_STAGE_FRAGMENT_BIT
         , immutableSamplers = V.empty
         }

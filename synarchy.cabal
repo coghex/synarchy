@@ -17,6 +17,7 @@ category: Game
 build-type: Simple
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files: CHANGELOG.md
+data-files: dat/*
 -- defaults to no debug
 flag dev
     default: False
@@ -48,7 +49,10 @@ test-suite synarchy-test
     build-depends: base
                 , base-unicode-symbols
                 , bytestring
+                , directory
+                , filepath
                 , hspec
+                , JuicyPixels
                 , synarchy
                 , text
                 , monad-logger
