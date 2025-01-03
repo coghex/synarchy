@@ -11,6 +11,7 @@ import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Device
 import Engine.Graphics.Vulkan.Instance
 import Engine.Graphics.Vulkan.Types
+import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Sync
 import Engine.Graphics.Window.GLFW
 import Engine.Graphics.Window.Types
@@ -18,6 +19,7 @@ import Engine.Core.Monad
 import Engine.Core.Types
 import Engine.Concurrent.Var
 import Engine.Core.Error.Exception
+import Vulkan.Zero
 
 spec ∷ Window → Spec
 spec window = before initTestEnv $ do
@@ -56,11 +58,13 @@ initTestEnv = do
 
 defaultEngineState ∷ EngineState
 defaultEngineState = EngineState
-  { frameCount    = 0
-  , engineRunning = True
-  , currentTime   = 0.0
-  , deltaTime     = 0.0
-  , logFunc       = \_ _ _ _ → pure ()
+  { frameCount      = 0
+  , engineRunning   = True
+  , currentTime     = 0.0
+  , deltaTime       = 0.0
+  , logFunc         = \_ _ _ _ → pure ()
+  , textureState    = (TexturePoolState zero zero, V.empty)
+  , descriptorState = Nothing
   }
 
 -- | Run a test with the engine monad

@@ -13,6 +13,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word64)
 import qualified Vulkan.Core10 as Vk
+import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture (TextureState(..))
 
 -- | Engine environment (read-only)
@@ -26,12 +27,13 @@ data EngineEnv = EngineEnv
 
 -- | Engine state (mutable)
 data EngineState = EngineState
-  { frameCount     ∷ Word64
-  , engineRunning  ∷ Bool
-  , currentTime    ∷ Double
-  , deltaTime      ∷ Double
-  , logFunc        ∷ LoggingFunc
-  , textureState   ∷ TextureState
+  { frameCount      ∷ Word64
+  , engineRunning   ∷ Bool
+  , currentTime     ∷ Double
+  , deltaTime       ∷ Double
+  , logFunc         ∷ LoggingFunc
+  , textureState    ∷ TextureState
+  , descriptorState ∷ Maybe DescriptorManager
   }
 
 type LoggingFunc = Logger.Loc → Logger.LogSource → Logger.LogLevel

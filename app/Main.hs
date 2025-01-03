@@ -20,12 +20,12 @@ import Engine.Graphics.Types
 import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
                                    , createWindow, destroyWindow, createWindowSurface)
 import Engine.Graphics.Window.Types (WindowConfig(..))
-import Engine.Graphics.Vulkan.Types (SyncObjects(..))
+import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture (TexturePoolState(..))
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
 import Engine.Graphics.Vulkan.Command (createVulkanCommandCollection
                                       , VulkanCommandCollection(..))
-import Engine.Graphics.Vulkan.Descriptor (createVulkanDescriptorSetLayout)
+import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
 import Engine.Graphics.Vulkan.Swapchain (createVulkanSwapchain, querySwapchainSupport)
 import Engine.Graphics.Vulkan.Sync (createSyncObjects)
@@ -71,12 +71,13 @@ defaultWindowConfig = WindowConfig
 
 defaultEngineState ∷ LoggingFunc → EngineState
 defaultEngineState lf = EngineState
-  { frameCount    = 0
-  , engineRunning = True
-  , currentTime   = 0.0
-  , deltaTime     = 0.0
-  , logFunc       = lf
-  , textureState  = (TexturePoolState zero zero, V.empty)
+  { frameCount      = 0
+  , engineRunning   = True
+  , currentTime     = 0.0
+  , deltaTime       = 0.0
+  , logFunc         = lf
+  , textureState    = (TexturePoolState zero zero, V.empty)
+  , descriptorState = Nothing
   }
 
 main ∷ IO ()
@@ -135,6 +136,20 @@ main = do
 
         -- Initialize textures
         initializeTextures device physicalDevice (vccCommandPool cmdCollection) (graphicsQueue queues)
+
+        -- Create Descriptor Pool
+        let descConfig = DescriptorManagerConfig
+              { dmcMaxSets      = fromIntegral $ gcMaxFrames defaultGraphicsConfig * 2
+              , dmcUniformCount = fromIntegral $ gcMaxFrames defaultGraphicsConfig
+              , dmcSamplerCount = fromIntegral $ gcMaxFrames defaultGraphicsConfig
+              }
+        descManager ← createVulkanDescriptorManager device descConfig
+        logDebug $ "Descriptor Pool Created: " ++ show (dmPool descManager)
+
+        -- Allocate initial descriptor sets
+        descSets ← allocateVulkanDescriptorSets device descManager
+                     (fromIntegral $ gcMaxFrames defaultGraphicsConfig)
+        logDebug $ "Descriptor Sets Allocated: " ++ show (V.length descSets)
 
   
   result ← runEngineM engineAction envVar stateVar checkStatus

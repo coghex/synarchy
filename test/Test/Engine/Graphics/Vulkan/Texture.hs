@@ -203,6 +203,7 @@ defaultEngineState = EngineState
     , deltaTime     = 0.0
     , logFunc       = \_ _ _ _ → pure ()
     , textureState  = (TexturePoolState zero zero, V.empty)
+    , descriptorState = Nothing
     }
 
 runTest ∷ (Var EngineEnv, Var EngineState) 

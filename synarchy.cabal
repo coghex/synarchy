@@ -28,6 +28,7 @@ test-suite synarchy-test
     main-is: Spec.hs
     other-modules: Test.Engine.Graphics.Vulkan.Instance
                    Test.Engine.Graphics.Vulkan.Command
+                   Test.Engine.Graphics.Vulkan.Descriptor
                    Test.Engine.Graphics.Vulkan.Device
                    Test.Engine.Graphics.Vulkan.Swapchain
                    Test.Engine.Graphics.Vulkan.Sync
