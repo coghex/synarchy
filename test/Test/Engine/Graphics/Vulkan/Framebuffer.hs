@@ -7,9 +7,12 @@ import qualified Data.Text as T
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Device
 import Engine.Graphics.Vulkan.Instance
-import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Image
+import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.Framebuffer
+import Engine.Graphics.Vulkan.Pipeline
+import Engine.Graphics.Vulkan.Swapchain
+import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Window.GLFW
 import Engine.Graphics.Window.Types
 import Engine.Core.Monad
@@ -21,7 +24,7 @@ import Vulkan.Zero
 
 spec ∷ Window → Spec
 spec window = before initTestEnv $ do
-    describe "Framebuffer Creation" $ do
+    describe "Vulkan Framebuffer" $ do
         it "creates framebuffers for swapchain images" $ \env → do
             result ← runTest env $ do
                 let config = GraphicsConfig
@@ -37,44 +40,52 @@ spec window = before initTestEnv $ do
                 surface ← createWindowSurface window inst
                 pdev ← pickPhysicalDevice inst surface
                 (device, queues) ← createVulkanDevice inst pdev surface
+                
+                -- Create swapchain and get images
                 swapInfo ← createVulkanSwapchain pdev device queues surface
+                imageViews ← createSwapchainImageViews device swapInfo
                 renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo)
                 
-                -- Create image views for swapchain images
-                imageViews ← createSwapchainImageViews device (siSwapImgFormat swapInfo) (siSwapImgs swapInfo)
-                
                 -- Test framebuffer creation
-                framebuffers ← createFramebuffers device renderPass swapInfo imageViews
-                pure framebuffers
+                framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews
+                
+                pure (framebuffers, V.length $ siSwapImgs swapInfo)
             
             case result of
                 Left err → expectationFailure $ show err
-                Right framebuffers → do
-                    V.length framebuffers `shouldBe` V.length (siSwapImgs swapInfo)
-                    V.all (/= zero) framebuffers `shouldBe` True
+                Right (framebuffers, expectedCount) → do
+                    V.length framebuffers `shouldBe` expectedCount
+                    all (/= zero) framebuffers `shouldBe` True
 
--- Helper functions
+        it "correctly cleans up framebuffers" $ \env → do
+            result ← runTest env $ do
+                let config = GraphicsConfig
+                      { gcAppName   = T.pack "Framebuffer Test"
+                      , gcWidth     = 1
+                      , gcHeight    = 1
+                      , gcDebugMode = False
+                      , gcMaxFrames = 2
+                      }
+                
+                -- Create necessary Vulkan objects
+                (inst, _) ← createVulkanInstance config
+                surface ← createWindowSurface window inst
+                pdev ← pickPhysicalDevice inst surface
+                (device, queues) ← createVulkanDevice inst pdev surface
+                
+                -- Create and immediately destroy framebuffers
+                swapInfo ← createVulkanSwapchain pdev device queues surface
+                imageViews ← createSwapchainImageViews device swapInfo
+                renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo)
+                framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews
+                
+                pure True
+            
+            case result of
+                Left err → expectationFailure $ show err
+                Right success → success `shouldBe` True
 
-defaultTestConfig ∷ GraphicsConfig
-defaultTestConfig = GraphicsConfig
-    { gcAppName   = T.pack "Framebuffer Test"
-    , gcWidth     = 1
-    , gcHeight    = 1
-    , gcDebugMode = False
-    , gcMaxFrames = 2
-    }
-
--- Modify initializeVulkan to return queue information
-initializeVulkan ∷ GraphicsConfig → Window 
-                 → EngineM ε σ (Device, PhysicalDevice, DevQueues)
-initializeVulkan config window = do
-    (inst, _) ← createVulkanInstance config
-    surface ← createWindowSurface window inst
-    pdev ← pickPhysicalDevice inst surface
-    (device, queues) ← createVulkanDevice inst pdev surface
-    pure (device, pdev, queues)
-
--- Test environment setup (same as before)
+-- | Initialize test environment
 initTestEnv ∷ IO (Var EngineEnv, Var EngineState)
 initTestEnv = do
     envVar ← atomically $ newVar (undefined ∷ EngineEnv)
@@ -83,12 +94,12 @@ initTestEnv = do
 
 defaultEngineState ∷ EngineState
 defaultEngineState = EngineState
-    { frameCount    = 0
-    , engineRunning = True
-    , currentTime   = 0.0
-    , deltaTime     = 0.0
-    , logFunc       = \_ _ _ _ → pure ()
-    , textureState  = (TexturePoolState zero zero, V.empty)
+    { frameCount      = 0
+    , engineRunning   = True
+    , currentTime     = 0.0
+    , deltaTime       = 0.0
+    , logFunc         = \_ _ _ _ → pure ()
+    , textureState    = (TexturePoolState zero zero, V.empty)
     , descriptorState = Nothing
     }
 

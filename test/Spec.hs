@@ -5,6 +5,7 @@ import UPrelude
 import Test.Hspec
 import qualified Test.Engine.Graphics.Vulkan.Command as Command
 import qualified Test.Engine.Graphics.Vulkan.Descriptor as Descriptor
+import qualified Test.Engine.Graphics.Vulkan.Framebuffer as Framebuffer
 import qualified Test.Engine.Graphics.Vulkan.Device as VulkanDevice
 import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import qualified Test.Engine.Core.Monad as CoreMonad
@@ -61,4 +62,5 @@ main = do
         describe "Descriptor" (Descriptor.spec (Window window))
         describe "Texture" (Texture.spec (Window window))
         describe "Shader" (Shader.spec (Window window))
+        describe "Framebuffer" (Framebuffer.spec (Window window))
     )

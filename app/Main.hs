@@ -27,7 +27,7 @@ import Engine.Graphics.Vulkan.Command (createVulkanCommandCollection
                                       , VulkanCommandCollection(..))
 import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
---import Engine.Graphics.Vulkan.Framebuffer (createFramebuffers)
+import Engine.Graphics.Vulkan.Framebuffer (createVulkanFramebuffers)
 import Engine.Graphics.Vulkan.Pipeline
 import Engine.Graphics.Vulkan.Swapchain (createVulkanSwapchain, querySwapchainSupport
                                         , createSwapchainImageViews)
@@ -166,13 +166,12 @@ main = do
         logDebug $ "PipelineLayout: " ⧺ show pipelineLayout
 
         -- create swapchain image views
-        --imageViews ← createSwapchainImageViews device (siSwapImgFormat swapInfo)
-        --               (siSwapImgs swapInfo)
-        --logDebug $ "ImageViews: " ⧺ show (length imageViews)
+        imageViews ← createSwapchainImageViews device swapInfo
+        logDebug $ "ImageViews: " ⧺ show (length imageViews)
         
         -- create framebuffers
-        --framebuffers ← createFramebuffers device renderPass swapInfo imageViews
-        --logDebug $ "Framebuffers: " ⧺ show (length framebuffers)
+        framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews
+        logDebug $ "Framebuffers: " ⧺ show (length framebuffers)
 
   
   result ← runEngineM engineAction envVar stateVar checkStatus
