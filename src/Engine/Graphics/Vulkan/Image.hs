@@ -7,6 +7,7 @@ module Engine.Graphics.Vulkan.Image
   , createTextureImage
   , copyBufferToImage
   , VulkanImage(..)
+  , createSwapchainImageViews
   ) where
 
 import UPrelude
@@ -158,3 +159,21 @@ copyBufferToImage cmdBuf buffer (VulkanImage image _) width height
                                                  , height = height
                                                  , depth  = 1 } }
 
+-- | Create image views for each image in the swapchain
+createSwapchainImageViews ∷ Device → Format → V.Vector Image → EngineM ε σ (V.Vector ImageView)
+createSwapchainImageViews device format images = do
+  let createInfo image = zero
+        { image = image
+        , viewType = IMAGE_VIEW_TYPE_2D
+        , format = format
+        , subresourceRange = zero
+            { aspectMask = IMAGE_ASPECT_COLOR_BIT
+            , baseMipLevel = 0
+            , levelCount = 1
+            , baseArrayLayer = 0
+            , layerCount = 1
+            }
+        }
+  
+  allocResource (\ivs → V.mapM_ (flip (destroyImageView device) Nothing) ivs) $
+    V.mapM (\image → createImageView device (createInfo image) Nothing) images
