@@ -27,6 +27,7 @@ import Engine.Graphics.Vulkan.Command (createVulkanCommandCollection
                                       , VulkanCommandCollection(..))
 import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
+import Engine.Graphics.Vulkan.Pipeline
 import Engine.Graphics.Vulkan.Swapchain (createVulkanSwapchain, querySwapchainSupport)
 import Engine.Graphics.Vulkan.Sync (createSyncObjects)
 import Engine.Graphics.Vulkan.Texture
@@ -78,6 +79,7 @@ defaultEngineState lf = EngineState
   , logFunc         = lf
   , textureState    = (TexturePoolState zero zero, V.empty)
   , descriptorState = Nothing
+  , pipelineState   = Nothing
   }
 
 main ∷ IO ()
@@ -110,17 +112,17 @@ main = do
         
         -- Print some info about the device
         props ← liftIO $ getPhysicalDeviceProperties physicalDevice
-        logDebug $ "Selected device: " ++ show (deviceName props)
+        logDebug $ "Selected device: " ⧺ show (deviceName props)
         
         -- Test swapchain creation
         swapInfo ← createVulkanSwapchain physicalDevice device
                                          queues surface
-        logDebug $ "Swapchain Format: " ++ show (siSwapImgFormat swapInfo)
+        logDebug $ "Swapchain Format: " ⧺ show (siSwapImgFormat swapInfo)
 
         -- Test swapchain support query
         support ← querySwapchainSupport physicalDevice surface
-        logDebug $ "Available Formats: " ++ show (length $ formats support)
-        logDebug $ "Available Present Modes: " ++ show (presentModes support)
+        logDebug $ "Available Formats: " ⧺ show (length $ formats support)
+        logDebug $ "Available Present Modes: " ⧺ show (presentModes support)
 
         -- Create sync objects
         syncObjects ← createSyncObjects device defaultGraphicsConfig
@@ -128,11 +130,11 @@ main = do
         -- Create command pool and buffers
         cmdCollection ← createVulkanCommandCollection device queues
                           (fromIntegral $ length $ imageAvailableSemaphores syncObjects)
-        logDebug $ "CommandPool: " ++ show (length $ vccCommandBuffers cmdCollection)
+        logDebug $ "CommandPool: " ⧺ show (length $ vccCommandBuffers cmdCollection)
 
         -- Create descriptor set layout
         descSetLayout ← createVulkanDescriptorSetLayout device
-        logDebug $ "DescriptorSetLayout: " ++ show descSetLayout
+        logDebug $ "DescriptorSetLayout: " ⧺ show descSetLayout
 
         -- Initialize textures
         initializeTextures device physicalDevice (vccCommandPool cmdCollection) (graphicsQueue queues)
@@ -144,12 +146,22 @@ main = do
               , dmcSamplerCount = fromIntegral $ gcMaxFrames defaultGraphicsConfig
               }
         descManager ← createVulkanDescriptorManager device descConfig
-        logDebug $ "Descriptor Pool Created: " ++ show (dmPool descManager)
+        logDebug $ "Descriptor Pool Created: " ⧺ show (dmPool descManager)
 
         -- Allocate initial descriptor sets
         descSets ← allocateVulkanDescriptorSets device descManager
                      (fromIntegral $ gcMaxFrames defaultGraphicsConfig)
-        logDebug $ "Descriptor Sets Allocated: " ++ show (V.length descSets)
+        logDebug $ "Descriptor Sets Allocated: " ⧺ show (V.length descSets)
+
+        -- create render pass
+        renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo)
+        logDebug $ "RenderPass: " ⧺ show renderPass
+
+        -- create pipeline
+        (pipeline, pipelineLayout) ← createVulkanRenderPipeline device renderPass
+                                       (siSwapExtent swapInfo) descSetLayout
+        logDebug $ "Pipeline: " ⧺ show pipeline
+        logDebug $ "PipelineLayout: " ⧺ show pipelineLayout
 
   
   result ← runEngineM engineAction envVar stateVar checkStatus

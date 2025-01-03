@@ -34,6 +34,7 @@ data EngineState = EngineState
   , logFunc         ∷ LoggingFunc
   , textureState    ∷ TextureState
   , descriptorState ∷ Maybe DescriptorManager
+  , pipelineState   ∷ Maybe PipelineState
   }
 
 type LoggingFunc = Logger.Loc → Logger.LogSource → Logger.LogLevel

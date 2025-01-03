@@ -53,3 +53,9 @@ data DescriptorManager = DescriptorManager
   , dmActiveSets     ∷ V.Vector DescriptorSet
   } deriving (Show)
 
+-- Add to your existing types
+data PipelineState = PipelineState
+    { psPipeline       ∷ Pipeline
+    , psPipelineLayout ∷ PipelineLayout
+    , psRenderPass     ∷ RenderPass
+    } deriving (Show)

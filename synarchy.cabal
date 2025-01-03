@@ -47,6 +47,7 @@ test-suite synarchy-test
                      , TypeFamilyDependencies
                      , UnicodeSyntax
                      , ViewPatterns
+                     , QuasiQuotes
     build-depends: base
                 , base-unicode-symbols
                 , bytestring
@@ -62,6 +63,7 @@ test-suite synarchy-test
                 , vector
                 , GLFW-b
                 , vulkan
+                , vulkan-utils
     default-language: GHC2024
     if flag(dev)
       if os(darwin)
@@ -78,6 +80,11 @@ test-suite synarchy-test
                        -haddock
                        -rtsopts
                        -with-rtsopts=-N
+                       -fno-full-laziness
+                       -fno-cse
+                       -fPIC
+                       -optl-Wl,-dead_strip
+                       -optl-Wl,-bind_at_load
       else
           cpp-options: -DDEVELOPMENT
           ghc-options: -O0
@@ -119,18 +126,21 @@ library
                      Engine.Event.Types
                      Engine.Graphics.Types
                      Engine.Graphics.Vulkan.Buffer
-                     Engine.Graphics.Vulkan.Instance
-                     Engine.Graphics.Vulkan.Image
                      Engine.Graphics.Vulkan.Command
                      Engine.Graphics.Vulkan.Descriptor
                      Engine.Graphics.Vulkan.Device
+                     Engine.Graphics.Window.GLFW
+                     Engine.Graphics.Vulkan.Image
+                     Engine.Graphics.Vulkan.Instance
+                     Engine.Graphics.Vulkan.Pipeline
                      Engine.Graphics.Vulkan.Sampler
+                     Engine.Graphics.Vulkan.Shader
+                     Engine.Graphics.Vulkan.ShaderCode
                      Engine.Graphics.Vulkan.Swapchain
                      Engine.Graphics.Vulkan.Sync
                      Engine.Graphics.Vulkan.Types
                      Engine.Graphics.Vulkan.Types.Texture
                      Engine.Graphics.Vulkan.Texture
-                     Engine.Graphics.Window.GLFW
                      Engine.Graphics.Window.Types
                      Engine.Core.Monad
                      Engine.Core.Types
@@ -151,6 +161,7 @@ library
                       , TypeFamilyDependencies
                       , UnicodeSyntax
                       , ViewPatterns
+                      , QuasiQuotes
     other-extensions: Strict
                     , StrictData
                     , TemplateHaskell
@@ -193,6 +204,11 @@ library
                        -haddock
                        -rtsopts
                        -with-rtsopts=-N
+                       -fno-full-laziness
+                       -fno-cse
+                       -fPIC
+                       -optl-Wl,-dead_strip
+                       -optl-Wl,-bind_at_load
       else
           cpp-options: -DDEVELOPMENT
           ghc-options: -O0
@@ -247,6 +263,7 @@ executable synarchy
                       , TypeFamilyDependencies
                       , UnicodeSyntax
                       , ViewPatterns
+                      , QuasiQuotes
     other-extensions: Strict
                     , StrictData
                     , TemplateHaskell
