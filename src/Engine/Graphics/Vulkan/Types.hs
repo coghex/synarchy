@@ -3,7 +3,7 @@
 module Engine.Graphics.Vulkan.Types where
 import UPrelude
 import qualified Data.Vector as V
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Vulkan.Core10
 import Vulkan.Extensions.VK_EXT_debug_utils
 import Vulkan.Extensions.VK_EXT_validation_features
@@ -59,3 +59,6 @@ data PipelineState = PipelineState
     , psPipelineLayout ∷ PipelineLayout
     , psRenderPass     ∷ RenderPass
     } deriving (Show)
+
+maxTimeout ∷ Word64
+maxTimeout = maxBound

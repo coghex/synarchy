@@ -163,7 +163,7 @@ runCommandsOnce device commandPool cmdQueue action = do
 recordRenderCommandBuffer ∷ CommandBuffer → Word64 → EngineM ε σ ()
 recordRenderCommandBuffer cmdBuf frameIdx = do
     state ← get
-    logDebug $ "Recording command buffer for frame " <> show frameIdx
+    --logDebug $ "Recording command buffer for frame " <> show frameIdx
     pState ← case pipelineState state of
         Nothing → throwEngineException $ EngineException ExGraphics
             "Pipeline state not initialized"
@@ -187,15 +187,15 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
             Nothing → throwEngineException $ EngineException ExGraphics
               "Framebuffer not found"
             Just fb1 → pure fb1
-    se ← case (swapchainExtent state) of
+    si ← case (swapchainInfo state) of
         Nothing → throwEngineException $ EngineException ExGraphics
             "Swapchain extent not initialized"
-        Just se0 → pure se0
+        Just si0 → pure si0
     -- Begin render pass with correct clear value types
     let renderPassInfo = (zero ∷ RenderPassBeginInfo '[])
           { renderPass  = rp
           , framebuffer = fb
-          , renderArea  = Rect2D (Offset2D 0 0) se
+          , renderArea  = Rect2D (Offset2D 0 0) (siSwapExtent si)
           , clearValues = V.singleton zero
           }
     

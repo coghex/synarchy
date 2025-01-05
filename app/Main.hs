@@ -3,11 +3,13 @@ module Main where
 
 import UPrelude
 import Control.Exception (displayException, throwIO)
-import Control.Monad (void, when, forM_)
+import Control.Monad (void, when, forM_, unless)
 import qualified Control.Monad.Logger.CallStack as Logger
-import Control.Monad.State (modify, get)
+import Control.Monad.State (modify, get, gets)
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import Data.Maybe (fromJust)
+import Data.Word (Word32, Word64)
 import System.Environment (setEnv)
 import System.Exit ( exitFailure )
 import System.FilePath ((</>))
@@ -19,7 +21,7 @@ import Engine.Concurrent.Var
 import Engine.Graphics.Types
 import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
                                    , createWindow, destroyWindow, createWindowSurface)
-import Engine.Graphics.Window.Types (WindowConfig(..))
+import Engine.Graphics.Window.Types (WindowConfig(..), Window(..))
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture (TexturePoolState(..))
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
@@ -35,8 +37,10 @@ import Engine.Graphics.Vulkan.Texture
 import Engine.Graphics.Vulkan.Vertex
 import Engine.Graphics.Vulkan.Types.Texture
 import qualified Engine.Graphics.Window.GLFW as GLFW
+import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Zero
+import Vulkan.Extensions.VK_KHR_swapchain
 import Control.Monad.IO.Class (liftIO)
 
 defaultEngineConfig ∷ EngineConfig
@@ -89,7 +93,7 @@ defaultEngineState lf = EngineState
   , pipelineState    = Nothing
   , currentFrame     = 0
   , framebuffers     = Nothing
-  , swapchainExtent  = Nothing
+  , swapchainInfo    = Nothing
   , syncObjects      = Nothing
   , vertexBuffer     = Nothing
   }
@@ -112,6 +116,7 @@ main = do
       engineAction = do
         -- Initialize GLFW first
         window ← GLFW.createWindow defaultWindowConfig
+        modify $ \s → s { glfwWindow = Just window }
         
         -- Create Vulkan instance
         (vkInstance, _debugMessenger) ← createVulkanInstance defaultGraphicsConfig
@@ -122,6 +127,10 @@ main = do
         -- Select physical device and create logical device
         physicalDevice ← pickPhysicalDevice vkInstance surface
         (device, queues) ← createVulkanDevice vkInstance physicalDevice surface
+        modify $ \s → s { vulkanInstance = Just vkInstance
+                        , vulkanDevice = Just device
+                        , deviceQueues = Just queues
+                        }
         
         -- Print some info about the device
         props ← liftIO $ getPhysicalDeviceProperties physicalDevice
@@ -131,7 +140,7 @@ main = do
         swapInfo ← createVulkanSwapchain physicalDevice device
                                          queues surface
         logDebug $ "Swapchain Format: " ⧺ show (siSwapImgFormat swapInfo)
-        modify $ \s → s { swapchainExtent = Just (siSwapExtent swapInfo) }
+        modify $ \s → s { swapchainInfo = Just swapInfo }
         let numImages = length $ siSwapImgs swapInfo
 
         -- Test swapchain support query
@@ -141,11 +150,15 @@ main = do
 
         -- Create sync objects
         syncObjects ← createSyncObjects device defaultGraphicsConfig
+        modify $ \s → s { syncObjects = Just syncObjects }
 
         -- Create command pool and buffers
         cmdCollection ← createVulkanCommandCollection device queues
                           (fromIntegral $ length $ imageAvailableSemaphores syncObjects)
         logDebug $ "CommandPool: " ⧺ show (length $ vccCommandBuffers cmdCollection)
+        modify $ \s → s { vulkanCmdPool = Just (vccCommandPool cmdCollection)
+                        , vulkanCmdBuffers = Just (vccCommandBuffers cmdCollection)
+                        }
 
         -- Create Descriptor Pool
         let descConfig = DescriptorManagerConfig
@@ -208,15 +221,15 @@ main = do
           throwEngineException $ EngineException ExGraphics
                                    "Resource count mismatch"
 
-        -- Now safe to record commands
-        forM_ [0..(numImages-1)] $ \i → do
-            let cmdBuffer = vccCommandBuffers cmdCollection V.! i
-                frameBuffer = framebuffers V.! i
-                descSet = descSets V.! i
-
-            recordRenderCommandBuffer cmdBuffer $ fromIntegral i
-
+        -- Record initial command buffers
+        state ← get
+        let numImages = maybe 0 V.length (vulkanCmdBuffers state)
+        forM_ [0..numImages-1] $ \i → do
+            recordRenderCommandBuffer 
+                (fromJust (vulkanCmdBuffers state) V.! i) 
+                (fromIntegral i)
             logDebug $ "Recorded command buffer " ⧺ show i
+        mainLoop
   
   result ← runEngineM engineAction envVar stateVar checkStatus
   case result of
@@ -254,3 +267,102 @@ initializeTextures device physicalDevice cmdPool queue = do
   }
   
   logDebug "Textures initialized successfully"
+
+drawFrame ∷ EngineM' EngineEnv ()
+drawFrame = do
+    state ← get
+    
+    -- Get current frame index
+    let currentFrameIdx = currentFrame state
+    
+    -- Get sync objects for current frame
+    syncObjs ← case syncObjects state of
+        Nothing → throwEngineException $ EngineException ExGraphics "No sync objects"
+        Just s → pure s
+    
+    let inFlightFence = inFlightFences syncObjs V.! fromIntegral currentFrameIdx
+        imageAvailableSemaphore = imageAvailableSemaphores syncObjs V.! fromIntegral currentFrameIdx
+        renderFinishedSemaphore = renderFinishedSemaphores syncObjs V.! fromIntegral currentFrameIdx
+
+    -- Wait for previous frame
+    device ← case vulkanDevice state of
+        Nothing → throwEngineException $ EngineException ExGraphics "No device"
+        Just d → pure d
+    
+    liftIO $ waitForFences device (V.singleton inFlightFence) True maxTimeout
+    liftIO $ resetFences device (V.singleton inFlightFence)
+    
+    -- Acquire next image
+    swapchain ← case swapchainInfo state of
+        Nothing → throwEngineException $ EngineException ExGraphics "No swapchain"
+        Just si → pure $ siSwapchain si
+        
+    (acquireResult, imageIndex) ← liftIO $ acquireNextImageKHR 
+        device 
+        swapchain
+        maxTimeout 
+        imageAvailableSemaphore
+        zero
+    
+    when (acquireResult ≠ SUCCESS && acquireResult ≠ SUBOPTIMAL_KHR) $
+        throwEngineException $ EngineException ExGraphics $
+            T.pack $ "Failed to acquire next image: " ⧺ show acquireResult
+
+    -- Get command buffer
+    cmdBuffers ← case vulkanCmdBuffers state of
+        Nothing → throwEngineException $ EngineException ExGraphics "No command buffers"
+        Just cb → pure cb
+        
+    let cmdBuffer = cmdBuffers V.! fromIntegral imageIndex
+        waitStages = V.singleton PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+        submitInfo = zero 
+            { waitSemaphores = V.singleton imageAvailableSemaphore
+            , waitDstStageMask = waitStages
+            , commandBuffers = V.singleton (commandBufferHandle cmdBuffer)
+            , signalSemaphores = V.singleton renderFinishedSemaphore
+            }
+    liftIO $ resetCommandBuffer cmdBuffer zero
+    recordRenderCommandBuffer cmdBuffer $ fromIntegral imageIndex
+    
+    queues ← case deviceQueues state of
+        Nothing → throwEngineException $ EngineException ExGraphics "No queues"
+        Just q → pure q
+    
+    liftIO $ queueSubmit (graphicsQueue queues) (V.singleton $ SomeStruct submitInfo) inFlightFence
+
+    -- Present
+    let presentInfo = zero
+            { waitSemaphores = V.singleton renderFinishedSemaphore
+            , swapchains = V.singleton swapchain
+            , imageIndices = V.singleton imageIndex
+            }
+    
+    presentResult ← liftIO $ queuePresentKHR (presentQueue queues) presentInfo
+    case presentResult of
+        SUCCESS → pure ()
+        SUBOPTIMAL_KHR → pure ()
+        err → throwEngineException $ EngineException ExGraphics $
+                T.pack $ "Failed to present image: " ⧺ show err
+    
+    -- Update frame index
+    modify $ \s → s { currentFrame = (currentFrame s + 1) `mod` 2 }
+
+mainLoop ∷ EngineM' EngineEnv ()
+mainLoop = do
+    state ← get
+    running ← gets engineRunning
+    
+    unless (not running) $ do
+        window ← case glfwWindow state of
+            Nothing → throwEngineException $ EngineException ExGraphics "No window"
+            Just w → pure w
+            
+        -- Convert Window type to GLFW Window for these calls
+        let glfwWindow = case window of
+                Window w → w
+        
+        GLFW.pollEvents
+        shouldClose ← GLFW.windowShouldClose glfwWindow
+        unless shouldClose $ do
+            drawFrame
+            mainLoop
