@@ -34,6 +34,7 @@ test-suite synarchy-test
                    Test.Engine.Graphics.Vulkan.Swapchain
                    Test.Engine.Graphics.Vulkan.Sync
                    Test.Engine.Graphics.Vulkan.Texture
+                   Test.Engine.Graphics.Vulkan.Framebuffer
                    Test.Engine.Core.Monad
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
@@ -131,7 +132,6 @@ library
                      Engine.Graphics.Vulkan.Descriptor
                      Engine.Graphics.Vulkan.Device
                      Engine.Graphics.Vulkan.Framebuffer
-                     Engine.Graphics.Window.GLFW
                      Engine.Graphics.Vulkan.Image
                      Engine.Graphics.Vulkan.Instance
                      Engine.Graphics.Vulkan.Pipeline
@@ -143,6 +143,8 @@ library
                      Engine.Graphics.Vulkan.Types
                      Engine.Graphics.Vulkan.Types.Texture
                      Engine.Graphics.Vulkan.Texture
+                     Engine.Graphics.Vulkan.Vertex
+                     Engine.Graphics.Window.GLFW
                      Engine.Graphics.Window.Types
                      Engine.Core.Monad
                      Engine.Core.Types

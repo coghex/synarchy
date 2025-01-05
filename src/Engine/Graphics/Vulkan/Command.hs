@@ -2,6 +2,7 @@
 module Engine.Graphics.Vulkan.Command
   ( createVulkanCommandPool
   , createVulkanCommandCollection
+  , recordRenderCommandBuffer
   , allocateVulkanCommandBuffer
   , allocateVulkanCommandBuffers
   , destroyVulkanCommandPool
@@ -13,12 +14,18 @@ module Engine.Graphics.Vulkan.Command
   ) where
 
 import UPrelude
+import Control.Monad (forM_, when)
+import Control.Monad.Reader (ask)
+import Control.Monad.State (get)
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.Vector as V
+import Data.Word (Word64)
+import Engine.Core.Types
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource, locally)
 import Engine.Core.Error.Exception
 import Engine.Graphics.Types
+import Engine.Graphics.Vulkan.Types
 import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Zero
@@ -152,3 +159,103 @@ runCommandsOnce device commandPool cmdQueue action = do
     waitForFences device (V.singleton fence) True maxBound
   
   pure result
+
+recordRenderCommandBuffer ∷ CommandBuffer → Word64 → EngineM ε σ ()
+recordRenderCommandBuffer cmdBuf frameIdx = do
+    state ← get
+    logDebug $ "Recording command buffer for frame " <> show frameIdx
+    pState ← case pipelineState state of
+        Nothing → throwEngineException $ EngineException ExGraphics
+            "Pipeline state not initialized"
+        Just ps → pure ps
+    
+    beginVulkanCommandBuffer cmdBuf
+    
+    rp ← case (vulkanRenderPass state) of
+        Nothing  → throwEngineException $ EngineException ExGraphics
+            "Render pass not initialized"
+        Just rp0 → pure rp0
+    fb ← case (framebuffers state) of
+        Nothing → throwEngineException $ EngineException ExGraphics
+            "Framebuffer not initialized"
+        Just fb0 → do
+          let maxFrameIdx = fromIntegral $ V.length fb0 - 1
+          when (frameIdx > maxFrameIdx) $
+            throwEngineException $ EngineException ExGraphics
+              "Frame index out of bounds"
+          case (fb0 V.!? fromIntegral frameIdx) of
+            Nothing → throwEngineException $ EngineException ExGraphics
+              "Framebuffer not found"
+            Just fb1 → pure fb1
+    se ← case (swapchainExtent state) of
+        Nothing → throwEngineException $ EngineException ExGraphics
+            "Swapchain extent not initialized"
+        Just se0 → pure se0
+    -- Begin render pass with correct clear value types
+    let renderPassInfo = (zero ∷ RenderPassBeginInfo '[])
+          { renderPass  = rp
+          , framebuffer = fb
+          , renderArea  = Rect2D (Offset2D 0 0) se
+          , clearValues = V.singleton zero
+          }
+    
+    cmdBeginRenderPass cmdBuf renderPassInfo SUBPASS_CONTENTS_INLINE
+    
+    -- Bind pipeline using PipelineState
+    cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS (psPipeline pState)
+    
+    -- Bind descriptor sets (if we have them)
+    forM_ (descriptorState state) $ \descManager → do
+        case V.length (dmActiveSets descManager) of
+            0 → throwEngineException $ EngineException ExGraphics
+               "No active descriptor sets available"
+            _ → do
+               let descSet = V.head $ dmActiveSets descManager
+               cmdBindDescriptorSets cmdBuf 
+                   PIPELINE_BIND_POINT_GRAPHICS 
+                   (psPipelineLayout pState)
+                   0
+                   (V.singleton descSet)
+                   V.empty
+    
+    -- Bind vertex buffer (if we have it)
+    forM_ (vertexBuffer state) $ \(vBuf, _) →
+        cmdBindVertexBuffers cmdBuf 
+            0
+            (V.singleton vBuf)
+            (V.singleton 0)
+    
+    -- Draw command
+    cmdDraw cmdBuf
+        6    -- vertex count (adjust based on your needs)
+        1    -- instance count
+        0    -- first vertex
+        0    -- first instance
+    
+    -- End render pass and command buffer
+    cmdEndRenderPass cmdBuf
+    endVulkanCommandBuffer cmdBuf
+
+-- Helper function to prepare all command buffers
+prepareFrameCommandBuffers ∷ EngineM ε σ ()
+prepareFrameCommandBuffers = do
+    state ← get
+
+    case (vulkanDevice state) of
+        Nothing → throwEngineException $ EngineException ExGraphics
+            "Vulkan device not initialized"
+        Just dev → case (vulkanCmdPool state) of
+            Nothing → throwEngineException $ EngineException ExGraphics
+                "Vulkan command pool not initialized"
+            Just cmdPool → case (vulkanCmdBuffers state) of
+                Nothing → throwEngineException $ EngineException ExGraphics
+                    "Vulkan command buffers not initialized"
+                Just cmdBuffers → do
+                           -- Reset command pool
+                           resetCommandPool dev cmdPool zero
+                           -- Record command buffer for each frame
+                           V.zipWithM_ (recordRenderCommandBuffer)
+                                       cmdBuffers
+                                       (V.generate 
+                                         (V.length cmdBuffers)
+                                         fromIntegral)

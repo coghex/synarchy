@@ -160,7 +160,6 @@ defaultTestConfig = GraphicsConfig
     , gcMaxFrames = 2
     }
 
--- Modify initializeVulkan to return queue information
 initializeVulkan ∷ GraphicsConfig → Window 
                  → EngineM ε σ (Device, PhysicalDevice, DevQueues)
 initializeVulkan config window = do

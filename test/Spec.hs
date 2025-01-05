@@ -13,6 +13,7 @@ import qualified Test.Engine.Graphics.Vulkan.Shader as Shader
 import qualified Test.Engine.Graphics.Vulkan.Swapchain as Swapchain
 import qualified Test.Engine.Graphics.Vulkan.Sync as Sync
 import qualified Test.Engine.Graphics.Vulkan.Texture as Texture
+import qualified Test.Engine.Graphics.Vulkan.Vertex as Vertex
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
 import qualified Graphics.UI.GLFW as GLFW
@@ -63,4 +64,5 @@ main = do
         describe "Texture" (Texture.spec (Window window))
         describe "Shader" (Shader.spec (Window window))
         describe "Framebuffer" (Framebuffer.spec (Window window))
+        describe "Vertex" (Vertex.spec (Window window))
     )
