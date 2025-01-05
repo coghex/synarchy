@@ -17,10 +17,16 @@ import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture (TextureState(..))
 import Engine.Graphics.Window.Types
+import Engine.Core.Queue
+import Engine.Event.Types
+import Engine.Input.Types
 
 -- | Engine environment (read-only)
 data EngineEnv = EngineEnv
   { engineConfig     ∷ EngineConfig
+  , eventQueue       ∷ Queue Event
+  , inputQueue       ∷ Queue InputEvent
+  , logQueue         ∷ Queue T.Text
   }
 
 -- | Engine state (mutable)
@@ -32,6 +38,7 @@ data EngineState = EngineState
   , frameTimeAccum   ∷ Double
   , lastFrameTime    ∷ Double
   , targetFPS        ∷ Double
+  , inputState       ∷ InputState
   , logFunc          ∷ LoggingFunc
   , glfwWindow       ∷ Maybe Window
   , vulkanInstance   ∷ Maybe Vk.Instance

@@ -9,6 +9,7 @@ module Engine.Event.Types
 import UPrelude
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
+import Engine.Input.Types
 
 data Event
   = EventError T.Text T.Text            -- ^ Error event with source and message
@@ -22,27 +23,6 @@ data LogLevel
   | LogInfo
   | LogWarn
   | LogError
-  deriving (Show, Eq)
-
-data InputEvent
-  = KeyInput 
-      { window ∷ GLFW.Window
-      , key ∷ GLFW.Key
-      , scancode ∷ Int
-      , keyaction ∷ GLFW.KeyState
-      , mods ∷ GLFW.ModifierKeys
-      }
-  | MouseButton
-      { window ∷ GLFW.Window
-      , button ∷ GLFW.MouseButton
-      , mouseaction ∷ GLFW.MouseButtonState
-      , mods ∷ GLFW.ModifierKeys
-      }
-  | MouseScroll
-      { window ∷ GLFW.Window
-      , xOffset ∷ Double
-      , yOffset ∷ Double
-      }
   deriving (Show, Eq)
 
 data SystemAction

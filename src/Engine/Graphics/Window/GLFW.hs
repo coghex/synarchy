@@ -14,6 +14,8 @@ module Engine.Graphics.Window.GLFW
   , pollEvents
   , waitEvents
   , waitEventsTimeout
+    -- * Keyboard and Mouse Input
+  , GLFW.setKeyCallback
     -- * Vulkan Integration
   , getRequiredInstanceExtensions
   , createWindowSurface

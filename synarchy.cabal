@@ -146,10 +146,16 @@ library
                      Engine.Graphics.Vulkan.Vertex
                      Engine.Graphics.Window.GLFW
                      Engine.Graphics.Window.Types
+                     Engine.Input.Callback
+                     Engine.Input.Event
+                     Engine.Input.Types
+                     Engine.Input.Thread
+                     Engine.Input.Keyboard
                      Engine.Core.Monad
                      Engine.Core.Types
                      Engine.Core.Error.Exception
                      Engine.Core.Resource
+                     Engine.Core.Queue
                      Engine.Concurrent.Var
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures

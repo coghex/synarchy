@@ -3,9 +3,10 @@ module Main where
 
 import UPrelude
 import Control.Exception (displayException, throwIO)
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (threadDelay, forkIO)
 import Control.Monad (void, when, forM_, unless)
 import qualified Control.Monad.Logger.CallStack as Logger
+import Control.Monad.Reader (ask)
 import Control.Monad.State (modify, get, gets)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -18,9 +19,15 @@ import System.FilePath ((</>))
 import Engine.Core.Monad (runEngineM, EngineM')
 import Engine.Core.Types
 import Engine.Core.Resource
+import qualified Engine.Core.Queue as Q
 import Engine.Core.Error.Exception
 import Engine.Concurrent.Var
 import Engine.Graphics.Types
+import Engine.Input.Keyboard
+import Engine.Input.Types
+import Engine.Input.Thread (inputThread)
+import Engine.Input.Event (handleInputEvents)
+import Engine.Input.Callback (setupCallbacks)
 import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
                                    , createWindow, destroyWindow, createWindowSurface)
 import Engine.Graphics.Window.Types (WindowConfig(..), Window(..))
@@ -87,6 +94,7 @@ defaultEngineState lf = EngineState
   , frameTimeAccum   = 0.0
   , lastFrameTime    = 0.0
   , targetFPS        = 60.0
+  , inputState       = defaultInputState
   , logFunc          = lf
   , vulkanInstance   = Nothing
   , vulkanDevice     = Nothing
@@ -112,24 +120,41 @@ main = do
 #else
 #endif
 
+  -- Initialize queues first
+  eventQueue ← Q.newQueue
+  inputQueue ← Q.newQueue
+  logQueue   ← Q.newQueue
   -- Initialize engine environment and state
-  envVar ←   atomically $ newVar (undefined ∷ EngineEnv)
+  let defaultEngineEnv = EngineEnv
+        { engineConfig = defaultEngineConfig
+        , eventQueue   = eventQueue
+        , inputQueue   = inputQueue
+        , logQueue     = logQueue }
+  envVar ←   atomically $ newVar defaultEngineEnv
   lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
   stateVar ← atomically $ newVar $ defaultEngineState lf
+
+  -- fork input thread
+  _ ← forkIO $ inputThread defaultEngineEnv
   
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
-        -- Initialize GLFW first
+        -- initialize GLFW first
         window ← GLFW.createWindow defaultWindowConfig
         modify $ \s → s { glfwWindow = Just window }
+
+        -- setup input callbacks
+        env ← ask
+        let glfwWin = case window of Window w → w
+        liftIO $ setupCallbacks glfwWin inputQueue
         
-        -- Create Vulkan instance
+        -- create Vulkan instance
         (vkInstance, _debugMessenger) ← createVulkanInstance defaultGraphicsConfig
         
-        -- Create surface
+        -- create surface
         surface ← createWindowSurface window vkInstance
         
-        -- Select physical device and create logical device
+        -- select physical device and create logical device
         physicalDevice ← pickPhysicalDevice vkInstance surface
         (device, queues) ← createVulkanDevice vkInstance physicalDevice surface
         modify $ \s → s { vulkanInstance = Just vkInstance
@@ -137,27 +162,27 @@ main = do
                         , deviceQueues = Just queues
                         }
         
-        -- Print some info about the device
+        -- print some info about the device
         props ← liftIO $ getPhysicalDeviceProperties physicalDevice
         logDebug $ "Selected device: " ⧺ show (deviceName props)
         
-        -- Test swapchain creation
+        -- test swapchain creation
         swapInfo ← createVulkanSwapchain physicalDevice device
                                          queues surface
         logDebug $ "Swapchain Format: " ⧺ show (siSwapImgFormat swapInfo)
         modify $ \s → s { swapchainInfo = Just swapInfo }
         let numImages = length $ siSwapImgs swapInfo
 
-        -- Test swapchain support query
+        -- test swapchain support query
         support ← querySwapchainSupport physicalDevice surface
         logDebug $ "Available Formats: " ⧺ show (length $ formats support)
         logDebug $ "Available Present Modes: " ⧺ show (presentModes support)
 
-        -- Create sync objects
+        -- create sync objects
         syncObjects ← createSyncObjects device defaultGraphicsConfig
         modify $ \s → s { syncObjects = Just syncObjects }
 
-        -- Create command pool and buffers
+        -- create command pool and buffers
         cmdCollection ← createVulkanCommandCollection device queues
                           (fromIntegral $ length $ imageAvailableSemaphores syncObjects)
         logDebug $ "CommandPool: " ⧺ show (length $ vccCommandBuffers cmdCollection)
@@ -165,7 +190,7 @@ main = do
                         , vulkanCmdBuffers = Just (vccCommandBuffers cmdCollection)
                         }
 
-        -- Create Descriptor Pool
+        -- create Descriptor Pool
         let descConfig = DescriptorManagerConfig
               { dmcMaxSets      = fromIntegral $ gcMaxFrames defaultGraphicsConfig * 2
               , dmcUniformCount = fromIntegral $ gcMaxFrames defaultGraphicsConfig
@@ -175,7 +200,7 @@ main = do
         logDebug $ "Descriptor Pool Created: " ⧺ show (dmPool descManager)
         modify $ \s → s { descriptorState = Just descManager }
 
-        -- Allocate initial descriptor sets
+        -- allocate initial descriptor sets
         descSets ← allocateVulkanDescriptorSets device descManager
                      (fromIntegral $ gcMaxFrames defaultGraphicsConfig)
         let updatedManager = descManager { dmActiveSets = descSets }
@@ -189,11 +214,11 @@ main = do
         logDebug $ "VertexBuffer: " ⧺ show vBuffer
         modify $ \s → s { vertexBuffer = Just (vBuffer, vBufferMemory) }
 
-        -- Create descriptor set layout
+        -- create descriptor set layout
         descSetLayout ← createVulkanDescriptorSetLayout device
         logDebug $ "DescriptorSetLayout: " ⧺ show descSetLayout
 
-        -- Initialize textures
+        -- initialize textures
         initializeTextures device physicalDevice
                            (vccCommandPool cmdCollection)
                            (graphicsQueue queues)
@@ -220,13 +245,13 @@ main = do
         logDebug $ "Framebuffers: " ⧺ show (length framebuffers)
         modify $ \s → s { framebuffers = Just framebuffers }
 
-        -- Verify all counts match before recording
+        -- verify all counts match before recording
         when (V.length (vccCommandBuffers cmdCollection) /= V.length framebuffers ||
               V.length framebuffers /= V.length descSets) $
           throwEngineException $ EngineException ExGraphics
                                    "Resource count mismatch"
 
-        -- Record initial command buffers
+        -- record initial command buffers
         state ← get
         let numImages = maybe 0 V.length (vulkanCmdBuffers state)
         forM_ [0..numImages-1] $ \i → do
@@ -412,8 +437,8 @@ mainLoop = do
                 { frameTimeAccum = 0.0
                 , frameCount = 0 
                 }
-        
         GLFW.pollEvents
+        handleInputEvents
         shouldClose ← GLFW.windowShouldClose glfwWindow
         unless shouldClose $ do
             drawFrame
