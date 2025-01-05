@@ -29,6 +29,9 @@ data EngineState = EngineState
   , engineRunning    ∷ Bool
   , currentTime      ∷ Double
   , deltaTime        ∷ Double
+  , frameTimeAccum   ∷ Double
+  , lastFrameTime    ∷ Double
+  , targetFPS        ∷ Double
   , logFunc          ∷ LoggingFunc
   , glfwWindow       ∷ Maybe Window
   , vulkanInstance   ∷ Maybe Vk.Instance

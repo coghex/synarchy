@@ -3,6 +3,7 @@ module Main where
 
 import UPrelude
 import Control.Exception (displayException, throwIO)
+import Control.Concurrent (threadDelay)
 import Control.Monad (void, when, forM_, unless)
 import qualified Control.Monad.Logger.CallStack as Logger
 import Control.Monad.State (modify, get, gets)
@@ -10,6 +11,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Maybe (fromJust)
 import Data.Word (Word32, Word64)
+import Data.Time.Clock (getCurrentTime, utctDayTime)
 import System.Environment (setEnv)
 import System.Exit ( exitFailure )
 import System.FilePath ((</>))
@@ -82,6 +84,9 @@ defaultEngineState lf = EngineState
   , engineRunning    = True
   , currentTime      = 0.0
   , deltaTime        = 0.0
+  , frameTimeAccum   = 0.0
+  , lastFrameTime    = 0.0
+  , targetFPS        = 60.0
   , logFunc          = lf
   , vulkanInstance   = Nothing
   , vulkanDevice     = Nothing
@@ -347,6 +352,11 @@ drawFrame = do
     -- Update frame index
     modify $ \s → s { currentFrame = (currentFrame s + 1) `mod` 2 }
 
+getCurTime ∷ IO Double
+getCurTime = do
+    now ← getCurrentTime
+    return $ realToFrac $ utctDayTime now
+
 mainLoop ∷ EngineM' EngineEnv ()
 mainLoop = do
     state ← get
@@ -357,9 +367,51 @@ mainLoop = do
             Nothing → throwEngineException $ EngineException ExGraphics "No window"
             Just w → pure w
             
-        -- Convert Window type to GLFW Window for these calls
         let glfwWindow = case window of
                 Window w → w
+
+        currentTime ← liftIO getCurTime
+        lastTime ← gets lastFrameTime
+        accum ← gets frameTimeAccum
+        targetFps ← gets targetFPS
+
+        let frameTime = currentTime - lastTime
+            targetFrameTime = 1.0 / targetFps
+            -- Add a small adjustment for system overhead
+            systemOverhead = 0.0002  -- 0.2ms adjustment
+
+        -- Sleep if we're ahead of schedule, accounting for overhead
+        when (frameTime < targetFrameTime) $ do
+            let sleepTime = targetFrameTime - frameTime - systemOverhead
+            when (sleepTime > 0) $
+                liftIO $ threadDelay $ floor (sleepTime * 1000000)
+
+        -- Get time after potential sleep
+        actualCurrentTime ← liftIO getCurTime
+        let actualFrameTime = actualCurrentTime - lastTime
+            newAccum = accum + actualFrameTime
+
+        modify $ \s → s 
+            { lastFrameTime = actualCurrentTime
+            , frameTimeAccum = newAccum
+            , frameCount = frameCount s + 1
+            , deltaTime = actualFrameTime
+            , currentTime = actualCurrentTime 
+            }
+
+        when (newAccum ≥ 1.0) $ do
+            currentCount ← gets frameCount
+            let fps = fromIntegral currentCount / newAccum
+            logDebug $ "FPS: " ⧺ show fps
+            -- Adjust timing if FPS is consistently off
+            when (fps < 59.0) $
+                modify $ \s → s { targetFPS = targetFPS s + 0.1 }
+            when (fps > 61.0) $
+                modify $ \s → s { targetFPS = targetFPS s - 0.1 }
+            modify $ \s → s 
+                { frameTimeAccum = 0.0
+                , frameCount = 0 
+                }
         
         GLFW.pollEvents
         shouldClose ← GLFW.windowShouldClose glfwWindow
