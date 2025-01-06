@@ -8,11 +8,15 @@ import Control.Monad (void, when, forM_, unless)
 import qualified Control.Monad.Logger.CallStack as Logger
 import Control.Monad.Reader (ask)
 import Control.Monad.State (modify, get, gets)
+import Data.Bits ((.|.))
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Maybe (fromJust)
 import Data.Word (Word32, Word64)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
+import Foreign.Storable (sizeOf, poke)
+import Foreign.Ptr (castPtr)
+import Linear (M44, V3(..), identity, (!*!), perspective, lookAt, translation)
 import System.Environment (setEnv)
 import System.Exit ( exitFailure )
 import System.FilePath ((</>))
@@ -34,6 +38,7 @@ import Engine.Graphics.Window.Types (WindowConfig(..), Window(..))
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture (TexturePoolState(..))
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
+import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
@@ -109,6 +114,7 @@ defaultEngineState lf = EngineState
   , swapchainInfo    = Nothing
   , syncObjects      = Nothing
   , vertexBuffer     = Nothing
+  , uniformBuffers   = Nothing
   }
 
 main ∷ IO ()
@@ -223,6 +229,31 @@ main = do
         initializeTextures device physicalDevice
                            (vccCommandPool cmdCollection)
                            (graphicsQueue queues)
+
+        -- create uniform buffers
+        let modelMatrix = identity
+            viewMatrix = lookAt (V3 0 0 2) (V3 0 0 0) (V3 0 1 0)
+            projMatrix = perspective (45 * pi / 180) (800 / 600) 0.1 10
+            uboData = UBO modelMatrix viewMatrix projMatrix
+            uboSize = fromIntegral $ sizeOf uboData
+        (uboBuffer, uboMemory) ← createUniformBuffer device physicalDevice uboSize
+        logDebug $ "UniformBuffer: " ⧺ show uboBuffer
+        updateUniformBuffer device uboMemory uboData
+        modify $ \s → s { uniformBuffers = Just (uboBuffer, uboMemory) }
+        let bufferInfo = (zero ∷ DescriptorBufferInfo)
+                { buffer = uboBuffer
+                , offset = 0
+                , range  = uboSize
+                }
+            write = zero
+                { dstSet          = V.head descSets
+                , dstBinding      = 0
+                , dstArrayElement = 0
+                , descriptorCount = 1
+                , descriptorType  = DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                , bufferInfo      = V.singleton bufferInfo
+                }
+        updateDescriptorSets device (V.singleton $ SomeStruct write) V.empty
 
         -- create render pass
         renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo)
@@ -455,3 +486,5 @@ mainLoop = do
             else do
                 drawFrame
                 mainLoop
+
+

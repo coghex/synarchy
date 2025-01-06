@@ -83,14 +83,14 @@ instance Storable Vertex where
         poke (ptr `plusPtr` 16) c
 
 -- | Default quad vertices (2 triangles forming a rectangle)
-quadVertices :: [Vertex]
+quadVertices ∷ [Vertex]
 quadVertices =
-    [ Vertex (Vec2 (-0.5) (-0.5)) (Vec2 0 0) (Vec4 1 0 0 1)  -- Bottom left
-    , Vertex (Vec2   0.5  (-0.5)) (Vec2 1 0) (Vec4 0 1 0 1)  -- Bottom right
-    , Vertex (Vec2   0.5    0.5)  (Vec2 1 1) (Vec4 0 0 1 1)  -- Top right
-    , Vertex (Vec2   0.5    0.5)  (Vec2 1 1) (Vec4 0 0 1 1)  -- Top right
-    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 0 1) (Vec4 1 1 1 1)  -- Top left
-    , Vertex (Vec2 (-0.5) (-0.5)) (Vec2 0 0) (Vec4 1 0 0 1)  -- Bottom left
+    [ Vertex (Vec2 (-0.5) (-0.5)) (Vec2 0 0) (Vec4 1 0 0 1)  -- Bottom left, red
+    , Vertex (Vec2   0.5  (-0.5)) (Vec2 1 0) (Vec4 0 1 0 1)  -- Bottom right, green
+    , Vertex (Vec2   0.5    0.5)  (Vec2 1 1) (Vec4 0 0 1 1)  -- Top right, blue
+    , Vertex (Vec2   0.5    0.5)  (Vec2 1 1) (Vec4 0 0 1 1)  -- Top right, blue
+    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 0 1) (Vec4 1 1 1 1)  -- Top left, white
+    , Vertex (Vec2 (-0.5) (-0.5)) (Vec2 0 0) (Vec4 1 0 0 1)  -- Bottom left, red
     ]
 
 -- | Create vertex buffer from vertices

@@ -26,6 +26,7 @@ import Engine.Core.Resource (allocResource, locally)
 import Engine.Core.Error.Exception
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
+import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Zero
@@ -163,71 +164,85 @@ runCommandsOnce device commandPool cmdQueue action = do
 recordRenderCommandBuffer ∷ CommandBuffer → Word64 → EngineM ε σ ()
 recordRenderCommandBuffer cmdBuf frameIdx = do
     state ← get
-    --logDebug $ "Recording command buffer for frame " <> show frameIdx
-    pState ← case pipelineState state of
-        Nothing → throwEngineException $ EngineException ExGraphics
-            "Pipeline state not initialized"
-        Just ps → pure ps
+    env ← ask
     
-    beginVulkanCommandBuffer cmdBuf
+    -- Validate all required state components
+    pState ← maybe (throwEngineException $ EngineException ExGraphics "Pipeline state not initialized") 
+                  pure 
+                  (pipelineState state)
     
-    rp ← case (vulkanRenderPass state) of
-        Nothing  → throwEngineException $ EngineException ExGraphics
-            "Render pass not initialized"
-        Just rp0 → pure rp0
-    fb ← case (framebuffers state) of
-        Nothing → throwEngineException $ EngineException ExGraphics
-            "Framebuffer not initialized"
-        Just fb0 → do
-          let maxFrameIdx = fromIntegral $ V.length fb0 - 1
-          when (frameIdx > maxFrameIdx) $
-            throwEngineException $ EngineException ExGraphics
-              "Frame index out of bounds"
-          case (fb0 V.!? fromIntegral frameIdx) of
-            Nothing → throwEngineException $ EngineException ExGraphics
-              "Framebuffer not found"
-            Just fb1 → pure fb1
-    si ← case (swapchainInfo state) of
-        Nothing → throwEngineException $ EngineException ExGraphics
-            "Swapchain extent not initialized"
-        Just si0 → pure si0
-    -- Begin render pass with correct clear value types
-    let renderPassInfo = (zero ∷ RenderPassBeginInfo '[])
-          { renderPass  = rp
-          , framebuffer = fb
-          , renderArea  = Rect2D (Offset2D 0 0) (siSwapExtent si)
-          , clearValues = V.singleton zero
+    renderPass ← maybe (throwEngineException $ EngineException ExGraphics "Render pass not initialized")
+                      pure
+                      (vulkanRenderPass state)
+    
+    framebuffer ← maybe (throwEngineException $ EngineException ExGraphics "Framebuffer not initialized")
+                       (\fbs → if frameIdx < fromIntegral (V.length fbs)
+                              then pure (fbs V.! fromIntegral frameIdx)
+                              else throwEngineException $ EngineException ExGraphics "Frame index out of bounds")
+                       (framebuffers state)
+    
+    swapchainExtent ← maybe (throwEngineException $ EngineException ExGraphics "Swapchain info not initialized")
+                           (pure . siSwapExtent)
+                           (swapchainInfo state)
+    
+    -- Begin command buffer
+    let beginInfo = (zero ∷ CommandBufferBeginInfo '[])
+                      { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
+    liftIO $ beginCommandBuffer cmdBuf beginInfo
+    
+    -- Begin render pass
+    let clearColor = (zero ∷ ClearValue)
+        renderPassInfo = zero
+          { renderPass = renderPass
+          , framebuffer = framebuffer
+          , renderArea = Rect2D (Offset2D 0 0) swapchainExtent
+          , clearValues = V.singleton clearColor
           }
     
     cmdBeginRenderPass cmdBuf renderPassInfo SUBPASS_CONTENTS_INLINE
     
-    -- Bind pipeline using PipelineState
+    -- Bind graphics pipeline
     cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS (psPipeline pState)
     
-    -- Bind descriptor sets (if we have them)
+    -- Set viewport and scissors
+    let Extent2D w h = swapchainExtent
+        viewport = Viewport
+          { x = 0
+          , y = 0
+          , width = fromIntegral w
+          , height = fromIntegral h
+          , minDepth = 0
+          , maxDepth = 1
+          }
+        scissor = Rect2D
+          { offset = Offset2D 0 0
+          , extent = swapchainExtent
+          }
+    
+    cmdSetViewport cmdBuf 0 (V.singleton viewport)
+    cmdSetScissor cmdBuf 0 (V.singleton scissor)
+    
+    -- Bind descriptor sets if available
     forM_ (descriptorState state) $ \descManager → do
-        case V.length (dmActiveSets descManager) of
-            0 → throwEngineException $ EngineException ExGraphics
-               "No active descriptor sets available"
-            _ → do
-               let descSet = V.head $ dmActiveSets descManager
-               cmdBindDescriptorSets cmdBuf 
-                   PIPELINE_BIND_POINT_GRAPHICS 
-                   (psPipelineLayout pState)
-                   0
-                   (V.singleton descSet)
-                   V.empty
+        when (not $ V.null $ dmActiveSets descManager) $ do
+            let descSet = V.head $ dmActiveSets descManager
+            cmdBindDescriptorSets cmdBuf 
+                PIPELINE_BIND_POINT_GRAPHICS
+                (psPipelineLayout pState)
+                0  -- First set
+                (V.singleton descSet)
+                V.empty  -- No dynamic offsets
     
-    -- Bind vertex buffer (if we have it)
-    forM_ (vertexBuffer state) $ \(vBuf, _) →
+    -- Bind vertex buffer if available
+    forM_ (vertexBuffer state) $ \(vBuf, _) → do
         cmdBindVertexBuffers cmdBuf 
-            0
+            0  -- First binding
             (V.singleton vBuf)
-            (V.singleton 0)
+            (V.singleton 0)  -- Offsets
     
-    -- Draw command
+    -- Draw command (6 vertices for a quad)
     cmdDraw cmdBuf
-        6    -- vertex count (adjust based on your needs)
+        6    -- vertex count (2 triangles = 6 vertices)
         1    -- instance count
         0    -- first vertex
         0    -- first instance

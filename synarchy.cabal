@@ -184,6 +184,7 @@ library
                  , GLFW-b
                  , hslua
                  , JuicyPixels
+                 , linear
                  , monad-logger
                  , mtl
                  , network
@@ -287,6 +288,7 @@ executable synarchy
                  , GLFW-b
                  , hslua
                  , JuicyPixels
+                 , linear
                  , monad-logger
                  , mtl
                  , network

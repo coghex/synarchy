@@ -119,13 +119,18 @@ createVulkanRenderPipeline device renderPass swapExtent descriptorLayout = do
           , rasterizationSamples = SAMPLE_COUNT_1_BIT
           }
         
-        -- Color blending
         colorBlendAttachment = (zero ∷ PipelineColorBlendAttachmentState)
           { colorWriteMask = COLOR_COMPONENT_R_BIT
-                              .|. COLOR_COMPONENT_G_BIT
-                              .|. COLOR_COMPONENT_B_BIT
-                              .|. COLOR_COMPONENT_A_BIT
-          , blendEnable    = False
+                             ⌄ COLOR_COMPONENT_G_BIT
+                             ⌄ COLOR_COMPONENT_B_BIT
+                             ⌄ COLOR_COMPONENT_A_BIT
+          , blendEnable    = True
+          , srcColorBlendFactor = BLEND_FACTOR_SRC_ALPHA
+          , dstColorBlendFactor = BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+          , colorBlendOp   = BLEND_OP_ADD
+          , srcAlphaBlendFactor = BLEND_FACTOR_ONE
+          , dstAlphaBlendFactor = BLEND_FACTOR_ZERO
+          , alphaBlendOp   = BLEND_OP_ADD
           }
         
         colorBlending = (zero ∷ PipelineColorBlendStateCreateInfo '[])

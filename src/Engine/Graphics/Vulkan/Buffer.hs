@@ -3,16 +3,21 @@ module Engine.Graphics.Vulkan.Buffer
   ( createVulkanBuffer
   , copyBuffer
   , findMemoryType
+  , createStagingBuffer
+  , createUniformBuffer
+  , updateUniformBuffer
   ) where
 
 import UPrelude
-import Data.Bits (testBit)
-import Data.Word (Word32)
+import Data.Bits (testBit, (.|.))
+import Data.Word (Word32, Word64)
 import qualified Data.Vector as V
+import Foreign.Storable (Storable, sizeOf, poke)
 import Foreign.Ptr (castPtr)
 import Foreign.Marshal.Array (pokeArray)
 import Engine.Core.Monad
 import Engine.Core.Resource
+import Engine.Core.Types
 import Engine.Core.Error.Exception
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Command
@@ -106,3 +111,17 @@ createStagingBuffer device pDevice bufferSize data' = do
   unmapMemory device memory
   
   pure (memory, buffer)
+
+createUniformBuffer ∷ Device → PhysicalDevice → Word64
+                    → EngineM ε σ (Buffer, DeviceMemory)
+createUniformBuffer device pDevice bufferSize = do
+    (memory, buffer) ← createVulkanBuffer device pDevice bufferSize
+        BUFFER_USAGE_UNIFORM_BUFFER_BIT
+        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+    return (buffer, memory)
+
+updateUniformBuffer ∷ Device → DeviceMemory → UniformBufferObject → EngineM' EngineEnv ()
+updateUniformBuffer device memory uboData = do
+    dataPtr ← mapMemory device memory 0 (fromIntegral $ sizeOf uboData) zero
+    liftIO $ poke (castPtr dataPtr) uboData
+    unmapMemory device memory

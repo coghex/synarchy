@@ -55,6 +55,7 @@ data EngineState = EngineState
   , swapchainInfo    ∷ Maybe SwapchainInfo
   , syncObjects      ∷ Maybe SyncObjects
   , vertexBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
+  , uniformBuffers   ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   }
 
 type LoggingFunc = Logger.Loc → Logger.LogSource → Logger.LogLevel
