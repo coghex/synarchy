@@ -46,10 +46,10 @@ import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR, destroySurfaceKHR)
 -- | Initialize GLFW with error handling
 initializeGLFW ∷ EngineM ε σ ()
 initializeGLFW = do
-  success ← liftIO GLFW.init
-  unless success $
-    throwEngineException $ EngineException ExGraphics "Failed to initialize GLFW"
-  
+  success ← liftIO $ GLFW.init
+  case success of
+    True  → logDebug "GLFW initialized"
+    False → throwEngineException $ EngineException ExGraphics "Failed to initialize GLFW"
   -- Set necessary window hints for Vulkan
   liftIO $ do
     GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI

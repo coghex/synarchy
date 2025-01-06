@@ -197,6 +197,7 @@ library
                  , unliftio
                  , unliftio-core
                  , utf8-string
+                 , unix
     hs-source-dirs: src
     default-language: GHC2024
     if flag(dev)

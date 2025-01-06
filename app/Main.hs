@@ -25,7 +25,7 @@ import Engine.Concurrent.Var
 import Engine.Graphics.Types
 import Engine.Input.Keyboard
 import Engine.Input.Types
-import Engine.Input.Thread (inputThread, shutdownInputThread)
+import Engine.Input.Thread (shutdownInputThread, startInputThread)
 import Engine.Input.Event (handleInputEvents)
 import Engine.Input.Callback (setupCallbacks)
 import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
@@ -113,6 +113,7 @@ defaultEngineState lf = EngineState
 
 main ∷ IO ()
 main = do
+  setEnv "NSLog_Disabled" "YES"
 #ifdef DEVELOPMENT
   setEnv "VK_LOADER_DEBUG" "none"
   setEnv "VK_LOADER_MESSAGE_LEVEL" "error"
@@ -135,9 +136,7 @@ main = do
   stateVar ← atomically $ newVar $ defaultEngineState lf
 
   -- fork input thread
-  _ ← forkIO $ inputThread defaultEngineEnv
-
---  inputThreadState ← startInputThread envVar inputQueue
+  inputThreadState ← startInputThread defaultEngineEnv
   
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
@@ -262,11 +261,14 @@ main = do
                 (fromIntegral i)
             logDebug $ "Recorded command buffer " ⧺ show i
         mainLoop
---        shutdownInputThread env inputThreadState
+        liftIO $ Q.writeQueue logQueue "Engine shutting down..."
+        liftIO $ shutdownInputThread env inputThreadState
   
   result ← runEngineM engineAction envVar stateVar checkStatus
   case result of
-    Left err → putStrLn $ displayException err
+    Left err → do
+        putStrLn $ displayException err
+        liftIO $ shutdownInputThread defaultEngineEnv inputThreadState
     Right _  → pure ()
 
 checkStatus ∷ Either EngineException () → IO (Either EngineException ())

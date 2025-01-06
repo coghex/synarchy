@@ -5,9 +5,9 @@ import UPrelude
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
-import Control.Concurrent (threadDelay, ThreadId, killThread)
+import Control.Concurrent (threadDelay, ThreadId, killThread, forkIO)
 import Control.Exception (SomeException, catch)
-import Data.IORef (IORef, writeIORef)
+import Data.IORef (IORef, newIORef, writeIORef, readIORef)
 import Control.Monad (when)
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import Engine.Core.Types (EngineEnv(..))
@@ -24,11 +24,22 @@ data InputThreadState = InputThreadState
 data ThreadState = ThreadRunning | ThreadPaused | ThreadStopped
     deriving (Show, Eq)
 
--- | Main input thread
-inputThread ∷ EngineEnv → IO ()
-inputThread env = do
-    writeQueue (logQueue env) "Starting input thread..."
-    runInputLoop env defaultInputState ThreadRunning
+-- | Start the input processing thread
+startInputThread ∷ EngineEnv → IO InputThreadState
+startInputThread env = do
+    stateRef ← newIORef ThreadRunning
+    threadId ← catch 
+        (do
+            Q.writeQueue (logQueue env) "Starting input thread..."
+            tid ← forkIO $ runInputLoop env defaultInputState ThreadRunning
+            return tid
+        ) 
+        (\(e :: SomeException) → do
+            Q.writeQueue (logQueue env) $ T.pack $
+                "Failed to start input thread: " ⧺ show e
+            error "Input thread failed to start"
+        )
+    return $ InputThreadState stateRef threadId
 
 -- | Main input processing loop with timing control
 runInputLoop ∷ EngineEnv → InputState → ThreadState → IO ()
@@ -86,7 +97,7 @@ updateKeyState state key keyState mods = state
         newKeyState = KeyState
             { keyPressed = keyState ≡ GLFW.KeyState'Pressed
             , keyMods = mods
-            , keyTime = 0.0  -- You might want to add actual time here
+            , keyTime = 0.0
             }
 
 updateMouseState ∷ InputState → GLFW.MouseButton → (Double, Double) → GLFW.MouseButtonState → InputState
