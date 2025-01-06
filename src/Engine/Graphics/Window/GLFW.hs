@@ -66,7 +66,7 @@ createWindow config = do
 
   -- Set window hints
   liftIO $ GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
-  liftIO $ GLFW.windowHint $ GLFW.WindowHint'Visible False
+  --liftIO $ GLFW.windowHint $ GLFW.WindowHint'Visible False
   
   -- Create the window
   allocResource (\w0 → destroyWindow w0) $ do

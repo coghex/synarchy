@@ -25,7 +25,7 @@ import Engine.Concurrent.Var
 import Engine.Graphics.Types
 import Engine.Input.Keyboard
 import Engine.Input.Types
-import Engine.Input.Thread (inputThread)
+import Engine.Input.Thread (inputThread, shutdownInputThread)
 import Engine.Input.Event (handleInputEvents)
 import Engine.Input.Callback (setupCallbacks)
 import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
@@ -136,6 +136,8 @@ main = do
 
   -- fork input thread
   _ ← forkIO $ inputThread defaultEngineEnv
+
+--  inputThreadState ← startInputThread envVar inputQueue
   
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
@@ -260,6 +262,7 @@ main = do
                 (fromIntegral i)
             logDebug $ "Recorded command buffer " ⧺ show i
         mainLoop
+--        shutdownInputThread env inputThreadState
   
   result ← runEngineM engineAction envVar stateVar checkStatus
   case result of
@@ -440,6 +443,13 @@ mainLoop = do
         GLFW.pollEvents
         handleInputEvents
         shouldClose ← GLFW.windowShouldClose glfwWindow
-        unless shouldClose $ do
-            drawFrame
-            mainLoop
+        if shouldClose || not running
+            then do
+                env ← ask
+                liftIO $ Q.writeQueue (logQueue env) "Engine shutting down..."
+                -- Just wait for device to idle
+                forM_ (vulkanDevice state) $ \device → 
+                    liftIO $ deviceWaitIdle device
+            else do
+                drawFrame
+                mainLoop

@@ -3,14 +3,22 @@ module Engine.Input.Thread where
 
 import UPrelude
 import qualified Data.Map as Map
+import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (threadDelay, ThreadId, killThread)
+import Control.Exception (SomeException, catch)
+import Data.IORef (IORef, writeIORef)
 import Control.Monad (when)
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import Engine.Core.Types (EngineEnv(..))
 import Engine.Input.Types
 import Engine.Input.Callback
-import Engine.Core.Queue
+import Engine.Core.Queue as Q
+
+-- | Thread state with safe shutdown
+data InputThreadState = InputThreadState
+    { itsRunning :: IORef ThreadState
+    , itsThreadId :: ThreadId }
 
 -- | Thread state for control flow
 data ThreadState = ThreadRunning | ThreadPaused | ThreadStopped
@@ -94,3 +102,24 @@ updateWindowState state _ = state
 
 updateScrollState ∷ InputState → Double → Double → InputState
 updateScrollState state x y = state { inpScrollDelta = (x, y) }
+
+-- | Safely shutdown input thread
+shutdownInputThread ∷ EngineEnv → InputThreadState → IO ()
+shutdownInputThread env its = catch (do
+    -- Signal thread to stop
+    writeIORef (itsRunning its) ThreadStopped
+    Q.writeQueue (logQueue env) "Input thread signaled to stop..."
+    
+    -- Give thread time to cleanup and exit gracefully
+    threadDelay 50000  -- 50ms should be enough for cleanup
+    
+    -- Check if thread is still alive and force kill if necessary
+    writeIORef (itsRunning its) ThreadStopped
+    killThread (itsThreadId its)
+    Q.writeQueue (logQueue env) "Input thread shutdown complete."
+    ) $ \(e :: SomeException) → do
+        -- Log any errors during shutdown
+        Q.writeQueue (logQueue env) $ T.pack $
+            "Error shutting down input thread: " ⧺ show e
+        -- Force kill thread if graceful shutdown failed
+        killThread (itsThreadId its)
