@@ -29,6 +29,8 @@ import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.CStruct.Extends
 import Vulkan.Core10
+import Vulkan.Core10.CommandBufferBuilding
+         (ClearValue(..), ClearColorValue(..))
 import Vulkan.Zero
 
 -- | Collection of command buffers and their pool
@@ -191,7 +193,8 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
     liftIO $ beginCommandBuffer cmdBuf beginInfo
     
     -- Begin render pass
-    let clearColor = (zero ∷ ClearValue)
+    let clearColor = Color ( Float32 0.0 0.0 0.4 1.0 )
+
         renderPassInfo = zero
           { renderPass = renderPass
           , framebuffer = framebuffer
