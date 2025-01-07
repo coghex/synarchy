@@ -12,7 +12,7 @@ module Engine.Core.Error.Exception
   -- * Functions
   , throwEngineException
   , logInfo
-  , logExcept
+--  , logExcept
   , logDebug
   , throwGraphicsError
   , throwResourceError
@@ -28,7 +28,7 @@ import Control.Exception (Exception, displayException)
 import Control.Monad.Error.Class (MonadError(..), throwError)
 import qualified Control.Monad.Logger.CallStack as LoggerCS
 import Data.String (fromString)
-import GHC.Stack (HasCallStack, prettyCallStack, callStack)
+import GHC.Stack (HasCallStack, prettyCallStack, callStack, CallStack, getCallStack)
 import qualified Data.Text as T
 import Type.Reflection
 import qualified Vulkan.Core10 as Vk
@@ -95,20 +95,26 @@ data InitError
 
 -- | Main exception type with enhanced context
 data EngineException = EngineException
-  { errorType :: ExceptionType  -- ^ Type of error
-  , errorMsg  :: T.Text         -- ^ Error message
-  } deriving (Eq, Typeable)
+  { errorType    ∷ ExceptionType  -- ^ Type of error
+  , errorMsg     ∷ T.Text         -- ^ Error message
+  , errorContext ∷ ErrorContext -- ^ Additional context
+  } deriving (Typeable)
+
+-- | Error context, currently just a call stack
+data ErrorContext = ErrorContext
+  { contextCallStack ∷ CallStack
+  } deriving (Typeable)
 
 instance Show EngineException where
-  show (EngineException etype msg) = 
-    "Engine Exception: " ++ T.unpack msg ++ " (" ++ show etype ++ ")"
+  show (EngineException etype msg ctx) = unlines
+    [ "EngineException:"
+    , "Type: " ⧺ show etype
+    , "Message: " ⧺ T.unpack msg
+    , "Stack:\n" ⧺ prettyCallStack (contextCallStack ctx)
+    ]
 
 instance Exception EngineException where
-  displayException (EngineException etype msg) = unlines
-    [ "Engine Exception:"
-    , "Type: " ++ show etype
-    , "Message: " ++ T.unpack msg
-    ]
+  displayException ex = show ex
 
 -- | Helper function to throw engine exceptions
 throwEngineException :: MonadError EngineException m => EngineException -> m a
@@ -120,10 +126,10 @@ logInfo :: (HasCallStack, MonadError EngineException m, LoggerCS.MonadLogger m)
 logInfo = LoggerCS.logInfoCS callStack . fromString
 
 -- | Log an exception
-logExcept :: (HasCallStack, MonadError EngineException m)
-          => ExceptionType -> String -> m a
-logExcept exType msg = throwError $ EngineException exType 
-  $ T.pack (msg ++ "\n" ++ prettyCallStack callStack ++ "\n")
+--logExcept :: (HasCallStack, MonadError EngineException m)
+--          => ExceptionType -> String -> m a
+--logExcept exType msg = throwError $ EngineException exType 
+--  $ T.pack (msg ++ "\n" ++ prettyCallStack callStack ++ "\n")
 
 -- | Log a debug message (only in development)
 logDebug :: (HasCallStack, MonadError EngineException m, LoggerCS.MonadLogger m) 
@@ -138,27 +144,36 @@ logDebug = const $ pure ()
 throwGraphicsError :: MonadError EngineException m 
                   => GraphicsError -> T.Text -> m a
 throwGraphicsError err msg = 
-  throwError $ EngineException (ExGraphics err) msg
+  throwError $ EngineException (ExGraphics err) msg mkErrorContext
 
 throwResourceError :: MonadError EngineException m 
                   => ResourceError -> T.Text -> m a
 throwResourceError err msg = 
-  throwError $ EngineException (ExResource err) msg
+  throwError $ EngineException (ExResource err) msg mkErrorContext
 
 throwSystemError :: MonadError EngineException m 
                 => SystemError -> T.Text -> m a
 throwSystemError err msg = 
-  throwError $ EngineException (ExSystem err) msg
+  throwError $ EngineException (ExSystem err) msg mkErrorContext
 
 throwStateError :: MonadError EngineException m 
                 => StateError -> T.Text -> m a
 throwStateError err msg = 
-  throwError $ EngineException (ExState err) msg
+  throwError $ EngineException (ExState err) msg mkErrorContext
 
 throwInitError :: MonadError EngineException m 
                => InitError -> T.Text -> m a
 throwInitError err msg = 
-  throwError $ EngineException (ExInit err) msg
+  throwError $ EngineException (ExInit err) msg mkErrorContext
+
+-- | Create error context from current call stack
+mkErrorContext ∷ HasCallStack ⇒ ErrorContext
+mkErrorContext = 
+  let stack = callStack
+      ((_, loc):_) = getCallStack stack
+  in ErrorContext
+    { contextCallStack = stack
+    }
 
 -- | Catch EngineException in EngineM context
 catchEngine :: MonadError EngineException m 

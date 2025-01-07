@@ -190,12 +190,6 @@ main = do
         modify $ \s → s { syncObjects = Just syncObjects }
 
         -- create command pool and buffers
-        --cmdCollection ← createVulkanCommandCollection device queues
-        --                  (fromIntegral $ length $ imageAvailableSemaphores syncObjects)
-        --logDebug $ "CommandPool: " ⧺ show (length $ vccCommandBuffers cmdCollection)
-        --modify $ \s → s { vulkanCmdPool = Just (vccCommandPool cmdCollection)
-        --                , vulkanCmdBuffers = Just (vccCommandBuffers cmdCollection)
-        --                }
         frameRes ← V.generateM (fromIntegral $ gcMaxFrames defaultGraphicsConfig) $ \_ →
             createFrameResources device queues
         modify $ \s → s { frameResources = frameRes }
@@ -330,6 +324,8 @@ initializeTextures device physicalDevice cmdPool queue = do
   -- Load texture with proper error handling
   let texturePath = "dat/tile01.png"
   textureData ← createTextureWithDescriptor device physicalDevice cmdPool queue texturePath
+                  `catchEngine` \_ → throwGraphicsError TextureLoadFailed
+                                       "Failed to load texture"
   
   logDebug "Created texture with descriptor"
   
