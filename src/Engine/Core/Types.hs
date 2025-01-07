@@ -50,6 +50,7 @@ data EngineState = EngineState
   , textureState     ∷ TextureState
   , descriptorState  ∷ Maybe DescriptorManager
   , pipelineState    ∷ Maybe PipelineState
+  , frameResources   ∷ V.Vector FrameResources
   , currentFrame     ∷ Word32
   , framebuffers     ∷ Maybe (V.Vector Vk.Framebuffer)
   , swapchainInfo    ∷ Maybe SwapchainInfo

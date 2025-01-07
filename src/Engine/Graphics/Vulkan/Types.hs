@@ -56,11 +56,20 @@ data DescriptorManager = DescriptorManager
   , dmActiveSets     ∷ V.Vector DescriptorSet
   } deriving (Show)
 
--- Add to your existing types
+-- | Configuration for pipeline manager
 data PipelineState = PipelineState
     { psPipeline       ∷ Pipeline
     , psPipelineLayout ∷ PipelineLayout
     , psRenderPass     ∷ RenderPass
+    } deriving (Show)
+
+-- | Resources specific to a single frame in flight
+data FrameResources = FrameResources
+    { frCommandPool     ∷ CommandPool
+    , frCommandBuffer   ∷ V.Vector CommandBuffer
+    , frImageAvailable  ∷ Semaphore
+    , frRenderFinished  ∷ Semaphore
+    , frInFlight        ∷ Fence
     } deriving (Show)
 
 maxTimeout ∷ Word64

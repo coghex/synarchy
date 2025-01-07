@@ -190,12 +190,16 @@ main = do
         modify $ \s → s { syncObjects = Just syncObjects }
 
         -- create command pool and buffers
-        cmdCollection ← createVulkanCommandCollection device queues
-                          (fromIntegral $ length $ imageAvailableSemaphores syncObjects)
-        logDebug $ "CommandPool: " ⧺ show (length $ vccCommandBuffers cmdCollection)
-        modify $ \s → s { vulkanCmdPool = Just (vccCommandPool cmdCollection)
-                        , vulkanCmdBuffers = Just (vccCommandBuffers cmdCollection)
-                        }
+        --cmdCollection ← createVulkanCommandCollection device queues
+        --                  (fromIntegral $ length $ imageAvailableSemaphores syncObjects)
+        --logDebug $ "CommandPool: " ⧺ show (length $ vccCommandBuffers cmdCollection)
+        --modify $ \s → s { vulkanCmdPool = Just (vccCommandPool cmdCollection)
+        --                , vulkanCmdBuffers = Just (vccCommandBuffers cmdCollection)
+        --                }
+        frameRes ← V.generateM (fromIntegral $ gcMaxFrames defaultGraphicsConfig) $ \_ →
+            createFrameResources device queues
+        modify $ \s → s { frameResources = frameRes }
+        let cmdPool = frCommandPool $ frameRes V.! 0
 
         -- create Descriptor Pool
         let descConfig = DescriptorManagerConfig
@@ -216,8 +220,7 @@ main = do
 
         -- creating vertex buffer
         (vBuffer, vBufferMemory) ← createVertexBuffer device physicalDevice
-                                     (graphicsQueue queues)
-                                     (vccCommandPool cmdCollection)
+                                     (graphicsQueue queues) cmdPool
         logDebug $ "VertexBuffer: " ⧺ show vBuffer
         modify $ \s → s { vertexBuffer = Just (vBuffer, vBufferMemory) }
 
@@ -226,8 +229,7 @@ main = do
         logDebug $ "DescriptorSetLayout: " ⧺ show descSetLayout
 
         -- initialize textures
-        initializeTextures device physicalDevice
-                           (vccCommandPool cmdCollection)
+        initializeTextures device physicalDevice cmdPool
                            (graphicsQueue queues)
 
         -- create uniform buffers
@@ -277,11 +279,16 @@ main = do
         logDebug $ "Framebuffers: " ⧺ show (length framebuffers)
         modify $ \s → s { framebuffers = Just framebuffers }
 
-        -- verify all counts match before recording
-        when (V.length (vccCommandBuffers cmdCollection) /= V.length framebuffers ||
-              V.length framebuffers /= V.length descSets) $
-          throwEngineException $ EngineException ExGraphics
-                                   "Resource count mismatch"
+        -- Verify all counts match before recording
+        state ← get
+        let cmdBufferCount = V.length $ frCommandBuffer $ V.head frameRes
+            fbCount = V.length framebuffers
+            dsCount = maybe 0 (V.length . dmActiveSets) $ descriptorState state
+        when (cmdBufferCount /= fbCount || fbCount /= dsCount) $
+            throwEngineException $ EngineException ExGraphics $ T.pack $
+                "Resource count mismatch: cmdBuffers=" ⧺ show cmdBufferCount ⧺
+                " framebuffers=" ⧺ show fbCount ⧺
+                " descSets=" ⧺ show dsCount
 
         -- record initial command buffers
         state ← get
@@ -339,66 +346,56 @@ drawFrame = do
     state ← get
     
     -- Get current frame index
-    let currentFrameIdx = currentFrame state
-    
-    -- Get sync objects for current frame
-    syncObjs ← case syncObjects state of
-        Nothing → throwEngineException $ EngineException ExGraphics "No sync objects"
-        Just s → pure s
-    
-    let inFlightFence = inFlightFences syncObjs V.! fromIntegral currentFrameIdx
-        imageAvailableSemaphore = imageAvailableSemaphores syncObjs V.! fromIntegral currentFrameIdx
-        renderFinishedSemaphore = renderFinishedSemaphores syncObjs V.! fromIntegral currentFrameIdx
+    let frameIdx  = currentFrame state
+        resources = frameResources state V.! fromIntegral frameIdx
+        cmdBuffer = V.head $ frCommandBuffer resources
 
     -- Wait for previous frame
     device ← case vulkanDevice state of
         Nothing → throwEngineException $ EngineException ExGraphics "No device"
         Just d → pure d
     
-    liftIO $ waitForFences device (V.singleton inFlightFence) True maxTimeout
-    liftIO $ resetFences device (V.singleton inFlightFence)
+    liftIO $ waitForFences device (V.singleton (frInFlight resources))
+                           True maxTimeout
     
     -- Acquire next image
     swapchain ← case swapchainInfo state of
         Nothing → throwEngineException $ EngineException ExGraphics "No swapchain"
         Just si → pure $ siSwapchain si
-        
-    (acquireResult, imageIndex) ← liftIO $ acquireNextImageKHR 
-        device 
-        swapchain
-        maxTimeout 
-        imageAvailableSemaphore
-        zero
+    (acquireResult, imageIndex) ← liftIO $ acquireNextImageKHR device swapchain
+                                    maxTimeout (frImageAvailable resources) zero
+    -- reset fence only after acquiring image
+    liftIO $ resetFences device (V.singleton (frInFlight resources))
     
+    -- Check if we need to recreate swapchain
     when (acquireResult ≠ SUCCESS && acquireResult ≠ SUBOPTIMAL_KHR) $
         throwEngineException $ EngineException ExGraphics $
             T.pack $ "Failed to acquire next image: " ⧺ show acquireResult
 
-    -- Get command buffer
-    cmdBuffers ← case vulkanCmdBuffers state of
-        Nothing → throwEngineException $ EngineException ExGraphics "No command buffers"
-        Just cb → pure cb
-        
-    let cmdBuffer = cmdBuffers V.! fromIntegral imageIndex
-        waitStages = V.singleton PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-        submitInfo = zero 
-            { waitSemaphores = V.singleton imageAvailableSemaphore
-            , waitDstStageMask = waitStages
-            , commandBuffers = V.singleton (commandBufferHandle cmdBuffer)
-            , signalSemaphores = V.singleton renderFinishedSemaphore
-            }
+    -- reset and record command buffer
     liftIO $ resetCommandBuffer cmdBuffer zero
     recordRenderCommandBuffer cmdBuffer $ fromIntegral imageIndex
+
+    -- submit work
+    let waitStages = V.singleton PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+        submitInfo = zero 
+            { waitSemaphores = V.singleton $ frImageAvailable resources
+            , waitDstStageMask = waitStages
+            , commandBuffers = V.singleton $ commandBufferHandle cmdBuffer
+            , signalSemaphores = V.singleton $ frRenderFinished resources
+            }
     
     queues ← case deviceQueues state of
         Nothing → throwEngineException $ EngineException ExGraphics "No queues"
         Just q → pure q
     
-    liftIO $ queueSubmit (graphicsQueue queues) (V.singleton $ SomeStruct submitInfo) inFlightFence
+    liftIO $ queueSubmit (graphicsQueue queues)
+               (V.singleton $ SomeStruct submitInfo)
+               $ frInFlight resources
 
     -- Present
     let presentInfo = zero
-            { waitSemaphores = V.singleton renderFinishedSemaphore
+            { waitSemaphores = V.singleton $ frRenderFinished resources
             , swapchains = V.singleton swapchain
             , imageIndices = V.singleton imageIndex
             }
@@ -411,7 +408,9 @@ drawFrame = do
                 T.pack $ "Failed to present image: " ⧺ show err
     
     -- Update frame index
-    modify $ \s → s { currentFrame = (currentFrame s + 1) `mod` 2 }
+    modify $ \s → s { currentFrame = (currentFrame s + 1)
+                                       `mod` fromIntegral
+                                       (gcMaxFrames defaultGraphicsConfig) }
 
 getCurTime ∷ IO Double
 getCurTime = do

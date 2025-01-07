@@ -10,6 +10,7 @@ module Engine.Graphics.Vulkan.Command
   , endVulkanCommandBuffer
   , runCommandsOnce
   , submitToQueue
+  , createFrameResources
   , VulkanCommandCollection(..)
   ) where
 
@@ -98,12 +99,6 @@ beginVulkanCommandBuffer cmdBuf = do
 endVulkanCommandBuffer ∷ CommandBuffer → EngineM ε σ ()
 endVulkanCommandBuffer cmdBuf = 
   liftIO $ endCommandBuffer cmdBuf
-
--- | Allocate a single command buffer
-allocateVulkanCommandBuffer ∷ Device → CommandPool → EngineM ε σ CommandBuffer
-allocateVulkanCommandBuffer device cmdPool = do
-  buffers ← allocateVulkanCommandBuffers device cmdPool 1
-  pure $ V.head buffers
 
 -- | Submit a command buffer to a queue and wait for it to complete
 submitToQueue ∷ Device → Queue → CommandBuffer → EngineM ε σ ()
@@ -291,3 +286,60 @@ prepareFrameCommandBuffers = do
                                        (V.generate 
                                          (V.length cmdBuffers)
                                          fromIntegral)
+
+-- | Create a set of frame resources
+createFrameResources ∷ Device → DevQueues → EngineM ε σ FrameResources
+createFrameResources device queues = do
+    -- Create command pool for this frame
+    let poolInfo = (zero ∷ CommandPoolCreateInfo)
+          { flags = COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
+          , queueFamilyIndex = graphicsFamIdx queues
+          }
+    
+    cmdPool ← allocResource (\pool → destroyCommandPool device pool Nothing) $
+        createCommandPool device poolInfo Nothing
+    
+    -- Create command buffer
+    let allocInfo = zero
+          { commandPool = cmdPool
+          , level = COMMAND_BUFFER_LEVEL_PRIMARY
+          , commandBufferCount = 2
+          }
+    
+    cmdBuffers ← allocResource (freeCommandBuffers device cmdPool) $
+        allocateCommandBuffers device allocInfo
+    
+    -- Create synchronization primitives
+    imageAvailable ← allocResource (\s → destroySemaphore device s Nothing) $
+        createSemaphore device zero Nothing
+    
+    renderFinished ← allocResource (\s → destroySemaphore device s Nothing) $
+        createSemaphore device zero Nothing
+    
+    inFlight ← allocResource (\f → destroyFence device f Nothing) $
+        createFence device (zero { flags = FENCE_CREATE_SIGNALED_BIT }) Nothing
+    
+    pure $ FrameResources
+        { frCommandPool    = cmdPool
+        , frCommandBuffer  = cmdBuffers  -- Use the Vector directly
+        , frImageAvailable = imageAvailable
+        , frRenderFinished = renderFinished
+        , frInFlight      = inFlight
+        }
+
+-- | Helper function to allocate a single command buffer
+allocateVulkanCommandBuffer ∷ Device → CommandPool → EngineM ε σ CommandBuffer
+allocateVulkanCommandBuffer device cmdPool = do
+    let allocInfo = zero
+          { commandPool = cmdPool
+          , level = COMMAND_BUFFER_LEVEL_PRIMARY
+          , commandBufferCount = 1
+          }
+    
+    buffers ← allocResource (freeCommandBuffers device cmdPool) $
+        allocateCommandBuffers device allocInfo
+    
+    case V.length buffers of
+        0 → throwEngineException $ EngineException ExGraphics 
+            "Failed to allocate command buffer"
+        _ → pure $ V.head buffers
