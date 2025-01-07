@@ -16,7 +16,7 @@ import Data.Word (Word32, Word64)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
 import Foreign.Storable (sizeOf, poke)
 import Foreign.Ptr (castPtr)
-import Linear (M44, V3(..), identity, (!*!), perspective, lookAt, translation)
+import Linear (M44, V3(..), identity, (!*!), perspective, lookAt, translation, ortho)
 import System.Environment (setEnv)
 import System.Exit ( exitFailure )
 import System.FilePath ((</>))
@@ -232,8 +232,8 @@ main = do
 
         -- create uniform buffers
         let modelMatrix = identity
-            viewMatrix = lookAt (V3 0 0 2) (V3 0 0 0) (V3 0 1 0)
-            projMatrix = perspective (45 * pi / 180) (800 / 600) 0.1 10
+            viewMatrix = lookAt (V3 0 0 5) (V3 0 0 0) (V3 0 1 0)
+            projMatrix = ortho (-2) 2 (-2) 2 0.1 10
             uboData = UBO modelMatrix viewMatrix projMatrix
             uboSize = fromIntegral $ sizeOf uboData
         (uboBuffer, uboMemory) ← createUniformBuffer device physicalDevice uboSize

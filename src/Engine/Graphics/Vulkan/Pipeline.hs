@@ -108,8 +108,8 @@ createVulkanRenderPipeline device renderPass swapExtent descriptorLayout = do
           , rasterizerDiscardEnable = False
           , polygonMode             = POLYGON_MODE_FILL
           , lineWidth               = 1
-          , cullMode                = CULL_MODE_BACK_BIT
-          , frontFace              = FRONT_FACE_CLOCKWISE
+          , cullMode                = CULL_MODE_NONE
+          , frontFace              = FRONT_FACE_COUNTER_CLOCKWISE
           , depthBiasEnable        = False
           }
         
@@ -124,7 +124,7 @@ createVulkanRenderPipeline device renderPass swapExtent descriptorLayout = do
                              ⌄ COLOR_COMPONENT_G_BIT
                              ⌄ COLOR_COMPONENT_B_BIT
                              ⌄ COLOR_COMPONENT_A_BIT
-          , blendEnable    = True
+          , blendEnable    = False
           , srcColorBlendFactor = BLEND_FACTOR_SRC_ALPHA
           , dstColorBlendFactor = BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
           , colorBlendOp   = BLEND_OP_ADD
