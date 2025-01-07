@@ -21,7 +21,7 @@ vertexShaderCode = [vert|
     layout(location = 2) in vec4 inColor;       // Vertex color
 
     // Uniform buffer for transformation matrices
-    layout(binding = 0) uniform UniformBufferObject {
+    layout(set = 0, binding = 0) uniform UniformBufferObject {
         mat4 model;      // Model matrix
         mat4 view;       // View matrix
         mat4 proj;       // Projection matrix
@@ -52,7 +52,7 @@ fragmentShaderCode = [frag|
     layout(location = 1) in vec4 fragColor;
 
     // Texture sampler
-    layout(binding = 1) uniform sampler2D texSampler;
+    layout(set = 1, binding = 0) uniform sampler2D texSampler;
 
     // Output color
     layout(location = 0) out vec4 outColor;

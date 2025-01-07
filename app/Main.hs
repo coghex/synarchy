@@ -332,7 +332,7 @@ initializeTextures device physicalDevice cmdPool queue = do
     in (poolState', V.singleton textureData)
   }
   
-  logDebug "Textures initialized successfully"
+  logDebug $ "Texture loaded: " ⧺ show textureData
 
 drawFrame ∷ EngineM' EngineEnv ()
 drawFrame = do
