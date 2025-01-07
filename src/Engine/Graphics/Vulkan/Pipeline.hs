@@ -6,13 +6,16 @@ module Engine.Graphics.Vulkan.Pipeline
   ) where
 
 import UPrelude
+import Control.Monad.State (gets)
 import Data.Bits ((.|.))
 import qualified Data.Vector as V
 import qualified Data.ByteString as BS
+import Engine.Core.Types
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
+import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Shader
 import Engine.Graphics.Vulkan.Vertex
 import Vulkan.Core10
@@ -68,6 +71,8 @@ createVulkanRenderPipeline ∷ Device
 createVulkanRenderPipeline device renderPass swapExtent descriptorLayout = do
     -- Create shader stages first
     shaderStages ← createVulkanShaderStages device
+    -- Get the texture layout
+    (TexturePoolState _ texLayout, _) ← gets textureState
     
     let Extent2D w h = swapExtent
         -- Vertex input state
@@ -138,13 +143,13 @@ createVulkanRenderPipeline device renderPass swapExtent descriptorLayout = do
           , attachments     = V.singleton colorBlendAttachment
           , blendConstants  = (0, 0, 0, 0)
           }
-        
-        -- Pipeline layout
+
+        -- Create pipeline layout with both
         pipelineLayoutInfo = zero
-          { setLayouts      = V.singleton descriptorLayout
+          { setLayouts = V.fromList [descriptorLayout, texLayout]
           , pushConstantRanges = V.empty
           }
-    
+        
     -- Create pipeline layout
     pipelineLayout ← allocResource 
         (\layout → destroyPipelineLayout device layout Nothing) $

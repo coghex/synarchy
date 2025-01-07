@@ -229,12 +229,26 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
     forM_ (descriptorState state) $ \descManager → do
         when (not $ V.null $ dmActiveSets descManager) $ do
             let descSet = V.head $ dmActiveSets descManager
-            cmdBindDescriptorSets cmdBuf 
-                PIPELINE_BIND_POINT_GRAPHICS
-                (psPipelineLayout pState)
-                0  -- First set
-                (V.singleton descSet)
-                V.empty  -- No dynamic offsets
+                -- Get the texture descriptor set
+                (_, textures) = textureState state
+                textureDescSet = if V.null textures 
+                               then Nothing 
+                               else Just $ tdDescriptorSet $ V.head textures
+            
+            -- Bind both descriptor sets
+            case textureDescSet of
+                Just texDesc → cmdBindDescriptorSets cmdBuf 
+                    PIPELINE_BIND_POINT_GRAPHICS
+                    (psPipelineLayout pState)
+                    0  -- First set
+                    (V.fromList [descSet, texDesc])  -- Both sets
+                    V.empty  -- No dynamic offsets
+                Nothing → cmdBindDescriptorSets cmdBuf 
+                    PIPELINE_BIND_POINT_GRAPHICS
+                    (psPipelineLayout pState)
+                    0  
+                    (V.singleton descSet)
+                    V.empty
     
     -- Bind vertex buffer if available
     forM_ (vertexBuffer state) $ \(vBuf, _) → do
