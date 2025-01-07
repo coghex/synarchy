@@ -87,7 +87,7 @@ findMemoryType pDevice typeFilter properties = do
   
   let findType i 
         | i ≡ memTypeCount = 
-            throwEngineException $ EngineException ExGraphics
+            throwSystemError (MemoryError "findMemoryType: ")
               "failed to find suitable memory type"
         | otherwise = 
             if testBit typeFilter (fromIntegral i)

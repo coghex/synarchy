@@ -94,7 +94,7 @@ pickPhysicalDevice inst surface = do
   -- Get all physical devices
   (_, devices) ← liftIO $ enumeratePhysicalDevices inst
   when (V.null devices) $
-    throwEngineException $ EngineException ExGraphics
+    throwInitError DeviceCreationFailed
       "Failed to find GPUs with Vulkan support"
   
   -- Score and pick the best device
@@ -103,7 +103,7 @@ pickPhysicalDevice inst surface = do
       bestDevice = V.maximumBy (\a b → compare (fst a) (fst b)) ratedDevices
   
   if fst bestDevice == 0
-    then throwEngineException $ EngineException ExGraphics
+    then throwInitError DeviceCreationFailed
       "Failed to find a suitable GPU"
     else return $ snd bestDevice
 
@@ -142,7 +142,7 @@ findQueueFamilies device surface = do
         props
   
   case graphicsIdx of
-    Nothing → throwEngineException $ EngineException ExGraphics
+    Nothing → throwInitError DeviceCreationFailed
       "Could not find graphics queue family"
     Just gIdx → do
       -- Find present queue family
@@ -153,7 +153,7 @@ findQueueFamilies device surface = do
       let presentIdx = V.findIndex id presentSupport
       
       case presentIdx of
-        Nothing → throwEngineException $ EngineException ExGraphics
+        Nothing → throwInitError DeviceCreationFailed
           "Could not find present queue family"
         Just pIdx → return $ QueueFamilyIndices
           { graphicsFamily = fromIntegral gIdx

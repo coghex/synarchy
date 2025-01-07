@@ -10,6 +10,7 @@ module Engine.Graphics.Vulkan.Image
   ) where
 
 import UPrelude
+import qualified Data.Text as T
 import qualified Data.Vector as V
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.ByteString as BS
@@ -133,7 +134,7 @@ findMemoryType pdev typeFilter properties = do
       
       findType i
         | i ≥ fromIntegral (V.length types) = 
-            throwEngineException $ EngineException ExGraphics 
+            throwSystemError (MemoryError "findMemoryType error: ") $ T.pack
               "failed to find suitable memory type"
         | suitable i (types V.! i) = return $ fromIntegral i
         | otherwise = findType (i + 1)

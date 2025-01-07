@@ -44,7 +44,7 @@ createTextureImageView ∷ PhysicalDevice → Device → CommandPool
 createTextureImageView pdev dev cmdPool cmdQueue path = do
   JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
     ← liftIO (JP.readImage path) ⌦ \case
-      Left err → throwEngineException $ EngineException ExGraphics
+      Left err → throwGraphicsError TextureLoadFailed
         $ T.pack $ "cannot create texture image view: " ++ err
       Right dynImg → pure $ JP.convertRGBA8 dynImg
   let (imageDataForeignPtr, imageDataLen)

@@ -49,7 +49,7 @@ initializeGLFW = do
   success ← liftIO $ GLFW.init
   case success of
     True  → logDebug "GLFW initialized"
-    False → throwEngineException $ EngineException ExGraphics "Failed to initialize GLFW"
+    False → throwInitError WindowCreationFailed "Failed to initialize GLFW"
   -- Set necessary window hints for Vulkan
   liftIO $ do
     GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI
@@ -73,8 +73,9 @@ createWindow config = do
     mw ← liftIO $ GLFW.createWindow (wcWidth config) (wcHeight config)
                                     (T.unpack $ wcTitle config) Nothing Nothing
     case mw of
-      Nothing → throwEngineException
-                  $ EngineException ExGraphics "Failed to create window"
+      Nothing → throwSystemError (GLFWError "Window creation failed") $
+                  T.pack $ "Failed to create GLFW window with dimensions: "
+                  ⧺ show (wcWidth config) ⧺ "x" ⧺ show (wcHeight config)
       Just win → do
         logDebug "Window created"
         pure $ Window win
@@ -129,8 +130,8 @@ makeContextCurrent = liftIO ∘ GLFW.makeContextCurrent
 
 -- | Hint that we're on the main thread
 mainThreadHint ∷ EngineM ε σ ()
-mainThreadHint = liftIO $ GLFW.setErrorCallback $ Just $ \_ msg →
-  putStrLn $ "GLFW error: " ⧺ msg
+mainThreadHint = liftIO $ GLFW.setErrorCallback $ Just $ \errCode msg →
+  putStrLn $ "GLFW error: " ⧺ show errCode ⧺ ": " ⧺ msg
 
 -- | Get required Vulkan instance extensions
 getRequiredInstanceExtensions ∷ EngineM ε σ [BS.ByteString]
@@ -159,10 +160,8 @@ createWindowSurface (Window win) inst = allocResource
 
     case surfaceOrError of
       Right surface → pure surface
-      Left err → throwEngineException $ EngineException 
-        { errorType = ExGraphics
-        , errorMsg = err
-        }
+      Left err → throwSystemError (GLFWError "Surface creation failed") $
+                   T.pack $ "Failed to create window surface: " ⧺ err
 
 -- | Terminate GLFW
 terminateGLFW ∷ EngineM ε σ ()

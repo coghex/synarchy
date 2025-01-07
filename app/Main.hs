@@ -285,7 +285,7 @@ main = do
             fbCount = V.length framebuffers
             dsCount = maybe 0 (V.length . dmActiveSets) $ descriptorState state
         when (cmdBufferCount /= fbCount || fbCount /= dsCount) $
-            throwEngineException $ EngineException ExGraphics $ T.pack $
+            throwResourceError (ResourceCountMismatch "engine init: ") $ T.pack $
                 "Resource count mismatch: cmdBuffers=" ⧺ show cmdBufferCount ⧺
                 " framebuffers=" ⧺ show fbCount ⧺
                 " descSets=" ⧺ show dsCount
@@ -352,7 +352,7 @@ drawFrame = do
 
     -- Wait for previous frame
     device ← case vulkanDevice state of
-        Nothing → throwEngineException $ EngineException ExGraphics "No device"
+        Nothing → throwGraphicsError VulkanDeviceLost "No device"
         Just d → pure d
     
     liftIO $ waitForFences device (V.singleton (frInFlight resources))
@@ -360,7 +360,7 @@ drawFrame = do
     
     -- Acquire next image
     swapchain ← case swapchainInfo state of
-        Nothing → throwEngineException $ EngineException ExGraphics "No swapchain"
+        Nothing → throwGraphicsError SwapchainError "No swapchain"
         Just si → pure $ siSwapchain si
     (acquireResult, imageIndex) ← liftIO $ acquireNextImageKHR device swapchain
                                     maxTimeout (frImageAvailable resources) zero
@@ -369,7 +369,7 @@ drawFrame = do
     
     -- Check if we need to recreate swapchain
     when (acquireResult ≠ SUCCESS && acquireResult ≠ SUBOPTIMAL_KHR) $
-        throwEngineException $ EngineException ExGraphics $
+        throwGraphicsError SwapchainError $
             T.pack $ "Failed to acquire next image: " ⧺ show acquireResult
 
     -- reset and record command buffer
@@ -386,7 +386,7 @@ drawFrame = do
             }
     
     queues ← case deviceQueues state of
-        Nothing → throwEngineException $ EngineException ExGraphics "No queues"
+        Nothing → throwGraphicsError VulkanDeviceLost "No queues"
         Just q → pure q
     
     liftIO $ queueSubmit (graphicsQueue queues)
@@ -404,7 +404,7 @@ drawFrame = do
     case presentResult of
         SUCCESS → pure ()
         SUBOPTIMAL_KHR → pure ()
-        err → throwEngineException $ EngineException ExGraphics $
+        err → throwGraphicsError SwapchainError $
                 T.pack $ "Failed to present image: " ⧺ show err
     
     -- Update frame index
@@ -424,7 +424,7 @@ mainLoop = do
     
     unless (not running) $ do
         window ← case glfwWindow state of
-            Nothing → throwEngineException $ EngineException ExGraphics "No window"
+            Nothing → throwSystemError (GLFWError "main loop: ") "No window"
             Just w → pure w
             
         let glfwWindow = case window of

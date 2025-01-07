@@ -164,21 +164,21 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
     env ← ask
     
     -- Validate all required state components
-    pState ← maybe (throwEngineException $ EngineException ExGraphics "Pipeline state not initialized") 
+    pState ← maybe (throwGraphicsError PipelineError "Pipeline state not initialized") 
                   pure 
                   (pipelineState state)
     
-    renderPass ← maybe (throwEngineException $ EngineException ExGraphics "Render pass not initialized")
+    renderPass ← maybe (throwGraphicsError RenderPassError "Render pass not initialized")
                       pure
                       (vulkanRenderPass state)
     
-    framebuffer ← maybe (throwEngineException $ EngineException ExGraphics "Framebuffer not initialized")
+    framebuffer ← maybe (throwGraphicsError FramebufferError "Framebuffer not initialized")
                        (\fbs → if frameIdx < fromIntegral (V.length fbs)
                               then pure (fbs V.! fromIntegral frameIdx)
-                              else throwEngineException $ EngineException ExGraphics "Frame index out of bounds")
+                              else throwGraphicsError FramebufferError "Frame index out of bounds")
                        (framebuffers state)
     
-    swapchainExtent ← maybe (throwEngineException $ EngineException ExGraphics "Swapchain info not initialized")
+    swapchainExtent ← maybe (throwGraphicsError SwapchainError "Swapchain info not initialized")
                            (pure . siSwapExtent)
                            (swapchainInfo state)
     
@@ -269,13 +269,13 @@ prepareFrameCommandBuffers = do
     state ← get
 
     case (vulkanDevice state) of
-        Nothing → throwEngineException $ EngineException ExGraphics
+        Nothing → throwGraphicsError VulkanDeviceLost
             "Vulkan device not initialized"
         Just dev → case (vulkanCmdPool state) of
-            Nothing → throwEngineException $ EngineException ExGraphics
+            Nothing → throwGraphicsError CommandBufferError
                 "Vulkan command pool not initialized"
             Just cmdPool → case (vulkanCmdBuffers state) of
-                Nothing → throwEngineException $ EngineException ExGraphics
+                Nothing → throwGraphicsError CommandBufferError
                     "Vulkan command buffers not initialized"
                 Just cmdBuffers → do
                            -- Reset command pool
@@ -340,6 +340,6 @@ allocateVulkanCommandBuffer device cmdPool = do
         allocateCommandBuffers device allocInfo
     
     case V.length buffers of
-        0 → throwEngineException $ EngineException ExGraphics 
+        0 → throwGraphicsError CommandBufferError
             "Failed to allocate command buffer"
         _ → pure $ V.head buffers

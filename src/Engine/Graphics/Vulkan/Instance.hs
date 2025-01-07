@@ -48,6 +48,10 @@ vulkanInstanceCreateInfo config = do
                  else []
   -- Combine with GLFW extensions
   let requiredExts = baseExts <> glfwExts
+      missingExts = filter (not ∘ (`elem` availableExts)) requiredExts
+  unless (null missingExts) $
+    throwInitError ExtensionNotSupported $ T.pack $
+      "Required extensions not available: " ⧺ show missingExts
   -- Check if portability enumeration is available and needed
   let needsPortability = KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME `elem` availableExts
       portabilityExts  = if needsPortability 
@@ -57,9 +61,11 @@ vulkanInstanceCreateInfo config = do
   let finalExts = V.fromList $ requiredExts <> portabilityExts
   -- Set up validation layers if debug mode is enabled
   let validationLayer = "VK_LAYER_KHRONOS_validation"
-      layers' = if gcDebugMode config && validationLayer `elem` availableLayers
-               then V.fromList [validationLayer]
-               else V.empty
+      layers' = if gcDebugMode config then
+                  if validationLayer `elem` availableLayers
+                    then V.fromList [validationLayer]
+                    else V.empty
+                else V.empty
   -- Set up flags - include portability bit if needed
   let flags = if needsPortability 
               then INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
@@ -106,12 +112,16 @@ createVulkanInstance config = do
         :& ()
 
   inst ← allocResource (\i0 → destroyInstance i0 Nothing)
-           $ createInstance instCreateInfo Nothing
+           $ createInstance instCreateInfo Nothing `catchEngine` \err →
+               throwInitError VulkanInitFailed $ T.pack $
+                 "Failed to create Vulkan instance: " ⧺ show err
   
   -- Create debug messenger if debug mode is enabled
   dbgMessenger ← if gcDebugMode config 
     then do
       messenger ← createDebugUtilsMessengerEXT inst debugUtilsMessengerCreateInfo Nothing
+        `catchEngine` \err → throwInitError VulkanInitFailed $ T.pack $
+          "Failed to create debug messenger: " ⧺ show err
       return $ Just messenger
     else return Nothing
     
@@ -131,6 +141,8 @@ destroyVulkanInstance (inst, mbMessenger) = do
 initVulkan ∷ GraphicsConfig → EngineM ε σ Instance
 initVulkan config = do
   (inst, _) ← allocResource destroyVulkanInstance $ createVulkanInstance config
+    `catchEngine` \err → throwInitError VulkanInitFailed $ T.pack $
+      "Failed to initialize Vulkan: " ⧺ show err
   return inst
 
 getAvailableExtensions ∷ EngineM ε σ [BS.ByteString]
@@ -147,8 +159,8 @@ filterExtensions ∷ [BS.ByteString] → [BS.ByteString] → EngineM ε σ [BS.B
 filterExtensions available required = do
   let missing = filter (not ∘ (`elem` available)) required
   unless (null missing) $
-    throwEngineException $ EngineException ExGraphics
-      $ "Required extensions not available"
+    throwInitError ExtensionNotSupported $ T.pack $
+      "Required extensions not available"
   return required
 
 -- | Debug messenger info for validation layers
