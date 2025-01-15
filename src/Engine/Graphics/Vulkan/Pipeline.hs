@@ -13,6 +13,7 @@ import qualified Data.ByteString as BS
 import Engine.Core.Types
 import Engine.Core.Monad
 import Engine.Core.Resource
+import Engine.Core.State
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture

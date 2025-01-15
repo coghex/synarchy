@@ -9,7 +9,9 @@ import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad (MonadIO(liftIO), EngineM')
 import Engine.Input.Thread
 import Engine.Core.Types
+import Engine.Core.State
 import Engine.Core.Queue as Q
+import Engine.Concurrent.Var (atomically)
 import Engine.Input.Types
 
 -- | Process all pending input events

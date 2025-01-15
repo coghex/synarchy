@@ -11,6 +11,7 @@ import qualified Data.Text as T
 import Engine.Asset.Types
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types
+import Engine.Event.Base
 
 data Event
   = EventError T.Text T.Text            -- ^ Error event with source and message
@@ -25,14 +26,6 @@ data LogLevel
   | LogInfo
   | LogWarn
   | LogError
-  deriving (Show, Eq)
-
-data SystemAction
-  = SysRecreateWindow
-  | SysReloadResources
-  | SysToggleFullscreen
-  | SysResizeWindow Int Int
-  | SysExit
   deriving (Show, Eq)
 
 data AssetEvent

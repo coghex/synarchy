@@ -23,9 +23,11 @@ import qualified Data.Vector as V
 import Data.Word (Word64)
 import Engine.Core.Types
 import Engine.Core.Monad
+import Engine.Core.State
 import Engine.Core.Resource (allocResource, locally)
 import Engine.Core.Error.Exception
 import Engine.Graphics.Types
+import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture

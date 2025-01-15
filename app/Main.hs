@@ -20,8 +20,10 @@ import Linear (M44, V3(..), identity, (!*!), perspective, lookAt, translation, o
 import System.Environment (setEnv)
 import System.Exit ( exitFailure )
 import System.FilePath ((</>))
+import Engine.Core.Base
 import Engine.Core.Monad (runEngineM, EngineM')
 import Engine.Core.Types
+import Engine.Core.State
 import Engine.Core.Resource
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Error.Exception
@@ -35,6 +37,7 @@ import Engine.Input.Callback (setupCallbacks)
 import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
                                    , createWindow, destroyWindow, createWindowSurface)
 import Engine.Graphics.Window.Types (WindowConfig(..), Window(..))
+import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture (TexturePoolState(..))
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance)

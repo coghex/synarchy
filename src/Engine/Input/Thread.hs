@@ -10,10 +10,10 @@ import Control.Exception (SomeException, catch)
 import Data.IORef (IORef, newIORef, writeIORef, readIORef)
 import Control.Monad (when)
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
-import Engine.Core.Types (EngineEnv(..))
+import Engine.Core.State
 import Engine.Input.Types
 import Engine.Input.Callback
-import Engine.Core.Queue as Q
+import qualified Engine.Core.Queue as Q
 
 -- | Thread state with safe shutdown
 data InputThreadState = InputThreadState
@@ -70,7 +70,7 @@ runInputLoop env inpSt ThreadRunning = do
 -- | Process all queued inputs
 processInputs ∷ EngineEnv → InputState → IO InputState
 processInputs env inpSt = do
-    mEvent ← tryReadQueue (inputQueue env)
+    mEvent ← Q.tryReadQueue (inputQueue env)
     case mEvent of
         Just event → do
             newState ← processInput env inpSt event

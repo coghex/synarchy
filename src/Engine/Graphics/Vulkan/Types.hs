@@ -33,27 +33,12 @@ data VulkanDescriptorInfo = VulkanDescriptorInfo
   , vdiSets    ∷ V.Vector DescriptorSet
   }
 
-data TextureInfo = TextureInfo
-  { tiImage    ∷ Image
-  , tiView     ∷ ImageView
-  , tiSampler  ∷ Sampler
-  , tiMemory   ∷ DeviceMemory
-  , tiLayout   ∷ ImageLayout
-  }
-
 -- | Configuration for descriptor manager
 data DescriptorManagerConfig = DescriptorManagerConfig
   { dmcMaxSets        ∷ Word32        -- ^ Maximum number of descriptor sets
   , dmcUniformCount   ∷ Word32        -- ^ Number of uniform buffer descriptors
   , dmcSamplerCount   ∷ Word32        -- ^ Number of combined image sampler descriptors
   } deriving (Show, Eq)
-
--- | Configuration for pipeline manager
-data PipelineState = PipelineState
-    { psPipeline       ∷ Pipeline
-    , psPipelineLayout ∷ PipelineLayout
-    , psRenderPass     ∷ RenderPass
-    } deriving (Show)
 
 -- | Resources specific to a single frame in flight
 data FrameResources = FrameResources

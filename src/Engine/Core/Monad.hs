@@ -12,11 +12,8 @@ import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.Reader.Class (MonadReader(..))
 import Control.Monad.State.Class (MonadState(..), gets)
 import qualified Control.Monad.Logger.CallStack as Logger
-import Engine.Core.Types
-  ( EngineState(..)
-  , EngineEnv(..)
-  )
 import Engine.Core.Error.Exception (EngineException(..))
+import Engine.Core.State
 import Engine.Concurrent.Var 
 
 -- | Main engine monad transformer stack

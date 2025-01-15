@@ -6,7 +6,7 @@ import qualified Data.Text as T
 import qualified Data.Map as Map
 import Data.Word (Word32)
 import Vulkan.Core10
-import Engine.Graphics.Vulkan.Types (TextureInfo)
+import Engine.Graphics.Vulkan.Base (TextureInfo)
 
 -- | Unique identifier for assets
 newtype AssetId = AssetId Word32

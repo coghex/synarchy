@@ -1,10 +1,5 @@
 module Engine.Core.Types
-  ( EngineState(..)
-  , EngineEnv(..)
-  , EngineError(..)
-  , EngineConfig(..)
-  , LoggingFunc
-  , TextureState(..)
+  ( EngineConfig(..)
   ) where
 
 import UPrelude
@@ -22,49 +17,6 @@ import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Core.Queue
 import Engine.Event.Types
 import Engine.Input.Types
-
--- | Engine environment (read-only)
-data EngineEnv = EngineEnv
-  { engineConfig     ∷ EngineConfig
-  , eventQueue       ∷ Queue Event
-  , inputQueue       ∷ Queue InputEvent
-  , logQueue         ∷ Queue T.Text
-  }
-
--- | Engine state (mutable)
-data EngineState = EngineState
-  { frameCount       ∷ Word64
-  , engineRunning    ∷ Bool
-  , currentTime      ∷ Double
-  , deltaTime        ∷ Double
-  , frameTimeAccum   ∷ Double
-  , lastFrameTime    ∷ Double
-  , targetFPS        ∷ Double
-  , inputState       ∷ InputState
-  , logFunc          ∷ LoggingFunc
-  , glfwWindow       ∷ Maybe Window
-  , vulkanInstance   ∷ Maybe Vk.Instance
-  , vulkanDevice     ∷ Maybe Vk.Device
-  , deviceQueues     ∷ Maybe DevQueues
-  , vulkanCmdPool    ∷ Maybe Vk.CommandPool
-  , vulkanCmdBuffers ∷ Maybe (V.Vector Vk.CommandBuffer)
-  , vulkanRenderPass ∷ Maybe Vk.RenderPass
-  , textureState     ∷ TextureState
-  , descriptorState  ∷ Maybe DescriptorManager
-  , pipelineState    ∷ Maybe PipelineState
-  , frameResources   ∷ V.Vector FrameResources
-  , currentFrame     ∷ Word32
-  , framebuffers     ∷ Maybe (V.Vector Vk.Framebuffer)
-  , swapchainInfo    ∷ Maybe SwapchainInfo
-  , syncObjects      ∷ Maybe SyncObjects
-  , vertexBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
-  , uniformBuffers   ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
-  , assetPool        ∷ AssetPool
-  , assetConfig      ∷ AssetConfig
-  }
-
-type LoggingFunc = Logger.Loc → Logger.LogSource → Logger.LogLevel
-                              → Logger.LogStr → IO ()
 
 -- | Engine configuration
 data EngineConfig = EngineConfig
