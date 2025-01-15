@@ -27,6 +27,15 @@ data EngineEnv = EngineEnv
 
 -- | Engine state (mutable)
 data EngineState = EngineState
+  { timingState      ∷ TimingState
+  , inputState       ∷ InputState
+  , logFunc          ∷ LoggingFunc
+  , graphicsState    ∷ GraphicsState
+  , assetPool        ∷ AssetPool
+  , assetConfig      ∷ AssetConfig
+  }
+
+data TimingState = TimingState
   { frameCount       ∷ Word64
   , engineRunning    ∷ Bool
   , currentTime      ∷ Double
@@ -34,9 +43,10 @@ data EngineState = EngineState
   , frameTimeAccum   ∷ Double
   , lastFrameTime    ∷ Double
   , targetFPS        ∷ Double
-  , inputState       ∷ InputState
-  , logFunc          ∷ LoggingFunc
-  , glfwWindow       ∷ Maybe Window
+  }
+
+data GraphicsState = GraphicsState
+  { glfwWindow       ∷ Maybe Window
   , vulkanInstance   ∷ Maybe Vk.Instance
   , vulkanDevice     ∷ Maybe Vk.Device
   , deviceQueues     ∷ Maybe DevQueues
@@ -53,7 +63,5 @@ data EngineState = EngineState
   , syncObjects      ∷ Maybe SyncObjects
   , vertexBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , uniformBuffers   ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
-  , assetPool        ∷ AssetPool
-  , assetConfig      ∷ AssetConfig
   }
 

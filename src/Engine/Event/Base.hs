@@ -1,6 +1,9 @@
 module Engine.Event.Base where
 import UPrelude
--- Move basic event types here, without dependencies on Asset types
+
+data LogLevel = LogDebug Int | LogInfo | LogWarn | LogError
+  deriving (Show, Eq, Ord)
+
 data SystemAction
   = SysRecreateWindow
   | SysReloadResources

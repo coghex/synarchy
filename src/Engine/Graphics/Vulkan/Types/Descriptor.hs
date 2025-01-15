@@ -8,7 +8,7 @@ import qualified Data.Text as T
 import qualified Data.Map as Map
 import Data.Word (Word32)
 import Vulkan.Core10
-import Engine.Asset.Types (AssetId)
+import Engine.Asset.Base (AssetId)
 
 -- | Manages descriptor resources
 data DescriptorManager = DescriptorManager

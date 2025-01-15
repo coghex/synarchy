@@ -26,10 +26,3 @@ data EngineConfig = EngineConfig
   , enableDebug     ∷ Bool
   }
 
--- | Engine errors
-data EngineError
-  = VulkanError   T.Text
-  | ResourceError T.Text
-  | StateError    T.Text
-  | InitError     T.Text
-  deriving (Show, Eq)

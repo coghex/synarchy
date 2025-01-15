@@ -6,19 +6,8 @@ import qualified Data.Text as T
 import qualified Data.Map as Map
 import Data.Word (Word32)
 import Vulkan.Core10
+import Engine.Asset.Base (AssetId, AssetStatus)
 import Engine.Graphics.Vulkan.Base (TextureInfo)
-
--- | Unique identifier for assets
-newtype AssetId = AssetId Word32
-  deriving (Eq, Ord, Show)
-
--- | Asset status tracking
-data AssetStatus
-  = AssetUnloaded
-  | AssetLoading
-  | AssetLoaded
-  | AssetError T.Text
-  deriving (Eq, Show)
 
 -- | Metadata for texture atlases
 data AtlasMetadata = AtlasMetadata

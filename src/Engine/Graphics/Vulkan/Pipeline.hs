@@ -73,7 +73,8 @@ createVulkanRenderPipeline device renderPass swapExtent descriptorLayout = do
     -- Create shader stages first
     shaderStages ← createVulkanShaderStages device
     -- Get the texture layout
-    (TexturePoolState _ texLayout, _) ← gets textureState
+    state ← gets graphicsState
+    let (TexturePoolState _ texLayout, _) = textureState state
     
     let Extent2D w h = swapExtent
         -- Vertex input state

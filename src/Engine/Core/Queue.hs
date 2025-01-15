@@ -26,3 +26,17 @@ tryReadQueue q = atomically $ tryReadTQueue (queueTQueue q)
 -- | Read all available items from a queue
 flushQueue ∷ Queue α → IO [α]
 flushQueue q = atomically $ flushTQueue (queueTQueue q)
+
+type Channel α = STM.TChan α
+
+newChannel ∷ IO (Channel α)
+newChannel = STM.atomically STM.newTChan
+
+readChannel ∷ Channel α → STM.STM α
+readChannel = STM.readTChan
+
+writeChannel ∷ Channel α → α → STM.STM ()
+writeChannel = STM.writeTChan
+
+tryReadChannel ∷ Channel α → STM.STM (Maybe α)
+tryReadChannel = STM.tryReadTChan

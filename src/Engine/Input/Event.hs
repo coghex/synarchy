@@ -34,7 +34,8 @@ processInputEvent event = do
             -- Handle escape key
             when (key == GLFW.Key'Escape && keyState == GLFW.KeyState'Pressed) $ do
                 liftIO $ Q.writeQueue (logQueue env) "Escape pressed, shutting down..."
-                modify $ \s → s { engineRunning = False }
+                modify $ \s → s { timingState = (timingState s) {
+                                    engineRunning = False } }
             -- Update general input state
             modify $ \s → s { inputState = updateKeyState (inputState s) key keyState mods }
             

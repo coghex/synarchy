@@ -17,7 +17,7 @@ module Engine.Graphics.Vulkan.Command
 import UPrelude
 import Control.Monad (forM_, when)
 import Control.Monad.Reader (ask)
-import Control.Monad.State (get)
+import Control.Monad.State (get, gets)
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.Vector as V
 import Data.Word (Word64)
@@ -163,7 +163,7 @@ runCommandsOnce device commandPool cmdQueue action = do
 
 recordRenderCommandBuffer ∷ CommandBuffer → Word64 → EngineM ε σ ()
 recordRenderCommandBuffer cmdBuf frameIdx = do
-    state ← get
+    state ← gets graphicsState
     env ← ask
     
     -- Validate all required state components
@@ -269,7 +269,7 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
 -- Helper function to prepare all command buffers
 prepareFrameCommandBuffers ∷ EngineM ε σ ()
 prepareFrameCommandBuffers = do
-    state ← get
+    state ← gets graphicsState
 
     case (vulkanDevice state) of
         Nothing → throwGraphicsError VulkanDeviceLost

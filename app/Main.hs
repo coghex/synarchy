@@ -9,6 +9,7 @@ import qualified Control.Monad.Logger.CallStack as Logger
 import Control.Monad.Reader (ask)
 import Control.Monad.State (modify, get, gets)
 import Data.Bits ((.|.))
+import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Maybe (fromJust)
@@ -20,6 +21,7 @@ import Linear (M44, V3(..), identity, (!*!), perspective, lookAt, translation, o
 import System.Environment (setEnv)
 import System.Exit ( exitFailure )
 import System.FilePath ((</>))
+import Engine.Asset.Types
 import Engine.Core.Base
 import Engine.Core.Monad (runEngineM, EngineM')
 import Engine.Core.Types
@@ -96,29 +98,38 @@ defaultWindowConfig = WindowConfig
 
 defaultEngineState ∷ LoggingFunc → EngineState
 defaultEngineState lf = EngineState
-  { frameCount       = 0
-  , engineRunning    = True
-  , currentTime      = 0.0
-  , deltaTime        = 0.0
-  , frameTimeAccum   = 0.0
-  , lastFrameTime    = 0.0
-  , targetFPS        = 60.0
+  { timingState = TimingState
+    { frameCount       = 0
+    , engineRunning    = True
+    , currentTime      = 0.0
+    , deltaTime        = 0.0
+    , frameTimeAccum   = 0.0
+    , lastFrameTime    = 0.0
+    , targetFPS        = 60.0
+    }
   , inputState       = defaultInputState
   , logFunc          = lf
-  , vulkanInstance   = Nothing
-  , vulkanDevice     = Nothing
-  , vulkanCmdPool    = Nothing
-  , vulkanCmdBuffers = Nothing
-  , vulkanRenderPass = Nothing
-  , textureState     = (TexturePoolState zero zero, V.empty)
-  , descriptorState  = Nothing
-  , pipelineState    = Nothing
-  , currentFrame     = 0
-  , framebuffers     = Nothing
-  , swapchainInfo    = Nothing
-  , syncObjects      = Nothing
-  , vertexBuffer     = Nothing
-  , uniformBuffers   = Nothing
+  , graphicsState    = GraphicsState
+    { glfwWindow       = Nothing
+    , vulkanInstance   = Nothing
+    , vulkanDevice     = Nothing
+    , deviceQueues     = Nothing
+    , vulkanCmdPool    = Nothing
+    , vulkanCmdBuffers = Nothing
+    , vulkanRenderPass = Nothing
+    , textureState     = (TexturePoolState zero zero, V.empty)
+    , descriptorState  = Nothing
+    , pipelineState    = Nothing
+    , frameResources   = V.empty
+    , currentFrame     = 0
+    , framebuffers     = Nothing
+    , swapchainInfo    = Nothing
+    , syncObjects      = Nothing
+    , vertexBuffer     = Nothing
+    , uniformBuffers   = Nothing
+    }
+  , assetPool        = AssetPool Map.empty Map.empty 0
+  , assetConfig      = AssetConfig 100 100 True True
   }
 
 main ∷ IO ()
@@ -152,7 +163,8 @@ main = do
       engineAction = do
         -- initialize GLFW first
         window ← GLFW.createWindow defaultWindowConfig
-        modify $ \s → s { glfwWindow = Just window }
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            glfwWindow = Just window } }
 
         -- setup input callbacks
         env ← ask
@@ -168,10 +180,11 @@ main = do
         -- select physical device and create logical device
         physicalDevice ← pickPhysicalDevice vkInstance surface
         (device, queues) ← createVulkanDevice vkInstance physicalDevice surface
-        modify $ \s → s { vulkanInstance = Just vkInstance
-                        , vulkanDevice = Just device
-                        , deviceQueues = Just queues
-                        }
+        modify $ \s → s { graphicsState = (graphicsState s)
+                          { vulkanInstance = Just vkInstance
+                          , vulkanDevice = Just device
+                          , deviceQueues = Just queues
+                          } }
         
         -- print some info about the device
         props ← liftIO $ getPhysicalDeviceProperties physicalDevice
@@ -181,7 +194,8 @@ main = do
         swapInfo ← createVulkanSwapchain physicalDevice device
                                          queues surface
         logDebug $ "Swapchain Format: " ⧺ show (siSwapImgFormat swapInfo)
-        modify $ \s → s { swapchainInfo = Just swapInfo }
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            swapchainInfo = Just swapInfo } }
         let numImages = length $ siSwapImgs swapInfo
 
         -- test swapchain support query
@@ -191,12 +205,14 @@ main = do
 
         -- create sync objects
         syncObjects ← createSyncObjects device defaultGraphicsConfig
-        modify $ \s → s { syncObjects = Just syncObjects }
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            syncObjects = Just syncObjects } }
 
         -- create command pool and buffers
         frameRes ← V.generateM (fromIntegral $ gcMaxFrames defaultGraphicsConfig) $ \_ →
             createFrameResources device queues
-        modify $ \s → s { frameResources = frameRes }
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            frameResources = frameRes } }
         let cmdPool = frCommandPool $ frameRes V.! 0
 
         -- create Descriptor Pool
@@ -207,20 +223,23 @@ main = do
               }
         descManager ← createVulkanDescriptorManager device descConfig
         logDebug $ "Descriptor Pool Created: " ⧺ show (dmPool descManager)
-        modify $ \s → s { descriptorState = Just descManager }
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            descriptorState = Just descManager } }
 
         -- allocate initial descriptor sets
         descSets ← allocateVulkanDescriptorSets device descManager
                      (fromIntegral $ gcMaxFrames defaultGraphicsConfig)
         let updatedManager = descManager { dmActiveSets = descSets }
-        modify $ \s → s { descriptorState = Just updatedManager }
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            descriptorState = Just updatedManager } }
         logDebug $ "Descriptor Sets Allocated: " ⧺ show (V.length descSets)
 
         -- creating vertex buffer
         (vBuffer, vBufferMemory) ← createVertexBuffer device physicalDevice
                                      (graphicsQueue queues) cmdPool
         logDebug $ "VertexBuffer: " ⧺ show vBuffer
-        modify $ \s → s { vertexBuffer = Just (vBuffer, vBufferMemory) }
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            vertexBuffer = Just (vBuffer, vBufferMemory) } }
 
         -- create descriptor set layout
         descSetLayout ← createVulkanDescriptorSetLayout device
@@ -239,7 +258,8 @@ main = do
         (uboBuffer, uboMemory) ← createUniformBuffer device physicalDevice uboSize
         logDebug $ "UniformBuffer: " ⧺ show uboBuffer
         updateUniformBuffer device uboMemory uboData
-        modify $ \s → s { uniformBuffers = Just (uboBuffer, uboMemory) }
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            uniformBuffers = Just (uboBuffer, uboMemory) } }
         let bufferInfo = (zero ∷ DescriptorBufferInfo)
                 { buffer = uboBuffer
                 , offset = 0
@@ -258,7 +278,8 @@ main = do
         -- create render pass
         renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo)
         logDebug $ "RenderPass: " ⧺ show renderPass
-        modify $ \s → s { vulkanRenderPass = Just renderPass }
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            vulkanRenderPass = Just renderPass } }
 
         -- create pipeline
         (pipeline, pipelineLayout) ← createVulkanRenderPipeline device renderPass
@@ -266,7 +287,8 @@ main = do
         logDebug $ "Pipeline: " ⧺ show pipeline
         logDebug $ "PipelineLayout: " ⧺ show pipelineLayout
         let pstate = PipelineState pipeline pipelineLayout renderPass
-        modify $ \s → s { pipelineState = Just (pstate) }
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            pipelineState = Just (pstate) } }
 
         -- create swapchain image views
         imageViews ← createSwapchainImageViews device swapInfo
@@ -275,10 +297,11 @@ main = do
         -- create framebuffers
         framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews
         logDebug $ "Framebuffers: " ⧺ show (length framebuffers)
-        modify $ \s → s { framebuffers = Just framebuffers }
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            framebuffers = Just framebuffers } }
 
         -- Verify all counts match before recording
-        state ← get
+        state ← gets graphicsState
         let cmdBufferCount = V.length $ frCommandBuffer $ V.head frameRes
             fbCount = V.length framebuffers
             dsCount = maybe 0 (V.length . dmActiveSets) $ descriptorState state
@@ -289,7 +312,7 @@ main = do
                 " descSets=" ⧺ show dsCount
 
         -- record initial command buffers
-        state ← get
+        state ← gets graphicsState
         let numImages = maybe 0 V.length (vulkanCmdBuffers state)
         forM_ [0..numImages-1] $ \i → do
             recordRenderCommandBuffer 
@@ -323,7 +346,8 @@ initializeTextures device physicalDevice cmdPool queue = do
   
   -- Update engine state with pool and layout
   let poolState = TexturePoolState descriptorPool descriptorSetLayout
-  modify $ \s → s { textureState = (poolState, V.empty) }
+  modify $ \s → s { graphicsState = (graphicsState s) {
+                      textureState = (poolState, V.empty) } }
   
   -- Load texture with proper error handling
   let texturePath = "dat/tile01.png"
@@ -334,16 +358,17 @@ initializeTextures device physicalDevice cmdPool queue = do
   logDebug "Created texture with descriptor"
   
   -- Update engine state with the new texture
-  modify $ \s → s { textureState = 
-    let (poolState', _) = textureState s
-    in (poolState', V.singleton textureData)
-  }
+  modify $ \s → s { graphicsState = (graphicsState s) {
+    textureState = 
+      let (poolState', _) = textureState (graphicsState s)
+      in (poolState', V.singleton textureData)
+  } }
   
   logDebug $ "Texture loaded: " ⧺ show textureData
 
 drawFrame ∷ EngineM' EngineEnv ()
 drawFrame = do
-    state ← get
+    state ← gets graphicsState
     
     -- Get current frame index
     let frameIdx  = currentFrame state
@@ -408,9 +433,10 @@ drawFrame = do
                 T.pack $ "Failed to present image: " ⧺ show err
     
     -- Update frame index
-    modify $ \s → s { currentFrame = (currentFrame s + 1)
-                                       `mod` fromIntegral
-                                       (gcMaxFrames defaultGraphicsConfig) }
+    modify $ \s → s { graphicsState = (graphicsState s) {
+                        currentFrame = (currentFrame (graphicsState s) + 1)
+                                         `mod` fromIntegral
+                                         (gcMaxFrames defaultGraphicsConfig) } }
 
 getCurTime ∷ IO Double
 getCurTime = do
@@ -419,8 +445,9 @@ getCurTime = do
 
 mainLoop ∷ EngineM' EngineEnv ()
 mainLoop = do
-    state ← get
-    running ← gets engineRunning
+    state  ← gets graphicsState
+    tstate ← gets timingState
+    let running = engineRunning tstate
     
     unless (not running) $ do
         window ← case glfwWindow state of
@@ -431,9 +458,10 @@ mainLoop = do
                 Window w → w
 
         currentTime ← liftIO getCurTime
-        lastTime ← gets lastFrameTime
-        accum ← gets frameTimeAccum
-        targetFps ← gets targetFPS
+        tstate ← gets timingState
+        let lastTime  = lastFrameTime tstate
+            accum     = frameTimeAccum tstate
+            targetFps = targetFPS tstate
 
         let frameTime = currentTime - lastTime
             targetFrameTime = 1.0 / targetFps
@@ -451,27 +479,30 @@ mainLoop = do
         let actualFrameTime = actualCurrentTime - lastTime
             newAccum = accum + actualFrameTime
 
-        modify $ \s → s 
+        modify $ \s → s { timingState = (timingState s)
             { lastFrameTime = actualCurrentTime
             , frameTimeAccum = newAccum
-            , frameCount = frameCount s + 1
+            , frameCount = frameCount (timingState s) + 1
             , deltaTime = actualFrameTime
             , currentTime = actualCurrentTime 
-            }
+            } }
 
         when (newAccum ≥ 1.0) $ do
-            currentCount ← gets frameCount
-            let fps = fromIntegral currentCount / newAccum
+            tstate ← gets timingState
+            let currentCount = frameCount tstate
+                fps = fromIntegral currentCount / newAccum
             logDebug $ "FPS: " ⧺ show fps
             -- Adjust timing if FPS is consistently off
             when (fps < 59.0) $
-                modify $ \s → s { targetFPS = targetFPS s + 0.1 }
+                modify $ \s → s { timingState = (timingState s) {
+                                    targetFPS = targetFPS (timingState s) + 0.1 } }
             when (fps > 61.0) $
-                modify $ \s → s { targetFPS = targetFPS s - 0.1 }
-            modify $ \s → s 
+                modify $ \s → s { timingState = (timingState s) {
+                                    targetFPS = targetFPS (timingState s) - 0.1 } }
+            modify $ \s → s { timingState = (timingState s)
                 { frameTimeAccum = 0.0
                 , frameCount = 0 
-                }
+                } }
         GLFW.pollEvents
         handleInputEvents
         shouldClose ← GLFW.windowShouldClose glfwWindow
