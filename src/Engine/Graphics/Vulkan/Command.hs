@@ -27,6 +27,7 @@ import Engine.Core.Resource (allocResource, locally)
 import Engine.Core.Error.Exception
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
+import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.CStruct.Extends
 import Vulkan.Core10

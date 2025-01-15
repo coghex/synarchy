@@ -125,6 +125,8 @@ test-suite synarchy-test
 library
     -- Expose the modules you want to test
     exposed-modules: UPrelude
+                     Engine.Asset.Types
+                     Engine.Asset.Manager
                      Engine.Event.Types
                      Engine.Graphics.Types
                      Engine.Graphics.Vulkan.Buffer
@@ -141,6 +143,7 @@ library
                      Engine.Graphics.Vulkan.Swapchain
                      Engine.Graphics.Vulkan.Sync
                      Engine.Graphics.Vulkan.Types
+                     Engine.Graphics.Vulkan.Types.Descriptor
                      Engine.Graphics.Vulkan.Types.Texture
                      Engine.Graphics.Vulkan.Texture
                      Engine.Graphics.Vulkan.Vertex

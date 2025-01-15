@@ -8,6 +8,7 @@ module Engine.Event.Types
 
 import UPrelude
 import qualified Data.Text as T
+import Engine.Asset.Types
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types
 
@@ -16,6 +17,7 @@ data Event
   | EventLog LogLevel T.Text         -- ^ Logging event
   | EventInput InputEvent          -- ^ Input event
   | EventSystem SystemAction       -- ^ System-level event
+  | EventAsset AssetEvent          -- ^ Asset event
   deriving (Show, Eq)
 
 data LogLevel
@@ -31,4 +33,10 @@ data SystemAction
   | SysToggleFullscreen
   | SysResizeWindow Int Int
   | SysExit
+  deriving (Show, Eq)
+
+data AssetEvent
+  = AssetLoaded AssetId
+  | AssetLoadError AssetId T.Text
+  | AssetUnloaded AssetId
   deriving (Show, Eq)

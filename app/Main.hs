@@ -49,6 +49,7 @@ import Engine.Graphics.Vulkan.Swapchain (createVulkanSwapchain, querySwapchainSu
 import Engine.Graphics.Vulkan.Sync (createSyncObjects)
 import Engine.Graphics.Vulkan.Texture
 import Engine.Graphics.Vulkan.Vertex
+import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Vulkan.CStruct.Extends

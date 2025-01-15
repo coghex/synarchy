@@ -13,10 +13,12 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32, Word64)
 import qualified Vulkan.Core10 as Vk
+import Engine.Asset.Types
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture (TextureState(..))
 import Engine.Graphics.Window.Types
+import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Core.Queue
 import Engine.Event.Types
 import Engine.Input.Types
@@ -57,6 +59,8 @@ data EngineState = EngineState
   , syncObjects      ∷ Maybe SyncObjects
   , vertexBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , uniformBuffers   ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
+  , assetPool        ∷ AssetPool
+  , assetConfig      ∷ AssetConfig
   }
 
 type LoggingFunc = Logger.Loc → Logger.LogSource → Logger.LogLevel

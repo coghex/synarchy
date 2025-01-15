@@ -48,14 +48,6 @@ data DescriptorManagerConfig = DescriptorManagerConfig
   , dmcSamplerCount   ∷ Word32        -- ^ Number of combined image sampler descriptors
   } deriving (Show, Eq)
 
--- | Manages descriptor resources
-data DescriptorManager = DescriptorManager
-  { dmPool           ∷ DescriptorPool
-  , dmUniformLayout  ∷ DescriptorSetLayout  -- ^ Layout for uniform buffers
-  , dmSamplerLayout  ∷ DescriptorSetLayout  -- ^ Layout for combined image samplers
-  , dmActiveSets     ∷ V.Vector DescriptorSet
-  } deriving (Show)
-
 -- | Configuration for pipeline manager
 data PipelineState = PipelineState
     { psPipeline       ∷ Pipeline
