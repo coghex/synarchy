@@ -33,6 +33,7 @@ data TextureAtlas = TextureAtlas
   , taStatus       ∷ AssetStatus
   , taInfo         ∷ Maybe TextureInfo  -- Vulkan resources
   , taRefCount     ∷ Word32
+  , taCleanup      ∷ Maybe (IO ())      -- cleanup function
   }
 
 -- | Shader stage specification
@@ -50,7 +51,8 @@ data ShaderProgram = ShaderProgram
   , spStatus       ∷ AssetStatus
   , spModules      ∷ V.Vector ShaderModule
   , spRefCount     ∷ Word32
-  } deriving (Show)
+  , spCleanup      ∷ Maybe (IO ())      -- cleanup function
+  }
 
 -- | Asset pool containing all loaded assets
 data AssetPool = AssetPool

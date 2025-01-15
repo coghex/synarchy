@@ -48,6 +48,7 @@ data TimingState = TimingState
 data GraphicsState = GraphicsState
   { glfwWindow       ∷ Maybe Window
   , vulkanInstance   ∷ Maybe Vk.Instance
+  , vulkanPDevice    ∷ Maybe Vk.PhysicalDevice
   , vulkanDevice     ∷ Maybe Vk.Device
   , deviceQueues     ∷ Maybe DevQueues
   , vulkanCmdPool    ∷ Maybe Vk.CommandPool

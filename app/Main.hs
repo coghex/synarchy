@@ -112,6 +112,7 @@ defaultEngineState lf = EngineState
   , graphicsState    = GraphicsState
     { glfwWindow       = Nothing
     , vulkanInstance   = Nothing
+    , vulkanPDevice    = Nothing
     , vulkanDevice     = Nothing
     , deviceQueues     = Nothing
     , vulkanCmdPool    = Nothing
@@ -182,6 +183,7 @@ main = do
         (device, queues) ← createVulkanDevice vkInstance physicalDevice surface
         modify $ \s → s { graphicsState = (graphicsState s)
                           { vulkanInstance = Just vkInstance
+                          , vulkanPDevice = Just physicalDevice
                           , vulkanDevice = Just device
                           , deviceQueues = Just queues
                           } }

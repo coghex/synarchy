@@ -9,6 +9,7 @@ module Engine.Core.Error.Exception
   , SystemError(..)
   , StateError(..)
   , InitError(..)
+  , AssetError(..)
   -- * Functions
   , throwEngineException
   , logInfo
@@ -19,6 +20,7 @@ module Engine.Core.Error.Exception
   , throwSystemError
   , throwStateError
   , throwInitError
+  , throwAssetError
   , catchEngine
   , tryEngine
   ) where
@@ -40,6 +42,7 @@ data ExceptionType
   | ExSystem SystemError       -- ^ System-level errors
   | ExState StateError        -- ^ State management errors
   | ExInit InitError         -- ^ Initialization errors
+  | ExAsset AssetError     -- ^ Asset loading errors
   deriving (Show, Eq, Typeable)
 
 -- | Graphics-specific errors
@@ -91,6 +94,16 @@ data InitError
   | DeviceCreationFailed   -- ^ Failed to create logical device
   | ExtensionNotSupported  -- ^ Required extension not supported
   | ValidationLayerNotSupported -- ^ Required validation layer not supported
+  deriving (Show, Eq, Typeable)
+
+-- | Asset loading errors
+data AssetError
+  = AssetNotFound FilePath          -- ^ Asset file not found
+  | AssetAlreadyLoaded FilePath     -- ^ Attempting to load already loaded asset
+  | AssetLoadFailed FilePath T.Text -- ^ Asset failed to load with reason
+  | InvalidAssetFormat T.Text       -- ^ Asset format is invalid
+  | AssetAllocationFailed T.Text    -- ^ Failed to allocate asset
+  | AssetCountMismatch T.Text       -- ^ Asset count mismatch
   deriving (Show, Eq, Typeable)
 
 -- | Main exception type with enhanced context
@@ -165,6 +178,12 @@ throwInitError :: MonadError EngineException m
                => InitError -> T.Text -> m a
 throwInitError err msg = 
   throwError $ EngineException (ExInit err) msg mkErrorContext
+
+throwAssetError :: MonadError EngineException m 
+               => AssetError -> T.Text -> m a
+throwAssetError err msg = 
+  throwError $ EngineException (ExAsset err) msg mkErrorContext
+
 
 -- | Create error context from current call stack
 mkErrorContext ∷ HasCallStack ⇒ ErrorContext

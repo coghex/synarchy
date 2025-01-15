@@ -1,6 +1,7 @@
 -- src/Engine/Graphics/Vulkan/Texture.hs
 module Engine.Graphics.Vulkan.Texture
   ( createTextureImageView
+  , createTextureImageView'
   , createTextureSampler
   , createTextureDescriptorSet
   , createTextureDescriptorPool
@@ -26,6 +27,7 @@ import Engine.Core.Resource
 import Engine.Core.Error.Exception
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Image (createVulkanImage, createVulkanImageView
+                                    , createVulkanImage'
                                     , copyBufferToImage, VulkanImage(..))
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
@@ -40,7 +42,7 @@ data ImageLayoutTransition = Undef_TransDst
                           | Undef_ColorAtt
 
 createTextureImageView ∷ PhysicalDevice → Device → CommandPool
-                      → Queue → FilePath → EngineM ε σ (ImageView, Word32)
+                      → Queue → FilePath → EngineM ε σ (VulkanImage, ImageView, Word32)
 createTextureImageView pdev dev cmdPool cmdQueue path = do
   JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
     ← liftIO (JP.readImage path) ⌦ \case
@@ -82,7 +84,68 @@ createTextureImageView pdev dev cmdPool cmdQueue path = do
   
   imageView ← createVulkanImageView dev image
     FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
-  return (imageView, mipLevels)
+  return (image, imageView, mipLevels)
+
+-- | Create a texture image view with cleanup action
+createTextureImageView' ∷ PhysicalDevice → Device → CommandPool
+                       → Queue → FilePath 
+                       → EngineM ε σ ((ImageView, Word32), EngineM ε σ ())
+createTextureImageView' pdev dev cmdPool cmdQueue path = do
+  -- Load and convert image data
+  JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
+    ← liftIO (JP.readImage path) ⌦ \case
+      Left err → throwGraphicsError TextureLoadFailed
+        $ T.pack $ "cannot create texture image view: " ++ err
+      Right dynImg → pure $ JP.convertRGBA8 dynImg
+
+  let (imageDataForeignPtr, imageDataLen) = Vec.unsafeToForeignPtr0 imageData
+      bufSize = fromIntegral imageDataLen
+      mipLevels = (floor ∘ logBase (2 ∷ Float)
+                ∘ fromIntegral $ max imageWidth imageHeight) + 1
+
+  -- Create the image with cleanup
+  (vulkanImage@(VulkanImage image imagedata), imageCleanup) ← createVulkanImage' dev pdev
+    (fromIntegral imageWidth, fromIntegral imageHeight)
+    FORMAT_R8G8B8A8_UNORM
+    IMAGE_TILING_OPTIMAL
+    (IMAGE_USAGE_TRANSFER_SRC_BIT
+    ⌄ IMAGE_USAGE_TRANSFER_DST_BIT
+    ⌄ IMAGE_USAGE_SAMPLED_BIT)
+    MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+
+  -- Handle staging buffer with locally for automatic cleanup
+  locally $ do
+    (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
+      BUFFER_USAGE_TRANSFER_SRC_BIT
+      (MEMORY_PROPERTY_HOST_VISIBLE_BIT
+      ⌄ MEMORY_PROPERTY_HOST_COHERENT_BIT)
+    stagingDataPtr ← mapMemory dev stagingMem 0 bufSize zero
+    liftIO $ withForeignPtr imageDataForeignPtr
+      $ \imageDataPtr → copyArray (castPtr stagingDataPtr)
+                          imageDataPtr imageDataLen
+    unmapMemory dev stagingMem
+
+    -- Copy data and transition image layout
+    runCommandsOnce dev cmdPool cmdQueue $ \cmdBuf → do
+      transitionImageLayout vulkanImage FORMAT_R8G8B8A8_UNORM
+        Undef_TransDst mipLevels cmdBuf
+      copyBufferToImage cmdBuf stagingBuf vulkanImage
+        (fromIntegral imageWidth) (fromIntegral imageHeight)
+      transitionImageLayout vulkanImage FORMAT_R8G8B8A8_UNORM
+        TransDst_ShaderRO mipLevels cmdBuf
+
+  -- Create image view with cleanup
+  (imageView, viewCleanup) ← allocResource'
+    (\view → liftIO $ destroyImageView dev view Nothing)
+    (createVulkanImageView dev (VulkanImage image imagedata)
+      FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT)
+
+  -- Combine cleanup actions
+  let cleanup = do
+        viewCleanup    -- First cleanup the view
+        imageCleanup   -- Then cleanup the image and memory
+
+  pure ((imageView, mipLevels), cleanup)
 
 transitionImageLayout ∷ VulkanImage → Format → ImageLayoutTransition
                      → Word32 → CommandBuffer → EngineM ε σ ()
@@ -245,7 +308,7 @@ createTextureDescriptorSetLayout device = do
 createTextureWithDescriptor ∷ Device → PhysicalDevice → CommandPool → Queue 
                            → FilePath → EngineM ε σ TextureData
 createTextureWithDescriptor device pDevice cmdPool cmdQueue path = do
-  (imageView, mipLevels) ← createTextureImageView pDevice device cmdPool cmdQueue path
+  (_, imageView, mipLevels) ← createTextureImageView pDevice device cmdPool cmdQueue path
   sampler ← createTextureSampler device pDevice
   
   -- Create descriptor resources

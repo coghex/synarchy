@@ -1,6 +1,7 @@
 -- src/Engine/Graphics/Vulkan/Image.hs
 module Engine.Graphics.Vulkan.Image
   ( createVulkanImage
+  , createVulkanImage'
   , createVulkanImageView
   , destroyVulkanImage
   , destroyVulkanImageView
@@ -67,6 +68,52 @@ createVulkanImage device pDevice (width, height) format tiling usage memProps = 
   bindImageMemory device image memory 0
 
   pure $ VulkanImage image memory
+
+-- | a version that returns a cleanup action
+createVulkanImage' ∷ Device → PhysicalDevice → (Word32, Word32) → Format → ImageTiling 
+                   → ImageUsageFlags → MemoryPropertyFlags 
+                   → EngineM ε σ (VulkanImage, EngineM ε σ ())
+createVulkanImage' device pDevice (width, height) format tiling usage memProps = do
+  let imageInfo = zero
+        { imageType = IMAGE_TYPE_2D
+        , extent = Extent3D width height 1
+        , mipLevels = 1
+        , arrayLayers = 1
+        , format = format
+        , tiling = tiling
+        , initialLayout = IMAGE_LAYOUT_UNDEFINED
+        , usage = usage
+        , sharingMode = SHARING_MODE_EXCLUSIVE
+        , samples = SAMPLE_COUNT_1_BIT
+        }
+  
+  -- Use allocResource' instead of allocResource
+  (image, cleanupImage) ← allocResource' 
+    (\img → liftIO $ destroyImage device img Nothing)
+    (createImage device imageInfo Nothing)
+
+  MemoryRequirements {size=siz, alignment=_, memoryTypeBits=mtb}
+    ← getImageMemoryRequirements device image
+
+  memTypeIndex ← findMemoryType pDevice mtb memProps
+  
+  let allocInfo = zero
+        { allocationSize = siz
+        , memoryTypeIndex = memTypeIndex
+        }
+
+  (memory, cleanupMemory) ← allocResource'
+    (\mem → liftIO $ freeMemory device mem Nothing)
+    (allocateMemory device allocInfo Nothing)
+
+  bindImageMemory device image memory 0
+
+  -- Combine cleanup actions
+  let cleanup = do
+        cleanupImage
+        cleanupMemory
+
+  pure (VulkanImage image memory, cleanup)
 
 -- | Create an image view for the given image
 createVulkanImageView ∷ Device

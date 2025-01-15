@@ -11,4 +11,5 @@ data EngineError
   | ResourceError T.Text
   | StateError    T.Text
   | InitError     T.Text
+  | AssetError    T.Text
   deriving (Show, Eq)
