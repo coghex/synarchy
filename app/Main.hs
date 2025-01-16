@@ -22,6 +22,7 @@ import System.Environment (setEnv)
 import System.Exit ( exitFailure )
 import System.FilePath ((</>))
 import Engine.Asset.Types
+import Engine.Asset.Manager
 import Engine.Core.Base
 import Engine.Core.Monad (runEngineM, EngineM')
 import Engine.Core.Types
@@ -213,9 +214,10 @@ main = do
         -- create command pool and buffers
         frameRes ← V.generateM (fromIntegral $ gcMaxFrames defaultGraphicsConfig) $ \_ →
             createFrameResources device queues
-        modify $ \s → s { graphicsState = (graphicsState s) {
-                            frameResources = frameRes } }
         let cmdPool = frCommandPool $ frameRes V.! 0
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            frameResources = frameRes
+                          , vulkanCmdPool  = Just cmdPool } }
 
         -- create Descriptor Pool
         let descConfig = DescriptorManagerConfig
@@ -350,23 +352,63 @@ initializeTextures device physicalDevice cmdPool queue = do
   let poolState = TexturePoolState descriptorPool descriptorSetLayout
   modify $ \s → s { graphicsState = (graphicsState s) {
                       textureState = (poolState, V.empty) } }
-  
-  -- Load texture with proper error handling
+
+  -- Initialize asset manager
+  assetPool <- initAssetManager (AssetConfig 100 100 True True)
+  modify $ \s → s { assetPool = assetPool }
+
+  -- Load texture using asset manager
   let texturePath = "dat/tile01.png"
-  textureData ← createTextureWithDescriptor device physicalDevice cmdPool queue texturePath
-                  `catchEngine` \_ → throwGraphicsError TextureLoadFailed
-                                       "Failed to load texture"
+  textureId <- loadTextureAtlas (T.pack "tile01") texturePath
+--                `catchEngine` \_ → throwGraphicsError TextureLoadFailed $ T.pack
+--                                     $ "Failed to load texture: " ⧺ texturePath
   
-  logDebug "Created texture with descriptor"
-  
-  -- Update engine state with the new texture
-  modify $ \s → s { graphicsState = (graphicsState s) {
-    textureState = 
-      let (poolState', _) = textureState (graphicsState s)
-      in (poolState', V.singleton textureData)
-  } }
-  
-  logDebug $ "Texture loaded: " ⧺ show textureData
+  -- Get the loaded texture atlas
+  atlas <- getTextureAtlas textureId
+  case taInfo atlas of
+    Nothing → throwGraphicsError TextureLoadFailed "Texture info not found"
+    Just info → do
+      -- Allocate descriptor set
+      let allocInfo = zero 
+            { descriptorPool = descriptorPool
+            , setLayouts = V.singleton descriptorSetLayout
+            }
+      descriptorSets <- liftIO $ allocateDescriptorSets device allocInfo
+      let descriptorSet = V.head descriptorSets
+
+      -- Update descriptor set
+      let imageInfo = zero
+            { imageView = tiView info
+            , sampler = tiSampler info
+            , imageLayout = tiLayout info
+            }
+          write = zero
+            { dstSet = descriptorSet
+            , dstBinding = 0
+            , dstArrayElement = 0
+            , descriptorCount = 1
+            , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            , imageInfo = V.singleton imageInfo
+            }
+      
+      liftIO $ updateDescriptorSets device (V.singleton $ SomeStruct write) V.empty
+
+      -- Create TextureData
+      let textureData = TextureData
+            { tdImageView = tiView info
+            , tdSampler = tiSampler info
+            , tdMipLevels = amMipLevels (taMetadata atlas)
+            , tdDescriptorSet = descriptorSet
+            }
+      
+      -- Update engine state
+      modify $ \s → s { graphicsState = (graphicsState s) {
+        textureState = 
+          let (poolState', _) = textureState (graphicsState s)
+          in (poolState', V.singleton textureData)
+      } }
+      
+      logDebug "Texture state updated with info from asset manager"
 
 drawFrame ∷ EngineM' EngineEnv ()
 drawFrame = do

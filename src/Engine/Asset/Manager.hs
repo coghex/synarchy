@@ -16,7 +16,7 @@ module Engine.Asset.Manager
 import UPrelude
 import Control.Monad (void)
 import Control.Monad.Reader (ask)
-import Control.Monad.State (get, modify)
+import Control.Monad.State (get, modify, gets)
 import Data.Maybe (fromMaybe)
 import qualified Data.Map as Map
 import qualified Data.Text as T
@@ -36,7 +36,7 @@ import Engine.Graphics.Vulkan.Texture (createTextureImageView, createTextureSamp
 import qualified Vulkan.Core10 as Vk
 
 -- | Initialize the asset manager
-initAssetManager ∷ AssetConfig → EngineM' ε AssetPool
+initAssetManager ∷ AssetConfig → EngineM ε σ AssetPool
 initAssetManager config = do
   -- Create empty asset pool with initial configuration
   pure $ AssetPool
@@ -48,7 +48,7 @@ initAssetManager config = do
 -- | Load a texture atlas from file
 loadTextureAtlas ∷ T.Text      -- ^ Name of the atlas
                 → FilePath     -- ^ Path to the atlas file
-                → EngineM' ε AssetId
+                → EngineM ε σ AssetId
 loadTextureAtlas name path = do
  -- First generate a new asset ID
   state ← get
@@ -152,10 +152,13 @@ reloadAsset aid = do
   undefined
 
 -- | Get a texture atlas by ID
-getTextureAtlas ∷ AssetId → EngineM' ε TextureAtlas
+getTextureAtlas ∷ AssetId → EngineM ε σ TextureAtlas
 getTextureAtlas aid = do
-  -- Look up texture atlas in pool
-  undefined
+  pool ← gets assetPool
+  case Map.lookup aid (apTextureAtlases pool) of
+    Nothing → throwAssetError (AssetNotFound "getTextureAtlas: ") 
+                "Texture atlas not found"
+    Just atlas → pure atlas
 
 -- | Get a shader program by ID
 getShaderProgram ∷ AssetId → EngineM' ε ShaderProgram
