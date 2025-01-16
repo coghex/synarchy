@@ -72,7 +72,7 @@ createVulkanImage device pDevice (width, height) format tiling usage memProps = 
 -- | a version that returns a cleanup action
 createVulkanImage' ∷ Device → PhysicalDevice → (Word32, Word32) → Format → ImageTiling 
                    → ImageUsageFlags → MemoryPropertyFlags 
-                   → EngineM ε σ (VulkanImage, EngineM ε σ ())
+                   → EngineM ε σ (VulkanImage, IO ())
 createVulkanImage' device pDevice (width, height) format tiling usage memProps = do
   let imageInfo = zero
         { imageType = IMAGE_TYPE_2D
@@ -88,7 +88,7 @@ createVulkanImage' device pDevice (width, height) format tiling usage memProps =
         }
   
   -- Use allocResource' instead of allocResource
-  (image, cleanupImage) ← allocResource' 
+  (image, cleanupImage) ← allocResource'IO 
     (\img → liftIO $ destroyImage device img Nothing)
     (createImage device imageInfo Nothing)
 
@@ -102,7 +102,7 @@ createVulkanImage' device pDevice (width, height) format tiling usage memProps =
         , memoryTypeIndex = memTypeIndex
         }
 
-  (memory, cleanupMemory) ← allocResource'
+  (memory, cleanupMemory) ← allocResource'IO
     (\mem → liftIO $ freeMemory device mem Nothing)
     (allocateMemory device allocInfo Nothing)
 

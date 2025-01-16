@@ -2,7 +2,9 @@ module Engine.Core.State where
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import qualified Data.Map as Map
 import Data.Word (Word64, Word32)
+import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Core.Base
 import Engine.Core.Types
@@ -65,4 +67,20 @@ data GraphicsState = GraphicsState
   , vertexBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , uniformBuffers   ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   }
+
+-- | Asset pool containing all loaded assets
+data AssetPool = AssetPool
+  { apTextureAtlases    ∷ Map.Map AssetId TextureAtlas
+  , apShaderPrograms    ∷ Map.Map AssetId ShaderProgram
+  , apNextId            ∷ Word32
+  }
+
+-- | Asset loading configuration
+data AssetConfig = AssetConfig
+  { acMaxTextureAtlases ∷ Word32
+  , acMaxShaderPrograms ∷ Word32
+  , acPreloadAssets     ∷ Bool
+  , acEnableHotReload   ∷ Bool
+  } deriving (Show)
+
 

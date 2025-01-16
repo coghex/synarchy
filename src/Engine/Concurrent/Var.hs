@@ -7,9 +7,11 @@ module Engine.Concurrent.Var
   , modifyVar
   , modifyVar'
   , atomically
+  , dupVar
   ) where
 
 import UPrelude
+import Control.Monad ((>>=))
 import qualified Control.Concurrent.STM as STM
 
 type Var α = STM.TVar α
@@ -35,3 +37,6 @@ modifyVar' = STM.modifyTVar'
 
 atomically ∷ STM.STM α → IO α
 atomically = STM.atomically
+
+dupVar ∷ Var a → IO (Var a)
+dupVar v = atomically $ readVar v >>= newVar >>= return

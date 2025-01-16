@@ -6,13 +6,14 @@ module Engine.Core.Monad
   ) where
 
 import UPrelude
-import Control.Monad ((>>=))
+import Control.Monad ((>>=), void)
 import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.Reader.Class (MonadReader(..))
 import Control.Monad.State.Class (MonadState(..), gets)
 import qualified Control.Monad.Logger.CallStack as Logger
 import Engine.Core.Error.Exception (EngineException(..))
+import Engine.Core.Base
 import Engine.Core.State
 import Engine.Concurrent.Var 
 
@@ -76,3 +77,6 @@ instance Logger.MonadLogger (EngineM ε σ) where
   monadLoggerLog loc ls ll msg = do
     lf ← gets logFunc
     liftIO $ lf loc ls ll (Logger.toLogStr msg)
+
+getEngineVars ∷ EngineM ε σ (Var EngineEnv, Var EngineState)
+getEngineVars = EngineM $ \e s c → c (Right (e, s))

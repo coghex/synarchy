@@ -14,13 +14,15 @@ module Engine.Asset.Manager
   ) where
 
 import UPrelude
+import Control.Monad (void)
+import Control.Monad.Reader (ask)
 import Control.Monad.State (get, modify)
 import Data.Maybe (fromMaybe)
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Control.Monad.IO.Class (MonadIO(..))
-import Engine.Core.Monad (EngineM, EngineM')
+import Engine.Core.Monad
 import Engine.Core.Resource (allocResource, allocResource')
 import Engine.Core.State
 import Engine.Core.Error.Exception
@@ -30,7 +32,7 @@ import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Image (VulkanImage(..))
 import Engine.Graphics.Vulkan.Texture (createTextureImageView, createTextureSampler
-    , createTextureImageView')
+    , createTextureImageView', createTextureSampler')
 import qualified Vulkan.Core10 as Vk
 
 -- | Initialize the asset manager
@@ -87,11 +89,11 @@ loadTextureAtlas name path = do
     , apNextId = apNextId pool + 1
     } }
   -- Load the texture with proper cleanup handling
-  (vulkanImage@(VulkanImage image imageMemory),imageView,mipLevels) ←
-    (createTextureImageView pDevice device cmdPool cmdQueue path)
+  ((vulkanImage@(VulkanImage image imageMemory),imageView,mipLevels),imagecleanup) ←
+    (createTextureImageView' pDevice device cmdPool cmdQueue path)
 
-  sampler ←
-    (createTextureSampler device pDevice)
+  (sampler, samplercleanup) ←
+    (createTextureSampler' device pDevice)
 
   -- Create the TextureInfo
   let textureInfo = TextureInfo
@@ -104,13 +106,8 @@ loadTextureAtlas name path = do
 
   -- Combine cleanup actions
   let cleanup = do
-        -- Cleanup sampler
-        Vk.destroySampler device sampler Nothing
-        -- Cleanup image view
-        Vk.destroyImageView device imageView Nothing
-        -- Cleanup image and memory
-        Vk.destroyImage device image Nothing
-        Vk.freeMemory device imageMemory Nothing
+        samplercleanup
+        imagecleanup
 
   -- Update atlas with loaded texture
   modify $ \s → s { assetPool = (assetPool s)

@@ -6,6 +6,7 @@ import qualified Data.Text as T
 import qualified Data.Map as Map
 import Data.Word (Word32)
 import Vulkan.Core10
+import Engine.Core.Base
 import Engine.Asset.Base (AssetId, AssetStatus)
 import Engine.Graphics.Vulkan.Base (TextureInfo)
 
@@ -31,9 +32,9 @@ data TextureAtlas = TextureAtlas
   , taPath         ∷ T.Text
   , taMetadata     ∷ AtlasMetadata
   , taStatus       ∷ AssetStatus
-  , taInfo         ∷ Maybe TextureInfo  -- Vulkan resources
+  , taInfo         ∷ Maybe TextureInfo   -- Vulkan resources
   , taRefCount     ∷ Word32
-  , taCleanup      ∷ Maybe (IO ())      -- cleanup function
+  , taCleanup      ∷ Maybe (IO ()) -- cleanup function
   }
 
 -- | Shader stage specification
@@ -54,17 +55,4 @@ data ShaderProgram = ShaderProgram
   , spCleanup      ∷ Maybe (IO ())      -- cleanup function
   }
 
--- | Asset pool containing all loaded assets
-data AssetPool = AssetPool
-  { apTextureAtlases    ∷ Map.Map AssetId TextureAtlas
-  , apShaderPrograms    ∷ Map.Map AssetId ShaderProgram
-  , apNextId            ∷ Word32
-  }
 
--- | Asset loading configuration
-data AssetConfig = AssetConfig
-  { acMaxTextureAtlases ∷ Word32
-  , acMaxShaderPrograms ∷ Word32
-  , acPreloadAssets     ∷ Bool
-  , acEnableHotReload   ∷ Bool
-  } deriving (Show)

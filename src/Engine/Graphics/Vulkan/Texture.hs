@@ -3,6 +3,7 @@ module Engine.Graphics.Vulkan.Texture
   ( createTextureImageView
   , createTextureImageView'
   , createTextureSampler
+  , createTextureSampler'
   , createTextureDescriptorSet
   , createTextureDescriptorPool
   , createTextureDescriptorSetLayout
@@ -89,7 +90,8 @@ createTextureImageView pdev dev cmdPool cmdQueue path = do
 -- | Create a texture image view with cleanup action
 createTextureImageView' ∷ PhysicalDevice → Device → CommandPool
                        → Queue → FilePath 
-                       → EngineM ε σ ((ImageView, Word32), EngineM ε σ ())
+                       → EngineM ε σ ((VulkanImage, ImageView, Word32)
+                                      , IO ())
 createTextureImageView' pdev dev cmdPool cmdQueue path = do
   -- Load and convert image data
   JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
@@ -135,7 +137,7 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
         TransDst_ShaderRO mipLevels cmdBuf
 
   -- Create image view with cleanup
-  (imageView, viewCleanup) ← allocResource'
+  (imageView, viewCleanup) ← allocResource'IO
     (\view → liftIO $ destroyImageView dev view Nothing)
     (createVulkanImageView dev (VulkanImage image imagedata)
       FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT)
@@ -145,7 +147,7 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
         viewCleanup    -- First cleanup the view
         imageCleanup   -- Then cleanup the image and memory
 
-  pure ((imageView, mipLevels), cleanup)
+  pure (((VulkanImage image imagedata), imageView, mipLevels), cleanup)
 
 transitionImageLayout ∷ VulkanImage → Format → ImageLayoutTransition
                      → Word32 → CommandBuffer → EngineM ε σ ()
@@ -231,6 +233,32 @@ createTextureSampler dev pdev = do
   
   allocResource (\s → destroySampler dev s Nothing) $
     createSampler dev samplerInfo Nothing
+
+createTextureSampler' ∷ Device → PhysicalDevice → EngineM ε σ (Sampler,IO ())
+createTextureSampler' dev pdev = do
+  props ← getPhysicalDeviceProperties pdev
+  let samplerInfo = zero
+        { magFilter = FILTER_NEAREST
+        , minFilter = FILTER_NEAREST
+        , addressModeU = SAMPLER_ADDRESS_MODE_REPEAT
+        , addressModeV = SAMPLER_ADDRESS_MODE_REPEAT
+        , addressModeW = SAMPLER_ADDRESS_MODE_REPEAT
+        , anisotropyEnable = False
+        , maxAnisotropy = 1
+        , borderColor = BORDER_COLOR_INT_OPAQUE_BLACK
+        , unnormalizedCoordinates = False
+        , compareEnable = False
+        , compareOp = COMPARE_OP_ALWAYS
+        , mipmapMode = SAMPLER_MIPMAP_MODE_NEAREST
+        , mipLodBias = 0
+        , minLod = 0
+        , maxLod = fromIntegral 0  -- disable mipmapping for now
+        }
+  
+  allocResource'IO (\s → destroySampler dev s Nothing) $
+    createSampler dev samplerInfo Nothing
+
+
 
 createTextureDescriptorSet ∷ Device 
                           → DescriptorPool 

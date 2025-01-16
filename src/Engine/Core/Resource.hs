@@ -3,6 +3,7 @@
 module Engine.Core.Resource
   ( allocResource
   , allocResource'
+  , allocResource'IO
   , locally
   ) where
 
@@ -27,6 +28,15 @@ allocResource' free alloc = EngineM $ \e s c → unEngineM alloc e s $ \case
   Right a → c (Right (a, EngineM $ \e' s' c'
     → c' (Right ()) ⌦ \r → r ⚟ unEngineM (free a) e' s' pure))
 {-# INLINE allocResource' #-}
+ -- | Version of allocResource' that returns an IO cleanup action
+allocResource'IO :: (α → EngineM' ε ()) → EngineM ε σ α 
+                → EngineM ε σ (α, IO ())
+allocResource'IO free alloc = EngineM $ \e s c → unEngineM alloc e s $ \case
+  Left ex → c (Left ex)
+  Right a → c $ Right (a, unEngineM (locally (free a)) e s $ \case
+    Right _ → pure ()
+    Left ex → error $ show ex)
+{-# INLINE allocResource'IO #-}
 -- | run nested continuations locally frees
 --   all resources, only for side effects 
 locally ∷ EngineM' ε α → EngineM ε σ α
