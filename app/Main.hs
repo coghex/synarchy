@@ -325,6 +325,12 @@ main = do
             logDebug $ "Recorded command buffer " ⧺ show i
         mainLoop
         liftIO $ Q.writeQueue logQueue "Engine shutting down..."
+        assets ← gets assetPool
+        graphicalstate ← gets graphicsState
+        forM_ (vulkanDevice graphicalstate) $ \device → 
+            liftIO $ deviceWaitIdle device
+        logDebug "cleaning up asset manager..."
+        cleanupAssetManager assets
         liftIO $ shutdownInputThread env inputThreadState
   
   result ← runEngineM engineAction envVar stateVar checkStatus
@@ -360,8 +366,6 @@ initializeTextures device physicalDevice cmdPool queue = do
   -- Load texture using asset manager
   let texturePath = "dat/tile01.png"
   textureId <- loadTextureAtlas (T.pack "tile01") texturePath
---                `catchEngine` \_ → throwGraphicsError TextureLoadFailed $ T.pack
---                                     $ "Failed to load texture: " ⧺ texturePath
   
   -- Get the loaded texture atlas
   atlas <- getTextureAtlas textureId

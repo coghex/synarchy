@@ -14,7 +14,7 @@ module Engine.Asset.Manager
   ) where
 
 import UPrelude
-import Control.Monad (void)
+import Control.Monad (void, forM_)
 import Control.Monad.Reader (ask)
 import Control.Monad.State (get, modify, gets)
 import Data.Maybe (fromMaybe)
@@ -137,10 +137,34 @@ loadShaderProgram name stages = do
 -- | Unload an asset and cleanup its resources
 unloadAsset ∷ AssetId → EngineM' ε ()
 unloadAsset aid = do
-  -- 1. Find asset in pool
-  -- 2. Clean up Vulkan resources
-  -- 3. Remove from pool
-  undefined
+  pool ← gets assetPool
+  
+  -- First check if it's a texture atlas
+  case Map.lookup aid (apTextureAtlases pool) of
+    Just atlas → do
+      -- Execute cleanup if it exists
+      liftIO $ maybe (pure ()) id (taCleanup atlas)
+      -- Remove from pool
+      modify $ \s → s { assetPool = (assetPool s) {
+        apTextureAtlases = Map.delete aid (apTextureAtlases pool)
+      } }
+      pure ()
+      
+    Nothing →
+      -- If not a texture, check if it's a shader program
+      case Map.lookup aid (apShaderPrograms pool) of
+        Just program → do
+          -- Execute cleanup if it exists
+          liftIO $ maybe (pure ()) id (spCleanup program)
+          -- Remove from pool
+          modify $ \s → s { assetPool = (assetPool s) {
+            apShaderPrograms = Map.delete aid (apShaderPrograms pool)
+          } }
+          pure ()
+          
+        Nothing →
+          throwAssetError (AssetNotFound "unloadAsset: ") $ T.pack $
+            "Asset not found: " ⧺ show aid
 
 -- | Reload an asset (useful for hot reloading)
 reloadAsset ∷ AssetId → EngineM' ε ()
@@ -169,5 +193,36 @@ getShaderProgram aid = do
 -- | Clean up all asset resources
 cleanupAssetManager ∷ AssetPool → EngineM' ε ()
 cleanupAssetManager pool = do
-  -- Clean up all Vulkan resources for textures and shaders
-  undefined
+  -- First clean up all texture atlases
+  forM_ (Map.elems $ apTextureAtlases pool) $ \atlas → do
+    logDebug $ "Cleaning up texture atlas: " ⧺ T.unpack (taName atlas)
+    case taStatus atlas of
+      AssetLoaded → do
+        -- Execute cleanup if it exists
+        liftIO $ maybe (pure ()) id (taCleanup atlas)
+      AssetLoading →
+        logDebug $ "Warning: Cleaning up texture that was still loading: " 
+                   ⧺ T.unpack (taName atlas)
+      _ → pure ()
+
+  -- Then clean up all shader programs
+  forM_ (Map.elems $ apShaderPrograms pool) $ \program → do
+    logDebug $ "Cleaning up shader program: " ⧺ T.unpack (spName program)
+    case spStatus program of
+      AssetLoaded → do
+        -- Execute cleanup if it exists
+        liftIO $ maybe (pure ()) id (spCleanup program)
+      AssetLoading →
+        logDebug $ "Warning: Cleaning up shader that was still loading: "
+                   ⧺ T.unpack (spName program)
+      _ → pure ()
+
+  -- Clear the asset pool
+  modify $ \s → s { assetPool = AssetPool
+    { apTextureAtlases = Map.empty
+    , apShaderPrograms = Map.empty
+    , apNextId = 0
+    }
+  }
+
+  logDebug "Asset manager cleanup complete"
