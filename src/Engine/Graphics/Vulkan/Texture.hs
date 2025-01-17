@@ -35,6 +35,7 @@ import Engine.Graphics.Vulkan.Image (createVulkanImage, createVulkanImageView
                                     , copyBufferToImage, VulkanImage(..))
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
+import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.Core10
 import Vulkan.Zero
@@ -372,7 +373,7 @@ updateTextureArrayDescriptors ∷ Device → TextureArrayState → EngineM ε σ
 updateTextureArrayDescriptors device state = do
   -- Free old descriptor set if it exists
   case tasDescriptorSet state of
-    Just oldSet → liftIO $ freeDescriptorSets device (tasDescriptorPool state) (V.singleton oldSet)
+    Just oldSet → freeVulkanDescriptorSets device (tasDescriptorPool state) (V.singleton oldSet)
     Nothing → pure ()
 
   -- Create new descriptor set if we have textures

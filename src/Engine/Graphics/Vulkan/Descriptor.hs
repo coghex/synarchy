@@ -11,6 +11,7 @@ module Engine.Graphics.Vulkan.Descriptor
     -- * Set Management
   , allocateVulkanDescriptorSets
   , updateVulkanDescriptorSets
+  , freeVulkanDescriptorSets
   ) where
 
 import UPrelude
@@ -207,3 +208,8 @@ destroyVulkanDescriptorManager device manager = do
   destroyDescriptorSetLayout device (dmSamplerLayout manager) Nothing
   -- Then destroy pool (this implicitly frees all allocated sets)
   destroyDescriptorPool device (dmPool manager) Nothing
+
+freeVulkanDescriptorSets ∷ Device → DescriptorPool → V.Vector DescriptorSet → EngineM ε σ ()
+freeVulkanDescriptorSets device pool sets = 
+    when (not $ V.null sets) $
+        liftIO $ freeDescriptorSets device pool sets

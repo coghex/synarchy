@@ -14,10 +14,10 @@ module Engine.Asset.Manager
   ) where
 
 import UPrelude
-import Control.Monad (void, forM_)
+import Control.Monad (void, forM_, when)
 import Control.Monad.Reader (ask)
 import Control.Monad.State (get, modify, gets)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust, fromJust)
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -30,6 +30,7 @@ import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Base
+import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Image (VulkanImage(..))
 import Engine.Graphics.Vulkan.Texture
 import Engine.Graphics.Vulkan.Types.Texture
@@ -215,36 +216,59 @@ getShaderProgram aid = do
 -- | Clean up all asset resources
 cleanupAssetManager ∷ AssetPool → EngineM' ε ()
 cleanupAssetManager pool = do
-  -- First clean up all texture atlases
-  forM_ (Map.elems $ apTextureAtlases pool) $ \atlas → do
-    logDebug $ "Cleaning up texture atlas: " ⧺ T.unpack (taName atlas)
-    case taStatus atlas of
-      AssetLoaded → do
-        -- Execute cleanup if it exists
-        liftIO $ maybe (pure ()) id (taCleanup atlas)
-      AssetLoading →
-        logDebug $ "Warning: Cleaning up texture that was still loading: " 
-                   ⧺ T.unpack (taName atlas)
-      _ → pure ()
+    -- Get device for cleanup
+    state ← gets graphicsState
+    device ← case vulkanDevice state of
+        Nothing → throwGraphicsError VulkanDeviceLost "No device during cleanup"
+        Just d → pure d
+        
+    -- Wait for device to be idle before cleanup
+    liftIO $ Vk.deviceWaitIdle device
+    
+    -- First clean up texture array states
+    forM_ (Map.toList $ textureArrayStates $ state) $ \(arrayName, arrayState) → do
+        logDebug $ "Cleaning up texture array state: " ⧺ T.unpack arrayName
+        -- Free descriptor sets if they exist
+        when (isJust $ tasDescriptorSet arrayState) $
+            freeVulkanDescriptorSets device
+                (tasDescriptorPool arrayState)
+                (V.singleton $ fromJust $ tasDescriptorSet arrayState)
+        
+    -- Clear texture array states from graphics state
+    modify $ \s → s { graphicsState = (graphicsState s) {
+        textureArrayStates = Map.empty
+    }}
+    
+    -- Then clean up individual texture atlases
+    forM_ (Map.elems $ apTextureAtlases pool) $ \atlas → do
+        logDebug $ "Cleaning up texture atlas: " ⧺ T.unpack (taName atlas)
+        case taStatus atlas of
+            AssetLoaded → do
+                -- Execute cleanup if it exists
+                -- This will handle sampler and image cleanup through the stored cleanup actions
+                liftIO $ maybe (pure ()) id (taCleanup atlas)
+            AssetLoading →
+                logDebug $ "Warning: Cleaning up texture that was still loading: " 
+                        ⧺ T.unpack (taName atlas)
+            _ → pure ()
 
-  -- Then clean up all shader programs
-  forM_ (Map.elems $ apShaderPrograms pool) $ \program → do
-    logDebug $ "Cleaning up shader program: " ⧺ T.unpack (spName program)
-    case spStatus program of
-      AssetLoaded → do
-        -- Execute cleanup if it exists
-        liftIO $ maybe (pure ()) id (spCleanup program)
-      AssetLoading →
-        logDebug $ "Warning: Cleaning up shader that was still loading: "
-                   ⧺ T.unpack (spName program)
-      _ → pure ()
+    -- Then clean up all shader programs
+    forM_ (Map.elems $ apShaderPrograms pool) $ \program → do
+        logDebug $ "Cleaning up shader program: " ⧺ T.unpack (spName program)
+        case spStatus program of
+            AssetLoaded → do
+                liftIO $ maybe (pure ()) id (spCleanup program)
+            AssetLoading →
+                logDebug $ "Warning: Cleaning up shader that was still loading: "
+                        ⧺ T.unpack (spName program)
+            _ → pure ()
 
-  -- Clear the asset pool
-  modify $ \s → s { assetPool = AssetPool
-    { apTextureAtlases = Map.empty
-    , apShaderPrograms = Map.empty
-    , apNextId = 0
+    -- Clear the asset pool
+    modify $ \s → s { assetPool = AssetPool
+        { apTextureAtlases = Map.empty
+        , apShaderPrograms = Map.empty
+        , apNextId = 0
+        }
     }
-  }
 
-  logDebug "Asset manager cleanup complete"
+    logDebug "Asset manager cleanup complete"
