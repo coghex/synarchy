@@ -85,31 +85,38 @@ instance Storable Vertex where
         poke (ptr `plusPtr` 16) c
         poke (ptr `plusPtr` 32) a
 
--- Update quad vertices to include atlas ID (default to atlas 0)
+-- Updated quad vertices to create two quads side by side with different atlas IDs
 quadVertices ∷ [Vertex]
 quadVertices =
-    [ Vertex (Vec2 (-0.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0  -- Bottom left
-    , Vertex (Vec2   0.5  (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 0  -- Bottom right
-    , Vertex (Vec2   0.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0  -- Top right
-    , Vertex (Vec2   0.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0  -- Top right
-    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 0  -- Top left
-    , Vertex (Vec2 (-0.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0  -- Bottom left
+    -- Left quad (atlas ID 0)
+    [ Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0  -- Bottom left
+    , Vertex (Vec2 (-0.5) (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 0  -- Bottom right
+    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0  -- Top right
+    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0  -- Top right
+    , Vertex (Vec2 (-1.5)   0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 0  -- Top left
+    , Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0  -- Bottom left
+    -- Right quad (atlas ID 1)
+    , Vertex (Vec2   0.5  (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 1  -- Bottom left
+    , Vertex (Vec2   1.5  (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 1  -- Bottom right
+    , Vertex (Vec2   1.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 1  -- Top right
+    , Vertex (Vec2   1.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 1  -- Top right
+    , Vertex (Vec2   0.5    0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 1  -- Top left
+    , Vertex (Vec2   0.5  (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 1  -- Bottom left
     ]
 
 -- | Create vertex buffer from vertices
-createVertexBuffer :: Device 
-                  -> PhysicalDevice 
-                  -> Queue 
-                  -> CommandPool 
-                  -> EngineM ε σ (Buffer, DeviceMemory)
+createVertexBuffer ∷ Device 
+                  → PhysicalDevice 
+                  → Queue 
+                  → CommandPool 
+                  → EngineM ε σ (Buffer, DeviceMemory)
 createVertexBuffer device pDevice graphicsQueue commandPool = do
     let vertices = quadVertices  -- Our predefined vertices
         bsize    = sizeOf (head vertices)
         vertSize = fromIntegral $ bsize * length vertices
-        --vertSize = fromIntegral $ sizeOf (undefined :: Vertex) * length vertices
     
     -- Create staging buffer
-    (stagingMemory, stagingBuffer) <- createVulkanBuffer 
+    (stagingMemory, stagingBuffer) ← createVulkanBuffer 
         device 
         pDevice 
         vertSize
@@ -117,16 +124,16 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
         (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
 
     -- Map memory and copy vertex data
-    dataPtr <- mapMemory device stagingMemory 0 vertSize zero
+    dataPtr ← mapMemory device stagingMemory 0 vertSize zero
     liftIO $ do
         let ptr = castPtr dataPtr
-        forM_ (zip [0..] vertices) $ \(i, vertex) -> do
+        forM_ (zip [0..] vertices) $ \(i, vertex) → do
             let offset = i * fromIntegral bsize
             poke (ptr `plusPtr` offset) vertex
     unmapMemory device stagingMemory
 
     -- Create vertex buffer
-    (vertexMemory, vertexBuffer) <- createVulkanBuffer 
+    (vertexMemory, vertexBuffer) ← createVulkanBuffer 
         device 
         pDevice 
         vertSize
@@ -139,7 +146,7 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
     pure (vertexBuffer, vertexMemory)
 
 -- | Get vertex binding description for pipeline creation
-getVertexBindingDescription :: VertexInputBindingDescription
+getVertexBindingDescription ∷ VertexInputBindingDescription
 getVertexBindingDescription = zero
     { binding = 0
     , stride = 36
@@ -147,7 +154,7 @@ getVertexBindingDescription = zero
     }
 
 -- | Get vertex attribute descriptions for pipeline creation
-getVertexAttributeDescriptions :: V.Vector VertexInputAttributeDescription
+getVertexAttributeDescriptions ∷ V.Vector VertexInputAttributeDescription
 getVertexAttributeDescriptions = V.fromList
     [ zero  -- Position
         { location = 0

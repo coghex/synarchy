@@ -365,55 +365,81 @@ initializeTextures device physicalDevice cmdPool queue = do
   modify $ \s → s { assetPool = assetPool }
 
   -- Load texture using asset manager
-  let texturePath = "dat/tile01.png"
-  textureId <- loadTextureAtlas (T.pack "tile01") texturePath (T.pack "default")
+  let texturePath1 = "dat/tile01.png"
+  let texturePath2 = "dat/tile02.png"
+  textureId1 ← loadTextureAtlas (T.pack "tile01") texturePath1 (T.pack "default")
+  textureId2 ← loadTextureAtlas (T.pack "tile02") texturePath2 (T.pack "default")
   
   -- Get the loaded texture atlas
-  atlas <- getTextureAtlas textureId
-  case taInfo atlas of
-    Nothing → throwGraphicsError TextureLoadFailed "Texture info not found"
-    Just info → do
-      -- Allocate descriptor set
-      let allocInfo = zero 
-            { descriptorPool = descriptorPool
-            , setLayouts = V.singleton descriptorSetLayout
+  atlas1 ← getTextureAtlas textureId1
+  atlas2 ← getTextureAtlas textureId2
+ -- Create descriptor sets for both textures
+  let allocInfo = zero 
+        { descriptorPool = descriptorPool
+        , setLayouts = V.replicate 2 descriptorSetLayout
+        }
+  descriptorSets <- liftIO $ allocateDescriptorSets device allocInfo
+  
+  -- Update descriptor sets for both textures
+  case (taInfo atlas1, taInfo atlas2) of
+    (Just info1, Just info2) → do
+      -- Update first descriptor set
+      let imageInfo1 = zero
+            { imageView = tiView info1
+            , sampler = tiSampler info1
+            , imageLayout = tiLayout info1
             }
-      descriptorSets <- liftIO $ allocateDescriptorSets device allocInfo
-      let descriptorSet = V.head descriptorSets
-
-      -- Update descriptor set
-      let imageInfo = zero
-            { imageView = tiView info
-            , sampler = tiSampler info
-            , imageLayout = tiLayout info
-            }
-          write = zero
-            { dstSet = descriptorSet
+          write1 = zero
+            { dstSet = descriptorSets V.! 0
             , dstBinding = 0
             , dstArrayElement = 0
             , descriptorCount = 1
             , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-            , imageInfo = V.singleton imageInfo
+            , imageInfo = V.singleton imageInfo1
+            }
+          
+          -- Update second descriptor set
+          imageInfo2 = zero
+            { imageView = tiView info2
+            , sampler = tiSampler info2
+            , imageLayout = tiLayout info2
+            }
+          write2 = zero
+            { dstSet = descriptorSets V.! 1
+            , dstBinding = 0
+            , dstArrayElement = 0
+            , descriptorCount = 1
+            , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+            , imageInfo = V.singleton imageInfo2
             }
       
-      liftIO $ updateDescriptorSets device (V.singleton $ SomeStruct write) V.empty
+      liftIO $ updateDescriptorSets device 
+        (V.fromList [SomeStruct write1, SomeStruct write2]) 
+        V.empty
 
-      -- Create TextureData
-      let textureData = TextureData
-            { tdImageView = tiView info
-            , tdSampler = tiSampler info
-            , tdMipLevels = amMipLevels (taMetadata atlas)
-            , tdDescriptorSet = descriptorSet
+      -- Create TextureData for both textures
+      let textureData1 = TextureData
+            { tdImageView = tiView info1
+            , tdSampler = tiSampler info1
+            , tdMipLevels = amMipLevels (taMetadata atlas1)
+            , tdDescriptorSet = descriptorSets V.! 0
+            }
+          textureData2 = TextureData
+            { tdImageView = tiView info2
+            , tdSampler = tiSampler info2
+            , tdMipLevels = amMipLevels (taMetadata atlas2)
+            , tdDescriptorSet = descriptorSets V.! 1
             }
       
-      -- Update engine state
+      -- Update engine state with both textures
       modify $ \s → s { graphicsState = (graphicsState s) {
         textureState = 
           let (poolState', _) = textureState (graphicsState s)
-          in (poolState', V.singleton textureData)
+          in (poolState', V.fromList [textureData1, textureData2])
       } }
       
-      logDebug "Texture state updated with info from asset manager"
+      logDebug "Both textures loaded and descriptor sets updated"
+    _ → throwGraphicsError TextureLoadFailed "Texture info not found"
 
 drawFrame ∷ EngineM' EngineEnv ()
 drawFrame = do

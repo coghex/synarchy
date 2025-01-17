@@ -166,7 +166,7 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
     state ← gets graphicsState
     env ← ask
     
-    -- Validate all required state components
+    -- Validate required state components [existing validation code remains the same]
     pState ← maybe (throwGraphicsError PipelineError "Pipeline state not initialized") 
                   pure 
                   (pipelineState state)
@@ -185,14 +185,13 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
                            (pure . siSwapExtent)
                            (swapchainInfo state)
     
-    -- Begin command buffer
+    -- Begin command buffer [existing code remains the same]
     let beginInfo = (zero ∷ CommandBufferBeginInfo '[])
                       { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
     liftIO $ beginCommandBuffer cmdBuf beginInfo
     
-    -- Begin render pass
+    -- Begin render pass [existing code remains the same]
     let clearColor = Color ( Float32 0.0 0.0 0.4 1.0 )
-
         renderPassInfo = zero
           { renderPass = renderPass
           , framebuffer = framebuffer
@@ -205,7 +204,7 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
     -- Bind graphics pipeline
     cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS (psPipeline pState)
     
-    -- Set viewport and scissors
+    -- Set viewport and scissors [existing code remains the same]
     let Extent2D w h = swapchainExtent
         viewport = Viewport
           { x = 0
@@ -223,23 +222,23 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
     cmdSetViewport cmdBuf 0 (V.singleton viewport)
     cmdSetScissor cmdBuf 0 (V.singleton scissor)
     
-    -- Bind descriptor sets if available
+    -- Bind descriptor sets for both uniform buffer and textures
     forM_ (descriptorState state) $ \descManager → do
         when (not $ V.null $ dmActiveSets descManager) $ do
             let descSet = V.head $ dmActiveSets descManager
-                -- Get the texture descriptor set
+                -- Get texture descriptor sets
                 (_, textures) = textureState state
-                textureDescSet = if V.null textures 
-                               then Nothing 
-                               else Just $ tdDescriptorSet $ V.head textures
+                textureDescSets = if V.length textures >= 2
+                                then Just $ V.map tdDescriptorSet $ V.take 2 textures
+                                else Nothing
             
-            -- Bind both descriptor sets
-            case textureDescSet of
-                Just texDesc → cmdBindDescriptorSets cmdBuf 
+            -- Bind descriptor sets
+            case textureDescSets of
+                Just texDescs → cmdBindDescriptorSets cmdBuf 
                     PIPELINE_BIND_POINT_GRAPHICS
                     (psPipelineLayout pState)
                     0  -- First set
-                    (V.fromList [descSet, texDesc])  -- Both sets
+                    (V.cons descSet texDescs)  -- Uniform set followed by texture sets
                     V.empty  -- No dynamic offsets
                 Nothing → cmdBindDescriptorSets cmdBuf 
                     PIPELINE_BIND_POINT_GRAPHICS
@@ -248,18 +247,26 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
                     (V.singleton descSet)
                     V.empty
     
-    -- Bind vertex buffer if available
+    -- Bind vertex buffer
     forM_ (vertexBuffer state) $ \(vBuf, _) → do
         cmdBindVertexBuffers cmdBuf 
             0  -- First binding
             (V.singleton vBuf)
             (V.singleton 0)  -- Offsets
     
-    -- Draw command (6 vertices for a quad)
+    -- Draw two quads with different textures
+    -- First quad (left side)
     cmdDraw cmdBuf
         6    -- vertex count (2 triangles = 6 vertices)
         1    -- instance count
         0    -- first vertex
+        0    -- first instance
+        
+    -- Second quad (right side)
+    cmdDraw cmdBuf
+        6    -- vertex count (2 triangles = 6 vertices)
+        1    -- instance count
+        6    -- first vertex (offset by 6 to get to second quad's vertices)
         0    -- first instance
     
     -- End render pass and command buffer
