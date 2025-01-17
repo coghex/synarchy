@@ -34,7 +34,7 @@ defaultDescriptorConfig ∷ DescriptorManagerConfig
 defaultDescriptorConfig = DescriptorManagerConfig
   { dmcMaxSets      = 100   -- Total sets
   , dmcUniformCount = 100   -- Uniform buffer descriptors
-  , dmcSamplerCount = 100   -- Sampler descriptors
+  , dmcSamplerCount = 800   -- 8 samplers per set
   }
 
 createVulkanDescriptorPool ∷ Device → DescriptorManagerConfig → EngineM ε σ DescriptorPool
@@ -70,11 +70,11 @@ createVulkanDescriptorSetLayout device = do
         , immutableSamplers = V.empty
         }
       
-      -- Create a binding for combined image sampler (textures)
+      -- Create a binding for texture atlas array
       samplerBinding = zero
         { binding = 1
         , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-        , descriptorCount = 1
+        , descriptorCount = 8
         , stageFlags = SHADER_STAGE_FRAGMENT_BIT
         , immutableSamplers = V.empty
         }
@@ -94,7 +94,6 @@ createVulkanDescriptorSetLayouts device = do
   uniformLayout ← createUniformLayout
   -- Create sampler layout
   samplerLayout ← createSamplerLayout
-  
   pure (uniformLayout, samplerLayout)
   where
     createUniformLayout = do
@@ -115,7 +114,7 @@ createVulkanDescriptorSetLayouts device = do
       let binding = zero
             { binding = 0
             , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-            , descriptorCount = 1
+            , descriptorCount = 8
             , stageFlags = SHADER_STAGE_FRAGMENT_BIT
             , immutableSamplers = V.empty
             }
@@ -150,14 +149,14 @@ allocateVulkanDescriptorSets device manager count = do
   allocateDescriptorSets device allocInfo
 
 updateVulkanDescriptorSets ∷ Device 
-                          → DescriptorSet
-                          → Maybe (Buffer, DeviceSize)        -- ^ Optional uniform buffer info
-                          → Maybe (ImageView, Sampler)        -- ^ Optional image/sampler info
-                          → EngineM ε σ ()
-updateVulkanDescriptorSets device dset mbBuffer mbImage = do
+  → DescriptorSet
+  → Maybe (Buffer, DeviceSize)   -- ^ Optional uniform buffer info
+  → Maybe [(ImageView, Sampler)] -- ^ Optional image/sampler info
+  → EngineM ε σ ()
+updateVulkanDescriptorSets device dset mbBuffer mbImages = do
   let writes = V.fromList $ catMaybes
         [ makeBufferWrite <$> mbBuffer
-        , makeImageWrite <$> mbImage
+        , makeImageWrite <$> mbImages
         ]
   
   when (not $ V.null writes) $
@@ -177,19 +176,20 @@ updateVulkanDescriptorSets device dset mbBuffer mbImage = do
             }
         }
     
-    makeImageWrite (imageView, sampler) =
+    makeImageWrite images =
       SomeStruct $ zero
         { dstSet = dset
         , dstBinding = 1
         , dstArrayElement = 0
-        , descriptorCount = 1
+        , descriptorCount = fromIntegral $ length images
         , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-        , imageInfo = V.singleton $ zero
-            { imageView = imageView
-            , imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-            , sampler = sampler
-            }
+        , imageInfo = V.fromList $ map makeImageInfo images
         }
+      where makeImageInfo (view, sampler) = zero
+              { imageView = view
+              , imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+              , sampler = sampler
+              }
 
 destroyVulkanDescriptorManager ∷ Device → DescriptorManager → EngineM ε σ ()
 destroyVulkanDescriptorManager device manager = do

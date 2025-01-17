@@ -116,8 +116,8 @@ createVulkanRenderPipeline device renderPass swapExtent descriptorLayout = do
           , polygonMode             = POLYGON_MODE_FILL
           , lineWidth               = 1
           , cullMode                = CULL_MODE_NONE
-          , frontFace              = FRONT_FACE_COUNTER_CLOCKWISE
-          , depthBiasEnable        = False
+          , frontFace               = FRONT_FACE_COUNTER_CLOCKWISE
+          , depthBiasEnable         = False
           }
         
         -- Multisampling
@@ -131,7 +131,7 @@ createVulkanRenderPipeline device renderPass swapExtent descriptorLayout = do
                              ⌄ COLOR_COMPONENT_G_BIT
                              ⌄ COLOR_COMPONENT_B_BIT
                              ⌄ COLOR_COMPONENT_A_BIT
-          , blendEnable    = False
+          , blendEnable    = True
           , srcColorBlendFactor = BLEND_FACTOR_SRC_ALPHA
           , dstColorBlendFactor = BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
           , colorBlendOp   = BLEND_OP_ADD
@@ -166,9 +166,11 @@ createVulkanRenderPipeline device renderPass swapExtent descriptorLayout = do
           , rasterizationState = Just $ SomeStruct rasterizer
           , multisampleState   = Just $ SomeStruct multisampling
           , colorBlendState    = Just $ SomeStruct colorBlending
-          , layout            = pipelineLayout
-          , renderPass        = renderPass
-          , subpass          = 0
+          , layout             = pipelineLayout
+          , renderPass         = renderPass
+          , subpass            = 0
+          , basePipelineHandle = zero
+          , basePipelineIndex  = (-1)
           }
     
     -- Create pipeline

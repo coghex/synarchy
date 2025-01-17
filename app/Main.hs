@@ -111,24 +111,25 @@ defaultEngineState lf = EngineState
   , inputState       = defaultInputState
   , logFunc          = lf
   , graphicsState    = GraphicsState
-    { glfwWindow       = Nothing
-    , vulkanInstance   = Nothing
-    , vulkanPDevice    = Nothing
-    , vulkanDevice     = Nothing
-    , deviceQueues     = Nothing
-    , vulkanCmdPool    = Nothing
-    , vulkanCmdBuffers = Nothing
-    , vulkanRenderPass = Nothing
-    , textureState     = (TexturePoolState zero zero, V.empty)
-    , descriptorState  = Nothing
-    , pipelineState    = Nothing
-    , frameResources   = V.empty
-    , currentFrame     = 0
-    , framebuffers     = Nothing
-    , swapchainInfo    = Nothing
-    , syncObjects      = Nothing
-    , vertexBuffer     = Nothing
-    , uniformBuffers   = Nothing
+    { glfwWindow         = Nothing
+    , vulkanInstance     = Nothing
+    , vulkanPDevice      = Nothing
+    , vulkanDevice       = Nothing
+    , deviceQueues       = Nothing
+    , vulkanCmdPool      = Nothing
+    , vulkanCmdBuffers   = Nothing
+    , vulkanRenderPass   = Nothing
+    , textureState       = (TexturePoolState zero zero, V.empty)
+    , descriptorState    = Nothing
+    , pipelineState      = Nothing
+    , frameResources     = V.empty
+    , currentFrame       = 0
+    , framebuffers       = Nothing
+    , swapchainInfo      = Nothing
+    , syncObjects        = Nothing
+    , vertexBuffer       = Nothing
+    , uniformBuffers     = Nothing
+    , textureArrayStates = Map.empty
     }
   , assetPool        = AssetPool Map.empty Map.empty 0
   , assetConfig      = AssetConfig 100 100 True True
@@ -365,7 +366,7 @@ initializeTextures device physicalDevice cmdPool queue = do
 
   -- Load texture using asset manager
   let texturePath = "dat/tile01.png"
-  textureId <- loadTextureAtlas (T.pack "tile01") texturePath
+  textureId <- loadTextureAtlas (T.pack "tile01") texturePath (T.pack "default")
   
   -- Get the loaded texture atlas
   atlas <- getTextureAtlas textureId

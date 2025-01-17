@@ -31,8 +31,8 @@ import Engine.Asset.Types
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Image (VulkanImage(..))
-import Engine.Graphics.Vulkan.Texture (createTextureImageView, createTextureSampler
-    , createTextureImageView', createTextureSampler')
+import Engine.Graphics.Vulkan.Texture
+import Engine.Graphics.Vulkan.Types.Texture
 import qualified Vulkan.Core10 as Vk
 
 -- | Initialize the asset manager
@@ -45,11 +45,21 @@ initAssetManager config = do
     , apNextId = 0
     }
 
+-- Add to Engine/Asset/Manager.hs
+initTextureArrayManager ∷ Vk.Device → EngineM ε σ TextureArrayManager
+initTextureArrayManager device = do
+  defaultArray ← createTextureArrayState device
+  pure $ TextureArrayManager
+    { tamArrays = Map.singleton "default" defaultArray
+    , tamTextureMap = Map.empty
+    }
+
 -- | Load a texture atlas from file
 loadTextureAtlas ∷ T.Text      -- ^ Name of the atlas
                 → FilePath     -- ^ Path to the atlas file
+                → T.Text       -- ^ Array name
                 → EngineM ε σ AssetId
-loadTextureAtlas name path = do
+loadTextureAtlas name path arrayName = do
  -- First generate a new asset ID
   state ← get
   let pool = assetPool state
@@ -103,6 +113,26 @@ loadTextureAtlas name path = do
         , tiMemory = imageMemory
         , tiLayout = Vk.IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         }
+
+--  -- Get current texture array state
+--  (TexturePoolState pool layout, textures) ← gets (textureState . graphicsState)
+--  
+--  -- Create descriptor set for this texture
+--  descriptorSet ← createTextureDescriptorSet device pool layout imageView sampler
+--
+--  -- Update texture array state with new texture
+--  let textureData = TextureData
+--        { tdImageView = imageView
+--        , tdSampler = sampler
+--        , tdMipLevels = mipLevels
+--        , tdDescriptorSet = descriptorSet
+--        }
+--      newTextures = V.snoc textures textureData
+--
+--  -- Update engine state with new texture array
+--  modify $ \s → s { graphicsState = (graphicsState s) {
+--    textureState = (TexturePoolState pool layout, newTextures)
+--  } }
 
   -- Combine cleanup actions
   let cleanup = do
@@ -187,8 +217,11 @@ getTextureAtlas aid = do
 -- | Get a shader program by ID
 getShaderProgram ∷ AssetId → EngineM' ε ShaderProgram
 getShaderProgram aid = do
-  -- Look up shader program in pool
-  undefined
+  pool ← gets assetPool
+  case Map.lookup aid (apShaderPrograms pool) of
+    Nothing → throwAssetError (AssetNotFound "getShaderProgram: ")
+                "Shader program not found"
+    Just shader → pure shader
 
 -- | Clean up all asset resources
 cleanupAssetManager ∷ AssetPool → EngineM' ε ()

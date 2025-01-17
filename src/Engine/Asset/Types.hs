@@ -9,6 +9,7 @@ import Vulkan.Core10
 import Engine.Core.Base
 import Engine.Asset.Base (AssetId, AssetStatus)
 import Engine.Graphics.Vulkan.Base (TextureInfo)
+import Engine.Graphics.Vulkan.Types.Texture (TextureData)
 
 -- | Metadata for texture atlases
 data AtlasMetadata = AtlasMetadata
@@ -54,5 +55,14 @@ data ShaderProgram = ShaderProgram
   , spRefCount     ∷ Word32
   , spCleanup      ∷ Maybe (IO ())      -- cleanup function
   }
-
-
+-- | tracks texture array state
+data TextureArrayState = TextureArrayState
+  { tasDescriptorPool      ∷ DescriptorPool
+  , tasDescriptorSetLayout ∷ DescriptorSetLayout
+  , tasActiveTextures      ∷ V.Vector TextureData
+  , tasDescriptorSet       ∷ Maybe DescriptorSet
+  }
+data TextureArrayManager = TextureArrayManager
+  { tamArrays     ∷ Map.Map T.Text TextureArrayState
+  , tamTextureMap ∷ Map.Map AssetId T.Text
+  }

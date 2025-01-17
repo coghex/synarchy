@@ -48,24 +48,25 @@ data TimingState = TimingState
   }
 
 data GraphicsState = GraphicsState
-  { glfwWindow       ∷ Maybe Window
-  , vulkanInstance   ∷ Maybe Vk.Instance
-  , vulkanPDevice    ∷ Maybe Vk.PhysicalDevice
-  , vulkanDevice     ∷ Maybe Vk.Device
-  , deviceQueues     ∷ Maybe DevQueues
-  , vulkanCmdPool    ∷ Maybe Vk.CommandPool
-  , vulkanCmdBuffers ∷ Maybe (V.Vector Vk.CommandBuffer)
-  , vulkanRenderPass ∷ Maybe Vk.RenderPass
-  , textureState     ∷ TextureState
-  , descriptorState  ∷ Maybe DescriptorManager
-  , pipelineState    ∷ Maybe PipelineState
-  , frameResources   ∷ V.Vector FrameResources
-  , currentFrame     ∷ Word32
-  , framebuffers     ∷ Maybe (V.Vector Vk.Framebuffer)
-  , swapchainInfo    ∷ Maybe SwapchainInfo
-  , syncObjects      ∷ Maybe SyncObjects
-  , vertexBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
-  , uniformBuffers   ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
+  { glfwWindow         ∷ Maybe Window
+  , vulkanInstance     ∷ Maybe Vk.Instance
+  , vulkanPDevice      ∷ Maybe Vk.PhysicalDevice
+  , vulkanDevice       ∷ Maybe Vk.Device
+  , deviceQueues       ∷ Maybe DevQueues
+  , vulkanCmdPool      ∷ Maybe Vk.CommandPool
+  , vulkanCmdBuffers   ∷ Maybe (V.Vector Vk.CommandBuffer)
+  , vulkanRenderPass   ∷ Maybe Vk.RenderPass
+  , textureState       ∷ TextureState
+  , descriptorState    ∷ Maybe DescriptorManager
+  , pipelineState      ∷ Maybe PipelineState
+  , frameResources     ∷ V.Vector FrameResources
+  , currentFrame       ∷ Word32
+  , framebuffers       ∷ Maybe (V.Vector Vk.Framebuffer)
+  , swapchainInfo      ∷ Maybe SwapchainInfo
+  , syncObjects        ∷ Maybe SyncObjects
+  , vertexBuffer       ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
+  , uniformBuffers     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
+  , textureArrayStates ∷ Map.Map T.Text TextureArrayState
   }
 
 -- | Asset pool containing all loaded assets

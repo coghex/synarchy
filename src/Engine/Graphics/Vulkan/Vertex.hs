@@ -65,32 +65,35 @@ instance Storable Vec4 where
 
 -- | Vertex structure matching shader input
 data Vertex = Vertex
-    { pos   :: Vec2  -- ^ Position (layout = 0)
-    , tex   :: Vec2  -- ^ Texture coordinates (layout = 1)
-    , color :: Vec4  -- ^ Color (layout = 2)
+    { pos     ∷ Vec2  -- ^ Position (layout = 0)
+    , tex     ∷ Vec2  -- ^ Texture coordinates (layout = 1)
+    , color   ∷ Vec4  -- ^ Color (layout = 2)
+    , atlasId ∷ Float -- ^ Atlas ID (layout = 3)
     } deriving (Show, Eq)
 
 instance Storable Vertex where
-    sizeOf _ = 32  -- 2 * sizeof(Vec2) + sizeof(Vec4) = 2 * 8 + 16
+    sizeOf _ = 36  -- 2 * sizeOf(Vec2) + sizeOf(Vec4) + sizeOf(Float)
     alignment _ = 4  -- alignment of Float
     peek ptr = Vertex
         <$> peek (castPtr ptr)
         <*> peek (ptr `plusPtr` 8)   -- after first Vec2
         <*> peek (ptr `plusPtr` 16)  -- after second Vec2
-    poke ptr (Vertex p t c) = do
+        <*> peek (ptr `plusPtr` 32)  -- after Vec4
+    poke ptr (Vertex p t c a) = do
         poke (castPtr ptr) p
         poke (ptr `plusPtr` 8) t
         poke (ptr `plusPtr` 16) c
+        poke (ptr `plusPtr` 32) a
 
--- | Default quad vertices (2 triangles forming a rectangle)
+-- Update quad vertices to include atlas ID (default to atlas 0)
 quadVertices ∷ [Vertex]
 quadVertices =
-    [ Vertex (Vec2 (-0.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1)  -- Bottom left
-    , Vertex (Vec2   0.5  (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1)  -- Bottom right
-    , Vertex (Vec2   0.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1)  -- Top right
-    , Vertex (Vec2   0.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1)  -- Top right
-    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 0 1) (Vec4 1 1 1 1)  -- Top left
-    , Vertex (Vec2 (-0.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1)  -- Bottom left
+    [ Vertex (Vec2 (-0.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0  -- Bottom left
+    , Vertex (Vec2   0.5  (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 0  -- Bottom right
+    , Vertex (Vec2   0.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0  -- Top right
+    , Vertex (Vec2   0.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0  -- Top right
+    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 0  -- Top left
+    , Vertex (Vec2 (-0.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0  -- Bottom left
     ]
 
 -- | Create vertex buffer from vertices
@@ -139,7 +142,7 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
 getVertexBindingDescription :: VertexInputBindingDescription
 getVertexBindingDescription = zero
     { binding = 0
-    , stride = 32
+    , stride = 36
     , inputRate = VERTEX_INPUT_RATE_VERTEX
     }
 
@@ -163,5 +166,11 @@ getVertexAttributeDescriptions = V.fromList
         , binding = 0
         , format = FORMAT_R32G32B32A32_SFLOAT
         , offset = 16
+        }
+    , zero  -- Atlas ID
+        { location = 3
+        , binding = 0
+        , format = FORMAT_R32_SFLOAT
+        , offset = 32
         }
     ]

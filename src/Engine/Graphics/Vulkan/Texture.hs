@@ -7,7 +7,8 @@ module Engine.Graphics.Vulkan.Texture
   , createTextureDescriptorSet
   , createTextureDescriptorPool
   , createTextureDescriptorSetLayout
-  , createTextureWithDescriptor
+--  , createTextureWithDescriptor
+  , createTextureArrayState
   , transitionImageLayout
   , ImageLayoutTransition(..)
   , module Engine.Graphics.Vulkan.Types.Texture
@@ -23,6 +24,7 @@ import Data.Word (Word32)
 import Foreign.Marshal.Array (copyArray)
 import Foreign.Ptr (castPtr)
 import Foreign.ForeignPtr (withForeignPtr)
+import Engine.Asset.Types
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.Error.Exception
@@ -263,10 +265,9 @@ createTextureSampler' dev pdev = do
 createTextureDescriptorSet ∷ Device 
                           → DescriptorPool 
                           → DescriptorSetLayout 
-                          → ImageView 
-                          → Sampler 
+                          → [(ImageView, Sampler)]
                           → EngineM ε σ DescriptorSet
-createTextureDescriptorSet device pool layout textureImageView textureSampler = do
+createTextureDescriptorSet device pool layout texturePairs = do
   -- First allocate descriptor set
   let allocInfo = zero 
         { descriptorPool = pool
@@ -277,22 +278,23 @@ createTextureDescriptorSet device pool layout textureImageView textureSampler = 
   let descriptorSet = V.head descriptorSets
   
   -- Create image info for the descriptor write
-  let imageInfo = zero 
-        { imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-        , imageView = textureImageView
-        , sampler = textureSampler
-        }
+  let imageInfos = V.fromList
+        [ zero
+          { imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+          , imageView = view
+          , sampler = sampler
+          }
+        | (view, sampler) ← texturePairs
+        ]
       
       -- Create write descriptor set
       write = zero 
         { dstSet = descriptorSet
-        , dstBinding = 0  -- matches binding in layout
+        , dstBinding = 0 
         , dstArrayElement = 0
-        , descriptorCount = 1  -- important: must match vector length
+        , descriptorCount = fromIntegral $ length texturePairs
         , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-        , imageInfo = V.singleton imageInfo  -- vector must have descriptorCount elements
-        , bufferInfo = V.empty
-        , texelBufferView = V.empty
+        , imageInfo = imageInfos
         }
   
   -- Update the descriptor set
@@ -306,12 +308,12 @@ createTextureDescriptorPool ∷ Device → EngineM ε σ DescriptorPool
 createTextureDescriptorPool device = do
   let poolSize = zero
         { type' = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-        , descriptorCount = 100  -- increased for multiple textures
+        , descriptorCount = 800 -- 100 textures * 8 samplers
         }
       poolInfo = zero
-        { maxSets = 100  -- increased for multiple textures
+        { maxSets = 100
         , poolSizes = V.singleton poolSize
-        , flags = zero  -- or DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT if needed
+        , flags = DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT
         }
   
   allocResource (\pool → destroyDescriptorPool device pool Nothing) $
@@ -321,7 +323,7 @@ createTextureDescriptorSetLayout ∷ Device → EngineM ε σ DescriptorSetLayou
 createTextureDescriptorSetLayout device = do
   let binding = zero
         { binding = 0
-        , descriptorCount = 1
+        , descriptorCount = 8
         , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
         , stageFlags = SHADER_STAGE_FRAGMENT_BIT
         , immutableSamplers = V.empty
@@ -333,21 +335,53 @@ createTextureDescriptorSetLayout device = do
   allocResource (\layout → destroyDescriptorSetLayout device layout Nothing) $
     createDescriptorSetLayout device layoutInfo Nothing
 
-createTextureWithDescriptor ∷ Device → PhysicalDevice → CommandPool → Queue 
-                           → FilePath → EngineM ε σ TextureData
-createTextureWithDescriptor device pDevice cmdPool cmdQueue path = do
-  (_, imageView, mipLevels) ← createTextureImageView pDevice device cmdPool cmdQueue path
-  sampler ← createTextureSampler device pDevice
-  
-  -- Create descriptor resources
+--createTextureWithDescriptor ∷ Device → PhysicalDevice → CommandPool → Queue 
+--                           → FilePath → EngineM ε σ TextureData
+--createTextureWithDescriptor device pDevice cmdPool cmdQueue path = do
+--  (_, imageView, mipLevels) ← createTextureImageView pDevice device cmdPool cmdQueue path
+--  sampler ← createTextureSampler device pDevice
+--  
+--  -- Create descriptor resources
+--  descriptorPool ← createTextureDescriptorPool device
+--  descriptorSetLayout ← createTextureDescriptorSetLayout device
+--  descriptorSet ← createTextureDescriptorSet device descriptorPool 
+--                   descriptorSetLayout imageView sampler
+--  
+--  pure $ TextureData
+--    { tdImageView = imageView
+--    , tdSampler = sampler
+--    , tdMipLevels = mipLevels
+--    , tdDescriptorSet = descriptorSet
+--    }
+--
+-- | helper function to create a new texture array state
+createTextureArrayState ∷ Device → EngineM ε σ TextureArrayState
+createTextureArrayState device = do
   descriptorPool ← createTextureDescriptorPool device
   descriptorSetLayout ← createTextureDescriptorSetLayout device
-  descriptorSet ← createTextureDescriptorSet device descriptorPool 
-                   descriptorSetLayout imageView sampler
-  
-  pure $ TextureData
-    { tdImageView = imageView
-    , tdSampler = sampler
-    , tdMipLevels = mipLevels
-    , tdDescriptorSet = descriptorSet
+  pure $ TextureArrayState
+    { tasDescriptorPool      = descriptorPool
+    , tasDescriptorSetLayout = descriptorSetLayout
+    , tasActiveTextures      = V.empty
+    , tasDescriptorSet       = Nothing
     }
+
+-- | updates descriptor set when textures change
+updateTextureArrayDescriptors ∷ Device → TextureArrayState → EngineM ε σ TextureArrayState
+updateTextureArrayDescriptors device state = do
+  -- Free old descriptor set if it exists
+  case tasDescriptorSet state of
+    Just oldSet → liftIO $ freeDescriptorSets device (tasDescriptorPool state) (V.singleton oldSet)
+    Nothing → pure ()
+
+  -- Create new descriptor set if we have textures
+  if V.null (tasActiveTextures state)
+    then pure $ state { tasDescriptorSet = Nothing }
+    else do
+      let texturePairs = V.toList $ V.map (\td → (tdImageView td, tdSampler td)) 
+                          (tasActiveTextures state)
+      newSet ← createTextureDescriptorSet device 
+                (tasDescriptorPool state)
+                (tasDescriptorSetLayout state)
+                texturePairs
+      pure $ state { tasDescriptorSet = Just newSet }
