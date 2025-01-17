@@ -9,6 +9,7 @@ module Engine.Graphics.Vulkan.Texture
   , createTextureDescriptorSetLayout
 --  , createTextureWithDescriptor
   , createTextureArrayState
+  , updateTextureArrayDescriptors
   , transitionImageLayout
   , ImageLayoutTransition(..)
   , module Engine.Graphics.Vulkan.Types.Texture

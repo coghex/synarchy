@@ -60,13 +60,15 @@ loadTextureAtlas ∷ T.Text      -- ^ Name of the atlas
                 → T.Text       -- ^ Array name
                 → EngineM ε σ AssetId
 loadTextureAtlas name path arrayName = do
- -- First generate a new asset ID
+  -- First generate a new asset ID
   state ← get
   let pool = assetPool state
       nextId = AssetId $ apNextId pool
+  
+  -- Get required Vulkan resources
   pDevice ← case (vulkanPDevice $ graphicsState state) of
-    Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlas: ")
-                "No physical device found"
+    Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlas: ") 
+                "No physical device found"  
     Just pdev → pure pdev
   device ← case (vulkanDevice $ graphicsState state) of
     Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlas: ")
@@ -81,76 +83,63 @@ loadTextureAtlas name path arrayName = do
                 "No device queues found"
     Just queues → pure $ graphicsQueue queues
       
+  -- Create the texture image, view and sampler
+  ((vulkanImage@(VulkanImage image imageMemory), imageView, mipLevels), imageCleanup) ←
+    createTextureImageView' pDevice device cmdPool cmdQueue path
+    
+  (sampler, samplerCleanup) ←
+    createTextureSampler' device pDevice
+
+  -- Get or create texture array state
+  let texArrays = textureArrayStates $ graphicsState state
+  texArray ← case Map.lookup arrayName texArrays of
+    Just array → pure array
+    Nothing → createTextureArrayState device
+
+  -- Create texture data 
+  let textureData = TextureData
+        { tdImageView = imageView
+        , tdSampler = sampler
+        , tdMipLevels = mipLevels
+        , tdDescriptorSet = error "Descriptor set not yet created" -- Will be updated
+        }
+      
+  -- Update texture array state with new texture
+  let newTexArray = texArray
+        { tasActiveTextures = V.snoc (tasActiveTextures texArray) textureData
+        }
+  updatedTexArray ← updateTextureArrayDescriptors device newTexArray
+
   -- Create initial atlas entry
   let atlas = TextureAtlas
         { taId = nextId
         , taName = name
         , taPath = T.pack path
-        , taMetadata = AtlasMetadata (0, 0) Vk.FORMAT_UNDEFINED 0 Map.empty
-        , taStatus = AssetLoading
-        , taInfo = Nothing
+        , taMetadata = AtlasMetadata (0, 0) Vk.FORMAT_R8G8B8A8_UNORM mipLevels Map.empty
+        , taStatus = AssetLoaded
+        , taInfo = Just $ TextureInfo
+            { tiImage = image
+            , tiView = imageView
+            , tiSampler = sampler
+            , tiMemory = imageMemory
+            , tiLayout = Vk.IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+            }
         , taRefCount = 1
-        , taCleanup = Nothing
+        , taCleanup = Just $ do
+            samplerCleanup
+            imageCleanup
         }
 
-  -- Update pool with initial entry
-  modify $ \s → s { assetPool = (assetPool s)
-    { apTextureAtlases = Map.insert nextId atlas (apTextureAtlases pool)
-    , apNextId = apNextId pool + 1
-    } }
-  -- Load the texture with proper cleanup handling
-  ((vulkanImage@(VulkanImage image imageMemory),imageView,mipLevels),imagecleanup) ←
-    (createTextureImageView' pDevice device cmdPool cmdQueue path)
-
-  (sampler, samplercleanup) ←
-    (createTextureSampler' device pDevice)
-
-  -- Create the TextureInfo
-  let textureInfo = TextureInfo
-        { tiImage = image
-        , tiView = imageView
-        , tiSampler = sampler
-        , tiMemory = imageMemory
-        , tiLayout = Vk.IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+  -- Update state
+  modify $ \s → s 
+    { assetPool = (assetPool s)
+        { apTextureAtlases = Map.insert nextId atlas (apTextureAtlases pool)
+        , apNextId = apNextId pool + 1
         }
-
---  -- Get current texture array state
---  (TexturePoolState pool layout, textures) ← gets (textureState . graphicsState)
---  
---  -- Create descriptor set for this texture
---  descriptorSet ← createTextureDescriptorSet device pool layout imageView sampler
---
---  -- Update texture array state with new texture
---  let textureData = TextureData
---        { tdImageView = imageView
---        , tdSampler = sampler
---        , tdMipLevels = mipLevels
---        , tdDescriptorSet = descriptorSet
---        }
---      newTextures = V.snoc textures textureData
---
---  -- Update engine state with new texture array
---  modify $ \s → s { graphicsState = (graphicsState s) {
---    textureState = (TexturePoolState pool layout, newTextures)
---  } }
-
-  -- Combine cleanup actions
-  let cleanup = do
-        samplercleanup
-        imagecleanup
-
-  -- Update atlas with loaded texture
-  modify $ \s → s { assetPool = (assetPool s)
-    { apTextureAtlases = Map.adjust
-        (\a → a { taMetadata = AtlasMetadata (0, 0)
-                                 Vk.FORMAT_R8G8B8A8_UNORM mipLevels Map.empty
-                , taStatus = AssetLoaded
-                , taInfo = Just textureInfo
-                , taCleanup = Just cleanup
-                })
-        nextId
-        (apTextureAtlases $ assetPool s)
-    } }
+    , graphicsState = (graphicsState s)
+        { textureArrayStates = Map.insert arrayName updatedTexArray texArrays
+        }
+    }
 
   pure nextId
 
