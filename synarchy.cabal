@@ -167,6 +167,8 @@ library
                      Engine.Core.Resource
                      Engine.Core.Queue
                      Engine.Concurrent.Var
+                     Engine.Scene.Base
+                     Engine.Scene.Types
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields
