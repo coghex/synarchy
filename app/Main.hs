@@ -245,14 +245,14 @@ main = do
         logDebug $ "VertexBuffer: " ⧺ show vBuffer
         modify $ \s → s { graphicsState = (graphicsState s) {
                             vertexBuffer = Just (vBuffer, vBufferMemory) } }
-
-        -- create descriptor set layout
-        descSetLayout ← createVulkanDescriptorSetLayout device
-        logDebug $ "DescriptorSetLayout: " ⧺ show descSetLayout
-
+        -- Create descriptor pool and layout first
+        descriptorPool ← createTextureDescriptorPool device
+        (uniformLayout, texLayout) ← createVulkanDescriptorSetLayout device
+        
+        logDebug "Created descriptor pool and layout"
         -- initialize textures
         initializeTextures device physicalDevice cmdPool
-                           (graphicsQueue queues)
+                           (graphicsQueue queues) descriptorPool texLayout
 
         -- create uniform buffers
         let modelMatrix = identity
@@ -288,7 +288,7 @@ main = do
 
         -- create pipeline
         (pipeline, pipelineLayout) ← createVulkanRenderPipeline device renderPass
-                                       (siSwapExtent swapInfo) descSetLayout
+                                       (siSwapExtent swapInfo) uniformLayout
         logDebug $ "Pipeline: " ⧺ show pipeline
         logDebug $ "PipelineLayout: " ⧺ show pipelineLayout
         let pstate = PipelineState pipeline pipelineLayout renderPass
@@ -347,22 +347,37 @@ checkStatus (Left err) = do
   putStrLn $ displayException err
   exitFailure
 
-initializeTextures ∷ Device → PhysicalDevice → CommandPool → Queue → EngineM' EngineEnv ()
-initializeTextures device physicalDevice cmdPool queue = do
-  -- Create descriptor pool and layout first
-  descriptorPool ← createTextureDescriptorPool device
-  descriptorSetLayout ← createTextureDescriptorSetLayout device
-  
-  logDebug "Created descriptor pool and layout"
-  
+initializeTextures ∷ Device → PhysicalDevice → CommandPool → Queue
+  → DescriptorPool → DescriptorSetLayout
+  → EngineM' EngineEnv ()
+initializeTextures device physicalDevice cmdPool queue
+                   descriptorPool textureLayout = do
+ 
   -- Update engine state with pool and layout
-  let poolState = TexturePoolState descriptorPool descriptorSetLayout
+  let poolState = TexturePoolState descriptorPool textureLayout
   modify $ \s → s { graphicsState = (graphicsState s) {
                       textureState = (poolState, V.empty) } }
 
   -- Initialize asset manager
   assetPool <- initAssetManager (AssetConfig 100 100 True True)
   modify $ \s → s { assetPool = assetPool }
+
+  -- Create descriptor set for texture array
+  let allocInfo = zero 
+        { descriptorPool = descriptorPool
+        , setLayouts = V.singleton textureLayout
+        }
+  textureSets ← liftIO $ allocateDescriptorSets device allocInfo
+  let textureArrayState = TextureArrayState
+        { tasDescriptorPool = descriptorPool
+        , tasDescriptorSetLayout = textureLayout
+        , tasActiveTextures = V.empty
+        , tasDescriptorSet = Just (V.head textureSets)
+        }
+  -- Update state with texture array
+  modify $ \s → s { graphicsState = (graphicsState s) {
+      textureArrayStates = Map.singleton "default" textureArrayState
+  } }
 
   -- Load texture using asset manager
   let texturePath1 = "dat/tile01.png"
@@ -378,47 +393,34 @@ initializeTextures device physicalDevice cmdPool queue = do
   logDebug $ "Atlas 1 status: " ⧺ show (taStatus atlas1)
   logDebug $ "Atlas 2 status: " ⧺ show (taStatus atlas2)
  -- Create descriptor sets for both textures
-  let allocInfo = zero 
-        { descriptorPool = descriptorPool
-        , setLayouts = V.replicate 2 descriptorSetLayout
-        }
-  descriptorSets <- liftIO $ allocateDescriptorSets device allocInfo
-  
+ 
   -- Update descriptor sets for both textures
   case (taInfo atlas1, taInfo atlas2) of
     (Just info1, Just info2) → do
       -- Update first descriptor set
-      let imageInfo1 = zero
-            { imageView = tiView info1
-            , sampler = tiSampler info1
-            , imageLayout = tiLayout info1
-            }
-          write1 = zero
-            { dstSet = descriptorSets V.! 0
+      let imageInfos = V.fromList
+            [ zero
+              { imageView = tiView info1
+              , sampler = tiSampler info1
+              , imageLayout = tiLayout info1
+              }
+            , zero
+              { imageView = tiView info2
+              , sampler = tiSampler info2
+              , imageLayout = tiLayout info2
+              }
+            ]
+          write = zero
+            { dstSet = V.head textureSets
             , dstBinding = 0
             , dstArrayElement = 0
-            , descriptorCount = 1
+            , descriptorCount = 2
             , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-            , imageInfo = V.singleton imageInfo1
-            }
-          
-          -- Update second descriptor set
-          imageInfo2 = zero
-            { imageView = tiView info2
-            , sampler = tiSampler info2
-            , imageLayout = tiLayout info2
-            }
-          write2 = zero
-            { dstSet = descriptorSets V.! 1
-            , dstBinding = 0
-            , dstArrayElement = 0
-            , descriptorCount = 1
-            , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-            , imageInfo = V.singleton imageInfo2
+            , imageInfo = imageInfos
             }
       
       liftIO $ updateDescriptorSets device 
-        (V.fromList [SomeStruct write1, SomeStruct write2]) 
+        (V.singleton $ SomeStruct write)
         V.empty
 
       -- Create TextureData for both textures
@@ -426,13 +428,13 @@ initializeTextures device physicalDevice cmdPool queue = do
             { tdImageView = tiView info1
             , tdSampler = tiSampler info1
             , tdMipLevels = amMipLevels (taMetadata atlas1)
-            , tdDescriptorSet = descriptorSets V.! 0
+            , tdDescriptorSet = textureSets V.! 0
             }
           textureData2 = TextureData
             { tdImageView = tiView info2
             , tdSampler = tiSampler info2
             , tdMipLevels = amMipLevels (taMetadata atlas2)
-            , tdDescriptorSet = descriptorSets V.! 1
+            , tdDescriptorSet = textureSets V.! 1
             }
       
       -- Update engine state with both textures
@@ -448,6 +450,15 @@ initializeTextures device physicalDevice cmdPool queue = do
 drawFrame ∷ EngineM' EngineEnv ()
 drawFrame = do
     state ← gets graphicsState
+
+    -- Validate descriptor sets
+    when (V.null $ dmActiveSets $ fromJust $ descriptorState state) $
+        throwGraphicsError DescriptorError "No active descriptor sets"
+    
+    -- Validate textures
+    let (_, textures) = textureState state
+    when (V.length textures < 2) $
+        throwGraphicsError TextureLoadFailed "Not enough textures loaded"
     
     -- Get current frame index
     let frameIdx  = currentFrame state

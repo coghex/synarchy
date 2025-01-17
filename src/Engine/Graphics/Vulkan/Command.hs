@@ -19,8 +19,11 @@ import Control.Monad (forM_, when)
 import Control.Monad.Reader (ask)
 import Control.Monad.State (get, gets)
 import Control.Monad.IO.Class (MonadIO(..))
+import Data.Maybe (fromMaybe)
 import qualified Data.Vector as V
+import qualified Data.Map as Map
 import Data.Word (Word64)
+import Engine.Asset.Types
 import Engine.Core.Types
 import Engine.Core.Monad
 import Engine.Core.State
@@ -227,27 +230,27 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
                        pure 
                        (descriptorState state)
     
-    let (_, textures) = textureState state
-    logDebug $ "Number of textures available: " ⧺ show (V.length textures)
-    
-    when (V.length textures < 2) $
-        throwGraphicsError TextureLoadFailed "Not enough textures loaded"
-    
-    when (V.null $ dmActiveSets descManager) $
-        throwGraphicsError DescriptorError "No active descriptor sets"
+    -- Get the texture array state
+    let (TexturePoolState descPool descLayout, textures) = textureState state
+    textureArray ← case Map.lookup "default" (textureArrayStates state) of
+        Nothing → throwGraphicsError TextureLoadFailed "No texture array state found"
+        Just arr → pure arr
     
     let uniformSet = V.head $ dmActiveSets descManager
-        textureDescSets = V.map tdDescriptorSet $ V.take 2 textures
+    textureSet ← case (tasDescriptorSet textureArray) of
+          Nothing  → (throwGraphicsError DescriptorError "No texture descriptor set")
+          Just set → pure set
     
-    logDebug $ "Binding descriptor sets - uniform: " ⧺ show uniformSet
-    logDebug $ "Texture descriptor sets: " ⧺ show textureDescSets
+   -- logDebug $ "Binding descriptor sets - uniform: " ⧺ show uniformSet
+   -- logDebug $ "Texture descriptor sets: " ⧺ show textureSet
     
+    let descriptorSets = V.fromList [uniformSet, textureSet]
     -- Bind all descriptor sets at once
     cmdBindDescriptorSets cmdBuf 
         PIPELINE_BIND_POINT_GRAPHICS
         (psPipelineLayout pState)
         0  -- First set index
-        (V.cons uniformSet textureDescSets)  -- All sets: [uniform, tex1, tex2]
+        descriptorSets
         V.empty  -- No dynamic offsets
     
     -- Bind vertex buffer
@@ -256,18 +259,22 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
             0  -- First binding
             (V.singleton vBuf)
             (V.singleton 0)  -- Offsets
-        logDebug "Vertex buffer bound successfully"
+        --logDebug "Vertex buffer bound successfully"
     
+    --logDebug $ "drawing with vertex count: 12"
     -- Draw both quads in a single draw call
     cmdDraw cmdBuf
         12   -- vertex count (2 quads = 12 vertices)
         1    -- instance count
         0    -- first vertex
         0    -- first instance
+    --logDebug "draw complete"
         
     -- End render pass and command buffer
     cmdEndRenderPass cmdBuf
+    --logDebug "render pass ended"
     endVulkanCommandBuffer cmdBuf
+    --logDebug "command buffer ended"
 
 -- Helper function to prepare all command buffers
 prepareFrameCommandBuffers ∷ EngineM ε σ ()

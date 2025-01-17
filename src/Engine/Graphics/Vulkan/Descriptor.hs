@@ -32,9 +32,9 @@ import Vulkan.CStruct.Extends
 -- | Default configuration
 defaultDescriptorConfig ∷ DescriptorManagerConfig
 defaultDescriptorConfig = DescriptorManagerConfig
-  { dmcMaxSets      = 100   -- Total sets
-  , dmcUniformCount = 100   -- Uniform buffer descriptors
-  , dmcSamplerCount = 800   -- 8 samplers per set
+  { dmcMaxSets      = 10   -- Total sets
+  , dmcUniformCount = 10   -- Uniform buffer descriptors
+  , dmcSamplerCount = 20   -- 2 textures * 10 frames
   }
 
 createVulkanDescriptorPool ∷ Device → DescriptorManagerConfig → EngineM ε σ DescriptorPool
@@ -59,7 +59,8 @@ createVulkanDescriptorPool device config = do
   allocResource (\pool → destroyDescriptorPool device pool Nothing) $
     createDescriptorPool device createInfo Nothing
 
-createVulkanDescriptorSetLayout ∷ Device → EngineM ε σ DescriptorSetLayout
+createVulkanDescriptorSetLayout ∷ Device
+  → EngineM ε σ (DescriptorSetLayout, DescriptorSetLayout)
 createVulkanDescriptorSetLayout device = do
   -- Create a binding for uniform buffer (transformation matrices, etc)
   let uniformBinding = zero 
@@ -72,7 +73,7 @@ createVulkanDescriptorSetLayout device = do
       
       -- Create a binding for texture atlas array
       samplerBinding = zero
-        { binding = 1
+        { binding = 0 -- its in set = 1
         , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
         , descriptorCount = 8
         , stageFlags = SHADER_STAGE_FRAGMENT_BIT
@@ -81,12 +82,20 @@ createVulkanDescriptorSetLayout device = do
       
       -- Create the layout info with both bindings
       layoutInfo = zero
-        { bindings = V.fromList [uniformBinding, samplerBinding]
+        { bindings = V.singleton uniformBinding
+        }
+      textureLayoutInfo = zero
+        { bindings = V.singleton samplerBinding
         }
   
-  -- Create the layout with proper resource cleanup
-  allocResource (\layout → destroyDescriptorSetLayout device layout Nothing) $
+  -- Create both layouts
+  uniformLayout ← allocResource (\layout → destroyDescriptorSetLayout device layout Nothing) $
     createDescriptorSetLayout device layoutInfo Nothing
+    
+  textureLayout ← allocResource (\layout → destroyDescriptorSetLayout device layout Nothing) $
+    createDescriptorSetLayout device textureLayoutInfo Nothing
+    
+  pure (uniformLayout, textureLayout)
 
 createVulkanDescriptorSetLayouts ∷ Device → EngineM ε σ (DescriptorSetLayout, DescriptorSetLayout)
 createVulkanDescriptorSetLayouts device = do
