@@ -368,11 +368,15 @@ initializeTextures device physicalDevice cmdPool queue = do
   let texturePath1 = "dat/tile01.png"
   let texturePath2 = "dat/tile02.png"
   textureId1 ← loadTextureAtlas (T.pack "tile01") texturePath1 (T.pack "default")
+  logDebug $ "Texture 1 loaded: " ⧺ show textureId1
   textureId2 ← loadTextureAtlas (T.pack "tile02") texturePath2 (T.pack "default")
+  logDebug $ "Texture 2 loaded: " ⧺ show textureId2
   
   -- Get the loaded texture atlas
   atlas1 ← getTextureAtlas textureId1
   atlas2 ← getTextureAtlas textureId2
+  logDebug $ "Atlas 1 status: " ⧺ show (taStatus atlas1)
+  logDebug $ "Atlas 2 status: " ⧺ show (taStatus atlas2)
  -- Create descriptor sets for both textures
   let allocInfo = zero 
         { descriptorPool = descriptorPool

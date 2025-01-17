@@ -222,30 +222,33 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
     cmdSetViewport cmdBuf 0 (V.singleton viewport)
     cmdSetScissor cmdBuf 0 (V.singleton scissor)
     
-    -- Bind descriptor sets for both uniform buffer and textures
-    forM_ (descriptorState state) $ \descManager → do
-        when (not $ V.null $ dmActiveSets descManager) $ do
-            let descSet = V.head $ dmActiveSets descManager
-                -- Get texture descriptor sets
-                (_, textures) = textureState state
-                textureDescSets = if V.length textures >= 2
-                                then Just $ V.map tdDescriptorSet $ V.take 2 textures
-                                else Nothing
-            
-            -- Bind descriptor sets
-            case textureDescSets of
-                Just texDescs → cmdBindDescriptorSets cmdBuf 
-                    PIPELINE_BIND_POINT_GRAPHICS
-                    (psPipelineLayout pState)
-                    0  -- First set
-                    (V.cons descSet texDescs)  -- Uniform set followed by texture sets
-                    V.empty  -- No dynamic offsets
-                Nothing → cmdBindDescriptorSets cmdBuf 
-                    PIPELINE_BIND_POINT_GRAPHICS
-                    (psPipelineLayout pState)
-                    0  
-                    (V.singleton descSet)
-                    V.empty
+    -- Verify descriptor sets and textures
+    descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
+                       pure 
+                       (descriptorState state)
+    
+    let (_, textures) = textureState state
+    logDebug $ "Number of textures available: " ⧺ show (V.length textures)
+    
+    when (V.length textures < 2) $
+        throwGraphicsError TextureLoadFailed "Not enough textures loaded"
+    
+    when (V.null $ dmActiveSets descManager) $
+        throwGraphicsError DescriptorError "No active descriptor sets"
+    
+    let uniformSet = V.head $ dmActiveSets descManager
+        textureDescSets = V.map tdDescriptorSet $ V.take 2 textures
+    
+    logDebug $ "Binding descriptor sets - uniform: " ⧺ show uniformSet
+    logDebug $ "Texture descriptor sets: " ⧺ show textureDescSets
+    
+    -- Bind all descriptor sets at once
+    cmdBindDescriptorSets cmdBuf 
+        PIPELINE_BIND_POINT_GRAPHICS
+        (psPipelineLayout pState)
+        0  -- First set index
+        (V.cons uniformSet textureDescSets)  -- All sets: [uniform, tex1, tex2]
+        V.empty  -- No dynamic offsets
     
     -- Bind vertex buffer
     forM_ (vertexBuffer state) $ \(vBuf, _) → do
@@ -253,22 +256,15 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
             0  -- First binding
             (V.singleton vBuf)
             (V.singleton 0)  -- Offsets
+        logDebug "Vertex buffer bound successfully"
     
-    -- Draw two quads with different textures
-    -- First quad (left side)
+    -- Draw both quads in a single draw call
     cmdDraw cmdBuf
-        6    -- vertex count (2 triangles = 6 vertices)
+        12   -- vertex count (2 quads = 12 vertices)
         1    -- instance count
         0    -- first vertex
         0    -- first instance
         
-    -- Second quad (right side)
-    cmdDraw cmdBuf
-        6    -- vertex count (2 triangles = 6 vertices)
-        1    -- instance count
-        6    -- first vertex (offset by 6 to get to second quad's vertices)
-        0    -- first instance
-    
     -- End render pass and command buffer
     cmdEndRenderPass cmdBuf
     endVulkanCommandBuffer cmdBuf

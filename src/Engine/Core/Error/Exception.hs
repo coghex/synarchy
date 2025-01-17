@@ -51,13 +51,14 @@ data GraphicsError
   | VulkanOutOfDate          -- ^ Swapchain is out of date
   | ShaderCompilationFailed  -- ^ Shader failed to compile
   | TextureLoadFailed        -- ^ Texture failed to load
-  | SwapchainError          -- ^ Swapchain creation/management error
-  | PipelineError           -- ^ Pipeline creation/management error
-  | CommandBufferError      -- ^ Command buffer error
-  | DescriptorError         -- ^ Descriptor set/pool error
-  | RenderPassError         -- ^ Render pass error
-  | FramebufferError        -- ^ Framebuffer error
-  | VulkanError Vk.Result   -- ^ Raw Vulkan error
+  | SwapchainError           -- ^ Swapchain creation/management error
+  | PipelineError            -- ^ Pipeline creation/management error
+  | CommandBufferError       -- ^ Command buffer error
+  | DescriptorError          -- ^ Descriptor set/pool error
+  | RenderPassError          -- ^ Render pass error
+  | FramebufferError         -- ^ Framebuffer error
+  | VertexBufferError        -- ^ Vertex buffer error
+  | VulkanError Vk.Result    -- ^ Raw Vulkan error
   deriving (Show, Eq, Typeable)
 
 -- | Resource management errors
