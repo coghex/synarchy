@@ -17,11 +17,11 @@ module Engine.Graphics.Vulkan.Texture
 
 import UPrelude
 import qualified Codec.Picture as JP
-import Control.Monad (when, filterM)
+import Control.Monad (when, filterM, (>>=))
 import qualified Data.Vector as V
 import qualified Data.Text as T
 import qualified Data.Vector.Storable as Vec
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Foreign.Marshal.Array (copyArray)
 import Foreign.Ptr (castPtr)
 import Foreign.ForeignPtr (withForeignPtr)
@@ -97,6 +97,7 @@ createTextureImageView' ∷ PhysicalDevice → Device → CommandPool
                        → EngineM ε σ ((VulkanImage, ImageView, Word32)
                                       , IO ())
 createTextureImageView' pdev dev cmdPool cmdQueue path = do
+  let maxTimeout = maxBound ∷ Word64
   -- Load and convert image data
   JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
     ← liftIO (JP.readImage path) ⌦ \case
@@ -119,6 +120,11 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
     ⌄ IMAGE_USAGE_SAMPLED_BIT)
     MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
+  -- Create a fence for synchronization
+  let fenceInfo = ( zero ∷ FenceCreateInfo '[] )
+                    { flags = FENCE_CREATE_SIGNALED_BIT }
+  fence ← createFence dev fenceInfo Nothing
+    
   -- Handle staging buffer with locally for automatic cleanup
   locally $ do
     (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
@@ -131,14 +137,47 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
                           imageDataPtr imageDataLen
     unmapMemory dev stagingMem
 
-    -- Copy data and transition image layout
-    runCommandsOnce dev cmdPool cmdQueue $ \cmdBuf → do
-      transitionImageLayout vulkanImage FORMAT_R8G8B8A8_UNORM
+    -- Wait for the fence before proceeding
+    waitForFences dev (V.singleton fence) True maxTimeout
+    resetFences dev (V.singleton fence)
+    -- Record and submit commands
+    let commandInfo = (zero ∷ CommandBufferBeginInfo '[])
+          { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
+    
+    cmdBuf ← allocateCommandBuffers dev
+        (zero { commandPool = cmdPool
+             , level = COMMAND_BUFFER_LEVEL_PRIMARY
+             , commandBufferCount = 1 })
+        >>= pure . V.head
+
+    beginCommandBuffer cmdBuf commandInfo
+    
+    -- Transition image layout
+    transitionImageLayout vulkanImage FORMAT_R8G8B8A8_UNORM
         Undef_TransDst mipLevels cmdBuf
-      copyBufferToImage cmdBuf stagingBuf vulkanImage
+
+    -- Copy buffer to image
+    copyBufferToImage cmdBuf stagingBuf vulkanImage
         (fromIntegral imageWidth) (fromIntegral imageHeight)
-      transitionImageLayout vulkanImage FORMAT_R8G8B8A8_UNORM
+
+    -- Transition to shader read
+    transitionImageLayout vulkanImage FORMAT_R8G8B8A8_UNORM
         TransDst_ShaderRO mipLevels cmdBuf
+
+    endCommandBuffer cmdBuf
+
+    -- Submit command buffer with fence
+    let submitInfo = (zero ∷ SubmitInfo '[])
+          { commandBuffers = V.singleton (commandBufferHandle cmdBuf) }
+    queueSubmit cmdQueue (V.singleton $ SomeStruct submitInfo) fence
+
+    -- Wait for completion before cleanup
+    waitForFences dev (V.singleton fence) True maxBound
+    
+    -- Free command buffer
+    freeCommandBuffers dev cmdPool (V.singleton cmdBuf)
+  -- Cleanup fence
+  destroyFence dev fence Nothing
 
   -- Create image view with cleanup
   (imageView, viewCleanup) ← allocResource'IO
@@ -151,7 +190,7 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
         viewCleanup    -- First cleanup the view
         imageCleanup   -- Then cleanup the image and memory
 
-  pure (((VulkanImage image imagedata), imageView, mipLevels), cleanup)
+  pure ((vulkanImage, imageView, mipLevels), cleanup)
 
 transitionImageLayout ∷ VulkanImage → Format → ImageLayoutTransition
                      → Word32 → CommandBuffer → EngineM ε σ ()

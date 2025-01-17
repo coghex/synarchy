@@ -221,54 +221,47 @@ cleanupAssetManager pool = do
     device ← case vulkanDevice state of
         Nothing → throwGraphicsError VulkanDeviceLost "No device during cleanup"
         Just d → pure d
+    queues ← case deviceQueues state of
+        Nothing → throwGraphicsError VulkanDeviceLost "No device queues during cleanup"
+        Just q → pure q
         
     -- Wait for device to be idle before cleanup
-    liftIO $ Vk.deviceWaitIdle device
+    liftIO $ do
+      Vk.queueWaitIdle (graphicsQueue queues)
+      Vk.queueWaitIdle (presentQueue queues)
+      Vk.deviceWaitIdle device
     
-    -- First clean up texture array states
-    forM_ (Map.toList $ textureArrayStates $ state) $ \(arrayName, arrayState) → do
+    -- 1. Free descriptor sets first
+    forM_ (Map.toList $ textureArrayStates state) $ \(arrayName, arrayState) → do
         logDebug $ "Cleaning up texture array state: " ⧺ T.unpack arrayName
-        -- Free descriptor sets if they exist
-        when (isJust $ tasDescriptorSet arrayState) $
-            freeVulkanDescriptorSets device
+        when (isJust $ tasDescriptorSet arrayState) $ do
+            -- Free descriptor sets
+            freeVulkanDescriptorSets device 
                 (tasDescriptorPool arrayState)
                 (V.singleton $ fromJust $ tasDescriptorSet arrayState)
-        
-    -- Clear texture array states from graphics state
-    modify $ \s → s { graphicsState = (graphicsState s) {
-        textureArrayStates = Map.empty
-    }}
-    
-    -- Then clean up individual texture atlases
+            -- Destroy pool and layout
+            --destroyDescriptorPool device (tasDescriptorPool arrayState) Nothing
+            --destroyDescriptorSetLayout device (tasDescriptorSetLayout arrayState) Nothing
+
+    -- 2. Clean up textures
     forM_ (Map.elems $ apTextureAtlases pool) $ \atlas → do
         logDebug $ "Cleaning up texture atlas: " ⧺ T.unpack (taName atlas)
         case taStatus atlas of
             AssetLoaded → do
-                -- Execute cleanup if it exists
-                -- This will handle sampler and image cleanup through the stored cleanup actions
+                -- Wait for device to be idle again before each texture cleanup
+                liftIO $ Vk.deviceWaitIdle device
                 liftIO $ maybe (pure ()) id (taCleanup atlas)
-            AssetLoading →
-                logDebug $ "Warning: Cleaning up texture that was still loading: " 
-                        ⧺ T.unpack (taName atlas)
             _ → pure ()
 
-    -- Then clean up all shader programs
-    forM_ (Map.elems $ apShaderPrograms pool) $ \program → do
-        logDebug $ "Cleaning up shader program: " ⧺ T.unpack (spName program)
-        case spStatus program of
-            AssetLoaded → do
-                liftIO $ maybe (pure ()) id (spCleanup program)
-            AssetLoading →
-                logDebug $ "Warning: Cleaning up shader that was still loading: "
-                        ⧺ T.unpack (spName program)
-            _ → pure ()
-
-    -- Clear the asset pool
-    modify $ \s → s { assetPool = AssetPool
-        { apTextureAtlases = Map.empty
-        , apShaderPrograms = Map.empty
-        , apNextId = 0
+    -- Clear states
+    modify $ \s → s 
+        { graphicsState = (graphicsState s) 
+            { textureArrayStates = Map.empty }
+        , assetPool = (assetPool s) 
+            { apTextureAtlases = Map.empty
+            , apShaderPrograms = Map.empty
+            , apNextId = 0
+            }
         }
-    }
 
     logDebug "Asset manager cleanup complete"

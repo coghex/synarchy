@@ -102,6 +102,7 @@ defaultEngineState lf = EngineState
   { timingState = TimingState
     { frameCount       = 0
     , engineRunning    = True
+    , engineCleaning   = False
     , currentTime      = 0.0
     , deltaTime        = 0.0
     , frameTimeAccum   = 0.0
@@ -470,8 +471,10 @@ drawFrame = do
         Nothing → throwGraphicsError VulkanDeviceLost "No device"
         Just d → pure d
     
-    liftIO $ waitForFences device (V.singleton (frInFlight resources))
+    liftIO $ do
+      waitForFences device (V.singleton (frInFlight resources))
                            True maxTimeout
+      resetFences device (V.singleton (frInFlight resources))
     
     -- Acquire next image
     swapchain ← case swapchainInfo state of
@@ -596,6 +599,7 @@ mainLoop = do
         GLFW.pollEvents
         handleInputEvents
         shouldClose ← GLFW.windowShouldClose glfwWindow
+        cleaning ← gets (engineCleaning . timingState)
         if shouldClose || not running
             then do
                 env ← ask
@@ -603,7 +607,7 @@ mainLoop = do
                 -- Just wait for device to idle
                 forM_ (vulkanDevice state) $ \device → 
                     liftIO $ deviceWaitIdle device
-            else do
+            else unless cleaning $ do
                 drawFrame
                 mainLoop
 

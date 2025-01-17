@@ -40,6 +40,7 @@ data EngineState = EngineState
 data TimingState = TimingState
   { frameCount       ∷ Word64
   , engineRunning    ∷ Bool
+  , engineCleaning   ∷ Bool
   , currentTime      ∷ Double
   , deltaTime        ∷ Double
   , frameTimeAccum   ∷ Double
