@@ -149,6 +149,7 @@ library
                      Engine.Graphics.Vulkan.Types
                      Engine.Graphics.Vulkan.Types.Descriptor
                      Engine.Graphics.Vulkan.Types.Texture
+                     Engine.Graphics.Vulkan.Types.Vertex
                      Engine.Graphics.Vulkan.Texture
                      Engine.Graphics.Vulkan.Vertex
                      Engine.Graphics.Window.GLFW

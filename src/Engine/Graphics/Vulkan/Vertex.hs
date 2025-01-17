@@ -1,9 +1,6 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Vulkan.Vertex
-    ( Vec2(..)
-    , Vec4(..)
-    , Vertex(..)
-    , quadVertices
+    ( quadVertices
     , createVertexBuffer
     , getVertexBindingDescription
     , getVertexAttributeDescriptions
@@ -12,78 +9,16 @@ module Engine.Graphics.Vulkan.Vertex
 import UPrelude
 import Control.Monad (forM_)
 import qualified Data.Vector as V
-import Foreign.Storable (Storable(..), sizeOf)
-import qualified Foreign.Storable as Storable
-import Foreign.Ptr (Ptr, castPtr, plusPtr)
-import Foreign.Marshal.Array (pokeArray)
 import Data.Bits ((.|.))
-
+import Foreign.Storable (Storable(..), sizeOf)
+import Foreign.Ptr (Ptr, castPtr, plusPtr)
 import Engine.Core.Monad
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
+import Engine.Graphics.Vulkan.Types.Vertex
 import Vulkan.Core10
 import Vulkan.Zero
-
--- | 2D vector for positions and texture coordinates
-data Vec2 = Vec2 
-    { x ∷ Float
-    , y ∷ Float 
-    } deriving (Show, Eq)
-
-instance Storable Vec2 where
-    sizeOf _ = 8  -- 2 * sizeof(Float) = 2 * 4 bytes
-    alignment _ = 4  -- alignment of Float
-    peek ptr = Vec2
-        <$> peekByteOff ptr 0
-        <*> peekByteOff ptr 4  -- use actual byte offset
-    poke ptr (Vec2 x' y') = do
-        pokeByteOff ptr 0 x'
-        pokeByteOff ptr 4 y'
-
--- | 4D vector for colors (RGBA)
-data Vec4 = Vec4 
-    { r ∷ Float
-    , g ∷ Float
-    , b ∷ Float
-    , a ∷ Float 
-    } deriving (Show, Eq)
-
-instance Storable Vec4 where
-    sizeOf _ = 16  -- 4 * sizeof(Float) = 4 * 4 bytes
-    alignment _ = 4  -- alignment of Float
-    peek ptr = Vec4
-        <$> peekByteOff ptr 0
-        <*> peekByteOff ptr 4
-        <*> peekByteOff ptr 8
-        <*> peekByteOff ptr 12
-    poke ptr (Vec4 r' g' b' a') = do
-        pokeByteOff ptr 0 r'
-        pokeByteOff ptr 4 g'
-        pokeByteOff ptr 8 b'
-        pokeByteOff ptr 12 a'
-
--- | Vertex structure matching shader input
-data Vertex = Vertex
-    { pos     ∷ Vec2  -- ^ Position (layout = 0)
-    , tex     ∷ Vec2  -- ^ Texture coordinates (layout = 1)
-    , color   ∷ Vec4  -- ^ Color (layout = 2)
-    , atlasId ∷ Float -- ^ Atlas ID (layout = 3)
-    } deriving (Show, Eq)
-
-instance Storable Vertex where
-    sizeOf _ = 36  -- 2 * sizeOf(Vec2) + sizeOf(Vec4) + sizeOf(Float)
-    alignment _ = 4  -- alignment of Float
-    peek ptr = Vertex
-        <$> peek (castPtr ptr)
-        <*> peek (ptr `plusPtr` 8)   -- after first Vec2
-        <*> peek (ptr `plusPtr` 16)  -- after second Vec2
-        <*> peek (ptr `plusPtr` 32)  -- after Vec4
-    poke ptr (Vertex p t c a) = do
-        poke (castPtr ptr) p
-        poke (ptr `plusPtr` 8) t
-        poke (ptr `plusPtr` 16) c
-        poke (ptr `plusPtr` 32) a
 
 -- Updated quad vertices to create two quads side by side with different atlas IDs
 quadVertices ∷ [Vertex]
