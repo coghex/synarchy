@@ -30,31 +30,31 @@ defaultCamera = Camera2D
 createViewMatrix ∷ Camera2D → M44 Float
 createViewMatrix camera =
     let (px, py) = camPosition camera
-        rot = camRotation camera  -- Don't negate here
+        rot = camRotation camera
+        cosθ = cos rot
+        sinθ = sin rot
         
-        -- First create translation matrix (move camera position)
+        -- First create translation matrix with rotated position
         translateMat = V4 (V4 1 0 0 0)
                         (V4 0 1 0 0)
                         (V4 0 0 1 0)
-                        (V4 (-px) (-py) 0 1)
+                        (V4 (-px * cosθ + py * sinθ)    -- Rotated X translation
+                            (py * cosθ + px * sinθ)    -- Rotated Y translation
+                            0 1)
         
         -- Then create rotation matrix
-        cosθ = cos rot
-        sinθ = sin rot
         rotationMat = V4 (V4  cosθ  (-sinθ) 0 0)
                         (V4  sinθ   cosθ    0 0)
                         (V4  0      0       1 0)
                         (V4  0      0       0 1)
                         
-        -- For a view matrix, we want to:
-        -- 1. Translate to move camera position to origin
-        -- 2. Apply inverse rotation (which is transpose for rotation matrix)
+        -- Apply rotation then translation
     in rotationMat !*! translateMat
 
 createProjectionMatrix ∷ Camera2D → Float → Float → M44 Float
 createProjectionMatrix camera width height =
     let aspect = width / height
-        zoom = camZoom camera
+        zoom = max 0.1 (camZoom camera)  -- Prevent zero or negative zoom
         left   = -zoom * aspect
         right  = zoom * aspect
         bottom = -zoom
@@ -62,7 +62,6 @@ createProjectionMatrix camera width height =
         near   = -1
         far    = 1
         
-        -- Standard orthographic projection matrix
     in V4 (V4 (2/(right-left))  0                  0                (-(right+left)/(right-left)))
           (V4  0                (2/(top-bottom))    0                (-(top+bottom)/(top-bottom)))
           (V4  0                 0                 (2/(far-near))    (-(far+near)/(far-near)))
