@@ -131,6 +131,7 @@ library
                      Engine.Event.Base
                      Engine.Event.Types
                      Engine.Graphics.Base
+                     Engine.Graphics.Camera
                      Engine.Graphics.Types
                      Engine.Graphics.Vulkan.Base
                      Engine.Graphics.Vulkan.Buffer

@@ -37,6 +37,7 @@ import Engine.Input.Types
 import Engine.Input.Thread (shutdownInputThread, startInputThread)
 import Engine.Input.Event (handleInputEvents)
 import Engine.Input.Callback (setupCallbacks)
+import Engine.Graphics.Camera (defaultCamera)
 import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
                                    , createWindow, destroyWindow, createWindowSurface)
 import Engine.Graphics.Window.Types (WindowConfig(..), Window(..))
@@ -131,6 +132,7 @@ defaultEngineState lf = EngineState
     , vertexBuffer       = Nothing
     , uniformBuffers     = Nothing
     , textureArrayStates = Map.empty
+    , camera2D           = defaultCamera
     }
   , assetPool        = AssetPool Map.empty Map.empty 0
   , assetConfig      = AssetConfig 100 100 True True

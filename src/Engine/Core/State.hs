@@ -16,6 +16,7 @@ import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Window.Types
+import Engine.Graphics.Camera
 import Engine.Input.Types
 import qualified Vulkan.Core10 as Vk
 
@@ -68,6 +69,7 @@ data GraphicsState = GraphicsState
   , vertexBuffer       ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , uniformBuffers     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , textureArrayStates ∷ Map.Map T.Text TextureArrayState
+  , camera2D           ∷ Camera2D
   }
 
 -- | Asset pool containing all loaded assets
