@@ -33,10 +33,10 @@ createViewMatrix camera =
         rot = camRotation camera  -- Don't negate here
         
         -- First create translation matrix (move camera position)
-        translateMat = V4 (V4 1 0 0 (-px))
-                        (V4 0 1 0 (-py))
+        translateMat = V4 (V4 1 0 0 0)
+                        (V4 0 1 0 0)
                         (V4 0 0 1 0)
-                        (V4 0 0 0 1)
+                        (V4 (-px) (-py) 0 1)
         
         -- Then create rotation matrix
         cosθ = cos rot
