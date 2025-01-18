@@ -56,44 +56,49 @@ processInputEvent event = do
 
 updateCameraFromInput ∷ InputState → Camera2D → Double → Camera2D
 updateCameraFromInput input camera dt =
-    let -- Movement
-        (px, py) = camPosition camera
+    let -- Base movement speed
         moveSpeed = 5.0 * realToFrac dt
         rot = camRotation camera
+        (px, py) = camPosition camera
         
-        -- Get raw movement input
-        dx = if isKeyDown GLFW.Key'D (inpKeyStates input)
-             then moveSpeed
-             else if isKeyDown GLFW.Key'A (inpKeyStates input)
-             then -moveSpeed
-             else 0
-        dy = if isKeyDown GLFW.Key'W (inpKeyStates input)
-             then moveSpeed
-             else if isKeyDown GLFW.Key'S (inpKeyStates input)
-             then -moveSpeed
-             else 0
+        -- Raw input
+        movingRight = isKeyDown GLFW.Key'D (inpKeyStates input)
+        movingLeft  = isKeyDown GLFW.Key'A (inpKeyStates input)
+        movingUp    = isKeyDown GLFW.Key'W (inpKeyStates input)
+        movingDown  = isKeyDown GLFW.Key'S (inpKeyStates input)
         
-        -- Transform movement by camera rotation
-        finalDx = dx * cos rot - dy * sin rot
-        finalDy = dx * sin rot + dy * cos rot
+        -- Calculate movement vector
+        dx = if movingRight then moveSpeed else if movingLeft then -moveSpeed else 0
+        dy = if movingUp then moveSpeed else if movingDown then -moveSpeed else 0
         
-        -- Handle zoom
-        currentZoom = camZoom camera
-        zoomDelta = if isKeyDown GLFW.Key'Equal (inpKeyStates input)
-                    then -moveSpeed
-                    else if isKeyDown GLFW.Key'Minus (inpKeyStates input)
-                    then moveSpeed
-                    else 0
-        newZoom = max 0.1 $ min 10.0 $ currentZoom + zoomDelta
+        -- Transform movement by rotation
+        -- Use negative rotation to move relative to camera view
+        cosθ = cos (-rot)
+        sinθ = sin (-rot)
+        
+        -- Calculate final movement
+        finalDx = dx * cosθ - dy * sinθ
+        finalDy = dx * sinθ + dy * cosθ
         
         -- Handle rotation
+        rotSpeed = 2.0 * realToFrac dt
         rotDelta = if isKeyDown GLFW.Key'Q (inpKeyStates input)
-                   then -moveSpeed
+                   then -rotSpeed
                    else if isKeyDown GLFW.Key'E (inpKeyStates input)
-                   then moveSpeed
+                   then rotSpeed
                    else 0
+        
+        -- Handle zoom
+        zoomSpeed = 2.0 * realToFrac dt
+        zoomDelta = if isKeyDown GLFW.Key'Equal (inpKeyStates input)
+                    then -zoomSpeed
+                    else if isKeyDown GLFW.Key'Minus (inpKeyStates input)
+                    then zoomSpeed
+                    else 0
+        newZoom = max 0.1 $ min 10.0 $ camZoom camera + zoomDelta
+        
     in camera
-        { camPosition = (px - finalDx, py - finalDy)  -- Note the negation here
+        { camPosition = (px + finalDx, py + finalDy)
         , camZoom = newZoom
         , camRotation = rot + rotDelta
         }

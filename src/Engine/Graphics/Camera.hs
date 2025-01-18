@@ -30,15 +30,26 @@ defaultCamera = Camera2D
 createViewMatrix ∷ Camera2D → M44 Float
 createViewMatrix camera =
     let (px, py) = camPosition camera
-        rot = -camRotation camera
+        rot = camRotation camera  -- Don't negate here
+        
+        -- First create translation matrix (move camera position)
+        translateMat = V4 (V4 1 0 0 (-px))
+                        (V4 0 1 0 (-py))
+                        (V4 0 0 1 0)
+                        (V4 0 0 0 1)
+        
+        -- Then create rotation matrix
         cosθ = cos rot
         sinθ = sin rot
-        -- Create a pure 2D transformation matrix
-        -- This combines rotation and translation in 2D space
-    in V4 (V4 cosθ (-sinθ) 0  (-px))
-          (V4 sinθ cosθ    0  (-py))
-          (V4 0    0       1   0 )
-          (V4 0    0       0   1 )
+        rotationMat = V4 (V4  cosθ  (-sinθ) 0 0)
+                        (V4  sinθ   cosθ    0 0)
+                        (V4  0      0       1 0)
+                        (V4  0      0       0 1)
+                        
+        -- For a view matrix, we want to:
+        -- 1. Translate to move camera position to origin
+        -- 2. Apply inverse rotation (which is transpose for rotation matrix)
+    in rotationMat !*! translateMat
 
 createProjectionMatrix ∷ Camera2D → Float → Float → M44 Float
 createProjectionMatrix camera width height =
@@ -50,8 +61,9 @@ createProjectionMatrix camera width height =
         top    = zoom
         near   = -1
         far    = 1
-        -- Simplified ortho projection for 2D
-    in V4 (V4 (2/(right-left)) 0                0              (-(right+left)/(right-left)))
-          (V4  0               (2/(top-bottom)) 0              (-(top+bottom)/(top-bottom)))
-          (V4  0               0                (-2/(far-near)) (-(far+near)/(far-near)))
-          (V4  0               0                0               1)
+        
+        -- Standard orthographic projection matrix
+    in V4 (V4 (2/(right-left))  0                  0                (-(right+left)/(right-left)))
+          (V4  0                (2/(top-bottom))    0                (-(top+bottom)/(top-bottom)))
+          (V4  0                 0                 (2/(far-near))    (-(far+near)/(far-near)))
+          (V4  0                 0                  0                 1)
