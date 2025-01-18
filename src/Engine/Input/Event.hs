@@ -61,23 +61,23 @@ updateCameraFromInput input camera dt =
         moveSpeed = 5.0 * realToFrac dt
         rot = camRotation camera
         
-        -- Check WASD keys
-        dx = if isKeyDown GLFW.Key'D (inpKeyStates input)
+        -- Check WASD keys - straight 2D movement first
+        rawDx = if isKeyDown GLFW.Key'D (inpKeyStates input)
              then moveSpeed
              else if isKeyDown GLFW.Key'A (inpKeyStates input)
              then -moveSpeed
              else 0
-        dy = if isKeyDown GLFW.Key'W (inpKeyStates input)
+        rawDy = if isKeyDown GLFW.Key'W (inpKeyStates input)
              then moveSpeed
              else if isKeyDown GLFW.Key'S (inpKeyStates input)
              then -moveSpeed
              else 0
              
-        -- Apply rotation to movement
-        finalDx = dx * cos rot - dy * sin rot
-        finalDy = dx * sin rot + dy * cos rot
+        -- Apply camera rotation to movement vector
+        finalDx = rawDx * cos (-rot) - rawDy * sin (-rot)
+        finalDy = rawDx * sin (-rot) + rawDy * cos (-rot)
         
-        -- Zoom
+        -- Zoom and rotation handling (unchanged)
         currentZoom = camZoom camera
         zoomSpeed = 2.0 * realToFrac dt
         zoomDelta = if isKeyDown GLFW.Key'Equal (inpKeyStates input)
@@ -87,15 +87,15 @@ updateCameraFromInput input camera dt =
                     else 0
         newZoom = max 0.1 $ min 10.0 $ currentZoom + zoomDelta
         
-        -- Rotation
         rotSpeed = 2.0 * realToFrac dt
         rotDelta = if isKeyDown GLFW.Key'Q (inpKeyStates input)
                    then -rotSpeed
                    else if isKeyDown GLFW.Key'E (inpKeyStates input)
                    then rotSpeed
                    else 0
+                   
     in camera
-        { camPosition = (px + finalDx, py + finalDy)
+        { camPosition = (px + finalDx, py + finalDy)  -- Add to current position
         , camZoom = newZoom
         , camRotation = rot + rotDelta
         }
@@ -105,3 +105,4 @@ updateCameraFromInput input camera dt =
         case Map.lookup key keyStates of
             Nothing → False
             Just ks → keyPressed ks
+
