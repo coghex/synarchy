@@ -67,7 +67,7 @@ data GraphicsState = GraphicsState
   , swapchainInfo      ∷ Maybe SwapchainInfo
   , syncObjects        ∷ Maybe SyncObjects
   , vertexBuffer       ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
-  , uniformBuffers     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
+  , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))
   , textureArrayStates ∷ Map.Map T.Text TextureArrayState
   , camera2D           ∷ Camera2D
   }

@@ -37,7 +37,7 @@ import Engine.Input.Types
 import Engine.Input.Thread (shutdownInputThread, startInputThread)
 import Engine.Input.Event (handleInputEvents)
 import Engine.Input.Callback (setupCallbacks)
-import Engine.Graphics.Camera (defaultCamera)
+import Engine.Graphics.Camera
 import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
                                    , createWindow, destroyWindow, createWindowSurface)
 import Engine.Graphics.Window.Types (WindowConfig(..), Window(..))
@@ -263,25 +263,35 @@ main = do
             projMatrix = ortho (-2) 2 (-2) 2 0.1 10
             uboData = UBO modelMatrix viewMatrix projMatrix
             uboSize = fromIntegral $ sizeOf uboData
-        (uboBuffer, uboMemory) ← createUniformBuffer device physicalDevice uboSize
-        logDebug $ "UniformBuffer: " ⧺ show uboBuffer
-        updateUniformBuffer device uboMemory uboData
+            numFrames = gcMaxFrames defaultGraphicsConfig
+        
+        uniformBuffers ← V.generateM (fromIntegral numFrames) $ \_ → do
+            (buffer, memory) ← createUniformBuffer device physicalDevice uboSize
+            -- Initialize with identity matrices
+            let uboData = UBO identity identity identity
+            updateUniformBuffer device memory uboData
+            pure (buffer, memory)
+        
+        logDebug $ "UniformBuffers created: " ⧺ show (V.length uniformBuffers)
         modify $ \s → s { graphicsState = (graphicsState s) {
-                            uniformBuffers = Just (uboBuffer, uboMemory) } }
-        let bufferInfo = (zero ∷ DescriptorBufferInfo)
-                { buffer = uboBuffer
-                , offset = 0
-                , range  = uboSize
-                }
-            write = zero
-                { dstSet          = V.head descSets
-                , dstBinding      = 0
-                , dstArrayElement = 0
-                , descriptorCount = 1
-                , descriptorType  = DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                , bufferInfo      = V.singleton bufferInfo
-                }
-        updateDescriptorSets device (V.singleton $ SomeStruct write) V.empty
+                            uniformBuffers = Just uniformBuffers } }
+        
+        -- Update descriptor sets for all uniform buffers
+        forM_ (zip [0..] (V.toList uniformBuffers)) $ \(i, (buffer, _)) → do
+              let bufferInfo = (zero ∷ DescriptorBufferInfo)
+                    { buffer = buffer
+                    , offset = 0
+                    , range  = uboSize
+                    }
+                  write = zero
+                    { dstSet          = descSets V.! i
+                    , dstBinding      = 0
+                    , dstArrayElement = 0
+                    , descriptorCount = 1
+                    , descriptorType  = DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                    , bufferInfo      = V.singleton bufferInfo
+                    }
+              updateDescriptorSets device (V.singleton $ SomeStruct write) V.empty
 
         -- create render pass
         renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo)
@@ -453,6 +463,27 @@ initializeTextures device physicalDevice cmdPool queue
 drawFrame ∷ EngineM' EngineEnv ()
 drawFrame = do
     state ← gets graphicsState
+    -- get window size
+    let Window win = fromJust $ glfwWindow state
+        frameIdx = currentFrame state
+    -- update uniform buffer
+    case (vulkanDevice state, uniformBuffers state) of
+        (Just device, Just buffers) → do
+            let (_, memory) = buffers V.! fromIntegral frameIdx
+            (width, height) ← GLFW.getFramebufferSize win
+            
+            -- Create matrices using camera
+            let camera = camera2D state
+                modelMatrix = identity
+                viewMatrix = createViewMatrix camera
+                projMatrix = createProjectionMatrix camera 
+                             (fromIntegral width) 
+                             (fromIntegral height)
+                uboData = UBO modelMatrix viewMatrix projMatrix
+            
+            -- Update the uniform buffer
+            updateUniformBuffer device memory uboData
+        _ → throwGraphicsError VulkanDeviceLost "No device or uniform buffer"
 
     -- Validate descriptor sets
     when (V.null $ dmActiveSets $ fromJust $ descriptorState state) $
@@ -463,11 +494,8 @@ drawFrame = do
     when (V.length textures < 2) $
         throwGraphicsError TextureLoadFailed "Not enough textures loaded"
     
-    -- Get current frame index
-    let frameIdx  = currentFrame state
-        resources = frameResources state V.! fromIntegral frameIdx
+    let resources = frameResources state V.! fromIntegral frameIdx
         cmdBuffer = V.head $ frCommandBuffer resources
-
     -- Wait for previous frame
     device ← case vulkanDevice state of
         Nothing → throwGraphicsError VulkanDeviceLost "No device"

@@ -10,6 +10,7 @@ module Engine.Graphics.Window.GLFW
   , windowShouldClose
   , setWindowShouldClose
   , getWindowSize
+  , getFramebufferSize
     -- * Event Handling
   , pollEvents
   , waitEvents
@@ -107,6 +108,10 @@ setWindowShouldClose win = liftIO ∘ GLFW.setWindowShouldClose win
 -- | Get the current window size
 getWindowSize ∷ GLFW.Window → EngineM ε σ (Int, Int)
 getWindowSize = liftIO ∘ GLFW.getWindowSize
+
+-- | Get the current framebuffer size
+getFramebufferSize ∷ GLFW.Window → EngineM ε σ (Int, Int)
+getFramebufferSize = liftIO ∘ GLFW.getFramebufferSize
 
 -- | Set a window's title
 setWindowTitle ∷ GLFW.Window → T.Text → EngineM ε σ ()

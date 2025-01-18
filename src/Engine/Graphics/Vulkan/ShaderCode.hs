@@ -33,7 +33,8 @@ vertexShaderCode = [vert|
     layout(location = 2) out flat float fragAtlasId;
 
     void main() {
-        gl_Position = ubo.proj * ubo.view * ubo.model * vec4(inPosition, 0.0, 1.0);
+        vec4 worldPos = ubo.model * vec4(inPosition, 0.0, 1.0);
+        gl_Position = ubo.proj * ubo.view * worldPos;
         fragTexCoord = inTexCoord;
         fragColor = inColor;
         fragAtlasId = inAtlasId;
