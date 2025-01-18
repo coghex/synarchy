@@ -30,24 +30,15 @@ defaultCamera = Camera2D
 createViewMatrix ∷ Camera2D → M44 Float
 createViewMatrix camera =
     let (px, py) = camPosition camera
-        rot = camRotation camera
+        rot = -camRotation camera
         cosθ = cos rot
         sinθ = sin rot
---        rotationMat = V4 (V4 cosθ (-sinθ) 0 0)
---                        (V4 sinθ cosθ  0 0)
---                        (V4 0    0     1 0)
---                        (V4 0    0     0 1)
---        translateMat = V4 (V4 1 0 0 (-px))
---                        (V4 0 1 0 (-py))
---                        (V4 0 0 1 0)
---                        (V4 0 0 0 1)
---    in translateMat !*! rotationMat
         -- Create a pure 2D transformation matrix
         -- This combines rotation and translation in 2D space
-    in V4 (V4  cosθ     sinθ    0  (-px * cosθ - py * sinθ))
-          (V4 (-sinθ)    cosθ    0  (px * sinθ - py * cosθ))
-          (V4  0         0       1   0)
-          (V4  0         0       0   1)
+    in V4 (V4 cosθ (-sinθ) 0  (-px))
+          (V4 sinθ cosθ    0  (-py))
+          (V4 0    0       1   0 )
+          (V4 0    0       0   1 )
 
 createProjectionMatrix ∷ Camera2D → Float → Float → M44 Float
 createProjectionMatrix camera width height =

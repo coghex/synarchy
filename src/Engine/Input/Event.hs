@@ -61,41 +61,39 @@ updateCameraFromInput input camera dt =
         moveSpeed = 5.0 * realToFrac dt
         rot = camRotation camera
         
-        -- Check WASD keys - straight 2D movement first
-        rawDx = if isKeyDown GLFW.Key'D (inpKeyStates input)
+        -- Get raw movement input
+        dx = if isKeyDown GLFW.Key'D (inpKeyStates input)
              then moveSpeed
              else if isKeyDown GLFW.Key'A (inpKeyStates input)
              then -moveSpeed
              else 0
-        rawDy = if isKeyDown GLFW.Key'W (inpKeyStates input)
+        dy = if isKeyDown GLFW.Key'W (inpKeyStates input)
              then moveSpeed
              else if isKeyDown GLFW.Key'S (inpKeyStates input)
              then -moveSpeed
              else 0
-             
-        -- Apply camera rotation to movement vector
-        finalDx = rawDx * cos (-rot) - rawDy * sin (-rot)
-        finalDy = rawDx * sin (-rot) + rawDy * cos (-rot)
         
-        -- Zoom and rotation handling (unchanged)
+        -- Transform movement by camera rotation
+        finalDx = dx * cos rot - dy * sin rot
+        finalDy = dx * sin rot + dy * cos rot
+        
+        -- Handle zoom
         currentZoom = camZoom camera
-        zoomSpeed = 2.0 * realToFrac dt
         zoomDelta = if isKeyDown GLFW.Key'Equal (inpKeyStates input)
-                    then -zoomSpeed
+                    then -moveSpeed
                     else if isKeyDown GLFW.Key'Minus (inpKeyStates input)
-                    then zoomSpeed
+                    then moveSpeed
                     else 0
         newZoom = max 0.1 $ min 10.0 $ currentZoom + zoomDelta
         
-        rotSpeed = 2.0 * realToFrac dt
+        -- Handle rotation
         rotDelta = if isKeyDown GLFW.Key'Q (inpKeyStates input)
-                   then -rotSpeed
+                   then -moveSpeed
                    else if isKeyDown GLFW.Key'E (inpKeyStates input)
-                   then rotSpeed
+                   then moveSpeed
                    else 0
-                   
     in camera
-        { camPosition = (px + finalDx, py + finalDy)  -- Add to current position
+        { camPosition = (px - finalDx, py - finalDy)  -- Note the negation here
         , camZoom = newZoom
         , camRotation = rot + rotDelta
         }
