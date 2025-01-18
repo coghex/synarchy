@@ -6,8 +6,6 @@ module Engine.Graphics.Vulkan.Pipeline
   ) where
 
 import UPrelude
-import Control.Monad.State (gets)
-import Data.Bits ((.|.))
 import qualified Data.Vector as V
 import qualified Data.ByteString as BS
 import Engine.Core.Types

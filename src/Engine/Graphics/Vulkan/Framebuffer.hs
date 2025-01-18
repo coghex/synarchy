@@ -7,8 +7,6 @@ module Engine.Graphics.Vulkan.Framebuffer
 
 import UPrelude
 import qualified Data.Vector as V
-import Data.Bits ((.|.))
-import Control.Monad (when)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Types

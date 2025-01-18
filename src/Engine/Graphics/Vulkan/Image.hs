@@ -13,11 +13,7 @@ module Engine.Graphics.Vulkan.Image
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.ByteString as BS
-import Data.Bits ((.|.), (.&.), shift, testBit)
-import Data.Word (Word32)
-import Foreign.Ptr (nullPtr)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.Error.Exception

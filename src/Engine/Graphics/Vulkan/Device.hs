@@ -11,12 +11,7 @@ module Engine.Graphics.Vulkan.Device
   ) where
 
 import UPrelude
-import Control.Monad (when)
-import Control.Monad.IO.Class (MonadIO(..))
-import Data.Bits ((.&.), (.|.), zeroBits)
-import Data.Word (Word32)
 import qualified Data.Vector as V
-import Foreign.Ptr (nullPtr)
 import Engine.Core.Error.Exception
 import Engine.Core.Monad
 import Engine.Core.Resource

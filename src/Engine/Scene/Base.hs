@@ -2,7 +2,6 @@
 module Engine.Scene.Base where
 
 import UPrelude
-import Data.Word (Word32)
 import qualified Data.Text as T
 
 -- | Unique identifier for scene objects

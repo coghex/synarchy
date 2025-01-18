@@ -3,7 +3,6 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Map as Map
-import Data.Word (Word64, Word32)
 import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Core.Base

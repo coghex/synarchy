@@ -17,14 +17,9 @@ module Engine.Graphics.Vulkan.Texture
 
 import UPrelude
 import qualified Codec.Picture as JP
-import Control.Monad (when, filterM, (>>=))
 import qualified Data.Vector as V
 import qualified Data.Text as T
 import qualified Data.Vector.Storable as Vec
-import Data.Word (Word32, Word64)
-import Foreign.Marshal.Array (copyArray)
-import Foreign.Ptr (castPtr)
-import Foreign.ForeignPtr (withForeignPtr)
 import Engine.Asset.Types
 import Engine.Core.Monad
 import Engine.Core.Resource

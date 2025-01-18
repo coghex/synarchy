@@ -6,7 +6,6 @@ module Engine.Graphics.Vulkan.Types.Texture
 
 import UPrelude
 import qualified Data.Vector as V
-import Data.Word (Word32)
 import qualified Vulkan.Core10 as Vk
 
 -- | Data for a single texture

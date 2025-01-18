@@ -1,12 +1,8 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Vulkan.Types.Vertex where
 import UPrelude
-import Data.Word (Word32)
 import qualified Data.Text as T
-import Foreign.Storable (Storable(..), sizeOf)
 import qualified Foreign.Storable as Storable
-import Foreign.Ptr (Ptr, castPtr, plusPtr)
-import Foreign.Marshal.Array (pokeArray)
 
 -- Constants for vertex layout
 vertexPositionOffset :: Int

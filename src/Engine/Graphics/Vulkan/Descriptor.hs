@@ -16,10 +16,7 @@ module Engine.Graphics.Vulkan.Descriptor
 
 import UPrelude
 import Control.Monad.IO.Class (MonadIO(..))
-import Control.Monad (when)
 import qualified Data.Vector as V
-import Data.Maybe (catMaybes)
-import Data.Word (Word32)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.Error.Exception

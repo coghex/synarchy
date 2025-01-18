@@ -4,19 +4,11 @@ module Main where
 import UPrelude
 import Control.Exception (displayException, throwIO)
 import Control.Concurrent (threadDelay, forkIO)
-import Control.Monad (void, when, forM_, unless)
 import qualified Control.Monad.Logger.CallStack as Logger
-import Control.Monad.Reader (ask)
-import Control.Monad.State (modify, get, gets)
-import Data.Bits ((.|.))
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.Maybe (fromJust)
-import Data.Word (Word32, Word64)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
-import Foreign.Storable (sizeOf, poke)
-import Foreign.Ptr (castPtr)
 import Linear (M44, V3(..), identity, (!*!), perspective, lookAt, translation, ortho)
 import System.Environment (setEnv)
 import System.Exit ( exitFailure )
@@ -32,7 +24,6 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.Error.Exception
 import Engine.Concurrent.Var
 import Engine.Graphics.Types
-import Engine.Input.Keyboard
 import Engine.Input.Types
 import Engine.Input.Thread (shutdownInputThread, startInputThread)
 import Engine.Input.Event (handleInputEvents)

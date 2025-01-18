@@ -28,13 +28,9 @@ module Engine.Graphics.Window.GLFW
 
 import UPrelude
 import Control.Exception (IOException, catch, ioError)
-import Control.Monad (unless)
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
-import Foreign.Ptr (castPtr, nullPtr)
-import Foreign.Marshal.Alloc (alloca)
-import Foreign.Storable (peek)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
 import Engine.Core.Resource
@@ -114,7 +110,7 @@ getFramebufferSize ∷ GLFW.Window → EngineM ε σ (Int, Int)
 getFramebufferSize = liftIO ∘ GLFW.getFramebufferSize
 
 -- | Set a window's title
-setWindowTitle ∷ GLFW.Window → T.Text → EngineM ε σ ()
+setWindowTitle ∷ GLFW.Window → Text → EngineM ε σ ()
 setWindowTitle win title = liftIO $ GLFW.setWindowTitle win ( T.unpack title )
 
 -- | Poll for pending events

@@ -6,7 +6,6 @@ import UPrelude
 import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.Word (Word32, Word64)
 import qualified Vulkan.Core10 as Vk
 import Engine.Asset.Types
 import Engine.Graphics.Types

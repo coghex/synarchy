@@ -14,14 +14,9 @@ module Engine.Asset.Manager
   ) where
 
 import UPrelude
-import Control.Monad (void, forM_, when)
-import Control.Monad.Reader (ask)
-import Control.Monad.State (get, modify, gets)
-import Data.Maybe (fromMaybe, isJust, fromJust)
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Control.Monad.IO.Class (MonadIO(..))
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource, allocResource')
 import Engine.Core.State
@@ -56,9 +51,9 @@ initTextureArrayManager device = do
     }
 
 -- | Load a texture atlas from file
-loadTextureAtlas ∷ T.Text      -- ^ Name of the atlas
+loadTextureAtlas ∷ Text      -- ^ Name of the atlas
                 → FilePath     -- ^ Path to the atlas file
-                → T.Text       -- ^ Array name
+                → Text       -- ^ Array name
                 → EngineM ε σ AssetId
 loadTextureAtlas name path arrayName = do
   -- First generate a new asset ID
@@ -145,7 +140,7 @@ loadTextureAtlas name path arrayName = do
   pure nextId
 
 -- | Load a shader program
-loadShaderProgram ∷ T.Text            -- ^ Name of the program
+loadShaderProgram ∷ Text            -- ^ Name of the program
                  → V.Vector ShaderStageInfo  -- ^ Shader stages
                  → EngineM' ε AssetId
 loadShaderProgram name stages = do

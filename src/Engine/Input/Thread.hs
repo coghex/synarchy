@@ -8,7 +8,6 @@ import qualified Graphics.UI.GLFW as GLFW
 import Control.Concurrent (threadDelay, ThreadId, killThread, forkIO)
 import Control.Exception (SomeException, catch)
 import Data.IORef (IORef, newIORef, writeIORef, readIORef)
-import Control.Monad (when)
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import Engine.Core.State
 import Engine.Input.Types

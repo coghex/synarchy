@@ -9,12 +9,7 @@ module Engine.Graphics.Vulkan.Buffer
   ) where
 
 import UPrelude
-import Data.Bits (testBit, (.|.))
-import Data.Word (Word32, Word64)
 import qualified Data.Vector as V
-import Foreign.Storable (Storable, sizeOf, poke)
-import Foreign.Ptr (castPtr)
-import Foreign.Marshal.Array (pokeArray)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.Types

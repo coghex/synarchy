@@ -5,7 +5,6 @@ module Engine.Graphics.Vulkan.Sampler
   ) where
 
 import UPrelude
-import Control.Monad.IO.Class (MonadIO(..))
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Vulkan.Types

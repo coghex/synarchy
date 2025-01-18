@@ -6,16 +6,10 @@ module Engine.Graphics.Vulkan.Instance
   ) where
 
 import UPrelude
-import Control.Monad (when, unless, void)
-import Control.Monad.IO.Class (MonadIO(..))
-import Data.Bits ((.|.))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as BSU
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.Word (Word32)
-import Foreign.Ptr (nullPtr)
-import Foreign.C.String (peekCString)
 import Engine.Core.Error.Exception
 import Engine.Core.Monad
 import Engine.Core.Resource

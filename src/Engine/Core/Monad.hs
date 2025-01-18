@@ -6,7 +6,6 @@ module Engine.Core.Monad
   ) where
 
 import UPrelude
-import Control.Monad ((>>=), void)
 import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.Reader.Class (MonadReader(..))

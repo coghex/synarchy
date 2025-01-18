@@ -11,7 +11,6 @@ module Engine.Concurrent.Var
   ) where
 
 import UPrelude
-import Control.Monad ((>>=))
 import qualified Control.Concurrent.STM as STM
 
 type Var α = STM.TVar α

@@ -10,7 +10,6 @@ module Engine.Graphics.Vulkan.Swapchain
 
 import UPrelude
 import qualified Data.Vector as V
-import Data.Word (Word32, Word64)
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource)
 import Engine.Graphics.Types

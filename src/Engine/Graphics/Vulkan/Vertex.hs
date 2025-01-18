@@ -7,11 +7,7 @@ module Engine.Graphics.Vulkan.Vertex
     ) where
 
 import UPrelude
-import Control.Monad (forM_)
 import qualified Data.Vector as V
-import Data.Bits ((.|.))
-import Foreign.Storable (Storable(..), sizeOf)
-import Foreign.Ptr (Ptr, castPtr, plusPtr)
 import Engine.Core.Monad
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Buffer

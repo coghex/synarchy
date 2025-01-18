@@ -5,14 +5,13 @@ module Engine.Graphics.Window.Types
   ) where
 
 import UPrelude
-import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 
 -- | Basic window configuration
 data WindowConfig = WindowConfig
   { wcWidth     ∷ Int
   , wcHeight    ∷ Int
-  , wcTitle     ∷ T.Text
+  , wcTitle     ∷ Text
   , wcResizable ∷ Bool
   }
 

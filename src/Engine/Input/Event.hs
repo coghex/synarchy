@@ -2,9 +2,6 @@
 module Engine.Input.Event where
 
 import UPrelude
-import Control.Monad (when)
-import Control.Monad.Reader (ask)
-import Control.Monad.State (modify, get)
 import qualified Data.Map as Map
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad (MonadIO(liftIO), EngineM')

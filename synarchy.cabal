@@ -159,7 +159,6 @@ library
                      Engine.Input.Event
                      Engine.Input.Types
                      Engine.Input.Thread
-                     Engine.Input.Keyboard
                      Engine.Core.Base
                      Engine.Core.Monad
                      Engine.Core.State

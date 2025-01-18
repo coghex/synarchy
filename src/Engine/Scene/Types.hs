@@ -4,7 +4,6 @@ module Engine.Scene.Types where
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
-import qualified Data.Text as T
 import Engine.Scene.Base
 import Engine.Asset.Base (AssetId)
 import Engine.Graphics.Vulkan.Types.Texture (TextureData)
@@ -35,7 +34,7 @@ data Camera2D = Camera2D
 
 -- | Main scene state
 data Scene = Scene
-    { sceneId      ∷ T.Text
+    { sceneId      ∷ Text
     , sceneLayers  ∷ Map.Map LayerId SceneLayer
     , sceneCamera  ∷ Camera2D
     } deriving (Show)
@@ -61,7 +60,7 @@ defaultCamera = Camera2D
     , camRotation = 0.0
     }
 
-createEmptyScene ∷ T.Text → Scene
+createEmptyScene ∷ Text → Scene
 createEmptyScene sid = Scene
     { sceneId = sid
     , sceneLayers = Map.empty

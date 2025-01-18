@@ -3,9 +3,6 @@
 module Engine.Graphics.Vulkan.Types where
 import UPrelude
 import qualified Data.Vector as V
-import Data.Word (Word32, Word64)
-import Foreign.Storable (sizeOf, Storable(..), peek, poke)
-import Foreign.Ptr (castPtr, plusPtr)
 import Linear (V4(..), M44, identity)
 import Vulkan.Core10
 import Vulkan.Extensions.VK_EXT_debug_utils

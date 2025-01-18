@@ -29,7 +29,6 @@ import UPrelude
 import Control.Exception (Exception, displayException)
 import Control.Monad.Error.Class (MonadError(..), throwError)
 import qualified Control.Monad.Logger.CallStack as LoggerCS
-import Data.String (fromString)
 import GHC.Stack (HasCallStack, prettyCallStack, callStack, CallStack, getCallStack)
 import qualified Data.Text as T
 import Type.Reflection
