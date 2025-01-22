@@ -77,7 +77,6 @@ test-suite synarchy-test
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
-                       -eventlog
                        -fprof-auto
                        -haddock
                        -rtsopts
@@ -95,7 +94,6 @@ test-suite synarchy-test
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
-                       -eventlog
                        -fprof-auto
                        -haddock
                        -rtsopts
@@ -108,7 +106,6 @@ test-suite synarchy-test
                        -optc-O3
                        -fexcess-precision
                        -threaded
-                       -eventlog
                        -feager-blackholing
                        -rtsopts
                        -with-rtsopts=-N
@@ -117,7 +114,6 @@ test-suite synarchy-test
                        -optc-O3
                        -fexcess-precision
                        -threaded
-                       -eventlog
                        -feager-blackholing
                        -rtsopts
                        -with-rtsopts=-N
@@ -223,11 +219,8 @@ library
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
-                       -eventlog
                        -fprof-auto
                        -haddock
-                       -rtsopts
-                       -with-rtsopts=-N
                        -fno-full-laziness
                        -fno-cse
                        -fPIC
@@ -241,11 +234,8 @@ library
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
-                       -eventlog
                        -fprof-auto
                        -haddock
-                       -rtsopts
-                       -with-rtsopts=-N
     else
       if os(darwin)
           cpp-options: -DDARWIN
@@ -254,19 +244,13 @@ library
                        -optc-O3
                        -fexcess-precision
                        -threaded
-                       -eventlog
                        -feager-blackholing
-                       -rtsopts
-                       -with-rtsopts=-N
       else
           ghc-options: -O2
                        -optc-O3
                        -fexcess-precision
                        -threaded
-                       -eventlog
                        -feager-blackholing
-                       -rtsopts
-                       -with-rtsopts=-N
 
 
 
@@ -329,7 +313,6 @@ executable synarchy
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
-                       -eventlog
                        -fprof-auto
                        -haddock
                        -rtsopts
@@ -342,7 +325,6 @@ executable synarchy
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
-                       -eventlog
                        -fprof-auto
                        -haddock
                        -rtsopts
@@ -355,7 +337,6 @@ executable synarchy
                        -optc-O3
                        -fexcess-precision
                        -threaded
-                       -eventlog
                        -feager-blackholing
                        -rtsopts
                        -with-rtsopts=-N
@@ -364,7 +345,6 @@ executable synarchy
                        -optc-O3
                        -fexcess-precision
                        -threaded
-                       -eventlog
                        -feager-blackholing
                        -rtsopts
                        -with-rtsopts=-N

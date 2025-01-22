@@ -16,7 +16,7 @@ import System.FilePath ((</>))
 import Engine.Asset.Types
 import Engine.Asset.Manager
 import Engine.Core.Base
-import Engine.Core.Monad (runEngineM, EngineM')
+import Engine.Core.Monad (runEngineM, EngineM', MonadIO(..))
 import Engine.Core.Types
 import Engine.Core.State
 import Engine.Core.Resource
@@ -54,7 +54,6 @@ import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.Extensions.VK_KHR_swapchain
-import Control.Monad.IO.Class (liftIO)
 
 defaultEngineConfig ∷ EngineConfig
 defaultEngineConfig = EngineConfig 
