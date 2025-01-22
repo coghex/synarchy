@@ -3,6 +3,7 @@
 module Engine.Graphics.Vulkan.Instance
   ( createVulkanInstance
   , destroyVulkanInstance
+  , getAvailableExtensions
   ) where
 
 import UPrelude

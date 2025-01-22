@@ -9,6 +9,7 @@ import qualified Test.Engine.Core.Monad as CoreMonad
 import qualified Test.Engine.Core.Resource as CoreResource
 import qualified Test.Engine.Core.Queue as CoreQueue
 import qualified Test.Engine.Core.Var as CoreVar
+import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
 import qualified Graphics.UI.GLFW as GLFW
@@ -55,4 +56,5 @@ main = do
         describe "Engine.Core.Queue" CoreQueue.spec
         describe "Engine.Core.Var" CoreVar.spec
         describe "Engine.Core.Error.Exception" CoreException.spec
+        describe "Engine.Graphics.Vulkan.Instance" VulkanInstance.spec
     )
