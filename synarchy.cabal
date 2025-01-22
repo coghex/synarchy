@@ -28,6 +28,7 @@ test-suite synarchy-test
     main-is: Spec.hs
     other-modules: Test.UPrelude
                    Test.Engine.Core.Monad
+                   Test.Engine.Core.Resource
                    Test.Engine.Core.Queue
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
@@ -158,7 +159,7 @@ library
                      Engine.Core.Error.Exception
                      Engine.Core.Resource
                      Engine.Core.Queue
-                     Engine.Concurrent.Var
+                     Engine.Core.Var
                      Engine.Scene.Base
                      Engine.Scene.Types
     -- Use the same extensions as your executable

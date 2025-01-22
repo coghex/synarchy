@@ -23,7 +23,6 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
         - UPrelude (unicode and other utilities)
         - Engine
             - Asset (loading and managing assets)
-            - Concurrent (threading and synchronization)
             - Core (main engine functionality/continuation monad/resource handling)
             - Event (event handling)
             - Graphics (vulkan and graphics functionality)

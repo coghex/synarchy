@@ -14,7 +14,7 @@ import qualified Control.Monad.Logger.CallStack as Logger
 import Engine.Core.Error.Exception (EngineException(..))
 import Engine.Core.Base
 import Engine.Core.State
-import Engine.Concurrent.Var 
+import Engine.Core.Var 
 
 -- | Main engine monad transformer stack
 -- ε = environment

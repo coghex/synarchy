@@ -9,7 +9,7 @@ import Engine.Input.Thread
 import Engine.Core.Types
 import Engine.Core.State
 import Engine.Core.Queue as Q
-import Engine.Concurrent.Var (atomically)
+import Engine.Core.Var (atomically)
 import Engine.Graphics.Camera ( Camera2D(..) )
 import Engine.Input.Types
 

@@ -1,5 +1,5 @@
 -- Engine/Concurrent/Var.hs
-module Engine.Concurrent.Var
+module Engine.Core.Var
   ( Var
   , newVar
   , readVar

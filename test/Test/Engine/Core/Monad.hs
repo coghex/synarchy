@@ -10,7 +10,7 @@ import Engine.Core.Types
 import Engine.Core.Defaults
 import Engine.Core.Error.Exception
 import Engine.Core.Queue as Q
-import Engine.Concurrent.Var
+import Engine.Core.Var
 import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.State (put)  -- Add this import
 import Control.Monad.Error.Class (throwError, catchError)  -- Add this import

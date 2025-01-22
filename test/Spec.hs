@@ -5,6 +5,7 @@ import UPrelude
 import Test.Hspec
 import qualified Test.UPrelude as UPrelude
 import qualified Test.Engine.Core.Monad as CoreMonad
+import qualified Test.Engine.Core.Resource as CoreResource
 import qualified Test.Engine.Core.Queue as CoreQueue
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
@@ -48,5 +49,6 @@ main = do
     (\window -> hspec $ do
         describe "UPrelude" UPrelude.spec
         describe "Engine.Core.Monad" CoreMonad.spec
+        describe "Engine.Core.Resource" CoreResource.spec
         describe "Engine.Core.Queue" CoreQueue.spec
     )

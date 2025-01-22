@@ -1,7 +1,7 @@
 module Engine.Core.Base where
 
 import UPrelude
-import Engine.Concurrent.Var
+import Engine.Core.Var
 import qualified Control.Monad.Logger.CallStack as Logger
 
 
