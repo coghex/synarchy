@@ -26,16 +26,7 @@ test-suite synarchy-test
     type: exitcode-stdio-1.0
     hs-source-dirs: test
     main-is: Spec.hs
-    other-modules: Test.Engine.Graphics.Vulkan.Instance
-                   Test.Engine.Graphics.Vulkan.Command
-                   Test.Engine.Graphics.Vulkan.Descriptor
-                   Test.Engine.Graphics.Vulkan.Device
-                   Test.Engine.Graphics.Vulkan.Shader
-                   Test.Engine.Graphics.Vulkan.Swapchain
-                   Test.Engine.Graphics.Vulkan.Sync
-                   Test.Engine.Graphics.Vulkan.Texture
-                   Test.Engine.Graphics.Vulkan.Framebuffer
-                   Test.Engine.Core.Monad
+    other-modules: Test.UPrelude
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash

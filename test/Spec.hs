@@ -3,17 +3,7 @@ module Main where
 
 import UPrelude
 import Test.Hspec
-import qualified Test.Engine.Graphics.Vulkan.Command as Command
-import qualified Test.Engine.Graphics.Vulkan.Descriptor as Descriptor
-import qualified Test.Engine.Graphics.Vulkan.Framebuffer as Framebuffer
-import qualified Test.Engine.Graphics.Vulkan.Device as VulkanDevice
-import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
-import qualified Test.Engine.Core.Monad as CoreMonad
-import qualified Test.Engine.Graphics.Vulkan.Shader as Shader
-import qualified Test.Engine.Graphics.Vulkan.Swapchain as Swapchain
-import qualified Test.Engine.Graphics.Vulkan.Sync as Sync
-import qualified Test.Engine.Graphics.Vulkan.Texture as Texture
-import qualified Test.Engine.Graphics.Vulkan.Vertex as Vertex
+import qualified Test.UPrelude as UPrelude
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
 import qualified Graphics.UI.GLFW as GLFW
@@ -54,15 +44,5 @@ main = do
     initGLFW           -- setup
     GLFW.destroyWindow -- cleanup
     (\window -> hspec $ do
-        describe "Core Monad" CoreMonad.spec
-        describe "Vulkan Instance" VulkanInstance.spec
-        describe "Vulkan Device" VulkanDevice.spec
-        describe "Swapchain" (Swapchain.spec (Window window))
-        describe "Sync" (Sync.spec (Window window))
-        describe "Command" (Command.spec (Window window))
-        describe "Descriptor" (Descriptor.spec (Window window))
-        describe "Texture" (Texture.spec (Window window))
-        describe "Shader" (Shader.spec (Window window))
-        describe "Framebuffer" (Framebuffer.spec (Window window))
-        describe "Vertex" (Vertex.spec (Window window))
+        describe "UPrelude" UPrelude.spec
     )
