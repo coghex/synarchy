@@ -16,6 +16,7 @@ import System.FilePath ((</>))
 import Engine.Asset.Types
 import Engine.Asset.Manager
 import Engine.Core.Base
+import Engine.Core.Defaults
 import Engine.Core.Monad (runEngineM, EngineM', MonadIO(..))
 import Engine.Core.Types
 import Engine.Core.State
@@ -23,6 +24,7 @@ import Engine.Core.Resource
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Error.Exception
 import Engine.Concurrent.Var
+import Engine.Graphics.Base
 import Engine.Graphics.Types
 import Engine.Input.Types
 import Engine.Input.Thread (shutdownInputThread, startInputThread)
@@ -54,79 +56,6 @@ import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.Extensions.VK_KHR_swapchain
-
-defaultEngineConfig ∷ EngineConfig
-defaultEngineConfig = EngineConfig 
-  { windowWidth  = 800
-  , windowHeight = 600
-  , enableVSync  = True
-#ifdef DEVELOPMENT
-  , enableDebug  = True
-#else
-  , enableDebug  = False
-#endif
-  }
-
-defaultGraphicsConfig ∷ GraphicsConfig
-defaultGraphicsConfig = GraphicsConfig 
-  { gcAppName   = T.pack "Vulkan Device Test"
-#ifdef DEVELOPMENT
-  , gcDebugMode = True
-#else
-  , gcDebugMode = False
-#endif
-  , gcWidth     = 800
-  , gcHeight    = 600
-  , gcMaxFrames = 2
-  }
-
-defaultWindowConfig ∷ WindowConfig
-defaultWindowConfig = WindowConfig 
-  { wcWidth     = 800
-  , wcHeight    = 600
-  , wcTitle     = T.pack "Vulkan Test"
-  , wcResizable = True
-  }
-
-defaultEngineState ∷ LoggingFunc → EngineState
-defaultEngineState lf = EngineState
-  { timingState = TimingState
-    { frameCount       = 0
-    , engineRunning    = True
-    , engineCleaning   = False
-    , currentTime      = 0.0
-    , deltaTime        = 0.0
-    , frameTimeAccum   = 0.0
-    , lastFrameTime    = 0.0
-    , targetFPS        = 60.0
-    }
-  , inputState       = defaultInputState
-  , logFunc          = lf
-  , graphicsState    = GraphicsState
-    { glfwWindow         = Nothing
-    , vulkanInstance     = Nothing
-    , vulkanPDevice      = Nothing
-    , vulkanDevice       = Nothing
-    , deviceQueues       = Nothing
-    , vulkanCmdPool      = Nothing
-    , vulkanCmdBuffers   = Nothing
-    , vulkanRenderPass   = Nothing
-    , textureState       = (TexturePoolState zero zero, V.empty)
-    , descriptorState    = Nothing
-    , pipelineState      = Nothing
-    , frameResources     = V.empty
-    , currentFrame       = 0
-    , framebuffers       = Nothing
-    , swapchainInfo      = Nothing
-    , syncObjects        = Nothing
-    , vertexBuffer       = Nothing
-    , uniformBuffers     = Nothing
-    , textureArrayStates = Map.empty
-    , camera2D           = defaultCamera
-    }
-  , assetPool        = AssetPool Map.empty Map.empty 0
-  , assetConfig      = AssetConfig 100 100 True True
-  }
 
 main ∷ IO ()
 main = do

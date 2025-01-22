@@ -27,6 +27,8 @@ test-suite synarchy-test
     hs-source-dirs: test
     main-is: Spec.hs
     other-modules: Test.UPrelude
+                   Test.Engine.Core.Monad
+                   Test.Engine.Core.Queue
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash
@@ -43,7 +45,9 @@ test-suite synarchy-test
                      , QuasiQuotes
     build-depends: base
                 , base-unicode-symbols
+                , async
                 , bytestring
+                , containers
                 , directory
                 , filepath
                 , hspec
@@ -147,6 +151,7 @@ library
                      Engine.Input.Types
                      Engine.Input.Thread
                      Engine.Core.Base
+                     Engine.Core.Defaults
                      Engine.Core.Monad
                      Engine.Core.State
                      Engine.Core.Types

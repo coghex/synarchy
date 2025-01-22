@@ -4,6 +4,8 @@ module Main where
 import UPrelude
 import Test.Hspec
 import qualified Test.UPrelude as UPrelude
+import qualified Test.Engine.Core.Monad as CoreMonad
+import qualified Test.Engine.Core.Queue as CoreQueue
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
 import qualified Graphics.UI.GLFW as GLFW
@@ -45,4 +47,6 @@ main = do
     GLFW.destroyWindow -- cleanup
     (\window -> hspec $ do
         describe "UPrelude" UPrelude.spec
+        describe "Engine.Core.Monad" CoreMonad.spec
+        describe "Engine.Core.Queue" CoreQueue.spec
     )

@@ -12,6 +12,7 @@ module Engine.Core.Error.Exception
   , AssetError(..)
   -- * Functions
   , throwEngineException
+  , mkErrorContext
   , logInfo
 --  , logExcept
   , logDebug
@@ -77,6 +78,7 @@ data SystemError
   | MemoryError T.Text     -- ^ Memory allocation/management error
   | IOError T.Text         -- ^ General IO error
   | TimeoutError T.Text    -- ^ Operation timed out
+  | TestError T.Text       -- ^ Test error
   deriving (Show, Eq, Typeable)
 
 -- | State management errors
@@ -112,6 +114,8 @@ data EngineException = EngineException
   , errorMsg     ∷ T.Text         -- ^ Error message
   , errorContext ∷ ErrorContext -- ^ Additional context
   } deriving (Typeable)
+instance Eq EngineException where
+  (==) a b = errorType a == errorType b && errorMsg a == errorMsg b
 
 -- | Error context, currently just a call stack
 data ErrorContext = ErrorContext

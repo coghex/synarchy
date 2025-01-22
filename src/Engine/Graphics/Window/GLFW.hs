@@ -35,7 +35,7 @@ import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.Error.Exception
-import Engine.Graphics.Types (GraphicsConfig(..))
+import Engine.Graphics.Base (GraphicsConfig(..))
 import Engine.Graphics.Window.Types
 import Vulkan.Core10 (Instance(..), AllocationCallbacks)
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR, destroySurfaceKHR)

@@ -9,14 +9,6 @@ import Vulkan.Core10
 import Vulkan.Extensions.VK_KHR_surface
 import Vulkan.Extensions.VK_KHR_swapchain
 
-data GraphicsConfig = GraphicsConfig
-  { gcAppName    ∷ Text   -- ^ Application name for Vulkan
-  , gcWidth      ∷ Int    -- ^ Initial window width
-  , gcHeight     ∷ Int    -- ^ Initial window height
-  , gcDebugMode  ∷ Bool   -- ^ Enable Vulkan validation layers
-  , gcMaxFrames  ∷ Int    -- ^ Maximum number of frames in flight
-  }
-
 data VulkanState = VulkanState
   { vsInstance        ∷ Instance
   , vsPhysicalDevice  ∷ Maybe PhysicalDevice

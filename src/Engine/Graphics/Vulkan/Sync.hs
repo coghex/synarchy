@@ -9,6 +9,7 @@ import qualified Vulkan as Vk
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource)
 import Engine.Core.Error.Exception
+import Engine.Graphics.Base
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
 

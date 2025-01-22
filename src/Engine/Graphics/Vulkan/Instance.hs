@@ -14,6 +14,7 @@ import Engine.Core.Error.Exception
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Vulkan.Types
+import Engine.Graphics.Base
 import Engine.Graphics.Types
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Vulkan.Core10
