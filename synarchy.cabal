@@ -27,9 +27,11 @@ test-suite synarchy-test
     hs-source-dirs: test
     main-is: Spec.hs
     other-modules: Test.UPrelude
+                   Test.Engine.Core.Error.Exception
                    Test.Engine.Core.Monad
                    Test.Engine.Core.Resource
                    Test.Engine.Core.Queue
+                   Test.Engine.Core.Var
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash

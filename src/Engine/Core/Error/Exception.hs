@@ -13,6 +13,7 @@ module Engine.Core.Error.Exception
   -- * Functions
   , throwEngineException
   , mkErrorContext
+  , contextCallStack
   , logInfo
 --  , logExcept
   , logDebug

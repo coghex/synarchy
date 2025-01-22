@@ -4,9 +4,11 @@ module Main where
 import UPrelude
 import Test.Hspec
 import qualified Test.UPrelude as UPrelude
+import qualified Test.Engine.Core.Error.Exception as CoreException
 import qualified Test.Engine.Core.Monad as CoreMonad
 import qualified Test.Engine.Core.Resource as CoreResource
 import qualified Test.Engine.Core.Queue as CoreQueue
+import qualified Test.Engine.Core.Var as CoreVar
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
 import qualified Graphics.UI.GLFW as GLFW
@@ -51,4 +53,6 @@ main = do
         describe "Engine.Core.Monad" CoreMonad.spec
         describe "Engine.Core.Resource" CoreResource.spec
         describe "Engine.Core.Queue" CoreQueue.spec
+        describe "Engine.Core.Var" CoreVar.spec
+        describe "Engine.Core.Error.Exception" CoreException.spec
     )
