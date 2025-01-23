@@ -9,6 +9,7 @@ import qualified Test.UPrelude as UPrelude
 import qualified Test.Engine.Core.Monad as CoreMonad
 import qualified Test.Engine.Core.Resource as CoreResource
 import qualified Test.Engine.Core.Queue as CoreQueue
+import qualified Test.Engine.Graphics.Window.GLFW as TestGLFW
 import Control.Concurrent (threadDelay)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Graphics.Window.Types (Window(..))
@@ -66,7 +67,6 @@ main = do
             pure newState
         Nothing → error "Failed to create GLFW window"
 
-    -- Run tests that don't depend on GLFW
     hspec $ do
         -- Core tests (no graphics dependencies)
         describe "Core Tests" $ do
@@ -74,6 +74,8 @@ main = do
             describe "Engine.Core.Monad" CoreMonad.spec
             describe "Engine.Core.Resource" CoreResource.spec
             describe "Engine.Core.Queue" CoreQueue.spec
+        -- GLFW tests
+        describe "GLFW Tests" $ TestGLFW.spec env initialState
 
     -- Cleanup GLFW
     putStrLn "[Debug] Terminating GLFW..."
