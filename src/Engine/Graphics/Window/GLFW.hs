@@ -6,11 +6,15 @@ module Engine.Graphics.Window.GLFW
   , showWindow
   , hideWindow
   , makeContextCurrent
+  , getGLFWWindow
     -- * Window State
   , windowShouldClose
   , setWindowShouldClose
   , getWindowSize
   , getFramebufferSize
+  , GLFW.setWindowSize
+  , GLFW.setWindowPos
+  , GLFW.getWindowPos
     -- * Event Handling
   , pollEvents
   , waitEvents
@@ -18,6 +22,7 @@ module Engine.Graphics.Window.GLFW
     -- * Keyboard and Mouse Input
   , GLFW.setKeyCallback
     -- * Vulkan Integration
+  , vulkanSupported
   , getRequiredInstanceExtensions
   , createWindowSurface
   , mainThreadHint
@@ -167,3 +172,10 @@ createWindowSurface (Window win) inst = allocResource
 -- | Terminate GLFW
 terminateGLFW ∷ EngineM ε σ ()
 terminateGLFW = liftIO GLFW.terminate
+
+-- | Get the GLFW window handle
+getGLFWWindow ∷ Window → GLFW.Window
+getGLFWWindow (Window win) = win
+
+vulkanSupported ∷ EngineM ε σ Bool
+vulkanSupported = liftIO GLFW.vulkanSupported
