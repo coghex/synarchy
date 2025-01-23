@@ -1,3 +1,4 @@
+-- test/Test/Engine/Graphics/Window/GLFW.hs
 {-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Test.Engine.Graphics.Window.GLFW (spec) where
@@ -16,43 +17,33 @@ import Control.Exception (SomeException, catch, throwIO)
 
 -- | Main test specification for GLFW functionality
 spec ∷ EngineEnv → EngineState → Spec
-spec env state = beforeAll initGLFW $ afterAll cleanupGLFW $ do
+spec env state = do
     describe "GLFW Window" $ do
-        it "creates a window with specified dimensions" $ \_ → do
-            let config = WindowConfig 
-                    { wcWidth = 800
-                    , wcHeight = 600
-                    , wcTitle = "Test Window"
-                    , wcResizable = True
-                    }
+        it "has correct window dimensions" $ do
             runEngineTest env state $ do
-                win <- createWindow config
-                (width, height) <- getWindowSize (getGLFWWindow win)
-                liftIO $ do
-                    width `shouldBe` 800
-                    height `shouldBe` 600
-                    GLFW.destroyWindow (getGLFWWindow win)
+                case glfwWindow (graphicsState state) of
+                    Just win → do
+                        liftIO $ putStrLn "Found window in state"
+                        (width, height) <- getWindowSize (getGLFWWindow win)
+                        liftIO $ do
+                            putStrLn $ "Window dimensions: " ⧺ show width ⧺ "x" ⧺ show height
+                            width `shouldBe` 800
+                            height `shouldBe` 600
+                    Nothing → do
+                        liftIO $ putStrLn "No window found in state"
+                        liftIO $ expectationFailure "No window found in state"
 
-        it "supports Vulkan" $ \_ → do
+        it "supports Vulkan" $
             runEngineTest env state $ do
                 supported <- vulkanSupported
                 liftIO $ supported `shouldBe` True
 
-        it "returns required Vulkan extensions" $ \_ → do
+        it "returns required Vulkan extensions" $
             runEngineTest env state $ do
                 exts <- getRequiredInstanceExtensions
                 liftIO $ length exts `shouldSatisfy` (> 0)
 
     where
-        initGLFW :: IO Bool
-        initGLFW = do
-            GLFW.setErrorCallback (Just (\e d → 
-                putStrLn $ "GLFW Error: " ⧺ show e ⧺ " " ⧺ show d))
-            GLFW.init
-
-        cleanupGLFW :: Bool → IO ()
-        cleanupGLFW _ = GLFW.terminate
-
         runEngineTest ∷ ∀ ε α. EngineEnv → EngineState → EngineM ε EngineState α → IO α
         runEngineTest env state action = do
             stateVar ← atomically $ newVar state

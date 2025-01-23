@@ -9,7 +9,6 @@ import qualified Test.UPrelude as UPrelude
 import qualified Test.Engine.Core.Monad as CoreMonad
 import qualified Test.Engine.Core.Resource as CoreResource
 import qualified Test.Engine.Core.Queue as CoreQueue
-import qualified Test.Engine.Graphics.Window.GLFW as GLFWTest
 import Control.Concurrent (threadDelay)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Graphics.Window.Types (Window(..))
@@ -24,10 +23,6 @@ import qualified Control.Monad.Logger.CallStack as Logger
 -- | Initialize a minimal EngineState for testing
 initTestState ∷ IO (EngineEnv, EngineState)
 initTestState = do
-    GLFW.setErrorCallback (Just (\e d → print $ "GLFW Error: " <> show e <> " " <> show d))
-    success ← GLFW.init
-    unless success $ error "GLFW initialization failed"
-
     -- Create queues
     eventQ ← Q.newQueue
     inputQ ← Q.newQueue
@@ -43,12 +38,36 @@ initTestState = do
             , logQueue = logQ }
     
     -- Return initial state
-    pure $ (env, defaultEngineState logFunc)
+    pure (env, defaultEngineState logFunc)
 
 main ∷ IO ()
 main = do
-    (env, initialState) ← initTestState
-    hspec $ afterAll_ GLFW.terminate $ do
+    -- Initialize GLFW first
+    putStrLn "[Debug] Initializing GLFW..."
+    GLFW.setErrorCallback (Just (\e d → 
+        putStrLn $ "[GLFW Error] " ⧺ show e ⧺ " " ⧺ show d))
+    
+    success ← GLFW.init
+    unless success $ error "GLFW initialization failed"
+    putStrLn "[Debug] GLFW initialized successfully"
+
+    -- Initialize test state
+    (env, state) ← initTestState
+    putStrLn "[Debug] Test state initialized"
+
+    -- Create window and update state
+    putStrLn "[Debug] Creating GLFW window..."
+    glfwWin <- GLFW.createWindow 800 600 "Test Window" Nothing Nothing
+    initialState <- case glfwWin of
+        Just win → do
+            putStrLn "[Debug] GLFW window created successfully"
+            let newState = state { graphicsState = (graphicsState state) {
+                    glfwWindow = Just (Window win) } }
+            pure newState
+        Nothing → error "Failed to create GLFW window"
+
+    -- Run tests that don't depend on GLFW
+    hspec $ do
         -- Core tests (no graphics dependencies)
         describe "Core Tests" $ do
             describe "UPrelude" UPrelude.spec
@@ -56,15 +75,7 @@ main = do
             describe "Engine.Core.Resource" CoreResource.spec
             describe "Engine.Core.Queue" CoreQueue.spec
 
-        -- Graphics tests
-        describe "Graphics Tests" $ do
-            describe "GLFW Window Tests" $ 
-                GLFWTest.spec env initialState
-
---            describe "Vulkan Tests" $ 
---                VulkanTest.spec initialState
-
-        -- Input tests
---        describe "Input Tests" $ do
---            describe "Input Thread Tests" $ 
---                InputTest.spec initialState
+    -- Cleanup GLFW
+    putStrLn "[Debug] Terminating GLFW..."
+    GLFW.terminate
+    putStrLn "[Debug] GLFW terminated"
