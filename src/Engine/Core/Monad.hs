@@ -3,6 +3,7 @@ module Engine.Core.Monad
   , EngineM'
   , runEngineM
   , MonadIO(..)
+  , MonadError(..)
   ) where
 
 import UPrelude
