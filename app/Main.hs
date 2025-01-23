@@ -23,7 +23,7 @@ import Engine.Core.State
 import Engine.Core.Resource
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Error.Exception
-import Engine.Concurrent.Var
+import Engine.Core.Var
 import Engine.Graphics.Base
 import Engine.Graphics.Types
 import Engine.Input.Types
