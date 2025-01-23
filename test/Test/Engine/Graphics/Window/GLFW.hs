@@ -12,43 +12,65 @@ import Engine.Core.Monad
 import Engine.Core.Base
 import Engine.Core.Var
 import qualified Graphics.UI.GLFW as GLFW
-import Control.Exception (SomeException, catch)
+import Control.Exception (SomeException, catch, throwIO)
 
 -- | Main test specification for GLFW functionality
 spec ∷ EngineEnv → EngineState → Spec
-spec env state = do
+spec env state = beforeAll initGLFW $ afterAll cleanupGLFW $ do
     describe "GLFW Window" $ do
-        it "creates a window with specified dimensions" $ do
+        it "creates a window with specified dimensions" $ \_ → do
             let config = WindowConfig 
                     { wcWidth = 800
                     , wcHeight = 600
                     , wcTitle = "Test Window"
                     , wcResizable = True
                     }
-            window <- runEngineTest env state $ createWindow config
-            case window of
-                Window win -> do
-                    (width, height) <- GLFW.getWindowSize win
+            runEngineTest env state $ do
+                win <- createWindow config
+                (width, height) <- getWindowSize (getGLFWWindow win)
+                liftIO $ do
                     width `shouldBe` 800
                     height `shouldBe` 600
+                    GLFW.destroyWindow (getGLFWWindow win)
 
-        it "supports Vulkan" $ do
-            result <- runEngineTest env state vulkanSupported
-            result `shouldBe` True
+        it "supports Vulkan" $ \_ → do
+            runEngineTest env state $ do
+                supported <- vulkanSupported
+                liftIO $ supported `shouldBe` True
 
-        it "returns required Vulkan extensions" $ do
-            exts <- runEngineTest env state getRequiredInstanceExtensions
-            length exts `shouldSatisfy` (> 0)
+        it "returns required Vulkan extensions" $ \_ → do
+            runEngineTest env state $ do
+                exts <- getRequiredInstanceExtensions
+                liftIO $ length exts `shouldSatisfy` (> 0)
 
     where
+        initGLFW :: IO Bool
+        initGLFW = do
+            GLFW.setErrorCallback (Just (\e d → 
+                putStrLn $ "GLFW Error: " ⧺ show e ⧺ " " ⧺ show d))
+            GLFW.init
+
+        cleanupGLFW :: Bool → IO ()
+        cleanupGLFW _ = GLFW.terminate
+
         runEngineTest ∷ ∀ ε α. EngineEnv → EngineState → EngineM ε EngineState α → IO α
         runEngineTest env state action = do
             stateVar ← atomically $ newVar state
             envVar ← atomically $ newVar env
+            mvar ← atomically $ newVar Nothing
+            
             let cont result = case result of
-                    Right v → pure v
+                    Right v → do
+                        atomically $ writeVar mvar (Just v)
+                        pure state
                     Left err → error $ "Engine error: " ⧺ show err
-            unEngineM action envVar stateVar cont
-              `catch` \(e ∷ SomeException) → do
-                liftIO $ putStrLn $ "Exception caught: " ⧺ show e
-                pure state
+            
+            _ ← unEngineM action envVar stateVar cont
+                `catch` \(e ∷ SomeException) → do
+                    liftIO $ putStrLn $ "Exception caught: " ⧺ show e
+                    throwIO e
+            
+            result ← atomically $ readVar mvar
+            case result of
+                Just v → pure v
+                Nothing → error "No result produced"
