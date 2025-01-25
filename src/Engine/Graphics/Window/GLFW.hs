@@ -2,6 +2,7 @@
 module Engine.Graphics.Window.GLFW
   ( -- * Window Management
     createWindow
+  , createRawWindow
   , destroyWindow
   , showWindow
   , hideWindow
@@ -21,6 +22,7 @@ module Engine.Graphics.Window.GLFW
   , waitEventsTimeout
     -- * Keyboard and Mouse Input
   , GLFW.setKeyCallback
+  , GLFW.setErrorCallback
     -- * Vulkan Integration
   , vulkanSupported
   , getRequiredInstanceExtensions
@@ -29,6 +31,9 @@ module Engine.Graphics.Window.GLFW
     -- * Initialization
   , initializeGLFW
   , terminateGLFW
+    -- * Raw init since tests run in IO
+  , GLFW.init
+  , GLFW.terminate
   ) where
 
 import UPrelude
@@ -81,6 +86,22 @@ createWindow config = do
       Just win → do
         logDebug "Window created"
         pure $ Window win
+--
+-- | Creates a GLFW window in an IO context for testing
+createRawWindow ∷ WindowConfig → IO (Maybe Window)
+createRawWindow config = do
+
+  -- Set window hints
+  GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
+  GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI
+  GLFW.windowHint $ GLFW.WindowHint'Resizable True
+  --liftIO $ GLFW.windowHint $ GLFW.WindowHint'Visible False
+  -- Create the window
+  mw ← liftIO $ GLFW.createWindow (wcWidth config) (wcHeight config)
+                                  (T.unpack $ wcTitle config) Nothing Nothing
+  pure $ case mw of
+    Nothing → Nothing
+    Just win → Just $ Window win
 
 -- | Clean up GLFW window resources
 destroyWindow ∷ Window → EngineM' ε ()
@@ -162,7 +183,8 @@ createWindowSurface (Window win) inst = allocResource
         surfacePtr
       if result == 0  -- VK_SUCCESS
         then Right <$> peek surfacePtr
-        else pure $ Left "Failed to create window surface"
+        else pure $ Left $ "Failed to create window surface, error code: "
+                         ⧺ show result
 
     case surfaceOrError of
       Right surface → pure surface

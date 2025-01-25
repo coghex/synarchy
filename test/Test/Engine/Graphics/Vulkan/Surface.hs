@@ -36,13 +36,13 @@ spec env state = do
                     Nothing → liftIO $ expectationFailure "No window found in state"
                     Just win → do
                         -- Create a test instance
-                        --(inst, _) ← createVulkanInstance defaultGraphicsConfig
-                        --liftIO $ putStrLn "Created test instance"
-                        ---- Create surface
-                        --surface <- GLFW.createWindowSurface win inst
-                        ---- The surface creation should succeed (if it fails, it will throw an exception)
-                        --liftIO $ surface `shouldSatisfy` (/= zero)
-                        pure ()
+                        (inst, _) ← createVulkanInstance defaultGraphicsConfig
+                        liftIO $ putStrLn "Created test instance"
+                        -- Create surface
+                        surface <- GLFW.createWindowSurface win inst
+                        liftIO $ putStrLn "Created surface"
+                        -- The surface creation should succeed (if it fails, it will throw an exception)
+                        liftIO $ surface `shouldSatisfy` (/= zero)
 
         it "fails with invalid instance" $ do
             runEngineTest env state $ do

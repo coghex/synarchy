@@ -13,7 +13,7 @@ import qualified Test.Engine.Graphics.Window.GLFW as TestGLFW
 import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import qualified Test.Engine.Graphics.Vulkan.Surface as VulkanSurface
 import Control.Concurrent (threadDelay)
-import qualified Graphics.UI.GLFW as GLFW
+import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Core.State
 import Engine.Core.Defaults
@@ -54,20 +54,21 @@ main = do
     unless success $ error "GLFW initialization failed"
     putStrLn "[Debug] GLFW initialized successfully"
 
+
     -- Initialize test state
     (env, state) ← initTestState
     putStrLn "[Debug] Test state initialized"
 
     -- Create window and update state
     putStrLn "[Debug] Creating GLFW window..."
-    glfwWin <- GLFW.createWindow 800 600 "Test Window" Nothing Nothing
+    glfwWin <- GLFW.createRawWindow defaultWindowConfig
     initialState <- case glfwWin of
-        Just win → do
+        Just (Window win) → do
             putStrLn "[Debug] GLFW window created successfully"
             let newState = state { graphicsState = (graphicsState state) {
                     glfwWindow = Just (Window win) } }
             pure newState
-        Nothing → error "Failed to create GLFW window"
+        _ → error "Failed to create GLFW window"
 
     hspec $ do
         -- Core tests (no graphics dependencies)
