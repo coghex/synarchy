@@ -80,7 +80,7 @@ main = do
         describe "GLFW Tests" $ TestGLFW.spec env initialState
         -- Vulkan tests
         describe "Engine.Graphics.Vulkan.Instance" $ VulkanInstance.spec env initialState
---        describe "Engine.Graphics.Vulkan.Surface" $ VulkanSurface.spec env initialState
+        describe "Engine.Graphics.Vulkan.Surface" $ VulkanSurface.spec env initialState
 
     -- Cleanup GLFW
     putStrLn "[Debug] Terminating GLFW..."
