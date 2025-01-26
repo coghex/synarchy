@@ -69,6 +69,7 @@ data GraphicsState = GraphicsState
   , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))
   , textureArrayStates ∷ Map.Map T.Text TextureArrayState
   , camera2D           ∷ Camera2D
+  , cleanupStatus      ∷ CleanupStatus
   }
 
 -- | Asset pool containing all loaded assets

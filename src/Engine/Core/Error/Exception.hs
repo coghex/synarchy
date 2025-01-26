@@ -59,6 +59,7 @@ data GraphicsError
   | RenderPassError          -- ^ Render pass error
   | FramebufferError         -- ^ Framebuffer error
   | VertexBufferError        -- ^ Vertex buffer error
+  | CleanupError             -- ^ Cleanup error
   | VulkanError Vk.Result    -- ^ Raw Vulkan error
   deriving (Show, Eq, Typeable)
 

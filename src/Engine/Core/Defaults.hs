@@ -12,6 +12,7 @@ import Engine.Input.Types
 import Engine.Graphics.Base
 import Engine.Graphics.Camera
 import Engine.Graphics.Window.Types
+import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.Zero
 
@@ -83,6 +84,7 @@ defaultEngineState lf = EngineState
     , uniformBuffers     = Nothing
     , textureArrayStates = Map.empty
     , camera2D           = defaultCamera
+    , cleanupStatus      = NotStarted
     }
   , assetPool        = AssetPool Map.empty Map.empty 0
   , assetConfig      = AssetConfig 100 100 True True

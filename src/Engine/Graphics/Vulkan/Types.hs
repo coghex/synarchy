@@ -49,6 +49,10 @@ data FrameResources = FrameResources
 maxTimeout ∷ Word64
 maxTimeout = maxBound
 
+-- | blocks on cleanup
+data CleanupStatus = NotStarted | InProgress | Completed
+  deriving (Show, Eq)
+
 -- | Uniform buffer object matching shader layout
 data UniformBufferObject = UBO
     { uboModel ∷ M44 Float  -- model matrix

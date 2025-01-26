@@ -14,6 +14,8 @@ module Engine.Asset.Manager
   ) where
 
 import UPrelude
+import Control.Concurrent.MVar
+import Control.Exception (finally)
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -21,6 +23,7 @@ import Engine.Core.Monad
 import Engine.Core.Resource (allocResource, allocResource')
 import Engine.Core.State
 import Engine.Core.Error.Exception
+import Engine.Core.Var
 import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Graphics.Types
@@ -29,7 +32,10 @@ import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Image (VulkanImage(..))
 import Engine.Graphics.Vulkan.Texture
 import Engine.Graphics.Vulkan.Types.Texture
+import Engine.Graphics.Vulkan.Types
+import Engine.Graphics.Vulkan.ShaderCode
 import qualified Vulkan.Core10 as Vk
+import Vulkan.Zero
 
 -- | Initialize the asset manager
 initAssetManager ∷ AssetConfig → EngineM ε σ AssetPool
@@ -144,10 +150,7 @@ loadShaderProgram ∷ Text            -- ^ Name of the program
                  → V.Vector ShaderStageInfo  -- ^ Shader stages
                  → EngineM' ε AssetId
 loadShaderProgram name stages = do
-  -- 1. Generate new asset ID
-  -- 2. Load and compile shader modules
-  -- 3. Add to asset pool
-  undefined
+    undefined
 
 -- | Unload an asset and cleanup its resources
 unloadAsset ∷ AssetId → EngineM' ε ()
@@ -211,47 +214,72 @@ getShaderProgram aid = do
 -- | Clean up all asset resources
 cleanupAssetManager ∷ AssetPool → EngineM' ε ()
 cleanupAssetManager pool = do
-    -- Get device for cleanup
     state ← gets graphicsState
+    
+    -- Check if cleanup is already in progress
+    when (cleanupStatus state == InProgress) $
+      throwGraphicsError CleanupError "Cleanup already in progress"
+    
+    -- Mark cleanup as started
+    modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = InProgress } }
+    
     device ← case vulkanDevice state of
         Nothing → throwGraphicsError VulkanDeviceLost "No device during cleanup"
         Just d → pure d
     queues ← case deviceQueues state of
         Nothing → throwGraphicsError VulkanDeviceLost "No device queues during cleanup"
         Just q → pure q
-        
-    -- Wait for device to be idle before cleanup
+
+    -- Ensure device is idle before starting cleanup
     liftIO $ do
-      Vk.queueWaitIdle (graphicsQueue queues)
-      Vk.queueWaitIdle (presentQueue queues)
-      Vk.deviceWaitIdle device
-    
-    -- 1. Free descriptor sets first
+        Vk.queueWaitIdle (graphicsQueue queues)
+        Vk.queueWaitIdle (presentQueue queues)
+        Vk.deviceWaitIdle device
+
+    -- Handle cleanup in proper monad context
+    cleanupResources device state pool `catchError` \e → do
+        logDebug $ "Cleanup error: " ⧺ (show e)
+        -- Ensure we still mark cleanup as completed
+        modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = Completed } }
+        throwError e
+
+-- Separate cleanup function
+cleanupResources ∷ Vk.Device → GraphicsState → AssetPool → EngineM' ε ()
+cleanupResources device state pool = do
+    -- 1. First invalidate all descriptor sets
     forM_ (Map.toList $ textureArrayStates state) $ \(arrayName, arrayState) → do
-        logDebug $ "Cleaning up texture array state: " ⧺ T.unpack arrayName
+        logDebug $ "Invalidating descriptor sets for: " ⧺ T.unpack arrayName
         when (isJust $ tasDescriptorSet arrayState) $ do
-            -- Free descriptor sets
-            freeVulkanDescriptorSets device 
+            -- Mark descriptor sets as invalid in state
+            modify $ \s → s { graphicsState = (graphicsState s) {
+                textureArrayStates = Map.adjust (\as → as { 
+                    tasDescriptorSet = Nothing 
+                }) arrayName (textureArrayStates $ graphicsState s)
+            }}
+
+    -- 2. Free descriptor sets
+    forM_ (Map.toList $ textureArrayStates state) $ \(arrayName, arrayState) → do
+        logDebug $ "Freeing descriptor sets for: " ⧺ T.unpack arrayName
+        when (isJust $ tasDescriptorSet arrayState) $ do
+            liftIO $ Vk.freeDescriptorSets device 
                 (tasDescriptorPool arrayState)
                 (V.singleton $ fromJust $ tasDescriptorSet arrayState)
-            -- Destroy pool and layout
-            --destroyDescriptorPool device (tasDescriptorPool arrayState) Nothing
-            --destroyDescriptorSetLayout device (tasDescriptorSetLayout arrayState) Nothing
 
-    -- 2. Clean up textures
+    -- 3. Clean up textures
     forM_ (Map.elems $ apTextureAtlases pool) $ \atlas → do
         logDebug $ "Cleaning up texture atlas: " ⧺ T.unpack (taName atlas)
         case taStatus atlas of
             AssetLoaded → do
-                -- Wait for device to be idle again before each texture cleanup
                 liftIO $ Vk.deviceWaitIdle device
                 liftIO $ maybe (pure ()) id (taCleanup atlas)
             _ → pure ()
 
-    -- Clear states
+    -- 4. Clear states
     modify $ \s → s 
         { graphicsState = (graphicsState s) 
-            { textureArrayStates = Map.empty }
+            { textureArrayStates = Map.empty
+            , cleanupStatus = Completed
+            }
         , assetPool = (assetPool s) 
             { apTextureAtlases = Map.empty
             , apShaderPrograms = Map.empty
@@ -259,4 +287,6 @@ cleanupAssetManager pool = do
             }
         }
 
+    -- Final device wait
+    liftIO $ Vk.deviceWaitIdle device
     logDebug "Asset manager cleanup complete"
