@@ -15,7 +15,7 @@ module Engine.Asset.Manager
 
 import UPrelude
 import Control.Concurrent.MVar
-import Control.Exception (finally)
+import Control.Exception (finally, catch, SomeException)
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -215,12 +215,10 @@ getShaderProgram aid = do
 cleanupAssetManager ∷ AssetPool → EngineM' ε ()
 cleanupAssetManager pool = do
     state ← gets graphicsState
-    
-    -- Check if cleanup is already in progress
+
     when (cleanupStatus state == InProgress) $
       throwGraphicsError CleanupError "Cleanup already in progress"
     
-    -- Mark cleanup as started
     modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = InProgress } }
     
     device ← case vulkanDevice state of
@@ -230,51 +228,47 @@ cleanupAssetManager pool = do
         Nothing → throwGraphicsError VulkanDeviceLost "No device queues during cleanup"
         Just q → pure q
 
-    -- Ensure device is idle before starting cleanup
+    logDebug "Waiting for device to be idle..."
     liftIO $ do
         Vk.queueWaitIdle (graphicsQueue queues)
         Vk.queueWaitIdle (presentQueue queues)
         Vk.deviceWaitIdle device
 
-    -- Handle cleanup in proper monad context
     cleanupResources device state pool `catchError` \e → do
         logDebug $ "Cleanup error: " ⧺ (show e)
-        -- Ensure we still mark cleanup as completed
         modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = Completed } }
         throwError e
 
--- Separate cleanup function
 cleanupResources ∷ Vk.Device → GraphicsState → AssetPool → EngineM' ε ()
 cleanupResources device state pool = do
-    -- 1. First invalidate all descriptor sets
     forM_ (Map.toList $ textureArrayStates state) $ \(arrayName, arrayState) → do
         logDebug $ "Invalidating descriptor sets for: " ⧺ T.unpack arrayName
         when (isJust $ tasDescriptorSet arrayState) $ do
-            -- Mark descriptor sets as invalid in state
             modify $ \s → s { graphicsState = (graphicsState s) {
                 textureArrayStates = Map.adjust (\as → as { 
                     tasDescriptorSet = Nothing 
                 }) arrayName (textureArrayStates $ graphicsState s)
             }}
 
-    -- 2. Free descriptor sets
     forM_ (Map.toList $ textureArrayStates state) $ \(arrayName, arrayState) → do
         logDebug $ "Freeing descriptor sets for: " ⧺ T.unpack arrayName
         when (isJust $ tasDescriptorSet arrayState) $ do
-            liftIO $ Vk.freeDescriptorSets device 
+            handleExceptions
+              (liftIO $ Vk.freeDescriptorSets device 
                 (tasDescriptorPool arrayState)
-                (V.singleton $ fromJust $ tasDescriptorSet arrayState)
+                (V.singleton $ fromJust $ tasDescriptorSet arrayState))
+              "Freeing descriptor sets error: "
 
-    -- 3. Clean up textures
     forM_ (Map.elems $ apTextureAtlases pool) $ \atlas → do
         logDebug $ "Cleaning up texture atlas: " ⧺ T.unpack (taName atlas)
         case taStatus atlas of
             AssetLoaded → do
                 liftIO $ Vk.deviceWaitIdle device
-                liftIO $ maybe (pure ()) id (taCleanup atlas)
+                handleExceptions
+                  (liftIO $ maybe (pure ()) id (taCleanup atlas))
+                  "Cleaning up texture atlas error: "
             _ → pure ()
 
-    -- 4. Clear states
     modify $ \s → s 
         { graphicsState = (graphicsState s) 
             { textureArrayStates = Map.empty
@@ -287,6 +281,20 @@ cleanupResources device state pool = do
             }
         }
 
-    -- Final device wait
-    liftIO $ Vk.deviceWaitIdle device
+    handleExceptions
+      (liftIO $ Vk.deviceWaitIdle device)
+      "Final device wait error: "
     logDebug "Asset manager cleanup complete"
+
+handleExceptions ∷ EngineM' ε () → Text → EngineM' ε ()
+handleExceptions action errorMsg = action `catchError` \e → do
+    logDebug $ (show errorMsg) ⧺ (show e)
+    throwError e
+
+freeVulkanDescriptorSets ∷ Vk.Device → Vk.DescriptorPool → V.Vector Vk.DescriptorSet → EngineM' ε ()
+freeVulkanDescriptorSets device pool sets = do
+    logDebug $ "Freeing descriptor sets: " ⧺ (show (V.length sets))
+    handleExceptions
+      (liftIO $ Vk.freeDescriptorSets device pool sets)
+      "Error freeing descriptor sets: "
+    logDebug "Descriptor sets freed successfully"
