@@ -12,6 +12,7 @@ import qualified Test.Engine.Core.Queue as CoreQueue
 import qualified Test.Engine.Graphics.Window.GLFW as TestGLFW
 import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import qualified Test.Engine.Graphics.Vulkan.Surface as VulkanSurface
+import qualified Test.Engine.Graphics.Vulkan.Device as VulkanDevice
 import Control.Concurrent (threadDelay)
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Graphics.Window.Types (Window(..))
@@ -80,8 +81,10 @@ main = do
         -- GLFW tests
         describe "GLFW Tests" $ TestGLFW.spec env initialState
         -- Vulkan tests
-        describe "Engine.Graphics.Vulkan.Instance" $ VulkanInstance.spec env initialState
-        describe "Engine.Graphics.Vulkan.Surface" $ VulkanSurface.spec env initialState
+        describe "Vulkan Tests" $ do
+            describe "Engine.Graphics.Vulkan.Instance" $ VulkanInstance.spec env initialState
+            describe "Engine.Graphics.Vulkan.Surface" $ VulkanSurface.spec env initialState
+            describe "Engine.Graphics.Vulkan.Device" $ VulkanDevice.spec env initialState
 
     -- Cleanup GLFW
     putStrLn "[Debug] Terminating GLFW..."

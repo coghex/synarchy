@@ -9,12 +9,15 @@ import UPrelude
 import Test.Hspec
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Graphics.Vulkan.Instance
+import Engine.Graphics.Window.Types
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Core.State
 import Engine.Core.Defaults
 import Engine.Core.Base
 import Engine.Core.Monad
 import Engine.Core.Var
+import Engine.Graphics.Base
+import Control.Concurrent (threadDelay)
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Error.Class (catchError)
@@ -37,10 +40,8 @@ spec env state = do
                     Just win → do
                         -- Create a test instance
                         (inst, _) ← createVulkanInstance defaultGraphicsConfig
-                        liftIO $ putStrLn "Created test instance"
                         -- Create surface
                         surface <- GLFW.createWindowSurface win inst
-                        liftIO $ putStrLn "Created surface"
                         -- The surface creation should succeed (if it fails, it will throw an exception)
                         liftIO $ surface `shouldSatisfy` (/= zero)
 
@@ -59,6 +60,17 @@ spec env state = do
                                 EngineException (ExSystem (GLFWError _)) _ _ → pure True
                                 _ → pure False
                         liftIO $ result `shouldBe` True
+
+        it "can create and destroy surface multiple times" $ do
+            runEngineTest env state $ do
+                case glfwWindow (graphicsState state) of
+                    Nothing → liftIO $ expectationFailure "No window found in state"
+                    Just win → do
+                        (inst, _) ← createVulkanInstance defaultGraphicsConfig
+                        let createAndDestroySurface = do
+                              surface <- GLFW.createWindowSurface win inst
+                              liftIO $ surface `shouldSatisfy` (/= zero)
+                        replicateM_ 5 createAndDestroySurface
 
     where
         runEngineTest ∷ ∀ ε α. EngineEnv → EngineState → EngineM ε EngineState α → IO α

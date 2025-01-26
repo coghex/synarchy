@@ -18,6 +18,7 @@ module Engine.Graphics.Window.GLFW
   , GLFW.getWindowPos
     -- * Event Handling
   , pollEvents
+  , pollRawEvents
   , waitEvents
   , waitEventsTimeout
     -- * Keyboard and Mouse Input
@@ -94,8 +95,7 @@ createRawWindow config = do
   -- Set window hints
   GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
   GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI
-  GLFW.windowHint $ GLFW.WindowHint'Resizable True
-  --liftIO $ GLFW.windowHint $ GLFW.WindowHint'Visible False
+  GLFW.windowHint $ GLFW.WindowHint'Visible True
   -- Create the window
   mw ← liftIO $ GLFW.createWindow (wcWidth config) (wcHeight config)
                                   (T.unpack $ wcTitle config) Nothing Nothing
@@ -142,6 +142,8 @@ setWindowTitle win title = liftIO $ GLFW.setWindowTitle win ( T.unpack title )
 -- | Poll for pending events
 pollEvents ∷ EngineM ε σ ()
 pollEvents = liftIO GLFW.pollEvents
+pollRawEvents ∷ IO ()
+pollRawEvents = GLFW.pollEvents
 
 -- | Wait for events
 waitEvents ∷ EngineM ε σ ()
@@ -172,7 +174,7 @@ createWindowSurface ∷ Window
                    → EngineM ε σ SurfaceKHR  -- ^ Raw Vulkan surface handle
 createWindowSurface (Window win) inst = allocResource
   (\surface → do
-      logDebug "Destroying window surface"
+--      logDebug "Destroying window surface"
       liftIO $ destroySurfaceKHR inst surface Nothing)
   $ do
     surfaceOrError ← liftIO $ alloca $ \surfacePtr → do

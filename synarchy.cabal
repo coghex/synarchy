@@ -36,6 +36,7 @@ test-suite synarchy-test
                    Test.Engine.Graphics.Vulkan.Instance
                    Test.Engine.Graphics.Vulkan.Surface
                    Test.Engine.Graphics.Vulkan.Helpers
+                   Test.Engine.Graphics.Vulkan.Device
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash
