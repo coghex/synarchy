@@ -62,6 +62,7 @@ import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.Extensions.VK_KHR_swapchain
+import GHC.Stack (HasCallStack)
 
 main ∷ IO ()
 main = do
@@ -392,8 +393,11 @@ drawFrame ∷ EngineM' EngineEnv ()
 drawFrame = do
     state ← gets graphicsState
     -- get window size
-    let Window win = fromJust $ glfwWindow state
-        frameIdx = currentFrame state
+    Window win ← case extractWindow state of
+        Left err → throwSystemError (GLFWError "drawFrame: ") $ T.pack $
+            "No window found: " ⧺ displayException err
+        Right w → pure w
+    let frameIdx = currentFrame state
     -- update scene for this frame
     updateSceneForRender
     batches ← getCurrentRenderBatches
@@ -424,17 +428,28 @@ drawFrame = do
         else do
             ensureDynamicVertexBuffer 6
 
-    ---- Validate descriptor sets
-    --when (V.null $ dmActiveSets $ fromJust $ descriptorState state) $
-    --    throwGraphicsError DescriptorError "No active descriptor sets"
-    --
-    ---- Validate textures
-    --let (_, textures) = textureState state
-    --when (V.length textures < 2) $
-    --    throwGraphicsError TextureLoadFailed "Not enough textures loaded"
+    -- Validate descriptor sets
+    case descriptorState state of
+        Nothing → throwGraphicsError DescriptorError "No descriptor manager available"
+        Just descManager → when (V.null $ dmActiveSets descManager) $
+            throwGraphicsError DescriptorError "No active descriptor sets available"
+    -- Validate textures
+    let (_, textures) = textureState state
+    when (V.length textures < minRequiredTextures) $
+      throwGraphicsError TextureLoadFailed $
+        "Not enough textures loaded: " <> T.pack (show (V.length textures)) <>
+        ", expected at least " <> T.pack (show minRequiredTextures)
     
     let resources = frameResources state V.! fromIntegral frameIdx
         cmdBuffer = V.head $ frCommandBuffer resources
+    cmdBuffer ← case safeVectorHead (frCommandBuffer resources) of
+        Nothing → throwGraphicsError CommandBufferError
+            "No command buffer available for this frame"
+        Just cb → pure cb
+    resources ← case safeVectorIndex (frameResources state) (fromIntegral frameIdx) of
+        Nothing → throwGraphicsError CommandBufferError $
+            "Frame index out of bounds: " <> T.pack (show frameIdx)
+        Just res → pure res
     -- Wait for previous frame
     device ← case vulkanDevice state of
         Nothing → throwGraphicsError VulkanDeviceLost "No device"
@@ -451,8 +466,8 @@ drawFrame = do
         Just si → pure $ siSwapchain si
     (acquireResult, imageIndex) ← liftIO $ acquireNextImageKHR device swapchain
                                     maxTimeout (frImageAvailable resources) zero
-    -- reset fence only after acquiring image
-    liftIO $ resetFences device (V.singleton (frInFlight resources))
+--    -- reset fence only after acquiring image
+--    liftIO $ resetFences device (V.singleton (frInFlight resources))
     
     -- Check if we need to recreate swapchain
     when (acquireResult ≠ SUCCESS && acquireResult ≠ SUBOPTIMAL_KHR) $
@@ -525,10 +540,10 @@ mainLoop = do
         tstate ← gets timingState
         let lastTime  = lastFrameTime tstate
             accum     = frameTimeAccum tstate
-            targetFps = targetFPS tstate
+            tFps      = targetFPS tstate
 
         let frameTime = currentTime - lastTime
-            targetFrameTime = 1.0 / targetFps
+            targetFrameTime = if tFps > 0.0 then 1.0 / tFps else 1.0 / 60.0
             -- Add a small adjustment for system overhead
             systemOverhead = 0.0002  -- 0.2ms adjustment
 
@@ -554,7 +569,7 @@ mainLoop = do
         when (newAccum ≥ 1.0) $ do
             tstate ← gets timingState
             let currentCount = frameCount tstate
-                fps = fromIntegral currentCount / newAccum
+                fps = if newAccum > 0 then fromIntegral currentCount / newAccum else 0.0
             logDebug $ "FPS: " ⧺ show fps
             -- Adjust timing if FPS is consistently off
             when (fps < 59.0) $
@@ -645,3 +660,27 @@ initializeTestScene = do
                 Just (objId, finalMgr) → do
                     modify $ \s → s { sceneManager = finalMgr }
                     logDebug $ "Test scene created with object: " ⧺ show objId
+
+extractWindow ∷ HasCallStack ⇒ GraphicsState → Either EngineException Window
+extractWindow state =
+    case glfwWindow state of
+        Nothing → Left $ EngineException
+                    (ExSystem (GLFWError "drawFrame"))
+                    "No GLFW window initialized"
+                    mkErrorContext
+        Just win → Right win
+
+-- | Safe vector access that checks bounds
+safeVectorIndex ∷ V.Vector a → Int → Maybe a
+safeVectorIndex vec idx
+  | idx >= 0 && idx < V.length vec = Just (vec V.! idx)
+  | otherwise = Nothing
+
+-- | Safe vector head that returns Maybe
+safeVectorHead ∷ V.Vector a → Maybe a
+safeVectorHead vec
+  | V.null vec = Nothing
+  | otherwise = Just (V.head vec)
+
+minRequiredTextures ∷ Int
+minRequiredTextures = 2
