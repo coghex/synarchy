@@ -5,6 +5,7 @@ import UPrelude
 import Control.Exception (displayException, throwIO)
 import Control.Concurrent (threadDelay, forkIO)
 import qualified Control.Monad.Logger.CallStack as Logger
+import GHC.Stack (HasCallStack)
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -63,6 +64,34 @@ import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.Extensions.VK_KHR_swapchain
 
+-- | Constants for improved readability and maintainability
+minRequiredTextures ∷ Int
+minRequiredTextures = 2
+
+defaultVertexCount ∷ Int
+defaultVertexCount = 6
+
+-- | Safe vector access that checks bounds
+safeVectorIndex ∷ V.Vector a → Int → Maybe a
+safeVectorIndex vec idx
+  | idx >= 0 && idx < V.length vec = Just (vec V.! idx)
+  | otherwise = Nothing
+
+-- | Safe vector head that returns Maybe
+safeVectorHead ∷ V.Vector a → Maybe a
+safeVectorHead vec
+  | V.null vec = Nothing
+  | otherwise = Just (V.head vec)
+
+-- | Safe window extraction with proper error handling
+extractWindow :: HasCallStack => GraphicsState -> Either EngineException Window
+extractWindow state = case glfwWindow state of
+  Nothing -> Left $ EngineException
+    (ExSystem (GLFWError "drawFrame"))
+    "No window available"
+    mkErrorContext
+  Just window -> Right window
+
 main ∷ IO ()
 main = do
   setEnv "NSLog_Disabled" "YES"
@@ -90,7 +119,7 @@ main = do
   -- fork input thread
   inputThreadState ← startInputThread defaultEngineEnv
   
-  let engineAction ∷ EngineM' EngineEnv ()
+  let engineAction :: EngineM' EngineEnv ()
       engineAction = do
         -- initialize GLFW first
         window ← GLFW.createWindow defaultWindowConfig
@@ -245,7 +274,12 @@ main = do
 
         -- Verify all counts match before recording
         state ← gets graphicsState
-        let cmdBufferCount = V.length $ frCommandBuffer $ V.head frameRes
+        -- Safe access to first frame resource
+        firstFrameRes ← case safeVectorHead frameRes of
+            Nothing → throwResourceError (ResourceCountMismatch "engine init: ") 
+                        "No frame resources available"
+            Just res → pure res
+        let cmdBufferCount = V.length $ frCommandBuffer firstFrameRes
             fbCount = V.length framebuffers
             dsCount = maybe 0 (V.length . dmActiveSets) $ descriptorState state
         when (cmdBufferCount /= fbCount || fbCount /= dsCount) $
@@ -259,12 +293,17 @@ main = do
 
         -- record initial command buffers
         state ← gets graphicsState
-        let numImages = maybe 0 V.length (vulkanCmdBuffers state)
-        forM_ [0..numImages-1] $ \i → do
-            recordRenderCommandBuffer 
-                (fromJust (vulkanCmdBuffers state) V.! i) 
-                (fromIntegral i)
-            logDebug $ "Recorded command buffer " ⧺ show i
+        case vulkanCmdBuffers state of
+            Nothing → throwGraphicsError CommandBufferError "No command buffers available"
+            Just cmdBuffers → do
+                let numImages = V.length cmdBuffers
+                forM_ [0..numImages-1] $ \i → do
+                    case safeVectorIndex cmdBuffers i of
+                        Nothing → throwGraphicsError CommandBufferError $
+                            "Command buffer index out of bounds: " <> T.pack (show i)
+                        Just cmdBuffer → do
+                            recordRenderCommandBuffer cmdBuffer (fromIntegral i)
+                            logDebug $ "Recorded command buffer " ⧺ show i
         mainLoop
         liftIO $ Q.writeQueue logQueue "Engine shutting down..."
         assets ← gets assetPool
@@ -309,11 +348,15 @@ initializeTextures device physicalDevice cmdPool queue
         , setLayouts = V.singleton textureLayout
         }
   textureSets ← liftIO $ allocateDescriptorSets device allocInfo
+  -- Safe descriptor set access
+  descriptorSet ← case safeVectorHead textureSets of
+    Nothing → throwGraphicsError DescriptorError "No descriptor sets allocated"
+    Just ds → pure ds
   let textureArrayState = TextureArrayState
         { tasDescriptorPool = descriptorPool
         , tasDescriptorSetLayout = textureLayout
         , tasActiveTextures = V.empty
-        , tasDescriptorSet = Just (V.head textureSets)
+        , tasDescriptorSet = Just descriptorSet
         }
   -- Update state with texture array
   modify $ \s → s { graphicsState = (graphicsState s) {
@@ -391,16 +434,23 @@ initializeTextures device physicalDevice cmdPool queue
 drawFrame ∷ EngineM' EngineEnv ()
 drawFrame = do
     state ← gets graphicsState
-    -- get window size
-    let Window win = fromJust $ glfwWindow state
-        frameIdx = currentFrame state
+    -- Safely extract window with proper error handling
+    Window win ← case extractWindow state of
+        Left err → throwError err
+        Right window → pure window
+    let frameIdx = currentFrame state
     -- update scene for this frame
     updateSceneForRender
     batches ← getCurrentRenderBatches
-    -- update uniform buffer
+    -- update uniform buffer with bounds checking
     case (vulkanDevice state, uniformBuffers state) of
         (Just device, Just buffers) → do
-            let (_, memory) = buffers V.! fromIntegral frameIdx
+            -- Safe buffer access with bounds checking
+            (_, memory) ← case safeVectorIndex buffers (fromIntegral frameIdx) of
+                Nothing → throwGraphicsError VertexBufferError $
+                    "Frame index out of bounds: " <> T.pack (show frameIdx) <>
+                    " >= " <> T.pack (show (V.length buffers))
+                Just buffer → pure buffer
             (width, height) ← GLFW.getFramebufferSize win
             
             -- Create matrices using camera
@@ -422,27 +472,43 @@ drawFrame = do
             buffer ← ensureDynamicVertexBuffer totalVertices
             uploadBatchesToBuffer batches buffer
         else do
-            ensureDynamicVertexBuffer 6
+            ensureDynamicVertexBuffer defaultVertexCount
 
-    ---- Validate descriptor sets
-    --when (V.null $ dmActiveSets $ fromJust $ descriptorState state) $
-    --    throwGraphicsError DescriptorError "No active descriptor sets"
-    --
-    ---- Validate textures
-    --let (_, textures) = textureState state
-    --when (V.length textures < 2) $
-    --    throwGraphicsError TextureLoadFailed "Not enough textures loaded"
+    -- Enable and fix validation for descriptor sets
+    case descriptorState state of
+        Nothing → throwGraphicsError DescriptorError "No descriptor manager available"
+        Just descManager → when (V.null $ dmActiveSets descManager) $
+            throwGraphicsError DescriptorError "No active descriptor sets"
     
-    let resources = frameResources state V.! fromIntegral frameIdx
-        cmdBuffer = V.head $ frCommandBuffer resources
+    -- Enable and fix validation for textures  
+    let (_, textures) = textureState state
+    when (V.length textures < minRequiredTextures) $
+        throwGraphicsError TextureLoadFailed $
+            "Not enough textures loaded: " <> T.pack (show (V.length textures)) <>
+            " < " <> T.pack (show minRequiredTextures)
+    
+    -- Safe frame resource access with bounds checking
+    resources ← case safeVectorIndex (frameResources state) (fromIntegral frameIdx) of
+        Nothing → throwGraphicsError CommandBufferError $
+            "Frame index out of bounds: " <> T.pack (show frameIdx) <>
+            " >= " <> T.pack (show (V.length (frameResources state)))
+        Just res → pure res
+    
+    -- Safe command buffer access
+    cmdBuffer ← case safeVectorHead (frCommandBuffer resources) of
+        Nothing → throwGraphicsError CommandBufferError "No command buffer available"
+        Just buf → pure buf
+        
     -- Wait for previous frame
     device ← case vulkanDevice state of
         Nothing → throwGraphicsError VulkanDeviceLost "No device"
         Just d → pure d
     
+    -- Fix fence synchronization ordering: wait before reset
     liftIO $ do
       waitForFences device (V.singleton (frInFlight resources))
                            True maxTimeout
+      -- Only reset fence after successful wait  
       resetFences device (V.singleton (frInFlight resources))
     
     -- Acquire next image
@@ -451,8 +517,6 @@ drawFrame = do
         Just si → pure $ siSwapchain si
     (acquireResult, imageIndex) ← liftIO $ acquireNextImageKHR device swapchain
                                     maxTimeout (frImageAvailable resources) zero
-    -- reset fence only after acquiring image
-    liftIO $ resetFences device (V.singleton (frInFlight resources))
     
     -- Check if we need to recreate swapchain
     when (acquireResult ≠ SUCCESS && acquireResult ≠ SUBOPTIMAL_KHR) $
