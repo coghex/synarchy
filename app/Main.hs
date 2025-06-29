@@ -65,20 +65,47 @@ import Vulkan.Zero
 import Vulkan.Extensions.VK_KHR_swapchain
 
 -- | Constants for improved readability and maintainability
-minRequiredTextures ∷ Int
+minRequiredTextures :: Int
 minRequiredTextures = 2
 
-defaultVertexCount ∷ Int
+defaultVertexCount :: Int
 defaultVertexCount = 6
 
+-- Asset manager configuration constants
+defaultMaxTextures :: Int
+defaultMaxTextures = 100
+
+defaultMaxModels :: Int  
+defaultMaxModels = 100
+
+-- Camera configuration constants
+defaultCameraDistance :: Float
+defaultCameraDistance = 5.0
+
+defaultCameraUp :: V3 Float
+defaultCameraUp = V3 0 1 0
+
+defaultCameraTarget :: V3 Float
+defaultCameraTarget = V3 0 0 0
+
+-- Projection matrix constants
+defaultOrthoSize :: Float
+defaultOrthoSize = 2.0
+
+defaultNearPlane :: Float
+defaultNearPlane = 0.1
+
+defaultFarPlane :: Float
+defaultFarPlane = 10.0
+
 -- | Safe vector access that checks bounds
-safeVectorIndex ∷ V.Vector a → Int → Maybe a
+safeVectorIndex :: V.Vector a -> Int -> Maybe a
 safeVectorIndex vec idx
   | idx >= 0 && idx < V.length vec = Just (vec V.! idx)
   | otherwise = Nothing
 
 -- | Safe vector head that returns Maybe
-safeVectorHead ∷ V.Vector a → Maybe a
+safeVectorHead :: V.Vector a -> Maybe a
 safeVectorHead vec
   | V.null vec = Nothing
   | otherwise = Just (V.head vec)
@@ -92,7 +119,7 @@ extractWindow state = case glfwWindow state of
     mkErrorContext
   Just window -> Right window
 
-main ∷ IO ()
+main :: IO ()
 main = do
   setEnv "NSLog_Disabled" "YES"
 #ifdef DEVELOPMENT
@@ -103,44 +130,44 @@ main = do
 #endif
 
   -- Initialize queues first
-  eventQueue ← Q.newQueue
-  inputQueue ← Q.newQueue
-  logQueue   ← Q.newQueue
+  eventQueue <- Q.newQueue
+  inputQueue <- Q.newQueue
+  logQueue   <- Q.newQueue
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
         { engineConfig = defaultEngineConfig
         , eventQueue   = eventQueue
         , inputQueue   = inputQueue
         , logQueue     = logQueue }
-  envVar ←   atomically $ newVar defaultEngineEnv
-  lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
-  stateVar ← atomically $ newVar $ defaultEngineState lf
+  envVar <-   atomically $ newVar defaultEngineEnv
+  lf <- Logger.runStdoutLoggingT $ Logger.LoggingT pure
+  stateVar <- atomically $ newVar $ defaultEngineState lf
 
   -- fork input thread
-  inputThreadState ← startInputThread defaultEngineEnv
+  inputThreadState <- startInputThread defaultEngineEnv
   
   let engineAction :: EngineM' EngineEnv ()
       engineAction = do
         -- initialize GLFW first
-        window ← GLFW.createWindow defaultWindowConfig
-        modify $ \s → s { graphicsState = (graphicsState s) {
+        window <- GLFW.createWindow defaultWindowConfig
+        modify $ \s -> s { graphicsState = (graphicsState s) {
                             glfwWindow = Just window } }
 
         -- setup input callbacks
-        env ← ask
-        let glfwWin = case window of Window w → w
+        env <- ask
+        let glfwWin = case window of Window w -> w
         liftIO $ setupCallbacks glfwWin inputQueue
         
         -- create Vulkan instance
-        (vkInstance, _debugMessenger) ← createVulkanInstance defaultGraphicsConfig
+        (vkInstance, _debugMessenger) <- createVulkanInstance defaultGraphicsConfig
         
         -- create surface
-        surface ← createWindowSurface window vkInstance
+        surface <- createWindowSurface window vkInstance
         
         -- select physical device and create logical device
-        physicalDevice ← pickPhysicalDevice vkInstance surface
-        (device, queues) ← createVulkanDevice vkInstance physicalDevice surface
-        modify $ \s → s { graphicsState = (graphicsState s)
+        physicalDevice <- pickPhysicalDevice vkInstance surface
+        (device, queues) <- createVulkanDevice vkInstance physicalDevice surface
+        modify $ \s -> s { graphicsState = (graphicsState s)
                           { vulkanInstance = Just vkInstance
                           , vulkanPDevice = Just physicalDevice
                           , vulkanDevice = Just device
@@ -148,32 +175,32 @@ main = do
                           } }
         
         -- print some info about the device
-        props ← liftIO $ getPhysicalDeviceProperties physicalDevice
-        logDebug $ "Selected device: " ⧺ show (deviceName props)
+        props <- liftIO $ getPhysicalDeviceProperties physicalDevice
+        logDebug $ "Selected device: " ++ show (deviceName props)
         
         -- test swapchain creation
-        swapInfo ← createVulkanSwapchain physicalDevice device
+        swapInfo <- createVulkanSwapchain physicalDevice device
                                          queues surface
-        logDebug $ "Swapchain Format: " ⧺ show (siSwapImgFormat swapInfo)
-        modify $ \s → s { graphicsState = (graphicsState s) {
+        logDebug $ "Swapchain Format: " ++ show (siSwapImgFormat swapInfo)
+        modify $ \s -> s { graphicsState = (graphicsState s) {
                             swapchainInfo = Just swapInfo } }
         let numImages = length $ siSwapImgs swapInfo
 
         -- test swapchain support query
-        support ← querySwapchainSupport physicalDevice surface
-        logDebug $ "Available Formats: " ⧺ show (length $ formats support)
-        logDebug $ "Available Present Modes: " ⧺ show (presentModes support)
+        support <- querySwapchainSupport physicalDevice surface
+        logDebug $ "Available Formats: " ++ show (length $ formats support)
+        logDebug $ "Available Present Modes: " ++ show (presentModes support)
 
         -- create sync objects
-        syncObjects ← createSyncObjects device defaultGraphicsConfig
-        modify $ \s → s { graphicsState = (graphicsState s) {
+        syncObjects <- createSyncObjects device defaultGraphicsConfig
+        modify $ \s -> s { graphicsState = (graphicsState s) {
                             syncObjects = Just syncObjects } }
 
         -- create command pool and buffers
-        frameRes ← V.generateM (fromIntegral $ gcMaxFrames defaultGraphicsConfig) $ \_ →
+        frameRes <- V.generateM (fromIntegral $ gcMaxFrames defaultGraphicsConfig) $ \_ ->
             createFrameResources device queues
         let cmdPool = frCommandPool $ frameRes V.! 0
-        modify $ \s → s { graphicsState = (graphicsState s) {
+        modify $ \s -> s { graphicsState = (graphicsState s) {
                             frameResources = frameRes
                           , vulkanCmdPool  = Just cmdPool } }
 
@@ -183,56 +210,56 @@ main = do
               , dmcUniformCount = fromIntegral $ gcMaxFrames defaultGraphicsConfig
               , dmcSamplerCount = fromIntegral $ gcMaxFrames defaultGraphicsConfig
               }
-        descManager ← createVulkanDescriptorManager device descConfig
-        logDebug $ "Descriptor Pool Created: " ⧺ show (dmPool descManager)
-        modify $ \s → s { graphicsState = (graphicsState s) {
+        descManager <- createVulkanDescriptorManager device descConfig
+        logDebug $ "Descriptor Pool Created: " ++ show (dmPool descManager)
+        modify $ \s -> s { graphicsState = (graphicsState s) {
                             descriptorState = Just descManager } }
 
         -- allocate initial descriptor sets
-        descSets ← allocateVulkanDescriptorSets device descManager
+        descSets <- allocateVulkanDescriptorSets device descManager
                      (fromIntegral $ gcMaxFrames defaultGraphicsConfig)
         let updatedManager = descManager { dmActiveSets = descSets }
-        modify $ \s → s { graphicsState = (graphicsState s) {
+        modify $ \s -> s { graphicsState = (graphicsState s) {
                             descriptorState = Just updatedManager } }
-        logDebug $ "Descriptor Sets Allocated: " ⧺ show (V.length descSets)
+        logDebug $ "Descriptor Sets Allocated: " ++ show (V.length descSets)
 
         -- creating vertex buffer
-        (vBuffer, vBufferMemory) ← createVertexBuffer device physicalDevice
+        (vBuffer, vBufferMemory) <- createVertexBuffer device physicalDevice
                                      (graphicsQueue queues) cmdPool
-        logDebug $ "VertexBuffer: " ⧺ show vBuffer
-        modify $ \s → s { graphicsState = (graphicsState s) {
+        logDebug $ "VertexBuffer: " ++ show vBuffer
+        modify $ \s -> s { graphicsState = (graphicsState s) {
                             vertexBuffer = Just (vBuffer, vBufferMemory) } }
         -- Create descriptor pool and layout first
-        descriptorPool ← createTextureDescriptorPool device
-        (uniformLayout, texLayout) ← createVulkanDescriptorSetLayout device
+        descriptorPool <- createTextureDescriptorPool device
+        (uniformLayout, texLayout) <- createVulkanDescriptorSetLayout device
         
         logDebug "Created descriptor pool and layout"
         -- initialize textures
         initializeTextures device physicalDevice cmdPool
                            (graphicsQueue queues) descriptorPool texLayout
 
-        -- create uniform buffers
+        -- create uniform buffers  
         let modelMatrix = identity
-            viewMatrix = lookAt (V3 0 0 5) (V3 0 0 0) (V3 0 1 0)
-            projMatrix = ortho (-2) 2 (-2) 2 0.1 10
+            viewMatrix = lookAt (V3 0 0 defaultCameraDistance) defaultCameraTarget defaultCameraUp
+            projMatrix = ortho (-defaultOrthoSize) defaultOrthoSize (-defaultOrthoSize) defaultOrthoSize defaultNearPlane defaultFarPlane
             uboData = UBO modelMatrix viewMatrix projMatrix
             uboSize = fromIntegral $ sizeOf uboData
             numFrames = gcMaxFrames defaultGraphicsConfig
         
-        uniformBuffers ← V.generateM (fromIntegral numFrames) $ \_ → do
-            (buffer, memory) ← createUniformBuffer device physicalDevice uboSize
+        uniformBuffers <- V.generateM (fromIntegral numFrames) $ \_ -> do
+            (buffer, memory) <- createUniformBuffer device physicalDevice uboSize
             -- Initialize with identity matrices
             let uboData = UBO identity identity identity
             updateUniformBuffer device memory uboData
             pure (buffer, memory)
         
-        logDebug $ "UniformBuffers created: " ⧺ show (V.length uniformBuffers)
-        modify $ \s → s { graphicsState = (graphicsState s) {
+        logDebug $ "UniformBuffers created: " ++ show (V.length uniformBuffers)
+        modify $ \s -> s { graphicsState = (graphicsState s) {
                             uniformBuffers = Just uniformBuffers } }
         
         -- Update descriptor sets for all uniform buffers
-        forM_ (zip [0..] (V.toList uniformBuffers)) $ \(i, (buffer, _)) → do
-              let bufferInfo = (zero ∷ DescriptorBufferInfo)
+        forM_ (zip [0..] (V.toList uniformBuffers)) $ \(i, (buffer, _)) -> do
+              let bufferInfo = (zero :: DescriptorBufferInfo)
                     { buffer = buffer
                     , offset = 0
                     , range  = uboSize
@@ -248,110 +275,110 @@ main = do
               updateDescriptorSets device (V.singleton $ SomeStruct write) V.empty
 
         -- create render pass
-        renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo)
-        logDebug $ "RenderPass: " ⧺ show renderPass
-        modify $ \s → s { graphicsState = (graphicsState s) {
+        renderPass <- createVulkanRenderPass device (siSwapImgFormat swapInfo)
+        logDebug $ "RenderPass: " ++ show renderPass
+        modify $ \s -> s { graphicsState = (graphicsState s) {
                             vulkanRenderPass = Just renderPass } }
 
         -- create pipeline
-        (pipeline, pipelineLayout) ← createVulkanRenderPipeline device renderPass
+        (pipeline, pipelineLayout) <- createVulkanRenderPipeline device renderPass
                                        (siSwapExtent swapInfo) uniformLayout
-        logDebug $ "Pipeline: " ⧺ show pipeline
-        logDebug $ "PipelineLayout: " ⧺ show pipelineLayout
+        logDebug $ "Pipeline: " ++ show pipeline
+        logDebug $ "PipelineLayout: " ++ show pipelineLayout
         let pstate = PipelineState pipeline pipelineLayout renderPass
-        modify $ \s → s { graphicsState = (graphicsState s) {
+        modify $ \s -> s { graphicsState = (graphicsState s) {
                             pipelineState = Just (pstate) } }
 
         -- create swapchain image views
-        imageViews ← createSwapchainImageViews device swapInfo
-        logDebug $ "ImageViews: " ⧺ show (length imageViews)
+        imageViews <- createSwapchainImageViews device swapInfo
+        logDebug $ "ImageViews: " ++ show (length imageViews)
         
         -- create framebuffers
-        framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews
-        logDebug $ "Framebuffers: " ⧺ show (length framebuffers)
-        modify $ \s → s { graphicsState = (graphicsState s) {
+        framebuffers <- createVulkanFramebuffers device renderPass swapInfo imageViews
+        logDebug $ "Framebuffers: " ++ show (length framebuffers)
+        modify $ \s -> s { graphicsState = (graphicsState s) {
                             framebuffers = Just framebuffers } }
 
         -- Verify all counts match before recording
-        state ← gets graphicsState
+        state <- gets graphicsState
         -- Safe access to first frame resource
-        firstFrameRes ← case safeVectorHead frameRes of
-            Nothing → throwResourceError (ResourceCountMismatch "engine init: ") 
+        firstFrameRes <- case safeVectorHead frameRes of
+            Nothing -> throwResourceError (ResourceCountMismatch "engine init: ") 
                         "No frame resources available"
-            Just res → pure res
+            Just res -> pure res
         let cmdBufferCount = V.length $ frCommandBuffer firstFrameRes
             fbCount = V.length framebuffers
             dsCount = maybe 0 (V.length . dmActiveSets) $ descriptorState state
         when (cmdBufferCount /= fbCount || fbCount /= dsCount) $
             throwResourceError (ResourceCountMismatch "engine init: ") $ T.pack $
-                "Resource count mismatch: cmdBuffers=" ⧺ show cmdBufferCount ⧺
-                " framebuffers=" ⧺ show fbCount ⧺
-                " descSets=" ⧺ show dsCount
+                "Resource count mismatch: cmdBuffers=" ++ show cmdBufferCount ++
+                " framebuffers=" ++ show fbCount ++
+                " descSets=" ++ show dsCount
 
         -- initialize the scene
         initializeTestScene
 
         -- record initial command buffers
-        state ← gets graphicsState
+        state <- gets graphicsState
         case vulkanCmdBuffers state of
-            Nothing → throwGraphicsError CommandBufferError "No command buffers available"
-            Just cmdBuffers → do
+            Nothing -> throwGraphicsError CommandBufferError "No command buffers available"
+            Just cmdBuffers -> do
                 let numImages = V.length cmdBuffers
-                forM_ [0..numImages-1] $ \i → do
+                forM_ [0..numImages-1] $ \i -> do
                     case safeVectorIndex cmdBuffers i of
-                        Nothing → throwGraphicsError CommandBufferError $
+                        Nothing -> throwGraphicsError CommandBufferError $
                             "Command buffer index out of bounds: " <> T.pack (show i)
-                        Just cmdBuffer → do
+                        Just cmdBuffer -> do
                             recordRenderCommandBuffer cmdBuffer (fromIntegral i)
-                            logDebug $ "Recorded command buffer " ⧺ show i
+                            logDebug $ "Recorded command buffer " ++ show i
         mainLoop
         liftIO $ Q.writeQueue logQueue "Engine shutting down..."
-        assets ← gets assetPool
-        graphicalstate ← gets graphicsState
-        forM_ (vulkanDevice graphicalstate) $ \device → 
+        assets <- gets assetPool
+        graphicalstate <- gets graphicsState
+        forM_ (vulkanDevice graphicalstate) $ \device -> 
             liftIO $ deviceWaitIdle device
         logDebug "cleaning up asset manager..."
         cleanupAssetManager assets
         liftIO $ shutdownInputThread env inputThreadState
   
-  result ← runEngineM engineAction envVar stateVar checkStatus
+  result <- runEngineM engineAction envVar stateVar checkStatus
   case result of
-    Left err → do
+    Left err -> do
         putStrLn $ displayException err
         liftIO $ shutdownInputThread defaultEngineEnv inputThreadState
-    Right _  → pure ()
+    Right _  -> pure ()
 
-checkStatus ∷ Either EngineException () → IO (Either EngineException ())
+checkStatus :: Either EngineException () -> IO (Either EngineException ())
 checkStatus (Right ()) = pure (Right ())
 checkStatus (Left err) = do
   putStrLn $ displayException err
   exitFailure
 
-initializeTextures ∷ Device → PhysicalDevice → CommandPool → Queue
-  → DescriptorPool → DescriptorSetLayout
-  → EngineM' EngineEnv ()
+initializeTextures :: Device -> PhysicalDevice -> CommandPool -> Queue
+  -> DescriptorPool -> DescriptorSetLayout
+  -> EngineM' EngineEnv ()
 initializeTextures device physicalDevice cmdPool queue
                    descriptorPool textureLayout = do
  
   -- Update engine state with pool and layout
   let poolState = TexturePoolState descriptorPool textureLayout
-  modify $ \s → s { graphicsState = (graphicsState s) {
+  modify $ \s -> s { graphicsState = (graphicsState s) {
                       textureState = (poolState, V.empty) } }
 
   -- Initialize asset manager
-  assetPool <- initAssetManager (AssetConfig 100 100 True True)
-  modify $ \s → s { assetPool = assetPool }
+  assetPool <- initAssetManager (AssetConfig defaultMaxTextures defaultMaxModels True True)
+  modify $ \s -> s { assetPool = assetPool }
 
   -- Create descriptor set for texture array
   let allocInfo = zero 
         { descriptorPool = descriptorPool
         , setLayouts = V.singleton textureLayout
         }
-  textureSets ← liftIO $ allocateDescriptorSets device allocInfo
+  textureSets <- liftIO $ allocateDescriptorSets device allocInfo
   -- Safe descriptor set access
-  descriptorSet ← case safeVectorHead textureSets of
-    Nothing → throwGraphicsError DescriptorError "No descriptor sets allocated"
-    Just ds → pure ds
+  descriptorSet <- case safeVectorHead textureSets of
+    Nothing -> throwGraphicsError DescriptorError "No descriptor sets allocated"
+    Just ds -> pure ds
   let textureArrayState = TextureArrayState
         { tasDescriptorPool = descriptorPool
         , tasDescriptorSetLayout = textureLayout
@@ -359,28 +386,28 @@ initializeTextures device physicalDevice cmdPool queue
         , tasDescriptorSet = Just descriptorSet
         }
   -- Update state with texture array
-  modify $ \s → s { graphicsState = (graphicsState s) {
+  modify $ \s -> s { graphicsState = (graphicsState s) {
       textureArrayStates = Map.singleton "default" textureArrayState
   } }
 
   -- Load texture using asset manager
   let texturePath1 = "dat/tile01.png"
   let texturePath2 = "dat/tile02.png"
-  textureId1 ← loadTextureAtlas (T.pack "tile01") texturePath1 (T.pack "default")
-  logDebug $ "Texture 1 loaded: " ⧺ show textureId1
-  textureId2 ← loadTextureAtlas (T.pack "tile02") texturePath2 (T.pack "default")
-  logDebug $ "Texture 2 loaded: " ⧺ show textureId2
+  textureId1 <- loadTextureAtlas (T.pack "tile01") texturePath1 (T.pack "default")
+  logDebug $ "Texture 1 loaded: " ++ show textureId1
+  textureId2 <- loadTextureAtlas (T.pack "tile02") texturePath2 (T.pack "default")
+  logDebug $ "Texture 2 loaded: " ++ show textureId2
   
   -- Get the loaded texture atlas
-  atlas1 ← getTextureAtlas textureId1
-  atlas2 ← getTextureAtlas textureId2
-  logDebug $ "Atlas 1 status: " ⧺ show (taStatus atlas1)
-  logDebug $ "Atlas 2 status: " ⧺ show (taStatus atlas2)
+  atlas1 <- getTextureAtlas textureId1
+  atlas2 <- getTextureAtlas textureId2
+  logDebug $ "Atlas 1 status: " ++ show (taStatus atlas1)
+  logDebug $ "Atlas 2 status: " ++ show (taStatus atlas2)
  -- Create descriptor sets for both textures
  
   -- Update descriptor sets for both textures
   case (taInfo atlas1, taInfo atlas2) of
-    (Just info1, Just info2) → do
+    (Just info1, Just info2) -> do
       -- Update first descriptor set
       let imageInfos = V.fromList
             [ zero
@@ -422,36 +449,36 @@ initializeTextures device physicalDevice cmdPool queue
             }
       
       -- Update engine state with both textures
-      modify $ \s → s { graphicsState = (graphicsState s) {
+      modify $ \s -> s { graphicsState = (graphicsState s) {
         textureState = 
           let (poolState', _) = textureState (graphicsState s)
           in (poolState', V.fromList [textureData1, textureData2])
       } }
       
       logDebug "Both textures loaded and descriptor sets updated"
-    _ → throwGraphicsError TextureLoadFailed "Texture info not found"
+    _ -> throwGraphicsError TextureLoadFailed "Texture info not found"
 
-drawFrame ∷ EngineM' EngineEnv ()
+drawFrame :: EngineM' EngineEnv ()
 drawFrame = do
-    state ← gets graphicsState
+    state <- gets graphicsState
     -- Safely extract window with proper error handling
-    Window win ← case extractWindow state of
-        Left err → throwError err
-        Right window → pure window
+    Window win <- case extractWindow state of
+        Left err -> throwError err
+        Right window -> pure window
     let frameIdx = currentFrame state
     -- update scene for this frame
     updateSceneForRender
-    batches ← getCurrentRenderBatches
+    batches <- getCurrentRenderBatches
     -- update uniform buffer with bounds checking
     case (vulkanDevice state, uniformBuffers state) of
-        (Just device, Just buffers) → do
+        (Just device, Just buffers) -> do
             -- Safe buffer access with bounds checking
-            (_, memory) ← case safeVectorIndex buffers (fromIntegral frameIdx) of
-                Nothing → throwGraphicsError VertexBufferError $
+            (_, memory) <- case safeVectorIndex buffers (fromIntegral frameIdx) of
+                Nothing -> throwGraphicsError VertexBufferError $
                     "Frame index out of bounds: " <> T.pack (show frameIdx) <>
                     " >= " <> T.pack (show (V.length buffers))
-                Just buffer → pure buffer
-            (width, height) ← GLFW.getFramebufferSize win
+                Just buffer -> pure buffer
+            (width, height) <- GLFW.getFramebufferSize win
             
             -- Create matrices using camera
             let camera = camera2D state
@@ -464,20 +491,20 @@ drawFrame = do
             
             -- Update the uniform buffer
             updateUniformBuffer device memory uboData
-        _ → throwGraphicsError VulkanDeviceLost "No device or uniform buffer"
+        _ -> throwGraphicsError VulkanDeviceLost "No device or uniform buffer"
     -- prepare dynamic vertex buffer with scene data
     let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
-    dynamicBuffer ← if totalVertices > 0
+    dynamicBuffer <- if totalVertices > 0
         then do
-            buffer ← ensureDynamicVertexBuffer totalVertices
+            buffer <- ensureDynamicVertexBuffer totalVertices
             uploadBatchesToBuffer batches buffer
         else do
             ensureDynamicVertexBuffer defaultVertexCount
 
     -- Enable and fix validation for descriptor sets
     case descriptorState state of
-        Nothing → throwGraphicsError DescriptorError "No descriptor manager available"
-        Just descManager → when (V.null $ dmActiveSets descManager) $
+        Nothing -> throwGraphicsError DescriptorError "No descriptor manager available"
+        Just descManager -> when (V.null $ dmActiveSets descManager) $
             throwGraphicsError DescriptorError "No active descriptor sets"
     
     -- Enable and fix validation for textures  
@@ -488,21 +515,21 @@ drawFrame = do
             " < " <> T.pack (show minRequiredTextures)
     
     -- Safe frame resource access with bounds checking
-    resources ← case safeVectorIndex (frameResources state) (fromIntegral frameIdx) of
-        Nothing → throwGraphicsError CommandBufferError $
+    resources <- case safeVectorIndex (frameResources state) (fromIntegral frameIdx) of
+        Nothing -> throwGraphicsError CommandBufferError $
             "Frame index out of bounds: " <> T.pack (show frameIdx) <>
             " >= " <> T.pack (show (V.length (frameResources state)))
-        Just res → pure res
+        Just res -> pure res
     
     -- Safe command buffer access
-    cmdBuffer ← case safeVectorHead (frCommandBuffer resources) of
-        Nothing → throwGraphicsError CommandBufferError "No command buffer available"
-        Just buf → pure buf
+    cmdBuffer <- case safeVectorHead (frCommandBuffer resources) of
+        Nothing -> throwGraphicsError CommandBufferError "No command buffer available"
+        Just buf -> pure buf
         
     -- Wait for previous frame
-    device ← case vulkanDevice state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No device"
-        Just d → pure d
+    device <- case vulkanDevice state of
+        Nothing -> throwGraphicsError VulkanDeviceLost "No device"
+        Just d -> pure d
     
     -- Fix fence synchronization ordering: wait before reset
     liftIO $ do
@@ -512,16 +539,16 @@ drawFrame = do
       resetFences device (V.singleton (frInFlight resources))
     
     -- Acquire next image
-    swapchain ← case swapchainInfo state of
-        Nothing → throwGraphicsError SwapchainError "No swapchain"
-        Just si → pure $ siSwapchain si
-    (acquireResult, imageIndex) ← liftIO $ acquireNextImageKHR device swapchain
+    swapchain <- case swapchainInfo state of
+        Nothing -> throwGraphicsError SwapchainError "No swapchain"
+        Just si -> pure $ siSwapchain si
+    (acquireResult, imageIndex) <- liftIO $ acquireNextImageKHR device swapchain
                                     maxTimeout (frImageAvailable resources) zero
     
     -- Check if we need to recreate swapchain
-    when (acquireResult ≠ SUCCESS && acquireResult ≠ SUBOPTIMAL_KHR) $
+    when (acquireResult /= SUCCESS && acquireResult /= SUBOPTIMAL_KHR) $
         throwGraphicsError SwapchainError $
-            T.pack $ "Failed to acquire next image: " ⧺ show acquireResult
+            T.pack $ "Failed to acquire next image: " ++ show acquireResult
 
     -- reset and record command buffer
     liftIO $ resetCommandBuffer cmdBuffer zero
@@ -538,9 +565,9 @@ drawFrame = do
             , signalSemaphores = V.singleton $ frRenderFinished resources
             }
     
-    queues ← case deviceQueues state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No queues"
-        Just q → pure q
+    queues <- case deviceQueues state of
+        Nothing -> throwGraphicsError VulkanDeviceLost "No queues"
+        Just q -> pure q
     
     liftIO $ queueSubmit (graphicsQueue queues)
                (V.singleton $ SomeStruct submitInfo)
@@ -553,46 +580,47 @@ drawFrame = do
             , imageIndices = V.singleton imageIndex
             }
     
-    presentResult ← liftIO $ queuePresentKHR (presentQueue queues) presentInfo
+    presentResult <- liftIO $ queuePresentKHR (presentQueue queues) presentInfo
     case presentResult of
-        SUCCESS → pure ()
-        SUBOPTIMAL_KHR → pure ()
-        err → throwGraphicsError SwapchainError $
-                T.pack $ "Failed to present image: " ⧺ show err
+        SUCCESS -> pure ()
+        SUBOPTIMAL_KHR -> pure ()
+        err -> throwGraphicsError SwapchainError $
+                T.pack $ "Failed to present image: " ++ show err
     
     -- Update frame index
-    modify $ \s → s { graphicsState = (graphicsState s) {
+    modify $ \s -> s { graphicsState = (graphicsState s) {
                         currentFrame = (currentFrame (graphicsState s) + 1)
                                          `mod` fromIntegral
                                          (gcMaxFrames defaultGraphicsConfig) } }
 
-getCurTime ∷ IO Double
+getCurTime :: IO Double
 getCurTime = do
-    now ← getCurrentTime
+    now <- getCurrentTime
     return $ realToFrac $ utctDayTime now
 
-mainLoop ∷ EngineM' EngineEnv ()
+mainLoop :: EngineM' EngineEnv ()
 mainLoop = do
-    state  ← gets graphicsState
-    tstate ← gets timingState
+    state  <- gets graphicsState
+    tstate <- gets timingState
     let running = engineRunning tstate
     
     unless (not running) $ do
-        window ← case glfwWindow state of
-            Nothing → throwSystemError (GLFWError "main loop: ") "No window"
-            Just w → pure w
+        window <- case glfwWindow state of
+            Nothing -> throwSystemError (GLFWError "main loop: ") "No window"
+            Just w -> pure w
             
         let glfwWindow = case window of
-                Window w → w
+                Window w -> w
 
-        currentTime ← liftIO getCurTime
-        tstate ← gets timingState
+        currentTime <- liftIO getCurTime
+        tstate <- gets timingState
         let lastTime  = lastFrameTime tstate
             accum     = frameTimeAccum tstate
             targetFps = targetFPS tstate
 
         let frameTime = currentTime - lastTime
-            targetFrameTime = 1.0 / targetFps
+            -- Safe division to avoid division by zero
+            targetFrameTime = if targetFps > 0 then 1.0 / targetFps else 1.0 / 60.0
             -- Add a small adjustment for system overhead
             systemOverhead = 0.0002  -- 0.2ms adjustment
 
@@ -603,11 +631,11 @@ mainLoop = do
                 liftIO $ threadDelay $ floor (sleepTime * 1000000)
 
         -- Get time after potential sleep
-        actualCurrentTime ← liftIO getCurTime
+        actualCurrentTime <- liftIO getCurTime
         let actualFrameTime = actualCurrentTime - lastTime
             newAccum = accum + actualFrameTime
 
-        modify $ \s → s { timingState = (timingState s)
+        modify $ \s -> s { timingState = (timingState s)
             { lastFrameTime = actualCurrentTime
             , frameTimeAccum = newAccum
             , frameCount = frameCount (timingState s) + 1
@@ -615,52 +643,53 @@ mainLoop = do
             , currentTime = actualCurrentTime 
             } }
 
-        when (newAccum ≥ 1.0) $ do
-            tstate ← gets timingState
+        when (newAccum >= 1.0) $ do
+            tstate <- gets timingState
             let currentCount = frameCount tstate
-                fps = fromIntegral currentCount / newAccum
-            logDebug $ "FPS: " ⧺ show fps
+                -- Safe FPS calculation to avoid division by zero
+                fps = if newAccum > 0 then fromIntegral currentCount / newAccum else 0.0
+            logDebug $ "FPS: " ++ show fps
             -- Adjust timing if FPS is consistently off
             when (fps < 59.0) $
-                modify $ \s → s { timingState = (timingState s) {
+                modify $ \s -> s { timingState = (timingState s) {
                                     targetFPS = targetFPS (timingState s) + 0.1 } }
             when (fps > 61.0) $
-                modify $ \s → s { timingState = (timingState s) {
+                modify $ \s -> s { timingState = (timingState s) {
                                     targetFPS = targetFPS (timingState s) - 0.1 } }
-            modify $ \s → s { timingState = (timingState s)
+            modify $ \s -> s { timingState = (timingState s)
                 { frameTimeAccum = 0.0
                 , frameCount = 0 
                 } }
         GLFW.pollEvents
         handleInputEvents
-        shouldClose ← GLFW.windowShouldClose glfwWindow
-        cleaning ← gets (engineCleaning . timingState)
+        shouldClose <- GLFW.windowShouldClose glfwWindow
+        cleaning <- gets (engineCleaning . timingState)
         if shouldClose || not running
             then do
-                env ← ask
+                env <- ask
                 liftIO $ Q.writeQueue (logQueue env) "Engine shutting down..."
                 -- Just wait for device to idle
-                forM_ (vulkanDevice state) $ \device → 
+                forM_ (vulkanDevice state) $ \device -> 
                     liftIO $ deviceWaitIdle device
             else unless cleaning $ do
                 drawFrame
                 mainLoop
 
 -- Add after initializeTextures function
-initializeTestScene ∷ EngineM' EngineEnv ()
+initializeTestScene :: EngineM' EngineEnv ()
 initializeTestScene = do
     -- Get loaded texture asset IDs
-    assetPool ← gets assetPool
+    assetPool <- gets assetPool
     let textureIds = Map.keys (apTextureAtlases assetPool)
     
     case textureIds of
-        [] → logDebug "No textures loaded for test scene"
-        (tex1:tex2:_) → do
+        [] -> logDebug "No textures loaded for test scene"
+        (tex1:tex2:_) -> do
             -- Create test scene
             let camera = defaultCamera
                 testSceneId = "test"
             
-            sceneMgr ← gets sceneManager
+            sceneMgr <- gets sceneManager
             let sceneWithTest = createScene testSceneId camera sceneMgr
                 activeScene = setActiveScene testSceneId sceneWithTest
             
@@ -682,18 +711,18 @@ initializeTestScene = do
             
             -- Add objects to scene
             case addObjectToScene testSceneId node1 activeScene of
-                Nothing → logDebug "Failed to add first object to scene"
-                Just (obj1Id, mgr1) → case addObjectToScene testSceneId node2 mgr1 of
-                    Nothing → logDebug "Failed to add second object to scene"
-                    Just (obj2Id, finalMgr) → do
-                        modify $ \s → s { sceneManager = finalMgr }
-                        logDebug $ "Test scene created with objects: " ⧺ show obj1Id ⧺ ", " ⧺ show obj2Id
-        (tex1:_) → do
+                Nothing -> logDebug "Failed to add first object to scene"
+                Just (obj1Id, mgr1) -> case addObjectToScene testSceneId node2 mgr1 of
+                    Nothing -> logDebug "Failed to add second object to scene"
+                    Just (obj2Id, finalMgr) -> do
+                        modify $ \s -> s { sceneManager = finalMgr }
+                        logDebug $ "Test scene created with objects: " ++ show obj1Id ++ ", " ++ show obj2Id
+        (tex1:_) -> do
             -- Single texture case
             let camera = defaultCamera
                 testSceneId = "test"
             
-            sceneMgr ← gets sceneManager
+            sceneMgr <- gets sceneManager
             let sceneWithTest = createScene testSceneId camera sceneMgr
                 activeScene = setActiveScene testSceneId sceneWithTest
             
@@ -705,7 +734,7 @@ initializeTestScene = do
                     }
             
             case addObjectToScene testSceneId node1 activeScene of
-                Nothing → logDebug "Failed to add object to scene"
-                Just (objId, finalMgr) → do
-                    modify $ \s → s { sceneManager = finalMgr }
-                    logDebug $ "Test scene created with object: " ⧺ show objId
+                Nothing -> logDebug "Failed to add object to scene"
+                Just (objId, finalMgr) -> do
+                    modify $ \s -> s { sceneManager = finalMgr }
+                    logDebug $ "Test scene created with object: " ++ show objId
