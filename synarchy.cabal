@@ -169,6 +169,9 @@ library
                      Engine.Core.Var
                      Engine.Scene.Base
                      Engine.Scene.Types
+                     Engine.Scene.Batch
+                     Engine.Scene.Graph
+                     Engine.Scene.Manager
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields

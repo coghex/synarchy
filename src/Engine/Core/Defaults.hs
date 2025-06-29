@@ -89,10 +89,6 @@ defaultEngineState lf = EngineState
     }
   , assetPool        = AssetPool Map.empty Map.empty 0
   , assetConfig      = AssetConfig 100 100 True True
-  , sceneManager     = SceneManager
-    { activeScene      = Nothing
-    , scenes           = Map.empty
-    , sceneBatches     = Map.empty
-    }
+  , sceneManager     = createSceneManager
   }
 
