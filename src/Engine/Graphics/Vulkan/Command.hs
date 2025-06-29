@@ -3,6 +3,7 @@ module Engine.Graphics.Vulkan.Command
   ( createVulkanCommandPool
   , createVulkanCommandCollection
   , recordRenderCommandBuffer
+  , recordSceneCommandBuffer
   , allocateVulkanCommandBuffer
   , allocateVulkanCommandBuffers
   , destroyVulkanCommandPool
@@ -18,6 +19,7 @@ import UPrelude
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.Vector as V
 import qualified Data.Map as Map
+import Data.IORef (newIORef, readIORef, modifyIORef)
 import Engine.Asset.Types
 import Engine.Core.Types
 import Engine.Core.Monad
@@ -29,6 +31,7 @@ import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
+import Engine.Scene.Types
 import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Core10.CommandBufferBuilding
@@ -351,3 +354,113 @@ allocateVulkanCommandBuffer device cmdPool = do
         0 → throwGraphicsError CommandBufferError
             "Failed to allocate command buffer"
         _ → pure $ V.head buffers
+
+-- Replace the existing recordRenderCommandBuffer function
+recordSceneCommandBuffer ∷ CommandBuffer → Word64 → SceneDynamicBuffer → V.Vector RenderBatch → EngineM ε σ ()
+recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer batches = do
+    state ← gets graphicsState
+    
+    -- Validate required state components
+    pState ← maybe (throwGraphicsError PipelineError "Pipeline state not initialized") 
+                  pure 
+                  (pipelineState state)
+    
+    renderPass ← maybe (throwGraphicsError RenderPassError "Render pass not initialized")
+                      pure
+                      (vulkanRenderPass state)
+    
+    framebuffer ← maybe (throwGraphicsError FramebufferError "Framebuffer not initialized")
+                       (\fbs → if frameIdx < fromIntegral (V.length fbs)
+                              then pure (fbs V.! fromIntegral frameIdx)
+                              else throwGraphicsError FramebufferError "Frame index out of bounds")
+                       (framebuffers state)
+    
+    swapchainExtent ← maybe (throwGraphicsError SwapchainError "Swapchain info not initialized")
+                           (pure . siSwapExtent)
+                           (swapchainInfo state)
+    
+    -- Begin command buffer
+    let beginInfo = (zero ∷ CommandBufferBeginInfo '[])
+                      { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
+    liftIO $ beginCommandBuffer cmdBuf beginInfo
+    
+    -- Begin render pass
+    let clearColor = Color ( Float32 0.0 0.0 0.4 1.0 )
+        renderPassInfo = zero
+          { renderPass = renderPass
+          , framebuffer = framebuffer
+          , renderArea = Rect2D (Offset2D 0 0) swapchainExtent
+          , clearValues = V.singleton clearColor
+          }
+    
+    cmdBeginRenderPass cmdBuf renderPassInfo SUBPASS_CONTENTS_INLINE
+    
+    -- Bind graphics pipeline
+    cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS (psPipeline pState)
+    
+    -- Set viewport and scissors
+    let Extent2D w h = swapchainExtent
+        viewport = Viewport
+          { x = 0
+          , y = 0
+          , width = fromIntegral w
+          , height = fromIntegral h
+          , minDepth = 0
+          , maxDepth = 1
+          }
+        scissor = Rect2D
+          { offset = Offset2D 0 0
+          , extent = swapchainExtent
+          }
+    
+    cmdSetViewport cmdBuf 0 (V.singleton viewport)
+    cmdSetScissor cmdBuf 0 (V.singleton scissor)
+    
+    -- Bind descriptor sets
+    descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
+                       pure 
+                       (descriptorState state)
+    
+    let (TexturePoolState descPool descLayout, textures) = textureState state
+    textureArray ← case Map.lookup "default" (textureArrayStates state) of
+        Nothing → throwGraphicsError TextureLoadFailed "No texture array state found"
+        Just arr → pure arr
+    
+    let uniformSet = V.head $ dmActiveSets descManager
+    textureSet ← case (tasDescriptorSet textureArray) of
+          Nothing → (throwGraphicsError DescriptorError "No texture descriptor set")
+          Just set → pure set
+    
+    let descriptorSets = V.fromList [uniformSet, textureSet]
+    cmdBindDescriptorSets cmdBuf 
+        PIPELINE_BIND_POINT_GRAPHICS
+        (psPipelineLayout pState)
+        0
+        descriptorSets
+        V.empty
+    
+    -- Bind dynamic vertex buffer
+    cmdBindVertexBuffers cmdBuf 
+        0  -- First binding
+        (V.singleton (sdbBuffer dynamicBuffer))
+        (V.singleton 0)  -- Offsets
+    
+    -- Draw all batches
+    currentVertexOffset ← liftIO $ newIORef (0 ∷ Word32)
+    V.forM_ batches $ \batch → do
+        offset ← liftIO $ readIORef currentVertexOffset
+        let vertexCount = fromIntegral $ V.length $ rbVertices batch
+        
+        -- Draw this batch
+        cmdDraw cmdBuf
+            vertexCount  -- vertex count
+            1           -- instance count  
+            offset      -- first vertex
+            0           -- first instance
+        
+        -- Update offset for next batch
+        liftIO $ modifyIORef currentVertexOffset (+ vertexCount)
+    
+    -- End render pass and command buffer
+    cmdEndRenderPass cmdBuf
+    endVulkanCommandBuffer cmdBuf

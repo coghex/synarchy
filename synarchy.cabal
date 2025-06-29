@@ -172,6 +172,7 @@ library
                      Engine.Scene.Batch
                      Engine.Scene.Graph
                      Engine.Scene.Manager
+                     Engine.Scene.Render
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields

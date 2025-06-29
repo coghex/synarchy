@@ -49,9 +49,15 @@ import Engine.Graphics.Vulkan.Swapchain (createVulkanSwapchain, querySwapchainSu
 import Engine.Graphics.Vulkan.Sync (createSyncObjects)
 import Engine.Graphics.Vulkan.Texture
 import Engine.Graphics.Vulkan.Vertex
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex, Vec2(..), Vec4(..))
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
 import qualified Engine.Graphics.Window.GLFW as GLFW
+import Engine.Scene.Manager
+import Engine.Scene.Types
+import Engine.Scene.Render
+import Engine.Scene.Graph
+import Engine.Scene.Base
 import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Zero
@@ -248,6 +254,9 @@ main = do
                 " framebuffers=" ⧺ show fbCount ⧺
                 " descSets=" ⧺ show dsCount
 
+        -- initialize the scene
+        initializeTestScene
+
         -- record initial command buffers
         state ← gets graphicsState
         let numImages = maybe 0 V.length (vulkanCmdBuffers state)
@@ -385,6 +394,9 @@ drawFrame = do
     -- get window size
     let Window win = fromJust $ glfwWindow state
         frameIdx = currentFrame state
+    -- update scene for this frame
+    updateSceneForRender
+    batches ← getCurrentRenderBatches
     -- update uniform buffer
     case (vulkanDevice state, uniformBuffers state) of
         (Just device, Just buffers) → do
@@ -403,15 +415,23 @@ drawFrame = do
             -- Update the uniform buffer
             updateUniformBuffer device memory uboData
         _ → throwGraphicsError VulkanDeviceLost "No device or uniform buffer"
+    -- prepare dynamic vertex buffer with scene data
+    let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
+    dynamicBuffer ← if totalVertices > 0
+        then do
+            buffer ← ensureDynamicVertexBuffer totalVertices
+            uploadBatchesToBuffer batches buffer
+        else do
+            ensureDynamicVertexBuffer 6
 
-    -- Validate descriptor sets
-    when (V.null $ dmActiveSets $ fromJust $ descriptorState state) $
-        throwGraphicsError DescriptorError "No active descriptor sets"
-    
-    -- Validate textures
-    let (_, textures) = textureState state
-    when (V.length textures < 2) $
-        throwGraphicsError TextureLoadFailed "Not enough textures loaded"
+    ---- Validate descriptor sets
+    --when (V.null $ dmActiveSets $ fromJust $ descriptorState state) $
+    --    throwGraphicsError DescriptorError "No active descriptor sets"
+    --
+    ---- Validate textures
+    --let (_, textures) = textureState state
+    --when (V.length textures < 2) $
+    --    throwGraphicsError TextureLoadFailed "Not enough textures loaded"
     
     let resources = frameResources state V.! fromIntegral frameIdx
         cmdBuffer = V.head $ frCommandBuffer resources
@@ -441,7 +461,9 @@ drawFrame = do
 
     -- reset and record command buffer
     liftIO $ resetCommandBuffer cmdBuffer zero
-    recordRenderCommandBuffer cmdBuffer $ fromIntegral imageIndex
+    --recordRenderCommandBuffer cmdBuffer $ fromIntegral imageIndex
+    recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex)
+                             dynamicBuffer batches
 
     -- submit work
     let waitStages = V.singleton PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
@@ -560,4 +582,66 @@ mainLoop = do
                 drawFrame
                 mainLoop
 
-
+-- Add after initializeTextures function
+initializeTestScene ∷ EngineM' EngineEnv ()
+initializeTestScene = do
+    -- Get loaded texture asset IDs
+    assetPool ← gets assetPool
+    let textureIds = Map.keys (apTextureAtlases assetPool)
+    
+    case textureIds of
+        [] → logDebug "No textures loaded for test scene"
+        (tex1:tex2:_) → do
+            -- Create test scene
+            let camera = defaultCamera
+                testSceneId = "test"
+            
+            sceneMgr ← gets sceneManager
+            let sceneWithTest = createScene testSceneId camera sceneMgr
+                activeScene = setActiveScene testSceneId sceneWithTest
+            
+            -- Create first test object
+            let node1 = (createSceneNode SpriteObject)
+                    { nodeTransform = defaultTransform { position = (-1.0, 0.0) }
+                    , nodeTexture = Just tex1
+                    , nodeSize = (1.0, 1.0)
+                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
+                    }
+            
+            -- Create second test object  
+            let node2 = (createSceneNode SpriteObject)
+                    { nodeTransform = defaultTransform { position = (1.0, 0.0) }
+                    , nodeTexture = Just tex2
+                    , nodeSize = (1.0, 1.0)
+                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
+                    }
+            
+            -- Add objects to scene
+            case addObjectToScene testSceneId node1 activeScene of
+                Nothing → logDebug "Failed to add first object to scene"
+                Just (obj1Id, mgr1) → case addObjectToScene testSceneId node2 mgr1 of
+                    Nothing → logDebug "Failed to add second object to scene"
+                    Just (obj2Id, finalMgr) → do
+                        modify $ \s → s { sceneManager = finalMgr }
+                        logDebug $ "Test scene created with objects: " ⧺ show obj1Id ⧺ ", " ⧺ show obj2Id
+        (tex1:_) → do
+            -- Single texture case
+            let camera = defaultCamera
+                testSceneId = "test"
+            
+            sceneMgr ← gets sceneManager
+            let sceneWithTest = createScene testSceneId camera sceneMgr
+                activeScene = setActiveScene testSceneId sceneWithTest
+            
+            let node1 = (createSceneNode SpriteObject)
+                    { nodeTransform = defaultTransform { position = (0.0, 0.0) }
+                    , nodeTexture = Just tex1
+                    , nodeSize = (1.0, 1.0)
+                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
+                    }
+            
+            case addObjectToScene testSceneId node1 activeScene of
+                Nothing → logDebug "Failed to add object to scene"
+                Just (objId, finalMgr) → do
+                    modify $ \s → s { sceneManager = finalMgr }
+                    logDebug $ "Test scene created with object: " ⧺ show objId

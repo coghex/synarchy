@@ -71,3 +71,13 @@ instance Storable UniformBufferObject where
         poke (castPtr ptr) model
         poke (castPtr $ ptr `plusPtr` sizeOf model) view
         poke (castPtr $ ptr `plusPtr` (2 * sizeOf model)) proj
+
+
+-- | Dynamic vertex buffer for scene rendering
+data SceneDynamicBuffer = SceneDynamicBuffer
+    { sdbBuffer     ∷ Buffer
+    , sdbMemory     ∷ DeviceMemory
+    , sdbCapacity   ∷ Word64      -- Current buffer capacity in vertices
+    , sdbUsed       ∷ Word64      -- Currently used vertices
+    } deriving (Show)
+
