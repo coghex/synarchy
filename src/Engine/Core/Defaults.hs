@@ -14,6 +14,7 @@ import Engine.Graphics.Camera
 import Engine.Graphics.Window.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture
+import Engine.Scene.Types
 import Vulkan.Zero
 
 defaultEngineConfig ∷ EngineConfig
@@ -88,5 +89,10 @@ defaultEngineState lf = EngineState
     }
   , assetPool        = AssetPool Map.empty Map.empty 0
   , assetConfig      = AssetConfig 100 100 True True
+  , sceneManager     = SceneManager
+    { activeScene      = Nothing
+    , scenes           = Map.empty
+    , sceneBatches     = Map.empty
+    }
   }
 

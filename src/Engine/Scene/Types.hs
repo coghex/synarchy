@@ -8,6 +8,7 @@ import Engine.Scene.Base
 import Engine.Asset.Base (AssetId)
 import Engine.Graphics.Vulkan.Types.Texture (TextureData)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex)
+import Engine.Graphics.Camera
 
 -- | Core scene object representation
 data SceneObject = SceneObject
@@ -23,13 +24,6 @@ data SceneLayer = SceneLayer
     { layerId      ∷ LayerId
     , layerObjects ∷ Map.Map ObjectId SceneObject
     , layerVisible ∷ Bool
-    } deriving (Show)
-
--- | Simple 2D camera
-data Camera2D = Camera2D
-    { camPosition ∷ (Float, Float)
-    , camZoom     ∷ Float
-    , camRotation ∷ Float
     } deriving (Show)
 
 -- | Main scene state
@@ -48,17 +42,10 @@ data SpriteBatch = SpriteBatch
 
 -- | Scene manager state
 data SceneManager = SceneManager
-    { activeScene   ∷ Scene
+    { activeScene   ∷ Maybe Text
+    , scenes        ∷ Map.Map Text Scene
     , sceneBatches  ∷ Map.Map LayerId (Map.Map AssetId SpriteBatch)
     } deriving (Show)
-
--- | Helper functions
-defaultCamera ∷ Camera2D
-defaultCamera = Camera2D
-    { camPosition = (0, 0)
-    , camZoom = 1.0
-    , camRotation = 0.0
-    }
 
 createEmptyScene ∷ Text → Scene
 createEmptyScene sid = Scene

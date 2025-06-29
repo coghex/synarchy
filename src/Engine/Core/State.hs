@@ -17,6 +17,7 @@ import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Window.Types
 import Engine.Graphics.Camera
 import Engine.Input.Types
+import Engine.Scene.Types
 import qualified Vulkan.Core10 as Vk
 
 -- | Engine environment (read-only)
@@ -35,6 +36,7 @@ data EngineState = EngineState
   , graphicsState    ∷ GraphicsState
   , assetPool        ∷ AssetPool
   , assetConfig      ∷ AssetConfig
+  , sceneManager     ∷ SceneManager
   }
 
 data TimingState = TimingState
