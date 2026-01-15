@@ -21,6 +21,7 @@ module Engine.Graphics.Window.GLFW
   , pollRawEvents
   , waitEvents
   , waitEventsTimeout
+  , GLFW.postEmptyEvent
     -- * Keyboard and Mouse Input
   , GLFW.setKeyCallback
   , GLFW.setErrorCallback

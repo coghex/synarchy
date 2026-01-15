@@ -291,7 +291,9 @@ shutdownEngine (Window win) ts = do
     state ← gets graphicsState
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
-    -- glfw cleanup
+    -- glfw cleanup, stopping polling first
+    liftIO $ GLFW.postEmptyEvent
+    GLFW.setWindowShouldClose win True
     liftIO $ clearGLFWCallbacks win
 
     -- Wait for input thread to finish

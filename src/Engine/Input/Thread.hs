@@ -107,7 +107,8 @@ updateScrollState state x y = state { inpScrollDelta = (x, y) }
 
 -- | Safely shutdown input thread
 shutdownInputThread ∷ EngineEnv → ThreadState → IO ()
-shutdownInputThread env ts = catch (do
+--shutdownInputThread env ts = catch (do
+shutdownInputThread env ts = do
     -- Signal thread to stop
     writeIORef (tsRunning ts) ThreadStopped
     Q.writeQueue (logQueue env) "Input thread signaled to stop..."
@@ -116,9 +117,9 @@ shutdownInputThread env ts = catch (do
     waitThreadComplete ts
     
     Q.writeQueue (logQueue env) "Input thread shutdown complete."
-    ) $ \(e :: SomeException) → do
-        -- Log any errors during shutdown
-        Q.writeQueue (logQueue env) $ T.pack $
-            "Error shutting down input thread: " ⧺ show e
-        -- Force kill thread if graceful shutdown failed
-        killThread (tsThreadId ts)
+--    ) $ \(e :: SomeException) → do
+--        -- Log any errors during shutdown
+--        Q.writeQueue (logQueue env) $ T.pack $
+--            "Error shutting down input thread: " ⧺ show e
+--        -- Force kill thread if graceful shutdown failed
+--        killThread (tsThreadId ts)
