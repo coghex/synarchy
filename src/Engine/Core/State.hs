@@ -39,10 +39,15 @@ data EngineState = EngineState
   , sceneManager     ∷ SceneManager
   }
 
+data EngineLifecycle
+  = EngineRunning         -- engine is running normally
+  | CleaningUp            -- engine is cleaning up resources
+  | EngineStopped         -- engine has stopped
+  deriving (Eq, Show)
+
 data TimingState = TimingState
   { frameCount       ∷ Word64
-  , engineRunning    ∷ Bool
-  , engineCleaning   ∷ Bool
+  , engineLifecycle  ∷ EngineLifecycle
   , currentTime      ∷ Double
   , deltaTime        ∷ Double
   , frameTimeAccum   ∷ Double

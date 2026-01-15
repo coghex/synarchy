@@ -54,8 +54,7 @@ defaultEngineState ∷ LoggingFunc → EngineState
 defaultEngineState lf = EngineState
   { timingState = TimingState
     { frameCount       = 0
-    , engineRunning    = True
-    , engineCleaning   = False
+    , engineLifecycle  = EngineRunning
     , currentTime      = 0.0
     , deltaTime        = 0.0
     , frameTimeAccum   = 0.0

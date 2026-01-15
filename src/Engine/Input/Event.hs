@@ -37,7 +37,7 @@ processInputEvent event = do
             when (key == GLFW.Key'Escape && keyState == GLFW.KeyState'Pressed) $ do
                 liftIO $ Q.writeQueue (logQueue env) "Escape pressed, shutting down..."
                 modify $ \s → s { timingState = (timingState s) {
-                                    engineRunning = False } }
+                                    engineLifecycle = CleaningUp } }
             let newCam = updateCameraFromInput (inputState state) cam dt
             -- Update general input state
             modify $ \s → s { inputState = updateKeyState (inputState s) key keyState mods

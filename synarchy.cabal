@@ -163,6 +163,7 @@ library
                      Engine.Core.Monad
                      Engine.Core.State
                      Engine.Core.Types
+                     Engine.Core.Thread
                      Engine.Core.Error.Exception
                      Engine.Core.Resource
                      Engine.Core.Queue

@@ -8,6 +8,7 @@ import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import Data.IORef (readIORef)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
 import Linear (M44, V3(..), identity, (!*!), perspective, lookAt, translation, ortho)
 import System.Environment (setEnv)
@@ -19,6 +20,7 @@ import Engine.Core.Base
 import Engine.Core.Defaults
 import Engine.Core.Monad (runEngineM, EngineM', MonadIO(..))
 import Engine.Core.Types
+import Engine.Core.Thread
 import Engine.Core.State
 import Engine.Core.Resource
 import qualified Engine.Core.Queue as Q
@@ -27,7 +29,7 @@ import Engine.Core.Var
 import Engine.Graphics.Base
 import Engine.Graphics.Types
 import Engine.Input.Types
-import Engine.Input.Thread (shutdownInputThread, startInputThread)
+import Engine.Input.Thread
 import Engine.Input.Event (handleInputEvents)
 import Engine.Input.Callback (setupCallbacks)
 import Engine.Graphics.Camera
@@ -267,21 +269,41 @@ main = do
                 (fromIntegral i)
             logDebug $ "Recorded command buffer " ⧺ show i
         mainLoop
-        liftIO $ Q.writeQueue logQueue "Engine shutting down..."
-        assets ← gets assetPool
-        graphicalstate ← gets graphicsState
-        forM_ (vulkanDevice graphicalstate) $ \device → 
-            liftIO $ deviceWaitIdle device
-        logDebug "cleaning up asset manager..."
-        cleanupAssetManager assets
-        liftIO $ shutdownInputThread env inputThreadState
-  
+        shutdownEngine inputThreadState
+ 
   result ← runEngineM engineAction envVar stateVar checkStatus
   case result of
     Left err → do
         putStrLn $ displayException err
         liftIO $ shutdownInputThread defaultEngineEnv inputThreadState
     Right _  → pure ()
+
+-- the ever important shutdown function
+shutdownEngine ∷ InputThreadState → EngineM' EngineEnv ()
+shutdownEngine its = do
+    logDebug "Engine cleaning up..."
+    -- Set lifecycle state to CleaningUp
+    modify $ \s → s { timingState = (timingState s) { engineLifecycle = CleaningUp } }
+
+    -- Wait for input thread to finish
+    env ← ask
+    liftIO $ shutdownInputThread env its
+    inputThreadState ← liftIO $ readIORef (itsRunning its)
+    liftIO $ waitThreadComplete its
+
+    -- cleanup asset manager
+    logDebug "cleaning up asset manager..."
+    assets ← gets assetPool
+    cleanupAssetManager assets
+
+    -- Wait for Vulkan device to idle before resource cleanup
+    state ← gets graphicsState
+    forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
+
+    -- Transition to stopped state
+    modify $ \s → s { timingState
+                    = (timingState s) { engineLifecycle = EngineStopped } }
+    logDebug "Engine shutdown complete."
 
 checkStatus ∷ Either EngineException () → IO (Either EngineException ())
 checkStatus (Right ()) = pure (Right ())
@@ -526,9 +548,8 @@ mainLoop ∷ EngineM' EngineEnv ()
 mainLoop = do
     state  ← gets graphicsState
     tstate ← gets timingState
-    let running = engineRunning tstate
-    
-    unless (not running) $ do
+    let lifecycle = engineLifecycle tstate
+    unless (lifecycle ≡ CleaningUp || lifecycle ≡ EngineStopped) $ do
         window ← case glfwWindow state of
             Nothing → throwSystemError (GLFWError "main loop: ") "No window"
             Just w → pure w
@@ -585,15 +606,18 @@ mainLoop = do
         GLFW.pollEvents
         handleInputEvents
         shouldClose ← GLFW.windowShouldClose glfwWindow
-        cleaning ← gets (engineCleaning . timingState)
-        if shouldClose || not running
+        lifecycle ← gets (engineLifecycle . timingState)
+        if shouldClose || lifecycle ≢ EngineRunning
             then do
                 env ← ask
                 liftIO $ Q.writeQueue (logQueue env) "Engine shutting down..."
                 -- Just wait for device to idle
                 forM_ (vulkanDevice state) $ \device → 
-                    liftIO $ deviceWaitIdle device
-            else unless cleaning $ do
+                    unless (lifecycle ≡ EngineStopped) $
+                      liftIO $ deviceWaitIdle device
+                modify $ \s → s { timingState = (timingState s) {
+                                    engineLifecycle = EngineStopped } }
+            else unless (lifecycle ≡ CleaningUp) $ do
                 drawFrame
                 mainLoop
 
