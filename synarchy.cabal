@@ -175,6 +175,10 @@ library
                      Engine.Scene.Graph
                      Engine.Scene.Manager
                      Engine.Scene.Render
+                     Engine.Lua.Base
+                     Engine.Lua.Types
+                     Engine.Lua.Init
+                     Engine.Lua.Thread
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields
@@ -198,6 +202,7 @@ library
                  , base-unicode-symbols
                  , bytestring
                  , containers
+                 , directory
                  , filepath
                  , GLFW-b
                  , hslua
