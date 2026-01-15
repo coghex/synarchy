@@ -291,13 +291,13 @@ shutdownEngine (Window win) ts = do
     state ← gets graphicsState
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
+    -- glfw cleanup
+    liftIO $ clearGLFWCallbacks win
+
     -- Wait for input thread to finish
     env ← ask
     inputThreadState ← liftIO $ readIORef (tsRunning ts)
     liftIO $ shutdownInputThread env ts
-
-    -- glfw cleanup
-    liftIO $ clearGLFWCallbacks win
 
     -- cleanup asset manager
     logDebug "cleaning up asset manager..."
@@ -560,7 +560,10 @@ mainLoop = do
           logDebug "Engine starting..."
           liftIO $ threadDelay 100000
           -- clear the input queue before hitting the main loop again
-          liftIO $ Q.flushQueue (inputQueue env)
+          flushed ← liftIO $ Q.flushQueue (inputQueue env)
+          -- double check if its flushed
+          when (not $ null flushed) $
+              logDebug $ "Unexpected inputs found during engine start: " ⧺ show flushed
           liftIO $ writeIORef (lifecycleRef env) EngineRunning
           mainLoop
         -- regular operation
@@ -627,9 +630,10 @@ mainLoop = do
               then do
                   liftIO $ Q.writeQueue (logQueue env) "Engine shutting down..."
                   -- Just wait for device to idle
-                  forM_ (vulkanDevice state) $ \device → 
-                      unless (lifecycle ≡ EngineStopped) $
-                        liftIO $ deviceWaitIdle device
+--                  forM_ (vulkanDevice state) $ \device → 
+--                      unless (lifecycle ≡ EngineStopped) $
+--                        liftIO $ deviceWaitIdle device
+                  liftIO $ writeIORef (lifecycleRef env) CleaningUp
               else unless (lifecycle ≡ CleaningUp) $ do
                   drawFrame
                   mainLoop
