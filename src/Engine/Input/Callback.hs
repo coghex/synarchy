@@ -4,14 +4,17 @@ module Engine.Input.Callback where
 import UPrelude
 import qualified Graphics.UI.GLFW as GLFW
 import Control.Concurrent.STM.TQueue
+import Data.IORef (IORef, readIORef)
+import System.IO.Unsafe (unsafePerformIO)
 import Engine.Input.Types
+import Engine.Core.State
 import Engine.Core.Queue
 
 -- | Sets up all GLFW callbacks for a window
-setupCallbacks ∷ GLFW.Window → Queue InputEvent → IO ()
-setupCallbacks window queue = do
-    GLFW.setKeyCallback window 
-        (Just $ keyCallback queue)
+setupCallbacks ∷ GLFW.Window → IORef EngineLifecycle → Queue InputEvent → IO ()
+setupCallbacks window el queue = do
+    GLFW.setKeyCallback window
+        (Just $ keyCallback queue el)
     GLFW.setMouseButtonCallback window 
         (Just $ mouseCallback queue)
     GLFW.setCursorPosCallback window 
@@ -24,10 +27,14 @@ setupCallbacks window queue = do
         (Just $ focusCallback queue)
 
 -- | Keyboard input callback
-keyCallback ∷ Queue InputEvent → GLFW.Window → GLFW.Key → Int
-            → GLFW.KeyState → GLFW.ModifierKeys → IO ()
-keyCallback queue _win key _scancode keyState mods = 
-    writeQueue queue $ InputKeyEvent key keyState mods
+keyCallback ∷ Queue InputEvent → IORef EngineLifecycle → GLFW.Window
+            → GLFW.Key → Int → GLFW.KeyState → GLFW.ModifierKeys → IO ()
+keyCallback queue el _win key _scancode keyState mods
+    -- discard any input pressed during startup
+  | lifecycle ≡ EngineRunning = writeQueue queue $ InputKeyEvent key keyState mods
+  | otherwise                 = return ()
+  where
+    lifecycle = unsafePerformIO $ readIORef el
 
 -- | Mouse button callback
 mouseCallback ∷ Queue InputEvent → GLFW.Window → GLFW.MouseButton

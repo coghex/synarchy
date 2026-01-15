@@ -3,6 +3,7 @@ module Engine.Input.Event where
 
 import UPrelude
 import qualified Data.Map as Map
+import Data.IORef (writeIORef)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad (MonadIO(liftIO), EngineM')
 import Engine.Input.Thread
@@ -36,8 +37,7 @@ processInputEvent event = do
             -- Handle escape key
             when (key == GLFW.Key'Escape && keyState == GLFW.KeyState'Pressed) $ do
                 liftIO $ Q.writeQueue (logQueue env) "Escape pressed, shutting down..."
-                modify $ \s → s { timingState = (timingState s) {
-                                    engineLifecycle = CleaningUp } }
+                liftIO $ writeIORef (lifecycleRef env) CleaningUp
             let newCam = updateCameraFromInput (inputState state) cam dt
             -- Update general input state
             modify $ \s → s { inputState = updateKeyState (inputState s) key keyState mods

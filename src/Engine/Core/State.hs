@@ -3,6 +3,7 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Map as Map
+import Data.IORef (IORef)
 import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Core.Base
@@ -26,6 +27,7 @@ data EngineEnv = EngineEnv
   , eventQueue       ∷ Q.Queue Event
   , inputQueue       ∷ Q.Queue InputEvent
   , logQueue         ∷ Q.Queue T.Text
+  , lifecycleRef     ∷ IORef EngineLifecycle
   }
 
 -- | Engine state (mutable)
@@ -40,14 +42,14 @@ data EngineState = EngineState
   }
 
 data EngineLifecycle
-  = EngineRunning         -- engine is running normally
+  = EngineStarting        -- engine is initializing
+  | EngineRunning         -- engine is running normally
   | CleaningUp            -- engine is cleaning up resources
   | EngineStopped         -- engine has stopped
   deriving (Eq, Show)
 
 data TimingState = TimingState
   { frameCount       ∷ Word64
-  , engineLifecycle  ∷ EngineLifecycle
   , currentTime      ∷ Double
   , deltaTime        ∷ Double
   , frameTimeAccum   ∷ Double

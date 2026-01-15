@@ -8,7 +8,7 @@ import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.IORef (readIORef)
+import Data.IORef (newIORef, readIORef, IORef, writeIORef)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
 import Linear (M44, V3(..), identity, (!*!), perspective, lookAt, translation, ortho)
 import System.Environment (setEnv)
@@ -80,12 +80,15 @@ main = do
   eventQueue ← Q.newQueue
   inputQueue ← Q.newQueue
   logQueue   ← Q.newQueue
+  -- initialize engine lifecycle io ref to block threads on engine status
+  lifecycleRef ← newIORef EngineStarting
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
         { engineConfig = defaultEngineConfig
         , eventQueue   = eventQueue
         , inputQueue   = inputQueue
-        , logQueue     = logQueue }
+        , logQueue     = logQueue
+        , lifecycleRef = lifecycleRef }
   envVar ←   atomically $ newVar defaultEngineEnv
   lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
   stateVar ← atomically $ newVar $ defaultEngineState lf
@@ -103,7 +106,7 @@ main = do
         -- setup input callbacks
         env ← ask
         let glfwWin = case window of Window w → w
-        liftIO $ setupCallbacks glfwWin inputQueue
+        liftIO $ setupCallbacks glfwWin lifecycleRef inputQueue
         
         -- create Vulkan instance
         (vkInstance, _debugMessenger) ← createVulkanInstance defaultGraphicsConfig
@@ -268,6 +271,7 @@ main = do
                 (fromJust (vulkanCmdBuffers state) V.! i) 
                 (fromIntegral i)
             logDebug $ "Recorded command buffer " ⧺ show i
+
         mainLoop
         shutdownEngine inputThreadState
  
@@ -279,17 +283,14 @@ main = do
     Right _  → pure ()
 
 -- the ever important shutdown function
-shutdownEngine ∷ InputThreadState → EngineM' EngineEnv ()
-shutdownEngine its = do
+shutdownEngine ∷ ThreadState → EngineM' EngineEnv ()
+shutdownEngine ts = do
     logDebug "Engine cleaning up..."
-    -- Set lifecycle state to CleaningUp
-    modify $ \s → s { timingState = (timingState s) { engineLifecycle = CleaningUp } }
 
     -- Wait for input thread to finish
     env ← ask
-    liftIO $ shutdownInputThread env its
-    inputThreadState ← liftIO $ readIORef (itsRunning its)
-    liftIO $ waitThreadComplete its
+    inputThreadState ← liftIO $ readIORef (tsRunning ts)
+    liftIO $ shutdownInputThread env ts
 
     -- cleanup asset manager
     logDebug "cleaning up asset manager..."
@@ -301,8 +302,7 @@ shutdownEngine its = do
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
     -- Transition to stopped state
-    modify $ \s → s { timingState
-                    = (timingState s) { engineLifecycle = EngineStopped } }
+    liftIO $ writeIORef (lifecycleRef env) EngineStopped
     logDebug "Engine shutdown complete."
 
 checkStatus ∷ Either EngineException () → IO (Either EngineException ())
@@ -546,80 +546,91 @@ getCurTime = do
 
 mainLoop ∷ EngineM' EngineEnv ()
 mainLoop = do
+    env ← ask
     state  ← gets graphicsState
     tstate ← gets timingState
-    let lifecycle = engineLifecycle tstate
-    unless (lifecycle ≡ CleaningUp || lifecycle ≡ EngineStopped) $ do
-        window ← case glfwWindow state of
-            Nothing → throwSystemError (GLFWError "main loop: ") "No window"
-            Just w → pure w
-            
-        let glfwWindow = case window of
-                Window w → w
+    lifecycle ← liftIO $ readIORef (lifecycleRef env)
 
-        currentTime ← liftIO getCurTime
-        tstate ← gets timingState
-        let lastTime  = lastFrameTime tstate
-            accum     = frameTimeAccum tstate
-            tFps      = targetFPS tstate
+    case lifecycle of
+        -- block premature exits
+        EngineStarting → do
+          logDebug "Engine starting..."
+          liftIO $ threadDelay 100000
+          -- make sure to transition the engine state to running
+          liftIO $ writeIORef (lifecycleRef env) EngineRunning
+          mainLoop
+        -- regular operation
+        EngineRunning → do
+          window ← case glfwWindow state of
+              Nothing → throwSystemError (GLFWError "main loop: ") "No window"
+              Just w → pure w
+              
+          let glfwWindow = case window of
+                  Window w → w
 
-        let frameTime = currentTime - lastTime
-            targetFrameTime = if tFps > 0.0 then 1.0 / tFps else 1.0 / 60.0
-            -- Add a small adjustment for system overhead
-            systemOverhead = 0.0002  -- 0.2ms adjustment
+          currentTime ← liftIO getCurTime
+          tstate ← gets timingState
+          let lastTime  = lastFrameTime tstate
+              accum     = frameTimeAccum tstate
+              tFps      = targetFPS tstate
 
-        -- Sleep if we're ahead of schedule, accounting for overhead
-        when (frameTime < targetFrameTime) $ do
-            let sleepTime = targetFrameTime - frameTime - systemOverhead
-            when (sleepTime > 0) $
-                liftIO $ threadDelay $ floor (sleepTime * 1000000)
+          let frameTime = currentTime - lastTime
+              targetFrameTime = if tFps > 0.0 then 1.0 / tFps else 1.0 / 60.0
+              -- Add a small adjustment for system overhead
+              systemOverhead = 0.0002  -- 0.2ms adjustment
 
-        -- Get time after potential sleep
-        actualCurrentTime ← liftIO getCurTime
-        let actualFrameTime = actualCurrentTime - lastTime
-            newAccum = accum + actualFrameTime
+          -- Sleep if we're ahead of schedule, accounting for overhead
+          when (frameTime < targetFrameTime) $ do
+              let sleepTime = targetFrameTime - frameTime - systemOverhead
+              when (sleepTime > 0) $
+                  liftIO $ threadDelay $ floor (sleepTime * 1000000)
 
-        modify $ \s → s { timingState = (timingState s)
-            { lastFrameTime = actualCurrentTime
-            , frameTimeAccum = newAccum
-            , frameCount = frameCount (timingState s) + 1
-            , deltaTime = actualFrameTime
-            , currentTime = actualCurrentTime 
-            } }
+          -- Get time after potential sleep
+          actualCurrentTime ← liftIO getCurTime
+          let actualFrameTime = actualCurrentTime - lastTime
+              newAccum = accum + actualFrameTime
 
-        when (newAccum ≥ 1.0) $ do
-            tstate ← gets timingState
-            let currentCount = frameCount tstate
-                fps = if newAccum > 0 then fromIntegral currentCount / newAccum else 0.0
-            logDebug $ "FPS: " ⧺ show fps
-            -- Adjust timing if FPS is consistently off
-            when (fps < 59.0) $
-                modify $ \s → s { timingState = (timingState s) {
-                                    targetFPS = targetFPS (timingState s) + 0.1 } }
-            when (fps > 61.0) $
-                modify $ \s → s { timingState = (timingState s) {
-                                    targetFPS = targetFPS (timingState s) - 0.1 } }
-            modify $ \s → s { timingState = (timingState s)
-                { frameTimeAccum = 0.0
-                , frameCount = 0 
-                } }
-        GLFW.pollEvents
-        handleInputEvents
-        shouldClose ← GLFW.windowShouldClose glfwWindow
-        lifecycle ← gets (engineLifecycle . timingState)
-        if shouldClose || lifecycle ≢ EngineRunning
-            then do
-                env ← ask
-                liftIO $ Q.writeQueue (logQueue env) "Engine shutting down..."
-                -- Just wait for device to idle
-                forM_ (vulkanDevice state) $ \device → 
-                    unless (lifecycle ≡ EngineStopped) $
-                      liftIO $ deviceWaitIdle device
-                modify $ \s → s { timingState = (timingState s) {
-                                    engineLifecycle = EngineStopped } }
-            else unless (lifecycle ≡ CleaningUp) $ do
-                drawFrame
-                mainLoop
+          modify $ \s → s { timingState = (timingState s)
+              { lastFrameTime = actualCurrentTime
+              , frameTimeAccum = newAccum
+              , frameCount = frameCount (timingState s) + 1
+              , deltaTime = actualFrameTime
+              , currentTime = actualCurrentTime 
+              } }
+
+          when (newAccum ≥ 1.0) $ do
+              tstate ← gets timingState
+              let currentCount = frameCount tstate
+                  fps = if newAccum > 0 then fromIntegral currentCount / newAccum else 0.0
+              logDebug $ "FPS: " ⧺ show fps
+              -- Adjust timing if FPS is consistently off
+              when (fps < 59.0) $
+                  modify $ \s → s { timingState = (timingState s) {
+                                      targetFPS = targetFPS (timingState s) + 0.1 } }
+              when (fps > 61.0) $
+                  modify $ \s → s { timingState = (timingState s) {
+                                      targetFPS = targetFPS (timingState s) - 0.1 } }
+              modify $ \s → s { timingState = (timingState s)
+                  { frameTimeAccum = 0.0
+                  , frameCount = 0 
+                  } }
+          GLFW.pollEvents
+          handleInputEvents
+          shouldClose ← GLFW.windowShouldClose glfwWindow
+          env ← ask
+          lifecycle ← liftIO $ readIORef (lifecycleRef env)
+          if shouldClose || lifecycle ≢ EngineRunning
+              then do
+                  liftIO $ Q.writeQueue (logQueue env) "Engine shutting down..."
+                  -- Just wait for device to idle
+                  forM_ (vulkanDevice state) $ \device → 
+                      unless (lifecycle ≡ EngineStopped) $
+                        liftIO $ deviceWaitIdle device
+              else unless (lifecycle ≡ CleaningUp) $ do
+                  drawFrame
+                  mainLoop
+        CleaningUp → logDebug "Engine is cleaning up"
+        EngineStopped → logDebug "Engine has stopped"
 
 -- Add after initializeTextures function
 initializeTestScene ∷ EngineM' EngineEnv ()

@@ -1,19 +1,25 @@
-module Engine.Core.Thread
-  ( waitThreadComplete -- Export threading utility functions
-  ) where
+module Engine.Core.Thread where
 
 import UPrelude
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (threadDelay, ThreadId, killThread)
 import Data.IORef (IORef, readIORef)
-import Engine.Input.Thread (InputThreadState(..), ThreadState(..))
 import Data.Foldable (forM_)
 
+-- | Thread state with safe shutdown
+data ThreadState = ThreadState
+    { tsRunning  ∷ IORef ThreadControl
+    , tsThreadId ∷ ThreadId }
+
+-- | Thread state for control flow
+data ThreadControl = ThreadRunning | ThreadPaused | ThreadStopped
+    deriving (Show, Eq)
+
 -- | Wait for a thread to complete, ensuring graceful shutdown
-waitThreadComplete ∷ InputThreadState → IO ()
-waitThreadComplete its = do
-    tstate ← readIORef (itsRunning its)
+waitThreadComplete ∷ ThreadState → IO ()
+waitThreadComplete ts = do
+    tstate ← readIORef (tsRunning ts)
     case tstate of
         ThreadStopped → pure () -- Thread has already stopped
         _ → do
             threadDelay 10000 -- Check every 10ms
-            waitThreadComplete its
+            waitThreadComplete ts

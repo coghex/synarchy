@@ -10,21 +10,13 @@ import Control.Exception (SomeException, catch)
 import Data.IORef (IORef, newIORef, writeIORef, readIORef)
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import Engine.Core.State
+import Engine.Core.Thread
 import Engine.Input.Types
 import Engine.Input.Callback
 import qualified Engine.Core.Queue as Q
 
--- | Thread state with safe shutdown
-data InputThreadState = InputThreadState
-    { itsRunning :: IORef ThreadState
-    , itsThreadId :: ThreadId }
-
--- | Thread state for control flow
-data ThreadState = ThreadRunning | ThreadPaused | ThreadStopped
-    deriving (Show, Eq)
-
 -- | Start the input processing thread
-startInputThread ∷ EngineEnv → IO InputThreadState
+startInputThread ∷ EngineEnv → IO ThreadState
 startInputThread env = do
     stateRef ← newIORef ThreadRunning
     threadId ← catch 
@@ -38,10 +30,10 @@ startInputThread env = do
                 "Failed to start input thread: " ⧺ show e
             error "Input thread failed to start"
         )
-    return $ InputThreadState stateRef threadId
+    return $ ThreadState stateRef threadId
 
 -- | Main input processing loop with timing control
-runInputLoop ∷ EngineEnv → InputState → ThreadState → IO ()
+runInputLoop ∷ EngineEnv → InputState → ThreadControl → IO ()
 runInputLoop _   _     ThreadStopped = return ()
 runInputLoop env inpSt ThreadPaused  = do
     threadDelay 100000  -- 100ms pause check
@@ -114,22 +106,19 @@ updateScrollState ∷ InputState → Double → Double → InputState
 updateScrollState state x y = state { inpScrollDelta = (x, y) }
 
 -- | Safely shutdown input thread
-shutdownInputThread ∷ EngineEnv → InputThreadState → IO ()
-shutdownInputThread env its = catch (do
+shutdownInputThread ∷ EngineEnv → ThreadState → IO ()
+shutdownInputThread env ts = catch (do
     -- Signal thread to stop
-    writeIORef (itsRunning its) ThreadStopped
+    writeIORef (tsRunning ts) ThreadStopped
     Q.writeQueue (logQueue env) "Input thread signaled to stop..."
+
+    -- Wait for thread to complete
+    waitThreadComplete ts
     
-    -- Give thread time to cleanup and exit gracefully
-    threadDelay 50000  -- 50ms should be enough for cleanup
-    
-    -- Check if thread is still alive and force kill if necessary
-    writeIORef (itsRunning its) ThreadStopped
-    killThread (itsThreadId its)
     Q.writeQueue (logQueue env) "Input thread shutdown complete."
     ) $ \(e :: SomeException) → do
         -- Log any errors during shutdown
         Q.writeQueue (logQueue env) $ T.pack $
             "Error shutting down input thread: " ⧺ show e
         -- Force kill thread if graceful shutdown failed
-        killThread (itsThreadId its)
+        killThread (tsThreadId ts)
