@@ -26,15 +26,25 @@ setupCallbacks window el queue = do
     GLFW.setWindowFocusCallback window 
         (Just $ focusCallback queue)
 
+-- | clears all GLFW callbacks for a window
+clearGLFWCallbacks ∷ GLFW.Window → IO ()
+clearGLFWCallbacks window = do
+    GLFW.setKeyCallback window Nothing
+    GLFW.setMouseButtonCallback window Nothing
+    GLFW.setCursorPosCallback window Nothing
+    GLFW.setScrollCallback window Nothing
+    GLFW.setWindowSizeCallback window Nothing
+    GLFW.setWindowFocusCallback window Nothing
+
 -- | Keyboard input callback
 keyCallback ∷ Queue InputEvent → IORef EngineLifecycle → GLFW.Window
             → GLFW.Key → Int → GLFW.KeyState → GLFW.ModifierKeys → IO ()
-keyCallback queue el _win key _scancode keyState mods
+keyCallback queue el _win key _scancode keyState mods = do
     -- discard any input pressed during startup
-  | lifecycle ≡ EngineRunning = writeQueue queue $ InputKeyEvent key keyState mods
-  | otherwise                 = return ()
-  where
-    lifecycle = unsafePerformIO $ readIORef el
+  lifecycle ← readIORef el
+  case lifecycle of
+    EngineRunning → writeQueue queue $ InputKeyEvent key keyState mods
+    _             → return ()
 
 -- | Mouse button callback
 mouseCallback ∷ Queue InputEvent → GLFW.Window → GLFW.MouseButton

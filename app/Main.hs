@@ -31,7 +31,7 @@ import Engine.Graphics.Types
 import Engine.Input.Types
 import Engine.Input.Thread
 import Engine.Input.Event (handleInputEvents)
-import Engine.Input.Callback (setupCallbacks)
+import Engine.Input.Callback (setupCallbacks, clearGLFWCallbacks)
 import Engine.Graphics.Camera
 import Engine.Graphics.Window.GLFW (initializeGLFW, terminateGLFW
                                    , createWindow, destroyWindow, createWindowSurface)
@@ -273,7 +273,7 @@ main = do
             logDebug $ "Recorded command buffer " ⧺ show i
 
         mainLoop
-        shutdownEngine inputThreadState
+        shutdownEngine window inputThreadState
  
   result ← runEngineM engineAction envVar stateVar checkStatus
   case result of
@@ -283,23 +283,26 @@ main = do
     Right _  → pure ()
 
 -- the ever important shutdown function
-shutdownEngine ∷ ThreadState → EngineM' EngineEnv ()
-shutdownEngine ts = do
+shutdownEngine ∷ Window → ThreadState → EngineM' EngineEnv ()
+shutdownEngine (Window win) ts = do
     logDebug "Engine cleaning up..."
+
+    -- Wait for Vulkan device to idle before resource cleanup
+    state ← gets graphicsState
+    forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
     -- Wait for input thread to finish
     env ← ask
     inputThreadState ← liftIO $ readIORef (tsRunning ts)
     liftIO $ shutdownInputThread env ts
 
+    -- glfw cleanup
+    liftIO $ clearGLFWCallbacks win
+
     -- cleanup asset manager
     logDebug "cleaning up asset manager..."
     assets ← gets assetPool
     cleanupAssetManager assets
-
-    -- Wait for Vulkan device to idle before resource cleanup
-    state ← gets graphicsState
-    forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
     -- Transition to stopped state
     liftIO $ writeIORef (lifecycleRef env) EngineStopped
@@ -556,7 +559,8 @@ mainLoop = do
         EngineStarting → do
           logDebug "Engine starting..."
           liftIO $ threadDelay 100000
-          -- make sure to transition the engine state to running
+          -- clear the input queue before hitting the main loop again
+          liftIO $ Q.flushQueue (inputQueue env)
           liftIO $ writeIORef (lifecycleRef env) EngineRunning
           mainLoop
         -- regular operation
@@ -716,6 +720,7 @@ safeVectorHead ∷ V.Vector a → Maybe a
 safeVectorHead vec
   | V.null vec = Nothing
   | otherwise = Just (V.head vec)
+
 
 minRequiredTextures ∷ Int
 minRequiredTextures = 2
