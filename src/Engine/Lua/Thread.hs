@@ -120,7 +120,9 @@ executeLuaScripts logQueue luaEnv currentTick = do
                 (lsFilePath script)
               Lua.pop luaState 1
       
-      -- Update next tick for this script (only meaningful for non-zero intervals)
+      -- Update next tick for this script for informational purposes
+      -- Note: The actual scheduling is done via modulo check on currentTick,
+      -- not by comparing to lsNextTick, so this is primarily for debugging/monitoring
       let nextTick = if lsTickInterval script ≡ 0
                      then currentTick + 1
                      else currentTick + lsTickInterval script

@@ -17,7 +17,7 @@ data LuaScript = LuaScript
   { lsName         ∷ T.Text           -- ^ Script name/identifier
   , lsFilePath     ∷ FilePath         -- ^ Path to the Lua script file
   , lsTickInterval ∷ Word64           -- ^ Ticks between executions (0 = execute every tick)
-  , lsNextTick     ∷ Word64           -- ^ Next tick when this script should execute
+  , lsNextTick     ∷ Word64           -- ^ Next tick when this script should execute (informational, not used for scheduling)
   , lsEnabled      ∷ Bool             -- ^ Whether this script is enabled
   , lsInitialized  ∷ Bool             -- ^ Whether the init script has been executed
   } deriving (Show, Eq)
