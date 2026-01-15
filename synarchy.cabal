@@ -86,6 +86,7 @@ test-suite synarchy-test
                        -with-rtsopts=-N
                        -fno-full-laziness
                        -fno-cse
+                       -fsanitize=address
                        -fPIC
                        -optl-Wl,-dead_strip
                        -optl-Wl,-bind_at_load
