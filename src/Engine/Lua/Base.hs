@@ -62,6 +62,9 @@ updateScript scriptsVar script =
   atomically $ modifyTVar' scriptsVar $ Map.insert (lsName script) script
 
 -- | Calculate the LCM of all tick intervals for scheduling optimization
+-- Note: This function is currently not used in the main loop, but is available
+-- for future optimizations where the scheduler could use the LCM to determine
+-- when to wake up and check for scripts to execute, rather than checking every tick.
 calculateLCM ∷ LuaScripts → Word64
 calculateLCM scripts =
   let intervals = [lsTickInterval s | s ← Map.elems scripts, lsTickInterval s > 0]

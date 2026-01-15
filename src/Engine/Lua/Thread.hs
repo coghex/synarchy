@@ -9,6 +9,7 @@ module Engine.Lua.Thread
 import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
+import Data.List (sortBy)
 import qualified Scripting.Lua as Lua
 import qualified Engine.Core.Queue as Q
 import Engine.Lua.Types
@@ -75,14 +76,16 @@ executeLuaScripts logQueue luaEnv currentTick = do
   let luaState = leLuaState luaEnv
   
   -- Get scripts that should execute on this tick, sorted by name for determinism
-  let scriptsToRun = Map.elems $ Map.filter shouldRun scripts
-      shouldRun script = lsEnabled script ∧
+  let shouldRun script = lsEnabled script ∧
                         lsInitialized script ∧
                         (lsTickInterval script ≡ 0 ∨
                          currentTick `mod` lsTickInterval script ≡ 0)
+      scriptsToRun = Map.elems $ Map.filter shouldRun scripts
+      -- Sort by name for deterministic execution order
+      sortedScripts = sortBy (\a b → compare (lsName a) (lsName b)) scriptsToRun
   
   -- Execute each script in deterministic order (sorted by name)
-  forM_ scriptsToRun $ \script → catch
+  forM_ sortedScripts $ \script → catch
     (do
       -- Load the script file if needed
       Lua.getglobal luaState "runLua"
@@ -117,8 +120,11 @@ executeLuaScripts logQueue luaEnv currentTick = do
                 (lsFilePath script)
               Lua.pop luaState 1
       
-      -- Update next tick for this script
-      let updatedScript = script { lsNextTick = currentTick + lsTickInterval script }
+      -- Update next tick for this script (only meaningful for non-zero intervals)
+      let nextTick = if lsTickInterval script ≡ 0
+                     then currentTick + 1
+                     else currentTick + lsTickInterval script
+          updatedScript = script { lsNextTick = nextTick }
       updateScript (leScripts luaEnv) updatedScript
     )
     (\(e ∷ SomeException) → do
