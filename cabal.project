@@ -3,4 +3,5 @@ packages: .
 allow-newer: *:base
 
 constraints:
-  dependent-sum >= 0.7
+  dependent-sum >= 0.7,
+  vulkan < 3.7
