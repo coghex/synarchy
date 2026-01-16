@@ -59,6 +59,7 @@ test-suite synarchy-test
                 , directory
                 , filepath
                 , hspec
+                , hslua
                 , JuicyPixels
                 , synarchy
                 , text
@@ -159,6 +160,9 @@ library
                      Engine.Input.Event
                      Engine.Input.Types
                      Engine.Input.Thread
+                     Engine.Lua.Base
+                     Engine.Lua.Types
+                     Engine.Lua.Init
                      Engine.Core.Base
                      Engine.Core.Defaults
                      Engine.Core.Monad
@@ -199,6 +203,7 @@ library
                  , bytestring
                  , containers
                  , filepath
+                 , directory
                  , GLFW-b
                  , hslua
                  , JuicyPixels
@@ -291,6 +296,7 @@ executable synarchy
                  , bytestring
                  , containers
                  , filepath
+                 , directory
                  , GLFW-b
                  , hslua
                  , JuicyPixels
