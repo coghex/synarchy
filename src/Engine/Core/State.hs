@@ -9,6 +9,7 @@ import Engine.Asset.Types
 import Engine.Core.Base
 import Engine.Core.Types
 import Engine.Core.Queue as Q
+import Engine.Lua.Types
 import Engine.Event.Types
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Base
@@ -28,6 +29,7 @@ data EngineEnv = EngineEnv
   , inputQueue       ∷ Q.Queue InputEvent
   , logQueue         ∷ Q.Queue T.Text
   , lifecycleRef     ∷ IORef EngineLifecycle
+  , luaEnv           ∷ LuaEnv
   }
 
 -- | Engine state (mutable)

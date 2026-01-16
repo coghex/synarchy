@@ -91,17 +91,19 @@ main = do
   luaState ← Lua.newstate
   luaScripts ← newTVarIO Map.empty
   luaEventQueue ← newTQueueIO
-  let env = LuaEnv luaState luaScripts luaEventQueue
+  let lEnv = LuaEnv luaState luaScripts luaEventQueue
   currentDir ← getCurrentDirectory
   let modDir = currentDir </> "mod"
-  luaInit env modDir
+  luaInit lEnv modDir
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
         { engineConfig = defaultEngineConfig
         , eventQueue   = eventQueue
         , inputQueue   = inputQueue
         , logQueue     = logQueue
-        , lifecycleRef = lifecycleRef }
+        , lifecycleRef = lifecycleRef
+        , luaEnv       = lEnv
+        }
   envVar ←   atomically $ newVar defaultEngineEnv
   lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
   stateVar ← atomically $ newVar $ defaultEngineState lf

@@ -160,24 +160,34 @@ unloadAsset aid = do
   -- First check if it's a texture atlas
   case Map.lookup aid (apTextureAtlases pool) of
     Just atlas → do
-      -- Execute cleanup if it exists
-      liftIO $ maybe (pure ()) id (taCleanup atlas)
-      -- Remove from pool
-      modify $ \s → s { assetPool = (assetPool s) {
-        apTextureAtlases = Map.delete aid (apTextureAtlases pool)
-      } }
+      -- Decrement reference count
+      let refCount = taRefCount atlas - 1
+      if refCount <= 0 then do
+          -- Execute cleanup if it exists
+          liftIO $ maybe (pure ()) id (taCleanup atlas)
+          -- Remove from pool
+          modify $ \s → s { assetPool = (assetPool s) {
+            apTextureAtlases = Map.delete aid (apTextureAtlases pool)
+          } }
+      else modify $ \s → s { assetPool = (assetPool s) {
+            apTextureAtlases = Map.adjust (\a → a { taRefCount = refCount }) aid (apTextureAtlases pool) }}
       pure ()
       
     Nothing →
       -- If not a texture, check if it's a shader program
       case Map.lookup aid (apShaderPrograms pool) of
         Just program → do
-          -- Execute cleanup if it exists
-          liftIO $ maybe (pure ()) id (spCleanup program)
-          -- Remove from pool
-          modify $ \s → s { assetPool = (assetPool s) {
-            apShaderPrograms = Map.delete aid (apShaderPrograms pool)
-          } }
+          -- decrement reference count
+          let newRefCount = spRefCount program - 1
+          if newRefCount <= 0 then do
+                -- Execute cleanup if it exists
+                liftIO $ maybe (pure ()) id (spCleanup program)
+                -- Remove from pool
+                modify $ \s → s { assetPool = (assetPool s) {
+                  apShaderPrograms = Map.delete aid (apShaderPrograms pool)
+                } }
+            else modify $ \s → s { assetPool = (assetPool s) {
+                  apShaderPrograms = Map.adjust (\p → p { spRefCount = newRefCount }) aid (apShaderPrograms pool) }}
           pure ()
           
         Nothing →
