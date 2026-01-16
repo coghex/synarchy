@@ -4,6 +4,7 @@ module Main where
 import UPrelude
 import Control.Exception (displayException, throwIO)
 import Control.Concurrent (threadDelay, forkIO)
+import Control.Concurrent.STM (newTVarIO, newTQueueIO)
 import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Map as Map
 import qualified Data.Text as T
@@ -13,7 +14,9 @@ import Data.Time.Clock (getCurrentTime, utctDayTime)
 import Linear (M44, V3(..), identity, (!*!), perspective, lookAt, translation, ortho)
 import System.Environment (setEnv)
 import System.Exit ( exitFailure )
+import System.Directory (getCurrentDirectory)
 import System.FilePath ((</>))
+import qualified HsLua as Lua
 import Engine.Asset.Types
 import Engine.Asset.Manager
 import Engine.Core.Base
@@ -26,6 +29,8 @@ import Engine.Core.Resource
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Error.Exception
 import Engine.Core.Var
+import Engine.Lua.Init
+import Engine.Lua.Types
 import Engine.Graphics.Base
 import Engine.Graphics.Types
 import Engine.Input.Types
@@ -82,6 +87,14 @@ main = do
   logQueue   ← Q.newQueue
   -- initialize engine lifecycle io ref to block threads on engine status
   lifecycleRef ← newIORef EngineStarting
+  -- initialize lua
+  luaState ← Lua.newstate
+  luaScripts ← newTVarIO Map.empty
+  luaEventQueue ← newTQueueIO
+  let env = LuaEnv luaState luaScripts luaEventQueue
+  currentDir ← getCurrentDirectory
+  let modDir = currentDir </> "mod"
+  luaInit env modDir
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
         { engineConfig = defaultEngineConfig
