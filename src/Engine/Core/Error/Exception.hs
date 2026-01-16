@@ -10,6 +10,7 @@ module Engine.Core.Error.Exception
   , StateError(..)
   , InitError(..)
   , AssetError(..)
+  , LuaError(..)
   -- * Functions
   , throwEngineException
   , mkErrorContext
@@ -23,6 +24,7 @@ module Engine.Core.Error.Exception
   , throwStateError
   , throwInitError
   , throwAssetError
+  , throwLuaError
   , catchEngine
   , tryEngine
   ) where
@@ -44,6 +46,7 @@ data ExceptionType
   | ExState StateError        -- ^ State management errors
   | ExInit InitError         -- ^ Initialization errors
   | ExAsset AssetError     -- ^ Asset loading errors
+  | ExLua LuaError         -- ^ Lua-specific errors
   deriving (Show, Eq, Typeable)
 
 -- | Graphics-specific errors
@@ -110,6 +113,18 @@ data AssetError
   | AssetCountMismatch T.Text       -- ^ Asset count mismatch
   deriving (Show, Eq, Typeable)
 
+-- | Lua-specific errors
+data LuaError
+  = LuaSyntaxError T.Text        -- ^ Syntax error during Lua script parsing
+  | LuaRuntimeError T.Text       -- ^ Runtime error during Lua script execution
+  | LuaMissingFunction T.Text    -- ^ Attempt to call a nonexistent Lua function
+  | LuaTypeError T.Text          -- ^ Invalid type provided for a Lua function argument
+  | LuaMemoryError T.Text        -- ^ Lua VM ran out of memory
+  | LuaCallbackError T.Text      -- ^ Error occurred in a Lua->Haskell callback
+  | LuaExecutionTimeout T.Text   -- ^ Lua script exceeded execution time limit
+  | LuaGenericError T.Text       -- ^ General Lua error with a specific message
+  deriving (Show, Eq, Typeable)
+
 -- | Main exception type with enhanced context
 data EngineException = EngineException
   { errorType    ∷ ExceptionType  -- ^ Type of error
@@ -164,32 +179,30 @@ throwGraphicsError :: MonadError EngineException m
                   => GraphicsError -> T.Text -> m a
 throwGraphicsError err msg = 
   throwError $ EngineException (ExGraphics err) msg mkErrorContext
-
 throwResourceError :: MonadError EngineException m 
                   => ResourceError -> T.Text -> m a
 throwResourceError err msg = 
   throwError $ EngineException (ExResource err) msg mkErrorContext
-
 throwSystemError :: MonadError EngineException m 
                 => SystemError -> T.Text -> m a
 throwSystemError err msg = 
   throwError $ EngineException (ExSystem err) msg mkErrorContext
-
 throwStateError :: MonadError EngineException m 
                 => StateError -> T.Text -> m a
 throwStateError err msg = 
   throwError $ EngineException (ExState err) msg mkErrorContext
-
 throwInitError :: MonadError EngineException m 
                => InitError -> T.Text -> m a
 throwInitError err msg = 
   throwError $ EngineException (ExInit err) msg mkErrorContext
-
 throwAssetError :: MonadError EngineException m 
                => AssetError -> T.Text -> m a
 throwAssetError err msg = 
   throwError $ EngineException (ExAsset err) msg mkErrorContext
-
+throwLuaError :: MonadError EngineException m 
+               => LuaError -> T.Text -> m a
+throwLuaError err msg = 
+  throwError $ EngineException (ExLua err) msg mkErrorContext
 
 -- | Create error context from current call stack
 mkErrorContext ∷ HasCallStack ⇒ ErrorContext

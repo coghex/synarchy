@@ -4,6 +4,7 @@ module Engine.Core.Monad
   , runEngineM
   , MonadIO(..)
   , MonadError(..)
+  , getEngineVars
   ) where
 
 import UPrelude
