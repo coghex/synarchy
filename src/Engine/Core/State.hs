@@ -87,6 +87,7 @@ data GraphicsState = GraphicsState
 data AssetPool = AssetPool
   { apTextureAtlases    ∷ Map.Map AssetId TextureAtlas
   , apShaderPrograms    ∷ Map.Map AssetId ShaderProgram
+  , apAssetPaths        ∷ Map.Map T.Text AssetId
   , apNextId            ∷ Word32
   }
 

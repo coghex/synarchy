@@ -85,7 +85,7 @@ defaultEngineState lf = EngineState
     , camera2D           = defaultCamera
     , cleanupStatus      = NotStarted
     }
-  , assetPool        = AssetPool Map.empty Map.empty 0
+  , assetPool        = AssetPool Map.empty Map.empty Map.empty 0
   , assetConfig      = AssetConfig 100 100 True True
   , sceneManager     = createSceneManager
   }
