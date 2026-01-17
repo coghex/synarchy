@@ -306,12 +306,13 @@ shutdownEngine (Window win) ts = do
     state ← gets graphicsState
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
+    -- TODO: figure out why this causes a race condition
     -- cleanup asset manager
-    logDebug "cleaning up asset manager..."
-    assets ← gets assetPool
-    cleanupAssetManager assets
+    --logDebug "cleaning up asset manager..."
+    --assets ← gets assetPool
+    --cleanupAssetManager assets
 
-    forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
+    --forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
     -- glfw cleanup, stopping polling first
     liftIO $ GLFW.postEmptyEvent
