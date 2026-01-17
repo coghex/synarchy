@@ -9,7 +9,7 @@ import Engine.Asset.Types
 import Engine.Core.Base
 import Engine.Core.Types
 import Engine.Core.Queue as Q
-import Engine.Lua.Types
+import Engine.Scripting.Lua.Types
 import Engine.Event.Types
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Base

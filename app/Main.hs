@@ -29,8 +29,8 @@ import Engine.Core.Resource
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Error.Exception
 import Engine.Core.Var
-import Engine.Lua.Init
-import Engine.Lua.Types
+import Engine.Scripting.Lua.Backend
+import Engine.Scripting.Lua.Types
 import Engine.Graphics.Base
 import Engine.Graphics.Types
 import Engine.Input.Types
@@ -65,6 +65,8 @@ import Engine.Scene.Types
 import Engine.Scene.Render
 import Engine.Scene.Graph
 import Engine.Scene.Base
+import Engine.Scripting.Loader (createBackend)
+import Engine.Scripting.Backend (AnyBackend(..), BackendType(..))
 import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Zero
@@ -81,6 +83,7 @@ main = do
 #else
 #endif
 
+  AnyBackend luaBackend ← createBackend LuaBackendType
   -- Initialize queues first
   eventQueue ← Q.newQueue
   inputQueue ← Q.newQueue
@@ -369,8 +372,8 @@ initializeTextures device physicalDevice cmdPool queue
   } }
 
   -- Load texture using asset manager
-  let texturePath1 = "dat/tile01.png"
-  let texturePath2 = "dat/tile02.png"
+  let texturePath1 = "assets/textures/tile01.png"
+  let texturePath2 = "assets/textures/tile02.png"
   textureId1 ← loadTextureAtlas (T.pack "tile01") texturePath1 (T.pack "default")
   logDebug $ "Texture 1 loaded: " ⧺ show textureId1
   textureId2 ← loadTextureAtlas (T.pack "tile02") texturePath2 (T.pack "default")

@@ -160,9 +160,12 @@ library
                      Engine.Input.Event
                      Engine.Input.Types
                      Engine.Input.Thread
-                     Engine.Lua.Base
-                     Engine.Lua.Types
-                     Engine.Lua.Init
+                     Engine.Scripting.Backend
+                     Engine.Scripting.Loader
+                     Engine.Scripting.Types
+                     Engine.Scripting.Lua.Backend
+                     Engine.Scripting.Lua.Types
+                     Engine.Scripting.PureScript.Backend
                      Engine.Core.Base
                      Engine.Core.Defaults
                      Engine.Core.Monad
