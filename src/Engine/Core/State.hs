@@ -28,8 +28,8 @@ data EngineEnv = EngineEnv
   , eventQueue       ∷ Q.Queue Event
   , inputQueue       ∷ Q.Queue InputEvent
   , logQueue         ∷ Q.Queue T.Text
-  , luaEventQueue    ∷ Q.Queue LuaEvent
-  , luaCommandQueue  ∷ Q.Queue LuaCommand
+  , luaToEngineQueue ∷ Q.Queue LuaToEngineMsg
+  , engineToLuaQueue ∷ Q.Queue EngineToLuaMsg
   , lifecycleRef     ∷ IORef EngineLifecycle
   }
 

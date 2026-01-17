@@ -66,7 +66,7 @@ import Engine.Scene.Render
 import Engine.Scene.Graph
 import Engine.Scene.Base
 import Engine.Scripting.Loader (createBackend)
-import Engine.Scripting.Backend (AnyBackend(..), BackendType(..))
+import Engine.Scripting.Backend (AnyBackend(..), BackendType(..), initBackend)
 import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Zero
@@ -83,24 +83,23 @@ main = do
 #else
 #endif
 
-  AnyBackend luaBackend ← createBackend LuaBackendType
   -- Initialize queues first
   eventQueue ← Q.newQueue
   inputQueue ← Q.newQueue
   logQueue   ← Q.newQueue
-  leq        ← Q.newQueue
-  lcq        ← Q.newQueue
+  lteq       ← Q.newQueue
+  etlq       ← Q.newQueue
   -- initialize engine lifecycle io ref to block threads on engine status
   lifecycleRef ← newIORef EngineStarting
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
-        { engineConfig    = defaultEngineConfig
-        , eventQueue      = eventQueue
-        , inputQueue      = inputQueue
-        , logQueue        = logQueue
-        , luaEventQueue   = leq
-        , luaCommandQueue = lcq
-        , lifecycleRef    = lifecycleRef
+        { engineConfig     = defaultEngineConfig
+        , eventQueue       = eventQueue
+        , inputQueue       = inputQueue
+        , logQueue         = logQueue
+        , luaToEngineQueue = lteq
+        , engineToLuaQueue = etlq
+        , lifecycleRef     = lifecycleRef
         }
   envVar ←   atomically $ newVar defaultEngineEnv
   lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
@@ -108,7 +107,7 @@ main = do
 
   -- fork input thread
   inputThreadState ← startInputThread defaultEngineEnv
-  -- fork lua thread
+  -- fork scripting thread
   luaThreadState ← startLuaThread defaultEngineEnv
   
   let engineAction ∷ EngineM' EngineEnv ()

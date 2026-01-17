@@ -9,7 +9,7 @@ import Engine.Scripting.Backend
 import Engine.Scripting.Types
 import Engine.Scripting.Lua.Types
 import Engine.Core.Thread
-import Engine.Core.State (EngineEnv, luaEventQueue, luaCommandQueue, logQueue, lifecycleRef)
+import Engine.Core.State
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
@@ -65,6 +65,21 @@ instance ScriptBackend LuaBackend where
   backendName _    = "Lua"
   backendVersion _ = "5.5"
 
+registerLuaAPI :: Lua.State -> EngineEnv -> IO ()
+registerLuaAPI lst env = Lua.runWith lst $ do
+  Lua.newtable 
+  -- engine.logInfo
+  Lua.pushHaskellFunction (logInfoFn :: Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "logInfo")
+  Lua.setglobal (Lua.Name "engine")
+  where logInfoFn = do
+          msg <- Lua.tostring 1
+          case msg of
+            Just bs → Lua.liftIO $ Q.writeQueue (logQueue env) (TE.decodeUtf8 bs)
+            Nothing → return ()
+          return 0
+
+
 -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
 callLuaFunction funcName _args = do
@@ -85,9 +100,9 @@ startLuaThread env = do
     threadId ← catch 
         (do
             Q.writeQueue (logQueue env) "Starting lua thread..."
-            let leq = luaEventQueue env
-                lcq = luaCommandQueue env
-            backendState ← createLuaBackendState leq lcq
+            let lteq = luaToEngineQueue env
+                etlq = engineToLuaQueue env
+            backendState ← createLuaBackendState lteq etlq
             tid ← forkIO $ runLuaLoop env backendState stateRef
             return tid
         ) 
@@ -99,16 +114,16 @@ startLuaThread env = do
     return $ ThreadState stateRef threadId
 
 -- | Create Lua backend state
-createLuaBackendState ::  Q.Queue LuaEvent -> Q.Queue LuaCommand -> IO LuaBackendState
-createLuaBackendState eventQueue commandQueue = do
+createLuaBackendState ::  Q.Queue LuaToEngineMsg -> Q.Queue EngineToLuaMsg
+  -> IO LuaBackendState
+createLuaBackendState ltem etlm = do
   lState ← Lua.newstate
   _ ← Lua.runWith lState $ Lua.openlibs
   scriptsVar ← newTVarIO Map.empty
   return LuaBackendState
     { lbsLuaState     = lState
     , lbsScripts      = scriptsVar
-    , lbsEventQueue   = eventQueue
-    , lbsCommandQueue = commandQueue
+    , lbsMsgQueues    = (ltem, etlm)
     }
 
 -- | Lua event loop (existing code)

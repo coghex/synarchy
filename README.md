@@ -31,8 +31,10 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
                 - Sprite (sprite and animation functionality)
             - Input (input handling)
             - Scene (scene graph and rendering)
+            - Scripting (scripting support)
     - app (here Main.hs controls the draw loop and spawns the child threads)
-    - dat (images and other data)
+    - assets (images and other data)
+    - scripts (self explanatory)
     - test (unit tests are really just for the base engine and most of the functionality is tested in the app)
 
 ## Task List

@@ -19,8 +19,7 @@ type LuaScripts = TVar (Map.Map FilePath LuaScript)
 data LuaBackendState = LuaBackendState
   { lbsLuaState    ∷ Lua.State
   , lbsScripts     ∷ LuaScripts
-  , lbsEventQueue  ∷ Q.Queue LuaEvent
-  , lbsCommandQueue ∷ Q.Queue LuaCommand
+  , lbsMsgQueues   ∷ (Q.Queue LuaToEngineMsg, Q.Queue EngineToLuaMsg)
   }
 
 -- | Log levels for Lua
@@ -30,14 +29,12 @@ data LuaLogLevel = LuaLogDebug
                  | LuaLogError
                  deriving (Eq, Show)
 
--- | Lua-specific commands
-data LuaCommand = LuaStart | LuaStop 
-  deriving (Eq, Show)
-
--- | Lua-specific events
-data LuaEvent = LuaLog LuaLogLevel String
-              | LuaRes LuaResult
-              deriving (Eq, Show)
+data LuaToEngineMsg = LuaLog LuaLogLevel String
+                    | LuaLoadTexture FilePath
+                    deriving (Eq, Show)
+data EngineToLuaMsg = LuaTextureLoaded Int
+                    | LuaThreadKill
+                    deriving (Eq, Show)
 
 -- | Lua execution result
 data LuaResult = LuaSuccess
