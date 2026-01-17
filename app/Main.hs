@@ -85,24 +85,19 @@ main = do
   eventQueue ← Q.newQueue
   inputQueue ← Q.newQueue
   logQueue   ← Q.newQueue
+  leq        ← Q.newQueue
+  lcq        ← Q.newQueue
   -- initialize engine lifecycle io ref to block threads on engine status
   lifecycleRef ← newIORef EngineStarting
-  -- initialize lua
-  luaState ← Lua.newstate
-  luaScripts ← newTVarIO Map.empty
-  luaEventQueue ← newTQueueIO
-  let lEnv = LuaEnv luaState luaScripts luaEventQueue
-  currentDir ← getCurrentDirectory
-  let modDir = currentDir </> "mod"
-  --luaInit lEnv modDir
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
-        { engineConfig = defaultEngineConfig
-        , eventQueue   = eventQueue
-        , inputQueue   = inputQueue
-        , logQueue     = logQueue
-        , lifecycleRef = lifecycleRef
-        , luaEnv       = lEnv
+        { engineConfig    = defaultEngineConfig
+        , eventQueue      = eventQueue
+        , inputQueue      = inputQueue
+        , logQueue        = logQueue
+        , luaEventQueue   = leq
+        , luaCommandQueue = lcq
+        , lifecycleRef    = lifecycleRef
         }
   envVar ←   atomically $ newVar defaultEngineEnv
   lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
@@ -110,6 +105,8 @@ main = do
 
   -- fork input thread
   inputThreadState ← startInputThread defaultEngineEnv
+  -- fork lua thread
+  luaThreadState ← startLuaThread defaultEngineEnv
   
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
