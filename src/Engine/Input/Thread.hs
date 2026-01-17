@@ -22,7 +22,7 @@ startInputThread env = do
     threadId ← catch 
         (do
             Q.writeQueue (logQueue env) "Starting input thread..."
-            tid ← forkIO $ runInputLoop env defaultInputState ThreadRunning
+            tid ← forkIO $ runInputLoop env defaultInputState stateRef
             return tid
         ) 
         (\(e :: SomeException) → do
@@ -33,31 +33,36 @@ startInputThread env = do
     return $ ThreadState stateRef threadId
 
 -- | Main input processing loop with timing control
-runInputLoop ∷ EngineEnv → InputState → ThreadControl → IO ()
-runInputLoop _   _     ThreadStopped = do
-    pure ()
-runInputLoop env inpSt ThreadPaused  = do
-    threadDelay 100000  -- 100ms pause check
-    runInputLoop env inpSt ThreadRunning
-runInputLoop env inpSt ThreadRunning = do
-    -- Start frame timing
-    frameStart ← getCurrentTime
-    
-    -- Process all pending inputs
-    newInpSt ← processInputs env inpSt
-    
-    -- Calculate frame time and delay to maintain consistent rate
-    frameEnd ← getCurrentTime
-    let diff  = diffUTCTime frameEnd frameStart
-        usecs = floor (toRational diff * 1000000) ∷ Int
-        targetFrameTime = 1000  -- 1ms target frame time
-        delay = targetFrameTime - usecs
-    
-    -- Only delay if we're running faster than target
-    when (delay > 0) $ threadDelay delay
-    
-    -- Continue loop
-    runInputLoop env newInpSt ThreadRunning
+runInputLoop ∷ EngineEnv → InputState → IORef ThreadControl → IO ()
+  -- read control state
+runInputLoop env inpSt stateRef = do
+  control ← readIORef stateRef
+  case control of
+    ThreadStopped → do
+        Q.writeQueue (logQueue env) "Input thread stopping..."
+        pure ()
+    ThreadPaused  → do
+        threadDelay 100000  -- 100ms pause check
+        runInputLoop env inpSt stateRef
+    ThreadRunning → do
+        -- Start frame timing
+        frameStart ← getCurrentTime
+        
+        -- Process all pending inputs
+        newInpSt ← processInputs env inpSt
+        
+        -- Calculate frame time and delay to maintain consistent rate
+        frameEnd ← getCurrentTime
+        let diff  = diffUTCTime frameEnd frameStart
+            usecs = floor (toRational diff * 1000000) ∷ Int
+            targetFrameTime = 1000  -- 1ms target frame time
+            delay = targetFrameTime - usecs
+        
+        -- Only delay if we're running faster than target
+        when (delay > 0) $ threadDelay delay
+        
+        -- Continue loop
+        runInputLoop env newInpSt stateRef
 
 -- | Process all queued inputs
 processInputs ∷ EngineEnv → InputState → IO InputState
@@ -112,15 +117,5 @@ shutdownInputThread ∷ EngineEnv → ThreadState → IO ()
 shutdownInputThread env ts = do
     -- Signal thread to stop
     writeIORef (tsRunning ts) ThreadStopped
-    Q.writeQueue (logQueue env) "Input thread signaled to stop..."
-
     -- Wait for thread to complete
     waitThreadComplete ts
-    
-    Q.writeQueue (logQueue env) "Input thread shutdown complete."
---    ) $ \(e :: SomeException) → do
---        -- Log any errors during shutdown
---        Q.writeQueue (logQueue env) $ T.pack $
---            "Error shutting down input thread: " ⧺ show e
---        -- Force kill thread if graceful shutdown failed
---        killThread (tsThreadId ts)

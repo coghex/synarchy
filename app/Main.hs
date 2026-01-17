@@ -285,7 +285,7 @@ main = do
             logDebug $ "Recorded command buffer " ⧺ show i
 
         mainLoop
-        shutdownEngine window inputThreadState
+        shutdownEngine window inputThreadState luaThreadState
  
   result ← runEngineM engineAction envVar stateVar checkStatus
   case result of
@@ -295,8 +295,8 @@ main = do
     Right _  → pure ()
 
 -- the ever important shutdown function
-shutdownEngine ∷ Window → ThreadState → EngineM' EngineEnv ()
-shutdownEngine (Window win) ts = do
+shutdownEngine ∷ Window → ThreadState → ThreadState → EngineM' EngineEnv ()
+shutdownEngine (Window win) its lts = do
     logDebug "Engine cleaning up..."
 
     -- Wait for Vulkan device to idle before resource cleanup
@@ -318,8 +318,17 @@ shutdownEngine (Window win) ts = do
 
     -- Wait for input thread to finish
     env ← ask
-    inputThreadState ← liftIO $ readIORef (tsRunning ts)
-    liftIO $ shutdownInputThread env ts
+    inputThreadState ← liftIO $ readIORef (tsRunning its)
+    -- Signal thread to stop
+    logDebug "Shutting down input thread..."
+    liftIO $ writeIORef (tsRunning its) ThreadStopped
+    -- Wait for thread to complete
+    liftIO $ waitThreadComplete its
+    -- cleanup lua thread
+    luaThreadState ← liftIO $ readIORef (tsRunning lts)
+    logDebug "Shutting down Lua thread..."
+    liftIO $ writeIORef (tsRunning lts) ThreadStopped
+    liftIO $ waitThreadComplete lts
 
     -- Transition to stopped state
     liftIO $ writeIORef (lifecycleRef env) EngineStopped

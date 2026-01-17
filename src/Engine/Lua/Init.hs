@@ -12,6 +12,7 @@ import Engine.Core.State
 import Engine.Core.Thread
 import Engine.Lua.Types
 import qualified Engine.Core.Queue as Q
+import qualified HsLua as Lua
 
 -- | Start the lua thread
 startLuaThread ∷ EngineEnv → IO ThreadState
@@ -23,7 +24,7 @@ startLuaThread env = do
             let leq = luaEventQueue env
                 lcq = luaCommandQueue env
             defaultls ← defaultLuaState leq lcq
-            tid ← forkIO $ runLuaLoop env defaultls ThreadRunning
+            tid ← forkIO $ runLuaLoop env defaultls stateRef
             return tid
         ) 
         (\(e :: SomeException) → do
@@ -33,26 +34,31 @@ startLuaThread env = do
         )
     return $ ThreadState stateRef threadId
 
-runLuaLoop ∷ EngineEnv → LuaState → ThreadControl → IO ()
-runLuaLoop _      _     ThreadStopped = return ()
-runLuaLoop env luaState ThreadPaused  = do
-    threadDelay 100000 -- Sleep for 100ms while paused
-    runLuaLoop env luaState ThreadPaused
-runLuaLoop env luaState ThreadRunning = do
-    frameStart ← getCurrentTime
-    -- Process events
-    --newLuaSt ← processLuaEvents env luaState
-    let newLuaSt = luaState -- Placeholder for actual event processing
-    -- Calculate frame time and delay to maintain consistent rate
-    frameEnd ← getCurrentTime
-    let diff  = diffUTCTime frameEnd frameStart
-        usecs = floor (toRational diff * 1000000) ∷ Int
-        targetFrameTime = 1000  -- 1ms target frame time
-        delay = targetFrameTime - usecs
-    
-    -- Only delay if we're running faster than target
-    when (delay > 0) $ threadDelay delay
-    
-    -- Continue loop
-    runLuaLoop env newLuaSt ThreadRunning
+runLuaLoop ∷ EngineEnv → LuaState → IORef ThreadControl → IO ()
+runLuaLoop env ls stateRef = do
+    control ← readIORef stateRef
+    case control of
+        ThreadStopped → do
+            Lua.close (luaState ls)
+            pure ()
+        ThreadPaused → do
+            threadDelay 100000 -- Sleep for 100ms while paused
+            runLuaLoop env ls stateRef
+        ThreadRunning → do
+            frameStart ← getCurrentTime
+            -- Process events
+            --newLuaSt ← processLuaEvents env luaState
+            let newLuaSt = ls -- Placeholder for actual event processing
+            -- Calculate frame time and delay to maintain consistent rate
+            frameEnd ← getCurrentTime
+            let diff  = diffUTCTime frameEnd frameStart
+                usecs = floor (toRational diff * 1000000) ∷ Int
+                targetFrameTime = 1000  -- 1ms target frame time
+                delay = targetFrameTime - usecs
+            
+            -- Only delay if we're running faster than target
+            when (delay > 0) $ threadDelay delay
+            
+            -- Continue loop
+            runLuaLoop env newLuaSt stateRef
 
