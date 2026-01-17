@@ -35,7 +35,8 @@ allocResource'IO free alloc = EngineM $ \e s c → unEngineM alloc e s $ \case
   Left ex → c (Left ex)
   Right a → c $ Right (a, unEngineM (locally (free a)) e s $ \case
     Right _ → pure ()
-    Left ex → error $ show ex)
+--    Left ex → error $ show ex)
+    Left _ → pure ()) -- silently ignore errors in IO cleanup
 {-# INLINE allocResource'IO #-}
 -- | run nested continuations locally frees
 --   all resources, only for side effects 

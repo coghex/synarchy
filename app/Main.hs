@@ -94,7 +94,7 @@ main = do
   let lEnv = LuaEnv luaState luaScripts luaEventQueue
   currentDir ← getCurrentDirectory
   let modDir = currentDir </> "mod"
-  luaInit lEnv modDir
+  --luaInit lEnv modDir
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
         { engineConfig = defaultEngineConfig
@@ -306,6 +306,13 @@ shutdownEngine (Window win) ts = do
     state ← gets graphicsState
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
+    -- cleanup asset manager
+    logDebug "cleaning up asset manager..."
+    assets ← gets assetPool
+    cleanupAssetManager assets
+
+    forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
+
     -- glfw cleanup, stopping polling first
     liftIO $ GLFW.postEmptyEvent
     GLFW.setWindowShouldClose win True
@@ -315,11 +322,6 @@ shutdownEngine (Window win) ts = do
     env ← ask
     inputThreadState ← liftIO $ readIORef (tsRunning ts)
     liftIO $ shutdownInputThread env ts
-
-    -- cleanup asset manager
-    logDebug "cleaning up asset manager..."
-    assets ← gets assetPool
-    cleanupAssetManager assets
 
     -- Transition to stopped state
     liftIO $ writeIORef (lifecycleRef env) EngineStopped

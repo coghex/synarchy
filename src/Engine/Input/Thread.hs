@@ -34,7 +34,8 @@ startInputThread env = do
 
 -- | Main input processing loop with timing control
 runInputLoop ∷ EngineEnv → InputState → ThreadControl → IO ()
-runInputLoop _   _     ThreadStopped = return ()
+runInputLoop _   _     ThreadStopped = do
+    pure ()
 runInputLoop env inpSt ThreadPaused  = do
     threadDelay 100000  -- 100ms pause check
     runInputLoop env inpSt ThreadRunning
