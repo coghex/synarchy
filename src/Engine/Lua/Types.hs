@@ -27,6 +27,7 @@ data LuaState = LuaState
 defaultLuaState ∷ Q.Queue LuaEvent → Q.Queue LuaCommand → IO LuaState
 defaultLuaState eventQueue commandQueue = do
   lState ← Lua.newstate
+  _ ← Lua.runWith lState $ Lua.openlibs
   scriptsVar ← newTVarIO Map.empty
   return LuaState
     { luaState    = lState

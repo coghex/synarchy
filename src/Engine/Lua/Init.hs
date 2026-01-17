@@ -61,4 +61,3 @@ runLuaLoop env ls stateRef = do
             
             -- Continue loop
             runLuaLoop env newLuaSt stateRef
-

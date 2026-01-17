@@ -291,7 +291,8 @@ main = do
   case result of
     Left err → do
         putStrLn $ displayException err
-        liftIO $ shutdownInputThread defaultEngineEnv inputThreadState
+        liftIO $ shutdownThread inputThreadState
+        liftIO $ shutdownThread luaThreadState
     Right _  → pure ()
 
 -- the ever important shutdown function
@@ -318,17 +319,12 @@ shutdownEngine (Window win) its lts = do
 
     -- Wait for input thread to finish
     env ← ask
-    inputThreadState ← liftIO $ readIORef (tsRunning its)
     -- Signal thread to stop
     logDebug "Shutting down input thread..."
-    liftIO $ writeIORef (tsRunning its) ThreadStopped
-    -- Wait for thread to complete
-    liftIO $ waitThreadComplete its
+    liftIO $ shutdownThread its
     -- cleanup lua thread
-    luaThreadState ← liftIO $ readIORef (tsRunning lts)
     logDebug "Shutting down Lua thread..."
-    liftIO $ writeIORef (tsRunning lts) ThreadStopped
-    liftIO $ waitThreadComplete lts
+    liftIO $ shutdownThread lts
 
     -- Transition to stopped state
     liftIO $ writeIORef (lifecycleRef env) EngineStopped

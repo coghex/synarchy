@@ -110,12 +110,3 @@ updateWindowState state _ = state
 
 updateScrollState ∷ InputState → Double → Double → InputState
 updateScrollState state x y = state { inpScrollDelta = (x, y) }
-
--- | Safely shutdown input thread
-shutdownInputThread ∷ EngineEnv → ThreadState → IO ()
---shutdownInputThread env ts = catch (do
-shutdownInputThread env ts = do
-    -- Signal thread to stop
-    writeIORef (tsRunning ts) ThreadStopped
-    -- Wait for thread to complete
-    waitThreadComplete ts
