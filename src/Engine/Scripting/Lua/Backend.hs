@@ -15,13 +15,14 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Map as Map
 import Data.Dynamic (toDyn, fromDynamic)
-import Data.IORef (IORef, newIORef, readIORef)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Text.Encoding as TE
 import Control.Concurrent (threadDelay, forkIO)
+import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
 import Control.Exception (SomeException, catch)
 import Control.Monad.Logger (Loc(..), LogLevel(..), toLogStr, defaultLoc)
-import Data.Time.Clock (getCurrentTime, diffUTCTime)
+import Data.Time.Clock (getCurrentTime, diffUTCTime, utctDayTime)
 
 -- | Lua scripting backend
 data LuaBackend = LuaBackend
@@ -66,21 +67,48 @@ instance ScriptBackend LuaBackend where
   backendName _    = "Lua"
   backendVersion _ = "5.5"
 
-registerLuaAPI :: Lua.State -> EngineEnv -> IO ()
-registerLuaAPI lst env = Lua.runWith lst $ do
+registerLuaAPI ∷ Lua.State → EngineEnv → LuaBackendState → IO ()
+registerLuaAPI lst env backendState = Lua.runWith lst $ do
   Lua.newtable 
   -- engine.logInfo
-  Lua.pushHaskellFunction (logInfoFn :: Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.pushHaskellFunction (logInfoFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "logInfo")
+  -- engine.setTickInterval
+  Lua.pushHaskellFunction (setTickIntervalFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "setTickInterval")
   Lua.setglobal (Lua.Name "engine")
-  where logInfoFn = do
-          msg <- Lua.tostring 1
-          let lf = logFunc env
-          case msg of
-            Just bs → Lua.liftIO $ lf defaultLoc "lua" LevelInfo (toLogStr $ TE.decodeUtf8 bs)
-            Nothing → return ()
-          return 0
-
+  where
+    logInfoFn = do
+      msg ← Lua.tostring 1
+      let lf = logFunc env
+      case msg of
+        Just bs → Lua.liftIO $ lf defaultLoc "lua" LevelInfo (toLogStr $ TE.decodeUtf8 bs)
+        Nothing → return ()
+      return 0
+    setTickIntervalFn = do
+      interval ← Lua.tonumber 1
+      case interval of
+        Just (Lua.Number seconds) → Lua.liftIO $ do
+          scriptPathMaybe ← Lua.runWith lst $ do
+            _ ← Lua.getfield Lua.registryindex (Lua.Name "_CURRENT_SCRIPT") ∷  Lua.LuaE Lua.Exception Lua.Type
+            Lua.tostring (-1)
+          case scriptPathMaybe of
+            Just pathBS → do
+              let scriptPath = TE.decodeUtf8 pathBS
+                  lf = logFunc env
+              currentTime ← getCurrentTime
+              let currentSecs = realToFrac $ utctDayTime currentTime
+              atomically $ modifyTVar (lbsScripts backendState) $ Map.adjust
+                (\s -> s { scriptTickRate = seconds
+                         , scriptNextTick = currentSecs + seconds
+                         }) (T.unpack scriptPath)
+              lf defaultLoc "lua" LevelInfo $ toLogStr $
+                "Tick interval for script " ⧺ (show scriptPath) ⧺ " set to " ⧺ (show seconds) ⧺ " seconds."
+            Nothing → do
+              let lf = logFunc env
+              lf defaultLoc "lua" LevelError "setTickInterval called outside of script context."
+        Nothing → return ()
+      return 0
 
 -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
@@ -107,25 +135,34 @@ startLuaThread env = do
                 etlq = engineToLuaQueue env
             backendState ← createLuaBackendState lteq etlq
             -- register lua api
-            registerLuaAPI (lbsLuaState backendState) env
+            registerLuaAPI (lbsLuaState backendState) env backendState
             lf defaultLoc "lua" LevelInfo "Lua API registered."
-            -- load init script
+            let scriptPath = "scripts/init.lua"
+            Lua.runWith (lbsLuaState backendState) $ do
+              Lua.pushstring (TE.encodeUtf8 $ T.pack scriptPath)
+              Lua.setfield Lua.registryindex (Lua.Name "_CURRENT_SCRIPT") ∷  Lua.LuaE Lua.Exception ()
+            currentTime ← getCurrentTime 
+            let currentSecs = realToFrac $ utctDayTime currentTime
+                defaultScript = LuaScript
+                  { scriptPath     = scriptPath
+                  , scriptTickRate = 1.0 -- default 1 second tick rate
+                  , scriptNextTick = currentSecs + 1.0 }
+            atomically $ modifyTVar (lbsScripts backendState) $
+              Map.insert scriptPath defaultScript
             backend ← createLuaBackend
             let scriptCtx = ScriptContext (toDyn (lbsLuaState backendState))
-            loadResult ← loadScript backend scriptCtx "scripts/init.lua"
+            loadResult ← loadScript backend scriptCtx scriptPath
             case loadResult of
-              ScriptSuccess _ → lf defaultLoc "lua" LevelInfo
-                                  "scripts/init.lua loaded successfully."
+              ScriptSuccess _ → lf defaultLoc "lua" LevelInfo $ toLogStr $
+                                  (T.pack $ (show scriptPath) ⧺ " loaded successfully.")
               ScriptError err → lf defaultLoc "lua" LevelError $ toLogStr $
-                                  "Failed to load scripts/init.lua: " ⧺ (show err)
-            -- call init() function
+                                  T.pack $ "Failed to load " ⧺ scriptPath ⧺ ": " ⧺ (show err)
             initResult ← callFunction backend scriptCtx "init" []
             case initResult of
               ScriptSuccess _ → lf defaultLoc "lua" LevelInfo
                                   "init() function executed successfully."
               ScriptError err → lf defaultLoc "lua" LevelError $ toLogStr $
                                   "Failed to execute init(): " ⧺ (show err)
-
             tid ← forkIO $ runLuaLoop env backendState stateRef
             return tid
         ) 
@@ -156,6 +193,8 @@ runLuaLoop env ls stateRef = do
     control ← readIORef stateRef
     case control of
         ThreadStopped → do
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelInfo "Stopping lua thread..."
             Lua.close (lbsLuaState ls)
             pure ()
         ThreadPaused → do
@@ -163,11 +202,46 @@ runLuaLoop env ls stateRef = do
             runLuaLoop env ls stateRef
         ThreadRunning → do
             frameStart ← getCurrentTime
-            let newLuaSt = ls
-            frameEnd ← getCurrentTime
-            let diff  = diffUTCTime frameEnd frameStart
-                usecs = floor (toRational diff * 1000000) ∷ Int
-                targetFrameTime = 1000
-                delay = targetFrameTime - usecs
-            when (delay > 0) $ threadDelay delay
-            runLuaLoop env newLuaSt stateRef
+            let currentSecs = realToFrac $ utctDayTime frameStart
+            -- get scripts
+            scriptsMap ← readTVarIO (lbsScripts ls)
+            let scripts = Map.elems scriptsMap
+            -- find next wake time
+            let nextWakeTimes = map scriptNextTick scripts
+                nextWakeTime = if null nextWakeTimes
+                               then currentSecs + 1.0
+                               else minimum nextWakeTimes
+                sleepTime = nextWakeTime - currentSecs
+            when (sleepTime > 0) $ do
+                let sleepMicros = min (floor (sleepTime * 1000000)) 1000000 -- max 100ms sleep
+                threadDelay sleepMicros
+            -- check control again
+            control' ← readIORef stateRef
+            unless (control' ≡ ThreadStopped) $ do
+              currentTime ← getCurrentTime
+              let currentSecs' = realToFrac $ utctDayTime currentTime
+              -- execture all scripts whose time has come
+              scriptsMap' ← readTVarIO (lbsScripts ls)
+              forM_ (Map.toList scriptsMap') $ \(path, script) → do
+                when (currentSecs' ≥ scriptNextTick script) $ do
+                    -- set current script in registry
+                    Lua.runWith (lbsLuaState ls) $ do
+                      Lua.pushstring (TE.encodeUtf8 $ T.pack path)
+                      Lua.setfield Lua.registryindex (Lua.Name "_CURRENT_SCRIPT") ∷  Lua.LuaE Lua.Exception ()
+                    -- execute update function
+                    backend ← createLuaBackend
+                    let scriptCtx = ScriptContext (toDyn (lbsLuaState ls))
+                        dt        = scriptTickRate script
+                    _ ← callFunction backend scriptCtx "update" [ScriptNumber dt]
+                    -- update next tick time (preserve overshoot for determinism)
+                    atomically $ modifyTVar (lbsScripts ls) $ Map.adjust
+                      (\s -> s { scriptNextTick = scriptNextTick s + scriptTickRate s }) path
+
+              -- check for messages from engine
+              let (_, etlq) = lbsMsgQueues ls
+              msg ← Q.tryReadQueue etlq
+              case msg of
+                  Just LuaThreadKill → writeIORef stateRef ThreadStopped
+                  _                  → return ()
+              -- continue loop
+              runLuaLoop env ls stateRef

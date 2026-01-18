@@ -9,7 +9,9 @@ import qualified HsLua as Lua
 
 -- | Represents a single Lua script's metadata
 data LuaScript = LuaScript
-  { scriptPath   ∷ FilePath
+  { scriptPath     ∷ FilePath -- path to the Lua script
+  , scriptTickRate ∷ Double   -- seconds between updates
+  , scriptNextTick ∷ Double   -- next scheduled tick time
   } deriving (Eq, Show)
 
 -- | Thread-safe map of Lua scripts
