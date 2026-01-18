@@ -21,6 +21,7 @@ import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
 import Control.Exception (SomeException, catch)
+import Control.Monad (forM_, when, unless)
 import Control.Monad.Logger (Loc(..), LogLevel(..), toLogStr, defaultLoc)
 import Data.Time.Clock (getCurrentTime, diffUTCTime, utctDayTime)
 
@@ -112,11 +113,18 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
 
 -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
-callLuaFunction funcName _args = do
+callLuaFunction funcName args = do
   let name = Lua.Name (TE.encodeUtf8 funcName)
   _ <- Lua.getglobal name
-  -- TODO: Push arguments
-  Lua.call 0 Lua.multret
+  -- push arguments onto the lua stack
+  forM_ args $ \arg → case arg of
+    ScriptNumber n → Lua.pushnumber (Lua.Number n)
+    ScriptString s → Lua.pushstring (TE.encodeUtf8 s)
+    ScriptBool b   → Lua.pushboolean b
+    ScriptNil      → Lua.pushnil
+    _              → Lua.pushnil -- unsupported types push nil for now
+  let numArgs = fromIntegral (length args)
+  Lua.call numArgs Lua.multret
   return Lua.OK
 
 -- | Create Lua backend
