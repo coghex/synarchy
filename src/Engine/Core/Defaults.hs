@@ -8,6 +8,7 @@ import qualified Data.Map as Map
 import Engine.Core.Base
 import Engine.Core.Types
 import Engine.Core.State
+import Engine.Asset.Types
 import Engine.Input.Types
 import Engine.Graphics.Base
 import Engine.Graphics.Camera
@@ -50,8 +51,8 @@ defaultWindowConfig = WindowConfig
   , wcResizable = True
   }
 
-defaultEngineState ∷ EngineState
-defaultEngineState = EngineState
+defaultEngineState ∷ AssetPool → EngineState
+defaultEngineState pool = EngineState
   { timingState = TimingState
     { frameCount       = 0
     , currentTime      = 0.0
@@ -84,7 +85,7 @@ defaultEngineState = EngineState
     , camera2D           = defaultCamera
     , cleanupStatus      = NotStarted
     }
-  , assetPool        = AssetPool Map.empty Map.empty Map.empty 0
+  , assetPool        = pool
   , assetConfig      = AssetConfig 100 100 True True
   , sceneManager     = createSceneManager
   }

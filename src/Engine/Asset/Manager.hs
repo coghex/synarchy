@@ -9,6 +9,8 @@ module Engine.Asset.Manager
   , reloadAsset
   , getTextureAtlas
   , getShaderProgram
+  , generateHandle
+  , updateAssetState
   -- * Resource Cleanup
   , cleanupAssetManager
   ) where
@@ -19,6 +21,7 @@ import Control.Exception (finally, catch, SomeException)
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource, allocResource')
 import Engine.Core.State
@@ -41,14 +44,34 @@ import Vulkan.Zero
 initAssetManager ∷ AssetConfig → EngineM ε σ AssetPool
 initAssetManager config = do
   -- Create empty asset pool with initial configuration
-  pure $ AssetPool
-    { apTextureAtlases = Map.empty
-    , apShaderPrograms = Map.empty
-    , apAssetPaths = Map.empty
-    , apNextId = 0
-    }
+  ap ← liftIO defaultAssetPool
+  pure ap
 
--- Add to Engine/Asset/Manager.hs
+generateHandle ∷ ∀ h. AssetHandle h ⇒ AssetPool → IO h
+generateHandle pool = fromInt <$>
+  atomicModifyIORef' (getCounterRef @h pool) (\n → (n + 1, n))
+
+lookupAsset ∷ ∀ h. AssetHandle h ⇒ h → AssetPool → IO (Maybe (AssetState AssetId))
+lookupAsset handle pool = do
+  stateMap ← readIORef (getStateMap @h pool)
+  return $ Map.lookup handle stateMap
+
+updateAssetState ∷ ∀ h. AssetHandle h ⇒ h → AssetState AssetId → AssetPool → IO ()
+updateAssetState handle newState pool =
+  atomicModifyIORef' (getStateMap @h pool) $ \m → (Map.insert handle newState m, ())
+
+-- | Delete asset state for a handle
+deleteAssetState ∷ ∀ h.  AssetHandle h ⇒ h → AssetPool → IO ()
+deleteAssetState handle pool =
+  atomicModifyIORef' (getStateMap @h pool) $ \m →
+    (Map.delete handle m, ())
+
+-- | Get all handles of a specific type
+getAllHandles ∷ ∀ h. AssetHandle h ⇒ AssetPool → IO [h]
+getAllHandles pool = do
+  stateMap ← readIORef (getStateMap @h pool)
+  return $ Map.keys stateMap
+
 initTextureArrayManager ∷ Vk.Device → EngineM ε σ TextureArrayManager
 initTextureArrayManager device = do
   defaultArray ← createTextureArrayState device
@@ -65,8 +88,9 @@ loadTextureAtlas ∷ Text      -- ^ Name of the atlas
 loadTextureAtlas name path arrayName = do
   state ← get
   let pool = assetPool state
+      pathKey = T.pack path
   -- check if the texture is already loaded
-  case Map.lookup (T.pack path) (apAssetPaths pool) of
+  case Map.lookup pathKey (apAssetPaths pool) of
     Just existingId → do
       -- texture is already loaded, increment refcount and reuse
       modify $ \s → s { assetPool = (assetPool s) {
@@ -75,7 +99,7 @@ loadTextureAtlas name path arrayName = do
       return existingId
     Nothing → do
       -- First generate a new asset ID
-      let nextId = AssetId $ apNextId pool
+      let nextId = AssetId $ fromIntegral $ apNextAssetId pool
       -- Get required Vulkan resources
       pDevice ← case (vulkanPDevice $ graphicsState state) of
         Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlas: ") 
@@ -145,8 +169,8 @@ loadTextureAtlas name path arrayName = do
       modify $ \s → s 
         { assetPool = (assetPool s)
             { apTextureAtlases = Map.insert nextId atlas (apTextureAtlases pool)
-            , apAssetPaths = Map.insert (T.pack path) nextId (apAssetPaths pool)
-            , apNextId = apNextId pool + 1
+            , apAssetPaths = Map.insert pathKey nextId (apAssetPaths pool)
+            , apNextAssetId = apNextAssetId pool + 1
             }
         , graphicsState = (graphicsState s)
             { textureArrayStates = Map.insert arrayName updatedTexArray texArrays
@@ -186,7 +210,7 @@ unloadAsset aid = do
       
     Nothing →
       -- If not a texture, check if it's a shader program
-      case Map.lookup aid (apShaderPrograms pool) of
+      case Map.lookup aid (apShaders pool) of
         Just program → do
           -- decrement reference count
           let newRefCount = spRefCount program - 1
@@ -195,10 +219,10 @@ unloadAsset aid = do
                 liftIO $ maybe (pure ()) id (spCleanup program)
                 -- Remove from pool
                 modify $ \s → s { assetPool = (assetPool s) {
-                  apShaderPrograms = Map.delete aid (apShaderPrograms pool)
+                  apShaders = Map.delete aid (apShaders pool)
                 } }
             else modify $ \s → s { assetPool = (assetPool s) {
-                  apShaderPrograms = Map.adjust (\p → p { spRefCount = newRefCount }) aid (apShaderPrograms pool) }}
+                  apShaders = Map.adjust (\p → p { spRefCount = newRefCount }) aid (apShaders pool) }}
           pure ()
           
         Nothing →
@@ -227,7 +251,7 @@ getTextureAtlas aid = do
 getShaderProgram ∷ AssetId → EngineM' ε ShaderProgram
 getShaderProgram aid = do
   pool ← gets assetPool
-  case Map.lookup aid (apShaderPrograms pool) of
+  case Map.lookup aid (apShaders pool) of
     Nothing → throwAssetError (AssetNotFound "getShaderProgram: ")
                 "Shader program not found"
     Just shader → pure shader
@@ -297,8 +321,8 @@ cleanupResources device state pool = do
             }
         , assetPool = (assetPool s) 
             { apTextureAtlases = Map.empty
-            , apShaderPrograms = Map.empty
-            , apNextId = 0
+            , apShaders = Map.empty
+            , apNextAssetId = 0
             }
         }
 

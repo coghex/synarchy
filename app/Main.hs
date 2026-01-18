@@ -103,7 +103,9 @@ main = do
         , lifecycleRef     = lifecycleRef
         }
   envVar ←   atomically $ newVar defaultEngineEnv
-  stateVar ← atomically $ newVar $ defaultEngineState
+  -- empty asset pool
+  ap ← defaultAssetPool
+  stateVar ← atomically $ newVar $ defaultEngineState ap
 
   -- fork input thread
   inputThreadState ← startInputThread defaultEngineEnv
@@ -668,12 +670,20 @@ mainLoop = do
 initializeTestScene ∷ EngineM' EngineEnv ()
 initializeTestScene = do
     -- Get loaded texture asset IDs
-    assetPool ← gets assetPool
-    let textureIds = Map.keys (apTextureAtlases assetPool)
+    pool ← gets assetPool
+    let textureIds = Map.keys (apTextureAtlases pool)
     
     case textureIds of
         [] → logDebug "No textures loaded for test scene"
         (tex1:tex2:_) → do
+            -- first creates handles
+            handle1 ← liftIO $ generateHandle @TextureHandle pool
+            handle2 ← liftIO $ generateHandle @TextureHandle pool
+            -- mark them as ready (pointing to the loaded assetIds)
+            liftIO $ updateAssetState @TextureHandle handle1
+                (AssetReady tex1 []) pool
+            liftIO $ updateAssetState @TextureHandle handle2
+                (AssetReady tex2 []) pool
             -- Create test scene
             let camera = defaultCamera
                 testSceneId = "test"
@@ -685,7 +695,7 @@ initializeTestScene = do
             -- Create first test object
             let node1 = (createSceneNode SpriteObject)
                     { nodeTransform = defaultTransform { position = (-1.0, 0.0) }
-                    , nodeTexture = Just tex1
+                    , nodeTexture = Just handle1
                     , nodeSize = (1.0, 1.0)
                     , nodeColor = Vec4 1.0 1.0 1.0 1.0
                     }
@@ -693,7 +703,7 @@ initializeTestScene = do
             -- Create second test object  
             let node2 = (createSceneNode SpriteObject)
                     { nodeTransform = defaultTransform { position = (1.0, 0.0) }
-                    , nodeTexture = Just tex2
+                    , nodeTexture = Just handle2
                     , nodeSize = (1.0, 1.0)
                     , nodeColor = Vec4 1.0 1.0 1.0 1.0
                     }
@@ -708,6 +718,9 @@ initializeTestScene = do
                         logDebug $ "Test scene created with objects: " ⧺ show obj1Id ⧺ ", " ⧺ show obj2Id
         (tex1:_) → do
             -- Single texture case
+            handle1 ← liftIO $ generateHandle @TextureHandle pool
+            liftIO $ updateAssetState @TextureHandle handle1
+                (AssetReady tex1 []) pool
             let camera = defaultCamera
                 testSceneId = "test"
             
@@ -717,7 +730,7 @@ initializeTestScene = do
             
             let node1 = (createSceneNode SpriteObject)
                     { nodeTransform = defaultTransform { position = (0.0, 0.0) }
-                    , nodeTexture = Just tex1
+                    , nodeTexture = Just handle1
                     , nodeSize = (1.0, 1.0)
                     , nodeColor = Vec4 1.0 1.0 1.0 1.0
                     }

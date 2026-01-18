@@ -10,7 +10,8 @@ import Data.Maybe (mapMaybe)
 import Engine.Scene.Base
 import Engine.Scene.Graph
 import Engine.Scene.Types
-import Engine.Asset.Base (AssetId)
+import Engine.Asset.Base
+import Engine.Asset.Types
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Graphics.Camera
 
@@ -106,7 +107,7 @@ updateBatches objects manager =
         }
 
 -- | Group drawable objects by texture and layer
-groupByTextureAndLayer ∷ V.Vector DrawableObject → [((AssetId, LayerId), V.Vector DrawableObject)]
+groupByTextureAndLayer ∷ V.Vector DrawableObject → [((TextureHandle, LayerId), V.Vector DrawableObject)]
 groupByTextureAndLayer objects =
     let objList = V.toList objects
         grouped = List.groupBy (\a b → (doTexture a, doLayer a) ≡ (doTexture b, doLayer b)) $
@@ -117,7 +118,7 @@ groupByTextureAndLayer objects =
     in keyed
 
 -- | Create a render batch from grouped objects
-createBatch ∷ ((AssetId, LayerId), V.Vector DrawableObject) → ((AssetId, LayerId), RenderBatch)
+createBatch ∷ ((TextureHandle, LayerId), V.Vector DrawableObject) → ((TextureHandle, LayerId), RenderBatch)
 createBatch ((textureId, layerId), objects) =
     let allVertices = V.concatMap doVertices objects
         objectIds = V.map doId objects

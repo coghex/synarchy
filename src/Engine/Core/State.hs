@@ -83,20 +83,4 @@ data GraphicsState = GraphicsState
   , cleanupStatus      ∷ CleanupStatus
   }
 
--- | Asset pool containing all loaded assets
-data AssetPool = AssetPool
-  { apTextureAtlases    ∷ Map.Map AssetId TextureAtlas
-  , apShaderPrograms    ∷ Map.Map AssetId ShaderProgram
-  , apAssetPaths        ∷ Map.Map T.Text AssetId
-  , apNextId            ∷ Word32
-  }
-
--- | Asset loading configuration
-data AssetConfig = AssetConfig
-  { acMaxTextureAtlases ∷ Word32
-  , acMaxShaderPrograms ∷ Word32
-  , acPreloadAssets     ∷ Bool
-  , acEnableHotReload   ∷ Bool
-  } deriving (Show)
-
 

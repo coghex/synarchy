@@ -7,6 +7,7 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Engine.Scene.Base
 import Engine.Asset.Base (AssetId)
+import Engine.Asset.Types
 import Engine.Graphics.Vulkan.Types.Texture (TextureData)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex, Vec2(..), Vec4(..))
 import Engine.Graphics.Camera
@@ -17,7 +18,7 @@ data SceneObject = SceneObject
     { objId       ∷ ObjectId
     , objType     ∷ ObjectType
     , objTransform ∷ Transform2D
-    , objTexture  ∷ Maybe AssetId
+    , objTexture  ∷ Maybe TextureHandle
     , objVisible  ∷ Bool
     } deriving (Show)
 
@@ -30,7 +31,7 @@ data SceneLayer = SceneLayer
 
 -- | Batch for sprite rendering
 data SpriteBatch = SpriteBatch
-    { batchTexture  ∷ AssetId
+    { batchTexture  ∷ TextureHandle
     , batchVertices ∷ V.Vector Vertex  -- You'll need to import your Vertex type
     , batchDirty    ∷ Bool
     } deriving (Show)
@@ -80,7 +81,8 @@ data SceneNode = SceneNode
     { nodeId         ∷ ObjectId
     , nodeType       ∷ ObjectType
     , nodeTransform  ∷ Transform2D
-    , nodeTexture    ∷ Maybe AssetId
+    , nodeTexture    ∷ Maybe TextureHandle
+    , nodeFont        ∷ Maybe FontHandle
     , nodeVisible    ∷ Bool
     , nodeColor      ∷ Vec4        -- RGBA color multiplier
     , nodeUVRect     ∷ Maybe (Vec2, Vec2)  -- UV coordinates (min, max) for atlas
@@ -121,7 +123,7 @@ createEmptySceneGraph = SceneGraph
 -- | Drawable object ready for rendering
 data DrawableObject = DrawableObject
     { doId         ∷ ObjectId
-    , doTexture    ∷ AssetId
+    , doTexture    ∷ TextureHandle
     , doVertices   ∷ V.Vector Vertex
     , doZIndex     ∷ Float
     , doLayer      ∷ LayerId
@@ -129,7 +131,7 @@ data DrawableObject = DrawableObject
 
 -- | Render batch grouped by texture and layer
 data RenderBatch = RenderBatch
-    { rbTexture    ∷ AssetId
+    { rbTexture    ∷ TextureHandle
     , rbLayer      ∷ LayerId
     , rbVertices   ∷ V.Vector Vertex
     , rbObjects    ∷ V.Vector ObjectId
@@ -138,9 +140,9 @@ data RenderBatch = RenderBatch
 
 -- | Batch manager state
 data BatchManager = BatchManager
-    { bmBatches      ∷ Map.Map (AssetId, LayerId) RenderBatch
+    { bmBatches      ∷ Map.Map (TextureHandle, LayerId) RenderBatch
     , bmVisibleObjs  ∷ V.Vector DrawableObject
-    , bmDirtyBatches ∷ Set.Set (AssetId, LayerId)
+    , bmDirtyBatches ∷ Set.Set (TextureHandle, LayerId)
     } deriving (Show)
 
 -- | Create empty batch manager

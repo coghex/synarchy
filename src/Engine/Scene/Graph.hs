@@ -20,6 +20,7 @@ createSceneNode objType = SceneNode
     , nodeType = objType
     , nodeTransform = defaultTransform
     , nodeTexture = Nothing
+    , nodeFont = Nothing
     , nodeVisible = True
     , nodeColor = Vec4 1.0 1.0 1.0 1.0
     , nodeUVRect = Nothing
