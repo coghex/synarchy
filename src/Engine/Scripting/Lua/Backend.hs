@@ -20,6 +20,7 @@ import Data.Text.Encoding as TE
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
 import Control.Exception (SomeException, catch)
+import Control.Monad.Logger (Loc(..), LogLevel(..), toLogStr, defaultLoc)
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
 
 -- | Lua scripting backend
@@ -74,8 +75,10 @@ registerLuaAPI lst env = Lua.runWith lst $ do
   Lua.setglobal (Lua.Name "engine")
   where logInfoFn = do
           msg <- Lua.tostring 1
+          let lf = logFunc env
           case msg of
-            Just bs → Lua.liftIO $ Q.writeQueue (logQueue env) (TE.decodeUtf8 bs)
+            Just bs → --Lua.liftIO $ Q.writeQueue (logQueue env) (TE.decodeUtf8 bs)
+                      Lua.liftIO $ lf defaultLoc "lua" LevelInfo (toLogStr $ TE.decodeUtf8 bs)
             Nothing → return ()
           return 0
 
@@ -99,7 +102,8 @@ startLuaThread env = do
     stateRef ← newIORef ThreadRunning
     threadId ← catch 
         (do
-            Q.writeQueue (logQueue env) "Starting lua thread..."
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelInfo "Starting lua thread..."
             let lteq = luaToEngineQueue env
                 etlq = engineToLuaQueue env
             backendState ← createLuaBackendState lteq etlq
@@ -107,8 +111,9 @@ startLuaThread env = do
             return tid
         ) 
         (\(e :: SomeException) → do
-            Q.writeQueue (logQueue env) $ T.pack $
-                "Failed to start lua thread: " ⧺ show e
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelError $
+                "Failed to start lua thread: " <> (toLogStr (show e))
             error "Lua thread failed to start"
         )
     return $ ThreadState stateRef threadId

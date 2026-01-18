@@ -76,7 +76,7 @@ instance MonadState EngineState (EngineM ε σ) where
 
 instance Logger.MonadLogger (EngineM ε σ) where
   monadLoggerLog loc ls ll msg = do
-    lf ← gets logFunc
+    lf ← asks logFunc
     liftIO $ lf loc ls ll (Logger.toLogStr msg)
 
 getEngineVars ∷ EngineM ε σ (Var EngineEnv, Var EngineState)

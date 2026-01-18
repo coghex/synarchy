@@ -11,6 +11,7 @@ import Engine.Core.Types
 import Engine.Core.State
 import Engine.Core.Queue as Q
 import Engine.Core.Var (atomically)
+import Engine.Core.Error.Exception
 import Engine.Graphics.Camera ( Camera2D(..) )
 import Engine.Input.Types
 
@@ -36,7 +37,7 @@ processInputEvent event = do
         InputKeyEvent key keyState mods → do
             -- Handle escape key
             when (key == GLFW.Key'Escape && keyState == GLFW.KeyState'Pressed) $ do
-                liftIO $ Q.writeQueue (logQueue env) "Escape pressed, shutting down..."
+                logInfo "Escape pressed, shutting down..."
                 liftIO $ writeIORef (lifecycleRef env) CleaningUp
             let newCam = updateCameraFromInput (inputState state) cam dt
             -- Update general input state

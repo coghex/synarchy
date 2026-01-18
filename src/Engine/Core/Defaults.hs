@@ -50,8 +50,8 @@ defaultWindowConfig = WindowConfig
   , wcResizable = True
   }
 
-defaultEngineState ∷ LoggingFunc → EngineState
-defaultEngineState lf = EngineState
+defaultEngineState ∷ EngineState
+defaultEngineState = EngineState
   { timingState = TimingState
     { frameCount       = 0
     , currentTime      = 0.0
@@ -61,7 +61,6 @@ defaultEngineState lf = EngineState
     , targetFPS        = 60.0
     }
   , inputState       = defaultInputState
-  , logFunc          = lf
   , graphicsState    = GraphicsState
     { glfwWindow         = Nothing
     , vulkanInstance     = Nothing

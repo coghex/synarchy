@@ -7,6 +7,7 @@ import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import Control.Concurrent (threadDelay, ThreadId, killThread, forkIO)
 import Control.Exception (SomeException, catch)
+import Control.Monad.Logger (Loc(..), LogLevel(..), toLogStr, defaultLoc)
 import Data.IORef (IORef, newIORef, writeIORef, readIORef)
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import Engine.Core.State
@@ -21,13 +22,15 @@ startInputThread env = do
     stateRef ← newIORef ThreadRunning
     threadId ← catch 
         (do
-            Q.writeQueue (logQueue env) "Starting input thread..."
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelInfo "Starting input thread..."
             tid ← forkIO $ runInputLoop env defaultInputState stateRef
             return tid
         ) 
         (\(e :: SomeException) → do
-            Q.writeQueue (logQueue env) $ T.pack $
-                "Failed to start input thread: " ⧺ show e
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelError $ "Failed to start input thread."
+                                           <> (toLogStr $ show e)
             error "Input thread failed to start"
         )
     return $ ThreadState stateRef threadId
@@ -39,7 +42,8 @@ runInputLoop env inpSt stateRef = do
   control ← readIORef stateRef
   case control of
     ThreadStopped → do
-        Q.writeQueue (logQueue env) "Input thread stopping..."
+        let lf = logFunc env
+        lf defaultLoc "lua" LevelInfo "Input thread stopping..."
         pure ()
     ThreadPaused  → do
         threadDelay 100000  -- 100ms pause check

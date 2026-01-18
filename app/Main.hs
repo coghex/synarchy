@@ -91,19 +91,20 @@ main = do
   etlq       ← Q.newQueue
   -- initialize engine lifecycle io ref to block threads on engine status
   lifecycleRef ← newIORef EngineStarting
+  -- initialize logging function
+  lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
         { engineConfig     = defaultEngineConfig
         , eventQueue       = eventQueue
         , inputQueue       = inputQueue
-        , logQueue         = logQueue
+        , logFunc          = lf
         , luaToEngineQueue = lteq
         , engineToLuaQueue = etlq
         , lifecycleRef     = lifecycleRef
         }
   envVar ←   atomically $ newVar defaultEngineEnv
-  lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
-  stateVar ← atomically $ newVar $ defaultEngineState lf
+  stateVar ← atomically $ newVar $ defaultEngineState
 
   -- fork input thread
   inputThreadState ← startInputThread defaultEngineEnv
@@ -652,7 +653,7 @@ mainLoop = do
           lifecycle ← liftIO $ readIORef (lifecycleRef env)
           if shouldClose || lifecycle ≢ EngineRunning
               then do
-                  liftIO $ Q.writeQueue (logQueue env) "Engine shutting down..."
+                  logInfo "Engine shutting down..."
                   -- Just wait for device to idle
 --                  forM_ (vulkanDevice state) $ \device → 
 --                      unless (lifecycle ≡ EngineStopped) $

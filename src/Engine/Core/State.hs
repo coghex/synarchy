@@ -27,7 +27,7 @@ data EngineEnv = EngineEnv
   { engineConfig     ∷ EngineConfig
   , eventQueue       ∷ Q.Queue Event
   , inputQueue       ∷ Q.Queue InputEvent
-  , logQueue         ∷ Q.Queue T.Text
+  , logFunc          ∷ LoggingFunc
   , luaToEngineQueue ∷ Q.Queue LuaToEngineMsg
   , engineToLuaQueue ∷ Q.Queue EngineToLuaMsg
   , lifecycleRef     ∷ IORef EngineLifecycle
@@ -37,7 +37,6 @@ data EngineEnv = EngineEnv
 data EngineState = EngineState
   { timingState      ∷ TimingState
   , inputState       ∷ InputState
-  , logFunc          ∷ LoggingFunc
   , graphicsState    ∷ GraphicsState
   , assetPool        ∷ AssetPool
   , assetConfig      ∷ AssetConfig
