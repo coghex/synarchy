@@ -106,6 +106,26 @@ startLuaThread env = do
             let lteq = luaToEngineQueue env
                 etlq = engineToLuaQueue env
             backendState ← createLuaBackendState lteq etlq
+            -- register lua api
+            registerLuaAPI (lbsLuaState backendState) env
+            lf defaultLoc "lua" LevelInfo "Lua API registered."
+            -- load init script
+            backend ← createLuaBackend
+            let scriptCtx = ScriptContext (toDyn (lbsLuaState backendState))
+            loadResult ← loadScript backend scriptCtx "scripts/init.lua"
+            case loadResult of
+              ScriptSuccess _ → lf defaultLoc "lua" LevelInfo
+                                  "scripts/init.lua loaded successfully."
+              ScriptError err → lf defaultLoc "lua" LevelError $ toLogStr $
+                                  "Failed to load scripts/init.lua: " ⧺ (show err)
+            -- call init() function
+            initResult ← callFunction backend scriptCtx "init" []
+            case initResult of
+              ScriptSuccess _ → lf defaultLoc "lua" LevelInfo
+                                  "init() function executed successfully."
+              ScriptError err → lf defaultLoc "lua" LevelError $ toLogStr $
+                                  "Failed to execute init(): " ⧺ (show err)
+
             tid ← forkIO $ runLuaLoop env backendState stateRef
             return tid
         ) 
