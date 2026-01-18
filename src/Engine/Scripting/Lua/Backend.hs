@@ -77,8 +77,7 @@ registerLuaAPI lst env = Lua.runWith lst $ do
           msg <- Lua.tostring 1
           let lf = logFunc env
           case msg of
-            Just bs → --Lua.liftIO $ Q.writeQueue (logQueue env) (TE.decodeUtf8 bs)
-                      Lua.liftIO $ lf defaultLoc "lua" LevelInfo (toLogStr $ TE.decodeUtf8 bs)
+            Just bs → Lua.liftIO $ lf defaultLoc "lua" LevelInfo (toLogStr $ TE.decodeUtf8 bs)
             Nothing → return ()
           return 0
 

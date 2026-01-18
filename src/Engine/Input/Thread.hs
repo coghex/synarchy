@@ -23,13 +23,13 @@ startInputThread env = do
     threadId ← catch 
         (do
             let lf = logFunc env
-            lf defaultLoc "lua" LevelInfo "Starting input thread..."
+            lf defaultLoc "input" LevelInfo "Starting input thread..."
             tid ← forkIO $ runInputLoop env defaultInputState stateRef
             return tid
         ) 
         (\(e :: SomeException) → do
             let lf = logFunc env
-            lf defaultLoc "lua" LevelError $ "Failed to start input thread."
+            lf defaultLoc "input" LevelError $ "Failed to start input thread."
                                            <> (toLogStr $ show e)
             error "Input thread failed to start"
         )
@@ -43,7 +43,7 @@ runInputLoop env inpSt stateRef = do
   case control of
     ThreadStopped → do
         let lf = logFunc env
-        lf defaultLoc "lua" LevelInfo "Input thread stopping..."
+        lf defaultLoc "input" LevelInfo "Input thread stopping..."
         pure ()
     ThreadPaused  → do
         threadDelay 100000  -- 100ms pause check

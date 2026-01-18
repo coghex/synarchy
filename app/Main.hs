@@ -86,7 +86,6 @@ main = do
   -- Initialize queues first
   eventQueue ← Q.newQueue
   inputQueue ← Q.newQueue
-  logQueue   ← Q.newQueue
   lteq       ← Q.newQueue
   etlq       ← Q.newQueue
   -- initialize engine lifecycle io ref to block threads on engine status

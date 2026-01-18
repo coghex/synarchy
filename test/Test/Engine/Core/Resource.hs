@@ -67,7 +67,7 @@ spec = do
               { engineConfig = defaultEngineConfig
               , eventQueue   = eventQueue
               , inputQueue   = inputQueue
-              , logQueue     = logQueue 
+              , logFunc      = logFunc
               }
             engineState = defaultEngineState logFunc
         
