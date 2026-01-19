@@ -369,20 +369,14 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
                 -- Convert everything to Double
                 aspect = fromIntegral w / fromIntegral h
                 zoom = realToFrac (camZoom camera)
-                viewRight = zoom * aspect
-                viewTop = zoom
-                -- Screen to NDC (screenX/screenY are Double now)
-                ndcX = (screenX / fromIntegral w) * 2.0 - 1.0
-                ndcY = 1.0 - (screenY / fromIntegral h) * 2.0
+                viewWidth = zoom * aspect
+                viewHeight = zoom
+                -- Screen to normalized
+                normX = screenX / fromIntegral w
+                normY = screenY / fromIntegral h
                 -- NDC to view space
-                viewX = ndcX * viewRight
-                viewY = ndcY * viewTop
-                -- Apply camera transform
-                (camXf, camYf) = camPosition camera
-                camX = realToFrac camXf
-                camY = realToFrac camYf
-                worldX = viewX + camX
-                worldY = viewY + camY
+                worldX = (normX * 2.0 - 1.0) * viewWidth * 0.5
+                worldY = (normY * 2.0 - 1.0) * viewHeight * 0.5
             -- worldX and worldY are Double
             return (worldX, worldY)
           -- Wrap back into Lua.Number for pushnumber
