@@ -463,9 +463,6 @@ processLuaMessages = do
           -- update local state too
           pool ← liftIO $ readIORef apRef
           modify $ \s → s { assetPool = pool }
-          -- update handle state
-          liftIO $ updateAssetState @TextureHandle handle
-              (AssetReady assetId []) pool
           logDebug $ "Texture loaded: handle=" ⧺ (show handle) ⧺
                      ", assetId=" ⧺ (show assetId)
         _ → return () -- unhandled message
@@ -679,6 +676,7 @@ mainLoop = do
                   } }
           GLFW.pollEvents
           handleInputEvents
+          processLuaMessages
           shouldClose ← GLFW.windowShouldClose glfwWindow
           env ← ask
           lifecycle ← liftIO $ readIORef (lifecycleRef env)

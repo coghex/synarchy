@@ -2,15 +2,12 @@ local tickCount = 0
 
 function init()
     engine.logInfo("Lua init script started.")
+    engine.logInfo("loading resources from lua...")
+    local handle = engine.loadTexture("assets/textures/tile01.png")
+    engine.logInfo("Texture loaded with handle: " .. tostring(handle))
+    playerTexture = handle
 end
 
 function update(dt)
-    tickCount = tickCount + 1
-    --engine.logInfo("update #" .. tickCount .. " dt=" .. tostring(dt))
-
-    -- example, change tick rate after 5 updates
-    if tickCount == 5 then
-        engine.setTickInterval(0.5)
-    --    engine.logInfo("Tick rate changed to 0.5 seconds.")
-    end
+    -- empty for now
 end
