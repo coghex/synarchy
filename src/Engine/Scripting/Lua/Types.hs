@@ -50,6 +50,7 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaMoveSpriteRequest ObjectId Float Float
                     | LuaSetSpriteScaleRequest ObjectId Float Float
                     | LuaSetSpriteColorRequest ObjectId Vec4
+                    | LuaSetSpriteVisibleRequest ObjectId Bool
                     | LuaDestroySpriteRequest ObjectId
                     deriving (Eq, Show)
 data EngineToLuaMsg = LuaTextureLoaded TextureHandle AssetId

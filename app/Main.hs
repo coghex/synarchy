@@ -510,6 +510,34 @@ processLuaMessages = do
             node { nodeTransform = (nodeTransform node) {
                       position = (x, y) } }
 
+        LuaSetSpriteColorRequest objId color → do
+          modifySceneNode objId $ \node →
+            node { nodeColor = color }
+
+        LuaSetSpriteVisibleRequest objId visible → do
+          modifySceneNode objId $ \node →
+            node { nodeVisible = visible }
+
+        LuaDestroySpriteRequest objId → do
+          sceneMgr ← gets sceneManager
+          case smActiveScene sceneMgr of
+            Just sceneId → do
+              case Map.lookup sceneId (smSceneGraphs sceneMgr) of
+                Just graph → do
+                  let updatedGraph = graph { sgNodes      = Map.delete objId
+                                                              (sgNodes graph)
+                                           , sgWorldTrans = Map.delete objId
+                                                              (sgWorldTrans graph)
+                                           , sgDirtyNodes = Set.delete objId
+                                                              (sgDirtyNodes graph) }
+                      updatedGraphs = Map.insert sceneId updatedGraph
+                                                  (smSceneGraphs sceneMgr)
+                  modify $ \s → s { sceneManager = sceneMgr {
+                                      smSceneGraphs = updatedGraphs } }
+                  logDebug $ "Destroyed sprite with object id: " ⧺ show objId
+                Nothing → logInfo $ "no scene graph"
+            Nothing → logInfo $ "no active scene"
+
         _ → return () -- unhandled message
 
 -- helper function

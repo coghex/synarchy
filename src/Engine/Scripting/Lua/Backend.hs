@@ -13,6 +13,7 @@ import Engine.Asset.Manager
 import Engine.Core.Thread
 import Engine.Core.State
 import Engine.Scene.Base
+import Engine.Graphics.Vulkan.Types.Vertex
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
@@ -89,6 +90,15 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.moveSprite(objectId, x, y)
   Lua.pushHaskellFunction (moveSpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "moveSprite")
+  -- engine.setSpriteColor(objectId, r, g, b, a)
+  Lua.pushHaskellFunction (setSpriteColorFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "setSpriteColor")
+  -- engine.setSpriteVisible(objectId, visible)
+  Lua.pushHaskellFunction (setSpriteVisibleFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "setSpriteVisible")
+  -- engine.destroySprite(objectId)
+  Lua.pushHaskellFunction (destroySpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "destroySprite")
   -- set global 'engine' table
   Lua.setglobal (Lua.Name "engine")
   where
@@ -210,6 +220,60 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
               "moveSprite requires 3 arguments: objectId, x, y"
           return 0
 
+    setSpriteColorFn = do
+      objIdNum ← Lua.tointeger 1
+      r ← Lua.tonumber 2
+      g ← Lua.tonumber 3
+      b ← Lua.tonumber 4
+      a ← Lua.tonumber 5
+      case (objIdNum, r, g, b, a) of
+        (Just idVal, Just rVal, Just gVal, Just bVal, Just aVal) → do
+          Lua.liftIO $ do
+            let (lteq, _) = lbsMsgQueues backendState
+                color     = Vec4 (realToFrac rVal) (realToFrac gVal)
+                                 (realToFrac bVal) (realToFrac aVal)
+                msg = LuaSetSpriteColorRequest (ObjectId (fromIntegral idVal)) color
+            Q.writeQueue lteq msg
+          return 0
+        _ → do
+          Lua.liftIO $ do
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelError 
+              "setSpriteColor requires 5 arguments: objectId, r, g, b, a"
+          return 0
+
+    setSpriteVisibleFn = do
+      objIdNum ← Lua.tointeger 1
+      visible ← Lua.toboolean 2
+      case objIdNum of
+        Just idVal → do
+          Lua.liftIO $ do
+            let (lteq, _) = lbsMsgQueues backendState
+                msg = LuaSetSpriteVisibleRequest (ObjectId (fromIntegral idVal)) visible
+            Q.writeQueue lteq msg
+          return 0
+        _ → do
+          Lua.liftIO $ do
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelError 
+              "setSpriteVisible requires 2 arguments: objectId, visible"
+          return 0
+
+    destroySpriteFn = do
+      objIdNum ← Lua.tointeger 1
+      case objIdNum of
+        Just idVal → do
+          Lua.liftIO $ do
+            let (lteq, _) = lbsMsgQueues backendState
+                msg = LuaDestroySpriteRequest (ObjectId (fromIntegral idVal))
+            Q.writeQueue lteq msg
+          return 0
+        _ → do
+          Lua.liftIO $ do
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelError 
+              "destroySprite requires 1 argument: objectId"
+          return 0
 
 -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
