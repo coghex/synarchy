@@ -8,6 +8,8 @@ import UPrelude
 import Engine.Scripting.Backend
 import Engine.Scripting.Types
 import Engine.Scripting.Lua.Types
+import Engine.Asset.Types
+import Engine.Asset.Manager
 import Engine.Core.Thread
 import Engine.Core.State
 import qualified Engine.Core.Queue as Q
@@ -77,6 +79,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.setTickInterval
   Lua.pushHaskellFunction (setTickIntervalFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "setTickInterval")
+  -- engine.loadTexture(path)
+  Lua.pushHaskellFunction (loadTextureFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "loadTexture")
   Lua.setglobal (Lua.Name "engine")
   where
     logInfoFn = do
@@ -110,6 +115,29 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
               lf defaultLoc "lua" LevelError "setTickInterval called outside of script context."
         Nothing → return ()
       return 0
+    loadTextureFn = do
+      path ← Lua.tostring 1
+      case path of
+        Just pathBS → do
+          (handle, pathStr) ← Lua.liftIO $ do
+            let pathStr = TE.decodeUtf8 pathBS
+                (lteq, _) = lbsMsgQueues backendState
+            -- generate handle using shared asset pool
+            pool ← readIORef (lbsAssetPool backendState)
+            handle ← generateHandle @TextureHandle pool
+            -- mark as loading
+            updateAssetState @TextureHandle handle
+              (AssetLoading (T.unpack pathStr) [] 0.0) pool
+            -- write updated pool back
+            writeIORef (lbsAssetPool backendState) pool
+            -- send message to main thread
+            Q.writeQueue lteq (LuaLoadTextureRequest handle (T.unpack pathStr))
+            -- return handle to lua
+            return (handle, pathStr)
+          let (TextureHandle n) = handle
+          Lua.pushnumber (Lua.Number (fromIntegral n))
+        Nothing → Lua.pushnil
+      return 1
 
 -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
@@ -132,8 +160,8 @@ createLuaBackend :: IO LuaBackend
 createLuaBackend = return LuaBackend
 
 -- | Start Lua thread (existing thread management)
-startLuaThread ∷ EngineEnv → IO ThreadState
-startLuaThread env = do
+startLuaThread ∷ EngineEnv → IORef AssetPool → IO ThreadState
+startLuaThread env apRef = do
     stateRef ← newIORef ThreadRunning
     threadId ← catch 
         (do
@@ -141,7 +169,7 @@ startLuaThread env = do
             lf defaultLoc "lua" LevelInfo "Starting lua thread..."
             let lteq = luaToEngineQueue env
                 etlq = engineToLuaQueue env
-            backendState ← createLuaBackendState lteq etlq
+            backendState ← createLuaBackendState lteq etlq apRef
             -- register lua api
             registerLuaAPI (lbsLuaState backendState) env backendState
             lf defaultLoc "lua" LevelInfo "Lua API registered."
@@ -184,8 +212,8 @@ startLuaThread env = do
 
 -- | Create Lua backend state
 createLuaBackendState ::  Q.Queue LuaToEngineMsg -> Q.Queue EngineToLuaMsg
-  -> IO LuaBackendState
-createLuaBackendState ltem etlm = do
+                      -> IORef AssetPool  -> IO LuaBackendState
+createLuaBackendState ltem etlm apRef = do
   lState ← Lua.newstate
   _ ← Lua.runWith lState $ Lua.openlibs
   scriptsVar ← newTVarIO Map.empty
@@ -193,6 +221,7 @@ createLuaBackendState ltem etlm = do
     { lbsLuaState     = lState
     , lbsScripts      = scriptsVar
     , lbsMsgQueues    = (ltem, etlm)
+    , lbsAssetPool    = apRef
     }
 
 -- | Lua event loop (existing code)

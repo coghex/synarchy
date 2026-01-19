@@ -65,13 +65,13 @@ data AssetConfig = AssetConfig
 
 -- | Asset Handles provide opaque references to assets
 newtype TextureHandle = TextureHandle Int
-  deriving (Show, Eq, Ord, Num)
+  deriving (Show, Eq, Ord)
 newtype FontHandle = FontHandle Int
-  deriving (Show, Eq, Ord, Num)
+  deriving (Show, Eq, Ord)
 newtype ShaderHandle = ShaderHandle Int
-  deriving (Show, Eq, Ord, Num)
+  deriving (Show, Eq, Ord)
 -- | asset handle type class
-class (Eq h, Ord h, Num h) ⇒ AssetHandle h where
+class (Eq h, Ord h, Show h) ⇒ AssetHandle h where
   -- get the counter reference for this handle type
   getCounterRef ∷ AssetPool → IORef Int
   -- get the state map for this handle type
@@ -151,6 +151,17 @@ data Font = Font
   , fRefCount   ∷ Word32
   , fCleanup    ∷ Maybe (IO ())
   }
+instance Show Font where
+  show f = "Font { fId = " <> show (fId f)
+         <> ", fName = " <> show (fName f)
+         <> ", fPath = " <> show (fPath f)
+         <> ", fSize = " <> show (fSize f)
+         <> ", fStatus = " <> show (fStatus f)
+         <> ", fAtlasId = " <> show (fAtlasId f)
+         <> ", fGlyphMap = <" <> show (Map.size (fGlyphMap f)) <> " glyphs>"
+         <> ", fRefCount = " <> show (fRefCount f)
+         <> ", fCleanup = " <> if isJust (fCleanup f) then "<present>" else "<absent> }"
+        
 
 -- | Information about a single glyph in the font atlas
 data GlyphInfo = GlyphInfo

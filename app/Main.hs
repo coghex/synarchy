@@ -9,13 +9,13 @@ import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.IORef (newIORef, readIORef, IORef, writeIORef)
+import Data.IORef (newIORef, readIORef, IORef, writeIORef, atomicModifyIORef')
 import Data.Time.Clock (getCurrentTime, utctDayTime)
 import Linear (M44, V3(..), identity, (!*!), perspective, lookAt, translation, ortho)
 import System.Environment (setEnv)
 import System.Exit ( exitFailure )
 import System.Directory (getCurrentDirectory)
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeBaseName)
 import qualified HsLua as Lua
 import Engine.Asset.Types
 import Engine.Asset.Manager
@@ -92,6 +92,9 @@ main = do
   lifecycleRef ← newIORef EngineStarting
   -- initialize logging function
   lf ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
+  -- empty asset pool
+  ap ← defaultAssetPool
+  apRef ← newIORef ap
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
         { engineConfig     = defaultEngineConfig
@@ -101,16 +104,15 @@ main = do
         , luaToEngineQueue = lteq
         , engineToLuaQueue = etlq
         , lifecycleRef     = lifecycleRef
+        , assetPoolRef     = apRef
         }
   envVar ←   atomically $ newVar defaultEngineEnv
-  -- empty asset pool
-  ap ← defaultAssetPool
   stateVar ← atomically $ newVar $ defaultEngineState ap
 
   -- fork input thread
   inputThreadState ← startInputThread defaultEngineEnv
   -- fork scripting thread
-  luaThreadState ← startLuaThread defaultEngineEnv
+  luaThreadState ← startLuaThread defaultEngineEnv apRef
   
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
@@ -439,6 +441,34 @@ initializeTextures device physicalDevice cmdPool queue
       
       logDebug "Both textures loaded and descriptor sets updated"
     _ → throwGraphicsError TextureLoadFailed "Texture info not found"
+
+processLuaMessages ∷ EngineM' EngineEnv ()
+processLuaMessages = do
+    env ← ask
+    let lteq = luaToEngineQueue env
+    -- check for messages
+    maybeMsg ← liftIO $ Q.tryReadQueue lteq
+    case maybeMsg of
+      Nothing → return () -- no messages
+      Just msg → case msg of
+        LuaLoadTextureRequest handle path → do
+          logDebug $ "Loading texture: " ⧺ (show path)
+          assetId ← loadTextureAtlas (T.pack $ takeBaseName path) path "default"
+          -- update shared asset pool
+          apRef ← asks assetPoolRef
+          liftIO $ do
+            pool ← readIORef apRef
+            updateAssetState @TextureHandle handle
+                (AssetReady assetId []) pool
+          -- update local state too
+          pool ← liftIO $ readIORef apRef
+          modify $ \s → s { assetPool = pool }
+          -- update handle state
+          liftIO $ updateAssetState @TextureHandle handle
+              (AssetReady assetId []) pool
+          logDebug $ "Texture loaded: handle=" ⧺ (show handle) ⧺
+                     ", assetId=" ⧺ (show assetId)
+        _ → return () -- unhandled message
 
 drawFrame ∷ EngineM' EngineEnv ()
 drawFrame = do
