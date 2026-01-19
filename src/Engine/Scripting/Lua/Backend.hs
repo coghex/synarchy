@@ -16,6 +16,7 @@ import Engine.Input.Bindings
 import Engine.Input.Types
 import Engine.Scene.Base
 import Engine.Graphics.Vulkan.Types.Vertex
+import Engine.Graphics.Camera
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
@@ -118,6 +119,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.getWindowSize()
   Lua.pushHaskellFunction (getWindowSizeFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "getWindowSize")
+  -- engine.getWorldCoord(screenX, screenY)
+  Lua.pushHaskellFunction (getWorldCoordFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "getWorldCoord")
   -- set global 'engine' table
   Lua.setglobal (Lua.Name "engine")
   where
@@ -352,7 +356,44 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
       Lua.pushnumber (Lua.Number h)
       return 2
 
--- | Helper to call Lua function with explicit type
+    getWorldCoordFn = do
+      sx ← Lua.tonumber 1
+      sy ← Lua.tonumber 2
+      case (sx, sy) of
+        (Just (Lua.Number screenX), Just (Lua.Number screenY)) → do
+          -- screenX and screenY are now Double
+          (worldX, worldY) ← Lua.liftIO $ do
+            inputState ← readIORef (lbsInputState backendState)
+            camera ← readIORef (cameraRef env)
+            let (w, h) = inpWindowSize inputState
+                -- Convert everything to Double
+                aspect = fromIntegral w / fromIntegral h
+                zoom = realToFrac (camZoom camera)
+                viewRight = zoom * aspect
+                viewTop = zoom
+                -- Screen to NDC (screenX/screenY are Double now)
+                ndcX = (screenX / fromIntegral w) * 2.0 - 1.0
+                ndcY = 1.0 - (screenY / fromIntegral h) * 2.0
+                -- NDC to view space
+                viewX = ndcX * viewRight
+                viewY = ndcY * viewTop
+                -- Apply camera transform
+                (camXf, camYf) = camPosition camera
+                camX = realToFrac camXf
+                camY = realToFrac camYf
+                worldX = viewX + camX
+                worldY = viewY + camY
+            -- worldX and worldY are Double
+            return (worldX, worldY)
+          -- Wrap back into Lua.Number for pushnumber
+          Lua.pushnumber (Lua.Number worldX)
+          Lua.pushnumber (Lua.Number worldY)
+        _ → do
+          Lua.pushnil
+          Lua.pushnil
+      return 2
+
+    -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
 callLuaFunction funcName args = do
   let name = Lua.Name (TE.encodeUtf8 funcName)

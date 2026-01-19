@@ -105,6 +105,8 @@ main = do
   keyBindingsRef ← newIORef keyBindings
   -- load video config
   videoConfig ← loadVideoConfig "config/video.yaml"
+  -- create camera reference
+  cameraRef ← newIORef defaultCamera
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
         { engineConfig     = defaultEngineConfig
@@ -118,6 +120,7 @@ main = do
         , nextObjectIdRef  = nextObjIdRef
         , inputStateRef    = inputStateRef
         , keyBindingsRef   = keyBindingsRef
+        , cameraRef        = cameraRef
         }
   envVar ←   atomically $ newVar defaultEngineEnv
   stateVar ← atomically $ newVar $ defaultEngineState ap
@@ -228,9 +231,12 @@ main = do
         logDebug $ "Created default scene with id: " ⧺ defaultSceneId
 
         -- create uniform buffers
+        (width, height) ← GLFW.getFramebufferSize glfwWin
         let modelMatrix = identity
-            viewMatrix = lookAt (V3 0 0 5) (V3 0 0 0) (V3 0 1 0)
-            projMatrix = ortho (-2) 2 (-2) 2 0.1 10
+            viewMatrix = createViewMatrix camera
+            projMatrix = createProjectionMatrix camera
+                         (fromIntegral width)
+                         (fromIntegral height)
             uboData = UBO modelMatrix viewMatrix projMatrix
             uboSize = fromIntegral $ sizeOf uboData
             numFrames = gcMaxFrames defaultGraphicsConfig
@@ -599,6 +605,8 @@ drawFrame = do
                              (fromIntegral width) 
                              (fromIntegral height)
                 uboData = UBO modelMatrix viewMatrix projMatrix
+            env ← ask
+            liftIO $ writeIORef (cameraRef env) camera
             
             -- Update the uniform buffer
             updateUniformBuffer device memory uboData

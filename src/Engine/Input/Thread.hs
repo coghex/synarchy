@@ -120,8 +120,6 @@ processInput env inpSt event = case event of
         return $ updateMouseState inpSt btn pos state
     InputCursorMove x y → 
         return $ inpSt { inpMousePos = (x, y) }
-    InputWindowEvent winEv →
-        return $ updateWindowState inpSt winEv
     InputScrollEvent x y →
         return $ updateScrollState inpSt x y
     InputWindowEvent winEv → do

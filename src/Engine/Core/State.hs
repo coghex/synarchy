@@ -36,6 +36,7 @@ data EngineEnv = EngineEnv
   , nextObjectIdRef  ∷ IORef Word32
   , inputStateRef    ∷ IORef InputState
   , keyBindingsRef   ∷ IORef KeyBindings
+  , cameraRef        ∷ IORef Camera2D
   }
 
 -- | Engine state (mutable)
