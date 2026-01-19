@@ -12,12 +12,13 @@ import Engine.Asset.Types
 import Engine.Asset.Manager
 import Engine.Core.Thread
 import Engine.Core.State
+import Engine.Scene.Base
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Map as Map
 import Data.Dynamic (toDyn, fromDynamic)
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Data.Text.Encoding as TE
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
@@ -82,6 +83,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.loadTexture(path)
   Lua.pushHaskellFunction (loadTextureFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "loadTexture")
+  -- engine.spawnSprite(x, y, width, height, textureHandle)
+  Lua.pushHaskellFunction (spawnSpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "spawnSprite")
+  -- set global 'engine' table
   Lua.setglobal (Lua.Name "engine")
   where
     logInfoFn = do
@@ -138,6 +143,51 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
           Lua.pushnumber (Lua.Number (fromIntegral n))
         Nothing → Lua.pushnil
       return 1
+    spawnSpriteFn = do
+      -- Get arguments from Lua stack
+      x <- Lua.tonumber 1
+      y <- Lua.tonumber 2
+      width <- Lua.tonumber 3
+      height <- Lua.tonumber 4
+      texHandleNum <- Lua.tointeger 5
+      
+      case (x, y, width, height, texHandleNum) of
+        (Just xVal, Just yVal, Just wVal, Just hVal, Just texNum) -> do
+          -- Generate ObjectId and send message (all in IO)
+          objId <- Lua.liftIO $ do
+            -- Generate unique ObjectId
+            objId <- atomicModifyIORef' (lbsNextObjectId backendState) 
+              (\n -> (n + 1, ObjectId n))
+            
+            let (lteq, _) = lbsMsgQueues backendState
+                texHandle = TextureHandle (fromIntegral texNum)
+                msg = LuaSpawnSpriteRequest
+                  { lssObjectId      = objId
+                  , lssX             = realToFrac xVal
+                  , lssY             = realToFrac yVal
+                  , lssWidth         = realToFrac wVal
+                  , lssHeight        = realToFrac hVal
+                  , lssTextureHandle = texHandle
+                  }
+            
+            -- Send message to main thread
+            Q.writeQueue lteq msg
+            
+            return objId
+          
+          -- Return ObjectId to Lua
+          let (ObjectId n) = objId
+          Lua.pushinteger (Lua.Integer $ fromIntegral n)
+          
+        _ -> do
+          -- Invalid arguments
+          Lua.liftIO $ do
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelError 
+              "spawnSprite requires 5 arguments:  x, y, width, height, textureHandle"
+          Lua.pushnil
+      
+      return 1
 
 -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
@@ -160,8 +210,8 @@ createLuaBackend :: IO LuaBackend
 createLuaBackend = return LuaBackend
 
 -- | Start Lua thread (existing thread management)
-startLuaThread ∷ EngineEnv → IORef AssetPool → IO ThreadState
-startLuaThread env apRef = do
+startLuaThread ∷ EngineEnv → IORef AssetPool → IORef Word32 → IO ThreadState
+startLuaThread env apRef objIdRef = do
     stateRef ← newIORef ThreadRunning
     threadId ← catch 
         (do
@@ -169,7 +219,7 @@ startLuaThread env apRef = do
             lf defaultLoc "lua" LevelInfo "Starting lua thread..."
             let lteq = luaToEngineQueue env
                 etlq = engineToLuaQueue env
-            backendState ← createLuaBackendState lteq etlq apRef
+            backendState ← createLuaBackendState lteq etlq apRef objIdRef
             -- register lua api
             registerLuaAPI (lbsLuaState backendState) env backendState
             lf defaultLoc "lua" LevelInfo "Lua API registered."
@@ -212,8 +262,8 @@ startLuaThread env apRef = do
 
 -- | Create Lua backend state
 createLuaBackendState ::  Q.Queue LuaToEngineMsg -> Q.Queue EngineToLuaMsg
-                      -> IORef AssetPool  -> IO LuaBackendState
-createLuaBackendState ltem etlm apRef = do
+                      -> IORef AssetPool -> IORef Word32 -> IO LuaBackendState
+createLuaBackendState ltem etlm apRef objIdRef = do
   lState ← Lua.newstate
   _ ← Lua.runWith lState $ Lua.openlibs
   scriptsVar ← newTVarIO Map.empty
@@ -222,6 +272,7 @@ createLuaBackendState ltem etlm apRef = do
     , lbsScripts      = scriptsVar
     , lbsMsgQueues    = (ltem, etlm)
     , lbsAssetPool    = apRef
+    , lbsNextObjectId = objIdRef
     }
 
 -- | Lua event loop (existing code)

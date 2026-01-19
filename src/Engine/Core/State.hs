@@ -32,6 +32,7 @@ data EngineEnv = EngineEnv
   , engineToLuaQueue ∷ Q.Queue EngineToLuaMsg
   , lifecycleRef     ∷ IORef EngineLifecycle
   , assetPoolRef     ∷ IORef AssetPool
+  , nextObjectIdRef  ∷ IORef Word32
   }
 
 -- | Engine state (mutable)

@@ -95,6 +95,7 @@ main = do
   -- empty asset pool
   ap ← defaultAssetPool
   apRef ← newIORef ap
+  nextObjIdRef ← newIORef 0
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
         { engineConfig     = defaultEngineConfig
@@ -105,6 +106,7 @@ main = do
         , engineToLuaQueue = etlq
         , lifecycleRef     = lifecycleRef
         , assetPoolRef     = apRef
+        , nextObjectIdRef  = nextObjIdRef
         }
   envVar ←   atomically $ newVar defaultEngineEnv
   stateVar ← atomically $ newVar $ defaultEngineState ap
@@ -112,7 +114,7 @@ main = do
   -- fork input thread
   inputThreadState ← startInputThread defaultEngineEnv
   -- fork scripting thread
-  luaThreadState ← startLuaThread defaultEngineEnv apRef
+  luaThreadState ← startLuaThread defaultEngineEnv apRef nextObjIdRef
   
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
@@ -205,6 +207,14 @@ main = do
         -- initialize textures
         initializeTextures device physicalDevice cmdPool
                            (graphicsQueue queues) descriptorPool texLayout
+        -- create default active scene
+        let defaultSceneId = "default"
+            camera = defaultCamera
+        sceneMgr ← gets sceneManager
+        let sceneWithDefault = createScene defaultSceneId camera sceneMgr
+            activeScene = setActiveScene defaultSceneId sceneWithDefault
+        modify $ \s → s { sceneManager = activeScene }
+        logDebug $ "Created default scene with id: " ⧺ defaultSceneId
 
         -- create uniform buffers
         let modelMatrix = identity
@@ -279,7 +289,7 @@ main = do
                 " descSets=" ⧺ show dsCount
 
         -- initialize the scene
-        initializeTestScene
+        --initializeTestScene
 
         -- record initial command buffers
         state ← gets graphicsState
@@ -354,8 +364,8 @@ initializeTextures device physicalDevice cmdPool queue
                       textureState = (poolState, V.empty) } }
 
   -- Initialize asset manager
-  assetPool <- initAssetManager (AssetConfig 100 100 True True)
-  modify $ \s → s { assetPool = assetPool }
+  --assetPool <- initAssetManager (AssetConfig 100 100 True True)
+  --modify $ \s → s { assetPool = assetPool }
 
   -- Create descriptor set for texture array
   let allocInfo = zero 
@@ -375,72 +385,72 @@ initializeTextures device physicalDevice cmdPool queue
   } }
 
   -- Load texture using asset manager
-  let texturePath1 = "assets/textures/tile01.png"
-  let texturePath2 = "assets/textures/tile02.png"
-  textureId1 ← loadTextureAtlas (T.pack "tile01") texturePath1 (T.pack "default")
-  logDebug $ "Texture 1 loaded: " ⧺ show textureId1
-  textureId2 ← loadTextureAtlas (T.pack "tile02") texturePath2 (T.pack "default")
-  logDebug $ "Texture 2 loaded: " ⧺ show textureId2
-  
-  -- Get the loaded texture atlas
-  atlas1 ← getTextureAtlas textureId1
-  atlas2 ← getTextureAtlas textureId2
-  logDebug $ "Atlas 1 status: " ⧺ show (taStatus atlas1)
-  logDebug $ "Atlas 2 status: " ⧺ show (taStatus atlas2)
- -- Create descriptor sets for both textures
+  --let texturePath1 = "assets/textures/tile01.png"
+  --let texturePath2 = "assets/textures/tile02.png"
+  --textureId1 ← loadTextureAtlas (T.pack "tile01") texturePath1 (T.pack "default")
+  --logDebug $ "Texture 1 loaded: " ⧺ show textureId1
+  --textureId2 ← loadTextureAtlas (T.pack "tile02") texturePath2 (T.pack "default")
+  --logDebug $ "Texture 2 loaded: " ⧺ show textureId2
+  --
+  ---- Get the loaded texture atlas
+  --atlas1 ← getTextureAtlas textureId1
+  --atlas2 ← getTextureAtlas textureId2
+  --logDebug $ "Atlas 1 status: " ⧺ show (taStatus atlas1)
+  --logDebug $ "Atlas 2 status: " ⧺ show (taStatus atlas2)
+ ---- Create descriptor sets for both textures
  
-  -- Update descriptor sets for both textures
-  case (taInfo atlas1, taInfo atlas2) of
-    (Just info1, Just info2) → do
-      -- Update first descriptor set
-      let imageInfos = V.fromList
-            [ zero
-              { imageView = tiView info1
-              , sampler = tiSampler info1
-              , imageLayout = tiLayout info1
-              }
-            , zero
-              { imageView = tiView info2
-              , sampler = tiSampler info2
-              , imageLayout = tiLayout info2
-              }
-            ]
-          write = zero
-            { dstSet = V.head textureSets
-            , dstBinding = 0
-            , dstArrayElement = 0
-            , descriptorCount = 2
-            , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-            , imageInfo = imageInfos
-            }
-      
-      liftIO $ updateDescriptorSets device 
-        (V.singleton $ SomeStruct write)
-        V.empty
+  ---- Update descriptor sets for both textures
+  --case (taInfo atlas1, taInfo atlas2) of
+  --  (Just info1, Just info2) → do
+  --    -- Update first descriptor set
+  --    let imageInfos = V.fromList
+  --          [ zero
+  --            { imageView = tiView info1
+  --            , sampler = tiSampler info1
+  --            , imageLayout = tiLayout info1
+  --            }
+  --          , zero
+  --            { imageView = tiView info2
+  --            , sampler = tiSampler info2
+  --            , imageLayout = tiLayout info2
+  --            }
+  --          ]
+  --        write = zero
+  --          { dstSet = V.head textureSets
+  --          , dstBinding = 0
+  --          , dstArrayElement = 0
+  --          , descriptorCount = 2
+  --          , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+  --          , imageInfo = imageInfos
+  --          }
+  --    
+  --    liftIO $ updateDescriptorSets device 
+  --      (V.singleton $ SomeStruct write)
+  --      V.empty
 
-      -- Create TextureData for both textures
-      let textureData1 = TextureData
-            { tdImageView = tiView info1
-            , tdSampler = tiSampler info1
-            , tdMipLevels = amMipLevels (taMetadata atlas1)
-            , tdDescriptorSet = textureSets V.! 0
-            }
-          textureData2 = TextureData
-            { tdImageView = tiView info2
-            , tdSampler = tiSampler info2
-            , tdMipLevels = amMipLevels (taMetadata atlas2)
-            , tdDescriptorSet = textureSets V.! 1
-            }
-      
-      -- Update engine state with both textures
-      modify $ \s → s { graphicsState = (graphicsState s) {
-        textureState = 
-          let (poolState', _) = textureState (graphicsState s)
-          in (poolState', V.fromList [textureData1, textureData2])
-      } }
-      
-      logDebug "Both textures loaded and descriptor sets updated"
-    _ → throwGraphicsError TextureLoadFailed "Texture info not found"
+  --    -- Create TextureData for both textures
+  --    let textureData1 = TextureData
+  --          { tdImageView = tiView info1
+  --          , tdSampler = tiSampler info1
+  --          , tdMipLevels = amMipLevels (taMetadata atlas1)
+  --          , tdDescriptorSet = textureSets V.! 0
+  --          }
+  --        textureData2 = TextureData
+  --          { tdImageView = tiView info2
+  --          , tdSampler = tiSampler info2
+  --          , tdMipLevels = amMipLevels (taMetadata atlas2)
+  --          , tdDescriptorSet = textureSets V.! 1
+  --          }
+  --    
+  --    -- Update engine state with both textures
+  --    modify $ \s → s { graphicsState = (graphicsState s) {
+  --      textureState = 
+  --        let (poolState', _) = textureState (graphicsState s)
+  --        in (poolState', V.fromList [textureData1, textureData2])
+  --    } }
+  --    
+  --    logDebug "Both textures loaded and descriptor sets updated"
+  --  _ → throwGraphicsError TextureLoadFailed "Texture info not found"
 
 processLuaMessages ∷ EngineM' EngineEnv ()
 processLuaMessages = do
@@ -465,6 +475,32 @@ processLuaMessages = do
           modify $ \s → s { assetPool = pool }
           logDebug $ "Texture loaded: handle=" ⧺ (show handle) ⧺
                      ", assetId=" ⧺ (show assetId)
+        LuaSpawnSpriteRequest objId x y width height texHandle → do
+          logDebug $ "Spawning sprite id=" ⧺ show objId ⧺
+                     " pos=(" ⧺ show x ⧺ ", " ⧺ show y ⧺ ")" ⧺
+                     " size=(" ⧺ show width ⧺ ", " ⧺ show height ⧺ ")" ⧺
+                     " tex=" ⧺ show texHandle
+          -- get active scene
+          sceneMgr ← gets sceneManager
+          case smActiveScene sceneMgr of
+            Just sceneId → do
+              let node = (createSceneNode SpriteObject)
+                    { nodeId = objId
+                    , nodeTransform = defaultTransform { position = (x,y) }
+                    , nodeTexture = Just texHandle
+                    , nodeSize = (width, height)
+                    , nodeColor = Vec4 1 1 1 1
+                    , nodeVisible = True
+                    }
+              -- add to scene graph
+              case addObjectToScene sceneId node sceneMgr of
+                Just (addedObjId, newSceneMgr) → do
+                  modify $ \s → s { sceneManager = newSceneMgr }
+                  logDebug $ "Sprite succesfully pawned with object id: "
+                           ⧺ show addedObjId
+                Nothing → logDebug $ "Failed to add sprite "
+                                   ⧺ show objId ⧺ " to scene"
+            Nothing → logDebug "cannot spawn sprite: no active scene"
         _ → return () -- unhandled message
 
 drawFrame ∷ EngineM' EngineEnv ()
@@ -511,13 +547,6 @@ drawFrame = do
         Nothing → throwGraphicsError DescriptorError "No descriptor manager available"
         Just descManager → when (V.null $ dmActiveSets descManager) $
             throwGraphicsError DescriptorError "No active descriptor sets available"
-    -- Validate textures
-    let (_, textures) = textureState state
-    when (V.length textures < minRequiredTextures) $
-      throwGraphicsError TextureLoadFailed $
-        "Not enough textures loaded: " <> T.pack (show (V.length textures)) <>
-        ", expected at least " <> T.pack (show minRequiredTextures)
-    
     let resources = frameResources state V.! fromIntegral frameIdx
         cmdBuffer = V.head $ frCommandBuffer resources
     cmdBuffer ← case safeVectorHead (frCommandBuffer resources) of
@@ -695,79 +724,79 @@ mainLoop = do
         EngineStopped → logDebug "Engine has stopped"
 
 -- Add after initializeTextures function
-initializeTestScene ∷ EngineM' EngineEnv ()
-initializeTestScene = do
-    -- Get loaded texture asset IDs
-    pool ← gets assetPool
-    let textureIds = Map.keys (apTextureAtlases pool)
-    
-    case textureIds of
-        [] → logDebug "No textures loaded for test scene"
-        (tex1:tex2:_) → do
-            -- first creates handles
-            handle1 ← liftIO $ generateHandle @TextureHandle pool
-            handle2 ← liftIO $ generateHandle @TextureHandle pool
-            -- mark them as ready (pointing to the loaded assetIds)
-            liftIO $ updateAssetState @TextureHandle handle1
-                (AssetReady tex1 []) pool
-            liftIO $ updateAssetState @TextureHandle handle2
-                (AssetReady tex2 []) pool
-            -- Create test scene
-            let camera = defaultCamera
-                testSceneId = "test"
-            
-            sceneMgr ← gets sceneManager
-            let sceneWithTest = createScene testSceneId camera sceneMgr
-                activeScene = setActiveScene testSceneId sceneWithTest
-            
-            -- Create first test object
-            let node1 = (createSceneNode SpriteObject)
-                    { nodeTransform = defaultTransform { position = (-1.0, 0.0) }
-                    , nodeTexture = Just handle1
-                    , nodeSize = (1.0, 1.0)
-                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
-                    }
-            
-            -- Create second test object  
-            let node2 = (createSceneNode SpriteObject)
-                    { nodeTransform = defaultTransform { position = (1.0, 0.0) }
-                    , nodeTexture = Just handle2
-                    , nodeSize = (1.0, 1.0)
-                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
-                    }
-            
-            -- Add objects to scene
-            case addObjectToScene testSceneId node1 activeScene of
-                Nothing → logDebug "Failed to add first object to scene"
-                Just (obj1Id, mgr1) → case addObjectToScene testSceneId node2 mgr1 of
-                    Nothing → logDebug "Failed to add second object to scene"
-                    Just (obj2Id, finalMgr) → do
-                        modify $ \s → s { sceneManager = finalMgr }
-                        logDebug $ "Test scene created with objects: " ⧺ show obj1Id ⧺ ", " ⧺ show obj2Id
-        (tex1:_) → do
-            -- Single texture case
-            handle1 ← liftIO $ generateHandle @TextureHandle pool
-            liftIO $ updateAssetState @TextureHandle handle1
-                (AssetReady tex1 []) pool
-            let camera = defaultCamera
-                testSceneId = "test"
-            
-            sceneMgr ← gets sceneManager
-            let sceneWithTest = createScene testSceneId camera sceneMgr
-                activeScene = setActiveScene testSceneId sceneWithTest
-            
-            let node1 = (createSceneNode SpriteObject)
-                    { nodeTransform = defaultTransform { position = (0.0, 0.0) }
-                    , nodeTexture = Just handle1
-                    , nodeSize = (1.0, 1.0)
-                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
-                    }
-            
-            case addObjectToScene testSceneId node1 activeScene of
-                Nothing → logDebug "Failed to add object to scene"
-                Just (objId, finalMgr) → do
-                    modify $ \s → s { sceneManager = finalMgr }
-                    logDebug $ "Test scene created with object: " ⧺ show objId
+--initializeTestScene ∷ EngineM' EngineEnv ()
+--initializeTestScene = do
+--    -- Get loaded texture asset IDs
+--    pool ← gets assetPool
+--    let textureIds = Map.keys (apTextureAtlases pool)
+--    
+--    case textureIds of
+--        [] → logDebug "No textures loaded for test scene"
+--        (tex1:tex2:_) → do
+--            -- first creates handles
+--            handle1 ← liftIO $ generateHandle @TextureHandle pool
+--            handle2 ← liftIO $ generateHandle @TextureHandle pool
+--            -- mark them as ready (pointing to the loaded assetIds)
+--            liftIO $ updateAssetState @TextureHandle handle1
+--                (AssetReady tex1 []) pool
+--            liftIO $ updateAssetState @TextureHandle handle2
+--                (AssetReady tex2 []) pool
+--            -- Create test scene
+--            let camera = defaultCamera
+--                testSceneId = "test"
+--            
+--            sceneMgr ← gets sceneManager
+--            let sceneWithTest = createScene testSceneId camera sceneMgr
+--                activeScene = setActiveScene testSceneId sceneWithTest
+--            
+--            -- Create first test object
+--            let node1 = (createSceneNode SpriteObject)
+--                    { nodeTransform = defaultTransform { position = (-1.0, 0.0) }
+--                    , nodeTexture = Just handle1
+--                    , nodeSize = (1.0, 1.0)
+--                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
+--                    }
+--            
+--            -- Create second test object  
+--            let node2 = (createSceneNode SpriteObject)
+--                    { nodeTransform = defaultTransform { position = (1.0, 0.0) }
+--                    , nodeTexture = Just handle2
+--                    , nodeSize = (1.0, 1.0)
+--                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
+--                    }
+--            
+--            -- Add objects to scene
+--            case addObjectToScene testSceneId node1 activeScene of
+--                Nothing → logDebug "Failed to add first object to scene"
+--                Just (obj1Id, mgr1) → case addObjectToScene testSceneId node2 mgr1 of
+--                    Nothing → logDebug "Failed to add second object to scene"
+--                    Just (obj2Id, finalMgr) → do
+--                        modify $ \s → s { sceneManager = finalMgr }
+--                        logDebug $ "Test scene created with objects: " ⧺ show obj1Id ⧺ ", " ⧺ show obj2Id
+--        (tex1:_) → do
+--            -- Single texture case
+--            handle1 ← liftIO $ generateHandle @TextureHandle pool
+--            liftIO $ updateAssetState @TextureHandle handle1
+--                (AssetReady tex1 []) pool
+--            let camera = defaultCamera
+--                testSceneId = "test"
+--            
+--            sceneMgr ← gets sceneManager
+--            let sceneWithTest = createScene testSceneId camera sceneMgr
+--                activeScene = setActiveScene testSceneId sceneWithTest
+--            
+--            let node1 = (createSceneNode SpriteObject)
+--                    { nodeTransform = defaultTransform { position = (0.0, 0.0) }
+--                    , nodeTexture = Just handle1
+--                    , nodeSize = (1.0, 1.0)
+--                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
+--                    }
+--            
+--            case addObjectToScene testSceneId node1 activeScene of
+--                Nothing → logDebug "Failed to add object to scene"
+--                Just (objId, finalMgr) → do
+--                    modify $ \s → s { sceneManager = finalMgr }
+--                    logDebug $ "Test scene created with object: " ⧺ show objId
 
 extractWindow ∷ HasCallStack ⇒ GraphicsState → Either EngineException Window
 extractWindow state =
@@ -789,7 +818,3 @@ safeVectorHead ∷ V.Vector a → Maybe a
 safeVectorHead vec
   | V.null vec = Nothing
   | otherwise = Just (V.head vec)
-
-
-minRequiredTextures ∷ Int
-minRequiredTextures = 2
