@@ -14,17 +14,21 @@ import Engine.Core.State
 import Engine.Core.Thread
 import Engine.Input.Types
 import Engine.Input.Callback
+import Engine.Input.Bindings
 import qualified Engine.Core.Queue as Q
 
 -- | Start the input processing thread
 startInputThread ∷ EngineEnv → IO ThreadState
 startInputThread env = do
+    let inputSRef     = inputStateRef env
+        apRef         = assetPoolRef env
+        objIdRef      = nextObjectIdRef env
     stateRef ← newIORef ThreadRunning
     threadId ← catch 
         (do
             let lf = logFunc env
             lf defaultLoc "input" LevelInfo "Starting input thread..."
-            tid ← forkIO $ runInputLoop env defaultInputState stateRef
+            tid ← forkIO $ runInputLoop env stateRef
             return tid
         ) 
         (\(e :: SomeException) → do
@@ -36,9 +40,9 @@ startInputThread env = do
     return $ ThreadState stateRef threadId
 
 -- | Main input processing loop with timing control
-runInputLoop ∷ EngineEnv → InputState → IORef ThreadControl → IO ()
+runInputLoop ∷ EngineEnv → IORef ThreadControl → IO ()
   -- read control state
-runInputLoop env inpSt stateRef = do
+runInputLoop env stateRef = do
   control ← readIORef stateRef
   case control of
     ThreadStopped → do
@@ -47,13 +51,18 @@ runInputLoop env inpSt stateRef = do
         pure ()
     ThreadPaused  → do
         threadDelay 100000  -- 100ms pause check
-        runInputLoop env inpSt stateRef
+        runInputLoop env stateRef
     ThreadRunning → do
         -- Start frame timing
         frameStart ← getCurrentTime
         
         -- Process all pending inputs
+        let sharedInputRef = inputStateRef env
+        inpSt ← readIORef sharedInputRef
         newInpSt ← processInputs env inpSt
+
+        -- write to the shared state
+        writeIORef sharedInputRef newInpSt
         
         -- Calculate frame time and delay to maintain consistent rate
         frameEnd ← getCurrentTime
@@ -66,7 +75,7 @@ runInputLoop env inpSt stateRef = do
         when (delay > 0) $ threadDelay delay
         
         -- Continue loop
-        runInputLoop env newInpSt stateRef
+        runInputLoop env stateRef
 
 -- | Process all queued inputs
 processInputs ∷ EngineEnv → InputState → IO InputState
@@ -81,7 +90,16 @@ processInputs env inpSt = do
 -- | Process individual input events
 processInput ∷ EngineEnv → InputState → InputEvent → IO InputState
 processInput env inpSt event = case event of
-    InputKeyEvent key keyState mods →
+    InputKeyEvent key keyState mods → do
+        -- get current key bindings
+        bindings ← readIORef (keyBindingsRef env)
+        -- check for special key combinations
+        case getKeyForAction "escape" bindings of
+          Just escapeKeyName →
+            when (Just key ≡ parseKeyName escapeKeyName
+                  && keyState ≡ GLFW.KeyState'Pressed) $ do
+                writeIORef (lifecycleRef env) CleaningUp
+          Nothing → return ()
         return $ updateKeyState inpSt key keyState mods
     InputMouseEvent btn pos state →
         return $ updateMouseState inpSt btn pos state

@@ -6,6 +6,7 @@ import Data.IORef (IORef)
 import Control.Concurrent.STM.TVar (TVar, newTVarIO)
 import Engine.Asset.Base
 import Engine.Asset.Types
+import Engine.Input.Types
 import Engine.Scene.Base
 import Engine.Graphics.Vulkan.Types.Vertex
 import qualified Engine.Core.Queue as Q
@@ -29,6 +30,7 @@ data LuaBackendState = LuaBackendState
   , lbsMsgQueues    ∷ (Q.Queue LuaToEngineMsg, Q.Queue EngineToLuaMsg)
   , lbsAssetPool    ∷ IORef AssetPool
   , lbsNextObjectId ∷ IORef Word32
+  , lbsInputState   ∷ IORef InputState
   }
 
 -- | Log levels for Lua

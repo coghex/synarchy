@@ -34,6 +34,7 @@ import Engine.Scripting.Lua.Backend
 import Engine.Scripting.Lua.Types
 import Engine.Graphics.Base
 import Engine.Graphics.Types
+import Engine.Input.Bindings
 import Engine.Input.Types
 import Engine.Input.Thread
 import Engine.Input.Event (handleInputEvents)
@@ -97,6 +98,10 @@ main = do
   ap ← defaultAssetPool
   apRef ← newIORef ap
   nextObjIdRef ← newIORef 0
+  -- initialize input state
+  inputStateRef ← newIORef defaultInputState
+  keyBindings ← loadKeyBindings "config/keybinds.json"
+  keyBindingsRef ← newIORef keyBindings
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
         { engineConfig     = defaultEngineConfig
@@ -108,6 +113,8 @@ main = do
         , lifecycleRef     = lifecycleRef
         , assetPoolRef     = apRef
         , nextObjectIdRef  = nextObjIdRef
+        , inputStateRef    = inputStateRef
+        , keyBindingsRef   = keyBindingsRef
         }
   envVar ←   atomically $ newVar defaultEngineEnv
   stateVar ← atomically $ newVar $ defaultEngineState ap
@@ -115,7 +122,7 @@ main = do
   -- fork input thread
   inputThreadState ← startInputThread defaultEngineEnv
   -- fork scripting thread
-  luaThreadState ← startLuaThread defaultEngineEnv apRef nextObjIdRef
+  luaThreadState ← startLuaThread defaultEngineEnv
   
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do

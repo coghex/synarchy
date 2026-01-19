@@ -67,6 +67,8 @@ test-suite synarchy-test
                 , stm
                 , mtl
                 , vector
+                , yaml
+                , aeson
                 , GLFW-b
                 , vulkan
                 , vulkan-utils
@@ -156,6 +158,7 @@ library
                      Engine.Graphics.Vulkan.Vertex
                      Engine.Graphics.Window.GLFW
                      Engine.Graphics.Window.Types
+                     Engine.Input.Bindings
                      Engine.Input.Callback
                      Engine.Input.Event
                      Engine.Input.Types
@@ -218,6 +221,8 @@ library
                  , text
                  , time
                  , vector
+                 , yaml
+                 , aeson
                  , vulkan
                  , vulkan-utils
                  , template-haskell
@@ -312,6 +317,8 @@ executable synarchy
                  , text
                  , time
                  , vector
+                 , yaml
+                 , aeson
                  , vulkan
                  , vulkan-utils
                  , template-haskell

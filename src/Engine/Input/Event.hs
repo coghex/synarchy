@@ -3,7 +3,7 @@ module Engine.Input.Event where
 
 import UPrelude
 import qualified Data.Map as Map
-import Data.IORef (writeIORef)
+import Data.IORef (writeIORef, readIORef)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad (MonadIO(liftIO), EngineM')
 import Engine.Input.Thread
@@ -19,12 +19,10 @@ import Engine.Input.Types
 handleInputEvents ∷ EngineM' EngineEnv ()
 handleInputEvents = do
     env ← ask
-    mEvent ← liftIO $ Q.tryReadQueue (inputQueue env)
-    case mEvent of
-        Just event → do
-            processInputEvent event
-            handleInputEvents
-        Nothing → return ()
+    -- read the shared input state
+    sharedInput ← liftIO $ readIORef (inputStateRef env)
+    -- update local copy in engine state
+    modify $ \s → s { inputState = sharedInput }
 
 -- | Process a single input event
 processInputEvent ∷ InputEvent → EngineM' EngineEnv ()

@@ -12,6 +12,7 @@ import Engine.Asset.Types
 import Engine.Asset.Manager
 import Engine.Core.Thread
 import Engine.Core.State
+import Engine.Input.Types
 import Engine.Scene.Base
 import Engine.Graphics.Vulkan.Types.Vertex
 import qualified Engine.Core.Queue as Q
@@ -296,8 +297,11 @@ createLuaBackend :: IO LuaBackend
 createLuaBackend = return LuaBackend
 
 -- | Start Lua thread (existing thread management)
-startLuaThread ∷ EngineEnv → IORef AssetPool → IORef Word32 → IO ThreadState
-startLuaThread env apRef objIdRef = do
+startLuaThread ∷ EngineEnv → IO ThreadState
+startLuaThread env = do
+    let apRef        = assetPoolRef env
+        objIdRef     = nextObjectIdRef env
+        inputSRef    = inputStateRef env
     stateRef ← newIORef ThreadRunning
     threadId ← catch 
         (do
@@ -305,7 +309,7 @@ startLuaThread env apRef objIdRef = do
             lf defaultLoc "lua" LevelInfo "Starting lua thread..."
             let lteq = luaToEngineQueue env
                 etlq = engineToLuaQueue env
-            backendState ← createLuaBackendState lteq etlq apRef objIdRef
+            backendState ← createLuaBackendState lteq etlq apRef objIdRef inputSRef
             -- register lua api
             registerLuaAPI (lbsLuaState backendState) env backendState
             lf defaultLoc "lua" LevelInfo "Lua API registered."
@@ -348,8 +352,9 @@ startLuaThread env apRef objIdRef = do
 
 -- | Create Lua backend state
 createLuaBackendState ::  Q.Queue LuaToEngineMsg -> Q.Queue EngineToLuaMsg
-                      -> IORef AssetPool -> IORef Word32 -> IO LuaBackendState
-createLuaBackendState ltem etlm apRef objIdRef = do
+                      -> IORef AssetPool -> IORef Word32
+                      -> IORef InputState -> IO LuaBackendState
+createLuaBackendState ltem etlm apRef objIdRef inputStateRef = do
   lState ← Lua.newstate
   _ ← Lua.runWith lState $ Lua.openlibs
   scriptsVar ← newTVarIO Map.empty
@@ -359,6 +364,7 @@ createLuaBackendState ltem etlm apRef objIdRef = do
     , lbsMsgQueues    = (ltem, etlm)
     , lbsAssetPool    = apRef
     , lbsNextObjectId = objIdRef
+    , lbsInputState   = inputStateRef
     }
 
 -- | Lua event loop (existing code)
