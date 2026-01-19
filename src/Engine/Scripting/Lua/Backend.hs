@@ -12,12 +12,15 @@ import Engine.Asset.Types
 import Engine.Asset.Manager
 import Engine.Core.Thread
 import Engine.Core.State
+import Engine.Input.Bindings
 import Engine.Input.Types
 import Engine.Scene.Base
 import Engine.Graphics.Vulkan.Types.Vertex
+import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Map as Map
 import Data.Dynamic (toDyn, fromDynamic)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
@@ -100,6 +103,18 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.destroySprite(objectId)
   Lua.pushHaskellFunction (destroySpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "destroySprite")
+  -- engine.isKeyDown(keyName)
+  Lua.pushHaskellFunction (isKeyDownFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "isKeyDown")
+  -- engine.isActionDown(actionName)
+  Lua.pushHaskellFunction (isActionDownFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "isActionDown")
+  -- engine.getMousePosition()
+  Lua.pushHaskellFunction (getMousePositionFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "getMousePosition")
+  -- engine.isMouseButtonDown(button)
+  Lua.pushHaskellFunction (isMouseButtonDownFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "isMouseButtonDown")
   -- set global 'engine' table
   Lua.setglobal (Lua.Name "engine")
   where
@@ -276,6 +291,55 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
               "destroySprite requires 1 argument: objectId"
           return 0
 
+    isKeyDownFn = do
+      keyStr ← Lua.tostring 1
+      case keyStr of
+        Just keyBS → do
+          isDown ← Lua.liftIO $ do
+            inputState ← readIORef (lbsInputState backendState)
+            let keyName = TE.decodeUtf8 keyBS
+            return $ checkKeyDown keyName inputState
+          Lua.pushboolean isDown
+        Nothing → Lua.pushboolean False
+      return 1
+
+    isActionDownFn = do
+      actionStr ← Lua.tostring 1
+      case actionStr of
+        Just actionBS → do
+          isDown ← Lua.liftIO $ do
+            inputState ← readIORef (lbsInputState backendState)
+            bindings ← readIORef (keyBindingsRef env)
+            let actionName = TE.decodeUtf8 actionBS
+            return $ isActionDown actionName bindings inputState
+          Lua.pushboolean isDown
+        Nothing → Lua.pushboolean False
+      return 1
+
+    getMousePositionFn = do
+      (x,y) ← Lua.liftIO $ do
+        inputState ← readIORef (lbsInputState backendState)
+        return $ inpMousePos inputState
+      Lua.pushnumber (Lua.Number x)
+      Lua.pushnumber (Lua.Number y)
+      return 2
+
+    isMouseButtonDownFn = do
+      buttonNum ← Lua.tointeger 1
+      case buttonNum of
+        Just btn → do
+          isDown ← Lua.liftIO $ do
+            inputState ← readIORef (lbsInputState backendState)
+            let button = case btn of
+                  1 → GLFW.MouseButton'1
+                  2 → GLFW.MouseButton'2
+                  3 → GLFW.MouseButton'3
+                  _ → GLFW.MouseButton'1
+            return $ Map.findWithDefault False button (inpMouseBtns inputState)
+          Lua.pushboolean isDown
+        Nothing → Lua.pushboolean False
+      return 1
+
 -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
 callLuaFunction funcName args = do
@@ -308,7 +372,7 @@ startLuaThread env = do
             let lf = logFunc env
             lf defaultLoc "lua" LevelInfo "Starting lua thread..."
             let lteq = luaToEngineQueue env
-                etlq = engineToLuaQueue env
+                etlq = luaQueue env
             backendState ← createLuaBackendState lteq etlq apRef objIdRef inputSRef
             -- register lua api
             registerLuaAPI (lbsLuaState backendState) env backendState
@@ -351,7 +415,7 @@ startLuaThread env = do
     return $ ThreadState stateRef threadId
 
 -- | Create Lua backend state
-createLuaBackendState ::  Q.Queue LuaToEngineMsg -> Q.Queue EngineToLuaMsg
+createLuaBackendState ::  Q.Queue LuaToEngineMsg -> Q.Queue LuaMsg
                       -> IORef AssetPool -> IORef Word32
                       -> IORef InputState -> IO LuaBackendState
 createLuaBackendState ltem etlm apRef objIdRef inputStateRef = do
@@ -367,7 +431,7 @@ createLuaBackendState ltem etlm apRef objIdRef inputStateRef = do
     , lbsInputState   = inputStateRef
     }
 
--- | Lua event loop (existing code)
+-- | Lua event loop
 runLuaLoop ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
 runLuaLoop env ls stateRef = do
     control ← readIORef stateRef
@@ -417,11 +481,74 @@ runLuaLoop env ls stateRef = do
                     atomically $ modifyTVar (lbsScripts ls) $ Map.adjust
                       (\s -> s { scriptNextTick = scriptNextTick s + scriptTickRate s }) path
 
-              -- check for messages from engine
-              let (_, etlq) = lbsMsgQueues ls
-              msg ← Q.tryReadQueue etlq
-              case msg of
-                  Just LuaThreadKill → writeIORef stateRef ThreadStopped
-                  _                  → return ()
+              -- process pending lua messages
+              processLuaMsgs env ls stateRef
+
               -- continue loop
               runLuaLoop env ls stateRef
+
+-- | Process messages from anywhere to lua
+processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
+processLuaMsgs env ls stateRef = do
+    let (_, etlq) = lbsMsgQueues ls
+    mMsg ← Q.tryReadQueue etlq
+    case mMsg of
+        Just msg → do
+            processLuaMsg env ls stateRef msg
+            processLuaMsgs env ls stateRef
+        Nothing → return ()
+-- | Process a single lua message
+processLuaMsg ∷ EngineEnv → LuaBackendState → IORef ThreadControl → LuaMsg → IO ()
+processLuaMsg env ls stateRef msg = case msg of
+  LuaTextureLoaded handle assetId → do
+    -- TODO: Handle texture loaded callback
+    let lf = logFunc env
+    lf defaultLoc "lua" LevelInfo $ 
+        "Texture loaded:  " <> toLogStr (show handle) <> " -> " <> toLogStr (show assetId)
+    return ()
+  LuaThreadKill → writeIORef stateRef ThreadStopped
+  LuaMouseDownEvent button x y → do
+    let buttonNum = case button of
+          GLFW.MouseButton'1 → 1
+          GLFW.MouseButton'2 → 2
+          GLFW.MouseButton'3 → 3
+          _                  → 0
+    tryCallLuaHandler ls "onMouseDown"
+      [ ScriptNumber (fromIntegral buttonNum)
+      , ScriptNumber x
+      , ScriptNumber y ]
+  LuaMouseUpEvent button x y → do
+    let buttonNum = case button of
+          GLFW.MouseButton'1 → 1
+          GLFW.MouseButton'2 → 2
+          GLFW.MouseButton'3 → 3
+          _                  → 0
+    tryCallLuaHandler ls "onMouseUp"
+      [ ScriptNumber (fromIntegral buttonNum)
+      , ScriptNumber x
+      , ScriptNumber y ]
+  LuaKeyDownEvent key → do
+    let keyName = keyToText key
+    tryCallLuaHandler ls "onKeyDown" [ScriptString keyName]
+  LuaKeyUpEvent key → do
+    let keyName = keyToText key
+    tryCallLuaHandler ls "onKeyUp" [ScriptString keyName]
+  _ → return () -- other messages can be handled here
+
+-- | helper function to call lua event handlers safely
+tryCallLuaHandler ∷ LuaBackendState → T.Text → [ScriptValue] → IO ()
+tryCallLuaHandler ls funcName args = do
+  -- check if handler exists
+  exists ← Lua.runWith (lbsLuaState ls) $ do
+    _ ← Lua.getglobal (Lua.Name $ TE.encodeUtf8 funcName) ∷  Lua.LuaE Lua.Exception Lua.Type
+    isFunc ← Lua.isfunction (-1)
+    Lua.pop 1
+    return isFunc
+  when exists $ do
+    backend ← createLuaBackend
+    let scriptCtx = ScriptContext (toDyn (lbsLuaState ls))
+    result ← callFunction backend scriptCtx funcName args
+    case result of
+      ScriptSuccess _ → return ()
+      ScriptError err → do
+        putStrLn $ "Error calling Lua handler " ⧺ (T.unpack funcName) ⧺ ": " ⧺ (show err)

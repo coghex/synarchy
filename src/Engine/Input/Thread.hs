@@ -15,6 +15,7 @@ import Engine.Core.Thread
 import Engine.Input.Types
 import Engine.Input.Callback
 import Engine.Input.Bindings
+import Engine.Scripting.Lua.Types
 import qualified Engine.Core.Queue as Q
 
 -- | Start the input processing thread
@@ -90,19 +91,35 @@ processInputs env inpSt = do
 -- | Process individual input events
 processInput ∷ EngineEnv → InputState → InputEvent → IO InputState
 processInput env inpSt event = case event of
-    InputKeyEvent key keyState mods → do
+    InputKeyEvent glfwKey keyState mods → do
+        let key = fromGLFWKey glfwKey
         -- get current key bindings
         bindings ← readIORef (keyBindingsRef env)
         -- check for special key combinations
         case getKeyForAction "escape" bindings of
           Just escapeKeyName →
-            when (Just key ≡ parseKeyName escapeKeyName
+            when (Just key ≡ textToKey escapeKeyName
                   && keyState ≡ GLFW.KeyState'Pressed) $ do
                 writeIORef (lifecycleRef env) CleaningUp
           Nothing → return ()
-        return $ updateKeyState inpSt key keyState mods
-    InputMouseEvent btn pos state →
+        -- send key events to lua
+        let lq = luaQueue env
+        when (keyState ≡ GLFW.KeyState'Pressed) $
+            Q.writeQueue lq (LuaKeyDownEvent key)
+        when (keyState ≡ GLFW.KeyState'Released) $
+            Q.writeQueue lq (LuaKeyUpEvent key)
+        return $ updateKeyState inpSt glfwKey keyState mods
+    InputMouseEvent btn pos state → do
+        -- send mouse events to lua
+        let lq = luaQueue env
+            (x, y) = pos
+        when (state ≡ GLFW.MouseButtonState'Pressed) $
+            Q.writeQueue lq (LuaMouseDownEvent btn x y)
+        when (state ≡ GLFW.MouseButtonState'Released) $
+            Q.writeQueue lq (LuaMouseUpEvent btn x y)
         return $ updateMouseState inpSt btn pos state
+    InputCursorMove x y → 
+        return $ inpSt { inpMousePos = (x, y) }
     InputWindowEvent winEv →
         return $ updateWindowState inpSt winEv
     InputScrollEvent x y →

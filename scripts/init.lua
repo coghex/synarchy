@@ -1,42 +1,42 @@
-local tickCount = 0
-local testx, testy = 0, 0
-local testspeed = 0.1
-local colorR = 1.0
+local tex = nil
+local spawnedSprites = {}
+local lastLogTime = 0
+local logInterval = 1.0  -- Log mouse position every 1 second
 
 function init()
-    engine.logInfo("=== Sprite Manipulation Test ===")
+    engine.logInfo("=== Input System Test ===")
+    engine.logInfo("Controls:")
+    engine.logInfo("  WASD - Move camera")
+    engine.logInfo("  Left Click - Spawn sprite at mouse")
+    engine.logInfo("  Escape - Quit")
+    
+    -- Load texture for spawning
     tex = engine.loadTexture("assets/textures/tile01.png")
-    
-    sprite1 = engine.spawnSprite(testx, testy, 1, 1, tex)
-    sprite2 = engine.spawnSprite(1, 0, 1, 1, tex)
-    
-    -- Make sprite2 red
-    engine.setSpriteColor(sprite2, 1, 0, 0, 1)
-    
-    engine.logInfo("Spawned sprites: " .. sprite1 .. ", " .. sprite2)
+    engine.logInfo("Texture loaded, ready for input")
 end
 
 function update(dt)
-    tickCount = tickCount + 1
-    
-    -- Move sprite1
-    testx = testx + testspeed * dt
-    engine.moveSprite(sprite1, testx, testy)
-    
-    -- Pulse color on sprite1
-    colorR = 0.5 + 0.5 * math.sin(tickCount * 0.1)
-    engine.setSpriteColor(sprite1, colorR, 1, 1, 1)
-    
-    -- Toggle visibility
-    if tickCount % 2 == 0 then
-        engine.setSpriteVisible(sprite2, false)
-    elseif tickCount % 2 == 1 then
-        engine.setSpriteVisible(sprite2, true)
+    -- Mouse position logging (throttled)
+    lastLogTime = lastLogTime + dt
+    if lastLogTime >= logInterval then
+        local mx, my = engine.getMousePosition()
+        engine.logInfo("Mouse position: " .. math.floor(mx) .. ", " .. math.floor(my))
+        lastLogTime = 0
     end
-    
-    -- Destroy sprite1 after 10 ticks
-    if tickCount == 10 then
-        engine.destroySprite(sprite1)
-        engine.logInfo("Sprite1 destroyed!")
-    end
+end
+
+function onMouseDown(button, x, y)
+    engine.logInfo("Mouse button " .. button .. " pressed at: " .. x .. ", " .. y)
+end
+
+function onMouseIp(button, x, y)
+    engine.logInfo("Mouse button " .. button .. " released at: " .. x .. ", " .. y)
+end
+
+function onKeyDown(key)
+    engine.logInfo("Key " .. key .. " pressed")
+end
+
+function onKeyUp(key)
+    engine.logInfo("Key " .. key .. " released")
 end

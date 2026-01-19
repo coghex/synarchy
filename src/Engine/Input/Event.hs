@@ -24,32 +24,6 @@ handleInputEvents = do
     -- update local copy in engine state
     modify $ \s → s { inputState = sharedInput }
 
--- | Process a single input event
-processInputEvent ∷ InputEvent → EngineM' EngineEnv ()
-processInputEvent event = do
-    env ← ask
-    state ← get
-    let dt  = deltaTime $ timingState   state
-        cam = camera2D  $ graphicsState state
-    case event of
-        InputKeyEvent key keyState mods → do
-            -- Handle escape key
-            when (key == GLFW.Key'Escape && keyState == GLFW.KeyState'Pressed) $ do
-                logInfo "Escape pressed, shutting down..."
-                liftIO $ writeIORef (lifecycleRef env) CleaningUp
-            let newCam = updateCameraFromInput (inputState state) cam dt
-            -- Update general input state
-            modify $ \s → s { inputState = updateKeyState (inputState s) key keyState mods
-                            , graphicsState = (graphicsState s) { camera2D = newCam } }
-        InputMouseEvent btn pos state → do
-            modify $ \s → s { inputState = updateMouseState (inputState s) btn pos state }
-            
-        InputWindowEvent winEv → do
-            modify $ \s → s { inputState = updateWindowState (inputState s) winEv }
-            
-        InputScrollEvent x y → do
-            modify $ \s → s { inputState = updateScrollState (inputState s) x y }
-
 updateCameraFromInput ∷ InputState → Camera2D → Double → Camera2D
 updateCameraFromInput input camera dt =
     let -- Base movement speed

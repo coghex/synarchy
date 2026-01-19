@@ -30,7 +30,7 @@ data EngineEnv = EngineEnv
   , inputQueue       ∷ Q.Queue InputEvent
   , logFunc          ∷ LoggingFunc
   , luaToEngineQueue ∷ Q.Queue LuaToEngineMsg
-  , engineToLuaQueue ∷ Q.Queue EngineToLuaMsg
+  , luaQueue         ∷ Q.Queue LuaMsg
   , lifecycleRef     ∷ IORef EngineLifecycle
   , assetPoolRef     ∷ IORef AssetPool
   , nextObjectIdRef  ∷ IORef Word32

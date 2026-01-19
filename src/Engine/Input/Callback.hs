@@ -56,8 +56,7 @@ mouseCallback queue _win btn state mods = do
 -- | Cursor position callback
 cursorCallback ∷ Queue InputEvent → GLFW.Window → Double → Double → IO ()
 cursorCallback queue _win x y = do
-    let pos = (x, y)
-    writeQueue queue $ InputMouseEvent GLFW.MouseButton'1 pos GLFW.MouseButtonState'Released
+    writeQueue queue $ InputCursorMove x y
 
 -- | Scroll wheel callback
 scrollCallback ∷ Queue InputEvent → GLFW.Window → Double → Double → IO ()

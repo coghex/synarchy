@@ -9,6 +9,7 @@ import Engine.Asset.Types
 import Engine.Input.Types
 import Engine.Scene.Base
 import Engine.Graphics.Vulkan.Types.Vertex
+import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
@@ -27,7 +28,7 @@ type LuaScripts = TVar (Map.Map FilePath LuaScript)
 data LuaBackendState = LuaBackendState
   { lbsLuaState     ∷ Lua.State
   , lbsScripts      ∷ LuaScripts
-  , lbsMsgQueues    ∷ (Q.Queue LuaToEngineMsg, Q.Queue EngineToLuaMsg)
+  , lbsMsgQueues    ∷ (Q.Queue LuaToEngineMsg, Q.Queue LuaMsg)
   , lbsAssetPool    ∷ IORef AssetPool
   , lbsNextObjectId ∷ IORef Word32
   , lbsInputState   ∷ IORef InputState
@@ -40,6 +41,7 @@ data LuaLogLevel = LuaLogDebug
                  | LuaLogError
                  deriving (Eq, Show)
 
+-- | messages from lua to the main thread
 data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaLoadTextureRequest TextureHandle FilePath
                     | LuaSpawnSpriteRequest
@@ -55,9 +57,15 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSetSpriteVisibleRequest ObjectId Bool
                     | LuaDestroySpriteRequest ObjectId
                     deriving (Eq, Show)
-data EngineToLuaMsg = LuaTextureLoaded TextureHandle AssetId
-                    | LuaThreadKill
-                    deriving (Eq, Show)
+
+-- | messages from set to lua from anywhere
+data LuaMsg = LuaTextureLoaded TextureHandle AssetId
+            | LuaThreadKill
+            | LuaMouseDownEvent GLFW.MouseButton Double Double
+            | LuaMouseUpEvent GLFW.MouseButton Double Double
+            | LuaKeyDownEvent Key
+            | LuaKeyUpEvent Key
+            deriving (Eq, Show)
 
 -- | Lua execution result
 data LuaResult = LuaSuccess

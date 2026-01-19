@@ -29,7 +29,7 @@ data KeyBindingConfig = KeyBindingConfig
 
 instance FromJSON KeyBindingConfig where
   parseJSON (Object v) =
-    KeyBindingConfig <$> v .: "bindings" .!= defaultKeyBindings
+    KeyBindingConfig <$> v .: "keybinds" .!= defaultKeyBindings
   parseJSON _ = fail "Expected Object for KeyBindingConfig value"
 
 -- | Load keybindings from a YAML file
