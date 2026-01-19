@@ -86,6 +86,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.spawnSprite(x, y, width, height, textureHandle)
   Lua.pushHaskellFunction (spawnSpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "spawnSprite")
+  -- engine.moveSprite(objectId, x, y)
+  Lua.pushHaskellFunction (moveSpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "moveSprite")
   -- set global 'engine' table
   Lua.setglobal (Lua.Name "engine")
   where
@@ -188,6 +191,25 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
           Lua.pushnil
       
       return 1
+    moveSpriteFn = do
+      objIdNum ← Lua.tointeger 1
+      x ← Lua.tonumber 2
+      y ← Lua.tonumber 3
+      case (objIdNum, x, y) of
+        (Just idVal, Just xVal, Just yVal) → do
+          Lua.liftIO $ do
+            let (lteq, _) = lbsMsgQueues backendState
+                msg = LuaMoveSpriteRequest (ObjectId (fromIntegral idVal))
+                  (realToFrac xVal) (realToFrac yVal)
+            Q.writeQueue lteq msg
+          return 0
+        _ → do
+          Lua.liftIO $ do
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelError 
+              "moveSprite requires 3 arguments: objectId, x, y"
+          return 0
+
 
 -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status

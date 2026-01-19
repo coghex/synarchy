@@ -33,17 +33,30 @@ createSceneNode objType = SceneNode
 -- | Add a node to the scene graph
 addNode ∷ SceneNode → SceneGraph → (ObjectId, SceneGraph)
 addNode node graph = 
-    let newId = ObjectId (sgNextId graph)
-        updatedNode = node { nodeId = newId, nodeDirty = True }
-        newGraph = graph
-            { sgNodes = Map.insert newId updatedNode (sgNodes graph)
-            , sgRootNodes = if isNothing (nodeParent updatedNode)
-                           then Set.insert newId (sgRootNodes graph)
-                           else sgRootNodes graph
-            , sgDirtyNodes = Set.insert newId (sgDirtyNodes graph)
-            , sgNextId = sgNextId graph + 1
-            }
-    in (newId, newGraph)
+  let providedId = nodeId node
+      ObjectId providedIdNum = providedId
+      -- ensure nextId doest collide
+      newNextId = max (sgNextId graph) (providedIdNum + 1)
+      -- add node with its existing id
+      updatedNode = node { nodeDirty = True }
+      -- initial world transform
+      initialWorldTrans = WorldTransform
+        { wtMatrix = localToWorldMatrix (nodeTransform node)
+        , wtPosition = position (nodeTransform node)
+        , wtScale = scale (nodeTransform node)
+        , wtRotation = rotation (nodeTransform node)
+        , wtZIndex = zIndex (nodeTransform node)
+        }
+      newGraph = graph
+        { sgNodes = Map.insert providedId updatedNode (sgNodes graph)
+        , sgRootNodes = if isNothing (nodeParent updatedNode)
+                       then Set.insert providedId (sgRootNodes graph)
+                       else sgRootNodes graph
+        , sgWorldTrans = Map.insert providedId initialWorldTrans (sgWorldTrans graph)
+        , sgDirtyNodes = Set.insert providedId (sgDirtyNodes graph)
+        , sgNextId = newNextId
+        }
+      in (providedId, newGraph)
 
 -- | Add a child node to a parent
 addChild ∷ ObjectId → ObjectId → SceneGraph → SceneGraph

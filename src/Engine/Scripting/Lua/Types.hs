@@ -7,6 +7,7 @@ import Control.Concurrent.STM.TVar (TVar, newTVarIO)
 import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Scene.Base
+import Engine.Graphics.Vulkan.Types.Vertex
 import qualified Engine.Core.Queue as Q
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
@@ -46,6 +47,10 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                         , lssWidth       ∷ Float
                         , lssHeight      ∷ Float
                         , lssTextureHandle ∷ TextureHandle }
+                    | LuaMoveSpriteRequest ObjectId Float Float
+                    | LuaSetSpriteScaleRequest ObjectId Float Float
+                    | LuaSetSpriteColorRequest ObjectId Vec4
+                    | LuaDestroySpriteRequest ObjectId
                     deriving (Eq, Show)
 data EngineToLuaMsg = LuaTextureLoaded TextureHandle AssetId
                     | LuaThreadKill

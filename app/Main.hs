@@ -7,6 +7,7 @@ import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.STM (newTVarIO, newTQueueIO)
 import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.IORef (newIORef, readIORef, IORef, writeIORef, atomicModifyIORef')
@@ -461,6 +462,7 @@ processLuaMessages = do
     case maybeMsg of
       Nothing → return () -- no messages
       Just msg → case msg of
+
         LuaLoadTextureRequest handle path → do
           logDebug $ "Loading texture: " ⧺ (show path)
           assetId ← loadTextureAtlas (T.pack $ takeBaseName path) path "default"
@@ -475,6 +477,7 @@ processLuaMessages = do
           modify $ \s → s { assetPool = pool }
           logDebug $ "Texture loaded: handle=" ⧺ (show handle) ⧺
                      ", assetId=" ⧺ (show assetId)
+
         LuaSpawnSpriteRequest objId x y width height texHandle → do
           logDebug $ "Spawning sprite id=" ⧺ show objId ⧺
                      " pos=(" ⧺ show x ⧺ ", " ⧺ show y ⧺ ")" ⧺
@@ -501,7 +504,36 @@ processLuaMessages = do
                 Nothing → logDebug $ "Failed to add sprite "
                                    ⧺ show objId ⧺ " to scene"
             Nothing → logDebug "cannot spawn sprite: no active scene"
+
+        LuaMoveSpriteRequest objId x y → do
+          modifySceneNode objId $ \node →
+            node { nodeTransform = (nodeTransform node) {
+                      position = (x, y) } }
+
         _ → return () -- unhandled message
+
+-- helper function
+modifySceneNode ∷ ObjectId → (SceneNode → SceneNode) → EngineM' EngineEnv ()
+modifySceneNode objId f = do
+  sceneMgr ← gets sceneManager
+  case smActiveScene sceneMgr of
+    Just sceneId → do
+      case Map.lookup sceneId (smSceneGraphs sceneMgr) of
+        Just graph → do
+          case Map.lookup objId (sgNodes graph) of
+            Just node → do
+              let updatedNode = f node
+                  updatedGraph = graph { sgNodes = Map.insert objId updatedNode
+                                                             (sgNodes graph)
+                                       , sgDirtyNodes = Set.insert objId
+                                                             (sgDirtyNodes graph) }
+                  updatedGraphs = Map.insert sceneId updatedGraph
+                                              (smSceneGraphs sceneMgr)
+              modify $ \s → s { sceneManager = sceneMgr {
+                                  smSceneGraphs = updatedGraphs } }
+            Nothing → logInfo $ "Sprite not found: " ⧺ (show objId)
+        Nothing → logInfo $ "no scene graph"
+    Nothing → logInfo $ "no active scene"
 
 drawFrame ∷ EngineM' EngineEnv ()
 drawFrame = do
