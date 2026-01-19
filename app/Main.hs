@@ -496,7 +496,7 @@ processLuaMessages = do
               case addObjectToScene sceneId node sceneMgr of
                 Just (addedObjId, newSceneMgr) → do
                   modify $ \s → s { sceneManager = newSceneMgr }
-                  logDebug $ "Sprite succesfully pawned with object id: "
+                  logDebug $ "Sprite succesfully spawned with object id: "
                            ⧺ show addedObjId
                 Nothing → logDebug $ "Failed to add sprite "
                                    ⧺ show objId ⧺ " to scene"

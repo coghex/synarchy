@@ -86,10 +86,10 @@ generateQuadVertices node worldTrans =
         
         -- Vertices: bottom-left, bottom-right, top-right, top-left
         -- Note: This creates 6 vertices for a quad (2 triangles)
-        v1 = Vertex (Vec2 (posX - halfX) (posY - halfY)) (Vec2 (x uvMin) (y uvMax)) color atlasId
-        v2 = Vertex (Vec2 (posX + halfX) (posY - halfY)) (Vec2 (x uvMax) (y uvMax)) color atlasId
-        v3 = Vertex (Vec2 (posX + halfX) (posY + halfY)) (Vec2 (x uvMax) (y uvMin)) color atlasId
-        v4 = Vertex (Vec2 (posX - halfX) (posY + halfY)) (Vec2 (x uvMin) (y uvMin)) color atlasId
+        v1 = Vertex (Vec2 (posX - halfX) (posY - halfY)) (Vec2 (x uvMin) (y uvMin)) color atlasId
+        v2 = Vertex (Vec2 (posX + halfX) (posY - halfY)) (Vec2 (x uvMax) (y uvMin)) color atlasId
+        v3 = Vertex (Vec2 (posX + halfX) (posY + halfY)) (Vec2 (x uvMax) (y uvMax)) color atlasId
+        v4 = Vertex (Vec2 (posX - halfX) (posY + halfY)) (Vec2 (x uvMin) (y uvMax)) color atlasId
         
         -- Create two triangles: (v1,v2,v3) and (v1,v3,v4)
     in V.fromList [v1, v2, v3, v1, v3, v4]
