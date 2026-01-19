@@ -34,7 +34,7 @@ data InputEvent
     | InputCursorMove Double Double
     | InputScrollEvent
         { iseScrollX   ∷ Double         -- ^ Scroll X offset
-        , isecrollY    ∷ Double         -- ^ Scroll Y offset
+        , iseScrollY    ∷ Double         -- ^ Scroll Y offset
         }
     deriving (Show, Eq)
 

@@ -33,6 +33,7 @@ import Engine.Core.Var
 import Engine.Scripting.Lua.Backend
 import Engine.Scripting.Lua.Types
 import Engine.Graphics.Base
+import Engine.Graphics.Config
 import Engine.Graphics.Types
 import Engine.Input.Bindings
 import Engine.Input.Types
@@ -102,6 +103,8 @@ main = do
   inputStateRef ← newIORef defaultInputState
   keyBindings ← loadKeyBindings "config/keybinds.json"
   keyBindingsRef ← newIORef keyBindings
+  -- load video config
+  videoConfig ← loadVideoConfig "config/video.yaml"
   -- Initialize engine environment and state
   let defaultEngineEnv = EngineEnv
         { engineConfig     = defaultEngineConfig
@@ -127,7 +130,7 @@ main = do
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
         -- initialize GLFW first
-        window ← GLFW.createWindow defaultWindowConfig
+        window ← GLFW.createWindow $ defaultWindowConfig videoConfig
         modify $ \s → s { graphicsState = (graphicsState s) {
                             glfwWindow = Just window } }
 

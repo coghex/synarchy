@@ -124,6 +124,14 @@ processInput env inpSt event = case event of
         return $ updateWindowState inpSt winEv
     InputScrollEvent x y →
         return $ updateScrollState inpSt x y
+    InputWindowEvent winEv → do
+        case winEv of
+          WindowResize w h → do
+            let lf = logFunc env
+            lf defaultLoc "input" LevelInfo $ "Window resized to: " <> (toLogStr $ show (w, h))
+            -- TODO: Trigger swapchain recreation or other necessary updates
+          _ → return ()
+        return $ updateWindowState inpSt winEv
 
 -- | Helper state update functions
 updateKeyState ∷ InputState → GLFW.Key → GLFW.KeyState → GLFW.ModifierKeys → InputState

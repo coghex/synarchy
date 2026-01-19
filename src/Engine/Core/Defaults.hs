@@ -12,6 +12,7 @@ import Engine.Asset.Types
 import Engine.Input.Types
 import Engine.Graphics.Base
 import Engine.Graphics.Camera
+import Engine.Graphics.Config
 import Engine.Graphics.Window.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture
@@ -43,11 +44,11 @@ defaultGraphicsConfig = GraphicsConfig
   , gcMaxFrames = 2
   }
 
-defaultWindowConfig ∷ WindowConfig
-defaultWindowConfig = WindowConfig
-  { wcWidth     = 800
-  , wcHeight    = 600
-  , wcTitle     = T.pack "Vulkan Test"
+defaultWindowConfig ∷ VideoConfig → WindowConfig
+defaultWindowConfig vc = WindowConfig
+  { wcWidth     = vcWidth vc
+  , wcHeight    = vcHeight vc
+  , wcTitle     = T.pack "Synarchy"
   , wcResizable = True
   }
 

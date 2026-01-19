@@ -2,6 +2,7 @@ local tex = nil
 local spawnedSprites = {}
 local lastLogTime = 0
 local logInterval = 1.0  -- Log mouse position every 1 second
+local w, h = 800,600
 
 function init()
     engine.logInfo("=== Input System Test ===")
@@ -10,6 +11,9 @@ function init()
     engine.logInfo("  Left Click - Spawn sprite at mouse")
     engine.logInfo("  Escape - Quit")
     
+    -- quick window size test
+    w,h = engine.getWindowSize()
+    engine.logInfo("Window size: " .. w .. "x" .. h)
     -- Load texture for spawning
     tex = engine.loadTexture("assets/textures/tile01.png")
     engine.logInfo("Texture loaded, ready for input")
@@ -26,10 +30,13 @@ function update(dt)
 end
 
 function onMouseDown(button, x, y)
+    local worldX = (x / w) * 4 - 2
+    local worldY = -((y / h) * 4 - 2)
+    engine.spawnSprite(0, 0, 0.5, 0.5, tex)
     engine.logInfo("Mouse button " .. button .. " pressed at: " .. x .. ", " .. y)
 end
 
-function onMouseIp(button, x, y)
+function onMouseUp(button, x, y)
     engine.logInfo("Mouse button " .. button .. " released at: " .. x .. ", " .. y)
 end
 

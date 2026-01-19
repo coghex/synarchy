@@ -136,6 +136,7 @@ library
                      Engine.Graphics.Base
                      Engine.Graphics.Camera
                      Engine.Graphics.Types
+                     Engine.Graphics.Config
                      Engine.Graphics.Vulkan.Base
                      Engine.Graphics.Vulkan.Buffer
                      Engine.Graphics.Vulkan.Command

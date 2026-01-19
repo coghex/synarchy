@@ -115,6 +115,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.isMouseButtonDown(button)
   Lua.pushHaskellFunction (isMouseButtonDownFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "isMouseButtonDown")
+  -- engine.getWindowSize()
+  Lua.pushHaskellFunction (getWindowSizeFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "getWindowSize")
   -- set global 'engine' table
   Lua.setglobal (Lua.Name "engine")
   where
@@ -339,6 +342,15 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
           Lua.pushboolean isDown
         Nothing → Lua.pushboolean False
       return 1
+
+    getWindowSizeFn = do
+      (w, h) ← Lua.liftIO $ do
+        inputState ← readIORef (lbsInputState backendState)
+        let (winW, winH) = inpWindowSize inputState
+        return (fromIntegral winW, fromIntegral winH)
+      Lua.pushnumber (Lua.Number w)
+      Lua.pushnumber (Lua.Number h)
+      return 2
 
 -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
