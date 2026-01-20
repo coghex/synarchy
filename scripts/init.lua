@@ -31,8 +31,10 @@ end
 
 function onMouseDown(button, x, y)
     local worldX, worldY = engine.getWorldCoord(x, y)
-    engine.spawnSprite(worldX, worldY, 0.5, 0.5, tex)
-    engine.logInfo("Mouse button " .. button .. " pressed at: " .. x .. ", " .. y)
+    engine.spawnSprite(worldX, worldY, 0.1, 0.1, tex)
+    engine.spawnSprite(0, 0, 0.1, 0.1, tex)
+    engine.logInfo("mouse button " .. button .. " pressed at: " .. x .. ", " .. y)
+    engine.logInfo("world coord " .. button .. " pressed at: " .. worldX .. ", " .. worldY)
 end
 
 function onMouseUp(button, x, y)

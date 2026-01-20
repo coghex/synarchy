@@ -607,6 +607,8 @@ drawFrame = do
                 uboData = UBO modelMatrix viewMatrix projMatrix
             env ← ask
             liftIO $ writeIORef (cameraRef env) camera
+            liftIO $ atomicModifyIORef' (inputStateRef env) $ \is →
+                (is { inpWindowSize = (width, height) }, ())
             
             -- Update the uniform buffer
             updateUniformBuffer device memory uboData
