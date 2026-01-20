@@ -6,6 +6,7 @@ import qualified Data.Vector as V
 import Data.Word (Word8, Word32)
 import Engine.Asset.Types (TextureHandle, FontHandle, GlyphInfo)
 import Engine.Scene.Base (ObjectId)
+import Vulkan.Core10
 
 -- | a complete font atlas texture with glyph metadata
 data FontAtlas = FontAtlas
@@ -14,9 +15,12 @@ data FontAtlas = FontAtlas
   , faAtlasWidth  ∷ Int
   , faAtlasHeight ∷ Int
   , faFontSize    ∷ Int
-  , faLineHeight  ∷ Float
+  , faLineHeight  ∷ Float       
   , faBaseline    ∷ Float
   , faAtlasBitmap ∷ [Word8]
+  , faDescriptorSet ∷ Maybe DescriptorSet
+  , faImageView     ∷ Maybe ImageView
+  , faSampler       ∷ Maybe Sampler
   } deriving (Eq, Show)
 
 -- | add instance data

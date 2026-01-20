@@ -2,17 +2,28 @@ module Engine.Graphics.Font.Load where
 
 import UPrelude
 import Engine.Asset.Types
+import Engine.Asset.Manager (generateHandle)
 import Engine.Graphics.Font.Data
 import Engine.Graphics.Font.STB
+import Engine.Graphics.Types
+import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
+import Engine.Graphics.Vulkan.Image (createVulkanImage, VulkanImage(..), createVulkanImageView)
+import Engine.Graphics.Vulkan.Texture (createTextureSampler, TexturePoolState(..))
+import Vulkan.Core10
+import Vulkan.Zero
+import Vulkan.CStruct.Extends
 import Engine.Core.Monad
 import Engine.Core.State
+import Engine.Core.Resource (allocResource)
 import Engine.Core.Error.Exception
-import Control.Monad (forM_, when, foldM)
+import Control.Monad (forM_, when, foldM, forM)
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Data.Word (Word8)
 import Data.Char (ord)
 import Data.Array.IO (IOArray, newArray, writeArray, getElems)
+import Foreign.Ptr (castPtr)
+import Foreign.Marshal.Array (pokeArray)
 
 -- | Load a TTF font at specified size
 loadFont ∷ FilePath → Int → EngineM ε σ FontHandle
@@ -31,9 +42,12 @@ loadFont fontPath fontSize = do
             atlas ← liftIO $ generateFontAtlas fontPath fontSize
             
             -- Upload to GPU
-            texHandle ← uploadFontAtlasToGPU atlas
+            (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas
             
-            let newAtlas = atlas { faTexture = texHandle }
+            let newAtlas = atlas { faTexture = texHandle
+                                 , faDescriptorSet = Just descriptorSet
+                                 , faImageView = Just imgView
+                                 , faSampler = Just samp }
                 handle = FontHandle (fromIntegral (fcNextHandle cache))
             
             modify $ \s → s 
@@ -49,33 +63,30 @@ loadFont fontPath fontSize = do
 -- Atlas Generation with STB
 -----------------------------------------------------------
 
--- | Generate font atlas from TTF file
 generateFontAtlas ∷ FilePath → Int → IO FontAtlas
 generateFontAtlas fontPath fontSize = do
     putStrLn $ "Generating font atlas for: " ++ fontPath ++ " size=" ++ show fontSize
     
-    -- Load font
     maybeFont ← loadSTBFont fontPath
     case maybeFont of
         Nothing → error $ "Failed to load font: " ++ fontPath
         Just font → do
-            -- Get scale for desired pixel height
             scale ← scaleForPixelHeight font (fromIntegral fontSize)
-            
-            -- Get font metrics
             (ascent, descent, lineGap) ← getSTBFontMetrics font scale
             
-            -- ASCII printable characters
             let chars = [' '..'~']
                 numChars = length chars
             
-            -- Render all glyphs
-            glyphData ← mapM (\c → renderGlyphWithMetrics font c scale) chars
+            glyphDataWithMetrics ← forM chars $ \c → do
+                (w,h,xoff,yoff,pixels) ← renderGlyphWithMetrics font c scale
+                (_,_,_,_,advance) ← getSTBGlyphMetrics font c scale
+                return (w, h, xoff, yoff, pixels, advance)
+
+            freeSTBFont font
             
-            -- Calculate atlas size
             let charsPerRow = 16
-                maxWidth = maximum $ map (\(w,_,_,_,_) → w) glyphData
-                maxHeight = maximum $ map (\(_,h,_,_,_) → h) glyphData
+                maxWidth = maximum $ map (\(w,_,_,_,_,_) → w) glyphDataWithMetrics
+                maxHeight = maximum $ map (\(_,h,_,_,_,_) → h) glyphDataWithMetrics
                 cellWidth = maxWidth + 2
                 cellHeight = maxHeight + 2
                 atlasWidth = nextPowerOf2 (charsPerRow * cellWidth)
@@ -84,13 +95,10 @@ generateFontAtlas fontPath fontSize = do
             
             putStrLn $ "Atlas size: " ++ show atlasWidth ++ "x" ++ show atlasHeight
             
-            -- Pack glyphs
-            (atlasBitmap, glyphMap) ← packGlyphsSTB atlasWidth atlasHeight charsPerRow glyphData chars
-            
-            -- Free font
-            freeSTBFont font
-            
-            putStrLn $ "Atlas generated:  " ++ show (Map.size glyphMap) ++ " glyphs"
+            -- Pack glyphs with metrics
+            (atlasBitmap, glyphMap) ← packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow glyphDataWithMetrics chars
+           
+            putStrLn $ "Atlas generated: " ++ show (Map.size glyphMap) ++ " glyphs"
             
             return $ FontAtlas
                 { faTexture = TextureHandle 0
@@ -101,9 +109,11 @@ generateFontAtlas fontPath fontSize = do
                 , faLineHeight = ascent - descent + lineGap
                 , faBaseline = ascent
                 , faAtlasBitmap = atlasBitmap
+                , faDescriptorSet = Nothing
+                , faImageView = Nothing
+                , faSampler = Nothing
                 }
 
--- | Render glyph and get metrics
 renderGlyphWithMetrics ∷ STBFont → Char → Float 
                        → IO (Int, Int, Int, Int, [Word8])
 renderGlyphWithMetrics font char scale = do
@@ -112,10 +122,10 @@ renderGlyphWithMetrics font char scale = do
         Nothing → return (0, 0, 0, 0, [])
         Just glyph → return glyph
 
--- | Pack glyphs into atlas
-packGlyphsSTB ∷ Int → Int → Int → [(Int, Int, Int, Int, [Word8])] → [Char]
-              → IO ([Word8], Map.Map Char GlyphInfo)
-packGlyphsSTB atlasWidth atlasHeight charsPerRow glyphData chars = do
+-- Updated to use metrics stored before font was freed
+packGlyphsSTBWithMetrics ∷ Int → Int → Int → [(Int, Int, Int, Int, [Word8], Float)] → [Char]
+                         → IO ([Word8], Map.Map Char GlyphInfo)
+packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow glyphData chars = do
     atlasArray ← newArray (0, atlasWidth * atlasHeight - 1) 0 ∷ IO (IOArray Int Word8)
     
     glyphMap ← foldM (packGlyph atlasArray) Map.empty (zip glyphData (zip chars [0..]))
@@ -123,7 +133,7 @@ packGlyphsSTB atlasWidth atlasHeight charsPerRow glyphData chars = do
     finalBitmap ← getElems atlasArray
     return (finalBitmap, glyphMap)
   where
-    packGlyph atlasArray gmap ((w, h, xoff, yoff, pixels), (char, idx)) = do
+    packGlyph atlasArray gmap ((w, h, xoff, yoff, pixels, advance), (char, idx)) = do
         let col = idx `mod` charsPerRow
             row = idx `div` charsPerRow
             cellWidth = atlasWidth `div` charsPerRow
@@ -131,16 +141,12 @@ packGlyphsSTB atlasWidth atlasHeight charsPerRow glyphData chars = do
             atlasX = col * cellWidth + 1
             atlasY = row * cellHeight + 1
         
-        -- Copy pixels
-        forM_ [0.. h-1] $ \y →
-            forM_ [0.. w-1] $ \x → do
+        forM_ [0..h-1] $ \y →
+            forM_ [0..w-1] $ \x → do
                 let srcIdx = y * w + x
                     dstIdx = (atlasY + y) * atlasWidth + (atlasX + x)
                 when (srcIdx < length pixels) $
                     writeArray atlasArray dstIdx (pixels !! srcIdx)
-        
-        -- Get advance
-        (_, _, _, _, advance) ← getSTBGlyphMetrics (error "font freed") char 1.0  -- Placeholder
         
         let u0 = fromIntegral atlasX / fromIntegral atlasWidth
             v0 = fromIntegral atlasY / fromIntegral atlasHeight
@@ -151,24 +157,255 @@ packGlyphsSTB atlasWidth atlasHeight charsPerRow glyphData chars = do
                 { giUVRect = (u0, v0, u1, v1)
                 , giSize = (fromIntegral w, fromIntegral h)
                 , giBearing = (fromIntegral xoff, fromIntegral yoff)
-                , giAdvance = advance
+                , giAdvance = advance  -- Use stored advance
                 }
         
         return $ Map.insert char glyphInfo gmap
 
--- | Round up to next power of 2
 nextPowerOf2 ∷ Int → Int
 nextPowerOf2 n = head $ dropWhile (< n) powersOf2
   where powersOf2 = iterate (*2) 1
 
 -----------------------------------------------------------
--- GPU Upload (same as before)
+-- GPU Upload
 -----------------------------------------------------------
 
-uploadFontAtlasToGPU ∷ FontAtlas → EngineM ε σ TextureHandle
+uploadFontAtlasToGPU ∷ FontAtlas
+                     → EngineM ε σ (TextureHandle, DescriptorSet, ImageView, Sampler)
 uploadFontAtlasToGPU atlas = do
-    -- Same implementation as before
     state ← gets graphicsState
-    -- ... (use faAtlasBitmap to upload)
-    return (TextureHandle 0)  -- Placeholder
+    
+    -- Get Vulkan handles
+    device ← case vulkanDevice state of
+        Nothing → throwGraphicsError VulkanDeviceLost "No device"
+        Just d → pure d
+    pDevice ← case vulkanPDevice state of
+        Nothing → throwGraphicsError VulkanDeviceLost "No physical device"
+        Just pd → pure pd
+    cmdPool ← case vulkanCmdPool state of
+        Nothing → throwGraphicsError VulkanDeviceLost "No command pool"
+        Just pool → pure pool
+    queues ← case deviceQueues state of
+        Nothing → throwGraphicsError VulkanDeviceLost "No queues"
+        Just qs → pure qs
+    
+    let width = faAtlasWidth atlas
+        height = faAtlasHeight atlas
+        pixels = faAtlasBitmap atlas
+        queue = graphicsQueue queues
 
+    logDebug $ "Uploading font atlas to GPU: " ⧺ (show width) ⧺ "x" ⧺ (show height)
+    
+    -- Create grayscale texture
+    (texHandle, descSet, imgView, samp) ← createFontTextureGrayscale device pDevice
+                                            cmdPool queue width height pixels
+    
+    logDebug $ "Font atlas uploaded:  handle=" ⧺ (show texHandle)
+    return (texHandle, descSet, imgView, samp)
+
+createFontTextureGrayscale ∷ Device → PhysicalDevice → CommandPool → Queue 
+                           → Int → Int → [Word8]
+                           → EngineM ε σ (TextureHandle, DescriptorSet, ImageView, Sampler)
+createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
+    let bufferSize = fromIntegral $ width * height
+    
+    logDebug $ "Creating font texture:  " ⧺ (show width) ⧺ "x" ⧺ (show height) 
+             ⧺ " (" ⧺ (show bufferSize) ⧺ " bytes)"
+    
+    -- 1. Create staging buffer
+    (stagingMemory, stagingBuffer) ← createVulkanBuffer device pDevice bufferSize
+        BUFFER_USAGE_TRANSFER_SRC_BIT
+        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|.  MEMORY_PROPERTY_HOST_COHERENT_BIT)
+    
+    -- 2. Upload pixel data
+    dataPtr ← mapMemory device stagingMemory 0 bufferSize zero
+    liftIO $ pokeArray (castPtr dataPtr) pixels
+    unmapMemory device stagingMemory
+    
+    logDebug "Staging buffer created and filled"
+    
+    -- 3. Create GPU image
+    image ← createVulkanImage device pDevice
+        (fromIntegral width, fromIntegral height)
+        FORMAT_R8_UNORM
+        IMAGE_TILING_OPTIMAL
+        (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
+        MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    
+    logDebug "GPU image created"
+    
+    -- 4. Transition and copy
+    runCommandsOnce device cmdPool queue $ \cmdBuf → do
+        transitionImageLayout cmdBuf (viImage image) FORMAT_R8_UNORM
+            IMAGE_LAYOUT_UNDEFINED IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+        
+        let region = zero
+              { bufferOffset = 0
+              , bufferRowLength = 0
+              , bufferImageHeight = 0
+              , imageSubresource = zero
+                  { aspectMask = IMAGE_ASPECT_COLOR_BIT
+                  , mipLevel = 0
+                  , baseArrayLayer = 0
+                  , layerCount = 1
+                  }
+              , imageOffset = Offset3D 0 0 0
+              , imageExtent = Extent3D (fromIntegral width) (fromIntegral height) 1
+              }
+        cmdCopyBufferToImage cmdBuf stagingBuffer (viImage image) 
+                            IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL (V.singleton region)
+        
+        transitionImageLayout cmdBuf (viImage image) FORMAT_R8_UNORM
+            IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    
+    logDebug "Image data copied and layout transitioned"
+    
+    -- 5. Create image view
+    imageView ← createVulkanImageView device image FORMAT_R8_UNORM IMAGE_ASPECT_COLOR_BIT
+    
+    logDebug "Image view created"
+    
+    -- 6. Create sampler
+    sampler ← createFontTextureSampler device
+    
+    logDebug "Sampler created"
+    
+    -- 7. Create descriptor set
+    state ← get
+    let texArrays = textureArrayStates $ graphicsState state
+    case Map.lookup "default" texArrays of
+        Nothing → throwGraphicsError DescriptorError "No default texture array"
+        Just defaultArray → do
+            let descriptorPool = tasDescriptorPool defaultArray
+                descriptorLayout = tasDescriptorSetLayout defaultArray
+            
+            let allocInfo = zero
+                  { descriptorPool = descriptorPool
+                  , setLayouts = V.singleton descriptorLayout
+                  }
+            descriptorSets ← liftIO $ allocateDescriptorSets device allocInfo
+            let descSet = V.head descriptorSets
+            
+            let imgInfo = zero
+                  { sampler = sampler
+                  , imageView = imageView
+                  , imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                  }
+                writeDescriptorSet = SomeStruct $ zero
+                  { dstSet = descSet
+                  , dstBinding = 0
+                  , dstArrayElement = 0
+                  , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+                  , descriptorCount = 1
+                  , imageInfo = V.singleton imgInfo
+                  }
+            
+            updateDescriptorSets device (V.singleton writeDescriptorSet) V.empty
+            
+            -- Generate handle
+            pool ← gets assetPool
+            handle ← liftIO $ generateHandle @TextureHandle pool
+            
+            -- Cleanup staging buffer
+            destroyBuffer device stagingBuffer Nothing
+            freeMemory device stagingMemory Nothing
+            
+            logDebug $ "Font texture created: handle=" ⧺ (show handle)
+            
+            return (handle, descSet, imageView, sampler)
+
+-----------------------------------------------------------
+-- Helper Functions
+-----------------------------------------------------------
+
+transitionImageLayout ∷ CommandBuffer → Image → Format 
+                      → ImageLayout → ImageLayout → EngineM ε σ ()
+transitionImageLayout cmdBuf image format oldLayout newLayout = do
+    let (srcAccess, dstAccess, srcStage, dstStage) = case (oldLayout, newLayout) of
+          (IMAGE_LAYOUT_UNDEFINED, IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) →
+              ( zero
+              , ACCESS_TRANSFER_WRITE_BIT
+              , PIPELINE_STAGE_TOP_OF_PIPE_BIT
+              , PIPELINE_STAGE_TRANSFER_BIT
+              )
+          (IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) →
+              ( ACCESS_TRANSFER_WRITE_BIT
+              , ACCESS_SHADER_READ_BIT
+              , PIPELINE_STAGE_TRANSFER_BIT
+              , PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+              )
+          _ →
+              ( ACCESS_MEMORY_READ_BIT .|. ACCESS_MEMORY_WRITE_BIT
+              , ACCESS_MEMORY_READ_BIT .|. ACCESS_MEMORY_WRITE_BIT
+              , PIPELINE_STAGE_ALL_COMMANDS_BIT
+              , PIPELINE_STAGE_ALL_COMMANDS_BIT
+              )
+    
+    let barrier = zero
+          { srcAccessMask = srcAccess
+          , dstAccessMask = dstAccess
+          , oldLayout = oldLayout
+          , newLayout = newLayout
+          , srcQueueFamilyIndex = QUEUE_FAMILY_IGNORED
+          , dstQueueFamilyIndex = QUEUE_FAMILY_IGNORED
+          , image = image
+          , subresourceRange = zero
+              { aspectMask = IMAGE_ASPECT_COLOR_BIT
+              , baseMipLevel = 0
+              , levelCount = 1
+              , baseArrayLayer = 0
+              , layerCount = 1
+              }
+          }
+    
+    cmdPipelineBarrier cmdBuf srcStage dstStage zero V.empty V.empty (V.singleton $ SomeStruct barrier)
+
+runCommandsOnce ∷ Device → CommandPool → Queue → (CommandBuffer → EngineM ε σ ()) → EngineM ε σ ()
+runCommandsOnce device cmdPool queue action = do
+    let allocInfo = zero
+          { commandPool = cmdPool
+          , level = COMMAND_BUFFER_LEVEL_PRIMARY
+          , commandBufferCount = 1
+          }
+    
+    cmdBuffers ← allocateCommandBuffers device allocInfo
+    let cmdBuffer = V.head cmdBuffers
+    
+    let beginInfo = (zero ∷ CommandBufferBeginInfo '[])
+          { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
+    beginCommandBuffer cmdBuffer beginInfo
+    
+    action cmdBuffer
+    
+    endCommandBuffer cmdBuffer
+    
+    let submitInfo = zero 
+          { commandBuffers = V.singleton (commandBufferHandle cmdBuffer) 
+          }
+    queueSubmit queue (V.singleton $ SomeStruct submitInfo) zero
+    queueWaitIdle queue
+    
+    freeCommandBuffers device cmdPool cmdBuffers
+
+createFontTextureSampler ∷ Device → EngineM ε σ Sampler
+createFontTextureSampler device = do
+    let samplerInfo = zero
+          { magFilter = FILTER_LINEAR
+          , minFilter = FILTER_LINEAR
+          , mipmapMode = SAMPLER_MIPMAP_MODE_LINEAR
+          , addressModeU = SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+          , addressModeV = SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+          , addressModeW = SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+          , mipLodBias = 0.0
+          , anisotropyEnable = False
+          , maxAnisotropy = 1.0
+          , compareEnable = False
+          , compareOp = COMPARE_OP_ALWAYS
+          , minLod = 0.0
+          , maxLod = 0.0
+          , borderColor = BORDER_COLOR_INT_OPAQUE_BLACK
+          , unnormalizedCoordinates = False
+          }
+    
+    allocResource (\s → destroySampler device s Nothing) $
+        createSampler device samplerInfo Nothing
