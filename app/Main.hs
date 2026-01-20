@@ -305,9 +305,6 @@ main = do
                 " framebuffers=" ⧺ show fbCount ⧺
                 " descSets=" ⧺ show dsCount
 
-        -- initialize the scene
-        --initializeTestScene
-
         -- record initial command buffers
         state ← gets graphicsState
         let numImages = maybe 0 V.length (vulkanCmdBuffers state)
@@ -336,14 +333,6 @@ shutdownEngine (Window win) its lts = do
     -- Wait for Vulkan device to idle before resource cleanup
     state ← gets graphicsState
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
-
-    -- TODO: figure out why this causes a race condition
-    -- cleanup asset manager
-    --logDebug "cleaning up asset manager..."
-    --assets ← gets assetPool
-    --cleanupAssetManager assets
-
-    --forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
     -- glfw cleanup, stopping polling first
     liftIO $ GLFW.postEmptyEvent
@@ -653,8 +642,6 @@ drawFrame = do
         Just si → pure $ siSwapchain si
     (acquireResult, imageIndex) ← liftIO $ acquireNextImageKHR device swapchain
                                     maxTimeout (frImageAvailable resources) zero
---    -- reset fence only after acquiring image
---    liftIO $ resetFences device (V.singleton (frInFlight resources))
     
     -- Check if we need to recreate swapchain
     when (acquireResult ≠ SUCCESS && acquireResult ≠ SUBOPTIMAL_KHR) $
@@ -663,7 +650,6 @@ drawFrame = do
 
     -- reset and record command buffer
     liftIO $ resetCommandBuffer cmdBuffer zero
-    --recordRenderCommandBuffer cmdBuffer $ fromIntegral imageIndex
     recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex)
                              dynamicBuffer batches
 
@@ -771,7 +757,7 @@ mainLoop = do
               tstate ← gets timingState
               let currentCount = frameCount tstate
                   fps = if newAccum > 0 then fromIntegral currentCount / newAccum else 0.0
-              logDebug $ "FPS: " ⧺ show fps
+              --logDebug $ "FPS: " ⧺ show fps
               -- Adjust timing if FPS is consistently off
               when (fps < 59.0) $
                   modify $ \s → s { timingState = (timingState s) {
@@ -792,10 +778,6 @@ mainLoop = do
           if shouldClose || lifecycle ≢ EngineRunning
               then do
                   logInfo "Engine shutting down..."
-                  -- Just wait for device to idle
---                  forM_ (vulkanDevice state) $ \device → 
---                      unless (lifecycle ≡ EngineStopped) $
---                        liftIO $ deviceWaitIdle device
                   liftIO $ writeIORef (lifecycleRef env) CleaningUp
               else unless (lifecycle ≡ CleaningUp) $ do
                   drawFrame
@@ -803,81 +785,7 @@ mainLoop = do
         CleaningUp → logDebug "Engine is cleaning up"
         EngineStopped → logDebug "Engine has stopped"
 
--- Add after initializeTextures function
---initializeTestScene ∷ EngineM' EngineEnv ()
---initializeTestScene = do
---    -- Get loaded texture asset IDs
---    pool ← gets assetPool
---    let textureIds = Map.keys (apTextureAtlases pool)
---    
---    case textureIds of
---        [] → logDebug "No textures loaded for test scene"
---        (tex1:tex2:_) → do
---            -- first creates handles
---            handle1 ← liftIO $ generateHandle @TextureHandle pool
---            handle2 ← liftIO $ generateHandle @TextureHandle pool
---            -- mark them as ready (pointing to the loaded assetIds)
---            liftIO $ updateAssetState @TextureHandle handle1
---                (AssetReady tex1 []) pool
---            liftIO $ updateAssetState @TextureHandle handle2
---                (AssetReady tex2 []) pool
---            -- Create test scene
---            let camera = defaultCamera
---                testSceneId = "test"
---            
---            sceneMgr ← gets sceneManager
---            let sceneWithTest = createScene testSceneId camera sceneMgr
---                activeScene = setActiveScene testSceneId sceneWithTest
---            
---            -- Create first test object
---            let node1 = (createSceneNode SpriteObject)
---                    { nodeTransform = defaultTransform { position = (-1.0, 0.0) }
---                    , nodeTexture = Just handle1
---                    , nodeSize = (1.0, 1.0)
---                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
---                    }
---            
---            -- Create second test object  
---            let node2 = (createSceneNode SpriteObject)
---                    { nodeTransform = defaultTransform { position = (1.0, 0.0) }
---                    , nodeTexture = Just handle2
---                    , nodeSize = (1.0, 1.0)
---                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
---                    }
---            
---            -- Add objects to scene
---            case addObjectToScene testSceneId node1 activeScene of
---                Nothing → logDebug "Failed to add first object to scene"
---                Just (obj1Id, mgr1) → case addObjectToScene testSceneId node2 mgr1 of
---                    Nothing → logDebug "Failed to add second object to scene"
---                    Just (obj2Id, finalMgr) → do
---                        modify $ \s → s { sceneManager = finalMgr }
---                        logDebug $ "Test scene created with objects: " ⧺ show obj1Id ⧺ ", " ⧺ show obj2Id
---        (tex1:_) → do
---            -- Single texture case
---            handle1 ← liftIO $ generateHandle @TextureHandle pool
---            liftIO $ updateAssetState @TextureHandle handle1
---                (AssetReady tex1 []) pool
---            let camera = defaultCamera
---                testSceneId = "test"
---            
---            sceneMgr ← gets sceneManager
---            let sceneWithTest = createScene testSceneId camera sceneMgr
---                activeScene = setActiveScene testSceneId sceneWithTest
---            
---            let node1 = (createSceneNode SpriteObject)
---                    { nodeTransform = defaultTransform { position = (0.0, 0.0) }
---                    , nodeTexture = Just handle1
---                    , nodeSize = (1.0, 1.0)
---                    , nodeColor = Vec4 1.0 1.0 1.0 1.0
---                    }
---            
---            case addObjectToScene testSceneId node1 activeScene of
---                Nothing → logDebug "Failed to add object to scene"
---                Just (objId, finalMgr) → do
---                    modify $ \s → s { sceneManager = finalMgr }
---                    logDebug $ "Test scene created with object: " ⧺ show objId
-
+-- | Extract the GLFW window from the graphics state
 extractWindow ∷ HasCallStack ⇒ GraphicsState → Either EngineException Window
 extractWindow state =
     case glfwWindow state of

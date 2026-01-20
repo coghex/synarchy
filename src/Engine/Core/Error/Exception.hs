@@ -206,12 +206,7 @@ throwLuaError err msg =
 
 -- | Create error context from current call stack
 mkErrorContext ∷ HasCallStack ⇒ ErrorContext
-mkErrorContext = 
-  let stack = callStack
-      ((_, loc):_) = getCallStack stack
-  in ErrorContext
-    { contextCallStack = stack
-    }
+mkErrorContext = ErrorContext { contextCallStack = callStack }
 
 -- | Catch EngineException in EngineM context
 catchEngine :: MonadError EngineException m 

@@ -24,7 +24,6 @@ function update(dt)
     lastLogTime = lastLogTime + dt
     if lastLogTime >= logInterval then
         local mx, my = engine.getMousePosition()
-        engine.logInfo("Mouse position: " .. math.floor(mx) .. ", " .. math.floor(my))
         lastLogTime = 0
     end
 end
@@ -32,14 +31,10 @@ end
 function onMouseDown(button, x, y)
     local w, h = engine.getWindowSize()
     local worldX, worldY = engine.getWorldCoord(x, y)
-    engine.logInfo("Mouse at: " .. x .. ", " ..  y)
-    engine.logInfo("Window size: " .. w ..  "x" .. h)
-    engine.logInfo("Mouse / Window:  " .. (x/w) .. ", " .. (y/h))
     engine.spawnSprite(worldX, worldY, 0.1, 0.1, tex)
 end
 
 function onMouseUp(button, x, y)
-    engine.logInfo("Mouse button " .. button .. " released at: " .. x .. ", " .. y)
 end
 
 function onKeyDown(key)

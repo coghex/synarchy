@@ -405,6 +405,8 @@ createTextureArrayState device = do
 -- | updates descriptor set when textures change
 updateTextureArrayDescriptors ∷ Device → TextureArrayState → EngineM ε σ TextureArrayState
 updateTextureArrayDescriptors device state = do
+  -- wait for device idle before modifying descriptor sets
+  liftIO $ deviceWaitIdle device
   -- Free old descriptor set if it exists
   case tasDescriptorSet state of
     Just oldSet → freeVulkanDescriptorSets device (tasDescriptorPool state) (V.singleton oldSet)
