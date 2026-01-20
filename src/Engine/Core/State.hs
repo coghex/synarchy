@@ -18,6 +18,7 @@ import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Window.Types
 import Engine.Graphics.Camera
+import Engine.Graphics.Font.Data
 import Engine.Input.Types
 import Engine.Input.Bindings
 import Engine.Scene.Types
@@ -87,6 +88,10 @@ data GraphicsState = GraphicsState
   , textureArrayStates ∷ Map.Map T.Text TextureArrayState
   , camera2D           ∷ Camera2D
   , cleanupStatus      ∷ CleanupStatus
+  , fontCache          ∷ FontCache
+  , fontPipeline       ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
+  , fontQuadBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
+  , textBatchQueue     ∷ V.Vector TextBatch
   }
 
 

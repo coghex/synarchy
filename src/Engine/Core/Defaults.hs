@@ -16,6 +16,7 @@ import Engine.Graphics.Config
 import Engine.Graphics.Window.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture
+import Engine.Graphics.Font.Data
 import Engine.Scene.Types
 import Vulkan.Zero
 
@@ -85,6 +86,10 @@ defaultEngineState pool = EngineState
     , textureArrayStates = Map.empty
     , camera2D           = defaultCamera
     , cleanupStatus      = NotStarted
+    , fontCache          = defaultFontCache
+    , fontPipeline       = Nothing
+    , fontQuadBuffer     = Nothing
+    , textBatchQueue     = V.empty
     }
   , assetPool        = pool
   , assetConfig      = AssetConfig 100 100 True True

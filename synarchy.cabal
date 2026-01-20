@@ -159,6 +159,9 @@ library
                      Engine.Graphics.Vulkan.Vertex
                      Engine.Graphics.Window.GLFW
                      Engine.Graphics.Window.Types
+                     Engine.Graphics.Font.Data
+                     Engine.Graphics.Font.Load
+                     Engine.Graphics.Font.STB
                      Engine.Input.Bindings
                      Engine.Input.Callback
                      Engine.Input.Event
@@ -221,6 +224,7 @@ library
                  , stm
                  , text
                  , time
+                 , array
                  , vector
                  , yaml
                  , aeson
@@ -231,7 +235,13 @@ library
                  , unliftio-core
                  , utf8-string
                  , unix
+    pkgconfig-depends: vulkan
     hs-source-dirs: src
+    c-sources:
+        cbits/font_stb.c
+    include-dirs:
+        cbits
+    cc-options: -O2
     default-language: GHC2024
     if flag(dev)
       if os(darwin)
