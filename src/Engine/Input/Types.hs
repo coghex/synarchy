@@ -13,6 +13,7 @@ data InputState = InputState
     , inpMouseBtns ∷ Map.Map GLFW.MouseButton Bool
     , inpScrollDelta ∷ (Double, Double)  -- ^ Scroll wheel delta
     , inpWindowSize ∷ (Int, Int)         -- ^ Current window dimensions
+    , inpFramebufferSize ∷ (Int, Int)    -- ^ Current framebuffer dimensions
     , inpWindowFocused ∷ Bool            -- ^ Is window currently focused
     } deriving (Show)
 
@@ -268,5 +269,6 @@ defaultInputState = InputState
     , inpMouseBtns = Map.empty
     , inpScrollDelta = (0.0, 0.0)
     , inpWindowSize = (800, 600)         -- default size, adjust as needed
+    , inpFramebufferSize = (800, 600)
     , inpWindowFocused = True
     }

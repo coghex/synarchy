@@ -30,11 +30,12 @@ function update(dt)
 end
 
 function onMouseDown(button, x, y)
+    local w, h = engine.getWindowSize()
     local worldX, worldY = engine.getWorldCoord(x, y)
+    engine.logInfo("Mouse at: " .. x .. ", " ..  y)
+    engine.logInfo("Window size: " .. w ..  "x" .. h)
+    engine.logInfo("Mouse / Window:  " .. (x/w) .. ", " .. (y/h))
     engine.spawnSprite(worldX, worldY, 0.1, 0.1, tex)
-    engine.spawnSprite(0, 0, 0.1, 0.1, tex)
-    engine.logInfo("mouse button " .. button .. " pressed at: " .. x .. ", " .. y)
-    engine.logInfo("world coord " .. button .. " pressed at: " .. worldX .. ", " .. worldY)
 end
 
 function onMouseUp(button, x, y)

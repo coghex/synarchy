@@ -365,15 +365,16 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
           (worldX, worldY) ← Lua.liftIO $ do
             inputState ← readIORef (lbsInputState backendState)
             camera ← readIORef (cameraRef env)
-            let (w, h) = inpWindowSize inputState
+            let (winW, winH) = inpWindowSize inputState
+                (fbW, fbH) = inpFramebufferSize inputState
                 -- Convert everything to Double
-                aspect = fromIntegral w / fromIntegral h
+                aspect = fromIntegral fbW / fromIntegral fbH
                 zoom = realToFrac (camZoom camera)
                 viewWidth = zoom * aspect
                 viewHeight = zoom
                 -- Screen to normalized
-                normX = screenX / fromIntegral w
-                normY = screenY / fromIntegral h
+                normX = screenX / fromIntegral winW
+                normY = screenY / fromIntegral winH
                 -- NDC to view space
                 viewX = (normX * 2.0 - 1.0) * viewWidth
                 viewY = (normY * 2.0 - 1.0) * viewHeight

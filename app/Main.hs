@@ -595,21 +595,21 @@ drawFrame = do
     case (vulkanDevice state, uniformBuffers state) of
         (Just device, Just buffers) → do
             let (_, memory) = buffers V.! fromIntegral frameIdx
-            (width, height) ← GLFW.getFramebufferSize win
-            
+            (fbWidth, fbHeight) ← GLFW.getFramebufferSize win
+            (winWidth, winHeight) ← GLFW.getWindowSize win
             -- Create matrices using camera
             let camera = camera2D state
                 modelMatrix = identity
                 viewMatrix = createViewMatrix camera
                 projMatrix = createProjectionMatrix camera 
-                             (fromIntegral width) 
-                             (fromIntegral height)
+                             (fromIntegral fbWidth) 
+                             (fromIntegral fbHeight)
                 uboData = UBO modelMatrix viewMatrix projMatrix
             env ← ask
             liftIO $ writeIORef (cameraRef env) camera
             liftIO $ atomicModifyIORef' (inputStateRef env) $ \is →
-                (is { inpWindowSize = (width, height) }, ())
-            
+                (is { inpWindowSize = (winWidth, winHeight)
+                    , inpFramebufferSize = (fbWidth, fbHeight) }, ())
             -- Update the uniform buffer
             updateUniformBuffer device memory uboData
         _ → throwGraphicsError VulkanDeviceLost "No device or uniform buffer"
