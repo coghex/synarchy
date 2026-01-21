@@ -2,7 +2,7 @@
 module Main where
 
 import UPrelude
-import Control.Exception (displayException, throwIO, try)
+import Control.Exception (displayException, throwIO, catch, SomeException)
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.STM (newTVarIO, newTQueueIO)
 import qualified Control.Monad.Logger.CallStack as Logger
@@ -287,6 +287,22 @@ main = do
         modify $ \s → s { graphicsState = (graphicsState s) {
                             pipelineState = Just (pstate) } }
 
+        -- create a pipeline for fonts
+        logDebug "creating font pipeline..."
+        (fontPipe, fontPipeLayout) ← createFontPipeline device renderPass
+                                       (siSwapExtent swapInfo) uniformLayout
+        logDebug $ "Font Pipeline: " ⧺ show fontPipe
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            fontPipeline = Just (fontPipe, fontPipeLayout) } }
+        -- create shared quad buffer for text rendering
+        logDebug "creating font quad buffer..."
+        quadBuf ← createFontQuadBuffer device physicalDevice
+                      (graphicsQueue queues) cmdPool
+        logDebug $ "Font Quad Buffer: " ⧺ show quadBuf
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            fontQuadBuffer = Just quadBuf } }
+        logDebug "font system initialized"
+
         -- create swapchain image views
         imageViews ← createSwapchainImageViews device swapInfo
         logDebug $ "ImageViews: " ⧺ show (length imageViews)
@@ -317,22 +333,6 @@ main = do
                 (fromIntegral i)
             logDebug $ "Recorded command buffer " ⧺ show i
 
-        -- create a pipeline for fonts
-        logDebug "creating font pipeline..."
-        (fontPipe, fontPipeLayout) ← createFontPipeline device renderPass
-                                       (siSwapExtent swapInfo) uniformLayout
-        logDebug $ "Font Pipeline: " ⧺ show fontPipe
-        modify $ \s → s { graphicsState = (graphicsState s) {
-                            fontPipeline = Just (fontPipe, fontPipeLayout) } }
-        -- create shared quad buffer for text rendering
-        logDebug "creating font quad buffer..."
-        quadBuf ← createFontQuadBuffer device physicalDevice
-                      (graphicsQueue queues) cmdPool
-        logDebug $ "Font Quad Buffer: " ⧺ show quadBuf
-        modify $ \s → s { graphicsState = (graphicsState s) {
-                            fontQuadBuffer = Just quadBuf } }
-        logDebug "font system initialized"
-
         mainLoop
         shutdownEngine window inputThreadState luaThreadState
  
@@ -348,9 +348,9 @@ main = do
 shutdownEngine ∷ Window → ThreadState → ThreadState → EngineM' EngineEnv ()
 shutdownEngine (Window win) its lts = do
     logDebug "Engine cleaning up..."
+    state ← gets graphicsState
 
     -- Wait for Vulkan device to idle before resource cleanup
-    state ← gets graphicsState
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
     -- glfw cleanup, stopping polling first
@@ -505,21 +505,23 @@ processLuaMessages = do
 --        LuaLoadFontRequest handle path size → do
 --          logDebug $ "Loading font: " ⧺ (show path) ⧺
 --                     " size=" ⧺ show size
---          result ← try $ loadFont path size
+--          result ← catch 
+--            (Right <$> loadFont path size)
+--            (\(e ∷ SomeException) → return $ Left e)
 --          case result of
 --            Right actualHandle → do
 --              logDebug $ "Font loaded: handle=" ⧺ show actualHandle
 --              env ← ask
---              let etlq = snd $ luaQueue env
+--              let etlq = luaQueue env
 --              liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
---            Left (err ∷ EngineException) → do
---              throwGraphicsError FontError $ "Failed to load font: " ⧺ displayException err
+--            Left err → do
+--              throwGraphicsError FontError $ T.pack $ "Font load failed: " ⧺ show err
 --              env ← ask
---              let etlq = snd $ luaQueue env
+--              let etlq = luaQueue env
 --              liftIO $ Q.writeQueue etlq (LuaFontLoadFailed (T.pack $ show err))
---
---        LuaDrawTextRequest x y fontHandle text → do
---          drawText x y fontHandle text
+
+        LuaDrawTextRequest x y fontHandle text → do
+          drawText x y fontHandle text
 
         LuaSpawnSpriteRequest objId x y width height texHandle → do
           logDebug $ "Spawning sprite id=" ⧺ show objId ⧺

@@ -9,6 +9,7 @@ module Engine.Graphics.Vulkan.Vertex
 import UPrelude
 import qualified Data.Vector as V
 import Engine.Core.Monad
+import Engine.Core.Resource
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
@@ -64,10 +65,7 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
     unmapMemory device stagingMemory
 
     -- Create vertex buffer
-    (vertexMemory, vertexBuffer) ← createVulkanBuffer 
-        device 
-        pDevice 
-        vertSize
+    (vertexMemory, vertexBuffer) ← createVulkanBuffer device pDevice vertSize
         (BUFFER_USAGE_TRANSFER_DST_BIT .|. BUFFER_USAGE_VERTEX_BUFFER_BIT)
         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 

@@ -22,10 +22,12 @@ import Engine.Graphics.Vulkan.ShaderCode (fontVertexShaderCode, fontFragmentShad
 import Engine.Graphics.Vulkan.Types.Descriptor
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
+import qualified Data.Vector.Storable as VS
 import qualified Data.Text as T
 import Foreign.Storable (Storable(..))
 import Foreign.Ptr (plusPtr, castPtr)
 import Foreign.Marshal.Array (pokeArray)
+import Foreign.Marshal.Utils (copyBytes)
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
@@ -143,158 +145,160 @@ addTextBatch fontHandle instances = do
 createFontPipeline ∷ Device → RenderPass → Extent2D → DescriptorSetLayout 
                    → EngineM ε σ (Pipeline, PipelineLayout)
 createFontPipeline device renderPass swapExtent uniformLayout = do
-    -- Create shader modules
-    vertModule ← allocResource 
-        (\sm → destroyShaderModule device sm Nothing) $
-        createShaderModule device zero { code = fontVertexShaderCode } Nothing
-        
-    fragModule ← allocResource 
-        (\sm → destroyShaderModule device sm Nothing) $
-        createShaderModule device zero { code = fontFragmentShaderCode } Nothing
-    
-    let vertStageInfo = zero 
-          { stage   = SHADER_STAGE_VERTEX_BIT
-          , module' = vertModule
-          , name    = "main"
-          }
-        fragStageInfo = zero 
-          { stage   = SHADER_STAGE_FRAGMENT_BIT
-          , module' = fragModule
-          , name    = "main"
-          }
-        shaderStages = V.fromList [SomeStruct vertStageInfo, SomeStruct fragStageInfo]
-    
-    -- Get texture layout
-    state ← gets graphicsState
-    let texArrays = textureArrayStates state
-    case Map.lookup "default" texArrays of
-        Nothing → throwGraphicsError DescriptorError "No default texture array"
-        Just defaultArray → do
-            let texLayout = tasDescriptorSetLayout defaultArray
-                Extent2D w h = swapExtent
-        
-                -- Vertex input:  per-vertex (quad) + per-instance (glyph data)
-                vertexBindings = V.fromList
-                    [ zero  -- Binding 0: per-vertex (quad template)
-                      { binding = 0
-                      , stride = 16  -- vec2 pos + vec2 uv
-                      , inputRate = VERTEX_INPUT_RATE_VERTEX
-                      }
-                    , zero  -- Binding 1: per-instance (glyph data)
-                      { binding = 1
-                      , stride = 48  -- GlyphInstance size
-                      , inputRate = VERTEX_INPUT_RATE_INSTANCE
-                      }
-                    ]
-        
-                vertexAttributes = V.fromList
-                    [ -- Per-vertex (quad template)
-                      zero { location = 0, binding = 0, format = FORMAT_R32G32_SFLOAT, offset = 0 }  -- pos
-                    , zero { location = 1, binding = 0, format = FORMAT_R32G32_SFLOAT, offset = 8 }  -- uv
-                    , -- Per-instance (glyph data)
-                      zero { location = 2, binding = 1, format = FORMAT_R32G32_SFLOAT, offset = 0 }  -- glyphPos
-                    , zero { location = 3, binding = 1, format = FORMAT_R32G32_SFLOAT, offset = 8 }  -- glyphSize
-                    , zero { location = 4, binding = 1, format = FORMAT_R32G32B32A32_SFLOAT, offset = 16 }  -- glyphUV
-                    , zero { location = 5, binding = 1, format = FORMAT_R32G32B32A32_SFLOAT, offset = 32 }  -- glyphColor
-                    ]
-        
-                vertexInputInfo = zero
-                  { vertexBindingDescriptions = vertexBindings
-                  , vertexAttributeDescriptions = vertexAttributes
-                  }
-        
-                inputAssembly = zero
-                  { topology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
-                  , primitiveRestartEnable = False
-                  }
-        
-                viewport = zero
-                  { x = 0, y = 0
-                  , width = fromIntegral w
-                  , height = fromIntegral h
-                  , minDepth = 0, maxDepth = 1
-                  }
-        
-                scissor = (zero ∷ Rect2D)
-                  { offset = Offset2D 0 0
-                  , extent = swapExtent
-                  }
-        
-                viewportState = zero
-                  { viewports = V.singleton viewport
-                  , scissors = V.singleton scissor
-                  }
-        
-                rasterizer = (zero ∷ PipelineRasterizationStateCreateInfo '[])
-                  { depthClampEnable = False
-                  , rasterizerDiscardEnable = False
-                  , polygonMode = POLYGON_MODE_FILL
-                  , lineWidth = 1
-                  , cullMode = CULL_MODE_NONE
-                  , frontFace = FRONT_FACE_COUNTER_CLOCKWISE
-                  , depthBiasEnable = False
-                  }
-        
-                multisampling = (zero ∷ PipelineMultisampleStateCreateInfo '[])
-                  { sampleShadingEnable = False
-                  , rasterizationSamples = SAMPLE_COUNT_1_BIT
-                  }
-        
-                -- Alpha blending for text
-                colorBlendAttachment = zero
-                  { colorWriteMask = COLOR_COMPONENT_R_BIT .|. COLOR_COMPONENT_G_BIT 
-                                    .|. COLOR_COMPONENT_B_BIT .|. COLOR_COMPONENT_A_BIT
-                  , blendEnable = True
-                  , srcColorBlendFactor = BLEND_FACTOR_SRC_ALPHA
-                  , dstColorBlendFactor = BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
-                  , colorBlendOp = BLEND_OP_ADD
-                  , srcAlphaBlendFactor = BLEND_FACTOR_ONE
-                  , dstAlphaBlendFactor = BLEND_FACTOR_ZERO
-                  , alphaBlendOp = BLEND_OP_ADD
-                  }
-        
-                colorBlending = (zero ∷ PipelineColorBlendStateCreateInfo '[])
-                  { logicOpEnable = False
-                  , attachments = V.singleton colorBlendAttachment
-                  , blendConstants = (0, 0, 0, 0)
-                  }
-        
-                pipelineLayoutInfo = zero
-                  { setLayouts = V.fromList [uniformLayout, texLayout]
-                  , pushConstantRanges = V.empty
-                  }
-    
-            -- Create pipeline layout
-            pipelineLayout ← allocResource 
-                (\layout → destroyPipelineLayout device layout Nothing) $
-                createPipelineLayout device pipelineLayoutInfo Nothing
-    
-            -- Create pipeline
-            let pipelineInfo = (zero ∷ GraphicsPipelineCreateInfo '[])
-                  { stages = shaderStages
-                  , vertexInputState = Just $ SomeStruct vertexInputInfo
-                  , inputAssemblyState = Just inputAssembly
-                  , viewportState = Just $ SomeStruct viewportState
-                  , rasterizationState = Just $ SomeStruct rasterizer
-                  , multisampleState = Just $ SomeStruct multisampling
-                  , colorBlendState = Just $ SomeStruct colorBlending
-                  , layout = pipelineLayout
-                  , renderPass = renderPass
-                  , subpass = 0
-                  , basePipelineHandle = zero
-                  , basePipelineIndex = -1
-                  }
-    
-            (result, pipelinesVec) ← createGraphicsPipelines 
-                device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
-    
-            let pipeline = V.head pipelinesVec
-    
-            _ ← allocResource 
-                (\p → destroyPipeline device p Nothing)
-                (pure pipeline)
-    
-            pure (pipeline, pipelineLayout)
+    (pipeline, pipelineLayout) ← locally $ do
+      -- Create shader modules
+      vertModule ← allocResource 
+          (\sm → destroyShaderModule device sm Nothing) $
+          createShaderModule device zero { code = fontVertexShaderCode } Nothing
+          
+      fragModule ← allocResource 
+          (\sm → destroyShaderModule device sm Nothing) $
+          createShaderModule device zero { code = fontFragmentShaderCode } Nothing
+      
+      let vertStageInfo = zero 
+            { stage   = SHADER_STAGE_VERTEX_BIT
+            , module' = vertModule
+            , name    = "main"
+            }
+          fragStageInfo = zero 
+            { stage   = SHADER_STAGE_FRAGMENT_BIT
+            , module' = fragModule
+            , name    = "main"
+            }
+          shaderStages = V.fromList [SomeStruct vertStageInfo, SomeStruct fragStageInfo]
+      
+      -- Get texture layout
+      state ← gets graphicsState
+      let texArrays = textureArrayStates state
+      case Map.lookup "default" texArrays of
+          Nothing → throwGraphicsError DescriptorError "No default texture array"
+          Just defaultArray → do
+              let texLayout = tasDescriptorSetLayout defaultArray
+                  Extent2D w h = swapExtent
+          
+                  -- Vertex input:  per-vertex (quad) + per-instance (glyph data)
+                  vertexBindings = V.fromList
+                      [ zero  -- Binding 0: per-vertex (quad template)
+                        { binding = 0
+                        , stride = 16  -- vec2 pos + vec2 uv
+                        , inputRate = VERTEX_INPUT_RATE_VERTEX
+                        }
+                      , zero  -- Binding 1: per-instance (glyph data)
+                        { binding = 1
+                        , stride = 48  -- GlyphInstance size
+                        , inputRate = VERTEX_INPUT_RATE_INSTANCE
+                        }
+                      ]
+          
+                  vertexAttributes = V.fromList
+                      [ -- Per-vertex (quad template)
+                        zero { location = 0, binding = 0, format = FORMAT_R32G32_SFLOAT, offset = 0 }  -- pos
+                      , zero { location = 1, binding = 0, format = FORMAT_R32G32_SFLOAT, offset = 8 }  -- uv
+                      , -- Per-instance (glyph data)
+                        zero { location = 2, binding = 1, format = FORMAT_R32G32_SFLOAT, offset = 0 }  -- glyphPos
+                      , zero { location = 3, binding = 1, format = FORMAT_R32G32_SFLOAT, offset = 8 }  -- glyphSize
+                      , zero { location = 4, binding = 1, format = FORMAT_R32G32B32A32_SFLOAT, offset = 16 }  -- glyphUV
+                      , zero { location = 5, binding = 1, format = FORMAT_R32G32B32A32_SFLOAT, offset = 32 }  -- glyphColor
+                      ]
+          
+                  vertexInputInfo = zero
+                    { vertexBindingDescriptions = vertexBindings
+                    , vertexAttributeDescriptions = vertexAttributes
+                    }
+          
+                  inputAssembly = zero
+                    { topology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+                    , primitiveRestartEnable = False
+                    }
+          
+                  viewport = zero
+                    { x = 0, y = 0
+                    , width = fromIntegral w
+                    , height = fromIntegral h
+                    , minDepth = 0, maxDepth = 1
+                    }
+          
+                  scissor = (zero ∷ Rect2D)
+                    { offset = Offset2D 0 0
+                    , extent = swapExtent
+                    }
+          
+                  viewportState = zero
+                    { viewports = V.singleton viewport
+                    , scissors = V.singleton scissor
+                    }
+          
+                  rasterizer = (zero ∷ PipelineRasterizationStateCreateInfo '[])
+                    { depthClampEnable = False
+                    , rasterizerDiscardEnable = False
+                    , polygonMode = POLYGON_MODE_FILL
+                    , lineWidth = 1
+                    , cullMode = CULL_MODE_NONE
+                    , frontFace = FRONT_FACE_COUNTER_CLOCKWISE
+                    , depthBiasEnable = False
+                    }
+          
+                  multisampling = (zero ∷ PipelineMultisampleStateCreateInfo '[])
+                    { sampleShadingEnable = False
+                    , rasterizationSamples = SAMPLE_COUNT_1_BIT
+                    }
+          
+                  -- Alpha blending for text
+                  colorBlendAttachment = zero
+                    { colorWriteMask = COLOR_COMPONENT_R_BIT .|. COLOR_COMPONENT_G_BIT 
+                                      .|. COLOR_COMPONENT_B_BIT .|. COLOR_COMPONENT_A_BIT
+                    , blendEnable = True
+                    , srcColorBlendFactor = BLEND_FACTOR_SRC_ALPHA
+                    , dstColorBlendFactor = BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+                    , colorBlendOp = BLEND_OP_ADD
+                    , srcAlphaBlendFactor = BLEND_FACTOR_ONE
+                    , dstAlphaBlendFactor = BLEND_FACTOR_ZERO
+                    , alphaBlendOp = BLEND_OP_ADD
+                    }
+          
+                  colorBlending = (zero ∷ PipelineColorBlendStateCreateInfo '[])
+                    { logicOpEnable = False
+                    , attachments = V.singleton colorBlendAttachment
+                    , blendConstants = (0, 0, 0, 0)
+                    }
+          
+                  pipelineLayoutInfo = zero
+                    { setLayouts = V.fromList [uniformLayout, texLayout]
+                    , pushConstantRanges = V.empty
+                    }
+      
+              -- Create pipeline layout
+              pipelineLayout ← allocResource 
+                  (\layout → destroyPipelineLayout device layout Nothing) $
+                  createPipelineLayout device pipelineLayoutInfo Nothing
+      
+              -- Create pipeline
+              let pipelineInfo = (zero ∷ GraphicsPipelineCreateInfo '[])
+                    { stages = shaderStages
+                    , vertexInputState = Just $ SomeStruct vertexInputInfo
+                    , inputAssemblyState = Just inputAssembly
+                    , viewportState = Just $ SomeStruct viewportState
+                    , rasterizationState = Just $ SomeStruct rasterizer
+                    , multisampleState = Just $ SomeStruct multisampling
+                    , colorBlendState = Just $ SomeStruct colorBlending
+                    , layout = pipelineLayout
+                    , renderPass = renderPass
+                    , subpass = 0
+                    , basePipelineHandle = zero
+                    , basePipelineIndex = -1
+                    }
+      
+              (result, pipelinesVec) ← createGraphicsPipelines 
+                  device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
+      
+              let pipeline = V.head pipelinesVec
+      
+              _ ← allocResource 
+                  (\p → destroyPipeline device p Nothing)
+                  (pure pipeline)
+      
+              pure (pipeline, pipelineLayout)
+    pure (pipeline, pipelineLayout)
 
 -----------------------------------------------------------
 -- Quad Buffer Creation
@@ -305,40 +309,32 @@ createFontQuadBuffer ∷ Device → PhysicalDevice → Queue → CommandPool
                      → EngineM ε σ (Buffer, DeviceMemory)
 createFontQuadBuffer device pDevice queue cmdPool = do
     -- Simple quad vertices [0,0] to [1,1] (will be scaled per-instance)
-    let quadVertices = 
+    let quadVertices = VS.fromList
             [ 0.0, 0.0, 0.0, 0.0  -- Bottom-left:  pos, uv
             , 1.0, 0.0, 1.0, 0.0  -- Bottom-right
             , 1.0, 1.0, 1.0, 1.0  -- Top-right
             , 1.0, 1.0, 1.0, 1.0  -- Top-right (duplicate for 2nd triangle)
             , 0.0, 1.0, 0.0, 1.0  -- Top-left
             , 0.0, 0.0, 0.0, 0.0  -- Bottom-left (duplicate)
-            ] ∷ [Float]
+            ] ∷ VS.Vector Float
         
-        vertSize = fromIntegral $ length quadVertices * sizeOf (undefined ∷ Float)
+        vertSize = fromIntegral $ VS.length quadVertices * sizeOf (0 ∷ Float)
     
-    -- Create staging buffer
-    (stagingMemory, stagingBuffer) ← createVulkanBuffer device pDevice vertSize
-        BUFFER_USAGE_TRANSFER_SRC_BIT
-        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+    (vertBuff, vertMem) ← locally $ do
+      (stagingMem, stagingBuff) ← createVulkanBuffer device pDevice vertSize
+          BUFFER_USAGE_TRANSFER_SRC_BIT
+          (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+      dataPtr ← mapMemory device stagingMem 0 vertSize zero
+      liftIO $ VS.unsafeWith quadVertices $ \srcPtr →
+          copyBytes (castPtr dataPtr) srcPtr (fromIntegral vertSize)
+      unmapMemory device stagingMem
+      (vertexMem, vertexBuff) ← createVulkanBuffer device pDevice vertSize
+          (BUFFER_USAGE_VERTEX_BUFFER_BIT .|. BUFFER_USAGE_TRANSFER_DST_BIT)
+          MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+      copyBuffer device cmdPool queue stagingBuff vertexBuff vertSize
+      return (vertexBuff, vertexMem)
     
-    -- Upload data
-    dataPtr ← mapMemory device stagingMemory 0 vertSize zero
-    liftIO $ pokeArray (castPtr dataPtr) quadVertices
-    unmapMemory device stagingMemory
-    
-    -- Create vertex buffer
-    (vertexMemory, vertexBuffer) ← createVulkanBuffer device pDevice vertSize
-        (BUFFER_USAGE_TRANSFER_DST_BIT .|.  BUFFER_USAGE_VERTEX_BUFFER_BIT)
-        MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-    
-    -- Copy staging to vertex buffer
-    copyBuffer device cmdPool queue stagingBuffer vertexBuffer vertSize
-    
-    -- Cleanup staging
-    destroyBuffer device stagingBuffer Nothing
-    freeMemory device stagingMemory Nothing
-    
-    return (vertexBuffer, vertexMemory)
+    return (vertBuff, vertMem)
 
 -----------------------------------------------------------
 -- Rendering
