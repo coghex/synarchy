@@ -17,8 +17,9 @@ data Transform2D = Transform2D
     } deriving (Show, Eq)
 
 -- | Type of scene object
-data ObjectType 
+data NodeType 
     = SpriteObject
+    | TextObject
     | ParticleEmitter
     deriving (Show, Eq)
 

@@ -14,13 +14,15 @@ import Linear (M44, V3(..), (!*!), mkTransformation)
 import Linear.Quaternion (axisAngle)
 
 -- | Create a default scene node
-createSceneNode ∷ ObjectType → SceneNode
+createSceneNode ∷ NodeType → SceneNode
 createSceneNode objType = SceneNode
     { nodeId = ObjectId 0  -- Will be set when added to graph
     , nodeType = objType
     , nodeTransform = defaultTransform
     , nodeTexture = Nothing
+    , nodeLayer = LayerId 0 -- default layer TODO: implement layers
     , nodeFont = Nothing
+    , nodeText = Nothing
     , nodeVisible = True
     , nodeColor = Vec4 1.0 1.0 1.0 1.0
     , nodeUVRect = Nothing

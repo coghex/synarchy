@@ -15,6 +15,7 @@ import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Resource
 import Engine.Core.Error.Exception
+import Engine.Scene.Types
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer, copyBuffer)
 import Engine.Graphics.Vulkan.Command
@@ -340,34 +341,27 @@ createFontQuadBuffer device pDevice queue cmdPool = do
 -- Rendering
 -----------------------------------------------------------
 
--- | Render all queued text batches (called from draw loop)
 renderTextBatches ∷ CommandBuffer → EngineM ε σ ()
 renderTextBatches cmdBuffer = do
     state ← gets graphicsState
-    let batches = V.toList (textBatchQueue state)
-    
-    unless (null batches) $ do
-        -- Bind font pipeline
-        case fontPipeline state of
-            Nothing → throwGraphicsError FontError "Font pipeline not initialized"
-            Just (pipeline, layout) → do
-                cmdBindPipeline cmdBuffer PIPELINE_BIND_POINT_GRAPHICS pipeline
-                
-                -- Bind quad buffer
-                case fontQuadBuffer state of
-                    Nothing → throwGraphicsError FontError "Font quad buffer not initialized"
-                    Just (quadBuffer, _) → do
-                        -- Render each batch
-                        forM_ batches $ \batch → renderBatch cmdBuffer quadBuffer layout batch
-    
-    -- Clear queue
+    let batches = textBatchQueue state
+    unless (V.null batches) $ do
+      case fontPipeline state of
+        Nothing → throwGraphicsError FontError "Font pipeline not initialized"
+        Just (pipeline, layout) → do
+          cmdBindPipeline cmdBuffer PIPELINE_BIND_POINT_GRAPHICS pipeline
+          case fontQuadBuffer state of
+              Nothing → throwGraphicsError FontError "Font quad buffer not initialized"
+              Just (quadBuffer, _) → do
+                  -- Render each batch
+                  forM_ batches $ \batch → renderTextBatch cmdBuffer quadBuffer layout batch
+    -- clear queue
     modify $ \s → s 
-        { graphicsState = (graphicsState s) { textBatchQueue = V.empty }
-        }
+        { graphicsState = (graphicsState s) { textBatchQueue = V.empty } }
 
 -- | Render a single text batch
-renderBatch ∷ CommandBuffer → Buffer → PipelineLayout → TextBatch → EngineM ε σ ()
-renderBatch cmdBuffer quadBuffer layout batch = do
+renderTextBatch ∷ CommandBuffer → Buffer → PipelineLayout → TextBatch → EngineM ε σ ()
+renderTextBatch cmdBuffer quadBuffer layout batch = do
     state ← gets graphicsState
     device ← case vulkanDevice state of
         Nothing → throwGraphicsError VulkanDeviceLost "No device"

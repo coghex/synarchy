@@ -502,23 +502,17 @@ processLuaMessages = do
           logDebug $ "Texture loaded: handle=" ⧺ (show handle) ⧺
                      ", assetId=" ⧺ (show assetId)
 
---        LuaLoadFontRequest handle path size → do
---          logDebug $ "Loading font: " ⧺ (show path) ⧺
---                     " size=" ⧺ show size
---          result ← catch 
---            (Right <$> loadFont path size)
---            (\(e ∷ SomeException) → return $ Left e)
---          case result of
---            Right actualHandle → do
---              logDebug $ "Font loaded: handle=" ⧺ show actualHandle
---              env ← ask
---              let etlq = luaQueue env
---              liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
---            Left err → do
---              throwGraphicsError FontError $ T.pack $ "Font load failed: " ⧺ show err
---              env ← ask
---              let etlq = luaQueue env
---              liftIO $ Q.writeQueue etlq (LuaFontLoadFailed (T.pack $ show err))
+        LuaLoadFontRequest handle path size → do
+          logDebug $ "Loading font: " ⧺ (show path) ⧺ " size=" ⧺ show size
+          
+          -- Load font (if it fails, the exception will propagate up)
+          actualHandle ← loadFont path size
+          
+          logDebug $ "Font loaded successfully:  handle=" ⧺ show actualHandle
+          
+          -- Send success message back to Lua thread
+          let etlq = luaQueue env
+          liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
 
         LuaDrawTextRequest x y fontHandle text → do
           drawText x y fontHandle text
@@ -692,6 +686,8 @@ drawFrame = do
     liftIO $ resetCommandBuffer cmdBuffer zero
     recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex)
                              dynamicBuffer batches
+    -- record text command buffe, both lua drawText() and scene text
+    renderTextBatches cmdBuffer
 
     -- submit work
     let waitStages = V.singleton PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT

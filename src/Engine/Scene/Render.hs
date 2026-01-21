@@ -10,6 +10,8 @@ import Engine.Core.State
 import Engine.Core.Error.Exception
 import Engine.Scene.Types
 import Engine.Scene.Manager
+import Engine.Scene.Graph
+import Engine.Scene.Batch
 import Engine.Graphics.Vulkan.Types.Vertex
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Buffer
@@ -35,6 +37,18 @@ updateSceneForRender = do
                             (fromIntegral height) 
                             sceneMgr
     
+    -- collect text batches from active scene
+    case smActiveScene updatedSceneMgr of
+        Just sceneId → case Map.lookup sceneId (smSceneGraphs updatedSceneMgr) of
+            Just graph → do
+                let updatedGraph = updateWorldTransforms graph
+                textRenderBatches ← collectTextBatches updatedGraph
+                let simpleBatches = convertToTextBatches textRenderBatches
+                modify $ \s → s { graphicsState = (graphicsState s) 
+                                    { textBatchQueue = simpleBatches } }
+            Nothing → return ()
+        Nothing → return ()
+
     -- Store updated scene manager
     modify $ \s → s { sceneManager = updatedSceneMgr }
 

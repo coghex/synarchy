@@ -11,12 +11,13 @@ import Engine.Asset.Types
 import Engine.Graphics.Vulkan.Types.Texture (TextureData)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex, Vec2(..), Vec4(..))
 import Engine.Graphics.Camera
+import Engine.Graphics.Font.Data
 import Linear (M44)
 
 -- | Core scene object representation
 data SceneObject = SceneObject
     { objId       ∷ ObjectId
-    , objType     ∷ ObjectType
+    , objType     ∷ NodeType
     , objTransform ∷ Transform2D
     , objTexture  ∷ Maybe TextureHandle
     , objVisible  ∷ Bool
@@ -79,10 +80,12 @@ createEmptyLayer lid = SceneLayer
 -- | Represents a drawable object in the scene
 data SceneNode = SceneNode
     { nodeId         ∷ ObjectId
-    , nodeType       ∷ ObjectType
+    , nodeType       ∷ NodeType
     , nodeTransform  ∷ Transform2D
+    , nodeLayer      ∷ LayerId
     , nodeTexture    ∷ Maybe TextureHandle
-    , nodeFont        ∷ Maybe FontHandle
+    , nodeFont       ∷ Maybe FontHandle
+    , nodeText       ∷ Maybe Text
     , nodeVisible    ∷ Bool
     , nodeColor      ∷ Vec4        -- RGBA color multiplier
     , nodeUVRect     ∷ Maybe (Vec2, Vec2)  -- UV coordinates (min, max) for atlas
@@ -138,9 +141,18 @@ data RenderBatch = RenderBatch
     , rbDirty      ∷ Bool
     } deriving (Show)
 
+-- | Text render batch grouped by font and layer
+data TextRenderBatch = TextRenderBatch
+    { trbFont      ∷ FontHandle
+    , trbLayer     ∷ LayerId
+    , trbInstances ∷ V.Vector GlyphInstance
+    , trbObjects   ∷ V.Vector ObjectId
+    } deriving (Show)
+
 -- | Batch manager state
 data BatchManager = BatchManager
     { bmBatches      ∷ Map.Map (TextureHandle, LayerId) RenderBatch
+    , bmTextBatches  ∷ Map.Map (FontHandle, LayerId) TextRenderBatch
     , bmVisibleObjs  ∷ V.Vector DrawableObject
     , bmDirtyBatches ∷ Set.Set (TextureHandle, LayerId)
     } deriving (Show)
@@ -149,6 +161,7 @@ data BatchManager = BatchManager
 createBatchManager ∷ BatchManager
 createBatchManager = BatchManager
     { bmBatches = Map.empty
+    , bmTextBatches = Map.empty
     , bmVisibleObjs = V.empty
     , bmDirtyBatches = Set.empty
     }

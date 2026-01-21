@@ -30,10 +30,10 @@ data TextBatch = TextBatch
   } deriving (Eq, Show)
 
 data GlyphInstance = GlyphInstance
-    { instancePosition ∷ (Float, Float)                -- ← RENAMED
-    , instanceSize     ∷ (Float, Float)                -- ← RENAMED
-    , instanceUVRect   ∷ (Float, Float, Float, Float)  -- ← RENAMED
-    , instanceColor    ∷ (Float, Float, Float, Float)  -- ← RENAMED
+    { instancePosition ∷ (Float, Float)
+    , instanceSize     ∷ (Float, Float)
+    , instanceUVRect   ∷ (Float, Float, Float, Float)
+    , instanceColor    ∷ (Float, Float, Float, Float)
     } deriving (Show, Eq)
 
 -- | Cache of loaded fonts to avoid re-loading
