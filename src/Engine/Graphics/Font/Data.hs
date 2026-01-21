@@ -23,19 +23,18 @@ data FontAtlas = FontAtlas
   , faSampler       ∷ Maybe Sampler
   } deriving (Eq, Show)
 
--- | add instance data
-data GlyphInstance = GlyphInstance
-  { giPosition ∷ (Float, Float)
-  , giSize     ∷ (Float, Float)
-  , giUVRect   ∷ (Float, Float, Float, Float)
-  , giColor    ∷ (Float, Float, Float, Float)
-  } deriving (Eq, Show)
-
 -- | batch of text instances
 data TextBatch = TextBatch
   { tbFontHandle   ∷ FontHandle
   , tbInstances    ∷ V.Vector GlyphInstance
   } deriving (Eq, Show)
+
+data GlyphInstance = GlyphInstance
+    { instancePosition ∷ (Float, Float)                -- ← RENAMED
+    , instanceSize     ∷ (Float, Float)                -- ← RENAMED
+    , instanceUVRect   ∷ (Float, Float, Float, Float)  -- ← RENAMED
+    , instanceColor    ∷ (Float, Float, Float, Float)  -- ← RENAMED
+    } deriving (Show, Eq)
 
 -- | Cache of loaded fonts to avoid re-loading
 data FontCache = FontCache

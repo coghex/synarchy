@@ -2,7 +2,7 @@
 module Main where
 
 import UPrelude
-import Control.Exception (displayException, throwIO)
+import Control.Exception (displayException, throwIO, try)
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.STM (newTVarIO, newTQueueIO)
 import qualified Control.Monad.Logger.CallStack as Logger
@@ -35,6 +35,9 @@ import Engine.Scripting.Lua.Types
 import Engine.Graphics.Base
 import Engine.Graphics.Config
 import Engine.Graphics.Types
+import Engine.Graphics.Font.Load (loadFont)
+import Engine.Graphics.Font.Draw
+import Engine.Graphics.Font.Data
 import Engine.Input.Bindings
 import Engine.Input.Types
 import Engine.Input.Thread
@@ -314,6 +317,22 @@ main = do
                 (fromIntegral i)
             logDebug $ "Recorded command buffer " ⧺ show i
 
+        -- create a pipeline for fonts
+        logDebug "creating font pipeline..."
+        (fontPipe, fontPipeLayout) ← createFontPipeline device renderPass
+                                       (siSwapExtent swapInfo) uniformLayout
+        logDebug $ "Font Pipeline: " ⧺ show fontPipe
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            fontPipeline = Just (fontPipe, fontPipeLayout) } }
+        -- create shared quad buffer for text rendering
+        logDebug "creating font quad buffer..."
+        quadBuf ← createFontQuadBuffer device physicalDevice
+                      (graphicsQueue queues) cmdPool
+        logDebug $ "Font Quad Buffer: " ⧺ show quadBuf
+        modify $ \s → s { graphicsState = (graphicsState s) {
+                            fontQuadBuffer = Just quadBuf } }
+        logDebug "font system initialized"
+
         mainLoop
         shutdownEngine window inputThreadState luaThreadState
  
@@ -482,6 +501,25 @@ processLuaMessages = do
           modify $ \s → s { assetPool = pool }
           logDebug $ "Texture loaded: handle=" ⧺ (show handle) ⧺
                      ", assetId=" ⧺ (show assetId)
+
+--        LuaLoadFontRequest handle path size → do
+--          logDebug $ "Loading font: " ⧺ (show path) ⧺
+--                     " size=" ⧺ show size
+--          result ← try $ loadFont path size
+--          case result of
+--            Right actualHandle → do
+--              logDebug $ "Font loaded: handle=" ⧺ show actualHandle
+--              env ← ask
+--              let etlq = snd $ luaQueue env
+--              liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
+--            Left (err ∷ EngineException) → do
+--              throwGraphicsError FontError $ "Failed to load font: " ⧺ displayException err
+--              env ← ask
+--              let etlq = snd $ luaQueue env
+--              liftIO $ Q.writeQueue etlq (LuaFontLoadFailed (T.pack $ show err))
+--
+--        LuaDrawTextRequest x y fontHandle text → do
+--          drawText x y fontHandle text
 
         LuaSpawnSpriteRequest objId x y width height texHandle → do
           logDebug $ "Spawning sprite id=" ⧺ show objId ⧺

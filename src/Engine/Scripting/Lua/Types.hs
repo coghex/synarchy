@@ -44,6 +44,8 @@ data LuaLogLevel = LuaLogDebug
 -- | messages from lua to the main thread
 data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaLoadTextureRequest TextureHandle FilePath
+                    | LuaLoadFontRequest FontHandle FilePath Int
+                    | LuaDrawTextRequest Float Float FontHandle Text
                     | LuaSpawnSpriteRequest
                         { lssObjectId    ∷ ObjectId -- generated in lua thread
                         , lssX           ∷ Float
@@ -60,6 +62,8 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
 
 -- | messages from set to lua from anywhere
 data LuaMsg = LuaTextureLoaded TextureHandle AssetId
+            | LuaFontLoaded FontHandle
+            | LuaFontLoadFailed Text
             | LuaThreadKill
             | LuaMouseDownEvent GLFW.MouseButton Double Double
             | LuaMouseUpEvent GLFW.MouseButton Double Double

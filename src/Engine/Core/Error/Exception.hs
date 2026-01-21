@@ -63,6 +63,7 @@ data GraphicsError
   | FramebufferError         -- ^ Framebuffer error
   | VertexBufferError        -- ^ Vertex buffer error
   | CleanupError             -- ^ Cleanup error
+  | FontError                -- ^ Font rendering error
   | VulkanError Vk.Result    -- ^ Raw Vulkan error
   deriving (Show, Eq, Typeable)
 

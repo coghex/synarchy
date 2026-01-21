@@ -31,6 +31,13 @@ data AssetPool = AssetPool
   , apShaderHandles     ∷ IORef (Map.Map ShaderHandle (AssetState AssetId))
   }
 
+data GlyphInfo = GlyphInfo
+  { giUVRect    ∷ (Float, Float, Float, Float)  -- ^ UV coordinates (u0, v0, u1, v1) in atlas
+  , giSize      ∷ (Float, Float)                -- ^ Glyph dimensions (width, height) in pixels
+  , giBearing   ∷ (Float, Float)                -- ^ Offset from baseline (x, y)
+  , giAdvance   ∷ Float                         -- ^ Horizontal advance to next glyph
+  } deriving (Show, Eq)
+
 -- | Create default asset pool with initialized IORefs
 defaultAssetPool ∷ IO AssetPool
 defaultAssetPool = do
@@ -162,14 +169,6 @@ instance Show Font where
          <> ", fRefCount = " <> show (fRefCount f)
          <> ", fCleanup = " <> if isJust (fCleanup f) then "<present>" else "<absent> }"
         
--- | Information about a single glyph in the atlas
-data GlyphInfo = GlyphInfo
-    { giUVRect      ∷ (Float, Float, Float, Float)  -- ^ UV coordinates (u0, v0, u1, v1) in atlas
-    , giSize        ∷ (Float, Float)                -- ^ Glyph dimensions (width, height) in pixels
-    , giBearing     ∷ (Float, Float)                -- ^ Offset from baseline (x, y)
-    , giAdvance     ∷ Float                         -- ^ Horizontal advance to next glyph
-    } deriving (Show, Eq)
-
 -- | Shader stage specification
 data ShaderStageInfo = ShaderStageInfo
   { ssiStage       ∷ ShaderStageFlags

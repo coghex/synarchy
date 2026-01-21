@@ -160,6 +160,7 @@ library
                      Engine.Graphics.Window.GLFW
                      Engine.Graphics.Window.Types
                      Engine.Graphics.Font.Data
+                     Engine.Graphics.Font.Draw
                      Engine.Graphics.Font.Load
                      Engine.Graphics.Font.STB
                      Engine.Input.Bindings

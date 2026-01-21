@@ -17,6 +17,9 @@ import Engine.Input.Types
 import Engine.Scene.Base
 import Engine.Graphics.Vulkan.Types.Vertex
 import Engine.Graphics.Camera
+import Engine.Graphics.Font.Data
+import Engine.Graphics.Font.Load
+import Engine.Graphics.Font.Draw
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
@@ -122,6 +125,12 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.getWorldCoord(screenX, screenY)
   Lua.pushHaskellFunction (getWorldCoordFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "getWorldCoord")
+  -- engine.loadFont(path, size)
+  Lua.pushHaskellFunction (loadFontFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "loadFont")
+  -- engine.drawText(x,y,fontHandle,text)
+  Lua.pushHaskellFunction (drawTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "drawText")
   -- set global 'engine' table
   Lua.setglobal (Lua.Name "engine")
   where
@@ -392,6 +401,44 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
           Lua.pushnil
       return 2
 
+    loadFontFn = do
+      path ← Lua.tostring 1
+      size ← Lua.tointeger 2
+      case (path, size) of
+        (Just pathBS, Just sizeVal) → do
+          handle ← Lua.liftIO $ do
+            let pathStr = TE.decodeUtf8 pathBS
+                (lteq, _) = lbsMsgQueues backendState
+                -- for now a simple counter for font handles
+                handle = FontHandle (fromIntegral sizeVal) -- TODO: improve handle generation
+            Q.writeQueue lteq (LuaLoadFontRequest handle (T.unpack pathStr) (fromIntegral sizeVal))
+            return handle
+          let (FontHandle n) = handle
+          Lua.pushinteger (Lua.Integer $ fromIntegral n)
+        _ → Lua.pushnil
+      return 1
+
+    drawTextFn = do
+      x ← Lua.tonumber 1
+      y ← Lua.tonumber 2
+      fontHandleNum ← Lua.tointeger 3
+      text ← Lua.tostring 4
+      case (x,y,fontHandleNum,text) of
+        (Just xVal, Just yVal, Just fh, Just textBS) → do
+          Lua.liftIO $ do
+            let (lteq, _) = lbsMsgQueues backendState
+                msg = LuaDrawTextRequest (realToFrac xVal) (realToFrac yVal)
+                      (FontHandle (fromIntegral fh)) (TE.decodeUtf8 textBS)
+            Q.writeQueue lteq msg
+          return 0
+        _ → do
+          Lua.liftIO $ do
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelError 
+              "drawText requires 4 arguments: x, y, fontHandle, text"
+          return 0
+
+
     -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
 callLuaFunction funcName args = do
@@ -557,6 +604,16 @@ processLuaMsg env ls stateRef msg = case msg of
     let lf = logFunc env
     lf defaultLoc "lua" LevelInfo $ 
         "Texture loaded:  " <> toLogStr (show handle) <> " -> " <> toLogStr (show assetId)
+    return ()
+  LuaFontLoaded handle → do
+    let lf = logFunc env
+    lf defaultLoc "lua" LevelInfo $ 
+        "Font loaded:  " <> toLogStr (show handle)
+    return ()
+  LuaFontLoadFailed err → do
+    let lf = logFunc env
+    lf defaultLoc "lua" LevelError $ 
+        "Font load failed:  " <> toLogStr (show err)
     return ()
   LuaThreadKill → writeIORef stateRef ThreadStopped
   LuaMouseDownEvent button x y → do
