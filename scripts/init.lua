@@ -1,4 +1,6 @@
 local tex = nil
+local font = nil
+local textId = 1
 local spawnedSprites = {}
 local lastLogTime = 0
 local logInterval = 1.0  -- Log mouse position every 1 second
@@ -17,6 +19,20 @@ function init()
     -- Load texture for spawning
     tex = engine.loadTexture("assets/textures/tile01.png")
     engine.logInfo("Texture loaded, ready for input")
+    -- load font
+    font = engine.loadFont("assets/fonts/ChrustyRock-ORLA.ttf", 32)
+    if font then
+        engine.logInfo("Font loaded successfully")
+        engine.spawnText(textId,50,50,font,"hello, scene graph")
+          local w, h = engine.getWindowSize()
+          local centerX = w / 2
+          local centerY = h / 2
+          
+          engine.logInfo("Spawning text at center: " .. centerX .. ", " .. centerY)
+          local textId = engine.spawnText(1, centerX, centerY, fontHandle, "HELLO WORLD")
+    else
+        engine.logError("Failed to load font")
+    end
 end
 
 function update(dt)

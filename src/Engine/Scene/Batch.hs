@@ -18,6 +18,7 @@ import Engine.Graphics.Font.Data
 import Engine.Graphics.Font.Draw
 import Engine.Core.Monad
 import Engine.Core.State
+import Engine.Core.Error.Exception
 
 -- | Batch manager for 2D rendering
 collectSpriteBatches ∷ SceneGraph → Camera2D → Float → Float → V.Vector DrawableObject
@@ -33,27 +34,54 @@ collectTextBatches ∷ SceneGraph → EngineM ε σ (V.Vector TextRenderBatch)
 collectTextBatches graph = do
   let allNodes = Map.elems (sgNodes graph)
       textNodes = filter (\n → nodeType n ≡ TextObject && nodeVisible n) allNodes
+  logDebug $ "Collecting text batches from " ⧺ show (length textNodes) ⧺ " text nodes."
+  forM_ textNodes $ \node → do
+      logDebug $ " Text Node " ⧺ show (nodeId node) ⧺
+                 " font =" ⧺ show (nodeFont node) ⧺
+                 " text =" ⧺ show (nodeText node) ⧺
+                 " visible =" ⧺ show (nodeVisible node)
   gs ← gets graphicsState
   let cache = fontCache gs
+  logDebug $ "Font cache contains " ⧺ show (Map.size (fcFonts cache)) ⧺ " fonts."
   let grouped = groupByFontAndLayer textNodes
-  batches ← forM grouped $ \((fontHandle, layerId), nodes) →
+  logDebug $ "grouped into " ⧺ show (length grouped) ⧺ " font/layer groups."
+  batches ← forM grouped $ \((fontHandle, layerId), nodes) → do
+    logDebug $ "processing group: font=" ⧺ show fontHandle ⧺ " layer=" ⧺ show layerId
+             ⧺ " nodes=" ⧺ show (length nodes)
     case Map.lookup fontHandle (fcFonts cache) of
-      Nothing → return Nothing
+      Nothing → do
+        logDebug $ " Font " ⧺ show fontHandle ⧺ " not found in cache."
+        return Nothing
       Just atlas → do
-          allInstances ← fmap V.concat $ forM nodes $ \node →
+          logDebug $ " Found font atlas"
+          allInstances ← fmap V.concat $ forM nodes $ \node → do
+              let worldTransResult = Map.lookup (nodeId node) (sgWorldTrans graph)
+              logDebug $ "      Node " ⧺ show (nodeId node) ⧺
+                         " world trans= " ⧺ show (isJust worldTransResult)
               case (nodeText node, Map.lookup (nodeId node) (sgWorldTrans graph)) of
                   (Just text, Just worldTrans) → do
                       let (x,y) = wtPosition worldTrans
                           Vec4 r g b a = nodeColor node
                           color = (r, g, b, a)
-                      return $ layoutText atlas x y text color
-                  _ → return V.empty
+                      logDebug $ "      Laying out text: \"" ⧺ show text ⧺ "\" at (" ⧺ show x ⧺ "," ⧺ show y ⧺ ")"
+                      let instances = layoutText atlas x y text color
+                      logDebug $ "      Created " ⧺ show (V.length instances) ⧺ " glyph instances."
+                      return instances
+                  (Nothing, _) → do
+                      logDebug $ "      No text for node " ⧺ show (nodeId node)
+                      return V.empty
+                  (_, Nothing) → do
+                      logDebug $ "      No world transform for node"
+                      return V.empty
+          logDebug $ "  Total instances for batch: " ⧺ show (V.length allInstances)
           return $ Just $ TextRenderBatch
               { trbFont = fontHandle
               , trbLayer = layerId
               , trbInstances = allInstances
               , trbObjects = V.fromList $ map nodeId nodes }
-  return $ V.fromList $ catMaybes batches
+  let result = V.fromList $ catMaybes batches
+  logDebug $ "collectTextBatches returning " ⧺ show (V.length result) ⧺ " text render batches."
+  return result
 
 -- | Group text nodes by font and layer
 groupByFontAndLayer ∷ [SceneNode] → [((FontHandle, LayerId), [SceneNode])]
@@ -70,7 +98,8 @@ groupByFontAndLayer nodes =
 collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → V.Vector DrawableObject
 collectVisibleObjects graph camera viewWidth viewHeight =
     let allNodes = Map.elems (sgNodes graph)
-        visibleNodes = filter (isNodeVisible camera viewWidth viewHeight) allNodes
+        spriteNodes = filter (\n → nodeType n ≡ SpriteObject && nodeVisible n) allNodes
+        visibleNodes = filter (isNodeVisible camera viewWidth viewHeight) spriteNodes
         drawableObjs = mapMaybe (nodeToDrawable graph) visibleNodes
     in V.fromList drawableObjs
 
@@ -105,14 +134,15 @@ isNodeVisible camera viewWidth viewHeight node =
         in not (nodeRight < left || nodeLeft > right || 
                 nodeTop < bottom || nodeBottom > top)
 
--- | Convert scene node to drawable object
+-- | Convert scene node to drawable object (sprites only)
 nodeToDrawable ∷ SceneGraph → SceneNode → Maybe DrawableObject
 nodeToDrawable graph node = do
+    guard (nodeType node ≡ SpriteObject)
     textureId ← nodeTexture node
     worldTrans ← Map.lookup (nodeId node) (sgWorldTrans graph)
     
     let vertices = generateQuadVertices node worldTrans
-        layerId = LayerId 0  -- Default layer, can be extended
+        layerId = nodeLayer node
         
     return DrawableObject
         { doId = nodeId node

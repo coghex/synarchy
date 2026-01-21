@@ -8,6 +8,7 @@ import Data.IORef
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Error.Exception
+import Engine.Scene.Base
 import Engine.Scene.Types
 import Engine.Scene.Manager
 import Engine.Scene.Graph
@@ -16,6 +17,7 @@ import Engine.Graphics.Vulkan.Types.Vertex
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Window.Types
+import Engine.Graphics.Font.Data
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Graphics.Window.Types (Window(..))
 import Vulkan.Core10
@@ -42,13 +44,20 @@ updateSceneForRender = do
         Just sceneId → case Map.lookup sceneId (smSceneGraphs updatedSceneMgr) of
             Just graph → do
                 let updatedGraph = updateWorldTransforms graph
+                let allNodes = Map.elems (sgNodes updatedGraph)
+                    textNodes = filter (\n → nodeType n ≡ TextObject && nodeVisible n) allNodes
+                logDebug $ "Text nodes in scene: " ⧺ (show (length textNodes))
                 textRenderBatches ← collectTextBatches updatedGraph
+                logDebug $ "Text render batches collected" ⧺ show (V.length textRenderBatches)
                 let simpleBatches = convertToTextBatches textRenderBatches
+                logDebug $ "simple text batches: " ⧺ show (V.length simpleBatches)
+                forM_ simpleBatches $ \batch → do
+                  logDebug $ "  Batch font=" ⧺ show (tbFontHandle batch) ⧺
+                             " instances=" ⧺ show (V.length (tbInstances batch))
                 modify $ \s → s { graphicsState = (graphicsState s) 
                                     { textBatchQueue = simpleBatches } }
-            Nothing → return ()
-        Nothing → return ()
-
+            Nothing → logDebug "No active scene graph found"
+        Nothing → logDebug "No active scene to collect text batches from"
     -- Store updated scene manager
     modify $ \s → s { sceneManager = updatedSceneMgr }
 

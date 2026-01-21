@@ -92,6 +92,8 @@ data GraphicsState = GraphicsState
   , fontPipeline       ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , fontQuadBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , textBatchQueue     ∷ V.Vector TextBatch
+  -- instance buffers that survive across frames
+  , pendingInstanceBuffers ∷ V.Vector (Vk.Buffer, Vk.DeviceMemory)
   }
 
 

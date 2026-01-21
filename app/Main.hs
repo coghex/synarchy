@@ -313,28 +313,9 @@ main = do
         modify $ \s → s { graphicsState = (graphicsState s) {
                             framebuffers = Just framebuffers } }
 
-        -- Verify all counts match before recording
-        state ← gets graphicsState
-        let cmdBufferCount = V.length $ frCommandBuffer $ V.head frameRes
-            fbCount = V.length framebuffers
-            dsCount = maybe 0 (V.length . dmActiveSets) $ descriptorState state
-        when (cmdBufferCount /= fbCount || fbCount /= dsCount) $
-            throwResourceError (ResourceCountMismatch "engine init: ") $ T.pack $
-                "Resource count mismatch: cmdBuffers=" ⧺ show cmdBufferCount ⧺
-                " framebuffers=" ⧺ show fbCount ⧺
-                " descSets=" ⧺ show dsCount
-
-        -- record initial command buffers
-        state ← gets graphicsState
-        let numImages = maybe 0 V.length (vulkanCmdBuffers state)
-        forM_ [0..numImages-1] $ \i → do
-            recordRenderCommandBuffer 
-                (fromJust (vulkanCmdBuffers state) V.! i) 
-                (fromIntegral i)
-            logDebug $ "Recorded command buffer " ⧺ show i
-
         mainLoop
         shutdownEngine window inputThreadState luaThreadState
+        logDebug "Engine shutdown complete."
  
   result ← runEngineM engineAction envVar stateVar checkStatus
   case result of
@@ -350,6 +331,10 @@ shutdownEngine (Window win) its lts = do
     logDebug "Engine cleaning up..."
     state ← gets graphicsState
 
+    modify $ \s → s { graphicsState = (graphicsState s) {
+                          textBatchQueue = V.empty }
+                    , sceneManager = (sceneManager s) {
+                          smBatchManager = createBatchManager } }
     -- Wait for Vulkan device to idle before resource cleanup
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
@@ -409,73 +394,6 @@ initializeTextures device physicalDevice cmdPool queue
       textureArrayStates = Map.singleton "default" textureArrayState
   } }
 
-  -- Load texture using asset manager
-  --let texturePath1 = "assets/textures/tile01.png"
-  --let texturePath2 = "assets/textures/tile02.png"
-  --textureId1 ← loadTextureAtlas (T.pack "tile01") texturePath1 (T.pack "default")
-  --logDebug $ "Texture 1 loaded: " ⧺ show textureId1
-  --textureId2 ← loadTextureAtlas (T.pack "tile02") texturePath2 (T.pack "default")
-  --logDebug $ "Texture 2 loaded: " ⧺ show textureId2
-  --
-  ---- Get the loaded texture atlas
-  --atlas1 ← getTextureAtlas textureId1
-  --atlas2 ← getTextureAtlas textureId2
-  --logDebug $ "Atlas 1 status: " ⧺ show (taStatus atlas1)
-  --logDebug $ "Atlas 2 status: " ⧺ show (taStatus atlas2)
- ---- Create descriptor sets for both textures
- 
-  ---- Update descriptor sets for both textures
-  --case (taInfo atlas1, taInfo atlas2) of
-  --  (Just info1, Just info2) → do
-  --    -- Update first descriptor set
-  --    let imageInfos = V.fromList
-  --          [ zero
-  --            { imageView = tiView info1
-  --            , sampler = tiSampler info1
-  --            , imageLayout = tiLayout info1
-  --            }
-  --          , zero
-  --            { imageView = tiView info2
-  --            , sampler = tiSampler info2
-  --            , imageLayout = tiLayout info2
-  --            }
-  --          ]
-  --        write = zero
-  --          { dstSet = V.head textureSets
-  --          , dstBinding = 0
-  --          , dstArrayElement = 0
-  --          , descriptorCount = 2
-  --          , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-  --          , imageInfo = imageInfos
-  --          }
-  --    
-  --    liftIO $ updateDescriptorSets device 
-  --      (V.singleton $ SomeStruct write)
-  --      V.empty
-
-  --    -- Create TextureData for both textures
-  --    let textureData1 = TextureData
-  --          { tdImageView = tiView info1
-  --          , tdSampler = tiSampler info1
-  --          , tdMipLevels = amMipLevels (taMetadata atlas1)
-  --          , tdDescriptorSet = textureSets V.! 0
-  --          }
-  --        textureData2 = TextureData
-  --          { tdImageView = tiView info2
-  --          , tdSampler = tiSampler info2
-  --          , tdMipLevels = amMipLevels (taMetadata atlas2)
-  --          , tdDescriptorSet = textureSets V.! 1
-  --          }
-  --    
-  --    -- Update engine state with both textures
-  --    modify $ \s → s { graphicsState = (graphicsState s) {
-  --      textureState = 
-  --        let (poolState', _) = textureState (graphicsState s)
-  --        in (poolState', V.fromList [textureData1, textureData2])
-  --    } }
-  --    
-  --    logDebug "Both textures loaded and descriptor sets updated"
-  --  _ → throwGraphicsError TextureLoadFailed "Texture info not found"
 
 processLuaMessages ∷ EngineM' EngineEnv ()
 processLuaMessages = do
@@ -504,18 +422,33 @@ processLuaMessages = do
 
         LuaLoadFontRequest handle path size → do
           logDebug $ "Loading font: " ⧺ (show path) ⧺ " size=" ⧺ show size
-          
           -- Load font (if it fails, the exception will propagate up)
-          actualHandle ← loadFont path size
-          
+          actualHandle ← loadFont handle path size
           logDebug $ "Font loaded successfully:  handle=" ⧺ show actualHandle
-          
           -- Send success message back to Lua thread
           let etlq = luaQueue env
           liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
 
-        LuaDrawTextRequest x y fontHandle text → do
-          drawText x y fontHandle text
+        LuaSpawnTextRequest oid x y fontHandle text → do
+          sceneMgr ← gets sceneManager
+          case smActiveScene sceneMgr of
+            Just sceneId → do
+              let node = (createSceneNode TextObject)
+                    { nodeId = oid
+                    , nodeTransform = defaultTransform { position = (x,y) }
+                    , nodeFont = Just fontHandle
+                    , nodeText = Just text
+                    , nodeColor = Vec4 1 1 1 1
+                    , nodeVisible = True
+                    }
+              case addObjectToScene sceneId node sceneMgr of
+                Just (addedObjId, newSceneMgr) → do
+                  modify $ \s → s { sceneManager = newSceneMgr }
+                  logDebug $ "Text object succesfully spawned with object id: "
+                           ⧺ show addedObjId
+                Nothing → logDebug $ "Failed to add text object "
+                                   ⧺ show oid ⧺ " to scene"
+            Nothing → logDebug "cannot draw text: no active scene"
 
         LuaSpawnSpriteRequest objId x y width height texHandle → do
           logDebug $ "Spawning sprite id=" ⧺ show objId ⧺
@@ -613,6 +546,8 @@ drawFrame = do
     let frameIdx = currentFrame state
     -- update scene for this frame
     updateSceneForRender
+    state' ← gets graphicsState
+    let textBatches = textBatchQueue state'
     batches ← getCurrentRenderBatches
     -- update uniform buffer
     case (vulkanDevice state, uniformBuffers state) of
@@ -669,6 +604,7 @@ drawFrame = do
       waitForFences device (V.singleton (frInFlight resources))
                            True maxTimeout
       resetFences device (V.singleton (frInFlight resources))
+    cleanupPendingInstanceBuffers
     
     -- Acquire next image
     swapchain ← case swapchainInfo state of
@@ -684,10 +620,10 @@ drawFrame = do
 
     -- reset and record command buffer
     liftIO $ resetCommandBuffer cmdBuffer zero
+    logDebug "about to call recordSceneCommandBuffer"
     recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex)
-                             dynamicBuffer batches
-    -- record text command buffe, both lua drawText() and scene text
-    renderTextBatches cmdBuffer
+                             dynamicBuffer batches textBatches
+    logDebug "recordSceneCommandBuffer returned successfully, about to submit work"
 
     -- submit work
     let waitStages = V.singleton PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
@@ -702,16 +638,20 @@ drawFrame = do
         Nothing → throwGraphicsError VulkanDeviceLost "No queues"
         Just q → pure q
     
+    logDebug "submitting to graphics queue"
     liftIO $ queueSubmit (graphicsQueue queues)
                (V.singleton $ SomeStruct submitInfo)
                $ frInFlight resources
+    logDebug "submission to graphics queue complete"
 
     -- Present
+    logDebug "about to present image"
     let presentInfo = zero
             { waitSemaphores = V.singleton $ frRenderFinished resources
             , swapchains = V.singleton swapchain
             , imageIndices = V.singleton imageIndex
             }
+    logDebug "calling queuePresentKHR"
     
     presentResult ← liftIO $ queuePresentKHR (presentQueue queues) presentInfo
     case presentResult of
@@ -720,11 +660,13 @@ drawFrame = do
         err → throwGraphicsError SwapchainError $
                 T.pack $ "Failed to present image: " ⧺ show err
     
+    logDebug "image presented successfully"
     -- Update frame index
     modify $ \s → s { graphicsState = (graphicsState s) {
                         currentFrame = (currentFrame (graphicsState s) + 1)
                                          `mod` fromIntegral
                                          (gcMaxFrames defaultGraphicsConfig) } }
+    logDebug "drawFrame complete"
 
 getCurTime ∷ IO Double
 getCurTime = do

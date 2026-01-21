@@ -7,6 +7,7 @@ import Engine.Graphics.Font.Data
 import Engine.Graphics.Font.STB
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
+import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Vulkan.Image (createVulkanImage, VulkanImage(..), createVulkanImageView)
 import Engine.Graphics.Vulkan.Texture (createTextureSampler, TexturePoolState(..))
 import Vulkan.Core10
@@ -26,8 +27,8 @@ import Foreign.Ptr (castPtr)
 import Foreign.Marshal.Array (pokeArray)
 
 -- | Load a TTF font at specified size
-loadFont ∷ FilePath → Int → EngineM ε σ FontHandle
-loadFont fontPath fontSize = do
+loadFont ∷ FontHandle → FilePath → Int → EngineM ε σ FontHandle
+loadFont requestedHandle fontPath fontSize = do
     gs ← gets graphicsState
     let cache = fontCache gs
     case Map.lookup (fontPath, fontSize) (fcPathCache cache) of
@@ -48,12 +49,11 @@ loadFont fontPath fontSize = do
                                  , faDescriptorSet = Just descriptorSet
                                  , faImageView = Just imgView
                                  , faSampler = Just samp }
-                handle = FontHandle (fromIntegral (fcNextHandle cache))
+                handle = requestedHandle
             
             modify $ \s → s 
                 { graphicsState = gs { fontCache = cache
                     { fcFonts = Map.insert handle newAtlas (fcFonts cache)
-                    , fcNextHandle = fcNextHandle cache + 1
                     , fcPathCache = Map.insert (fontPath, fontSize) handle (fcPathCache cache) } } }
             
             logInfo $ "Font loaded: handle=" ⧺ (show handle)
@@ -213,9 +213,9 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
              ⧺ " (" ⧺ (show bufferSize) ⧺ " bytes)"
     
     -- 1. Create staging buffer
-    (stagingMemory, stagingBuffer) ← createVulkanBuffer device pDevice bufferSize
+    (stagingMemory, stagingBuffer) ← createVulkanBufferManual device pDevice bufferSize
         BUFFER_USAGE_TRANSFER_SRC_BIT
-        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|.  MEMORY_PROPERTY_HOST_COHERENT_BIT)
+        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
     
     -- 2. Upload pixel data
     dataPtr ← mapMemory device stagingMemory 0 bufferSize zero
@@ -270,18 +270,34 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
     
     logDebug "Sampler created"
     
-    -- 7. Create descriptor set
+    -- 7. Create font-specific descriptor set layout (WITHOUT allocResource - it needs to persist)
+    let fontSamplerBinding = zero
+          { binding = 0
+          , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+          , descriptorCount = 1
+          , stageFlags = SHADER_STAGE_FRAGMENT_BIT
+          , immutableSamplers = V.empty
+          }
+        fontLayoutInfo = zero
+          { bindings = V.singleton fontSamplerBinding
+          }
+    
+    -- Create WITHOUT allocResource - the descriptor set needs this layout to remain valid
+    fontTextureLayout ← createDescriptorSetLayout device fontLayoutInfo Nothing
+    
+    logDebug "Font texture layout created"
+    
+    -- 8. Allocate and update descriptor set
     state ← get
     let texArrays = textureArrayStates $ graphicsState state
     case Map.lookup "default" texArrays of
         Nothing → throwGraphicsError DescriptorError "No default texture array"
         Just defaultArray → do
             let descriptorPool = tasDescriptorPool defaultArray
-                descriptorLayout = tasDescriptorSetLayout defaultArray
             
             let allocInfo = zero
                   { descriptorPool = descriptorPool
-                  , setLayouts = V.singleton descriptorLayout
+                  , setLayouts = V.singleton fontTextureLayout
                   }
             descriptorSets ← liftIO $ allocateDescriptorSets device allocInfo
             let descSet = V.head descriptorSets
@@ -302,6 +318,8 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
             
             updateDescriptorSets device (V.singleton writeDescriptorSet) V.empty
             
+            logDebug "Font descriptor set allocated and updated"
+            
             -- Generate handle
             pool ← gets assetPool
             handle ← liftIO $ generateHandle @TextureHandle pool
@@ -310,7 +328,7 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
             destroyBuffer device stagingBuffer Nothing
             freeMemory device stagingMemory Nothing
             
-            logDebug $ "Font texture created: handle=" ⧺ (show handle)
+            logDebug $ "Font texture created:  handle=" ⧺ (show handle)
             
             return (handle, descSet, imageView, sampler)
 

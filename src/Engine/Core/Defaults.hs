@@ -90,6 +90,7 @@ defaultEngineState pool = EngineState
     , fontPipeline       = Nothing
     , fontQuadBuffer     = Nothing
     , textBatchQueue     = V.empty
+    , pendingInstanceBuffers = V.empty
     }
   , assetPool        = pool
   , assetConfig      = AssetConfig 100 100 True True

@@ -128,9 +128,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.loadFont(path, size)
   Lua.pushHaskellFunction (loadFontFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "loadFont")
-  -- engine.drawText(x,y,fontHandle,text)
-  Lua.pushHaskellFunction (drawTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "drawText")
+  -- engine.spawnText(id,x,y,fontHandle,text)
+  Lua.pushHaskellFunction (spawnTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "spawnText")
   -- set global 'engine' table
   Lua.setglobal (Lua.Name "engine")
   where
@@ -409,8 +409,11 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
           handle ← Lua.liftIO $ do
             let pathStr = TE.decodeUtf8 pathBS
                 (lteq, _) = lbsMsgQueues backendState
-                -- for now a simple counter for font handles
-                handle = FontHandle (fromIntegral sizeVal) -- TODO: improve handle generation
+            pool ← readIORef (lbsAssetPool backendState)
+            handle ← generateHandle @FontHandle pool
+            updateAssetState @FontHandle handle
+              (AssetLoading (T.unpack pathStr) [] 0.0) pool
+            writeIORef (lbsAssetPool backendState) pool
             Q.writeQueue lteq (LuaLoadFontRequest handle (T.unpack pathStr) (fromIntegral sizeVal))
             return handle
           let (FontHandle n) = handle
@@ -418,25 +421,23 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
         _ → Lua.pushnil
       return 1
 
-    drawTextFn = do
-      x ← Lua.tonumber 1
-      y ← Lua.tonumber 2
-      fontHandleNum ← Lua.tointeger 3
-      text ← Lua.tostring 4
-      case (x,y,fontHandleNum,text) of
-        (Just xVal, Just yVal, Just fh, Just textBS) → do
-          Lua.liftIO $ do
-            let (lteq, _) = lbsMsgQueues backendState
-                msg = LuaDrawTextRequest (realToFrac xVal) (realToFrac yVal)
-                      (FontHandle (fromIntegral fh)) (TE.decodeUtf8 textBS)
-            Q.writeQueue lteq msg
-          return 0
-        _ → do
-          Lua.liftIO $ do
-            let lf = logFunc env
-            lf defaultLoc "lua" LevelError 
-              "drawText requires 4 arguments: x, y, fontHandle, text"
-          return 0
+    spawnTextFn = do
+      objIdNum ← Lua.tointeger 1
+      x ← Lua.tonumber 2
+      y ← Lua.tonumber 3
+      fontHandleNum ← Lua.tointeger 4
+      text ← Lua.tostring 5
+      case (objIdNum, x,y,fontHandleNum,text) of
+        (Just oid, Just xVal, Just yVal, Just fh, Just textBS) → do
+            let objId = ObjectId $ fromIntegral oid
+                fontHandle = FontHandle $ fromIntegral fh
+                textStr = TE.decodeUtf8 textBS
+                msg = LuaSpawnTextRequest objId (realToFrac xVal) (realToFrac yVal)
+                      fontHandle textStr
+                lteq = luaToEngineQueue env
+            Lua.liftIO $ Q.writeQueue lteq msg
+        _ → Lua.pushstring "drawText requires 5 arguments: objectId, x, y, fontHandle, text"
+      return 0
 
 
     -- | Helper to call Lua function with explicit type

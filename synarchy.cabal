@@ -139,12 +139,14 @@ library
                      Engine.Graphics.Config
                      Engine.Graphics.Vulkan.Base
                      Engine.Graphics.Vulkan.Buffer
+                     Engine.Graphics.Vulkan.BufferUtils
                      Engine.Graphics.Vulkan.Command
                      Engine.Graphics.Vulkan.Descriptor
                      Engine.Graphics.Vulkan.Device
                      Engine.Graphics.Vulkan.Framebuffer
                      Engine.Graphics.Vulkan.Image
                      Engine.Graphics.Vulkan.Instance
+                     Engine.Graphics.Vulkan.InstanceBuffer
                      Engine.Graphics.Vulkan.Pipeline
                      Engine.Graphics.Vulkan.Sampler
                      Engine.Graphics.Vulkan.Shader

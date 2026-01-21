@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 -- src/Engine/Graphics/Vulkan/Command.hs
 module Engine.Graphics.Vulkan.Command
   ( createVulkanCommandPool
@@ -27,11 +28,15 @@ import Engine.Core.State
 import Engine.Core.Resource (allocResource, locally)
 import Engine.Core.Error.Exception
 import Engine.Graphics.Types
+import Engine.Graphics.Vulkan.BufferUtils
 import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
+import Engine.Graphics.Font.Data
 import Engine.Scene.Types
+import Foreign.Storable (sizeOf, pokeElemOff)
+import Foreign.Ptr (castPtr)
 import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Core10.CommandBufferBuilding
@@ -167,7 +172,7 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
     state ← gets graphicsState
     env ← ask
     
-    -- Validate required state components [existing validation code remains the same]
+    -- Validate required state components
     pState ← maybe (throwGraphicsError PipelineError "Pipeline state not initialized") 
                   pure 
                   (pipelineState state)
@@ -186,12 +191,12 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
                            (pure . siSwapExtent)
                            (swapchainInfo state)
     
-    -- Begin command buffer [existing code remains the same]
+    -- Begin command buffer
     let beginInfo = (zero ∷ CommandBufferBeginInfo '[])
                       { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
     liftIO $ beginCommandBuffer cmdBuf beginInfo
     
-    -- Begin render pass [existing code remains the same]
+    -- Begin render pass
     let clearColor = Color ( Float32 0.0 0.0 0.4 1.0 )
         renderPassInfo = zero
           { renderPass = renderPass
@@ -205,7 +210,7 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
     -- Bind graphics pipeline
     cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS (psPipeline pState)
     
-    -- Set viewport and scissors [existing code remains the same]
+    -- Set viewport and scissors
     let Extent2D w h = swapchainExtent
         viewport = Viewport
           { x = 0
@@ -239,9 +244,6 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
           Nothing  → (throwGraphicsError DescriptorError "No texture descriptor set")
           Just set → pure set
     
-   -- logDebug $ "Binding descriptor sets - uniform: " ⧺ show uniformSet
-   -- logDebug $ "Texture descriptor sets: " ⧺ show textureSet
-    
     let descriptorSets = V.fromList [uniformSet, textureSet]
     -- Bind all descriptor sets at once
     cmdBindDescriptorSets cmdBuf 
@@ -257,22 +259,17 @@ recordRenderCommandBuffer cmdBuf frameIdx = do
             0  -- First binding
             (V.singleton vBuf)
             (V.singleton 0)  -- Offsets
-        --logDebug "Vertex buffer bound successfully"
     
-    --logDebug $ "drawing with vertex count: 12"
     -- Draw both quads in a single draw call
     cmdDraw cmdBuf
         12   -- vertex count (2 quads = 12 vertices)
         1    -- instance count
         0    -- first vertex
         0    -- first instance
-    --logDebug "draw complete"
         
     -- End render pass and command buffer
     cmdEndRenderPass cmdBuf
-    --logDebug "render pass ended"
     endVulkanCommandBuffer cmdBuf
-    --logDebug "command buffer ended"
 
 -- Helper function to prepare all command buffers
 prepareFrameCommandBuffers ∷ EngineM ε σ ()
@@ -289,14 +286,14 @@ prepareFrameCommandBuffers = do
                 Nothing → throwGraphicsError CommandBufferError
                     "Vulkan command buffers not initialized"
                 Just cmdBuffers → do
-                           -- Reset command pool
-                           resetCommandPool dev cmdPool zero
-                           -- Record command buffer for each frame
-                           V.zipWithM_ (recordRenderCommandBuffer)
-                                       cmdBuffers
-                                       (V.generate 
-                                         (V.length cmdBuffers)
-                                         fromIntegral)
+                                    -- Reset command pool
+                                    resetCommandPool dev cmdPool zero
+                                    -- Record command buffer for each frame
+                                    V.zipWithM_ (recordRenderCommandBuffer)
+                                         cmdBuffers
+                                         (V.generate 
+                                           (V.length cmdBuffers)
+                                           fromIntegral)
 
 -- | Create a set of frame resources
 createFrameResources ∷ Device → DevQueues → EngineM ε σ FrameResources
@@ -355,9 +352,12 @@ allocateVulkanCommandBuffer device cmdPool = do
             "Failed to allocate command buffer"
         _ → pure $ V.head buffers
 
--- Replace the existing recordRenderCommandBuffer function
-recordSceneCommandBuffer ∷ CommandBuffer → Word64 → SceneDynamicBuffer → V.Vector RenderBatch → EngineM ε σ ()
-recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer batches = do
+-- | Record scene command buffer with sprite and text batches
+-- Text batches are rendered INSIDE the render pass, before it ends
+recordSceneCommandBuffer ∷ CommandBuffer → Word64 → SceneDynamicBuffer 
+                         → V.Vector RenderBatch → V.Vector TextBatch 
+                         → EngineM ε σ ()
+recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer batches textBatches = do
     state ← gets graphicsState
     
     -- Validate required state components
@@ -379,6 +379,14 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer batches = do
                            (pure . siSwapExtent)
                            (swapchainInfo state)
     
+    device ← maybe (throwGraphicsError VulkanDeviceLost "No device")
+                   pure
+                   (vulkanDevice state)
+    
+    pDevice ← maybe (throwGraphicsError VulkanDeviceLost "No physical device")
+                    pure
+                    (vulkanPDevice state)
+    
     -- Begin command buffer
     let beginInfo = (zero ∷ CommandBufferBeginInfo '[])
                       { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
@@ -395,7 +403,7 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer batches = do
     
     cmdBeginRenderPass cmdBuf renderPassInfo SUBPASS_CONTENTS_INLINE
     
-    -- Bind graphics pipeline
+    -- Bind graphics pipeline for sprites
     cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS (psPipeline pState)
     
     -- Set viewport and scissors
@@ -416,7 +424,7 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer batches = do
     cmdSetViewport cmdBuf 0 (V.singleton viewport)
     cmdSetScissor cmdBuf 0 (V.singleton scissor)
     
-    -- Bind descriptor sets
+    -- Bind descriptor sets for sprites
     descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
                        pure 
                        (descriptorState state)
@@ -439,13 +447,13 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer batches = do
         descriptorSets
         V.empty
     
-    -- Bind dynamic vertex buffer
+    -- Bind dynamic vertex buffer for sprites
     cmdBindVertexBuffers cmdBuf 
         0  -- First binding
         (V.singleton (sdbBuffer dynamicBuffer))
         (V.singleton 0)  -- Offsets
     
-    -- Draw all batches
+    -- Draw all sprite batches
     currentVertexOffset ← liftIO $ newIORef (0 ∷ Word32)
     V.forM_ batches $ \batch → do
         offset ← liftIO $ readIORef currentVertexOffset
@@ -461,6 +469,152 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer batches = do
         -- Update offset for next batch
         liftIO $ modifyIORef currentVertexOffset (+ vertexCount)
     
+    -- ========================================
+    -- RENDER TEXT BATCHES (inside render pass)
+    -- ========================================
+    unless (V.null textBatches) $ do
+        logDebug $ "fontPipeline = " ⧺ show (fontPipeline state)
+        logDebug $ "fontQuadBuffer = " ⧺ show (fontQuadBuffer state)
+        case (fontPipeline state, fontQuadBuffer state) of
+            (Just (pipeline, layout), Just (quadBuffer, _)) → do
+                logDebug $ "font pipeline = " ⧺ show pipeline
+                logDebug $ "font pipeline layout = " ⧺ show layout
+                logDebug $ "font quad buffer = " ⧺ show quadBuffer
+                -- Bind font pipeline
+                cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS pipeline
+                
+                -- Reset viewport and scissor (same as before)
+                cmdSetViewport cmdBuf 0 (V.singleton viewport)
+                cmdSetScissor cmdBuf 0 (V.singleton scissor)
+                
+                -- Render each text batch
+                logDebug $ "about to render " ⧺ show (V.length textBatches) ⧺ " text batches"
+                !newBuffers ← V.foldM' (\acc batch → do
+                    logDebug $ "processing batch, current acc length = " ⧺ show (V.length acc)
+                    maybeBuffer ← renderTextBatchInline cmdBuf device pDevice 
+                                                        quadBuffer layout batch state
+                    logDebug "renderTextBatchInline returned"
+                    case maybeBuffer of
+                        Nothing → do
+                          logDebug "got nothing, continuing"
+                          pure acc
+                        Just !buf → do
+                          logDebug $ "got buffer, adding to acc"
+                          let !newAcc = V.snoc acc buf
+                          logDebug $ "new acc length = " ⧺ show (V.length newAcc)
+                          pure newAcc
+                  ) V.empty textBatches
+                
+                logDebug $ "fold complete, about to store " <> show (V.length newBuffers) <> " buffers"
+                -- Store instance buffers so they survive until next frame
+                modify $ \s → s 
+                    { graphicsState = (graphicsState s) 
+                        { pendingInstanceBuffers = 
+                            pendingInstanceBuffers (graphicsState s) <> newBuffers 
+                        }
+                    }
+                logDebug "buffers stored"
+            _ → pure ()
+    
+    -- Clear the text batch queue
+    logDebug "about to clear text batch queue"
+    modify $ \s → s 
+        { graphicsState = (graphicsState s) { textBatchQueue = V.empty } }
+    logDebug "text batch queue cleared"
+
+    logDebug "about to end render pass"
     -- End render pass and command buffer
     cmdEndRenderPass cmdBuf
+    logDebug "render pass ended, about to end command buffer"
     endVulkanCommandBuffer cmdBuf
+    logDebug "command buffer ended"
+
+-- | Render a single text batch inline (helper for recordSceneCommandBuffer)
+renderTextBatchInline ∷ CommandBuffer → Device → PhysicalDevice 
+                      → Buffer → PipelineLayout → TextBatch → GraphicsState
+                      → EngineM ε σ (Maybe (Buffer, DeviceMemory))
+renderTextBatchInline cmdBuf device pDevice quadBuffer layout batch state = do
+    let instances = tbInstances batch
+    if V.null instances
+        then pure Nothing
+        else do
+            logDebug "about to call createTextInstanceBuffer"
+            -- Create instance buffer
+            !instanceBuf@(!instanceBuffer, !instanceMemory) ← createTextInstanceBuffer device pDevice instances
+            logDebug $ "instance buffer = " <> show instanceBuffer
+            logDebug $ "instance memory = " <> show instanceMemory
+            logDebug "aboud to bind vertex buffers"
+            
+            -- Bind vertex buffers (quad + instances)
+            cmdBindVertexBuffers cmdBuf 0 
+                (V.fromList [quadBuffer, instanceBuffer])
+                (V.fromList [0, 0])
+            
+            logDebug "vertex buffers bound successfully, about to look up font"
+            -- Bind font atlas descriptor set
+            let cache = fontCache state
+            logDebug $ "font cache retreived, looking up handle: " <> show (tbFontHandle batch)
+            case Map.lookup (tbFontHandle batch) (fcFonts cache) of
+                Nothing → do
+                    logDebug $ "Font handle not found:  " <> show (tbFontHandle batch)
+                    pure Nothing
+                Just atlas → do
+                    logDebug "Font atlas found, checking descriptor set"
+                    case faDescriptorSet atlas of
+                        Nothing → do
+                            logDebug "Font atlas has no descriptor set"
+                            pure Nothing
+                        Just descSet → do
+                            logDebug $ "Font atlas descriptor set: " ⧺ show descSet
+                            logDebug "checking descriptorstate..."
+                            case descriptorState state of
+                                Just manager → do
+                                    logDebug "got descriptor mangaer"
+                                    let !uniformSet = V.head (dmActiveSets manager)
+                                    logDebug $ "uniform set: " <> show uniformSet
+                                    logDebug "about to bind descriptor sets"
+                                    cmdBindDescriptorSets cmdBuf 
+                                        PIPELINE_BIND_POINT_GRAPHICS 
+                                        layout 
+                                        0
+                                        (V.fromList [uniformSet, descSet])
+                                        V.empty
+                                    logDebug "descriptor sets bound"
+                                    
+                                    -- Draw instanced
+                                    let !instanceCount = fromIntegral $ V.length instances
+                                    logDebug $ "about to draw " <> show instanceCount <> " instances"
+                                    cmdDraw cmdBuf 6 instanceCount 0 0
+                                    logDebug "draw call successful, returning instanceBuf"
+                                    let !result = Just instanceBuf
+                                    logDebug $ "returning result: " <> show result
+                                    pure result
+                                Nothing → do
+                                    logDebug "No descriptor manager"
+                                    pure Nothing
+
+-- | Create instance buffer for text glyphs
+createTextInstanceBuffer ∷ Device → PhysicalDevice → V.Vector GlyphInstance 
+                         → EngineM ε σ (Buffer, DeviceMemory)
+createTextInstanceBuffer device pDevice instances = do
+    let !instanceSize = fromIntegral $ sizeOf (undefined ∷ GlyphInstance)
+        !instanceCount = V.length instances
+        !bufferSize = fromIntegral $ instanceSize * instanceCount
+    logDebug $ "Creating text instance buffer of size: " <> show bufferSize
+    when (instanceSize /= 48) $
+        logDebug $ "Warning: Unusual instance count, expected 48, got: " <> show instanceSize
+    
+    -- Create buffer
+    (!memory, !buffer) ← createVulkanBufferManual device pDevice bufferSize
+        BUFFER_USAGE_VERTEX_BUFFER_BIT
+        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+    logDebug "Text instance buffer created, mapping memory"
+    
+    -- Upload instance data
+    !dataPtr ← mapMemory device memory 0 bufferSize zero
+    logDebug "memory mapped, uploading instance data"
+    liftIO $ V.imapM_ (\i inst → pokeElemOff (castPtr dataPtr) i inst) instances
+    logDebug "Instance data uploaded, unmapping memory"
+    unmapMemory device memory
+    logDebug "Memory unmapped successfully"
+    return (buffer, memory)
