@@ -1,6 +1,5 @@
 local tex = nil
 local font = nil
-local textId = 1
 local spawnedSprites = {}
 local lastLogTime = 0
 local logInterval = 1.0  -- Log mouse position every 1 second
@@ -23,7 +22,7 @@ function init()
     font = engine.loadFont("assets/fonts/ChrustyRock-ORLA.ttf", 32)
     if font then
         engine.logInfo("Font loaded successfully")
-        engine.spawnText(textId,100,100,font,"hello, scene graph")
+        engine.spawnText(100,100,font,"hello, scene graph")
     else
         engine.logError("Failed to load font")
     end

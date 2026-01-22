@@ -128,7 +128,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.loadFont(path, size)
   Lua.pushHaskellFunction (loadFontFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "loadFont")
-  -- engine.spawnText(id,x,y,fontHandle,text)
+  -- engine.spawnText(x,y,fontHandle,text)
   Lua.pushHaskellFunction (spawnTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "spawnText")
   -- set global 'engine' table
@@ -422,21 +422,27 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
       return 1
 
     spawnTextFn = do
-      objIdNum ← Lua.tointeger 1
-      x ← Lua.tonumber 2
-      y ← Lua.tonumber 3
-      fontHandleNum ← Lua.tointeger 4
-      text ← Lua.tostring 5
-      case (objIdNum, x,y,fontHandleNum,text) of
-        (Just oid, Just xVal, Just yVal, Just fh, Just textBS) → do
-            let objId = ObjectId $ fromIntegral oid
-                fontHandle = FontHandle $ fromIntegral fh
+      x ← Lua.tonumber 1
+      y ← Lua.tonumber 2
+      fontHandleNum ← Lua.tointeger 3
+      text ← Lua.tostring 4
+      case (x,y,fontHandleNum,text) of
+        (Just xVal, Just yVal, Just fh, Just textBS) → do
+          objId ← Lua.liftIO $ do
+            objId ← atomicModifyIORef' (lbsNextObjectId backendState) 
+                (\n -> (n + 1, ObjectId n))
+            let fontHandle = FontHandle $ fromIntegral fh
                 textStr = TE.decodeUtf8 textBS
                 msg = LuaSpawnTextRequest objId (realToFrac xVal) (realToFrac yVal)
                       fontHandle textStr
                 lteq = luaToEngineQueue env
             Lua.liftIO $ Q.writeQueue lteq msg
-        _ → Lua.pushstring "drawText requires 5 arguments: objectId, x, y, fontHandle, text"
+            return objId
+          let (ObjectId n) = objId
+          Lua.pushinteger (Lua.Integer $ fromIntegral n)
+        _ → do
+          Lua.pushstring "drawText requires 5 arguments: objectId, x, y, fontHandle, text"
+          Lua.pushnil
       return 0
 
 
