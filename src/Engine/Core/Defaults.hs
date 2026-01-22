@@ -89,6 +89,7 @@ defaultEngineState pool = EngineState
     , fontCache          = defaultFontCache
     , fontPipeline       = Nothing
     , fontQuadBuffer     = Nothing
+    , fontDescriptorLayout = Nothing
     , textBatchQueue     = V.empty
     , pendingInstanceBuffers = V.empty
     }

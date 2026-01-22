@@ -13,6 +13,7 @@ import Engine.Scene.Types
 import Engine.Scene.Manager
 import Engine.Scene.Graph
 import Engine.Scene.Batch
+import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types.Vertex
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Buffer
@@ -29,9 +30,15 @@ updateSceneForRender = do
     state ← gets graphicsState
     sceneMgr ← gets sceneManager
     
+    -- TODO: find out why i need width and height twice, i know the second one is for translating the fonts position to world coords
     -- Get window dimensions for frustum culling
     let Window win = fromJust $ glfwWindow state
     (width, height) ← GLFW.getFramebufferSize win
+    -- and the screen dimensions from the swapchain
+    let (screenW, screenH) = case swapchainInfo state of
+                               Nothing → (800.0,600.0)
+                               Just swapInfo → let Extent2D w h = siSwapExtent swapInfo
+                                               in (fromIntegral w, fromIntegral h)
     
     -- Update scene manager with current view dimensions
     let updatedSceneMgr = updateSceneManager 
@@ -46,7 +53,7 @@ updateSceneForRender = do
                 let updatedGraph = updateWorldTransforms graph
                 let allNodes = Map.elems (sgNodes updatedGraph)
                     textNodes = filter (\n → nodeType n ≡ TextObject && nodeVisible n) allNodes
-                textRenderBatches ← collectTextBatches updatedGraph
+                textRenderBatches ← collectTextBatches updatedGraph screenW screenH
                 let simpleBatches = convertToTextBatches textRenderBatches
                 let finalSceneMgr = updatedSceneMgr 
                                         { smSceneGraphs = Map.insert sceneId updatedGraph (smSceneGraphs updatedSceneMgr) }

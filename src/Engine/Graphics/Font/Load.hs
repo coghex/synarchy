@@ -38,12 +38,15 @@ loadFont requestedHandle fontPath fontSize = do
         Nothing → do
             logInfo $ "Loading font: " ⧺ (show fontPath)
                     ⧺ " size=" ⧺ (show fontSize)
-            
+            -- get the descriptor layout for font
+            fontDescLayout ← case fontDescriptorLayout gs of
+                Nothing → throwGraphicsError DescriptorError "No font descriptor layout"
+                Just layout → return layout
             -- Generate atlas
             atlas ← liftIO $ generateFontAtlas fontPath fontSize
             
             -- Upload to GPU
-            (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas
+            (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas fontDescLayout
             
             let newAtlas = atlas { faTexture = texHandle
                                  , faDescriptorSet = Just descriptorSet
@@ -170,9 +173,9 @@ nextPowerOf2 n = head $ dropWhile (< n) powersOf2
 -- GPU Upload
 -----------------------------------------------------------
 
-uploadFontAtlasToGPU ∷ FontAtlas
-                     → EngineM ε σ (TextureHandle, DescriptorSet, ImageView, Sampler)
-uploadFontAtlasToGPU atlas = do
+uploadFontAtlasToGPU ∷ FontAtlas → DescriptorSetLayout
+  → EngineM ε σ (TextureHandle, DescriptorSet, ImageView, Sampler)
+uploadFontAtlasToGPU atlas fontDescriptorsLayout = do
     state ← gets graphicsState
     
     -- Get Vulkan handles
@@ -196,15 +199,15 @@ uploadFontAtlasToGPU atlas = do
 
     -- Create grayscale texture
     (texHandle, descSet, imgView, samp) ← createFontTextureGrayscale device pDevice
-                                            cmdPool queue width height pixels
+                                            cmdPool queue width height pixels fontDescriptorsLayout
     
     logDebug $ "Font atlas uploaded:  handle=" ⧺ (show texHandle)
     return (texHandle, descSet, imgView, samp)
 
 createFontTextureGrayscale ∷ Device → PhysicalDevice → CommandPool → Queue 
-                           → Int → Int → [Word8]
+                           → Int → Int → [Word8] → DescriptorSetLayout
                            → EngineM ε σ (TextureHandle, DescriptorSet, ImageView, Sampler)
-createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
+createFontTextureGrayscale device pDevice cmdPool queue width height pixels fontDescLayout = do
     let bufferSize = fromIntegral $ width * height
     
     logDebug $ "Creating font texture:  " ⧺ (show width) ⧺ "x" ⧺ (show height) 
@@ -258,20 +261,7 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
     -- 6. Create sampler
     sampler ← createFontTextureSampler device
     
-    -- 7. Create font-specific descriptor set layout (WITHOUT allocResource - it needs to persist)
-    let fontSamplerBinding = zero
-          { binding = 0
-          , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-          , descriptorCount = 1
-          , stageFlags = SHADER_STAGE_FRAGMENT_BIT
-          , immutableSamplers = V.empty
-          }
-        fontLayoutInfo = zero
-          { bindings = V.singleton fontSamplerBinding
-          }
-    
-    -- Create WITHOUT allocResource - the descriptor set needs this layout to remain valid
-    fontTextureLayout ← createDescriptorSetLayout device fontLayoutInfo Nothing
+    -- 7. There is no number 7
     
     -- 8. Allocate and update descriptor set
     state ← get
@@ -283,7 +273,7 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
             
             let allocInfo = zero
                   { descriptorPool = descriptorPool
-                  , setLayouts = V.singleton fontTextureLayout
+                  , setLayouts = V.singleton fontDescLayout
                   }
             descriptorSets ← liftIO $ allocateDescriptorSets device allocInfo
             let descSet = V.head descriptorSets

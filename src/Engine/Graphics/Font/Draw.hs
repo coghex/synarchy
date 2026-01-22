@@ -38,23 +38,30 @@ import Vulkan.CStruct.Extends
 -----------------------------------------------------------
 
 -- | Draw text at position (Lua-facing API)
-drawText ∷ Float → Float → FontHandle → Text → EngineM ε σ ()
-drawText x y fontHandle text = do
+drawText ∷ Float → Float → Float → Float → FontHandle → Text → EngineM ε σ ()
+drawText x y screenW screenH fontHandle text = do
     gs ← gets graphicsState
     let cache = fontCache gs
     case Map.lookup fontHandle (fcFonts cache) of
         Nothing → throwGraphicsError FontError $ "Invalid font handle: " <> T.pack (show fontHandle)
         Just atlas → do
-            let instances = layoutText atlas x y text (1.0, 1.0, 1.0, 1.0)  -- White
+            let instances = layoutText atlas x y screenW screenH text (1.0, 1.0, 1.0, 1.0)  -- White TODO: Color
             addTextBatch fontHandle instances
 
--- | Layout text into glyph instances
-layoutText ∷ FontAtlas → Float → Float → Text → (Float, Float, Float, Float) → V.Vector GlyphInstance
-layoutText atlas startX startY text color =
+-- | Layout text into glyph instances (converts pixels to world coords)
+-- TODO: text with its own coordinated UBO transform would probably be a better
+-- system, but this is simpler for now, and works fine for screen-space text.
+layoutText ∷ FontAtlas → Float → Float → Float → Float
+  → Text → (Float, Float, Float, Float) → V.Vector GlyphInstance
+layoutText atlas startX startY screenW screenH text color =
     let chars = T.unpack text
         (_, instances) = foldl layoutChar (startX, []) chars
     in V.fromList (reverse instances)
   where
+    pixelToNdcX px = (px / screenW) * 2.0 - 1.0
+    pixelToNdcY py = 1.0 - (py / screenH) * 2.0
+    pixelToNdcW pw = (pw / screenW) * 2.0
+    pixelToNdcH ph = (ph / screenH) * 2.0
     layoutChar (currentX, acc) char =
         case Map.lookup char (faGlyphData atlas) of
             Nothing → (currentX, acc)  -- Skip unknown character
@@ -62,14 +69,17 @@ layoutText atlas startX startY text color =
                 let (bearingX, bearingY) = giBearing glyphInfo
                     (w, h) = giSize glyphInfo
                     (u0, v0, u1, v1) = giUVRect glyphInfo
-                    
                     -- Position glyph (baseline-aligned)
-                    x = currentX + bearingX
-                    y = startY - bearingY
+                    pxX = currentX + bearingX
+                    pxY = startY + bearingY
+                    ndcX = pixelToNdcX pxX
+                    ndcY = pixelToNdcY pxY
+                    ndcW = pixelToNdcW w
+                    ndcH = pixelToNdcH h
                     
                     instance' = GlyphInstance
-                        { instancePosition = (x, y)
-                        , instanceSize = (w, h)
+                        { instancePosition = (ndcX, ndcY)
+                        , instanceSize = (ndcW, ndcH)
                         , instanceUVRect = (u0, v0, u1, v1)
                         , instanceColor = color }
                     
@@ -136,7 +146,7 @@ createInstanceBuffer device pDevice instances = do
 
 -- | Create font rendering pipeline with instancing
 createFontPipeline ∷ Device → RenderPass → Extent2D → DescriptorSetLayout 
-                   → EngineM ε σ (Pipeline, PipelineLayout)
+                   → EngineM ε σ (Pipeline, PipelineLayout, DescriptorSetLayout)
 createFontPipeline device renderPass swapExtent uniformLayout = do
     -- Create font-specific texture layout (must persist)
     fontTexLayout ← createFontTextureLayout device
@@ -276,7 +286,7 @@ createFontPipeline device renderPass swapExtent uniformLayout = do
     destroyShaderModule device vertModule Nothing
     destroyShaderModule device fragModule Nothing
     
-    pure (pipeline, pipelineLayout)
+    pure (pipeline, pipelineLayout, fontTexLayout)
 
 -----------------------------------------------------------
 -- Quad Buffer Creation (unchanged from original)

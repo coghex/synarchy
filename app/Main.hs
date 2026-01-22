@@ -288,11 +288,12 @@ main = do
                             pipelineState = Just (pstate) } }
 
         -- create a pipeline for fonts
-        (fontPipe, fontPipeLayout) ← createFontPipeline device renderPass
-                                       (siSwapExtent swapInfo) uniformLayout
+        (fontPipe, fontPipeLayout, fontDescLayout)
+          ← createFontPipeline device renderPass (siSwapExtent swapInfo) uniformLayout
         logDebug $ "Font Pipeline: " ⧺ show fontPipe
         modify $ \s → s { graphicsState = (graphicsState s) {
-                            fontPipeline = Just (fontPipe, fontPipeLayout) } }
+                            fontPipeline = Just (fontPipe, fontPipeLayout)
+                          , fontDescriptorLayout = Just fontDescLayout } }
         -- create shared quad buffer for text rendering
         quadBuf ← createFontQuadBuffer device physicalDevice
                       (graphicsQueue queues) cmdPool

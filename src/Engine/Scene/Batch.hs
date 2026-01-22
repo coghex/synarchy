@@ -30,8 +30,9 @@ collectSpriteBatches graph camera viewWidth viewHeight =
     in V.fromList drawableObjs
 
 -- | collect text drawable objects from scene graph
-collectTextBatches ∷ SceneGraph → EngineM ε σ (V.Vector TextRenderBatch)
-collectTextBatches graph = do
+collectTextBatches ∷ SceneGraph → Float → Float
+  → EngineM ε σ (V.Vector TextRenderBatch)
+collectTextBatches graph screenW screenH = do
   let allNodes = Map.elems (sgNodes graph)
       textNodes = filter (\n → nodeType n ≡ TextObject && nodeVisible n) allNodes
   gs ← gets graphicsState
@@ -50,7 +51,7 @@ collectTextBatches graph = do
                       let (x,y) = wtPosition worldTrans
                           Vec4 r g b a = nodeColor node
                           color = (r, g, b, a)
-                      let instances = layoutText atlas x y text color
+                      let instances = layoutText atlas x y screenW screenH text color
                       return instances
                   (Nothing, _) → do
                       logDebug $ "      No text for node " ⧺ show (nodeId node)
