@@ -391,114 +391,117 @@ processLuaMessages = do
     maybeMsg ← liftIO $ Q.tryReadQueue lteq
     case maybeMsg of
       Nothing → return () -- no messages
-      Just msg → case msg of
+      Just msg → do
+        currentTime ← liftIO getCurrentTime
+        logDebug $ "[MAIN RECV " <> show currentTime <> "] processing: " ⧺ show msg
+        case msg of
+          LuaLoadTextureRequest handle path → do
+            logDebug $ "Loading texture: " ⧺ (show path)
+            assetId ← loadTextureAtlas (T.pack $ takeBaseName path) path "default"
+            -- update shared asset pool
+            apRef ← asks assetPoolRef
+            liftIO $ do
+              pool ← readIORef apRef
+              updateAssetState @TextureHandle handle
+                  (AssetReady assetId []) pool
+            -- update local state too
+            pool ← liftIO $ readIORef apRef
+            modify $ \s → s { assetPool = pool }
+            logDebug $ "Texture loaded: handle=" ⧺ (show handle) ⧺
+                       ", assetId=" ⧺ (show assetId)
 
-        LuaLoadTextureRequest handle path → do
-          logDebug $ "Loading texture: " ⧺ (show path)
-          assetId ← loadTextureAtlas (T.pack $ takeBaseName path) path "default"
-          -- update shared asset pool
-          apRef ← asks assetPoolRef
-          liftIO $ do
-            pool ← readIORef apRef
-            updateAssetState @TextureHandle handle
-                (AssetReady assetId []) pool
-          -- update local state too
-          pool ← liftIO $ readIORef apRef
-          modify $ \s → s { assetPool = pool }
-          logDebug $ "Texture loaded: handle=" ⧺ (show handle) ⧺
-                     ", assetId=" ⧺ (show assetId)
+          LuaLoadFontRequest handle path size → do
+            logDebug $ "Loading font: " ⧺ (show path) ⧺ " size=" ⧺ show size
+            -- Load font (if it fails, the exception will propagate up)
+            actualHandle ← loadFont handle path size
+            logDebug $ "Font loaded successfully:  handle=" ⧺ show actualHandle
+            -- Send success message back to Lua thread
+            let etlq = luaQueue env
+            liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
 
-        LuaLoadFontRequest handle path size → do
-          logDebug $ "Loading font: " ⧺ (show path) ⧺ " size=" ⧺ show size
-          -- Load font (if it fails, the exception will propagate up)
-          actualHandle ← loadFont handle path size
-          logDebug $ "Font loaded successfully:  handle=" ⧺ show actualHandle
-          -- Send success message back to Lua thread
-          let etlq = luaQueue env
-          liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
+          LuaSpawnTextRequest oid x y fontHandle text → do
+            sceneMgr ← gets sceneManager
+            case smActiveScene sceneMgr of
+              Just sceneId → do
+                let node = (createSceneNode TextObject)
+                      { nodeId = oid
+                      , nodeTransform = defaultTransform { position = (x,y) }
+                      , nodeFont = Just fontHandle
+                      , nodeText = Just text
+                      , nodeColor = Vec4 1 1 1 1
+                      , nodeVisible = True
+                      }
+                case addObjectToScene sceneId node sceneMgr of
+                  Just (addedObjId, newSceneMgr) → do
+                    modify $ \s → s { sceneManager = newSceneMgr }
+                    logDebug $ "Text object succesfully spawned with object id: "
+                             ⧺ show addedObjId
+                  Nothing → logDebug $ "Failed to add text object "
+                                     ⧺ show oid ⧺ " to scene"
+              Nothing → logDebug "cannot draw text: no active scene"
 
-        LuaSpawnTextRequest oid x y fontHandle text → do
-          sceneMgr ← gets sceneManager
-          case smActiveScene sceneMgr of
-            Just sceneId → do
-              let node = (createSceneNode TextObject)
-                    { nodeId = oid
-                    , nodeTransform = defaultTransform { position = (x,y) }
-                    , nodeFont = Just fontHandle
-                    , nodeText = Just text
-                    , nodeColor = Vec4 1 1 1 1
-                    , nodeVisible = True
-                    }
-              case addObjectToScene sceneId node sceneMgr of
-                Just (addedObjId, newSceneMgr) → do
-                  modify $ \s → s { sceneManager = newSceneMgr }
-                  logDebug $ "Text object succesfully spawned with object id: "
-                           ⧺ show addedObjId
-                Nothing → logDebug $ "Failed to add text object "
-                                   ⧺ show oid ⧺ " to scene"
-            Nothing → logDebug "cannot draw text: no active scene"
+          LuaSpawnSpriteRequest objId x y width height texHandle → do
+            logDebug $ "Spawning sprite id=" ⧺ show objId ⧺
+                       " pos=(" ⧺ show x ⧺ ", " ⧺ show y ⧺ ")" ⧺
+                       " size=(" ⧺ show width ⧺ ", " ⧺ show height ⧺ ")" ⧺
+                       " tex=" ⧺ show texHandle
+            -- get active scene
+            sceneMgr ← gets sceneManager
+            case smActiveScene sceneMgr of
+              Just sceneId → do
+                let node = (createSceneNode SpriteObject)
+                      { nodeId = objId
+                      , nodeTransform = defaultTransform { position = (x,y) }
+                      , nodeTexture = Just texHandle
+                      , nodeSize = (width, height)
+                      , nodeColor = Vec4 1 1 1 1
+                      , nodeVisible = True
+                      }
+                -- add to scene graph
+                case addObjectToScene sceneId node sceneMgr of
+                  Just (addedObjId, newSceneMgr) → do
+                    modify $ \s → s { sceneManager = newSceneMgr }
+                    logDebug $ "Sprite succesfully spawned with object id: "
+                             ⧺ show addedObjId
+                  Nothing → logDebug $ "Failed to add sprite "
+                                     ⧺ show objId ⧺ " to scene"
+              Nothing → logDebug "cannot spawn sprite: no active scene"
 
-        LuaSpawnSpriteRequest objId x y width height texHandle → do
-          logDebug $ "Spawning sprite id=" ⧺ show objId ⧺
-                     " pos=(" ⧺ show x ⧺ ", " ⧺ show y ⧺ ")" ⧺
-                     " size=(" ⧺ show width ⧺ ", " ⧺ show height ⧺ ")" ⧺
-                     " tex=" ⧺ show texHandle
-          -- get active scene
-          sceneMgr ← gets sceneManager
-          case smActiveScene sceneMgr of
-            Just sceneId → do
-              let node = (createSceneNode SpriteObject)
-                    { nodeId = objId
-                    , nodeTransform = defaultTransform { position = (x,y) }
-                    , nodeTexture = Just texHandle
-                    , nodeSize = (width, height)
-                    , nodeColor = Vec4 1 1 1 1
-                    , nodeVisible = True
-                    }
-              -- add to scene graph
-              case addObjectToScene sceneId node sceneMgr of
-                Just (addedObjId, newSceneMgr) → do
-                  modify $ \s → s { sceneManager = newSceneMgr }
-                  logDebug $ "Sprite succesfully spawned with object id: "
-                           ⧺ show addedObjId
-                Nothing → logDebug $ "Failed to add sprite "
-                                   ⧺ show objId ⧺ " to scene"
-            Nothing → logDebug "cannot spawn sprite: no active scene"
+          LuaMoveSpriteRequest objId x y → do
+            modifySceneNode objId $ \node →
+              node { nodeTransform = (nodeTransform node) {
+                        position = (x, y) } }
 
-        LuaMoveSpriteRequest objId x y → do
-          modifySceneNode objId $ \node →
-            node { nodeTransform = (nodeTransform node) {
-                      position = (x, y) } }
+          LuaSetSpriteColorRequest objId color → do
+            modifySceneNode objId $ \node →
+              node { nodeColor = color }
 
-        LuaSetSpriteColorRequest objId color → do
-          modifySceneNode objId $ \node →
-            node { nodeColor = color }
+          LuaSetSpriteVisibleRequest objId visible → do
+            modifySceneNode objId $ \node →
+              node { nodeVisible = visible }
 
-        LuaSetSpriteVisibleRequest objId visible → do
-          modifySceneNode objId $ \node →
-            node { nodeVisible = visible }
+          LuaDestroySpriteRequest objId → do
+            sceneMgr ← gets sceneManager
+            case smActiveScene sceneMgr of
+              Just sceneId → do
+                case Map.lookup sceneId (smSceneGraphs sceneMgr) of
+                  Just graph → do
+                    let updatedGraph = graph { sgNodes      = Map.delete objId
+                                                                (sgNodes graph)
+                                             , sgWorldTrans = Map.delete objId
+                                                                (sgWorldTrans graph)
+                                             , sgDirtyNodes = Set.delete objId
+                                                                (sgDirtyNodes graph) }
+                        updatedGraphs = Map.insert sceneId updatedGraph
+                                                    (smSceneGraphs sceneMgr)
+                    modify $ \s → s { sceneManager = sceneMgr {
+                                        smSceneGraphs = updatedGraphs } }
+                    logDebug $ "Destroyed sprite with object id: " ⧺ show objId
+                  Nothing → logInfo $ "no scene graph"
+              Nothing → logInfo $ "no active scene"
 
-        LuaDestroySpriteRequest objId → do
-          sceneMgr ← gets sceneManager
-          case smActiveScene sceneMgr of
-            Just sceneId → do
-              case Map.lookup sceneId (smSceneGraphs sceneMgr) of
-                Just graph → do
-                  let updatedGraph = graph { sgNodes      = Map.delete objId
-                                                              (sgNodes graph)
-                                           , sgWorldTrans = Map.delete objId
-                                                              (sgWorldTrans graph)
-                                           , sgDirtyNodes = Set.delete objId
-                                                              (sgDirtyNodes graph) }
-                      updatedGraphs = Map.insert sceneId updatedGraph
-                                                  (smSceneGraphs sceneMgr)
-                  modify $ \s → s { sceneManager = sceneMgr {
-                                      smSceneGraphs = updatedGraphs } }
-                  logDebug $ "Destroyed sprite with object id: " ⧺ show objId
-                Nothing → logInfo $ "no scene graph"
-            Nothing → logInfo $ "no active scene"
-
-        _ → return () -- unhandled message
+          _ → return () -- unhandled message
+        processLuaMessages -- process next message
 
 -- helper function
 modifySceneNode ∷ ObjectId → (SceneNode → SceneNode) → EngineM' EngineEnv ()
@@ -605,6 +608,8 @@ drawFrame = do
     when (acquireResult ≠ SUCCESS && acquireResult ≠ SUBOPTIMAL_KHR) $
         throwGraphicsError SwapchainError $
             T.pack $ "Failed to acquire next image: " ⧺ show acquireResult
+
+    currentTime ← liftIO getCurrentTime
 
     -- reset and record command buffer
     liftIO $ resetCommandBuffer cmdBuffer zero

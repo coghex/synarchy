@@ -18,6 +18,10 @@ newQueue = Queue <$> STM.atomically newTQueue
 writeQueue ∷ Queue α → α → IO ()
 writeQueue q val = STM.atomically $ writeTQueue (queueTQueue q) val
 
+-- | Read a value from a queue, blocking if empty
+readQueue ∷ Queue α → IO α
+readQueue q = STM.atomically $ readTQueue (queueTQueue q)
+
 -- | Try to read from a queue, returning Nothing if empty
 tryReadQueue ∷ Queue α → IO (Maybe α)
 tryReadQueue q = STM.atomically $ tryReadTQueue (queueTQueue q)

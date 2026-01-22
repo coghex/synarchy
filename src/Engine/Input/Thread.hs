@@ -56,25 +56,21 @@ runInputLoop env stateRef = do
     ThreadRunning → do
         -- Start frame timing
         frameStart ← getCurrentTime
-        
         -- Process all pending inputs
         let sharedInputRef = inputStateRef env
         inpSt ← readIORef sharedInputRef
         newInpSt ← processInputs env inpSt
-
         -- write to the shared state
         writeIORef sharedInputRef newInpSt
-        
         -- Calculate frame time and delay to maintain consistent rate
-        frameEnd ← getCurrentTime
-        let diff  = diffUTCTime frameEnd frameStart
-            usecs = floor (toRational diff * 1000000) ∷ Int
-            targetFrameTime = 1000  -- 1ms target frame time
-            delay = targetFrameTime - usecs
-        
-        -- Only delay if we're running faster than target
-        when (delay > 0) $ threadDelay delay
-        
+--        frameEnd ← getCurrentTime
+--        let diff  = diffUTCTime frameEnd frameStart
+--            usecs = floor (toRational diff * 1000000) ∷ Int
+--            targetFrameTime = 16666  -- ~60 FPS
+--            delay = targetFrameTime - usecs
+--        -- Only delay if we're running faster than target
+--        when (delay > 0) $ threadDelay delay
+        threadDelay 16666  -- Fixed delay for ~60 FPS
         -- Continue loop
         runInputLoop env stateRef
 
@@ -113,7 +109,11 @@ processInput env inpSt event = case event of
         -- send mouse events to lua
         let lq = luaQueue env
             (x, y) = pos
-        when (state ≡ GLFW.MouseButtonState'Pressed) $
+        when (state ≡ GLFW.MouseButtonState'Pressed) $ do
+            currentTime ← getCurrentTime
+            let lf = logFunc env
+            lf defaultLoc "input" LevelDebug $
+                "[INPUT " <> (toLogStr (show currentTime)) <> "] Mouse click at " <> (toLogStr (show pos))
             Q.writeQueue lq (LuaMouseDownEvent btn x y)
         when (state ≡ GLFW.MouseButtonState'Released) $
             Q.writeQueue lq (LuaMouseUpEvent btn x y)
