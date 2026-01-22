@@ -71,7 +71,7 @@ layoutText atlas startX startY screenW screenH text color =
                     (u0, v0, u1, v1) = giUVRect glyphInfo
                     -- Position glyph (baseline-aligned)
                     pxX = currentX + bearingX
-                    pxY = startY + bearingY
+                    pxY = startY - bearingY
                     ndcX = pixelToNdcX pxX
                     ndcY = pixelToNdcY pxY
                     ndcW = pixelToNdcW w
