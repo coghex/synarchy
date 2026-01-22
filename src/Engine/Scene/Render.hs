@@ -46,16 +46,13 @@ updateSceneForRender = do
                 let updatedGraph = updateWorldTransforms graph
                 let allNodes = Map.elems (sgNodes updatedGraph)
                     textNodes = filter (\n → nodeType n ≡ TextObject && nodeVisible n) allNodes
-                logDebug $ "Text nodes in scene: " ⧺ (show (length textNodes))
                 textRenderBatches ← collectTextBatches updatedGraph
-                logDebug $ "Text render batches collected" ⧺ show (V.length textRenderBatches)
                 let simpleBatches = convertToTextBatches textRenderBatches
-                logDebug $ "simple text batches: " ⧺ show (V.length simpleBatches)
-                forM_ simpleBatches $ \batch → do
-                  logDebug $ "  Batch font=" ⧺ show (tbFontHandle batch) ⧺
-                             " instances=" ⧺ show (V.length (tbInstances batch))
+                let finalSceneMgr = updatedSceneMgr 
+                                        { smSceneGraphs = Map.insert sceneId updatedGraph (smSceneGraphs updatedSceneMgr) }
                 modify $ \s → s { graphicsState = (graphicsState s) 
-                                    { textBatchQueue = simpleBatches } }
+                                    { textBatchQueue = simpleBatches }
+                                , sceneManager = finalSceneMgr }
             Nothing → logDebug "No active scene graph found"
         Nothing → logDebug "No active scene to collect text batches from"
     -- Store updated scene manager

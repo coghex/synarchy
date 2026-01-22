@@ -5,7 +5,6 @@ module Engine.Graphics.Font.Draw
     , createFontTextureLayout
     , drawText
     , layoutText
-    , renderTextBatches
     , cleanupPendingInstanceBuffers
     ) where
 
@@ -130,96 +129,6 @@ createInstanceBuffer device pDevice instances = do
     
     pure (buffer, memory)
 
------------------------------------------------------------
--- Rendering
------------------------------------------------------------
-
-renderTextBatches ∷ CommandBuffer → EngineM ε σ ()
-renderTextBatches cmdBuffer = do
-    state ← gets graphicsState
-    let batches = textBatchQueue state
-    
-    unless (V.null batches) $ do
-      case fontPipeline state of
-        Nothing → throwGraphicsError FontError "Font pipeline not initialized"
-        Just (pipeline, layout) → do
-          cmdBindPipeline cmdBuffer PIPELINE_BIND_POINT_GRAPHICS pipeline
-          logDebug "font pipeline bound for text rendering"
---          case fontQuadBuffer state of
---              Nothing → throwGraphicsError FontError "Font quad buffer not initialized"
---              Just (quadBuffer, _) → do
---                  -- Collect all instance buffers created this frame
---                  newBuffers ← V.foldM' (\acc batch → do
---                      maybeBuffer ← renderTextBatch cmdBuffer quadBuffer layout batch
---                      case maybeBuffer of
---                          Nothing → pure acc
---                          Just buf → pure $ V.snoc acc buf
---                    ) V.empty batches
---                  
---                  -- Store instance buffers so they survive until next frame
---                  modify $ \s → s 
---                      { graphicsState = (graphicsState s) 
---                          { pendingInstanceBuffers = 
---                              pendingInstanceBuffers (graphicsState s) <> newBuffers 
---                          }
---                      }
---    
-    -- Clear the text batch queue
-    modify $ \s → s 
-        { graphicsState = (graphicsState s) { textBatchQueue = V.empty } }
-
--- | Render a single text batch, returns the instance buffer if one was created
-renderTextBatch ∷ CommandBuffer → Buffer → PipelineLayout → TextBatch 
-                → EngineM ε σ (Maybe (Buffer, DeviceMemory))
-renderTextBatch cmdBuffer quadBuffer layout batch = do
-    state ← gets graphicsState
-    device ← case vulkanDevice state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No device"
-        Just d → pure d
-    pDevice ← case vulkanPDevice state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No physical device"
-        Just pd → pure pd
-    
-    let instances = tbInstances batch
-    if V.null instances
-        then pure Nothing
-        else do
-            -- Create instance buffer (kept alive until next frame)
-            instanceBuf@(instanceBuffer, _) ← createInstanceBuffer device pDevice instances
-            
-            -- Bind vertex buffers (quad + instances)
-            cmdBindVertexBuffers cmdBuffer 0 
-                (V.fromList [quadBuffer, instanceBuffer])
-                (V.fromList [0, 0])
-            
-            -- Bind font atlas descriptor set
-            let cache = fontCache state
-            case Map.lookup (tbFontHandle batch) (fcFonts cache) of
-                Nothing → do
-                    throwGraphicsError FontError "Invalid font handle in batch"
-                Just atlas → do
-                    case faDescriptorSet atlas of
-                        Nothing → throwGraphicsError FontError "Font atlas has no descriptor set"
-                        Just descSet → do
-                            -- Bind descriptor sets (uniform at set 0, texture at set 1)
-                            descState ← gets (descriptorState . graphicsState)
-                            case descState of
-                                Just manager → do
-                                    let uniformSet = V.head (dmActiveSets manager)
-                                    cmdBindDescriptorSets cmdBuffer 
-                                        PIPELINE_BIND_POINT_GRAPHICS 
-                                        layout 
-                                        0  -- First set
-                                        (V.fromList [uniformSet, descSet])
-                                        V.empty
-                                Nothing → throwGraphicsError FontError "No descriptor manager"
-                            
-                            -- Draw instanced
-                            let instanceCount = fromIntegral $ V.length instances
-                            cmdDraw cmdBuffer 6 instanceCount 0 0  -- 6 vertices, N instances
-            
-            -- Return the buffer so it can be tracked
-            pure $ Just instanceBuf
 
 -----------------------------------------------------------
 -- Pipeline Creation

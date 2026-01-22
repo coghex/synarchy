@@ -146,7 +146,6 @@ library
                      Engine.Graphics.Vulkan.Framebuffer
                      Engine.Graphics.Vulkan.Image
                      Engine.Graphics.Vulkan.Instance
-                     Engine.Graphics.Vulkan.InstanceBuffer
                      Engine.Graphics.Vulkan.Pipeline
                      Engine.Graphics.Vulkan.Sampler
                      Engine.Graphics.Vulkan.Shader

@@ -194,8 +194,6 @@ uploadFontAtlasToGPU atlas = do
         pixels = faAtlasBitmap atlas
         queue = graphicsQueue queues
 
-    logDebug $ "Uploading font atlas to GPU: " ⧺ (show width) ⧺ "x" ⧺ (show height)
-    
     -- Create grayscale texture
     (texHandle, descSet, imgView, samp) ← createFontTextureGrayscale device pDevice
                                             cmdPool queue width height pixels
@@ -222,8 +220,6 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
     liftIO $ pokeArray (castPtr dataPtr) pixels
     unmapMemory device stagingMemory
     
-    logDebug "Staging buffer created and filled"
-    
     -- 3. Create GPU image
     image ← createVulkanImage device pDevice
         (fromIntegral width, fromIntegral height)
@@ -231,8 +227,6 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
         IMAGE_TILING_OPTIMAL
         (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-    
-    logDebug "GPU image created"
     
     -- 4. Transition and copy
     runCommandsOnce device cmdPool queue $ \cmdBuf → do
@@ -258,17 +252,11 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
         transitionImageLayout cmdBuf (viImage image) FORMAT_R8_UNORM
             IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     
-    logDebug "Image data copied and layout transitioned"
-    
     -- 5. Create image view
     imageView ← createVulkanImageView device image FORMAT_R8_UNORM IMAGE_ASPECT_COLOR_BIT
     
-    logDebug "Image view created"
-    
     -- 6. Create sampler
     sampler ← createFontTextureSampler device
-    
-    logDebug "Sampler created"
     
     -- 7. Create font-specific descriptor set layout (WITHOUT allocResource - it needs to persist)
     let fontSamplerBinding = zero
@@ -284,8 +272,6 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
     
     -- Create WITHOUT allocResource - the descriptor set needs this layout to remain valid
     fontTextureLayout ← createDescriptorSetLayout device fontLayoutInfo Nothing
-    
-    logDebug "Font texture layout created"
     
     -- 8. Allocate and update descriptor set
     state ← get
@@ -317,8 +303,6 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels = do
                   }
             
             updateDescriptorSets device (V.singleton writeDescriptorSet) V.empty
-            
-            logDebug "Font descriptor set allocated and updated"
             
             -- Generate handle
             pool ← gets assetPool

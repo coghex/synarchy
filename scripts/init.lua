@@ -23,13 +23,7 @@ function init()
     font = engine.loadFont("assets/fonts/ChrustyRock-ORLA.ttf", 32)
     if font then
         engine.logInfo("Font loaded successfully")
-        engine.spawnText(textId,50,50,font,"hello, scene graph")
-          local w, h = engine.getWindowSize()
-          local centerX = w / 2
-          local centerY = h / 2
-          
-          engine.logInfo("Spawning text at center: " .. centerX .. ", " .. centerY)
-          local textId = engine.spawnText(1, centerX, centerY, fontHandle, "HELLO WORLD")
+        engine.spawnText(textId,0.0,0.0,font,"hello, scene graph")
     else
         engine.logError("Failed to load font")
     end

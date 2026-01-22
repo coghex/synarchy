@@ -288,14 +288,12 @@ main = do
                             pipelineState = Just (pstate) } }
 
         -- create a pipeline for fonts
-        logDebug "creating font pipeline..."
         (fontPipe, fontPipeLayout) ← createFontPipeline device renderPass
                                        (siSwapExtent swapInfo) uniformLayout
         logDebug $ "Font Pipeline: " ⧺ show fontPipe
         modify $ \s → s { graphicsState = (graphicsState s) {
                             fontPipeline = Just (fontPipe, fontPipeLayout) } }
         -- create shared quad buffer for text rendering
-        logDebug "creating font quad buffer..."
         quadBuf ← createFontQuadBuffer device physicalDevice
                       (graphicsQueue queues) cmdPool
         logDebug $ "Font Quad Buffer: " ⧺ show quadBuf
@@ -330,19 +328,16 @@ shutdownEngine ∷ Window → ThreadState → ThreadState → EngineM' EngineEnv
 shutdownEngine (Window win) its lts = do
     logDebug "Engine cleaning up..."
     state ← gets graphicsState
-
     modify $ \s → s { graphicsState = (graphicsState s) {
                           textBatchQueue = V.empty }
                     , sceneManager = (sceneManager s) {
                           smBatchManager = createBatchManager } }
     -- Wait for Vulkan device to idle before resource cleanup
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
-
     -- glfw cleanup, stopping polling first
     liftIO $ GLFW.postEmptyEvent
     GLFW.setWindowShouldClose win True
     liftIO $ clearGLFWCallbacks win
-
     -- Wait for input thread to finish
     env ← ask
     -- Signal thread to stop
@@ -351,10 +346,8 @@ shutdownEngine (Window win) its lts = do
     -- cleanup lua thread
     logDebug "Shutting down Lua thread..."
     liftIO $ shutdownThread lts
-
     -- Transition to stopped state
     liftIO $ writeIORef (lifecycleRef env) EngineStopped
-    logDebug "Engine shutdown complete."
 
 checkStatus ∷ Either EngineException () → IO (Either EngineException ())
 checkStatus (Right ()) = pure (Right ())
@@ -367,16 +360,10 @@ initializeTextures ∷ Device → PhysicalDevice → CommandPool → Queue
   → EngineM' EngineEnv ()
 initializeTextures device physicalDevice cmdPool queue
                    descriptorPool textureLayout = do
- 
   -- Update engine state with pool and layout
   let poolState = TexturePoolState descriptorPool textureLayout
   modify $ \s → s { graphicsState = (graphicsState s) {
                       textureState = (poolState, V.empty) } }
-
-  -- Initialize asset manager
-  --assetPool <- initAssetManager (AssetConfig 100 100 True True)
-  --modify $ \s → s { assetPool = assetPool }
-
   -- Create descriptor set for texture array
   let allocInfo = zero 
         { descriptorPool = descriptorPool
@@ -620,10 +607,8 @@ drawFrame = do
 
     -- reset and record command buffer
     liftIO $ resetCommandBuffer cmdBuffer zero
-    logDebug "about to call recordSceneCommandBuffer"
     recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex)
                              dynamicBuffer batches textBatches
-    logDebug "recordSceneCommandBuffer returned successfully, about to submit work"
 
     -- submit work
     let waitStages = V.singleton PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
@@ -638,20 +623,16 @@ drawFrame = do
         Nothing → throwGraphicsError VulkanDeviceLost "No queues"
         Just q → pure q
     
-    logDebug "submitting to graphics queue"
     liftIO $ queueSubmit (graphicsQueue queues)
                (V.singleton $ SomeStruct submitInfo)
                $ frInFlight resources
-    logDebug "submission to graphics queue complete"
 
     -- Present
-    logDebug "about to present image"
     let presentInfo = zero
             { waitSemaphores = V.singleton $ frRenderFinished resources
             , swapchains = V.singleton swapchain
             , imageIndices = V.singleton imageIndex
             }
-    logDebug "calling queuePresentKHR"
     
     presentResult ← liftIO $ queuePresentKHR (presentQueue queues) presentInfo
     case presentResult of
@@ -660,13 +641,11 @@ drawFrame = do
         err → throwGraphicsError SwapchainError $
                 T.pack $ "Failed to present image: " ⧺ show err
     
-    logDebug "image presented successfully"
     -- Update frame index
     modify $ \s → s { graphicsState = (graphicsState s) {
                         currentFrame = (currentFrame (graphicsState s) + 1)
                                          `mod` fromIntegral
                                          (gcMaxFrames defaultGraphicsConfig) } }
-    logDebug "drawFrame complete"
 
 getCurTime ∷ IO Double
 getCurTime = do
