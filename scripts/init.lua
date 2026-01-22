@@ -23,7 +23,7 @@ function init()
     font = engine.loadFont("assets/fonts/ChrustyRock-ORLA.ttf", 32)
     if font then
         engine.logInfo("Font loaded successfully")
-        engine.spawnText(textId,0.0,0.0,font,"hello, scene graph")
+        engine.spawnText(textId,100,100,font,"hello, scene graph")
     else
         engine.logError("Failed to load font")
     end
