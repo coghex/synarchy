@@ -38,15 +38,9 @@ function update(dt)
 end
 
 function onMouseDown(button, x, y)
-    engine.logInfo("=== onMouseDown ===")
-    engine.logInfo("Button: " .. button .. " x=" .. x .. " y=" .. y)
     local w, h = engine.getWindowSize()
-    engine.logInfo("Window Size: " .. w .. "x" .. h)
     local worldX, worldY = engine.getWorldCoord(x, y)
-    engine.logInfo("World Coord: x=" .. worldX .. " y=" .. worldY)
-    engine.logInfo("Texture handle: " .. tostring(tex))
     local objId = engine.spawnSprite(worldX, worldY, 0.1, 0.1, tex)
-    engine.logInfo("Spawned sprite with ID: " .. objId)
 end
 
 function onMouseUp(button, x, y)
