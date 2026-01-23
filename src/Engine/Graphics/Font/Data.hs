@@ -5,7 +5,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Data.Word (Word8, Word32)
 import Engine.Asset.Types (TextureHandle, FontHandle, GlyphInfo)
-import Engine.Scene.Base (ObjectId)
+import Engine.Scene.Base (ObjectId, LayerId)
 import Foreign.Storable (peekByteOff, pokeByteOff, Storable(..))
 import Vulkan.Core10
 
@@ -28,6 +28,7 @@ data FontAtlas = FontAtlas
 data TextBatch = TextBatch
   { tbFontHandle   ∷ FontHandle
   , tbInstances    ∷ V.Vector GlyphInstance
+  , tbLayer        ∷ LayerId
   } deriving (Eq, Show)
 
 data GlyphInstance = GlyphInstance

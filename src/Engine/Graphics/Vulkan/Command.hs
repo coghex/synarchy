@@ -33,6 +33,7 @@ import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Font.Data
+import Engine.Scene.Base
 import Engine.Scene.Types
 import Foreign.Storable (sizeOf, pokeElemOff)
 import Foreign.Ptr (castPtr)
@@ -226,9 +227,9 @@ allocateVulkanCommandBuffer device cmdPool = do
 -- | Record scene command buffer with sprite and text batches
 -- Text batches are rendered INSIDE the render pass, before it ends
 recordSceneCommandBuffer ∷ CommandBuffer → Word64 → SceneDynamicBuffer 
-                         → V.Vector RenderBatch → V.Vector TextBatch 
+                         → Map.Map LayerId (V.Vector RenderItem)
                          → EngineM ε σ ()
-recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer batches textBatches = do
+recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
     state ← gets graphicsState
     
     -- Validate required state components
@@ -257,7 +258,7 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer batches textBatches = do
     pDevice ← maybe (throwGraphicsError VulkanDeviceLost "No physical device")
                     pure
                     (vulkanPDevice state)
-    
+
     -- Begin command buffer
     let beginInfo = (zero ∷ CommandBufferBeginInfo '[])
                       { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
@@ -295,88 +296,91 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer batches textBatches = do
     cmdSetViewport cmdBuf 0 (V.singleton viewport)
     cmdSetScissor cmdBuf 0 (V.singleton scissor)
     
-    -- Bind descriptor sets for sprites
-    descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
-                       pure 
-                       (descriptorState state)
+    -- Track vertex offset for sprite drawing
+    vertexOffsetRef ← liftIO $ newIORef (0 ∷ Word32)
     
-    let (TexturePoolState descPool descLayout, textures) = textureState state
-    textureArray ← case Map.lookup "default" (textureArrayStates state) of
-        Nothing → throwGraphicsError TextureLoadFailed "No texture array state found"
-        Just arr → pure arr
-    
-    let uniformSet = V.head $ dmActiveSets descManager
-    textureSet ← case (tasDescriptorSet textureArray) of
-          Nothing → (throwGraphicsError DescriptorError "No texture descriptor set")
-          Just set → pure set
-    
-    let descriptorSets = V.fromList [uniformSet, textureSet]
-    cmdBindDescriptorSets cmdBuf 
-        PIPELINE_BIND_POINT_GRAPHICS
-        (psPipelineLayout pState)
-        0
-        descriptorSets
-        V.empty
-    
-    -- Bind dynamic vertex buffer for sprites
-    cmdBindVertexBuffers cmdBuf 
-        0  -- First binding
-        (V.singleton (sdbBuffer dynamicBuffer))
-        (V.singleton 0)  -- Offsets
-    
-    -- Draw all sprite batches
-    currentVertexOffset ← liftIO $ newIORef (0 ∷ Word32)
-    V.forM_ batches $ \batch → do
-        offset ← liftIO $ readIORef currentVertexOffset
-        let vertexCount = fromIntegral $ V.length $ rbVertices batch
+    -- Render each layer in order
+    forM_ (Map.toAscList layeredBatches) $ \(layerId, items) → do
+        -- Render sprites in this layer
+        let spriteBatches = V.fromList [b | SpriteItem b ← V.toList items]
         
-        -- Draw this batch
-        cmdDraw cmdBuf
-            vertexCount  -- vertex count
-            1           -- instance count  
-            offset      -- first vertex
-            0           -- first instance
+        unless (V.null spriteBatches) $ do
+            -- Bind sprite pipeline
+            cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS (psPipeline pState)
+            cmdSetViewport cmdBuf 0 (V.singleton viewport)
+            cmdSetScissor cmdBuf 0 (V.singleton scissor)
+            
+            -- Bind descriptor sets
+            descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
+                               pure 
+                               (descriptorState state)
+            
+            let (TexturePoolState descPool descLayout, textures) = textureState state
+            textureArray ← case Map.lookup "default" (textureArrayStates state) of
+                Nothing → throwGraphicsError TextureLoadFailed "No texture array state found"
+                Just arr → pure arr
+            
+            let uniformSet = V.head $ dmActiveSets descManager
+            textureSet ← case (tasDescriptorSet textureArray) of
+                  Nothing → (throwGraphicsError DescriptorError "No texture descriptor set")
+                  Just set → pure set
+            
+            let descriptorSets = V.fromList [uniformSet, textureSet]
+            cmdBindDescriptorSets cmdBuf 
+                PIPELINE_BIND_POINT_GRAPHICS
+                (psPipelineLayout pState)
+                0
+                descriptorSets
+                V.empty
+            
+            -- Bind vertex buffer
+            cmdBindVertexBuffers cmdBuf 0
+                (V.singleton (sdbBuffer dynamicBuffer))
+                (V.singleton 0)
+            
+            -- Draw sprite batches
+            V.forM_ spriteBatches $ \batch → do
+                offset ← liftIO $ readIORef vertexOffsetRef
+                let vertexCount = fromIntegral $ V.length $ rbVertices batch
+                cmdDraw cmdBuf vertexCount 1 offset 0
+                liftIO $ modifyIORef vertexOffsetRef (+ vertexCount)
         
-        -- Update offset for next batch
-        liftIO $ modifyIORef currentVertexOffset (+ vertexCount)
-    
-    -- ========================================
-    -- RENDER TEXT BATCHES (inside render pass)
-    -- ========================================
-    unless (V.null textBatches) $ do
-        case (fontPipeline state, fontQuadBuffer state) of
-            (Just (pipeline, layout), Just (quadBuffer, _)) → do
-                -- Bind font pipeline
-                cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS pipeline
-                
-                -- Reset viewport and scissor (same as before)
-                cmdSetViewport cmdBuf 0 (V.singleton viewport)
-                cmdSetScissor cmdBuf 0 (V.singleton scissor)
-                
-                -- Render each text batch
-                !newBuffers ← V.foldM' (\acc batch → do
-                    maybeBuffer ← renderTextBatchInline cmdBuf device pDevice 
-                                                        quadBuffer layout batch state
-                    case maybeBuffer of
-                        Nothing → do
-                          pure acc
-                        Just !buf → do
-                          let !newAcc = V.snoc acc buf
-                          pure newAcc
-                  ) V.empty textBatches
-                
-                -- Store instance buffers so they survive until next frame
-                modify $ \s → s 
-                    { graphicsState = (graphicsState s) 
-                        { pendingInstanceBuffers = 
-                            pendingInstanceBuffers (graphicsState s) <> newBuffers 
+        -- Render text in this layer
+        let textItems = V.fromList [b | TextItem b ← V.toList items]
+        
+        unless (V.null textItems) $ do
+            case (fontPipeline state, fontQuadBuffer state) of
+                (Just (pipeline, layout), Just (quadBuffer, _)) → do
+                    cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS pipeline
+                    cmdSetViewport cmdBuf 0 (V.singleton viewport)
+                    cmdSetScissor cmdBuf 0 (V.singleton scissor)
+                    
+                    descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
+                                       pure 
+                                       (descriptorState state)
+                    let uniformSet = V.head $ dmActiveSets descManager
+                    
+                    !newBuffers ← V.foldM' (\acc trb → do
+                        let textBatch = TextBatch 
+                              { tbFontHandle = trbFont trb
+                              , tbInstances = trbInstances trb
+                              , tbLayer = trbLayer trb
+                              }
+                        maybeBuffer ← renderTextBatchInline cmdBuf device pDevice 
+                                                            quadBuffer layout textBatch state
+                        case maybeBuffer of
+                            Nothing → pure acc
+                            Just !buf → pure $ V.snoc acc buf
+                      ) V.empty textItems
+                    
+                    modify $ \s → s 
+                        { graphicsState = (graphicsState s) 
+                            { pendingInstanceBuffers = 
+                                pendingInstanceBuffers (graphicsState s) <> newBuffers 
+                            }
                         }
-                    }
-            _ → pure ()
-    
-    -- Clear the text batch queue
-    modify $ \s → s 
-        { graphicsState = (graphicsState s) { textBatchQueue = V.empty } }
+                _ → pure ()
+
     -- End render pass and command buffer
     cmdEndRenderPass cmdBuf
     endVulkanCommandBuffer cmdBuf

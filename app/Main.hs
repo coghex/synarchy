@@ -329,9 +329,7 @@ shutdownEngine ∷ Window → ThreadState → ThreadState → EngineM' EngineEnv
 shutdownEngine (Window win) its lts = do
     logDebug "Engine cleaning up..."
     state ← gets graphicsState
-    modify $ \s → s { graphicsState = (graphicsState s) {
-                          textBatchQueue = V.empty }
-                    , sceneManager = (sceneManager s) {
+    modify $ \s → s { sceneManager = (sceneManager s) {
                           smBatchManager = createBatchManager } }
     -- Wait for Vulkan device to idle before resource cleanup
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
@@ -419,7 +417,7 @@ processLuaMessages = do
             let etlq = luaQueue env
             liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
 
-          LuaSpawnTextRequest oid x y fontHandle text → do
+          LuaSpawnTextRequest oid x y fontHandle text layer → do
             sceneMgr ← gets sceneManager
             case smActiveScene sceneMgr of
               Just sceneId → do
@@ -430,6 +428,7 @@ processLuaMessages = do
                       , nodeText = Just text
                       , nodeColor = Vec4 1 1 1 1
                       , nodeVisible = True
+                      , nodeLayer = layer
                       }
                 case addObjectToScene sceneId node sceneMgr of
                   Just (addedObjId, newSceneMgr) → do
@@ -440,13 +439,14 @@ processLuaMessages = do
                                      ⧺ show oid ⧺ " to scene"
               Nothing → logDebug "cannot draw text: no active scene"
 
-          LuaSpawnSpriteRequest objId x y width height texHandle → do
+          LuaSpawnSpriteRequest objId x y width height texHandle layer → do
             logDebug $ "Spawning sprite id=" ⧺ show objId ⧺
                        " pos=(" ⧺ show x ⧺ ", " ⧺ show y ⧺ ")" ⧺
                        " size=(" ⧺ show width ⧺ ", " ⧺ show height ⧺ ")" ⧺
                        " tex=" ⧺ show texHandle
             -- get active scene
             sceneMgr ← gets sceneManager
+
             case smActiveScene sceneMgr of
               Just sceneId → do
                 let node = (createSceneNode SpriteObject)
@@ -456,6 +456,7 @@ processLuaMessages = do
                       , nodeSize = (width, height)
                       , nodeColor = Vec4 1 1 1 1
                       , nodeVisible = True
+                      , nodeLayer = layer
                       }
                 -- add to scene graph
                 case addObjectToScene sceneId node sceneMgr of
@@ -538,7 +539,8 @@ drawFrame = do
     -- update scene for this frame
     updateSceneForRender
     state' ← gets graphicsState
-    let textBatches = textBatchQueue state'
+    sceneMgr ← gets sceneManager
+    let layeredBatches = bmLayeredBatches $ smBatchManager $ sceneMgr
     batches ← getCurrentRenderBatches
     -- update uniform buffer
     case (vulkanDevice state, uniformBuffers state) of
@@ -614,7 +616,7 @@ drawFrame = do
     -- reset and record command buffer
     liftIO $ resetCommandBuffer cmdBuffer zero
     recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex)
-                             dynamicBuffer batches textBatches
+                             dynamicBuffer layeredBatches
 
     -- submit work
     let waitStages = V.singleton PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT

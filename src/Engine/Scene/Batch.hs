@@ -91,7 +91,8 @@ collectVisibleObjects graph camera viewWidth viewHeight =
 convertToTextBatches ∷ V.Vector TextRenderBatch → V.Vector TextBatch
 convertToTextBatches = V.map $ \trb → TextBatch
     { tbFontHandle = trbFont trb
-    , tbInstances = trbInstances trb }
+    , tbInstances = trbInstances trb
+    , tbLayer = trbLayer trb }
 
 -- | Check if a node is visible within camera frustum
 isNodeVisible ∷ Camera2D → Float → Float → SceneNode → Bool
@@ -177,6 +178,14 @@ updateBatches objects manager =
         , bmDirtyBatches = dirtyKeys
         }
 
+-- | update batch manager with thext batches
+updateTextBatches ∷ V.Vector TextRenderBatch → BatchManager → BatchManager
+updateTextBatches textBatches manager =
+    let groupedText = V.foldl' (\acc trb →
+            let key = (trbFont trb, trbLayer trb)
+            in Map.insert key trb acc) Map.empty textBatches
+    in manager { bmTextBatches = groupedText }
+
 -- | Group drawable objects by texture and layer
 groupByTextureAndLayer ∷ V.Vector DrawableObject → [((TextureHandle, LayerId), V.Vector DrawableObject)]
 groupByTextureAndLayer objects =
@@ -215,3 +224,31 @@ getSortedBatches manager =
                 (rbObjects batch)
             zIndices = V.map doZIndex objects
         in if V.null zIndices then 0.0 else V.sum zIndices / fromIntegral (V.length zIndices)
+
+-- | Build layered batches from sprite and text batches
+buildLayeredBatches ∷ BatchManager → BatchManager
+buildLayeredBatches manager =
+    let -- Get all sprite batches sorted by (layer, zIndex)
+        sortedSprites = getSortedBatches manager
+        
+        -- Get all text batches sorted by layer
+        sortedText = List.sortOn trbLayer $ Map.elems (bmTextBatches manager)
+        
+        -- Group sprites by layer
+        spriteLayers = V.foldl' (\acc batch →
+            let layer = rbLayer batch
+                existing = Map.findWithDefault V.empty layer acc
+            in Map.insert layer (V.snoc existing (SpriteItem batch)) acc
+          ) Map.empty sortedSprites
+        
+        -- Group text by layer
+        textLayers = foldl' (\acc batch →
+            let layer = trbLayer batch
+                existing = Map.findWithDefault V.empty layer acc
+            in Map.insert layer (V.snoc existing (TextItem batch)) acc
+          ) Map.empty sortedText
+        
+        -- Merge sprite and text layers
+        allLayers = Map.unionWith (V.++) spriteLayers textLayers
+        
+    in manager { bmLayeredBatches = allLayers }

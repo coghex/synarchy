@@ -51,19 +51,16 @@ updateSceneForRender = do
         Just sceneId → case Map.lookup sceneId (smSceneGraphs updatedSceneMgr) of
             Just graph → do
                 let updatedGraph = updateWorldTransforms graph
-                let allNodes = Map.elems (sgNodes updatedGraph)
-                    textNodes = filter (\n → nodeType n ≡ TextObject && nodeVisible n) allNodes
                 textRenderBatches ← collectTextBatches updatedGraph screenW screenH
-                let simpleBatches = convertToTextBatches textRenderBatches
-                let finalSceneMgr = updatedSceneMgr 
-                                        { smSceneGraphs = Map.insert sceneId updatedGraph (smSceneGraphs updatedSceneMgr) }
-                modify $ \s → s { graphicsState = (graphicsState s) 
-                                    { textBatchQueue = simpleBatches }
-                                , sceneManager = finalSceneMgr }
-            Nothing → logDebug "No active scene graph found"
-        Nothing → logDebug "No active scene to collect text batches from"
-    -- Store updated scene manager
-    modify $ \s → s { sceneManager = updatedSceneMgr }
+                let updatedBatchMgr = updateTextBatches textRenderBatches (smBatchManager updatedSceneMgr)
+                    simpleBatches = convertToTextBatches textRenderBatches
+                    finalBatchMgr = buildLayeredBatches updatedBatchMgr
+                    finalSceneMgr = updatedSceneMgr 
+                                        { smSceneGraphs = Map.insert sceneId updatedGraph (smSceneGraphs updatedSceneMgr)
+                                        , smBatchManager = finalBatchMgr }
+                modify $ \s → s { sceneManager = finalSceneMgr }
+            Nothing → modify $ \s → s { sceneManager = updatedSceneMgr }
+        Nothing → modify $ \s → s { sceneManager = updatedSceneMgr }
 
 -- | Get current render batches from scene
 getCurrentRenderBatches ∷ EngineM ε σ (V.Vector RenderBatch)

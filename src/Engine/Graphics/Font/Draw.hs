@@ -3,7 +3,6 @@ module Engine.Graphics.Font.Draw
     ( createFontPipeline
     , createFontQuadBuffer
     , createFontTextureLayout
-    , drawText
     , layoutText
     , cleanupPendingInstanceBuffers
     ) where
@@ -16,6 +15,7 @@ import Engine.Core.State
 import Engine.Core.Resource
 import Engine.Core.Error.Exception
 import Engine.Scene.Types
+import Engine.Scene.Base
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer, copyBuffer)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
@@ -36,17 +36,6 @@ import Vulkan.CStruct.Extends
 -----------------------------------------------------------
 -- Text Rendering API
 -----------------------------------------------------------
-
--- | Draw text at position (Lua-facing API)
-drawText ∷ Float → Float → Float → Float → FontHandle → Text → EngineM ε σ ()
-drawText x y screenW screenH fontHandle text = do
-    gs ← gets graphicsState
-    let cache = fontCache gs
-    case Map.lookup fontHandle (fcFonts cache) of
-        Nothing → throwGraphicsError FontError $ "Invalid font handle: " <> T.pack (show fontHandle)
-        Just atlas → do
-            let instances = layoutText atlas x y screenW screenH text (1.0, 1.0, 1.0, 1.0)  -- White TODO: Color
-            addTextBatch fontHandle instances
 
 -- | Layout text into glyph instances (converts pixels to world coords)
 -- TODO: text with its own coordinated UBO transform would probably be a better
@@ -85,16 +74,6 @@ layoutText atlas startX startY screenW screenH text color =
                     
                     nextX = currentX + giAdvance glyphInfo
                 in (nextX, instance' : acc)
-
--- | Add text batch to render queue
-addTextBatch ∷ FontHandle → V.Vector GlyphInstance → EngineM ε σ ()
-addTextBatch fontHandle instances = do
-    let batch = TextBatch fontHandle instances
-    modify $ \s → s 
-        { graphicsState = (graphicsState s) 
-            { textBatchQueue = V.snoc (textBatchQueue $ graphicsState s) batch 
-            }
-        }
 
 -----------------------------------------------------------
 -- Instance Buffer Management

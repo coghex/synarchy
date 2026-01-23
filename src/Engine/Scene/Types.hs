@@ -14,6 +14,12 @@ import Engine.Graphics.Camera
 import Engine.Graphics.Font.Data
 import Linear (M44)
 
+-- | Unified render item for layer-based rendering
+data RenderItem
+  = SpriteItem RenderBatch
+  | TextItem TextRenderBatch
+  deriving (Show)
+
 -- | Core scene object representation
 data SceneObject = SceneObject
     { objId       ∷ ObjectId
@@ -155,6 +161,7 @@ data BatchManager = BatchManager
     , bmTextBatches  ∷ Map.Map (FontHandle, LayerId) TextRenderBatch
     , bmVisibleObjs  ∷ V.Vector DrawableObject
     , bmDirtyBatches ∷ Set.Set (TextureHandle, LayerId)
+    , bmLayeredBatches ∷ Map.Map LayerId (V.Vector RenderItem)
     } deriving (Show)
 
 -- | Create empty batch manager
@@ -164,6 +171,7 @@ createBatchManager = BatchManager
     , bmTextBatches = Map.empty
     , bmVisibleObjs = V.empty
     , bmDirtyBatches = Set.empty
+    , bmLayeredBatches = Map.empty
     }
 
 

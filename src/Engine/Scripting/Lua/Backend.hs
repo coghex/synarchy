@@ -93,7 +93,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.loadTexture(path)
   Lua.pushHaskellFunction (loadTextureFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "loadTexture")
-  -- engine.spawnSprite(x, y, width, height, textureHandle)
+  -- engine.spawnSprite(x, y, width, height, textureHandle, layer)
   Lua.pushHaskellFunction (spawnSpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "spawnSprite")
   -- engine.moveSprite(objectId, x, y)
@@ -129,7 +129,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.loadFont(path, size)
   Lua.pushHaskellFunction (loadFontFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "loadFont")
-  -- engine.spawnText(x,y,fontHandle,text)
+  -- engine.spawnText(x,y,fontHandle,text,layer)
   Lua.pushHaskellFunction (spawnTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "spawnText")
   -- set global 'engine' table
@@ -142,6 +142,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
         Just bs → Lua.liftIO $ lf defaultLoc "lua" LevelInfo (toLogStr $ TE.decodeUtf8 bs)
         Nothing → return ()
       return 0
+
     setTickIntervalFn = do
       interval ← Lua.tonumber 1
       case interval of
@@ -166,6 +167,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
               lf defaultLoc "lua" LevelError "setTickInterval called outside of script context."
         Nothing → return ()
       return 0
+
     loadTextureFn = do
       path ← Lua.tostring 1
       case path of
@@ -189,16 +191,19 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
           Lua.pushnumber (Lua.Number (fromIntegral n))
         Nothing → Lua.pushnil
       return 1
+
     spawnSpriteFn = do
       -- Get arguments from Lua stack
-      x <- Lua.tonumber 1
-      y <- Lua.tonumber 2
-      width <- Lua.tonumber 3
-      height <- Lua.tonumber 4
-      texHandleNum <- Lua.tointeger 5
+      x ← Lua.tonumber 1
+      y ← Lua.tonumber 2
+      width ← Lua.tonumber 3
+      height ← Lua.tonumber 4
+      texHandleNum ← Lua.tointeger 5
+      layer ← Lua.tointeger 6
       
       case (x, y, width, height, texHandleNum) of
         (Just xVal, Just yVal, Just wVal, Just hVal, Just texNum) -> do
+          let layerId = LayerId $ fromIntegral $ fromMaybe 0 layer
           -- Generate ObjectId and send message (all in IO)
           objId <- Lua.liftIO $ do
             -- Generate unique ObjectId
@@ -214,6 +219,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
                   , lssWidth         = realToFrac wVal
                   , lssHeight        = realToFrac hVal
                   , lssTextureHandle = texHandle
+                  , lssLayer         = layerId
                   }
             
             -- Send message to main thread
@@ -234,6 +240,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
           Lua.pushnil
       
       return 1
+
     moveSpriteFn = do
       objIdNum ← Lua.tointeger 1
       x ← Lua.tonumber 2
@@ -427,15 +434,17 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
       y ← Lua.tonumber 2
       fontHandleNum ← Lua.tointeger 3
       text ← Lua.tostring 4
+      layer ← Lua.tointeger 5
       case (x,y,fontHandleNum,text) of
         (Just xVal, Just yVal, Just fh, Just textBS) → do
+          let layerId = LayerId $ fromIntegral $ fromMaybe 0 layer
           objId ← Lua.liftIO $ do
             objId ← atomicModifyIORef' (lbsNextObjectId backendState) 
                 (\n -> (n + 1, ObjectId n))
             let fontHandle = FontHandle $ fromIntegral fh
                 textStr = TE.decodeUtf8 textBS
                 msg = LuaSpawnTextRequest objId (realToFrac xVal) (realToFrac yVal)
-                      fontHandle textStr
+                      fontHandle textStr layerId
                 lteq = luaToEngineQueue env
             Lua.liftIO $ Q.writeQueue lteq msg
             return objId
