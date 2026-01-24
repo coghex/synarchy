@@ -36,6 +36,7 @@ module Engine.Graphics.Window.GLFW
     -- * Raw init since tests run in IO
   , GLFW.init
   , GLFW.terminate
+  , GLFW.Window (..)
   ) where
 
 import UPrelude

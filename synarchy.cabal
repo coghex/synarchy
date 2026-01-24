@@ -146,6 +146,7 @@ library
                      Engine.Graphics.Vulkan.Device
                      Engine.Graphics.Vulkan.Framebuffer
                      Engine.Graphics.Vulkan.Image
+                     Engine.Graphics.Vulkan.Init
                      Engine.Graphics.Vulkan.Instance
                      Engine.Graphics.Vulkan.Pipeline
                      Engine.Graphics.Vulkan.Sampler
@@ -165,6 +166,7 @@ library
                      Engine.Graphics.Font.Draw
                      Engine.Graphics.Font.Load
                      Engine.Graphics.Font.STB
+                     Engine.Graphics.Transform
                      Engine.Input.Bindings
                      Engine.Input.Callback
                      Engine.Input.Event
@@ -175,9 +177,11 @@ library
                      Engine.Scripting.Types
                      Engine.Scripting.Lua.Backend
                      Engine.Scripting.Lua.Types
+                     Engine.Scripting.Lua.Message
                      Engine.Scripting.PureScript.Backend
                      Engine.Core.Base
                      Engine.Core.Defaults
+                     Engine.Core.Init
                      Engine.Core.Monad
                      Engine.Core.State
                      Engine.Core.Types
@@ -192,6 +196,7 @@ library
                      Engine.Scene.Graph
                      Engine.Scene.Manager
                      Engine.Scene.Render
+                     Engine.Loop
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields

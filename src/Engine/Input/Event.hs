@@ -5,7 +5,7 @@ import UPrelude
 import qualified Data.Map as Map
 import Data.IORef (writeIORef, readIORef)
 import qualified Graphics.UI.GLFW as GLFW
-import Engine.Core.Monad (MonadIO(liftIO), EngineM')
+import Engine.Core.Monad (MonadIO(liftIO), EngineM)
 import Engine.Input.Thread
 import Engine.Core.Types
 import Engine.Core.State
@@ -16,7 +16,7 @@ import Engine.Graphics.Camera ( Camera2D(..) )
 import Engine.Input.Types
 
 -- | Process all pending input events
-handleInputEvents ∷ EngineM' EngineEnv ()
+handleInputEvents ∷ EngineM ε σ ()
 handleInputEvents = do
     env ← ask
     -- read the shared input state

@@ -5,13 +5,12 @@ module Engine.Graphics.Transform
     , applyTransform
     , combineTransforms
     , Transform2D(..)
-    , defaultTransform
     ) where
 
 import UPrelude
 import Linear
 import qualified Data.Text as T
-import Engine.Scene.Base (Transform2D(..))
+import Engine.Scene.Base (Transform2D(..), defaultTransform)
 
 -- | Create model matrix from 2D transform
 createModelMatrix ∷ Transform2D → M44 Float
@@ -45,6 +44,7 @@ createModelMatrix transform =
                             (V4 0 0 0 1)
 
 -- | Apply one transform to another (for parent-child relationships)
+-- parent child hierarchy is managed by SceneNode.nodeParent in the scene graph
 applyTransform ∷ Transform2D → Transform2D → Transform2D
 applyTransform parentT childT =
     Transform2D
@@ -53,7 +53,6 @@ applyTransform parentT childT =
         , rotation = pr + cr
         , scale = (psx * csx, psy * csy)
         , zIndex = pz + cz
-        , parent = parent childT
         }
   where
     (px, py) = position parentT
@@ -68,13 +67,3 @@ applyTransform parentT childT =
 -- | Combine multiple transforms in order
 combineTransforms ∷ [Transform2D] → Transform2D
 combineTransforms = foldr applyTransform defaultTransform
-
--- | Default transform with identity values
-defaultTransform ∷ Transform2D
-defaultTransform = Transform2D
-    { position = (0, 0)
-    , rotation = 0
-    , scale = (1, 1)
-    , zIndex = 0
-    , parent = Nothing
-    }
