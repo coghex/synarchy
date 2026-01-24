@@ -8,6 +8,7 @@ import qualified Data.Set as Set
 import Engine.Scene.Base
 import Engine.Asset.Base (AssetId)
 import Engine.Asset.Types
+import Engine.Asset.Handle
 import Engine.Graphics.Vulkan.Types.Texture (TextureData)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex, Vec2(..), Vec4(..))
 import Engine.Graphics.Camera

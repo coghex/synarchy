@@ -19,6 +19,7 @@ import System.Directory (getCurrentDirectory)
 import System.FilePath ((</>), takeBaseName)
 import qualified HsLua as Lua
 import Engine.Asset.Types
+import Engine.Asset.Handle
 import Engine.Asset.Manager
 import Engine.Core.Base
 import Engine.Core.Defaults

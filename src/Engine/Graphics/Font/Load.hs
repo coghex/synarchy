@@ -3,6 +3,7 @@ module Engine.Graphics.Font.Load where
 import UPrelude
 import Engine.Asset.Types
 import Engine.Asset.Manager (generateHandle)
+import Engine.Asset.Handle
 import Engine.Graphics.Font.Data
 import Engine.Graphics.Font.STB
 import Engine.Graphics.Types
@@ -10,6 +11,7 @@ import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Vulkan.Image (createVulkanImage, VulkanImage(..), createVulkanImageView)
 import Engine.Graphics.Vulkan.Texture (createTextureSampler, TexturePoolState(..))
+import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends

@@ -12,6 +12,7 @@ import Engine.Scene.Graph
 import Engine.Scene.Types
 import Engine.Asset.Base
 import Engine.Asset.Types
+import Engine.Asset.Handle
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Graphics.Camera
 import Engine.Graphics.Font.Data

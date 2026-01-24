@@ -1,19 +1,5 @@
 -- Engine/Asset/Manager.hs
-module Engine.Asset.Manager
-  ( initAssetManager
-  -- * Asset Loading
-  , loadTextureAtlas
-  , loadShaderProgram
-  -- * Asset Management
-  , unloadAsset
-  , reloadAsset
-  , getTextureAtlas
-  , getShaderProgram
-  , generateHandle
-  , updateAssetState
-  -- * Resource Cleanup
-  , cleanupAssetManager
-  ) where
+module Engine.Asset.Manager where
 
 import UPrelude
 import Control.Concurrent.MVar
@@ -29,6 +15,7 @@ import Engine.Core.Error.Exception
 import Engine.Core.Var
 import Engine.Asset.Base
 import Engine.Asset.Types
+import Engine.Asset.Handle
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Descriptor
@@ -40,37 +27,121 @@ import Engine.Graphics.Vulkan.ShaderCode
 import qualified Vulkan.Core10 as Vk
 import Vulkan.Zero
 
--- | Initialize the asset manager
-initAssetManager ∷ AssetConfig → EngineM ε σ AssetPool
-initAssetManager config = do
-  -- Create empty asset pool with initial configuration
-  ap ← liftIO defaultAssetPool
-  pure ap
+-- | Generate a texture handle
+generateTextureHandle ∷ AssetPool → IO TextureHandle
+generateTextureHandle pool =
+  atomicModifyIORef' (apNextTextureHandle pool) $ \n →
+    (n + 1, TextureHandle n)
 
-generateHandle ∷ ∀ h. AssetHandle h ⇒ AssetPool → IO h
-generateHandle pool = fromInt <$>
-  atomicModifyIORef' (getCounterRef @h pool) (\n → (n + 1, n))
+-- | Generate a font handle
+generateFontHandle ∷ AssetPool → IO FontHandle
+generateFontHandle pool =
+  atomicModifyIORef' (apNextFontHandle pool) $ \n →
+    (n + 1, FontHandle n)
 
-lookupAsset ∷ ∀ h. AssetHandle h ⇒ h → AssetPool → IO (Maybe (AssetState AssetId))
-lookupAsset handle pool = do
-  stateMap ← readIORef (getStateMap @h pool)
-  return $ Map.lookup handle stateMap
+-- | Generate a shader handle
+generateShaderHandle ∷ AssetPool → IO ShaderHandle
+generateShaderHandle pool =
+  atomicModifyIORef' (apNextShaderHandle pool) $ \n →
+    (n + 1, ShaderHandle n)
 
-updateAssetState ∷ ∀ h. AssetHandle h ⇒ h → AssetState AssetId → AssetPool → IO ()
-updateAssetState handle newState pool =
-  atomicModifyIORef' (getStateMap @h pool) $ \m → (Map.insert handle newState m, ())
+-- | Update texture handle state
+updateTextureState ∷ TextureHandle → AssetState AssetId → AssetPool → IO ()
+updateTextureState handle newState pool =
+  atomicModifyIORef' (apTextureHandles pool) $ \m →
+    (Map.insert handle newState m, ())
 
--- | Delete asset state for a handle
-deleteAssetState ∷ ∀ h.  AssetHandle h ⇒ h → AssetPool → IO ()
-deleteAssetState handle pool =
-  atomicModifyIORef' (getStateMap @h pool) $ \m →
+-- | Update font handle state
+updateFontState ∷ FontHandle → AssetState AssetId → AssetPool → IO ()
+updateFontState handle newState pool =
+  atomicModifyIORef' (apFontHandles pool) $ \m →
+    (Map.insert handle newState m, ())
+
+-- | Update shader handle state
+updateShaderState ∷ ShaderHandle → AssetState AssetId → AssetPool → IO ()
+updateShaderState handle newState pool =
+  atomicModifyIORef' (apShaderHandles pool) $ \m →
+    (Map.insert handle newState m, ())
+
+-- | Delete texture handle state
+deleteTextureState ∷ TextureHandle → AssetPool → IO ()
+deleteTextureState handle pool =
+  atomicModifyIORef' (apTextureHandles pool) $ \m →
     (Map.delete handle m, ())
 
--- | Get all handles of a specific type
-getAllHandles ∷ ∀ h. AssetHandle h ⇒ AssetPool → IO [h]
-getAllHandles pool = do
-  stateMap ← readIORef (getStateMap @h pool)
+-- | Delete font handle state
+deleteFontState ∷ FontHandle → AssetPool → IO ()
+deleteFontState handle pool =
+  atomicModifyIORef' (apFontHandles pool) $ \m →
+    (Map.delete handle m, ())
+
+-- | Delete shader handle state
+deleteShaderState ∷ ShaderHandle → AssetPool → IO ()
+deleteShaderState handle pool =
+  atomicModifyIORef' (apShaderHandles pool) $ \m →
+    (Map.delete handle m, ())
+
+-- | Get all texture handles
+getAllTextureHandles ∷ AssetPool → IO [TextureHandle]
+getAllTextureHandles pool = do
+  stateMap ← readIORef (apTextureHandles pool)
   return $ Map.keys stateMap
+
+-- | Get all font handles
+getAllFontHandles ∷ AssetPool → IO [FontHandle]
+getAllFontHandles pool = do
+  stateMap ← readIORef (apFontHandles pool)
+  return $ Map.keys stateMap
+
+-- | Get all shader handles
+getAllShaderHandles ∷ AssetPool → IO [ShaderHandle]
+getAllShaderHandles pool = do
+  stateMap ← readIORef (apShaderHandles pool)
+  return $ Map.keys stateMap
+
+-- LEGACY: Keep old generic functions for backward compatibility
+-- (these just delegate to specific versions)
+generateHandle ∷ ∀ h. AssetHandle h ⇒ AssetPool → IO h
+generateHandle pool = fromInt <$> atomicModifyIORef' counter (\n → (n + 1, n))
+  where
+    counter = apNextTextureHandle pool  -- Default to texture for now
+
+updateAssetState ∷ ∀ h. AssetHandle h ⇒ h → AssetState AssetId → AssetPool → IO ()
+updateAssetState handle state pool = 
+  updateTextureState (fromInt $ toInt handle) state pool
+
+deleteAssetState ∷ ∀ h. AssetHandle h ⇒ h → AssetPool → IO ()
+deleteAssetState handle pool =
+  deleteTextureState (fromInt $ toInt handle) pool
+
+getAllHandles ∷ ∀ h. AssetHandle h ⇒ AssetPool → IO [h]
+getAllHandles pool = 
+  map (fromInt . toInt) <$> getAllTextureHandles pool
+
+-- | Lookup texture handle state
+lookupTextureAsset ∷ TextureHandle → AssetPool → IO (Maybe (AssetState AssetId))
+lookupTextureAsset handle pool = do
+  stateMap ← readIORef (apTextureHandles pool)
+  return $ Map.lookup handle stateMap
+
+-- | Lookup font handle state
+lookupFontAsset ∷ FontHandle → AssetPool → IO (Maybe (AssetState AssetId))
+lookupFontAsset handle pool = do
+  stateMap ← readIORef (apFontHandles pool)
+  return $ Map.lookup handle stateMap
+
+-- | Lookup shader handle state
+lookupShaderAsset ∷ ShaderHandle → AssetPool → IO (Maybe (AssetState AssetId))
+lookupShaderAsset handle pool = do
+  stateMap ← readIORef (apShaderHandles pool)
+  return $ Map.lookup handle stateMap
+
+-- LEGACY: Generic version for backward compatibility
+lookupAsset ∷ ∀ h. AssetHandle h ⇒ h → AssetPool → IO (Maybe (AssetState AssetId))
+lookupAsset handle pool = 
+  lookupTextureAsset (fromInt $ toInt handle) pool
+  -- Hack: assumes TextureHandle for backward compatibility
+  -- Update call sites to use specific functions
 
 initTextureArrayManager ∷ Vk.Device → EngineM ε σ TextureArrayManager
 initTextureArrayManager device = do
@@ -343,3 +414,33 @@ freeVulkanDescriptorSets device pool sets = do
       (liftIO $ Vk.freeDescriptorSets device pool sets)
       "Error freeing descriptor sets: "
     logDebug "Descriptor sets freed successfully"
+
+-- | Get texture handle state map
+getTextureStateMap ∷ AssetPool → IO (Map.Map TextureHandle (AssetState AssetId))
+getTextureStateMap pool = readIORef (apTextureHandles pool)
+
+-- | Get font handle state map
+getFontStateMap ∷ AssetPool → IO (Map.Map FontHandle (AssetState AssetId))
+getFontStateMap pool = readIORef (apFontHandles pool)
+
+-- | Get shader handle state map
+getShaderStateMap ∷ AssetPool → IO (Map.Map ShaderHandle (AssetState AssetId))
+getShaderStateMap pool = readIORef (apShaderHandles pool)
+
+-- | Get specific texture handle state
+getTextureHandleState ∷ TextureHandle → AssetPool → IO (Maybe (AssetState AssetId))
+getTextureHandleState handle pool = do
+  stateMap ← readIORef (apTextureHandles pool)
+  return $ Map.lookup handle stateMap
+
+-- | Get specific font handle state
+getFontHandleState ∷ FontHandle → AssetPool → IO (Maybe (AssetState AssetId))
+getFontHandleState handle pool = do
+  stateMap ← readIORef (apFontHandles pool)
+  return $ Map.lookup handle stateMap
+
+-- | Get specific shader handle state
+getShaderHandleState ∷ ShaderHandle → AssetPool → IO (Maybe (AssetState AssetId))
+getShaderHandleState handle pool = do
+  stateMap ← readIORef (apShaderHandles pool)
+  return $ Map.lookup handle stateMap

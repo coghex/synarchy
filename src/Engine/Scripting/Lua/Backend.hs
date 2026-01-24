@@ -10,6 +10,7 @@ import Engine.Scripting.Types
 import Engine.Scripting.Lua.Types
 import Engine.Asset.Types
 import Engine.Asset.Manager
+import Engine.Asset.Handle
 import Engine.Core.Thread
 import Engine.Core.State
 import Engine.Input.Bindings

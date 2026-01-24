@@ -12,9 +12,10 @@ import Data.IORef (IORef, newIORef)
 import Vulkan.Core10
 import Engine.Core.Base
 import Engine.Asset.Base (AssetId, AssetStatus)
+import Engine.Asset.Handle
 import Engine.Scene.Base (ObjectId)
 import Engine.Graphics.Vulkan.Base (TextureInfo)
-import Engine.Graphics.Vulkan.Types.Texture (TextureData)
+import Engine.Graphics.Vulkan.Types.Texture (TextureData, TextureArrayState)
 
 -- | Asset pool containing all loaded assets
 data AssetPool = AssetPool
@@ -69,55 +70,6 @@ data AssetConfig = AssetConfig
   , acPreloadAssets     ∷ Bool
   , acEnableHotReload   ∷ Bool
   } deriving (Show)
-
--- | Asset Handles provide opaque references to assets
-newtype TextureHandle = TextureHandle Int
-  deriving (Show, Eq, Ord)
-newtype FontHandle = FontHandle Int
-  deriving (Show, Eq, Ord)
-newtype ShaderHandle = ShaderHandle Int
-  deriving (Show, Eq, Ord)
--- | asset handle type class
-class (Eq h, Ord h, Show h) ⇒ AssetHandle h where
-  -- get the counter reference for this handle type
-  getCounterRef ∷ AssetPool → IORef Int
-  -- get the state map for this handle type
-  getStateMap ∷ AssetPool → IORef (Map.Map h (AssetState AssetId))
-  -- construct a handle from an integer
-  fromInt ∷ Int → h
-  -- extract Int from handle
-  toInt ∷ h → Int
--- Instances
-instance AssetHandle TextureHandle where
-  getCounterRef = apNextTextureHandle
-  getStateMap   = apTextureHandles
-  fromInt       = TextureHandle
-  toInt (TextureHandle n) = n
-instance AssetHandle FontHandle where
-  getCounterRef = apNextFontHandle
-  getStateMap   = apFontHandles
-  fromInt       = FontHandle
-  toInt (FontHandle n) = n
-instance AssetHandle ShaderHandle where
-  getCounterRef = apNextShaderHandle
-  getStateMap   = apShaderHandles
-  fromInt       = ShaderHandle
-  toInt (ShaderHandle n) = n
-
--- | Asset Loading States
-data AssetState α
-  = AssetLoading { asPath       ∷ FilePath
-                 , asDependents ∷ [Dependent]
-                 , asProgress   ∷ Float }
-  | AssetReady { asValue      ∷ α
-               , asDependents ∷ [Dependent] }
-  | AssetFailed { asError ∷ Text }
-  deriving (Show, Eq)
-
--- | Dependent asset information
-data Dependent = DependentEntity ObjectId -- scene entity waiting for asset
-               | DependentLuaCallback Int -- lua callback id
-               deriving (Show, Eq)
 
 -- | Metadata for texture atlases
 data AtlasMetadata = AtlasMetadata
@@ -185,13 +137,6 @@ data ShaderProgram = ShaderProgram
   , spModules      ∷ V.Vector ShaderModule
   , spRefCount     ∷ Word32
   , spCleanup      ∷ Maybe (IO ())      -- cleanup function
-  }
--- | tracks texture array state
-data TextureArrayState = TextureArrayState
-  { tasDescriptorPool      ∷ DescriptorPool
-  , tasDescriptorSetLayout ∷ DescriptorSetLayout
-  , tasActiveTextures      ∷ V.Vector TextureData
-  , tasDescriptorSet       ∷ Maybe DescriptorSet
   }
 data TextureArrayManager = TextureArrayManager
   { tamArrays     ∷ Map.Map Text TextureArrayState

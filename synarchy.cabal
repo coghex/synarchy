@@ -130,6 +130,7 @@ library
     exposed-modules: UPrelude
                      Engine.Asset.Base
                      Engine.Asset.Types
+                     Engine.Asset.Handle
                      Engine.Asset.Manager
                      Engine.Event.Base
                      Engine.Event.Types

@@ -6,6 +6,7 @@ import Data.IORef (IORef)
 import Control.Concurrent.STM.TVar (TVar, newTVarIO)
 import Engine.Asset.Base
 import Engine.Asset.Types
+import Engine.Asset.Handle
 import Engine.Input.Types
 import Engine.Scene.Base
 import Engine.Graphics.Vulkan.Types.Vertex
