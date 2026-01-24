@@ -407,14 +407,6 @@ handleExceptions action errorMsg = action `catchError` \e → do
     logDebug $ (show errorMsg) ⧺ (show e)
     throwError e
 
-freeVulkanDescriptorSets ∷ Vk.Device → Vk.DescriptorPool → V.Vector Vk.DescriptorSet → EngineM' ε ()
-freeVulkanDescriptorSets device pool sets = do
-    logDebug $ "Freeing descriptor sets: " ⧺ (show (V.length sets))
-    handleExceptions
-      (liftIO $ Vk.freeDescriptorSets device pool sets)
-      "Error freeing descriptor sets: "
-    logDebug "Descriptor sets freed successfully"
-
 -- | Get texture handle state map
 getTextureStateMap ∷ AssetPool → IO (Map.Map TextureHandle (AssetState AssetId))
 getTextureStateMap pool = readIORef (apTextureHandles pool)

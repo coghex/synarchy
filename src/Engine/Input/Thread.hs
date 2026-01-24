@@ -62,14 +62,7 @@ runInputLoop env stateRef = do
         newInpSt ← processInputs env inpSt
         -- write to the shared state
         writeIORef sharedInputRef newInpSt
-        -- Calculate frame time and delay to maintain consistent rate
---        frameEnd ← getCurrentTime
---        let diff  = diffUTCTime frameEnd frameStart
---            usecs = floor (toRational diff * 1000000) ∷ Int
---            targetFrameTime = 16666  -- ~60 FPS
---            delay = targetFrameTime - usecs
---        -- Only delay if we're running faster than target
---        when (delay > 0) $ threadDelay delay
+
         threadDelay 16666  -- Fixed delay for ~60 FPS
         -- Continue loop
         runInputLoop env stateRef

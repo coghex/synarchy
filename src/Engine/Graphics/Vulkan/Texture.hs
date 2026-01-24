@@ -371,25 +371,6 @@ createTextureDescriptorSetLayout device = do
   allocResource (\layout → destroyDescriptorSetLayout device layout Nothing) $
     createDescriptorSetLayout device layoutInfo Nothing
 
---createTextureWithDescriptor ∷ Device → PhysicalDevice → CommandPool → Queue 
---                           → FilePath → EngineM ε σ TextureData
---createTextureWithDescriptor device pDevice cmdPool cmdQueue path = do
---  (_, imageView, mipLevels) ← createTextureImageView pDevice device cmdPool cmdQueue path
---  sampler ← createTextureSampler device pDevice
---  
---  -- Create descriptor resources
---  descriptorPool ← createTextureDescriptorPool device
---  descriptorSetLayout ← createTextureDescriptorSetLayout device
---  descriptorSet ← createTextureDescriptorSet device descriptorPool 
---                   descriptorSetLayout imageView sampler
---  
---  pure $ TextureData
---    { tdImageView = imageView
---    , tdSampler = sampler
---    , tdMipLevels = mipLevels
---    , tdDescriptorSet = descriptorSet
---    }
---
 -- | helper function to create a new texture array state
 createTextureArrayState ∷ Device → EngineM ε σ TextureArrayState
 createTextureArrayState device = do

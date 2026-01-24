@@ -72,8 +72,6 @@ import Engine.Scene.Types
 import Engine.Scene.Render
 import Engine.Scene.Graph
 import Engine.Scene.Base
-import Engine.Scripting.Loader (createBackend)
-import Engine.Scripting.Backend (AnyBackend(..), BackendType(..), initBackend)
 import Vulkan.CStruct.Extends
 import Vulkan.Core10
 import Vulkan.Zero
