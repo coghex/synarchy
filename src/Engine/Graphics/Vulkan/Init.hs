@@ -31,9 +31,12 @@ import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
 import Engine.Graphics.Vulkan.Framebuffer (createVulkanFramebuffers)
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
 import Engine.Graphics.Vulkan.Pipeline
+import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline)
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Sync (createSyncObjects)
 import Engine.Graphics.Vulkan.Texture
+import Engine.Graphics.Vulkan.Texture.System
+import Engine.Graphics.Vulkan.Texture.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
@@ -45,8 +48,6 @@ import Vulkan.Zero
 import Vulkan.CStruct.Extends (SomeStruct(..))
 
 -- | Initialize all Vulkan resources
--- Returns the command pool for use by other systems
--- Using general EngineM ε σ so helper functions with different return types work
 initializeVulkan ∷ Window → EngineM ε σ CommandPool
 initializeVulkan window = do
   let Window glfwWin = window
@@ -122,14 +123,27 @@ initializeVulkan window = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                       vertexBuffer = Just (vBuffer, vBufferMemory) } }
   
-  -- Create texture descriptor pool and layout
+  -- Create texture descriptor pool and layout (legacy)
   descriptorPool ← createTextureDescriptorPool device
   (uniformLayout, texLayout) ← createVulkanDescriptorSetLayout device
   logDebug "Created descriptor pool and layout"
   
-  -- Initialize textures
+  -- Initialize legacy textures
   initializeTextures device physicalDevice cmdPool (graphicsQueue queues) 
                      descriptorPool texLayout
+  
+  -- *** NEW: Initialize bindless texture system ***
+  let texSystemConfig = TextureSystemConfig
+        { tscMaxTextures   = 16384
+        , tscReservedSlots = 1      -- Slot 0 = undefined texture
+        , tscForceBindless = False
+        , tscForceLegacy   = False
+        }
+  texSystem ← createTextureSystem physicalDevice device cmdPool 
+                                   (graphicsQueue queues) texSystemConfig
+  modify $ \s → s { graphicsState = (graphicsState s) {
+                      textureSystem = Just texSystem } }
+  logDebug "Bindless texture system initialized"
   
   -- Create default scene
   let defaultSceneId = "default"
@@ -148,13 +162,26 @@ initializeVulkan window = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                       vulkanRenderPass = Just renderPass } }
   
-  -- Create sprite pipeline
+  -- Create legacy sprite pipeline
   (pipeline, pipelineLayout) ← createVulkanRenderPipeline device renderPass
                                  (siSwapExtent swapInfo) uniformLayout
   logDebug $ "Pipeline: " ⧺ show pipeline
   let pstate = PipelineState pipeline pipelineLayout renderPass
   modify $ \s → s { graphicsState = (graphicsState s) {
                       pipelineState = Just pstate } }
+  
+  -- *** NEW: Create bindless pipeline if bindless is enabled ***
+  case texSystem of
+    BindlessSystem bindless → do
+      let bindlessTexLayout = btsDescriptorLayout bindless
+      (bindlessPipe, bindlessPipeLayout) ← 
+        createBindlessPipeline device renderPass (siSwapExtent swapInfo) 
+                               uniformLayout bindlessTexLayout
+      logDebug $ "Bindless Pipeline: " ⧺ show bindlessPipe
+      modify $ \s → s { graphicsState = (graphicsState s) {
+                          bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout) } }
+    LegacySystem → 
+      logDebug "Using legacy pipeline only (no bindless)"
   
   -- Create font pipeline
   (fontPipe, fontPipeLayout, fontDescLayout) ←
@@ -183,8 +210,7 @@ initializeVulkan window = do
   
   pure cmdPool
 
--- | Initialize texture subsystem
--- Using general EngineM ε σ to be callable from any context
+-- | Initialize texture subsystem (legacy path)
 initializeTextures ∷ Device → PhysicalDevice → CommandPool → Queue
   → DescriptorPool → DescriptorSetLayout
   → EngineM ε σ ()
@@ -207,6 +233,7 @@ initializeTextures device _physicalDevice _cmdPool _queue descriptorPool texture
         , tasCurrentCapacity = 0
         , tasCurrentCount = 0
         , tasHandleToIndex = Map.empty
+        , tasUndefinedTexture = Nothing
         }
   
   modify $ \s → s { graphicsState = (graphicsState s) {
@@ -214,7 +241,6 @@ initializeTextures device _physicalDevice _cmdPool _queue descriptorPool texture
   } }
 
 -- | Create uniform buffers for all frames
--- Using general EngineM ε σ to be callable from any context
 createUniformBuffersForFrames ∷ Device → PhysicalDevice 
   → GLFWRaw.Window → V.Vector DescriptorSet → EngineM ε σ ()
 createUniformBuffersForFrames device physicalDevice glfwWin descSets = do

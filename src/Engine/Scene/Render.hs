@@ -41,7 +41,7 @@ updateSceneForRender = do
                                                in (fromIntegral w, fromIntegral h)
     
     -- Update scene manager with current view dimensions
-    let updatedSceneMgr = updateSceneManager 
+    updatedSceneMgr ← updateSceneManager 
                             (fromIntegral width) 
                             (fromIntegral height) 
                             sceneMgr

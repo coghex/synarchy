@@ -19,7 +19,7 @@ import UPrelude
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.Vector as V
 import qualified Data.Map as Map
-import Data.IORef (newIORef, readIORef, modifyIORef)
+import Data.IORef (newIORef, readIORef, modifyIORef, IORef)
 import Engine.Asset.Types
 import Engine.Core.Types
 import Engine.Core.Monad
@@ -32,6 +32,7 @@ import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
+import Engine.Graphics.Vulkan.Texture.Types (TextureSystem(..), BindlessTextureSystem(..))
 import Engine.Graphics.Font.Data
 import Engine.Scene.Base
 import Engine.Scene.Types
@@ -201,7 +202,7 @@ createFrameResources device queues = do
     
     pure $ FrameResources
         { frCommandPool    = cmdPool
-        , frCommandBuffer  = cmdBuffers  -- Use the Vector directly
+        , frCommandBuffer  = cmdBuffers
         , frImageAvailable = imageAvailable
         , frRenderFinished = renderFinished
         , frInFlight      = inFlight
@@ -225,7 +226,7 @@ allocateVulkanCommandBuffer device cmdPool = do
         _ → pure $ V.head buffers
 
 -- | Record scene command buffer with sprite and text batches
--- Text batches are rendered INSIDE the render pass, before it ends
+-- Supports both bindless and legacy texture paths
 recordSceneCommandBuffer ∷ CommandBuffer → Word64 → SceneDynamicBuffer 
                          → Map.Map LayerId (V.Vector RenderItem)
                          → EngineM ε σ ()
@@ -259,6 +260,11 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
                     pure
                     (vulkanPDevice state)
 
+    -- Determine if we should use bindless or legacy path
+    let useBindless = case (textureSystem state, bindlessPipeline state) of
+          (Just (BindlessSystem _), Just _) → True
+          _ → False
+
     -- Begin command buffer
     let beginInfo = (zero ∷ CommandBufferBeginInfo '[])
                       { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
@@ -274,9 +280,6 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
           }
     
     cmdBeginRenderPass cmdBuf renderPassInfo SUBPASS_CONTENTS_INLINE
-    
-    -- Bind graphics pipeline for sprites
-    cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS (psPipeline pState)
     
     -- Set viewport and scissors
     let Extent2D w h = swapchainExtent
@@ -305,47 +308,13 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
         let spriteBatches = V.fromList [b | SpriteItem b ← V.toList items]
         
         unless (V.null spriteBatches) $ do
-            -- Bind sprite pipeline
-            cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS (psPipeline pState)
-            cmdSetViewport cmdBuf 0 (V.singleton viewport)
-            cmdSetScissor cmdBuf 0 (V.singleton scissor)
-            
-            -- Bind descriptor sets
-            descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
-                               pure 
-                               (descriptorState state)
-            
-            let (TexturePoolState descPool descLayout, textures) = textureState state
-            textureArray ← case Map.lookup "default" (textureArrayStates state) of
-                Nothing → throwGraphicsError TextureLoadFailed "No texture array state found"
-                Just arr → pure arr
-            
-            let uniformSet = V.head $ dmActiveSets descManager
-            textureSet ← case (tasDescriptorSet textureArray) of
-                  Nothing → (throwGraphicsError DescriptorError "No texture descriptor set")
-                  Just set → pure set
-            
-            let descriptorSets = V.fromList [uniformSet, textureSet]
-            cmdBindDescriptorSets cmdBuf 
-                PIPELINE_BIND_POINT_GRAPHICS
-                (psPipelineLayout pState)
-                0
-                descriptorSets
-                V.empty
-            
-            -- Bind vertex buffer
-            cmdBindVertexBuffers cmdBuf 0
-                (V.singleton (sdbBuffer dynamicBuffer))
-                (V.singleton 0)
-            
-            -- Draw sprite batches
-            V.forM_ spriteBatches $ \batch → do
-                offset ← liftIO $ readIORef vertexOffsetRef
-                let vertexCount = fromIntegral $ V.length $ rbVertices batch
-                cmdDraw cmdBuf vertexCount 1 offset 0
-                liftIO $ modifyIORef vertexOffsetRef (+ vertexCount)
+            if useBindless
+               then renderSpritesBindless cmdBuf state viewport scissor 
+                                          dynamicBuffer spriteBatches vertexOffsetRef
+               else renderSpritesLegacy cmdBuf state pState viewport scissor 
+                                        dynamicBuffer spriteBatches vertexOffsetRef
         
-        -- Render text in this layer
+        -- Render text in this layer (unchanged - fonts use their own descriptors)
         let textItems = V.fromList [b | TextItem b ← V.toList items]
         
         unless (V.null textItems) $ do
@@ -384,6 +353,97 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
     -- End render pass and command buffer
     cmdEndRenderPass cmdBuf
     endVulkanCommandBuffer cmdBuf
+
+-- | Render sprites using the bindless pipeline
+renderSpritesBindless ∷ CommandBuffer → GraphicsState → Viewport → Rect2D
+                      → SceneDynamicBuffer → V.Vector RenderBatch 
+                      → IORef Word32 → EngineM ε σ ()
+renderSpritesBindless cmdBuf state viewport scissor dynamicBuffer spriteBatches vertexOffsetRef = do
+    -- Get bindless pipeline and texture system
+    (pipeline, pipelineLayout) ← case bindlessPipeline state of
+        Just p → pure p
+        Nothing → throwGraphicsError PipelineError "Bindless pipeline not available"
+    
+    bindless ← case textureSystem state of
+        Just (BindlessSystem b) → pure b
+        _ → throwGraphicsError DescriptorError "Bindless texture system not available"
+    
+    descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
+                       pure 
+                       (descriptorState state)
+    
+    -- Bind bindless pipeline
+    cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS pipeline
+    cmdSetViewport cmdBuf 0 (V.singleton viewport)
+    cmdSetScissor cmdBuf 0 (V.singleton scissor)
+    
+    -- Bind descriptor sets: set 0 = uniforms, set 1 = bindless textures
+    let uniformSet = V.head $ dmActiveSets descManager
+        textureSet = btsDescriptorSet bindless
+        descriptorSets = V.fromList [uniformSet, textureSet]
+    
+    cmdBindDescriptorSets cmdBuf 
+        PIPELINE_BIND_POINT_GRAPHICS
+        pipelineLayout
+        0
+        descriptorSets
+        V.empty
+    
+    -- Bind vertex buffer
+    cmdBindVertexBuffers cmdBuf 0
+        (V.singleton (sdbBuffer dynamicBuffer))
+        (V.singleton 0)
+    
+    -- Draw sprite batches
+    V.forM_ spriteBatches $ \batch → do
+        offset ← liftIO $ readIORef vertexOffsetRef
+        let vertexCount = fromIntegral $ V.length $ rbVertices batch
+        cmdDraw cmdBuf vertexCount 1 offset 0
+        liftIO $ modifyIORef vertexOffsetRef (+ vertexCount)
+
+-- | Render sprites using the legacy pipeline (bounded texture array)
+renderSpritesLegacy ∷ CommandBuffer → GraphicsState → PipelineState 
+                    → Viewport → Rect2D → SceneDynamicBuffer 
+                    → V.Vector RenderBatch → IORef Word32 → EngineM ε σ ()
+renderSpritesLegacy cmdBuf state pState viewport scissor dynamicBuffer spriteBatches vertexOffsetRef = do
+    -- Bind legacy sprite pipeline
+    cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS (psPipeline pState)
+    cmdSetViewport cmdBuf 0 (V.singleton viewport)
+    cmdSetScissor cmdBuf 0 (V.singleton scissor)
+    
+    -- Bind descriptor sets (legacy path)
+    descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
+                       pure 
+                       (descriptorState state)
+    
+    textureArray ← case Map.lookup "default" (textureArrayStates state) of
+        Nothing → throwGraphicsError TextureLoadFailed "No texture array state found"
+        Just arr → pure arr
+    
+    let uniformSet = V.head $ dmActiveSets descManager
+    textureSet ← case (tasDescriptorSet textureArray) of
+          Nothing → (throwGraphicsError DescriptorError "No texture descriptor set")
+          Just set → pure set
+    
+    let descriptorSets = V.fromList [uniformSet, textureSet]
+    cmdBindDescriptorSets cmdBuf 
+        PIPELINE_BIND_POINT_GRAPHICS
+        (psPipelineLayout pState)
+        0
+        descriptorSets
+        V.empty
+    
+    -- Bind vertex buffer
+    cmdBindVertexBuffers cmdBuf 0
+        (V.singleton (sdbBuffer dynamicBuffer))
+        (V.singleton 0)
+    
+    -- Draw sprite batches
+    V.forM_ spriteBatches $ \batch → do
+        offset ← liftIO $ readIORef vertexOffsetRef
+        let vertexCount = fromIntegral $ V.length $ rbVertices batch
+        cmdDraw cmdBuf vertexCount 1 offset 0
+        liftIO $ modifyIORef vertexOffsetRef (+ vertexCount)
 
 -- | Render a single text batch inline (helper for recordSceneCommandBuffer)
 renderTextBatchInline ∷ CommandBuffer → Device → PhysicalDevice 

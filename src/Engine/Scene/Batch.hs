@@ -14,6 +14,8 @@ import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Asset.Handle
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Texture.Types (TextureSystem(..), BindlessTextureSystem(..))
+import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Graphics.Camera
 import Engine.Graphics.Font.Data
 import Engine.Graphics.Font.Draw
@@ -22,13 +24,16 @@ import Engine.Core.State
 import Engine.Core.Error.Exception
 
 -- | Batch manager for 2D rendering
-collectSpriteBatches ∷ SceneGraph → Camera2D → Float → Float → V.Vector DrawableObject
-collectSpriteBatches graph camera viewWidth viewHeight =
-    let allNodes = Map.elems (sgNodes graph)
+-- Now runs in EngineM to access bindless texture system
+collectSpriteBatches ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
+collectSpriteBatches graph camera viewWidth viewHeight = do
+    gs ← gets graphicsState
+    let texSystem = textureSystem gs
+        allNodes = Map.elems (sgNodes graph)
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject && nodeVisible n) allNodes
         visibleSprites = filter (isNodeVisible camera viewWidth viewHeight) spriteNodes
-        drawableObjs = mapMaybe (nodeToDrawable graph) visibleSprites
-    in V.fromList drawableObjs
+        drawableObjs = mapMaybe (nodeToDrawable graph texSystem) visibleSprites
+    pure $ V.fromList drawableObjs
 
 -- | collect text drawable objects from scene graph
 collectTextBatches ∷ SceneGraph → Float → Float
@@ -46,7 +51,6 @@ collectTextBatches graph screenW screenH = do
         return Nothing
       Just atlas → do
           allInstances ← fmap V.concat $ forM nodes $ \node → do
-              let worldTransResult = Map.lookup (nodeId node) (sgWorldTrans graph)
               case (nodeText node, Map.lookup (nodeId node) (sgWorldTrans graph)) of
                   (Just text, Just worldTrans) → do
                       let (x,y) = wtPosition worldTrans
@@ -79,14 +83,16 @@ groupByFontAndLayer nodes =
                       (n:_) → ((fromJust $ nodeFont n, nodeLayer n), grp)) grouped
   in keyed
 
--- | Collect visible objects from scene graph (this might be obsolete)
-collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → V.Vector DrawableObject
-collectVisibleObjects graph camera viewWidth viewHeight =
-    let allNodes = Map.elems (sgNodes graph)
+-- | Collect visible objects from scene graph
+collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
+collectVisibleObjects graph camera viewWidth viewHeight = do
+    gs ← gets graphicsState
+    let texSystem = textureSystem gs
+        allNodes = Map.elems (sgNodes graph)
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject && nodeVisible n) allNodes
         visibleNodes = filter (isNodeVisible camera viewWidth viewHeight) spriteNodes
-        drawableObjs = mapMaybe (nodeToDrawable graph) visibleNodes
-    in V.fromList drawableObjs
+        drawableObjs = mapMaybe (nodeToDrawable graph texSystem) visibleNodes
+    pure $ V.fromList drawableObjs
 
 -- | conversion function
 convertToTextBatches ∷ V.Vector TextRenderBatch → V.Vector TextBatch
@@ -106,7 +112,6 @@ isNodeVisible camera viewWidth viewHeight node =
             (nodeX, nodeY) = position (nodeTransform node)
             (sizeX, sizeY) = nodeSize node
             
-            -- Simple AABB frustum culling
             left = camX - (viewWidth * zoom * 0.5)
             right = camX + (viewWidth * zoom * 0.5)
             bottom = camY - (viewHeight * zoom * 0.5)
@@ -121,50 +126,49 @@ isNodeVisible camera viewWidth viewHeight node =
                 nodeTop < bottom || nodeBottom > top)
 
 -- | Convert scene node to drawable object (sprites only)
-nodeToDrawable ∷ SceneGraph → SceneNode → Maybe DrawableObject
-nodeToDrawable graph node = do
+-- Now takes TextureSystem to look up bindless slot
+nodeToDrawable ∷ SceneGraph → Maybe TextureSystem → SceneNode → Maybe DrawableObject
+nodeToDrawable graph texSystem node = do
     guard (nodeType node ≡ SpriteObject)
-    textureId ← nodeTexture node
+    textureHandle ← nodeTexture node
     worldTrans ← Map.lookup (nodeId node) (sgWorldTrans graph)
     
-    let vertices = generateQuadVertices node worldTrans
+    -- Look up bindless slot for this texture
+    let atlasId = case texSystem of
+          Just (BindlessSystem bindless) → 
+            fromIntegral $ getTextureSlotIndex textureHandle bindless
+          _ → 0.0  -- Legacy fallback
+    
+    let vertices = generateQuadVertices node worldTrans atlasId
         layerId = nodeLayer node
         
     return DrawableObject
         { doId = nodeId node
-        , doTexture = textureId
+        , doTexture = textureHandle
         , doVertices = vertices
         , doZIndex = wtZIndex worldTrans
         , doLayer = layerId
         }
 
 -- | Generate quad vertices for a scene node
-generateQuadVertices ∷ SceneNode → WorldTransform → V.Vector Vertex
-generateQuadVertices node worldTrans =
+generateQuadVertices ∷ SceneNode → WorldTransform → Float → V.Vector Vertex
+generateQuadVertices node worldTrans atlasId =
     let (sizeX, sizeY) = nodeSize node
         (posX, posY) = wtPosition worldTrans
         color = nodeColor node
         
-        -- Default UV coordinates (can be overridden by nodeUVRect)
         (uvMin, uvMax) = case nodeUVRect node of
             Just (minUV, maxUV) → (minUV, maxUV)
             Nothing → (Vec2 0.0 0.0, Vec2 1.0 1.0)
         
-        -- Quad corners in local space
         halfX = sizeX * 0.5
         halfY = sizeY * 0.5
         
-        -- Atlas ID (default to 0 if not specified)
-        atlasId = 0.0  -- You might want to add this to SceneNode later
-        
-        -- Vertices: bottom-left, bottom-right, top-right, top-left
-        -- Note: This creates 6 vertices for a quad (2 triangles)
         v1 = Vertex (Vec2 (posX - halfX) (posY - halfY)) (Vec2 (x uvMin) (y uvMin)) color atlasId
         v2 = Vertex (Vec2 (posX + halfX) (posY - halfY)) (Vec2 (x uvMax) (y uvMin)) color atlasId
         v3 = Vertex (Vec2 (posX + halfX) (posY + halfY)) (Vec2 (x uvMax) (y uvMax)) color atlasId
         v4 = Vertex (Vec2 (posX - halfX) (posY + halfY)) (Vec2 (x uvMin) (y uvMax)) color atlasId
         
-        -- Create two triangles: (v1,v2,v3) and (v1,v3,v4)
     in V.fromList [v1, v2, v3, v1, v3, v4]
 
 -- | Update batches with new visible objects
@@ -179,7 +183,7 @@ updateBatches objects manager =
         , bmDirtyBatches = dirtyKeys
         }
 
--- | update batch manager with thext batches
+-- | update batch manager with text batches
 updateTextBatches ∷ V.Vector TextRenderBatch → BatchManager → BatchManager
 updateTextBatches textBatches manager =
     let groupedText = V.foldl' (\acc trb →
@@ -229,27 +233,21 @@ getSortedBatches manager =
 -- | Build layered batches from sprite and text batches
 buildLayeredBatches ∷ BatchManager → BatchManager
 buildLayeredBatches manager =
-    let -- Get all sprite batches sorted by (layer, zIndex)
-        sortedSprites = getSortedBatches manager
-        
-        -- Get all text batches sorted by layer
+    let sortedSprites = getSortedBatches manager
         sortedText = List.sortOn trbLayer $ Map.elems (bmTextBatches manager)
         
-        -- Group sprites by layer
         spriteLayers = V.foldl' (\acc batch →
             let layer = rbLayer batch
                 existing = Map.findWithDefault V.empty layer acc
             in Map.insert layer (V.snoc existing (SpriteItem batch)) acc
           ) Map.empty sortedSprites
         
-        -- Group text by layer
         textLayers = foldl' (\acc batch →
             let layer = trbLayer batch
                 existing = Map.findWithDefault V.empty layer acc
             in Map.insert layer (V.snoc existing (TextItem batch)) acc
           ) Map.empty sortedText
         
-        -- Merge sprite and text layers
         allLayers = Map.unionWith (V.++) spriteLayers textLayers
         
     in manager { bmLayeredBatches = allLayers }

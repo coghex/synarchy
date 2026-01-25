@@ -18,9 +18,13 @@ import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Base
 import Engine.Graphics.Types
 import qualified Engine.Graphics.Window.GLFW as GLFW
+import Foreign.Marshal.Utils (with)
 import Vulkan.Core10
+import Vulkan.Core12
+import Vulkan.Core10.LayerDiscovery (LayerProperties(..))
 import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_EXT_debug_utils
+import Vulkan.Extensions.VK_EXT_layer_settings
 import Vulkan.Extensions.VK_KHR_portability_subset
 import Vulkan.Extensions.VK_KHR_portability_enumeration
 import Vulkan.Extensions.VK_KHR_get_physical_device_properties2
@@ -37,7 +41,7 @@ vulkanInstanceCreateInfo config = do
   let availableExts = map extensionName $ V.toList exts
   -- Get all available layers
   (_count, layers) ← liftIO $ enumerateInstanceLayerProperties
-  let availableLayers = map layerName $ V.toList layers
+  let availableLayers = map (\LayerProperties{layerName = ln} → ln) $ V.toList layers
   -- Basic required extensions (including debug if enabled)
   let baseExts = if gcDebugMode config 
                  then [EXT_DEBUG_UTILS_EXTENSION_NAME]
@@ -94,23 +98,64 @@ createVulkanInstance config = do
                      <> glfwExts
                      <> [KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME]
                      <> [KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME]  -- Required for macOS
-      
-  let instCreateInfo = zero 
-        { applicationInfo = Just $ zero 
-            { applicationName = Just $ BSU.fromString $ T.unpack $ gcAppName config
-            , engineName     = Just "Synarchy Engine"
-            , apiVersion     = API_VERSION_1_0
-            }
-        , enabledExtensionNames = V.fromList allExtensions
-        , flags = INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR  -- Required for portability
-        }
-        ::& debugUtilsMessengerCreateInfo
-        :& ()
+                     <> [EXT_LAYER_SETTINGS_EXTENSION_NAME]  -- for moltenvk config
 
-  inst ← allocResource (\i0 → destroyInstance i0 Nothing)
-           $ createInstance instCreateInfo Nothing `catchEngine` \err →
-               throwInitError VulkanInitFailed $ T.pack $
-                 "Failed to create Vulkan instance: " ⧺ show err
+  -- Create the instance with MoltenVK configuration
+  -- We use 'with' to allocate the setting value on the stack
+  inst ← liftIO $ with (1 ∷ Word32) $ \valuePtr → do
+    let moltenVkSetting = LayerSettingEXT
+          { layerName = "MoltenVK"
+          , settingName = "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS"
+          , type' = LAYER_SETTING_TYPE_UINT32_EXT
+          , valueCount = 1
+          , values = castPtr valuePtr
+          }
+        
+        layerSettingsInfo = LayerSettingsCreateInfoEXT
+          { settings = V.singleton moltenVkSetting
+          }
+
+        instCreateInfo = zero 
+          { applicationInfo = Just $ zero 
+              { applicationName = Just $ BSU.fromString $ T.unpack $ gcAppName config
+              , engineName     = Just "Synarchy Engine"
+              , apiVersion     = API_VERSION_1_2
+              }
+          , enabledExtensionNames = V.fromList allExtensions
+          , flags = INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+          }
+          ::& layerSettingsInfo
+          :& debugUtilsMessengerCreateInfo
+          :& ()
+    
+    createInstance instCreateInfo Nothing
+  -- enable higher descriptor limits on macOS
+--  let moltenVkSettings = zero
+--        { layerName = "MoltenVK"
+--        , settingName = "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS"
+--        , type' = LAYER_SETTING_TYPE_UINT32_EXT
+--        , values = Left $ V.singleton (2 :: Word32)
+--        }
+--      layerSettingsInfo = LayerSettingsCreateInfoEXT
+--        { settings = moltenVkSettings
+--        }
+--        
+--  let instCreateInfo = zero 
+--        { applicationInfo = Just $ zero 
+--            { applicationName = Just $ BSU.fromString $ T.unpack $ gcAppName config
+--            , engineName     = Just "Synarchy Engine"
+--            , apiVersion     = API_VERSION_1_0
+--            }
+--        , enabledExtensionNames = V.fromList allExtensions
+--        , flags = INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR  -- Required for portability
+--        }
+--        ::& debugUtilsMessengerCreateInfo
+--        :& ()
+--
+--  inst ← allocResource (\i0 → destroyInstance i0 Nothing)
+--           $ createInstance instCreateInfo Nothing `catchEngine` \err →
+--               throwInitError VulkanInitFailed $ T.pack $
+--                 "Failed to create Vulkan instance: " ⧺ show err
   
   -- Create debug messenger if debug mode is enabled
   dbgMessenger ← if gcDebugMode config 
@@ -149,7 +194,7 @@ getAvailableExtensions = do
 getAvailableLayers ∷ EngineM ε σ [BS.ByteString]
 getAvailableLayers = do
   (_, layers) ← liftIO $ enumerateInstanceLayerProperties
-  return $ map layerName $ V.toList layers
+  return $ map (\LayerProperties{layerName = ln} → ln) $ V.toList layers
 
 filterExtensions ∷ [BS.ByteString] → [BS.ByteString] → EngineM ε σ [BS.ByteString]
 filterExtensions available required = do

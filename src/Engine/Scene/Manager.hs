@@ -11,7 +11,7 @@ import Engine.Scene.Graph
 import Engine.Scene.Batch
 import Engine.Graphics.Camera
 import Engine.Asset.Base (AssetId)
-import Engine.Core.Monad (EngineM')
+import Engine.Core.Monad
 
 -- | Create a new scene
 createScene ∷ Text → Camera2D → SceneManager → SceneManager
@@ -48,20 +48,20 @@ setActiveScene sceneId manager =
         }
 
 -- | Update scene manager and regenerate batches
-updateSceneManager ∷ Float → Float → SceneManager → SceneManager
+updateSceneManager ∷ Float → Float → SceneManager → EngineM ε σ SceneManager
 updateSceneManager viewWidth viewHeight manager =
     case smActiveScene manager of
-        Nothing → manager
+        Nothing → pure manager
         Just activeId → case Map.lookup activeId (smScenes manager) of
-            Nothing → manager
-            Just scene → 
+            Nothing → pure manager
+            Just scene → do
                 let graph = fromMaybe createEmptySceneGraph $ 
                            Map.lookup activeId (smSceneGraphs manager)
                     updatedGraph = updateWorldTransforms graph
-                    visibleObjects = collectVisibleObjects updatedGraph 
+                visibleObjects ← collectVisibleObjects updatedGraph 
                                    (sceneCamera scene) viewWidth viewHeight
-                    updatedBatches = updateBatches visibleObjects (smBatchManager manager)
-                in manager
+                let updatedBatches = updateBatches visibleObjects (smBatchManager manager)
+                pure $ manager
                     { smSceneGraphs = Map.insert activeId updatedGraph (smSceneGraphs manager)
                     , smBatchManager = updatedBatches
                     , smDirtyScenes = Set.delete activeId (smDirtyScenes manager)

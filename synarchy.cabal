@@ -141,6 +141,7 @@ library
                      Engine.Graphics.Vulkan.Base
                      Engine.Graphics.Vulkan.Buffer
                      Engine.Graphics.Vulkan.BufferUtils
+                     Engine.Graphics.Vulkan.Capability
                      Engine.Graphics.Vulkan.Command
                      Engine.Graphics.Vulkan.Descriptor
                      Engine.Graphics.Vulkan.Device
@@ -149,6 +150,7 @@ library
                      Engine.Graphics.Vulkan.Init
                      Engine.Graphics.Vulkan.Instance
                      Engine.Graphics.Vulkan.Pipeline
+                     Engine.Graphics.Vulkan.Pipeline.Bindless
                      Engine.Graphics.Vulkan.Sampler
                      Engine.Graphics.Vulkan.Shader
                      Engine.Graphics.Vulkan.ShaderCode
@@ -159,6 +161,12 @@ library
                      Engine.Graphics.Vulkan.Types.Texture
                      Engine.Graphics.Vulkan.Types.Vertex
                      Engine.Graphics.Vulkan.Texture
+                     Engine.Graphics.Vulkan.Texture.Undefined
+                     Engine.Graphics.Vulkan.Texture.Types
+                     Engine.Graphics.Vulkan.Texture.Slot
+                     Engine.Graphics.Vulkan.Texture.System
+                     Engine.Graphics.Vulkan.Texture.Handle
+                     Engine.Graphics.Vulkan.Texture.Bindless
                      Engine.Graphics.Vulkan.Vertex
                      Engine.Graphics.Window.GLFW
                      Engine.Graphics.Window.Types

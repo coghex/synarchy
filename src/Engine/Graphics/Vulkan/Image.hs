@@ -19,15 +19,10 @@ import Engine.Core.Resource
 import Engine.Core.Error.Exception
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
+import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
-
--- | Holds image and its memory
-data VulkanImage = VulkanImage
-  { viImage  ∷ Image
-  , viMemory ∷ DeviceMemory
-  }
 
 -- Usage in createVulkanImage:
 createVulkanImage ∷ Device → PhysicalDevice → (Word32, Word32) → Format → ImageTiling 

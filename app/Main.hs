@@ -23,6 +23,9 @@ main ∷ IO ()
 main = do
   -- Suppress macOS noise
   setEnv "NSLog_Disabled" "YES"
+  -- Enable MoltenVK argument buffers for higher descriptor limits (bindless)
+  -- Value 2 = use argument buffers when Metal Tier 2 is available (Apple Silicon)
+  setEnv "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS" "2"
 #ifdef DEVELOPMENT
   setEnv "VK_LOADER_DEBUG" "none"
   setEnv "VK_LOADER_MESSAGE_LEVEL" "error"

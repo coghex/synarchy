@@ -9,7 +9,6 @@ module Engine.Loop
 import UPrelude
 import Control.Concurrent (threadDelay)
 import Control.Exception (displayException)
-import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')

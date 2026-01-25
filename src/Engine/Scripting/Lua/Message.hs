@@ -10,7 +10,7 @@ import Data.IORef (readIORef)
 import Data.Time.Clock (getCurrentTime)
 import System.FilePath (takeBaseName)
 import Engine.Asset.Handle
-import Engine.Asset.Manager (loadTextureAtlas, updateAssetState)
+import Engine.Asset.Manager
 import Engine.Asset.Types
 import Engine.Core.Monad
 import Engine.Core.State
@@ -57,8 +57,8 @@ handleLuaMessage msg = case msg of
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
 handleLoadTexture handle path = do
-    logDebug $ "Loading texture: " ⧺ show path
-    assetId ← loadTextureAtlas (T.pack $ takeBaseName path) path "default"
+    logDebug $ "Loading texture: " ⧺ show path ⧺ " with handle " ⧺ show handle
+    assetId ← loadTextureAtlasWithHandle handle (T.pack $ takeBaseName path) path "default"
     
     apRef ← asks assetPoolRef
     liftIO $ do

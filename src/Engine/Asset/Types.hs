@@ -96,6 +96,8 @@ data TextureAtlas = TextureAtlas
   , taInfo         ∷ Maybe TextureInfo   -- Vulkan resources
   , taRefCount     ∷ Word32
   , taCleanup      ∷ Maybe (IO ()) -- cleanup function
+  , taBindlessSlot ∷ Maybe Word32  -- bindless texture slot index
+  , taTextureHandle ∷ TextureHandle -- handle for binless lookup
   }
 
 -- | Font resource (stub for future implementation)

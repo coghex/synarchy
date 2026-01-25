@@ -18,6 +18,7 @@ import Engine.Core.Resource
 import Engine.Graphics.Types
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Vulkan.Core10
+import Vulkan.Core12 (PhysicalDeviceVulkan12Features(..))
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_KHR_surface
@@ -53,6 +54,16 @@ createVulkanDevice inst physicalDevice surface = do
   let deviceExtensions = [ KHR_SWAPCHAIN_EXTENSION_NAME
                         , KHR_PORTABILITY_SUBSET_EXTENSION_NAME  -- Required for macOS
                         ]
+  -- enable vulkan 1.2 descriptor indexing functions
+  -- ths triggers moltenVk to use metal argument buffers
+  let vulkan12Features = zero
+        { descriptorIndexing = True
+        , shaderSampledImageArrayNonUniformIndexing = True
+        , runtimeDescriptorArray = True
+        , descriptorBindingPartiallyBound = True
+        , descriptorBindingUpdateUnusedWhilePending = True
+        , descriptorBindingVariableDescriptorCount = True
+        } :: PhysicalDeviceVulkan12Features
   
   -- Create the logical device
   let deviceCreateInfo = (zero ∷ DeviceCreateInfo '[])
@@ -60,6 +71,8 @@ createVulkanDevice inst physicalDevice surface = do
         , enabledExtensionNames = V.fromList deviceExtensions
         , enabledFeatures = Just zero
         }
+        ::& vulkan12Features
+        :& ()
   
   device ← allocResource (\d0 → destroyDevice d0 Nothing)
              $ createDevice physicalDevice deviceCreateInfo Nothing

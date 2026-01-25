@@ -3,6 +3,8 @@ module Engine.Graphics.Vulkan.Types.Texture
   , TexturePoolState(..)
   , TextureState(..)
   , TextureArrayState(..)
+  , VulkanImage(..)
+  , UndefinedTexture(..)
   ) where
 
 import UPrelude
@@ -10,6 +12,12 @@ import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
 import qualified Vulkan.Core10 as Vk
 import Engine.Asset.Handle (TextureHandle)
+
+-- | Holds image and its memory
+data VulkanImage = VulkanImage
+  { viImage  ∷ Vk.Image
+  , viMemory ∷ Vk.DeviceMemory
+  }
 
 -- | Data for a single texture
 data TextureData = TextureData 
@@ -34,8 +42,19 @@ data TextureArrayState = TextureArrayState
   , tasCurrentCapacity     ∷ Word32
   , tasCurrentCount        ∷ Word32
   , tasHandleToIndex       ∷ Map.Map TextureHandle Int
+  , tasUndefinedTexture    ∷ Maybe UndefinedTexture
   } deriving (Show)
 
 
 -- | Overall texture state as a type alias
 type TextureState = (TexturePoolState, V.Vector TextureData)
+
+-- undefined texture
+data UndefinedTexture = UndefinedTexture
+      { utImage     ∷ VulkanImage
+      , utImageView ∷ Vk.ImageView
+      , utSampler   ∷ Vk.Sampler }
+instance Show UndefinedTexture where
+  show ut = "UndefinedTexture { utImage = <VulkanImage>, utImageView = " ++ show (utImageView ut) ++ ", utSampler = " ++ show (utSampler ut) ++ " }"
+
+

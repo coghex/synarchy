@@ -1,5 +1,41 @@
 -- Engine/Asset/Manager.hs
-module Engine.Asset.Manager where
+module Engine.Asset.Manager 
+  ( generateTextureHandle
+  , generateFontHandle
+  , generateShaderHandle
+  , updateTextureState
+  , updateFontState
+  , updateShaderState
+  , deleteTextureState
+  , deleteFontState
+  , deleteShaderState
+  , getAllTextureHandles
+  , getAllFontHandles
+  , getAllShaderHandles
+  , generateHandle
+  , updateAssetState
+  , deleteAssetState
+  , getAllHandles
+  , lookupTextureAsset
+  , lookupFontAsset
+  , lookupShaderAsset
+  , lookupAsset
+  , initTextureArrayManager
+  , loadTextureAtlas
+  , loadTextureAtlasWithHandle
+  , loadShaderProgram
+  , unloadAsset
+  , reloadAsset
+  , getTextureAtlas
+  , getShaderProgram
+  , cleanupAssetManager
+  , getTextureStateMap
+  , getFontStateMap
+  , getShaderStateMap
+  , getTextureHandleState
+  , getFontHandleState
+  , getShaderHandleState
+  ) where
 
 import UPrelude
 import Control.Concurrent.MVar
@@ -7,7 +43,7 @@ import Control.Exception (finally, catch, SomeException)
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
+import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource, allocResource')
 import Engine.Core.State
@@ -24,6 +60,10 @@ import Engine.Graphics.Vulkan.Texture
 import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.ShaderCode
+import Engine.Graphics.Vulkan.Texture.Types (TextureSystem(..), BindlessTextureSystem(..))
+import Engine.Graphics.Vulkan.Texture.Bindless (registerTexture)
+import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
+import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import qualified Vulkan.Core10 as Vk
 import Vulkan.Zero
 
@@ -100,11 +140,10 @@ getAllShaderHandles pool = do
   return $ Map.keys stateMap
 
 -- LEGACY: Keep old generic functions for backward compatibility
--- (these just delegate to specific versions)
 generateHandle ∷ ∀ h. AssetHandle h ⇒ AssetPool → IO h
 generateHandle pool = fromInt <$> atomicModifyIORef' counter (\n → (n + 1, n))
   where
-    counter = apNextTextureHandle pool  -- Default to texture for now
+    counter = apNextTextureHandle pool
 
 updateAssetState ∷ ∀ h. AssetHandle h ⇒ h → AssetState AssetId → AssetPool → IO ()
 updateAssetState handle state pool = 
@@ -140,8 +179,6 @@ lookupShaderAsset handle pool = do
 lookupAsset ∷ ∀ h. AssetHandle h ⇒ h → AssetPool → IO (Maybe (AssetState AssetId))
 lookupAsset handle pool = 
   lookupTextureAsset (fromInt $ toInt handle) pool
-  -- Hack: assumes TextureHandle for backward compatibility
-  -- Update call sites to use specific functions
 
 initTextureArrayManager ∷ Vk.Device → EngineM ε σ TextureArrayManager
 initTextureArrayManager device = do
@@ -151,41 +188,47 @@ initTextureArrayManager device = do
     , tamTextureMap = Map.empty
     }
 
--- | Load a texture atlas from file
-loadTextureAtlas ∷ Text      -- ^ Name of the atlas
-                → FilePath     -- ^ Path to the atlas file
-                → Text       -- ^ Array name
-                → EngineM ε σ AssetId
+-- | Load a texture atlas from file (generates a new handle)
+loadTextureAtlas ∷ Text → FilePath → Text → EngineM ε σ AssetId
 loadTextureAtlas name path arrayName = do
+  pool ← gets assetPool
+  texHandle ← liftIO $ generateTextureHandle pool
+  loadTextureAtlasWithHandle texHandle name path arrayName
+
+-- | Load a texture atlas from file with a specific TextureHandle
+-- This is used when the handle was already generated (e.g., from Lua)
+loadTextureAtlasWithHandle ∷ TextureHandle  -- ^ Pre-generated handle
+                          → Text            -- ^ Name of the atlas
+                          → FilePath        -- ^ Path to the atlas file
+                          → Text            -- ^ Array name
+                          → EngineM ε σ AssetId
+loadTextureAtlasWithHandle texHandle name path arrayName = do
   state ← get
   let pool = assetPool state
       pathKey = T.pack path
   -- check if the texture is already loaded
   case Map.lookup pathKey (apAssetPaths pool) of
     Just existingId → do
-      -- texture is already loaded, increment refcount and reuse
       modify $ \s → s { assetPool = (assetPool s) {
         apTextureAtlases = Map.adjust (\a → a { taRefCount = taRefCount a + 1 })
                                       existingId (apTextureAtlases pool) } }
       return existingId
     Nothing → do
-      -- First generate a new asset ID
       let nextId = AssetId $ fromIntegral $ apNextAssetId pool
-      -- Get required Vulkan resources
       pDevice ← case (vulkanPDevice $ graphicsState state) of
-        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlas: ") 
+        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlasWithHandle: ") 
                     "No physical device found"  
         Just pdev → pure pdev
       device ← case (vulkanDevice $ graphicsState state) of
-        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlas: ")
+        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlasWithHandle: ")
                     "No device found"
         Just dev → pure dev
       cmdPool ← case (vulkanCmdPool $ graphicsState state) of
-        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlas: ")
+        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlasWithHandle: ")
                     "No command pool found"
-        Just pool → pure pool
+        Just cmdP → pure cmdP
       cmdQueue ← case (deviceQueues (graphicsState state)) of
-        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlas: ")
+        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlasWithHandle: ")
                     "No device queues found"
         Just queues → pure $ graphicsQueue queues
           
@@ -195,28 +238,47 @@ loadTextureAtlas name path arrayName = do
         
       (sampler, samplerCleanup) ←
         createTextureSampler' device pDevice
+
+      -- Register with bindless system using the provided handle
+      bindlessSlot ← case textureSystem (graphicsState state) of
+        Just (BindlessSystem bindless) → do
+          (mbHandle, newBindless) ← registerTexture device texHandle imageView sampler bindless
+          modify $ \s → s { graphicsState = (graphicsState s) {
+            textureSystem = Just (BindlessSystem newBindless)
+          }}
+          case mbHandle of
+            Just bHandle → do
+              let slot = tsIndex $ bthSlot bHandle
+              logDebug $ "Registered texture '" ⧺ (show name) ⧺ "' (handle " ⧺ (show texHandle) 
+                        ⧺ ") in bindless slot: " ⧺ (show slot)
+              pure $ Just slot
+            Nothing → do
+              logInfo $ "Failed to register texture in bindless system: " ⧺ show name
+              pure Nothing
+        _ → do
+          logDebug "No bindless system available, using legacy path"
+          pure Nothing
     
-      -- Get or create texture array state
-      let texArrays = textureArrayStates $ graphicsState state
+      -- Get or create texture array state (legacy path)
+      state' ← get
+      let texArrays = textureArrayStates $ graphicsState state'
       texArray ← case Map.lookup arrayName texArrays of
         Just array → pure array
         Nothing → createTextureArrayState device
     
-      -- Create texture data 
       let textureData = TextureData
             { tdImageView = imageView
             , tdSampler = sampler
             , tdMipLevels = mipLevels
-            , tdDescriptorSet = error "Descriptor set not yet created" -- Will be updated
+            , tdDescriptorSet = error "Descriptor set not yet created"
             }
           
-      -- Update texture array state with new texture
       let newTexArray = texArray
             { tasActiveTextures = V.snoc (tasActiveTextures texArray) textureData
+            , tasHandleToIndex = Map.insert texHandle (V.length $ tasActiveTextures texArray) (tasHandleToIndex texArray)
             }
       updatedTexArray ← updateTextureArrayDescriptors device newTexArray
     
-      -- Create initial atlas entry
       let atlas = TextureAtlas
             { taId = nextId
             , taName = name
@@ -234,9 +296,10 @@ loadTextureAtlas name path arrayName = do
             , taCleanup = Just $ do
                 samplerCleanup
                 imageCleanup
+            , taBindlessSlot = bindlessSlot
+            , taTextureHandle = texHandle
             }
     
-      -- Update state
       modify $ \s → s 
         { assetPool = (assetPool s)
             { apTextureAtlases = Map.insert nextId atlas (apTextureAtlases pool)
@@ -251,9 +314,7 @@ loadTextureAtlas name path arrayName = do
       pure nextId
 
 -- | Load a shader program
-loadShaderProgram ∷ Text            -- ^ Name of the program
-                 → V.Vector ShaderStageInfo  -- ^ Shader stages
-                 → EngineM' ε AssetId
+loadShaderProgram ∷ Text → V.Vector ShaderStageInfo → EngineM' ε AssetId
 loadShaderProgram name stages = do
     undefined
 
@@ -262,15 +323,11 @@ unloadAsset ∷ AssetId → EngineM' ε ()
 unloadAsset aid = do
   pool ← gets assetPool
   
-  -- First check if it's a texture atlas
   case Map.lookup aid (apTextureAtlases pool) of
     Just atlas → do
-      -- Decrement reference count
       let refCount = taRefCount atlas - 1
       if refCount <= 0 then do
-          -- Execute cleanup if it exists
           liftIO $ maybe (pure ()) id (taCleanup atlas)
-          -- Remove from pool
           modify $ \s → s { assetPool = (assetPool s) {
             apTextureAtlases = Map.delete aid (apTextureAtlases pool)
             , apAssetPaths = Map.filter (/= aid) (apAssetPaths pool)
@@ -280,15 +337,11 @@ unloadAsset aid = do
       pure ()
       
     Nothing →
-      -- If not a texture, check if it's a shader program
       case Map.lookup aid (apShaders pool) of
         Just program → do
-          -- decrement reference count
           let newRefCount = spRefCount program - 1
           if newRefCount <= 0 then do
-                -- Execute cleanup if it exists
                 liftIO $ maybe (pure ()) id (spCleanup program)
-                -- Remove from pool
                 modify $ \s → s { assetPool = (assetPool s) {
                   apShaders = Map.delete aid (apShaders pool)
                 } }
@@ -303,10 +356,6 @@ unloadAsset aid = do
 -- | Reload an asset (useful for hot reloading)
 reloadAsset ∷ AssetId → EngineM' ε ()
 reloadAsset aid = do
-  -- 1. Get existing asset info
-  -- 2. Clean up old resources
-  -- 3. Load new resources
-  -- 4. Update pool
   undefined
 
 -- | Get a texture atlas by ID

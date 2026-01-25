@@ -13,9 +13,11 @@ import Engine.Scripting.Lua.Types
 import Engine.Event.Types
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Base
+import Engine.Graphics.Vulkan.Capability (TextureSystemCapability(..))
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
+import Engine.Graphics.Vulkan.Texture.Types
 import Engine.Graphics.Window.Types
 import Engine.Graphics.Camera
 import Engine.Graphics.Font.Data
@@ -71,6 +73,7 @@ data GraphicsState = GraphicsState
   , vulkanInstance     ∷ Maybe Vk.Instance
   , vulkanPDevice      ∷ Maybe Vk.PhysicalDevice
   , vulkanDevice       ∷ Maybe Vk.Device
+  , textureCapability  ∷ Maybe TextureSystemCapability
   , deviceQueues       ∷ Maybe DevQueues
   , vulkanCmdPool      ∷ Maybe Vk.CommandPool
   , vulkanCmdBuffers   ∷ Maybe (V.Vector Vk.CommandBuffer)
@@ -86,6 +89,8 @@ data GraphicsState = GraphicsState
   , vertexBuffer       ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))
   , textureArrayStates ∷ Map.Map T.Text TextureArrayState
+  , textureSystem      ∷ Maybe TextureSystem
+  , bindlessPipeline   ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , camera2D           ∷ Camera2D
   , cleanupStatus      ∷ CleanupStatus
   , fontCache          ∷ FontCache
