@@ -1,4 +1,13 @@
-local tex = nil
+local tex1 = nil
+local tex2 = nil
+local tex3 = nil
+local tex4 = nil
+local tex5 = nil
+local tex6 = nil
+local tex7 = nil
+local tex8 = nil
+local tex9 = nil
+local tex10 = nil
 local font = nil
 local spawnedSprites = {}
 local spriteCount = 0
@@ -17,7 +26,16 @@ function init()
     w,h = engine.getWindowSize()
     engine.logInfo("Window size: " .. w .. "x" .. h)
     -- Load texture for spawning
-    tex = engine.loadTexture("assets/textures/tile01.png")
+    tex1 = engine.loadTexture("assets/textures/tile01.png")
+    tex2 = engine.loadTexture("assets/textures/tile02.png")
+    tex3 = engine.loadTexture("assets/textures/tile03.png")
+    tex4 = engine.loadTexture("assets/textures/tile04.png")
+    tex5 = engine.loadTexture("assets/textures/tile05.png")
+    tex6 = engine.loadTexture("assets/textures/tile06.png")
+    tex7 = engine.loadTexture("assets/textures/tile07.png")
+    tex8 = engine.loadTexture("assets/textures/tile08.png")
+    tex9 = engine.loadTexture("assets/textures/tile09.png")
+    tex10 = engine.loadTexture("assets/textures/tile10.png")
     engine.logInfo("Texture loaded, ready for input")
     -- load font
     font = engine.loadFont("assets/fonts/ChrustyRock-ORLA.ttf", 32)
@@ -42,6 +60,31 @@ function onMouseDown(button, x, y)
     spriteCount = spriteCount + 1
     -- cycle through layers 0,1,2
     local layer = spriteCount % 3
+    -- cycle through textures
+    local texI = spriteCount % 11
+    if texI == 1 then
+        tex = tex1
+    elseif texI == 2 then
+        tex = tex3
+    elseif texI == 3 then
+        tex = tex2
+    elseif texI == 4 then
+        tex = tex4
+    elseif texI == 5 then
+        tex = tex5
+    elseif texI == 6 then
+        tex = tex6
+    elseif texI == 7 then
+        tex = tex7
+    elseif texI == 8 then
+        tex = tex8
+    elseif texI == 9 then
+        tex = tex9
+    elseif texI == 10 then
+        tex = tex10
+    else 
+        tex = 0
+    end
     local w, h = engine.getWindowSize()
     local worldX, worldY = engine.getWorldCoord(x, y)
     local objId = engine.spawnSprite(worldX, worldY, 0.1, 0.1, tex, layer)
