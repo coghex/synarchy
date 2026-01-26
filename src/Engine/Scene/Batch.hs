@@ -14,7 +14,7 @@ import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Asset.Handle
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
-import Engine.Graphics.Vulkan.Texture.Types (TextureSystem(..), BindlessTextureSystem(..))
+import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Graphics.Camera
 import Engine.Graphics.Font.Data
@@ -127,17 +127,16 @@ isNodeVisible camera viewWidth viewHeight node =
 
 -- | Convert scene node to drawable object (sprites only)
 -- Now takes TextureSystem to look up bindless slot
-nodeToDrawable ∷ SceneGraph → Maybe TextureSystem → SceneNode → Maybe DrawableObject
-nodeToDrawable graph texSystem node = do
+nodeToDrawable ∷ SceneGraph → Maybe BindlessTextureSystem → SceneNode → Maybe DrawableObject
+nodeToDrawable graph bts node = do
     guard (nodeType node ≡ SpriteObject)
     textureHandle ← nodeTexture node
     worldTrans ← Map.lookup (nodeId node) (sgWorldTrans graph)
     
     -- Look up bindless slot for this texture
-    let atlasId = case texSystem of
-          Just (BindlessSystem bindless) → 
-            fromIntegral $ getTextureSlotIndex textureHandle bindless
-          _ → 0.0  -- Legacy fallback
+    let atlasId = case bts of
+                    Just bts' → fromIntegral $ getTextureSlotIndex textureHandle bts'
+                    Nothing   → 0  -- Fallback if no bindless system
     
     let vertices = generateQuadVertices node worldTrans atlasId
         layerId = nodeLayer node

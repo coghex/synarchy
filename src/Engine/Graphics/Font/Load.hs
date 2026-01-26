@@ -28,6 +28,23 @@ import Data.Array.IO (IOArray, newArray, writeArray, getElems)
 import Foreign.Ptr (castPtr)
 import Foreign.Marshal.Array (pokeArray)
 
+-- | Create a descriptor pool dedicated to font atlas textures
+-- Each font gets one descriptor set with one combined image sampler
+createFontDescriptorPool ∷ Device → Word32 → EngineM ε σ DescriptorPool
+createFontDescriptorPool device maxFonts = do
+  let poolSize = zero
+        { type' = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+        , descriptorCount = maxFonts  -- One sampler per font
+        }
+      poolInfo = zero
+        { maxSets = fromIntegral maxFonts
+        , poolSizes = V.singleton poolSize
+        , flags = DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT
+        }
+  
+  allocResource (\pool → destroyDescriptorPool device pool Nothing) $
+    createDescriptorPool device poolInfo Nothing
+
 -- | Load a TTF font at specified size
 loadFont ∷ FontHandle → FilePath → Int → EngineM ε σ FontHandle
 loadFont requestedHandle fontPath fontSize = do
@@ -267,46 +284,45 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
     
     -- 8. Allocate and update descriptor set
     state ← get
-    let texArrays = textureArrayStates $ graphicsState state
-    case Map.lookup "default" texArrays of
-        Nothing → throwGraphicsError DescriptorError "No default texture array"
-        Just defaultArray → do
-            let descriptorPool = tasDescriptorPool defaultArray
-            
-            let allocInfo = zero
-                  { descriptorPool = descriptorPool
-                  , setLayouts = V.singleton fontDescLayout
-                  }
-            descriptorSets ← liftIO $ allocateDescriptorSets device allocInfo
-            let descSet = V.head descriptorSets
-            
-            let imgInfo = zero
-                  { sampler = sampler
-                  , imageView = imageView
-                  , imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                  }
-                writeDescriptorSet = SomeStruct $ zero
-                  { dstSet = descSet
-                  , dstBinding = 0
-                  , dstArrayElement = 0
-                  , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-                  , descriptorCount = 1
-                  , imageInfo = V.singleton imgInfo
-                  }
-            
-            updateDescriptorSets device (V.singleton writeDescriptorSet) V.empty
-            
-            -- Generate handle
-            pool ← gets assetPool
-            handle ← liftIO $ generateHandle @TextureHandle pool
-            
-            -- Cleanup staging buffer
-            destroyBuffer device stagingBuffer Nothing
-            freeMemory device stagingMemory Nothing
-            
-            logDebug $ "Font texture created:  handle=" ⧺ (show handle)
-            
-            return (handle, descSet, imageView, sampler)
+    fontPool ← case fontDescriptorPool (graphicsState state) of
+        Nothing → throwGraphicsError DescriptorError "Font descriptor pool not initialized"
+        Just pool → pure pool
+    
+    let allocInfo = zero
+          { descriptorPool = fontPool
+          , setLayouts = V.singleton fontDescLayout
+          }
+    descriptorSets ← liftIO $ allocateDescriptorSets device allocInfo
+    let descSet = V.head descriptorSets
+    
+    -- Update descriptor set with font texture
+    let imgInfo = zero
+          { sampler = sampler
+          , imageView = imageView
+          , imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+          }
+        writeDescriptorSet = SomeStruct $ zero
+          { dstSet = descSet
+          , dstBinding = 0
+          , dstArrayElement = 0
+          , descriptorType = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+          , descriptorCount = 1
+          , imageInfo = V.singleton imgInfo
+          }
+    
+    updateDescriptorSets device (V.singleton writeDescriptorSet) V.empty
+    
+    -- Generate handle
+    pool ← gets assetPool
+    handle ← liftIO $ generateHandle @TextureHandle pool
+    
+    -- Cleanup staging buffer
+    destroyBuffer device stagingBuffer Nothing
+    freeMemory device stagingMemory Nothing
+    
+    logDebug $ "Font texture created: handle=" ⧺ (show handle)
+    
+    return (handle, descSet, imageView, sampler)
 
 -----------------------------------------------------------
 -- Helper Functions

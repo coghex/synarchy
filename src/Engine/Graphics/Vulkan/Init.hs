@@ -2,7 +2,6 @@
 {-# LANGUAGE DataKinds #-}
 module Engine.Graphics.Vulkan.Init
   ( initializeVulkan
-  , initializeTextures
   , createUniformBuffersForFrames
   ) where
 
@@ -20,6 +19,7 @@ import Engine.Core.Error.Exception
 import Engine.Graphics.Base
 import Engine.Graphics.Camera
 import Engine.Graphics.Types
+import Engine.Graphics.Font.Load (createFontDescriptorPool)
 import Engine.Graphics.Font.Draw (createFontPipeline, createFontQuadBuffer)
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
@@ -108,6 +108,10 @@ initializeVulkan window = do
   logDebug $ "Descriptor Pool Created: " ⧺ show (dmPool descManager)
   modify $ \s → s { graphicsState = (graphicsState s) {
                       descriptorState = Just descManager } }
+  -- create a font descriptor pool (supports up to 64 fonts)
+  fontDescPool ← createFontDescriptorPool device 64
+  modify $ \s → s { graphicsState = (graphicsState s) {
+                      fontDescriptorPool = Just fontDescPool } }
   
   -- Allocate descriptor sets
   descSets ← allocateVulkanDescriptorSets device descManager (fromIntegral numFrames)
@@ -123,16 +127,7 @@ initializeVulkan window = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                       vertexBuffer = Just (vBuffer, vBufferMemory) } }
   
-  -- Create texture descriptor pool and layout (legacy)
-  descriptorPool ← createTextureDescriptorPool device
-  (uniformLayout, texLayout) ← createVulkanDescriptorSetLayout device
-  logDebug "Created descriptor pool and layout"
-  
-  -- Initialize legacy textures
-  initializeTextures device physicalDevice cmdPool (graphicsQueue queues) 
-                     descriptorPool texLayout
-  
-  -- *** NEW: Initialize bindless texture system ***
+  -- Create uniform descriptor set layout
   let texSystemConfig = TextureSystemConfig
         { tscMaxTextures   = 16384
         , tscReservedSlots = 1      -- Slot 0 = undefined texture
@@ -162,30 +157,17 @@ initializeVulkan window = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                       vulkanRenderPass = Just renderPass } }
   
-  -- Create legacy sprite pipeline
-  (pipeline, pipelineLayout) ← createVulkanRenderPipeline device renderPass
-                                 (siSwapExtent swapInfo) uniformLayout
-  logDebug $ "Pipeline: " ⧺ show pipeline
-  let pstate = PipelineState pipeline pipelineLayout renderPass
+  let bindlessTexLayout = btsDescriptorLayout texSystem
+  (bindlessPipe, bindlessPipeLayout) ← 
+    createBindlessPipeline device renderPass (siSwapExtent swapInfo) 
+                           (dmUniformLayout descManager) bindlessTexLayout
+  logDebug $ "Bindless Pipeline: " ⧺ show bindlessPipe
   modify $ \s → s { graphicsState = (graphicsState s) {
-                      pipelineState = Just pstate } }
-  
-  -- *** NEW: Create bindless pipeline if bindless is enabled ***
-  case texSystem of
-    BindlessSystem bindless → do
-      let bindlessTexLayout = btsDescriptorLayout bindless
-      (bindlessPipe, bindlessPipeLayout) ← 
-        createBindlessPipeline device renderPass (siSwapExtent swapInfo) 
-                               uniformLayout bindlessTexLayout
-      logDebug $ "Bindless Pipeline: " ⧺ show bindlessPipe
-      modify $ \s → s { graphicsState = (graphicsState s) {
                           bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout) } }
-    LegacySystem → 
-      logDebug "Using legacy pipeline only (no bindless)"
   
   -- Create font pipeline
   (fontPipe, fontPipeLayout, fontDescLayout) ←
-    createFontPipeline device renderPass (siSwapExtent swapInfo) uniformLayout
+    createFontPipeline device renderPass (siSwapExtent swapInfo) (dmUniformLayout descManager)
   logDebug $ "Font Pipeline: " ⧺ show fontPipe
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontPipeline = Just (fontPipe, fontPipeLayout)
@@ -209,36 +191,6 @@ initializeVulkan window = do
                       framebuffers = Just framebuffers } }
   
   pure cmdPool
-
--- | Initialize texture subsystem (legacy path)
-initializeTextures ∷ Device → PhysicalDevice → CommandPool → Queue
-  → DescriptorPool → DescriptorSetLayout
-  → EngineM ε σ ()
-initializeTextures device _physicalDevice _cmdPool _queue descriptorPool textureLayout = do
-  let poolState = TexturePoolState descriptorPool textureLayout
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      textureState = (poolState, V.empty) } }
-  
-  let allocInfo = zero 
-        { descriptorPool = descriptorPool
-        , setLayouts = V.singleton textureLayout
-        }
-  textureSets ← liftIO $ allocateDescriptorSets device allocInfo
-  
-  let textureArrayState = TextureArrayState
-        { tasDescriptorPool = descriptorPool
-        , tasDescriptorSetLayout = textureLayout
-        , tasActiveTextures = V.empty
-        , tasDescriptorSet = Just (V.head textureSets)
-        , tasCurrentCapacity = 0
-        , tasCurrentCount = 0
-        , tasHandleToIndex = Map.empty
-        , tasUndefinedTexture = Nothing
-        }
-  
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      textureArrayStates = Map.singleton "default" textureArrayState
-  } }
 
 -- | Create uniform buffers for all frames
 createUniformBuffersForFrames ∷ Device → PhysicalDevice 

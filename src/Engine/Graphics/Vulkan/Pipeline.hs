@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Vulkan.Pipeline
-  ( createVulkanRenderPipeline
-  , createVulkanRenderPass
+  ( createVulkanRenderPass
   , destroyVulkanRenderPass
   ) where
 
@@ -62,128 +61,6 @@ createVulkanRenderPass device swapchainImageFormat = do
     allocResource (\rpass → destroyRenderPass device rpass Nothing) $
         createRenderPass device renderPassInfo Nothing
 
-createVulkanRenderPipeline ∷ Device 
-                          → RenderPass
-                          → Extent2D
-                          → DescriptorSetLayout
-                          → EngineM ε σ (Pipeline, PipelineLayout)
-createVulkanRenderPipeline device renderPass swapExtent descriptorLayout = do
-    -- Create shader stages first
-    shaderStages ← createVulkanShaderStages device
-    -- Get the texture layout
-    state ← gets graphicsState
-    let (TexturePoolState _ texLayout, _) = textureState state
-    
-    let Extent2D w h = swapExtent
-        -- Vertex input state
-        vertexInputInfo = zero
-          { vertexBindingDescriptions   = V.singleton getVertexBindingDescription
-          , vertexAttributeDescriptions = getVertexAttributeDescriptions
-          }
-        
-        -- Input assembly
-        inputAssembly = zero
-          { topology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
-          , primitiveRestartEnable = False
-          }
-        
-        -- Viewport and scissors
-        viewport = zero
-          { x = 0
-          , y = 0
-          , width  = fromIntegral w
-          , height = fromIntegral h
-          , minDepth = 0
-          , maxDepth = 1
-          }
-        
-        scissor = (zero ∷ Rect2D)
-          { offset = Offset2D 0 0
-          , extent = swapExtent
-          }
-        
-        viewportState = zero
-          { viewports = V.singleton viewport
-          , scissors  = V.singleton scissor
-          }
-        
-        -- Rasterizer
-        rasterizer = (zero ∷ PipelineRasterizationStateCreateInfo '[])
-          { depthClampEnable        = False
-          , rasterizerDiscardEnable = False
-          , polygonMode             = POLYGON_MODE_FILL
-          , lineWidth               = 1
-          , cullMode                = CULL_MODE_NONE
-          , frontFace               = FRONT_FACE_COUNTER_CLOCKWISE
-          , depthBiasEnable         = False
-          }
-        
-        -- Multisampling
-        multisampling = (zero ∷ PipelineMultisampleStateCreateInfo '[])
-          { sampleShadingEnable  = False
-          , rasterizationSamples = SAMPLE_COUNT_1_BIT
-          }
-        
-        colorBlendAttachment = (zero ∷ PipelineColorBlendAttachmentState)
-          { colorWriteMask = COLOR_COMPONENT_R_BIT
-                             ⌄ COLOR_COMPONENT_G_BIT
-                             ⌄ COLOR_COMPONENT_B_BIT
-                             ⌄ COLOR_COMPONENT_A_BIT
-          , blendEnable    = True
-          , srcColorBlendFactor = BLEND_FACTOR_SRC_ALPHA
-          , dstColorBlendFactor = BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
-          , colorBlendOp   = BLEND_OP_ADD
-          , srcAlphaBlendFactor = BLEND_FACTOR_ONE
-          , dstAlphaBlendFactor = BLEND_FACTOR_ZERO
-          , alphaBlendOp   = BLEND_OP_ADD
-          }
-        
-        colorBlending = (zero ∷ PipelineColorBlendStateCreateInfo '[])
-          { logicOpEnable   = False
-          , attachments     = V.singleton colorBlendAttachment
-          , blendConstants  = (0, 0, 0, 0)
-          }
-
-        -- Create pipeline layout with both
-        pipelineLayoutInfo = zero
-          { setLayouts = V.fromList [descriptorLayout, texLayout]
-          , pushConstantRanges = V.empty
-          }
-        
-    -- Create pipeline layout
-    pipelineLayout ← allocResource 
-        (\layout → destroyPipelineLayout device layout Nothing) $
-        createPipelineLayout device pipelineLayoutInfo Nothing
-    
-    -- Create the graphics pipeline
-    let pipelineInfo = (zero ∷ GraphicsPipelineCreateInfo '[])
-          { stages             = shaderStages
-          , vertexInputState   = Just $ SomeStruct vertexInputInfo
-          , inputAssemblyState = Just inputAssembly
-          , viewportState      = Just $ SomeStruct viewportState
-          , rasterizationState = Just $ SomeStruct rasterizer
-          , multisampleState   = Just $ SomeStruct multisampling
-          , colorBlendState    = Just $ SomeStruct colorBlending
-          , layout             = pipelineLayout
-          , renderPass         = renderPass
-          , subpass            = 0
-          , basePipelineHandle = zero
-          , basePipelineIndex  = (-1)
-          }
-    
-    -- Create pipeline
-    (result, pipelinesVec) ← createGraphicsPipelines 
-        device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
-    
-    -- Get the first pipeline from the vector
-    let pipeline = V.head pipelinesVec
-    
-    -- Set up resource cleanup
-    _ ← allocResource 
-        (\p → destroyPipeline device p Nothing)
-        (pure pipeline)
-    
-    pure (pipeline, pipelineLayout)
 
 destroyVulkanRenderPass ∷ Device → RenderPass → EngineM ε σ ()
 destroyVulkanRenderPass device renderPass =

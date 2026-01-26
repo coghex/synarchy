@@ -78,7 +78,6 @@ data GraphicsState = GraphicsState
   , vulkanCmdPool      ∷ Maybe Vk.CommandPool
   , vulkanCmdBuffers   ∷ Maybe (V.Vector Vk.CommandBuffer)
   , vulkanRenderPass   ∷ Maybe Vk.RenderPass
-  , textureState       ∷ TextureState
   , descriptorState    ∷ Maybe DescriptorManager
   , pipelineState      ∷ Maybe PipelineState
   , frameResources     ∷ V.Vector FrameResources
@@ -88,14 +87,14 @@ data GraphicsState = GraphicsState
   , syncObjects        ∷ Maybe SyncObjects
   , vertexBuffer       ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))
-  , textureArrayStates ∷ Map.Map T.Text TextureArrayState
-  , textureSystem      ∷ Maybe TextureSystem
+  , textureSystem      ∷ Maybe BindlessTextureSystem
   , bindlessPipeline   ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , camera2D           ∷ Camera2D
   , cleanupStatus      ∷ CleanupStatus
   , fontCache          ∷ FontCache
   , fontPipeline       ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , fontQuadBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
+  , fontDescriptorPool ∷ Maybe Vk.DescriptorPool
   , fontDescriptorLayout ∷ Maybe Vk.DescriptorSetLayout
   -- instance buffers that survive across frames
   , pendingInstanceBuffers ∷ V.Vector (Vk.Buffer, Vk.DeviceMemory)

@@ -20,7 +20,6 @@ module Engine.Asset.Manager
   , lookupFontAsset
   , lookupShaderAsset
   , lookupAsset
-  , initTextureArrayManager
   , loadTextureAtlas
   , loadTextureAtlasWithHandle
   , loadShaderProgram
@@ -60,7 +59,7 @@ import Engine.Graphics.Vulkan.Texture
 import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.ShaderCode
-import Engine.Graphics.Vulkan.Texture.Types (TextureSystem(..), BindlessTextureSystem(..))
+import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (registerTexture)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
@@ -180,14 +179,6 @@ lookupAsset ∷ ∀ h. AssetHandle h ⇒ h → AssetPool → IO (Maybe (AssetSta
 lookupAsset handle pool = 
   lookupTextureAsset (fromInt $ toInt handle) pool
 
-initTextureArrayManager ∷ Vk.Device → EngineM ε σ TextureArrayManager
-initTextureArrayManager device = do
-  defaultArray ← createTextureArrayState device
-  pure $ TextureArrayManager
-    { tamArrays = Map.singleton "default" defaultArray
-    , tamTextureMap = Map.empty
-    }
-
 -- | Load a texture atlas from file (generates a new handle)
 loadTextureAtlas ∷ Text → FilePath → Text → EngineM ε σ AssetId
 loadTextureAtlas name path arrayName = do
@@ -241,11 +232,11 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
 
       -- Register with bindless system using the provided handle
       bindlessSlot ← case textureSystem (graphicsState state) of
-        Just (BindlessSystem bindless) → do
+        Just bindless → do
           (mbHandle, newBindless) ← registerTexture device texHandle imageView sampler bindless
           modify $ \s → s { graphicsState = (graphicsState s) {
-            textureSystem = Just (BindlessSystem newBindless)
-          }}
+            textureSystem = Just newBindless
+            } }
           case mbHandle of
             Just bHandle → do
               let slot = tsIndex $ bthSlot bHandle
@@ -261,10 +252,6 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
     
       -- Get or create texture array state (legacy path)
       state' ← get
-      let texArrays = textureArrayStates $ graphicsState state'
-      texArray ← case Map.lookup arrayName texArrays of
-        Just array → pure array
-        Nothing → createTextureArrayState device
     
       let textureData = TextureData
             { tdImageView = imageView
@@ -273,12 +260,6 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
             , tdDescriptorSet = error "Descriptor set not yet created"
             }
           
-      let newTexArray = texArray
-            { tasActiveTextures = V.snoc (tasActiveTextures texArray) textureData
-            , tasHandleToIndex = Map.insert texHandle (V.length $ tasActiveTextures texArray) (tasHandleToIndex texArray)
-            }
-      updatedTexArray ← updateTextureArrayDescriptors device newTexArray
-    
       let atlas = TextureAtlas
             { taId = nextId
             , taName = name
@@ -305,9 +286,6 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
             { apTextureAtlases = Map.insert nextId atlas (apTextureAtlases pool)
             , apAssetPaths = Map.insert pathKey nextId (apAssetPaths pool)
             , apNextAssetId = apNextAssetId pool + 1
-            }
-        , graphicsState = (graphicsState s)
-            { textureArrayStates = Map.insert arrayName updatedTexArray texArrays
             }
         }
     
@@ -406,24 +384,6 @@ cleanupAssetManager pool = do
 
 cleanupResources ∷ Vk.Device → GraphicsState → AssetPool → EngineM' ε ()
 cleanupResources device state pool = do
-    forM_ (Map.toList $ textureArrayStates state) $ \(arrayName, arrayState) → do
-        logDebug $ "Invalidating descriptor sets for: " ⧺ T.unpack arrayName
-        when (isJust $ tasDescriptorSet arrayState) $ do
-            modify $ \s → s { graphicsState = (graphicsState s) {
-                textureArrayStates = Map.adjust (\as → as { 
-                    tasDescriptorSet = Nothing 
-                }) arrayName (textureArrayStates $ graphicsState s)
-            }}
-
-    forM_ (Map.toList $ textureArrayStates state) $ \(arrayName, arrayState) → do
-        logDebug $ "Freeing descriptor sets for: " ⧺ T.unpack arrayName
-        when (isJust $ tasDescriptorSet arrayState) $ do
-            handleExceptions
-              (liftIO $ Vk.freeDescriptorSets device 
-                (tasDescriptorPool arrayState)
-                (V.singleton $ fromJust $ tasDescriptorSet arrayState))
-              "Freeing descriptor sets error: "
-
     forM_ (Map.elems $ apTextureAtlases pool) $ \atlas → do
         logDebug $ "Cleaning up texture atlas: " ⧺ T.unpack (taName atlas)
         case taStatus atlas of
@@ -436,8 +396,7 @@ cleanupResources device state pool = do
 
     modify $ \s → s 
         { graphicsState = (graphicsState s) 
-            { textureArrayStates = Map.empty
-            , cleanupStatus = Completed
+            { cleanupStatus = Completed
             }
         , assetPool = (assetPool s) 
             { apTextureAtlases = Map.empty

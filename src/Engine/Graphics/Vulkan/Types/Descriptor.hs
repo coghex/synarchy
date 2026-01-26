@@ -13,8 +13,5 @@ import Engine.Asset.Base (AssetId)
 data DescriptorManager = DescriptorManager
   { dmPool           ∷ DescriptorPool
   , dmUniformLayout  ∷ DescriptorSetLayout  -- ^ Layout for uniform buffers
-  , dmSamplerLayout  ∷ DescriptorSetLayout  -- ^ Layout for combined image samplers
   , dmActiveSets     ∷ V.Vector DescriptorSet
-  , dmTextureLayouts ∷ Map.Map AssetId DescriptorSetLayout
-  , dmShaderLayouts  ∷ Map.Map AssetId DescriptorSetLayout
   } deriving (Show)

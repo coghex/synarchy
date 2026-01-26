@@ -1,8 +1,7 @@
 -- | Types for the bindless texture system
 -- Separated to avoid import cycles with Engine.Core.State
 module Engine.Graphics.Vulkan.Texture.Types
-  ( TextureSystem(..)
-  , TextureSystemConfig(..)
+  ( TextureSystemConfig(..)
   , BindlessTextureSystem(..)
   , BindlessConfig(..)
   ) where
@@ -40,9 +39,3 @@ data TextureSystemConfig = TextureSystemConfig
   , tscForceBindless  ∷ Bool     -- ^ Force bindless even if limits are low
   , tscForceLegacy    ∷ Bool     -- ^ Force legacy path (for testing)
   } deriving (Show, Eq)
-
--- | The texture system (either bindless or legacy)
-data TextureSystem
-  = BindlessSystem !BindlessTextureSystem
-  | LegacySystem
-  deriving (Show)
