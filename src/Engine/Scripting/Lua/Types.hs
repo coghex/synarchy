@@ -62,7 +62,7 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSetPosRequest ObjectId Float Float
                     | LuaSetVisibleRequest ObjectId Bool
                     | LuaSetTextRequest ObjectId Text
-                    | LuaDestroySpriteRequest ObjectId
+                    | LuaDestroyRequest ObjectId
                     | LuaRequestFocus Word32
                     | LuaReleaseFocus
                     | LuaRegisterFocusable Bool Int

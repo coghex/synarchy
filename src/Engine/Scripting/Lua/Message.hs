@@ -52,7 +52,7 @@ handleLuaMessage msg = case msg of
   LuaSetSizeRequest objId width height → handleSetSize objId width height
   LuaSetPosRequest objId x y → handleSetPosSprite objId x y
   LuaSetVisibleRequest objId visible → handleSetVisible objId visible
-  LuaDestroySpriteRequest objId → handleDestroySprite objId
+  LuaDestroyRequest objId → handleDestroy objId
   _ → return ()
 
 -- | Handle texture load request
@@ -153,8 +153,8 @@ handleSetVisible objId visible = do
     modifySceneNode objId $ \node → node { nodeVisible = visible }
 
 -- | Handle destroy sprite request
-handleDestroySprite ∷ ObjectId → EngineM ε σ ()
-handleDestroySprite objId = do
+handleDestroy ∷ ObjectId → EngineM ε σ ()
+handleDestroy objId = do
     sceneMgr ← gets sceneManager
     case smActiveScene sceneMgr of
       Just sceneId → case Map.lookup sceneId (smSceneGraphs sceneMgr) of
@@ -166,7 +166,6 @@ handleDestroySprite objId = do
                 }
               updatedGraphs = Map.insert sceneId updatedGraph (smSceneGraphs sceneMgr)
           modify $ \s → s { sceneManager = sceneMgr { smSceneGraphs = updatedGraphs } }
-          logDebug $ "Destroyed sprite: " ⧺ show objId
         Nothing → logInfo "No scene graph"
       Nothing → logInfo "No active scene"
 

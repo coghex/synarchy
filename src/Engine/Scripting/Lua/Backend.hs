@@ -113,9 +113,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.setVisible(objectId, visible)
   Lua.pushHaskellFunction (setVisibleFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "setVisible")
-  -- engine.destroySprite(objectId)
-  Lua.pushHaskellFunction (destroySpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "destroySprite")
+  -- engine.destroy(objectId)
+  Lua.pushHaskellFunction (destroyFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "destroy")
   -- engine.isKeyDown(keyName)
   Lua.pushHaskellFunction (isKeyDownFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "isKeyDown")
@@ -347,20 +347,20 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
               "setVisible requires 2 arguments: objectId, visible"
           return 0
 
-    destroySpriteFn = do
+    destroyFn = do
       objIdNum ← Lua.tointeger 1
       case objIdNum of
         Just idVal → do
           Lua.liftIO $ do
             let (lteq, _) = lbsMsgQueues backendState
-                msg = LuaDestroySpriteRequest (ObjectId (fromIntegral idVal))
+                msg = LuaDestroyRequest (ObjectId (fromIntegral idVal))
             Q.writeQueue lteq msg
           return 0
         _ → do
           Lua.liftIO $ do
             let lf = logFunc env
             lf defaultLoc "lua" LevelError 
-              "destroySprite requires 1 argument: objectId"
+              "destroy requires 1 argument: objectId"
           return 0
 
     isKeyDownFn = do
