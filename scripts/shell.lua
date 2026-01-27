@@ -537,31 +537,8 @@ function calculateBoxHeight()
     return math.min(neededHeight, maxHeight)
 end
 
--- Find longest common prefix among a list of strings
-function longestCommonPrefix(strings)
+local function longestCommonPrefix(strings)
     if #strings == 0 then return "" end
-    function calculateBoxHeight()
-    local promptPadding = 20
-    local baseHeight = tileSize * 2 + lineHeight - promptPadding
-    
-    if #history == 0 then
-        return baseHeight
-    end
-    
-    local maxTextWidth = middleWidth - historyPadding * 2
-    local historyLines = 0
-    for _, entry in ipairs(history) do
-        historyLines = historyLines + countLinesForEntry(entry, maxTextWidth, shellFont)
-    end
-    
-    local historyHeight = historyLines * lineHeight
-    local neededHeight = baseHeight + historyHeight
-    
-    local _, fbHeight = engine.getFramebufferSize()
-    local maxHeight = fbHeight - marginTop - marginBottom
-    
-    return math.min(neededHeight, maxHeight)
-end
     if #strings == 1 then return strings[1] end
     
     local prefix = strings[1]
