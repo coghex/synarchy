@@ -251,9 +251,9 @@ fontUIVertexShaderCode = [vert|
     layout(location = 1) out vec4 fragColor;
     
     void main() {
-        // calculate final position, glyphPos and size are already in NDC
-        vec2 pos = glyphPos + inPosition * glyphSize;
-        gl_Position = vec4(pos, 0.0, 1.0);
+        // calculate pos in pixels, then apply projection
+        vec2 pixelPos = glyphPos + inPosition * glyphSize;
+        gl_Position = ubo.uiProj * vec4(pixelPos, 0.0, 1.0);
         // interpolate uv within atlas rect
         vec2 uv = mix(glyphUV.xy, glyphUV.zw, inTexCoord);
         fragTexCoord = uv;

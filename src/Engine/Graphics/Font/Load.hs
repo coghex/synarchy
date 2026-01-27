@@ -118,7 +118,7 @@ generateFontAtlas fontPath fontSize = do
             putStrLn $ "Atlas size: " ++ show atlasWidth ++ "x" ++ show atlasHeight
             
             -- Pack glyphs with metrics
-            (atlasBitmap, glyphMap) ← packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow glyphDataWithMetrics chars
+            (atlasBitmap, glyphMap) ← packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow cellWidth cellHeight glyphDataWithMetrics chars
            
             putStrLn $ "Atlas generated: " ++ show (Map.size glyphMap) ++ " glyphs"
             
@@ -145,9 +145,10 @@ renderGlyphWithMetrics font char scale = do
         Just glyph → return glyph
 
 -- Updated to use metrics stored before font was freed
-packGlyphsSTBWithMetrics ∷ Int → Int → Int → [(Int, Int, Int, Int, [Word8], Float)] → [Char]
+packGlyphsSTBWithMetrics ∷ Int → Int → Int → Int → Int
+                         → [(Int, Int, Int, Int, [Word8], Float)] → [Char]
                          → IO ([Word8], Map.Map Char GlyphInfo)
-packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow glyphData chars = do
+packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow cellWidth cellHeight glyphData chars = do
     atlasArray ← newArray (0, atlasWidth * atlasHeight - 1) 0 ∷ IO (IOArray Int Word8)
     
     glyphMap ← foldM (packGlyph atlasArray) Map.empty (zip glyphData (zip chars [0..]))
@@ -158,8 +159,6 @@ packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow glyphData chars = do
     packGlyph atlasArray gmap ((w, h, xoff, yoff, pixels, advance), (char, idx)) = do
         let col = idx `mod` charsPerRow
             row = idx `div` charsPerRow
-            cellWidth = atlasWidth `div` charsPerRow
-            cellHeight = 32
             atlasX = col * cellWidth + 1
             atlasY = row * cellHeight + 1
         

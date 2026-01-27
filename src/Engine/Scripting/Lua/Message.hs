@@ -50,7 +50,7 @@ handleLuaMessage msg = case msg of
     handleSpawnSprite objId x y width height texHandle layer
   LuaMoveSpriteRequest objId x y → handleMoveSprite objId x y
   LuaSetSpriteColorRequest objId color → handleSetSpriteColor objId color
-  LuaSetSpriteVisibleRequest objId visible → handleSetSpriteVisible objId visible
+  LuaSetVisibleRequest objId visible → handleSetVisible objId visible
   LuaDestroySpriteRequest objId → handleDestroySprite objId
   _ → return ()
 
@@ -143,8 +143,8 @@ handleSetSpriteColor objId color = do
     modifySceneNode objId $ \node → node { nodeColor = color }
 
 -- | Handle set sprite visible request
-handleSetSpriteVisible ∷ ObjectId → Bool → EngineM ε σ ()
-handleSetSpriteVisible objId visible = do
+handleSetVisible ∷ ObjectId → Bool → EngineM ε σ ()
+handleSetVisible objId visible = do
     modifySceneNode objId $ \node → node { nodeVisible = visible }
 
 -- | Handle destroy sprite request

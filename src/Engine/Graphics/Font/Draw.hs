@@ -5,6 +5,7 @@ module Engine.Graphics.Font.Draw
     , createFontQuadBuffer
     , createFontTextureLayout
     , layoutText
+    , layoutTextUI
     , cleanupPendingInstanceBuffers
     ) where
 
@@ -468,3 +469,30 @@ createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout = 
     destroyShaderModule device fragModule Nothing
     
     pure (pipeline, pipelineLayout)
+
+-- | Layout text into glyph instances for UI (pixel coordinates, no NDC conversion)
+layoutTextUI ∷ FontAtlas → Float → Float → Text → (Float, Float, Float, Float) → V.Vector GlyphInstance
+layoutTextUI atlas startX startY text color =
+    let chars = T.unpack text
+        (_, instances) = foldl layoutChar (startX, []) chars
+    in V.fromList (reverse instances)
+  where
+    layoutChar (currentX, acc) char =
+        case Map.lookup char (faGlyphData atlas) of
+            Nothing → (currentX, acc)  -- Skip unknown character
+            Just glyphInfo →
+                let (bearingX, bearingY) = giBearing glyphInfo
+                    (w, h) = giSize glyphInfo
+                    (u0, v0, u1, v1) = giUVRect glyphInfo
+                    -- Position glyph in pixels (no NDC conversion)
+                    pxX = currentX + bearingX
+                    pxY = startY + bearingY
+                    
+                    instance' = GlyphInstance
+                        { instancePosition = (pxX, pxY)
+                        , instanceSize = (w, h)
+                        , instanceUVRect = (u0, v0, u1, v1)
+                        , instanceColor = color }
+                    
+                    nextX = currentX + giAdvance glyphInfo
+                in (nextX, instance' : acc)

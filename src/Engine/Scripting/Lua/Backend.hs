@@ -106,9 +106,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.setSpriteColor(objectId, r, g, b, a)
   Lua.pushHaskellFunction (setSpriteColorFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "setSpriteColor")
-  -- engine.setSpriteVisible(objectId, visible)
-  Lua.pushHaskellFunction (setSpriteVisibleFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "setSpriteVisible")
+  -- engine.setVisible(objectId, visible)
+  Lua.pushHaskellFunction (setVisibleFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "setVisible")
   -- engine.destroySprite(objectId)
   Lua.pushHaskellFunction (destroySpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "destroySprite")
@@ -301,21 +301,21 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
               "setSpriteColor requires 5 arguments: objectId, r, g, b, a"
           return 0
 
-    setSpriteVisibleFn = do
+    setVisibleFn = do
       objIdNum ← Lua.tointeger 1
       visible ← Lua.toboolean 2
       case objIdNum of
         Just idVal → do
           Lua.liftIO $ do
             let (lteq, _) = lbsMsgQueues backendState
-                msg = LuaSetSpriteVisibleRequest (ObjectId (fromIntegral idVal)) visible
+                msg = LuaSetVisibleRequest (ObjectId (fromIntegral idVal)) visible
             Q.writeQueue lteq msg
           return 0
         _ → do
           Lua.liftIO $ do
             let lf = logFunc env
             lf defaultLoc "lua" LevelError 
-              "setSpriteVisible requires 2 arguments: objectId, visible"
+              "setVisible requires 2 arguments: objectId, visible"
           return 0
 
     destroySpriteFn = do
@@ -481,7 +481,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
         _ → do
           Lua.pushstring "drawText requires 5 arguments: objectId, x, y, fontHandle, text"
           Lua.pushnil
-      return 0
+      return 1
 
     registerFocusableFn = do
       acceptsText ← Lua.toboolean 1

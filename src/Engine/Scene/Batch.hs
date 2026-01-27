@@ -35,7 +35,6 @@ collectSpriteBatches graph camera viewWidth viewHeight = do
         drawableObjs = mapMaybe (nodeToDrawable graph texSystem) visibleSprites
     pure $ V.fromList drawableObjs
 
--- | collect text drawable objects from scene graph
 collectTextBatches ∷ SceneGraph → Float → Float
   → EngineM ε σ (V.Vector TextRenderBatch)
 collectTextBatches graph screenW screenH = do
@@ -56,7 +55,10 @@ collectTextBatches graph screenW screenH = do
                       let (x,y) = wtPosition worldTrans
                           Vec4 r g b a = nodeColor node
                           color = (r, g, b, a)
-                      let instances = layoutText atlas x y screenW screenH text color
+                          isUILayer = let (LayerId l) = layerId in l >= 10
+                      let instances = if isUILayer
+                                      then layoutTextUI atlas x y text color
+                                      else layoutText atlas x y screenW screenH text color
                       return instances
                   (Nothing, _) → do
                       logDebug $ "      No text for node " ⧺ show (nodeId node)

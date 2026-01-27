@@ -28,8 +28,12 @@ local objBoxNW = nil
 local objBoxSE = nil
 local objBoxSW = nil
 
+-- Text object for prompt
+local objPrompt = nil
+
 -- Font
 local fontHandle = nil
+local shellFont = nil
 
 -- Configuration
 local tileSize = 64        -- tile size in pixels
@@ -43,6 +47,15 @@ local marginBottom = 40
 function shell.init(font)
     fontHandle = font
     
+    -- Load shell-specific font
+    shellFont = engine.loadFont("assets/fonts/Cabal.ttf", 64)
+    if shellFont then
+        engine.logInfo("Shell font loaded: Cabal.ttf")
+    else
+        engine.logError("Failed to load shell font")
+        shellFont = font  -- Fall back to passed font
+    end
+    
     -- Load all 9 box textures
     texBox = engine.loadTexture("assets/textures/box/box.png")
     texBoxN = engine.loadTexture("assets/textures/box/boxn.png")
@@ -54,8 +67,11 @@ function shell.init(font)
     texBoxSE = engine.loadTexture("assets/textures/box/boxse.png")
     texBoxSW = engine.loadTexture("assets/textures/box/boxsw.png")
     
+    engine.logInfo("Shell textures loaded")
+    
     -- Register as focusable (accepts text, tab index 0)
     focusId = engine.registerFocusable(true, 0)
+    engine.logInfo("Shell initialized with focusId: " .. tostring(focusId))
 end
 
 function shell.toggle()
@@ -100,17 +116,26 @@ function shell.show()
         objBoxSW = engine.spawnSprite(baseX + tileSize / 2, row2Y, tileSize, tileSize, texBoxSW, shellLayer)
         objBoxS  = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row2Y, middleWidth, tileSize, texBoxS, shellLayer)
         objBoxSE = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row2Y, tileSize, tileSize, texBoxSE, shellLayer)
+        
+        -- Spawn prompt text "$>" in the middle row, inside the box
+        -- Position it at the left edge of the center area
+        local promptX = baseX + tileSize + 10  -- 10px padding from left edge
+        local promptY = row2Y - 48-- Bottom row (where input goes)
+        objPrompt = engine.spawnText(promptX, promptY, shellFont, "$>", shellLayer)
+        engine.logInfo("Shell prompt spawned at: " .. promptX .. ", " .. promptY)
     else
         -- Show existing tiles
-        engine.setSpriteVisible(objBoxNW, true)
-        engine.setSpriteVisible(objBoxN, true)
-        engine.setSpriteVisible(objBoxNE, true)
-        engine.setSpriteVisible(objBoxW, true)
-        engine.setSpriteVisible(objBox, true)
-        engine.setSpriteVisible(objBoxE, true)
-        engine.setSpriteVisible(objBoxSW, true)
-        engine.setSpriteVisible(objBoxS, true)
-        engine.setSpriteVisible(objBoxSE, true)
+        engine.setVisible(objBoxNW, true)
+        engine.setVisible(objBoxN, true)
+        engine.setVisible(objBoxNE, true)
+        engine.setVisible(objBoxW, true)
+        engine.setVisible(objBox, true)
+        engine.setVisible(objBoxE, true)
+        engine.setVisible(objBoxSW, true)
+        engine.setVisible(objBoxS, true)
+        engine.setVisible(objBoxSE, true)
+        engine.setVisible(objPrompt, true)
+        -- TODO: Show text when we have setTextVisible
     end
 end
 
@@ -118,15 +143,17 @@ function shell.hide()
     visible = false
     engine.releaseFocus()
     
-    if objBoxNW then engine.setSpriteVisible(objBoxNW, false) end
-    if objBoxN then engine.setSpriteVisible(objBoxN, false) end
-    if objBoxNE then engine.setSpriteVisible(objBoxNE, false) end
-    if objBoxW then engine.setSpriteVisible(objBoxW, false) end
-    if objBox then engine.setSpriteVisible(objBox, false) end
-    if objBoxE then engine.setSpriteVisible(objBoxE, false) end
-    if objBoxSW then engine.setSpriteVisible(objBoxSW, false) end
-    if objBoxS then engine.setSpriteVisible(objBoxS, false) end
-    if objBoxSE then engine.setSpriteVisible(objBoxSE, false) end
+    if objBoxNW then engine.setVisible(objBoxNW, false) end
+    if objBoxN then engine.setVisible(objBoxN, false) end
+    if objBoxNE then engine.setVisible(objBoxNE, false) end
+    if objBoxW then engine.setVisible(objBoxW, false) end
+    if objBox then engine.setVisible(objBox, false) end
+    if objBoxE then engine.setVisible(objBoxE, false) end
+    if objBoxSW then engine.setVisible(objBoxSW, false) end
+    if objBoxS then engine.setVisible(objBoxS, false) end
+    if objBoxSE then engine.setVisible(objBoxSE, false) end
+    if objPrompt then engine.setVisible(objPrompt, false) end
+    -- TODO: Hide text when we have setTextVisible
 end
 
 function shell.updateDisplay()
