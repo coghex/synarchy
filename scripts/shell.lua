@@ -57,12 +57,14 @@ local cursorVisible = true
 local cursorBlinkTime = 0
 local cursorBlinkRate = 0.5 -- seconds
 local cursorPos = 0
+local inputScrollOffset = 0
 
 -- Configuration
 local tileSize = 64
 local middleWidth = 1200
 local shellLayer = 10
 local fontSize = 32
+local maxInputWidth = 0
 
 -- completion state
 local currentCompletions = {}
@@ -197,8 +199,9 @@ end
 
 function shell.updateDisplay()
     if not visible then return end
+    updateInputScroll()
     if objBufferText then
-        engine.setText(objBufferText, inputBuffer)
+        engine.setText(objBufferText, getVisibleInput())
     end
     shell.updateCursorPos()
     shell.updateGhostText()
@@ -237,6 +240,7 @@ function shell.onSubmit()
     if inputBuffer == "" then return end
     historyIndex = 0
     savedInputBuffer = ""
+    inputScrollOffset = 0
     local cmd = string.lower(string.match(inputBuffer, "^%s*(%S+)") or "")
     if cmd == "help" then
         shell.addHistory(inputBuffer, shell.cmdHelp(), false)
@@ -290,7 +294,6 @@ function shell.cmdQuit()
 end
 
 function shell.rebuildHistoryDisplay()
-    -- Destroy old text objects
     for _, obj in ipairs(historyTextObjects) do
         engine.destroy(obj)
     end
@@ -302,36 +305,43 @@ function shell.rebuildHistoryDisplay()
     local fbWidth, fbHeight = engine.getFramebufferSize()
     local baseX = marginLeft
     local textX = baseX + tileSize + historyPadding
+    local maxTextWidth = middleWidth - historyPadding * 2
     
     local promptY = getPromptY()
-    local availableHeight = promptY - marginTop - tileSize - historyPadding
-    local maxLines = math.floor(availableHeight / lineHeight)
-    
-    local startIdx = math.max(1, #history - maxLines + 1)
-    
     local y = promptY - lineHeight
-    for i = #history, startIdx, -1 do
+    
+    for i = #history, 1, -1 do
         local entry = history[i]
         
-        local resultColor = "white"
-        if entry.result == "OK" then
-            resultColor = "green"
-        elseif entry.result and entry.result:match("^undefined:") then
-            resultColor = "orange"
-        elseif entry.isError then
-            resultColor = "red"
-        end
-
+        -- Result (potentially multi-line)
         if entry.result and entry.result ~= "" and entry.result ~= "nil" then
-            local resultObj = engine.spawnText(textX + 20, y, shellFont, entry.result, resultColor, shellLayer)
-            table.insert(historyTextObjects, resultObj)
-            y = y - lineHeight
+            local resultColor = "white"
+            if entry.result == "OK" then
+                resultColor = "green"
+            elseif entry.result:match("^undefined:") then
+                resultColor = "orange"
+            elseif entry.isError then
+                resultColor = "red"
+            end
+            
+            local resultLines = wrapText(entry.result, maxTextWidth - 20, shellFont)
+            for j = #resultLines, 1, -1 do
+                if y < marginTop + tileSize then break end
+                local resultObj = engine.spawnText(textX + 20, y, shellFont, resultLines[j], resultColor, shellLayer)
+                table.insert(historyTextObjects, resultObj)
+                y = y - lineHeight
+            end
         end
         
+        -- Command (potentially multi-line)
         local cmdText = "$> " .. entry.command
-        local cmdObj = engine.spawnText(textX, y, shellFont, cmdText, "white", shellLayer)
-        table.insert(historyTextObjects, cmdObj)
-        y = y - lineHeight
+        local cmdLines = wrapText(cmdText, maxTextWidth, shellFont)
+        for j = #cmdLines, 1, -1 do
+            if y < marginTop + tileSize then break end
+            local cmdObj = engine.spawnText(textX, y, shellFont, cmdLines[j], "white", shellLayer)
+            table.insert(historyTextObjects, cmdObj)
+            y = y - lineHeight
+        end
         
         if y < marginTop + tileSize then
             break
@@ -428,7 +438,7 @@ function shell.updateCursorPos()
     local bufferX = promptX + fontSize
     
     -- Only measure text up to cursor position
-    local textBeforeCursor = inputBuffer:sub(1, cursorPos)
+    local textBeforeCursor = inputBuffer:sub(inputScrollOffset + 1, cursorPos)
     local textWidth = engine.getTextWidth(shellFont, textBeforeCursor)
     local cursorOffset = -4
     local cursorX = bufferX + textWidth + cursorOffset
@@ -457,6 +467,53 @@ function getPromptY()
     return row2Y - fontSize
 end
 
+function getMaxInputWidth()
+    if maxInputWidth > 0 then return maxInputWidth end
+    maxInputWidth = middleWidth - 100
+    return maxInputWidth
+end
+
+-- Update scroll position based on cursor
+function updateInputScroll()
+    local maxWidth = getMaxInputWidth()
+    
+    -- If cursor moved left of scroll offset, scroll left
+    if cursorPos < inputScrollOffset then
+        inputScrollOffset = cursorPos
+        return
+    end
+    
+    -- If cursor is at start, reset scroll
+    if cursorPos == 0 then
+        inputScrollOffset = 0
+        return
+    end
+    
+    -- Check if cursor is past right edge
+    local widthFromScrollToCursor = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1, cursorPos))
+    
+    -- If cursor goes past right edge, scroll right
+    while widthFromScrollToCursor > maxWidth do
+        inputScrollOffset = inputScrollOffset + 1
+        widthFromScrollToCursor = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1, cursorPos))
+    end
+end
+
+-- Get the visible portion of input buffer
+function getVisibleInput()
+    local maxWidth = getMaxInputWidth()
+    local visible = inputBuffer:sub(inputScrollOffset + 1)
+    
+    -- Trim to fit width
+    for i = #visible, 1, -1 do
+        local test = visible:sub(1, i)
+        if engine.getTextWidth(shellFont, test) <= maxWidth then
+            return test
+        end
+    end
+    return ""
+end
+
 function calculateBoxHeight()
     local promptPadding = 20
     local baseHeight = tileSize * 2 + lineHeight - promptPadding
@@ -465,12 +522,10 @@ function calculateBoxHeight()
         return baseHeight
     end
     
+    local maxTextWidth = middleWidth - historyPadding * 2
     local historyLines = 0
     for _, entry in ipairs(history) do
-        historyLines = historyLines + 1
-        if entry.result and entry.result ~= "" and entry.result ~= "nil" then
-            historyLines = historyLines + 1
-        end
+        historyLines = historyLines + countLinesForEntry(entry, maxTextWidth, shellFont)
     end
     
     local historyHeight = historyLines * lineHeight
@@ -483,8 +538,30 @@ function calculateBoxHeight()
 end
 
 -- Find longest common prefix among a list of strings
-local function longestCommonPrefix(strings)
+function longestCommonPrefix(strings)
     if #strings == 0 then return "" end
+    function calculateBoxHeight()
+    local promptPadding = 20
+    local baseHeight = tileSize * 2 + lineHeight - promptPadding
+    
+    if #history == 0 then
+        return baseHeight
+    end
+    
+    local maxTextWidth = middleWidth - historyPadding * 2
+    local historyLines = 0
+    for _, entry in ipairs(history) do
+        historyLines = historyLines + countLinesForEntry(entry, maxTextWidth, shellFont)
+    end
+    
+    local historyHeight = historyLines * lineHeight
+    local neededHeight = baseHeight + historyHeight
+    
+    local _, fbHeight = engine.getFramebufferSize()
+    local maxHeight = fbHeight - marginTop - marginBottom
+    
+    return math.min(neededHeight, maxHeight)
+end
     if #strings == 1 then return strings[1] end
     
     local prefix = strings[1]
@@ -501,13 +578,84 @@ local function longestCommonPrefix(strings)
 end
 
 -- Get the current word being typed (handles engine.xxx)
-local function getCurrentWord()
+function getCurrentWord()
     return inputBuffer:match("[%w_%.]+$") or ""
 end
 
+-- Wrap text into multiple lines that fit within maxWidth (by character)
+function wrapText(text, maxWidth, font)
+    local lines = {}
+    local currentLine = ""
+    
+    for i = 1, #text do
+        local char = text:sub(i, i)
+        local testLine = currentLine .. char
+        local width = engine.getTextWidth(font, testLine)
+        
+        if width > maxWidth and currentLine ~= "" then
+            table.insert(lines, currentLine)
+            currentLine = char
+        else
+            currentLine = testLine
+        end
+    end
+    
+    if currentLine ~= "" then
+        table.insert(lines, currentLine)
+    end
+    
+    if #lines == 0 then
+        table.insert(lines, text)
+    end
+    
+    return lines
+end
+
+-- Wrap text into multiple lines that fit within maxWidth
+function wrapTextByWord(text, maxWidth, font)
+    local lines = {}
+    local currentLine = ""
+    
+    for word in text:gmatch("%S+") do
+        local testLine = currentLine == "" and word or (currentLine .. " " .. word)
+        local width = engine.getTextWidth(font, testLine)
+        
+        if width > maxWidth and currentLine ~= "" then
+            table.insert(lines, currentLine)
+            currentLine = word
+        else
+            currentLine = testLine
+        end
+    end
+    
+    if currentLine ~= "" then
+        table.insert(lines, currentLine)
+    end
+    
+    -- Handle empty input
+    if #lines == 0 then
+        table.insert(lines, text)
+    end
+    
+    return lines
+end
+
+-- Count lines needed for a history entry
+function countLinesForEntry(entry, maxWidth, font)
+    local lines = 0
+    
+    local cmdText = "$> " .. entry.command
+    lines = lines + #wrapText(cmdText, maxWidth, font)
+    
+    if entry.result and entry.result ~= "" and entry.result ~= "nil" then
+        lines = lines + #wrapText(entry.result, maxWidth - 20, font)
+    end
+    
+    return lines
+end
 
 -- More general table member completion
-local function getTableCompletions(tableName, memberPrefix)
+function getTableCompletions(tableName, memberPrefix)
     local results = {}
     local tbl = _G[tableName] or (shellSandbox and shellSandbox[tableName])
     if type(tbl) == "table" then
@@ -605,8 +753,11 @@ function shell.updateGhostText()
     if #currentCompletions > 0 then
         local commonPrefix = longestCommonPrefix(currentCompletions)
         local ghostPart = commonPrefix:sub(#prefix + 1)
-        
-        if #ghostPart > 0 then
+        local maxWidth = getMaxInputWidth()
+        local currentWidth = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1))
+        local ghostWidth = engine.getTextWidth(shellFont, ghostPart)
+
+        if #ghostPart > 0 and (currentWidth + ghostWidth) <= maxWidth then
             if not ghostText then
                 ghostText = engine.spawnText(0, 0, shellFont, ghostPart, "ghost", shellLayer)
             else
@@ -615,7 +766,6 @@ function shell.updateGhostText()
             end
             
             -- Position after cursor
-            local textWidth = engine.getTextWidth(shellFont, inputBuffer)
             local fbWidth, fbHeight = engine.getFramebufferSize()
             local boxHeight = calculateBoxHeight()
             local baseX = marginLeft
@@ -625,6 +775,7 @@ function shell.updateGhostText()
             local promptX = baseX + tileSize + 10
             local promptY = row2Y - fontSize
             local bufferX = promptX + fontSize
+            local textWidth = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1))
             local cursorX = bufferX + textWidth
             
             engine.setPos(ghostText, cursorX, promptY)
@@ -709,6 +860,10 @@ function shell.onCursorLeft(fid)
     if fid == focusId and cursorPos > 0 then
         cursorPos = cursorPos - 1
         shell.updateCursorPos()
+        if cursorPos < inputScrollOffset then
+            inputScrollOffset = cursorPos
+            shell.updateDisplay()
+        end
     end
 end
 
@@ -716,13 +871,16 @@ function shell.onCursorRight(fid)
     if fid == focusId and cursorPos < #inputBuffer then
         cursorPos = cursorPos + 1
         shell.updateCursorPos()
+        shell.updateDisplay()
     end
 end
 
 function shell.onCursorHome(fid)
     if fid == focusId then
         cursorPos = 0
+        inputScrollOffset = 0
         shell.updateCursorPos()
+        shell.updateDisplay()
     end
 end
 
@@ -730,6 +888,7 @@ function shell.onCursorEnd(fid)
     if fid == focusId then
         cursorPos = #inputBuffer
         shell.updateCursorPos()
+        shell.updateDisplay()
     end
 end
 
@@ -746,6 +905,7 @@ function shell.onInterrupt(fid)
     if fid ~= focusId then return end
     historyIndex = 0
     savedInputBuffer = ""
+    inputScrollOffset = 0
     inputBuffer = ""
     cursorPos = 0
     shell.updateDisplay()

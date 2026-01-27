@@ -110,7 +110,7 @@ processInput env inpSt event = case event of
                 Q.writeQueue (luaQueue env) LuaShellToggle
             when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
                 Q.writeQueue (luaQueue env) $ LuaFocusLost fid
-            when (key ≡ KeyBackspace ∧ keyState ≡ GLFW.KeyState'Pressed) $
+            when (key ≡ KeyBackspace ∧ isKeyDown keyState) $
                 Q.writeQueue (luaQueue env) (LuaTextBackspace fid)
             when (key ≡ KeyEnter ∧ keyState ≡ GLFW.KeyState'Pressed) $
                 Q.writeQueue (luaQueue env) (LuaTextSubmit fid)
@@ -120,9 +120,9 @@ processInput env inpSt event = case event of
                 Q.writeQueue (luaQueue env) (LuaCursorUp fid)
             when (key ≡ KeyDown ∧ keyState ≡ GLFW.KeyState'Pressed) $
                 Q.writeQueue (luaQueue env) (LuaCursorDown fid)
-            when (key ≡ KeyLeft ∧ keyState ≡ GLFW.KeyState'Pressed) $
+            when (key ≡ KeyLeft ∧ isKeyDown keyState) $
                 Q.writeQueue (luaQueue env) (LuaCursorLeft fid)
-            when (key ≡ KeyRight ∧ keyState ≡ GLFW.KeyState'Pressed) $
+            when (key ≡ KeyRight ∧ isKeyDown keyState) $
                 Q.writeQueue (luaQueue env) (LuaCursorRight fid)
             when ((key ≡ KeyHome ∧ keyState ≡ GLFW.KeyState'Pressed)
                  ∨ (key ≡ KeyA ∧ keyState ≡ GLFW.KeyState'Pressed
@@ -132,7 +132,7 @@ processInput env inpSt event = case event of
                  ∨ (key ≡ KeyE ∧ keyState ≡ GLFW.KeyState'Pressed
                    ∧ (GLFW.modifierKeysControl mods))) $
                 Q.writeQueue (luaQueue env) (LuaCursorEnd fid)
-            when (key ≡ KeyDelete ∧ keyState ≡ GLFW.KeyState'Pressed) $
+            when (key ≡ KeyDelete ∧ isKeyDown keyState) $
                 Q.writeQueue (luaQueue env) (LuaTextDelete fid)
             when (key ≡ KeyC ∧ keyState ≡ GLFW.KeyState'Pressed
                    ∧ (GLFW.modifierKeysControl mods)) $
@@ -197,3 +197,9 @@ updateWindowState state _ = state
 
 updateScrollState ∷ InputState → Double → Double → InputState
 updateScrollState state x y = state { inpScrollDelta = (x, y) }
+
+-- | Helper to check if key is pressed or repeating
+isKeyDown ∷ GLFW.KeyState → Bool
+isKeyDown GLFW.KeyState'Pressed   = True
+isKeyDown GLFW.KeyState'Repeating = True
+isKeyDown _                       = False
