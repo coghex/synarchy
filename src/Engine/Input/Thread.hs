@@ -8,7 +8,7 @@ import qualified Graphics.UI.GLFW as GLFW
 import Control.Concurrent (threadDelay, ThreadId, killThread, forkIO)
 import Control.Exception (SomeException, catch)
 import Control.Monad.Logger (Loc(..), LogLevel(..), toLogStr, defaultLoc)
-import Data.IORef (IORef, newIORef, writeIORef, readIORef)
+import Data.IORef (IORef, newIORef, writeIORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import Engine.Core.State
 import Engine.Core.Thread
@@ -17,6 +17,8 @@ import Engine.Input.Callback
 import Engine.Input.Bindings
 import Engine.Scripting.Lua.Types
 import qualified Engine.Core.Queue as Q
+import UI.Focus (FocusManager, getInputMode, InputMode(..), clearFocus
+                , FocusId(..), fmCurrentFocus)
 
 -- | Start the input processing thread
 startInputThread ∷ EngineEnv → IO ThreadState
@@ -81,23 +83,44 @@ processInputs env inpSt = do
 processInput ∷ EngineEnv → InputState → InputEvent → IO InputState
 processInput env inpSt event = case event of
     InputKeyEvent glfwKey keyState mods → do
+        focusMgr ← readIORef (focusManagerRef env)
+        let mode = getInputMode focusMgr
         let key = fromGLFWKey glfwKey
-        -- get current key bindings
-        bindings ← readIORef (keyBindingsRef env)
-        -- check for special key combinations
-        case getKeyForAction "escape" bindings of
-          Just escapeKeyName →
-            when (Just key ≡ textToKey escapeKeyName
-                  && keyState ≡ GLFW.KeyState'Pressed) $ do
-                writeIORef (lifecycleRef env) CleaningUp
-          Nothing → return ()
-        -- send key events to lua
-        let lq = luaQueue env
-        when (keyState ≡ GLFW.KeyState'Pressed) $
-            Q.writeQueue lq (LuaKeyDownEvent key)
-        when (keyState ≡ GLFW.KeyState'Released) $
-            Q.writeQueue lq (LuaKeyUpEvent key)
+        case mode of
+          GameInputMode → do
+            when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) LuaShellToggle
+            when (key ≠ KeyGrave) $ do
+                let lq = luaQueue env
+                when (keyState ≡ GLFW.KeyState'Pressed) $
+                    Q.writeQueue lq (LuaKeyDownEvent key)
+                when (keyState ≡ GLFW.KeyState'Released) $
+                    Q.writeQueue lq (LuaKeyUpEvent key)
+            -- get current key bindings
+            bindings ← readIORef (keyBindingsRef env)
+            -- check for special key combinations
+            case getKeyForAction "escape" bindings of
+              Just escapeKeyName →
+                when (Just key ≡ textToKey escapeKeyName
+                      ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                    writeIORef (lifecycleRef env) CleaningUp
+              Nothing → return ()
+          TextInputMode (FocusId fid) → do
+            when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
+                Q.writeQueue (luaQueue env) LuaShellToggle
+            when (key ≡ KeyBackspace ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) (LuaTextBackspace fid)
+            when (key ≡ KeyEnter ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) (LuaTextSubmit fid)
+            return ()
         return $ updateKeyState inpSt glfwKey keyState mods
+    InputCharEvent c → do
+        focusMgr ← readIORef (focusManagerRef env)
+        case fmCurrentFocus focusMgr of
+          Just (FocusId fid) →
+            Q.writeQueue (luaQueue env) (LuaCharInput fid c)
+          Nothing → return ()
+        return inpSt
     InputMouseEvent btn pos state → do
         -- send mouse events to lua
         let lq = luaQueue env

@@ -1,181 +1,163 @@
--- Shell module for in-game Lua console
+-- Shell module for debug console
 local shell = {}
 
 -- State
 local visible = false
-local initialized = false
-local textures = {}
-local sprites = {}
+local focusId = nil
+local inputBuffer = ""
+
+-- Textures (loaded on init)
+local texBox = nil
+local texBoxN = nil
+local texBoxS = nil
+local texBoxE = nil
+local texBoxW = nil
+local texBoxNE = nil
+local texBoxNW = nil
+local texBoxSE = nil
+local texBoxSW = nil
+
+-- UI object IDs for the 9-box
+local objBox = nil
+local objBoxN = nil
+local objBoxS = nil
+local objBoxE = nil
+local objBoxW = nil
+local objBoxNE = nil
+local objBoxNW = nil
+local objBoxSE = nil
+local objBoxSW = nil
+
+-- Font
+local fontHandle = nil
 
 -- Configuration
-local config = {
-    width = 600,
-    height = 300,
-    borderSize = 32,
-    baseX = -400,  -- Adjust based on your coordinate system
-    baseY = -300,  -- Bottom of screen
-    layer = 1000,  -- High layer to render on top
-}
+local tileSize = 64        -- tile size in pixels
+local middleWidth = 400    -- middle section width in pixels
+local shellLayer = 10
 
--- History
-local history = {}
-local historyIndex = 0
-local maxHistory = 100
+-- Margins from edges (in pixels)
+local marginLeft = 40
+local marginBottom = 40
 
--- Initialize shell (call once)
-function shell.init()
-    if initialized then return end
+function shell.init(font)
+    fontHandle = font
     
-    engine.logInfo("Shell: Initializing...")
+    -- Load all 9 box textures
+    texBox = engine.loadTexture("assets/textures/box/box.png")
+    texBoxN = engine.loadTexture("assets/textures/box/boxn.png")
+    texBoxS = engine.loadTexture("assets/textures/box/boxs.png")
+    texBoxE = engine.loadTexture("assets/textures/box/boxe.png")
+    texBoxW = engine.loadTexture("assets/textures/box/boxw.png")
+    texBoxNE = engine.loadTexture("assets/textures/box/boxne.png")
+    texBoxNW = engine.loadTexture("assets/textures/box/boxnw.png")
+    texBoxSE = engine.loadTexture("assets/textures/box/boxse.png")
+    texBoxSW = engine.loadTexture("assets/textures/box/boxsw.png")
     
-    -- Load 9-patch textures
-    textures.nw = engine.loadTexture("assets/textures/box/boxnw.png")
-    textures.n  = engine.loadTexture("assets/textures/box/boxn.png")
-    textures.ne = engine.loadTexture("assets/textures/box/boxne.png")
-    textures.w  = engine.loadTexture("assets/textures/box/boxw.png")
-    textures.c  = engine.loadTexture("assets/textures/box/box.png")
-    textures.e  = engine.loadTexture("assets/textures/box/boxe.png")
-    textures.sw = engine.loadTexture("assets/textures/box/boxsw.png")
-    textures.s  = engine.loadTexture("assets/textures/box/boxs.png")
-    textures.se = engine.loadTexture("assets/textures/box/boxse.png")
-    
-    -- Create the 9-patch sprites
-    --shell.createBox()
-    
-    -- Start hidden
-    shell.setVisible(false)
-    
-    initialized = true
-    engine.logInfo("Shell: Initialized")
+    -- Register as focusable (accepts text, tab index 0)
+    focusId = engine.registerFocusable(true, 0)
 end
 
--- Create the 9-patch box sprites
-function shell.createBox()
-    local w = config.width
-    local h = config.height
-    local b = config.borderSize
-    local x = config.baseX
-    local y = config.baseY
-    local layer = config.layer
-    
-    -- Calculate sizes
-    local edgeW = w - (2 * b)  -- Horizontal edge width
-    local edgeH = h - (2 * b)  -- Vertical edge height
-    
-    -- Bottom row (SW, S, SE)
-    sprites.sw = engine.spawnSprite(x, y, b, b, textures.sw, layer)
-    sprites.s  = engine.spawnSprite(x + b, y, edgeW, b, textures.s, layer)
-    sprites.se = engine.spawnSprite(x + w - b, y, b, b, textures.se, layer)
-    
-    -- Middle row (W, C, E)
-    sprites.w = engine.spawnSprite(x, y + b, b, edgeH, textures.w, layer)
-    sprites.c = engine.spawnSprite(x + b, y + b, edgeW, edgeH, textures.c, layer)
-    sprites.e = engine.spawnSprite(x + w - b, y + b, b, edgeH, textures.e, layer)
-    
-    -- Top row (NW, N, NE)
-    sprites.nw = engine.spawnSprite(x, y + h - b, b, b, textures.nw, layer)
-    sprites.n  = engine.spawnSprite(x + b, y + h - b, edgeW, b, textures.n, layer)
-    sprites.ne = engine.spawnSprite(x + w - b, y + h - b, b, b, textures.ne, layer)
-    
-    engine.logInfo("Shell: Box created with 9 sprites")
-end
-
--- Set visibility of all shell sprites
-function shell.setVisible(vis)
-    visible = vis
-    if vis and sprites.c == nil then
-        shell.createBox()
-    end
-    for name, id in pairs(sprites) do
-        engine.setSpriteVisible(id, vis)
-    end
-    engine.logInfo("Shell: visibility = " .. tostring(vis))
-end
-
--- Toggle shell visibility
 function shell.toggle()
-    -- Initialize on first toggle if needed
-    if not initialized then
-        shell.init()
-    end
-    
-    shell.setVisible(not visible)
-end
-
--- Execute a command
-function shell.execute(command)
-    if command == nil or command == "" then
-        return
-    end
-    
-    engine.logInfo("Shell: Executing: " .. command)
-    
-    -- Try to evaluate as expression first (for things like "1+1")
-    local fn, err = load("return " .. command)
-    if not fn then
-        -- If that fails, try as statement
-        fn, err = load(command)
-    end
-    
-    if fn then
-        local ok, result = pcall(fn)
-        if ok then
-            local output = tostring(result)
-            engine.logInfo("Shell: Result: " .. output)
-            shell.addHistory(command, output)
-        else
-            engine.logInfo("Shell: Error: " .. tostring(result))
-            shell.addHistory(command, "Error: " .. tostring(result))
-        end
+    if visible then
+        shell.hide()
     else
-        engine.logInfo("Shell: Parse error: " .. tostring(err))
-        shell.addHistory(command, "Parse error: " .. tostring(err))
+        shell.show()
     end
 end
 
--- Add to history
-function shell.addHistory(command, result)
-    table.insert(history, {
-        command = command,
-        result = result,
-        time = os.time()
-    })
+function shell.show()
+    visible = true
+    engine.requestFocus(focusId)
     
-    -- Trim history if too long
-    while #history > maxHistory do
-        table.remove(history, 1)
-    end
+    -- Use framebuffer size for pixel-accurate positioning
+    local w, h = engine.getFramebufferSize()
     
-    -- Reset history navigation
-    historyIndex = #history + 1
-end
-
--- Navigate history up (older)
-function shell.historyUp()
-    if historyIndex > 1 then
-        historyIndex = historyIndex - 1
-        local entry = history[historyIndex]
-        if entry then
-            engine.logInfo("Shell: History[" .. historyIndex .. "]: " .. entry.command)
-            -- TODO: Set input buffer to entry.command
-        end
+    -- Calculate total box dimensions
+    local totalHeight = tileSize * 3
+    
+    -- Position at bottom-left of screen
+    local baseX = marginLeft
+    local baseY = h - marginBottom - totalHeight
+    
+    -- Spawn tiles if they don't exist
+    -- Note: spawnSprite expects CENTER position, so we add half the size
+    if not objBoxNW then
+        -- Top row
+        local row0Y = baseY + tileSize / 2
+        objBoxNW = engine.spawnSprite(baseX + tileSize / 2, row0Y, tileSize, tileSize, texBoxNW, shellLayer)
+        objBoxN  = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row0Y, middleWidth, tileSize, texBoxN, shellLayer)
+        objBoxNE = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row0Y, tileSize, tileSize, texBoxNE, shellLayer)
+        
+        -- Middle row
+        local row1Y = baseY + tileSize + tileSize / 2
+        objBoxW  = engine.spawnSprite(baseX + tileSize / 2, row1Y, tileSize, tileSize, texBoxW, shellLayer)
+        objBox   = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row1Y, middleWidth, tileSize, texBox, shellLayer)
+        objBoxE  = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row1Y, tileSize, tileSize, texBoxE, shellLayer)
+        
+        -- Bottom row
+        local row2Y = baseY + tileSize * 2 + tileSize / 2
+        objBoxSW = engine.spawnSprite(baseX + tileSize / 2, row2Y, tileSize, tileSize, texBoxSW, shellLayer)
+        objBoxS  = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row2Y, middleWidth, tileSize, texBoxS, shellLayer)
+        objBoxSE = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row2Y, tileSize, tileSize, texBoxSE, shellLayer)
+    else
+        -- Show existing tiles
+        engine.setSpriteVisible(objBoxNW, true)
+        engine.setSpriteVisible(objBoxN, true)
+        engine.setSpriteVisible(objBoxNE, true)
+        engine.setSpriteVisible(objBoxW, true)
+        engine.setSpriteVisible(objBox, true)
+        engine.setSpriteVisible(objBoxE, true)
+        engine.setSpriteVisible(objBoxSW, true)
+        engine.setSpriteVisible(objBoxS, true)
+        engine.setSpriteVisible(objBoxSE, true)
     end
 end
 
--- Navigate history down (newer)
-function shell.historyDown()
-    if historyIndex <= #history then
-        historyIndex = historyIndex + 1
-        if historyIndex <= #history then
-            local entry = history[historyIndex]
-            engine.logInfo("Shell: History[" .. historyIndex .. "]: " .. entry.command)
-            -- TODO: Set input buffer to entry.command
-        else
-            engine.logInfo("Shell: History: (current)")
-            -- TODO: Clear input buffer
-        end
+function shell.hide()
+    visible = false
+    engine.releaseFocus()
+    
+    if objBoxNW then engine.setSpriteVisible(objBoxNW, false) end
+    if objBoxN then engine.setSpriteVisible(objBoxN, false) end
+    if objBoxNE then engine.setSpriteVisible(objBoxNE, false) end
+    if objBoxW then engine.setSpriteVisible(objBoxW, false) end
+    if objBox then engine.setSpriteVisible(objBox, false) end
+    if objBoxE then engine.setSpriteVisible(objBoxE, false) end
+    if objBoxSW then engine.setSpriteVisible(objBoxSW, false) end
+    if objBoxS then engine.setSpriteVisible(objBoxS, false) end
+    if objBoxSE then engine.setSpriteVisible(objBoxSE, false) end
+end
+
+function shell.updateDisplay()
+    if not visible then return end
+    -- TODO: Update text display with inputBuffer
+end
+
+function shell.isVisible()
+    return visible
+end
+
+function shell.getFocusId()
+    return focusId
+end
+
+function shell.onChar(char)
+    inputBuffer = inputBuffer .. char
+    shell.updateDisplay()
+end
+
+function shell.onBackspace()
+    if #inputBuffer > 0 then
+        inputBuffer = string.sub(inputBuffer, 1, -2)
+        shell.updateDisplay()
     end
 end
 
--- Return the module
+function shell.onSubmit()
+    -- TODO: Execute command from inputBuffer
+    inputBuffer = ""
+    shell.updateDisplay()
+end
+
 return shell

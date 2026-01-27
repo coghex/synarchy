@@ -6,8 +6,10 @@ module Engine.Graphics.Vulkan.ShaderCode
     , fragmentShaderCode
     , fontVertexShaderCode
     , fontFragmentShaderCode
+    , fontUIVertexShaderCode
     , bindlessVertexShaderCode
     , bindlessFragmentShaderCode
+    , bindlessUIVertexShaderCode
     ) where
 
 import Vulkan.Utils.ShaderQQ.GLSL.Glslang (vert, frag)
@@ -91,6 +93,8 @@ fontVertexShaderCode = [vert|
         mat4 model;
         mat4 view;
         mat4 proj;
+        mat4 uiView;
+        mat4 uiProj;
     } ubo;
     // outputs to fragment shader
     layout(location = 0) out vec2 fragTexCoord;
@@ -141,6 +145,8 @@ bindlessVertexShaderCode = [vert|
         mat4 model;
         mat4 view;
         mat4 proj;
+        mat4 uiView;
+        mat4 uiProj;
     } ubo;
 
     // Outputs
@@ -179,5 +185,78 @@ bindlessFragmentShaderCode = [frag|
         // nonuniformEXT is required for proper divergent texture access
         vec4 texColor = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord);
         outColor = texColor * fragColor;
+    }
+|]
+
+-- | Bindless UI vertex shader (uses UI camera matrices)
+bindlessUIVertexShaderCode :: BS.ByteString
+bindlessUIVertexShaderCode = [vert|
+    #version 450
+    #extension GL_ARB_separate_shader_objects : enable
+
+    // Vertex attributes
+    layout(location = 0) in vec2 inPosition;
+    layout(location = 1) in vec2 inTexCoord;
+    layout(location = 2) in vec4 inColor;
+    layout(location = 3) in float inTexIndex;  // Float for compatibility
+
+    // Uniform buffer
+    layout(set = 0, binding = 0) uniform UniformBufferObject {
+        mat4 model;
+        mat4 view;
+        mat4 proj;
+        mat4 uiView;
+        mat4 uiProj;
+    } ubo;
+
+    // Outputs
+    layout(location = 0) out vec2 fragTexCoord;
+    layout(location = 1) out vec4 fragColor;
+    layout(location = 2) out flat int fragTexIndex;
+
+    void main() {
+        gl_Position = ubo.uiProj * vec4(inPosition.xy, 0.0, 1.0);
+        fragTexCoord = inTexCoord;
+        fragColor = inColor;
+        fragTexIndex = int(inTexIndex);
+    }
+|]
+
+-- | Font UI vertex shader (uses UI camera, but fonts currently use NDC directly)
+-- For now this is identical to the world font shader since fonts already use NDC
+fontUIVertexShaderCode :: BS.ByteString
+fontUIVertexShaderCode = [vert|
+    #version 450
+
+    // per-vertex data (quad template)
+    layout(location = 0) in vec2 inPosition;
+    layout(location = 1) in vec2 inTexCoord;
+    // per-instance data (one per character)
+    layout(location = 2) in vec2 glyphPos;
+    layout(location = 3) in vec2 glyphSize;
+    layout(location = 4) in vec4 glyphUV;
+    layout(location = 5) in vec4 glyphColor;
+    
+    // uniform buffer (needed for consistency, but UI text uses NDC directly)
+    layout(set = 0, binding = 0) uniform UniformBufferObject {
+        mat4 model;
+        mat4 view;
+        mat4 proj;
+        mat4 uiView;
+        mat4 uiProj;
+    } ubo;
+    
+    // outputs to fragment shader
+    layout(location = 0) out vec2 fragTexCoord;
+    layout(location = 1) out vec4 fragColor;
+    
+    void main() {
+        // calculate final position, glyphPos and size are already in NDC
+        vec2 pos = glyphPos + inPosition * glyphSize;
+        gl_Position = vec4(pos, 0.0, 1.0);
+        // interpolate uv within atlas rect
+        vec2 uv = mix(glyphUV.xy, glyphUV.zw, inTexCoord);
+        fragTexCoord = uv;
+        fragColor = glyphColor;
     }
 |]

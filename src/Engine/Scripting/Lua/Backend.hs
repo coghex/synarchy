@@ -27,6 +27,7 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Map as Map
+import qualified Data.ByteString.Char8 as BS
 import Data.Dynamic (toDyn, fromDynamic)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Data.Text.Encoding as TE
@@ -38,6 +39,8 @@ import Control.Monad (forM_, when, unless)
 import Control.Monad.Logger (Loc(..), LogLevel(..), toLogStr, defaultLoc)
 import Data.Time.Clock (getCurrentTime, diffUTCTime, utctDayTime)
 import System.Timeout (timeout)
+import UI.Focus (FocusId(..), registerFocusTarget, setFocus
+                , clearFocus, fmCurrentFocus)
 
 -- | Lua scripting backend
 data LuaBackend = LuaBackend
@@ -124,6 +127,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.getWindowSize()
   Lua.pushHaskellFunction (getWindowSizeFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "getWindowSize")
+  -- engine.getFramebufferSize()
+  Lua.pushHaskellFunction (getFramebufferSizeFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "getFramebufferSize")
   -- engine.getWorldCoord(screenX, screenY)
   Lua.pushHaskellFunction (getWorldCoordFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "getWorldCoord")
@@ -133,6 +139,18 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.spawnText(x,y,fontHandle,text,layer)
   Lua.pushHaskellFunction (spawnTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "spawnText")
+  -- engine.registerFocusable(acceptsText, tabIndex) -> focusId
+  Lua.pushHaskellFunction (registerFocusableFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "registerFocusable")
+  -- engine.requestFocus(focusId)
+  Lua.pushHaskellFunction (requestFocusFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "requestFocus")
+  -- engine.releaseFocus()
+  Lua.pushHaskellFunction (releaseFocusFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "releaseFocus")
+  -- engine.getFocusId() -> focusId or nil
+  Lua.pushHaskellFunction (getFocusIdFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "getFocusId")
   -- set global 'engine' table
   Lua.setglobal (Lua.Name "engine")
   where
@@ -374,6 +392,15 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
       Lua.pushnumber (Lua.Number h)
       return 2
 
+    getFramebufferSizeFn = do
+      (w, h) ← Lua.liftIO $ do
+        inputState ← readIORef (lbsInputState backendState)
+        let (winW, winH) = inpFramebufferSize inputState
+        return (fromIntegral winW, fromIntegral winH)
+      Lua.pushnumber (Lua.Number w)
+      Lua.pushnumber (Lua.Number h)
+      return 2
+
     getWorldCoordFn = do
       sx ← Lua.tonumber 1
       sy ← Lua.tonumber 2
@@ -456,6 +483,40 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
           Lua.pushnil
       return 0
 
+    registerFocusableFn = do
+      acceptsText ← Lua.toboolean 1
+      tabIndex ← Lua.tointeger 2
+      case tabIndex of
+        Just (Lua.Integer idx) → do
+          fid ← Lua.liftIO $ atomicModifyIORef' (focusManagerRef env) $ \fm →
+            let (newFid, newFm) = registerFocusTarget acceptsText (fromIntegral idx) fm
+            in (newFm, newFid)
+          let (FocusId n) = fid
+          Lua.pushinteger (Lua.Integer $ fromIntegral n)
+        Nothing → do
+          Lua.pushnil
+      return 1
+
+    requestFocusFn = do
+      mFid ← Lua.tointeger 1
+      case mFid of
+        Just (Lua.Integer n) → Lua.liftIO $
+          atomicModifyIORef' (focusManagerRef env) $ \fm →
+            (setFocus (FocusId $ fromIntegral n) fm, ())
+        Nothing → return ()
+      return 0
+
+    releaseFocusFn = do
+      Lua.liftIO $ atomicModifyIORef' (focusManagerRef env) $ \fm →
+          (clearFocus fm, ())
+      return 0
+
+    getFocusIdFn = do
+      fm ← Lua.liftIO $ readIORef (focusManagerRef env)
+      case fmCurrentFocus fm of
+        Just (FocusId n) -> Lua.pushinteger (Lua.Integer $ fromIntegral n)
+        Nothing          -> Lua.pushnil
+      return 1
 
     -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
@@ -662,6 +723,18 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaKeyUpEvent key → do
     let keyName = keyToText key
     tryCallLuaHandler ls "onKeyUp" [ScriptString keyName]
+  LuaShellToggle → do
+    tryCallLuaHandler ls "onShellToggle" []
+  LuaCharInput fid c → do
+    tryCallLuaHandler ls "onCharInput"
+      [ ScriptNumber (fromIntegral fid)
+      , ScriptString (T.singleton c) ]
+  LuaTextBackspace fid → do
+    tryCallLuaHandler ls "onTextBackspace"
+      [ ScriptNumber (fromIntegral fid) ]
+  LuaTextSubmit fid → do
+    tryCallLuaHandler ls "onTextSubmit"
+      [ ScriptNumber (fromIntegral fid) ]
   _ → return () -- other messages can be handled here
 
 -- | helper function to call lua event handlers safely

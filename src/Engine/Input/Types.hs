@@ -24,6 +24,9 @@ data InputEvent
         , ikeKeyState ∷ GLFW.KeyState   -- ^ Whether it's pressed or released
         , ikeMods     ∷ GLFW.ModifierKeys -- ^ Modifier keys (shift, ctrl, etc)
         }
+    | InputCharEvent
+        { iceChar ∷ Char                 -- ^ Character input
+        }
     | InputWindowEvent
         { iweWinEvent ∷ WindowEvent     -- ^ Window-related events
         }

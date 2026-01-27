@@ -237,12 +237,18 @@ updateUniformBufferForFrame win frameIdx = do
             (fbWidth, fbHeight) ← GLFW.getFramebufferSize win
             (winWidth, winHeight) ← GLFW.getWindowSize win
             
-            let camera = camera2D state
-                uboData = UBO identity (createViewMatrix camera)
+            env ← ask
+            camera ← liftIO $ readIORef (cameraRef env)
+            
+            -- Update UI camera to use framebuffer dimensions
+            let uiCamera = UICamera (fromIntegral fbWidth) (fromIntegral fbHeight)
+            let uiProjMatrix = createUIProjectionMatrix uiCamera
+            let uboData = UBO identity (createViewMatrix camera)
                               (createProjectionMatrix camera 
                                   (fromIntegral fbWidth) (fromIntegral fbHeight))
+                              (createUIViewMatrix uiCamera)
+                              (createUIProjectionMatrix uiCamera)
             
-            env ← ask
             liftIO $ writeIORef (cameraRef env) camera
             liftIO $ atomicModifyIORef' (inputStateRef env) $ \is →
                 (is { inpWindowSize = (winWidth, winHeight)

@@ -90,9 +90,12 @@ collectVisibleObjects graph camera viewWidth viewHeight = do
     let texSystem = textureSystem gs
         allNodes = Map.elems (sgNodes graph)
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject && nodeVisible n) allNodes
-        visibleNodes = filter (isNodeVisible camera viewWidth viewHeight) spriteNodes
+        -- Skip frustum culling for UI layers (layer >= 10)
+        visibleNodes = filter (\n → isUILayer (nodeLayer n) || isNodeVisible camera viewWidth viewHeight n) spriteNodes
         drawableObjs = mapMaybe (nodeToDrawable graph texSystem) visibleNodes
     pure $ V.fromList drawableObjs
+  where
+    isUILayer (LayerId l) = l >= 10
 
 -- | conversion function
 convertToTextBatches ∷ V.Vector TextRenderBatch → V.Vector TextBatch

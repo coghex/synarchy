@@ -61,6 +61,10 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSetSpriteColorRequest ObjectId Vec4
                     | LuaSetSpriteVisibleRequest ObjectId Bool
                     | LuaDestroySpriteRequest ObjectId
+                    | LuaRequestFocus Word32
+                    | LuaReleaseFocus
+                    | LuaRegisterFocusable Bool Int
+                    | LuaUnregisterFocusable Word32
                     deriving (Eq, Show)
 
 -- | messages from set to lua from anywhere
@@ -72,6 +76,12 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaMouseUpEvent GLFW.MouseButton Double Double
             | LuaKeyDownEvent Key
             | LuaKeyUpEvent Key
+            | LuaShellToggle
+            | LuaFocusGained Word32
+            | LuaFocusLost Word32
+            | LuaCharInput Word32 Char
+            | LuaTextBackspace Word32
+            | LuaTextSubmit Word32
             deriving (Eq, Show)
 
 -- | Lua execution result

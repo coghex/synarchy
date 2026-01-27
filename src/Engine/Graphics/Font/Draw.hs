@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Font.Draw
     ( createFontPipeline
+    , createFontUIPipeline
     , createFontQuadBuffer
     , createFontTextureLayout
     , layoutText
@@ -20,7 +21,8 @@ import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer, copyBuffer)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Vulkan.Command
-import Engine.Graphics.Vulkan.ShaderCode (fontVertexShaderCode, fontFragmentShaderCode)
+import Engine.Graphics.Vulkan.ShaderCode (fontVertexShaderCode, fontFragmentShaderCode
+                                         , fontUIVertexShaderCode)
 import Engine.Graphics.Vulkan.Types.Descriptor
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
@@ -328,3 +330,141 @@ createFontTextureLayout device = do
         layoutInfo = zero { bindings = V.singleton binding }
     
     createDescriptorSetLayout device layoutInfo Nothing
+
+-- | Create font UI rendering pipeline (uses UI camera)
+createFontUIPipeline ∷ Device → RenderPass → Extent2D → DescriptorSetLayout 
+                     → DescriptorSetLayout  -- ^ Font texture layout (reuse from world pipeline)
+                     → EngineM ε σ (Pipeline, PipelineLayout)
+createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout = do
+    let Extent2D w h = swapExtent
+        pipelineLayoutInfo = zero
+          { setLayouts = V.fromList [uniformLayout, fontTexLayout]
+          , pushConstantRanges = V.empty
+          }
+    
+    pipelineLayout ← createPipelineLayout device pipelineLayoutInfo Nothing
+    
+    -- Create shader modules
+    vertModule ← createShaderModule device zero { code = fontUIVertexShaderCode } Nothing
+    fragModule ← createShaderModule device zero { code = fontFragmentShaderCode } Nothing
+    
+    let vertStageInfo = zero 
+          { stage   = SHADER_STAGE_VERTEX_BIT
+          , module' = vertModule
+          , name    = "main"
+          }
+        fragStageInfo = zero 
+          { stage   = SHADER_STAGE_FRAGMENT_BIT
+          , module' = fragModule
+          , name    = "main"
+          }
+        shaderStages = V.fromList [SomeStruct vertStageInfo, SomeStruct fragStageInfo]
+    
+        vertexBindings = V.fromList
+            [ zero  -- Binding 0: per-vertex (quad template)
+              { binding = 0
+              , stride = 16  -- vec2 pos + vec2 uv
+              , inputRate = VERTEX_INPUT_RATE_VERTEX
+              }
+            , zero  -- Binding 1: per-instance (glyph data)
+              { binding = 1
+              , stride = 48  -- GlyphInstance size
+              , inputRate = VERTEX_INPUT_RATE_INSTANCE
+              }
+            ]
+    
+        vertexAttributes = V.fromList
+            [ -- Per-vertex (quad template)
+              zero { location = 0, binding = 0, format = FORMAT_R32G32_SFLOAT, offset = 0 }
+            , zero { location = 1, binding = 0, format = FORMAT_R32G32_SFLOAT, offset = 8 }
+            , -- Per-instance (glyph data)
+              zero { location = 2, binding = 1, format = FORMAT_R32G32_SFLOAT, offset = 0 }
+            , zero { location = 3, binding = 1, format = FORMAT_R32G32_SFLOAT, offset = 8 }
+            , zero { location = 4, binding = 1, format = FORMAT_R32G32B32A32_SFLOAT, offset = 16 }
+            , zero { location = 5, binding = 1, format = FORMAT_R32G32B32A32_SFLOAT, offset = 32 }
+            ]
+    
+        vertexInputInfo = zero
+          { vertexBindingDescriptions = vertexBindings
+          , vertexAttributeDescriptions = vertexAttributes
+          }
+    
+        inputAssembly = zero
+          { topology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+          , primitiveRestartEnable = False
+          }
+    
+        viewport = zero
+          { x = 0, y = 0
+          , width = fromIntegral w
+          , height = fromIntegral h
+          , minDepth = 0, maxDepth = 1
+          }
+    
+        scissor = (zero ∷ Rect2D)
+          { offset = Offset2D 0 0
+          , extent = swapExtent
+          }
+    
+        viewportState = zero
+          { viewports = V.singleton viewport
+          , scissors = V.singleton scissor
+          }
+    
+        rasterizer = (zero ∷ PipelineRasterizationStateCreateInfo '[])
+          { depthClampEnable = False
+          , rasterizerDiscardEnable = False
+          , polygonMode = POLYGON_MODE_FILL
+          , lineWidth = 1
+          , cullMode = CULL_MODE_NONE
+          , frontFace = FRONT_FACE_COUNTER_CLOCKWISE
+          , depthBiasEnable = False
+          }
+    
+        multisampling = (zero ∷ PipelineMultisampleStateCreateInfo '[])
+          { sampleShadingEnable = False
+          , rasterizationSamples = SAMPLE_COUNT_1_BIT
+          }
+    
+        colorBlendAttachment = zero
+          { colorWriteMask = COLOR_COMPONENT_R_BIT .|. COLOR_COMPONENT_G_BIT 
+                            .|. COLOR_COMPONENT_B_BIT .|. COLOR_COMPONENT_A_BIT
+          , blendEnable = True
+          , srcColorBlendFactor = BLEND_FACTOR_SRC_ALPHA
+          , dstColorBlendFactor = BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+          , colorBlendOp = BLEND_OP_ADD
+          , srcAlphaBlendFactor = BLEND_FACTOR_ONE
+          , dstAlphaBlendFactor = BLEND_FACTOR_ZERO
+          , alphaBlendOp = BLEND_OP_ADD
+          }
+    
+        colorBlending = (zero ∷ PipelineColorBlendStateCreateInfo '[])
+          { logicOpEnable = False
+          , attachments = V.singleton colorBlendAttachment
+          , blendConstants = (0, 0, 0, 0)
+          }
+    
+        pipelineInfo = (zero ∷ GraphicsPipelineCreateInfo '[])
+          { stages = shaderStages
+          , vertexInputState = Just $ SomeStruct vertexInputInfo
+          , inputAssemblyState = Just inputAssembly
+          , viewportState = Just $ SomeStruct viewportState
+          , rasterizationState = Just $ SomeStruct rasterizer
+          , multisampleState = Just $ SomeStruct multisampling
+          , colorBlendState = Just $ SomeStruct colorBlending
+          , layout = pipelineLayout
+          , renderPass = renderPass
+          , subpass = 0
+          , basePipelineHandle = zero
+          , basePipelineIndex = -1
+          }
+    
+    (_, pipelinesVec) ← createGraphicsPipelines 
+        device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
+    
+    let !pipeline = V.head pipelinesVec
+    
+    destroyShaderModule device vertModule Nothing
+    destroyShaderModule device fragModule Nothing
+    
+    pure (pipeline, pipelineLayout)

@@ -44,6 +44,10 @@ import Vulkan.Core10.CommandBufferBuilding
          (ClearValue(..), ClearColorValue(..))
 import Vulkan.Zero
 
+-- | Layer ID threshold to separate world and UI layers
+uiLayerThreshold ∷ LayerId
+uiLayerThreshold = LayerId 10
+
 -- | Collection of command buffers and their pool
 data VulkanCommandCollection = VulkanCommandCollection
   { vccCommandPool    ∷ CommandPool
@@ -293,53 +297,127 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
     -- Track vertex offset for sprite drawing
     vertexOffsetRef ← liftIO $ newIORef (0 ∷ Word32)
     
-    -- Render each layer in order
-    forM_ (Map.toAscList layeredBatches) $ \(layerId, items) → do
-        -- Render sprites in this layer
-        let spriteBatches = V.fromList [b | SpriteItem b ← V.toList items]
-        
-        renderSpritesBindless cmdBuf state viewport scissor 
-                              dynamicBuffer spriteBatches vertexOffsetRef
-        
-        -- Render text in this layer (unchanged - fonts use their own descriptors)
-        let textItems = V.fromList [b | TextItem b ← V.toList items]
-        
-        unless (V.null textItems) $ do
-            case (fontPipeline state, fontQuadBuffer state) of
-                (Just (pipeline, layout), Just (quadBuffer, _)) → do
-                    cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS pipeline
-                    cmdSetViewport cmdBuf 0 (V.singleton viewport)
-                    cmdSetScissor cmdBuf 0 (V.singleton scissor)
-                    
-                    descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
-                                       pure 
-                                       (descriptorState state)
-                    let uniformSet = V.head $ dmActiveSets descManager
-                    
-                    !newBuffers ← V.foldM' (\acc trb → do
-                        let textBatch = TextBatch 
-                              { tbFontHandle = trbFont trb
-                              , tbInstances = trbInstances trb
-                              , tbLayer = trbLayer trb
-                              }
-                        maybeBuffer ← renderTextBatchInline cmdBuf device pDevice 
-                                                            quadBuffer layout textBatch state
-                        case maybeBuffer of
-                            Nothing → pure acc
-                            Just !buf → pure $ V.snoc acc buf
-                      ) V.empty textItems
-                    
-                    modify $ \s → s 
-                        { graphicsState = (graphicsState s) 
-                            { pendingInstanceBuffers = 
-                                pendingInstanceBuffers (graphicsState s) <> newBuffers 
-                            }
-                        }
-                _ → pure ()
+    -- Split layers into world and UI
+    let (worldLayers, uiLayers) = Map.partitionWithKey 
+                                    (\layerId _ → layerId < uiLayerThreshold) 
+                                    layeredBatches
+    
+    -- Render world layers (< 10) with world pipelines
+    forM_ (Map.toAscList worldLayers) $ \(layerId, items) → do
+        renderLayerItems cmdBuf state viewport scissor dynamicBuffer 
+                         items vertexOffsetRef device pDevice False
+    
+    -- Render UI layers (>= 10) with UI pipelines  
+    forM_ (Map.toAscList uiLayers) $ \(layerId, items) → do
+        renderLayerItems cmdBuf state viewport scissor dynamicBuffer 
+                         items vertexOffsetRef device pDevice True
 
     -- End render pass and command buffer
     cmdEndRenderPass cmdBuf
     endVulkanCommandBuffer cmdBuf
+
+-- | Render items in a single layer
+-- isUI determines whether to use world or UI pipelines
+renderLayerItems ∷ CommandBuffer → GraphicsState → Viewport → Rect2D
+                 → SceneDynamicBuffer → V.Vector RenderItem
+                 → IORef Word32 → Device → PhysicalDevice → Bool
+                 → EngineM ε σ ()
+renderLayerItems cmdBuf state viewport scissor dynamicBuffer items 
+                 vertexOffsetRef device pDevice isUI = do
+    -- Render sprites in this layer
+    let spriteBatches = V.fromList [b | SpriteItem b ← V.toList items]
+    
+    if isUI
+        then renderSpritesBindlessUI cmdBuf state viewport scissor 
+                                     dynamicBuffer spriteBatches vertexOffsetRef
+        else renderSpritesBindless cmdBuf state viewport scissor 
+                                   dynamicBuffer spriteBatches vertexOffsetRef
+    
+    -- Render text in this layer
+    let textItems = V.fromList [b | TextItem b ← V.toList items]
+    
+    unless (V.null textItems) $ do
+        let maybePipeline = if isUI 
+                            then fontUIPipeline state 
+                            else fontPipeline state
+        case (maybePipeline, fontQuadBuffer state) of
+            (Just (pipeline, layout), Just (quadBuffer, _)) → do
+                cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS pipeline
+                cmdSetViewport cmdBuf 0 (V.singleton viewport)
+                cmdSetScissor cmdBuf 0 (V.singleton scissor)
+                
+                descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
+                                   pure 
+                                   (descriptorState state)
+                let uniformSet = V.head $ dmActiveSets descManager
+                
+                !newBuffers ← V.foldM' (\acc trb → do
+                    let textBatch = TextBatch 
+                          { tbFontHandle = trbFont trb
+                          , tbInstances = trbInstances trb
+                          , tbLayer = trbLayer trb
+                          }
+                    maybeBuffer ← renderTextBatchInline cmdBuf device pDevice 
+                                                        quadBuffer layout textBatch state
+                    case maybeBuffer of
+                        Nothing → pure acc
+                        Just !buf → pure $ V.snoc acc buf
+                  ) V.empty textItems
+                
+                modify $ \s → s 
+                    { graphicsState = (graphicsState s) 
+                        { pendingInstanceBuffers = 
+                            pendingInstanceBuffers (graphicsState s) <> newBuffers 
+                        }
+                    }
+            _ → pure ()
+
+-- | Render sprites using the bindless UI pipeline
+renderSpritesBindlessUI ∷ CommandBuffer → GraphicsState → Viewport → Rect2D
+                        → SceneDynamicBuffer → V.Vector RenderBatch 
+                        → IORef Word32 → EngineM ε σ ()
+renderSpritesBindlessUI cmdBuf state viewport scissor dynamicBuffer spriteBatches vertexOffsetRef = do
+    -- Get bindless UI pipeline and texture system
+    (pipeline, pipelineLayout) ← case bindlessUIPipeline state of
+        Just p → pure p
+        Nothing → throwGraphicsError PipelineError "Bindless UI pipeline not available"
+    
+    bindless ← case textureSystem state of
+        Just b → pure b
+        _ → throwGraphicsError DescriptorError "Bindless texture system not available"
+    
+    descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
+                       pure 
+                       (descriptorState state)
+    
+    -- Bind bindless UI pipeline
+    cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS pipeline
+    cmdSetViewport cmdBuf 0 (V.singleton viewport)
+    cmdSetScissor cmdBuf 0 (V.singleton scissor)
+    
+    -- Bind descriptor sets: set 0 = uniforms, set 1 = bindless textures
+    let uniformSet = V.head $ dmActiveSets descManager
+        textureSet = btsDescriptorSet bindless
+        descriptorSets = V.fromList [uniformSet, textureSet]
+    
+    cmdBindDescriptorSets cmdBuf 
+        PIPELINE_BIND_POINT_GRAPHICS
+        pipelineLayout
+        0
+        descriptorSets
+        V.empty
+    
+    -- Bind vertex buffer
+    cmdBindVertexBuffers cmdBuf 0
+        (V.singleton (sdbBuffer dynamicBuffer))
+        (V.singleton 0)
+    
+    -- Draw sprite batches
+    V.forM_ spriteBatches $ \batch → do
+        offset ← liftIO $ readIORef vertexOffsetRef
+        let vertexCount = fromIntegral $ V.length $ rbVertices batch
+        cmdDraw cmdBuf vertexCount 1 offset 0
+        liftIO $ modifyIORef vertexOffsetRef (+ vertexCount)
 
 -- | Render sprites using the bindless pipeline
 renderSpritesBindless ∷ CommandBuffer → GraphicsState → Viewport → Rect2D

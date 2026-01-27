@@ -2,9 +2,13 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Camera
     ( Camera2D(..)
+    , UICamera(..)
     , defaultCamera
+    , defaultUICamera
     , createViewMatrix
     , createProjectionMatrix
+    , createUIViewMatrix
+    , createUIProjectionMatrix
     ) where
 
 import UPrelude
@@ -20,12 +24,48 @@ data Camera2D = Camera2D
     , camRotation ∷ Float
     } deriving (Show, Eq)
 
+data UICamera = UICamera
+    { uiCamWidth  ∷ Float
+    , uiCamHeight ∷ Float
+    } deriving (Show, Eq)
+
 defaultCamera ∷ Camera2D
 defaultCamera = Camera2D
     { camPosition = (0, 0)
     , camZoom     = 1.0
     , camRotation = 0.0
     }
+
+defaultUICamera ∷ Float → Float → UICamera
+defaultUICamera width height = UICamera
+    { uiCamWidth  = width
+    , uiCamHeight = height
+    }
+
+-- | UI camera view matrix (identity - no transformation)
+createUIViewMatrix ∷ UICamera → M44 Float
+createUIViewMatrix _ = 
+    V4 (V4 1 0 0 0)
+       (V4 0 1 0 0)
+       (V4 0 0 1 0)
+       (V4 0 0 0 1)
+
+-- | UI camera projection matrix (pixel coordinates, origin at top-left)
+createUIProjectionMatrix ∷ UICamera → M44 Float
+createUIProjectionMatrix uiCam =
+    let width  = uiCamWidth uiCam
+        height = uiCamHeight uiCam
+        left   = 0
+        right  = width
+        top    = height  -- Swapped
+        bottom = 0       -- Swapped
+        near   = -1
+        far    = 1
+        
+    in V4 (V4 (2/(right-left))  0                   0                 0)
+          (V4  0                (2/(top-bottom))    0                 0)
+          (V4  0                 0                  (2/(far-near))    0)
+          (V4 (-(right+left)/(right-left))  (-(top+bottom)/(top-bottom))  (-(far+near)/(far-near))  1)
 
 createViewMatrix ∷ Camera2D → M44 Float
 createViewMatrix camera =

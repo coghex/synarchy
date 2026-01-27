@@ -55,23 +55,28 @@ data CleanupStatus = NotStarted | InProgress | Completed
 
 -- | Uniform buffer object matching shader layout
 data UniformBufferObject = UBO
-    { uboModel ∷ M44 Float  -- model matrix
-    , uboView  ∷ M44 Float  -- view matrix
-    , uboProj  ∷ M44 Float  -- projection matrix
+    { uboModel  ∷ M44 Float  -- model matrix
+    , uboView   ∷ M44 Float  -- view matrix
+    , uboProj   ∷ M44 Float  -- projection matrix
+    , uboUIView ∷ M44 Float  -- UI view matrix
+    , uboUIProj ∷ M44 Float  -- UI projection matrix
     } deriving (Show)
 
 instance Storable UniformBufferObject where
-    sizeOf _ = 3 * sizeOf (undefined ∷ M44 Float)
+    sizeOf _ = 5 * sizeOf (undefined ∷ M44 Float)
     alignment _ = 16  -- Vulkan requires 16-byte alignment for uniform buffers
     peek ptr = UBO
         <$> peek (castPtr ptr)
         <*> peek (castPtr $ ptr `plusPtr` sizeOf (undefined ∷ M44 Float))
         <*> peek (castPtr $ ptr `plusPtr` (2 * sizeOf (undefined ∷ M44 Float)))
-    poke ptr (UBO model view proj) = do
+        <*> peek (castPtr $ ptr `plusPtr` (3 * sizeOf (undefined ∷ M44 Float)))
+        <*> peek (castPtr $ ptr `plusPtr` (4 * sizeOf (undefined ∷ M44 Float)))
+    poke ptr (UBO model view proj uiView uiProj) = do
         poke (castPtr ptr) model
         poke (castPtr $ ptr `plusPtr` sizeOf model) view
         poke (castPtr $ ptr `plusPtr` (2 * sizeOf model)) proj
-
+        poke (castPtr $ ptr `plusPtr` (3 * sizeOf model)) uiView
+        poke (castPtr $ ptr `plusPtr` (4 * sizeOf model)) uiProj
 
 -- | Dynamic vertex buffer for scene rendering
 data SceneDynamicBuffer = SceneDynamicBuffer

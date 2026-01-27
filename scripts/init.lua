@@ -1,3 +1,5 @@
+local shell = require("scripts/shell")
+
 local tex1 = nil
 local tex2 = nil
 local tex3 = nil
@@ -20,6 +22,7 @@ function init()
     engine.logInfo("Controls:")
     engine.logInfo("  WASD - Move camera")
     engine.logInfo("  Left Click - Spawn sprite at mouse")
+    engine.logInfo("  Grave (`) - Toggle shell")
     engine.logInfo("  Escape - Quit")
     
     -- quick window size test
@@ -45,6 +48,9 @@ function init()
     else
         engine.logError("Failed to load font")
     end
+    
+    -- Initialize shell
+    shell.init(font)
 end
 
 function update(dt)
@@ -99,4 +105,27 @@ end
 
 function onKeyUp(key)
     engine.logInfo("Key " .. key .. " released")
+end
+
+-- Shell event handlers
+function onShellToggle()
+    shell.toggle()
+end
+
+function onCharInput(focusId, char)
+    if focusId == shell.getFocusId() then
+        shell.onChar(char)
+    end
+end
+
+function onTextBackspace(focusId)
+    if focusId == shell.getFocusId() then
+        shell.onBackspace()
+    end
+end
+
+function onTextSubmit(focusId)
+    if focusId == shell.getFocusId() then
+        shell.onSubmit()
+    end
 end

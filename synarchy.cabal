@@ -205,6 +205,9 @@ library
                      Engine.Scene.Manager
                      Engine.Scene.Render
                      Engine.Loop
+                     UI
+                     UI.Focus
+                     UI.TextBuffer
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields

@@ -1,6 +1,7 @@
 -- | Bindless-specific pipeline creation
 module Engine.Graphics.Vulkan.Pipeline.Bindless
   ( createBindlessPipeline
+  , createBindlessUIPipeline
   ) where
 
 import UPrelude
@@ -9,21 +10,45 @@ import qualified Data.Vector as V
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Vulkan.Vertex
-import Engine.Graphics.Vulkan.ShaderCode (bindlessVertexShaderCode, bindlessFragmentShaderCode)
+import Engine.Graphics.Vulkan.ShaderCode (bindlessVertexShaderCode, bindlessFragmentShaderCode
+                                         , bindlessUIVertexShaderCode)
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
 
--- | Create a pipeline for bindless rendering
+-- | Create a pipeline for bindless rendering (world camera)
 createBindlessPipeline ∷ Device
                        → RenderPass
                        → Extent2D
                        → DescriptorSetLayout  -- ^ Uniform buffer layout (set 0)
                        → DescriptorSetLayout  -- ^ Bindless texture layout (set 1)
                        → EngineM ε σ (Pipeline, PipelineLayout)
-createBindlessPipeline device renderPass swapExtent uniformLayout textureLayout = do
+createBindlessPipeline device renderPass swapExtent uniformLayout textureLayout =
+  createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout
+                                   bindlessVertexShaderCode
+
+-- | Create a pipeline for bindless UI rendering (UI camera)
+createBindlessUIPipeline ∷ Device
+                         → RenderPass
+                         → Extent2D
+                         → DescriptorSetLayout  -- ^ Uniform buffer layout (set 0)
+                         → DescriptorSetLayout  -- ^ Bindless texture layout (set 1)
+                         → EngineM ε σ (Pipeline, PipelineLayout)
+createBindlessUIPipeline device renderPass swapExtent uniformLayout textureLayout =
+  createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout
+                                   bindlessUIVertexShaderCode
+
+-- | Internal helper to create bindless pipeline with specified vertex shader
+createBindlessPipelineWithShader ∷ Device
+                                 → RenderPass
+                                 → Extent2D
+                                 → DescriptorSetLayout
+                                 → DescriptorSetLayout
+                                 → BS.ByteString  -- ^ Vertex shader code
+                                 → EngineM ε σ (Pipeline, PipelineLayout)
+createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout vertShaderCode = do
   -- Create shader modules
-  vertShaderModule ← createShaderModule' device bindlessVertexShaderCode
+  vertShaderModule ← createShaderModule' device vertShaderCode
   fragShaderModule ← createShaderModule' device bindlessFragmentShaderCode
 
   let vertShaderStageInfo = zero

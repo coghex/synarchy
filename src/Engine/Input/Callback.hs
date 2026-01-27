@@ -15,6 +15,8 @@ setupCallbacks ∷ GLFW.Window → IORef EngineLifecycle → Queue InputEvent �
 setupCallbacks window el queue = do
     GLFW.setKeyCallback window
         (Just $ keyCallback queue el)
+    GLFW.setCharCallback window
+        (Just $ charCallback queue)
     GLFW.setMouseButtonCallback window 
         (Just $ mouseCallback queue)
     GLFW.setCursorPosCallback window 
@@ -30,6 +32,7 @@ setupCallbacks window el queue = do
 clearGLFWCallbacks ∷ GLFW.Window → IO ()
 clearGLFWCallbacks window = do
     GLFW.setKeyCallback window Nothing
+    GLFW.setCharCallback window Nothing
     GLFW.setMouseButtonCallback window Nothing
     GLFW.setCursorPosCallback window Nothing
     GLFW.setScrollCallback window Nothing
@@ -45,6 +48,11 @@ keyCallback queue el _win key _scancode keyState mods = do
   case lifecycle of
     EngineRunning → writeQueue queue $ InputKeyEvent key keyState mods
     _             → return ()
+
+-- | Character input callback
+charCallback ∷ Queue InputEvent → GLFW.Window → Char → IO ()
+charCallback queue _win char = do
+    writeQueue queue $ InputCharEvent char
 
 -- | Mouse button callback
 mouseCallback ∷ Queue InputEvent → GLFW.Window → GLFW.MouseButton

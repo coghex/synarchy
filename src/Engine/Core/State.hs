@@ -25,6 +25,7 @@ import Engine.Input.Types
 import Engine.Input.Bindings
 import Engine.Scene.Types
 import qualified Vulkan.Core10 as Vk
+import UI.Focus (FocusManager)
 
 -- | Engine environment (read-only)
 data EngineEnv = EngineEnv
@@ -40,6 +41,8 @@ data EngineEnv = EngineEnv
   , inputStateRef    ∷ IORef InputState
   , keyBindingsRef   ∷ IORef KeyBindings
   , cameraRef        ∷ IORef Camera2D
+  , uiCameraRef      ∷ IORef UICamera
+  , focusManagerRef  ∷ IORef FocusManager
   }
 
 -- | Engine state (mutable)
@@ -89,10 +92,11 @@ data GraphicsState = GraphicsState
   , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))
   , textureSystem      ∷ Maybe BindlessTextureSystem
   , bindlessPipeline   ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
-  , camera2D           ∷ Camera2D
+  , bindlessUIPipeline ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , cleanupStatus      ∷ CleanupStatus
   , fontCache          ∷ FontCache
   , fontPipeline       ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
+  , fontUIPipeline     ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , fontQuadBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , fontDescriptorPool ∷ Maybe Vk.DescriptorPool
   , fontDescriptorLayout ∷ Maybe Vk.DescriptorSetLayout

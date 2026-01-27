@@ -14,10 +14,11 @@ import Engine.Core.State
 import Engine.Core.Types
 import Engine.Core.Var
 import qualified Engine.Core.Queue as Q
-import Engine.Graphics.Camera (defaultCamera)
-import Engine.Graphics.Config (loadVideoConfig, VideoConfig)
+import Engine.Graphics.Camera (defaultCamera, defaultUICamera)
+import Engine.Graphics.Config (loadVideoConfig, VideoConfig(..))
 import Engine.Input.Bindings (loadKeyBindings)
 import Engine.Input.Types (defaultInputState)
+import UI.Focus (createFocusManager)
 
 -- | Result of engine initialization
 data EngineInitResult = EngineInitResult
@@ -54,8 +55,13 @@ initializeEngine = do
   -- Load video config
   videoConfig ← loadVideoConfig "config/video.yaml"
   
-  -- Create camera reference
+  -- Create camera references
   cameraRef ← newIORef defaultCamera
+  uiCameraRef ← newIORef $ defaultUICamera (fromIntegral (vcWidth videoConfig))
+                                           (fromIntegral (vcHeight videoConfig))
+
+  -- Create focus manager
+  focusMgrRef ← newIORef createFocusManager
   
   -- Build environment
   let env = EngineEnv
@@ -71,6 +77,8 @@ initializeEngine = do
         , inputStateRef    = inputStateRef
         , keyBindingsRef   = keyBindingsRef
         , cameraRef        = cameraRef
+        , uiCameraRef      = uiCameraRef
+        , focusManagerRef  = focusMgrRef
         }
   
   envVar   ← atomically $ newVar env

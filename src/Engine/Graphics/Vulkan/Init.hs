@@ -9,6 +9,7 @@ import UPrelude
 import qualified Data.Map as Map
 import qualified Data.Vector as V
 import qualified Graphics.UI.GLFW as GLFWRaw
+import Data.IORef (readIORef)
 import Foreign.Storable (sizeOf)
 import Linear (M44, identity)
 import Engine.Asset.Handle
@@ -20,7 +21,8 @@ import Engine.Graphics.Base
 import Engine.Graphics.Camera
 import Engine.Graphics.Types
 import Engine.Graphics.Font.Load (createFontDescriptorPool)
-import Engine.Graphics.Font.Draw (createFontPipeline, createFontQuadBuffer)
+import Engine.Graphics.Font.Draw (createFontPipeline
+                                 , createFontUIPipeline, createFontQuadBuffer)
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Graphics.Vulkan.Base
@@ -31,7 +33,8 @@ import Engine.Graphics.Vulkan.Device (createVulkanDevice, pickPhysicalDevice)
 import Engine.Graphics.Vulkan.Framebuffer (createVulkanFramebuffers)
 import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
 import Engine.Graphics.Vulkan.Pipeline
-import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline)
+import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline
+                                                , createBindlessUIPipeline)
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Sync (createSyncObjects)
 import Engine.Graphics.Vulkan.Texture
@@ -164,6 +167,12 @@ initializeVulkan window = do
   logDebug $ "Bindless Pipeline: " ⧺ show bindlessPipe
   modify $ \s → s { graphicsState = (graphicsState s) {
                           bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout) } }
+  (bindlessUIPipe, bindlessUIPipeLayout) ← 
+    createBindlessUIPipeline device renderPass (siSwapExtent swapInfo) 
+                             (dmUniformLayout descManager) bindlessTexLayout
+  logDebug $ "Bindless UI Pipeline: " ⧺ show bindlessUIPipe
+  modify $ \s → s { graphicsState = (graphicsState s) {
+                          bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout) } }
   
   -- Create font pipeline
   (fontPipe, fontPipeLayout, fontDescLayout) ←
@@ -172,6 +181,11 @@ initializeVulkan window = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontPipeline = Just (fontPipe, fontPipeLayout)
                     , fontDescriptorLayout = Just fontDescLayout } }
+  (fontUIPipe, fontUIPipeLayout) ←
+    createFontUIPipeline device renderPass (siSwapExtent swapInfo) (dmUniformLayout descManager) fontDescLayout
+  logDebug $ "Font UI Pipeline: " ⧺ show fontUIPipe
+  modify $ \s → s { graphicsState = (graphicsState s) {
+                      fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout) } }
   
   -- Create font quad buffer
   quadBuf ← createFontQuadBuffer device physicalDevice (graphicsQueue queues) cmdPool
@@ -199,15 +213,23 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
   (width, height) ← GLFW.getFramebufferSize glfwWin
   
   state ← gets graphicsState
-  let camera = camera2D state
-      uboData = UBO identity (createViewMatrix camera) 
-                    (createProjectionMatrix camera (fromIntegral width) (fromIntegral height))
+  cameraRef ← asks cameraRef
+  uiCameraRef ← asks uiCameraRef
+  camera ← liftIO $ readIORef cameraRef
+  uiCamera ← liftIO $ readIORef uiCameraRef
+  
+  let uboData = UBO 
+          identity 
+          (createViewMatrix camera) 
+          (createProjectionMatrix camera (fromIntegral width) (fromIntegral height))
+          (createUIViewMatrix uiCamera)
+          (createUIProjectionMatrix uiCamera)
       uboSize = fromIntegral $ sizeOf uboData
       numFrames = gcMaxFrames defaultGraphicsConfig
   
   uniformBuffers ← V.generateM (fromIntegral numFrames) $ \_ → do
       (buffer, memory) ← createUniformBuffer device physicalDevice uboSize
-      updateUniformBuffer device memory (UBO identity identity identity)
+      updateUniformBuffer device memory (UBO identity identity identity identity identity)
       pure (buffer, memory)
   
   logDebug $ "UniformBuffers created: " ⧺ show (V.length uniformBuffers)
