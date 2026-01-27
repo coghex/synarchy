@@ -1111,6 +1111,9 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaTextBackspace fid → do
     broadcastToModules ls "onTextBackspace"
       [ ScriptNumber (fromIntegral fid) ]
+  LuaTabPressed fid → do
+    broadcastToModules ls "onTabPressed"
+      [ ScriptNumber (fromIntegral fid) ]
   LuaTextSubmit fid → do
     broadcastToModules ls "onTextSubmit"
       [ ScriptNumber (fromIntegral fid) ]

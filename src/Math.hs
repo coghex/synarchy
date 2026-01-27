@@ -30,6 +30,7 @@ colorToVec4 ("cyan") = Vec4 0 1.0 1.0 1.0
 colorToVec4 ("magenta") = Vec4 1.0 0 1.0 1.0
 colorToVec4 ("transparent") = Vec4 0 0 0 0.0
 colorToVec4 ("opaque") = Vec4 0 0 0 0.5
+colorToVec4 ("ghost") = Vec4 1.0 1.0 1.0 0.5
 colorToVec4 ("gray") = Vec4 0.5 0.5 0.5 1.0
 colorToVec4 ("orange") = Vec4 1.0 0.65 0 1.0
 colorToVec4 ("purple") = Vec4 0.5 0 0.5 1.0

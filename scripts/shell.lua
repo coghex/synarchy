@@ -61,6 +61,10 @@ local middleWidth = 1200
 local shellLayer = 10
 local fontSize = 32
 
+-- completion state
+local currentCompletions = {}
+local ghostText = nil
+
 function shell.init(scriptId)
     myScriptId = scriptId
     engine.logInfo("Shell module initialized with scriptId: " .. tostring(scriptId))
@@ -113,6 +117,7 @@ function shell.shutdown()
     if objPrompt then engine.destroy(objPrompt) end
     if objBufferText then engine.destroy(objBufferText) end
     if objCursor then engine.destroy(objCursor) end
+    if ghostText then engine.destroy(ghostText) end
     for _, obj in ipairs(historyTextObjects) do
         engine.destroy(obj)
     end
@@ -181,6 +186,7 @@ function shell.hide()
     if objPrompt then engine.setVisible(objPrompt, false) end
     if objBufferText then engine.setVisible(objBufferText, false) end
     if objCursor then engine.setVisible(objCursor, false) end
+    if ghostText then engine.setVisible(ghostText, false) end
     for _, obj in ipairs(historyTextObjects) do
         engine.setVisible(obj, false)
     end
@@ -192,6 +198,7 @@ function shell.updateDisplay()
         engine.setText(objBufferText, inputBuffer)
     end
     shell.updateCursorPos()
+    shell.updateGhostText()
 end
 
 function shell.isVisible()
@@ -456,6 +463,181 @@ function calculateBoxHeight()
     local maxHeight = fbHeight - marginTop - marginBottom
     
     return math.min(neededHeight, maxHeight)
+end
+
+-- Find longest common prefix among a list of strings
+local function longestCommonPrefix(strings)
+    if #strings == 0 then return "" end
+    if #strings == 1 then return strings[1] end
+    
+    local prefix = strings[1]
+    for i = 2, #strings do
+        local s = strings[i]
+        local j = 1
+        while j <= #prefix and j <= #s and prefix:sub(j, j) == s:sub(j, j) do
+            j = j + 1
+        end
+        prefix = prefix:sub(1, j - 1)
+        if prefix == "" then return "" end
+    end
+    return prefix
+end
+
+-- Get the current word being typed (handles engine.xxx)
+local function getCurrentWord()
+    return inputBuffer:match("[%w_%.]+$") or ""
+end
+
+
+-- More general table member completion
+local function getTableCompletions(tableName, memberPrefix)
+    local results = {}
+    local tbl = _G[tableName] or (shellSandbox and shellSandbox[tableName])
+    if type(tbl) == "table" then
+        for name, _ in pairs(tbl) do
+            if type(name) == "string" and name:sub(1, #memberPrefix) == memberPrefix then
+                table.insert(results, tableName .. "." .. name)
+            end
+        end
+    end
+    return results
+end
+
+function shell.getCompletions(prefix)
+    local results = {}
+    local seen = {}
+    
+    local function addUnique(str)
+        if not seen[str] then
+            seen[str] = true
+            table.insert(results, str)
+        end
+    end
+    
+    -- Check for table.member pattern
+    local tableName, memberPrefix = prefix:match("^([%w_]+)%.(.*)$")
+    if tableName then
+        for _, completion in ipairs(getTableCompletions(tableName, memberPrefix)) do
+            addUnique(completion)
+        end
+    else
+        -- Lua keywords
+        local keywords = {
+            "and", "break", "do", "else", "elseif", "end",
+            "false", "for", "function", "if", "in", "local",
+            "nil", "not", "or", "repeat", "return", "then",
+            "true", "until", "while"
+        }
+        for _, kw in ipairs(keywords) do
+            if kw:sub(1, #prefix) == prefix then
+                addUnique(kw)
+            end
+        end
+        
+        -- Globals
+        for name, _ in pairs(_G) do
+            if type(name) == "string" and name:sub(1, #prefix) == prefix then
+                addUnique(name)
+            end
+        end
+        
+        -- Sandbox globals
+        if shellSandbox then
+            for name, _ in pairs(shellSandbox) do
+                if type(name) == "string" and name:sub(1, #prefix) == prefix then
+                    addUnique(name)
+                end
+            end
+        end
+        
+        -- Command history
+        for _, entry in ipairs(history) do
+            if entry.command:sub(1, #prefix) == prefix then
+                addUnique(entry.command)
+            end
+        end
+    end
+    
+    table.sort(results)
+    return results
+end
+
+-- Update ghost text showing completion hint
+function shell.updateGhostText()
+    if not visible then return end
+    
+    local prefix = getCurrentWord()
+    
+    if #prefix == 0 then
+        if ghostText then
+            engine.setVisible(ghostText, false)
+        end
+        currentCompletions = {}
+        return
+    end
+    
+    currentCompletions = shell.getCompletions(prefix)
+    
+    if #currentCompletions > 0 then
+        local commonPrefix = longestCommonPrefix(currentCompletions)
+        local ghostPart = commonPrefix:sub(#prefix + 1)
+        
+        if #ghostPart > 0 then
+            if not ghostText then
+                ghostText = engine.spawnText(0, 0, shellFont, ghostPart, "ghost", shellLayer)
+            else
+                engine.setText(ghostText, ghostPart)
+                engine.setVisible(ghostText, true)
+            end
+            
+            -- Position after cursor
+            local textWidth = engine.getTextWidth(shellFont, inputBuffer)
+            local fbWidth, fbHeight = engine.getFramebufferSize()
+            local boxHeight = calculateBoxHeight()
+            local baseX = marginLeft
+            local baseY = fbHeight - marginBottom - boxHeight
+            local middleHeight = boxHeight - tileSize * 2
+            local row2Y = baseY + tileSize + middleHeight + tileSize / 2
+            local promptX = baseX + tileSize + 10
+            local promptY = row2Y - fontSize
+            local bufferX = promptX + fontSize
+            local cursorX = bufferX + textWidth
+            
+            engine.setPos(ghostText, cursorX, promptY)
+        else
+            if ghostText then
+                engine.setVisible(ghostText, false)
+            end
+        end
+    else
+        if ghostText then
+            engine.setVisible(ghostText, false)
+        end
+    end
+end
+
+-- Tab completion - complete to common prefix
+function shell.onTab()
+    local prefix = getCurrentWord()
+    if #prefix == 0 then return end
+    
+    local completions = shell.getCompletions(prefix)
+    if #completions == 0 then return end
+    
+    local commonPrefix = longestCommonPrefix(completions)
+    local addition = commonPrefix:sub(#prefix + 1)
+    
+    if #addition > 0 then
+        inputBuffer = inputBuffer .. addition
+        shell.updateDisplay()
+    end
+end
+
+-- Handle tab key event
+function shell.onTabPressed(fid)
+    if fid == focusId then
+        shell.onTab()
+    end
 end
 
 return shell

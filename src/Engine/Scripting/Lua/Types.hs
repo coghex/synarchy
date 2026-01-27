@@ -87,6 +87,7 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaFocusLost Word32
             | LuaCharInput Word32 Char
             | LuaTextBackspace Word32
+            | LuaTabPressed Word32
             | LuaTextSubmit Word32
             deriving (Eq, Show)
 
