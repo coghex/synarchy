@@ -116,6 +116,10 @@ processInput env inpSt event = case event of
                 Q.writeQueue (luaQueue env) (LuaTextSubmit fid)
             when (key ≡ KeyTab ∧ keyState ≡ GLFW.KeyState'Pressed) $
                 Q.writeQueue (luaQueue env) (LuaTabPressed fid)
+            when (key ≡ KeyUp ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) (LuaCursorUp fid)
+            when (key ≡ KeyDown ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) (LuaCursorDown fid)
             when (key ≡ KeyLeft ∧ keyState ≡ GLFW.KeyState'Pressed) $
                 Q.writeQueue (luaQueue env) (LuaCursorLeft fid)
             when (key ≡ KeyRight ∧ keyState ≡ GLFW.KeyState'Pressed) $

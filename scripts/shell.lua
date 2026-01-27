@@ -12,6 +12,8 @@ local history = {}
 local historyTextObjects = {}
 local lineHeight = 40
 local historyPadding = 10
+local historyIndex = 0
+local savedInputBuffer = ""
 local marginLeft = 40
 local marginBottom = 40
 local marginTop = 40
@@ -211,6 +213,8 @@ function shell.getFocusId()
 end
 
 function shell.onChar(char)
+    historyIndex = 0
+    savedInputBuffer = ""
     -- Insert at cursor position
     local before = inputBuffer:sub(1, cursorPos)
     local after = inputBuffer:sub(cursorPos + 1)
@@ -231,6 +235,8 @@ end
 
 function shell.onSubmit()
     if inputBuffer == "" then return end
+    historyIndex = 0
+    savedInputBuffer = ""
     local cmd = string.lower(string.match(inputBuffer, "^%s*(%S+)") or "")
     if cmd == "help" then
         shell.addHistory(inputBuffer, shell.cmdHelp(), false)
@@ -661,6 +667,44 @@ function shell.onTabPressed(fid)
     end
 end
 
+function shell.onCursorUp(fid)
+    if fid ~= focusId then return end
+    if #history == 0 then return end
+    
+    -- Save current input when starting to browse
+    if historyIndex == 0 then
+        savedInputBuffer = inputBuffer
+    end
+    
+    -- Move up in history (towards older commands)
+    if historyIndex < #history then
+        historyIndex = historyIndex + 1
+        local entry = history[#history - historyIndex + 1]
+        inputBuffer = entry.command
+        cursorPos = #inputBuffer
+        shell.updateDisplay()
+    end
+end
+
+function shell.onCursorDown(fid)
+    if fid ~= focusId then return end
+    
+    if historyIndex > 1 then
+        -- Move down in history (towards newer commands)
+        historyIndex = historyIndex - 1
+        local entry = history[#history - historyIndex + 1]
+        inputBuffer = entry.command
+        cursorPos = #inputBuffer
+        shell.updateDisplay()
+    elseif historyIndex == 1 then
+        -- Back to saved input
+        historyIndex = 0
+        inputBuffer = savedInputBuffer
+        cursorPos = #inputBuffer
+        shell.updateDisplay()
+    end
+end
+
 function shell.onCursorLeft(fid)
     if fid == focusId and cursorPos > 0 then
         cursorPos = cursorPos - 1
@@ -699,6 +743,9 @@ function shell.onDelete(fid)
 end
 
 function shell.onInterrupt(fid)
+    if fid ~= focusId then return end
+    historyIndex = 0
+    savedInputBuffer = ""
     inputBuffer = ""
     cursorPos = 0
     shell.updateDisplay()

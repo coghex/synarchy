@@ -1123,6 +1123,12 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaFocusLost fid → do
     broadcastToModules ls "onFocusLost"
       [ ScriptNumber (fromIntegral fid) ]
+  LuaCursorUp fid → do
+    broadcastToModules ls "onCursorUp"
+      [ ScriptNumber (fromIntegral fid) ]
+  LuaCursorDown fid → do
+    broadcastToModules ls "onCursorDown"
+      [ ScriptNumber (fromIntegral fid) ]
   LuaCursorLeft fid → do
     broadcastToModules ls "onCursorLeft"
       [ ScriptNumber (fromIntegral fid) ]

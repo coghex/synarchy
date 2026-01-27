@@ -89,6 +89,8 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaTextBackspace Word32
             | LuaTabPressed Word32
             | LuaTextSubmit Word32
+            | LuaCursorUp Word32
+            | LuaCursorDown Word32
             | LuaCursorLeft Word32
             | LuaCursorRight Word32
             | LuaCursorHome Word32
