@@ -6,6 +6,13 @@ local visible = false
 local focusId = nil
 local inputBuffer = ""
 local history = {}
+local historyTextObjects = {}
+local maxHistoryVisible = {}
+local lineHeight = 40
+local historyPadding = 10
+local marginLeft = 40
+local marginBottom = 40
+local marginTop = 40
 
 -- Textures (loaded on init)
 local texBox = nil
@@ -39,7 +46,7 @@ local shellFont = nil
 
 -- Configuration
 local tileSize = 64        -- tile size in pixels
-local middleWidth = 400    -- middle section width in pixels
+local middleWidth = 1200    -- middle section width in pixels
 local shellLayer = 10
 
 -- Margins from edges (in pixels)
@@ -88,59 +95,8 @@ function shell.show()
     visible = true
     engine.requestFocus(focusId)
     
-    -- Use framebuffer size for pixel-accurate positioning
-    local w, h = engine.getFramebufferSize()
-    
-    -- Calculate total box dimensions
-    local totalHeight = tileSize * 3
-    
-    -- Position at bottom-left of screen
-    local baseX = marginLeft
-    local baseY = h - marginBottom - totalHeight
-    
-    -- Spawn tiles if they don't exist
-    -- Note: spawnSprite expects CENTER position, so we add half the size
-    if not objBoxNW then
-        -- Top row
-        local row0Y = baseY + tileSize / 2
-        objBoxNW = engine.spawnSprite(baseX + tileSize / 2, row0Y, tileSize, tileSize, texBoxNW, shellLayer)
-        objBoxN  = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row0Y, middleWidth, tileSize, texBoxN, shellLayer)
-        objBoxNE = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row0Y, tileSize, tileSize, texBoxNE, shellLayer)
-        
-        -- Middle row
-        local row1Y = baseY + tileSize + tileSize / 2
-        objBoxW  = engine.spawnSprite(baseX + tileSize / 2, row1Y, tileSize, tileSize, texBoxW, shellLayer)
-        objBox   = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row1Y, middleWidth, tileSize, texBox, shellLayer)
-        objBoxE  = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row1Y, tileSize, tileSize, texBoxE, shellLayer)
-        
-        -- Bottom row
-        local row2Y = baseY + tileSize * 2 + tileSize / 2
-        objBoxSW = engine.spawnSprite(baseX + tileSize / 2, row2Y, tileSize, tileSize, texBoxSW, shellLayer)
-        objBoxS  = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row2Y, middleWidth, tileSize, texBoxS, shellLayer)
-        objBoxSE = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row2Y, tileSize, tileSize, texBoxSE, shellLayer)
-        
-        -- Spawn prompt text "$>" in the middle row, inside the box
-        -- Position it at the left edge of the center area
-        local promptX = baseX + tileSize + 10  -- 10px padding from left edge
-        local promptY = row2Y - 48 -- Bottom row (where input goes)
-        objPrompt = engine.spawnText(promptX, promptY, shellFont, "$>", shellLayer)
-        local bufferX = promptX + 60
-        local bufferY = promptY
-        objBufferText = engine.spawnText(bufferX, bufferY, shellFont, "", shellLayer)
-    else
-        -- Show existing tiles
-        engine.setVisible(objBoxNW, true)
-        engine.setVisible(objBoxN, true)
-        engine.setVisible(objBoxNE, true)
-        engine.setVisible(objBoxW, true)
-        engine.setVisible(objBox, true)
-        engine.setVisible(objBoxE, true)
-        engine.setVisible(objBoxSW, true)
-        engine.setVisible(objBoxS, true)
-        engine.setVisible(objBoxSE, true)
-        engine.setVisible(objPrompt, true)
-        engine.setVisible(objBufferText, true)
-    end
+    shell.rebuildBox()
+    shell.rebuildHistoryDisplay()
 end
 
 function shell.hide()
@@ -158,6 +114,9 @@ function shell.hide()
     if objBoxSE then engine.setVisible(objBoxSE, false) end
     if objPrompt then engine.setVisible(objPrompt, false) end
     if objBufferText then engine.setVisible(objBufferText, false) end
+    for _, obj in ipairs(historyTextObjects) do
+        engine.setVisible(obj, false)
+    end
 end
 
 function shell.updateDisplay()
@@ -193,11 +152,28 @@ function shell.onSubmit()
     if cmd == "help" then
         shell.addHistory(inputBuffer, shell.cmdHelp(), false)
     elseif cmd == "clear" then
+        shell.addHistory(inputBuffer, "OK", false)
         shell.cmdClear()
     elseif cmd == "exit" or cmd == "quit" then
+        shell.addHistory(inputBuffer, "OK", false)
         shell.cmdQuit()
     else
         local result, isError = engine.shellExecute(inputBuffer)
+        
+        -- Bare identifier returning nil is probably an undefined variable
+        local trimmed = inputBuffer:match("^%s*(.-)%s*$")
+        if result == "nil" and trimmed:match("^[%a_][%w_]*$") then
+            result = "undefined: " .. trimmed
+            isError = true
+        end
+        
+        if result == nil or result == "" or result == "nil" then
+            if isError then
+                result = "ERROR"
+            else
+                result = "OK"
+            end
+        end
         shell.addHistory(inputBuffer, result, isError)
     end
     inputBuffer = ""
@@ -210,7 +186,10 @@ function shell.addHistory(command, result, isError)
         result = result,
         isError = isError
     })
-    -- TODO: Update history display
+    if visible then
+        shell.rebuildBox()
+        shell.rebuildHistoryDisplay()
+    end
 end
 
 function shell.cmdHelp()
@@ -219,12 +198,170 @@ end
 
 function shell.cmdClear()
     history = {}
-    -- TODO: Update history display
+    if visible then
+        shell.rebuildBox()
+        shell.rebuildHistoryDisplay()
+    end
 end
 
 function shell.cmdQuit()
     -- TODO: Signal engine to quit
     engine.logInfo("Quit requested from shell")
+end
+
+function shell.rebuildHistoryDisplay()
+    -- Destroy old text objects
+    for _, obj in ipairs(historyTextObjects) do
+        engine.setVisible(obj, false)
+        -- TODO: engine.destroyText(obj) when available
+    end
+    historyTextObjects = {}
+    
+    if not visible then return end
+    if #history == 0 then return end
+    
+    -- Get current layout info
+    local fbWidth, fbHeight = engine.getFramebufferSize()
+    local baseX = marginLeft
+    local textX = baseX + tileSize + historyPadding
+    
+    -- Calculate how many lines we can show
+    local promptY = getPromptY()
+    local availableHeight = promptY - marginTop - tileSize - historyPadding
+    local maxLines = math.floor(availableHeight / lineHeight)
+    
+    -- Get the lines to display (most recent at bottom)
+    local startIdx = math.max(1, #history - maxLines + 1)
+    
+    local y = promptY - lineHeight  -- Start just above prompt
+    for i = #history, startIdx, -1 do
+        local entry = history[i]
+        
+        -- Result line first (closer to prompt, lower on screen)
+        if entry.result and entry.result ~= "" and entry.result ~= "nil" then
+            local resultObj = engine.spawnText(textX + 20, y, shellFont, entry.result,"white", shellLayer)
+            table.insert(historyTextObjects, resultObj)
+            y = y - lineHeight
+        end
+        
+        -- Command line (above result, higher on screen)
+        local cmdText = "$> " .. entry.command
+        local cmdObj = engine.spawnText(textX, y, shellFont, cmdText, "white", shellLayer)
+        table.insert(historyTextObjects, cmdObj)
+        y = y - lineHeight
+        
+        -- Stop if we've run out of space
+        if y < marginTop + tileSize then
+            break
+        end
+    end
+end
+
+-- Add this new function
+function shell.rebuildBox()
+    local fbWidth, fbHeight = engine.getFramebufferSize()
+    local boxHeight = calculateBoxHeight()
+    
+    -- Calculate middle section height (total - top edge - bottom edge)
+    local middleHeight = boxHeight - tileSize * 2
+    
+    -- Position at bottom-left of screen
+    local baseX = marginLeft
+    local baseY = fbHeight - marginBottom - boxHeight
+    
+    -- Destroy old sprites if they exist
+    if objBoxNW then
+        -- For now, just hide them - we'll respawn
+        -- TODO: Add engine.destroySprite() for proper cleanup
+        engine.setVisible(objBoxNW, false)
+        engine.setVisible(objBoxN, false)
+        engine.setVisible(objBoxNE, false)
+        engine.setVisible(objBoxW, false)
+        engine.setVisible(objBox, false)
+        engine.setVisible(objBoxE, false)
+        engine.setVisible(objBoxSW, false)
+        engine.setVisible(objBoxS, false)
+        engine.setVisible(objBoxSE, false)
+        engine.setVisible(objPrompt, false)
+        engine.setVisible(objBufferText, false)
+    end
+    
+    -- Top row (at the top of the box)
+    local row0Y = baseY + tileSize / 2
+    objBoxNW = engine.spawnSprite(baseX + tileSize / 2, row0Y, tileSize, tileSize, texBoxNW, shellLayer)
+    objBoxN  = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row0Y, middleWidth, tileSize, texBoxN, shellLayer)
+    objBoxNE = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row0Y, tileSize, tileSize, texBoxNE, shellLayer)
+    
+    -- Middle section (stretched to fill)
+    local middleY = baseY + tileSize + middleHeight / 2
+    objBoxW  = engine.spawnSprite(baseX + tileSize / 2, middleY, tileSize, middleHeight, texBoxW, shellLayer)
+    objBox   = engine.spawnSprite(baseX + tileSize + middleWidth / 2, middleY, middleWidth, middleHeight, texBox, shellLayer)
+    objBoxE  = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, middleY, tileSize, middleHeight, texBoxE, shellLayer)
+    
+    -- Bottom row
+    local row2Y = baseY + tileSize + middleHeight + tileSize / 2
+    objBoxSW = engine.spawnSprite(baseX + tileSize / 2, row2Y, tileSize, tileSize, texBoxSW, shellLayer)
+    objBoxS  = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row2Y, middleWidth, tileSize, texBoxS, shellLayer)
+    objBoxSE = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row2Y, tileSize, tileSize, texBoxSE, shellLayer)
+    
+    -- Prompt text at bottom
+    local promptX = baseX + tileSize + 10
+    local promptY = row2Y - 32
+    objPrompt = engine.spawnText(promptX, promptY, shellFont, "$>", "white", shellLayer)
+    local bufferX = promptX + 60
+    objBufferText = engine.spawnText(bufferX, promptY, shellFont, inputBuffer, "white", shellLayer)
+end
+
+function shell.addHistory(command, result, isError)
+    engine.logInfo("addHistory called: " .. command .. " -> " .. tostring(result))
+    table.insert(history, {
+        command = command,
+        result = result,
+        isError = isError
+    })
+    engine.logInfo("History size now: " .. #history)
+    if visible then
+        shell.rebuildBox()
+        shell.rebuildHistoryDisplay()
+    end
+end
+
+-- Helper to get prompt Y position
+function getPromptY()
+    local fbWidth, fbHeight = engine.getFramebufferSize()
+    local boxHeight = calculateBoxHeight()
+    local baseY = fbHeight - marginBottom - boxHeight
+    local middleHeight = boxHeight - tileSize * 2
+    local row2Y = baseY + tileSize + middleHeight + tileSize / 2
+    return row2Y - 32  -- Adjust based on font size
+end
+
+-- Calculate required box height based on history
+function calculateBoxHeight()
+    local promptPadding = 20  -- Extra space around prompt
+    local baseHeight = tileSize * 2 + lineHeight - promptPadding
+    
+    if #history == 0 then
+        return baseHeight
+    end
+    
+    -- Count lines needed for history
+    local historyLines = 0
+    for _, entry in ipairs(history) do
+        historyLines = historyLines + 1
+        if entry.result and entry.result ~= "" and entry.result ~= "nil" then
+            historyLines = historyLines + 1
+        end
+    end
+    
+    local historyHeight = historyLines * lineHeight
+    local neededHeight = baseHeight + historyHeight
+    
+    -- Clamp to screen bounds
+    local _, fbHeight = engine.getFramebufferSize()
+    local maxHeight = fbHeight - marginTop - marginBottom
+    
+    return math.min(neededHeight, maxHeight)
 end
 
 return shell

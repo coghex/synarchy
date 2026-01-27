@@ -5,6 +5,7 @@ module Engine.Scripting.Lua.Backend
   ) where
 
 import UPrelude
+import Math (colorToVec4)
 import Engine.Scripting.Backend
 import Engine.Scripting.Types
 import Engine.Scripting.Lua.Types
@@ -103,9 +104,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.moveSprite(objectId, x, y)
   Lua.pushHaskellFunction (moveSpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "moveSprite")
-  -- engine.setSpriteColor(objectId, r, g, b, a)
-  Lua.pushHaskellFunction (setSpriteColorFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "setSpriteColor")
+  -- engine.setColor(objectId, color)
+  Lua.pushHaskellFunction (setColorFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "setColor")
   -- engine.setVisible(objectId, visible)
   Lua.pushHaskellFunction (setVisibleFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "setVisible")
@@ -136,7 +137,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.loadFont(path, size)
   Lua.pushHaskellFunction (loadFontFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "loadFont")
-  -- engine.spawnText(x,y,fontHandle,text,layer)
+  -- engine.spawnText(x,y,fontHandle,text,color,layer)
   Lua.pushHaskellFunction (spawnTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "spawnText")
   -- engine.setText(objectId, text)
@@ -288,26 +289,23 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
               "moveSprite requires 3 arguments: objectId, x, y"
           return 0
 
-    setSpriteColorFn = do
+    setColorFn = do
       objIdNum ← Lua.tointeger 1
-      r ← Lua.tonumber 2
-      g ← Lua.tonumber 3
-      b ← Lua.tonumber 4
-      a ← Lua.tonumber 5
-      case (objIdNum, r, g, b, a) of
-        (Just idVal, Just rVal, Just gVal, Just bVal, Just aVal) → do
+      color ← Lua.tostring 2
+      case (objIdNum, color) of
+        (Just idVal, Just c) → do
           Lua.liftIO $ do
             let (lteq, _) = lbsMsgQueues backendState
-                color     = Vec4 (realToFrac rVal) (realToFrac gVal)
-                                 (realToFrac bVal) (realToFrac aVal)
-                msg = LuaSetSpriteColorRequest (ObjectId (fromIntegral idVal)) color
+                cStr = T.unpack $ TE.decodeUtf8 c
+                msg = LuaSetColorRequest (ObjectId (fromIntegral idVal))
+                                         (colorToVec4 cStr)
             Q.writeQueue lteq msg
           return 0
         _ → do
           Lua.liftIO $ do
             let lf = logFunc env
             lf defaultLoc "lua" LevelError 
-              "setSpriteColor requires 5 arguments: objectId, r, g, b, a"
+              "setColor requires 2 arguments: objectId, color"
           return 0
 
     setVisibleFn = do
@@ -471,17 +469,19 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
       y ← Lua.tonumber 2
       fontHandleNum ← Lua.tointeger 3
       text ← Lua.tostring 4
-      layer ← Lua.tointeger 5
-      case (x,y,fontHandleNum,text) of
-        (Just xVal, Just yVal, Just fh, Just textBS) → do
+      color ← Lua.tostring 5
+      layer ← Lua.tointeger 6
+      case (x,y,fontHandleNum,color,text) of
+        (Just xVal, Just yVal, Just fh, Just c, Just textBS) → do
           let layerId = LayerId $ fromIntegral $ fromMaybe 0 layer
           objId ← Lua.liftIO $ do
             objId ← atomicModifyIORef' (lbsNextObjectId backendState) 
                 (\n -> (n + 1, ObjectId n))
             let fontHandle = FontHandle $ fromIntegral fh
                 textStr = TE.decodeUtf8 textBS
+                cStr = T.unpack $ TE.decodeUtf8 c
                 msg = LuaSpawnTextRequest objId (realToFrac xVal) (realToFrac yVal)
-                      fontHandle textStr layerId
+                      fontHandle textStr (colorToVec4 cStr) layerId
                 lteq = luaToEngineQueue env
             Lua.liftIO $ Q.writeQueue lteq msg
             return objId

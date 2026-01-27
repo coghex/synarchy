@@ -16,6 +16,7 @@ local spriteCount = 0
 local lastLogTime = 0
 local logInterval = 1.0  -- Log mouse position every 1 second
 local w, h = 800,600
+local testText = nil
 
 function init()
     engine.logInfo("=== Input System Test ===")
@@ -44,7 +45,7 @@ function init()
     font = engine.loadFont("assets/fonts/ChrustyRock-ORLA.ttf", 32)
     if font then
         engine.logInfo("Font loaded successfully")
-        engine.spawnText(100,100,font,"hello, scene graph", 1)
+        testText = engine.spawnText(100,100,font,"hello, scene graph", "#99FF00", 1)
     else
         engine.logError("Failed to load font")
     end
@@ -94,6 +95,7 @@ function onMouseDown(button, x, y)
     local w, h = engine.getWindowSize()
     local worldX, worldY = engine.getWorldCoord(x, y)
     local objId = engine.spawnSprite(worldX, worldY, 0.1, 0.1, tex, layer)
+    engine.setColor(testText, "#FF00FF")
 end
 
 function onMouseUp(button, x, y)

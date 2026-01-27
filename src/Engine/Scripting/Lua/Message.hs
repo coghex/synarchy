@@ -43,13 +43,13 @@ handleLuaMessage ∷ LuaToEngineMsg → EngineM ε σ ()
 handleLuaMessage msg = case msg of
   LuaLoadTextureRequest handle path → handleLoadTexture handle path
   LuaLoadFontRequest handle path size → handleLoadFont handle path size
-  LuaSpawnTextRequest oid x y fontHandle text layer → 
-    handleSpawnText oid x y fontHandle text layer
+  LuaSpawnTextRequest oid x y fontHandle text color layer → 
+    handleSpawnText oid x y fontHandle text color layer
   LuaSetTextRequest objId text → handleSetText objId text
   LuaSpawnSpriteRequest objId x y width height texHandle layer →
     handleSpawnSprite objId x y width height texHandle layer
   LuaMoveSpriteRequest objId x y → handleMoveSprite objId x y
-  LuaSetSpriteColorRequest objId color → handleSetSpriteColor objId color
+  LuaSetColorRequest objId color → handleSetColor objId color
   LuaSetVisibleRequest objId visible → handleSetVisible objId visible
   LuaDestroySpriteRequest objId → handleDestroySprite objId
   _ → return ()
@@ -76,9 +76,9 @@ handleLoadFont handle path size = do
     liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
 
 -- | Handle spawn text request
-handleSpawnText ∷ ObjectId → Float → Float → FontHandle → Text → LayerId 
-                → EngineM ε σ ()
-handleSpawnText oid x y fontHandle text layer = do
+handleSpawnText ∷ ObjectId → Float → Float → FontHandle → Text
+                → Vec4 → LayerId → EngineM ε σ ()
+handleSpawnText oid x y fontHandle text color layer = do
     sceneMgr ← gets sceneManager
     case smActiveScene sceneMgr of
       Just sceneId → do
@@ -87,7 +87,7 @@ handleSpawnText oid x y fontHandle text layer = do
               , nodeTransform = defaultTransform { position = (x, y) }
               , nodeFont = Just fontHandle
               , nodeText = Just text
-              , nodeColor = Vec4 1 1 1 1
+              , nodeColor = color
               , nodeVisible = True
               , nodeLayer = layer
               }
@@ -137,8 +137,8 @@ handleMoveSprite objId x y = do
       node { nodeTransform = (nodeTransform node) { position = (x, y) } }
 
 -- | Handle set sprite color request
-handleSetSpriteColor ∷ ObjectId → Vec4 → EngineM ε σ ()
-handleSetSpriteColor objId color = do
+handleSetColor ∷ ObjectId → Vec4 → EngineM ε σ ()
+handleSetColor objId color = do
     modifySceneNode objId $ \node → node { nodeColor = color }
 
 -- | Handle set sprite visible request

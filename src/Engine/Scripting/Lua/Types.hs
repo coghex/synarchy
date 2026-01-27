@@ -47,7 +47,7 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaLoadTextureRequest TextureHandle FilePath
                     | LuaLoadFontRequest FontHandle FilePath Int
                     | LuaSpawnTextRequest ObjectId Float Float FontHandle
-                                                   Text LayerId
+                                                   Text Vec4 LayerId
                     | LuaSpawnSpriteRequest
                         { lssObjectId    ∷ ObjectId -- generated in lua thread
                         , lssX           ∷ Float
@@ -58,7 +58,7 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                         , lssLayer       ∷ LayerId }
                     | LuaMoveSpriteRequest ObjectId Float Float
                     | LuaSetSpriteScaleRequest ObjectId Float Float
-                    | LuaSetSpriteColorRequest ObjectId Vec4
+                    | LuaSetColorRequest ObjectId Vec4
                     | LuaSetVisibleRequest ObjectId Bool
                     | LuaSetTextRequest ObjectId Text
                     | LuaDestroySpriteRequest ObjectId
