@@ -116,6 +116,23 @@ processInput env inpSt event = case event of
                 Q.writeQueue (luaQueue env) (LuaTextSubmit fid)
             when (key ≡ KeyTab ∧ keyState ≡ GLFW.KeyState'Pressed) $
                 Q.writeQueue (luaQueue env) (LuaTabPressed fid)
+            when (key ≡ KeyLeft ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) (LuaCursorLeft fid)
+            when (key ≡ KeyRight ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) (LuaCursorRight fid)
+            when ((key ≡ KeyHome ∧ keyState ≡ GLFW.KeyState'Pressed)
+                 ∨ (key ≡ KeyA ∧ keyState ≡ GLFW.KeyState'Pressed
+                   ∧ (GLFW.modifierKeysControl mods))) $
+                Q.writeQueue (luaQueue env) (LuaCursorHome fid)
+            when ((key ≡ KeyEnd ∧ keyState ≡ GLFW.KeyState'Pressed)
+                 ∨ (key ≡ KeyE ∧ keyState ≡ GLFW.KeyState'Pressed
+                   ∧ (GLFW.modifierKeysControl mods))) $
+                Q.writeQueue (luaQueue env) (LuaCursorEnd fid)
+            when (key ≡ KeyDelete ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) (LuaTextDelete fid)
+            when (key ≡ KeyC ∧ keyState ≡ GLFW.KeyState'Pressed
+                   ∧ (GLFW.modifierKeysControl mods)) $
+                Q.writeQueue (luaQueue env) (LuaInterrupt fid)
             return ()
         return $ updateKeyState inpSt glfwKey keyState mods
     InputCharEvent c → do

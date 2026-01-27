@@ -64,7 +64,7 @@ data Key
     | KeyU | KeyV | KeyW | KeyX | KeyY | KeyZ
     | Key0 | Key1 | Key2 | Key3 | Key4 | Key5 | Key6 | Key7 | Key8 | Key9
     | KeySpace | KeyEnter | KeyEscape | KeyTab | KeyBackspace | KeyDelete
-    | KeyUp | KeyDown | KeyLeft | KeyRight
+    | KeyUp | KeyDown | KeyLeft | KeyRight | KeyHome | KeyEnd
     | KeyShift | KeyCtrl | KeyAlt | KeySuper
     | KeyGrave | KeyMinus | KeyEqual | KeyComma | KeyPeriod
     | KeyF1 | KeyF2 | KeyF3 | KeyF4 | KeyF5 | KeyF6

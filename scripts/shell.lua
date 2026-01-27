@@ -54,6 +54,7 @@ local objCursor = nil
 local cursorVisible = true
 local cursorBlinkTime = 0
 local cursorBlinkRate = 0.5 -- seconds
+local cursorPos = 0
 
 -- Configuration
 local tileSize = 64
@@ -210,13 +211,20 @@ function shell.getFocusId()
 end
 
 function shell.onChar(char)
-    inputBuffer = inputBuffer .. char
+    -- Insert at cursor position
+    local before = inputBuffer:sub(1, cursorPos)
+    local after = inputBuffer:sub(cursorPos + 1)
+    inputBuffer = before .. char .. after
+    cursorPos = cursorPos + 1
     shell.updateDisplay()
 end
 
 function shell.onBackspace()
-    if #inputBuffer > 0 then
-        inputBuffer = string.sub(inputBuffer, 1, -2)
+    if cursorPos > 0 then
+        local before = inputBuffer:sub(1, cursorPos - 1)
+        local after = inputBuffer:sub(cursorPos + 1)
+        inputBuffer = before .. after
+        cursorPos = cursorPos - 1
         shell.updateDisplay()
     end
 end
@@ -251,6 +259,7 @@ function shell.onSubmit()
         shell.addHistory(inputBuffer, result, isError)
     end
     inputBuffer = ""
+    cursorPos = 0
     shell.updateDisplay()
 end
 
@@ -398,7 +407,6 @@ function shell.rebuildBox()
     end
 end
 
--- Update cursor position based on text width
 function shell.updateCursorPos()
     if not objCursor then return end
     if not visible then return end
@@ -413,8 +421,11 @@ function shell.updateCursorPos()
     local promptY = row2Y - fontSize
     local bufferX = promptX + fontSize
     
-    local textWidth = engine.getTextWidth(shellFont, inputBuffer)
-    local cursorX = bufferX + textWidth
+    -- Only measure text up to cursor position
+    local textBeforeCursor = inputBuffer:sub(1, cursorPos)
+    local textWidth = engine.getTextWidth(shellFont, textBeforeCursor)
+    local cursorOffset = -4
+    local cursorX = bufferX + textWidth + cursorOffset
     
     engine.setPos(objCursor, cursorX, promptY)
 end
@@ -565,6 +576,13 @@ end
 -- Update ghost text showing completion hint
 function shell.updateGhostText()
     if not visible then return end
+    if cursorPos ~= #inputBuffer then
+        if ghostText then
+            engine.setVisible(ghostText, false)
+        end
+        currentCompletions = {}
+        return
+    end
     
     local prefix = getCurrentWord()
     
@@ -628,7 +646,10 @@ function shell.onTab()
     local addition = commonPrefix:sub(#prefix + 1)
     
     if #addition > 0 then
-        inputBuffer = inputBuffer .. addition
+        local before = inputBuffer:sub(1, cursorPos)
+        local after = inputBuffer:sub(cursorPos + 1)
+        inputBuffer = before .. addition .. after
+        cursorPos = cursorPos + #addition
         shell.updateDisplay()
     end
 end
@@ -638,6 +659,49 @@ function shell.onTabPressed(fid)
     if fid == focusId then
         shell.onTab()
     end
+end
+
+function shell.onCursorLeft(fid)
+    if fid == focusId and cursorPos > 0 then
+        cursorPos = cursorPos - 1
+        shell.updateCursorPos()
+    end
+end
+
+function shell.onCursorRight(fid)
+    if fid == focusId and cursorPos < #inputBuffer then
+        cursorPos = cursorPos + 1
+        shell.updateCursorPos()
+    end
+end
+
+function shell.onCursorHome(fid)
+    if fid == focusId then
+        cursorPos = 0
+        shell.updateCursorPos()
+    end
+end
+
+function shell.onCursorEnd(fid)
+    if fid == focusId then
+        cursorPos = #inputBuffer
+        shell.updateCursorPos()
+    end
+end
+
+function shell.onDelete(fid)
+    if fid == focusId and cursorPos < #inputBuffer then
+        local before = inputBuffer:sub(1, cursorPos)
+        local after = inputBuffer:sub(cursorPos + 2)
+        inputBuffer = before .. after
+        shell.updateDisplay()
+    end
+end
+
+function shell.onInterrupt(fid)
+    inputBuffer = ""
+    cursorPos = 0
+    shell.updateDisplay()
 end
 
 return shell

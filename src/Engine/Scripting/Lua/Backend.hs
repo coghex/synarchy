@@ -1111,6 +1111,9 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaTextBackspace fid → do
     broadcastToModules ls "onTextBackspace"
       [ ScriptNumber (fromIntegral fid) ]
+  LuaTextDelete fid → do
+    broadcastToModules ls "onTextDelete"
+      [ ScriptNumber (fromIntegral fid) ]
   LuaTabPressed fid → do
     broadcastToModules ls "onTabPressed"
       [ ScriptNumber (fromIntegral fid) ]
@@ -1119,6 +1122,21 @@ processLuaMsg env ls stateRef msg = case msg of
       [ ScriptNumber (fromIntegral fid) ]
   LuaFocusLost fid → do
     broadcastToModules ls "onFocusLost"
+      [ ScriptNumber (fromIntegral fid) ]
+  LuaCursorLeft fid → do
+    broadcastToModules ls "onCursorLeft"
+      [ ScriptNumber (fromIntegral fid) ]
+  LuaCursorRight fid → do
+    broadcastToModules ls "onCursorRight"
+      [ ScriptNumber (fromIntegral fid) ]
+  LuaCursorHome fid → do
+    broadcastToModules ls "onCursorHome"
+      [ ScriptNumber (fromIntegral fid) ]
+  LuaCursorEnd fid → do
+    broadcastToModules ls "onCursorEnd"
+      [ ScriptNumber (fromIntegral fid) ]
+  LuaInterrupt fid → do
+    broadcastToModules ls "onInterrupt"
       [ ScriptNumber (fromIntegral fid) ]
   _ → return ()
 
