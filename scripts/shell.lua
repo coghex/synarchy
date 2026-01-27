@@ -5,6 +5,7 @@ local shell = {}
 local visible = false
 local focusId = nil
 local inputBuffer = ""
+local history = {}
 
 -- Textures (loaded on init)
 local texBox = nil
@@ -187,11 +188,43 @@ function shell.onBackspace()
 end
 
 function shell.onSubmit()
-    -- TODO: Execute command from inputBuffer
-    local text = engine.getText(objBufferText)
-    engine.logInfo("text is: " .. text)
+    if inputBuffer == "" then return end
+    local cmd = string.lower(string.match(inputBuffer, "^%s*(%S+)") or "")
+    if cmd == "help" then
+        shell.addHistory(inputBuffer, shell.cmdHelp(), false)
+    elseif cmd == "clear" then
+        shell.cmdClear()
+    elseif cmd == "exit" or cmd == "quit" then
+        shell.cmdQuit()
+    else
+        local result, isError = engine.shellExecute(inputBuffer)
+        shell.addHistory(inputBuffer, result, isError)
+    end
     inputBuffer = ""
     shell.updateDisplay()
+end
+
+function shell.addHistory(command, result, isError)
+    table.insert(history, {
+        command = command,
+        result = result,
+        isError = isError
+    })
+    -- TODO: Update history display
+end
+
+function shell.cmdHelp()
+    return "Commands: help, clear, quit/exit\nOr enter Lua code to execute"
+end
+
+function shell.cmdClear()
+    history = {}
+    -- TODO: Update history display
+end
+
+function shell.cmdQuit()
+    -- TODO: Signal engine to quit
+    engine.logInfo("Quit requested from shell")
 end
 
 return shell
