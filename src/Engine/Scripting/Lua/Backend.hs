@@ -137,6 +137,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.loadScript(path, tickRate)
   Lua.pushHaskellFunction (loadScriptFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "loadScript")
+  -- engine.killScript(scriptId)
+  Lua.pushHaskellFunction (killScriptFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "killScript")
   -- engine.setTickInterval(scriptId, interval)
   Lua.pushHaskellFunction (setTickIntervalFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "setTickInterval")
@@ -1115,24 +1118,6 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onFocusLost"
       [ ScriptNumber (fromIntegral fid) ]
   _ → return ()
-
--- | helper function to call lua event handlers safely
-tryCallLuaHandler ∷ LuaBackendState → T.Text → [ScriptValue] → IO ()
-tryCallLuaHandler ls funcName args = do
-  -- check if handler exists
-  exists ← Lua.runWith (lbsLuaState ls) $ do
-    _ ← Lua.getglobal (Lua.Name $ TE.encodeUtf8 funcName) ∷  Lua.LuaE Lua.Exception Lua.Type
-    isFunc ← Lua.isfunction (-1)
-    Lua.pop 1
-    return isFunc
-  when exists $ do
-    backend ← createLuaBackend
-    let scriptCtx = ScriptContext (toDyn (lbsLuaState ls))
-    result ← callFunction backend scriptCtx funcName args
-    case result of
-      ScriptSuccess _ → return ()
-      ScriptError err → do
-        putStrLn $ "Error calling Lua handler " ⧺ (T.unpack funcName) ⧺ ": " ⧺ (show err)
 
 -- Helper function
 calculateTextWidth ∷ FontAtlas → String → Double

@@ -51,7 +51,7 @@ function game.init(scriptId)
     end
     
     -- Initialize shell
-    shellScriptId = engine.loadScript("scripts/shell.lua",1.0)
+    shellScriptId = engine.loadScript("scripts/shell.lua",0.5)
 end
 
 function game.update(dt)

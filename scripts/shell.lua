@@ -91,13 +91,10 @@ end
 function shell.update(dt)
     if not visible then return end
     
-    cursorBlinkTime = cursorBlinkTime + dt
-    if cursorBlinkTime >= cursorBlinkRate then
-        cursorBlinkTime = cursorBlinkTime - cursorBlinkRate
-        cursorVisible = not cursorVisible
-        if objCursor then
-            engine.setVisible(objCursor, cursorVisible)
-        end
+    -- dt will be ~0.5, so just toggle every call
+    cursorVisible = not cursorVisible
+    if objCursor then
+        engine.setVisible(objCursor, cursorVisible)
     end
 end
 
