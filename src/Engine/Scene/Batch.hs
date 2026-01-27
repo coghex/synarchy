@@ -7,6 +7,7 @@ import qualified Data.Map as Map
 import qualified Data.List as List
 import qualified Data.Set as Set
 import Data.Maybe (mapMaybe)
+import Data.IORef (readIORef)
 import Engine.Scene.Base
 import Engine.Scene.Graph
 import Engine.Scene.Types
@@ -40,8 +41,8 @@ collectTextBatches ∷ SceneGraph → Float → Float
 collectTextBatches graph screenW screenH = do
   let allNodes = Map.elems (sgNodes graph)
       textNodes = filter (\n → nodeType n ≡ TextObject && nodeVisible n) allNodes
-  gs ← gets graphicsState
-  let cache = fontCache gs
+  cacheRef ← asks fontCacheRef
+  cache ← liftIO $ readIORef cacheRef
   let grouped = groupByFontAndLayer textNodes
   batches ← forM grouped $ \((fontHandle, layerId), nodes) → do
     case Map.lookup fontHandle (fcFonts cache) of

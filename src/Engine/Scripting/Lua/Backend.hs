@@ -86,13 +86,58 @@ instance ScriptBackend LuaBackend where
   backendName _    = "Lua"
   backendVersion _ = "5.5"
 
+loadScriptAsModule ∷ Lua.State → FilePath → IO (Maybe Lua.Reference)
+loadScriptAsModule lst path = Lua.runWith lst $ do
+    status ← Lua.dofileTrace (Just path)
+    case status of
+        Lua.OK → do
+            isTable ← Lua.istable (-1)
+            if isTable
+                then do
+                    ref ← Lua.ref Lua.registryindex
+                    return (Just ref)
+                else do
+                    Lua.pop 1
+                    return Nothing
+        _ → return Nothing
+
+-- | Call a function on a module table
+callModuleFunction ∷ Lua.State → Lua.Reference → T.Text → [ScriptValue] → IO Lua.Status
+callModuleFunction lst modRef funcName args = Lua.runWith lst $ do
+    -- Push the module table from registry
+    _ ← Lua.getref Lua.registryindex modRef ∷ Lua.LuaE Lua.Exception Lua.Type
+    -- Get the function from the table
+    _ ← Lua.getfield (-1) (Lua.Name $ TE.encodeUtf8 funcName)
+    isFunc ← Lua.isfunction (-1)
+    if isFunc
+        then do
+            -- Push arguments
+            forM_ args $ \arg → case arg of
+                ScriptNumber n → Lua.pushnumber (Lua.Number n)
+                ScriptString s → Lua.pushstring (TE.encodeUtf8 s)
+                ScriptBool b   → Lua.pushboolean b
+                ScriptNil      → Lua.pushnil
+                _              → Lua.pushnil
+            -- Call function
+            Lua.call (fromIntegral $ length args) 0
+            -- Pop module table
+            Lua.pop 1
+            return Lua.OK
+        else do
+            -- Pop nil and module table
+            Lua.pop 2
+            return Lua.OK  -- Function doesn't exist, that's fine
+
 registerLuaAPI ∷ Lua.State → EngineEnv → LuaBackendState → IO ()
 registerLuaAPI lst env backendState = Lua.runWith lst $ do
   Lua.newtable 
   -- engine.logInfo
   Lua.pushHaskellFunction (logInfoFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "logInfo")
-  -- engine.setTickInterval
+  -- engine.loadScript(path, tickRate)
+  Lua.pushHaskellFunction (loadScriptFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "loadScript")
+  -- engine.setTickInterval(scriptId, interval)
   Lua.pushHaskellFunction (setTickIntervalFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "setTickInterval")
   -- engine.loadTexture(path)
@@ -149,6 +194,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.getText(objectId)
   Lua.pushHaskellFunction (getTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "getText")
+  -- engine.getTextWidth(fontHandle, text)
+  Lua.pushHaskellFunction (getTextWidthFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "getTextWidth")
   -- engine.shellExecute(code)
   Lua.pushHaskellFunction (shellExecuteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "shellExecute")
@@ -176,29 +224,25 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
       return 0
 
     setTickIntervalFn = do
-      interval ← Lua.tonumber 1
-      case interval of
-        Just (Lua.Number seconds) → Lua.liftIO $ do
-          scriptPathMaybe ← Lua.runWith lst $ do
-            _ ← Lua.getfield Lua.registryindex (Lua.Name "_CURRENT_SCRIPT") ∷  Lua.LuaE Lua.Exception Lua.Type
-            Lua.tostring (-1)
-          case scriptPathMaybe of
-            Just pathBS → do
-              let scriptPath = TE.decodeUtf8 pathBS
-                  lf = logFunc env
-              currentTime ← getCurrentTime
-              let currentSecs = realToFrac $ utctDayTime currentTime
-              atomically $ modifyTVar (lbsScripts backendState) $ Map.adjust
-                (\s -> s { scriptTickRate = seconds
-                         , scriptNextTick = currentSecs + seconds
-                         }) (T.unpack scriptPath)
-              lf defaultLoc "lua" LevelInfo $ toLogStr $
-                "Tick interval for script " ⧺ (show scriptPath) ⧺ " set to " ⧺ (show seconds) ⧺ " seconds."
-            Nothing → do
-              let lf = logFunc env
-              lf defaultLoc "lua" LevelError "setTickInterval called outside of script context."
-        Nothing → return ()
-      return 0
+       scriptIdNum ← Lua.tointeger 1
+       interval ← Lua.tonumber 2
+       case (scriptIdNum, interval) of
+           (Just sid, Just (Lua.Number seconds)) → Lua.liftIO $ do
+               currentTime ← getCurrentTime
+               let currentSecs = realToFrac $ utctDayTime currentTime
+               atomically $ modifyTVar (lbsScripts backendState) $
+                   Map.adjust (\s → s { scriptTickRate = seconds
+                                      , scriptNextTick = currentSecs + seconds
+                                      }) (fromIntegral sid)
+               let lf = logFunc env
+               lf defaultLoc "lua" LevelInfo $ toLogStr $
+                   "Tick interval for script " ⧺ show sid ⧺ " set to " ⧺ show seconds ⧺ " seconds."
+           _ → do
+               Lua.liftIO $ do
+                   let lf = logFunc env
+                   lf defaultLoc "lua" LevelError
+                       "setTickInterval requires 2 arguments: scriptId, seconds"
+       return 0
 
     loadTextureFn = do
       path ← Lua.tostring 1
@@ -545,6 +589,22 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
         _ → Lua.pushnil
       return 1
 
+    getTextWidthFn = do
+      fontHandleNum ← Lua.tointeger 1
+      text ← Lua.tostring 2
+      case (fontHandleNum, text) of
+          (Just fh, Just textBS) → do
+              width ← Lua.liftIO $ do
+                  let fontHandle = FontHandle (fromIntegral fh)
+                      textStr = T.unpack $ TE.decodeUtf8 textBS
+                  fontCache ← readIORef (fontCacheRef env)
+                  case Map.lookup fontHandle (fcFonts fontCache) of
+                      Nothing → return 0.0
+                      Just atlas → return $ calculateTextWidth atlas textStr
+              Lua.pushnumber (Lua.Number width)
+          _ → Lua.pushnumber (Lua.Number 0)
+      return 1
+
     shellExecuteFn = do
       code ← Lua.tostring 1
       case code of
@@ -634,6 +694,105 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
         Nothing          -> Lua.pushnil
       return 1
 
+    loadScriptFn = do
+        path <- Lua.tostring 1
+        tickRate <- Lua.tonumber 2
+        case (path, tickRate) of
+            (Just pathBS, Just rate) -> do
+                scriptId <- Lua.liftIO $ do
+                    let pathStr = T.unpack $ TE.decodeUtf8 pathBS
+                    
+                    -- Generate script ID
+                    sid <- atomicModifyIORef' (lbsNextScriptId backendState)
+                        (\n -> (n + 1, n))
+                    
+                    -- Load the script and get module reference
+                    status <- Lua.runWith lst $ Lua.dofileTrace (Just pathStr)
+                    case status of
+                        Lua.OK -> do
+                            modRef <- Lua.runWith lst $ do
+                                isTable <- Lua.istable (-1)
+                                if isTable
+                                    then Lua.ref Lua.registryindex
+                                    else do
+                                        Lua.pop 1
+                                        return (Lua.Reference (fromIntegral Lua.refnil))
+                            
+                            currentTime <- getCurrentTime
+                            let currentSecs = realToFrac $ utctDayTime currentTime
+                                script = LuaScript
+                                    { scriptId        = sid
+                                    , scriptPath      = pathStr
+                                    , scriptTickRate  = realToFrac rate
+                                    , scriptNextTick  = currentSecs + realToFrac rate
+                                    , scriptModuleRef = modRef
+                                    , scriptPaused    = False
+                                    }
+                            
+                            atomically $ modifyTVar (lbsScripts backendState) $
+                                Map.insert sid script
+                            
+                            -- Call init if it exists
+                            when (isValidRef modRef) $
+                                void $ callModuleFunction lst modRef "init" []
+                            
+                            return (Just sid)
+                        _ -> return Nothing
+                
+                case scriptId of
+                    Just sid -> Lua.pushinteger (Lua.Integer $ fromIntegral sid)
+                    Nothing  -> Lua.pushnil
+            _ -> Lua.pushnil
+        return 1
+
+    killScriptFn = do
+        sidNum <- Lua.tointeger 1
+        case sidNum of
+            Just sid -> Lua.liftIO $ do
+                scriptsMap <- readTVarIO (lbsScripts backendState)
+                case Map.lookup (fromIntegral sid) scriptsMap of
+                    Just script -> do
+                        -- Call shutdown if exists
+                        when (isValidRef (scriptModuleRef script)) $ do
+                            _ <- callModuleFunction lst (scriptModuleRef script) "shutdown" []
+                            -- Release the reference
+                            Lua.runWith lst $ Lua.unref Lua.registryindex (scriptModuleRef script)
+                        
+                        -- Remove from map
+                        atomically $ modifyTVar (lbsScripts backendState) $
+                            Map.delete (fromIntegral sid)
+                    Nothing -> return ()
+            _ -> return ()
+        return 0
+    
+    pauseScriptFn = do
+          sidNum <- Lua.tointeger 1
+          case sidNum of
+              Just sid -> Lua.liftIO $ atomically $ modifyTVar (lbsScripts backendState) $
+                  Map.adjust (\s -> s { scriptPaused = True }) (fromIntegral sid)
+              _ -> return ()
+          return 0
+      
+    resumeScriptFn = do
+          sidNum <- Lua.tointeger 1
+          case sidNum of
+              Just sid -> Lua.liftIO $ do
+                  currentTime <- getCurrentTime
+                  let currentSecs = realToFrac $ utctDayTime currentTime
+                  atomically $ modifyTVar (lbsScripts backendState) $
+                      Map.adjust (\s -> s { scriptPaused = False, scriptNextTick = currentSecs }) (fromIntegral sid)
+              _ -> return ()
+          return 0
+      
+    setScriptTickRateFn = do
+          sidNum <- Lua.tointeger 1
+          rate <- Lua.tonumber 2
+          case (sidNum, rate) of
+              (Just sid, Just r) -> Lua.liftIO $ atomically $ modifyTVar (lbsScripts backendState) $
+                  Map.adjust (\s -> s { scriptTickRate = realToFrac r }) (fromIntegral sid)
+              _ -> return ()
+          return 0
+
     -- | Helper to call Lua function with explicit type
 callLuaFunction :: T.Text -> [ScriptValue] -> Lua.LuaE Lua.Exception Lua.Status
 callLuaFunction funcName args = do
@@ -715,7 +874,6 @@ setupShellSandbox lst = Lua.runWith lst $ do
 createLuaBackend :: IO LuaBackend
 createLuaBackend = return LuaBackend
 
--- | Start Lua thread (existing thread management)
 startLuaThread ∷ EngineEnv → IO ThreadState
 startLuaThread env = do
     let apRef        = assetPoolRef env
@@ -734,32 +892,63 @@ startLuaThread env = do
             lf defaultLoc "lua" LevelInfo "Lua API registered."
             setupShellSandbox (lbsLuaState backendState)
             lf defaultLoc "lua" LevelInfo "Shell sandbox set up."
+            
+            -- Load init.lua as a module
             let scriptPath = "scripts/init.lua"
-            Lua.runWith (lbsLuaState backendState) $ do
-              Lua.pushstring (TE.encodeUtf8 $ T.pack scriptPath)
-              Lua.setfield Lua.registryindex (Lua.Name "_CURRENT_SCRIPT") ∷  Lua.LuaE Lua.Exception ()
-            currentTime ← getCurrentTime 
+            currentTime ← getCurrentTime
             let currentSecs = realToFrac $ utctDayTime currentTime
-                defaultScript = LuaScript
-                  { scriptPath     = scriptPath
-                  , scriptTickRate = 1.0 -- default 1 second tick rate
-                  , scriptNextTick = currentSecs + 1.0 }
-            atomically $ modifyTVar (lbsScripts backendState) $
-              Map.insert scriptPath defaultScript
-            backend ← createLuaBackend
-            let scriptCtx = ScriptContext (toDyn (lbsLuaState backendState))
-            loadResult ← loadScript backend scriptCtx scriptPath
-            case loadResult of
-              ScriptSuccess _ → lf defaultLoc "lua" LevelInfo $ toLogStr $
-                                  (T.pack $ (show scriptPath) ⧺ " loaded successfully.")
-              ScriptError err → lf defaultLoc "lua" LevelError $ toLogStr $
-                                  T.pack $ "Failed to load " ⧺ scriptPath ⧺ ": " ⧺ (show err)
-            initResult ← callFunction backend scriptCtx "init" []
-            case initResult of
-              ScriptSuccess _ → lf defaultLoc "lua" LevelInfo
-                                  "init() function executed successfully."
-              ScriptError err → lf defaultLoc "lua" LevelError $ toLogStr $
-                                  "Failed to execute init(): " ⧺ (show err)
+            
+            -- Generate script ID
+            initScriptId ← atomicModifyIORef' (lbsNextScriptId backendState)
+                (\n → (n + 1, n))
+            
+            -- Load the script
+            status ← Lua.runWith (lbsLuaState backendState) $ 
+                Lua.dofileTrace (Just scriptPath)
+            
+            case status of
+                Lua.OK → do
+                    -- Get module reference
+                    modRef ← Lua.runWith (lbsLuaState backendState) $ do
+                        isTable ← Lua.istable (-1)
+                        if isTable
+                            then Lua.ref Lua.registryindex
+                            else do
+                                Lua.pop 1
+                                return (Lua.Reference (fromIntegral Lua.refnil))
+                    
+                    let initScript = LuaScript
+                          { scriptId        = initScriptId
+                          , scriptPath      = scriptPath
+                          , scriptTickRate  = 1.0  -- Will be overridden by init()
+                          , scriptNextTick  = currentSecs + 1.0
+                          , scriptModuleRef = modRef
+                          , scriptPaused    = False
+                          }
+                    
+                    atomically $ modifyTVar (lbsScripts backendState) $
+                        Map.insert initScriptId initScript
+                    
+                    lf defaultLoc "lua" LevelInfo $ toLogStr $
+                        T.pack $ scriptPath ⧺ " loaded successfully as module."
+                    
+                    -- Call init on the module
+                    when (isValidRef modRef) $ do
+                        _ ← callModuleFunction (lbsLuaState backendState) modRef "init" 
+                            [ScriptNumber (fromIntegral initScriptId)]
+                        return ()
+                    
+                    lf defaultLoc "lua" LevelInfo "init() called on game module."
+                    
+                _ → do
+                    -- Get error message from stack
+                    errMsg ← Lua.runWith (lbsLuaState backendState) $ do
+                        err ← Lua.tostring (-1)
+                        Lua.pop 1
+                        return $ maybe "Unknown error" TE.decodeUtf8 err
+                    lf defaultLoc "lua" LevelError $ toLogStr $
+                        "Failed to load " <> T.pack scriptPath <> ": " <> errMsg
+            
             tid ← forkIO $ runLuaLoop env backendState stateRef
             return tid
         ) 
@@ -779,9 +968,11 @@ createLuaBackendState ltem etlm apRef objIdRef inputStateRef = do
   lState ← Lua.newstate
   _ ← Lua.runWith lState $ Lua.openlibs
   scriptsVar ← newTVarIO Map.empty
+  scriptIdRef ← newIORef 1
   return LuaBackendState
     { lbsLuaState     = lState
     , lbsScripts      = scriptsVar
+    , lbsNextScriptId = scriptIdRef
     , lbsMsgQueues    = (ltem, etlm)
     , lbsAssetPool    = apRef
     , lbsNextObjectId = objIdRef
@@ -828,18 +1019,15 @@ runLuaLoop env ls stateRef = do
                   let currentSecs' = realToFrac $ utctDayTime currentTime'
                   -- execute all scripts that are due
                   scriptsMap' ← readTVarIO (lbsScripts ls)
-                  forM_ (Map.toList scriptsMap') $ \(path, script) → do
-                    when (currentSecs' ≥ scriptNextTick script) $ do
-                      Lua.runWith (lbsLuaState ls) $ do
-                        Lua.pushstring (TE.encodeUtf8 $ T.pack path)
-                        Lua.setfield Lua.registryindex (Lua.Name "_CURRENT_SCRIPT") ∷  Lua.LuaE Lua.Exception ()
-                      backend ← createLuaBackend
-                      let scriptCtx = ScriptContext (toDyn (lbsLuaState ls))
-                          dt        = scriptTickRate script
-                      _ ← callFunction backend scriptCtx "update" [ScriptNumber dt]
-                      -- update next tick time (preserving overshoot)
+                  forM_ (Map.toList scriptsMap') $ \(sid, script) → do
+                    when (not (scriptPaused script) && currentSecs' ≥ scriptNextTick script) $ do
+                      when (isValidRef (scriptModuleRef script)) $ do
+                        let dt = scriptTickRate script
+                        _ ← callModuleFunction (lbsLuaState ls) (scriptModuleRef script) "update" [ScriptNumber dt]
+                        return ()
+                      -- update next tick time
                       atomically $ modifyTVar (lbsScripts ls) $
-                        Map.adjust (\s -> s { scriptNextTick = scriptNextTick s + scriptTickRate s }) path
+                        Map.adjust (\s → s { scriptNextTick = scriptNextTick s + scriptTickRate s }) sid
                   runLuaLoop env ls stateRef
 
 -- | Process messages from anywhere to lua
@@ -856,24 +1044,33 @@ processLuaMsgs env ls stateRef = do
             processLuaMsg env ls stateRef msg
             processLuaMsgs env ls stateRef
         Nothing → return ()
+
+-- | Broadcast an event to all loaded script modules
+broadcastToModules ∷ LuaBackendState → T.Text → [ScriptValue] → IO ()
+broadcastToModules ls funcName args = do
+    scriptsMap ← readTVarIO (lbsScripts ls)
+    forM_ (Map.elems scriptsMap) $ \script →
+        when (isValidRef (scriptModuleRef script)) $ do
+            _ ← callModuleFunction (lbsLuaState ls) (scriptModuleRef script) funcName args
+            return ()
+
 -- | Process a single lua message
 processLuaMsg ∷ EngineEnv → LuaBackendState → IORef ThreadControl → LuaMsg → IO ()
 processLuaMsg env ls stateRef msg = case msg of
   LuaTextureLoaded handle assetId → do
-    -- TODO: Handle texture loaded callback
     let lf = logFunc env
     lf defaultLoc "lua" LevelInfo $ 
-        "Texture loaded:  " <> toLogStr (show handle) <> " -> " <> toLogStr (show assetId)
+        "Texture loaded: " <> toLogStr (show handle) <> " -> " <> toLogStr (show assetId)
     return ()
   LuaFontLoaded handle → do
     let lf = logFunc env
     lf defaultLoc "lua" LevelInfo $ 
-        "Font loaded:  " <> toLogStr (show handle)
+        "Font loaded: " <> toLogStr (show handle)
     return ()
   LuaFontLoadFailed err → do
     let lf = logFunc env
     lf defaultLoc "lua" LevelError $ 
-        "Font load failed:  " <> toLogStr (show err)
+        "Font load failed: " <> toLogStr (show err)
     return ()
   LuaThreadKill → writeIORef stateRef ThreadStopped
   LuaMouseDownEvent button x y → do
@@ -882,7 +1079,7 @@ processLuaMsg env ls stateRef msg = case msg of
           GLFW.MouseButton'2 → 2
           GLFW.MouseButton'3 → 3
           _                  → 0
-    tryCallLuaHandler ls "onMouseDown"
+    broadcastToModules ls "onMouseDown"
       [ ScriptNumber (fromIntegral buttonNum)
       , ScriptNumber x
       , ScriptNumber y ]
@@ -892,32 +1089,32 @@ processLuaMsg env ls stateRef msg = case msg of
           GLFW.MouseButton'2 → 2
           GLFW.MouseButton'3 → 3
           _                  → 0
-    tryCallLuaHandler ls "onMouseUp"
+    broadcastToModules ls "onMouseUp"
       [ ScriptNumber (fromIntegral buttonNum)
       , ScriptNumber x
       , ScriptNumber y ]
   LuaKeyDownEvent key → do
     let keyName = keyToText key
-    tryCallLuaHandler ls "onKeyDown" [ScriptString keyName]
+    broadcastToModules ls "onKeyDown" [ScriptString keyName]
   LuaKeyUpEvent key → do
     let keyName = keyToText key
-    tryCallLuaHandler ls "onKeyUp" [ScriptString keyName]
+    broadcastToModules ls "onKeyUp" [ScriptString keyName]
   LuaShellToggle → do
-    tryCallLuaHandler ls "onShellToggle" []
+    broadcastToModules ls "onShellToggle" []
   LuaCharInput fid c → do
-    tryCallLuaHandler ls "onCharInput"
+    broadcastToModules ls "onCharInput"
       [ ScriptNumber (fromIntegral fid)
       , ScriptString (T.singleton c) ]
   LuaTextBackspace fid → do
-    tryCallLuaHandler ls "onTextBackspace"
+    broadcastToModules ls "onTextBackspace"
       [ ScriptNumber (fromIntegral fid) ]
   LuaTextSubmit fid → do
-    tryCallLuaHandler ls "onTextSubmit"
+    broadcastToModules ls "onTextSubmit"
       [ ScriptNumber (fromIntegral fid) ]
   LuaFocusLost fid → do
-    tryCallLuaHandler ls "onFocusLost"
+    broadcastToModules ls "onFocusLost"
       [ ScriptNumber (fromIntegral fid) ]
-  _ → return () -- other messages can be handled here
+  _ → return ()
 
 -- | helper function to call lua event handlers safely
 tryCallLuaHandler ∷ LuaBackendState → T.Text → [ScriptValue] → IO ()
@@ -936,3 +1133,13 @@ tryCallLuaHandler ls funcName args = do
       ScriptSuccess _ → return ()
       ScriptError err → do
         putStrLn $ "Error calling Lua handler " ⧺ (T.unpack funcName) ⧺ ": " ⧺ (show err)
+
+-- Helper function
+calculateTextWidth ∷ FontAtlas → String → Double
+calculateTextWidth atlas str = 
+    sum [ maybe 0 (realToFrac . giAdvance) (Map.lookup c (faGlyphData atlas)) 
+        | c ← str 
+        ]
+-- Add this helper at the top of your where clause or as a top-level function
+isValidRef :: Lua.Reference -> Bool
+isValidRef (Lua.Reference n) = n /= (fromIntegral Lua.refnil)

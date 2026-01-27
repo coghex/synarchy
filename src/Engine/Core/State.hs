@@ -39,6 +39,7 @@ data EngineEnv = EngineEnv
   , lifecycleRef     ∷ IORef EngineLifecycle
   , assetPoolRef     ∷ IORef AssetPool
   , nextObjectIdRef  ∷ IORef Word32
+  , fontCacheRef     ∷ IORef FontCache
   , inputStateRef    ∷ IORef InputState
   , keyBindingsRef   ∷ IORef KeyBindings
   , textBuffersRef   ∷ IORef (Map.Map ObjectId Text)
@@ -96,7 +97,6 @@ data GraphicsState = GraphicsState
   , bindlessPipeline   ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , bindlessUIPipeline ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , cleanupStatus      ∷ CleanupStatus
-  , fontCache          ∷ FontCache
   , fontPipeline       ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , fontUIPipeline     ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , fontQuadBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)

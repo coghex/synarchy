@@ -87,7 +87,6 @@ defaultEngineState pool = EngineState
     , bindlessPipeline   = Nothing
     , bindlessUIPipeline = Nothing
     , cleanupStatus      = NotStarted
-    , fontCache          = defaultFontCache
     , fontPipeline       = Nothing
     , fontUIPipeline     = Nothing
     , fontQuadBuffer     = Nothing

@@ -1,6 +1,9 @@
 -- Shell module for debug console
 local shell = {}
 
+-- Script ID (passed from engine)
+local myScriptId = nil
+
 -- State
 local visible = false
 local focusId = nil
@@ -46,21 +49,27 @@ local boxSpawned = false
 local fontHandle = nil
 local shellFont = nil
 
+-- Cursor
+local objCursor = nil
+local cursorVisible = true
+local cursorBlinkTime = 0
+local cursorBlinkRate = 0.5 -- seconds
+
 -- Configuration
 local tileSize = 64
 local middleWidth = 1200
 local shellLayer = 10
 local fontSize = 32
 
-function shell.init(font)
-    fontHandle = font
+function shell.init(scriptId)
+    myScriptId = scriptId
+    engine.logInfo("Shell module initialized with scriptId: " .. tostring(scriptId))
     
     shellFont = engine.loadFont("assets/fonts/Cabal.ttf", fontSize)
     if shellFont then
         engine.logInfo("Shell font loaded: Cabal.ttf")
     else
         engine.logError("Failed to load shell font")
-        shellFont = font
     end
     
     texBox = engine.loadTexture("assets/textures/box/box.png")
@@ -79,6 +88,67 @@ function shell.init(font)
     engine.logInfo("Shell initialized with focusId: " .. tostring(focusId))
 end
 
+function shell.update(dt)
+    if not visible then return end
+    
+    cursorBlinkTime = cursorBlinkTime + dt
+    if cursorBlinkTime >= cursorBlinkRate then
+        cursorBlinkTime = cursorBlinkTime - cursorBlinkRate
+        cursorVisible = not cursorVisible
+        if objCursor then
+            engine.setVisible(objCursor, cursorVisible)
+        end
+    end
+end
+
+function shell.shutdown()
+    engine.logInfo("Shell module shutting down")
+    -- Cleanup all objects
+    if objBoxNW then engine.destroy(objBoxNW) end
+    if objBoxN then engine.destroy(objBoxN) end
+    if objBoxNE then engine.destroy(objBoxNE) end
+    if objBoxW then engine.destroy(objBoxW) end
+    if objBox then engine.destroy(objBox) end
+    if objBoxE then engine.destroy(objBoxE) end
+    if objBoxSW then engine.destroy(objBoxSW) end
+    if objBoxS then engine.destroy(objBoxS) end
+    if objBoxSE then engine.destroy(objBoxSE) end
+    if objPrompt then engine.destroy(objPrompt) end
+    if objBufferText then engine.destroy(objBufferText) end
+    if objCursor then engine.destroy(objCursor) end
+    for _, obj in ipairs(historyTextObjects) do
+        engine.destroy(obj)
+    end
+end
+
+function shell.onShellToggle()
+    shell.toggle()
+end
+
+function shell.onCharInput(fid, char)
+    if fid == focusId then
+        shell.onChar(char)
+    end
+end
+
+function shell.onTextBackspace(fid)
+    if fid == focusId then
+        shell.onBackspace()
+    end
+end
+
+function shell.onTextSubmit(fid)
+    if fid == focusId then
+        shell.onSubmit()
+    end
+end
+
+function shell.onFocusLost(fid)
+    if fid == focusId and visible then
+        shell.hide()
+    end
+end
+
 function shell.toggle()
     if visible then
         shell.hide()
@@ -89,6 +159,8 @@ end
 
 function shell.show()
     visible = true
+    cursorVisible = true
+    cursorBlinkTime = 0
     engine.requestFocus(focusId)
     
     shell.rebuildBox()
@@ -111,6 +183,7 @@ function shell.hide()
     if objBoxSE then engine.setVisible(objBoxSE, false) end
     if objPrompt then engine.setVisible(objPrompt, false) end
     if objBufferText then engine.setVisible(objBufferText, false) end
+    if objCursor then engine.setVisible(objCursor, false) end
     for _, obj in ipairs(historyTextObjects) do
         engine.setVisible(obj, false)
     end
@@ -121,6 +194,7 @@ function shell.updateDisplay()
     if objBufferText then
         engine.setText(objBufferText, inputBuffer)
     end
+    shell.updateCursorPos()
 end
 
 function shell.isVisible()
@@ -277,6 +351,7 @@ function shell.rebuildBox()
         
         objPrompt = engine.spawnText(promptX, promptY, shellFont, "$>", "white", shellLayer)
         objBufferText = engine.spawnText(bufferX, promptY, shellFont, inputBuffer, "white", shellLayer)
+        objCursor = engine.spawnText(bufferX, promptY, shellFont, "|", "white", shellLayer)
         
         boxSpawned = true
     else
@@ -314,7 +389,30 @@ function shell.rebuildBox()
         -- Prompt
         engine.setPos(objPrompt, promptX, promptY)
         engine.setPos(objBufferText, bufferX, promptY)
+        engine.setVisible(objCursor, cursorVisible)
+        shell.updateCursorPos()
     end
+end
+
+-- Update cursor position based on text width
+function shell.updateCursorPos()
+    if not objCursor then return end
+    if not visible then return end
+    
+    local fbWidth, fbHeight = engine.getFramebufferSize()
+    local boxHeight = calculateBoxHeight()
+    local baseX = marginLeft
+    local baseY = fbHeight - marginBottom - boxHeight
+    local middleHeight = boxHeight - tileSize * 2
+    local row2Y = baseY + tileSize + middleHeight + tileSize / 2
+    local promptX = baseX + tileSize + 10
+    local promptY = row2Y - fontSize
+    local bufferX = promptX + fontSize
+    
+    local textWidth = engine.getTextWidth(shellFont, inputBuffer)
+    local cursorX = bufferX + textWidth
+    
+    engine.setPos(objCursor, cursorX, promptY)
 end
 
 function shell.addHistory(command, result, isError)

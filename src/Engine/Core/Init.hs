@@ -17,6 +17,7 @@ import Engine.Core.Var
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Camera (defaultCamera, defaultUICamera)
 import Engine.Graphics.Config (loadVideoConfig, VideoConfig(..))
+import Engine.Graphics.Font.Data (defaultFontCache)
 import Engine.Input.Bindings (loadKeyBindings)
 import Engine.Input.Types (defaultInputState)
 import UI.Focus (createFocusManager)
@@ -64,6 +65,8 @@ initializeEngine = do
   focusMgrRef ← newIORef createFocusManager
   -- text buffers reference
   textBuffersRef ← newIORef Map.empty
+  -- font cache reference
+  fontCache ← newIORef defaultFontCache
   
   -- Build environment
   let env = EngineEnv
@@ -76,6 +79,7 @@ initializeEngine = do
         , lifecycleRef     = lifecycleRef
         , assetPoolRef     = assetPoolRef
         , nextObjectIdRef  = nextObjectIdRef
+        , fontCacheRef     = fontCache
         , inputStateRef    = inputStateRef
         , keyBindingsRef   = keyBindingsRef
         , textBuffersRef   = textBuffersRef

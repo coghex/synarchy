@@ -17,9 +17,12 @@ import qualified HsLua as Lua
 
 -- | Represents a single Lua script's metadata
 data LuaScript = LuaScript
-  { scriptPath     ∷ FilePath -- path to the Lua script
-  , scriptTickRate ∷ Double   -- seconds between updates
-  , scriptNextTick ∷ Double   -- next scheduled tick time
+  { scriptId        ∷ Word32   -- unique identifier
+  , scriptPath      ∷ FilePath -- path to the Lua script
+  , scriptTickRate  ∷ Double   -- seconds between updates
+  , scriptNextTick  ∷ Double   -- next scheduled tick time
+  , scriptModuleRef ∷ Lua.Reference -- reference to the returned table
+  , scriptPaused    ∷ Bool     -- is the script paused
   } deriving (Eq, Show)
 
 -- | Thread-safe map of Lua scripts
@@ -28,7 +31,8 @@ type LuaScripts = TVar (Map.Map FilePath LuaScript)
 -- | Lua-specific state (wraps Lua.  State with script tracking)
 data LuaBackendState = LuaBackendState
   { lbsLuaState     ∷ Lua.State
-  , lbsScripts      ∷ LuaScripts
+  , lbsScripts      ∷ TVar (Map.Map Word32 LuaScript)
+  , lbsNextScriptId ∷ IORef Word32
   , lbsMsgQueues    ∷ (Q.Queue LuaToEngineMsg, Q.Queue LuaMsg)
   , lbsAssetPool    ∷ IORef AssetPool
   , lbsNextObjectId ∷ IORef Word32

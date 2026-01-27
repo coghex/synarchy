@@ -1,5 +1,4 @@
-local shell = require("scripts/shell")
-
+local game = {}
 local tex1 = nil
 local tex2 = nil
 local tex3 = nil
@@ -12,13 +11,14 @@ local tex9 = nil
 local tex10 = nil
 local font = nil
 local spawnedSprites = {}
+local shellScriptId = nil
 local spriteCount = 0
 local lastLogTime = 0
 local logInterval = 1.0  -- Log mouse position every 1 second
 local w, h = 800,600
 local testText = nil
 
-function init()
+function game.init(scriptId)
     engine.logInfo("=== Input System Test ===")
     engine.logInfo("Controls:")
     engine.logInfo("  WASD - Move camera")
@@ -51,10 +51,10 @@ function init()
     end
     
     -- Initialize shell
-    shell.init(font)
+    shellScriptId = engine.loadScript("scripts/shell.lua",1.0)
 end
 
-function update(dt)
+function game.update(dt)
     -- Mouse position logging (throttled)
     lastLogTime = lastLogTime + dt
     if lastLogTime >= logInterval then
@@ -63,7 +63,7 @@ function update(dt)
     end
 end
 
-function onMouseDown(button, x, y)
+function game.onMouseDown(button, x, y)
     spriteCount = spriteCount + 1
     -- cycle through layers 0,1,2
     local layer = spriteCount % 3
@@ -98,40 +98,19 @@ function onMouseDown(button, x, y)
     engine.setColor(testText, "#FF00FF")
 end
 
-function onMouseUp(button, x, y)
+function game.onMouseUp(button, x, y)
 end
 
-function onKeyDown(key)
+function game.onKeyDown(key)
 end
 
-function onKeyUp(key)
+function game.onKeyUp(key)
 end
 
--- Shell event handlers
-function onShellToggle()
-    shell.toggle()
-end
-
-function onCharInput(focusId, char)
-    if focusId == shell.getFocusId() then
-        shell.onChar(char)
+function game.shutdown()
+    if shellScriptId then
+        engine.killScript(shellScriptId)
     end
 end
 
-function onTextBackspace(focusId)
-    if focusId == shell.getFocusId() then
-        shell.onBackspace()
-    end
-end
-
-function onTextSubmit(focusId)
-    if focusId == shell.getFocusId() then
-        shell.onSubmit()
-    end
-end
-
-function onFocusLost(focusId)
-    if focusId == shell.getFocusId() then
-        shell.hide()
-    end
-end
+return game

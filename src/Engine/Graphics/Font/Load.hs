@@ -25,6 +25,7 @@ import qualified Data.Vector as V
 import Data.Word (Word8)
 import Data.Char (ord)
 import Data.Array.IO (IOArray, newArray, writeArray, getElems)
+import Data.IORef (readIORef, atomicModifyIORef')
 import Foreign.Ptr (castPtr)
 import Foreign.Marshal.Array (pokeArray)
 
@@ -48,8 +49,9 @@ createFontDescriptorPool device maxFonts = do
 -- | Load a TTF font at specified size
 loadFont ∷ FontHandle → FilePath → Int → EngineM ε σ FontHandle
 loadFont requestedHandle fontPath fontSize = do
+    cacheRef ← asks fontCacheRef
+    cache ← liftIO $ readIORef cacheRef
     gs ← gets graphicsState
-    let cache = fontCache gs
     case Map.lookup (fontPath, fontSize) (fcPathCache cache) of
         Just handle → do
             logInfo $ "Font already loaded: " ⧺ (show fontPath)
@@ -71,10 +73,10 @@ loadFont requestedHandle fontPath fontSize = do
                                  , faSampler = Just samp }
                 handle = requestedHandle
             
-            modify $ \s → s 
-                { graphicsState = gs { fontCache = cache
-                    { fcFonts = Map.insert handle newAtlas (fcFonts cache)
-                    , fcPathCache = Map.insert (fontPath, fontSize) handle (fcPathCache cache) } } }
+            liftIO $ atomicModifyIORef' cacheRef $ \c → ((c
+                { fcFonts = Map.insert handle newAtlas (fcFonts c)
+                , fcPathCache = Map.insert (fontPath, fontSize) handle (fcPathCache c) }
+                ), ())
             
             return handle
 

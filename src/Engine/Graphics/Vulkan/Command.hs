@@ -482,7 +482,9 @@ renderTextBatchInline cmdBuf device pDevice quadBuffer layout batch state = do
                 (V.fromList [quadBuffer, instanceBuffer])
                 (V.fromList [0, 0])
             -- Bind font atlas descriptor set
-            let cache = fontCache state
+            env ← ask
+            let cacheRef = fontCacheRef env
+            cache ← liftIO $ readIORef cacheRef 
             case Map.lookup (tbFontHandle batch) (fcFonts cache) of
                 Nothing → do
                     logDebug $ "Font handle not found:  " <> show (tbFontHandle batch)
