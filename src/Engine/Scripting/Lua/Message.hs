@@ -35,7 +35,6 @@ processLuaMessages = do
       Nothing → return ()
       Just msg → do
         currentTime ← liftIO getCurrentTime
-        logDebug $ "[MAIN RECV " <> show currentTime <> "] processing: " ⧺ show msg
         handleLuaMessage msg
         processLuaMessages
 
@@ -58,7 +57,6 @@ handleLuaMessage msg = case msg of
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
 handleLoadTexture handle path = do
-    logDebug $ "Loading texture: " ⧺ show path ⧺ " with handle " ⧺ show handle
     assetId ← loadTextureAtlasWithHandle handle (T.pack $ takeBaseName path) path "default"
     
     apRef ← asks assetPoolRef
@@ -68,15 +66,11 @@ handleLoadTexture handle path = do
     
     pool ← liftIO $ readIORef apRef
     modify $ \s → s { assetPool = pool }
-    logDebug $ "Texture loaded: handle=" ⧺ show handle ⧺ ", assetId=" ⧺ show assetId
 
 -- | Handle font load request
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM ε σ ()
 handleLoadFont handle path size = do
-    logDebug $ "Loading font: " ⧺ show path ⧺ " size=" ⧺ show size
     actualHandle ← loadFont handle path size
-    logDebug $ "Font loaded successfully: handle=" ⧺ show actualHandle
-    
     env ← ask
     let etlq = luaQueue env
     liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
@@ -103,7 +97,6 @@ handleSpawnText oid x y fontHandle text layer = do
             env ← ask
             liftIO $ atomicModifyIORef' (textBuffersRef env) $ \m →
               (Map.insert oid text m, ())
-            logDebug $ "Text object spawned with id: " ⧺ show addedObjId
           Nothing → logDebug $ "Failed to add text object " ⧺ show oid
       Nothing → logDebug "Cannot spawn text: no active scene"
 
@@ -119,11 +112,6 @@ handleSetText objId text = do
 handleSpawnSprite ∷ ObjectId → Float → Float → Float → Float 
                   → TextureHandle → LayerId → EngineM ε σ ()
 handleSpawnSprite objId x y width height texHandle layer = do
-    logDebug $ "Spawning sprite id=" ⧺ show objId ⧺
-               " pos=(" ⧺ show x ⧺ ", " ⧺ show y ⧺ ")" ⧺
-               " size=(" ⧺ show width ⧺ ", " ⧺ show height ⧺ ")" ⧺
-               " tex=" ⧺ show texHandle
-    
     sceneMgr ← gets sceneManager
     case smActiveScene sceneMgr of
       Just sceneId → do
@@ -139,7 +127,6 @@ handleSpawnSprite objId x y width height texHandle layer = do
         case addObjectToScene sceneId node sceneMgr of
           Just (addedObjId, newSceneMgr) → do
             modify $ \s → s { sceneManager = newSceneMgr }
-            logDebug $ "Sprite spawned with id: " ⧺ show addedObjId
           Nothing → logDebug $ "Failed to add sprite " ⧺ show objId
       Nothing → logDebug "Cannot spawn sprite: no active scene"
 

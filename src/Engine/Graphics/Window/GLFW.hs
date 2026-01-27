@@ -58,7 +58,7 @@ initializeGLFW ∷ EngineM ε σ ()
 initializeGLFW = do
   success ← liftIO $ GLFW.init
   case success of
-    True  → logDebug "GLFW initialized"
+    True  → return ()--logDebug "GLFW initialized"
     False → throwInitError WindowCreationFailed "Failed to initialize GLFW"
   -- Set necessary window hints for Vulkan
   liftIO $ do
@@ -86,9 +86,7 @@ createWindow config = do
       Nothing → throwSystemError (GLFWError "Window creation failed") $
                   T.pack $ "Failed to create GLFW window with dimensions: "
                   ⧺ show (wcWidth config) ⧺ "x" ⧺ show (wcHeight config)
-      Just win → do
-        logDebug "Window created"
-        pure $ Window win
+      Just win → pure $ Window win
 --
 -- | Creates a GLFW window in an IO context for testing
 createRawWindow ∷ WindowConfig → IO (Maybe Window)

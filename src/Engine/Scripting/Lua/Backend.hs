@@ -892,6 +892,9 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaTextSubmit fid → do
     tryCallLuaHandler ls "onTextSubmit"
       [ ScriptNumber (fromIntegral fid) ]
+  LuaFocusLost fid → do
+    tryCallLuaHandler ls "onFocusLost"
+      [ ScriptNumber (fromIntegral fid) ]
   _ → return () -- other messages can be handled here
 
 -- | helper function to call lua event handlers safely

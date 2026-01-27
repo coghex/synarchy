@@ -60,14 +60,11 @@ mainLoop = do
 -- | Handle engine starting state
 handleEngineStarting ∷ EngineEnv → EngineM ε σ ()
 handleEngineStarting env = do
-    logDebug "Engine starting..."
     liftIO $ threadDelay 100000
-    
     -- Clear the input queue before entering main loop
     flushed ← liftIO $ Q.flushQueue (inputQueue env)
     when (not $ null flushed) $
         logDebug $ "Unexpected inputs during start: " ⧺ show flushed
-    
     liftIO $ writeIORef (lifecycleRef env) EngineRunning
     mainLoop
 

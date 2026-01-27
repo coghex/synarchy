@@ -50,7 +50,7 @@ function shell.init(font)
     fontHandle = font
     
     -- Load shell-specific font
-    shellFont = engine.loadFont("assets/fonts/Cabal.ttf", 48)
+    shellFont = engine.loadFont("assets/fonts/Cabal.ttf", 32)
     if shellFont then
         engine.logInfo("Shell font loaded: Cabal.ttf")
     else

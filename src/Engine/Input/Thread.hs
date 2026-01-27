@@ -108,6 +108,8 @@ processInput env inpSt event = case event of
           TextInputMode (FocusId fid) → do
             when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
                 Q.writeQueue (luaQueue env) LuaShellToggle
+            when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
+                Q.writeQueue (luaQueue env) $ LuaFocusLost fid
             when (key ≡ KeyBackspace ∧ keyState ≡ GLFW.KeyState'Pressed) $
                 Q.writeQueue (luaQueue env) (LuaTextBackspace fid)
             when (key ≡ KeyEnter ∧ keyState ≡ GLFW.KeyState'Pressed) $
@@ -115,11 +117,12 @@ processInput env inpSt event = case event of
             return ()
         return $ updateKeyState inpSt glfwKey keyState mods
     InputCharEvent c → do
-        focusMgr ← readIORef (focusManagerRef env)
-        case fmCurrentFocus focusMgr of
-          Just (FocusId fid) →
-            Q.writeQueue (luaQueue env) (LuaCharInput fid c)
-          Nothing → return ()
+        when (c ≠ '`') $ do
+          focusMgr ← readIORef (focusManagerRef env)
+          case fmCurrentFocus focusMgr of
+            Just (FocusId fid) →
+              Q.writeQueue (luaQueue env) (LuaCharInput fid c)
+            Nothing → return ()
         return inpSt
     InputMouseEvent btn pos state → do
         -- send mouse events to lua

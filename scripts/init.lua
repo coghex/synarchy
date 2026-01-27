@@ -100,11 +100,9 @@ function onMouseUp(button, x, y)
 end
 
 function onKeyDown(key)
-    engine.logInfo("Key " .. key .. " pressed")
 end
 
 function onKeyUp(key)
-    engine.logInfo("Key " .. key .. " released")
 end
 
 -- Shell event handlers
@@ -127,5 +125,11 @@ end
 function onTextSubmit(focusId)
     if focusId == shell.getFocusId() then
         shell.onSubmit()
+    end
+end
+
+function onFocusLost(focusId)
+    if focusId == shell.getFocusId() then
+        shell.hide()
     end
 end

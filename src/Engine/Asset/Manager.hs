@@ -240,8 +240,6 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
           case mbHandle of
             Just bHandle → do
               let slot = tsIndex $ bthSlot bHandle
-              logDebug $ "Registered texture '" ⧺ (show name) ⧺ "' (handle " ⧺ (show texHandle) 
-                        ⧺ ") in bindless slot: " ⧺ (show slot)
               pure $ Just slot
             Nothing → do
               logInfo $ "Failed to register texture in bindless system: " ⧺ show name

@@ -55,8 +55,6 @@ loadFont requestedHandle fontPath fontSize = do
             logInfo $ "Font already loaded: " ⧺ (show fontPath)
             return handle
         Nothing → do
-            logInfo $ "Loading font: " ⧺ (show fontPath)
-                    ⧺ " size=" ⧺ (show fontSize)
             -- get the descriptor layout for font
             fontDescLayout ← case fontDescriptorLayout gs of
                 Nothing → throwGraphicsError DescriptorError "No font descriptor layout"
@@ -78,7 +76,6 @@ loadFont requestedHandle fontPath fontSize = do
                     { fcFonts = Map.insert handle newAtlas (fcFonts cache)
                     , fcPathCache = Map.insert (fontPath, fontSize) handle (fcPathCache cache) } } }
             
-            logInfo $ "Font loaded: handle=" ⧺ (show handle)
             return handle
 
 -----------------------------------------------------------
@@ -219,7 +216,6 @@ uploadFontAtlasToGPU atlas fontDescriptorsLayout = do
     (texHandle, descSet, imgView, samp) ← createFontTextureGrayscale device pDevice
                                             cmdPool queue width height pixels fontDescriptorsLayout
     
-    logDebug $ "Font atlas uploaded:  handle=" ⧺ (show texHandle)
     return (texHandle, descSet, imgView, samp)
 
 createFontTextureGrayscale ∷ Device → PhysicalDevice → CommandPool → Queue 
@@ -227,9 +223,6 @@ createFontTextureGrayscale ∷ Device → PhysicalDevice → CommandPool → Que
                            → EngineM ε σ (TextureHandle, DescriptorSet, ImageView, Sampler)
 createFontTextureGrayscale device pDevice cmdPool queue width height pixels fontDescLayout = do
     let bufferSize = fromIntegral $ width * height
-    
-    logDebug $ "Creating font texture:  " ⧺ (show width) ⧺ "x" ⧺ (show height) 
-             ⧺ " (" ⧺ (show bufferSize) ⧺ " bytes)"
     
     -- 1. Create staging buffer
     (stagingMemory, stagingBuffer) ← createVulkanBufferManual device pDevice bufferSize
@@ -310,17 +303,12 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
           }
     
     updateDescriptorSets device (V.singleton writeDescriptorSet) V.empty
-    
     -- Generate handle
     pool ← gets assetPool
     handle ← liftIO $ generateHandle @TextureHandle pool
-    
     -- Cleanup staging buffer
     destroyBuffer device stagingBuffer Nothing
     freeMemory device stagingMemory Nothing
-    
-    logDebug $ "Font texture created: handle=" ⧺ (show handle)
-    
     return (handle, descSet, imageView, sampler)
 
 -----------------------------------------------------------

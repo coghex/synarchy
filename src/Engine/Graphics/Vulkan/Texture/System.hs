@@ -31,14 +31,8 @@ createTextureSystem pdev dev cmdPool queue config = do
   support ← liftIO $ queryBindlessSupport pdev
   let capability = determineTextureCapability support (tscReservedSlots config)
 
-  logDebug $ "Bindless support: " ⧺ (show support)
-  logDebug $ "Texture capability: " ⧺ (show (describeCapability capability))
-
   case capability of
     BindlessTextures maxSlots | not (tscForceLegacy config) → do
-      logInfo $ "Using bindless texture system with " 
-                ⧺ (show maxSlots) ⧺ " slots"
-      
       let actualMax = min 16384 (min maxSlots (tscMaxTextures config))
       let bindlessConfig = defaultBindlessConfig
             { bcMaxTextures = actualMax

@@ -65,11 +65,8 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
 
   -- Initialize ALL slots to the undefined texture
   -- This is required for MoltenVK argument buffer compatibility
-  logDebug $ "Initializing " <> show (bcMaxTextures config) <> " texture slots with undefined texture..."
   initializeAllSlots dev descriptorSet config 
     (utImageView undefinedTex) (utSampler undefinedTex)
-  logDebug "All texture slots initialized"
-
   pure $ BindlessTextureSystem
     { btsConfig           = config
     , btsDescriptorPool   = descriptorPool

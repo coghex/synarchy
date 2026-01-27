@@ -50,7 +50,7 @@ initializeEngine = do
   
   -- Initialize input state
   inputStateRef ← newIORef defaultInputState
-  keyBindings ← loadKeyBindings "config/keybinds.json"
+  keyBindings ← loadKeyBindings "config/keybinds.yaml"
   keyBindingsRef ← newIORef keyBindings
   
   -- Load video config
