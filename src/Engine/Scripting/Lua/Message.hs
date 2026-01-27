@@ -48,8 +48,9 @@ handleLuaMessage msg = case msg of
   LuaSetTextRequest objId text → handleSetText objId text
   LuaSpawnSpriteRequest objId x y width height texHandle layer →
     handleSpawnSprite objId x y width height texHandle layer
-  LuaMoveSpriteRequest objId x y → handleMoveSprite objId x y
   LuaSetColorRequest objId color → handleSetColor objId color
+  LuaSetSizeRequest objId width height → handleSetSize objId width height
+  LuaSetPosRequest objId x y → handleSetPosSprite objId x y
   LuaSetVisibleRequest objId visible → handleSetVisible objId visible
   LuaDestroySpriteRequest objId → handleDestroySprite objId
   _ → return ()
@@ -131,8 +132,8 @@ handleSpawnSprite objId x y width height texHandle layer = do
       Nothing → logDebug "Cannot spawn sprite: no active scene"
 
 -- | Handle move sprite request
-handleMoveSprite ∷ ObjectId → Float → Float → EngineM ε σ ()
-handleMoveSprite objId x y = do
+handleSetPosSprite ∷ ObjectId → Float → Float → EngineM ε σ ()
+handleSetPosSprite objId x y = do
     modifySceneNode objId $ \node →
       node { nodeTransform = (nodeTransform node) { position = (x, y) } }
 
@@ -140,6 +141,11 @@ handleMoveSprite objId x y = do
 handleSetColor ∷ ObjectId → Vec4 → EngineM ε σ ()
 handleSetColor objId color = do
     modifySceneNode objId $ \node → node { nodeColor = color }
+
+-- | Handle set sprite size request
+handleSetSize ∷ ObjectId → Float → Float → EngineM ε σ ()
+handleSetSize objId width height = do
+    modifySceneNode objId $ \node → node { nodeSize = (width, height) }
 
 -- | Handle set sprite visible request
 handleSetVisible ∷ ObjectId → Bool → EngineM ε σ ()

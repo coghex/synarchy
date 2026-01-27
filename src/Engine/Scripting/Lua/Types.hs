@@ -56,9 +56,10 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                         , lssHeight      ∷ Float
                         , lssTextureHandle ∷ TextureHandle
                         , lssLayer       ∷ LayerId }
-                    | LuaMoveSpriteRequest ObjectId Float Float
                     | LuaSetSpriteScaleRequest ObjectId Float Float
                     | LuaSetColorRequest ObjectId Vec4
+                    | LuaSetSizeRequest ObjectId Float Float
+                    | LuaSetPosRequest ObjectId Float Float
                     | LuaSetVisibleRequest ObjectId Bool
                     | LuaSetTextRequest ObjectId Text
                     | LuaDestroySpriteRequest ObjectId

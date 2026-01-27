@@ -101,12 +101,15 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.spawnSprite(x, y, width, height, textureHandle, layer)
   Lua.pushHaskellFunction (spawnSpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "spawnSprite")
-  -- engine.moveSprite(objectId, x, y)
-  Lua.pushHaskellFunction (moveSpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "moveSprite")
+  -- engine.setPos(objectId, x, y)
+  Lua.pushHaskellFunction (setPosFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "setPos")
   -- engine.setColor(objectId, color)
   Lua.pushHaskellFunction (setColorFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "setColor")
+  -- engine.setSize(objectId, width, height)
+  Lua.pushHaskellFunction (setSizeFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "setSize")
   -- engine.setVisible(objectId, visible)
   Lua.pushHaskellFunction (setVisibleFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "setVisible")
@@ -270,7 +273,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
       
       return 1
 
-    moveSpriteFn = do
+    setPosFn = do
       objIdNum ← Lua.tointeger 1
       x ← Lua.tonumber 2
       y ← Lua.tonumber 3
@@ -278,7 +281,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
         (Just idVal, Just xVal, Just yVal) → do
           Lua.liftIO $ do
             let (lteq, _) = lbsMsgQueues backendState
-                msg = LuaMoveSpriteRequest (ObjectId (fromIntegral idVal))
+                msg = LuaSetPosRequest (ObjectId (fromIntegral idVal))
                   (realToFrac xVal) (realToFrac yVal)
             Q.writeQueue lteq msg
           return 0
@@ -286,7 +289,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
           Lua.liftIO $ do
             let lf = logFunc env
             lf defaultLoc "lua" LevelError 
-              "moveSprite requires 3 arguments: objectId, x, y"
+              "setPos requires 3 arguments: objectId, x, y"
           return 0
 
     setColorFn = do
@@ -306,6 +309,25 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
             let lf = logFunc env
             lf defaultLoc "lua" LevelError 
               "setColor requires 2 arguments: objectId, color"
+          return 0
+
+    setSizeFn = do
+      objIdNum ← Lua.tointeger 1
+      width ← Lua.tonumber 2
+      height ← Lua.tonumber 3
+      case (objIdNum, width, height) of
+        (Just idVal, Just wVal, Just hVal) → do
+          Lua.liftIO $ do
+            let (lteq, _) = lbsMsgQueues backendState
+                msg = LuaSetSizeRequest (ObjectId (fromIntegral idVal))
+                  (realToFrac wVal) (realToFrac hVal)
+            Q.writeQueue lteq msg
+          return 0
+        _ → do
+          Lua.liftIO $ do
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelError 
+              "setSize requires 3 arguments: objectId, width, height"
           return 0
 
     setVisibleFn = do

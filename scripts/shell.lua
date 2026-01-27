@@ -48,16 +48,13 @@ local shellFont = nil
 local tileSize = 64        -- tile size in pixels
 local middleWidth = 1200    -- middle section width in pixels
 local shellLayer = 10
-
--- Margins from edges (in pixels)
-local marginLeft = 40
-local marginBottom = 40
+local fontSize = 32
 
 function shell.init(font)
     fontHandle = font
     
     -- Load shell-specific font
-    shellFont = engine.loadFont("assets/fonts/Cabal.ttf", 32)
+    shellFont = engine.loadFont("assets/fonts/Cabal.ttf", fontSize)
     if shellFont then
         engine.logInfo("Shell font loaded: Cabal.ttf")
     else
@@ -180,18 +177,6 @@ function shell.onSubmit()
     shell.updateDisplay()
 end
 
-function shell.addHistory(command, result, isError)
-    table.insert(history, {
-        command = command,
-        result = result,
-        isError = isError
-    })
-    if visible then
-        shell.rebuildBox()
-        shell.rebuildHistoryDisplay()
-    end
-end
-
 function shell.cmdHelp()
     return "Commands: help, clear, quit/exit\nOr enter Lua code to execute"
 end
@@ -237,9 +222,19 @@ function shell.rebuildHistoryDisplay()
     for i = #history, startIdx, -1 do
         local entry = history[i]
         
+        -- choose color based on result
+        local resultColor = "white"
+        if entry.result == "OK" then
+            resultColor = "green"
+        elseif entry.result and entry.result:match("^undefined:") then
+            resultColor = "orange"
+        elseif entry.isError then
+            resultColor = "red"
+        end
+
         -- Result line first (closer to prompt, lower on screen)
         if entry.result and entry.result ~= "" and entry.result ~= "nil" then
-            local resultObj = engine.spawnText(textX + 20, y, shellFont, entry.result,"white", shellLayer)
+            local resultObj = engine.spawnText(textX + 20, y, shellFont, entry.result,resultColor, shellLayer)
             table.insert(historyTextObjects, resultObj)
             y = y - lineHeight
         end
@@ -306,20 +301,18 @@ function shell.rebuildBox()
     
     -- Prompt text at bottom
     local promptX = baseX + tileSize + 10
-    local promptY = row2Y - 32
+    local promptY = row2Y - fontSize
     objPrompt = engine.spawnText(promptX, promptY, shellFont, "$>", "white", shellLayer)
-    local bufferX = promptX + 60
+    local bufferX = promptX + fontSize
     objBufferText = engine.spawnText(bufferX, promptY, shellFont, inputBuffer, "white", shellLayer)
 end
 
 function shell.addHistory(command, result, isError)
-    engine.logInfo("addHistory called: " .. command .. " -> " .. tostring(result))
     table.insert(history, {
         command = command,
         result = result,
         isError = isError
     })
-    engine.logInfo("History size now: " .. #history)
     if visible then
         shell.rebuildBox()
         shell.rebuildHistoryDisplay()
@@ -333,7 +326,7 @@ function getPromptY()
     local baseY = fbHeight - marginBottom - boxHeight
     local middleHeight = boxHeight - tileSize * 2
     local row2Y = baseY + tileSize + middleHeight + tileSize / 2
-    return row2Y - 32  -- Adjust based on font size
+    return row2Y - fontSize
 end
 
 -- Calculate required box height based on history
