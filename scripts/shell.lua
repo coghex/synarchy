@@ -30,6 +30,7 @@ local objBoxSW = nil
 
 -- Text object for prompt
 local objPrompt = nil
+local objBufferText = nil
 
 -- Font
 local fontHandle = nil
@@ -48,7 +49,7 @@ function shell.init(font)
     fontHandle = font
     
     -- Load shell-specific font
-    shellFont = engine.loadFont("assets/fonts/Cabal.ttf", 64)
+    shellFont = engine.loadFont("assets/fonts/Cabal.ttf", 48)
     if shellFont then
         engine.logInfo("Shell font loaded: Cabal.ttf")
     else
@@ -120,9 +121,11 @@ function shell.show()
         -- Spawn prompt text "$>" in the middle row, inside the box
         -- Position it at the left edge of the center area
         local promptX = baseX + tileSize + 10  -- 10px padding from left edge
-        local promptY = row2Y - 48-- Bottom row (where input goes)
+        local promptY = row2Y - 48 -- Bottom row (where input goes)
         objPrompt = engine.spawnText(promptX, promptY, shellFont, "$>", shellLayer)
-        engine.logInfo("Shell prompt spawned at: " .. promptX .. ", " .. promptY)
+        local bufferX = promptX + 60
+        local bufferY = promptY
+        objBufferText = engine.spawnText(bufferX, bufferY, shellFont, "", shellLayer)
     else
         -- Show existing tiles
         engine.setVisible(objBoxNW, true)
@@ -135,7 +138,7 @@ function shell.show()
         engine.setVisible(objBoxS, true)
         engine.setVisible(objBoxSE, true)
         engine.setVisible(objPrompt, true)
-        -- TODO: Show text when we have setTextVisible
+        engine.setVisible(objBufferText, true)
     end
 end
 
@@ -153,12 +156,14 @@ function shell.hide()
     if objBoxS then engine.setVisible(objBoxS, false) end
     if objBoxSE then engine.setVisible(objBoxSE, false) end
     if objPrompt then engine.setVisible(objPrompt, false) end
-    -- TODO: Hide text when we have setTextVisible
+    if objBufferText then engine.setVisible(objBufferText, false) end
 end
 
 function shell.updateDisplay()
     if not visible then return end
-    -- TODO: Update text display with inputBuffer
+    if objBufferText then
+        engine.setText(objBufferText, inputBuffer)
+    end
 end
 
 function shell.isVisible()
@@ -183,6 +188,8 @@ end
 
 function shell.onSubmit()
     -- TODO: Execute command from inputBuffer
+    local text = engine.getText(objBufferText)
+    engine.logInfo("text is: " .. text)
     inputBuffer = ""
     shell.updateDisplay()
 end

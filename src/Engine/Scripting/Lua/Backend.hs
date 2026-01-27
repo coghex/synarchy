@@ -139,6 +139,12 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- engine.spawnText(x,y,fontHandle,text,layer)
   Lua.pushHaskellFunction (spawnTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "spawnText")
+  -- engine.setText(objectId, text)
+  Lua.pushHaskellFunction (setTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "setText")
+  -- engine.getText(objectId)
+  Lua.pushHaskellFunction (getTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
+  Lua.setfield (-2) (Lua.Name "getText")
   -- engine.registerFocusable(acceptsText, tabIndex) -> focusId
   Lua.pushHaskellFunction (registerFocusableFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
   Lua.setfield (-2) (Lua.Name "registerFocusable")
@@ -481,6 +487,37 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
         _ → do
           Lua.pushstring "drawText requires 5 arguments: objectId, x, y, fontHandle, text"
           Lua.pushnil
+      return 1
+
+    setTextFn = do
+      objIdNum ← Lua.tointeger 1
+      text ← Lua.tostring 2
+      case (objIdNum, text) of
+        (Just idVal, Just textBS) → do
+          Lua.liftIO $ do
+            let textStr = TE.decodeUtf8 textBS
+                msg = LuaSetTextRequest (ObjectId (fromIntegral idVal)) textStr
+                lteq = luaToEngineQueue env
+            Q.writeQueue lteq msg
+          return 0
+        _ → do
+          Lua.liftIO $ do
+            let lf = logFunc env
+            lf defaultLoc "lua" LevelError 
+              "setText requires 2 arguments: objectId, text"
+          return 0
+
+    getTextFn = do
+      objIdNum ← Lua.tointeger 1
+      case objIdNum of
+        Just idVal → do
+          mText ← Lua.liftIO $ do
+            buffers ← readIORef (textBuffersRef env)
+            return $ Map.lookup (ObjectId (fromIntegral idVal)) buffers
+          case mText of
+            Just txt → Lua.pushstring (TE.encodeUtf8 txt)
+            Nothing → Lua.pushnil
+        _ → Lua.pushnil
       return 1
 
     registerFocusableFn = do

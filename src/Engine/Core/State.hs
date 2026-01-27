@@ -23,6 +23,7 @@ import Engine.Graphics.Camera
 import Engine.Graphics.Font.Data
 import Engine.Input.Types
 import Engine.Input.Bindings
+import Engine.Scene.Base
 import Engine.Scene.Types
 import qualified Vulkan.Core10 as Vk
 import UI.Focus (FocusManager)
@@ -40,6 +41,7 @@ data EngineEnv = EngineEnv
   , nextObjectIdRef  ∷ IORef Word32
   , inputStateRef    ∷ IORef InputState
   , keyBindingsRef   ∷ IORef KeyBindings
+  , textBuffersRef   ∷ IORef (Map.Map ObjectId Text)
   , cameraRef        ∷ IORef Camera2D
   , uiCameraRef      ∷ IORef UICamera
   , focusManagerRef  ∷ IORef FocusManager

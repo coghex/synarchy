@@ -6,7 +6,7 @@ import UPrelude
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, atomicModifyIORef')
 import Data.Time.Clock (getCurrentTime)
 import System.FilePath (takeBaseName)
 import Engine.Asset.Handle
@@ -46,6 +46,7 @@ handleLuaMessage msg = case msg of
   LuaLoadFontRequest handle path size → handleLoadFont handle path size
   LuaSpawnTextRequest oid x y fontHandle text layer → 
     handleSpawnText oid x y fontHandle text layer
+  LuaSetTextRequest objId text → handleSetText objId text
   LuaSpawnSpriteRequest objId x y width height texHandle layer →
     handleSpawnSprite objId x y width height texHandle layer
   LuaMoveSpriteRequest objId x y → handleMoveSprite objId x y
@@ -99,9 +100,20 @@ handleSpawnText oid x y fontHandle text layer = do
         case addObjectToScene sceneId node sceneMgr of
           Just (addedObjId, newSceneMgr) → do
             modify $ \s → s { sceneManager = newSceneMgr }
+            env ← ask
+            liftIO $ atomicModifyIORef' (textBuffersRef env) $ \m →
+              (Map.insert oid text m, ())
             logDebug $ "Text object spawned with id: " ⧺ show addedObjId
           Nothing → logDebug $ "Failed to add text object " ⧺ show oid
       Nothing → logDebug "Cannot spawn text: no active scene"
+
+-- | Handle set text request
+handleSetText ∷ ObjectId → Text → EngineM ε σ ()
+handleSetText objId text = do
+    env ← ask
+    liftIO $ atomicModifyIORef' (textBuffersRef env) $ \m →
+      (Map.insert objId text m, ())
+    modifySceneNode objId $ \node → node { nodeText = Just text }
 
 -- | Handle spawn sprite request
 handleSpawnSprite ∷ ObjectId → Float → Float → Float → Float 

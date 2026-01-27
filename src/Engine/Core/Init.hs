@@ -7,6 +7,7 @@ module Engine.Core.Init
 import UPrelude
 import qualified Control.Monad.Logger.CallStack as Logger
 import Data.IORef (newIORef)
+import qualified Data.Map as Map
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Core.Base
 import Engine.Core.Defaults
@@ -59,9 +60,10 @@ initializeEngine = do
   cameraRef ← newIORef defaultCamera
   uiCameraRef ← newIORef $ defaultUICamera (fromIntegral (vcWidth videoConfig))
                                            (fromIntegral (vcHeight videoConfig))
-
   -- Create focus manager
   focusMgrRef ← newIORef createFocusManager
+  -- text buffers reference
+  textBuffersRef ← newIORef Map.empty
   
   -- Build environment
   let env = EngineEnv
@@ -76,6 +78,7 @@ initializeEngine = do
         , nextObjectIdRef  = nextObjectIdRef
         , inputStateRef    = inputStateRef
         , keyBindingsRef   = keyBindingsRef
+        , textBuffersRef   = textBuffersRef
         , cameraRef        = cameraRef
         , uiCameraRef      = uiCameraRef
         , focusManagerRef  = focusMgrRef

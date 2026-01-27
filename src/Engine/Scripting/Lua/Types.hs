@@ -60,6 +60,8 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSetSpriteScaleRequest ObjectId Float Float
                     | LuaSetSpriteColorRequest ObjectId Vec4
                     | LuaSetVisibleRequest ObjectId Bool
+                    | LuaSetTextRequest ObjectId Text
+                    | LuaGetTextRequest ObjectId Text
                     | LuaDestroySpriteRequest ObjectId
                     | LuaRequestFocus Word32
                     | LuaReleaseFocus
