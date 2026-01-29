@@ -21,6 +21,7 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
     - README, CHANGELOG, LICENSE, cabal file
     - src
         - UPrelude (unicode and other utilities)
+        - Math (math utilities and types)
         - Engine
             - Asset (loading and managing assets)
             - Core (main engine functionality/continuation monad/resource handling)
@@ -28,22 +29,26 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
             - Graphics (vulkan and graphics functionality)
                 - Vulkan (vulkan specific functionality)
                 - Window (windowing and input handling (glfw))
-                - Sprite (sprite and animation functionality)
+                - Font (font rendering)
             - Input (input handling)
             - Scene (scene graph and rendering)
-            - Scripting (scripting support)
+            - Scripting (lua scripting support)
+        - UI
+            - code for the ui system
     - app (here Main.hs controls the draw loop and spawns the child threads)
     - assets (images and other data)
-    - scripts (self explanatory)
+    - cbits (c code for text rasterization library)
+    - config (yaml config files)
+    - scripts (lua scripts)
     - test (unit tests are really just for the base engine and most of the functionality is tested in the app)
 
 ## Task List
 
 - [x] initialize Vulkan and GLFW
 - [x] load and render multiple textured sprites
-- [ ] multiple shader support through asset manager
-- [ ] sprite manager for batch processing
-- [ ] scene creation and switching
+- [x] multiple shader support through asset manager
+- [x] sprite manager for batch processing
+- [x] scene creation and switching
 - [ ] animation
 - [ ] hotloading
 

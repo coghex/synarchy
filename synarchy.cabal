@@ -187,6 +187,16 @@ library
                      Engine.Scripting.Lua.Backend
                      Engine.Scripting.Lua.Types
                      Engine.Scripting.Lua.Message
+                     Engine.Scripting.Lua.Thread
+                     Engine.Scripting.Lua.Script
+                     Engine.Scripting.Lua.Util
+                     Engine.Scripting.Lua.API
+                     Engine.Scripting.Lua.API.Core
+                     Engine.Scripting.Lua.API.Graphics
+                     Engine.Scripting.Lua.API.Input
+                     Engine.Scripting.Lua.API.Text
+                     Engine.Scripting.Lua.API.Focus
+                     Engine.Scripting.Lua.API.Shell
                      Engine.Core.Base
                      Engine.Core.Defaults
                      Engine.Core.Init
