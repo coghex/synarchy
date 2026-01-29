@@ -2,7 +2,7 @@ module Engine.Graphics.Font.Load where
 
 import UPrelude
 import Engine.Asset.Types
-import Engine.Asset.Manager (generateHandle)
+import Engine.Asset.Manager (generateTextureHandle)
 import Engine.Asset.Handle
 import Engine.Graphics.Font.Data
 import Engine.Graphics.Font.STB
@@ -307,7 +307,7 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
     updateDescriptorSets device (V.singleton writeDescriptorSet) V.empty
     -- Generate handle
     pool ← gets assetPool
-    handle ← liftIO $ generateHandle @TextureHandle pool
+    handle ← liftIO $ generateTextureHandle pool
     -- Cleanup staging buffer
     destroyBuffer device stagingBuffer Nothing
     freeMemory device stagingMemory Nothing

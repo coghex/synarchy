@@ -1,8 +1,6 @@
 module Engine.Scripting.Lua.Util
   ( isValidRef
-  , calculateTextWidth
   , broadcastToModules
---  , keyToText
   ) where
 
 import UPrelude
@@ -22,13 +20,6 @@ import Control.Monad (forM_, when)
 isValidRef ∷ Lua.Reference → Bool
 isValidRef (Lua.Reference n) = n ≠ fromIntegral Lua.refnil
 
--- | Calculate text width using font atlas glyph data
-calculateTextWidth ∷ FontAtlas → String → Double
-calculateTextWidth atlas str = 
-    sum [ maybe 0 (realToFrac . giAdvance) (Map.lookup c (faGlyphData atlas)) 
-        | c ← str 
-        ]
-
 -- | Broadcast an event to all loaded script modules
 broadcastToModules ∷ LuaBackendState → T.Text → [ScriptValue] → IO ()
 broadcastToModules ls funcName args = do
@@ -37,7 +28,3 @@ broadcastToModules ls funcName args = do
         when (isValidRef (scriptModuleRef script)) $ do
             _ ← callModuleFunction (lbsLuaState ls) (scriptModuleRef script) funcName args
             return ()
-
--- | Convert a Key to its text representation for Lua
---keyToText ∷ Key → T.Text
---keyToText (Key name) = name

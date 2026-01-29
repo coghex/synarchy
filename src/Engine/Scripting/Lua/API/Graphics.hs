@@ -11,7 +11,7 @@ module Engine.Scripting.Lua.API.Graphics
 import UPrelude
 import Math (colorToVec4)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
-import Engine.Asset.Manager (updateAssetState, generateHandle)
+import Engine.Asset.Manager (updateTextureState, generateTextureHandle)
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Core.State (EngineEnv(..))
@@ -31,8 +31,8 @@ loadTextureFn backendState = do
         let pathStr = TE.decodeUtf8 pathBS
             (lteq, _) = lbsMsgQueues backendState
         pool ← readIORef (lbsAssetPool backendState)
-        handle ← generateHandle @TextureHandle pool
-        updateAssetState @TextureHandle handle
+        handle ← generateTextureHandle pool
+        updateTextureState handle
           (AssetLoading (T.unpack pathStr) [] 0.0) pool
         writeIORef (lbsAssetPool backendState) pool
         Q.writeQueue lteq (LuaLoadTextureRequest handle (T.unpack pathStr))

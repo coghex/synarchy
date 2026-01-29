@@ -12,9 +12,6 @@ module Engine.Asset.Manager
   , getAllTextureHandles
   , getAllFontHandles
   , getAllShaderHandles
-  , generateHandle
-  , updateAssetState
-  , deleteAssetState
   , getAllHandles
   , lookupTextureAsset
   , lookupFontAsset
@@ -137,20 +134,6 @@ getAllShaderHandles ∷ AssetPool → IO [ShaderHandle]
 getAllShaderHandles pool = do
   stateMap ← readIORef (apShaderHandles pool)
   return $ Map.keys stateMap
-
--- LEGACY: Keep old generic functions for backward compatibility
-generateHandle ∷ ∀ h. AssetHandle h ⇒ AssetPool → IO h
-generateHandle pool = fromInt <$> atomicModifyIORef' counter (\n → (n + 1, n))
-  where
-    counter = apNextTextureHandle pool
-
-updateAssetState ∷ ∀ h. AssetHandle h ⇒ h → AssetState AssetId → AssetPool → IO ()
-updateAssetState handle state pool = 
-  updateTextureState (fromInt $ toInt handle) state pool
-
-deleteAssetState ∷ ∀ h. AssetHandle h ⇒ h → AssetPool → IO ()
-deleteAssetState handle pool =
-  deleteTextureState (fromInt $ toInt handle) pool
 
 getAllHandles ∷ ∀ h. AssetHandle h ⇒ AssetPool → IO [h]
 getAllHandles pool = 

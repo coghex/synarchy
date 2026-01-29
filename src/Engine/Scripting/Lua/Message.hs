@@ -63,7 +63,7 @@ handleLoadTexture handle path = do
     apRef ← asks assetPoolRef
     liftIO $ do
       pool ← readIORef apRef
-      updateAssetState @TextureHandle handle (AssetReady assetId []) pool
+      updateTextureState handle (AssetReady assetId []) pool
     
     pool ← liftIO $ readIORef apRef
     modify $ \s → s { assetPool = pool }

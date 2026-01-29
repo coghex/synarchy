@@ -9,11 +9,11 @@ module Engine.Scripting.Lua.API.Text
 import UPrelude
 import Math (colorToVec4)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
-import Engine.Scripting.Lua.Util (calculateTextWidth)
-import Engine.Asset.Manager (updateAssetState, generateHandle)
+import Engine.Asset.Manager (updateFontState, generateFontHandle)
 import Engine.Asset.Handle (FontHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
+import Engine.Graphics.Font.Util (calculateTextWidth)
 import Engine.Core.State (EngineEnv(..))
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
@@ -33,8 +33,8 @@ loadFontFn backendState = do
         let pathStr = TE.decodeUtf8 pathBS
             (lteq, _) = lbsMsgQueues backendState
         pool ← readIORef (lbsAssetPool backendState)
-        handle ← generateHandle @FontHandle pool
-        updateAssetState @FontHandle handle
+        handle ← generateFontHandle pool
+        updateFontState handle
           (AssetLoading (T.unpack pathStr) [] 0.0) pool
         writeIORef (lbsAssetPool backendState) pool
         Q.writeQueue lteq (LuaLoadFontRequest handle (T.unpack pathStr) (fromIntegral sizeVal))
