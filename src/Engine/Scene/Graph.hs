@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 module Engine.Scene.Graph 
-  ( createSceneNode
-  , addNode
+  ( addNode
   , addChild
   , withSceneGraph
   , withSceneGraphM
@@ -19,30 +18,8 @@ import Engine.Core.Monad
 import Engine.Core.State (EngineState(..))
 import Engine.Scene.Base
 import Engine.Scene.Types
-import Engine.Asset.Base (AssetId)
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex, Vec2(..), Vec4(..))
-import Engine.Graphics.Camera
 import Linear (M44, V3(..), (!*!), mkTransformation)
 import Linear.Quaternion (axisAngle)
-
--- | Create a default scene node
-createSceneNode ∷ NodeType → SceneNode
-createSceneNode objType = SceneNode
-    { nodeId = ObjectId 0  -- Will be set when added to graph
-    , nodeType = objType
-    , nodeTransform = defaultTransform
-    , nodeTexture = Nothing
-    , nodeLayer = LayerId 0
-    , nodeFont = Nothing
-    , nodeText = Nothing
-    , nodeVisible = True
-    , nodeColor = Vec4 1.0 1.0 1.0 1.0
-    , nodeUVRect = Nothing
-    , nodeSize = (1.0, 1.0)
-    , nodeChildren = Set.empty
-    , nodeParent = Nothing
-    , nodeDirty = True
-    }
 
 -- | Add a node to the scene graph
 addNode ∷ SceneNode → SceneGraph → (ObjectId, SceneGraph)

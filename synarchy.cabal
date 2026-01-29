@@ -210,8 +210,17 @@ library
                      Engine.Core.Queue
                      Engine.Core.Var
                      Engine.Scene.Base
-                     Engine.Scene.Types
                      Engine.Scene.Batch
+                     Engine.Scene.Batch.Sprite
+                     Engine.Scene.Batch.Text
+                     Engine.Scene.Batch.Update
+                     Engine.Scene.Batch.Vertex
+                     Engine.Scene.Batch.Visibility
+                     Engine.Scene.Types
+                     Engine.Scene.Types.Batch
+                     Engine.Scene.Types.Graph
+                     Engine.Scene.Types.Manager
+                     Engine.Scene.Types.Node
                      Engine.Scene.Graph
                      Engine.Scene.Manager
                      Engine.Scene.Render

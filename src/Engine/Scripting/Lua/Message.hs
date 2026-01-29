@@ -18,7 +18,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Font.Load (loadFont)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Scene.Base
-import Engine.Scene.Graph (createSceneNode, modifySceneNode, deleteSceneNode)
+import Engine.Scene.Graph (modifySceneNode, deleteSceneNode)
 import Engine.Scene.Manager (addObjectToScene)
 import Engine.Scene.Types
 import Engine.Scripting.Lua.Types

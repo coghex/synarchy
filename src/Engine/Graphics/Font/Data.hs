@@ -25,13 +25,6 @@ data FontAtlas = FontAtlas
   , faSampler       ∷ Maybe Sampler
   } deriving (Eq, Show)
 
--- | batch of text instances
-data TextBatch = TextBatch
-  { tbFontHandle   ∷ FontHandle
-  , tbInstances    ∷ V.Vector GlyphInstance
-  , tbLayer        ∷ LayerId
-  } deriving (Eq, Show)
-
 data GlyphInstance = GlyphInstance
     { instancePosition ∷ (Float, Float)
     , instanceSize     ∷ (Float, Float)

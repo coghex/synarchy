@@ -123,14 +123,12 @@ updateUniformBufferForFrame win frameIdx = do
             
             -- Update UI camera to use framebuffer dimensions
             let uiCamera = UICamera (fromIntegral fbWidth) (fromIntegral fbHeight)
-            let uiProjMatrix = createUIProjectionMatrix uiCamera
             let uboData = UBO identity (createViewMatrix camera)
                               (createProjectionMatrix camera 
                                   (fromIntegral fbWidth) (fromIntegral fbHeight))
                               (createUIViewMatrix uiCamera)
                               (createUIProjectionMatrix uiCamera)
             
-            liftIO $ writeIORef (cameraRef env) camera
             liftIO $ atomicModifyIORef' (inputStateRef env) $ \is →
                 (is { inpWindowSize = (winWidth, winHeight)
                     , inpFramebufferSize = (fbWidth, fbHeight) }, ())
