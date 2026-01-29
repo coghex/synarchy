@@ -102,26 +102,6 @@ cleanupPendingInstanceBuffers = do
                     }
                 }
 
--- | Create instance buffer for glyphs (returns both buffer and memory)
-createInstanceBuffer ∷ Device → PhysicalDevice → V.Vector GlyphInstance 
-                     → EngineM ε σ (Buffer, DeviceMemory)
-createInstanceBuffer device pDevice instances = do
-    let instanceSize = fromIntegral $ sizeOf (undefined ∷ GlyphInstance)
-        bufferSize = instanceSize * fromIntegral (V.length instances)
-    
-    -- Create buffer using your existing helper (returns (memory, buffer))
-    (memory, buffer) ← createVulkanBuffer device pDevice bufferSize
-        BUFFER_USAGE_VERTEX_BUFFER_BIT
-        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
-    
-    -- Upload instance data
-    dataPtr ← mapMemory device memory 0 bufferSize zero
-    liftIO $ V.imapM_ (\i inst → pokeElemOff (castPtr dataPtr) i inst) instances
-    unmapMemory device memory
-    
-    pure (buffer, memory)
-
-
 -----------------------------------------------------------
 -- Pipeline Creation
 -----------------------------------------------------------

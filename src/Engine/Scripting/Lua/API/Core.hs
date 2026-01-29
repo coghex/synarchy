@@ -5,7 +5,6 @@ module Engine.Scripting.Lua.API.Core
   , setTickIntervalFn
   , pauseScriptFn
   , resumeScriptFn
-  , setScriptTickRateFn
   ) where
 
 import UPrelude
@@ -140,16 +139,5 @@ resumeScriptFn backendState = do
             atomically $ modifyTVar (lbsScripts backendState) $
                 Map.adjust (\s → s { scriptPaused = False, scriptNextTick = currentSecs }) 
                            (fromIntegral sid)
-        _ → return ()
-    return 0
-
-setScriptTickRateFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
-setScriptTickRateFn backendState = do
-    sidNum ← Lua.tointeger 1
-    rate ← Lua.tonumber 2
-    case (sidNum, rate) of
-        (Just sid, Just r) → Lua.liftIO $ atomically $ 
-            modifyTVar (lbsScripts backendState) $
-                Map.adjust (\s → s { scriptTickRate = realToFrac r }) (fromIntegral sid)
         _ → return ()
     return 0

@@ -144,6 +144,9 @@ library
                      Engine.Graphics.Vulkan.BufferUtils
                      Engine.Graphics.Vulkan.Capability
                      Engine.Graphics.Vulkan.Command
+                     Engine.Graphics.Vulkan.Command.Record
+                     Engine.Graphics.Vulkan.Command.Sprite
+                     Engine.Graphics.Vulkan.Command.Text
                      Engine.Graphics.Vulkan.Descriptor
                      Engine.Graphics.Vulkan.Device
                      Engine.Graphics.Vulkan.Framebuffer
