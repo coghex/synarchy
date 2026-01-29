@@ -37,13 +37,6 @@ data SceneLayer = SceneLayer
     , layerVisible ∷ Bool
     } deriving (Show)
 
--- | Batch for sprite rendering
-data SpriteBatch = SpriteBatch
-    { batchTexture  ∷ TextureHandle
-    , batchVertices ∷ V.Vector Vertex  -- You'll need to import your Vertex type
-    , batchDirty    ∷ Bool
-    } deriving (Show)
-
 -- | Enhanced scene manager with batch processing
 data SceneManager = SceneManager
     { smScenes       ∷ Map.Map Text Scene

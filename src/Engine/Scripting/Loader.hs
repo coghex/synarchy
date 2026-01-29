@@ -4,18 +4,14 @@ module Engine.Scripting.Loader
 
 import UPrelude
 import Engine.Scripting.Backend
-import Engine.Scripting.Types
 import qualified Engine.Scripting.Lua.Backend as Lua
-import qualified Engine.Scripting.PureScript.Backend as PureScript
 
 -- | Create backend based on type (breaks circular dependency)
 createBackend :: BackendType -> IO AnyBackend
 createBackend LuaBackendType = do
   backend <- Lua.createLuaBackend
   return $ AnyBackend backend
-createBackend PureScriptBackendType = do
-  backend <- PureScript.createPureScriptBackend
-  return $ AnyBackend backend
+createBackend PureScriptBackendType = throwUnsupportedBackend "PureScript"
 createBackend JavaScriptBackendType = throwUnsupportedBackend "JavaScript"
 createBackend PythonBackendType     = throwUnsupportedBackend "Python"
 

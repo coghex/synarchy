@@ -30,7 +30,6 @@ updateSceneForRender = do
     state ← gets graphicsState
     sceneMgr ← gets sceneManager
     
-    -- TODO: find out why i need width and height twice, i know the second one is for translating the fonts position to world coords
     -- Get window dimensions for frustum culling
     let Window win = fromJust $ glfwWindow state
     (width, height) ← GLFW.getFramebufferSize win

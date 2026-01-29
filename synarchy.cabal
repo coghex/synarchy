@@ -187,7 +187,6 @@ library
                      Engine.Scripting.Lua.Backend
                      Engine.Scripting.Lua.Types
                      Engine.Scripting.Lua.Message
-                     Engine.Scripting.PureScript.Backend
                      Engine.Core.Base
                      Engine.Core.Defaults
                      Engine.Core.Init

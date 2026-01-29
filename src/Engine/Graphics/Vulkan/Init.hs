@@ -74,18 +74,14 @@ initializeVulkan window = do
   
   -- Log device info
   props ← liftIO $ getPhysicalDeviceProperties physicalDevice
-  --logDebug $ "Selected device: " ⧺ show (deviceName props)
   
   -- Create swapchain
   swapInfo ← createVulkanSwapchain physicalDevice device queues surface
-  --logDebug $ "Swapchain Format: " ⧺ show (siSwapImgFormat swapInfo)
   modify $ \s → s { graphicsState = (graphicsState s) {
                       swapchainInfo = Just swapInfo } }
   
   -- Log swapchain support
   support ← querySwapchainSupport physicalDevice surface
-  --logDebug $ "Available Formats: " ⧺ show (length $ formats support)
-  --logDebug $ "Available Present Modes: " ⧺ show (presentModes support)
   
   -- Create sync objects
   syncObjects ← createSyncObjects device defaultGraphicsConfig
@@ -108,7 +104,6 @@ initializeVulkan window = do
         , dmcSamplerCount = fromIntegral numFrames
         }
   descManager ← createVulkanDescriptorManager device descConfig
-  --logDebug $ "Descriptor Pool Created: " ⧺ show (dmPool descManager)
   modify $ \s → s { graphicsState = (graphicsState s) {
                       descriptorState = Just descManager } }
   -- create a font descriptor pool (supports up to 64 fonts)
@@ -121,12 +116,10 @@ initializeVulkan window = do
   let updatedManager = descManager { dmActiveSets = descSets }
   modify $ \s → s { graphicsState = (graphicsState s) {
                       descriptorState = Just updatedManager } }
-  --logDebug $ "Descriptor Sets Allocated: " ⧺ show (V.length descSets)
   
   -- Create vertex buffer
   (vBuffer, vBufferMemory) ← createVertexBuffer device physicalDevice
                                (graphicsQueue queues) cmdPool
-  --logDebug $ "VertexBuffer: " ⧺ show vBuffer
   modify $ \s → s { graphicsState = (graphicsState s) {
                       vertexBuffer = Just (vBuffer, vBufferMemory) } }
   
@@ -141,7 +134,6 @@ initializeVulkan window = do
                                    (graphicsQueue queues) texSystemConfig
   modify $ \s → s { graphicsState = (graphicsState s) {
                       textureSystem = Just texSystem } }
-  --logDebug "Bindless texture system initialized"
   
   -- Create default scene
   let defaultSceneId = "default"
@@ -149,14 +141,12 @@ initializeVulkan window = do
   let sceneWithDefault = createScene defaultSceneId defaultCamera sceneMgr
       activeScene = setActiveScene defaultSceneId sceneWithDefault
   modify $ \s → s { sceneManager = activeScene }
-  --logDebug $ "Created default scene with id: " ⧺ defaultSceneId
   
   -- Create uniform buffers
   createUniformBuffersForFrames device physicalDevice glfwWin descSets
   
   -- Create render pass
   renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo)
-  --logDebug $ "RenderPass: " ⧺ show renderPass
   modify $ \s → s { graphicsState = (graphicsState s) {
                       vulkanRenderPass = Just renderPass } }
   
@@ -164,43 +154,35 @@ initializeVulkan window = do
   (bindlessPipe, bindlessPipeLayout) ← 
     createBindlessPipeline device renderPass (siSwapExtent swapInfo) 
                            (dmUniformLayout descManager) bindlessTexLayout
-  --logDebug $ "Bindless Pipeline: " ⧺ show bindlessPipe
   modify $ \s → s { graphicsState = (graphicsState s) {
                           bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout) } }
   (bindlessUIPipe, bindlessUIPipeLayout) ← 
     createBindlessUIPipeline device renderPass (siSwapExtent swapInfo) 
                              (dmUniformLayout descManager) bindlessTexLayout
-  --logDebug $ "Bindless UI Pipeline: " ⧺ show bindlessUIPipe
   modify $ \s → s { graphicsState = (graphicsState s) {
                           bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout) } }
   
   -- Create font pipeline
   (fontPipe, fontPipeLayout, fontDescLayout) ←
     createFontPipeline device renderPass (siSwapExtent swapInfo) (dmUniformLayout descManager)
-  --logDebug $ "Font Pipeline: " ⧺ show fontPipe
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontPipeline = Just (fontPipe, fontPipeLayout)
                     , fontDescriptorLayout = Just fontDescLayout } }
   (fontUIPipe, fontUIPipeLayout) ←
     createFontUIPipeline device renderPass (siSwapExtent swapInfo) (dmUniformLayout descManager) fontDescLayout
-  --logDebug $ "Font UI Pipeline: " ⧺ show fontUIPipe
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout) } }
   
   -- Create font quad buffer
   quadBuf ← createFontQuadBuffer device physicalDevice (graphicsQueue queues) cmdPool
-  --logDebug $ "Font Quad Buffer: " ⧺ show quadBuf
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontQuadBuffer = Just quadBuf } }
-  --logDebug "Font system initialized"
   
   -- Create swapchain image views
   imageViews ← createSwapchainImageViews device swapInfo
-  --logDebug $ "ImageViews: " ⧺ show (length imageViews)
   
   -- Create framebuffers
   framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews
-  --logDebug $ "Framebuffers: " ⧺ show (length framebuffers)
   modify $ \s → s { graphicsState = (graphicsState s) {
                       framebuffers = Just framebuffers } }
   
@@ -232,7 +214,6 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
       updateUniformBuffer device memory (UBO identity identity identity identity identity)
       pure (buffer, memory)
   
-  --logDebug $ "UniformBuffers created: " ⧺ show (V.length uniformBuffers)
   modify $ \s → s { graphicsState = (graphicsState s) {
                       uniformBuffers = Just uniformBuffers } }
   

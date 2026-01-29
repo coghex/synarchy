@@ -145,9 +145,6 @@ createTextureImage device pDevice graphicsQueue cmdPool imageData (width, height
             IMAGE_TILING_OPTIMAL
             (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
             MEMORY_PROPERTY_DEVICE_LOCAL_BIT
-            
-  -- TODO: Copy data to staging buffer and transition image layout
-  
   pure image
 
 -- | Clean up image resources

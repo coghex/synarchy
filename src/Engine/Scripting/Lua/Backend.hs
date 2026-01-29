@@ -31,7 +31,6 @@ import qualified Data.Map as Map
 import qualified Data.ByteString.Char8 as BS
 import Data.Dynamic (toDyn, fromDynamic)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
-import Data.Text.Encoding as TE
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
@@ -79,10 +78,6 @@ instance ScriptBackend LuaBackend where
           _      -> return $ ScriptError "Function call failed"
       Nothing -> return $ ScriptError "Invalid Lua context"
   
-  registerFunction _ _ _ _ = 
-    -- TODO: Implement function registration
-    return ()
-  
   backendName _    = "Lua"
   backendVersion _ = "5.5"
 
@@ -128,93 +123,71 @@ callModuleFunction lst modRef funcName args = Lua.runWith lst $ do
             Lua.pop 2
             return Lua.OK  -- Function doesn't exist, that's fine
 
+registerLuaFunction ∷ BS.ByteString → (Lua.LuaE Lua.Exception Lua.NumResults)
+  → Lua.LuaE Lua.Exception ()
+registerLuaFunction name action = do
+    Lua.pushHaskellFunction action
+    Lua.setfield (-2) (Lua.Name name)
+
 registerLuaAPI ∷ Lua.State → EngineEnv → LuaBackendState → IO ()
 registerLuaAPI lst env backendState = Lua.runWith lst $ do
   Lua.newtable 
   -- engine.logInfo
-  Lua.pushHaskellFunction (logInfoFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "logInfo")
+  registerLuaFunction "logInfo" logInfoFn
   -- engine.loadScript(path, tickRate)
-  Lua.pushHaskellFunction (loadScriptFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "loadScript")
+  registerLuaFunction "loadScript" loadScriptFn
   -- engine.killScript(scriptId)
-  Lua.pushHaskellFunction (killScriptFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "killScript")
+  registerLuaFunction "killScript" killScriptFn
   -- engine.setTickInterval(scriptId, interval)
-  Lua.pushHaskellFunction (setTickIntervalFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "setTickInterval")
+  registerLuaFunction "setTickInterval" setTickIntervalFn
   -- engine.loadTexture(path)
-  Lua.pushHaskellFunction (loadTextureFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "loadTexture")
+  registerLuaFunction "loadTexture" loadTextureFn
   -- engine.spawnSprite(x, y, width, height, textureHandle, layer)
-  Lua.pushHaskellFunction (spawnSpriteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "spawnSprite")
+  registerLuaFunction "spawnSprite" spawnSpriteFn
   -- engine.setPos(objectId, x, y)
-  Lua.pushHaskellFunction (setPosFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "setPos")
+  registerLuaFunction "setPos" setPosFn
   -- engine.setColor(objectId, color)
-  Lua.pushHaskellFunction (setColorFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "setColor")
+  registerLuaFunction "setColor" setColorFn
   -- engine.setSize(objectId, width, height)
-  Lua.pushHaskellFunction (setSizeFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "setSize")
+  registerLuaFunction "setSize" setSizeFn
   -- engine.setVisible(objectId, visible)
-  Lua.pushHaskellFunction (setVisibleFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "setVisible")
+  registerLuaFunction "setVisible" setVisibleFn
   -- engine.destroy(objectId)
-  Lua.pushHaskellFunction (destroyFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "destroy")
+  registerLuaFunction "destroy" destroyFn
   -- engine.isKeyDown(keyName)
-  Lua.pushHaskellFunction (isKeyDownFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "isKeyDown")
+  registerLuaFunction "isKeyDown" isKeyDownFn
   -- engine.isActionDown(actionName)
-  Lua.pushHaskellFunction (isActionDownFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "isActionDown")
+  registerLuaFunction "isActionDown" isActionDownFn
   -- engine.getMousePosition()
-  Lua.pushHaskellFunction (getMousePositionFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "getMousePosition")
+  registerLuaFunction "getMousePosition" getMousePositionFn
   -- engine.isMouseButtonDown(button)
-  Lua.pushHaskellFunction (isMouseButtonDownFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "isMouseButtonDown")
+  registerLuaFunction "isMouseButtonDown" isMouseButtonDownFn
   -- engine.getWindowSize()
-  Lua.pushHaskellFunction (getWindowSizeFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "getWindowSize")
+  registerLuaFunction "getWindowSize" getWindowSizeFn
   -- engine.getFramebufferSize()
-  Lua.pushHaskellFunction (getFramebufferSizeFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "getFramebufferSize")
+  registerLuaFunction "getFramebufferSize" getFramebufferSizeFn
   -- engine.getWorldCoord(screenX, screenY)
-  Lua.pushHaskellFunction (getWorldCoordFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "getWorldCoord")
+  registerLuaFunction "getWorldCoord" getWorldCoordFn
   -- engine.loadFont(path, size)
-  Lua.pushHaskellFunction (loadFontFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "loadFont")
+  registerLuaFunction "loadFont" loadFontFn
   -- engine.spawnText(x,y,fontHandle,text,color,layer)
-  Lua.pushHaskellFunction (spawnTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "spawnText")
+  registerLuaFunction "spawnText" spawnTextFn
   -- engine.setText(objectId, text)
-  Lua.pushHaskellFunction (setTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "setText")
+  registerLuaFunction "setText" setTextFn
   -- engine.getText(objectId)
-  Lua.pushHaskellFunction (getTextFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "getText")
+  registerLuaFunction "getText" getTextFn
   -- engine.getTextWidth(fontHandle, text)
-  Lua.pushHaskellFunction (getTextWidthFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "getTextWidth")
+  registerLuaFunction "getTextWidth" getTextWidthFn
   -- engine.shellExecute(code)
-  Lua.pushHaskellFunction (shellExecuteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "shellExecute")
+  registerLuaFunction "shellExecute" shellExecuteFn
   -- engine.registerFocusable(acceptsText, tabIndex) -> focusId
-  Lua.pushHaskellFunction (registerFocusableFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "registerFocusable")
+  registerLuaFunction "registerFocusable" registerFocusableFn
   -- engine.requestFocus(focusId)
-  Lua.pushHaskellFunction (requestFocusFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "requestFocus")
+  registerLuaFunction "requestFocus" requestFocusFn
   -- engine.releaseFocus()
-  Lua.pushHaskellFunction (releaseFocusFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "releaseFocus")
+  registerLuaFunction "releaseFocus" releaseFocusFn
   -- engine.getFocusId() -> focusId or nil
-  Lua.pushHaskellFunction (getFocusIdFn ∷ Lua.LuaE Lua.Exception Lua.NumResults)
-  Lua.setfield (-2) (Lua.Name "getFocusId")
+  registerLuaFunction "getFocusId" getFocusIdFn
   -- set global 'engine' table
   Lua.setglobal (Lua.Name "engine")
   where
