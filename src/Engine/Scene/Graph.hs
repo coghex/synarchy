@@ -5,6 +5,8 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.Set as Set
+import Engine.Core.Monad
+import Engine.Core.State (EngineState(..))
 import Engine.Scene.Base
 import Engine.Scene.Types
 import Engine.Asset.Base (AssetId)
@@ -75,6 +77,37 @@ addChild parentId childId graph =
                     }
             in newGraph
         _ → graph
+
+-- | Modify the active scene graph directly
+withSceneGraph ∷ (SceneGraph → SceneGraph) → EngineM ε σ Bool
+withSceneGraph f = do
+    sceneMgr ← gets sceneManager
+    case smActiveScene sceneMgr of
+      Nothing → return False
+      Just sceneId → case Map.lookup sceneId (smSceneGraphs sceneMgr) of
+        Nothing → return False
+        Just graph → do
+          let updatedGraphs = Map.insert sceneId (f graph) (smSceneGraphs sceneMgr)
+          modify $ \s → s { sceneManager = sceneMgr { smSceneGraphs = updatedGraphs } }
+          return True
+
+-- | Modify a specific node in the active scene graph
+modifySceneNode ∷ ObjectId → (SceneNode → SceneNode) → EngineM ε σ Bool
+modifySceneNode objId f = withSceneGraph $ \graph →
+    case Map.lookup objId (sgNodes graph) of
+      Nothing → graph  -- Node doesn't exist, return unchanged
+      Just node → graph
+        { sgNodes = Map.insert objId (f node) (sgNodes graph)
+        , sgDirtyNodes = Set.insert objId (sgDirtyNodes graph)
+        }
+
+-- | Remove a node from the active scene graph
+deleteSceneNode ∷ ObjectId → EngineM ε σ Bool
+deleteSceneNode objId = withSceneGraph $ \graph → graph
+    { sgNodes      = Map.delete objId (sgNodes graph)
+    , sgWorldTrans = Map.delete objId (sgWorldTrans graph)
+    , sgDirtyNodes = Set.delete objId (sgDirtyNodes graph)
+    }
 
 -- | Convert local transform to world matrix
 localToWorldMatrix ∷ Transform2D → M44 Float

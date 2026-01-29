@@ -12,16 +12,12 @@ module Engine.Asset.Manager
   , getAllTextureHandles
   , getAllFontHandles
   , getAllShaderHandles
-  , getAllHandles
   , lookupTextureAsset
   , lookupFontAsset
   , lookupShaderAsset
-  , lookupAsset
   , loadTextureAtlas
   , loadTextureAtlasWithHandle
-  , loadShaderProgram
   , unloadAsset
-  , reloadAsset
   , getTextureAtlas
   , getShaderProgram
   , cleanupAssetManager
@@ -135,10 +131,6 @@ getAllShaderHandles pool = do
   stateMap ← readIORef (apShaderHandles pool)
   return $ Map.keys stateMap
 
-getAllHandles ∷ ∀ h. AssetHandle h ⇒ AssetPool → IO [h]
-getAllHandles pool = 
-  map (fromInt . toInt) <$> getAllTextureHandles pool
-
 -- | Lookup texture handle state
 lookupTextureAsset ∷ TextureHandle → AssetPool → IO (Maybe (AssetState AssetId))
 lookupTextureAsset handle pool = do
@@ -156,11 +148,6 @@ lookupShaderAsset ∷ ShaderHandle → AssetPool → IO (Maybe (AssetState Asset
 lookupShaderAsset handle pool = do
   stateMap ← readIORef (apShaderHandles pool)
   return $ Map.lookup handle stateMap
-
--- LEGACY: Generic version for backward compatibility
-lookupAsset ∷ ∀ h. AssetHandle h ⇒ h → AssetPool → IO (Maybe (AssetState AssetId))
-lookupAsset handle pool = 
-  lookupTextureAsset (fromInt $ toInt handle) pool
 
 -- | Load a texture atlas from file (generates a new handle)
 loadTextureAtlas ∷ Text → FilePath → Text → EngineM ε σ AssetId
@@ -272,11 +259,6 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
     
       pure nextId
 
--- | Load a shader program
-loadShaderProgram ∷ Text → V.Vector ShaderStageInfo → EngineM' ε AssetId
-loadShaderProgram name stages = do
-    undefined
-
 -- | Unload an asset and cleanup its resources
 unloadAsset ∷ AssetId → EngineM' ε ()
 unloadAsset aid = do
@@ -311,11 +293,6 @@ unloadAsset aid = do
         Nothing →
           throwAssetError (AssetNotFound "unloadAsset: ") $ T.pack $
             "Asset not found: " ⧺ show aid
-
--- | Reload an asset (useful for hot reloading)
-reloadAsset ∷ AssetId → EngineM' ε ()
-reloadAsset aid = do
-  undefined
 
 -- | Get a texture atlas by ID
 getTextureAtlas ∷ AssetId → EngineM ε σ TextureAtlas

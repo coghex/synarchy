@@ -19,7 +19,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Font.Load (loadFont)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Scene.Base
-import Engine.Scene.Graph (createSceneNode)
+import Engine.Scene.Graph (createSceneNode, modifySceneNode, deleteSceneNode)
 import Engine.Scene.Manager (addObjectToScene)
 import Engine.Scene.Types
 import Engine.Scripting.Lua.Types
@@ -108,6 +108,7 @@ handleSetText objId text = do
     liftIO $ atomicModifyIORef' (textBuffersRef env) $ \m →
       (Map.insert objId text m, ())
     modifySceneNode objId $ \node → node { nodeText = Just text }
+    return ()
 
 -- | Handle spawn sprite request
 handleSpawnSprite ∷ ObjectId → Float → Float → Float → Float 
@@ -131,59 +132,22 @@ handleSpawnSprite objId x y width height texHandle layer = do
           Nothing → logDebug $ "Failed to add sprite " ⧺ show objId
       Nothing → logDebug "Cannot spawn sprite: no active scene"
 
--- | Handle move sprite request
 handleSetPosSprite ∷ ObjectId → Float → Float → EngineM ε σ ()
-handleSetPosSprite objId x y = do
-    modifySceneNode objId $ \node →
+handleSetPosSprite objId x y =
+    void $ modifySceneNode objId $ \node →
       node { nodeTransform = (nodeTransform node) { position = (x, y) } }
 
--- | Handle set sprite color request
 handleSetColor ∷ ObjectId → Vec4 → EngineM ε σ ()
-handleSetColor objId color = do
-    modifySceneNode objId $ \node → node { nodeColor = color }
+handleSetColor objId color =
+    void $ modifySceneNode objId $ \node → node { nodeColor = color }
 
--- | Handle set sprite size request
 handleSetSize ∷ ObjectId → Float → Float → EngineM ε σ ()
-handleSetSize objId width height = do
-    modifySceneNode objId $ \node → node { nodeSize = (width, height) }
+handleSetSize objId width height =
+    void $ modifySceneNode objId $ \node → node { nodeSize = (width, height) }
 
--- | Handle set sprite visible request
 handleSetVisible ∷ ObjectId → Bool → EngineM ε σ ()
-handleSetVisible objId visible = do
-    modifySceneNode objId $ \node → node { nodeVisible = visible }
+handleSetVisible objId visible =
+    void $ modifySceneNode objId $ \node → node { nodeVisible = visible }
 
--- | Handle destroy sprite request
 handleDestroy ∷ ObjectId → EngineM ε σ ()
-handleDestroy objId = do
-    sceneMgr ← gets sceneManager
-    case smActiveScene sceneMgr of
-      Just sceneId → case Map.lookup sceneId (smSceneGraphs sceneMgr) of
-        Just graph → do
-          let updatedGraph = graph 
-                { sgNodes      = Map.delete objId (sgNodes graph)
-                , sgWorldTrans = Map.delete objId (sgWorldTrans graph)
-                , sgDirtyNodes = Set.delete objId (sgDirtyNodes graph) 
-                }
-              updatedGraphs = Map.insert sceneId updatedGraph (smSceneGraphs sceneMgr)
-          modify $ \s → s { sceneManager = sceneMgr { smSceneGraphs = updatedGraphs } }
-        Nothing → logInfo "No scene graph"
-      Nothing → logInfo "No active scene"
-
--- | Modify a scene node by ID
-modifySceneNode ∷ ObjectId → (SceneNode → SceneNode) → EngineM ε σ ()
-modifySceneNode objId f = do
-  sceneMgr ← gets sceneManager
-  case smActiveScene sceneMgr of
-    Just sceneId → case Map.lookup sceneId (smSceneGraphs sceneMgr) of
-      Just graph → case Map.lookup objId (sgNodes graph) of
-        Just node → do
-          let updatedNode = f node
-              updatedGraph = graph 
-                { sgNodes = Map.insert objId updatedNode (sgNodes graph)
-                , sgDirtyNodes = Set.insert objId (sgDirtyNodes graph) 
-                }
-              updatedGraphs = Map.insert sceneId updatedGraph (smSceneGraphs sceneMgr)
-          modify $ \s → s { sceneManager = sceneMgr { smSceneGraphs = updatedGraphs } }
-        Nothing → logInfo $ "Sprite not found: " ⧺ show objId
-      Nothing → logInfo "No scene graph"
-    Nothing → logInfo "No active scene"
+handleDestroy objId = void $ deleteSceneNode objId
