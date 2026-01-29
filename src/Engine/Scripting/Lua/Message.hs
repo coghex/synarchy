@@ -4,7 +4,6 @@ module Engine.Scripting.Lua.Message
 
 import UPrelude
 import qualified Data.Map as Map
-import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.IORef (readIORef, atomicModifyIORef')
 import Data.Time.Clock (getCurrentTime)
@@ -34,7 +33,6 @@ processLuaMessages = do
     case maybeMsg of
       Nothing → return ()
       Just msg → do
-        currentTime ← liftIO getCurrentTime
         handleLuaMessage msg
         processLuaMessages
 
