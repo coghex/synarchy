@@ -35,6 +35,8 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
             - Scripting (lua scripting support)
         - UI
             - code for the ui system
+        - Loop
+            - main loop and timing
     - app (here Main.hs controls the draw loop and spawns the child threads)
     - assets (images and other data)
     - cbits (c code for text rasterization library)

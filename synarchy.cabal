@@ -216,6 +216,10 @@ library
                      Engine.Scene.Manager
                      Engine.Scene.Render
                      Engine.Loop
+                     Engine.Loop.Timing
+                     Engine.Loop.Frame
+                     Engine.Loop.Resource
+                     Engine.Loop.Shutdown
                      UI
                      UI.Focus
                      UI.TextBuffer

@@ -16,7 +16,8 @@ import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Input.Callback (setupCallbacks)
 import Engine.Input.Thread (startInputThread)
-import Engine.Loop (mainLoop, shutdownEngine, checkStatus)
+import Engine.Loop (mainLoop)
+import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
 import Engine.Scripting.Lua.Backend (startLuaThread)
 
 main ∷ IO ()
