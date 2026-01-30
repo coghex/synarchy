@@ -3,14 +3,13 @@ module Engine.Loop.Frame
   ( drawFrame
   , updateUniformBufferForFrame
   , submitFrame
-  , presentFrame
   ) where
 
 import UPrelude
 import Control.Exception (displayException)
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
+import Data.IORef (readIORef, atomicModifyIORef')
 import Linear (identity)
 import Engine.Core.Defaults
 import Engine.Core.Monad
@@ -24,6 +23,7 @@ import Engine.Graphics.Types (DevQueues(..), SwapchainInfo(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
+import Engine.Graphics.Vulkan.Recreate (recreateSwapchain)
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Input.Types (InputState(..))
@@ -36,7 +36,7 @@ import Engine.Scene.Types
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
-import Vulkan.Extensions.VK_KHR_swapchain
+import Vulkan.Extensions.VK_KHR_swapchain hiding (acquireNextImageKHRSafe)
 import GHC.Stack (HasCallStack)
 
 -- | Draw a single frame
@@ -45,68 +45,101 @@ drawFrame = do
     state ← gets graphicsState
     
     -- Get window
-    Window win ← case extractWindow state of
+    window@(Window win) ← case extractWindow state of
         Left err → throwSystemError (GLFWError "drawFrame") $ T.pack $
             "No window: " ⧺ displayException err
         Right w → pure w
     
     let frameIdx = currentFrame state
     
-    -- Update scene
-    updateSceneForRender
-    state' ← gets graphicsState
-    sceneMgr ← gets sceneManager
-    let layeredBatches = bmLayeredBatches $ smBatchManager sceneMgr
-    batches ← getCurrentRenderBatches
+    -- Get frame resources and device early
+    resources ← getFrameResources state frameIdx
+    device ← getDevice state
     
-    -- Update uniform buffer
-    updateUniformBufferForFrame win frameIdx
+    -- Wait for this frame's previous work to complete
+    liftIO $ waitForFences device (V.singleton (frInFlight resources)) True maxBound
     
-    -- Prepare dynamic vertex buffer
-    let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
-    dynamicBuffer ← if totalVertices > 0
-        then do
-            buffer ← ensureDynamicVertexBuffer totalVertices
-            uploadBatchesToBuffer batches buffer
-        else ensureDynamicVertexBuffer 6
+    -- Try to acquire image BEFORE resetting fence
+    swapchain ← getSwapchain state
+    acquireResult ← liftIO $ acquireNextImageKHRSafe device swapchain maxBound
+                                 (frImageAvailable resources) zero
     
-    -- Validate resources
-    state'' ← gets graphicsState
-    validateDescriptorState state''
-    
-    -- Get frame resources
-    resources ← getFrameResources state'' frameIdx
-    cmdBuffer ← getCommandBuffer resources
-    device ← getDevice state''
-    
-    -- Wait for previous frame
-    liftIO $ do
-        waitForFences device (V.singleton (frInFlight resources)) True maxTimeout
-        resetFences device (V.singleton (frInFlight resources))
-    
-    cleanupPendingInstanceBuffers
-    
-    -- Acquire next image
-    swapchain ← getSwapchain state''
-    (acquireResult, imageIndex) ← liftIO $ 
-        acquireNextImageKHR device swapchain maxTimeout (frImageAvailable resources) zero
-    
-    when (acquireResult ≠ SUCCESS && acquireResult ≠ SUBOPTIMAL_KHR) $
-        throwGraphicsError SwapchainError $
-            T.pack $ "Failed to acquire image: " ⧺ show acquireResult
-    
-    -- Record and submit command buffer
-    liftIO $ resetCommandBuffer cmdBuffer zero
-    recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex) dynamicBuffer layeredBatches
-    
-    queues ← getQueues state''
-    submitFrame cmdBuffer resources queues
-    presentFrame resources queues swapchain imageIndex
-    
-    -- Update frame index
-    modify $ \s → s { graphicsState = (graphicsState s) {
-        currentFrame = (currentFrame (graphicsState s) + 1)
-                       `mod` fromIntegral (gcMaxFrames defaultGraphicsConfig) } }
+    case acquireResult of
+        Left ERROR_OUT_OF_DATE_KHR → do
+            logInfo "Swapchain out of date on acquire, recreating..."
+            recreateSwapchain window
+            -- Fence is still signaled, next frame will wait and it will return immediately
+        
+        Left SUBOPTIMAL_KHR → do
+            logDebug "Swapchain suboptimal on acquire, recreating..."
+            recreateSwapchain window
+            -- Fence is still signaled, next frame will wait and it will return immediately
+        
+        Left err → 
+            throwGraphicsError SwapchainError $
+                T.pack $ "Failed to acquire swapchain image: " ⧺ show err
+        
+        Right imageIndex → do
+            -- NOW reset fence since we're definitely going to submit
+            liftIO $ resetFences device (V.singleton (frInFlight resources))
+            
+            -- Update scene
+            updateSceneForRender
+            sceneMgr ← gets sceneManager
+            let layeredBatches = bmLayeredBatches $ smBatchManager sceneMgr
+            batches ← getCurrentRenderBatches
+            
+            -- Update uniform buffer
+            updateUniformBufferForFrame win frameIdx
+            
+            -- Prepare dynamic vertex buffer
+            let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
+            dynamicBuffer ← if totalVertices > 0
+                then do
+                    buffer ← ensureDynamicVertexBuffer totalVertices
+                    uploadBatchesToBuffer batches buffer
+                else ensureDynamicVertexBuffer 6
+            
+            -- Validate resources
+            state'' ← gets graphicsState
+            validateDescriptorState state''
+            
+            cleanupPendingInstanceBuffers
+            
+            -- Record command buffer
+            cmdBuffer ← getCommandBuffer resources
+            liftIO $ resetCommandBuffer cmdBuffer zero
+            recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex) 
+                                     dynamicBuffer layeredBatches
+            
+            -- Submit
+            queues ← getQueues state''
+            submitFrame cmdBuffer resources queues
+            
+            -- Present - get fresh swapchain from state
+            currentState ← gets graphicsState
+            currentSwapchain ← getSwapchain currentState
+            presentResult ← presentFrameWithResult resources queues currentSwapchain imageIndex
+            
+            case presentResult of
+                Left ERROR_OUT_OF_DATE_KHR → do
+                    logInfo "Swapchain out of date on present, recreating..."
+                    recreateSwapchain window
+                
+                Left SUBOPTIMAL_KHR → do
+                    logDebug "Swapchain suboptimal on present, recreating..."
+                    recreateSwapchain window
+                
+                Left err →
+                    throwGraphicsError SwapchainError $
+                        T.pack $ "Failed to present: " ⧺ show err
+                
+                Right () → pure ()
+            
+            -- Update frame index
+            modify $ \s → s { graphicsState = (graphicsState s) {
+                currentFrame = (currentFrame (graphicsState s) + 1)
+                               `mod` fromIntegral (gcMaxFrames defaultGraphicsConfig) } }
 
 -- | Update uniform buffer for current frame
 updateUniformBufferForFrame ∷ GLFW.Window → Word32 → EngineM ε σ ()
@@ -149,9 +182,10 @@ submitFrame cmdBuffer resources queues = do
     liftIO $ queueSubmit (graphicsQueue queues) 
                (V.singleton $ SomeStruct submitInfo) (frInFlight resources)
 
--- | Present frame
-presentFrame ∷ FrameResources → DevQueues → SwapchainKHR → Word32 → EngineM ε σ ()
-presentFrame resources queues swapchain imageIndex = do
+-- | Present frame and return result for handling
+presentFrameWithResult ∷ FrameResources → DevQueues → SwapchainKHR → Word32 
+                       → EngineM ε σ (Either Result ())
+presentFrameWithResult resources queues swapchain imageIndex = do
     let presentInfo = zero
             { waitSemaphores = V.singleton $ frRenderFinished resources
             , swapchains = V.singleton swapchain
@@ -159,7 +193,18 @@ presentFrame resources queues swapchain imageIndex = do
             }
     presentResult ← liftIO $ queuePresentKHR (presentQueue queues) presentInfo
     case presentResult of
-        SUCCESS        → pure ()
-        SUBOPTIMAL_KHR → pure ()
-        err → throwGraphicsError SwapchainError $
-                T.pack $ "Failed to present: " ⧺ show err
+        SUCCESS               → pure $ Right ()
+        SUBOPTIMAL_KHR        → pure $ Left SUBOPTIMAL_KHR
+        ERROR_OUT_OF_DATE_KHR → pure $ Left ERROR_OUT_OF_DATE_KHR
+        err                   → pure $ Left err
+
+-- | Safe wrapper for acquireNextImageKHR
+acquireNextImageKHRSafe ∷ Device → SwapchainKHR → Word64 → Semaphore → Fence 
+                        → IO (Either Result Word32)
+acquireNextImageKHRSafe device swapchain timeout semaphore fence = do
+    (result, imageIndex) ← acquireNextImageKHR device swapchain timeout semaphore fence
+    case result of
+        SUCCESS               → pure $ Right imageIndex
+        SUBOPTIMAL_KHR        → pure $ Left SUBOPTIMAL_KHR
+        ERROR_OUT_OF_DATE_KHR → pure $ Left ERROR_OUT_OF_DATE_KHR
+        err                   → pure $ Left err

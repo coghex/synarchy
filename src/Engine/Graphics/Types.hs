@@ -30,6 +30,7 @@ data DevQueues = DevQueues
 data SwapchainInfo = SwapchainInfo
   { siSwapchain     ∷ SwapchainKHR
   , siSwapImgs      ∷ V.Vector Image
+  , siSwapImgViews  ∷ V.Vector ImageView
   , siSwapImgFormat ∷ Format
   , siSwapExtent    ∷ Extent2D
   }

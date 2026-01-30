@@ -15,6 +15,7 @@ import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Capability (TextureSystemCapability(..))
 import Engine.Graphics.Vulkan.Types
+import Engine.Graphics.Vulkan.Types.Cleanup
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Texture.Types
@@ -26,6 +27,7 @@ import Engine.Input.Bindings
 import Engine.Scene.Base
 import Engine.Scene.Types
 import qualified Vulkan.Core10 as Vk
+import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 import UI.Focus (FocusManager)
 
 -- | Engine environment (read-only)
@@ -79,6 +81,7 @@ data GraphicsState = GraphicsState
   , vulkanInstance     ∷ Maybe Vk.Instance
   , vulkanPDevice      ∷ Maybe Vk.PhysicalDevice
   , vulkanDevice       ∷ Maybe Vk.Device
+  , vulkanSurface      ∷ Maybe SurfaceKHR
   , textureCapability  ∷ Maybe TextureSystemCapability
   , deviceQueues       ∷ Maybe DevQueues
   , vulkanCmdPool      ∷ Maybe Vk.CommandPool
@@ -96,14 +99,15 @@ data GraphicsState = GraphicsState
   , textureSystem      ∷ Maybe BindlessTextureSystem
   , bindlessPipeline   ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , bindlessUIPipeline ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
-  , cleanupStatus      ∷ CleanupStatus
   , fontPipeline       ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , fontUIPipeline     ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , fontQuadBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , fontDescriptorPool ∷ Maybe Vk.DescriptorPool
-  , fontDescriptorLayout ∷ Maybe Vk.DescriptorSetLayout
+  , fontDescriptorLayout   ∷ Maybe Vk.DescriptorSetLayout
   -- instance buffers that survive across frames
   , pendingInstanceBuffers ∷ V.Vector (Vk.Buffer, Vk.DeviceMemory)
+  , cleanupStatus          ∷ CleanupStatus
+  , vulkanCleanup          ∷ Cleanup
   }
 
 

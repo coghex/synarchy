@@ -155,12 +155,14 @@ library
                      Engine.Graphics.Vulkan.Instance
                      Engine.Graphics.Vulkan.Pipeline
                      Engine.Graphics.Vulkan.Pipeline.Bindless
+                     Engine.Graphics.Vulkan.Recreate
                      Engine.Graphics.Vulkan.Sampler
                      Engine.Graphics.Vulkan.Shader
                      Engine.Graphics.Vulkan.ShaderCode
                      Engine.Graphics.Vulkan.Swapchain
                      Engine.Graphics.Vulkan.Sync
                      Engine.Graphics.Vulkan.Types
+                     Engine.Graphics.Vulkan.Types.Cleanup
                      Engine.Graphics.Vulkan.Types.Descriptor
                      Engine.Graphics.Vulkan.Types.Texture
                      Engine.Graphics.Vulkan.Types.Vertex

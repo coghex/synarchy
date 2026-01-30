@@ -11,9 +11,11 @@ module Engine.Graphics.Vulkan.Swapchain
 import UPrelude
 import qualified Data.Vector as V
 import Engine.Core.Monad
+import Engine.Core.State
 import Engine.Core.Resource (allocResource)
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Sync
+import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
@@ -28,7 +30,9 @@ querySwapchainSupport pdev surface = do
   (_, modes) ← liftIO $ getPhysicalDeviceSurfacePresentModesKHR pdev surface
   pure $ SwapchainSupportDetails caps fmts modes
 
--- | Creates a new swapchain with proper cleanup handling
+-- Replace createVulkanSwapchain:
+
+-- | Creates a new swapchain
 createVulkanSwapchain ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR
   → EngineM ε σ SwapchainInfo
 createVulkanSwapchain pdev dev queues surface = do
@@ -60,12 +64,24 @@ createVulkanSwapchain pdev dev queues surface = do
         , clipped = True
         , oldSwapchain = zero
         }
-  swapchain ← allocResource (\s → destroySwapchainKHR dev s Nothing)
-    $ createSwapchainKHR dev swCreateInfo Nothing
+  
+  swapchain ← createSwapchainKHR dev swCreateInfo Nothing
+  
+  -- Build cleanup action
+  let cleanupAction = destroySwapchainKHR dev swapchain Nothing
+  
+  -- Store cleanup in state
+  modify $ \s → s { graphicsState = (graphicsState s) {
+      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+          cleanupSwapchain = cleanupAction
+      }
+  }}
+  
   (_, swapImgs) ← getSwapchainImagesKHR dev swapchain
   pure $ SwapchainInfo
     { siSwapchain = swapchain
     , siSwapImgs = swapImgs
+    , siSwapImgViews = V.empty
     , siSwapImgFormat = form
     , siSwapExtent = sExtent
     }
@@ -73,26 +89,38 @@ createVulkanSwapchain pdev dev queues surface = do
 -- | Creates image views for swapchain images
 createSwapchainImageViews ∷ Device → SwapchainInfo → EngineM ε σ (V.Vector ImageView)
 createSwapchainImageViews dev SwapchainInfo{..} = do
-  V.mapM createImageViewf siSwapImgs
+  imageViews ← V.mapM createImageViewf siSwapImgs
+  
+  -- Build cleanup action (destroy all image views)
+  let cleanupAction = V.forM_ imageViews $ \iv →
+          destroyImageView dev iv Nothing
+  
+  -- Store cleanup in state
+  modify $ \s → s { graphicsState = (graphicsState s) {
+      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+          cleanupImageViews = cleanupAction
+      }
+  }}
+  
+  pure imageViews
   where
     createImageViewf image = 
-      allocResource (\iv → destroyImageView dev iv Nothing) $
-        createImageView dev zero
-          { image = image
-          , viewType = IMAGE_VIEW_TYPE_2D
-          , format = siSwapImgFormat
-          , components = zero
-              { r = COMPONENT_SWIZZLE_IDENTITY
-              , g = COMPONENT_SWIZZLE_IDENTITY
-              , b = COMPONENT_SWIZZLE_IDENTITY
-              , a = COMPONENT_SWIZZLE_IDENTITY }
-          , subresourceRange = zero
-              { aspectMask = IMAGE_ASPECT_COLOR_BIT
-              , baseMipLevel = 0
-              , levelCount = 1
-              , baseArrayLayer = 0
-              , layerCount = 1 }
-          } Nothing
+      createImageView dev zero
+        { image = image
+        , viewType = IMAGE_VIEW_TYPE_2D
+        , format = siSwapImgFormat
+        , components = zero
+            { r = COMPONENT_SWIZZLE_IDENTITY
+            , g = COMPONENT_SWIZZLE_IDENTITY
+            , b = COMPONENT_SWIZZLE_IDENTITY
+            , a = COMPONENT_SWIZZLE_IDENTITY }
+        , subresourceRange = zero
+            { aspectMask = IMAGE_ASPECT_COLOR_BIT
+            , baseMipLevel = 0
+            , levelCount = 1
+            , baseArrayLayer = 0
+            , layerCount = 1 }
+        } Nothing
 
 -- | Choose the best swap surface format
 chooseSwapSurfaceFormat ∷ SwapchainSupportDetails → SurfaceFormatKHR

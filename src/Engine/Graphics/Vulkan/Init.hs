@@ -69,6 +69,7 @@ initializeVulkan window = do
                     { vulkanInstance = Just vkInstance
                     , vulkanPDevice  = Just physicalDevice
                     , vulkanDevice   = Just device
+                    , vulkanSurface  = Just surface
                     , deviceQueues   = Just queues
                     } }
   
@@ -180,6 +181,10 @@ initializeVulkan window = do
   
   -- Create swapchain image views
   imageViews ← createSwapchainImageViews device swapInfo
+  modify $ \s → s { graphicsState = (graphicsState s) {
+                      swapchainInfo = case swapchainInfo (graphicsState s) of
+                        Just si → Just si { siSwapImgViews = imageViews }
+                        Nothing → Nothing } }
   
   -- Create framebuffers
   framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews

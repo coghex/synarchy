@@ -15,6 +15,7 @@ import Engine.Graphics.Camera
 import Engine.Graphics.Config
 import Engine.Graphics.Window.Types
 import Engine.Graphics.Vulkan.Types
+import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..), emptyCleanup)
 import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Font.Data
 import Engine.Scene.Types
@@ -69,6 +70,7 @@ defaultEngineState pool = EngineState
     , vulkanInstance     = Nothing
     , vulkanPDevice      = Nothing
     , vulkanDevice       = Nothing
+    , vulkanSurface      = Nothing
     , textureCapability  = Nothing
     , deviceQueues       = Nothing
     , vulkanCmdPool      = Nothing
@@ -86,13 +88,14 @@ defaultEngineState pool = EngineState
     , textureSystem     = Nothing
     , bindlessPipeline   = Nothing
     , bindlessUIPipeline = Nothing
-    , cleanupStatus      = NotStarted
     , fontPipeline       = Nothing
     , fontUIPipeline     = Nothing
     , fontQuadBuffer     = Nothing
     , fontDescriptorLayout = Nothing
     , fontDescriptorPool  = Nothing
     , pendingInstanceBuffers = V.empty
+    , cleanupStatus      = NotStarted
+    , vulkanCleanup      = emptyCleanup
     }
   , assetPool        = pool
   , assetConfig      = AssetConfig 100 100 True True

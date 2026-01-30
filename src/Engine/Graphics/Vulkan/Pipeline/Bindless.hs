@@ -8,8 +8,9 @@ import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.Vector as V
 import Engine.Core.Monad
-import Engine.Core.Resource
+import Engine.Core.State
 import Engine.Graphics.Vulkan.Vertex
+import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Engine.Graphics.Vulkan.ShaderCode (bindlessVertexShaderCode, bindlessFragmentShaderCode
                                          , bindlessUIVertexShaderCode)
 import Vulkan.Core10
@@ -17,28 +18,59 @@ import Vulkan.Zero
 import Vulkan.CStruct.Extends
 
 -- | Create a pipeline for bindless rendering (world camera)
+-- Uses manual cleanup (stored in Cleanup state)
 createBindlessPipeline ∷ Device
                        → RenderPass
                        → Extent2D
                        → DescriptorSetLayout  -- ^ Uniform buffer layout (set 0)
                        → DescriptorSetLayout  -- ^ Bindless texture layout (set 1)
                        → EngineM ε σ (Pipeline, PipelineLayout)
-createBindlessPipeline device renderPass swapExtent uniformLayout textureLayout =
-  createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout
-                                   bindlessVertexShaderCode
+createBindlessPipeline device renderPass swapExtent uniformLayout textureLayout = do
+  (pipeline, pipelineLayout) ← createBindlessPipelineWithShader 
+      device renderPass swapExtent uniformLayout textureLayout bindlessVertexShaderCode
+  
+  -- Build cleanup action
+  let cleanupAction = do
+          destroyPipeline device pipeline Nothing
+          destroyPipelineLayout device pipelineLayout Nothing
+  
+  -- Store cleanup in state
+  modify $ \s → s { graphicsState = (graphicsState s) {
+      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+          cleanupBindless = cleanupAction
+      }
+  }}
+  
+  pure (pipeline, pipelineLayout)
 
 -- | Create a pipeline for bindless UI rendering (UI camera)
+-- Uses manual cleanup (stored in Cleanup state)
 createBindlessUIPipeline ∷ Device
                          → RenderPass
                          → Extent2D
                          → DescriptorSetLayout  -- ^ Uniform buffer layout (set 0)
                          → DescriptorSetLayout  -- ^ Bindless texture layout (set 1)
                          → EngineM ε σ (Pipeline, PipelineLayout)
-createBindlessUIPipeline device renderPass swapExtent uniformLayout textureLayout =
-  createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout
-                                   bindlessUIVertexShaderCode
+createBindlessUIPipeline device renderPass swapExtent uniformLayout textureLayout = do
+  (pipeline, pipelineLayout) ← createBindlessPipelineWithShader 
+      device renderPass swapExtent uniformLayout textureLayout bindlessUIVertexShaderCode
+  
+  -- Build cleanup action
+  let cleanupAction = do
+          destroyPipeline device pipeline Nothing
+          destroyPipelineLayout device pipelineLayout Nothing
+  
+  -- Store cleanup in state
+  modify $ \s → s { graphicsState = (graphicsState s) {
+      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+          cleanupBindlessUI = cleanupAction
+      }
+  }}
+  
+  pure (pipeline, pipelineLayout)
 
 -- | Internal helper to create bindless pipeline with specified vertex shader
+-- Does NOT register cleanup - caller is responsible
 createBindlessPipelineWithShader ∷ Device
                                  → RenderPass
                                  → Extent2D
@@ -137,9 +169,8 @@ createBindlessPipelineWithShader device renderPass swapExtent uniformLayout text
         , pushConstantRanges = V.empty
         }
 
-  pipelineLayout ← allocResource
-    (\layout → destroyPipelineLayout device layout Nothing) $
-    createPipelineLayout device pipelineLayoutInfo Nothing
+  -- Create pipeline layout WITHOUT allocResource
+  pipelineLayout ← createPipelineLayout device pipelineLayoutInfo Nothing
 
   let pipelineInfo = zero
         { stages             = shaderStages
@@ -156,15 +187,13 @@ createBindlessPipelineWithShader device renderPass swapExtent uniformLayout text
         , basePipelineIndex  = (-1)
         } ∷ GraphicsPipelineCreateInfo '[]
 
+  -- Create pipeline WITHOUT allocResource
   (_, pipelinesVec) ← createGraphicsPipelines
     device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
 
-  let pipeline = V.head pipelinesVec
+  let !pipeline = V.head pipelinesVec
 
-  _ ← allocResource
-    (\p → destroyPipeline device p Nothing)
-    (pure pipeline)
-
+  -- Destroy shader modules
   destroyShaderModule device vertShaderModule Nothing
   destroyShaderModule device fragShaderModule Nothing
 

@@ -1,19 +1,46 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Vulkan.Types.Cleanup
-  ( SwapchainCleanup(..)
+  ( Cleanup(..)
+  , emptyCleanup
+  , runAllCleanups
   ) where
 
 import UPrelude
 
--- | Cleanup actions for swapchain-dependent resources
+-- | Cleanup actions for Vulkan resources
 -- All fields are IO () actions that destroy the corresponding resource
-data SwapchainCleanup = SwapchainCleanup
-  { scSwapchain      ∷ IO ()
-  , scImageViews     ∷ IO ()
-  , scRenderPass     ∷ IO ()
-  , scFramebuffers   ∷ IO ()
-  , scBindless       ∷ IO ()
-  , scBindlessUI     ∷ IO ()
-  , scFont           ∷ IO ()
-  , scFontUI         ∷ IO ()
+data Cleanup = Cleanup
+  { cleanupFontUI       ∷ IO ()
+  , cleanupFont         ∷ IO ()
+  , cleanupBindlessUI   ∷ IO ()
+  , cleanupBindless     ∷ IO ()
+  , cleanupFramebuffers ∷ IO ()
+  , cleanupImageViews   ∷ IO ()
+  , cleanupRenderPass   ∷ IO ()
+  , cleanupSwapchain    ∷ IO ()
   }
+
+-- | empty cleanup (no-op all fields)
+emptyCleanup ∷ Cleanup
+emptyCleanup = Cleanup
+  { cleanupFontUI       = pure ()
+  , cleanupFont         = pure ()
+  , cleanupBindlessUI   = pure ()
+  , cleanupBindless     = pure ()
+  , cleanupFramebuffers = pure ()
+  , cleanupImageViews   = pure ()
+  , cleanupRenderPass   = pure ()
+  , cleanupSwapchain    = pure ()
+  }
+
+-- | Run all cleanup actions
+runAllCleanups ∷ Cleanup → IO ()
+runAllCleanups Cleanup{..} = do
+  cleanupFontUI
+  cleanupFont
+  cleanupBindlessUI
+  cleanupBindless
+  cleanupFramebuffers
+  cleanupImageViews
+  cleanupRenderPass
+  cleanupSwapchain

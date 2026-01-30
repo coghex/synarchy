@@ -24,6 +24,7 @@ import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.ShaderCode (fontVertexShaderCode, fontFragmentShaderCode
                                          , fontUIVertexShaderCode)
+import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Engine.Graphics.Vulkan.Types.Descriptor
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
@@ -113,9 +114,7 @@ createFontPipeline device renderPass swapExtent uniformLayout = do
           , pushConstantRanges = V.empty
           }
     
-    pipelineLayout ← allocResource
-        (\pl → destroyPipelineLayout device pl Nothing)
-        (createPipelineLayout device pipelineLayoutInfo Nothing)
+    pipelineLayout ← createPipelineLayout device pipelineLayoutInfo Nothing
     
     -- Create shader modules (temporary)
     vertModule ← createShaderModule device zero { code = fontVertexShaderCode } Nothing
@@ -231,17 +230,21 @@ createFontPipeline device renderPass swapExtent uniformLayout = do
           }
     
     -- Create pipeline
-    pipeline ← allocResource
-        (\p → destroyPipeline device p Nothing)
-        (do
-            (_, pipelinesVec) ← createGraphicsPipelines 
-                device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
-            pure $ V.head pipelinesVec
-        )
+    (_, pipelinesVec) ← createGraphicsPipelines 
+        device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
+    let !pipeline = V.head pipelinesVec
     
     -- Destroy shader modules (no longer needed)
     destroyShaderModule device vertModule Nothing
     destroyShaderModule device fragModule Nothing
+
+    let cleanupAction = do
+            destroyPipeline device pipeline Nothing
+            destroyPipelineLayout device pipelineLayout Nothing
+
+    modify $ \s → s { graphicsState = (graphicsState s) {
+        vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+            cleanupFont = cleanupAction } } }
     
     pure (pipeline, pipelineLayout, fontTexLayout)
 
@@ -320,9 +323,7 @@ createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout = 
           , pushConstantRanges = V.empty
           }
     
-    pipelineLayout ← allocResource
-        (\pl → destroyPipelineLayout device pl Nothing)
-        (createPipelineLayout device pipelineLayoutInfo Nothing)
+    pipelineLayout ← createPipelineLayout device pipelineLayoutInfo Nothing
     
     -- Create shader modules
     vertModule ← createShaderModule device zero { code = fontUIVertexShaderCode } Nothing
@@ -430,17 +431,22 @@ createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout = 
           }
     
     -- Create pipeline
-    pipeline ← allocResource
-        (\p → destroyPipeline device p Nothing)
-        (do
-            (_, pipelinesVec) ← createGraphicsPipelines 
-                device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
-            pure $ V.head pipelinesVec
-        )
+    (_, pipelinesVec) ← createGraphicsPipelines 
+        device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
+    let !pipeline = V.head pipelinesVec
     
     -- Destroy shader modules
     destroyShaderModule device vertModule Nothing
     destroyShaderModule device fragModule Nothing
+
+    -- cleanup action for pipeline
+    let cleanupAction = do
+            destroyPipeline device pipeline Nothing
+            destroyPipelineLayout device pipelineLayout Nothing
+    modify $ \s → s
+        { graphicsState = (graphicsState s)
+            { vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+                cleanupFontUI = cleanupAction } } }
     
     pure (pipeline, pipelineLayout)
 

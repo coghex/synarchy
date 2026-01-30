@@ -8,10 +8,12 @@ module Engine.Graphics.Vulkan.Framebuffer
 import UPrelude
 import qualified Data.Vector as V
 import Engine.Core.Monad
+import Engine.Core.State
 import Engine.Core.Resource
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Command
+import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
@@ -23,7 +25,17 @@ createVulkanFramebuffers ∷ Device
                         → V.Vector ImageView
                         → EngineM ε σ (V.Vector Framebuffer)
 createVulkanFramebuffers device renderPass swapInfo imageViews = do
-  V.mapM (createOneFramebuffer device renderPass swapInfo) imageViews
+  framebuffers ← V.mapM (createOneFramebuffer device renderPass swapInfo) imageViews
+  -- Build cleanup action (destroy all framebuffers)
+  let cleanupAction = V.forM_ framebuffers $ \fb →
+          destroyFramebuffer device fb Nothing
+  -- Store cleanup in state
+  modify $ \s → s { graphicsState = (graphicsState s) {
+      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+          cleanupFramebuffers = cleanupAction
+      }
+  }}
+  pure framebuffers
   where
     createOneFramebuffer dev rp si imageView = do
       let Extent2D w h = siSwapExtent si
@@ -35,8 +47,7 @@ createVulkanFramebuffers device renderPass swapInfo imageViews = do
             , layers         = 1
             }
       
-      allocResource (\fb → destroyFramebuffer dev fb Nothing) $
-        createFramebuffer dev fbInfo Nothing
+      createFramebuffer dev fbInfo Nothing
 
 -- | Cleanup framebuffers
 destroyVulkanFramebuffers ∷ Device → V.Vector Framebuffer → EngineM ε σ ()

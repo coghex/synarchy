@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Vulkan.Pipeline
   ( createVulkanRenderPass
-  , destroyVulkanRenderPass
   ) where
 
 import UPrelude
@@ -13,6 +12,7 @@ import Engine.Core.Resource
 import Engine.Core.State
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
+import Engine.Graphics.Vulkan.Types.Cleanup
 import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Shader
 import Engine.Graphics.Vulkan.Vertex
@@ -58,10 +58,9 @@ createVulkanRenderPass device swapchainImageFormat = do
           , dependencies = V.singleton dependency
           }
     
-    allocResource (\rpass → destroyRenderPass device rpass Nothing) $
-        createRenderPass device renderPassInfo Nothing
-
-
-destroyVulkanRenderPass ∷ Device → RenderPass → EngineM ε σ ()
-destroyVulkanRenderPass device renderPass =
-    destroyRenderPass device renderPass Nothing
+    renderPass ← createRenderPass device renderPassInfo Nothing
+    let cleanupAction = destroyRenderPass device renderPass Nothing
+    modify $ \s → s { graphicsState = (graphicsState s) {
+        vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+            cleanupRenderPass = cleanupAction } } }
+    pure renderPass

@@ -12,6 +12,7 @@ import Engine.Core.State
 import Engine.Core.Thread (ThreadState, shutdownThread)
 import Engine.Core.Error.Exception
 import Engine.Graphics.Window.Types (Window(..))
+import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..), runAllCleanups)
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Input.Callback (clearGLFWCallbacks)
 import Engine.Scene.Types (createBatchManager, SceneManager(..))
@@ -29,6 +30,9 @@ shutdownEngine (Window win) inputThreadState luaThreadState = do
     
     -- Wait for Vulkan device
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
+
+    -- run manual cleanup actions
+    liftIO $ runAllCleanups (vulkanCleanup state)
     
     -- GLFW cleanup
     liftIO $ GLFW.postEmptyEvent
