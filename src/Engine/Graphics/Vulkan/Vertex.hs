@@ -12,6 +12,7 @@ import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Buffer
+import Engine.Graphics.Vulkan.BufferUtils
 import Engine.Graphics.Vulkan.Command
 import Engine.Graphics.Vulkan.Types.Vertex
 import Vulkan.Core10
@@ -48,7 +49,7 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
         vertSize = fromIntegral $ bsize * length vertices
     
     -- Create staging buffer
-    (stagingMemory, stagingBuffer) ← createVulkanBuffer 
+    (stagingMemory, stagingBuffer) ← createVulkanBufferManual
         device 
         pDevice 
         vertSize
@@ -69,8 +70,10 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
         (BUFFER_USAGE_TRANSFER_DST_BIT .|. BUFFER_USAGE_VERTEX_BUFFER_BIT)
         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
-    -- Copy from staging to vertex buffer
+    -- Copy from staging to vertex buffer, free staging buffer
     copyBuffer device commandPool graphicsQueue stagingBuffer vertexBuffer vertSize
+    liftIO $ destroyBuffer device stagingBuffer Nothing
+    liftIO $ freeMemory device stagingMemory Nothing
 
     pure (vertexBuffer, vertexMemory)
 
