@@ -12,7 +12,7 @@ for regular use, `cabal build synarchy`, for development use `cabal build -f dev
 
 ## Usage
 
-to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev test`, or you can of course run the binary directly.
+to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev test`, or you can of course run the binary directly. user "ENGINE_DEBUG=Vulkan,Graphics,etc..." do get debug output from those modules.
 
 ## Development
 

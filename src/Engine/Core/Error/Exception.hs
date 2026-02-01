@@ -52,6 +52,7 @@ data ExceptionType
 -- | Graphics-specific errors
 data GraphicsError
   = VulkanDeviceLost         -- ^ Device was lost during operation
+  | VulkanSurfaceLost        -- ^ Vulkan surface was lost
   | VulkanOutOfDate          -- ^ Swapchain is out of date
   | ShaderCompilationFailed  -- ^ Shader failed to compile
   | TextureLoadFailed        -- ^ Texture failed to load

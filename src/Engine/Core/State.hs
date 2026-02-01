@@ -7,6 +7,7 @@ import Data.IORef (IORef)
 import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Core.Base
+import Engine.Core.Log
 import Engine.Core.Types
 import Engine.Core.Queue as Q
 import Engine.Scripting.Lua.Types
@@ -37,6 +38,7 @@ data EngineEnv = EngineEnv
   , eventQueue       ∷ Q.Queue Event
   , inputQueue       ∷ Q.Queue InputEvent
   , logFunc          ∷ LoggingFunc
+  , loggerRef        ∷ IORef LoggerState
   , luaToEngineQueue ∷ Q.Queue LuaToEngineMsg
   , luaQueue         ∷ Q.Queue LuaMsg
   , lifecycleRef     ∷ IORef EngineLifecycle

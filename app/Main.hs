@@ -9,7 +9,8 @@ import Engine.Core.Defaults (defaultWindowConfig)
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), graphicsState, glfwWindow)
 import Engine.Core.Thread (shutdownThread)
-import Engine.Core.Error.Exception
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logDebugM)
 import Engine.Graphics.Config (loadVideoConfig)
 import Engine.Graphics.Vulkan.Init (initializeVulkan)
 import Engine.Graphics.Window.Types (Window(..))
@@ -63,7 +64,7 @@ main = do
         
         -- Shutdown
         shutdownEngine window inputThreadState luaThreadState
-        logDebug "Engine shutdown complete."
+        logDebugM CatVulkan "Engine shutdown complete."
   
   -- Run engine
   result ← runEngineM engineAction envVar stateVar checkStatus

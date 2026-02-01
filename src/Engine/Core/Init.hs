@@ -11,6 +11,7 @@ import qualified Data.Map as Map
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Core.Base
 import Engine.Core.Defaults
+import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..), LogLevel(..))
 import Engine.Core.State
 import Engine.Core.Types
 import Engine.Core.Var
@@ -44,6 +45,8 @@ initializeEngine = do
   
   -- Initialize logging
   logFunc ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
+  logger ← initLogger defaultLogConfig { lcMinLevel = LevelDebug }
+  loggerRef ← newIORef logger
   
   -- Initialize asset pool
   assetPool ← defaultAssetPool
@@ -77,6 +80,7 @@ initializeEngine = do
         , eventQueue       = eventQueue
         , inputQueue       = inputQueue
         , logFunc          = logFunc
+        , loggerRef        = loggerRef
         , luaToEngineQueue = luaToEngineQueue
         , luaQueue         = engineToLuaQueue
         , lifecycleRef     = lifecycleRef

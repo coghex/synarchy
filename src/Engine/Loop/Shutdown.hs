@@ -5,8 +5,9 @@ module Engine.Loop.Shutdown
 
 import UPrelude
 import Control.Exception (displayException)
-import Data.IORef (writeIORef)
+import Data.IORef (writeIORef, readIORef)
 import System.Exit (exitFailure)
+import Engine.Core.Log (shutdownLogger)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Thread (ThreadState, shutdownThread)
@@ -46,6 +47,10 @@ shutdownEngine (Window win) inputThreadState luaThreadState = do
     
     logDebug "Shutting down Lua thread..."
     liftIO $ shutdownThread luaThreadState
+
+    -- shut down logger
+    logger ← liftIO $ readIORef $ loggerRef env
+    liftIO $ shutdownLogger logger
     
     -- Mark engine as stopped
     liftIO $ writeIORef (lifecycleRef env) EngineStopped

@@ -47,7 +47,10 @@ import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
 import Engine.Core.Resource
-import Engine.Core.Error.Exception
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM)
+import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
+                                   , InitError(..))
 import Engine.Graphics.Base (GraphicsConfig(..))
 import Engine.Graphics.Window.Types
 import Vulkan.Core10 (Instance(..), AllocationCallbacks)
@@ -59,7 +62,8 @@ initializeGLFW = do
   success ← liftIO $ GLFW.init
   case success of
     True  → return ()--logDebug "GLFW initialized"
-    False → throwInitError WindowCreationFailed "Failed to initialize GLFW"
+    False → logAndThrowM CatGraphics (ExInit WindowCreationFailed)
+                 "Failed to initialize GLFW"
   -- Set necessary window hints for Vulkan
   liftIO $ do
     GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI
@@ -71,7 +75,7 @@ createWindow config = do
   -- initialize glfw
   allocResource (\_ → do
                   terminateGLFW
-                  logDebug "GLFW terminated")
+                  logDebugM CatGraphics "GLFW terminated")
                 initializeGLFW
 
   -- Set window hints
@@ -83,9 +87,9 @@ createWindow config = do
     mw ← liftIO $ GLFW.createWindow (wcWidth config) (wcHeight config)
                                     (T.unpack $ wcTitle config) Nothing Nothing
     case mw of
-      Nothing → throwSystemError (GLFWError "Window creation failed") $
-                  T.pack $ "Failed to create GLFW window with dimensions: "
-                  ⧺ show (wcWidth config) ⧺ "x" ⧺ show (wcHeight config)
+      Nothing → logAndThrowM CatGraphics (ExInit WindowCreationFailed) $
+                 T.pack $ "Failed to create GLFW window with dimensions: "
+                 ⧺ show (wcWidth config) ⧺ "x" ⧺ show (wcHeight config)
       Just win → pure $ Window win
 --
 -- | Creates a GLFW window in an IO context for testing
@@ -190,7 +194,7 @@ createWindowSurface (Window win) inst = allocResource
 
     case surfaceOrError of
       Right surface → pure surface
-      Left err → throwSystemError (GLFWError "Surface creation failed") $
+      Left err → logAndThrowM CatVulkan (ExGraphics VulkanSurfaceLost) $
                    T.pack $ "Failed to create window surface: " ⧺ err
 
 -- | Terminate GLFW
