@@ -9,16 +9,17 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Data.List (sortOn)
 import Data.IORef (readIORef)
-import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
 import Engine.Core.Monad
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Error.Exception (logInfo)
+import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
+import Engine.Graphics.Font.Draw (layoutTextUI)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..), fromBindlessHandle)
-import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Scene.Base (LayerId(..))
-import Engine.Scene.Types.Batch (RenderBatch(..), RenderItem(..))
+import Engine.Scene.Types.Batch (RenderBatch(..), RenderItem(..), TextRenderBatch(..))
 import UI.Types
 import UI.Manager (getVisiblePages, getElementAbsolutePosition)
 
@@ -36,21 +37,18 @@ uiLayerToLayerId layer zIndex = LayerId $ fromIntegral $ case layer of
     LayerDebug   -> uiLayerBase + 200 + zIndex
 
 -- | Look up the bindless slot index for a texture handle
--- Returns 0 (undefined texture) if not found
 lookupTextureSlot :: BindlessTextureSystem -> TextureHandle -> Float
 lookupTextureSlot bindless texHandle =
     case Map.lookup texHandle (btsHandleMap bindless) of
         Just bth -> fromIntegral $ fromBindlessHandle bth
-        Nothing  -> 0.0  -- Undefined texture slot
+        Nothing  -> 0.0
 
 -- | Render all visible UI pages
--- Returns: (batches for vertex upload, layered items for draw ordering)
 renderUIPages :: EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderUIPages = do
     env <- ask
     mgr <- liftIO $ readIORef (uiManagerRef env)
     
-    -- Get bindless texture system for slot lookups
     gs <- gets graphicsState
     let maybeBindless = textureSystem gs
     
@@ -59,11 +57,14 @@ renderUIPages = do
             logInfo "No bindless texture system available for UI rendering"
             pure (V.empty, Map.empty)
         Just bindless -> do
+            -- Get font cache for text rendering
+            fontCache <- liftIO $ readIORef (fontCacheRef env)
+            
             let visiblePages = getVisiblePages mgr
                 defaultTex = upmDefaultBoxTex mgr
             
             results <- forM visiblePages $ \page -> 
-                renderPage mgr bindless defaultTex page
+                renderPage mgr bindless fontCache defaultTex page
             
             let allBatches = V.concat $ map fst results
                 allLayered = foldr (Map.unionWith (<>)) Map.empty (map snd results)
@@ -71,14 +72,15 @@ renderUIPages = do
             pure (allBatches, allLayered)
 
 -- | Render a single page
-renderPage :: UIPageManager -> BindlessTextureSystem -> Maybe TextureHandle -> UIPage 
+renderPage :: UIPageManager -> BindlessTextureSystem -> FontCache 
+           -> Maybe TextureHandle -> UIPage 
            -> EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
-renderPage mgr bindless defaultTex page = do
+renderPage mgr bindless fontCache defaultTex page = do
     let layerId = uiLayerToLayerId (upLayer page) (upZIndex page)
         rootElems = upRootElements page
     
     results <- forM rootElems $ \elemHandle ->
-        renderElement mgr bindless defaultTex layerId elemHandle
+        renderElement mgr bindless fontCache defaultTex layerId elemHandle
     
     let allBatches = V.concat $ map fst results
         allLayered = foldr (Map.unionWith (<>)) Map.empty (map snd results)
@@ -86,10 +88,10 @@ renderPage mgr bindless defaultTex page = do
     pure (allBatches, allLayered)
 
 -- | Render an element and all its children
-renderElement :: UIPageManager -> BindlessTextureSystem -> Maybe TextureHandle 
-              -> LayerId -> ElementHandle 
+renderElement :: UIPageManager -> BindlessTextureSystem -> FontCache
+              -> Maybe TextureHandle -> LayerId -> ElementHandle 
               -> EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
-renderElement mgr bindless defaultTex layerId handle = do
+renderElement mgr bindless fontCache defaultTex layerId handle = do
     case Map.lookup handle (upmElements mgr) of
         Nothing -> pure (V.empty, Map.empty)
         Just elem
@@ -99,11 +101,12 @@ renderElement mgr bindless defaultTex layerId handle = do
                         Just pos -> pos
                         Nothing  -> (0, 0)
                 
-                (selfBatch, selfItem) <- renderElementData bindless defaultTex layerId elem absX absY
+                (selfBatch, selfItem) <- renderElementData bindless fontCache 
+                                           defaultTex layerId elem absX absY
                 
                 let sortedChildren = sortOn (getChildZIndex mgr) (ueChildren elem)
                 childResults <- forM sortedChildren $ \childHandle ->
-                    renderElement mgr bindless defaultTex layerId childHandle
+                    renderElement mgr bindless fontCache defaultTex layerId childHandle
                 
                 let childBatches = V.concat $ map fst childResults
                     childLayered = foldr (Map.unionWith (<>)) Map.empty (map snd childResults)
@@ -128,10 +131,10 @@ getChildZIndex mgr handle =
         Just elem -> ueZIndex elem
 
 -- | Render element's visual data
-renderElementData :: BindlessTextureSystem -> Maybe TextureHandle -> LayerId 
-                  -> UIElement -> Float -> Float 
+renderElementData :: BindlessTextureSystem -> FontCache -> Maybe TextureHandle 
+                  -> LayerId -> UIElement -> Float -> Float 
                   -> EngineM ε σ (Maybe RenderBatch, Maybe RenderItem)
-renderElementData bindless defaultTex layerId elem absX absY = 
+renderElementData bindless fontCache defaultTex layerId elem absX absY = 
     case ueRenderData elem of
         RenderNone -> pure (Nothing, Nothing)
         
@@ -154,9 +157,29 @@ renderElementData bindless defaultTex layerId elem absX absY =
                             }
                     pure (Just batch, Just (SpriteItem batch))
         
-        RenderText _style -> 
-            -- TODO: integrate with font rendering
-            pure (Nothing, Nothing)
+        RenderText style -> do
+            let fontHandle = utsFont style
+            case Map.lookup fontHandle (fcFonts fontCache) of
+                Nothing -> do
+                    logInfo $ "UI text font not found: " <> show fontHandle
+                    pure (Nothing, Nothing)
+                Just atlas -> do
+                    let text = utsText style
+                        (cr, cg, cb, ca) = utsColor style
+                        color = (cr, cg, cb, ca)
+                        instances = layoutTextUI atlas absX absY text color
+                    
+                    if V.null instances
+                        then pure (Nothing, Nothing)
+                        else do
+                            let textBatch = TextRenderBatch
+                                    { trbFont      = fontHandle
+                                    , trbLayer     = layerId
+                                    , trbInstances = instances
+                                    , trbObjects   = V.empty
+                                    }
+                            -- Text doesn't go in sprite batches, only in layered items
+                            pure (Nothing, Just (TextItem textBatch))
         
         RenderSprite style -> do
             let (w, h) = ueSize elem
@@ -174,10 +197,9 @@ renderElementData bindless defaultTex layerId elem absX absY =
             pure (Just batch, Just (SpriteItem batch))
 
 -- | Generate quad vertices for a UI element
--- Position is top-left corner in screen pixels
 makeQuadVertices :: Float -> Float -> Float -> Float 
                  -> (Float, Float, Float, Float) 
-                 -> Float  -- atlasId (bindless texture slot)
+                 -> Float
                  -> V.Vector Vertex
 makeQuadVertices x y w h (cr, cg, cb, ca) atlasId =
     let x0 = x
