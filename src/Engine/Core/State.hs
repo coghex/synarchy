@@ -28,6 +28,7 @@ import Engine.Scene.Base
 import Engine.Scene.Types
 import qualified Vulkan.Core10 as Vk
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
+import UI.Types (UIPageManager)
 import UI.Focus (FocusManager)
 
 -- | Engine environment (read-only)
@@ -47,6 +48,7 @@ data EngineEnv = EngineEnv
   , textBuffersRef   ∷ IORef (Map.Map ObjectId Text)
   , cameraRef        ∷ IORef Camera2D
   , uiCameraRef      ∷ IORef UICamera
+  , uiManagerRef     ∷ IORef UIPageManager
   , focusManagerRef  ∷ IORef FocusManager
   }
 

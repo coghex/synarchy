@@ -12,6 +12,7 @@ local tex10 = nil
 local font = nil
 local spawnedSprites = {}
 local shellScriptId = nil
+local uiScriptId = nil
 local spriteCount = 0
 local lastLogTime = 0
 local logInterval = 1.0  -- Log mouse position every 1 second
@@ -52,6 +53,8 @@ function game.init(scriptId)
     
     -- Initialize shell
     shellScriptId = engine.loadScript("scripts/shell.lua",0.5)
+    -- initialize ui
+    uiScriptId = engine.loadScript("scripts/ui.lua",1.0)
 end
 
 function game.update(dt)

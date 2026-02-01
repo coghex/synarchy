@@ -9,6 +9,7 @@ import UPrelude
 import Control.Exception (displayException)
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import qualified Data.Map as Map
 import Data.IORef (readIORef, atomicModifyIORef')
 import Linear (identity)
 import Engine.Core.Defaults
@@ -33,6 +34,7 @@ import Engine.Loop.Resource (validateDescriptorState, getFrameResources,
 import Engine.Scene.Render (updateSceneForRender, getCurrentRenderBatches
                            , ensureDynamicVertexBuffer, uploadBatchesToBuffer)
 import Engine.Scene.Types
+import UI.Render (renderUIPages)
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
@@ -86,8 +88,13 @@ drawFrame = do
             -- Update scene
             updateSceneForRender
             sceneMgr ← gets sceneManager
-            let layeredBatches = bmLayeredBatches $ smBatchManager sceneMgr
-            batches ← getCurrentRenderBatches
+            let worldLayeredBatches = bmLayeredBatches $ smBatchManager sceneMgr
+            worldBatches ← getCurrentRenderBatches
+            -- render UI
+            (uiBatches, uiLayeredBatches) ← renderUIPages
+            -- merge world and UI batches
+            let batches = worldBatches <> uiBatches
+                layeredBatches = Map.unionWith (<>) worldLayeredBatches uiLayeredBatches
             
             -- Update uniform buffer
             updateUniformBufferForFrame win frameIdx

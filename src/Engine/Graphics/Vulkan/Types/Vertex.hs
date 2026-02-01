@@ -37,6 +37,7 @@ instance Storable Vec2 where
         Storable.pokeElemOff (castPtr ptr ∷ Ptr Float) 0 x'
         Storable.pokeElemOff (castPtr ptr ∷ Ptr Float) 1 y'
 
+-- | 4D vector for colors
 data Vec4 = Vec4 
     { r ∷ !Float
     , g ∷ !Float

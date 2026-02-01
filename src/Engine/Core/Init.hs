@@ -21,6 +21,7 @@ import Engine.Graphics.Font.Data (defaultFontCache)
 import Engine.Input.Bindings (loadKeyBindings)
 import Engine.Input.Types (defaultInputState)
 import UI.Focus (createFocusManager)
+import UI.Types (emptyUIPageManager)
 
 -- | Result of engine initialization
 data EngineInitResult = EngineInitResult
@@ -61,6 +62,8 @@ initializeEngine = do
   cameraRef ← newIORef defaultCamera
   uiCameraRef ← newIORef $ defaultUICamera (fromIntegral (vcWidth videoConfig))
                                            (fromIntegral (vcHeight videoConfig))
+  -- Create UI manager references
+  uiManagerRef ← newIORef emptyUIPageManager
   -- Create focus manager
   focusMgrRef ← newIORef createFocusManager
   -- text buffers reference
@@ -85,6 +88,7 @@ initializeEngine = do
         , textBuffersRef   = textBuffersRef
         , cameraRef        = cameraRef
         , uiCameraRef      = uiCameraRef
+        , uiManagerRef     = uiManagerRef
         , focusManagerRef  = focusMgrRef
         }
   

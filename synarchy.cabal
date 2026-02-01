@@ -203,6 +203,7 @@ library
                      Engine.Scripting.Lua.API.Text
                      Engine.Scripting.Lua.API.Focus
                      Engine.Scripting.Lua.API.Shell
+                     Engine.Scripting.Lua.API.UI
                      Engine.Core.Base
                      Engine.Core.Defaults
                      Engine.Core.Init
@@ -235,7 +236,10 @@ library
                      Engine.Loop.Resource
                      Engine.Loop.Shutdown
                      UI
+                     UI.Types
                      UI.Focus
+                     UI.Manager
+                     UI.Render
                      UI.TextBuffer
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures

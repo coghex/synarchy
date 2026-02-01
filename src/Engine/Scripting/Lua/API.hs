@@ -18,6 +18,7 @@ import Engine.Scripting.Lua.API.Text (loadFontFn, spawnTextFn, setTextFn,
 import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn, 
                                         releaseFocusFn, getFocusIdFn)
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
+import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 import qualified Data.ByteString.Char8 as BS
@@ -77,3 +78,38 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "shellExecute" shellExecuteFn
   
   Lua.setglobal (Lua.Name "engine")
+  
+  -- Register UI table separately
+  Lua.newtable
+  
+  -- UI Page functions
+  registerLuaFunction "newPage"    (uiNewPageFn env)
+  registerLuaFunction "deletePage" (uiDeletePageFn env)
+  registerLuaFunction "showPage"   (uiShowPageFn env)
+  registerLuaFunction "hidePage"   (uiHidePageFn env)
+  
+  -- UI Element creation functions
+  registerLuaFunction "newElement" (uiNewElementFn env)
+  registerLuaFunction "newBox"     (uiNewBoxFn env)
+  registerLuaFunction "newText"    (uiNewTextFn env)
+  registerLuaFunction "newSprite"  (uiNewSpriteFn env)
+  
+  -- UI Hierarchy functions
+  registerLuaFunction "addToPage"      (uiAddToPageFn env)
+  registerLuaFunction "addChild"       (uiAddChildFn env)
+  registerLuaFunction "removeElement"  (uiRemoveElementFn env)
+  registerLuaFunction "deleteElement"  (uiDeleteElementFn env)
+  
+  -- UI Property functions
+  registerLuaFunction "setPosition"  (uiSetPositionFn env)
+  registerLuaFunction "setSize"      (uiSetSizeFn env)
+  registerLuaFunction "setVisible"   (uiSetVisibleFn env)
+  registerLuaFunction "setClickable" (uiSetClickableFn env)
+  registerLuaFunction "setZIndex"    (uiSetZIndexFn env)
+  registerLuaFunction "setColor"     (uiSetColorFn env)
+  registerLuaFunction "setText"      (uiSetTextFn env)
+  
+  -- UI Default texture
+  registerLuaFunction "setDefaultBoxTexture" (uiSetDefaultBoxTextureFn env)
+  
+  Lua.setglobal (Lua.Name "UI")
