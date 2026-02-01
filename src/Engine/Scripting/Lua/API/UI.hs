@@ -23,7 +23,7 @@ module Engine.Scripting.Lua.API.UI
   , uiSetZIndexFn
   , uiSetColorFn
   , uiSetTextFn
-  , uiSetDefaultBoxTextureFn
+  , uiLoadBoxTexturesFn
   ) where
 
 import UPrelude
@@ -117,29 +117,70 @@ uiNewElementFn env = do
     
     return 1
 
--- | UI.newBox(name, width, height, r, g, b, a, pageHandle) -> elementHandle
+-- | UI.newBox(name, width, height, boxTexHandle, tileSize, r, g, b, a, pageHandle) -> elementHandle
 uiNewBoxFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
 uiNewBoxFn env = do
     nameArg <- Lua.tostring 1
     widthArg <- Lua.tonumber 2
     heightArg <- Lua.tonumber 3
-    rArg <- Lua.tonumber 4
-    gArg <- Lua.tonumber 5
-    bArg <- Lua.tonumber 6
-    aArg <- Lua.tonumber 7
-    pageArg <- Lua.tointeger 8
+    boxTexArg <- Lua.tointeger 4
+    tileSizeArg <- Lua.tonumber 5
+    rArg <- Lua.tonumber 6
+    gArg <- Lua.tonumber 7
+    bArg <- Lua.tonumber 8
+    aArg <- Lua.tonumber 9
+    pageArg <- Lua.tointeger 10
     
-    case (nameArg, widthArg, heightArg, rArg, gArg, bArg, aArg, pageArg) of
-        (Just nameBS, Just w, Just h, Just r, Just g, Just b, Just a, Just p) -> do
+    case (nameArg, widthArg, heightArg, boxTexArg, tileSizeArg, rArg, gArg, bArg, aArg, pageArg) of
+        (Just nameBS, Just w, Just h, Just bt, Just ts, Just r, Just g, Just b, Just a, Just p) -> do
             let name = TE.decodeUtf8 nameBS
+                boxTexHandle = BoxTextureHandle (fromIntegral bt)
+                tileSize = realToFrac ts
                 color = (realToFrac r, realToFrac g, realToFrac b, realToFrac a)
                 pageHandle = PageHandle (fromIntegral p)
             
             handle <- Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
-                let (elemH, newMgr) = createBox name (realToFrac w) (realToFrac h) color pageHandle mgr
+                let (elemH, newMgr) = createBox name (realToFrac w) (realToFrac h) 
+                                        boxTexHandle tileSize color pageHandle mgr
                 in (newMgr, elemH)
             
             Lua.pushinteger (fromIntegral $ unElementHandle handle)
+        _ -> Lua.pushnil
+    
+    return 1
+
+-- | UI.loadBoxTextures(texCenter, texN, texS, texE, texW, texNE, texNW, texSE, texSW) -> boxTextureHandle
+uiLoadBoxTexturesFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiLoadBoxTexturesFn env = do
+    centerArg <- Lua.tointeger 1
+    nArg <- Lua.tointeger 2
+    sArg <- Lua.tointeger 3
+    eArg <- Lua.tointeger 4
+    wArg <- Lua.tointeger 5
+    neArg <- Lua.tointeger 6
+    nwArg <- Lua.tointeger 7
+    seArg <- Lua.tointeger 8
+    swArg <- Lua.tointeger 9
+    
+    case (centerArg, nArg, sArg, eArg, wArg, neArg, nwArg, seArg, swArg) of
+        (Just c, Just n, Just s, Just e, Just w, Just ne, Just nw, Just se, Just sw) -> do
+            let texSet = BoxTextureSet
+                    { btsCenter = TextureHandle (fromIntegral c)
+                    , btsN      = TextureHandle (fromIntegral n)
+                    , btsS      = TextureHandle (fromIntegral s)
+                    , btsE      = TextureHandle (fromIntegral e)
+                    , btsW      = TextureHandle (fromIntegral w)
+                    , btsNE     = TextureHandle (fromIntegral ne)
+                    , btsNW     = TextureHandle (fromIntegral nw)
+                    , btsSE     = TextureHandle (fromIntegral se)
+                    , btsSW     = TextureHandle (fromIntegral sw)
+                    }
+            
+            handle <- Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+                let (h, newMgr) = registerBoxTextures texSet mgr
+                in (newMgr, h)
+            
+            Lua.pushinteger (fromIntegral $ unBoxTextureHandle handle)
         _ -> Lua.pushnil
     
     return 1
@@ -372,16 +413,6 @@ uiSetTextFn env = do
                 (setText elemHandle text mgr, ())
         _ -> pure ()
     
-    return 0
-
--- | UI.setDefaultBoxTexture(textureHandle)
-uiSetDefaultBoxTextureFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
-uiSetDefaultBoxTextureFn env = do
-    texArg <- Lua.tointeger 1
-    case texArg of
-        Just t -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
-            (setDefaultBoxTexture (TextureHandle $ fromIntegral t) mgr, ())
-        Nothing -> pure ()
     return 0
 
 -----------------------------------------------------------

@@ -33,8 +33,9 @@ module UI.Manager
   , getElementAbsolutePosition
   , getPageElements
   , getElementChildren
-    -- Default box texture
-  , setDefaultBoxTexture
+    -- Box textures
+  , registerBoxTextures
+  , getBoxTextureSet
   ) where
 
 import UPrelude
@@ -112,10 +113,16 @@ createElement :: Text -> Float -> Float -> PageHandle -> UIPageManager
 createElement name width height pageHandle mgr =
     createElementInternal name width height pageHandle RenderNone mgr
 
-createBox :: Text -> Float -> Float -> (Float, Float, Float, Float) -> PageHandle 
+createBox :: Text -> Float -> Float -> BoxTextureHandle -> Float 
+          -> (Float, Float, Float, Float) -> PageHandle 
           -> UIPageManager -> (ElementHandle, UIPageManager)
-createBox name width height color pageHandle mgr =
-    createElementInternal name width height pageHandle (RenderBox (UIBoxStyle color)) mgr
+createBox name width height texHandle tileSize color pageHandle mgr =
+    let style = UIBoxStyle
+          { ubsTextures = texHandle
+          , ubsTileSize = tileSize
+          , ubsColor    = color
+          }
+    in createElementInternal name width height pageHandle (RenderBox style) mgr
 
 createText :: Text -> Text -> FontHandle -> (Float, Float, Float, Float) -> PageHandle 
            -> UIPageManager -> (ElementHandle, UIPageManager)
@@ -309,11 +316,19 @@ getElementChildren handle mgr =
         Just elem -> mapMaybe (`Map.lookup` upmElements mgr) (ueChildren elem)
 
 -----------------------------------------------------------
--- Default Box Texture
+-- Box Textures
 -----------------------------------------------------------
 
-setDefaultBoxTexture :: TextureHandle -> UIPageManager -> UIPageManager
-setDefaultBoxTexture handle mgr = mgr { upmDefaultBoxTex = Just handle }
+registerBoxTextures :: BoxTextureSet -> UIPageManager -> (BoxTextureHandle, UIPageManager)
+registerBoxTextures texSet mgr =
+    let handle = BoxTextureHandle (upmNextBoxTexId mgr)
+    in (handle, mgr
+          { upmBoxTextures  = Map.insert handle texSet (upmBoxTextures mgr)
+          , upmNextBoxTexId = upmNextBoxTexId mgr + 1
+          })
+
+getBoxTextureSet :: BoxTextureHandle -> UIPageManager -> Maybe BoxTextureSet
+getBoxTextureSet handle mgr = Map.lookup handle (upmBoxTextures mgr)
 
 -----------------------------------------------------------
 -- Internal Helpers

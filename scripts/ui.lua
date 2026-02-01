@@ -2,35 +2,56 @@ local ui = {}
 
 local mainMenuPage = nil
 local testBox = nil
-local boxTex = nil
+local boxTexSet = nil
+local uiFont = nil
 
 function ui.init(scriptId)
     engine.logInfo("=== UI System Test ===")
     
-    boxTex = engine.loadTexture("assets/textures/box/box.png")
-    UI.setDefaultBoxTexture(boxTex)
+    -- Load font for text
+    uiFont = engine.loadFont("assets/fonts/Cabal.ttf", 24)
     
-    -- Load a font for UI text
-    local uiFont = engine.loadFont("assets/fonts/Cabal.ttf", 24)
+    -- Load all 9 box textures
+    local texCenter = engine.loadTexture("assets/textures/box/box.png")
+    local texN = engine.loadTexture("assets/textures/box/boxn.png")
+    local texS = engine.loadTexture("assets/textures/box/boxs.png")
+    local texE = engine.loadTexture("assets/textures/box/boxe.png")
+    local texW = engine.loadTexture("assets/textures/box/boxw.png")
+    local texNE = engine.loadTexture("assets/textures/box/boxne.png")
+    local texNW = engine.loadTexture("assets/textures/box/boxnw.png")
+    local texSE = engine.loadTexture("assets/textures/box/boxse.png")
+    local texSW = engine.loadTexture("assets/textures/box/boxsw.png")
     
+    -- Register the box texture set
+    boxTexSet = UI.loadBoxTextures(texCenter, texN, texS, texE, texW, texNE, texNW, texSE, texSW)
+    engine.logInfo("Box texture set registered: " .. tostring(boxTexSet))
+    
+    -- Create a page
     mainMenuPage = UI.newPage("main_menu", "menu")
+    engine.logInfo("Created page: " .. tostring(mainMenuPage))
     
-    -- Create boxes
-    testBox = UI.newBox("test_box", 200, 100, 0.8, 0.2, 0.2, 0.9, mainMenuPage)
+    -- Create a 9-tile box
+    -- UI.newBox(name, width, height, boxTexHandle, tileSize, r, g, b, a, pageHandle)
+    testBox = UI.newBox("test_box", 300, 200, boxTexSet, 64, 1.0, 1.0, 1.0, 1.0, mainMenuPage)
+    engine.logInfo("Created box: " .. tostring(testBox))
+    
+    -- Add box to page
     UI.addToPage(mainMenuPage, testBox, 100, 100)
+    engine.logInfo("Added box to page at (100, 100)")
     
-    local box2 = UI.newBox("box2", 150, 75, 0.2, 0.2, 0.8, 0.9, mainMenuPage)
-    UI.addToPage(mainMenuPage, box2, 350, 150)
+    -- Create a second smaller box
+    local box2 = UI.newBox("box2", 150, 100, boxTexSet, 64, 0.8, 0.8, 1.0, 1.0, mainMenuPage)
+    UI.addToPage(mainMenuPage, box2, 450, 150)
+    engine.logInfo("Created second box at (450, 150)")
     
-    local box3 = UI.newBox("box3", 50, 50, 0.2, 0.8, 0.2, 0.9, mainMenuPage)
-    UI.addChild(testBox, box3, 25, 25)
-    
-    -- Create text element
+    -- Create text label inside the first box
     local label = UI.newText("label", "Hello UI!", uiFont, 1.0, 1.0, 1.0, 1.0, mainMenuPage)
-    UI.addToPage(mainMenuPage, label, 120, 130)
+    UI.addChild(testBox, label, 80, 80)
+    engine.logInfo("Added text label as child of box")
     
+    -- Show the page
     UI.showPage(mainMenuPage)
-    engine.logInfo("Page shown with text")
+    engine.logInfo("Page shown")
 end
 
 function ui.update(dt)

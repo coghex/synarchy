@@ -3,6 +3,7 @@ module UI.Types
   ( -- Handles
     PageHandle(..)
   , ElementHandle(..)
+  , BoxTextureHandle(..)
     -- Layers
   , UILayer(..)
     -- Page
@@ -13,6 +14,8 @@ module UI.Types
   , UIBoxStyle(..)
   , UITextStyle(..)
   , UISpriteStyle(..)
+  -- Box Textures
+  , BoxTextureSet(..)
     -- Manager
   , UIPageManager(..)
   , emptyUIPageManager
@@ -73,8 +76,27 @@ data UIRenderData
   | RenderSprite UISpriteStyle
   deriving (Show)
 
+-- A handle to a group of 9 textures
+newtype BoxTextureHandle = BoxTextureHandle { unBoxTextureHandle :: Word32 }
+  deriving (Eq, Ord, Show)
+
+-- The 9 textures for a box
+data BoxTextureSet = BoxTextureSet
+  { btsCenter :: TextureHandle
+  , btsN      :: TextureHandle
+  , btsS      :: TextureHandle
+  , btsE      :: TextureHandle
+  , btsW      :: TextureHandle
+  , btsNE     :: TextureHandle
+  , btsNW     :: TextureHandle
+  , btsSE     :: TextureHandle
+  , btsSW     :: TextureHandle
+  } deriving (Show, Eq)
+
 data UIBoxStyle = UIBoxStyle
-  { ubsColor :: (Float, Float, Float, Float)
+  { ubsTextures :: BoxTextureHandle
+  , ubsTileSize :: Float
+  , ubsColor    :: (Float, Float, Float, Float)
   } deriving (Show)
 
 data UITextStyle = UITextStyle
@@ -90,13 +112,15 @@ data UISpriteStyle = UISpriteStyle
 
 -- | Manager for all UI pages and elements
 data UIPageManager = UIPageManager
-  { upmPages        :: Map.Map PageHandle UIPage
-  , upmElements     :: Map.Map ElementHandle UIElement
-  , upmVisiblePages :: Set.Set PageHandle
-  , upmNextPageId   :: Word32
-  , upmNextElemId   :: Word32
-  , upmHovered      :: Maybe ElementHandle
-  , upmDefaultBoxTex:: Maybe TextureHandle
+  { upmPages         :: Map.Map PageHandle UIPage
+  , upmElements      :: Map.Map ElementHandle UIElement
+  , upmVisiblePages  :: Set.Set PageHandle
+  , upmNextPageId    :: Word32
+  , upmNextElemId    :: Word32
+  , upmHovered       :: Maybe ElementHandle
+  , upmDefaultBoxTex :: Maybe TextureHandle
+  , upmBoxTextures   :: Map.Map BoxTextureHandle BoxTextureSet
+  , upmNextBoxTexId  :: Word32
   } deriving (Show)
 
 emptyUIPageManager :: UIPageManager
@@ -108,4 +132,6 @@ emptyUIPageManager = UIPageManager
   , upmNextElemId   = 1
   , upmHovered      = Nothing
   , upmDefaultBoxTex= Nothing
+  , upmBoxTextures  = Map.empty
+  , upmNextBoxTexId = 1
   }

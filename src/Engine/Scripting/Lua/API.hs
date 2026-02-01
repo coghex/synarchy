@@ -109,7 +109,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setColor"     (uiSetColorFn env)
   registerLuaFunction "setText"      (uiSetTextFn env)
   
-  -- UI Default texture
-  registerLuaFunction "setDefaultBoxTexture" (uiSetDefaultBoxTextureFn env)
+  -- UI textures
+  registerLuaFunction "loadBoxTextures" (uiLoadBoxTexturesFn env)
   
   Lua.setglobal (Lua.Name "UI")
