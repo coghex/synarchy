@@ -118,7 +118,6 @@ data UIPageManager = UIPageManager
   , upmNextPageId    :: Word32
   , upmNextElemId    :: Word32
   , upmHovered       :: Maybe ElementHandle
-  , upmDefaultBoxTex :: Maybe TextureHandle
   , upmBoxTextures   :: Map.Map BoxTextureHandle BoxTextureSet
   , upmNextBoxTexId  :: Word32
   } deriving (Show)
@@ -131,7 +130,6 @@ emptyUIPageManager = UIPageManager
   , upmNextPageId   = 1
   , upmNextElemId   = 1
   , upmHovered      = Nothing
-  , upmDefaultBoxTex= Nothing
   , upmBoxTextures  = Map.empty
   , upmNextBoxTexId = 1
   }
