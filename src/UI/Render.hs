@@ -7,12 +7,14 @@ module UI.Render
 import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
+import qualified Data.Text as T
 import Data.List (sortOn)
 import Data.IORef (readIORef)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
 import Engine.Core.Monad
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logInfoM, logWarnM)
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
-import Engine.Core.Error.Exception (logInfo)
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Draw (layoutTextUI)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
@@ -54,7 +56,7 @@ renderUIPages = do
     
     case maybeBindless of
         Nothing -> do
-            logInfo "No bindless texture system available for UI rendering"
+            logWarnM CatUI "No bindless texture system available for UI rendering"
             pure (V.empty, Map.empty)
         Just bindless -> do
             fontCache <- liftIO $ readIORef (fontCacheRef env)
@@ -135,7 +137,7 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
         RenderBox style -> do
             case getBoxTextureSet (ubsTextures style) mgr of
                 Nothing -> do
-                    logInfo "UI box texture set not found"
+                    logWarnM CatUI "UI box texture set not found"
                     pure (V.empty, V.empty)
                 Just texSet -> do
                     let (w, h) = ueSize elem
@@ -149,7 +151,7 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
             let fontHandle = utsFont style
             case Map.lookup fontHandle (fcFonts fontCache) of
                 Nothing -> do
-                    logInfo $ "UI text font not found: " <> show fontHandle
+                    logWarnM CatUI $ "UI text font not found: " <> (T.pack (show fontHandle))
                     pure (V.empty, V.empty)
                 Just atlas -> do
                     let text = utsText style

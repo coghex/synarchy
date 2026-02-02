@@ -8,7 +8,9 @@ module Engine.Graphics.Vulkan.Texture.System
 import UPrelude
 import qualified Data.Text as T
 import Engine.Core.Monad
-import Engine.Core.Error.Exception
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logInfoM, logDebugM, logAndThrowM)
+import Engine.Core.Error.Exception (GraphicsError(..), ExceptionType(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Vulkan.Image (VulkanImage)
 import Engine.Graphics.Vulkan.Texture (createTextureImageView, createTextureSampler)
@@ -42,8 +44,9 @@ createTextureSystem pdev dev cmdPool queue config = do
       pure bindless
 
     _ → do
-      logInfo "BINDLESS TEXTURES NOT SUPPORTED - LEGACY SYSTEM BROKEN!!!"
-      throwGraphicsError TextureLoadFailed $ T.pack "Legacy texture system is not implemented."
+      logInfoM CatTexture "BINDLESS TEXTURES NOT SUPPORTED - LEGACY SYSTEM BROKEN!!!"
+      logAndThrowM CatTexture (ExGraphics TextureLoadFailed) 
+        "Legacy texture system is not implemented."
 
 -- | Load a texture into the system
 -- Returns the slot index for shader use
@@ -69,9 +72,9 @@ loadTexture dev pdev cmdPool queue texHandle path system = do
     case mbHandle of
       Just bHandle → do
         let slotIndex = tsIndex (bthSlot bHandle)
-        logDebug $ "Loaded texture " ⧺ path 
-                  ⧺ " at slot " ⧺ (show slotIndex)
+        logDebugM CatTexture $ "Loaded texture " <> T.pack path 
+                  <> " at slot " <> T.pack (show slotIndex)
         pure (slotIndex, newBindless)
       Nothing → do
-        logInfo $ "Failed to allocate slot for texture: " ⧺ path
+        logInfoM CatTexture $ "Failed to allocate slot for texture: " <> T.pack path
         pure (0, newBindless)  -- Return undefined texture slot

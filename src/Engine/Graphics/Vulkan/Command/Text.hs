@@ -8,16 +8,18 @@ module Engine.Graphics.Vulkan.Command.Text
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
+import qualified Data.Text as T
 import Data.IORef (readIORef)
 import Foreign.Storable (sizeOf, pokeElemOff)
 import Foreign.Ptr (castPtr)
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logWarnM)
 import Engine.Core.Monad
 import Engine.Core.State (EngineEnv(..), GraphicsState(..))
-import Engine.Core.Error.Exception (logDebug)
 import Engine.Graphics.Font.Data (FontCache(..), FontAtlas(..), GlyphInstance, fcFonts)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Vulkan.Types
-import Engine.Graphics.Vulkan.Types.Descriptor
+import Engine.Graphics.Vulkan.Types.Descriptor (DescriptorManager(..))
 import Engine.Scene.Types (TextBatch(..))
 import Vulkan.Core10
 import Vulkan.Zero
@@ -43,12 +45,13 @@ renderTextBatchInline cmdBuf device pDevice quadBuffer layout batch state = do
             cache ← liftIO $ readIORef cacheRef 
             case Map.lookup (tbFontHandle batch) (fcFonts cache) of
                 Nothing → do
-                    logDebug $ "Font handle not found:  " <> show (tbFontHandle batch)
+                    logWarnM CatFont $ "Font handle not found:  "
+                                     <> T.pack (show (tbFontHandle batch))
                     pure Nothing
                 Just atlas → do
                     case faDescriptorSet atlas of
                         Nothing → do
-                            logDebug "Font atlas has no descriptor set"
+                            logWarnM CatFont "Font atlas has no descriptor set"
                             pure Nothing
                         Just descSet → do
                             case descriptorState state of
@@ -66,7 +69,8 @@ renderTextBatchInline cmdBuf device pDevice quadBuffer layout batch state = do
                                     let !result = Just instanceBuf
                                     pure result
                                 Nothing → do
-                                    logDebug "No descriptor manager"
+                                    logWarnM CatFont
+                                      "font render has no descriptor manager"
                                     pure Nothing
 
 -- | Create instance buffer for text glyphs
@@ -77,7 +81,8 @@ createTextInstanceBuffer device pDevice instances = do
         !instanceCount = V.length instances
         !bufferSize = fromIntegral $ instanceSize * instanceCount
     when (instanceSize /= 48) $
-        logDebug $ "Warning: Unusual instance size, expected 48, got: " <> show instanceSize
+        logWarnM CatFont $ "Warning: Unusual instance size, expected 48, got: "
+                         <> (T.pack (show instanceSize))
     
     -- Create buffer
     (!memory, !buffer) ← createVulkanBufferManual device pDevice bufferSize

@@ -17,6 +17,8 @@ import qualified Data.Vector.Storable as Vec
 import Engine.Asset.Types
 import Engine.Core.Monad
 import Engine.Core.Resource
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Error.Exception
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Image (createVulkanImage, createVulkanImageView
@@ -40,8 +42,8 @@ createTextureImageView ∷ PhysicalDevice → Device → CommandPool
 createTextureImageView pdev dev cmdPool cmdQueue path = do
   JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
     ← liftIO (JP.readImage path) ⌦ \case
-      Left err → throwGraphicsError TextureLoadFailed
-        $ T.pack $ "cannot create texture image view: " ++ err
+      Left err → logAndThrowM CatTexture (ExGraphics TextureLoadFailed)
+                   $ "cannot load texture image: " <> T.pack err
       Right dynImg → pure $ JP.convertRGBA8 dynImg
   let (imageDataForeignPtr, imageDataLen)
         = Vec.unsafeToForeignPtr0 imageData
@@ -90,8 +92,8 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
   -- Load and convert image data
   JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
     ← liftIO (JP.readImage path) ⌦ \case
-      Left err → throwGraphicsError TextureLoadFailed
-        $ T.pack $ "cannot create texture image view: " ++ err
+      Left err → logAndThrowM CatTexture (ExGraphics TextureLoadFailed)
+                   $ "cannot load texture image: " <> T.pack err
       Right dynImg → pure $ JP.convertRGBA8 dynImg
 
   let (imageDataForeignPtr, imageDataLen) = Vec.unsafeToForeignPtr0 imageData

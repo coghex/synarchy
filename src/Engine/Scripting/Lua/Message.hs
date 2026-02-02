@@ -11,9 +11,10 @@ import System.FilePath (takeBaseName)
 import Engine.Asset.Handle
 import Engine.Asset.Manager
 import Engine.Asset.Types
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logDebugM)
 import Engine.Core.Monad
 import Engine.Core.State
-import Engine.Core.Error.Exception
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Font.Load (loadFont)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
@@ -96,8 +97,8 @@ handleSpawnText oid x y fontHandle text color layer = do
             env ← ask
             liftIO $ atomicModifyIORef' (textBuffersRef env) $ \m →
               (Map.insert oid text m, ())
-          Nothing → logDebug $ "Failed to add text object " ⧺ show oid
-      Nothing → logDebug "Cannot spawn text: no active scene"
+          Nothing → logDebugM CatLua $ "Failed to add text object " <> T.pack (show oid)
+      Nothing → logDebugM CatLua "Cannot spawn text: no active scene"
 
 -- | Handle set text request
 handleSetText ∷ ObjectId → Text → EngineM ε σ ()
@@ -127,8 +128,8 @@ handleSpawnSprite objId x y width height texHandle layer = do
         case addObjectToScene sceneId node sceneMgr of
           Just (addedObjId, newSceneMgr) → do
             modify $ \s → s { sceneManager = newSceneMgr }
-          Nothing → logDebug $ "Failed to add sprite " ⧺ show objId
-      Nothing → logDebug "Cannot spawn sprite: no active scene"
+          Nothing → logDebugM CatLua $ "Failed to add sprite " <> T.pack (show objId)
+      Nothing → logDebugM CatLua "Cannot spawn sprite: no active scene"
 
 handleSetPosSprite ∷ ObjectId → Float → Float → EngineM ε σ ()
 handleSetPosSprite objId x y =

@@ -5,10 +5,13 @@ module Engine.Graphics.Vulkan.Recreate
 
 import UPrelude
 import qualified Data.Vector as V
+import qualified Data.Text as T
 import Data.IORef (writeIORef)
 import Engine.Core.Monad
 import Engine.Core.State
-import Engine.Core.Error.Exception
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logDebugM, logInfoM, logAndThrowM)
+import Engine.Core.Error.Exception (GraphicsError(..), ExceptionType(..))
 import Engine.Graphics.Camera (UICamera(..))
 import Engine.Graphics.Types
 import Engine.Graphics.Window.Types (Window(..))
@@ -45,10 +48,10 @@ recreateSwapchain window = do
     
     -- Handle minimized window (zero size)
     if width == 0 || height == 0
-        then logDebug "Window minimized, skipping swapchain recreation"
+        then logDebugM CatSwapchain "Window minimized, skipping swapchain recreation"
         else do
             -- Run all existing cleanup actions
-            logDebug "Running cleanup before recreation..."
+            logDebugM CatSwapchain "Running cleanup before recreation..."
             liftIO $ runAllCleanups (vulkanCleanup state)
             
             -- Reset cleanup to empty (we'll rebuild it)
@@ -69,7 +72,8 @@ recreateSwapchain window = do
             liftIO $ writeIORef (uiCameraRef env) $ 
                 UICamera (fromIntegral width) (fromIntegral height)
             
-            logInfo $ "Swapchain recreated: " ++ show width ++ "x" ++ show height
+            logInfoM CatSwapchain $ "Swapchain recreated: " <> (T.pack (show width)) 
+                                    <> "x" <> (T.pack (show height))
 
 -- | Recreate all swapchain-dependent resources
 recreateAllResources :: PhysicalDevice -> Device -> DevQueues -> SurfaceKHR 
@@ -140,40 +144,47 @@ recreateAllResources pDevice device queues surface window = do
         fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout)
     }}
     
-    logDebug "All resources recreated"
+    logDebugM CatGraphics "All resources recreated"
 
 -- | Helper extractors
-getDeviceOrFail :: GraphicsState -> EngineM ε σ Device
+getDeviceOrFail ∷ GraphicsState → EngineM ε σ Device
 getDeviceOrFail state = case vulkanDevice state of
-    Just d  -> pure d
-    Nothing -> throwGraphicsError VulkanDeviceLost "No device"
+    Just d  → pure d
+    Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
+                 "No device"
 
-getPhysicalDeviceOrFail :: GraphicsState -> EngineM ε σ PhysicalDevice
+getPhysicalDeviceOrFail ∷ GraphicsState → EngineM ε σ PhysicalDevice
 getPhysicalDeviceOrFail state = case vulkanPDevice state of
-    Just pd -> pure pd
-    Nothing -> throwGraphicsError VulkanDeviceLost "No physical device"
+    Just pd → pure pd
+    Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
+                 "No physical device"
 
-getSurfaceOrFail :: GraphicsState -> EngineM ε σ SurfaceKHR
+getSurfaceOrFail ∷ GraphicsState → EngineM ε σ SurfaceKHR
 getSurfaceOrFail state = case vulkanSurface state of
-    Just s  -> pure s
-    Nothing -> throwGraphicsError VulkanDeviceLost "No surface"
+    Just s  → pure s
+    Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
+                 "No surface"
 
-getQueuesOrFail :: GraphicsState -> EngineM ε σ DevQueues
+getQueuesOrFail ∷ GraphicsState → EngineM ε σ DevQueues
 getQueuesOrFail state = case deviceQueues state of
-    Just q  -> pure q
-    Nothing -> throwGraphicsError VulkanDeviceLost "No queues"
+    Just q  → pure q
+    Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
+                 "No device queues"
 
-getDescriptorManagerOrFail :: GraphicsState -> EngineM ε σ DescriptorManager
+getDescriptorManagerOrFail ∷ GraphicsState → EngineM ε σ DescriptorManager
 getDescriptorManagerOrFail state = case descriptorState state of
-    Just dm -> pure dm
-    Nothing -> throwGraphicsError DescriptorError "No descriptor manager"
+    Just dm → pure dm
+    Nothing → logAndThrowM CatDescriptor (ExGraphics DescriptorError)
+                 "No descriptor manager"
 
-getTextureSystemOrFail :: GraphicsState -> EngineM ε σ BindlessTextureSystem
+getTextureSystemOrFail ∷ GraphicsState → EngineM ε σ BindlessTextureSystem
 getTextureSystemOrFail state = case textureSystem state of
-    Just ts -> pure ts
-    Nothing -> throwGraphicsError TextureLoadFailed "No texture system"
+    Just ts → pure ts
+    Nothing → logAndThrowM CatTexture (ExGraphics TextureLoadFailed)
+                 "No texture system"
 
-getFontDescriptorLayoutOrFail :: GraphicsState -> EngineM ε σ DescriptorSetLayout
+getFontDescriptorLayoutOrFail ∷ GraphicsState → EngineM ε σ DescriptorSetLayout
 getFontDescriptorLayoutOrFail state = case fontDescriptorLayout state of
-    Just fdl -> pure fdl
-    Nothing -> throwGraphicsError FontError "No font descriptor layout"
+    Just fdl → pure fdl
+    Nothing  → logAndThrowM CatDescriptor (ExGraphics FontError)
+                 "No font descriptor layout"
