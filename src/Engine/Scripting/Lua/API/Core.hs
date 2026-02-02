@@ -13,7 +13,7 @@ import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import Engine.Scripting.Lua.Util (isValidRef)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (logInfo, LogCategory(..))
+import Engine.Core.Log (logInfo, logDebug, LogCategory(..))
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
@@ -57,13 +57,16 @@ setTickIntervalFn env backendState = do
 
 loadScriptFn ∷ EngineEnv → LuaBackendState → Lua.State 
              → Lua.LuaE Lua.Exception Lua.NumResults
-loadScriptFn _env backendState lst = do
+loadScriptFn env backendState lst = do
     path ← Lua.tostring 1
     tickRate ← Lua.tonumber 2
     case (path, tickRate) of
         (Just pathBS, Just rate) → do
+            logger ← Lua.liftIO $ readIORef (loggerRef env)
             scriptId ← Lua.liftIO $ do
                 let pathStr = TE.decodeUtf8 pathBS
+                
+                logInfo logger CatLua $ "Loading Lua script: " <> pathStr
                 
                 sid ← atomicModifyIORef' (lbsNextScriptId backendState)
                     (\n → (n + 1, n))
@@ -71,6 +74,8 @@ loadScriptFn _env backendState lst = do
                 status ← Lua.runWith lst $ Lua.dofileTrace (Just $ T.unpack pathStr)
                 case status of
                     Lua.OK → do
+                        logInfo logger CatLua $ "Lua script loaded: " <> pathStr 
+                                      <> " with ID " <> T.pack (show sid)
                         modRef ← Lua.runWith lst $ do
                             isTable ← Lua.istable (-1)
                             if isTable
@@ -96,8 +101,13 @@ loadScriptFn _env backendState lst = do
                         when (isValidRef modRef) $
                             void $ callModuleFunction lst modRef "init" []
                         
+                        logDebug logger CatLua $ "Lua script initialized with ID " 
+                                       <> T.pack (show sid)
+                        
                         return (Just sid)
-                    _ → return Nothing
+                    _ → do
+                        logInfo logger CatLua $ "Failed to load Lua script: " <> pathStr
+                        return Nothing
             
             case scriptId of
                 Just sid → Lua.pushinteger (Lua.Integer $ fromIntegral sid)
@@ -105,11 +115,14 @@ loadScriptFn _env backendState lst = do
         _ → Lua.pushnil
     return 1
 
-killScriptFn ∷ LuaBackendState → Lua.State → Lua.LuaE Lua.Exception Lua.NumResults
-killScriptFn backendState lst = do
+killScriptFn ∷ EngineEnv → LuaBackendState → Lua.State → Lua.LuaE Lua.Exception Lua.NumResults
+killScriptFn env backendState lst = do
     sidNum ← Lua.tointeger 1
     case sidNum of
         Just sid → Lua.liftIO $ do
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatLua $ "Destroying Lua script with ID " 
+                           <> T.pack (show sid)
             scriptsMap ← readTVarIO (lbsScripts backendState)
             case Map.lookup (fromIntegral sid) scriptsMap of
                 Just script → do
@@ -118,6 +131,8 @@ killScriptFn backendState lst = do
                         Lua.runWith lst $ Lua.unref Lua.registryindex (scriptModuleRef script)
                     atomically $ modifyTVar (lbsScripts backendState) $
                         Map.delete (fromIntegral sid)
+                    logDebug logger CatLua $ "Lua script destroyed: ID " 
+                                   <> T.pack (show sid)
                 Nothing → return ()
         _ → return ()
     return 0

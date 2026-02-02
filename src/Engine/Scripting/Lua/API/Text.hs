@@ -15,7 +15,7 @@ import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Util (calculateTextWidth)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (LogCategory(..), logWarn)
+import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
@@ -58,8 +58,11 @@ spawnTextFn env backendState = do
     (Just xVal, Just yVal, Just fh, Just c, Just textBS) → do
       let layerId = LayerId $ fromIntegral $ fromMaybe 0 layer
       objId ← Lua.liftIO $ do
+        logger ← readIORef $ loggerRef env
         objId ← atomicModifyIORef' (lbsNextObjectId backendState) 
             (\n → (n + 1, ObjectId n))
+        logDebug logger CatLua $ "Lua spawning text with ID " 
+                       <> T.pack (show objId)
         let fontHandle = FontHandle $ fromIntegral fh
             textStr = TE.decodeUtf8 textBS
             cStr = T.unpack $ TE.decodeUtf8 c

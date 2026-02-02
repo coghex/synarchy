@@ -15,7 +15,7 @@ import Engine.Asset.Manager (updateTextureState, generateTextureHandle)
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (LogCategory(..), logWarn)
+import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
@@ -57,8 +57,12 @@ spawnSpriteFn env backendState = do
     (Just xVal, Just yVal, Just wVal, Just hVal, Just texNum) → do
       let layerId = LayerId $ fromIntegral $ fromMaybe 0 layer
       objId ← Lua.liftIO $ do
+        logger ← readIORef $ loggerRef env
         objId ← atomicModifyIORef' (lbsNextObjectId backendState) 
           (\n → (n + 1, ObjectId n))
+        
+        logDebug logger CatLua $ "Lua spawning sprite with ID " 
+                       <> T.pack (show objId)
         
         let (lteq, _) = lbsMsgQueues backendState
             texHandle = TextureHandle (fromIntegral texNum)
@@ -164,6 +168,10 @@ destroyFn env backendState = do
   case objIdNum of
     Just idVal → do
       Lua.liftIO $ do
+        logger ← readIORef $ loggerRef env
+        let objId = ObjectId (fromIntegral idVal)
+        logDebug logger CatLua $ "Lua destroying object with ID " 
+                       <> T.pack (show objId)
         let (lteq, _) = lbsMsgQueues backendState
             msg = LuaDestroyRequest (ObjectId (fromIntegral idVal))
         Q.writeQueue lteq msg

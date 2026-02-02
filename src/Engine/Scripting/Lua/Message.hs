@@ -12,7 +12,7 @@ import Engine.Asset.Handle
 import Engine.Asset.Manager
 import Engine.Asset.Types
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logDebugSM)
+import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM, logWarnSM)
 import Engine.Core.Monad
 import Engine.Core.State
 import qualified Engine.Core.Queue as Q
@@ -102,6 +102,7 @@ handleLuaMessage msg = do
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
 handleLoadTexture handle path = do
+    logInfoM CatLua $ "Loading texture from Lua: " <> T.pack path
     assetId ← loadTextureAtlasWithHandle handle (T.pack $ takeBaseName path) path "default"
     
     apRef ← asks assetPoolRef
@@ -111,14 +112,17 @@ handleLoadTexture handle path = do
     
     pool ← liftIO $ readIORef apRef
     modify $ \s → s { assetPool = pool }
+    logInfoM CatLua $ "Texture loaded successfully: " <> T.pack path
 
 -- | Handle font load request
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM ε σ ()
 handleLoadFont handle path size = do
+    logInfoM CatLua $ "Loading font from Lua: " <> T.pack path
     actualHandle ← loadFont handle path size
     env ← ask
     let etlq = luaQueue env
     liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
+    logInfoM CatLua $ "Font loaded successfully: " <> T.pack path
 
 -- | Handle spawn text request
 handleSpawnText ∷ ObjectId → Float → Float → FontHandle → Text

@@ -10,6 +10,7 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Control.Monad (forM_)
+import System.CPUTime (getCPUTime)
 
 -- | Load a Lua script and return a reference to its module table
 loadScriptAsModule ∷ Lua.State → FilePath → IO (Maybe Lua.Reference)

@@ -38,7 +38,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- Core functions
   registerLuaFunction "logInfo"         (logInfoFn env)
   registerLuaFunction "loadScript"      (loadScriptFn env backendState lst)
-  registerLuaFunction "killScript"      (killScriptFn backendState lst)
+  registerLuaFunction "killScript"      (killScriptFn env backendState lst)
   registerLuaFunction "pauseScript"     (pauseScriptFn backendState)
   registerLuaFunction "resumeScript"    (resumeScriptFn backendState)
   registerLuaFunction "setTickInterval" (setTickIntervalFn env backendState)
