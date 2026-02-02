@@ -10,7 +10,7 @@ import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types
 import Engine.Core.Log (LoggerState, logWarn, logInfo, LogCategory(..))
 
--- | maps actino names to key names
+-- | maps action names to key names
 type KeyBindings = Map.Map T.Text T.Text
 
 -- | fallback default keybindings
