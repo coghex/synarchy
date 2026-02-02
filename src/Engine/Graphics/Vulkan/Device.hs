@@ -11,10 +11,12 @@ module Engine.Graphics.Vulkan.Device
   ) where
 
 import UPrelude
+import qualified Data.ByteString as BS
 import qualified Data.Vector as V
+import qualified Data.Text as T
 import Engine.Core.Error.Exception (ExceptionType(..), InitError(..))
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM, logDebugSM)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Types
@@ -39,8 +41,13 @@ createVulkanDevice ∷ Instance
                    → SurfaceKHR     
                    → EngineM ε σ (Device, DevQueues)
 createVulkanDevice inst physicalDevice surface = do
+  logDebugM CatVulkan "Finding queue families"
   -- Find queue families
   indices ← findQueueFamilies physicalDevice surface
+  
+  logDebugSM CatVulkan "Queue families found"
+    [("graphics_family", T.pack $ show $ graphicsFamily indices)
+    ,("present_family", T.pack $ show $ presentFamily indices)]
   
   -- Create unique queue create infos
   let queuePriority = 1.0
@@ -52,10 +59,17 @@ createVulkanDevice inst physicalDevice surface = do
         , queuePriorities = V.singleton queuePriority
         })) uniqueFamilies
   
+  logDebugSM CatVulkan "Creating device queues"
+    [("queue_count", T.pack $ show $ length uniqueFamilies)]
+  
   -- Get device extensions - note how madrigal specifies both extensions upfront
   let deviceExtensions = [ KHR_SWAPCHAIN_EXTENSION_NAME
                         , KHR_PORTABILITY_SUBSET_EXTENSION_NAME  -- Required for macOS
                         ]
+  
+  logDebugSM CatVulkan "Enabled device extensions"
+    [("extensions", T.pack $ show $ map (\bs → BS.take 30 bs) deviceExtensions)]
+  
   -- enable vulkan 1.2 descriptor indexing functions
   -- ths triggers moltenVk to use metal argument buffers
   let vulkan12Features = zero
@@ -66,6 +80,8 @@ createVulkanDevice inst physicalDevice surface = do
         , descriptorBindingUpdateUnusedWhilePending = True
         , descriptorBindingVariableDescriptorCount = True
         } :: PhysicalDeviceVulkan12Features
+  
+  logDebugM CatVulkan "Enabled Vulkan 1.2 descriptor indexing features"
   
   -- Create the logical device
   let deviceCreateInfo = (zero ∷ DeviceCreateInfo '[])
@@ -79,9 +95,13 @@ createVulkanDevice inst physicalDevice surface = do
   device ← allocResource (\d0 → destroyDevice d0 Nothing)
              $ createDevice physicalDevice deviceCreateInfo Nothing
   
+  logInfoM CatVulkan "Logical device created"
+  
   -- Get queue handles
   graphicsQ ← getDeviceQueue device (graphicsFamily indices) 0
   presentQ ← getDeviceQueue device (presentFamily indices) 0
+  
+  logDebugM CatVulkan "Device queues retrieved"
   
   let queues = DevQueues
         { graphicsQueue = graphicsQ

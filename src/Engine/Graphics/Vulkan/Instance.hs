@@ -12,7 +12,7 @@ import qualified Data.ByteString.UTF8 as BSU
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM, logDebugSM)
 import Engine.Core.Error.Exception (ExceptionType(..), SystemError(..)
                                    , InitError(..), catchEngine)
 import Engine.Core.Monad
@@ -90,8 +90,14 @@ vulkanInstanceCreateInfo config = do
 -- | Create and initialize Vulkan instance with optional debug messenger
 createVulkanInstance ∷ GraphicsConfig → EngineM ε σ (Instance, Maybe DebugUtilsMessengerEXT)
 createVulkanInstance config = do
+  logDebugM CatVulkan "Initializing Vulkan instance"
+  
   -- Get GLFW required extensions
   glfwExts ← GLFW.getRequiredInstanceExtensions
+  
+  logDebugSM CatVulkan "Instance extensions"
+    [("glfw_extensions", T.pack $ show $ map (\bs → BSU.toString bs) glfwExts)
+    ,("debug_mode", T.pack $ show $ gcDebugMode config)]
   
   -- Add macOS required extensions (following madrigal's pattern)
   let baseExtensions = if gcDebugMode config 
@@ -105,6 +111,7 @@ createVulkanInstance config = do
 
   -- Create the instance with MoltenVK configuration
   -- We use 'with' to allocate the setting value on the stack
+  logDebugM CatVulkan "Creating Vulkan instance with MoltenVK configuration"
   inst ← liftIO $ with (1 ∷ Word32) $ \valuePtr → do
     let moltenVkSetting = LayerSettingEXT
           { layerName = "MoltenVK"
@@ -133,12 +140,16 @@ createVulkanInstance config = do
     
     createInstance instCreateInfo Nothing
   
+  logInfoM CatVulkan "Vulkan instance created successfully"
+  
   -- Create debug messenger if debug mode is enabled
   dbgMessenger ← if gcDebugMode config 
     then do
+      logDebugM CatVulkan "Creating debug messenger"
       messenger ← createDebugUtilsMessengerEXT inst debugUtilsMessengerCreateInfo Nothing
         `catchEngine` \err → logAndThrowM CatInit (ExInit VulkanInitFailed) $
           "Failed to create debug messenger: " <> T.pack (show err)
+      logInfoM CatVulkan "Debug messenger created successfully"
       return $ Just messenger
     else return Nothing
     

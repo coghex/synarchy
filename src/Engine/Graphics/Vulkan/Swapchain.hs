@@ -10,9 +10,12 @@ module Engine.Graphics.Vulkan.Swapchain
 
 import UPrelude
 import qualified Data.Vector as V
+import qualified Data.Text as T
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Resource (allocResource)
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM)
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Sync
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
@@ -25,9 +28,20 @@ import Vulkan.Extensions.VK_KHR_swapchain as Swap
 -- | Query swapchain support details from physical device
 querySwapchainSupport ∷ PhysicalDevice → SurfaceKHR → EngineM ε σ SwapchainSupportDetails
 querySwapchainSupport pdev surface = do
+  logDebugM CatGraphics "Querying swapchain support"
   caps ← liftIO $ getPhysicalDeviceSurfaceCapabilitiesKHR pdev surface
   (_, fmts) ← liftIO $ getPhysicalDeviceSurfaceFormatsKHR pdev surface
   (_, modes) ← liftIO $ getPhysicalDeviceSurfacePresentModesKHR pdev surface
+  
+  logDebugSM CatGraphics "Surface capabilities"
+    [("min_image_count", T.pack $ show $ Surf.minImageCount caps)
+    ,("max_image_count", T.pack $ show $ Surf.maxImageCount caps)
+    ,("current_extent", T.pack $ show $ currentExtent caps)]
+  
+  logDebugSM CatGraphics "Available surface formats"
+    [("format_count", T.pack $ show $ V.length fmts)
+    ,("present_mode_count", T.pack $ show $ V.length modes)]
+  
   pure $ SwapchainSupportDetails caps fmts modes
 
 -- Replace createVulkanSwapchain:
@@ -36,6 +50,7 @@ querySwapchainSupport pdev surface = do
 createVulkanSwapchain ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR
   → EngineM ε σ SwapchainInfo
 createVulkanSwapchain pdev dev queues surface = do
+  logDebugM CatSwapchain "Creating swapchain"
   SwapchainSupportDetails{..} ← querySwapchainSupport pdev surface
   let ssd = SwapchainSupportDetails{..}
       SurfaceFormatKHR{format=form,colorSpace=cs} = chooseSwapSurfaceFormat ssd
@@ -65,6 +80,12 @@ createVulkanSwapchain pdev dev queues surface = do
         , oldSwapchain = zero
         }
   
+  logInfoSM CatSwapchain "Swapchain created"
+    [("format", T.pack $ show form)
+    ,("present_mode", T.pack $ show spMode)
+    ,("extent", T.pack $ show (width sExtent) <> "x" <> T.pack (show $ height sExtent))
+    ,("image_count", T.pack $ show imageCount)]
+  
   swapchain ← createSwapchainKHR dev swCreateInfo Nothing
   
   -- Build cleanup action
@@ -89,7 +110,11 @@ createVulkanSwapchain pdev dev queues surface = do
 -- | Creates image views for swapchain images
 createSwapchainImageViews ∷ Device → SwapchainInfo → EngineM ε σ (V.Vector ImageView)
 createSwapchainImageViews dev SwapchainInfo{..} = do
+  logDebugSM CatSwapchain "Creating swapchain image views"
+    [("count", T.pack $ show $ V.length siSwapImgs)]
   imageViews ← V.mapM createImageViewf siSwapImgs
+  
+  logInfoM CatSwapchain "Swapchain image views created"
   
   -- Build cleanup action (destroy all image views)
   let cleanupAction = V.forM_ imageViews $ \iv →
@@ -125,7 +150,8 @@ createSwapchainImageViews dev SwapchainInfo{..} = do
 -- | Choose the best swap surface format
 chooseSwapSurfaceFormat ∷ SwapchainSupportDetails → SurfaceFormatKHR
 chooseSwapSurfaceFormat (SwapchainSupportDetails _ formats _) = best
-  where best = if preferred `elem` formats then preferred else V.head formats
+  where best = if preferred `elem` formats then preferred else 
+                 if V.null formats then preferred else V.head formats
         preferred = zero { format = FORMAT_B8G8R8A8_UNORM
                        , colorSpace = COLOR_SPACE_SRGB_NONLINEAR_KHR }
 

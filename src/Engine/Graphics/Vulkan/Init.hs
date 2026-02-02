@@ -8,6 +8,7 @@ module Engine.Graphics.Vulkan.Init
 import UPrelude
 import qualified Data.Map as Map
 import qualified Data.Vector as V
+import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFWRaw
 import Data.IORef (readIORef)
 import Foreign.Storable (sizeOf)
@@ -17,6 +18,8 @@ import Engine.Core.Defaults
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Error.Exception
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logDebugM, logInfoM, logDebugSM, logInfoSM)
 import Engine.Graphics.Base
 import Engine.Graphics.Camera
 import Engine.Graphics.Types
@@ -56,14 +59,49 @@ initializeVulkan window = do
   let Window glfwWin = window
   
   -- Create Vulkan instance
+  logDebugM CatVulkan "Creating Vulkan instance"
   (vkInstance, _debugMessenger) ← createVulkanInstance defaultGraphicsConfig
+  logInfoM CatVulkan "Vulkan instance created successfully"
   
   -- Create surface
+  logDebugM CatVulkan "Creating window surface"
   surface ← GLFW.createWindowSurface window vkInstance
+  logInfoM CatVulkan "Window surface created successfully"
   
   -- Select physical device and create logical device
+  logDebugM CatVulkan "Selecting physical device"
   physicalDevice ← pickPhysicalDevice vkInstance surface
+  
+  -- Log device info
+  props ← liftIO $ getPhysicalDeviceProperties physicalDevice
+  let deviceName = T.pack $ takeWhile (/= '\0') $ map (toEnum . fromEnum) $ V.toList (deviceName props)
+      deviceTypeStr = case deviceType props of
+        PHYSICAL_DEVICE_TYPE_DISCRETE_GPU   → "Discrete GPU"
+        PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU → "Integrated GPU"
+        PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU    → "Virtual GPU"
+        PHYSICAL_DEVICE_TYPE_CPU            → "CPU"
+        _                                   → "Other"
+  logInfoSM CatVulkan "Physical device selected"
+    [("device", deviceName)
+    ,("type", deviceTypeStr)]
+  
+  let driverVer = driverVersion props
+      apiVer = apiVersion props
+      major = apiVer `shiftR` 22
+      minor = (apiVer `shiftR` 12) .&. 0x3FF
+      patch = apiVer .&. 0xFFF
+  logDebugSM CatVulkan "Physical device properties"
+    [("driver_version", T.pack $ show driverVer)
+    ,("api_version", T.pack $ show major <> "." <> T.pack (show minor) <> "." <> T.pack (show patch))
+    ,("max_image_dimension_2d", T.pack $ show $ maxImageDimension2D $ limits props)]
+  
+  logDebugM CatVulkan "Creating logical device"
   (device, queues) ← createVulkanDevice vkInstance physicalDevice surface
+  logInfoM CatVulkan "Logical device created successfully"
+  
+  logDebugSM CatVulkan "Queue family indices selected"
+    [("graphics_family", T.pack $ show $ graphicsFamIdx queues)
+    ,("present_family", T.pack $ show $ presentFamIdx queues)]
   
   modify $ \s → s { graphicsState = (graphicsState s)
                     { vulkanInstance = Just vkInstance
@@ -73,10 +111,8 @@ initializeVulkan window = do
                     , deviceQueues   = Just queues
                     } }
   
-  -- Log device info
-  props ← liftIO $ getPhysicalDeviceProperties physicalDevice
-  
   -- Create swapchain
+  logDebugM CatGraphics "Creating swapchain"
   swapInfo ← createVulkanSwapchain physicalDevice device queues surface
   modify $ \s → s { graphicsState = (graphicsState s) {
                       swapchainInfo = Just swapInfo } }
@@ -104,10 +140,15 @@ initializeVulkan window = do
         , dmcUniformCount = fromIntegral numFrames
         , dmcSamplerCount = fromIntegral numFrames
         }
+  logDebugSM CatDescriptor "Creating descriptor manager"
+    [("max_sets", T.pack $ show $ dmcMaxSets descConfig)
+    ,("uniform_count", T.pack $ show $ dmcUniformCount descConfig)]
   descManager ← createVulkanDescriptorManager device descConfig
+  logInfoM CatDescriptor "Descriptor manager created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       descriptorState = Just descManager } }
   -- create a font descriptor pool (supports up to 64 fonts)
+  logDebugM CatDescriptor "Creating font descriptor pool"
   fontDescPool ← createFontDescriptorPool device 64
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontDescriptorPool = Just fontDescPool } }
@@ -152,25 +193,33 @@ initializeVulkan window = do
                       vulkanRenderPass = Just renderPass } }
   
   let bindlessTexLayout = btsDescriptorLayout texSystem
+  logDebugM CatGraphics "Creating bindless pipeline"
   (bindlessPipe, bindlessPipeLayout) ← 
     createBindlessPipeline device renderPass (siSwapExtent swapInfo) 
                            (dmUniformLayout descManager) bindlessTexLayout
+  logInfoM CatGraphics "Bindless pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                           bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout) } }
+  logDebugM CatGraphics "Creating bindless UI pipeline"
   (bindlessUIPipe, bindlessUIPipeLayout) ← 
     createBindlessUIPipeline device renderPass (siSwapExtent swapInfo) 
                              (dmUniformLayout descManager) bindlessTexLayout
+  logInfoM CatGraphics "Bindless UI pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                           bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout) } }
   
   -- Create font pipeline
+  logDebugM CatGraphics "Creating font pipeline"
   (fontPipe, fontPipeLayout, fontDescLayout) ←
     createFontPipeline device renderPass (siSwapExtent swapInfo) (dmUniformLayout descManager)
+  logInfoM CatGraphics "Font pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontPipeline = Just (fontPipe, fontPipeLayout)
                     , fontDescriptorLayout = Just fontDescLayout } }
+  logDebugM CatGraphics "Creating font UI pipeline"
   (fontUIPipe, fontUIPipeLayout) ←
     createFontUIPipeline device renderPass (siSwapExtent swapInfo) (dmUniformLayout descManager) fontDescLayout
+  logInfoM CatGraphics "Font UI pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout) } }
   
@@ -187,10 +236,14 @@ initializeVulkan window = do
                         Nothing → Nothing } }
   
   -- Create framebuffers
+  logDebugSM CatGraphics "Creating framebuffers"
+    [("count", T.pack $ show $ V.length imageViews)]
   framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews
+  logInfoM CatGraphics "Framebuffers created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       framebuffers = Just framebuffers } }
   
+  logInfoM CatInit "Vulkan initialization complete"
   pure cmdPool
 
 -- | Create uniform buffers for all frames
