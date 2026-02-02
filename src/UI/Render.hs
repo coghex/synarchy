@@ -13,7 +13,7 @@ import Data.IORef (readIORef)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
 import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logInfoM, logWarnM)
+import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM)
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Draw (layoutTextUI)
@@ -151,13 +151,16 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
             let fontHandle = utsFont style
             case Map.lookup fontHandle (fcFonts fontCache) of
                 Nothing -> do
-                    logWarnM CatUI $ "UI text font not found: " <> (T.pack (show fontHandle))
+                    logWarnM CatUI $ "Font cache miss: UI text font not found: " <> (T.pack (show fontHandle))
                     pure (V.empty, V.empty)
                 Just atlas -> do
+                    logDebugM CatFont $ "Font cache hit: Found UI font " <> T.pack (show fontHandle)
                     let text = utsText style
                         (cr, cg, cb, ca) = utsColor style
                         color = (cr, cg, cb, ca)
                         instances = layoutTextUI atlas absX absY text color
+                    
+                    logDebugM CatFont $ "UI text layout generated " <> T.pack (show $ V.length instances) <> " vertices"
                     
                     if V.null instances
                         then pure (V.empty, V.empty)

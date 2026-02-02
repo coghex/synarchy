@@ -35,10 +35,11 @@ collectTextBatches graph screenW screenH = do
   batches ← forM grouped $ \((fontHandle, layerId), nodes) → do
     case Map.lookup fontHandle (fcFonts cache) of
       Nothing → do
-        logDebugM CatFont $ " Font " <> T.pack (show fontHandle)
+        logDebugM CatFont $ "Font cache miss: Font " <> T.pack (show fontHandle)
                                      <> " not found in cache."
         return Nothing
       Just atlas → do
+          logDebugM CatFont $ "Font cache hit: Found font " <> T.pack (show fontHandle)
           allInstances ← fmap V.concat $ forM nodes $ \node → do
               case (nodeText node, Map.lookup (nodeId node) (sgWorldTrans graph)) of
                   (Just text, Just worldTrans) → do
@@ -57,6 +58,7 @@ collectTextBatches graph screenW screenH = do
                   (_, Nothing) → do
                       logDebugM CatFont $ "      No world transform for node"
                       return V.empty
+          logDebugM CatFont $ "Text layout generated " <> T.pack (show $ V.length allInstances) <> " vertices"
           return $ Just $ TextRenderBatch
               { trbFont = fontHandle
               , trbLayer = layerId

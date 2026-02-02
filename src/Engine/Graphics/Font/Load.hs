@@ -25,7 +25,7 @@ import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
-import Engine.Core.Log.Monad (logWarnM, logAndThrowM)
+import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM, logWarnSM, logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Resource (allocResource)
@@ -52,6 +52,11 @@ createFontDescriptorPool device maxFonts = do
 -- | Load a TTF font at specified size
 loadFont ∷ FontHandle → FilePath → Int → EngineM ε σ FontHandle
 loadFont requestedHandle fontPath fontSize = do
+    logInfoSM CatFont "Font atlas generation started"
+        [("path", T.pack fontPath)
+        ,("size", T.pack $ show fontSize)
+        ,("char_range", "' ' to '~'")]
+    
     cacheRef ← asks fontCacheRef
     cache ← liftIO $ readIORef cacheRef
     gs ← gets graphicsState
@@ -70,8 +75,16 @@ loadFont requestedHandle fontPath fontSize = do
             logger ← liftIO $ readIORef loggerRef
             atlas ← liftIO $ generateFontAtlas logger fontPath fontSize
             
+            logDebugSM CatFont "Atlas texture dimensions"
+                [("width", T.pack $ show $ faAtlasWidth atlas)
+                ,("height", T.pack $ show $ faAtlasHeight atlas)
+                ,("glyph_count", T.pack $ show $ Map.size $ faGlyphData atlas)]
+            
             -- Upload to GPU
             (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas fontDescLayout
+            
+            logInfoSM CatFont "Font GPU upload completion"
+                [("atlas_size", T.pack $ show (faAtlasWidth atlas) <> "x" <> T.pack (show $ faAtlasHeight atlas))]
             
             let newAtlas = atlas { faTexture = texHandle
                                  , faDescriptorSet = Just descriptorSet
@@ -105,9 +118,15 @@ generateFontAtlas logger fontPath fontSize = do
             let chars = [' '..'~']
                 numChars = length chars
             
-            glyphDataWithMetrics ← forM chars $ \c → do
+            glyphDataWithMetrics ← forM (zip chars [0..]) $ \(c, idx) → do
                 (w,h,xoff,yoff,pixels) ← renderGlyphWithMetrics font c scale
                 (_,_,_,_,advance) ← getSTBGlyphMetrics font c scale
+                -- Log metrics for first few glyphs
+                when (idx < 3) $
+                    logDebug logger CatFont $ "Glyph metrics: char='" <> T.singleton c <> "' "
+                        <> "size=" <> T.pack (show w) <> "x" <> T.pack (show h)
+                        <> " bearing=(" <> T.pack (show xoff) <> "," <> T.pack (show yoff) <> ")"
+                        <> " advance=" <> T.pack (show advance)
                 return (w, h, xoff, yoff, pixels, advance)
 
             freeSTBFont font
@@ -151,7 +170,10 @@ renderGlyphWithMetrics ∷ STBFont → Char → Float
 renderGlyphWithMetrics font char scale = do
     result ← renderSTBGlyph font char scale
     case result of
-        Nothing → return (0, 0, 0, 0, [])
+        Nothing → do
+            -- Warn when specific glyphs fail to rasterize
+            putStrLn $ "WARNING: Failed to rasterize glyph: '" ++ [char] ++ "'"
+            return (0, 0, 0, 0, [])
         Just glyph → return glyph
 
 -- Updated to use metrics stored before font was freed
@@ -304,6 +326,8 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
           }
     descriptorSets ← liftIO $ allocateDescriptorSets device allocInfo
     let descSet = V.head descriptorSets
+    
+    logDebugM CatFont "Descriptor set allocated for font texture"
     
     -- Update descriptor set with font texture
     let imgInfo = zero

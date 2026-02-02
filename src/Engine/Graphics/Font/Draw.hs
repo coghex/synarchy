@@ -14,6 +14,8 @@ import Engine.Graphics.Font.Data
 import Engine.Asset.Types
 import Engine.Core.Monad
 import Engine.Core.State
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 import Engine.Core.Resource
 import Engine.Core.Error.Exception
 import Engine.Scene.Types
@@ -47,7 +49,8 @@ layoutText ∷ FontAtlas → Float → Float → Float → Float
 layoutText atlas startX startY screenW screenH text color =
     let chars = T.unpack text
         (_, instances) = foldl layoutChar (startX, []) chars
-    in V.fromList (reverse instances)
+        result = V.fromList (reverse instances)
+    in result
   where
     pixelToNdcX px = (px / screenW) * 2.0 - 1.0
     pixelToNdcY py = 1.0 - (py / screenH) * 2.0
@@ -455,7 +458,8 @@ layoutTextUI ∷ FontAtlas → Float → Float → Text → (Float, Float, Float
 layoutTextUI atlas startX startY text color =
     let chars = T.unpack text
         (_, instances) = foldl layoutChar (startX, []) chars
-    in V.fromList (reverse instances)
+        result = V.fromList (reverse instances)
+    in result
   where
     layoutChar (currentX, acc) char =
         case Map.lookup char (faGlyphData atlas) of
