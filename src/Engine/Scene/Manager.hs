@@ -25,50 +25,27 @@ createScene sceneId camera manager =
             , sceneActive = True
             }
         graph = createEmptySceneGraph
-        (camX, camY) = camPosition camera
-    in unsafePerformIO $ do
-        logDebugSM CatScene "Scene created"
-            [("sceneId", sceneId)
-            ,("cameraX", T.pack $ show camX)
-            ,("cameraY", T.pack $ show camY)
-            ,("zoom", T.pack $ show $ camZoom camera)]
-        pure $ manager
-            { smScenes = Map.insert sceneId scene (smScenes manager)
-            , smSceneGraphs = Map.insert sceneId graph (smSceneGraphs manager)
-            , smDirtyScenes = Set.insert sceneId (smDirtyScenes manager)
-            }
+    in manager
+        { smScenes = Map.insert sceneId scene (smScenes manager)
+        , smSceneGraphs = Map.insert sceneId graph (smSceneGraphs manager)
+        , smDirtyScenes = Set.insert sceneId (smDirtyScenes manager)
+        }
 
 -- | Add object to scene
 addObjectToScene ∷ Text → SceneNode → SceneManager → Maybe (ObjectId, SceneManager)
-addObjectToScene sceneId node manager = unsafePerformIO $ do
-    case Map.lookup sceneId (smSceneGraphs manager) of
-        Nothing → pure Nothing
-        Just graph → do
-            let (objId, newGraph) = addNode node graph
-                nodeTypeStr = case nodeType node of
-                    SpriteObject → "sprite"
-                    TextObject → "text"
-                (x, y) = position (nodeTransform node)
-                LayerId layer = nodeLayer node
-            logDebugSM CatScene "Object added to scene"
-                [("sceneId", sceneId)
-                ,("objectId", T.pack $ show objId)
-                ,("type", nodeTypeStr)
-                ,("layer", T.pack $ show layer)
-                ,("x", T.pack $ show x)
-                ,("y", T.pack $ show y)]
-            let updatedManager = manager
-                    { smSceneGraphs = Map.insert sceneId newGraph (smSceneGraphs manager)
-                    , smDirtyScenes = Set.insert sceneId (smDirtyScenes manager)
-                    }
-            pure $ Just (objId, updatedManager)
+addObjectToScene sceneId node manager = do
+    graph <- Map.lookup sceneId (smSceneGraphs manager)
+    let (objId, newGraph) = addNode node graph
+        updatedManager = manager
+            { smSceneGraphs = Map.insert sceneId newGraph (smSceneGraphs manager)
+            , smDirtyScenes = Set.insert sceneId (smDirtyScenes manager)
+            }
+    return (objId, updatedManager)
 
 -- | Set active scene
 setActiveScene ∷ Text → SceneManager → SceneManager
-setActiveScene sceneId manager = unsafePerformIO $ do
-    logInfoSM CatScene "Scene activated"
-        [("sceneId", sceneId)]
-    pure $ manager
+setActiveScene sceneId manager =
+    manager
         { smActiveScene = Just sceneId
         , smDirtyScenes = Set.insert sceneId (smDirtyScenes manager)
         }
