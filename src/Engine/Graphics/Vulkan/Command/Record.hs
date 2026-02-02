@@ -9,9 +9,10 @@ module Engine.Graphics.Vulkan.Command.Record
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
+import qualified Data.Text as T
 import Data.IORef (newIORef, IORef)
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
@@ -35,6 +36,10 @@ recordSceneCommandBuffer ∷ CommandBuffer → Word64 → SceneDynamicBuffer
                          → Map.Map LayerId (V.Vector RenderItem)
                          → EngineM ε σ ()
 recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
+    logDebugSM CatRender "Recording command buffer"
+      [("frame", T.pack $ show frameIdx)
+      ,("layer_count", T.pack $ show $ Map.size layeredBatches)]
+    
     state ← gets graphicsState
     
     -- Validate required state components
@@ -66,6 +71,8 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
     let beginInfo = (zero ∷ CommandBufferBeginInfo '[])
                       { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
     liftIO $ beginCommandBuffer cmdBuf beginInfo
+    
+    logDebugM CatRender "Beginning render pass"
     
     -- Begin render pass
     let clearColor = Color ( Float32 0.0 0.0 0.4 1.0 )
@@ -115,6 +122,7 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
                          items vertexOffsetRef device pDevice True
 
     -- End render pass and command buffer
+    logDebugM CatRender "Ending render pass"
     cmdEndRenderPass cmdBuf
     liftIO $ endCommandBuffer cmdBuf
 
@@ -143,6 +151,9 @@ renderLayerItems cmdBuf state viewport scissor dynamicBuffer items
                             else fontPipeline state
         case (maybePipeline, fontQuadBuffer state) of
             (Just (pipeline, layout), Just (quadBuffer, _)) → do
+                logDebugM CatRender $ "Binding font pipeline (UI: " 
+                                    <> (if isUI then "yes" else "no") <> ")"
+                
                 cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS pipeline
                 cmdSetViewport cmdBuf 0 (V.singleton viewport)
                 cmdSetScissor cmdBuf 0 (V.singleton scissor)

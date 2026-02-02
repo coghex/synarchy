@@ -277,6 +277,12 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
   
   -- Update descriptor sets
   forM_ (zip [0..] (V.toList uniformBuffers)) $ \(i, (buffer, _)) → do
+    logDebugSM CatDescriptor "Updating descriptor set"
+      [("set_index", T.pack $ show (i ∷ Int))
+      ,("binding", "0")
+      ,("type", "UNIFORM_BUFFER")
+      ,("count", "1")]
+    
     let bufferInfo = (zero ∷ DescriptorBufferInfo)
           { buffer = buffer
           , offset = 0

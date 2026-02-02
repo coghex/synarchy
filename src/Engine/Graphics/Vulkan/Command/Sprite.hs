@@ -6,9 +6,10 @@ module Engine.Graphics.Vulkan.Command.Sprite
 
 import UPrelude
 import qualified Data.Vector as V
+import qualified Data.Text as T
 import Data.IORef (IORef, readIORef, modifyIORef)
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
@@ -40,6 +41,7 @@ renderSpritesBindlessUI cmdBuf state viewport scissor dynamicBuffer spriteBatche
                        (descriptorState state)
     
     -- Bind bindless UI pipeline
+    logDebugM CatRender "Binding bindless UI pipeline"
     cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS pipeline
     cmdSetViewport cmdBuf 0 (V.singleton viewport)
     cmdSetScissor cmdBuf 0 (V.singleton scissor)
@@ -57,6 +59,9 @@ renderSpritesBindlessUI cmdBuf state viewport scissor dynamicBuffer spriteBatche
         V.empty
     
     -- Bind vertex buffer
+    logDebugSM CatRender "Binding vertex buffer (UI)"
+      [("buffer_size", T.pack $ show $ sdbSize dynamicBuffer)]
+    
     cmdBindVertexBuffers cmdBuf 0
         (V.singleton (sdbBuffer dynamicBuffer))
         (V.singleton 0)
@@ -65,6 +70,12 @@ renderSpritesBindlessUI cmdBuf state viewport scissor dynamicBuffer spriteBatche
     V.forM_ spriteBatches $ \batch → do
         offset ← liftIO $ readIORef vertexOffsetRef
         let vertexCount = fromIntegral $ V.length $ rbVertices batch
+        
+        logDebugSM CatRender "Drawing sprites (UI)"
+          [("vertex_count", T.pack $ show vertexCount)
+          ,("instance_count", "1")
+          ,("offset", T.pack $ show offset)]
+        
         cmdDraw cmdBuf vertexCount 1 offset 0
         liftIO $ modifyIORef vertexOffsetRef (+ vertexCount)
 
@@ -90,6 +101,7 @@ renderSpritesBindless cmdBuf state viewport scissor dynamicBuffer spriteBatches 
                        (descriptorState state)
     
     -- Bind bindless pipeline
+    logDebugM CatRender "Binding bindless pipeline"
     cmdBindPipeline cmdBuf PIPELINE_BIND_POINT_GRAPHICS pipeline
     cmdSetViewport cmdBuf 0 (V.singleton viewport)
     cmdSetScissor cmdBuf 0 (V.singleton scissor)
@@ -107,6 +119,9 @@ renderSpritesBindless cmdBuf state viewport scissor dynamicBuffer spriteBatches 
         V.empty
     
     -- Bind vertex buffer
+    logDebugSM CatRender "Binding vertex buffer"
+      [("buffer_size", T.pack $ show $ sdbSize dynamicBuffer)]
+    
     cmdBindVertexBuffers cmdBuf 0
         (V.singleton (sdbBuffer dynamicBuffer))
         (V.singleton 0)
@@ -115,5 +130,11 @@ renderSpritesBindless cmdBuf state viewport scissor dynamicBuffer spriteBatches 
     V.forM_ spriteBatches $ \batch → do
         offset ← liftIO $ readIORef vertexOffsetRef
         let vertexCount = fromIntegral $ V.length $ rbVertices batch
+        
+        logDebugSM CatRender "Drawing sprites"
+          [("vertex_count", T.pack $ show vertexCount)
+          ,("instance_count", "1")
+          ,("offset", T.pack $ show offset)]
+        
         cmdDraw cmdBuf vertexCount 1 offset 0
         liftIO $ modifyIORef vertexOffsetRef (+ vertexCount)
