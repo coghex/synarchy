@@ -746,7 +746,7 @@ function shell.updateGhostText()
             local row2Y = baseY + tileSize + middleHeight + tileSize / 2
             local promptX = baseX + tileSize + 10
             local promptY = row2Y - fontSize
-            local bufferX = promptX + fontSize
+            local bufferX = promptX + fontSize + 20
             local textWidth = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1))
             local cursorX = bufferX + textWidth
             
