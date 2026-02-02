@@ -14,8 +14,12 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Engine.Core.Monad
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.State
-import Engine.Core.Error.Exception
+import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
+                                   , EngineException(..), SystemError(..)
+                                   , mkErrorContext)
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Graphics.Types (DevQueues(..), SwapchainInfo(..))
 import Engine.Graphics.Vulkan.Types
@@ -27,15 +31,17 @@ import GHC.Stack (HasCallStack)
 -- | Validate descriptor state is ready for rendering
 validateDescriptorState ∷ GraphicsState → EngineM ε σ ()
 validateDescriptorState state = case descriptorState state of
-    Nothing → throwGraphicsError DescriptorError "No descriptor manager"
+    Nothing → logAndThrowM CatGraphics (ExGraphics DescriptorError)
+        "Descriptor manager is missing in graphics state"
     Just dm → when (V.null $ dmActiveSets dm) $
-        throwGraphicsError DescriptorError "No active descriptor sets"
+        logAndThrowM CatGraphics (ExGraphics DescriptorError)
+            "No active descriptor sets"
 
 -- | Get frame resources for a given frame index
 getFrameResources ∷ GraphicsState → Word32 → EngineM ε σ FrameResources
 getFrameResources state frameIdx = 
     case safeVectorIndex (frameResources state) (fromIntegral frameIdx) of
-        Nothing → throwGraphicsError CommandBufferError $
+        Nothing → logAndThrowM CatGraphics (ExGraphics CommandBufferError) $
             "Frame index out of bounds: " <> T.pack (show frameIdx)
         Just res → pure res
 
@@ -43,25 +49,26 @@ getFrameResources state frameIdx =
 getCommandBuffer ∷ FrameResources → EngineM ε σ CommandBuffer
 getCommandBuffer resources = 
     case safeVectorHead (frCommandBuffer resources) of
-        Nothing → throwGraphicsError CommandBufferError "No command buffer"
+        Nothing → logAndThrowM CatGraphics (ExGraphics CommandBufferError)
+                                           "No command buffer"
         Just cb → pure cb
 
 -- | Get Vulkan device
 getDevice ∷ GraphicsState → EngineM ε σ Device
 getDevice state = case vulkanDevice state of
-    Nothing → throwGraphicsError VulkanDeviceLost "No device"
+    Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost) "No device"
     Just d  → pure d
 
 -- | Get swapchain
 getSwapchain ∷ GraphicsState → EngineM ε σ SwapchainKHR
 getSwapchain state = case swapchainInfo state of
-    Nothing → throwGraphicsError SwapchainError "No swapchain"
+    Nothing → logAndThrowM CatGraphics (ExGraphics SwapchainError) "No swapchain"
     Just si → pure $ siSwapchain si
 
 -- | Get device queues
 getQueues ∷ GraphicsState → EngineM ε σ DevQueues
 getQueues state = case deviceQueues state of
-    Nothing → throwGraphicsError VulkanDeviceLost "No queues"
+    Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost) "No queues"
     Just q  → pure q
 
 -- | Extract window from graphics state

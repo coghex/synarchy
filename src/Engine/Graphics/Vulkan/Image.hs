@@ -15,8 +15,10 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.ByteString as BS
 import Engine.Core.Monad
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Resource
-import Engine.Core.Error.Exception
+import Engine.Core.Error.Exception (ExceptionType(..), SystemError(..))
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Texture
@@ -169,7 +171,7 @@ findMemoryType pdev typeFilter properties = do
       
       findType i
         | i ≥ fromIntegral (V.length types) = 
-            throwSystemError (MemoryError "findMemoryType error: ") $ T.pack
+            logAndThrowM CatVulkan (ExSystem (MemoryError "findMemoryType: ")) $
               "failed to find suitable memory type"
         | suitable i (types V.! i) = return $ fromIntegral i
         | otherwise = findType (i + 1)

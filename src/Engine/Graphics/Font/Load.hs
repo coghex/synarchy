@@ -24,7 +24,7 @@ import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
-import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Engine.Core.Log.Monad (logWarnM, logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
@@ -66,7 +66,9 @@ loadFont requestedHandle fontPath fontSize = do
                               "Font descriptor layout not initialized"
                 Just layout → return layout
             -- Generate atlas
-            atlas ← liftIO $ generateFontAtlas fontPath fontSize
+            loggerRef ← asks loggerRef
+            logger ← liftIO $ readIORef loggerRef
+            atlas ← liftIO $ generateFontAtlas logger fontPath fontSize
             
             -- Upload to GPU
             (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas fontDescLayout
@@ -88,9 +90,10 @@ loadFont requestedHandle fontPath fontSize = do
 -- Atlas Generation with STB
 -----------------------------------------------------------
 
-generateFontAtlas ∷ FilePath → Int → IO FontAtlas
-generateFontAtlas fontPath fontSize = do
-    putStrLn $ "Generating font atlas for: " ++ fontPath ++ " size=" ++ show fontSize
+generateFontAtlas ∷ LoggerState → FilePath → Int → IO FontAtlas
+generateFontAtlas logger fontPath fontSize = do
+    logDebug logger CatFont $ "Generating font atlas for: " <> T.pack fontPath
+                            <> " size=" <> T.pack (show fontSize)
     
     maybeFont ← loadSTBFont fontPath
     case maybeFont of
@@ -118,12 +121,16 @@ generateFontAtlas fontPath fontSize = do
                 numRows = (numChars + charsPerRow - 1) `div` charsPerRow
                 atlasHeight = nextPowerOf2 (numRows * cellHeight)
             
-            putStrLn $ "Atlas size: " ++ show atlasWidth ++ "x" ++ show atlasHeight
+            logDebug logger CatFont $
+                "Font atlas size: " <> T.pack (show atlasWidth)
+                <> "x" <> T.pack (show atlasHeight)
             
             -- Pack glyphs with metrics
             (atlasBitmap, glyphMap) ← packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow cellWidth cellHeight glyphDataWithMetrics chars
            
-            putStrLn $ "Atlas generated: " ++ show (Map.size glyphMap) ++ " glyphs"
+            logDebug logger CatFont $
+                "Font atlas generated with " <> T.pack (show $ Map.size glyphMap)
+                                             <> " glyphs."
             
             return $ FontAtlas
                 { faTexture = TextureHandle 0

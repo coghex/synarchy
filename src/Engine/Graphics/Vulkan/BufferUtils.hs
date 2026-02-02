@@ -10,6 +10,8 @@ import UPrelude
 import qualified Data.Vector as V
 import Engine.Core.Monad
 import Engine.Core.Resource
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Error.Exception
 import Vulkan.Core10
 import Vulkan.Zero
@@ -63,7 +65,7 @@ findMemoryType pDevice typeFilter properties = do
   
   let findType i 
         | i ≡ memTypeCount = 
-            throwSystemError (MemoryError "findMemoryType: ")
+            logAndThrowM CatSystem (ExSystem (MemoryError "findMemoryType: "))
               "failed to find suitable memory type"
         | otherwise = 
             if testBit typeFilter (fromIntegral i)

@@ -14,8 +14,10 @@ import Engine.Scripting.Lua.API.Shell (setupShellSandbox)
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules)
 import Engine.Asset.Types (AssetPool)
+import Engine.Core.Log (logWarn, logDebug, LogCategory(..))
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..))
+import Engine.Event.Types (Event(..))
 import Engine.Input.Types (InputState, keyToText)
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
@@ -42,15 +44,15 @@ startLuaThread env = do
     stateRef ← newIORef ThreadRunning
     threadId ← catch 
         (do
-            let lf = logFunc env
-            lf defaultLoc "lua" LevelInfo "Starting lua thread..."
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatLua "Starting lua thread..."
             let lteq = luaToEngineQueue env
                 etlq = luaQueue env
             backendState ← createLuaBackendState lteq etlq apRef objIdRef inputSRef
             registerLuaAPI (lbsLuaState backendState) env backendState
-            lf defaultLoc "lua" LevelInfo "Lua API registered."
+            logDebug logger CatLua "Lua API registered."
             setupShellSandbox (lbsLuaState backendState)
-            lf defaultLoc "lua" LevelInfo "Shell sandbox set up."
+            logDebug logger CatLua "Shell sandbox set up."
             
             -- Load init.lua as a module
             let scriptPath = "scripts/init.lua"
@@ -85,32 +87,33 @@ startLuaThread env = do
                     atomically $ modifyTVar (lbsScripts backendState) $
                         Map.insert initScriptId initScript
                     
-                    lf defaultLoc "lua" LevelInfo $ toLogStr $
-                        T.pack $ scriptPath ⧺ " loaded successfully as module."
+                    logDebug logger CatLua $ T.pack $ scriptPath
+                                   ⧺ "init.lua loaded successfully as module."
                     
                     when (isValidRef modRef) $ do
                         _ ← callModuleFunction (lbsLuaState backendState) modRef "init" 
                             [ScriptNumber (fromIntegral initScriptId)]
                         return ()
                     
-                    lf defaultLoc "lua" LevelInfo "init() called on game module."
+                    logDebug logger CatLua "init() called on game module."
                     
                 _ → do
                     errMsg ← Lua.runWith (lbsLuaState backendState) $ do
                         err ← Lua.tostring (-1)
                         Lua.pop 1
                         return $ maybe "Unknown error" TE.decodeUtf8 err
-                    lf defaultLoc "lua" LevelError $ toLogStr $
-                        "Failed to load " <> T.pack scriptPath <> ": " <> errMsg
+                    logWarn logger CatLua $
+                        T.pack $ "Error loading " ⧺ scriptPath ⧺ ": " ⧺ T.unpack errMsg
             
             tid ← forkIO $ runLuaLoop env backendState stateRef
             return tid
         ) 
         (\(e ∷ SomeException) → do
-            let lf = logFunc env
-            lf defaultLoc "lua" LevelError $
-                "Failed to start lua thread: " <> (toLogStr (show e))
-            error "Lua thread failed to start"
+            logger ← readIORef (loggerRef env)
+            logWarn logger CatLua $ "Lua thread failed to start."
+                                  <> T.pack (show e)
+            Q.writeQueue (eventQueue env) (EventError "LuaThread" (T.pack (show e)))
+            error "Lua thread failed to start."
         )
     return $ ThreadState stateRef threadId
 
@@ -139,8 +142,8 @@ runLuaLoop env ls stateRef = do
     control ← readIORef stateRef
     case control of
         ThreadStopped → do
-            let lf = logFunc env
-            lf defaultLoc "lua" LevelInfo "Stopping lua thread..."
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatLua "Lua thread stopping..."
             Lua.close (lbsLuaState ls)
             pure ()
         ThreadPaused → do
@@ -186,9 +189,9 @@ processLuaMsgs env ls stateRef = do
     case mMsg of
         Just msg → do
             currentTime ← getCurrentTime
-            let lf = logFunc env
-            lf defaultLoc "lua" LevelDebug $ 
-                "LUA RECV " <> toLogStr (show currentTime) <> "] got msg: " <> toLogStr (show msg)
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatLua $ 
+                "lua recv msg: " <> T.pack (show msg)
             processLuaMsg env ls stateRef msg
             processLuaMsgs env ls stateRef
         Nothing → return ()
@@ -197,15 +200,17 @@ processLuaMsgs env ls stateRef = do
 processLuaMsg ∷ EngineEnv → LuaBackendState → IORef ThreadControl → LuaMsg → IO ()
 processLuaMsg env ls stateRef msg = case msg of
   LuaTextureLoaded handle assetId → do
-    let lf = logFunc env
-    lf defaultLoc "lua" LevelInfo $ 
-        "Texture loaded: " <> toLogStr (show handle) <> " -> " <> toLogStr (show assetId)
+    logger ← readIORef (loggerRef env)
+    logDebug logger CatLua $ 
+        "Texture loaded: " <> T.pack (show handle) <> " -> " <> T.pack (show assetId)
   LuaFontLoaded handle → do
-    let lf = logFunc env
-    lf defaultLoc "lua" LevelInfo $ "Font loaded: " <> toLogStr (show handle)
+    logger ← readIORef (loggerRef env)
+    logDebug logger CatLua $ 
+        "Font loaded: " <> T.pack (show handle)
   LuaFontLoadFailed err → do
-    let lf = logFunc env
-    lf defaultLoc "lua" LevelError $ "Font load failed: " <> toLogStr (show err)
+    logger ← readIORef (loggerRef env)
+    logWarn logger CatLua $ 
+        "Font load failed: " <> T.pack (show err)
   LuaThreadKill → writeIORef stateRef ThreadStopped
   LuaMouseDownEvent button x y → do
     let buttonNum = case button of

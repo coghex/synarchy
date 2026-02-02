@@ -13,22 +13,24 @@ import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import Engine.Scripting.Lua.Util (isValidRef)
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Log (logInfo, LogCategory(..))
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
 import qualified Data.Map as Map
-import Data.IORef (atomicModifyIORef')
+import Data.IORef (atomicModifyIORef', readIORef)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
 import Control.Monad (when)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LogLevel(..), toLogStr, defaultLoc)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
 
 logInfoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 logInfoFn env = do
   msg ← Lua.tostring 1
-  let lf = logFunc env
+  logger ← liftIO $ readIORef (loggerRef env)
   case msg of
-    Just bs → Lua.liftIO $ lf defaultLoc "lua" LevelInfo (toLogStr $ TE.decodeUtf8 bs)
+    Just bs → logInfo logger CatLua (TE.decodeUtf8 bs)
     Nothing → return ()
   return 0
 

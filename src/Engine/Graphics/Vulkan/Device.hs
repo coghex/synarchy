@@ -12,7 +12,9 @@ module Engine.Graphics.Vulkan.Device
 
 import UPrelude
 import qualified Data.Vector as V
-import Engine.Core.Error.Exception
+import Engine.Core.Error.Exception (ExceptionType(..), InitError(..))
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Graphics.Types
@@ -102,7 +104,7 @@ pickPhysicalDevice inst surface = do
   -- Get all physical devices
   (_, devices) ← liftIO $ enumeratePhysicalDevices inst
   when (V.null devices) $
-    throwInitError DeviceCreationFailed
+    logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
       "Failed to find GPUs with Vulkan support"
   
   -- Score and pick the best device
@@ -111,7 +113,7 @@ pickPhysicalDevice inst surface = do
       bestDevice = V.maximumBy (\a b → compare (fst a) (fst b)) ratedDevices
   
   if fst bestDevice == 0
-    then throwInitError DeviceCreationFailed
+    then logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
       "Failed to find a suitable GPU"
     else return $ snd bestDevice
 
@@ -150,8 +152,8 @@ findQueueFamilies device surface = do
         props
   
   case graphicsIdx of
-    Nothing → throwInitError DeviceCreationFailed
-      "Could not find graphics queue family"
+    Nothing → logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
+                           "Could not find graphics queue family"
     Just gIdx → do
       -- Find present queue family
       presentSupport ← V.generateM (V.length props) $ \i → 
@@ -161,8 +163,8 @@ findQueueFamilies device surface = do
       let presentIdx = V.findIndex id presentSupport
       
       case presentIdx of
-        Nothing → throwInitError DeviceCreationFailed
-          "Could not find present queue family"
+        Nothing → logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
+                           "Could not find present queue family"
         Just pIdx → return $ QueueFamilyIndices
           { graphicsFamily = fromIntegral gIdx
           , presentFamily = fromIntegral pIdx

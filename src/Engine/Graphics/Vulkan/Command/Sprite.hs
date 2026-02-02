@@ -7,9 +7,11 @@ module Engine.Graphics.Vulkan.Command.Sprite
 import UPrelude
 import qualified Data.Vector as V
 import Data.IORef (IORef, readIORef, modifyIORef)
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
-import Engine.Core.Error.Exception
+import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
@@ -24,13 +26,16 @@ renderSpritesBindlessUI cmdBuf state viewport scissor dynamicBuffer spriteBatche
     -- Get bindless UI pipeline and texture system
     (pipeline, pipelineLayout) ← case bindlessUIPipeline state of
         Just p → pure p
-        Nothing → throwGraphicsError PipelineError "Bindless UI pipeline not available"
+        Nothing → logAndThrowM CatVulkan (ExGraphics PipelineError)
+                               "Bindless UI pipeline not available"
     
     bindless ← case textureSystem state of
         Just b → pure b
-        _ → throwGraphicsError DescriptorError "Bindless texture system not available"
+        _ → logAndThrowM CatVulkan (ExGraphics DescriptorError)
+                         "Bindless texture system not available"
     
-    descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
+    descManager ← maybe (logAndThrowM CatVulkan (ExGraphics DescriptorError)
+                                   "No descriptor state") 
                        pure 
                        (descriptorState state)
     
@@ -71,13 +76,16 @@ renderSpritesBindless cmdBuf state viewport scissor dynamicBuffer spriteBatches 
     -- Get bindless pipeline and texture system
     (pipeline, pipelineLayout) ← case bindlessPipeline state of
         Just p → pure p
-        Nothing → throwGraphicsError PipelineError "Bindless pipeline not available"
+        Nothing → logAndThrowM CatVulkan (ExGraphics PipelineError)
+                               "Bindless pipeline not available"
     
     bindless ← case textureSystem state of
         Just b → pure b
-        _ → throwGraphicsError DescriptorError "Bindless texture system not available"
+        _ → logAndThrowM CatVulkan (ExGraphics DescriptorError)
+                         "Bindless texture system not available"
     
-    descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
+    descManager ← maybe (logAndThrowM CatVulkan (ExGraphics DescriptorError)
+                                   "No descriptor state") 
                        pure 
                        (descriptorState state)
     

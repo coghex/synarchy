@@ -19,9 +19,11 @@ module Engine.Graphics.Vulkan.Command
 import UPrelude
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.Vector as V
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource, locally)
-import Engine.Core.Error.Exception
+import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Command.Record (recordSceneCommandBuffer)
@@ -198,6 +200,6 @@ allocateVulkanCommandBuffer device cmdPool = do
         allocateCommandBuffers device allocInfo
     
     case V.length buffers of
-        0 → throwGraphicsError CommandBufferError
-            "Failed to allocate command buffer"
+        0 → logAndThrowM CatGraphics (ExGraphics CommandBufferError)
+                         "Failed to allocate command buffer"
         _ → pure $ V.head buffers

@@ -178,7 +178,7 @@ createWindowSurface ∷ Window
                    → EngineM ε σ SurfaceKHR  -- ^ Raw Vulkan surface handle
 createWindowSurface (Window win) inst = allocResource
   (\surface → do
-      logInfoM CatVulkan "Destroying window surface"
+      logDebugM CatVulkan "Destroying window surface"
       liftIO $ destroySurfaceKHR inst surface Nothing)
   $ do
     surfaceOrError ← liftIO $ alloca $ \surfacePtr → do

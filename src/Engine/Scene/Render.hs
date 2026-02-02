@@ -5,9 +5,11 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
 import Data.IORef
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
-import Engine.Core.Error.Exception
+import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Scene.Base
 import Engine.Scene.Types
 import Engine.Scene.Manager
@@ -72,10 +74,12 @@ ensureDynamicVertexBuffer ∷ Word64 → EngineM ε σ SceneDynamicBuffer
 ensureDynamicVertexBuffer requiredVertices = do
     state ← gets graphicsState
     device ← case vulkanDevice state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No device"
+        Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
+                                           "No device"
         Just d → pure d
     pDevice ← case vulkanPDevice state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No physical device"
+        Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
+                                           "No physical device"
         Just pd → pure pd
     
     -- Calculate required buffer size
@@ -103,7 +107,8 @@ uploadBatchesToBuffer ∷ V.Vector RenderBatch → SceneDynamicBuffer → Engine
 uploadBatchesToBuffer batches dynamicBuffer = do
     state ← gets graphicsState
     device ← case vulkanDevice state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No device"
+        Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
+                                           "No device"
         Just d → pure d
     
     -- Calculate total vertices needed

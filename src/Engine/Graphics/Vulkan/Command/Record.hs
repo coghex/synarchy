@@ -10,9 +10,11 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
 import Data.IORef (newIORef, IORef)
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
-import Engine.Core.Error.Exception
+import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Engine.Graphics.Types (SwapchainInfo(..))
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
@@ -36,25 +38,27 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
     state ← gets graphicsState
     
     -- Validate required state components
-    renderPass ← maybe (throwGraphicsError RenderPassError "Render pass not initialized")
+    renderPass ← maybe (logAndThrowM CatVulkan (ExGraphics RenderPassError)
+                                     "Render pass not initialized")
                       pure
                       (vulkanRenderPass state)
-    
-    framebuffer ← maybe (throwGraphicsError FramebufferError "Framebuffer not initialized")
+    framebuffer ← maybe (logAndThrowM CatVulkan (ExGraphics FramebufferError)
+                                     "Framebuffer not initialized")
                        (\fbs → if frameIdx < fromIntegral (V.length fbs)
                               then pure (fbs V.! fromIntegral frameIdx)
-                              else throwGraphicsError FramebufferError "Frame index out of bounds")
+                              else logAndThrowM CatVulkan (ExGraphics FramebufferError)
+                                                       "Frame index out of bounds")
                        (framebuffers state)
-    
-    swapchainExtent ← maybe (throwGraphicsError SwapchainError "Swapchain info not initialized")
+    swapchainExtent ← maybe (logAndThrowM CatVulkan (ExGraphics SwapchainError)
+                                         "Swapchain info not initialized")
                            (pure . siSwapExtent)
                            (swapchainInfo state)
-    
-    device ← maybe (throwGraphicsError VulkanDeviceLost "No device")
+    device ← maybe (logAndThrowM CatVulkan (ExGraphics VulkanDeviceLost)
+                                   "No device")
                    pure
                    (vulkanDevice state)
-    
-    pDevice ← maybe (throwGraphicsError VulkanDeviceLost "No physical device")
+    pDevice ← maybe (logAndThrowM CatVulkan (ExGraphics VulkanDeviceLost)
+                                    "No physical device")
                     pure
                     (vulkanPDevice state)
 
@@ -143,7 +147,8 @@ renderLayerItems cmdBuf state viewport scissor dynamicBuffer items
                 cmdSetViewport cmdBuf 0 (V.singleton viewport)
                 cmdSetScissor cmdBuf 0 (V.singleton scissor)
                 
-                descManager ← maybe (throwGraphicsError DescriptorError "No descriptor state") 
+                descManager ← maybe (logAndThrowM CatVulkan (ExGraphics DescriptorError)
+                                             "No descriptor state")
                                    pure 
                                    (descriptorState state)
                 
