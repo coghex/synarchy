@@ -64,7 +64,7 @@ main = do
         
         -- Shutdown
         shutdownEngine window inputThreadState luaThreadState
-        logDebugM CatVulkan "Engine shutdown complete."
+        logDebugM CatSystem "Engine shutdown complete."
   
   -- Run engine
   result ← runEngineM engineAction envVar stateVar checkStatus

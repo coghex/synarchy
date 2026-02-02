@@ -13,9 +13,12 @@ import qualified Data.Map as Map
 import Data.IORef (readIORef, atomicModifyIORef')
 import Linear (identity)
 import Engine.Core.Defaults
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logDebugM, logInfoM, logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
-import Engine.Core.Error.Exception
+import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
+                                   , SystemError(..))
 import Engine.Graphics.Base
 import Engine.Graphics.Camera
 import Engine.Graphics.Font.Draw (cleanupPendingInstanceBuffers)
@@ -48,7 +51,8 @@ drawFrame = do
     
     -- Get window
     window@(Window win) ← case extractWindow state of
-        Left err → throwSystemError (GLFWError "drawFrame") $ T.pack $
+        Left err → logAndThrowM CatSystem
+          (ExSystem (GLFWError "drawFrame: ")) $ T.pack $
             "No window: " ⧺ displayException err
         Right w → pure w
     
@@ -68,18 +72,18 @@ drawFrame = do
     
     case acquireResult of
         Left ERROR_OUT_OF_DATE_KHR → do
-            logInfo "Swapchain out of date on acquire, recreating..."
+            logInfoM CatGraphics "Swapchain out of date on acquire, recreating..."
             recreateSwapchain window
             -- Fence is still signaled, next frame will wait and it will return immediately
         
         Left SUBOPTIMAL_KHR → do
-            logDebug "Swapchain suboptimal on acquire, recreating..."
+            logDebugM CatGraphics "Swapchain suboptimal on acquire, recreating..."
             recreateSwapchain window
             -- Fence is still signaled, next frame will wait and it will return immediately
         
-        Left err → 
-            throwGraphicsError SwapchainError $
-                T.pack $ "Failed to acquire swapchain image: " ⧺ show err
+        Left err → logAndThrowM CatGraphics
+          (ExGraphics SwapchainError) $ T.pack $
+            "Failed to acquire swapchain image: " ⧺ show err
         
         Right imageIndex → do
             -- NOW reset fence since we're definitely going to submit
@@ -130,16 +134,18 @@ drawFrame = do
             
             case presentResult of
                 Left ERROR_OUT_OF_DATE_KHR → do
-                    logInfo "Swapchain out of date on present, recreating..."
+                    logInfoM CatGraphics
+                      "Swapchain out of date on present, recreating..."
                     recreateSwapchain window
                 
                 Left SUBOPTIMAL_KHR → do
-                    logDebug "Swapchain suboptimal on present, recreating..."
+                    logInfoM CatGraphics
+                      "Swapchain suboptimal on present, recreating..."
                     recreateSwapchain window
                 
-                Left err →
-                    throwGraphicsError SwapchainError $
-                        T.pack $ "Failed to present: " ⧺ show err
+                Left err → logAndThrowM CatGraphics
+                  (ExGraphics SwapchainError) $ T.pack $
+                    "Failed to present: " ⧺ show err
                 
                 Right () → pure ()
             
@@ -174,7 +180,9 @@ updateUniformBufferForFrame win frameIdx = do
                     , inpFramebufferSize = (fbWidth, fbHeight) }, ())
             
             updateUniformBuffer device memory uboData
-        _ → throwGraphicsError VulkanDeviceLost "No device or uniform buffer"
+        _ → logAndThrowM CatGraphics
+          (ExGraphics VulkanDeviceLost) $
+            T.pack "No device or uniform buffer"
 
 -- | Submit frame to GPU
 submitFrame ∷ CommandBuffer → FrameResources → DevQueues → EngineM ε σ ()

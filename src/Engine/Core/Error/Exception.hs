@@ -30,6 +30,7 @@ module Engine.Core.Error.Exception
   ) where
 
 import UPrelude
+import Engine.Asset.Base (AssetId)
 import Control.Exception (Exception, displayException)
 import Control.Monad.Error.Class (MonadError(..), throwError)
 import qualified Control.Monad.Logger.CallStack as LoggerCS
@@ -107,12 +108,13 @@ data InitError
 
 -- | Asset loading errors
 data AssetError
-  = AssetNotFound FilePath          -- ^ Asset file not found
+  = AssetNotFound AssetId           -- ^ Asset file not found
   | AssetAlreadyLoaded FilePath     -- ^ Attempting to load already loaded asset
   | AssetLoadFailed FilePath T.Text -- ^ Asset failed to load with reason
   | InvalidAssetFormat T.Text       -- ^ Asset format is invalid
   | AssetAllocationFailed T.Text    -- ^ Failed to allocate asset
   | AssetCountMismatch T.Text       -- ^ Asset count mismatch
+  | AssetFailedCleanup
   deriving (Show, Eq, Typeable)
 
 -- | Lua-specific errors

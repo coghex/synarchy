@@ -253,10 +253,18 @@ loadDebugCategoriesFromEnv defaults = do
   let defaultMap = Map.fromList [(cat, True) | cat <- defaults]
   case mDebugStr of
     Nothing -> return defaultMap
-    Just str -> do
-      let catNames = map T.strip $ T.splitOn "," (T.pack str)
-          cats = mapMaybe parseCategory catNames
-      return $ Map.fromList [(cat, True) | cat <- cats]
+    Just str -> case str of
+                    "all" → return $ Map.fromList $ [(CatVulkan, True), (CatGraphics, True), (CatShader, True),
+                                      (CatDescriptor, True), (CatSwapchain, True), (CatTexture, True),
+                                      (CatFont, True), (CatAsset, True), (CatResource, True),
+                                      (CatLua, True), (CatScript, True), (CatInput, True),
+                                      (CatScene, True), (CatUI, True), (CatThread, True),
+                                      (CatSystem, True), (CatInit, True), (CatState, True),
+                                      (CatGeneral, True), (CatTest, True)]
+                    _      -> do
+                                let catNames = map T.strip $ T.splitOn "," (T.pack str)
+                                    cats = mapMaybe parseCategory catNames
+                                return $ Map.fromList [(cat, True) | cat <- cats]
 
 -- | Shutdown logger (flush buffers, close files)
 shutdownLogger :: LoggerState -> IO ()

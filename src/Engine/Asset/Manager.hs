@@ -39,7 +39,10 @@ import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Monad
 import Engine.Core.Resource (allocResource, allocResource')
 import Engine.Core.State
-import Engine.Core.Error.Exception
+import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
+                                   , AssetError(..))
+import Engine.Core.Log.Monad (logDebugM, logWarnM, logInfoM, logAndThrowM)
+import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Var
 import Engine.Asset.Base
 import Engine.Asset.Types
@@ -177,19 +180,19 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
     Nothing → do
       let nextId = AssetId $ fromIntegral $ apNextAssetId pool
       pDevice ← case (vulkanPDevice $ graphicsState state) of
-        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlasWithHandle: ") 
-                    "No physical device found"  
+        Nothing → logAndThrowM CatAsset (ExGraphics VulkanDeviceLost)
+                    "No physical device found"
         Just pdev → pure pdev
       device ← case (vulkanDevice $ graphicsState state) of
-        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlasWithHandle: ")
-                    "No device found"
+        Nothing → logAndThrowM CatAsset (ExGraphics VulkanDeviceLost)
+                    "No logical device found"
         Just dev → pure dev
       cmdPool ← case (vulkanCmdPool $ graphicsState state) of
-        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlasWithHandle: ")
+        Nothing → logAndThrowM CatAsset (ExGraphics VulkanDeviceLost)
                     "No command pool found"
         Just cmdP → pure cmdP
       cmdQueue ← case (deviceQueues (graphicsState state)) of
-        Nothing → throwAssetError (AssetLoadFailed path "loadTextureAtlasWithHandle: ")
+        Nothing → logAndThrowM CatAsset (ExGraphics VulkanDeviceLost)
                     "No device queues found"
         Just queues → pure $ graphicsQueue queues
           
@@ -212,10 +215,11 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
               let slot = tsIndex $ bthSlot bHandle
               pure $ Just slot
             Nothing → do
-              logInfo $ "Failed to register texture in bindless system: " ⧺ show name
+              logWarnM CatAsset $
+                "Failed to register texture in bindless system: " <> name
               pure Nothing
         _ → do
-          logDebug "No bindless system available, using legacy path"
+          logWarnM CatAsset "No bindless system available, using legacy path"
           pure Nothing
     
       -- Get or create texture array state (legacy path)
@@ -290,16 +294,15 @@ unloadAsset aid = do
                   apShaders = Map.adjust (\p → p { spRefCount = newRefCount }) aid (apShaders pool) }}
           pure ()
           
-        Nothing →
-          throwAssetError (AssetNotFound "unloadAsset: ") $ T.pack $
-            "Asset not found: " ⧺ show aid
+        Nothing → logAndThrowM CatAsset (ExAsset (AssetNotFound aid))
+                    "Attempted to unload non-existent asset"
 
 -- | Get a texture atlas by ID
 getTextureAtlas ∷ AssetId → EngineM ε σ TextureAtlas
 getTextureAtlas aid = do
   pool ← gets assetPool
   case Map.lookup aid (apTextureAtlases pool) of
-    Nothing → throwAssetError (AssetNotFound "getTextureAtlas: ") 
+    Nothing → logAndThrowM CatAsset (ExAsset (AssetNotFound aid))
                 "Texture atlas not found"
     Just atlas → pure atlas
 
@@ -308,7 +311,7 @@ getShaderProgram ∷ AssetId → EngineM' ε ShaderProgram
 getShaderProgram aid = do
   pool ← gets assetPool
   case Map.lookup aid (apShaders pool) of
-    Nothing → throwAssetError (AssetNotFound "getShaderProgram: ")
+    Nothing → logAndThrowM CatAsset (ExAsset (AssetNotFound aid))
                 "Shader program not found"
     Just shader → pure shader
 
@@ -318,38 +321,34 @@ cleanupAssetManager pool = do
     state ← gets graphicsState
 
     when (cleanupStatus state == InProgress) $
-      throwGraphicsError CleanupError "Cleanup already in progress"
+      logAndThrowM CatAsset (ExGraphics CleanupError) $ "Cleanup already in progress"
     
     modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = InProgress } }
     
     device ← case vulkanDevice state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No device during cleanup"
+        Nothing → logAndThrowM CatAsset (ExGraphics VulkanDeviceLost) "No device during cleanup"
         Just d → pure d
     queues ← case deviceQueues state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No device queues during cleanup"
+        Nothing → logAndThrowM CatAsset (ExGraphics CleanupError) "No device queues during cleanup"
         Just q → pure q
 
-    logDebug "Waiting for device to be idle..."
+    logDebugM CatAsset "Waiting for device to be idle..."
     liftIO $ do
         Vk.queueWaitIdle (graphicsQueue queues)
         Vk.queueWaitIdle (presentQueue queues)
         Vk.deviceWaitIdle device
 
-    cleanupResources device state pool `catchError` \e → do
-        logDebug $ "Cleanup error: " ⧺ (show e)
-        modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = Completed } }
-        throwError e
+    cleanupResources device state pool
+    modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = Completed } }
 
 cleanupResources ∷ Vk.Device → GraphicsState → AssetPool → EngineM' ε ()
 cleanupResources device state pool = do
     forM_ (Map.elems $ apTextureAtlases pool) $ \atlas → do
-        logDebug $ "Cleaning up texture atlas: " ⧺ T.unpack (taName atlas)
+        logDebugM CatAsset $ "Cleaning up texture atlas: " <> taName atlas
         case taStatus atlas of
             AssetLoaded → do
                 liftIO $ Vk.deviceWaitIdle device
-                handleExceptions
-                  (liftIO $ maybe (pure ()) id (taCleanup atlas))
-                  "Cleaning up texture atlas error: "
+                (liftIO $ maybe (pure ()) id (taCleanup atlas))
             _ → pure ()
 
     modify $ \s → s 
@@ -363,15 +362,8 @@ cleanupResources device state pool = do
             }
         }
 
-    handleExceptions
-      (liftIO $ Vk.deviceWaitIdle device)
-      "Final device wait error: "
-    logDebug "Asset manager cleanup complete"
-
-handleExceptions ∷ EngineM' ε () → Text → EngineM' ε ()
-handleExceptions action errorMsg = action `catchError` \e → do
-    logDebug $ (show errorMsg) ⧺ (show e)
-    throwError e
+    (liftIO $ Vk.deviceWaitIdle device)
+    logDebugM CatAsset "Asset manager cleanup complete"
 
 -- | Get texture handle state map
 getTextureStateMap ∷ AssetPool → IO (Map.Map TextureHandle (AssetState AssetId))

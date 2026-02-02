@@ -7,11 +7,13 @@ import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import Control.Concurrent (threadDelay, ThreadId, killThread, forkIO)
 import Control.Exception (SomeException, catch)
-import Control.Monad.Logger (Loc(..), LogLevel(..), toLogStr, defaultLoc)
 import Data.IORef (IORef, newIORef, writeIORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
+import Engine.Core.Log (logDebug, logError, LogCategory(..))
 import Engine.Core.State
 import Engine.Core.Thread
+import Engine.Core.Error.Exception (SystemError(..), ExceptionType(..))
+import Engine.Event.Types
 import Engine.Input.Types
 import Engine.Input.Callback
 import Engine.Input.Bindings
@@ -26,19 +28,20 @@ startInputThread env = do
     let inputSRef     = inputStateRef env
         apRef         = assetPoolRef env
         objIdRef      = nextObjectIdRef env
+        logRef        = loggerRef env
+    logger ← readIORef logRef
     stateRef ← newIORef ThreadRunning
     threadId ← catch 
         (do
-            let lf = logFunc env
-            lf defaultLoc "input" LevelInfo "Starting input thread..."
+            logDebug logger CatInput "Starting input thread..."
             tid ← forkIO $ runInputLoop env stateRef
             return tid
         ) 
         (\(e :: SomeException) → do
-            let lf = logFunc env
-            lf defaultLoc "input" LevelError $ "Failed to start input thread."
-                                           <> (toLogStr $ show e)
-            error "Input thread failed to start"
+            logError logger CatInput $ "Failed starting input thread: " <> T.pack (show e)
+            Q.writeQueue (eventQueue env) $ EventError
+              "startInputThread:" $ T.pack (show e)
+            error "Input thread start failure."
         )
     return $ ThreadState stateRef threadId
 
@@ -47,10 +50,10 @@ runInputLoop ∷ EngineEnv → IORef ThreadControl → IO ()
   -- read control state
 runInputLoop env stateRef = do
   control ← readIORef stateRef
+  logger ← readIORef (loggerRef env)
   case control of
     ThreadStopped → do
-        let lf = logFunc env
-        lf defaultLoc "input" LevelInfo "Input thread stopping..."
+        logDebug logger CatInput "Input thread stopping..."
         pure ()
     ThreadPaused  → do
         threadDelay 100000  -- 100ms pause check
@@ -153,9 +156,8 @@ processInput env inpSt event = case event of
             (x, y) = pos
         when (state ≡ GLFW.MouseButtonState'Pressed) $ do
             currentTime ← getCurrentTime
-            let lf = logFunc env
-            lf defaultLoc "input" LevelDebug $
-                "[INPUT " <> (toLogStr (show currentTime)) <> "] Mouse click at " <> (toLogStr (show pos))
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatInput $ "Mouse click at " <> (T.pack (show pos))
             Q.writeQueue lq (LuaMouseDownEvent btn x y)
         when (state ≡ GLFW.MouseButtonState'Released) $
             Q.writeQueue lq (LuaMouseUpEvent btn x y)
@@ -167,8 +169,8 @@ processInput env inpSt event = case event of
     InputWindowEvent winEv → do
         case winEv of
           WindowResize w h → do
-            let lf = logFunc env
-            lf defaultLoc "input" LevelInfo $ "Window resized to: " <> (toLogStr $ show (w, h))
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatInput $ "Window resized to: " <> (T.pack (show (w, h)))
           _ → return ()
         return $ updateWindowState inpSt winEv
 
