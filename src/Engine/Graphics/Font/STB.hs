@@ -12,12 +12,14 @@ module Engine.Graphics.Font.STB
     ) where
 
 import UPrelude
+import qualified Data.Text as T
 import Foreign.Ptr (Ptr, nullPtr)
 import Foreign.C.Types (CInt(..), CFloat(..))
 import Foreign.C.String (CString, withCString)
 import Foreign.Marshal.Alloc (alloca, free, mallocBytes)
 import Foreign.Marshal.Array (peekArray)
 import Foreign.Storable (Storable(peek, poke))
+import Engine.Core.Log (LoggerState, logWarn, LogCategory(CatFont))
 import Data.Word (Word8)
 import Data.Char (ord)
 
@@ -68,13 +70,13 @@ foreign import ccall "stb_scale_for_pixel_height"
 -----------------------------------------------------------
 
 -- | Load a TTF font file
-loadSTBFont ∷ FilePath → IO (Maybe STBFont)
-loadSTBFont path = withCString path $ \cpath → do
+loadSTBFont ∷ LoggerState → FilePath → IO (Maybe STBFont)
+loadSTBFont logger path = withCString path $ \cpath → do
     alloca $ \sizePtr → do
         fontData ← c_stb_load_font cpath sizePtr
         if fontData == nullPtr
             then do
-                putStrLn $ "Failed to load font: " ++ path
+                logWarn logger CatFont $ "Failed to load font: " <> T.pack path
                 return Nothing
             else do
                 size ← peek sizePtr
@@ -86,7 +88,8 @@ loadSTBFont path = withCString path $ \cpath → do
                 result ← c_stb_init_font fontData fontInfo
                 if result == 0
                     then do
-                        putStrLn $ "Failed to initialize font: " ++ path
+                        logWarn logger CatFont
+                          $ "Failed to initialize font info: " <> T.pack path
                         c_stb_free_font fontData
                         free fontInfo
                         return Nothing

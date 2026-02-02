@@ -4,6 +4,7 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson ((.:), (.!=), FromJSON(..), Value(..))
+import Engine.Core.Log (LoggerState, logWarn, LogCategory(..))
 
 -- | Video configuration settings
 data VideoConfig = VideoConfig
@@ -53,12 +54,13 @@ instance FromJSON VideoConfigFile where
     parseJSON _ = fail "Expected an object for VideoConfigFile"
 
 -- | Load video configuration from a YAML file
-loadVideoConfig ∷ FilePath → IO VideoConfig
-loadVideoConfig path = do
+loadVideoConfig ∷ LoggerState → FilePath → IO VideoConfig
+loadVideoConfig logger path = do
     result ← Yaml.decodeFileEither path
     case result of
         Left err → do
-            putStrLn $ "Error loading video config: " <> show err
+            logWarn logger CatInit $ "Error loading video config: "
+                                   <> T.pack (show err)
             return defaultVideoConfig
         Right vf → return $ VideoConfig
             { vcWidth      = resWidth (vfResolution vf)

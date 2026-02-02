@@ -55,11 +55,11 @@ initializeEngine = do
   
   -- Initialize input state
   inputStateRef ← newIORef defaultInputState
-  keyBindings ← loadKeyBindings "config/keybinds.yaml"
+  keyBindings ← loadKeyBindings logger "config/keybinds.yaml"
   keyBindingsRef ← newIORef keyBindings
   
   -- Load video config
-  videoConfig ← loadVideoConfig "config/video.yaml"
+  videoConfig ← loadVideoConfig logger "config/video.yaml"
   
   -- Create camera references
   cameraRef ← newIORef defaultCamera

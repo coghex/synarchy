@@ -44,10 +44,12 @@ import Control.Exception (IOException, catch, ioError)
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
+import Data.IORef (readIORef)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
+import Engine.Core.State
 import Engine.Core.Resource
-import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM)
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
                                    , InitError(..))
@@ -163,8 +165,11 @@ makeContextCurrent = liftIO ∘ GLFW.makeContextCurrent
 
 -- | Hint that we're on the main thread
 mainThreadHint ∷ EngineM ε σ ()
-mainThreadHint = liftIO $ GLFW.setErrorCallback $ Just $ \errCode msg →
-  putStrLn $ "GLFW error: " ⧺ show errCode ⧺ ": " ⧺ msg
+mainThreadHint = do
+  logger ← liftIO . readIORef =<< asks loggerRef
+  liftIO $ GLFW.setErrorCallback $ Just $ \errCode msg →
+    logWarn logger CatGraphics $ T.pack $
+      "GLFW error: " ⧺ show errCode ⧺ ": " ⧺ msg
 
 -- | Get required Vulkan instance extensions
 getRequiredInstanceExtensions ∷ EngineM ε σ [BS.ByteString]

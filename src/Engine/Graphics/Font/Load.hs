@@ -95,7 +95,7 @@ generateFontAtlas logger fontPath fontSize = do
     logDebug logger CatFont $ "Generating font atlas for: " <> T.pack fontPath
                             <> " size=" <> T.pack (show fontSize)
     
-    maybeFont ← loadSTBFont fontPath
+    maybeFont ← loadSTBFont logger fontPath
     case maybeFont of
         Nothing → error $ "Failed to load font: " ++ fontPath
         Just font → do

@@ -321,19 +321,27 @@ getEnabledCategories LoggerState{..} = do
 extractCallSite :: CallStack -> Maybe SrcLoc
 extractCallSite cs = 
   let frames = getCallStack cs
-  in case reverse frames of  -- Reverse to get the most recent call first
+  in case reverse frames of  -- Reverse to get most recent first
     [] -> Nothing
-    -- Skip internal logging calls (logMessage, logDebug, logDebugM, etc.)
     frames' -> case dropWhile isInternalCall frames' of
-      [] -> Nothing
+      [] -> case frames' of  -- Fallback: if all internal, take the last one
+        [] -> Nothing
+        ((_, loc):_) -> Just loc
       ((_, loc):_) -> Just loc
   where
-    isInternalCall (name, _) = 
-      "logMessage" `isPrefixOf` name ||
-      "logDebug" `isPrefixOf` name ||
-      "logInfo" `isPrefixOf` name ||
-      "logWarn" `isPrefixOf` name ||
-      "logError" `isPrefixOf` name
+    -- Only skip the exact logging function names, not prefixes
+    isInternalCall (name, _) = name `elem`
+      [ "logMessage"
+      , "logDebug", "logDebugS"
+      , "logInfo", "logInfoS"
+      , "logWarn", "logWarnS"
+      , "logError", "logErrorS"
+      , "logDebugM", "logDebugSM"
+      , "logInfoM", "logInfoSM"
+      , "logWarnM", "logWarnSM"
+      , "logErrorM", "logErrorSM"
+      , "getLogger"  -- Also skip the logger fetcher
+      ]
 
 -- | Core logging function (internal)
 logMessage :: (HasCallStack, MonadIO m) 
@@ -399,7 +407,7 @@ formatCategory :: LogCategory -> Text
 formatCategory cat = "[" <> T.pack (drop 3 (show cat)) <> "]"
 
 formatThread :: ThreadId -> Text
-formatThread tid = "[Thread:" <> T.pack (drop 9 (show tid)) <> "]"
+formatThread tid = "[Θ:" <> T.pack (drop 9 (show tid)) <> "]"
 
 formatContext :: [Text] -> Text
 formatContext [] = ""
@@ -408,7 +416,10 @@ formatContext ctx = "[" <> T.intercalate " > " ctx <> "]"
 formatLocation :: Maybe SrcLoc -> Text
 formatLocation Nothing = ""
 formatLocation (Just loc) = 
-  "[" <> T.pack (srcLocModule loc) <> ":" <> T.pack (show (srcLocStartLine loc)) <> "]"
+  -- Show just filename and line, not full module path
+  let modName = T.pack $ srcLocModule loc
+      fileName = T.takeWhileEnd (/= '.') modName  -- Get last component
+  in "[" <> fileName <> ":" <> T.pack (show (srcLocStartLine loc)) <> "]"
 
 formatFields :: Map.Map Text Text -> Text
 formatFields fields 

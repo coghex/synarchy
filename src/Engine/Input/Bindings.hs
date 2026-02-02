@@ -7,6 +7,7 @@ import qualified Data.Yaml as Yaml
 import Data.Aeson ((.:), (.!=), FromJSON(..), Value(..))
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types
+import Engine.Core.Log (LoggerState, logWarn, LogCategory(..))
 
 -- | maps actino names to key names
 type KeyBindings = Map.Map T.Text T.Text
@@ -33,13 +34,14 @@ instance FromJSON KeyBindingConfig where
   parseJSON _ = fail "Expected Object for KeyBindingConfig value"
 
 -- | Load keybindings from a YAML file
-loadKeyBindings ∷ FilePath → IO KeyBindings
-loadKeyBindings path = do
+loadKeyBindings ∷ LoggerState → FilePath → IO KeyBindings
+loadKeyBindings logger path = do
     result ← Yaml.decodeFileEither path
     case result of
         Left err → do
-            putStrLn $ "Failed to load keybindings from " <> path <> ": " <> show err
-            putStrLn "Using default keybindings."
+            logWarn logger CatInput $ "Failed to load keybindings from "
+                                    <> T.pack path <> ": " <> T.pack (show err)
+                                    <> ". Using default keybindings."
             return defaultKeyBindings
         Right config → return $ kbcBindings config
 

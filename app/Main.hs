@@ -3,6 +3,7 @@ module Main where
 
 import UPrelude
 import Control.Exception (displayException)
+import Data.IORef (readIORef)
 import System.Environment (setEnv)
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Defaults (defaultWindowConfig)
@@ -37,12 +38,13 @@ main = do
   -- Initialize engine
   EngineInitResult env envVar stateVar ← initializeEngine
   
-  -- Load video config for window creation
-  videoConfig ← loadVideoConfig "config/video.yaml"
-  
   -- Fork worker threads
   inputThreadState ← startInputThread env
   luaThreadState   ← startLuaThread env
+  
+  -- Load video configuration
+  logger ← liftIO $ readIORef (loggerRef env)
+  videoConfig ← loadVideoConfig logger "config/video.yaml"
   
   -- Define main engine action
   let engineAction ∷ EngineM' EngineEnv ()
