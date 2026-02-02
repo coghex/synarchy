@@ -18,7 +18,7 @@ import Engine.Asset.Types
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM, logInfoM)
 import Engine.Core.Error.Exception
 import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Image (createVulkanImage, createVulkanImageView
@@ -88,11 +88,15 @@ createTextureImageView' ∷ PhysicalDevice → Device → CommandPool
                        → EngineM ε σ ((VulkanImage, ImageView, Word32)
                                       , IO ())
 createTextureImageView' pdev dev cmdPool cmdQueue path = do
+  logDebugSM CatTexture "Loading texture image"
+    [("path", T.pack path)]
+  
   let maxTimeout = maxBound ∷ Word64
   -- Load and convert image data
   JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
     ← liftIO (JP.readImage path) ⌦ \case
-      Left err → logAndThrowM CatTexture (ExGraphics TextureLoadFailed)
+      Left err → do
+        logAndThrowM CatTexture (ExGraphics TextureLoadFailed)
                    $ "cannot load texture image: " <> T.pack err
       Right dynImg → pure $ JP.convertRGBA8 dynImg
 
@@ -100,8 +104,15 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
       bufSize = fromIntegral imageDataLen
       mipLevels = (floor ∘ logBase (2 ∷ Float)
                 ∘ fromIntegral $ max imageWidth imageHeight) + 1
+  
+  logDebugSM CatTexture "Texture image loaded"
+    [("width", T.pack $ show imageWidth)
+    ,("height", T.pack $ show imageHeight)
+    ,("format", "RGBA8")
+    ,("mip_levels", T.pack $ show mipLevels)]
 
   -- Create the image with cleanup
+  logDebugM CatTexture "Creating Vulkan image"
   (vulkanImage@(VulkanImage image imagedata), imageCleanup) ← createVulkanImage' dev pdev
     (fromIntegral imageWidth, fromIntegral imageHeight)
     FORMAT_R8G8B8A8_UNORM
@@ -118,6 +129,8 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
     
   -- Handle staging buffer with locally for automatic cleanup
   locally $ do
+    logDebugSM CatTexture "Allocating staging buffer"
+      [("size", T.pack $ show bufSize)]
     (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
       BUFFER_USAGE_TRANSFER_SRC_BIT
       (MEMORY_PROPERTY_HOST_VISIBLE_BIT
@@ -131,6 +144,8 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
     -- Wait for the fence before proceeding
     waitForFences dev (V.singleton fence) True maxTimeout
     resetFences dev (V.singleton fence)
+    
+    logDebugM CatTexture "Copying buffer to image and transitioning layout"
     -- Record and submit commands
     let commandInfo = (zero ∷ CommandBufferBeginInfo '[])
           { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
@@ -270,6 +285,7 @@ createTextureSampler dev pdev = do
 
 createTextureSampler' ∷ Device → PhysicalDevice → EngineM ε σ (Sampler,IO ())
 createTextureSampler' dev pdev = do
+  logDebugM CatTexture "Creating texture sampler"
   props ← getPhysicalDeviceProperties pdev
   let samplerInfo = zero
         { magFilter = FILTER_NEAREST

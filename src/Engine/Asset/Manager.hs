@@ -167,12 +167,20 @@ loadTextureAtlasWithHandle ∷ TextureHandle  -- ^ Pre-generated handle
                           → Text            -- ^ Array name
                           → EngineM ε σ AssetId
 loadTextureAtlasWithHandle texHandle name path arrayName = do
+  logDebugSM CatAsset "Asset loading started"
+    [("path", T.pack path)
+    ,("handle", T.pack $ show texHandle)
+    ,("name", name)]
+  
   state ← get
   let pool = assetPool state
       pathKey = T.pack path
   -- check if the texture is already loaded
   case Map.lookup pathKey (apAssetPaths pool) of
     Just existingId → do
+      logDebugSM CatAsset "Texture found in cache"
+        [("asset_id", T.pack $ show existingId)
+        ,("ref_count", T.pack $ show $ taRefCount $ (apTextureAtlases pool) Map.! existingId)]
       modify $ \s → s { assetPool = (assetPool s) {
         apTextureAtlases = Map.adjust (\a → a { taRefCount = taRefCount a + 1 })
                                       existingId (apTextureAtlases pool) } }
@@ -206,6 +214,7 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
       -- Register with bindless system using the provided handle
       bindlessSlot ← case textureSystem (graphicsState state) of
         Just bindless → do
+          logDebugM CatAsset "Registering texture with bindless system"
           (mbHandle, newBindless) ← registerTexture device texHandle imageView sampler bindless
           modify $ \s → s { graphicsState = (graphicsState s) {
             textureSystem = Just newBindless
@@ -213,6 +222,8 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
           case mbHandle of
             Just bHandle → do
               let slot = tsIndex $ bthSlot bHandle
+              logDebugSM CatAsset "Bindless texture slot assigned"
+                [("slot", T.pack $ show slot)]
               pure $ Just slot
             Nothing → do
               logWarnM CatAsset $
@@ -252,6 +263,11 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
             , taBindlessSlot = bindlessSlot
             , taTextureHandle = texHandle
             }
+    
+      logInfoSM CatTexture "Texture loaded successfully"
+        [("name", name)
+        ,("mip_levels", T.pack $ show mipLevels)
+        ,("bindless_slot", maybe "none" (T.pack . show) bindlessSlot)]
     
       modify $ \s → s 
         { assetPool = (assetPool s)
@@ -318,6 +334,7 @@ getShaderProgram aid = do
 -- | Clean up all asset resources
 cleanupAssetManager ∷ AssetPool → EngineM' ε ()
 cleanupAssetManager pool = do
+    logInfoM CatAsset "Asset cleanup phase started"
     state ← gets graphicsState
 
     when (cleanupStatus state == InProgress) $
@@ -340,11 +357,15 @@ cleanupAssetManager pool = do
 
     cleanupResources device state pool
     modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = Completed } }
+    logInfoM CatAsset "Asset cleanup completed successfully"
 
 cleanupResources ∷ Vk.Device → GraphicsState → AssetPool → EngineM' ε ()
 cleanupResources device state pool = do
     forM_ (Map.elems $ apTextureAtlases pool) $ \atlas → do
-        logDebugM CatAsset $ "Cleaning up texture atlas: " <> taName atlas
+        logDebugSM CatAsset "Cleaning up texture"
+          [("name", taName atlas)
+          ,("path", taPath atlas)
+          ,("asset_id", T.pack $ show $ taId atlas)]
         case taStatus atlas of
             AssetLoaded → do
                 liftIO $ Vk.deviceWaitIdle device
