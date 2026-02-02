@@ -118,6 +118,7 @@ generateFontAtlas logger fontPath fontSize = do
             let chars = [' '..'~']
                 numChars = length chars
             
+            -- Enumerate chars with indices to limit debug logging to first 3 glyphs
             glyphDataWithMetrics ← forM (zip chars [0..]) $ \(c, idx) → do
                 (w,h,xoff,yoff,pixels) ← renderGlyphWithMetrics logger font c scale
                 (_,_,_,_,advance) ← getSTBGlyphMetrics font c scale
