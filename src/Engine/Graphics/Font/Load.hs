@@ -24,7 +24,7 @@ import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
-import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
+import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM, logWarnSM, logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
@@ -119,7 +119,7 @@ generateFontAtlas logger fontPath fontSize = do
                 numChars = length chars
             
             glyphDataWithMetrics ← forM (zip chars [0..]) $ \(c, idx) → do
-                (w,h,xoff,yoff,pixels) ← renderGlyphWithMetrics font c scale
+                (w,h,xoff,yoff,pixels) ← renderGlyphWithMetrics logger font c scale
                 (_,_,_,_,advance) ← getSTBGlyphMetrics font c scale
                 -- Log metrics for first few glyphs
                 when (idx < 3) $
@@ -165,14 +165,14 @@ generateFontAtlas logger fontPath fontSize = do
                 , faSampler = Nothing
                 }
 
-renderGlyphWithMetrics ∷ STBFont → Char → Float 
+renderGlyphWithMetrics ∷ LoggerState → STBFont → Char → Float 
                        → IO (Int, Int, Int, Int, [Word8])
-renderGlyphWithMetrics font char scale = do
+renderGlyphWithMetrics logger font char scale = do
     result ← renderSTBGlyph font char scale
     case result of
         Nothing → do
             -- Warn when specific glyphs fail to rasterize
-            putStrLn $ "WARNING: Failed to rasterize glyph: '" ++ [char] ++ "'"
+            logWarn logger CatFont $ "Failed to rasterize glyph: '" <> T.singleton char <> "'"
             return (0, 0, 0, 0, [])
         Just glyph → return glyph
 
