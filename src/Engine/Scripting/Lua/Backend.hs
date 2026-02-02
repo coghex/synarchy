@@ -10,11 +10,9 @@ import Engine.Scripting.Types
 import Engine.Scripting.Lua.Thread (startLuaThread)
 import Engine.Scripting.Lua.Script (callLuaFunction)
 import Engine.Core.State (EngineEnv)
-import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import Data.Dynamic (toDyn, fromDynamic)
-import Data.IORef (readIORef)
 
 -- | Lua scripting backend
 data LuaBackend = LuaBackend
@@ -30,7 +28,7 @@ instance ScriptBackend LuaBackend where
       Just lst → Lua.close lst
       Nothing  → error "Invalid Lua context"
   
-  loadScript backend (ScriptContext dyn) path =
+  loadScript _ (ScriptContext dyn) path =
     case fromDynamic dyn of
       Just lst → do
         result ← Lua.runWith lst $ Lua.dofileTrace $ Just path
@@ -43,7 +41,7 @@ instance ScriptBackend LuaBackend where
   
   reloadScript backend ctx path = loadScript backend ctx path
   
-  callFunction backend (ScriptContext dyn) funcName args =
+  callFunction _ (ScriptContext dyn) funcName args =
     case fromDynamic dyn of
       Just lst → do
         result ← Lua.runWith lst $ callLuaFunction funcName args
