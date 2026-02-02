@@ -83,7 +83,7 @@ createVulkanSwapchain pdev dev queues surface = do
   logInfoSM CatSwapchain "Swapchain created"
     [("format", T.pack $ show form)
     ,("present_mode", T.pack $ show spMode)
-    ,("extent", T.pack $ show (width sExtent) <> "x" <> T.pack (show $ height sExtent))
+    ,("extent", T.pack $ show sExtent)
     ,("image_count", T.pack $ show imageCount)]
   
   swapchain ← createSwapchainKHR dev swCreateInfo Nothing

@@ -41,7 +41,8 @@ import Engine.Core.Resource (allocResource, allocResource')
 import Engine.Core.State
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
                                    , AssetError(..))
-import Engine.Core.Log.Monad (logDebugM, logWarnM, logInfoM, logAndThrowM)
+import Engine.Core.Log.Monad (logDebugM, logWarnM, logInfoM, logAndThrowM
+                             , logDebugSM, logInfoSM)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Var
 import Engine.Asset.Base
@@ -264,7 +265,7 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
             , taTextureHandle = texHandle
             }
     
-      logInfoSM CatTexture "Texture loaded successfully"
+      logDebugSM CatTexture "Texture loaded successfully"
         [("name", name)
         ,("mip_levels", T.pack $ show mipLevels)
         ,("bindless_slot", maybe "none" (T.pack . show) bindlessSlot)]

@@ -101,6 +101,7 @@ parseCategory :: Text -> Maybe LogCategory
 parseCategory t = case T.toLower t of
   "vulkan"      -> Just CatVulkan
   "graphics"    -> Just CatGraphics
+  "render"      -> Just CatRender
   "shader"      -> Just CatShader
   "descriptor"  -> Just CatDescriptor
   "swapchain"   -> Just CatSwapchain

@@ -102,7 +102,7 @@ handleLuaMessage msg = do
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
 handleLoadTexture handle path = do
-    logInfoM CatLua $ "Loading texture from Lua: " <> T.pack path
+    logDebugM CatLua $ "Loading texture from Lua: " <> T.pack path
     assetId ← loadTextureAtlasWithHandle handle (T.pack $ takeBaseName path) path "default"
     
     apRef ← asks assetPoolRef
@@ -112,7 +112,7 @@ handleLoadTexture handle path = do
     
     pool ← liftIO $ readIORef apRef
     modify $ \s → s { assetPool = pool }
-    logInfoM CatLua $ "Texture loaded successfully: " <> T.pack path
+    logDebugM CatLua $ "Texture loaded successfully: " <> T.pack path
 
 -- | Handle font load request
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM ε σ ()

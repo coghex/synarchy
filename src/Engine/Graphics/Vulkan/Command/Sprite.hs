@@ -60,7 +60,7 @@ renderSpritesBindlessUI cmdBuf state viewport scissor dynamicBuffer spriteBatche
     
     -- Bind vertex buffer
     logDebugSM CatRender "Binding vertex buffer (UI)"
-      [("buffer_size", T.pack $ show $ sdbSize dynamicBuffer)]
+      [("buffer_size", T.pack $ show $ sdbCapacity dynamicBuffer)]
     
     cmdBindVertexBuffers cmdBuf 0
         (V.singleton (sdbBuffer dynamicBuffer))
@@ -120,7 +120,7 @@ renderSpritesBindless cmdBuf state viewport scissor dynamicBuffer spriteBatches 
     
     -- Bind vertex buffer
     logDebugSM CatRender "Binding vertex buffer"
-      [("buffer_size", T.pack $ show $ sdbSize dynamicBuffer)]
+      [("buffer_size", T.pack $ show $ sdbCapacity dynamicBuffer)]
     
     cmdBindVertexBuffers cmdBuf 0
         (V.singleton (sdbBuffer dynamicBuffer))

@@ -74,27 +74,7 @@ initializeVulkan window = do
   
   -- Log device info
   props ← liftIO $ getPhysicalDeviceProperties physicalDevice
-  let deviceName = T.pack $ takeWhile (/= '\0') $ map (toEnum . fromEnum) $ V.toList (deviceName props)
-      deviceTypeStr = case deviceType props of
-        PHYSICAL_DEVICE_TYPE_DISCRETE_GPU   → "Discrete GPU"
-        PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU → "Integrated GPU"
-        PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU    → "Virtual GPU"
-        PHYSICAL_DEVICE_TYPE_CPU            → "CPU"
-        _                                   → "Other"
-  logInfoSM CatVulkan "Physical device selected"
-    [("device", deviceName)
-    ,("type", deviceTypeStr)]
-  
-  let driverVer = driverVersion props
-      apiVer = apiVersion props
-      major = apiVer `shiftR` 22
-      minor = (apiVer `shiftR` 12) .&. 0x3FF
-      patch = apiVer .&. 0xFFF
-  logDebugSM CatVulkan "Physical device properties"
-    [("driver_version", T.pack $ show driverVer)
-    ,("api_version", T.pack $ show major <> "." <> T.pack (show minor) <> "." <> T.pack (show patch))
-    ,("max_image_dimension_2d", T.pack $ show $ maxImageDimension2D $ limits props)]
-  
+ 
   logDebugM CatVulkan "Creating logical device"
   (device, queues) ← createVulkanDevice vkInstance physicalDevice surface
   logInfoM CatVulkan "Logical device created successfully"

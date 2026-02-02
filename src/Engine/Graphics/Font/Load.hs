@@ -84,7 +84,7 @@ loadFont requestedHandle fontPath fontSize = do
             (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas fontDescLayout
             
             logInfoSM CatFont "Font GPU upload completion"
-                [("atlas_size", T.pack $ show (faAtlasWidth atlas) <> "x" <> T.pack (show $ faAtlasHeight atlas))]
+                [("atlas_size", T.pack (show (faAtlasWidth atlas)) <> "x" <> T.pack (show (faAtlasHeight atlas)))]
             
             let newAtlas = atlas { faTexture = texHandle
                                  , faDescriptorSet = Just descriptorSet
