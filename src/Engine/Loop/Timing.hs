@@ -6,7 +6,6 @@ module Engine.Loop.Timing
 import UPrelude
 import Data.IORef (readIORef)
 import Control.Concurrent (threadDelay)
-import Control.Exception (evaluate)
 import Control.Monad (when)
 import Control.Monad.State (get, put)
 import Text.Printf (printf)
@@ -60,7 +59,7 @@ updateFrameTiming = do
   when (newAccum >= 1.0) $ do
     let fps = fromIntegral newFrameCount / newAccum :: Double
         avgFrameTime = (newAccum * 1000.0) / fromIntegral newFrameCount
-    logInfoSM CatRender "Performance"
+    logDebugSM CatGraphics "Performance"
       [("fps", T.pack $ printf "%.1f" fps)
       ,("avg_frame_ms", T.pack $ printf "%.2f" avgFrameTime)]
   

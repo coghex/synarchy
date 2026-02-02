@@ -9,7 +9,7 @@ function ui.init(scriptId)
     engine.logInfo("=== UI System Test ===")
     
     -- Load font for text
-    uiFont = engine.loadFont("assets/fonts/Cabal.ttf", 24)
+    uiFont = engine.loadFont("assets/fonts/arcade.ttf", 24)
     
     -- Load all 9 box textures
     local texCenter = engine.loadTexture("assets/textures/box/box.png")
@@ -32,7 +32,7 @@ function ui.init(scriptId)
     
     -- Create a 9-tile box
     -- UI.newBox(name, width, height, boxTexHandle, tileSize, r, g, b, a, pageHandle)
-    testBox = UI.newBox("test_box", 300, 200, boxTexSet, 64, 1.0, 1.0, 1.0, 1.0, mainMenuPage)
+    testBox = UI.newBox("test_box", 600, 200, boxTexSet, 64, 1.0, 1.0, 1.0, 1.0, mainMenuPage)
     engine.logInfo("Created box: " .. tostring(testBox))
     
     -- Add box to page

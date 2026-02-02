@@ -737,9 +737,9 @@ createFocusManager	src/UI/Focus.hs	66;"	f
 createFontDescriptorPool	src/Engine/Graphics/Font/Load.hs	37;"	f
 createFontPipeline	src/Engine/Graphics/Font/Draw.hs	108;"	f
 createFontQuadBuffer	src/Engine/Graphics/Font/Draw.hs	259;"	f
-createFontTextureGrayscale	src/Engine/Graphics/Font/Load.hs	261;"	f
+createFontTextureGrayscale	src/Engine/Graphics/Font/Load.hs	264;"	f
 createFontTextureLayout	src/Engine/Graphics/Font/Draw.hs	304;"	f
-createFontTextureSampler	src/Engine/Graphics/Font/Load.hs	430;"	f
+createFontTextureSampler	src/Engine/Graphics/Font/Load.hs	433;"	f
 createFontUIPipeline	src/Engine/Graphics/Font/Draw.hs	320;"	f
 createFrameResources	src/Engine/Graphics/Vulkan/Command.hs	154;"	f
 createLuaBackend	src/Engine/Scripting/Lua/Backend.hs	57;"	f
@@ -982,7 +982,7 @@ getBinDir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy
 getBoxTextureSet	src/UI/Manager.hs	330;"	f
 getChildZIndex	src/UI/Render.hs	123;"	f
 getCommandBuffer	src/Engine/Loop/Resource.hs	49;"	f
-getCurTime	src/Engine/Loop/Timing.hs	77;"	f
+getCurTime	src/Engine/Loop/Timing.hs	76;"	f
 getCurrentBatches	src/Engine/Scene/Manager.hs	74;"	f
 getCurrentRenderBatches	src/Engine/Scene/Render.hs	94;"	f
 getDataDir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	82;"	f
@@ -1250,7 +1250,7 @@ newChannel	src/Engine/Core/Queue.hs	35;"	f
 newQueue	src/Engine/Core/Queue.hs	14;"	f
 newVar	src/Engine/Core/Var.hs	18;"	f
 nextObjectIdRef	src/Engine/Core/State.hs	46;"	f
-nextPowerOf2	src/Engine/Graphics/Font/Load.hs	219;"	f
+nextPowerOf2	src/Engine/Graphics/Font/Load.hs	222;"	f
 nodeChildren	src/Engine/Scene/Types/Node.hs	28;"	f
 nodeColor	src/Engine/Scene/Types/Node.hs	25;"	f
 nodeDirty	src/Engine/Scene/Types/Node.hs	30;"	f
@@ -1266,7 +1266,7 @@ nodeTransform	src/Engine/Scene/Types/Node.hs	19;"	f
 nodeType	src/Engine/Scene/Types/Node.hs	18;"	f
 nodeUVRect	src/Engine/Scene/Types/Node.hs	26;"	f
 nodeVisible	src/Engine/Scene/Types/Node.hs	24;"	f
-packGlyphsSTBWithMetrics	src/Engine/Graphics/Font/Load.hs	181;"	f
+packGlyphsSTBWithMetrics	src/Engine/Graphics/Font/Load.hs	184;"	f
 parseCategory	src/Engine/Core/Log.hs	100;"	f
 parseKeyName	src/Engine/Input/Bindings.hs	64;"	f
 parseLayer	src/Engine/Scripting/Lua/API/UI.hs	422;"	f
@@ -1344,7 +1344,7 @@ resizeCallback	src/Engine/Input/Callback.hs	75;"	f
 resumeScriptFn	src/Engine/Scripting/Lua/API/Core.hs	149;"	f
 rotation	src/Engine/Scene/Base.hs	14;"	f
 runAllCleanups	src/Engine/Graphics/Vulkan/Types/Cleanup.hs	37;"	f
-runCommandsOnce	src/Engine/Graphics/Font/Load.hs	403;"	f
+runCommandsOnce	src/Engine/Graphics/Font/Load.hs	406;"	f
 runCommandsOnce	src/Engine/Graphics/Vulkan/Command.hs	117;"	f
 runEngineM	src/Engine/Core/Monad.hs	34;"	f
 runEngineTest	test/Test/Engine/Graphics/Vulkan/Device.hs	26;"	f
@@ -1506,7 +1506,7 @@ toInt	src/Engine/Asset/Handle.hs	53;"	f
 tpsDescPool	src/Engine/Graphics/Vulkan/Types/Texture.hs	32;"	f
 tpsLayout	src/Engine/Graphics/Vulkan/Types/Texture.hs	33;"	f
 traceLog	src/Engine/Core/Log.hs	516;"	f
-transitionImageLayout	src/Engine/Graphics/Font/Load.hs	361;"	f
+transitionImageLayout	src/Engine/Graphics/Font/Load.hs	364;"	f
 transitionImageLayout	src/Engine/Graphics/Vulkan/Texture.hs	201;"	f
 trbFont	src/Engine/Scene/Types/Batch.hs	43;"	f
 trbInstances	src/Engine/Scene/Types/Batch.hs	45;"	f
@@ -1595,7 +1595,7 @@ upVisible	src/UI/Types.hs	52;"	f
 upZIndex	src/UI/Types.hs	51;"	f
 updateBatches	src/Engine/Scene/Batch/Update.hs	21;"	f
 updateFontState	src/Engine/Asset/Manager.hs	91;"	f
-updateFrameTiming	src/Engine/Loop/Timing.hs	22;"	f
+updateFrameTiming	src/Engine/Loop/Timing.hs	21;"	f
 updateKeyState	src/Engine/Input/Thread.hs	191;"	f
 updateMouseState	src/Engine/Input/Thread.hs	201;"	f
 updateNodeTransform	src/Engine/Scene/Graph.hs	143;"	f
@@ -1610,7 +1610,7 @@ updateUniformBufferForFrame	src/Engine/Loop/Frame.hs	195;"	f
 updateWindowState	src/Engine/Input/Thread.hs	207;"	f
 updateWorldTransforms	src/Engine/Scene/Graph.hs	138;"	f
 uploadBatchesToBuffer	src/Engine/Scene/Render.hs	140;"	f
-uploadFontAtlasToGPU	src/Engine/Graphics/Font/Load.hs	227;"	f
+uploadFontAtlasToGPU	src/Engine/Graphics/Font/Load.hs	230;"	f
 upmBoxTextures	src/UI/Types.hs	121;"	f
 upmElements	src/UI/Types.hs	116;"	f
 upmHovered	src/UI/Types.hs	120;"	f

@@ -173,9 +173,12 @@ renderGlyphWithMetrics logger font char scale = do
     case result of
         Nothing → do
             -- Warn when specific glyphs fail to rasterize
-            logWarn logger CatFont $ "Failed to rasterize glyph: '" <> T.singleton char <> "'"
+            when (not $ isExpectedEmptyGlyph char) $
+                logWarn logger CatFont $ "Failed to rasterize glyph: '" <> T.singleton char <> "'"
             return (0, 0, 0, 0, [])
         Just glyph → return glyph
+  where
+    isExpectedEmptyGlyph c = c `elem` [' ', '\n', '\t', '\r']
 
 -- Updated to use metrics stored before font was freed
 packGlyphsSTBWithMetrics ∷ Int → Int → Int → Int → Int

@@ -43,7 +43,7 @@ function game.init(scriptId)
     tex10 = engine.loadTexture("assets/textures/tile10.png")
     engine.logInfo("Texture loaded, ready for input")
     -- load font
-    font = engine.loadFont("assets/fonts/ChrustyRock-ORLA.ttf", 32)
+    font = engine.loadFont("assets/fonts/gothic.ttf", 32)
     if font then
         engine.logInfo("Font loaded successfully")
         testText = engine.spawnText(100,100,font,"hello, scene graph", "#99FF00", 1)

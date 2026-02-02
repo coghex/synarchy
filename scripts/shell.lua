@@ -74,12 +74,7 @@ function shell.init(scriptId)
     myScriptId = scriptId
     engine.logInfo("Shell module initialized with scriptId: " .. tostring(scriptId))
     
-    shellFont = engine.loadFont("assets/fonts/Cabal.ttf", fontSize)
-    if shellFont then
-        engine.logInfo("Shell font loaded: Cabal.ttf")
-    else
-        engine.logError("Failed to load shell font")
-    end
+    shellFont = engine.loadFont("assets/fonts/shell.ttf", fontSize)
     
     texBox = engine.loadTexture("assets/textures/box/box.png")
     texBoxN = engine.loadTexture("assets/textures/box/boxn.png")
@@ -362,7 +357,7 @@ function shell.rebuildBox()
     local row2Y = baseY + tileSize + middleHeight + tileSize / 2
     local promptX = baseX + tileSize + 10
     local promptY = row2Y - fontSize
-    local bufferX = promptX + fontSize
+    local bufferX = promptX + fontSize + 20
     
     if not boxSpawned then
         -- First time: spawn all sprites
@@ -435,7 +430,7 @@ function shell.updateCursorPos()
     local row2Y = baseY + tileSize + middleHeight + tileSize / 2
     local promptX = baseX + tileSize + 10
     local promptY = row2Y - fontSize
-    local bufferX = promptX + fontSize
+    local bufferX = promptX + fontSize + 20
     
     -- Only measure text up to cursor position
     local textBeforeCursor = inputBuffer:sub(inputScrollOffset + 1, cursorPos)
