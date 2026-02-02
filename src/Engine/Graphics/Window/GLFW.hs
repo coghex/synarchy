@@ -48,7 +48,7 @@ import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM, logDebugM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM)
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
                                    , InitError(..))
 import Engine.Graphics.Base (GraphicsConfig(..))
@@ -61,7 +61,7 @@ initializeGLFW ∷ EngineM ε σ ()
 initializeGLFW = do
   success ← liftIO $ GLFW.init
   case success of
-    True  → return ()--logDebug "GLFW initialized"
+    True  → logDebugM CatGraphics "GLFW initialized"
     False → logAndThrowM CatGraphics (ExInit WindowCreationFailed)
                  "Failed to initialize GLFW"
   -- Set necessary window hints for Vulkan
@@ -178,7 +178,7 @@ createWindowSurface ∷ Window
                    → EngineM ε σ SurfaceKHR  -- ^ Raw Vulkan surface handle
 createWindowSurface (Window win) inst = allocResource
   (\surface → do
---      logDebug "Destroying window surface"
+      logInfoM CatVulkan "Destroying window surface"
       liftIO $ destroySurfaceKHR inst surface Nothing)
   $ do
     surfaceOrError ← liftIO $ alloca $ \surfacePtr → do

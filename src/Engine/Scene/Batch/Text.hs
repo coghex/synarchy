@@ -9,6 +9,7 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.List as List
+import qualified Data.Text as T
 import Data.IORef (readIORef)
 import Engine.Scene.Base (ObjectId, NodeType(..), LayerId(..), Transform2D(..))
 import Engine.Scene.Types.Node (SceneNode(..), WorldTransform(..))
@@ -20,7 +21,8 @@ import Engine.Graphics.Font.Draw (layoutText, layoutTextUI)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Core.Monad
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Error.Exception (logDebug)
+import Engine.Core.Log.Monad (logDebugM)
+import Engine.Core.Log (LogCategory(..))
 
 -- | Collect text batches from scene graph
 collectTextBatches ∷ SceneGraph → Float → Float → EngineM ε σ (V.Vector TextRenderBatch)
@@ -33,7 +35,8 @@ collectTextBatches graph screenW screenH = do
   batches ← forM grouped $ \((fontHandle, layerId), nodes) → do
     case Map.lookup fontHandle (fcFonts cache) of
       Nothing → do
-        logDebug $ " Font " ⧺ show fontHandle ⧺ " not found in cache."
+        logDebugM CatFont $ " Font " <> T.pack (show fontHandle)
+                                     <> " not found in cache."
         return Nothing
       Just atlas → do
           allInstances ← fmap V.concat $ forM nodes $ \node → do
@@ -48,10 +51,11 @@ collectTextBatches graph screenW screenH = do
                                       else layoutText atlas x y screenW screenH text color
                       return instances
                   (Nothing, _) → do
-                      logDebug $ "      No text for node " ⧺ show (nodeId node)
+                      logDebugM CatFont $ "      No text for node "
+                                        <> T.pack (show (nodeId node))
                       return V.empty
                   (_, Nothing) → do
-                      logDebug $ "      No world transform for node"
+                      logDebugM CatFont $ "      No world transform for node"
                       return V.empty
           return $ Just $ TextRenderBatch
               { trbFont = fontHandle

@@ -1,6 +1,15 @@
 module Engine.Graphics.Font.Load where
 
 import UPrelude
+import qualified Data.Map.Strict as Map
+import qualified Data.Vector as V
+import qualified Data.Text as T
+import Data.Word (Word8)
+import Data.Char (ord)
+import Data.Array.IO (IOArray, newArray, writeArray, getElems)
+import Data.IORef (readIORef, atomicModifyIORef')
+import Foreign.Ptr (castPtr)
+import Foreign.Marshal.Array (pokeArray)
 import Engine.Asset.Types
 import Engine.Asset.Manager (generateTextureHandle)
 import Engine.Asset.Handle
@@ -15,19 +24,13 @@ import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logWarnM, logAndThrowM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Resource (allocResource)
-import Engine.Core.Error.Exception
+import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
 import Control.Monad (forM_, when, foldM, forM)
-import qualified Data.Map.Strict as Map
-import qualified Data.Vector as V
-import Data.Word (Word8)
-import Data.Char (ord)
-import Data.Array.IO (IOArray, newArray, writeArray, getElems)
-import Data.IORef (readIORef, atomicModifyIORef')
-import Foreign.Ptr (castPtr)
-import Foreign.Marshal.Array (pokeArray)
 
 -- | Create a descriptor pool dedicated to font atlas textures
 -- Each font gets one descriptor set with one combined image sampler
@@ -54,12 +57,13 @@ loadFont requestedHandle fontPath fontSize = do
     gs ← gets graphicsState
     case Map.lookup (fontPath, fontSize) (fcPathCache cache) of
         Just handle → do
-            logInfo $ "Font already loaded: " ⧺ (show fontPath)
+            logWarnM CatFont $ "Font already loaded: " <> T.pack (show fontPath)
             return handle
         Nothing → do
             -- get the descriptor layout for font
             fontDescLayout ← case fontDescriptorLayout gs of
-                Nothing → throwGraphicsError DescriptorError "No font descriptor layout"
+                Nothing → logAndThrowM CatFont (ExGraphics DescriptorError)
+                              "Font descriptor layout not initialized"
                 Just layout → return layout
             -- Generate atlas
             atlas ← liftIO $ generateFontAtlas fontPath fontSize
@@ -197,16 +201,20 @@ uploadFontAtlasToGPU atlas fontDescriptorsLayout = do
     
     -- Get Vulkan handles
     device ← case vulkanDevice state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No device"
+        Nothing → logAndThrowM CatFont (ExGraphics VulkanDeviceLost)
+                                       "No device"
         Just d → pure d
     pDevice ← case vulkanPDevice state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No physical device"
+        Nothing → logAndThrowM CatFont (ExGraphics VulkanDeviceLost)
+                                       "No physical device"
         Just pd → pure pd
     cmdPool ← case vulkanCmdPool state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No command pool"
+        Nothing → logAndThrowM CatFont (ExGraphics VulkanDeviceLost)
+                                       "No command pool"
         Just pool → pure pool
     queues ← case deviceQueues state of
-        Nothing → throwGraphicsError VulkanDeviceLost "No queues"
+        Nothing → logAndThrowM CatFont (ExGraphics VulkanDeviceLost)
+                                       "No device queues"
         Just qs → pure qs
     
     let width = faAtlasWidth atlas
@@ -279,7 +287,8 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
     -- 8. Allocate and update descriptor set
     state ← get
     fontPool ← case fontDescriptorPool (graphicsState state) of
-        Nothing → throwGraphicsError DescriptorError "Font descriptor pool not initialized"
+        Nothing → logAndThrowM CatFont (ExGraphics DescriptorError)
+                                       "Font descriptor pool not initialized"
         Just pool → pure pool
     
     let allocInfo = zero
