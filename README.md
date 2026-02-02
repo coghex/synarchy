@@ -56,5 +56,4 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
 
 ## Known Issues
 
-- CallStack traces dont show the whole callstack, only where it is called in Error.Exception
 - on macos you will get junk in stdout, apple says there is no way around this, which is wild, even redirecting stdout doesnt work

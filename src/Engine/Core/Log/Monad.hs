@@ -12,11 +12,13 @@ module Engine.Core.Log.Monad
   , logErrorSM
   , withLogContextM
   , logAndThrowM
+  , withTiming
   ) where
 
 import UPrelude
 import qualified Data.Text as T
 import GHC.Stack (HasCallStack)
+import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import Control.Monad.Reader.Class (MonadReader, asks)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Error.Class (MonadError)
@@ -97,3 +99,15 @@ logAndThrowM :: (HasCallStack, MonadIO m, MonadReader EngineEnv m, MonadError En
 logAndThrowM cat exType msg = do
   logger <- getLogger
   logAndThrow logger cat exType msg
+
+{-# INLINE withTiming #-}
+withTiming :: (MonadIO m, MonadReader EngineEnv m) 
+           => LogCategory -> Text -> m a -> m a
+withTiming cat label action = do
+  start <- liftIO getCurrentTime
+  result <- action
+  end <- liftIO getCurrentTime
+  let durationMs = realToFrac (diffUTCTime end start * 1000) :: Double
+  when (durationMs > 1.0) $  -- Only log if > 1ms
+    logDebugSM cat label [("duration_ms", T.pack $ show durationMs)]
+  return result

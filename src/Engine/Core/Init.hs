@@ -10,7 +10,8 @@ import Data.IORef (newIORef)
 import qualified Data.Map as Map
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Core.Defaults
-import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..), LogLevel(..))
+import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
+                       , LogLevel(..), LogCategory(..))
 import Engine.Core.State
 import Engine.Core.Types
 import Engine.Core.Var
@@ -58,6 +59,7 @@ initializeEngine = do
   
   -- Load video config
   videoConfig ← loadVideoConfig logger "config/video.yaml"
+  videoConfigRef ← newIORef $ videoConfig
   
   -- Create camera references
   cameraRef ← newIORef defaultCamera
@@ -75,6 +77,7 @@ initializeEngine = do
   -- Build environment
   let env = EngineEnv
         { engineConfig     = defaultEngineConfig
+        , videoConfigRef   = videoConfigRef
         , eventQueue       = eventQueue
         , inputQueue       = inputQueue
         , loggerRef        = loggerRef

@@ -12,6 +12,7 @@ data VideoConfig = VideoConfig
     , vcHeight     ∷ Int
     , vcFullscreen ∷ Bool
     , vcVSync      ∷ Bool
+    , vcFrameLimit ∷ Maybe Int
     , vcMSAA       ∷ Int
     } deriving (Show, Eq)
 
@@ -22,6 +23,7 @@ defaultVideoConfig = VideoConfig
     , vcHeight     = 600
     , vcFullscreen = False
     , vcVSync      = True
+    , vcFrameLimit = Nothing
     , vcMSAA       = 1
     }
 
@@ -30,6 +32,7 @@ data VideoConfigFile = VideoConfigFile
     { vfResolution  ∷ Resolution
     , vfFullscreen  ∷ Bool
     , vfVSync       ∷ Bool
+    , vfFrameLimit  ∷ Maybe Int
     , vfMSAA        ∷ Int
     } deriving (Show, Eq)
 
@@ -50,6 +53,7 @@ instance FromJSON VideoConfigFile where
         <$> videoObj .: "resolution"
         <*> videoObj .: "fullscreen" .!= False
         <*> videoObj .: "vsync" .!= True
+        <*> videoObj .: "frame_limit" .!= Nothing
         <*> videoObj .: "msaa" .!= 1
     parseJSON _ = fail "Expected an object for VideoConfigFile"
 
@@ -67,5 +71,6 @@ loadVideoConfig logger path = do
             , vcHeight     = resHeight (vfResolution vf)
             , vcFullscreen = vfFullscreen vf
             , vcVSync      = vfVSync vf
+            , vcFrameLimit = vfFrameLimit vf
             , vcMSAA       = vfMSAA vf
             }

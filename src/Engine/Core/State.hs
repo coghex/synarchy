@@ -12,6 +12,7 @@ import Engine.Core.Queue as Q
 import Engine.Scripting.Lua.Types
 import Engine.Event.Types
 import Engine.Graphics.Types
+import Engine.Graphics.Config
 import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Capability (TextureSystemCapability(..))
 import Engine.Graphics.Vulkan.Types
@@ -34,6 +35,7 @@ import UI.Focus (FocusManager)
 -- | Engine environment (read-only)
 data EngineEnv = EngineEnv
   { engineConfig     ∷ EngineConfig
+  , videoConfigRef   ∷ IORef VideoConfig
   , eventQueue       ∷ Q.Queue Event
   , inputQueue       ∷ Q.Queue InputEvent
   , loggerRef        ∷ IORef LoggerState

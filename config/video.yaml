@@ -4,4 +4,5 @@ video:
     height: 1080
   fullscreen: false
   vsync: true
+  frame_limit: 60
   msaa: 1

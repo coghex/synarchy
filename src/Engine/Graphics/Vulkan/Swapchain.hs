@@ -47,17 +47,17 @@ querySwapchainSupport pdev surface = do
 -- Replace createVulkanSwapchain:
 
 -- | Creates a new swapchain
-createVulkanSwapchain ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR
+createVulkanSwapchain ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR → Bool
   → EngineM ε σ SwapchainInfo
-createVulkanSwapchain pdev dev queues surface = do
+createVulkanSwapchain pdev dev queues surface vsyncEnabled = do
   logDebugM CatSwapchain "Creating swapchain"
   SwapchainSupportDetails{..} ← querySwapchainSupport pdev surface
   let ssd = SwapchainSupportDetails{..}
       SurfaceFormatKHR{format=form,colorSpace=cs} = chooseSwapSurfaceFormat ssd
       imageCount = min (Surf.maxImageCount capabilities)
                       (Surf.minImageCount capabilities)
-      spMode = chooseSwapPresentMode ssd
-      sExtent = chooseSwapExtent ssd
+  spMode ← chooseSwapPresentMode ssd vsyncEnabled
+  let sExtent = chooseSwapExtent ssd
       (sharing, qfi) = if (graphicsQueue queues ≠ presentQueue queues)
                        then (SHARING_MODE_CONCURRENT
                            , V.fromList [ graphicsFamIdx queues
@@ -155,16 +155,26 @@ chooseSwapSurfaceFormat (SwapchainSupportDetails _ formats _) = best
         preferred = zero { format = FORMAT_B8G8R8A8_UNORM
                        , colorSpace = COLOR_SPACE_SRGB_NONLINEAR_KHR }
 
--- | Choose the best swap present mode
-chooseSwapPresentMode ∷ SwapchainSupportDetails → PresentModeKHR
-chooseSwapPresentMode (SwapchainSupportDetails _ _ presModes) = best
-  where best = if   PRESENT_MODE_IMMEDIATE_KHR `elem` presModes
-               then PRESENT_MODE_IMMEDIATE_KHR
-               else if PRESENT_MODE_MAILBOX_KHR `elem` presModes
-               then PRESENT_MODE_MAILBOX_KHR
-               else if PRESENT_MODE_FIFO_KHR `elem` presModes
-               then PRESENT_MODE_FIFO_KHR
-               else V.head presModes
+chooseSwapPresentMode :: SwapchainSupportDetails -> Bool -> EngineM ε σ Swap.PresentModeKHR
+chooseSwapPresentMode ssd vsyncEnabled = do
+  let available = presentModes ssd
+  
+  if vsyncEnabled
+    then do
+      -- VSync ON: Use FIFO (guaranteed to be available, caps at refresh rate)
+      logInfoM CatSwapchain "VSync enabled: using FIFO present mode"
+      pure Swap.PRESENT_MODE_FIFO_KHR
+    else do
+      -- VSync OFF: Prefer MAILBOX (triple buffering) or IMMEDIATE (no limit)
+      let preferred = if Swap.PRESENT_MODE_MAILBOX_KHR `V.elem` available
+                        then Swap.PRESENT_MODE_MAILBOX_KHR
+                        else if Swap.PRESENT_MODE_IMMEDIATE_KHR `V.elem` available
+                               then Swap.PRESENT_MODE_IMMEDIATE_KHR
+                               else Swap.PRESENT_MODE_FIFO_KHR
+      
+      logInfoSM CatSwapchain "VSync disabled: using present mode"
+        [("mode", T.pack $ show preferred)]
+      pure preferred
 
 -- | Set the width and height of the swapchain
 chooseSwapExtent ∷ SwapchainSupportDetails → Extent2D

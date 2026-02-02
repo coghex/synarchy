@@ -61,9 +61,7 @@ handleEngineRunning = do
     
     let Window glfwWin = window
     
-    -- Frame timing
-    updateFrameTiming
-    
+   
     -- Process events
     GLFW.pollEvents
     handleInputEvents
@@ -80,4 +78,5 @@ handleEngineRunning = do
             liftIO $ writeIORef (lifecycleRef env) CleaningUp
         else unless (lifecycle ≡ CleaningUp) $ do
             drawFrame
+            updateFrameTiming
             mainLoop

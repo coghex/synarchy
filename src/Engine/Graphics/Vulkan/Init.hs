@@ -21,6 +21,7 @@ import Engine.Core.Error.Exception
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logDebugSM, logInfoSM)
 import Engine.Graphics.Base
+import Engine.Graphics.Config
 import Engine.Graphics.Camera
 import Engine.Graphics.Types
 import Engine.Graphics.Font.Load (createFontDescriptorPool)
@@ -92,8 +93,14 @@ initializeVulkan window = do
                     } }
   
   -- Create swapchain
+  env <- ask
+  videoConfig <- liftIO $ readIORef (videoConfigRef env)
+  let vsyncEnabled = vcVSync videoConfig
+  
+  logDebugSM CatVulkan "Creating swapchain"
+    [("vsync", if vsyncEnabled then "enabled" else "disabled")]
   logDebugM CatGraphics "Creating swapchain"
-  swapInfo ← createVulkanSwapchain physicalDevice device queues surface
+  swapInfo ← createVulkanSwapchain physicalDevice device queues surface vsyncEnabled
   modify $ \s → s { graphicsState = (graphicsState s) {
                       swapchainInfo = Just swapInfo } }
   

@@ -11,7 +11,7 @@ import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), graphicsState, glfwWindow)
 import Engine.Core.Thread (shutdownThread)
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM)
+import Engine.Core.Log.Monad (logDebugM, withTiming)
 import Engine.Graphics.Config (loadVideoConfig)
 import Engine.Graphics.Vulkan.Init (initializeVulkan)
 import Engine.Graphics.Window.Types (Window(..))
@@ -44,13 +44,14 @@ main = do
   
   -- Load video configuration
   logger ← liftIO $ readIORef (loggerRef env)
-  videoConfig ← loadVideoConfig logger "config/video.yaml"
+  videoConfig ← readIORef (videoConfigRef env)
   
   -- Define main engine action
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
         -- Create window
-        window ← GLFW.createWindow $ defaultWindowConfig videoConfig
+        window ← withTiming CatGraphics "GLFW.createWindow"
+                    $ GLFW.createWindow $ defaultWindowConfig videoConfig
         modify $ \s → s { graphicsState = (graphicsState s) {
                             glfwWindow = Just window } }
         

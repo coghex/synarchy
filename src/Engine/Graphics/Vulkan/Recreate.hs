@@ -6,13 +6,14 @@ module Engine.Graphics.Vulkan.Recreate
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Text as T
-import Data.IORef (writeIORef)
+import Data.IORef (writeIORef, readIORef)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logAndThrowM)
 import Engine.Core.Error.Exception (GraphicsError(..), ExceptionType(..))
 import Engine.Graphics.Camera (UICamera(..))
+import Engine.Graphics.Config
 import Engine.Graphics.Types
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
@@ -90,7 +91,10 @@ recreateAllResources pDevice device queues surface window = do
         bindlessLayout = btsDescriptorLayout texSystem
     
     -- 1. Swapchain
-    swapInfo <- createVulkanSwapchain pDevice device queues surface
+    env <- ask
+    videoConfig ← liftIO $ readIORef (videoConfigRef env)
+    let vsyncEnabled = vcVSync videoConfig
+    swapInfo <- createVulkanSwapchain pDevice device queues surface vsyncEnabled
     modify $ \s -> s { graphicsState = (graphicsState s) {
         swapchainInfo = Just swapInfo
     }}
