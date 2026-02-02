@@ -7,7 +7,7 @@ import qualified Data.Map as Map
 import qualified Data.Text as T
 import Data.IORef
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM, logInfoM, logInfoSM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
@@ -69,7 +69,17 @@ updateSceneForRender = do
                 let updatedBatchMgr = updateTextBatches textRenderBatches (smBatchManager updatedSceneMgr)
                     simpleBatches = convertToTextBatches textRenderBatches
                     finalBatchMgr = buildLayeredBatches updatedBatchMgr
-                    finalSceneMgr = updatedSceneMgr 
+                    spriteBatches = getCurrentBatches updatedSceneMgr
+                    spriteCount = V.sum $ V.map (V.length . rbVertices) spriteBatches
+                    drawCallCount = V.length spriteBatches + V.length textRenderBatches
+                
+                logDebugSM CatScene "Batch generation complete"
+                    [("spriteBatches", T.pack $ show $ V.length spriteBatches)
+                    ,("spriteVertices", T.pack $ show spriteCount)
+                    ,("textBatches", T.pack $ show $ V.length textRenderBatches)
+                    ,("totalDrawCalls", T.pack $ show drawCallCount)]
+                
+                let finalSceneMgr = updatedSceneMgr 
                                         { smSceneGraphs = Map.insert sceneId updatedGraph (smSceneGraphs updatedSceneMgr)
                                         , smBatchManager = finalBatchMgr }
                 modify $ \s → s { sceneManager = finalSceneMgr }

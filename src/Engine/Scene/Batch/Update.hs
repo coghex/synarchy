@@ -13,9 +13,13 @@ import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.List as List
 import qualified Data.Set as Set
+import qualified Data.Text as T
 import Engine.Asset.Handle (TextureHandle, FontHandle)
 import Engine.Scene.Base (ObjectId, LayerId)
 import Engine.Scene.Types.Batch
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logDebugSM)
+import System.IO.Unsafe (unsafePerformIO)
 
 -- | Update batches with new visible objects
 updateBatches ∷ V.Vector DrawableObject → BatchManager → BatchManager
@@ -60,7 +64,13 @@ createBatch ((textureId, layerId), objects) =
             , rbObjects = objectIds
             , rbDirty = True
             }
-    in ((textureId, layerId), batch)
+    in unsafePerformIO $ do
+        logDebugSM CatScene "Batch created"
+            [("textureId", T.pack $ show textureId)
+            ,("layer", T.pack $ show layerId)
+            ,("vertices", T.pack $ show $ V.length allVertices)
+            ,("objects", T.pack $ show $ V.length objects)]
+        pure ((textureId, layerId), batch)
 
 -- | Get render batches sorted by layer and z-index
 getSortedBatches ∷ BatchManager → V.Vector RenderBatch

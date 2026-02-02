@@ -8,6 +8,7 @@ module Engine.Scene.Batch.Sprite
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
+import qualified Data.Text as T
 import Data.Maybe (mapMaybe)
 import Engine.Scene.Base (ObjectId, NodeType(..), LayerId)
 import Engine.Scene.Types.Node (SceneNode(..), WorldTransform(..))
@@ -21,6 +22,8 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Core.Monad
 import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.Log (LogCategory(..))
+import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 
 -- | Collect sprite batches from scene graph
 collectSpriteBatches ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
@@ -31,6 +34,12 @@ collectSpriteBatches graph camera viewWidth viewHeight = do
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject && nodeVisible n) allNodes
         visibleSprites = filter (isNodeVisible camera viewWidth viewHeight) spriteNodes
         drawableObjs = mapMaybe (nodeToDrawable graph texSystem) visibleSprites
+    
+    logDebugSM CatScene "Sprite batch generation"
+        [("totalSprites", T.pack $ show $ length spriteNodes)
+        ,("visibleSprites", T.pack $ show $ length visibleSprites)
+        ,("drawableObjects", T.pack $ show $ length drawableObjs)]
+    
     pure $ V.fromList drawableObjs
 
 -- | Collect visible objects from scene graph (with UI layer bypass)
@@ -42,6 +51,11 @@ collectVisibleObjects graph camera viewWidth viewHeight = do
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject && nodeVisible n) allNodes
         visibleNodes = filter (\n → isUILayer (nodeLayer n) || isNodeVisible camera viewWidth viewHeight n) spriteNodes
         drawableObjs = mapMaybe (nodeToDrawable graph texSystem) visibleNodes
+    
+    logDebugSM CatScene "Visible object culling"
+        [("totalObjects", T.pack $ show $ length spriteNodes)
+        ,("visibleObjects", T.pack $ show $ length visibleNodes)]
+    
     pure $ V.fromList drawableObjs
 
 -- | Convert scene node to drawable object (sprites only)

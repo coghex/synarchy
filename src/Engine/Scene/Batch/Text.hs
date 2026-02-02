@@ -21,7 +21,7 @@ import Engine.Graphics.Font.Draw (layoutText, layoutTextUI)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Core.Monad
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log.Monad (logDebugM)
+import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 import Engine.Core.Log (LogCategory(..))
 
 -- | Collect text batches from scene graph
@@ -29,6 +29,10 @@ collectTextBatches ∷ SceneGraph → Float → Float → EngineM ε σ (V.Vecto
 collectTextBatches graph screenW screenH = do
   let allNodes = Map.elems (sgNodes graph)
       textNodes = filter (\n → nodeType n ≡ TextObject && nodeVisible n) allNodes
+  
+  logDebugSM CatScene "Text batch collection started"
+      [("totalTextNodes", T.pack $ show $ length textNodes)]
+  
   cacheRef ← asks fontCacheRef
   cache ← liftIO $ readIORef cacheRef
   let grouped = groupByFontAndLayer textNodes
@@ -65,6 +69,12 @@ collectTextBatches graph screenW screenH = do
               , trbInstances = allInstances
               , trbObjects = V.fromList $ map nodeId nodes }
   let result = V.fromList $ catMaybes batches
+      totalVertices = V.sum $ V.map (V.length . trbInstances) result
+  
+  logDebugSM CatScene "Text batch generation complete"
+      [("batches", T.pack $ show $ V.length result)
+      ,("totalVertices", T.pack $ show totalVertices)]
+  
   return result
 
 -- | Group text nodes by font and layer
