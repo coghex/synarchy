@@ -4,9 +4,10 @@ module Engine.Scene.Render where
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map as Map
+import qualified Data.Text as T
 import Data.IORef
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logAndThrowM)
+import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..))
@@ -32,6 +33,9 @@ updateSceneForRender = do
     state ← gets graphicsState
     sceneMgr ← gets sceneManager
     
+    logDebugSM CatRender "Updating scene"
+        [("activeScene", maybe "none" (T.pack . show) (smActiveScene sceneMgr))]
+    
     -- Get window dimensions for frustum culling
     let Window win = fromJust $ glfwWindow state
     (width, height) ← GLFW.getFramebufferSize win
@@ -51,8 +55,17 @@ updateSceneForRender = do
     case smActiveScene updatedSceneMgr of
         Just sceneId → case Map.lookup sceneId (smSceneGraphs updatedSceneMgr) of
             Just graph → do
+                let nodeCount = length $ sgNodes graph
+                logDebugSM CatRender "Processing scene graph"
+                    [("sceneId", T.pack $ show sceneId)
+                    ,("nodes", T.pack $ show nodeCount)]
+                
                 let updatedGraph = updateWorldTransforms graph
                 textRenderBatches ← collectTextBatches updatedGraph screenW screenH
+                
+                logDebugSM CatRender "Collected text batches"
+                    [("textBatches", T.pack $ show $ V.length textRenderBatches)]
+                
                 let updatedBatchMgr = updateTextBatches textRenderBatches (smBatchManager updatedSceneMgr)
                     simpleBatches = convertToTextBatches textRenderBatches
                     finalBatchMgr = buildLayeredBatches updatedBatchMgr
@@ -60,14 +73,21 @@ updateSceneForRender = do
                                         { smSceneGraphs = Map.insert sceneId updatedGraph (smSceneGraphs updatedSceneMgr)
                                         , smBatchManager = finalBatchMgr }
                 modify $ \s → s { sceneManager = finalSceneMgr }
-            Nothing → modify $ \s → s { sceneManager = updatedSceneMgr }
-        Nothing → modify $ \s → s { sceneManager = updatedSceneMgr }
+            Nothing → do
+                logDebugM CatScene "No scene graph found for active scene"
+                modify $ \s → s { sceneManager = updatedSceneMgr }
+        Nothing → do
+            logDebugM CatScene "No active scene"
+            modify $ \s → s { sceneManager = updatedSceneMgr }
 
 -- | Get current render batches from scene
 getCurrentRenderBatches ∷ EngineM ε σ (V.Vector RenderBatch)
 getCurrentRenderBatches = do
     sceneMgr ← gets sceneManager
-    pure $ getCurrentBatches sceneMgr
+    let batches = getCurrentBatches sceneMgr
+    logDebugSM CatRender "Retrieved current batches"
+        [("count", T.pack $ show $ V.length batches)]
+    pure batches
 
 -- | Create or resize dynamic vertex buffer for scene rendering
 ensureDynamicVertexBuffer ∷ Word64 → EngineM ε σ SceneDynamicBuffer
@@ -86,6 +106,10 @@ ensureDynamicVertexBuffer requiredVertices = do
     let bufferSize = requiredVertices * (fromIntegral vertexTotalSize)
         -- Add 50% padding for dynamic growth
         paddedSize = bufferSize + (bufferSize `div` 2)
+    
+    logDebugSM CatRender "Creating dynamic vertex buffer"
+        [("vertices", T.pack $ show requiredVertices)
+        ,("sizeBytes", T.pack $ show paddedSize)]
     
     -- Create new buffer
     (memory, buffer) ← createVulkanBuffer 
@@ -114,9 +138,15 @@ uploadBatchesToBuffer batches dynamicBuffer = do
     -- Calculate total vertices needed
     let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
     
+    logDebugSM CatRender "Uploading batches to buffer"
+        [("batches", T.pack $ show $ V.length batches)
+        ,("totalVertices", T.pack $ show totalVertices)]
+    
     -- Ensure buffer capacity
     finalBuffer ← if totalVertices > sdbCapacity dynamicBuffer
-        then ensureDynamicVertexBuffer totalVertices
+        then do
+            logDebugM CatScene "Buffer too small, resizing..."
+            ensureDynamicVertexBuffer totalVertices
         else pure dynamicBuffer
     
     -- Upload vertex data
@@ -134,10 +164,11 @@ uploadBatchesToBuffer batches dynamicBuffer = do
         liftIO $ do
             let ptr = castPtr dataPtr `plusPtr` offset
             forM_ (zip [0..] vertices) $ \(i, vertex) → do
-                let vertOffset = i * fromIntegral vertexTotalSize
-                poke (ptr `plusPtr` vertOffset) vertex
-            modifyIORef currentOffset (+ batchSize)
+                pokeByteOff ptr (i * fromIntegral vertexTotalSize) vertex
+            writeIORef currentOffset (offset + batchSize)
     
     unmapMemory device (sdbMemory finalBuffer)
+    
+    logDebugM CatRender "Buffer upload complete"
     
     pure $ finalBuffer { sdbUsed = totalVertices }

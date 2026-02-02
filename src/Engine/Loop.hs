@@ -36,12 +36,16 @@ mainLoop = do
 -- | Handle engine starting state
 handleEngineStarting ∷ EngineEnv → EngineM ε σ ()
 handleEngineStarting env = do
+    logInfoM CatSystem "Engine starting..."
     liftIO $ threadDelay 100000
+    
     -- Clear the input queue before entering main loop
     flushed ← liftIO $ Q.flushQueue (inputQueue env)
     when (not $ null flushed) $
-        logWarnM CatThread $ "unexpected inputs during start"
-                                 <> (T.pack (show flushed))
+        logWarnM CatThread $ "Unexpected inputs during startup: "
+                                 <> (T.pack (show (length flushed)) <> " events flushed")
+    
+    logInfoM CatSystem "Engine running"
     liftIO $ writeIORef (lifecycleRef env) EngineRunning
     mainLoop
 

@@ -10,7 +10,6 @@ import qualified Data.Map as Map
 import qualified Data.Text as T
 import Data.IORef (IORef, newIORef)
 import Vulkan.Core10
-import Engine.Core.Base
 import Engine.Asset.Base (AssetId, AssetStatus)
 import Engine.Asset.Handle
 import Engine.Scene.Base (ObjectId)

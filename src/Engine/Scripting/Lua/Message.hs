@@ -12,7 +12,7 @@ import Engine.Asset.Handle
 import Engine.Asset.Manager
 import Engine.Asset.Types
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM)
+import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 import Engine.Core.Monad
 import Engine.Core.State
 import qualified Engine.Core.Queue as Q
@@ -24,35 +24,80 @@ import Engine.Scene.Manager (addObjectToScene)
 import Engine.Scene.Types
 import Engine.Scripting.Lua.Types
 
--- | Process all pending messages from Lua thread
 processLuaMessages ∷ EngineM ε σ ()
 processLuaMessages = do
     env ← ask
-    let lteq = luaToEngineQueue env
+    messages ← liftIO $ Q.flushQueue (luaToEngineQueue env)
     
-    maybeMsg ← liftIO $ Q.tryReadQueue lteq
-    case maybeMsg of
-      Nothing → return ()
-      Just msg → do
-        handleLuaMessage msg
-        processLuaMessages
+    when (not $ null messages) $
+        logDebugSM CatLua "Processing Lua messages"
+            [("count", T.pack $ show $ length messages)]
+    
+    forM_ messages handleLuaMessage
 
--- | Handle individual Lua messages
 handleLuaMessage ∷ LuaToEngineMsg → EngineM ε σ ()
-handleLuaMessage msg = case msg of
-  LuaLoadTextureRequest handle path → handleLoadTexture handle path
-  LuaLoadFontRequest handle path size → handleLoadFont handle path size
-  LuaSpawnTextRequest oid x y fontHandle text color layer → 
-    handleSpawnText oid x y fontHandle text color layer
-  LuaSetTextRequest objId text → handleSetText objId text
-  LuaSpawnSpriteRequest objId x y width height texHandle layer →
-    handleSpawnSprite objId x y width height texHandle layer
-  LuaSetColorRequest objId color → handleSetColor objId color
-  LuaSetSizeRequest objId width height → handleSetSize objId width height
-  LuaSetPosRequest objId x y → handleSetPosSprite objId x y
-  LuaSetVisibleRequest objId visible → handleSetVisible objId visible
-  LuaDestroyRequest objId → handleDestroy objId
-  _ → return ()
+handleLuaMessage msg = do
+    case msg of
+        LuaLoadFontRequest handle path size → do
+            logDebugSM CatLua "Loading font"
+                [("path", T.pack path)
+                ,("size", T.pack $ show size)
+                ,("handle", T.pack (show handle))]
+            handleLoadFont handle path size
+        
+        LuaLoadTextureRequest handle path → do
+            logDebugSM CatLua "Loading texture"
+                [("path", T.pack path)
+                ,("handle", T.pack (show handle))]
+            handleLoadTexture handle path
+        
+        LuaSpawnTextRequest objId x y font text color layer → do
+            logDebugSM CatLua "Spawning text"
+                [("objId", T.pack (show objId))
+                ,("pos", T.pack (show x) <> "," <> T.pack (show y))
+                ,("text", T.take 20 text)
+                ,("layer", T.pack (show layer))]
+            handleSpawnText objId x y font text color layer
+        
+        LuaSetTextRequest objId text → do
+            logDebugSM CatLua "Setting text"
+                [("objId", T.pack (show objId))
+                ,("text", T.take 20 text)]
+            handleSetText objId text
+        
+        LuaSpawnSpriteRequest objId x y w h tex layer → do
+            logDebugSM CatLua "Spawning sprite"
+                [("objId", T.pack (show objId))
+                ,("pos", T.pack (show x) <> "," <> T.pack (show y))
+                ,("size", T.pack (show w) <> "x" <> T.pack (show h))
+                ,("layer", T.pack (show layer))]
+            handleSpawnSprite objId x y w h tex layer
+        
+        LuaSetPosRequest objId x y → do
+            logDebugSM CatLua "Moving object"
+                [("objId", T.pack $ show objId)
+                ,("pos", T.pack (show x) <> "," <> T.pack (show y))]
+            handleSetPos objId x y
+        
+        LuaSetColorRequest objId color → do
+            logDebugM CatLua $ "Setting color for object " <> T.pack (show objId)
+            handleSetColor objId color
+        
+        LuaSetSizeRequest objId w h → do
+            logDebugSM CatLua "Setting size"
+                [("objId", T.pack $ show objId)
+                ,("size", T.pack (show w) <> "x" <> T.pack (show h))]
+            handleSetSize objId w h
+        
+        LuaSetVisibleRequest objId visible → do
+            logDebugSM CatLua "Setting visibility"
+                [("objId", T.pack $ show objId)
+                ,("visible", if visible then "true" else "false")]
+            handleSetVisible objId visible
+        
+        LuaDestroyRequest objId → do
+            logDebugM CatLua $ "Destroying object " <> T.pack (show objId)
+            handleDestroy objId
 
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
@@ -131,8 +176,8 @@ handleSpawnSprite objId x y width height texHandle layer = do
           Nothing → logDebugM CatLua $ "Failed to add sprite " <> T.pack (show objId)
       Nothing → logDebugM CatLua "Cannot spawn sprite: no active scene"
 
-handleSetPosSprite ∷ ObjectId → Float → Float → EngineM ε σ ()
-handleSetPosSprite objId x y =
+handleSetPos ∷ ObjectId → Float → Float → EngineM ε σ ()
+handleSetPos objId x y =
     void $ modifySceneNode objId $ \node →
       node { nodeTransform = (nodeTransform node) { position = (x, y) } }
 

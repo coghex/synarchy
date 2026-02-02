@@ -9,7 +9,6 @@ import qualified Control.Monad.Logger.CallStack as Logger
 import Data.IORef (newIORef)
 import qualified Data.Map as Map
 import Engine.Asset.Types (defaultAssetPool)
-import Engine.Core.Base
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..), LogLevel(..))
 import Engine.Core.State

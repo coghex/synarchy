@@ -15,16 +15,6 @@ module Engine.Core.Error.Exception
   , throwEngineException
   , mkErrorContext
   , contextCallStack
-  , logInfo
---  , logExcept
-  , logDebug
-  , throwGraphicsError
-  , throwResourceError
-  , throwSystemError
-  , throwStateError
-  , throwInitError
-  , throwAssetError
-  , throwLuaError
   , catchEngine
   , tryEngine
   ) where
@@ -33,7 +23,6 @@ import UPrelude
 import Engine.Asset.Base (AssetId)
 import Control.Exception (Exception, displayException)
 import Control.Monad.Error.Class (MonadError(..), throwError)
-import qualified Control.Monad.Logger.CallStack as LoggerCS
 import GHC.Stack (HasCallStack, prettyCallStack, callStack, CallStack, getCallStack)
 import qualified Data.Text as T
 import Type.Reflection
@@ -157,56 +146,6 @@ instance Exception EngineException where
 -- | Helper function to throw engine exceptions
 throwEngineException :: MonadError EngineException m => EngineException -> m a
 throwEngineException = throwError
-
--- | Log an informational message
-logInfo :: (HasCallStack, MonadError EngineException m, LoggerCS.MonadLogger m) 
-        => String -> m ()
-logInfo = LoggerCS.logInfoCS callStack . fromString
-
--- | Log an exception
---logExcept :: (HasCallStack, MonadError EngineException m)
---          => ExceptionType -> String -> m a
---logExcept exType msg = throwError $ EngineException exType 
---  $ T.pack (msg ++ "\n" ++ prettyCallStack callStack ++ "\n")
-
--- | Log a debug message (only in development)
-logDebug :: (HasCallStack, MonadError EngineException m, LoggerCS.MonadLogger m) 
-         => String -> m ()
-#ifdef DEVELOPMENT
-logDebug = LoggerCS.logDebugCS callStack . fromString
-#else
-logDebug = const $ pure ()
-#endif
-
--- Helper functions for specific error types
-throwGraphicsError :: MonadError EngineException m 
-                  => GraphicsError -> T.Text -> m a
-throwGraphicsError err msg = 
-  throwError $ EngineException (ExGraphics err) msg mkErrorContext
-throwResourceError :: MonadError EngineException m 
-                  => ResourceError -> T.Text -> m a
-throwResourceError err msg = 
-  throwError $ EngineException (ExResource err) msg mkErrorContext
-throwSystemError :: MonadError EngineException m 
-                => SystemError -> T.Text -> m a
-throwSystemError err msg = 
-  throwError $ EngineException (ExSystem err) msg mkErrorContext
-throwStateError :: MonadError EngineException m 
-                => StateError -> T.Text -> m a
-throwStateError err msg = 
-  throwError $ EngineException (ExState err) msg mkErrorContext
-throwInitError :: MonadError EngineException m 
-               => InitError -> T.Text -> m a
-throwInitError err msg = 
-  throwError $ EngineException (ExInit err) msg mkErrorContext
-throwAssetError :: MonadError EngineException m 
-               => AssetError -> T.Text -> m a
-throwAssetError err msg = 
-  throwError $ EngineException (ExAsset err) msg mkErrorContext
-throwLuaError :: MonadError EngineException m 
-               => LuaError -> T.Text -> m a
-throwLuaError err msg = 
-  throwError $ EngineException (ExLua err) msg mkErrorContext
 
 -- | Create error context from current call stack
 mkErrorContext ∷ HasCallStack ⇒ ErrorContext

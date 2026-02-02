@@ -8,7 +8,7 @@ import Control.Exception (displayException)
 import Data.IORef (writeIORef, readIORef)
 import System.Exit (exitFailure)
 import Engine.Core.Log (shutdownLogger, LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM)
+import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Thread (ThreadState, shutdownThread)
@@ -23,20 +23,24 @@ import Vulkan.Core10 (deviceWaitIdle)
 -- | Shutdown the engine
 shutdownEngine ∷ Window → ThreadState → ThreadState → EngineM ε σ ()
 shutdownEngine (Window win) inputThreadState luaThreadState = do
-    logDebugM CatSystem "Engine cleaning up..."
+    logInfoM CatSystem "Starting engine shutdown..."
     state ← gets graphicsState
     
     -- Clear batch manager
+    logDebugM CatSystem "Clearing batch manager..."
     modify $ \s → s { sceneManager = (sceneManager s) {
                           smBatchManager = createBatchManager } }
     
     -- Wait for Vulkan device
+    logDebugM CatSystem "Waiting for Vulkan device idle..."
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
 
     -- run manual cleanup actions
+    logDebugM CatSystem "Running Vulkan cleanup actions..."
     liftIO $ runAllCleanups (vulkanCleanup state)
     
     -- GLFW cleanup
+    logDebugM CatSystem "Cleaning up GLFW..."
     liftIO $ GLFW.postEmptyEvent
     GLFW.setWindowShouldClose win True
     liftIO $ clearGLFWCallbacks win
@@ -50,11 +54,14 @@ shutdownEngine (Window win) inputThreadState luaThreadState = do
     liftIO $ shutdownThread luaThreadState
 
     -- shut down logger
+    logDebugM CatSystem "Shutting down logger..."
     logger ← liftIO $ readIORef $ loggerRef env
     liftIO $ shutdownLogger logger
     
     -- Mark engine as stopped
     liftIO $ writeIORef (lifecycleRef env) EngineStopped
+    
+    logInfoM CatSystem "Engine shutdown complete"
 
 -- | Check engine status for continuation
 checkStatus ∷ Either EngineException () → IO (Either EngineException ())

@@ -204,7 +204,6 @@ library
                      Engine.Scripting.Lua.API.Focus
                      Engine.Scripting.Lua.API.Shell
                      Engine.Scripting.Lua.API.UI
-                     Engine.Core.Base
                      Engine.Core.Defaults
                      Engine.Core.Init
                      Engine.Core.Monad

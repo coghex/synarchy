@@ -12,9 +12,7 @@ import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.Reader.Class (MonadReader(..))
 import Control.Monad.State.Class (MonadState(..), gets)
-import qualified Control.Monad.Logger.CallStack as Logger
 import Engine.Core.Error.Exception (EngineException(..))
-import Engine.Core.Base
 import Engine.Core.State
 import Engine.Core.Var 
 

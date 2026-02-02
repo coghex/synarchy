@@ -6,7 +6,6 @@ import qualified Data.Map as Map
 import Data.IORef (IORef)
 import Engine.Asset.Base
 import Engine.Asset.Types
-import Engine.Core.Base
 import Engine.Core.Log
 import Engine.Core.Types
 import Engine.Core.Queue as Q

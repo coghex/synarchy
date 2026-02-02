@@ -5,7 +5,6 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Map as Map
-import Engine.Core.Base
 import Engine.Core.Types
 import Engine.Core.State
 import Engine.Asset.Types

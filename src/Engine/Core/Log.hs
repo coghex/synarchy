@@ -75,6 +75,7 @@ data LogLevel
 data LogCategory
   = CatVulkan
   | CatGraphics
+  | CatRender
   | CatShader
   | CatDescriptor
   | CatSwapchain
