@@ -8,7 +8,7 @@ import Data.IORef (writeIORef, readIORef)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad (MonadIO(liftIO), EngineM)
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logDebugSM)
+import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM)
 import Engine.Input.Thread
 import Engine.Core.Types
 import Engine.Core.State

@@ -9,7 +9,7 @@ import Control.Concurrent (threadDelay, ThreadId, killThread, forkIO)
 import Control.Exception (SomeException, catch)
 import Data.IORef (IORef, newIORef, writeIORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
-import Engine.Core.Log (logDebug, logError, LogCategory(..))
+import Engine.Core.Log (logDebug, logError, logInfo, LogCategory(..))
 import Engine.Core.State
 import Engine.Core.Thread
 import Engine.Core.Error.Exception (SystemError(..), ExceptionType(..))
@@ -91,6 +91,8 @@ processInput env inpSt event = case event of
         let key = fromGLFWKey glfwKey
         case mode of
           GameInputMode → do
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatInput $ "Input mode: GameInputMode, key=" <> T.pack (show key)
             when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $
                 Q.writeQueue (luaQueue env) LuaShellToggle
             when (key ≠ KeyGrave) $ do
@@ -103,12 +105,16 @@ processInput env inpSt event = case event of
             bindings ← readIORef (keyBindingsRef env)
             -- check for special key combinations
             case getKeyForAction "escape" bindings of
-              Just escapeKeyName →
+              Just escapeKeyName → do
+                logDebug logger CatInput $ "Key binding: action=escape, key=" <> escapeKeyName
                 when (Just key ≡ textToKey escapeKeyName
-                      ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                      ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
+                    logDebug logger CatInput "Action triggered: escape"
                     writeIORef (lifecycleRef env) CleaningUp
               Nothing → return ()
           TextInputMode (FocusId fid) → do
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatInput $ "Input mode: TextInputMode, focusId=" <> T.pack (show fid)
             when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
                 Q.writeQueue (luaQueue env) LuaShellToggle
             when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
@@ -154,24 +160,31 @@ processInput env inpSt event = case event of
         -- send mouse events to lua
         let lq = luaQueue env
             (x, y) = pos
+        logger ← readIORef (loggerRef env)
         when (state ≡ GLFW.MouseButtonState'Pressed) $ do
-            currentTime ← getCurrentTime
-            logger ← readIORef (loggerRef env)
-            logDebug logger CatInput $ "Mouse click at " <> (T.pack (show pos))
+            logDebug logger CatInput $ "Mouse button pressed: button=" <> T.pack (show btn)
+                                    <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
             Q.writeQueue lq (LuaMouseDownEvent btn x y)
-        when (state ≡ GLFW.MouseButtonState'Released) $
+        when (state ≡ GLFW.MouseButtonState'Released) $ do
+            logDebug logger CatInput $ "Mouse button released: button=" <> T.pack (show btn)
+                                    <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
             Q.writeQueue lq (LuaMouseUpEvent btn x y)
         return $ updateMouseState inpSt btn pos state
     InputCursorMove x y → 
         return $ inpSt { inpMousePos = (x, y) }
-    InputScrollEvent x y →
+    InputScrollEvent x y → do
+        logger ← readIORef (loggerRef env)
+        logDebug logger CatInput $ "Scroll event: dx=" <> T.pack (show x) <> ", dy=" <> T.pack (show y)
         return $ updateScrollState inpSt x y
     InputWindowEvent winEv → do
+        logger ← readIORef (loggerRef env)
         case winEv of
-          WindowResize w h → do
-            logger ← readIORef (loggerRef env)
-            logDebug logger CatInput $ "Window resized to: " <> (T.pack (show (w, h)))
-          _ → return ()
+          WindowResize w h →
+            logDebug logger CatInput $ "Window resize event: width=" <> T.pack (show w) <> ", height=" <> T.pack (show h)
+          WindowFocus focused →
+            logDebug logger CatInput $ "Window focus event: focused=" <> T.pack (show focused)
+          WindowMinimize minimized →
+            logDebug logger CatInput $ "Window minimize event: minimized=" <> T.pack (show minimized)
         return $ updateWindowState inpSt winEv
 
 -- | Helper state update functions

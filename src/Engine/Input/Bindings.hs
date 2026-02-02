@@ -1,3 +1,4 @@
+{-# LANGUAGE Strict #-}
 module Engine.Input.Bindings where
 
 import UPrelude
@@ -7,7 +8,7 @@ import qualified Data.Yaml as Yaml
 import Data.Aeson ((.:), (.!=), FromJSON(..), Value(..))
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types
-import Engine.Core.Log (LoggerState, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState, logWarn, logInfo, LogCategory(..))
 
 -- | maps actino names to key names
 type KeyBindings = Map.Map T.Text T.Text
@@ -43,7 +44,10 @@ loadKeyBindings logger path = do
                                     <> T.pack path <> ": " <> T.pack (show err)
                                     <> ". Using default keybindings."
             return defaultKeyBindings
-        Right config → return $ kbcBindings config
+        Right config → do
+            let bindings = kbcBindings config
+            logInfo logger CatInput $ "Key bindings loaded: " <> T.pack (show (Map.size bindings)) <> " actions"
+            return bindings
 
 -- | check if action is pressed
 isActionDown ∷ Text → KeyBindings → InputState → Bool
