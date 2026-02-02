@@ -15,6 +15,7 @@ import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Util (calculateTextWidth)
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Log (LogCategory(..), logWarn)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
@@ -22,6 +23,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Map as Map
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Monad.Logger (LogLevel(..), defaultLoc)
+import Control.Monad.IO.Class (liftIO)
 
 loadFontFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 loadFontFn backendState = do
@@ -85,8 +87,9 @@ setTextFn env = do
             lteq = luaToEngineQueue env
         Q.writeQueue lteq msg
       return 0
-    _ → do
-      Lua.liftIO $ (logFunc env) defaultLoc "lua" LevelError 
+    _ → liftIO $ do
+      logger ← readIORef (loggerRef env)
+      logWarn logger CatLua
         "setText requires 2 arguments: objectId, text"
       return 0
 

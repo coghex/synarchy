@@ -44,7 +44,6 @@ initializeEngine = do
   lifecycleRef ← newIORef EngineStarting
   
   -- Initialize logging
-  logFunc ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
   logger ← initLogger defaultLogConfig { lcMinLevel = LevelDebug }
   loggerRef ← newIORef logger
   
@@ -79,7 +78,6 @@ initializeEngine = do
         { engineConfig     = defaultEngineConfig
         , eventQueue       = eventQueue
         , inputQueue       = inputQueue
-        , logFunc          = logFunc
         , loggerRef        = loggerRef
         , luaToEngineQueue = luaToEngineQueue
         , luaQueue         = engineToLuaQueue

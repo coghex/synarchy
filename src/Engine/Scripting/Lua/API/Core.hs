@@ -46,12 +46,12 @@ setTickIntervalFn env backendState = do
                Map.adjust (\s → s { scriptTickRate = seconds
                                   , scriptNextTick = currentSecs + seconds
                                   }) (fromIntegral sid)
-           let lf = logFunc env
-           lf defaultLoc "lua" LevelInfo $ toLogStr $
+           logger ← readIORef (loggerRef env)
+           logInfo logger CatLua $ T.pack $
                "Tick interval for script " ⧺ show sid ⧺ " set to " ⧺ show seconds ⧺ " seconds."
        _ → Lua.liftIO $ do
-           let lf = logFunc env
-           lf defaultLoc "lua" LevelError
+           logger ← readIORef (loggerRef env)
+           logInfo logger CatLua
                "setTickInterval requires 2 arguments: scriptId, seconds"
    return 0
 

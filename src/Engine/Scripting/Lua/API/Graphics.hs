@@ -15,11 +15,13 @@ import Engine.Asset.Manager (updateTextureState, generateTextureHandle)
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Log (LogCategory(..), logWarn)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LogLevel(..), defaultLoc)
 
 loadTextureFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
@@ -77,8 +79,8 @@ spawnSpriteFn env backendState = do
       
     _ → do
       Lua.liftIO $ do
-        let lf = logFunc env
-        lf defaultLoc "lua" LevelError 
+        logger ← readIORef $ loggerRef env
+        logWarn logger CatLua
           "spawnSprite requires 5 arguments: x, y, width, height, textureHandle"
       Lua.pushnil
   return 1
@@ -96,8 +98,9 @@ setPosFn env backendState = do
               (realToFrac xVal) (realToFrac yVal)
         Q.writeQueue lteq msg
       return 0
-    _ → do
-      Lua.liftIO $ (logFunc env) defaultLoc "lua" LevelError 
+    _ → liftIO $ do
+      logger ← readIORef $ loggerRef env
+      logWarn logger CatLua
         "setPos requires 3 arguments: objectId, x, y"
       return 0
 
@@ -113,8 +116,9 @@ setColorFn env backendState = do
             msg = LuaSetColorRequest (ObjectId (fromIntegral idVal)) (colorToVec4 cStr)
         Q.writeQueue lteq msg
       return 0
-    _ → do
-      Lua.liftIO $ (logFunc env) defaultLoc "lua" LevelError 
+    _ → liftIO $ do
+      logger ← readIORef $ loggerRef env
+      logWarn logger CatLua
         "setColor requires 2 arguments: objectId, color"
       return 0
 
@@ -131,8 +135,9 @@ setSizeFn env backendState = do
               (realToFrac wVal) (realToFrac hVal)
         Q.writeQueue lteq msg
       return 0
-    _ → do
-      Lua.liftIO $ (logFunc env) defaultLoc "lua" LevelError 
+    _ → liftIO $ do
+      logger ← readIORef $ loggerRef env
+      logWarn logger CatLua
         "setSize requires 3 arguments: objectId, width, height"
       return 0
 
@@ -147,8 +152,9 @@ setVisibleFn env backendState = do
             msg = LuaSetVisibleRequest (ObjectId (fromIntegral idVal)) visible
         Q.writeQueue lteq msg
       return 0
-    _ → do
-      Lua.liftIO $ (logFunc env) defaultLoc "lua" LevelError 
+    _ → liftIO $ do
+      logger ← readIORef $ loggerRef env
+      logWarn logger CatLua
         "setVisible requires 2 arguments: objectId, visible"
       return 0
 
@@ -162,7 +168,8 @@ destroyFn env backendState = do
             msg = LuaDestroyRequest (ObjectId (fromIntegral idVal))
         Q.writeQueue lteq msg
       return 0
-    _ → do
-      Lua.liftIO $ (logFunc env) defaultLoc "lua" LevelError 
+    _ → liftIO $ do
+      logger ← readIORef $ loggerRef env
+      logWarn logger CatLua
         "destroy requires 1 argument: objectId"
       return 0

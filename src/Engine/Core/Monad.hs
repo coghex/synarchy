@@ -74,10 +74,5 @@ instance MonadState EngineState (EngineM ε σ) where
   put newSt = EngineM $ \_ s c →
     atomically (writeVar s newSt) >>= \_ → c (Right ())
 
-instance Logger.MonadLogger (EngineM ε σ) where
-  monadLoggerLog loc ls ll msg = do
-    lf ← asks logFunc
-    liftIO $ lf loc ls ll (Logger.toLogStr msg)
-
 getEngineVars ∷ EngineM ε σ (Var EngineEnv, Var EngineState)
 getEngineVars = EngineM $ \e s c → c (Right (e, s))

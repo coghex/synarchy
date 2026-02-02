@@ -37,7 +37,6 @@ data EngineEnv = EngineEnv
   { engineConfig     ∷ EngineConfig
   , eventQueue       ∷ Q.Queue Event
   , inputQueue       ∷ Q.Queue InputEvent
-  , logFunc          ∷ LoggingFunc
   , loggerRef        ∷ IORef LoggerState
   , luaToEngineQueue ∷ Q.Queue LuaToEngineMsg
   , luaQueue         ∷ Q.Queue LuaMsg
