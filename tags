@@ -1143,7 +1143,7 @@ keyMods	src/Engine/Input/Types.hs	55;"	f
 keyPressed	src/Engine/Input/Types.hs	54;"	f
 keyTime	src/Engine/Input/Types.hs	56;"	f
 keyToText	src/Engine/Input/Types.hs	146;"	f
-killScriptFn	src/Engine/Scripting/Lua/API/Core.hs	118;"	f
+killScriptFn	src/Engine/Scripting/Lua/API/Core.hs	125;"	f
 lastFrameTime	src/Engine/Core/State.hs	81;"	f
 layoutText	src/Engine/Graphics/Font/Draw.hs	47;"	f
 layoutTextUI	src/Engine/Graphics/Font/Draw.hs	457;"	f
@@ -1185,7 +1185,7 @@ loadKeyBindings	src/Engine/Input/Bindings.hs	38;"	f
 loadSTBFont	src/Engine/Graphics/Font/STB.hs	73;"	f
 loadScript	src/Engine/Scripting/Backend.hs	28;"	f
 loadScriptAsModule	src/Engine/Scripting/Lua/Script.hs	15;"	f
-loadScriptFn	src/Engine/Scripting/Lua/API/Core.hs	58;"	f
+loadScriptFn	src/Engine/Scripting/Lua/API/Core.hs	65;"	f
 loadTexture	src/Engine/Graphics/Vulkan/Texture/System.hs	53;"	f
 loadTextureAtlas	src/Engine/Asset/Manager.hs	157;"	f
 loadTextureAtlasWithHandle	src/Engine/Asset/Manager.hs	165;"	f
@@ -1205,7 +1205,7 @@ logErrorS	src/Engine/Core/Log.hs	469;"	f
 logErrorSM	src/Engine/Core/Log/Monad.hs	80;"	f
 logException	src/Engine/Core/Log.hs	507;"	f
 logInfo	src/Engine/Core/Log.hs	439;"	f
-logInfoFn	src/Engine/Scripting/Lua/API/Core.hs	28;"	f
+logInfoFn	src/Engine/Scripting/Lua/API/Core.hs	35;"	f
 logInfoM	src/Engine/Core/Log/Monad.hs	43;"	f
 logInfoS	src/Engine/Core/Log.hs	459;"	f
 logInfoSM	src/Engine/Core/Log/Monad.hs	68;"	f
@@ -1280,7 +1280,7 @@ parseLayer	src/Engine/Scripting/Lua/API/UI.hs	438;"	f
 parseLogLevel	src/Engine/Core/Log.hs	229;"	f
 pathSeparator	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	128;"	f
 pathSeparator	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy/build/synarchy/autogen/Paths_synarchy.hs	128;"	f
-pauseScriptFn	src/Engine/Scripting/Lua/API/Core.hs	140;"	f
+pauseScriptFn	src/Engine/Scripting/Lua/API/Core.hs	147;"	f
 pendingInstanceBuffers	src/Engine/Core/State.hs	114;"	f
 pendingInstanceBuffers	src/Engine/Graphics/Vulkan/Types/Font.hs	15;"	f
 pickPhysicalDevice	src/Engine/Graphics/Vulkan/Device.hs	120;"	f
@@ -1306,6 +1306,7 @@ quadVertices	src/Engine/Graphics/Vulkan/Vertex.hs	22;"	f
 queryBindlessSupport	src/Engine/Graphics/Vulkan/Capability.hs	36;"	f
 querySwapchainSupport	src/Engine/Graphics/Vulkan/Swapchain.hs	29;"	f
 queueTQueue	src/Engine/Core/Queue.hs	10;"	f
+quitFn	src/Engine/Scripting/Lua/API/Core.hs	30;"	f
 r	src/Engine/Graphics/Vulkan/Types/Vertex.hs	42;"	f
 rateDevice	src/Engine/Graphics/Vulkan/Device.hs	141;"	f
 rbDirty	src/Engine/Scene/Types/Batch.hs	38;"	f
@@ -1348,7 +1349,7 @@ requestFocusFn	src/Engine/Scripting/Lua/API/Focus.hs	28;"	f
 resHeight	src/Engine/Graphics/Config.hs	41;"	f
 resWidth	src/Engine/Graphics/Config.hs	40;"	f
 resizeCallback	src/Engine/Input/Callback.hs	78;"	f
-resumeScriptFn	src/Engine/Scripting/Lua/API/Core.hs	149;"	f
+resumeScriptFn	src/Engine/Scripting/Lua/API/Core.hs	156;"	f
 rotation	src/Engine/Scene/Base.hs	14;"	f
 runAllCleanups	src/Engine/Graphics/Vulkan/Types/Cleanup.hs	37;"	f
 runCommandsOnce	src/Engine/Graphics/Font/Load.hs	408;"	f
@@ -1395,7 +1396,7 @@ setSpriteTexture	src/UI/Manager.hs	277;"	f
 setText	src/UI/Manager.hs	265;"	f
 setTextColor	src/UI/Manager.hs	271;"	f
 setTextFn	src/Engine/Scripting/Lua/API/Text.hs	81;"	f
-setTickIntervalFn	src/Engine/Scripting/Lua/API/Core.hs	37;"	f
+setTickIntervalFn	src/Engine/Scripting/Lua/API/Core.hs	44;"	f
 setVisibleFn	src/Engine/Scripting/Lua/API/Graphics.hs	148;"	f
 setWindowShouldClose	src/Engine/Graphics/Window/GLFW.hs	148;"	f
 setWindowTitle	src/Engine/Graphics/Window/GLFW.hs	160;"	f

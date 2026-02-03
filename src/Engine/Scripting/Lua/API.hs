@@ -7,7 +7,7 @@ import UPrelude
 import Engine.Scripting.Lua.Types (LuaBackendState)
 import Engine.Scripting.Lua.API.Core (logInfoFn, loadScriptFn, killScriptFn, 
                                        setTickIntervalFn, pauseScriptFn, 
-                                       resumeScriptFn)
+                                       resumeScriptFn, quitFn)
 import Engine.Scripting.Lua.API.Graphics (loadTextureFn, spawnSpriteFn, setPosFn,
                                            setColorFn, setSizeFn, setVisibleFn, destroyFn)
 import Engine.Scripting.Lua.API.Input (isKeyDownFn, isActionDownFn, getMousePositionFn,
@@ -36,6 +36,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   Lua.newtable
   
   -- Core functions
+  registerLuaFunction "quit"            (quitFn env)
   registerLuaFunction "logInfo"         (logInfoFn env)
   registerLuaFunction "loadScript"      (loadScriptFn env backendState lst)
   registerLuaFunction "killScript"      (killScriptFn env backendState lst)

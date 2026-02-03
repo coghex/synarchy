@@ -1,5 +1,6 @@
 module Engine.Scripting.Lua.API.Core
-  ( logInfoFn
+  ( quitFn
+  , logInfoFn
   , loadScriptFn
   , killScriptFn
   , setTickIntervalFn
@@ -12,18 +13,24 @@ import Engine.Scripting.Types (ScriptValue(..))
 import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import Engine.Scripting.Lua.Util (isValidRef)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Log (logInfo, logDebug, LogCategory(..))
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
 import qualified Data.Map as Map
-import Data.IORef (atomicModifyIORef', readIORef)
+import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
 import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LogLevel(..), toLogStr, defaultLoc)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
+
+
+quitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+quitFn env = do
+  liftIO $ writeIORef (lifecycleRef env) CleaningUp
+  return 0
 
 logInfoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 logInfoFn env = do
