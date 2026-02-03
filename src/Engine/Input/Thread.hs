@@ -210,9 +210,11 @@ processInput env inpSt event = case event of
           WindowResize w h → do
             logDebug logger CatInput $ "Window resize event: width=" <> T.pack (show w) <> ", height=" <> T.pack (show h)
             writeIORef (windowSizeRef env) (w, h)
+            Q.writeQueue (luaQueue env) (LuaWindowResize w h)
           FramebufferResize w h → do
             logDebug logger CatInput $ "Framebuffer resize event: width=" <> T.pack (show w) <> ", height=" <> T.pack (show h)
             writeIORef (framebufferSizeRef env) (w, h)
+            Q.writeQueue (luaQueue env) (LuaFramebufferResize w h)
           WindowFocus focused →
             logDebug logger CatInput $ "Window focus event: focused=" <> T.pack (show focused)
           WindowMinimize minimized →

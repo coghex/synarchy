@@ -9,7 +9,7 @@ function game.init(scriptId)
     shellScriptId = engine.loadScript("scripts/shell.lua", 0.5)
     
     -- Initialize UI (which loads the main menu)
-    uiScriptId = engine.loadScript("scripts/main_menu.lua", 1.0)
+    uiScriptId = engine.loadScript("scripts/test.lua", 1.0)
 end
 
 function game.update(dt)

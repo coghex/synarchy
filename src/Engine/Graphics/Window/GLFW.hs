@@ -49,12 +49,14 @@ import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Resource
+import qualified Engine.Core.Queue as Q
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logInfoM)
 import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
                                    , InitError(..))
 import Engine.Graphics.Base (GraphicsConfig(..))
 import Engine.Graphics.Window.Types
+import Engine.Scripting.Lua.Types (LuaMsg(..))
 import Vulkan.Core10 (Instance(..), AllocationCallbacks)
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR, destroySurfaceKHR)
 
@@ -85,23 +87,26 @@ createWindow config = do
   --liftIO $ GLFW.windowHint $ GLFW.WindowHint'Visible False
   
   -- Create the window
-  allocResource (\w0 → destroyWindow w0) $ do
+  window ← allocResource (\w0 → destroyWindow w0) $ do
     mw ← liftIO $ GLFW.createWindow (wcWidth config) (wcHeight config)
                                     (T.unpack $ wcTitle config) Nothing Nothing
     case mw of
       Nothing → logAndThrowM CatGraphics (ExInit WindowCreationFailed) $
                  T.pack $ "Failed to create GLFW window with dimensions: "
                  ⧺ show (wcWidth config) ⧺ "x" ⧺ show (wcHeight config)
-      Just win → do
-        -- set window size reference
-        env ← ask
-        liftIO $ do
-            windowSize ← GLFW.getWindowSize win
-            framebufferSize ← GLFW.getFramebufferSize win
-            writeIORef (windowSizeRef env) windowSize
-            writeIORef (framebufferSizeRef env) framebufferSize
+      Just win → pure $ Window win
+  let Window win = window
+  env ← ask
+  liftIO $ do
+    windowSize ← GLFW.getWindowSize win
+    framebufferSize ← GLFW.getFramebufferSize win
+    writeIORef (windowSizeRef env) windowSize
+    writeIORef (framebufferSizeRef env) framebufferSize
+    Q.writeQueue (luaQueue env) (LuaWindowResize (fst windowSize) (snd windowSize))
+    Q.writeQueue (luaQueue env) (LuaFramebufferResize (fst framebufferSize) (snd framebufferSize))
+    
+  pure window
  
-        pure $ Window win
 
 
 -- | Creates a GLFW window in an IO context for testing

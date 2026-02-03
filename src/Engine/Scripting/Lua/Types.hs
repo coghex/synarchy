@@ -84,6 +84,8 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaKeyDownEvent Key
             | LuaKeyUpEvent Key
             | LuaShellToggle
+            | LuaWindowResize Int Int
+            | LuaFramebufferResize Int Int
             | LuaFocusGained Word32
             | LuaFocusLost Word32
             | LuaCharInput Word32 Char

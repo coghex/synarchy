@@ -237,6 +237,12 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onKeyUp" [ScriptString (keyToText key)]
   LuaShellToggle → 
     broadcastToModules ls "onShellToggle" []
+  LuaWindowResize w h → do
+    broadcastToModules ls "onWindowResize"
+      [ScriptNumber (fromIntegral w), ScriptNumber (fromIntegral h)]
+  LuaFramebufferResize w h → do
+    broadcastToModules ls "onFramebufferResize"
+      [ScriptNumber (fromIntegral w), ScriptNumber (fromIntegral h)]
   LuaCharInput fid c → 
     broadcastToModules ls "onCharInput"
       [ScriptNumber (fromIntegral fid), ScriptString (T.singleton c)]

@@ -200,13 +200,16 @@ updateUniformBufferForFrame win frameIdx = do
             let (_, memory) = buffers V.! fromIntegral frameIdx
             (fbWidth, fbHeight) ← GLFW.getFramebufferSize win
             (winWidth, winHeight) ← GLFW.getWindowSize win
+
+            -- Before writing
+            env ← ask
+            old ← liftIO $ readIORef (framebufferSizeRef env)
             
             logDebugSM CatRender "Updating uniform buffer"
                 [("frame", T.pack $ show frameIdx)
                 ,("fbSize", T.pack (show fbWidth) <> "x" <> T.pack (show fbHeight))
                 ,("winSize", T.pack (show winWidth) <> "x" <> T.pack (show winHeight))]
             
-            env ← ask
             camera ← liftIO $ readIORef (cameraRef env)
             
             -- Update UI camera to use framebuffer dimensions
