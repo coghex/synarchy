@@ -117,12 +117,12 @@ handleLoadTexture handle path = do
 -- | Handle font load request
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM ε σ ()
 handleLoadFont handle path size = do
-    logInfoM CatLua $ "Loading font from Lua: " <> T.pack path
+    logDebugM CatLua $ "Loading font from Lua: " <> T.pack path
     actualHandle ← loadFont handle path size
     env ← ask
     let etlq = luaQueue env
     liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
-    logInfoM CatLua $ "Font loaded successfully: " <> T.pack path
+    logDebugM CatLua $ "Font loaded successfully: " <> T.pack path
 
 -- | Handle spawn text request
 handleSpawnText ∷ ObjectId → Float → Float → FontHandle → Text

@@ -20,6 +20,7 @@ module Engine.Scripting.Lua.API.UI
   , uiSetSizeFn
   , uiSetVisibleFn
   , uiSetClickableFn
+  , uiSetOnClickFn
   , uiSetZIndexFn
   , uiSetColorFn
   , uiSetTextFn
@@ -358,6 +359,21 @@ uiSetClickableFn env = do
         Just e -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
             (setElementClickable (ElementHandle $ fromIntegral e) clickArg mgr, ())
         Nothing -> pure ()
+    
+    return 0
+
+-- | UI.setOnClick(elementHandle, callbackName)
+uiSetOnClickFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiSetOnClickFn env = do
+    elemArg <- Lua.tointeger 1
+    callbackArg <- Lua.tostring 2
+    
+    case (elemArg, callbackArg) of
+        (Just e, Just cbBS) -> do
+            let callback = TE.decodeUtf8 cbBS
+            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+                (setElementOnClick (ElementHandle $ fromIntegral e) callback mgr, ())
+        _ -> pure ()
     
     return 0
 

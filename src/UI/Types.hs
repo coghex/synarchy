@@ -55,17 +55,18 @@ data UIPage = UIPage
 
 -- | A UI element
 data UIElement = UIElement
-  { ueHandle       :: ElementHandle
-  , uePage         :: PageHandle
-  , ueParent       :: Maybe ElementHandle
-  , ueName         :: Text
-  , uePosition     :: (Float, Float)
-  , ueSize         :: (Float, Float)
-  , ueZIndex       :: Int
-  , ueVisible      :: Bool
-  , ueClickable    :: Bool
-  , ueChildren     :: [ElementHandle]
-  , ueRenderData   :: UIRenderData
+  { ueHandle     :: ElementHandle
+  , uePage       :: PageHandle
+  , ueParent     :: Maybe ElementHandle
+  , ueName       :: Text
+  , uePosition   :: (Float, Float)
+  , ueSize       :: (Float, Float)
+  , ueZIndex     :: Int
+  , ueVisible    :: Bool
+  , ueClickable  :: Bool
+  , ueChildren   :: [ElementHandle]
+  , ueRenderData :: UIRenderData
+  , ueOnClick    :: Maybe Text
   } deriving (Show)
 
 -- | What an element renders as

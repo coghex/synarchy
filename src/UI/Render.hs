@@ -29,6 +29,10 @@ import UI.Manager (getVisiblePages, getElementAbsolutePosition, getBoxTextureSet
 uiLayerBase :: Int
 uiLayerBase = 10
 
+-- Helper to unwrap LayerId
+unLayerId :: LayerId -> Word32
+unLayerId (LayerId i) = fromIntegral i
+
 -- | Convert UI layer to render LayerId
 uiLayerToLayerId :: UILayer -> Int -> LayerId
 uiLayerToLayerId layer zIndex = LayerId $ fromIntegral $ case layer of
@@ -86,11 +90,11 @@ renderPage mgr bindless fontCache page = do
     
     pure (allBatches, allLayered)
 
--- | Render an element and all its children
+-- Replace renderElement function:
 renderElement :: UIPageManager -> BindlessTextureSystem -> FontCache
               -> LayerId -> ElementHandle 
               -> EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
-renderElement mgr bindless fontCache layerId handle = do
+renderElement mgr bindless fontCache baseLayerId handle = do
     case Map.lookup handle (upmElements mgr) of
         Nothing -> pure (V.empty, Map.empty)
         Just elem
@@ -100,12 +104,16 @@ renderElement mgr bindless fontCache layerId handle = do
                         Just pos -> pos
                         Nothing  -> (0, 0)
                 
+                -- NEW: Add element z-index to the layer
+                let elemLayerId = LayerId $ unLayerId baseLayerId + fromIntegral (ueZIndex elem)
+                
                 (selfBatches, selfItems) <- renderElementData mgr bindless fontCache 
-                                              layerId elem absX absY
+                                              elemLayerId elem absX absY
                 
                 let sortedChildren = sortOn (getChildZIndex mgr) (ueChildren elem)
                 childResults <- forM sortedChildren $ \childHandle ->
-                    renderElement mgr bindless fontCache layerId childHandle
+                    renderElement mgr bindless fontCache elemLayerId childHandle
+                    --                                   ^^^^^^^^^^^ Pass modified layerId to children
                 
                 let childBatches = V.concat $ map fst childResults
                     childLayered = foldr (Map.unionWith (<>)) Map.empty (map snd childResults)
@@ -114,7 +122,7 @@ renderElement mgr bindless fontCache layerId handle = do
                     allLayered = if V.null selfItems
                                  then childLayered
                                  else Map.unionWith (<>) 
-                                        (Map.singleton layerId selfItems) 
+                                        (Map.singleton elemLayerId selfItems) 
                                         childLayered
                 
                 pure (allBatches, allLayered)

@@ -52,7 +52,7 @@ createFontDescriptorPool device maxFonts = do
 -- | Load a TTF font at specified size
 loadFont ∷ FontHandle → FilePath → Int → EngineM ε σ FontHandle
 loadFont requestedHandle fontPath fontSize = do
-    logInfoSM CatFont "Font atlas generation started"
+    logDebugSM CatFont "Font atlas generation started"
         [("path", T.pack fontPath)
         ,("size", T.pack $ show fontSize)
         ,("char_range", "' ' to '~'")]
@@ -83,7 +83,7 @@ loadFont requestedHandle fontPath fontSize = do
             -- Upload to GPU
             (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas fontDescLayout
             
-            logInfoSM CatFont "Font GPU upload completion"
+            logDebugSM CatFont "Font GPU upload completion"
                 [("atlas_size", T.pack (show (faAtlasWidth atlas)) <> "x" <> T.pack (show (faAtlasHeight atlas)))]
             
             let newAtlas = atlas { faTexture = texHandle

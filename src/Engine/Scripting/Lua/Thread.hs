@@ -229,6 +229,8 @@ processLuaMsg env ls stateRef msg = case msg of
           _                  → 0
     broadcastToModules ls "onMouseUp"
       [ScriptNumber (fromIntegral buttonNum), ScriptNumber x, ScriptNumber y]
+  LuaUIClickEvent elemHandle callbackName → do
+    broadcastToModules ls callbackName []
   LuaKeyDownEvent key → 
     broadcastToModules ls "onKeyDown" [ScriptString (keyToText key)]
   LuaKeyUpEvent key → 

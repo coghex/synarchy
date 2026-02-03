@@ -53,6 +53,7 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
 - [x] scene creation and switching
 - [ ] animation
 - [ ] hotloading
+- [ ] game (working title: "Ecce Homo")
 
 ## Known Issues
 

@@ -10,7 +10,7 @@ import qualified Data.Map as Map
 import qualified Data.Vector as V
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFWRaw
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, writeIORef)
 import Foreign.Storable (sizeOf)
 import Linear (M44, identity)
 import Engine.Asset.Handle
@@ -233,17 +233,22 @@ initializeVulkan window = do
   logInfoM CatInit "Vulkan initialization complete"
   pure cmdPool
 
--- | Create uniform buffers for all frames
-createUniformBuffersForFrames ∷ Device → PhysicalDevice 
-  → GLFWRaw.Window → V.Vector DescriptorSet → EngineM ε σ ()
+-- In src/Engine/Graphics/Vulkan/Init.hs
+-- Replace the createUniformBuffersForFrames function:
+
+createUniformBuffersForFrames :: Device -> PhysicalDevice 
+  -> GLFWRaw.Window -> V.Vector DescriptorSet -> EngineM ε σ ()
 createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
-  (width, height) ← GLFW.getFramebufferSize glfwWin
+  (width, height) <- GLFW.getFramebufferSize glfwWin
   
-  state ← gets graphicsState
-  cameraRef ← asks cameraRef
-  uiCameraRef ← asks uiCameraRef
-  camera ← liftIO $ readIORef cameraRef
-  uiCamera ← liftIO $ readIORef uiCameraRef
+  state <- gets graphicsState
+  cameraRef <- asks cameraRef
+  uiCameraRef <- asks uiCameraRef
+  camera <- liftIO $ readIORef cameraRef
+  
+  -- UPDATE: Create/update UI camera with actual framebuffer size
+  let uiCamera = defaultUICamera (fromIntegral width) (fromIntegral height)
+  liftIO $ writeIORef uiCameraRef uiCamera  -- Update the ref with correct size
   
   let uboData = UBO 
           identity 
@@ -254,28 +259,28 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
       uboSize = fromIntegral $ sizeOf uboData
       numFrames = gcMaxFrames defaultGraphicsConfig
   
-  uniformBuffers ← V.generateM (fromIntegral numFrames) $ \_ → do
-      (buffer, memory) ← createUniformBuffer device physicalDevice uboSize
+  uniformBuffers <- V.generateM (fromIntegral numFrames) $ \_ -> do
+      (buffer, memory) <- createUniformBuffer device physicalDevice uboSize
       updateUniformBuffer device memory (UBO identity identity identity identity identity)
       pure (buffer, memory)
   
-  modify $ \s → s { graphicsState = (graphicsState s) {
+  modify $ \s -> s { graphicsState = (graphicsState s) {
                       uniformBuffers = Just uniformBuffers } }
   
   -- Update descriptor sets
-  forM_ (zip [0..] (V.toList uniformBuffers)) $ \(i, (buffer, _)) → do
+  forM_ (zip [0..] (V.toList uniformBuffers)) $ \(i, (buffer, _)) -> do
     logDebugSM CatDescriptor "Updating descriptor set"
-      [("set_index", T.pack $ show (i ∷ Int))
+      [("set_index", T.pack $ show (i :: Int))
       ,("binding", "0")
       ,("type", "UNIFORM_BUFFER")
       ,("count", "1")]
     
-    let bufferInfo = (zero ∷ DescriptorBufferInfo)
+    let bufferInfo = (zero :: DescriptorBufferInfo)
           { buffer = buffer
           , offset = 0
           , range  = uboSize
           }
-        write = (zero ∷ WriteDescriptorSet '[])
+        write = (zero :: WriteDescriptorSet '[])
           { dstSet          = descSets V.! i
           , dstBinding      = 0
           , dstArrayElement = 0

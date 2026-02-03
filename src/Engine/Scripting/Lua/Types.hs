@@ -10,6 +10,7 @@ import Engine.Asset.Handle
 import Engine.Input.Types
 import Engine.Scene.Base
 import Engine.Graphics.Vulkan.Types.Vertex
+import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import qualified Data.Map.Strict as Map
@@ -97,6 +98,7 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaCursorEnd Word32
             | LuaTextDelete Word32
             | LuaInterrupt Word32
+            | LuaUIClickEvent ElementHandle Text
             deriving (Eq, Show)
 
 -- | Lua execution result

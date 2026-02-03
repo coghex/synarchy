@@ -24,6 +24,9 @@ module UI.Manager
   , setElementVisible
   , setElementClickable
   , setElementZIndex
+  , setElementOnClick
+  , isPointInElement
+  , findClickableElementAt
   , setBoxColor
   , setText
   , setTextColor
@@ -40,7 +43,7 @@ module UI.Manager
 
 import UPrelude
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe, isJust, listToMaybe)
 import qualified Data.Set as Set
 import Data.List (sortOn)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
@@ -152,6 +155,7 @@ createElementInternal name width height pageHandle renderData mgr =
           , ueClickable  = False
           , ueChildren   = []
           , ueRenderData = renderData
+          , ueOnClick    = Nothing
           }
     in (handle, mgr
           { upmElements   = Map.insert handle element (upmElements mgr)
@@ -244,6 +248,10 @@ setElementClickable :: ElementHandle -> Bool -> UIPageManager -> UIPageManager
 setElementClickable handle clickable = modifyElement handle `flip` 
     (\elem -> elem { ueClickable = clickable })
 
+setElementOnClick :: ElementHandle -> Text -> UIPageManager -> UIPageManager
+setElementOnClick handle callbackName = modifyElement handle `flip` 
+    (\elem -> elem { ueOnClick = Just callbackName })
+
 setElementZIndex :: ElementHandle -> Int -> UIPageManager -> UIPageManager
 setElementZIndex handle z = modifyElement handle `flip` 
     (\elem -> elem { ueZIndex = z })
@@ -314,6 +322,79 @@ getElementChildren handle mgr =
     case Map.lookup handle (upmElements mgr) of
         Nothing -> []
         Just elem -> mapMaybe (`Map.lookup` upmElements mgr) (ueChildren elem)
+
+-----------------------------------------------------------
+-- Click Detection
+-----------------------------------------------------------
+
+-- | Check if a point is inside an element's bounds (in screen coordinates)
+isPointInElement :: (Float, Float) -> UIElement -> UIPageManager -> Bool
+isPointInElement (px, py) element mgr =
+    if not (ueVisible element) then False
+    else case getElementAbsolutePosition (ueHandle element) mgr of
+        Nothing -> False
+        Just (ex, ey) ->
+            let (w, h) = ueSize element
+            in px >= ex && px <= (ex + w) &&
+               py >= ey && py <= (ey + h)
+
+-- Replace the findClickableElementAt function:
+
+findClickableElementAt :: (Float, Float) -> UIPageManager -> Maybe (ElementHandle, Text)
+findClickableElementAt pos mgr =
+    let visiblePages = Set.toList (upmVisiblePages mgr)
+        -- Get only ROOT elements from visible pages (not children)
+        allRootHandles = concatMap (\ph -> 
+            case Map.lookup ph (upmPages mgr) of
+                Just page -> upRootElements page
+                Nothing -> []
+            ) visiblePages
+        
+        -- For each root, check if point hits it OR any of its children
+        clickableRoots = filter (\rootHandle ->
+            case Map.lookup rootHandle (upmElements mgr) of
+                Nothing -> False
+                Just rootElem -> 
+                    ueClickable rootElem && 
+                    ueVisible rootElem &&
+                    isJust (ueOnClick rootElem) &&
+                    pointInElementTree pos rootHandle mgr
+            ) allRootHandles
+        
+        -- Sort by layer and zIndex (highest first)
+        -- FIXED: Properly combine page layer, page z-index, and element z-index
+        sorted = sortOn (\eh -> 
+            case Map.lookup eh (upmElements mgr) of
+                Just elem -> 
+                    let page = Map.lookup (uePage elem) (upmPages mgr)
+                        pageLayerVal = case page of
+                            Just p -> fromEnum (upLayer p) * 1000000  -- Layer is most significant
+                            Nothing -> 0
+                        pageZVal = case page of
+                            Just p -> upZIndex p * 1000  -- Page z-index is next
+                            Nothing -> 0
+                        elemZVal = ueZIndex elem  -- Element z-index is least significant
+                        totalVal = pageLayerVal + pageZVal + elemZVal
+                    in negate totalVal  -- Negate for descending sort (highest first)
+                Nothing -> 0
+            ) clickableRoots
+    in case sorted of
+        (eh:_) -> case Map.lookup eh (upmElements mgr) of
+            Just elem -> case ueOnClick elem of
+                Just cb -> Just (eh, cb)
+                Nothing -> Nothing
+            Nothing -> Nothing
+        [] -> Nothing
+  where
+    -- Check if point is in element or any of its children
+    pointInElementTree :: (Float, Float) -> ElementHandle -> UIPageManager -> Bool
+    pointInElementTree point handle mgr' =
+        case Map.lookup handle (upmElements mgr') of
+            Nothing -> False
+            Just elem ->
+                if isPointInElement point elem mgr'
+                then True
+                else any (\childH -> pointInElementTree point childH mgr') (ueChildren elem)
 
 -----------------------------------------------------------
 -- Box Textures

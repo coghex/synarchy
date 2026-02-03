@@ -9,7 +9,7 @@ import Control.Concurrent (threadDelay, ThreadId, killThread, forkIO)
 import Control.Exception (SomeException, catch)
 import Data.IORef (IORef, newIORef, writeIORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
-import Engine.Core.Log (logDebug, logError, logInfo, LogCategory(..))
+import Engine.Core.Log (logDebug, logError, logWarn, logInfo, LogCategory(..))
 import Engine.Core.State
 import Engine.Core.Thread
 import Engine.Core.Error.Exception (SystemError(..), ExceptionType(..))
@@ -18,7 +18,10 @@ import Engine.Input.Types
 import Engine.Input.Callback
 import Engine.Input.Bindings
 import Engine.Scripting.Lua.Types
+import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Core.Queue as Q
+import UI.Manager (findClickableElementAt)
+import UI.Types (ElementHandle(..))
 import UI.Focus (FocusManager, getInputMode, InputMode(..), clearFocus
                 , FocusId(..), fmCurrentFocus)
 
@@ -157,18 +160,43 @@ processInput env inpSt event = case event of
             Nothing → return ()
         return inpSt
     InputMouseEvent btn pos state → do
-        -- send mouse events to lua
         let lq = luaQueue env
             (x, y) = pos
         logger ← readIORef (loggerRef env)
+        
         when (state ≡ GLFW.MouseButtonState'Pressed) $ do
             logDebug logger CatInput $ "Mouse button pressed: button=" <> T.pack (show btn)
                                     <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
-            Q.writeQueue lq (LuaMouseDownEvent btn x y)
+            
+            -- Get window and framebuffer sizes from InputState
+            let (winW, winH) = inpWindowSize inpSt
+                (fbW, fbH) = inpFramebufferSize inpSt
+            
+            -- Calculate scale factors
+            let scaleX = fromIntegral fbW / fromIntegral winW
+                scaleY = fromIntegral fbH / fromIntegral winH
+                mouseX = realToFrac x * scaleX
+                mouseY = realToFrac y * scaleY
+            
+            logDebug logger CatInput $ "Converted mouse pos: (" <> T.pack (show mouseX) 
+                                    <> ", " <> T.pack (show mouseY) <> ")"
+            logDebug logger CatInput $ "Window: " <> T.pack (show winW) <> "x" <> T.pack (show winH)
+                                    <> ", Framebuffer: " <> T.pack (show fbW) <> "x" <> T.pack (show fbH)
+            
+            -- Check for UI element clicks with converted coordinates
+            uiMgr ← readIORef (uiManagerRef env)
+            case findClickableElementAt (mouseX, mouseY) uiMgr of
+                Just (elemHandle, callback) → do
+                    Q.writeQueue lq (LuaUIClickEvent elemHandle callback)
+                    logDebug logger CatUI $ "UI element clicked: " <> callback
+                Nothing → do
+                    Q.writeQueue lq (LuaMouseDownEvent btn x y)
+        
         when (state ≡ GLFW.MouseButtonState'Released) $ do
             logDebug logger CatInput $ "Mouse button released: button=" <> T.pack (show btn)
                                     <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
             Q.writeQueue lq (LuaMouseUpEvent btn x y)
+        
         return $ updateMouseState inpSt btn pos state
     InputCursorMove x y → 
         return $ inpSt { inpMousePos = (x, y) }
