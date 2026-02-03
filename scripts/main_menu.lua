@@ -14,7 +14,7 @@ local fontsLoaded = {
     menu = false,
     title = false
 }
-local fontsReady = false  -- FIX: was "fontReady"
+local fontsReady = false
 local menuFontHandle = nil
 local titleFontHandle = nil
 
@@ -35,11 +35,14 @@ local buttonWidth = 300
 local buttonHeight = 60
 local buttonSpacing = 20
 local buttonTileSize = 64
+local buttonPaddingX = 120
+local menuPaddingX = 80
+local menuPaddingY = 80
 
 function mainMenu.init(scriptId)
     -- Load fonts - store handles for comparison in onAssetLoaded
     menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)
-    titleFontHandle = engine.loadFont("assets/fonts/gothic.ttf", 48)
+    titleFontHandle = engine.loadFont("assets/fonts/gothic.ttf", 96)
     
     -- Also store in menuFont/titleFont for use in createUI
     menuFont = menuFontHandle
@@ -116,12 +119,23 @@ function mainMenu.createUI()
     
     -- Create the menu page
     page = UI.newPage("main_menu", "menu")
+
+    -- Calculate max text width across all buttons
+    local maxLabelWidth = 0
+    for i, item in ipairs(menuItems) do
+        local labelWidth = engine.getTextWidth(menuFont, item.label)
+        if labelWidth > maxLabelWidth then
+            maxLabelWidth = labelWidth
+        end
+    end
+    
+    local buttonWidth = maxLabelWidth + buttonPaddingX
     
     -- Calculate menu dimensions
-    local menuHeight = #menuItems * (buttonHeight + buttonSpacing) + buttonSpacing
-    local menuWidth = buttonWidth + 60
+    local menuHeight = #menuItems * (buttonHeight + buttonSpacing) + buttonSpacing + menuPaddingY
+    local menuWidth = buttonWidth + menuPaddingX
     
-    -- Center the menu box on screen
+    -- Center the menu box (Y=0 at top, Y increases downward)
     local menuX = (fbW - menuWidth) / 2
     local menuY = (fbH - menuHeight) / 2
     
@@ -130,30 +144,33 @@ function mainMenu.createUI()
     UI.addToPage(page, menuBox, menuX, menuY)
     UI.setZIndex(menuBox, 1)
     
-    -- Create title above the menu box
+    -- Create title ABOVE menu box (smaller Y value = higher on screen)
     local titleStr = "Ecce Homo"
     local titleWidth = engine.getTextWidth(titleFont, titleStr)
     local titleX = (fbW - titleWidth) / 2
-    local titleY = menuY - 60  -- Above the menu box
+    local titleY = menuY - 60
     titleText = UI.newText("title", titleStr, titleFont, 1.0, 1.0, 1.0, 1.0, page)
     UI.addToPage(page, titleText, titleX, titleY)
     
     -- Create menu buttons inside the menu box
+    -- Buttons stack from top to bottom (Y increases downward)
     local buttonX = (menuWidth - buttonWidth) / 2
     
     for i, item in ipairs(menuItems) do
-        local buttonY = buttonSpacing + (i - 1) * (buttonHeight + buttonSpacing)
-        
-        local btn = UI.newBox(item.name, buttonWidth, buttonHeight, boxTexSet, buttonTileSize, 0.3, 0.4, 0.5, 1.0, page)
-        UI.addChild(menuBox, btn, buttonX, buttonY)
+        local buttonOffsetX = menuPaddingX / 2
+        local buttonOffsetY = menuPaddingY / 2
+        local buttonY = buttonSpacing + (i - 1) * (buttonHeight + buttonSpacing) + buttonOffsetY
+        -- Center text in button
+        local labelWidth = engine.getTextWidth(menuFont, item.label)
+        local thisButtonWidth = labelWidth + buttonPaddingX
+        local thisButtonX = (menuWidth - thisButtonWidth) / 2
+        local btn = UI.newBox(item.name, thisButtonWidth, buttonHeight, boxTexSet, buttonTileSize, 0.3, 0.4, 0.5, 1.0, page)
+        UI.addChild(menuBox, btn, thisButtonX, buttonY)
         UI.setZIndex(btn, 2)
         UI.setClickable(btn, true)
         UI.setOnClick(btn, item.callback)
-        
-        -- Center text in button
-        local labelWidth = engine.getTextWidth(menuFont, item.label)
-        local labelX = (buttonWidth - labelWidth) / 2
-        local labelY = (buttonHeight / 2) + 48
+        local labelX = (thisButtonWidth - labelWidth) / 2
+        local labelY = (buttonHeight / 2) + 8
         local label = UI.newText(item.name .. "_label", item.label, menuFont, 1.0, 1.0, 1.0, 1.0, page)
         UI.addChild(btn, label, labelX, labelY)
         
@@ -176,10 +193,12 @@ end
 -- Button callbacks
 function mainMenu.onCreateWorld()
     engine.logInfo("Create World selected")
+    -- TODO: Start world creation
 end
 
 function mainMenu.onSettings()
     engine.logInfo("Settings selected")
+    -- TODO: Show settings menu
 end
 
 function mainMenu.onQuit()

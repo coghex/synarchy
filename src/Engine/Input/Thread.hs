@@ -178,6 +178,7 @@ processInput env inpSt event = case event of
                 mouseX = realToFrac x * scaleX
                 mouseY = realToFrac y * scaleY
             
+            logDebug logger CatUI $ "Click at (" <> T.pack (show mouseX) <> ", " <> T.pack (show mouseY) <> ")"
             logDebug logger CatInput $ "Converted mouse pos: (" <> T.pack (show mouseX) 
                                     <> ", " <> T.pack (show mouseY) <> ")"
             logDebug logger CatInput $ "Window: " <> T.pack (show winW) <> "x" <> T.pack (show winH)

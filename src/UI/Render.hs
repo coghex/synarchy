@@ -196,40 +196,48 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
                     }
             pure (V.singleton batch, V.singleton (SpriteItem batch))
 
--- | Generate 9 render batches for a box
 makeBoxBatches :: BindlessTextureSystem -> BoxTextureSet 
                -> Float -> Float -> Float -> Float -> Float 
                -> (Float, Float, Float, Float) -> LayerId
                -> V.Vector RenderBatch
 makeBoxBatches bindless texSet x y w h tileSize color layerId =
     let ts = tileSize
+        
         midW = max 0 (w - ts * 2)
         midH = max 0 (h - ts * 2)
         
-        -- Positions for each tile
+        -- When box is smaller than 2*tileSize, center the tiles on the box
+        -- Calculate offset to keep box visually centered on the hit area
+        offsetY = if h < ts * 2 then (h - ts * 2) / 2 else 0
+        offsetX = if w < ts * 2 then (w - ts * 2) / 2 else 0
+        
+        -- Adjusted base position
+        baseX = x + offsetX
+        baseY = y + offsetY
+        
         -- Top row
-        nwX = x
-        nwY = y
-        nX  = x + ts
-        nY  = y
-        neX = x + ts + midW
-        neY = y
+        nwX = baseX
+        nwY = baseY
+        nX  = baseX + ts
+        nY  = baseY
+        neX = baseX + ts + midW
+        neY = baseY
         
         -- Middle row
-        wX  = x
-        wY  = y + ts
-        cX  = x + ts
-        cY  = y + ts
-        eX  = x + ts + midW
-        eY  = y + ts
+        wX  = baseX
+        wY  = baseY + ts
+        cX  = baseX + ts
+        cY  = baseY + ts
+        eX  = baseX + ts + midW
+        eY  = baseY + ts
         
         -- Bottom row
-        swX = x
-        swY = y + ts + midH
-        sX  = x + ts
-        sY  = y + ts + midH
-        seX = x + ts + midW
-        seY = y + ts + midH
+        swX = baseX
+        swY = baseY + ts + midH
+        sX  = baseX + ts
+        sY  = baseY + ts + midH
+        seX = baseX + ts + midW
+        seY = baseY + ts + midH
         
         -- Create batch for each tile
         makeBatch tex px py pw ph = 

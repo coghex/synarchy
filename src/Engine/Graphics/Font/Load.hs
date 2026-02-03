@@ -4,6 +4,7 @@ import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import qualified Data.Text as T
+import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word8)
 import Data.Char (ord)
 import Data.Array.IO (IOArray, newArray, writeArray, getElems)
@@ -197,13 +198,14 @@ packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow cellWidth cellHeight
             row = idx `div` charsPerRow
             atlasX = col * cellWidth + 1
             atlasY = row * cellHeight + 1
+            pixelVec = VU.fromList pixels
         
         forM_ [0..h-1] $ \y →
             forM_ [0..w-1] $ \x → do
                 let srcIdx = y * w + x
                     dstIdx = (atlasY + y) * atlasWidth + (atlasX + x)
-                when (srcIdx < length pixels) $
-                    writeArray atlasArray dstIdx (pixels !! srcIdx)
+                when (srcIdx < VU.length pixelVec) $
+                    writeArray atlasArray dstIdx (pixelVec VU.! srcIdx)
         
         let u0 = fromIntegral atlasX / fromIntegral atlasWidth
             v0 = fromIntegral atlasY / fromIntegral atlasHeight

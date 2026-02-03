@@ -50,22 +50,27 @@ createUIViewMatrix _ =
        (V4 0 0 1 0)
        (V4 0 0 0 1)
 
--- | UI camera projection matrix (pixel coordinates, origin at top-left)
-createUIProjectionMatrix ∷ UICamera → M44 Float
+-- | UI camera projection matrix (pixel coordinates, origin at top-left, Y down - Vulkan style)
+-- Vulkan NDC: X [-1,1] left to right, Y [-1,1] top to bottom
+createUIProjectionMatrix :: UICamera -> M44 Float
 createUIProjectionMatrix uiCam =
     let width  = uiCamWidth uiCam
         height = uiCamHeight uiCam
+        
+        -- For Vulkan: Y=0 (top) -> NDC -1, Y=height (bottom) -> NDC +1
+        -- So we use top=0, bottom=height but need to flip the sign
         left   = 0
         right  = width
-        top    = height  -- Swapped
-        bottom = 0       -- Swapped
+        top    = 0
+        bottom = height
         near   = -1
         far    = 1
         
-    in V4 (V4 (2/(right-left))  0                   0                 0)
-          (V4  0                (2/(top-bottom))    0                 0)
-          (V4  0                 0                  (2/(far-near))    0)
-          (V4 (-(right+left)/(right-left))  (-(top+bottom)/(top-bottom))  (-(far+near)/(far-near))  1)
+        -- Column-major: each V4 is a COLUMN
+    in V4 (V4 (2/(right-left))  0                   0   0)   -- Column 0
+          (V4  0                (2/(bottom-top))    0   0)   -- Column 1: positive Y scale
+          (V4  0                 0                  (2/(far-near))   0)   -- Column 2
+          (V4 (-(right+left)/(right-left))  (-(bottom+top)/(bottom-top))  (-(far+near)/(far-near))  1)  -- Column 3
 
 createViewMatrix ∷ Camera2D → M44 Float
 createViewMatrix camera =

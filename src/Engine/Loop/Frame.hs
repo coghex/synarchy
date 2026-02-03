@@ -109,10 +109,10 @@ drawFrame = do
                 ,("layers", T.pack $ show $ Map.size worldLayeredBatches)]
             
             -- render UI
-            logDebugM CatUI "Rendering UI pages..."
+            logDebugM CatRender "Rendering UI pages..."
             (uiBatches, uiLayeredBatches) ← renderUIPages
             
-            logDebugSM CatUI "Collected UI batches"
+            logDebugSM CatRender "Collected UI batches"
                 [("count", T.pack $ show $ V.length uiBatches)
                 ,("layers", T.pack $ show $ Map.size uiLayeredBatches)]
             

@@ -338,46 +338,35 @@ isPointInElement (px, py) element mgr =
             in px >= ex && px <= (ex + w) &&
                py >= ey && py <= (ey + h)
 
--- Replace the findClickableElementAt function:
-
 findClickableElementAt :: (Float, Float) -> UIPageManager -> Maybe (ElementHandle, Text)
 findClickableElementAt pos mgr =
     let visiblePages = Set.toList (upmVisiblePages mgr)
-        -- Get only ROOT elements from visible pages (not children)
+        -- Get all ROOT elements from visible pages
         allRootHandles = concatMap (\ph -> 
             case Map.lookup ph (upmPages mgr) of
                 Just page -> upRootElements page
                 Nothing -> []
             ) visiblePages
         
-        -- For each root, check if point hits it OR any of its children
-        clickableRoots = filter (\rootHandle ->
-            case Map.lookup rootHandle (upmElements mgr) of
-                Nothing -> False
-                Just rootElem -> 
-                    ueClickable rootElem && 
-                    ueVisible rootElem &&
-                    isJust (ueOnClick rootElem) &&
-                    pointInElementTree pos rootHandle mgr
-            ) allRootHandles
+        -- Find all clickable elements in the tree that contain the point
+        clickableElements = concatMap (findClickableInTree pos) allRootHandles
         
         -- Sort by layer and zIndex (highest first)
-        -- FIXED: Properly combine page layer, page z-index, and element z-index
         sorted = sortOn (\eh -> 
             case Map.lookup eh (upmElements mgr) of
                 Just elem -> 
                     let page = Map.lookup (uePage elem) (upmPages mgr)
                         pageLayerVal = case page of
-                            Just p -> fromEnum (upLayer p) * 1000000  -- Layer is most significant
+                            Just p -> fromEnum (upLayer p) * 1000000
                             Nothing -> 0
                         pageZVal = case page of
-                            Just p -> upZIndex p * 1000  -- Page z-index is next
+                            Just p -> upZIndex p * 1000
                             Nothing -> 0
-                        elemZVal = ueZIndex elem  -- Element z-index is least significant
+                        elemZVal = ueZIndex elem
                         totalVal = pageLayerVal + pageZVal + elemZVal
                     in negate totalVal  -- Negate for descending sort (highest first)
                 Nothing -> 0
-            ) clickableRoots
+            ) clickableElements
     in case sorted of
         (eh:_) -> case Map.lookup eh (upmElements mgr) of
             Just elem -> case ueOnClick elem of
@@ -386,15 +375,21 @@ findClickableElementAt pos mgr =
             Nothing -> Nothing
         [] -> Nothing
   where
-    -- Check if point is in element or any of its children
-    pointInElementTree :: (Float, Float) -> ElementHandle -> UIPageManager -> Bool
-    pointInElementTree point handle mgr' =
-        case Map.lookup handle (upmElements mgr') of
-            Nothing -> False
+    -- Find all clickable elements in the tree that contain the point
+    findClickableInTree :: (Float, Float) -> ElementHandle -> [ElementHandle]
+    findClickableInTree point handle =
+        case Map.lookup handle (upmElements mgr) of
+            Nothing -> []
             Just elem ->
-                if isPointInElement point elem mgr'
-                then True
-                else any (\childH -> pointInElementTree point childH mgr') (ueChildren elem)
+                let thisClickable = 
+                        if ueClickable elem && 
+                           ueVisible elem && 
+                           isJust (ueOnClick elem) &&
+                           isPointInElement point elem mgr
+                        then [handle]
+                        else []
+                    childClickables = concatMap (findClickableInTree point) (ueChildren elem)
+                in thisClickable ++ childClickables
 
 -----------------------------------------------------------
 -- Box Textures
