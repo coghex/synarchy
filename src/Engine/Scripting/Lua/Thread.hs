@@ -204,10 +204,11 @@ processLuaMsg env ls stateRef msg = case msg of
     logDebug logger CatLua $ 
         "Texture loaded with handle " <> T.pack (show handle) 
         <> " as asset " <> T.pack (show assetId)
-  LuaFontLoaded handle → do
+  LuaFontLoaded handle path → do
     logger ← readIORef (loggerRef env)
     logDebug logger CatLua $ 
-        "Font loaded with handle " <> T.pack (show handle)
+        "Font " <> T.pack (show path)
+        <> " loaded with handle " <> T.pack (show handle)
   LuaFontLoadFailed err → do
     logger ← readIORef (loggerRef env)
     logWarn logger CatLua $ 
@@ -243,6 +244,12 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaFramebufferResize w h → do
     broadcastToModules ls "onFramebufferResize"
       [ScriptNumber (fromIntegral w), ScriptNumber (fromIntegral h)]
+  LuaAssetLoaded assetType handle path → do
+    broadcastToModules ls "onAssetLoaded"
+      [ ScriptString assetType
+      , ScriptNumber (fromIntegral handle)
+      , ScriptString path
+      ]
   LuaCharInput fid c → 
     broadcastToModules ls "onCharInput"
       [ScriptNumber (fromIntegral fid), ScriptString (T.singleton c)]

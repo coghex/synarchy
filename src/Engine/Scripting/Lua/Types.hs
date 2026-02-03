@@ -76,7 +76,7 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
 
 -- | messages from set to lua from anywhere
 data LuaMsg = LuaTextureLoaded TextureHandle AssetId
-            | LuaFontLoaded FontHandle
+            | LuaFontLoaded FontHandle FilePath
             | LuaFontLoadFailed Text
             | LuaThreadKill
             | LuaMouseDownEvent GLFW.MouseButton Double Double
@@ -86,6 +86,7 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaShellToggle
             | LuaWindowResize Int Int
             | LuaFramebufferResize Int Int
+            | LuaAssetLoaded Text Int Text
             | LuaFocusGained Word32
             | LuaFocusLost Word32
             | LuaCharInput Word32 Char

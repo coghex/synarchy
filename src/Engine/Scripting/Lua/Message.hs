@@ -112,6 +112,11 @@ handleLoadTexture handle path = do
     
     pool ← liftIO $ readIORef apRef
     modify $ \s → s { assetPool = pool }
+    -- notify lua
+    env ← ask
+    let (TextureHandle h) = handle
+    liftIO $ Q.writeQueue (luaQueue env)
+      (LuaAssetLoaded "texture" (fromIntegral h) (T.pack path))
     logDebugM CatLua $ "Texture loaded successfully: " <> T.pack path
 
 -- | Handle font load request
@@ -121,7 +126,9 @@ handleLoadFont handle path size = do
     actualHandle ← loadFont handle path size
     env ← ask
     let etlq = luaQueue env
-    liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle)
+    liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle path)
+    let (FontHandle h) = actualHandle
+    liftIO $ Q.writeQueue etlq (LuaAssetLoaded "font" (fromIntegral h) (T.pack path))
     logDebugM CatLua $ "Font loaded successfully: " <> T.pack path
 
 -- | Handle spawn text request

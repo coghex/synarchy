@@ -6,6 +6,17 @@ local page = nil
 local boxTexSet = nil
 local menuFont = nil
 local titleFont = nil
+local fbW, fbH = 0, 0
+local uiCreated = false
+
+-- Track loading state
+local fontsLoaded = {
+    menu = false,
+    title = false
+}
+local fontsReady = false  -- FIX: was "fontReady"
+local menuFontHandle = nil
+local titleFontHandle = nil
 
 -- UI element handles
 local titleText = nil
@@ -14,8 +25,8 @@ local buttons = {}
 
 -- Menu configuration
 local menuItems = {
-    { name = "new_game", label = "New Game", callback = "onNewGame" },
-    { name = "options", label = "Options", callback = "onOptions" },
+    { name = "create_world", label = "Create World", callback = "onCreateWorld" },
+    { name = "settings", label = "Settings", callback = "onSettings" },
     { name = "quit", label = "Quit", callback = "onQuit" }
 }
 
@@ -26,9 +37,13 @@ local buttonSpacing = 20
 local buttonTileSize = 64
 
 function mainMenu.init(scriptId)
-    -- Load fonts
-    menuFont = engine.loadFont("assets/fonts/arcade.ttf", 24)
-    titleFont = engine.loadFont("assets/fonts/gothic.ttf", 48)
+    -- Load fonts - store handles for comparison in onAssetLoaded
+    menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)
+    titleFontHandle = engine.loadFont("assets/fonts/gothic.ttf", 48)
+    
+    -- Also store in menuFont/titleFont for use in createUI
+    menuFont = menuFontHandle
+    titleFont = titleFontHandle
     
     -- Load box textures
     local texCenter = engine.loadTexture("assets/textures/box/box.png")
@@ -43,20 +58,70 @@ function mainMenu.init(scriptId)
     
     boxTexSet = UI.loadBoxTextures(texCenter, texN, texS, texE, texW, texNE, texNW, texSE, texSW)
     
+    engine.logInfo("Main menu initialized, waiting for assets...")
+end
+
+function mainMenu.checkReady()
+    engine.logInfo("checkReady: fontsReady=" .. tostring(fontsReady) .. " fbW=" .. fbW .. " fbH=" .. fbH .. " uiCreated=" .. tostring(uiCreated))
+    if fontsReady and fbW > 0 and fbH > 0 and not uiCreated then
+        mainMenu.createUI()
+    end
+end
+
+function mainMenu.onAssetLoaded(assetType, handle, path)
+    engine.logInfo("Asset loaded: " .. assetType .. " handle=" .. handle .. " path=" .. path)
+    
+    if assetType == "font" then
+        if handle == menuFontHandle then
+            fontsLoaded.menu = true
+            engine.logInfo("Menu font ready")
+        elseif handle == titleFontHandle then
+            fontsLoaded.title = true
+            engine.logInfo("Title font ready")
+        end
+        
+        -- Check if all fonts are loaded
+        if fontsLoaded.menu and fontsLoaded.title then
+            fontsReady = true
+            engine.logInfo("All fonts loaded!")
+            mainMenu.checkReady()
+        end
+    end
+end
+
+function mainMenu.onFramebufferResize(width, height)
+    engine.logInfo("Main menu onFramebufferResize: " .. width .. " x " .. height)
+    fbW = width
+    fbH = height
+    
+    if uiCreated then
+        -- Recreate UI with new dimensions
+        mainMenu.createUI()
+    else
+        -- Check if we can create UI now
+        mainMenu.checkReady()
+    end
+end
+
+function mainMenu.createUI()
+    if uiCreated then
+        -- Clean up old UI first
+        if page then
+            UI.deletePage(page)
+            buttons = {}
+        end
+    end
+    
+    engine.logInfo("Creating main menu with framebuffer size: " .. fbW .. " x " .. fbH)
+    
     -- Create the menu page
     page = UI.newPage("main_menu", "menu")
-    
-    -- Get framebuffer dimensions for layout
-    -- Coordinate system: origin at BOTTOM-LEFT, Y increases UPWARD
-    local fbW, fbH = engine.getFramebufferSize()
     
     -- Calculate menu dimensions
     local menuHeight = #menuItems * (buttonHeight + buttonSpacing) + buttonSpacing
     local menuWidth = buttonWidth + 60
     
     -- Center the menu box on screen
-    -- menuX is distance from left edge
-    -- menuY is distance from BOTTOM edge (box extends upward from this point)
     local menuX = (fbW - menuWidth) / 2
     local menuY = (fbH - menuHeight) / 2
     
@@ -69,22 +134,15 @@ function mainMenu.init(scriptId)
     local titleStr = "Ecce Homo"
     local titleWidth = engine.getTextWidth(titleFont, titleStr)
     local titleX = (fbW - titleWidth) / 2
-    -- Title goes above the menu box (menuY + menuHeight + some padding)
-    local titleY = menuY + menuHeight + 40
+    local titleY = menuY - 60  -- Above the menu box
     titleText = UI.newText("title", titleStr, titleFont, 1.0, 1.0, 1.0, 1.0, page)
     UI.addToPage(page, titleText, titleX, titleY)
     
     -- Create menu buttons inside the menu box
-    -- Child positions are relative to parent's bottom-left corner
-    -- Buttons stack from bottom to top
     local buttonX = (menuWidth - buttonWidth) / 2
     
-    -- Start from top of box and work down, but remember Y=0 is at bottom
-    -- So first button (New Game) should be at the TOP of the box
     for i, item in ipairs(menuItems) do
-        -- Calculate Y from top of menu box, going downward
-        -- Top of box is at menuHeight, first button starts at menuHeight - buttonSpacing - buttonHeight
-        local buttonY = menuHeight - (i * (buttonHeight + buttonSpacing))
+        local buttonY = buttonSpacing + (i - 1) * (buttonHeight + buttonSpacing)
         
         local btn = UI.newBox(item.name, buttonWidth, buttonHeight, boxTexSet, buttonTileSize, 0.3, 0.4, 0.5, 1.0, page)
         UI.addChild(menuBox, btn, buttonX, buttonY)
@@ -93,12 +151,9 @@ function mainMenu.init(scriptId)
         UI.setOnClick(btn, item.callback)
         
         -- Center text in button
-        -- Text baseline is at the Y position, so we need to offset for proper centering
         local labelWidth = engine.getTextWidth(menuFont, item.label)
         local labelX = (buttonWidth - labelWidth) / 2
-        -- Text Y should be near the vertical center of the button
-        -- Since text renders from baseline upward, place it at roughly 1/3 from bottom
-        local labelY = buttonHeight / 3
+        local labelY = (buttonHeight / 2) + 48
         local label = UI.newText(item.name .. "_label", item.label, menuFont, 1.0, 1.0, 1.0, 1.0, page)
         UI.addChild(btn, label, labelX, labelY)
         
@@ -110,18 +165,21 @@ function mainMenu.init(scriptId)
     
     -- Show the menu
     UI.showPage(page)
+    uiCreated = true
+    
+    engine.logInfo("Main menu created with " .. #menuItems .. " buttons")
 end
 
 function mainMenu.update(dt)
 end
 
 -- Button callbacks
-function mainMenu.onNewGame()
-    engine.logInfo("New Game selected")
+function mainMenu.onCreateWorld()
+    engine.logInfo("Create World selected")
 end
 
-function mainMenu.onOptions()
-    engine.logInfo("Options selected")
+function mainMenu.onSettings()
+    engine.logInfo("Settings selected")
 end
 
 function mainMenu.onQuit()

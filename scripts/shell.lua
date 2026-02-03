@@ -883,4 +883,19 @@ function shell.onInterrupt(fid)
     shell.updateDisplay()
 end
 
+function shell.onFramebufferResize(width, height)
+    -- Reset max input width cache so it gets recalculated
+    maxInputWidth = 0
+    
+    -- If visible, rebuild everything with new dimensions
+    if visible then
+        shell.rebuildBox()
+        shell.rebuildHistoryDisplay()
+        shell.updateCursorPos()
+        if ghostText then
+            shell.updateGhostText()
+        end
+    end
+end
+
 return shell
