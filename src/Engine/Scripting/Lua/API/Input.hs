@@ -10,8 +10,7 @@ module Engine.Scripting.Lua.API.Input
 
 import UPrelude
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Engine.Input.Types (InputState(..), inpMousePos, inpMouseBtns, 
-                           inpWindowSize, inpFramebufferSize)
+import Engine.Input.Types (InputState(..), inpMousePos, inpMouseBtns)
 import Engine.Input.Bindings (checkKeyDown, isActionDown)
 import Engine.Graphics.Camera (Camera2D(..), camZoom, camPosition)
 import Engine.Core.State (EngineEnv(..))
@@ -74,24 +73,20 @@ isMouseButtonDownFn backendState = do
     Nothing → Lua.pushboolean False
   return 1
 
-getWindowSizeFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
-getWindowSizeFn backendState = do
-  (w, h) ← Lua.liftIO $ do
-    inputState ← readIORef (lbsInputState backendState)
-    let (winW, winH) = inpWindowSize inputState
-    return (fromIntegral winW, fromIntegral winH)
-  Lua.pushnumber (Lua.Number w)
-  Lua.pushnumber (Lua.Number h)
+getWindowSizeFn ∷ EngineEnv → LuaBackendState
+  → Lua.LuaE Lua.Exception Lua.NumResults
+getWindowSizeFn env backendState = do
+  (w, h) ← Lua.liftIO $ readIORef (windowSizeRef env)
+  Lua.pushnumber (Lua.Number (fromIntegral w))
+  Lua.pushnumber (Lua.Number (fromIntegral h))
   return 2
 
-getFramebufferSizeFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
-getFramebufferSizeFn backendState = do
-  (w, h) ← Lua.liftIO $ do
-    inputState ← readIORef (lbsInputState backendState)
-    let (winW, winH) = inpFramebufferSize inputState
-    return (fromIntegral winW, fromIntegral winH)
-  Lua.pushnumber (Lua.Number w)
-  Lua.pushnumber (Lua.Number h)
+getFramebufferSizeFn ∷ EngineEnv → LuaBackendState
+  → Lua.LuaE Lua.Exception Lua.NumResults
+getFramebufferSizeFn env backendState = do
+  (w, h) ← Lua.liftIO $ readIORef (framebufferSizeRef env)
+  Lua.pushnumber (Lua.Number (fromIntegral w))
+  Lua.pushnumber (Lua.Number (fromIntegral h))
   return 2
 
 getWorldCoordFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
@@ -103,9 +98,9 @@ getWorldCoordFn env backendState = do
       (worldX, worldY) ← Lua.liftIO $ do
         inputState ← readIORef (lbsInputState backendState)
         camera ← readIORef (cameraRef env)
-        let (winW, winH) = inpWindowSize inputState
-            (fbW, fbH) = inpFramebufferSize inputState
-            aspect = fromIntegral fbW / fromIntegral fbH
+        (winW, winH) ← readIORef (windowSizeRef env)
+        (fbW, fbH) ← readIORef (framebufferSizeRef env)
+        let aspect = fromIntegral fbW / fromIntegral fbH
             zoom = realToFrac (camZoom camera)
             viewWidth = zoom * aspect
             viewHeight = zoom

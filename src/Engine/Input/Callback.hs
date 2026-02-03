@@ -25,6 +25,8 @@ setupCallbacks window el queue = do
         (Just $ scrollCallback queue)
     GLFW.setWindowSizeCallback window 
         (Just $ resizeCallback queue)
+    GLFW.setFramebufferSizeCallback window
+        (Just $ framebufferSizeCallback queue)
     GLFW.setWindowFocusCallback window 
         (Just $ focusCallback queue)
 
@@ -37,6 +39,7 @@ clearGLFWCallbacks window = do
     GLFW.setCursorPosCallback window Nothing
     GLFW.setScrollCallback window Nothing
     GLFW.setWindowSizeCallback window Nothing
+    GLFW.setFramebufferSizeCallback window Nothing
     GLFW.setWindowFocusCallback window Nothing
 
 -- | Keyboard input callback
@@ -75,6 +78,11 @@ scrollCallback queue _win x y =
 resizeCallback ∷ Queue InputEvent → GLFW.Window → Int → Int → IO ()
 resizeCallback queue _win w h =
     writeQueue queue $ InputWindowEvent $ WindowResize w h
+
+-- | Framebuffer size callback
+framebufferSizeCallback :: Queue InputEvent -> GLFW.Window -> Int -> Int -> IO ()
+framebufferSizeCallback queue _win w h =
+    writeQueue queue $ InputWindowEvent $ FramebufferResize w h
 
 -- | Window focus callback
 focusCallback ∷ Queue InputEvent → GLFW.Window → Bool → IO ()

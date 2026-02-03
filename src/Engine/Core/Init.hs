@@ -60,6 +60,8 @@ initializeEngine = do
   -- Load video config
   videoConfig ← loadVideoConfig logger "config/video.yaml"
   videoConfigRef ← newIORef $ videoConfig
+  windowSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
+  framebufferSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
   
   -- Create camera references
   cameraRef ← newIORef defaultCamera
@@ -76,24 +78,26 @@ initializeEngine = do
   
   -- Build environment
   let env = EngineEnv
-        { engineConfig     = defaultEngineConfig
-        , videoConfigRef   = videoConfigRef
-        , eventQueue       = eventQueue
-        , inputQueue       = inputQueue
-        , loggerRef        = loggerRef
-        , luaToEngineQueue = luaToEngineQueue
-        , luaQueue         = engineToLuaQueue
-        , lifecycleRef     = lifecycleRef
-        , assetPoolRef     = assetPoolRef
-        , nextObjectIdRef  = nextObjectIdRef
-        , fontCacheRef     = fontCache
-        , inputStateRef    = inputStateRef
-        , keyBindingsRef   = keyBindingsRef
-        , textBuffersRef   = textBuffersRef
-        , cameraRef        = cameraRef
-        , uiCameraRef      = uiCameraRef
-        , uiManagerRef     = uiManagerRef
-        , focusManagerRef  = focusMgrRef
+        { engineConfig       = defaultEngineConfig
+        , videoConfigRef     = videoConfigRef
+        , windowSizeRef      = windowSizeRef
+        , framebufferSizeRef = framebufferSizeRef
+        , eventQueue         = eventQueue
+        , inputQueue         = inputQueue
+        , loggerRef          = loggerRef
+        , luaToEngineQueue   = luaToEngineQueue
+        , luaQueue           = engineToLuaQueue
+        , lifecycleRef       = lifecycleRef
+        , assetPoolRef       = assetPoolRef
+        , nextObjectIdRef    = nextObjectIdRef
+        , fontCacheRef       = fontCache
+        , inputStateRef      = inputStateRef
+        , keyBindingsRef     = keyBindingsRef
+        , textBuffersRef     = textBuffersRef
+        , cameraRef          = cameraRef
+        , uiCameraRef        = uiCameraRef
+        , uiManagerRef       = uiManagerRef
+        , focusManagerRef    = focusMgrRef
         }
   
   envVar   ← atomically $ newVar env

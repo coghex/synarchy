@@ -169,8 +169,8 @@ processInput env inpSt event = case event of
                                     <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
             
             -- Get window and framebuffer sizes from InputState
-            let (winW, winH) = inpWindowSize inpSt
-                (fbW, fbH) = inpFramebufferSize inpSt
+            (winW, winH) ← readIORef (windowSizeRef env)
+            (fbW, fbH) ← readIORef (framebufferSizeRef env)
             
             -- Calculate scale factors
             let scaleX = fromIntegral fbW / fromIntegral winW
@@ -207,8 +207,12 @@ processInput env inpSt event = case event of
     InputWindowEvent winEv → do
         logger ← readIORef (loggerRef env)
         case winEv of
-          WindowResize w h →
+          WindowResize w h → do
             logDebug logger CatInput $ "Window resize event: width=" <> T.pack (show w) <> ", height=" <> T.pack (show h)
+            writeIORef (windowSizeRef env) (w, h)
+          FramebufferResize w h → do
+            logDebug logger CatInput $ "Framebuffer resize event: width=" <> T.pack (show w) <> ", height=" <> T.pack (show h)
+            writeIORef (framebufferSizeRef env) (w, h)
           WindowFocus focused →
             logDebug logger CatInput $ "Window focus event: focused=" <> T.pack (show focused)
           WindowMinimize minimized →
@@ -226,16 +230,15 @@ updateKeyState state key keyState mods = state
             , keyTime = 0.0
             }
 
+updateWindowState ∷ InputState → WindowEvent → InputState
+updateWindowState state (WindowFocus focused) = state { inpWindowFocused = focused }
+updateWindowState state _ = state
+
 updateMouseState ∷ InputState → GLFW.MouseButton → (Double, Double) → GLFW.MouseButtonState → InputState
 updateMouseState state btn pos btnState = state
     { inpMousePos = pos
     , inpMouseBtns = Map.insert btn (btnState ≡ GLFW.MouseButtonState'Pressed) (inpMouseBtns state)
     }
-
-updateWindowState ∷ InputState → WindowEvent → InputState
-updateWindowState state (WindowResize w h) = state { inpWindowSize = (w, h) }
-updateWindowState state (WindowFocus focused) = state { inpWindowFocused = focused }
-updateWindowState state _ = state
 
 updateScrollState ∷ InputState → Double → Double → InputState
 updateScrollState state x y = state { inpScrollDelta = (x, y) }

@@ -12,8 +12,6 @@ data InputState = InputState
     , inpMouseDelta ∷ (Double, Double)   -- ^ Mouse movement since last frame
     , inpMouseBtns ∷ Map.Map GLFW.MouseButton Bool
     , inpScrollDelta ∷ (Double, Double)  -- ^ Scroll wheel delta
-    , inpWindowSize ∷ (Int, Int)         -- ^ Current window dimensions
-    , inpFramebufferSize ∷ (Int, Int)    -- ^ Current framebuffer dimensions
     , inpWindowFocused ∷ Bool            -- ^ Is window currently focused
     } deriving (Show)
 
@@ -45,6 +43,7 @@ data InputEvent
 -- | Window-specific events
 data WindowEvent 
     = WindowResize Int Int        -- ^ New width and height
+    | FramebufferResize Int Int -- ^ New framebuffer width and height
     | WindowClose                 -- ^ Window close request
     | WindowFocus Bool           -- ^ Window focus gained/lost
     | WindowMinimize Bool        -- ^ Window minimized/restored
@@ -271,7 +270,5 @@ defaultInputState = InputState
     , inpMouseDelta = (0.0, 0.0)
     , inpMouseBtns = Map.empty
     , inpScrollDelta = (0.0, 0.0)
-    , inpWindowSize = (800, 600)         -- default size, adjust as needed
-    , inpFramebufferSize = (800, 600)
     , inpWindowFocused = True
     }

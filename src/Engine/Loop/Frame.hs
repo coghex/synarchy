@@ -10,7 +10,7 @@ import Control.Exception (displayException)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Map as Map
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Linear (identity)
 import Engine.Core.Defaults
 import Engine.Core.Log (LogCategory(..))
@@ -217,9 +217,8 @@ updateUniformBufferForFrame win frameIdx = do
                               (createUIViewMatrix uiCamera)
                               (createUIProjectionMatrix uiCamera)
             
-            liftIO $ atomicModifyIORef' (inputStateRef env) $ \is →
-                (is { inpWindowSize = (winWidth, winHeight)
-                    , inpFramebufferSize = (fbWidth, fbHeight) }, ())
+            liftIO $ writeIORef (windowSizeRef env) (winWidth, winHeight)
+            liftIO $ writeIORef (framebufferSizeRef env) (fbWidth, fbHeight)
             
             updateUniformBuffer device memory uboData
         _ → logAndThrowM CatGraphics

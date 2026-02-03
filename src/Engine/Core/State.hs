@@ -34,24 +34,26 @@ import UI.Focus (FocusManager)
 
 -- | Engine environment (read-only)
 data EngineEnv = EngineEnv
-  { engineConfig     ∷ EngineConfig
-  , videoConfigRef   ∷ IORef VideoConfig
-  , eventQueue       ∷ Q.Queue Event
-  , inputQueue       ∷ Q.Queue InputEvent
-  , loggerRef        ∷ IORef LoggerState
-  , luaToEngineQueue ∷ Q.Queue LuaToEngineMsg
-  , luaQueue         ∷ Q.Queue LuaMsg
-  , lifecycleRef     ∷ IORef EngineLifecycle
-  , assetPoolRef     ∷ IORef AssetPool
-  , nextObjectIdRef  ∷ IORef Word32
-  , fontCacheRef     ∷ IORef FontCache
-  , inputStateRef    ∷ IORef InputState
-  , keyBindingsRef   ∷ IORef KeyBindings
-  , textBuffersRef   ∷ IORef (Map.Map ObjectId Text)
-  , cameraRef        ∷ IORef Camera2D
-  , uiCameraRef      ∷ IORef UICamera
-  , uiManagerRef     ∷ IORef UIPageManager
-  , focusManagerRef  ∷ IORef FocusManager
+  { engineConfig       ∷ EngineConfig
+  , videoConfigRef     ∷ IORef VideoConfig
+  , windowSizeRef      ∷ IORef (Int, Int)
+  , framebufferSizeRef ∷ IORef (Int, Int)
+  , eventQueue         ∷ Q.Queue Event
+  , inputQueue         ∷ Q.Queue InputEvent
+  , loggerRef          ∷ IORef LoggerState
+  , luaToEngineQueue   ∷ Q.Queue LuaToEngineMsg
+  , luaQueue           ∷ Q.Queue LuaMsg
+  , lifecycleRef       ∷ IORef EngineLifecycle
+  , assetPoolRef       ∷ IORef AssetPool
+  , nextObjectIdRef    ∷ IORef Word32
+  , fontCacheRef       ∷ IORef FontCache
+  , inputStateRef      ∷ IORef InputState
+  , keyBindingsRef     ∷ IORef KeyBindings
+  , textBuffersRef     ∷ IORef (Map.Map ObjectId Text)
+  , cameraRef          ∷ IORef Camera2D
+  , uiCameraRef        ∷ IORef UICamera
+  , uiManagerRef       ∷ IORef UIPageManager
+  , focusManagerRef    ∷ IORef FocusManager
   }
 
 -- | Engine state (mutable)

@@ -44,7 +44,7 @@ import Control.Exception (IOException, catch, ioError)
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.Monad
 import Engine.Core.State
@@ -92,18 +92,12 @@ createWindow config = do
       Nothing → logAndThrowM CatGraphics (ExInit WindowCreationFailed) $
                  T.pack $ "Failed to create GLFW window with dimensions: "
                  ⧺ show (wcWidth config) ⧺ "x" ⧺ show (wcHeight config)
-      Just win → do
-        -- set window size reference
-        env ← ask
-        liftIO $ do
-            windowSize ← GLFW.getWindowSize win
-            framebufferSize ← GLFW.getFramebufferSize win
-            writeIORef (windowSizeRef env) windowSize
-            writeIORef (framebufferSizeRef env) framebufferSize
+      Just win → pure $ Window win
+    -- set window size reference
+  writeIORef (windowSizeRef env) (GLFW.getWindowSize window)
+  writeIORef (framebufferSizeRef env) (GLFW.getFramebufferSize window)
  
-        pure $ Window win
-
-
+--
 -- | Creates a GLFW window in an IO context for testing
 createRawWindow ∷ WindowConfig → IO (Maybe Window)
 createRawWindow config = do

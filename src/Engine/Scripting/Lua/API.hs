@@ -57,8 +57,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "isActionDown"      (isActionDownFn env backendState)
   registerLuaFunction "getMousePosition"  (getMousePositionFn backendState)
   registerLuaFunction "isMouseButtonDown" (isMouseButtonDownFn backendState)
-  registerLuaFunction "getWindowSize"     (getWindowSizeFn backendState)
-  registerLuaFunction "getFramebufferSize" (getFramebufferSizeFn backendState)
+  registerLuaFunction "getWindowSize"     (getWindowSizeFn env backendState)
+  registerLuaFunction "getFramebufferSize" (getFramebufferSizeFn env backendState)
   registerLuaFunction "getWorldCoord"     (getWorldCoordFn env backendState)
   
   -- Text functions

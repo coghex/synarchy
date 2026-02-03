@@ -3,7 +3,7 @@ module Main where
 
 import UPrelude
 import Control.Exception (displayException)
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, writeIORef)
 import System.Environment (setEnv)
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Defaults (defaultWindowConfig)
@@ -50,11 +50,10 @@ main = do
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
         -- Create window
-        window ← withTiming CatGraphics "GLFW.createWindow"
-                    $ GLFW.createWindow $ defaultWindowConfig videoConfig
+        window ← GLFW.createWindow $ defaultWindowConfig videoConfig
         modify $ \s → s { graphicsState = (graphicsState s) {
                             glfwWindow = Just window } }
-        
+       
         -- Setup input callbacks
         let Window glfwWin = window
         liftIO $ setupCallbacks glfwWin (lifecycleRef env) (inputQueue env)
