@@ -66,6 +66,9 @@ local shellLayer = 10
 local fontSize = 32
 local maxInputWidth = 0
 
+-- System configuration
+local uiscale = 1.0
+
 -- completion state
 local currentCompletions = {}
 local ghostText = nil
@@ -73,7 +76,16 @@ local ghostText = nil
 function shell.init(scriptId)
     myScriptId = scriptId
     engine.logInfo("Shell module initialized with scriptId: " .. tostring(scriptId))
-    
+
+    uiscale = engine.getUIScale()
+    tileSize = math.floor(tileSize * uiscale)
+    middleWidth = math.floor(middleWidth * uiscale)
+    fontSize = math.floor(fontSize * uiscale)
+    marginLeft = math.floor(marginLeft * uiscale)
+    marginBottom = math.floor(marginBottom * uiscale)
+    marginTop = math.floor(marginTop * uiscale)
+    lineHeight = math.floor(lineHeight * uiscale)
+
     shellFont = engine.loadFont("assets/fonts/shell.ttf", fontSize)
     
     texBox = engine.loadTexture("assets/textures/box/box.png")
@@ -430,13 +442,12 @@ function shell.updateCursorPos()
     local row2Y = baseY + tileSize + middleHeight + tileSize / 2
     local promptX = baseX + tileSize + 10
     local promptY = row2Y - fontSize
-    local bufferX = promptX + fontSize + 20
+    local bufferX = promptX + (0.5*fontSize) + 32
     
     -- Only measure text up to cursor position
     local textBeforeCursor = inputBuffer:sub(inputScrollOffset + 1, cursorPos)
     local textWidth = engine.getTextWidth(shellFont, textBeforeCursor)
-    local cursorOffset = -4
-    local cursorX = bufferX + textWidth + cursorOffset
+    local cursorX = bufferX + textWidth
     
     engine.setPos(objCursor, cursorX, promptY)
 end

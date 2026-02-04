@@ -7,6 +7,7 @@ local btnTexSet = nil
 local menuFont = nil
 local titleFont = nil
 local fbW, fbH = 0, 0
+local uiscale = 1.0
 
 -- Font loading state
 local fontsLoaded = {
@@ -28,6 +29,8 @@ local currentMenu = "main"
 
 function uiManager.init(scriptId)
     engine.logInfo("UI Manager initializing...")
+
+    uiscale = engine.getUIScale()
     
     -- Load fonts
     menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)

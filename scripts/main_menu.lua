@@ -70,7 +70,7 @@ function mainMenu.createUI()
     UI.addToPage(page, menuBox, menuX, menuY)
     UI.setZIndex(menuBox, 1)
     
-    -- Create title ABOVE menu box
+    -- Create title above menu box
     local titleStr = "Ecce Homo"
     local titleWidth = engine.getTextWidth(titleFont, titleStr)
     local titleX = (fbW - titleWidth) / 2

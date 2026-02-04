@@ -11,6 +11,7 @@ data VideoConfig = VideoConfig
     { vcWidth      ∷ Int
     , vcHeight     ∷ Int
     , vcFullscreen ∷ Bool
+    , vcUIScale    ∷ Float
     , vcVSync      ∷ Bool
     , vcFrameLimit ∷ Maybe Int
     , vcMSAA       ∷ Int
@@ -22,6 +23,7 @@ defaultVideoConfig = VideoConfig
     { vcWidth      = 800
     , vcHeight     = 600
     , vcFullscreen = False
+    , vcUIScale    = 1.0
     , vcVSync      = True
     , vcFrameLimit = Nothing
     , vcMSAA       = 1
@@ -31,6 +33,7 @@ defaultVideoConfig = VideoConfig
 data VideoConfigFile = VideoConfigFile
     { vfResolution  ∷ Resolution
     , vfFullscreen  ∷ Bool
+    , vfUIScale     ∷ Float
     , vfVSync       ∷ Bool
     , vfFrameLimit  ∷ Maybe Int
     , vfMSAA        ∷ Int
@@ -52,6 +55,7 @@ instance FromJSON VideoConfigFile where
       VideoConfigFile
         <$> videoObj .: "resolution"
         <*> videoObj .: "fullscreen" .!= False
+        <*> videoObj .: "ui_scale" .!= 1.0
         <*> videoObj .: "vsync" .!= True
         <*> videoObj .: "frame_limit" .!= Nothing
         <*> videoObj .: "msaa" .!= 1
@@ -62,10 +66,11 @@ instance ToJSON Resolution where
         , "height" .= h
         ]
 instance ToJSON VideoConfigFile where
-    toJSON (VideoConfigFile res fs vs fl msaa) = Yaml.object
+    toJSON (VideoConfigFile res fs uis vs fl msaa) = Yaml.object
         [ "video" .= Yaml.object
             [ "resolution" .= res
             , "fullscreen" .= fs
+            , "ui_scale" .= uis
             , "vsync" .= vs
             , "frame_limit" .= fl
             , "msaa" .= msaa
@@ -85,6 +90,7 @@ loadVideoConfig logger path = do
             { vcWidth      = resWidth (vfResolution vf)
             , vcHeight     = resHeight (vfResolution vf)
             , vcFullscreen = vfFullscreen vf
+            , vcUIScale    = vfUIScale vf
             , vcVSync      = vfVSync vf
             , vcFrameLimit = vfFrameLimit vf
             , vcMSAA       = vfMSAA vf
@@ -99,6 +105,7 @@ saveVideoConfig logger path config = do
               , resHeight = vcHeight config
               }
           , vfFullscreen = vcFullscreen config
+          , vfUIScale = vcUIScale config
           , vfVSync = vcVSync config
           , vfFrameLimit = vcFrameLimit config
           , vfMSAA = vcMSAA config

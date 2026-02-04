@@ -82,6 +82,11 @@ function settingsMenu.createUI()
     UI.setClickable(elements.fullscreenCheckbox, true)
     UI.setZIndex(elements.fullscreenCheckbox, 20)
     UI.setOnClick(elements.fullscreenCheckbox, "onToggle_fullscreen")
+
+    -- UI scaling row
+    local yPos = 360
+    local scalingLabel = UI.newText("scaling_label", "UI Scaling", menuFont, 1.0, 1.0, 1.0, 1.0, page)
+    UI.addChild(panel, scalingLabel, rowX, yPos + 8)
     
     -- Back button
     local btnWidth = 200

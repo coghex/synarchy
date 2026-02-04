@@ -7,6 +7,7 @@ module Engine.Scripting.Lua.API.Graphics
   , setVisibleFn
   , destroyFn
   , setFullscreenFn
+  , getUIScaleFn
   ) where
 
 import UPrelude
@@ -41,6 +42,13 @@ setFullscreenFn env = do
         writeIORef (videoConfigRef env) $ oldConfig { vcFullscreen = fullscreenArg }
     
     return 0
+
+-- | engine.getUIScale()
+getUIScaleFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+getUIScaleFn env = do
+    vconfig <- Lua.liftIO $ readIORef (videoConfigRef env)
+    Lua.pushnumber (Lua.Number (realToFrac (vcUIScale vconfig)))
+    return 1
 
 loadTextureFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 loadTextureFn backendState = do

@@ -1,0 +1,10 @@
+keybinds:
+  # Movement
+  moveUp: W
+  moveDown: S
+  moveLeft: A
+  moveRight: D
+  
+  # System
+  escape: Escape
+  openShell:  Grave
