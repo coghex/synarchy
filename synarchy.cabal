@@ -191,6 +191,7 @@ library
                      Engine.Scripting.Loader
                      Engine.Scripting.Types
                      Engine.Scripting.Lua.Backend
+                     Engine.Scripting.Lua.Debug
                      Engine.Scripting.Lua.Types
                      Engine.Scripting.Lua.Message
                      Engine.Scripting.Lua.Thread
@@ -198,6 +199,7 @@ library
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
                      Engine.Scripting.Lua.API.Core
+                     Engine.Scripting.Lua.API.Log
                      Engine.Scripting.Lua.API.Config
                      Engine.Scripting.Lua.API.Graphics
                      Engine.Scripting.Lua.API.Input
@@ -293,6 +295,7 @@ library
     hs-source-dirs: src
     c-sources:
         cbits/font_stb.c
+        cbits/lua_debug.c
     include-dirs:
         cbits
     cc-options: -O2

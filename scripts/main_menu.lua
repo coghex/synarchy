@@ -55,7 +55,7 @@ function mainMenu.createUI()
         end
     end
     
-    engine.logInfo("Creating main menu with framebuffer size: " .. fbW .. " x " .. fbH)
+    engine.logDebug("Creating main menu with framebuffer size: " .. fbW .. " x " .. fbH)
     
     page = UI.newPage("main_menu", "menu")
 
@@ -120,25 +120,25 @@ function mainMenu.createUI()
     end
     
     uiCreated = true
-    engine.logInfo("Main menu created with " .. #menuItems .. " buttons")
+    engine.logDebug("Main menu created with " .. #menuItems .. " buttons")
 end
 
 function mainMenu.show()
     if page then
         UI.showPage(page)
-        engine.logInfo("Main menu shown")
+        engine.logDebug("Main menu shown")
     end
 end
 
 function mainMenu.hide()
     if page then
         UI.hidePage(page)
-        engine.logInfo("Main menu hidden")
+        engine.logDebug("Main menu hidden")
     end
 end
 
 function mainMenu.onFramebufferResize(width, height)
-    engine.logInfo("Main menu onFramebufferResize: " .. width .. " x " .. height)
+    engine.logDebug("Main menu onFramebufferResize: " .. width .. " x " .. height)
     fbW = width
     fbH = height
     

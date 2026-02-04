@@ -140,7 +140,7 @@ createVulkanInstance config = do
     
     createInstance instCreateInfo Nothing
   
-  logInfoM CatVulkan "Vulkan instance created successfully"
+  logDebugM CatVulkan "Vulkan instance created successfully"
   
   -- Create debug messenger if debug mode is enabled
   dbgMessenger ← if gcDebugMode config 
@@ -149,7 +149,7 @@ createVulkanInstance config = do
       messenger ← createDebugUtilsMessengerEXT inst debugUtilsMessengerCreateInfo Nothing
         `catchEngine` \err → logAndThrowM CatInit (ExInit VulkanInitFailed) $
           "Failed to create debug messenger: " <> T.pack (show err)
-      logInfoM CatVulkan "Debug messenger created successfully"
+      logDebugM CatVulkan "Debug messenger created successfully"
       return $ Just messenger
     else return Nothing
     

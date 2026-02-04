@@ -35,7 +35,7 @@ defaultDescriptorConfig = DescriptorManagerConfig
 
 createVulkanDescriptorPool ∷ Device → DescriptorManagerConfig → EngineM ε σ DescriptorPool
 createVulkanDescriptorPool device config = do
-  logInfoSM CatDescriptor "Creating descriptor pool"
+  logDebugSM CatDescriptor "Creating descriptor pool"
     [("max_sets", T.pack $ show $ dmcMaxSets config)
     ,("uniform_count", T.pack $ show $ dmcUniformCount config)
     ,("sampler_count", T.pack $ show $ dmcSamplerCount config)]

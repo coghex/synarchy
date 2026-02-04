@@ -15,11 +15,15 @@ module Engine.Core.Log
   , setCategoryLevel
   , isEnabled
   , getEnabledCategories
+  , parseCategory
   
   -- * Core logging functions
   , logDebug
+  , logThreadDebug
   , logInfo
+  , logThreadInfo
   , logWarn
+  , logThreadWarn
   , logError
   
   -- * Structured logging
@@ -41,7 +45,7 @@ module Engine.Core.Log
   , LogLevel(..)
   , LogEntry(..)
   , LogContext(..)
-  , LoggerState
+  , LoggerState(..)
   ) where
 
 import UPrelude
@@ -374,11 +378,49 @@ logMessage ls@LoggerState{..} level cat msg fields = liftIO $ do
     
     writeLogEntry lsBackend entry
 
+-- | Core logging function for threaded contexts (internal)
+logThreadMessage :: (HasCallStack, MonadIO m) 
+                 => LoggerState 
+                 -> LogLevel 
+                 -> LogCategory 
+                 -> Text 
+                 -> Map.Map Text Text 
+                 -> m ()
+logThreadMessage ls@LoggerState{..} level cat msg fields = liftIO $ do
+  shouldLog <- isEnabled ls cat level
+  when shouldLog $ do
+    now <- Clock.getCurrentTime
+    tid <- myThreadId
+    ctx <- readIORef lsContext
+    
+    let srcLoc = if lsShowLocation then extractCallSite callStack else Nothing
+        entry = LogEntry
+          { leLevel = level
+          , leCategory = cat
+          , leMessage = msg
+          , leFields = Map.union fields (lcFields ctx)
+          , leTimestamp = now
+          , leThreadId = tid
+          , leSrcLoc = srcLoc
+          , leContext = lcBreadcrumbs ctx
+          }
+    
+    writeThreadLogEntry lsBackend entry
+
+
 -- | Write log entry to backend
 writeLogEntry :: LogBackend -> LogEntry -> IO ()
 writeLogEntry backend entry = case backend of
   LogToHandle h -> TIO.hPutStrLn h (formatLogEntry entry) >> hFlush h
   LogToFile path -> appendFile path (T.unpack $ formatLogEntry entry <> "\n")
+  LogToCallback cb -> cb entry
+  LogMulti backends -> mapM_ (`writeLogEntry` entry) backends
+
+-- | Write thread log entry to backend
+writeThreadLogEntry :: LogBackend -> LogEntry -> IO ()
+writeThreadLogEntry backend entry = case backend of
+  LogToHandle h -> TIO.hPutStrLn h (formatThreadLogEntry entry) >> hFlush h
+  LogToFile path -> appendFile path (T.unpack $ formatThreadLogEntry entry <> "\n")
   LogToCallback cb -> cb entry
   LogMulti backends -> mapM_ (`writeLogEntry` entry) backends
 
@@ -392,6 +434,20 @@ formatLogEntry LogEntry{..} =
     , formatThread leThreadId
     , formatContext leContext
     , formatLocation leSrcLoc
+    , leMessage
+    , formatFields leFields
+    ]
+
+-- | Format thread log entry as text (single line)
+formatThreadLogEntry :: LogEntry -> Text
+formatThreadLogEntry LogEntry{..} = 
+  T.intercalate " " $ filter (not . T.null)
+    [ formatTimestamp leTimestamp
+    , formatLevel leLevel
+    , formatCategory leCategory
+    , ""
+    , ""
+    , ""
     , leMessage
     , formatFields leFields
     ]
@@ -435,15 +491,30 @@ logDebug :: (HasCallStack, MonadIO m)
          => LoggerState -> LogCategory -> Text -> m ()
 logDebug ls cat msg = logMessage ls LevelDebug cat msg Map.empty
 
+-- | Public API: Log at debug level
+logThreadDebug :: (HasCallStack, MonadIO m) 
+         => LoggerState -> LogCategory -> Text -> m ()
+logThreadDebug ls cat msg = logThreadMessage ls LevelDebug cat msg Map.empty
+
 -- | Public API: Log at info level
 logInfo :: (HasCallStack, MonadIO m) 
         => LoggerState -> LogCategory -> Text -> m ()
 logInfo ls cat msg = logMessage ls LevelInfo cat msg Map.empty
 
+-- | Public API: Log at info level
+logThreadInfo :: (HasCallStack, MonadIO m) 
+        => LoggerState -> LogCategory -> Text -> m ()
+logThreadInfo ls cat msg = logThreadMessage ls LevelInfo cat msg Map.empty
+
 -- | Public API: Log at warn level
 logWarn :: (HasCallStack, MonadIO m) 
         => LoggerState -> LogCategory -> Text -> m ()
 logWarn ls cat msg = logMessage ls LevelWarn cat msg Map.empty
+
+-- | Public API: Log at warn level
+logThreadWarn :: (HasCallStack, MonadIO m) 
+        => LoggerState -> LogCategory -> Text -> m ()
+logThreadWarn ls cat msg = logThreadMessage ls LevelWarn cat msg Map.empty
 
 -- | Public API: Log at error level
 logError :: (HasCallStack, MonadIO m) 

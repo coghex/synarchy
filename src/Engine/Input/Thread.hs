@@ -36,7 +36,7 @@ startInputThread env = do
     stateRef ← newIORef ThreadRunning
     threadId ← catch 
         (do
-            logDebug logger CatInput "Starting input thread..."
+            logInfo logger CatInput "Starting input thread..."
             tid ← forkIO $ runInputLoop env stateRef
             return tid
         ) 

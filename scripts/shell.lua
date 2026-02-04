@@ -75,7 +75,7 @@ local ghostText = nil
 
 function shell.init(scriptId)
     myScriptId = scriptId
-    engine.logInfo("Shell module initialized with scriptId: " .. tostring(scriptId))
+    engine.logInfo("Shell initializing...")
 
     uiscale = engine.getUIScale()
     tileSize = math.floor(tileSize * uiscale)
@@ -98,10 +98,10 @@ function shell.init(scriptId)
     texBoxSE = engine.loadTexture("assets/textures/box/boxse.png")
     texBoxSW = engine.loadTexture("assets/textures/box/boxsw.png")
     
-    engine.logInfo("Shell textures loaded")
+    engine.logDebug("Shell textures loaded")
     
     focusId = engine.registerFocusable(true, 0)
-    engine.logInfo("Shell initialized with focusId: " .. tostring(focusId))
+    engine.logDebug("Shell initialized with focusId: " .. tostring(focusId))
 end
 
 function shell.update(dt)
@@ -115,7 +115,7 @@ function shell.update(dt)
 end
 
 function shell.shutdown()
-    engine.logInfo("Shell module shutting down")
+    engine.logDebug("Shell module shutting down")
     -- Cleanup all objects
     if objBoxNW then engine.destroy(objBoxNW) end
     if objBoxN then engine.destroy(objBoxN) end
@@ -297,7 +297,7 @@ function shell.cmdClear()
 end
 
 function shell.cmdQuit()
-    engine.logInfo("Quit requested from shell")
+    engine.logDebug("Quit requested from shell")
 end
 
 function shell.rebuildHistoryDisplay()

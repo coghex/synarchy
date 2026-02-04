@@ -61,7 +61,7 @@ shutdownEngine (Window win) inputThreadState luaThreadState = do
     -- Mark engine as stopped
     liftIO $ writeIORef (lifecycleRef env) EngineStopped
     
-    logInfoM CatSystem "Engine shutdown complete"
+    logDebugM CatSystem "Engine shutdown complete"
 
 -- | Check engine status for continuation
 checkStatus ∷ Either EngineException () → IO (Either EngineException ())

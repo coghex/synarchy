@@ -1,6 +1,5 @@
 module Engine.Scripting.Lua.API.Core
   ( quitFn
-  , logInfoFn
   , loadScriptFn
   , killScriptFn
   , setTickIntervalFn
@@ -14,7 +13,7 @@ import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import Engine.Scripting.Lua.Util (isValidRef)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
+import Engine.Core.Log (logInfo, logThreadInfo, logWarn, logDebug, LogCategory(..))
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
@@ -30,15 +29,6 @@ import Data.Time.Clock (getCurrentTime, utctDayTime)
 quitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 quitFn env = do
   liftIO $ writeIORef (lifecycleRef env) CleaningUp
-  return 0
-
-logInfoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-logInfoFn env = do
-  msg ← Lua.tostring 1
-  logger ← liftIO $ readIORef (loggerRef env)
-  case msg of
-    Just bs → logInfo logger CatLua (TE.decodeUtf8 bs)
-    Nothing → return ()
   return 0
 
 setTickIntervalFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
@@ -73,7 +63,7 @@ loadScriptFn env backendState lst = do
             scriptId ← Lua.liftIO $ do
                 let pathStr = TE.decodeUtf8 pathBS
                 
-                logInfo logger CatLua $ "Loading Lua script: " <> pathStr
+                logDebug logger CatLua $ "Loading Lua script: " <> pathStr
                 
                 sid ← atomicModifyIORef' (lbsNextScriptId backendState)
                     (\n → (n + 1, n))
@@ -81,8 +71,12 @@ loadScriptFn env backendState lst = do
                 status ← Lua.runWith lst $ Lua.dofileTrace (Just $ T.unpack pathStr)
                 case status of
                     Lua.OK → do
-                        logInfo logger CatLua $ "Lua script loaded: " <> pathStr 
-                                      <> " with ID " <> T.pack (show sid)
+                        let dropDir (('/'):xs) = T.pack xs
+                            dropDir (x:xs    ) = dropDir xs
+                            dropDir _          = ""
+                        logDebug logger CatLua $ "loaded: "
+                                              <> (dropDir (T.unpack (pathStr)))
+                        logDebug logger CatLua $ " with ID " <> T.pack (show sid)
                         modRef ← Lua.runWith lst $ do
                             isTable ← Lua.istable (-1)
                             if isTable

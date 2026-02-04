@@ -64,7 +64,7 @@ function uiManager.init(scriptId)
     mainMenu = require("scripts.main_menu")
     settingsMenu = require("scripts.settings_menu")
     
-    engine.logInfo("UI Manager waiting for assets...")
+    engine.logDebug("UI Manager waiting for assets...")
 end
 
 function uiManager.onAssetLoaded(assetType, handle, path)

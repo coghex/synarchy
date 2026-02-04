@@ -95,7 +95,7 @@ createVulkanDevice inst physicalDevice surface = do
   device ← allocResource (\d0 → destroyDevice d0 Nothing)
              $ createDevice physicalDevice deviceCreateInfo Nothing
   
-  logInfoM CatVulkan "Logical device created"
+  logDebugM CatVulkan "Logical device created"
   
   -- Get queue handles
   graphicsQ ← getDeviceQueue device (graphicsFamily indices) 0

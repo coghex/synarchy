@@ -80,7 +80,7 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled = do
         , oldSwapchain = zero
         }
   
-  logInfoSM CatSwapchain "Swapchain created"
+  logDebugSM CatSwapchain "Swapchain created"
     [("format", T.pack $ show form)
     ,("present_mode", T.pack $ show spMode)
     ,("extent", T.pack $ show sExtent)
@@ -114,7 +114,7 @@ createSwapchainImageViews dev SwapchainInfo{..} = do
     [("count", T.pack $ show $ V.length siSwapImgs)]
   imageViews ← V.mapM createImageViewf siSwapImgs
   
-  logInfoM CatSwapchain "Swapchain image views created"
+  logDebugM CatSwapchain "Swapchain image views created"
   
   -- Build cleanup action (destroy all image views)
   let cleanupAction = V.forM_ imageViews $ \iv →
@@ -162,7 +162,7 @@ chooseSwapPresentMode ssd vsyncEnabled = do
   if vsyncEnabled
     then do
       -- VSync ON: Use FIFO (guaranteed to be available, caps at refresh rate)
-      logInfoM CatSwapchain "VSync enabled: using FIFO present mode"
+      logDebugM CatSwapchain "VSync enabled: using FIFO present mode"
       pure Swap.PRESENT_MODE_FIFO_KHR
     else do
       -- VSync OFF: Prefer MAILBOX (triple buffering) or IMMEDIATE (no limit)

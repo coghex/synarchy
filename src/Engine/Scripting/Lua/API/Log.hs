@@ -2,14 +2,89 @@ module Engine.Scripting.Lua.API.Log
   ( registerLogAPI
   , setDebugCategoryFn
   , getDebugCategoriesFn
+  , logInfoFn
+  , logWarnFn
+  , logDebugFn
   ) where
 
 import UPrelude
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.ByteString.Char8 as BS
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
+import Engine.Core.State
 import Engine.Core.Log
-import Data.IORef (IORef, readIORef)
+import Data.IORef (IORef, readIORef, atomicModifyIORef')
+
+import Engine.Scripting.Lua.Debug (getSourceInfo, SourceInfo(..))
+
+logInfoFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+logInfoFn env = do
+    msg <- Lua.tostring 1
+    -- Level 2: 0=C function, 1=logInfoFn wrapper, 2=Lua caller
+    mInfo <- getSourceInfo 2
+    let (srcFile, srcLine) = case mInfo of
+            Just info -> (siSource info, siCurrentLine info)
+            Nothing   -> ("<unknown>", 0)
+        srcFileStripped = dropDir srcFile
+        dropDir ('.':'/':ss) = dropDir ss
+        dropDir ('/':ss)     = ss
+        dropDir (_:ss)       = dropDir ss
+        dropDir _            = ""
+    case msg of
+        Just msgBS -> Lua.liftIO $ do
+            logger <- readIORef (loggerRef env)
+            let msgText = TE.decodeUtf8 msgBS
+                fullMsg = "[" <> T.pack srcFileStripped <> ":"
+                              <> T.pack (show srcLine) <> "] " <> msgText
+            logThreadInfo logger CatLua fullMsg
+        Nothing -> pure ()
+    return 0
+
+logWarnFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+logWarnFn env = do
+    msg <- Lua.tostring 1
+    -- Level 2: 0=C function, 1=logWarnFn wrapper, 2=Lua caller
+    mInfo <- getSourceInfo 2
+    let (srcFile, srcLine) = case mInfo of
+            Just info -> (siSource info, siCurrentLine info)
+            Nothing   -> ("<unknown>", 0)
+        srcFileStripped = dropDir srcFile
+        dropDir ('.':'/':ss) = dropDir ss
+        dropDir ('/':ss)     = ss
+        dropDir (_:ss)       = dropDir ss
+        dropDir _            = ""
+    case msg of
+        Just msgBS -> Lua.liftIO $ do
+            logger <- readIORef (loggerRef env)
+            let msgText = TE.decodeUtf8 msgBS
+                fullMsg = "[" <> T.pack srcFileStripped <> ":"
+                              <> T.pack (show srcLine) <> "] " <> msgText
+            logThreadWarn logger CatLua fullMsg
+        Nothing -> pure ()
+    return 0
+
+logDebugFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+logDebugFn env = do
+    msg <- Lua.tostring 1
+    
+    -- Level 2: 0=C function, 1=logInfoFn wrapper, 2=Lua caller
+    mInfo <- getSourceInfo 2
+    
+    let (srcFile, srcLine) = case mInfo of
+            Just info -> (siSource info, siCurrentLine info)
+            Nothing   -> ("<unknown>", 0)
+    
+    case msg of
+        Just msgBS -> Lua.liftIO $ do
+            logger <- readIORef (loggerRef env)
+            let msgText = TE.decodeUtf8 msgBS
+                fullMsg = "[" <> T.pack srcFile <> ":" <> T.pack (show srcLine) <> "] " <> msgText
+            logThreadDebug logger CatLua fullMsg
+        Nothing -> pure ()
+    
+    return 0
 
 -- | Register Lua logging API
 registerLogAPI :: Lua.State -> IORef LoggerState -> IO ()
@@ -58,7 +133,7 @@ getDebugCategoriesFn loggerRef = do
   Lua.newtable
   let enabledCats = [cat | (cat, True) <- Map.toList debugFlags]
   forM_ (zip [1..] enabledCats) $ \(i :: Int, cat) -> do
-    Lua.pushstring (show cat)
+    Lua.pushstring (BS.pack (show cat))
     Lua.rawseti (-2) (fromIntegral i)
   
   return 1

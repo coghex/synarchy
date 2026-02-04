@@ -45,7 +45,7 @@ startLuaThread env = do
     threadId ← catch 
         (do
             logger ← readIORef (loggerRef env)
-            logInfo logger CatLua "Starting Lua thread"
+            logInfo logger CatLua "Starting Lua scripting thread..."
             let lteq = luaToEngineQueue env
                 etlq = luaQueue env
             backendState ← createLuaBackendState lteq etlq apRef objIdRef inputSRef
@@ -67,7 +67,7 @@ startLuaThread env = do
             
             case status of
                 Lua.OK → do
-                    logInfo logger CatLua $ "Lua script loaded: " <> T.pack scriptPath
+                    logDebug logger CatLua $ "Lua script loaded: " <> T.pack scriptPath
                     modRef ← Lua.runWith (lbsLuaState backendState) $ do
                         isTable ← Lua.istable (-1)
                         if isTable
@@ -97,7 +97,7 @@ startLuaThread env = do
                             [ScriptNumber (fromIntegral initScriptId)]
                         return ()
                     
-                    logInfo logger CatLua "Lua module initialized"
+                    logDebug logger CatLua "Lua module initialized"
                     
                 _ → do
                     errMsg ← Lua.runWith (lbsLuaState backendState) $ do
@@ -145,7 +145,7 @@ runLuaLoop env ls stateRef = do
     case control of
         ThreadStopped → do
             logger ← readIORef (loggerRef env)
-            logInfo logger CatLua "Lua thread stopped"
+            logDebug logger CatLua "Lua thread stopped"
             Lua.close (lbsLuaState ls)
             pure ()
         ThreadPaused → do

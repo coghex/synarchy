@@ -8,7 +8,7 @@ import qualified Data.Yaml as Yaml
 import Data.Aeson ((.:), (.!=), FromJSON(..), Value(..))
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types
-import Engine.Core.Log (LoggerState, logWarn, logInfo, LogCategory(..))
+import Engine.Core.Log (LoggerState, logWarn, logInfo, LogCategory(..), logDebug)
 
 -- | maps action names to key names
 type KeyBindings = Map.Map T.Text T.Text
@@ -46,7 +46,7 @@ loadKeyBindings logger path = do
             return defaultKeyBindings
         Right config → do
             let bindings = kbcBindings config
-            logInfo logger CatInput $ "Key bindings loaded: " <> T.pack (show (Map.size bindings)) <> " actions"
+            logDebug logger CatInput $ "Key bindings loaded: " <> T.pack (show (Map.size bindings)) <> " actions"
             return bindings
 
 -- | check if action is pressed

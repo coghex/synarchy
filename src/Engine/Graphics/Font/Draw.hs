@@ -45,11 +45,13 @@ import Vulkan.CStruct.Extends
 -----------------------------------------------------------
 
 -- | Layout text into glyph instances (converts pixels to world coords)
-layoutText ∷ FontAtlas → Float → Float → Float → Float
-  → Text → (Float, Float, Float, Float) → V.Vector GlyphInstance
-layoutText atlas startX startY screenW screenH text color =
-    let chars = T.unpack text
-        (_, instances) = foldl layoutChar (startX, []) chars
+layoutText :: FontAtlas -> Float -> Float -> Float -> Float -> Float
+  -> Text -> (Float, Float, Float, Float) -> V.Vector GlyphInstance
+layoutText atlas desiredSize startX startY screenW screenH text color =
+    let baseSize = fromIntegral $ faFontSize atlas
+        scaleFactor = desiredSize / baseSize
+        chars = T.unpack text
+        (_, instances) = foldl (layoutChar scaleFactor) (startX, []) chars
         result = V.fromList (reverse instances)
     in result
   where
@@ -57,27 +59,36 @@ layoutText atlas startX startY screenW screenH text color =
     pixelToNdcY py = 1.0 - (py / screenH) * 2.0
     pixelToNdcW pw = (pw / screenW) * 2.0
     pixelToNdcH ph = (ph / screenH) * 2.0
-    layoutChar (currentX, acc) char =
+    layoutChar scaleFactor (currentX, acc) char =
         case Map.lookup char (faGlyphData atlas) of
-            Nothing → (currentX, acc)
-            Just glyphInfo →
-                let (bearingX, bearingY) = giBearing glyphInfo
+            Nothing -> (currentX, acc)
+            Just glyphInfo ->
+                let -- Scale all glyph metrics by scaleFactor
+                    (bearingX, bearingY) = giBearing glyphInfo
                     (w, h) = giSize glyphInfo
-                    (u0, v0, u1, v1) = giUVRect glyphInfo
-                    pxX = currentX + bearingX
-                    pxY = startY - bearingY
+                    (u0, v0, u1, v1) = giUVRect glyphInfo  -- UVs don't change!
+                    
+                    -- Apply scale to sizes and positions
+                    scaledBearingX = bearingX * scaleFactor
+                    scaledBearingY = bearingY * scaleFactor
+                    scaledW = w * scaleFactor
+                    scaledH = h * scaleFactor
+                    scaledAdvance = giAdvance glyphInfo * scaleFactor
+                    
+                    pxX = currentX + scaledBearingX
+                    pxY = startY - scaledBearingY
                     ndcX = pixelToNdcX pxX
                     ndcY = pixelToNdcY pxY
-                    ndcW = pixelToNdcW w
-                    ndcH = pixelToNdcH h
+                    ndcW = pixelToNdcW scaledW
+                    ndcH = pixelToNdcH scaledH
                     
                     instance' = GlyphInstance
                         { instancePosition = (ndcX, ndcY)
                         , instanceSize = (ndcW, ndcH)
-                        , instanceUVRect = (u0, v0, u1, v1)
+                        , instanceUVRect = (u0, v0, u1, v1)  -- UVs stay the same!
                         , instanceColor = color }
                     
-                    nextX = currentX + giAdvance glyphInfo
+                    nextX = currentX + scaledAdvance
                 in (nextX, instance' : acc)
 
 -----------------------------------------------------------

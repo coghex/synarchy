@@ -62,12 +62,12 @@ initializeVulkan window = do
   -- Create Vulkan instance
   logDebugM CatVulkan "Creating Vulkan instance"
   (vkInstance, _debugMessenger) ← createVulkanInstance defaultGraphicsConfig
-  logInfoM CatVulkan "Vulkan instance created successfully"
+  logDebugM CatVulkan "Vulkan instance created successfully"
   
   -- Create surface
   logDebugM CatVulkan "Creating window surface"
   surface ← GLFW.createWindowSurface window vkInstance
-  logInfoM CatVulkan "Window surface created successfully"
+  logDebugM CatVulkan "Window surface created successfully"
   
   -- Select physical device and create logical device
   logDebugM CatVulkan "Selecting physical device"
@@ -78,7 +78,7 @@ initializeVulkan window = do
  
   logDebugM CatVulkan "Creating logical device"
   (device, queues) ← createVulkanDevice vkInstance physicalDevice surface
-  logInfoM CatVulkan "Logical device created successfully"
+  logDebugM CatVulkan "Logical device created successfully"
   
   logDebugSM CatVulkan "Queue family indices selected"
     [("graphics_family", T.pack $ show $ graphicsFamIdx queues)
@@ -131,7 +131,7 @@ initializeVulkan window = do
     [("max_sets", T.pack $ show $ dmcMaxSets descConfig)
     ,("uniform_count", T.pack $ show $ dmcUniformCount descConfig)]
   descManager ← createVulkanDescriptorManager device descConfig
-  logInfoM CatDescriptor "Descriptor manager created successfully"
+  logDebugM CatDescriptor "Descriptor manager created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       descriptorState = Just descManager } }
   -- create a font descriptor pool (supports up to 64 fonts)
@@ -184,14 +184,14 @@ initializeVulkan window = do
   (bindlessPipe, bindlessPipeLayout) ← 
     createBindlessPipeline device renderPass (siSwapExtent swapInfo) 
                            (dmUniformLayout descManager) bindlessTexLayout
-  logInfoM CatGraphics "Bindless pipeline created successfully"
+  logDebugM CatGraphics "Bindless pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                           bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout) } }
   logDebugM CatGraphics "Creating bindless UI pipeline"
   (bindlessUIPipe, bindlessUIPipeLayout) ← 
     createBindlessUIPipeline device renderPass (siSwapExtent swapInfo) 
                              (dmUniformLayout descManager) bindlessTexLayout
-  logInfoM CatGraphics "Bindless UI pipeline created successfully"
+  logDebugM CatGraphics "Bindless UI pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                           bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout) } }
   
@@ -199,14 +199,14 @@ initializeVulkan window = do
   logDebugM CatGraphics "Creating font pipeline"
   (fontPipe, fontPipeLayout, fontDescLayout) ←
     createFontPipeline device renderPass (siSwapExtent swapInfo) (dmUniformLayout descManager)
-  logInfoM CatGraphics "Font pipeline created successfully"
+  logDebugM CatGraphics "Font pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontPipeline = Just (fontPipe, fontPipeLayout)
                     , fontDescriptorLayout = Just fontDescLayout } }
   logDebugM CatGraphics "Creating font UI pipeline"
   (fontUIPipe, fontUIPipeLayout) ←
     createFontUIPipeline device renderPass (siSwapExtent swapInfo) (dmUniformLayout descManager) fontDescLayout
-  logInfoM CatGraphics "Font UI pipeline created successfully"
+  logDebugM CatGraphics "Font UI pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout) } }
   
@@ -226,11 +226,11 @@ initializeVulkan window = do
   logDebugSM CatGraphics "Creating framebuffers"
     [("count", T.pack $ show $ V.length imageViews)]
   framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews
-  logInfoM CatGraphics "Framebuffers created successfully"
+  logDebugM CatGraphics "Framebuffers created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       framebuffers = Just framebuffers } }
   
-  logInfoM CatInit "Vulkan initialization complete"
+  logDebugM CatInit "Vulkan initialization complete"
   pure cmdPool
 
 -- In src/Engine/Graphics/Vulkan/Init.hs

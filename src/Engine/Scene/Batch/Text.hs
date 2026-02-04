@@ -56,7 +56,7 @@ collectTextBatches graph screenW screenH = do
                           isUI = let (LayerId l) = layerId in l >= 10
                       let instances = if isUI
                                       then layoutTextUI atlas size x y text color
-                                      else layoutText atlas x y screenW screenH text color
+                                      else layoutText atlas size x y screenW screenH text color
                       return instances
                   (Nothing, _) → do
                       logDebugM CatFont $ "      No text for node "

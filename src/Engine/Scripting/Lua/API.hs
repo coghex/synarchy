@@ -5,17 +5,19 @@ module Engine.Scripting.Lua.API
 
 import UPrelude
 import Engine.Scripting.Lua.Types (LuaBackendState)
-import Engine.Scripting.Lua.API.Core (logInfoFn, loadScriptFn, killScriptFn, 
-                                       setTickIntervalFn, pauseScriptFn, 
-                                       resumeScriptFn, quitFn)
+import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn, 
+                                      setTickIntervalFn, pauseScriptFn, 
+                                      resumeScriptFn, quitFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , saveVideoConfigFn)
 import Engine.Scripting.Lua.API.Graphics (loadTextureFn, spawnSpriteFn, setPosFn,
                                            setColorFn, setSizeFn, setVisibleFn
                                            , destroyFn, setFullscreenFn, getUIScaleFn)
-import Engine.Scripting.Lua.API.Input (isKeyDownFn, isActionDownFn, getMousePositionFn,
-                                        isMouseButtonDownFn, getWindowSizeFn, 
-                                        getFramebufferSizeFn, getWorldCoordFn)
+import Engine.Scripting.Lua.API.Log (logInfoFn, logWarnFn, logDebugFn)
+import Engine.Scripting.Lua.API.Input (isKeyDownFn, isActionDownFn,
+                                       getMousePositionFn,
+                                       isMouseButtonDownFn, getWindowSizeFn, 
+                                       getFramebufferSizeFn, getWorldCoordFn)
 import Engine.Scripting.Lua.API.Text (loadFontFn, spawnTextFn, setTextFn, 
                                        getTextFn, getTextWidthFn)
 import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn, 
@@ -41,6 +43,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- Core functions
   registerLuaFunction "quit"            (quitFn env)
   registerLuaFunction "logInfo"         (logInfoFn env)
+  registerLuaFunction "logWarn"         (logWarnFn env)
+  registerLuaFunction "logDebug"        (logDebugFn env)
   registerLuaFunction "loadScript"      (loadScriptFn env backendState lst)
   registerLuaFunction "killScript"      (killScriptFn env backendState lst)
   registerLuaFunction "pauseScript"     (pauseScriptFn backendState)
