@@ -16,6 +16,7 @@ local fontsLoaded = {
 local fontsReady = false
 local menuFontHandle = nil
 local titleFontHandle = nil
+local initialized = false
 
 -- Sub-modules
 local mainMenu = nil
@@ -82,10 +83,15 @@ end
 
 function uiManager.checkReady()
     if fontsReady and fbW > 0 and fbH > 0 then
-        mainMenu.init(boxTexSet, menuFont, titleFont, fbW, fbH)
-        settingsMenu.init(btnTexSet, menuFont, fbW, fbH)
-        createWorldMenu.init(btnTexSet, menuFont, fbW, fbH)
-        uiManager.showMenu("main")
+        if not initialized then
+            mainMenu.init(boxTexSet, menuFont, titleFont, fbW, fbH)
+            settingsMenu.init(btnTexSet, menuFont, fbW, fbH)
+            createWorldMenu.init(btnTexSet, menuFont, fbW, fbH)
+            uiManager.showMenu("main")
+            initialized = true
+        else
+            uiManager.showMenu(currentMenu)
+        end
     end
 end
 
@@ -132,6 +138,10 @@ end
 -- Settings menu callbacks
 function uiManager.onSettingsBack()
     uiManager.showMenu("main")
+end
+
+function uiManager.onSettingsSave()
+    if settingsMenu then settingsMenu.onSave() end
 end
 
 function uiManager.onToggle_fullscreen()

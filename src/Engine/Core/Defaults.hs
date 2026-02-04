@@ -47,10 +47,11 @@ defaultGraphicsConfig = GraphicsConfig
 
 defaultWindowConfig ∷ VideoConfig → WindowConfig
 defaultWindowConfig vc = WindowConfig
-  { wcWidth     = vcWidth vc
-  , wcHeight    = vcHeight vc
-  , wcTitle     = T.pack "Synarchy"
-  , wcResizable = True
+  { wcWidth      = vcWidth vc
+  , wcHeight     = vcHeight vc
+  , wcFullscreen = vcFullscreen vc
+  , wcTitle      = T.pack "Synarchy"
+  , wcResizable  = True
   }
 
 defaultEngineState ∷ AssetPool → EngineState

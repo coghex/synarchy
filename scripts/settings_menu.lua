@@ -12,7 +12,11 @@ local texCheckboxChecked = nil
 local texCheckboxUnchecked = nil
 
 local currentSettings = {
-    fullscreen = false
+    width = 800,
+    height = 600,
+    fullscreen = false,
+    vsync = true,
+    msaa = 0
 }
 
 local elements = {}
@@ -29,7 +33,11 @@ function settingsMenu.init(boxTex, font, width, height)
     
     -- Load current settings
     local w, h, fs, vs, msaa = engine.getVideoConfig()
+    currentSettings.width = w
+    currentSettings.height = h
     currentSettings.fullscreen = fs
+    currentSettings.vsync = vs
+    currentSettings.msaa = msaa
     
     settingsMenu.createUI()
 end
@@ -82,7 +90,7 @@ function settingsMenu.createUI()
     local btnY = panelHeight - 120
     
     local backBtn = UI.newBox("back_btn", btnWidth, btnHeight, boxTexSet, 32, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, backBtn, btnX, btnY)
+    UI.addChild(panel, backBtn, btnX-128, btnY)
     UI.setClickable(backBtn, true)
     UI.setZIndex(backBtn, 20)
     UI.setOnClick(backBtn, "onSettingsBack")
@@ -90,6 +98,15 @@ function settingsMenu.createUI()
     local backLabel = UI.newText("back_label", "Back", menuFont, 1.0, 1.0, 1.0, 1.0, page)
     local backLabelWidth = engine.getTextWidth(menuFont, "Back")
     UI.addChild(backBtn, backLabel, (btnWidth - backLabelWidth) / 2, (btnHeight / 2) + 8)
+    -- Save button
+    local saveBtn = UI.newBox("save_btn", btnWidth, btnHeight, boxTexSet, 32, 1.0, 1.0, 1.0, 1.0, page)
+    local backlabelWidth = engine.getTextWidth(menuFont, "Save")
+    UI.addChild(panel, saveBtn, btnX+128, btnY)
+    UI.setClickable(saveBtn, true)
+    UI.setZIndex(saveBtn, 20)
+    UI.setOnClick(saveBtn, "onSettingsSave")
+    local saveLabel = UI.newText("save_label", "Save", menuFont, 1.0, 1.0, 1.0, 1.0, page)
+    UI.addChild(saveBtn, saveLabel, (btnWidth - backlabelWidth) / 2, (btnHeight / 2) + 8)
     
     uiCreated = true
 end
@@ -105,6 +122,18 @@ end
 
 function settingsMenu.getSettings()
     return currentSettings
+end
+
+function settingsMenu.onSave()
+    -- Save settings to config file or apply them as needed
+    engine.setVideoConfig(
+        currentSettings.width,
+        currentSettings.height,
+        currentSettings.fullscreen,
+        currentSettings.vsync,
+        currentSettings.msaa
+    )
+    engine.saveVideoConfig()
 end
 
 function settingsMenu.show()

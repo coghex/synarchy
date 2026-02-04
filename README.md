@@ -33,11 +33,11 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
             - Input (input handling)
             - Scene (scene graph and rendering)
             - Scripting (lua scripting support)
+            - Loop
+                - main loop and timing
         - UI
             - code for the ui system
-        - Loop
-            - main loop and timing
-    - app (here Main.hs controls the draw loop and spawns the child threads)
+    - app (here Main.hs controls the draw loop)
     - assets (images and other data)
     - cbits (c code for text rasterization library)
     - config (yaml config files)

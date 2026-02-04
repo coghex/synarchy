@@ -9,10 +9,11 @@ import qualified Graphics.UI.GLFW as GLFW
 
 -- | Basic window configuration
 data WindowConfig = WindowConfig
-  { wcWidth     ∷ Int
-  , wcHeight    ∷ Int
-  , wcTitle     ∷ Text
-  , wcResizable ∷ Bool
+  { wcWidth      ∷ Int
+  , wcHeight     ∷ Int
+  , wcFullscreen ∷ Bool
+  , wcTitle      ∷ Text
+  , wcResizable  ∷ Bool
   }
 
 -- | Opaque window type

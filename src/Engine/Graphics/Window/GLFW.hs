@@ -96,6 +96,17 @@ createWindow config = do
                  ⧺ show (wcWidth config) ⧺ "x" ⧺ show (wcHeight config)
       Just win → pure $ Window win
   let Window win = window
+  -- apply fullscreen if needed
+  when (wcFullscreen config) $ do
+    primaryMonitor ← liftIO $ GLFW.getPrimaryMonitor
+    case primaryMonitor of
+      Nothing → logInfoM CatGraphics "Failed to get primary monitor for fullscreen"
+      Just monitor → do
+        videoMode ← liftIO $ GLFW.getVideoMode monitor
+        case videoMode of
+          Nothing → logInfoM CatGraphics "Failed to get video mode for fullscreen"
+          Just vm → liftIO $ GLFW.setFullscreen win monitor vm
+
   env ← ask
   liftIO $ do
     windowSize ← GLFW.getWindowSize win
