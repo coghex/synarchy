@@ -201,7 +201,7 @@ function onResolutionNext()
     if settingsMenu then settingsMenu.onResolutionNext() end
 end
 
-function onToggle_fullscreen()
+function uiManager.onToggle_fullscreen()
     if settingsMenu then settingsMenu.onToggle_fullscreen() end
 end
 
