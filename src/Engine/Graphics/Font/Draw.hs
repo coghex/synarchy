@@ -24,7 +24,8 @@ import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer, copyBuffer)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Vulkan.Command
-import Engine.Graphics.Vulkan.ShaderCode (fontVertexShaderCode, fontFragmentShaderCode
+import Engine.Graphics.Vulkan.ShaderCode (fontVertexShaderCode
+                                         , fontSDFFragmentShaderCode
                                          , fontUIVertexShaderCode)
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Engine.Graphics.Vulkan.Types.Descriptor
@@ -121,7 +122,7 @@ createFontPipeline device renderPass swapExtent uniformLayout = do
     
     -- Create shader modules (temporary)
     vertModule ← createShaderModule device zero { code = fontVertexShaderCode } Nothing
-    fragModule ← createShaderModule device zero { code = fontFragmentShaderCode } Nothing
+    fragModule ← createShaderModule device zero { code = fontSDFFragmentShaderCode } Nothing
     
     let vertStageInfo = zero 
           { stage   = SHADER_STAGE_VERTEX_BIT
@@ -330,7 +331,7 @@ createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout = 
     
     -- Create shader modules
     vertModule ← createShaderModule device zero { code = fontUIVertexShaderCode } Nothing
-    fragModule ← createShaderModule device zero { code = fontFragmentShaderCode } Nothing
+    fragModule ← createShaderModule device zero { code = fontSDFFragmentShaderCode } Nothing
     
     let vertStageInfo = zero 
           { stage   = SHADER_STAGE_VERTEX_BIT
@@ -453,29 +454,41 @@ createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout = 
     
     pure (pipeline, pipelineLayout)
 
--- | Layout text into glyph instances for UI (pixel coordinates, no NDC conversion)
-layoutTextUI ∷ FontAtlas → Float → Float → Text → (Float, Float, Float, Float) → V.Vector GlyphInstance
-layoutTextUI atlas startX startY text color =
-    let chars = T.unpack text
-        (_, instances) = foldl layoutChar (startX, []) chars
+-- | Layout text into glyph instances for UI (pixel coordinates, with scaling)
+layoutTextUI :: FontAtlas -> Float -> Float -> Float -> Text
+  -> (Float, Float, Float, Float) -> V.Vector GlyphInstance
+layoutTextUI atlas desiredSize startX startY text color =
+    let baseSize = fromIntegral $ faFontSize atlas  -- e.g., 48 (the SDF base size)
+        scaleFactor = desiredSize / baseSize         -- e.g., 96/48 = 2.0
+        chars = T.unpack text
+        (_, instances) = foldl (layoutChar scaleFactor) (startX, []) chars
         result = V.fromList (reverse instances)
     in result
   where
-    layoutChar (currentX, acc) char =
+    layoutChar scaleFactor (currentX, acc) char =
         case Map.lookup char (faGlyphData atlas) of
-            Nothing → (currentX, acc)
-            Just glyphInfo →
-                let (bearingX, bearingY) = giBearing glyphInfo
+            Nothing -> (currentX, acc)
+            Just glyphInfo ->
+                let -- Scale all glyph metrics by scaleFactor
+                    (bearingX, bearingY) = giBearing glyphInfo
                     (w, h) = giSize glyphInfo
-                    (u0, v0, u1, v1) = giUVRect glyphInfo
-                    pxX = currentX + bearingX
-                    pxY = startY + bearingY
+                    (u0, v0, u1, v1) = giUVRect glyphInfo  -- UVs don't change!
+                    
+                    -- Apply scale to positions and sizes
+                    scaledBearingX = bearingX * scaleFactor
+                    scaledBearingY = bearingY * scaleFactor
+                    scaledW = w * scaleFactor
+                    scaledH = h * scaleFactor
+                    scaledAdvance = giAdvance glyphInfo * scaleFactor
+                    
+                    pxX = currentX + scaledBearingX
+                    pxY = startY + scaledBearingY
                     
                     instance' = GlyphInstance
                         { instancePosition = (pxX, pxY)
-                        , instanceSize = (w, h)
-                        , instanceUVRect = (u0, v0, u1, v1)
+                        , instanceSize = (scaledW, scaledH)
+                        , instanceUVRect = (u0, v0, u1, v1)  -- UVs stay the same!
                         , instanceColor = color }
                     
-                    nextX = currentX + giAdvance glyphInfo
+                    nextX = currentX + scaledAdvance
                 in (nextX, instance' : acc)

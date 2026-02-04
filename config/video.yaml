@@ -1,7 +1,7 @@
 video:
   frame_limit: 60
   fullscreen: false
-  ui_scale: 2.0
+  ui_scale: 1.0
   msaa: 1
   resolution:
     height: 1080

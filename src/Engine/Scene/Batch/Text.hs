@@ -50,9 +50,12 @@ collectTextBatches graph screenW screenH = do
                       let (x,y) = wtPosition worldTrans
                           Vec4 r g b a = nodeColor node
                           color = (r, g, b, a)
+                          size = case nodeFontSize node of
+                                        Nothing → 32
+                                        Just s → s
                           isUI = let (LayerId l) = layerId in l >= 10
                       let instances = if isUI
-                                      then layoutTextUI atlas x y text color
+                                      then layoutTextUI atlas size x y text color
                                       else layoutText atlas x y screenW screenH text color
                       return instances
                   (Nothing, _) → do

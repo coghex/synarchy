@@ -6,12 +6,15 @@ local boxTexSet = nil
 local menuFont = nil
 local titleFont = nil
 local fbW, fbH = 0, 0
+local titleFontSize = 96
+local fontSize = 24
 local uiCreated = false
+local uiscale = 1.0
 
 local buttons = {}
 
 local menuItems = {
-    { name = "create_world", label = "Create World", callback = "onCreateWorld" },
+    { name = "create_world", label = "Create World", callback = "onSettings" },
     { name = "settings", label = "Settings", callback = "onSettings" },
     { name = "quit", label = "Quit", callback = "onQuit" }
 }
@@ -30,6 +33,16 @@ function mainMenu.init(boxTex, font, tFont, width, height)
     titleFont = tFont
     fbW = width
     fbH = height
+    uiscale = engine.getUIScale()
+    fontSize = math.floor(fontSize * uiscale)
+    titleFontSize = math.floor(titleFontSize * uiscale)
+    buttonWidth = math.floor(buttonWidth * uiscale)
+    buttonHeight = math.floor(buttonHeight * uiscale)
+    buttonSpacing = math.floor(buttonSpacing * uiscale)
+    buttonTileSize = math.floor(buttonTileSize * uiscale)
+    buttonPaddingX = math.floor(buttonPaddingX * uiscale)
+    menuPaddingX = math.floor(menuPaddingX * uiscale)
+    menuPaddingY = math.floor(menuPaddingY * uiscale)
     
     mainMenu.createUI()
 end
@@ -49,7 +62,7 @@ function mainMenu.createUI()
     -- Calculate max text width
     local maxLabelWidth = 0
     for i, item in ipairs(menuItems) do
-        local labelWidth = engine.getTextWidth(menuFont, item.label)
+        local labelWidth = engine.getTextWidth(menuFont, item.label, fontSize)
         if labelWidth > maxLabelWidth then
             maxLabelWidth = labelWidth
         end
@@ -72,10 +85,10 @@ function mainMenu.createUI()
     
     -- Create title above menu box
     local titleStr = "Ecce Homo"
-    local titleWidth = engine.getTextWidth(titleFont, titleStr)
+    local titleWidth = engine.getTextWidth(titleFont, titleStr, titleFontSize)
     local titleX = (fbW - titleWidth) / 2
     local titleY = menuY - 60
-    local titleText = UI.newText("title", titleStr, titleFont, 1.0, 1.0, 1.0, 1.0, page)
+    local titleText = UI.newText("title", titleStr, titleFont, titleFontSize, 1.0, 1.0, 1.0, 1.0, page)
     UI.addToPage(page, titleText, titleX, titleY)
     
     -- Create menu buttons inside the menu box
@@ -86,7 +99,7 @@ function mainMenu.createUI()
         local buttonOffsetY = menuPaddingY / 2
         local buttonY = buttonSpacing + (i - 1) * (buttonHeight + buttonSpacing) + buttonOffsetY
         
-        local labelWidth = engine.getTextWidth(menuFont, item.label)
+        local labelWidth = engine.getTextWidth(menuFont, item.label, fontSize)
         local thisButtonWidth = labelWidth + buttonPaddingX
         local thisButtonX = (menuWidth - thisButtonWidth) / 2
         local btn = UI.newBox(item.name, thisButtonWidth, buttonHeight, boxTexSet, buttonTileSize, 0.3, 0.4, 0.5, 1.0, page)
@@ -97,7 +110,7 @@ function mainMenu.createUI()
         
         local labelX = (thisButtonWidth - labelWidth) / 2
         local labelY = (buttonHeight / 2) + 8
-        local label = UI.newText(item.name .. "_label", item.label, menuFont, 1.0, 1.0, 1.0, 1.0, page)
+        local label = UI.newText(item.name .. "_label", item.label, menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
         UI.addChild(btn, label, labelX, labelY)
         
         buttons[item.name] = {

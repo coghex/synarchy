@@ -8,6 +8,7 @@ module Engine.Graphics.Font.STB
     , renderSTBGlyph
     , getSTBGlyphMetrics
     , getSTBFontMetrics
+    , renderSTBGlyphSDF
     , scaleForPixelHeight
     ) where
 
@@ -55,6 +56,14 @@ foreign import ccall "stb_render_glyph"
     c_stb_render_glyph ∷ Ptr STBFontInfo → CInt → CFloat 
                        → Ptr CInt → Ptr CInt → Ptr CInt → Ptr CInt 
                        → IO (Ptr Word8)
+
+foreign import ccall "stb_render_glyph_sdf"
+    c_stb_render_glyph_sdf :: Ptr STBFontInfo -> CInt -> CFloat -> CInt
+                           -> Ptr CInt -> Ptr CInt -> Ptr CInt -> Ptr CInt
+                           -> IO (Ptr Word8)
+
+foreign import ccall "stb_free_sdf"
+    c_stb_free_sdf :: Ptr Word8 -> IO ()
 
 foreign import ccall "stb_free_bitmap"
     c_stb_free_bitmap ∷ Ptr Word8 → IO ()
@@ -175,3 +184,29 @@ renderSTBGlyph font char scale = do
                                          , fromIntegral yoff
                                          , pixels
                                          )
+
+
+-- | Render a glyph as SDF (Signed Distance Field)
+renderSTBGlyphSDF :: STBFont -> Char -> Float -> Int -> IO (Maybe (Int, Int, Int, Int, [Word8]))
+renderSTBGlyphSDF font char scale padding = do
+    let codepoint = fromIntegral $ ord char
+    alloca $ \wPtr ->
+        alloca $ \hPtr ->
+            alloca $ \xoffPtr ->
+                alloca $ \yoffPtr -> do
+                    bitmap <- c_stb_render_glyph_sdf (stbFontInfo font) codepoint 
+                                                     (realToFrac scale) (fromIntegral padding)
+                                                     wPtr hPtr xoffPtr yoffPtr
+                    if bitmap == nullPtr
+                        then return Nothing
+                        else do
+                            w <- peek wPtr
+                            h <- peek hPtr
+                            xoff <- peek xoffPtr
+                            yoff <- peek yoffPtr
+                            let size = fromIntegral w * fromIntegral h
+                            pixels <- peekArray size bitmap
+                            c_stb_free_sdf bitmap
+                            return $ Just (fromIntegral w, fromIntegral h,
+                                          fromIntegral xoff, fromIntegral yoff, pixels)
+

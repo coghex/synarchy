@@ -334,7 +334,7 @@ function shell.rebuildHistoryDisplay()
             local resultLines = wrapText(entry.result, maxTextWidth - 20, shellFont)
             for j = #resultLines, 1, -1 do
                 if y < marginTop + tileSize then break end
-                local resultObj = engine.spawnText(textX + 20, y, shellFont, resultLines[j], resultColor, shellLayer)
+                local resultObj = engine.spawnText(textX + 20, y, shellFont, resultLines[j], resultColor, shellLayer, fontSize)
                 table.insert(historyTextObjects, resultObj)
                 y = y - lineHeight
             end
@@ -345,7 +345,7 @@ function shell.rebuildHistoryDisplay()
         local cmdLines = wrapText(cmdText, maxTextWidth, shellFont)
         for j = #cmdLines, 1, -1 do
             if y < marginTop + tileSize then break end
-            local cmdObj = engine.spawnText(textX, y, shellFont, cmdLines[j], "white", shellLayer)
+            local cmdObj = engine.spawnText(textX, y, shellFont, cmdLines[j], "white", shellLayer, fontSize)
             table.insert(historyTextObjects, cmdObj)
             y = y - lineHeight
         end
@@ -369,7 +369,8 @@ function shell.rebuildBox()
     local row2Y = baseY + tileSize + middleHeight + tileSize / 2
     local promptX = baseX + tileSize + 10
     local promptY = row2Y - fontSize
-    local bufferX = promptX + fontSize + 20
+    local promptWidth = engine.getTextWidth(shellFont, "$>", fontSize)
+    local bufferX = promptX + promptWidth + 10
     
     if not boxSpawned then
         -- First time: spawn all sprites
@@ -385,9 +386,9 @@ function shell.rebuildBox()
         objBoxS  = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row2Y, middleWidth, tileSize, texBoxS, shellLayer)
         objBoxSE = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row2Y, tileSize, tileSize, texBoxSE, shellLayer)
         
-        objPrompt = engine.spawnText(promptX, promptY, shellFont, "$>", "white", shellLayer)
-        objBufferText = engine.spawnText(bufferX, promptY, shellFont, inputBuffer, "white", shellLayer)
-        objCursor = engine.spawnText(bufferX, promptY, shellFont, "|", "white", shellLayer)
+        objPrompt = engine.spawnText(promptX, promptY, shellFont, "$>", "white", shellLayer, fontSize)
+        objBufferText = engine.spawnText(bufferX, promptY, shellFont, inputBuffer, "white", shellLayer, fontSize)
+        objCursor = engine.spawnText(bufferX, promptY, shellFont, "|", "white", shellLayer, fontSize)
         
         boxSpawned = true
     else
@@ -442,12 +443,14 @@ function shell.updateCursorPos()
     local row2Y = baseY + tileSize + middleHeight + tileSize / 2
     local promptX = baseX + tileSize + 10
     local promptY = row2Y - fontSize
-    local bufferX = promptX + (0.5*fontSize) + 32
+    local promptWidth = engine.getTextWidth(shellFont, "$>", fontSize)
+    local bufferX = promptX + promptWidth + 10
     
     -- Only measure text up to cursor position
     local textBeforeCursor = inputBuffer:sub(inputScrollOffset + 1, cursorPos)
-    local textWidth = engine.getTextWidth(shellFont, textBeforeCursor)
-    local cursorX = bufferX + textWidth
+    local textWidth = engine.getTextWidth(shellFont, textBeforeCursor, fontSize)
+    local cursorWidth = engine.getTextWidth(shellFont, "|", fontSize)
+    local cursorX = bufferX + textWidth - cursorWidth / 2
     
     engine.setPos(objCursor, cursorX, promptY)
 end
@@ -496,12 +499,12 @@ function updateInputScroll()
     end
     
     -- Check if cursor is past right edge
-    local widthFromScrollToCursor = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1, cursorPos))
+    local widthFromScrollToCursor = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1, cursorPos), fontSize)
     
     -- If cursor goes past right edge, scroll right
     while widthFromScrollToCursor > maxWidth do
         inputScrollOffset = inputScrollOffset + 1
-        widthFromScrollToCursor = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1, cursorPos))
+        widthFromScrollToCursor = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1, cursorPos), fontSize)
     end
 end
 
@@ -513,7 +516,7 @@ function getVisibleInput()
     -- Trim to fit width
     for i = #visible, 1, -1 do
         local test = visible:sub(1, i)
-        if engine.getTextWidth(shellFont, test) <= maxWidth then
+        if engine.getTextWidth(shellFont, test, fontSize) <= maxWidth then
             return test
         end
     end
@@ -573,7 +576,7 @@ function wrapText(text, maxWidth, font)
     for i = 1, #text do
         local char = text:sub(i, i)
         local testLine = currentLine .. char
-        local width = engine.getTextWidth(font, testLine)
+        local width = engine.getTextWidth(font, testLine, fontSize)
         
         if width > maxWidth and currentLine ~= "" then
             table.insert(lines, currentLine)
@@ -601,7 +604,7 @@ function wrapTextByWord(text, maxWidth, font)
     
     for word in text:gmatch("%S+") do
         local testLine = currentLine == "" and word or (currentLine .. " " .. word)
-        local width = engine.getTextWidth(font, testLine)
+        local width = engine.getTextWidth(font, testLine, fontSize)
         
         if width > maxWidth and currentLine ~= "" then
             table.insert(lines, currentLine)
@@ -737,12 +740,12 @@ function shell.updateGhostText()
         local commonPrefix = longestCommonPrefix(currentCompletions)
         local ghostPart = commonPrefix:sub(#prefix + 1)
         local maxWidth = getMaxInputWidth()
-        local currentWidth = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1))
-        local ghostWidth = engine.getTextWidth(shellFont, ghostPart)
+        local currentWidth = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1), fontSize)
+        local ghostWidth = engine.getTextWidth(shellFont, ghostPart, fontSize)
 
         if #ghostPart > 0 and (currentWidth + ghostWidth) <= maxWidth then
             if not ghostText then
-                ghostText = engine.spawnText(0, 0, shellFont, ghostPart, "ghost", shellLayer)
+                ghostText = engine.spawnText(0, 0, shellFont, ghostPart, "ghost", shellLayer, fontSize)
             else
                 engine.setText(ghostText, ghostPart)
                 engine.setVisible(ghostText, true)
@@ -757,9 +760,11 @@ function shell.updateGhostText()
             local row2Y = baseY + tileSize + middleHeight + tileSize / 2
             local promptX = baseX + tileSize + 10
             local promptY = row2Y - fontSize
-            local bufferX = promptX + fontSize + 20
-            local textWidth = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1))
-            local cursorX = bufferX + textWidth
+            local promptWidth = engine.getTextWidth(shellFont, "$>", fontSize)
+            local bufferX = promptX + promptWidth + 10
+            local textWidth = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1), fontSize)
+            local cursorWidth = engine.getTextWidth(shellFont, "|", fontSize)
+            local cursorX = bufferX + textWidth - cursorWidth / 2
             
             engine.setPos(ghostText, cursorX, promptY)
         else

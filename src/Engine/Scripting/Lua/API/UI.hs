@@ -187,28 +187,30 @@ uiLoadBoxTexturesFn env = do
     
     return 1
 
--- | UI.newText(name, text, fontHandle, r, g, b, a, pageHandle) -> elementHandle
+-- | UI.newText(name, text, fontHandle, size, r, g, b, a, pageHandle) -> elementHandle
 uiNewTextFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
 uiNewTextFn env = do
     nameArg <- Lua.tostring 1
     textArg <- Lua.tostring 2
     fontArg <- Lua.tointeger 3
-    rArg <- Lua.tonumber 4
-    gArg <- Lua.tonumber 5
-    bArg <- Lua.tonumber 6
-    aArg <- Lua.tonumber 7
-    pageArg <- Lua.tointeger 8
+    sizeArg <- Lua.tonumber 4
+    rArg <- Lua.tonumber 5
+    gArg <- Lua.tonumber 6
+    bArg <- Lua.tonumber 7
+    aArg <- Lua.tonumber 8
+    pageArg <- Lua.tointeger 9
     
-    case (nameArg, textArg, fontArg, rArg, gArg, bArg, aArg, pageArg) of
-        (Just nameBS, Just txtBS, Just f, Just r, Just g, Just b, Just a, Just p) -> do
+    case (nameArg, textArg, fontArg, sizeArg, rArg, gArg, bArg, aArg, pageArg) of
+        (Just nameBS, Just txtBS, Just f, Just s, Just r, Just g, Just b, Just a, Just p) -> do
             let name = TE.decodeUtf8 nameBS
                 text = TE.decodeUtf8 txtBS
                 fontHandle = FontHandle (fromIntegral f)
                 color = (realToFrac r, realToFrac g, realToFrac b, realToFrac a)
                 pageHandle = PageHandle (fromIntegral p)
+                size = realToFrac s
             
             handle <- Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
-                let (elemH, newMgr) = createText name text fontHandle color pageHandle mgr
+                let (elemH, newMgr) = createText name text fontHandle size color pageHandle mgr
                 in (newMgr, elemH)
             
             Lua.pushinteger (fromIntegral $ unElementHandle handle)

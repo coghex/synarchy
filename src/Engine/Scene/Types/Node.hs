@@ -20,6 +20,7 @@ data SceneNode = SceneNode
     , nodeLayer      ∷ LayerId
     , nodeTexture    ∷ Maybe TextureHandle
     , nodeFont       ∷ Maybe FontHandle
+    , nodeFontSize   ∷ Maybe Float
     , nodeText       ∷ Maybe Text
     , nodeVisible    ∷ Bool
     , nodeColor      ∷ Vec4
@@ -48,6 +49,7 @@ createSceneNode objType = SceneNode
     , nodeTexture = Nothing
     , nodeLayer = LayerId 0
     , nodeFont = Nothing
+    , nodeFontSize = Nothing
     , nodeText = Nothing
     , nodeVisible = True
     , nodeColor = Vec4 1.0 1.0 1.0 1.0

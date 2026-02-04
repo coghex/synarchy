@@ -7,6 +7,7 @@ module Engine.Graphics.Vulkan.ShaderCode
     , fontVertexShaderCode
     , fontFragmentShaderCode
     , fontUIVertexShaderCode
+    , fontSDFFragmentShaderCode
     , bindlessVertexShaderCode
     , bindlessFragmentShaderCode
     , bindlessUIVertexShaderCode
@@ -258,5 +259,22 @@ fontUIVertexShaderCode = [vert|
         vec2 uv = mix(glyphUV.xy, glyphUV.zw, inTexCoord);
         fragTexCoord = uv;
         fragColor = glyphColor;
+    }
+|]
+
+fontSDFFragmentShaderCode :: BS.ByteString
+fontSDFFragmentShaderCode = [frag|
+    #version 450
+
+    layout(location = 0) in vec2 fragTexCoord;
+    layout(location = 1) in vec4 fragColor;
+    layout(set = 1, binding = 0) uniform sampler2D fontAtlas;
+    layout(location = 0) out vec4 outColor;
+    void main() {
+        float distance = texture(fontAtlas, fragTexCoord).r;
+        float edge = 0.7;
+        float smoothing = fwidth(distance) * 0.5;
+        float alpha = smoothstep(edge - smoothing, edge + smoothing, distance);
+        outColor = vec4(fragColor.rgb, fragColor.a * alpha);
     }
 |]

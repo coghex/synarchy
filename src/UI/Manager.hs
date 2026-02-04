@@ -127,11 +127,11 @@ createBox name width height texHandle tileSize color pageHandle mgr =
           }
     in createElementInternal name width height pageHandle (RenderBox style) mgr
 
-createText :: Text -> Text -> FontHandle -> (Float, Float, Float, Float) -> PageHandle 
+createText :: Text -> Text -> FontHandle -> Float -> (Float, Float, Float, Float) -> PageHandle 
            -> UIPageManager -> (ElementHandle, UIPageManager)
-createText name text font color pageHandle mgr =
+createText name text font size color pageHandle mgr =
     createElementInternal name 0 0 pageHandle 
-        (RenderText (UITextStyle text font color)) mgr
+        (RenderText (UITextStyle text font size color)) mgr
 
 createSprite :: Text -> Float -> Float -> TextureHandle -> (Float, Float, Float, Float) 
              -> PageHandle -> UIPageManager -> (ElementHandle, UIPageManager)

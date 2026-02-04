@@ -64,6 +64,26 @@ unsigned char* stb_render_glyph(stbtt_fontinfo* font, int codepoint, float scale
     return bitmap;
 }
 
+// Render glyph as SDF (Signed Distance Field)
+unsigned char* stb_render_glyph_sdf(stbtt_fontinfo* font, 
+                                     int codepoint, 
+                                     float scale,
+                                     int padding,
+                                     int* width, int* height,
+                                     int* xoff, int* yoff) {
+    unsigned char onedge_value = 180;  // Edge threshold (0.7 * 255)
+    float pixel_dist_scale = (float)onedge_value / (float)padding;
+    
+    return stbtt_GetCodepointSDF(font, scale, codepoint,
+                                  padding, onedge_value, pixel_dist_scale,
+                                  width, height, xoff, yoff);
+}
+
+// Free SDF bitmap (uses different free function)
+void stb_free_sdf(unsigned char* bitmap) {
+    stbtt_FreeSDF(bitmap, NULL);
+}
+
 // Free bitmap
 void stb_free_bitmap(unsigned char* bitmap) {
     stbtt_FreeBitmap(bitmap, NULL);

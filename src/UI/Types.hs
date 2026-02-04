@@ -103,6 +103,7 @@ data UIBoxStyle = UIBoxStyle
 data UITextStyle = UITextStyle
   { utsText  :: Text
   , utsFont  :: FontHandle
+  , utsSize  :: Float
   , utsColor :: (Float, Float, Float, Float)
   } deriving (Show)
 

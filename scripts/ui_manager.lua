@@ -22,7 +22,6 @@ local initialized = false
 -- Sub-modules
 local mainMenu = nil
 local settingsMenu = nil
-local createWorldMenu = nil
 
 -- Current active menu
 local currentMenu = "main"
@@ -64,7 +63,6 @@ function uiManager.init(scriptId)
     -- Load sub-modules
     mainMenu = require("scripts.main_menu")
     settingsMenu = require("scripts.settings_menu")
-    createWorldMenu = require("scripts.create_world_menu")
     
     engine.logInfo("UI Manager waiting for assets...")
 end
@@ -89,7 +87,6 @@ function uiManager.checkReady()
         if not initialized then
             mainMenu.init(boxTexSet, menuFont, titleFont, fbW, fbH)
             settingsMenu.init(btnTexSet, menuFont, fbW, fbH)
-            createWorldMenu.init(btnTexSet, menuFont, fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -104,7 +101,6 @@ function uiManager.onFramebufferResize(width, height)
     
     if mainMenu then mainMenu.onFramebufferResize(width, height) end
     if settingsMenu then settingsMenu.onFramebufferResize(width, height) end
-    if createWorldMenu then createWorldMenu.onFramebufferResize(width, height) end
     
     uiManager.checkReady()
 end
@@ -114,20 +110,12 @@ function uiManager.showMenu(menuName)
     
     mainMenu.hide()
     settingsMenu.hide()
-    createWorldMenu.hide()
     
     if menuName == "main" then
         mainMenu.show()
     elseif menuName == "settings" then
         settingsMenu.show()
-    elseif menuName == "createWorld" then
-        createWorldMenu.show()
     end
-end
-
--- Main menu button callbacks
-function uiManager.onCreateWorld()
-    uiManager.showMenu("createWorld")
 end
 
 function uiManager.onSettings()
@@ -151,28 +139,6 @@ function uiManager.onToggle_fullscreen()
     if settingsMenu then settingsMenu.onToggle_fullscreen() end
 end
 
--- Create world menu callbacks
-function uiManager.onRandomSeed()
-    if createWorldMenu then createWorldMenu.onRandomSeed() end
-end
-
-function uiManager.onSizePrev()
-    if createWorldMenu then createWorldMenu.onSizePrev() end
-end
-
-function uiManager.onSizeNext()
-    if createWorldMenu then createWorldMenu.onSizeNext() end
-end
-
-function uiManager.onCreate()
-    if createWorldMenu then
-        local worldSettings = createWorldMenu.getSettings()
-        engine.logInfo("Creating world: " .. worldSettings.name .. " (seed: " .. worldSettings.seed .. ", size: " .. worldSettings.size .. ")")
-        -- TODO: Actually create world
-        uiManager.showMenu("main")
-    end
-end
-
 function uiManager.onCancel()
     uiManager.showMenu("main")
 end
@@ -183,7 +149,6 @@ end
 function uiManager.shutdown()
     if mainMenu then mainMenu.shutdown() end
     if settingsMenu then settingsMenu.shutdown() end
-    if createWorldMenu then createWorldMenu.shutdown() end
 end
 
 return uiManager

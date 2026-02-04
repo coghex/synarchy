@@ -166,7 +166,8 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
                     let text = utsText style
                         (cr, cg, cb, ca) = utsColor style
                         color = (cr, cg, cb, ca)
-                        instances = layoutTextUI atlas absX absY text color
+                        size = utsSize style
+                        instances = layoutTextUI atlas size absX absY text color
                     
                     logDebugM CatFont $ "UI text layout generated " <> T.pack (show $ V.length instances) <> " vertices"
                     

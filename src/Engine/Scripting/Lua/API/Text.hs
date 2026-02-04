@@ -13,7 +13,7 @@ import Engine.Asset.Manager (updateFontState, generateFontHandle)
 import Engine.Asset.Handle (FontHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
-import Engine.Graphics.Font.Util (calculateTextWidth)
+import Engine.Graphics.Font.Util (calculateTextWidthScaled)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
 import qualified Engine.Core.Queue as Q
@@ -46,35 +46,36 @@ loadFontFn backendState = do
     _ → Lua.pushnil
   return 1
 
-spawnTextFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
+spawnTextFn :: EngineEnv -> LuaBackendState -> Lua.LuaE Lua.Exception Lua.NumResults
 spawnTextFn env backendState = do
-  x ← Lua.tonumber 1
-  y ← Lua.tonumber 2
-  fontHandleNum ← Lua.tointeger 3
-  text ← Lua.tostring 4
-  color ← Lua.tostring 5
-  layer ← Lua.tointeger 6
-  case (x, y, fontHandleNum, color, text) of
-    (Just xVal, Just yVal, Just fh, Just c, Just textBS) → do
+  x <- Lua.tonumber 1
+  y <- Lua.tonumber 2
+  fontHandleNum <- Lua.tointeger 3
+  text <- Lua.tostring 4
+  color <- Lua.tostring 5
+  layer <- Lua.tointeger 6
+  fontSize <- Lua.tonumber 7  -- NEW: Add size parameter
+  case (x, y, fontHandleNum, color, text, fontSize) of
+    (Just xVal, Just yVal, Just fh, Just c, Just textBS, Just size) -> do
       let layerId = LayerId $ fromIntegral $ fromMaybe 0 layer
-      objId ← Lua.liftIO $ do
-        logger ← readIORef $ loggerRef env
-        objId ← atomicModifyIORef' (lbsNextObjectId backendState) 
-            (\n → (n + 1, ObjectId n))
+      objId <- Lua.liftIO $ do
+        logger <- readIORef $ loggerRef env
+        objId <- atomicModifyIORef' (lbsNextObjectId backendState) 
+            (\n -> (n + 1, ObjectId n))
         logDebug logger CatLua $ "Lua spawning text with ID " 
                        <> T.pack (show objId)
         let fontHandle = FontHandle $ fromIntegral fh
             textStr = TE.decodeUtf8 textBS
             cStr = T.unpack $ TE.decodeUtf8 c
             msg = LuaSpawnTextRequest objId (realToFrac xVal) (realToFrac yVal)
-                  fontHandle textStr (colorToVec4 cStr) layerId
+                  fontHandle textStr (colorToVec4 cStr) layerId (realToFrac size)
             lteq = luaToEngineQueue env
         Q.writeQueue lteq msg
         return objId
       let (ObjectId n) = objId
       Lua.pushinteger (Lua.Integer $ fromIntegral n)
-    _ → do
-      Lua.pushstring "spawnText requires 6 arguments: x, y, fontHandle, text, color, layer"
+    _ -> do
+      Lua.pushstring "spawnText requires 7 arguments: x, y, fontHandle, text, color, layer, fontSize"
       Lua.pushnil
   return 1
 
@@ -110,19 +111,20 @@ getTextFn env = do
     _ → Lua.pushnil
   return 1
 
-getTextWidthFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getTextWidthFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
 getTextWidthFn env = do
-  fontHandleNum ← Lua.tointeger 1
-  text ← Lua.tostring 2
-  case (fontHandleNum, text) of
-      (Just fh, Just textBS) → do
-          width ← Lua.liftIO $ do
+  fontHandleNum <- Lua.tointeger 1
+  text <- Lua.tostring 2
+  fontSize <- Lua.tonumber 3  -- NEW: Add size parameter
+  case (fontHandleNum, text, fontSize) of
+      (Just fh, Just textBS, Just size) -> do
+          width <- Lua.liftIO $ do
               let fontHandle = FontHandle (fromIntegral fh)
                   textStr = T.unpack $ TE.decodeUtf8 textBS
-              fontCache ← readIORef (fontCacheRef env)
+              fontCache <- readIORef (fontCacheRef env)
               case Map.lookup fontHandle (fcFonts fontCache) of
-                  Nothing → return 0.0
-                  Just atlas → return $ calculateTextWidth atlas textStr
+                  Nothing -> return 0.0
+                  Just atlas -> return $ calculateTextWidthScaled atlas (realToFrac size) textStr
           Lua.pushnumber (Lua.Number width)
-      _ → Lua.pushnumber (Lua.Number 0)
+      _ -> Lua.pushnumber (Lua.Number 0)
   return 1

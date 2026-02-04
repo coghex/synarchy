@@ -5,7 +5,14 @@ local page = nil
 local boxTexSet = nil
 local menuFont = nil
 local fbW, fbH = 0, 0
+local fontSize = 32
+local checkboxSize = 48
+local buttonSize = 64
+local btnWidth = 160
+local btnHeight = 64
+local split = 100
 local uiCreated = false
+local uiscale = 1.0
 
 -- Checkbox textures
 local texCheckboxChecked = nil
@@ -26,6 +33,13 @@ function settingsMenu.init(boxTex, font, width, height)
     menuFont = font
     fbW = width
     fbH = height
+    uiscale = engine.getUIScale()
+    fontSize = math.floor(fontSize * uiscale)
+    checkboxSize = math.floor(checkboxSize * uiscale)
+    buttonSize = math.floor(buttonSize * uiscale)
+    btnWidth = math.floor(btnWidth * uiscale)
+    btnHeight = math.floor(btnHeight * uiscale)
+    split = math.floor(split * uiscale)
     
     -- Load checkbox textures
     texCheckboxChecked = engine.loadTexture("assets/textures/ui/checkboxchecked.png")
@@ -61,57 +75,54 @@ function settingsMenu.createUI()
     UI.setZIndex(panel, 10)
     
     -- Title
-    local titleText = UI.newText("settings_title", "Settings", menuFont, 1.0, 1.0, 1.0, 1.0, page)
-    local titleWidth = engine.getTextWidth(menuFont, "Settings")
+    local titleText = UI.newText("settings_title", "Settings", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    local titleWidth = engine.getTextWidth(menuFont, "Settings", fontSize)
     UI.addChild(panel, titleText, (panelWidth - titleWidth) / 2, 80)
     
     -- Fullscreen toggle row
     local yPos = 200
-    local checkboxSize = 48
     local rowX = 200
     
     -- Label
-    local labelText = UI.newText("fullscreen_label", "Fullscreen", menuFont, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, labelText, rowX, yPos + 8)
+    local labelText = UI.newText("fullscreen_label", "Fullscreen", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    UI.addChild(panel, labelText, rowX, yPos + (fontSize / 2))
     
     -- Checkbox sprite
     local checkboxX = panelWidth - rowX - checkboxSize
     local currentTex = currentSettings.fullscreen and texCheckboxChecked or texCheckboxUnchecked
     elements.fullscreenCheckbox = UI.newSprite("fullscreen_checkbox", checkboxSize, checkboxSize, currentTex, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, elements.fullscreenCheckbox, checkboxX, yPos)
+    UI.addChild(panel, elements.fullscreenCheckbox, checkboxX, yPos - (checkboxSize / 2))
     UI.setClickable(elements.fullscreenCheckbox, true)
     UI.setZIndex(elements.fullscreenCheckbox, 20)
     UI.setOnClick(elements.fullscreenCheckbox, "onToggle_fullscreen")
 
     -- UI scaling row
     local yPos = 360
-    local scalingLabel = UI.newText("scaling_label", "UI Scaling", menuFont, 1.0, 1.0, 1.0, 1.0, page)
+    local scalingLabel = UI.newText("scaling_label", "UI Scaling", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
     UI.addChild(panel, scalingLabel, rowX, yPos + 8)
     
     -- Back button
-    local btnWidth = 200
-    local btnHeight = 60
     local btnX = (panelWidth - btnWidth) / 2
     local btnY = panelHeight - 120
     
-    local backBtn = UI.newBox("back_btn", btnWidth, btnHeight, boxTexSet, 32, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, backBtn, btnX-128, btnY)
+    local backBtn = UI.newBox("back_btn", btnWidth, btnHeight, boxTexSet, fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    UI.addChild(panel, backBtn, btnX-split, btnY)
     UI.setClickable(backBtn, true)
     UI.setZIndex(backBtn, 20)
     UI.setOnClick(backBtn, "onSettingsBack")
     
-    local backLabel = UI.newText("back_label", "Back", menuFont, 1.0, 1.0, 1.0, 1.0, page)
-    local backLabelWidth = engine.getTextWidth(menuFont, "Back")
-    UI.addChild(backBtn, backLabel, (btnWidth - backLabelWidth) / 2, (btnHeight / 2) + 8)
+    local backLabel = UI.newText("back_label", "Back", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    local backLabelWidth = engine.getTextWidth(menuFont, "Back", fontSize)
+    UI.addChild(backBtn, backLabel, (btnWidth - backLabelWidth) / 2, (btnHeight / 2) + (fontSize / 2))
     -- Save button
-    local saveBtn = UI.newBox("save_btn", btnWidth, btnHeight, boxTexSet, 32, 1.0, 1.0, 1.0, 1.0, page)
-    local backlabelWidth = engine.getTextWidth(menuFont, "Save")
-    UI.addChild(panel, saveBtn, btnX+128, btnY)
+    local saveBtn = UI.newBox("save_btn", btnWidth, btnHeight, boxTexSet, fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    local backlabelWidth = engine.getTextWidth(menuFont, "Save", fontSize)
+    UI.addChild(panel, saveBtn, btnX+split, btnY)
     UI.setClickable(saveBtn, true)
     UI.setZIndex(saveBtn, 20)
     UI.setOnClick(saveBtn, "onSettingsSave")
-    local saveLabel = UI.newText("save_label", "Save", menuFont, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(saveBtn, saveLabel, (btnWidth - backlabelWidth) / 2, (btnHeight / 2) + 8)
+    local saveLabel = UI.newText("save_label", "Save", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    UI.addChild(saveBtn, saveLabel, (btnWidth - backlabelWidth) / 2, (btnHeight / 2) + (fontSize / 2))
     
     uiCreated = true
 end

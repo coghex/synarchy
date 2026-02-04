@@ -53,7 +53,7 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaLoadTextureRequest TextureHandle FilePath
                     | LuaLoadFontRequest FontHandle FilePath Int
                     | LuaSpawnTextRequest ObjectId Float Float FontHandle
-                                                   Text Vec4 LayerId
+                                                   Text Vec4 LayerId Float
                     | LuaSpawnSpriteRequest
                         { lssObjectId    ∷ ObjectId -- generated in lua thread
                         , lssX           ∷ Float

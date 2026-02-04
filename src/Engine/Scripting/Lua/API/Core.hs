@@ -14,7 +14,7 @@ import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import Engine.Scripting.Lua.Util (isValidRef)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
-import Engine.Core.Log (logInfo, logDebug, LogCategory(..))
+import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
@@ -112,8 +112,9 @@ loadScriptFn env backendState lst = do
                                        <> T.pack (show sid)
                         
                         return (Just sid)
-                    _ → do
-                        logInfo logger CatLua $ "Failed to load Lua script: " <> pathStr
+                    e → do
+                        logWarn logger CatLua $ "Failed to load Lua script: " <> pathStr
+                                       <> ". Error code: " <> T.pack (show e)
                         return Nothing
             
             case scriptId of

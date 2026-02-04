@@ -16,7 +16,7 @@ import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfo
 import Engine.Core.Monad
 import Engine.Core.State
 import qualified Engine.Core.Queue as Q
-import Engine.Graphics.Font.Load (loadFont)
+import Engine.Graphics.Font.Load (loadSDFFont)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scene.Base
@@ -58,13 +58,14 @@ handleLuaMessage msg = do
                 ,("handle", T.pack (show handle))]
             handleLoadTexture handle path
         
-        LuaSpawnTextRequest objId x y font text color layer → do
+        LuaSpawnTextRequest objId x y font text color layer size → do
             logDebugSM CatLua "Spawning text"
                 [("objId", T.pack (show objId))
                 ,("pos", T.pack (show x) <> "," <> T.pack (show y))
                 ,("text", T.take 20 text)
-                ,("layer", T.pack (show layer))]
-            handleSpawnText objId x y font text color layer
+                ,("layer", T.pack (show layer))
+                ,("size", T.pack (show size))]
+            handleSpawnText objId x y font text color layer size
         
         LuaSetTextRequest objId text → do
             logDebugSM CatLua "Setting text"
@@ -155,7 +156,7 @@ handleLoadTexture handle path = do
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM ε σ ()
 handleLoadFont handle path size = do
     logDebugM CatLua $ "Loading font from Lua: " <> T.pack path
-    actualHandle ← loadFont handle path size
+    actualHandle ← loadSDFFont handle path
     env ← ask
     let etlq = luaQueue env
     liftIO $ Q.writeQueue etlq (LuaFontLoaded actualHandle path)
@@ -165,8 +166,8 @@ handleLoadFont handle path size = do
 
 -- | Handle spawn text request
 handleSpawnText ∷ ObjectId → Float → Float → FontHandle → Text
-                → Vec4 → LayerId → EngineM ε σ ()
-handleSpawnText oid x y fontHandle text color layer = do
+                → Vec4 → LayerId → Float → EngineM ε σ ()
+handleSpawnText oid x y fontHandle text color layer size = do
     sceneMgr ← gets sceneManager
     case smActiveScene sceneMgr of
       Just sceneId → do
@@ -174,6 +175,7 @@ handleSpawnText oid x y fontHandle text color layer = do
               { nodeId = oid
               , nodeTransform = defaultTransform { position = (x, y) }
               , nodeFont = Just fontHandle
+              , nodeFontSize = Just size
               , nodeText = Just text
               , nodeColor = color
               , nodeVisible = True
