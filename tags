@@ -83,6 +83,7 @@ Command	src/Engine/Graphics/Vulkan/Command.hs	2;"	m
 CommandBufferError	src/Engine/Core/Error/Exception.hs	51;"	C
 Completed	src/Engine/Graphics/Vulkan/Types.hs	53;"	C
 Config	src/Engine/Graphics/Config.hs	1;"	m
+Config	src/Engine/Scripting/Lua/API/Config.hs	2;"	m
 Core	src/Engine/Graphics/Vulkan/Types/Core.hs	1;"	m
 Core	src/Engine/Scripting/Lua/API/Core.hs	1;"	m
 Data	src/Engine/Graphics/Font/Data.hs	1;"	m
@@ -1050,6 +1051,7 @@ getTextureStateMap	src/Engine/Asset/Manager.hs	391;"	f
 getTextureSystemOrFail	src/Engine/Graphics/Vulkan/Recreate.hs	184;"	f
 getVertexAttributeDescriptions	src/Engine/Graphics/Vulkan/Vertex.hs	89;"	f
 getVertexBindingDescription	src/Engine/Graphics/Vulkan/Vertex.hs	81;"	f
+getVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	18;"	f
 getVisiblePages	src/UI/Manager.hs	104;"	f
 getWindowSize	src/Engine/Graphics/Window/GLFW.hs	152;"	f
 getWindowSizeFn	src/Engine/Scripting/Lua/API/Input.hs	76;"	f
@@ -1190,7 +1192,7 @@ loadTexture	src/Engine/Graphics/Vulkan/Texture/System.hs	53;"	f
 loadTextureAtlas	src/Engine/Asset/Manager.hs	157;"	f
 loadTextureAtlasWithHandle	src/Engine/Asset/Manager.hs	165;"	f
 loadTextureFn	src/Engine/Scripting/Lua/API/Graphics.hs	27;"	f
-loadVideoConfig	src/Engine/Graphics/Config.hs	61;"	f
+loadVideoConfig	src/Engine/Graphics/Config.hs	76;"	f
 localToWorldMatrix	src/Engine/Scene/Graph.hs	127;"	f
 locally	src/Engine/Core/Resource.hs	43;"	f
 logAndThrow	src/Engine/Core/Log.hs	496;"	f
@@ -1327,8 +1329,8 @@ registerFocusTarget	src/UI/Focus.hs	82;"	f
 registerFocusableFn	src/Engine/Scripting/Lua/API/Focus.hs	14;"	f
 registerFunction	src/Engine/Scripting/Backend.hs	35;"	f
 registerLogAPI	src/Engine/Scripting/Lua/API/Log.hs	15;"	f
-registerLuaAPI	src/Engine/Scripting/Lua/API.hs	34;"	f
-registerLuaFunction	src/Engine/Scripting/Lua/API.hs	27;"	f
+registerLuaAPI	src/Engine/Scripting/Lua/API.hs	36;"	f
+registerLuaFunction	src/Engine/Scripting/Lua/API.hs	29;"	f
 registerTexture	src/Engine/Graphics/Vulkan/Texture/Bindless.hs	198;"	f
 releaseFocusFn	src/Engine/Scripting/Lua/API/Focus.hs	38;"	f
 reloadScript	src/Engine/Scripting/Backend.hs	29;"	f
@@ -1360,6 +1362,8 @@ runInputLoop	src/Engine/Input/Thread.hs	52;"	f
 runLuaLoop	src/Engine/Scripting/Lua/Thread.hs	142;"	f
 safeVectorHead	src/Engine/Loop/Resource.hs	90;"	f
 safeVectorIndex	src/Engine/Loop/Resource.hs	84;"	f
+saveVideoConfig	src/Engine/Graphics/Config.hs	94;"	f
+saveVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	57;"	f
 scale	src/Engine/Scene/Base.hs	15;"	f
 scaleForPixelHeight	src/Engine/Graphics/Font/STB.hs	106;"	f
 sceneActive	src/Engine/Scene/Types/Manager.hs	20;"	f
@@ -1397,6 +1401,7 @@ setText	src/UI/Manager.hs	265;"	f
 setTextColor	src/UI/Manager.hs	271;"	f
 setTextFn	src/Engine/Scripting/Lua/API/Text.hs	81;"	f
 setTickIntervalFn	src/Engine/Scripting/Lua/API/Core.hs	44;"	f
+setVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	30;"	f
 setVisibleFn	src/Engine/Scripting/Lua/API/Graphics.hs	148;"	f
 setWindowShouldClose	src/Engine/Graphics/Window/GLFW.hs	148;"	f
 setWindowTitle	src/Engine/Graphics/Window/GLFW.hs	160;"	f

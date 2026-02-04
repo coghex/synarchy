@@ -198,6 +198,7 @@ library
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
                      Engine.Scripting.Lua.API.Core
+                     Engine.Scripting.Lua.API.Config
                      Engine.Scripting.Lua.API.Graphics
                      Engine.Scripting.Lua.API.Input
                      Engine.Scripting.Lua.API.Text

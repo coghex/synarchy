@@ -3,8 +3,8 @@ module Engine.Graphics.Config where
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
-import Data.Aeson ((.:), (.!=), FromJSON(..), Value(..))
-import Engine.Core.Log (LoggerState, logWarn, LogCategory(..))
+import Data.Aeson ((.:), (.!=), (.=), FromJSON(..), ToJSON(..), Value(..))
+import Engine.Core.Log (LoggerState, logWarn, LogCategory(..), logInfo)
 
 -- | Video configuration settings
 data VideoConfig = VideoConfig
@@ -56,6 +56,21 @@ instance FromJSON VideoConfigFile where
         <*> videoObj .: "frame_limit" .!= Nothing
         <*> videoObj .: "msaa" .!= 1
     parseJSON _ = fail "Expected an object for VideoConfigFile"
+instance ToJSON Resolution where
+    toJSON (Resolution w h) = Yaml.object
+        [ "width"  .= w
+        , "height" .= h
+        ]
+instance ToJSON VideoConfigFile where
+    toJSON (VideoConfigFile res fs vs fl msaa) = Yaml.object
+        [ "video" .= Yaml.object
+            [ "resolution" .= res
+            , "fullscreen" .= fs
+            , "vsync" .= vs
+            , "frame_limit" .= fl
+            , "msaa" .= msaa
+            ]
+        ]
 
 -- | Load video configuration from a YAML file
 loadVideoConfig ∷ LoggerState → FilePath → IO VideoConfig
@@ -74,3 +89,19 @@ loadVideoConfig logger path = do
             , vcFrameLimit = vfFrameLimit vf
             , vcMSAA       = vfMSAA vf
             }
+
+-- | Save video configuration to a YAML file
+saveVideoConfig ∷ LoggerState → FilePath → VideoConfig → IO ()
+saveVideoConfig logger path config = do
+    let videoFile = VideoConfigFile
+          { vfResolution = Resolution 
+              { resWidth = vcWidth config
+              , resHeight = vcHeight config
+              }
+          , vfFullscreen = vcFullscreen config
+          , vfVSync = vcVSync config
+          , vfFrameLimit = vcFrameLimit config
+          , vfMSAA = vcMSAA config
+          }
+    result ← Yaml.encodeFile path videoFile
+    logInfo logger CatInit $ "Video config saved to " <> T.pack path
