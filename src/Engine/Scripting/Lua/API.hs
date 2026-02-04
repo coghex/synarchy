@@ -11,7 +11,8 @@ import Engine.Scripting.Lua.API.Core (logInfoFn, loadScriptFn, killScriptFn,
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , saveVideoConfigFn)
 import Engine.Scripting.Lua.API.Graphics (loadTextureFn, spawnSpriteFn, setPosFn,
-                                           setColorFn, setSizeFn, setVisibleFn, destroyFn)
+                                           setColorFn, setSizeFn, setVisibleFn
+                                           , destroyFn, setFullscreenFn)
 import Engine.Scripting.Lua.API.Input (isKeyDownFn, isActionDownFn, getMousePositionFn,
                                         isMouseButtonDownFn, getWindowSizeFn, 
                                         getFramebufferSizeFn, getWorldCoordFn)
@@ -59,6 +60,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setSize"      (setSizeFn env backendState)
   registerLuaFunction "setVisible"   (setVisibleFn env backendState)
   registerLuaFunction "destroy"      (destroyFn env backendState)
+  registerLuaFunction "setFullscreen" (setFullscreenFn env)
   
   -- Input functions
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)

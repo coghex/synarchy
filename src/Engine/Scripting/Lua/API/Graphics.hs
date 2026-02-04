@@ -6,6 +6,7 @@ module Engine.Scripting.Lua.API.Graphics
   , setSizeFn
   , setVisibleFn
   , destroyFn
+  , setFullscreenFn
   ) where
 
 import UPrelude
@@ -14,7 +15,9 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Manager (updateTextureState, generateTextureHandle)
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Scene.Base (ObjectId(..), LayerId(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Graphics.Config (VideoConfig(..))
+import Engine.Graphics.Window.Types (Window(..))
+import Engine.Core.State (EngineEnv(..), EngineState(..), glfwWindow)
 import Engine.Core.Log (LogCategory(..), logWarn, logDebug)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
@@ -23,6 +26,21 @@ import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LogLevel(..), defaultLoc)
+
+-- | engine.setFullscreen(bool)
+setFullscreenFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+setFullscreenFn env = do
+    fullscreenArg <- Lua.toboolean 1
+    
+    Lua.liftIO $ do
+        let lteq = luaToEngineQueue env
+        Q.writeQueue lteq (LuaSetFullscreen fullscreenArg)
+        
+        -- Also update the config so getVideoConfig reflects the change
+        oldConfig <- readIORef (videoConfigRef env)
+        writeIORef (videoConfigRef env) $ oldConfig { vcFullscreen = fullscreenArg }
+    
+    return 0
 
 loadTextureFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 loadTextureFn backendState = do

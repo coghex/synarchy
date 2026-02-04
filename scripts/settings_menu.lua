@@ -60,11 +60,11 @@ function settingsMenu.createUI()
     -- Fullscreen toggle row
     local yPos = 200
     local checkboxSize = 48
-    local rowX = 100
+    local rowX = 200
     
     -- Label
     local labelText = UI.newText("fullscreen_label", "Fullscreen", menuFont, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, labelText, rowX, yPos + 12)
+    UI.addChild(panel, labelText, rowX, yPos + 8)
     
     -- Checkbox sprite
     local checkboxX = panelWidth - rowX - checkboxSize
@@ -81,7 +81,7 @@ function settingsMenu.createUI()
     local btnX = (panelWidth - btnWidth) / 2
     local btnY = panelHeight - 120
     
-    local backBtn = UI.newBox("back_btn", btnWidth, btnHeight, boxTexSet, 32, 0.4, 0.3, 0.3, 1.0, page)
+    local backBtn = UI.newBox("back_btn", btnWidth, btnHeight, boxTexSet, 32, 1.0, 1.0, 1.0, 1.0, page)
     UI.addChild(panel, backBtn, btnX, btnY)
     UI.setClickable(backBtn, true)
     UI.setZIndex(backBtn, 20)
@@ -89,7 +89,7 @@ function settingsMenu.createUI()
     
     local backLabel = UI.newText("back_label", "Back", menuFont, 1.0, 1.0, 1.0, 1.0, page)
     local backLabelWidth = engine.getTextWidth(menuFont, "Back")
-    UI.addChild(backBtn, backLabel, (btnWidth - backLabelWidth) / 2, (btnHeight / 2) - 8)
+    UI.addChild(backBtn, backLabel, (btnWidth - backLabelWidth) / 2, (btnHeight / 2) + 8)
     
     uiCreated = true
 end
@@ -100,6 +100,7 @@ function settingsMenu.onToggle_fullscreen()
     -- Swap the checkbox texture
     local newTex = currentSettings.fullscreen and texCheckboxChecked or texCheckboxUnchecked
     UI.setSpriteTexture(elements.fullscreenCheckbox, newTex)
+    engine.setFullscreen(currentSettings.fullscreen)
 end
 
 function settingsMenu.getSettings()

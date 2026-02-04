@@ -49,6 +49,7 @@ data LuaLogLevel = LuaLogDebug
 
 -- | messages from lua to the main thread
 data LuaToEngineMsg = LuaLog LuaLogLevel String
+                    | LuaSetFullscreen Bool
                     | LuaLoadTextureRequest TextureHandle FilePath
                     | LuaLoadFontRequest FontHandle FilePath Int
                     | LuaSpawnTextRequest ObjectId Float Float FontHandle

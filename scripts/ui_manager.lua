@@ -3,6 +3,7 @@ local uiManager = {}
 
 -- Shared resources
 local boxTexSet = nil
+local btnTexSet = nil
 local menuFont = nil
 local titleFont = nil
 local fbW, fbH = 0, 0
@@ -44,6 +45,17 @@ function uiManager.init(scriptId)
     local texSE = engine.loadTexture("assets/textures/box/boxse.png")
     local texSW = engine.loadTexture("assets/textures/box/boxsw.png")
     boxTexSet = UI.loadBoxTextures(texCenter, texN, texS, texE, texW, texNE, texNW, texSE, texSW)
+    -- Load button textures
+    local btnTexCenter = engine.loadTexture("assets/textures/button/button.png")
+    local btnTexN = engine.loadTexture("assets/textures/button/buttonn.png")
+    local btnTexS = engine.loadTexture("assets/textures/button/buttons.png")
+    local btnTexE = engine.loadTexture("assets/textures/button/buttone.png")
+    local btnTexW = engine.loadTexture("assets/textures/button/buttonw.png")
+    local btnTexNE = engine.loadTexture("assets/textures/button/buttonne.png")
+    local btnTexNW = engine.loadTexture("assets/textures/button/buttonnw.png")
+    local btnTexSE = engine.loadTexture("assets/textures/button/buttonse.png")
+    local btnTexSW = engine.loadTexture("assets/textures/button/buttonsw.png")
+    btnTexSet = UI.loadBoxTextures(btnTexCenter, btnTexN, btnTexS, btnTexE, btnTexW, btnTexNE, btnTexNW, btnTexSE, btnTexSW)
     
     -- Load sub-modules
     mainMenu = require("scripts.main_menu")
@@ -71,8 +83,8 @@ end
 function uiManager.checkReady()
     if fontsReady and fbW > 0 and fbH > 0 then
         mainMenu.init(boxTexSet, menuFont, titleFont, fbW, fbH)
-        settingsMenu.init(boxTexSet, menuFont, fbW, fbH)
-        createWorldMenu.init(boxTexSet, menuFont, fbW, fbH)
+        settingsMenu.init(btnTexSet, menuFont, fbW, fbH)
+        createWorldMenu.init(btnTexSet, menuFont, fbW, fbH)
         uiManager.showMenu("main")
     end
 end

@@ -18,11 +18,13 @@ import Engine.Core.State
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Font.Load (loadFont)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
+import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scene.Base
 import Engine.Scene.Graph (modifySceneNode, deleteSceneNode)
 import Engine.Scene.Manager (addObjectToScene)
 import Engine.Scene.Types
 import Engine.Scripting.Lua.Types
+import qualified Graphics.UI.GLFW as GLFW
 
 processLuaMessages ∷ EngineM ε σ ()
 processLuaMessages = do
@@ -38,6 +40,11 @@ processLuaMessages = do
 handleLuaMessage ∷ LuaToEngineMsg → EngineM ε σ ()
 handleLuaMessage msg = do
     case msg of
+        LuaSetFullscreen fullscreen → do
+            logDebugSM CatLua "Setting fullscreen"
+                [("fullscreen", if fullscreen then "true" else "false")]
+            handleSetFullscreen fullscreen
+
         LuaLoadFontRequest handle path size → do
             logDebugSM CatLua "Loading font"
                 [("path", T.pack path)
@@ -98,6 +105,31 @@ handleLuaMessage msg = do
         LuaDestroyRequest objId → do
             logDebugM CatLua $ "Destroying object " <> T.pack (show objId)
             handleDestroy objId
+
+handleSetFullscreen :: Bool -> EngineM ε σ ()
+handleSetFullscreen fullscreen = do
+    state <- gets graphicsState
+    case glfwWindow state of
+        Nothing -> logWarnM CatGraphics "Cannot set fullscreen: no window"
+        Just (Window win) -> liftIO $ do
+            if fullscreen
+                then do
+                    -- Get primary monitor and its video mode
+                    mMonitor <- GLFW.getPrimaryMonitor
+                    case mMonitor of
+                        Nothing -> return ()
+                        Just monitor -> do
+                            mMode <- GLFW.getVideoMode monitor
+                            case mMode of
+                                Nothing -> return ()
+                                Just mode -> do
+                                    let w = GLFW.videoModeWidth mode
+                                        h = GLFW.videoModeHeight mode
+                                        r = GLFW.videoModeRefreshRate mode
+                                    GLFW.setFullscreen win monitor mode
+                else do
+                    -- Return to windowed mode (you may want to save/restore previous size)
+                    GLFW.setWindowed win 1280 720 100 100
 
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
