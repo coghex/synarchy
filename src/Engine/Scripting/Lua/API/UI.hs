@@ -24,6 +24,7 @@ module Engine.Scripting.Lua.API.UI
   , uiSetZIndexFn
   , uiSetColorFn
   , uiSetTextFn
+  , uiSetSpriteTextureFn
   , uiLoadBoxTexturesFn
   ) where
 
@@ -427,6 +428,19 @@ uiSetTextFn env = do
                 text = TE.decodeUtf8 txtBS
             Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
                 (setText elemHandle text mgr, ())
+        _ -> pure ()
+    
+    return 0
+
+-- | UI.setSpriteTexture(elementHandle, textureHandle)
+uiSetSpriteTextureFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiSetSpriteTextureFn env = do
+    elemArg <- Lua.tointeger 1
+    texArg <- Lua.tointeger 2
+    
+    case (elemArg, texArg) of
+        (Just e, Just t) -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+            (setSpriteTexture (ElementHandle $ fromIntegral e) (TextureHandle $ fromIntegral t) mgr, ())
         _ -> pure ()
     
     return 0
