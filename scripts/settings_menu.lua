@@ -22,9 +22,14 @@ local btnHeight = 64
 local split = 100
 
 local uiCreated = false
+
+local uiScaleTextBox = nil
+local frameLimitTextBox = nil
 local uiScaleTextBox = nil
 local uiScaleMin = 0.5
 local uiScaleMax = 4.0
+local frameLimitMin = 30
+local frameLimitMax = 240
 
 -- Checkbox textures
 local texCheckboxChecked = nil
@@ -79,6 +84,7 @@ function settingsMenu.createUI()
     -- Destroy old textbox if it exists
     textbox.destroyAll()
     uiScaleTextBox = nil
+    frameLimitTextBox = nil
     
     if uiCreated and page then
         UI.deletePage(page)
@@ -143,6 +149,26 @@ function settingsMenu.createUI()
         default = tostring(currentSettings.uiScale),
         textType = textbox.Type.SCALE
     })
+
+    -- Frame limit row
+    yPos = yPos + 160  -- Move down for next row
+    local frameLimitLabel = UI.newText("framelimit_label", "Frame Limit", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    UI.addChild(panel, frameLimitLabel, rowX, yPos + 8)
+    
+    frameLimitTextBox = textbox.new({
+        name = "framelimit_input",
+        x = textboxX,
+        y = yPos - (textboxHeight / 2) + 8,
+        width = textboxWidth,
+        height = textboxHeight,
+        page = page,
+        parent = panel,
+        uiscale = uiscale,
+        font = menuFont,
+        fontSize = 24,
+        default = tostring(currentSettings.frameLimit or 60),
+        textType = textbox.Type.NUMBER,  -- Integer only
+    })
     
     -- Button row - Back, Apply, Save
     local btnSpacing = math.floor(20 * uiscale)
@@ -202,33 +228,48 @@ end
 function settingsMenu.onApply()
     engine.logInfo("Applying settings...")
     
+    local scaleChanged = false
+    
     -- Get current UI scale from textbox and apply it
     if uiScaleTextBox then
         local scale = textbox.getNumericValue(uiScaleTextBox)
         if scale >= uiScaleMin and scale <= uiScaleMax then
-            currentSettings.uiScale = scale
-            engine.setUIScale(scale)
-            
-            -- Recalculate scaled sizes
-            fontSize = math.floor(baseFontSize * scale)
-            checkboxSize = math.floor(baseCheckboxSize * scale)
-            buttonSize = math.floor(baseButtonSize * scale)
-            btnWidth = math.floor(baseBtnWidth * scale)
-            btnHeight = math.floor(baseBtnHeight * scale)
-            split = math.floor(baseSplit * scale)
-            
-            -- Destroy old textbox BEFORE rebuilding UI
-            textbox.destroy(uiScaleTextBox)
-            uiScaleTextBox = nil
-            
-            -- Rebuild UI with new scale
-            settingsMenu.createUI()
-            settingsMenu.show()
-            
-            engine.logInfo("UI scale applied: " .. tostring(scale))
+            if currentSettings.uiScale ~= scale then
+                scaleChanged = true
+                currentSettings.uiScale = scale
+                engine.setUIScale(scale)
+                
+                -- Recalculate scaled sizes
+                fontSize = math.floor(baseFontSize * scale)
+                checkboxSize = math.floor(baseCheckboxSize * scale)
+                buttonSize = math.floor(baseButtonSize * scale)
+                btnWidth = math.floor(baseBtnWidth * scale)
+                btnHeight = math.floor(baseBtnHeight * scale)
+                split = math.floor(baseSplit * scale)
+                
+                engine.logInfo("UI scale applied: " .. tostring(scale))
+            end
         else
             engine.logWarn("UI scale out of range: " .. tostring(scale))
         end
+    end
+    
+    -- Get frame limit from textbox
+    if frameLimitTextBox then
+        local frameLimit = textbox.getNumericValue(frameLimitTextBox)
+        if frameLimit >= frameLimitMin and frameLimit <= frameLimitMax then
+            currentSettings.frameLimit = frameLimit
+            -- TODO: engine.setFrameLimit(frameLimit) when available
+            engine.logInfo("Frame limit set to: " .. tostring(frameLimit))
+        else
+            engine.logWarn("Frame limit out of range: " .. tostring(frameLimit))
+        end
+    end
+    
+    if scaleChanged then
+        -- Rebuild UI with new scale
+        settingsMenu.createUI()
+        settingsMenu.show()
     end
 end
 
@@ -275,33 +316,111 @@ function settingsMenu.handleTextBoxClick(callbackName)
     return textbox.handleCallback(callbackName)
 end
 
-function settingsMenu.onTextBoxSubmit(value)
-    -- Check if we have a valid scale value
-    local scale = tonumber(value)
-    if not scale then
-        engine.logWarn("Invalid UI scale value: " .. tostring(value))
-        -- Reset to current value
-        if uiScaleTextBox then
-            textbox.setText(uiScaleTextBox, tostring(currentSettings.uiScale))
+function settingsMenu.onTextBoxSubmit(name, value)
+    engine.logInfo("TextBox submit: " .. tostring(name) .. " = " .. tostring(value))
+    
+    if name == "uiscale_input" then
+        -- Handle UI scale
+        local scale = tonumber(value)
+        if not scale then
+            engine.logWarn("Invalid UI scale value: " .. tostring(value))
+            if uiScaleTextBox then
+                textbox.setText(uiScaleTextBox, tostring(currentSettings.uiScale))
+            end
+            return
         end
-        return
+        
+        -- Clamp to valid range
+        if scale < uiScaleMin then
+            scale = uiScaleMin
+            engine.logInfo("UI scale clamped to minimum: " .. tostring(scale))
+        elseif scale > uiScaleMax then
+            scale = uiScaleMax
+            engine.logInfo("UI scale clamped to maximum: " .. tostring(scale))
+        end
+        
+        -- Update textbox to show clamped value
+        if uiScaleTextBox then
+            textbox.setText(uiScaleTextBox, tostring(scale))
+        end
+        
+        engine.logInfo("UI scale ready to apply: " .. tostring(scale))
+        
+    elseif name == "framelimit_input" then
+        -- Handle frame limit
+        local frameLimit = tonumber(value)
+        if not frameLimit then
+            engine.logWarn("Invalid frame limit value: " .. tostring(value))
+            if frameLimitTextBox then
+                textbox.setText(frameLimitTextBox, tostring(currentSettings.frameLimit or 60))
+            end
+            return
+        end
+        
+        -- Clamp to valid range
+        if frameLimit < frameLimitMin then
+            frameLimit = frameLimitMin
+            engine.logInfo("Frame limit clamped to minimum: " .. tostring(frameLimit))
+        elseif frameLimit > frameLimitMax then
+            frameLimit = frameLimitMax
+            engine.logInfo("Frame limit clamped to maximum: " .. tostring(frameLimit))
+        end
+        
+        -- Update textbox to show clamped value
+        if frameLimitTextBox then
+            textbox.setText(frameLimitTextBox, tostring(frameLimit))
+        end
+        
+        engine.logInfo("Frame limit ready to apply: " .. tostring(frameLimit))
     end
+end
+
+function settingsMenu.onApply()
+    engine.logInfo("Applying settings...")
     
-    -- Clamp to valid range
-    if scale < uiScaleMin then
-        scale = uiScaleMin
-        engine.logInfo("UI scale clamped to minimum: " .. tostring(scale))
-    elseif scale > uiScaleMax then
-        scale = uiScaleMax
-        engine.logInfo("UI scale clamped to maximum: " .. tostring(scale))
-    end
+    local scaleChanged = false
     
-    -- Update textbox to show clamped value
+    -- Get current UI scale from textbox and apply it
     if uiScaleTextBox then
-        textbox.setText(uiScaleTextBox, tostring(scale))
+        local scale = textbox.getNumericValue(uiScaleTextBox)
+        if scale >= uiScaleMin and scale <= uiScaleMax then
+            if currentSettings.uiScale ~= scale then
+                scaleChanged = true
+                currentSettings.uiScale = scale
+                engine.setUIScale(scale)
+                
+                -- Recalculate scaled sizes
+                fontSize = math.floor(baseFontSize * scale)
+                checkboxSize = math.floor(baseCheckboxSize * scale)
+                buttonSize = math.floor(baseButtonSize * scale)
+                btnWidth = math.floor(baseBtnWidth * scale)
+                btnHeight = math.floor(baseBtnHeight * scale)
+                split = math.floor(baseSplit * scale)
+                
+                engine.logInfo("UI scale applied: " .. tostring(scale))
+            end
+        else
+            engine.logWarn("UI scale out of range: " .. tostring(scale))
+        end
     end
     
-    engine.logInfo("UI scale ready to apply: " .. tostring(scale))
+    -- Get frame limit from textbox
+    if frameLimitTextBox then
+        local frameLimit = textbox.getNumericValue(frameLimitTextBox)
+        if frameLimit >= frameLimitMin and frameLimit <= frameLimitMax then
+            currentSettings.frameLimit = frameLimit
+            -- TODO: engine.setFrameLimit(frameLimit) when available
+            engine.logInfo("Frame limit set to: " .. tostring(frameLimit))
+        else
+            engine.logWarn("Frame limit out of range: " .. tostring(frameLimit))
+        end
+    end
+    
+    if scaleChanged then
+        -- Rebuild UI with new scale
+        settingsMenu.createUI()
+        settingsMenu.show()
+    end
 end
 
 -- Revert settings to saved config (discard unsaved changes)
@@ -346,7 +465,7 @@ end
 
 -- Reload settings from engine config
 function settingsMenu.reloadSettings()
-    local w, h, fs, uiScale, vs, msaa = engine.getVideoConfig()
+    local w, h, fs, uiScale, vs, framelimit, msaa = engine.getVideoConfig()
     
     currentSettings.width = w
     currentSettings.height = h
@@ -354,6 +473,7 @@ function settingsMenu.reloadSettings()
     currentSettings.uiScale = uiScale
     currentSettings.vsync = vs
     currentSettings.msaa = msaa
+    currentSettings.frameLimit = framelimit
     
     -- Recalculate scaled sizes
     fontSize = math.floor(baseFontSize * uiScale)

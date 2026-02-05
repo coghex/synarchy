@@ -19,6 +19,7 @@ import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..))
 import Engine.Event.Types (Event(..))
 import Engine.Input.Types (InputState, keyToText)
+import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
@@ -231,7 +232,8 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onMouseUp"
       [ScriptNumber (fromIntegral buttonNum), ScriptNumber x, ScriptNumber y]
   LuaUIClickEvent elemHandle callbackName → do
-    broadcastToModules ls callbackName []
+    let (ElementHandle h) = elemHandle
+    broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
   LuaUICharInput c → 
     broadcastToModules ls "onUICharInput" [ScriptString (T.singleton c)]
   LuaUIBackspace → 

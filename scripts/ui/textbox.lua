@@ -1,6 +1,8 @@
 -- TextBox UI component (using engine focus and text buffer)
 local textbox = {}
 
+local TEXTBOX_CALLBACK = "onTextBoxClick"
+
 -- Storage for all textboxes
 local textboxes = {}
 local nextId = 1
@@ -83,7 +85,6 @@ function textbox.new(params)
         textId = nil,
         cursorId = nil,
         defaultValue = params.default or "",
-        callbackName = "onTextBoxClick",
         font = params.font,
         textType = params.textType or TextBoxType.TEXT,
         suffix = "",  -- Suffix to display (e.g., "x" for scale)
@@ -151,7 +152,7 @@ function textbox.new(params)
     
     -- Make it clickable
     UI.setClickable(tb.boxId, true)
-    UI.setOnClick(tb.boxId, tb.callbackName)
+    UI.setOnClick(tb.boxId, TEXTBOX_CALLBACK)
     
     textboxes[id] = tb
     
@@ -288,6 +289,31 @@ function textbox.update(dt)
     end
 end
 
+-- Find textbox by element handle
+function textbox.findByElementHandle(elemHandle)
+    for id, tb in pairs(textboxes) do
+        if tb.boxId == elemHandle then
+            return id
+        end
+    end
+    return nil
+end
+
+-- Handle click with element handle - this is the new approach
+function textbox.handleClickByElement(elemHandle)
+    local id = textbox.findByElementHandle(elemHandle)
+    if id then
+        textbox.focus(id)
+        return true
+    end
+    return false
+end
+
+-- Check if an element handle belongs to a textbox
+function textbox.isTextBoxElement(elemHandle)
+    return textbox.findByElementHandle(elemHandle) ~= nil
+end
+
 -- Handle click callback - find which textbox was clicked and focus it
 function textbox.handleCallback(callbackName)
     for id, tb in pairs(textboxes) do
@@ -295,6 +321,13 @@ function textbox.handleCallback(callbackName)
             textbox.focus(id)
             return true
         end
+    end
+    return false
+end
+-- Keep old callback method for compatibility
+function textbox.handleCallback(callbackName, elemHandle)
+    if callbackName == TEXTBOX_CALLBACK and elemHandle then
+        return textbox.handleClickByElement(elemHandle)
     end
     return false
 end
@@ -394,7 +427,7 @@ end
 -- Check if a callback name belongs to a textbox
 function textbox.isTextBoxCallback(callbackName)
     if not callbackName then return false end
-    return callbackName == "onTextBoxClick"
+    return callbackName == TEXTBOX_CALLBACK
 end
 
 -----------------------------------------------------------
@@ -563,9 +596,9 @@ function textbox.onSubmit()
         engine.logInfo("TextBox submitted: " .. tb.name .. " = '" .. displayText .. "' (value=" .. value .. ")")
         -- Unfocus after submit
         textbox.unfocus(id)
-        return true, value
+        return true, value, id, tb.name
     end
-    return false, nil
+    return false, nil, nil, nil
 end
 
 -- Handle escape (unfocus)

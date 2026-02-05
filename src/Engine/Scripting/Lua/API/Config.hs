@@ -25,8 +25,9 @@ getVideoConfigFn env = do
     Lua.pushboolean (vcFullscreen config)
     Lua.pushnumber (Lua.Number scale)
     Lua.pushboolean (vcVSync config)
+    Lua.pushinteger (maybe 0 fromIntegral $ vcFrameLimit config)
     Lua.pushinteger (fromIntegral $ vcMSAA config)
-    return 6
+    return 7
 
 -- | Set video config (doesn't save to file)
 -- engine.setVideoConfig(width, height, fullscreen, uiscale, vsync, msaa)
@@ -37,10 +38,12 @@ setVideoConfigFn env = do
     fullscreenArg <- Lua.toboolean 3
     uiScale <- Lua.tonumber 4
     vsyncArg <- Lua.toboolean 5
-    msaaArg <- Lua.tointeger 6
+    framelimitArg <- Lua.tointeger 6
+    msaaArg <- Lua.tointeger 7
     
-    case (widthArg, heightArg, fullscreenArg, uiScale, vsyncArg, msaaArg) of
-        (Just w, Just h, fs, Just uis, vs, Just m) -> do
+    case (widthArg, heightArg, fullscreenArg, uiScale, vsyncArg,
+         framelimitArg, msaaArg) of
+        (Just w, Just h, fs, Just uis, vs, Just fl, Just m) -> do
             Lua.liftIO $ do
                 oldConfig <- readIORef (videoConfigRef env)
                 let newConfig = oldConfig
@@ -49,6 +52,8 @@ setVideoConfigFn env = do
                       , vcFullscreen = fs
                       , vcUIScale = realToFrac uis
                       , vcVSync = vs
+                      , vcFrameLimit = if fl > 0 then Just (fromIntegral fl)
+                                                 else Nothing
                       , vcMSAA = fromIntegral m
                       }
                 writeIORef (videoConfigRef env) newConfig

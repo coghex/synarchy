@@ -177,8 +177,10 @@ function uiManager.shutdown()
     if settingsMenu then settingsMenu.shutdown() end
 end
 
-function uiManager.onTextBoxClick()
-    if settingsMenu then settingsMenu.handleTextBoxClick("onTextBoxClick") end
+function uiManager.onTextBoxClick(elemHandle)
+    if textbox then
+        textbox.handleClickByElement(elemHandle)
+    end
 end
 
 -----------------------------------------------------------
@@ -241,10 +243,10 @@ end
 -- Submit (Enter)
 function uiManager.onUISubmit()
     if textbox then
-        local handled, text = textbox.onSubmit()
-        if handled and text then
-            engine.logInfo("UI Submit received: " .. tostring(text))
-            if settingsMenu then settingsMenu.onTextBoxSubmit(text) end
+        local handled, value, id, name = textbox.onSubmit()
+        if handled and value then
+            engine.logInfo("UI Submit received: " .. tostring(value) .. " from " .. tostring(name))
+            if settingsMenu then settingsMenu.onTextBoxSubmit(name, value) end
         end
         return handled
     end

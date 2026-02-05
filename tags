@@ -768,7 +768,7 @@ createFontTextureSampler	src/Engine/Graphics/Font/Load.hs	563;"	f
 createFontUIPipeline	src/Engine/Graphics/Font/Draw.hs	332;"	f
 createFrameResources	src/Engine/Graphics/Vulkan/Command.hs	154;"	f
 createLuaBackend	src/Engine/Scripting/Lua/Backend.hs	57;"	f
-createLuaBackendState	src/Engine/Scripting/Lua/Thread.hs	123;"	f
+createLuaBackendState	src/Engine/Scripting/Lua/Thread.hs	124;"	f
 createModelMatrix	src/Engine/Graphics/Transform.hs	16;"	f
 createPage	src/UI/Manager.hs	68;"	f
 createProjectionMatrix	src/Engine/Graphics/Camera.hs	99;"	f
@@ -1337,8 +1337,8 @@ presentQueue	src/Engine/Graphics/Types.hs	24;"	f
 processInput	src/Engine/Input/Thread.hs	89;"	f
 processInputs	src/Engine/Input/Thread.hs	79;"	f
 processLuaMessages	src/Engine/Scripting/Lua/Message.hs	29;"	f
-processLuaMsg	src/Engine/Scripting/Lua/Thread.hs	200;"	f
-processLuaMsgs	src/Engine/Scripting/Lua/Thread.hs	187;"	f
+processLuaMsg	src/Engine/Scripting/Lua/Thread.hs	201;"	f
+processLuaMsgs	src/Engine/Scripting/Lua/Thread.hs	188;"	f
 psPipeline	src/Engine/Graphics/Vulkan/Base.hs	16;"	f
 psPipelineLayout	src/Engine/Graphics/Vulkan/Base.hs	17;"	f
 psRenderPass	src/Engine/Graphics/Vulkan/Base.hs	18;"	f
@@ -1398,11 +1398,11 @@ runCommandsOnce	src/Engine/Graphics/Vulkan/Command.hs	117;"	f
 runEngineM	src/Engine/Core/Monad.hs	34;"	f
 runEngineTest	test/Test/Engine/Graphics/Vulkan/Device.hs	26;"	f
 runInputLoop	src/Engine/Input/Thread.hs	52;"	f
-runLuaLoop	src/Engine/Scripting/Lua/Thread.hs	142;"	f
+runLuaLoop	src/Engine/Scripting/Lua/Thread.hs	143;"	f
 safeVectorHead	src/Engine/Loop/Resource.hs	90;"	f
 safeVectorIndex	src/Engine/Loop/Resource.hs	84;"	f
 saveVideoConfig	src/Engine/Graphics/Config.hs	100;"	f
-saveVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	62;"	f
+saveVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	67;"	f
 scale	src/Engine/Scene/Base.hs	15;"	f
 scaleForPixelHeight	src/Engine/Graphics/Font/STB.hs	115;"	f
 sceneActive	src/Engine/Scene/Types/Manager.hs	20;"	f
@@ -1446,8 +1446,8 @@ setTextBuffer	src/UI/Manager.hs	460;"	f
 setTextColor	src/UI/Manager.hs	320;"	f
 setTextFn	src/Engine/Scripting/Lua/API/Text.hs	82;"	f
 setTickIntervalFn	src/Engine/Scripting/Lua/API/Core.hs	34;"	f
-setUIScaleFn	src/Engine/Scripting/Lua/API/Config.hs	72;"	f
-setVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	33;"	f
+setUIScaleFn	src/Engine/Scripting/Lua/API/Config.hs	77;"	f
+setVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	34;"	f
 setVisibleFn	src/Engine/Scripting/Lua/API/Graphics.hs	174;"	f
 setWindowShouldClose	src/Engine/Graphics/Window/GLFW.hs	159;"	f
 setWindowTitle	src/Engine/Graphics/Window/GLFW.hs	171;"	f
@@ -1501,7 +1501,7 @@ ssiEntryPoint	src/Engine/Asset/Types.hs	128;"	f
 ssiPath	src/Engine/Asset/Types.hs	129;"	f
 ssiStage	src/Engine/Asset/Types.hs	127;"	f
 startInputThread	src/Engine/Input/Thread.hs	29;"	f
-startLuaThread	src/Engine/Scripting/Lua/Thread.hs	39;"	f
+startLuaThread	src/Engine/Scripting/Lua/Thread.hs	40;"	f
 stbFontData	src/Engine/Graphics/Font/STB.hs	36;"	f
 stbFontInfo	src/Engine/Graphics/Font/STB.hs	37;"	f
 stbFontSize	src/Engine/Graphics/Font/STB.hs	38;"	f
