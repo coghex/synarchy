@@ -116,23 +116,7 @@ end
 
 function shell.shutdown()
     engine.logDebug("Shell module shutting down")
-    -- Cleanup all objects
-    if objBoxNW then engine.destroy(objBoxNW) end
-    if objBoxN then engine.destroy(objBoxN) end
-    if objBoxNE then engine.destroy(objBoxNE) end
-    if objBoxW then engine.destroy(objBoxW) end
-    if objBox then engine.destroy(objBox) end
-    if objBoxE then engine.destroy(objBoxE) end
-    if objBoxSW then engine.destroy(objBoxSW) end
-    if objBoxS then engine.destroy(objBoxS) end
-    if objBoxSE then engine.destroy(objBoxSE) end
-    if objPrompt then engine.destroy(objPrompt) end
-    if objBufferText then engine.destroy(objBufferText) end
-    if objCursor then engine.destroy(objCursor) end
-    if ghostText then engine.destroy(ghostText) end
-    for _, obj in ipairs(historyTextObjects) do
-        engine.destroy(obj)
-    end
+    shell.destroyAllSprites()
 end
 
 function shell.onShellToggle()
@@ -176,6 +160,11 @@ function shell.show()
     cursorVisible = true
     cursorBlinkTime = 0
     engine.requestFocus(focusId)
+    local scaleChanged = shell.rescale()
+    if scaleChanged and boxSpawned then
+        shell.destroyAllSprites()
+        boxSpawned = false
+    end
     
     shell.rebuildBox()
     shell.rebuildHistoryDisplay()
@@ -912,6 +901,64 @@ function shell.onFramebufferResize(width, height)
             shell.updateGhostText()
         end
     end
+end
+
+-- Recalculate all scaled values from current UI scale
+function shell.rescale()
+    local newScale = engine.getUIScale()
+    
+    -- Only rebuild if scale actually changed
+    if newScale == uiscale and boxSpawned then
+        return false
+    end
+    
+    uiscale = newScale
+    
+    -- Recalculate all scaled values from base values
+    local baseTileSize = 64
+    local baseMiddleWidth = 1200
+    local baseFontSize = 32
+    local baseMarginLeft = 40
+    local baseMarginBottom = 40
+    local baseMarginTop = 40
+    local baseLineHeight = 40
+    
+    tileSize = math.floor(baseTileSize * uiscale)
+    middleWidth = math.floor(baseMiddleWidth * uiscale)
+    fontSize = math.floor(baseFontSize * uiscale)
+    marginLeft = math.floor(baseMarginLeft * uiscale)
+    marginBottom = math.floor(baseMarginBottom * uiscale)
+    marginTop = math.floor(baseMarginTop * uiscale)
+    lineHeight = math.floor(baseLineHeight * uiscale)
+    
+    -- Reset max input width cache
+    maxInputWidth = 0
+    
+    engine.logDebug("Shell rescaled to: " .. tostring(uiscale))
+    return true
+end
+
+-- Destroy all shell sprites (for rescale rebuild)
+function shell.destroyAllSprites()
+    if objBoxNW then engine.destroy(objBoxNW); objBoxNW = nil end
+    if objBoxN then engine.destroy(objBoxN); objBoxN = nil end
+    if objBoxNE then engine.destroy(objBoxNE); objBoxNE = nil end
+    if objBoxW then engine.destroy(objBoxW); objBoxW = nil end
+    if objBox then engine.destroy(objBox); objBox = nil end
+    if objBoxE then engine.destroy(objBoxE); objBoxE = nil end
+    if objBoxSW then engine.destroy(objBoxSW); objBoxSW = nil end
+    if objBoxS then engine.destroy(objBoxS); objBoxS = nil end
+    if objBoxSE then engine.destroy(objBoxSE); objBoxSE = nil end
+    if objPrompt then engine.destroy(objPrompt); objPrompt = nil end
+    if objBufferText then engine.destroy(objBufferText); objBufferText = nil end
+    if objCursor then engine.destroy(objCursor); objCursor = nil end
+    if ghostText then engine.destroy(ghostText); ghostText = nil end
+    
+    -- Destroy history text objects
+    for _, obj in ipairs(historyTextObjects) do
+        engine.destroy(obj)
+    end
+    historyTextObjects = {}
 end
 
 return shell
