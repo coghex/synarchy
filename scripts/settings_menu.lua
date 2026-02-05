@@ -1,5 +1,6 @@
 -- Settings Menu Module
 local textbox = require("scripts.ui.textbox")
+local checkbox = require("scripts.ui.checkbox")
 local settingsMenu = {}
 
 local page = nil
@@ -13,7 +14,6 @@ local baseBtnWidth = 160
 local baseBtnHeight = 64
 local baseSplit = 100
 
--- Scaled values (computed in init)
 local fontSize = 32
 local checkboxSize = 48
 local buttonSize = 64
@@ -23,17 +23,14 @@ local split = 100
 
 local uiCreated = false
 
--- Remove duplicate declaration
 local uiScaleTextBox = nil
 local frameLimitTextBox = nil
+local fullscreenCheckboxId = nil  -- Store checkbox ID
+
 local uiScaleMin = 0.5
 local uiScaleMax = 4.0
 local frameLimitMin = 30
 local frameLimitMax = 240
-
--- Checkbox textures
-local texCheckboxChecked = nil
-local texCheckboxUnchecked = nil
 
 local currentSettings = {
     width = 800,
@@ -45,6 +42,9 @@ local currentSettings = {
     msaa = 0
 }
 
+-- Pending changes (not yet applied)
+local pendingSettings = {}
+
 local elements = {}
 
 function settingsMenu.init(boxTex, font, width, height)
@@ -53,11 +53,9 @@ function settingsMenu.init(boxTex, font, width, height)
     fbW = width
     fbH = height
     
-    -- Get UI scale from engine config
     currentSettings.uiScale = engine.getUIScale()
     local uiscale = currentSettings.uiScale
     
-    -- Apply scaling to sizes
     fontSize = math.floor(baseFontSize * uiscale)
     checkboxSize = math.floor(baseCheckboxSize * uiscale)
     buttonSize = math.floor(baseButtonSize * uiscale)
@@ -65,33 +63,36 @@ function settingsMenu.init(boxTex, font, width, height)
     btnHeight = math.floor(baseBtnHeight * uiscale)
     split = math.floor(baseSplit * uiscale)
     
-    -- Load checkbox textures
-    texCheckboxChecked = engine.loadTexture("assets/textures/ui/checkboxchecked.png")
-    texCheckboxUnchecked = engine.loadTexture("assets/textures/ui/checkboxunchecked.png")
     textbox.init()
+    checkbox.init()
     
-    -- Load current settings
     settingsMenu.reloadSettings()
-    
     settingsMenu.createUI()
 end
 
 function settingsMenu.createUI()
-    -- Destroy old textbox if it exists
     textbox.destroyAll()
+    checkbox.destroyAll()
     uiScaleTextBox = nil
     frameLimitTextBox = nil
+    fullscreenCheckboxId = nil
     
     if uiCreated and page then
         UI.deletePage(page)
         elements = {}
     end
     
+    -- Reset pending to current
+    pendingSettings = {
+        fullscreen = currentSettings.fullscreen,
+        uiScale = currentSettings.uiScale,
+        frameLimit = currentSettings.frameLimit,
+    }
+    
     local uiscale = currentSettings.uiScale
     
     page = UI.newPage("settings_menu", "modal")
     
-    -- Panel
     local panelWidth = math.floor(fbW * 0.6)
     local panelHeight = math.floor(fbH * 0.6)
     local panelX = (fbW - panelWidth) / 2
@@ -101,7 +102,6 @@ function settingsMenu.createUI()
     UI.addToPage(page, panel, panelX, panelY)
     UI.setZIndex(panel, 10)
     
-    -- Title
     local titleText = UI.newText("settings_title", "Settings", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
     local titleWidth = engine.getTextWidth(menuFont, "Settings", fontSize)
     UI.addChild(panel, titleText, (panelWidth - titleWidth) / 2, 80)
@@ -110,18 +110,26 @@ function settingsMenu.createUI()
     local yPos = 200
     local rowX = 200
     
-    -- Label
     local labelText = UI.newText("fullscreen_label", "Fullscreen", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
     UI.addChild(panel, labelText, rowX, yPos + (fontSize / 2))
     
-    -- Checkbox sprite
     local checkboxX = panelWidth - rowX - checkboxSize
-    local currentTex = currentSettings.fullscreen and texCheckboxChecked or texCheckboxUnchecked
-    elements.fullscreenCheckbox = UI.newSprite("fullscreen_checkbox", checkboxSize, checkboxSize, currentTex, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, elements.fullscreenCheckbox, checkboxX, yPos - (checkboxSize / 2))
-    UI.setClickable(elements.fullscreenCheckbox, true)
-    UI.setZIndex(elements.fullscreenCheckbox, 20)
-    UI.setOnClick(elements.fullscreenCheckbox, "onToggle_fullscreen")
+    fullscreenCheckboxId = checkbox.new({
+        name = "fullscreen",
+        size = baseCheckboxSize,
+        uiscale = uiscale,
+        page = page,
+        parent = panel,
+        x = checkboxX,
+        y = yPos - (checkboxSize / 2),
+        default = currentSettings.fullscreen,
+        onChange = function(checked, id, name)
+            -- Just update pending, don't apply yet
+            pendingSettings.fullscreen = checked
+            engine.logInfo("Fullscreen pending: " .. tostring(checked))
+        end,
+    })
+    UI.setZIndex(checkbox.getElementHandle(fullscreenCheckboxId), 20)
 
     -- UI scaling row
     yPos = 360
@@ -166,7 +174,7 @@ function settingsMenu.createUI()
         textType = textbox.Type.NUMBER,
     })
     
-    -- Button row - Back, Apply, Save
+    -- Button row
     local btnSpacing = math.floor(20 * uiscale)
     local totalBtnWidth = (btnWidth * 3) + (btnSpacing * 2)
     local btnStartX = (panelWidth - totalBtnWidth) / 2
@@ -208,15 +216,6 @@ function settingsMenu.createUI()
     uiCreated = true
 end
 
-function settingsMenu.onToggle_fullscreen()
-    currentSettings.fullscreen = not currentSettings.fullscreen
-    
-    -- Swap the checkbox texture
-    local newTex = currentSettings.fullscreen and texCheckboxChecked or texCheckboxUnchecked
-    UI.setSpriteTexture(elements.fullscreenCheckbox, newTex)
-    engine.setFullscreen(currentSettings.fullscreen)
-end
-
 function settingsMenu.getSettings()
     return currentSettings
 end
@@ -226,16 +225,23 @@ function settingsMenu.onApply()
     
     local scaleChanged = false
     
-    -- Get current UI scale from textbox and apply it
+    -- Apply fullscreen from pending
+    if pendingSettings.fullscreen ~= currentSettings.fullscreen then
+        currentSettings.fullscreen = pendingSettings.fullscreen
+        engine.setFullscreen(currentSettings.fullscreen)
+        engine.logInfo("Fullscreen applied: " .. tostring(currentSettings.fullscreen))
+    end
+    
+    -- Get UI scale from textbox
     if uiScaleTextBox then
         local scale = textbox.getNumericValue(uiScaleTextBox)
         if scale >= uiScaleMin and scale <= uiScaleMax then
             if currentSettings.uiScale ~= scale then
                 scaleChanged = true
                 currentSettings.uiScale = scale
+                pendingSettings.uiScale = scale
                 engine.setUIScale(scale)
                 
-                -- Recalculate scaled sizes
                 fontSize = math.floor(baseFontSize * scale)
                 checkboxSize = math.floor(baseCheckboxSize * scale)
                 buttonSize = math.floor(baseButtonSize * scale)
@@ -250,11 +256,12 @@ function settingsMenu.onApply()
         end
     end
     
-    -- Get frame limit from textbox and apply it
+    -- Get frame limit from textbox
     if frameLimitTextBox then
         local frameLimit = textbox.getNumericValue(frameLimitTextBox)
         if frameLimit >= frameLimitMin and frameLimit <= frameLimitMax then
             currentSettings.frameLimit = math.floor(frameLimit)
+            pendingSettings.frameLimit = currentSettings.frameLimit
             engine.setFrameLimit(currentSettings.frameLimit)
             engine.logInfo("Frame limit applied: " .. tostring(currentSettings.frameLimit))
         else
@@ -263,7 +270,6 @@ function settingsMenu.onApply()
     end
     
     if scaleChanged then
-        -- Rebuild UI with new scale
         settingsMenu.createUI()
         settingsMenu.show()
     end
@@ -271,13 +277,8 @@ end
 
 function settingsMenu.onSave()
     engine.logInfo("Saving settings...")
-    
-    -- Apply first to make sure current values are set
     settingsMenu.onApply()
-    
-    -- Save video config to file
     engine.saveVideoConfig()
-    
     engine.logInfo("Settings saved.")
 end
 
@@ -299,21 +300,8 @@ function settingsMenu.onFramebufferResize(width, height)
     fbW = width
     fbH = height
     if uiCreated then
-        -- Destroy old textbox before recreating
-        if uiScaleTextBox then
-            textbox.destroy(uiScaleTextBox)
-            uiScaleTextBox = nil
-        end
-        if frameLimitTextBox then
-            textbox.destroy(frameLimitTextBox)
-            frameLimitTextBox = nil
-        end
         settingsMenu.createUI()
     end
-end
-
-function settingsMenu.handleTextBoxClick(callbackName)
-    return textbox.handleCallback(callbackName)
 end
 
 function settingsMenu.onTextBoxSubmit(name, value)
@@ -328,15 +316,11 @@ function settingsMenu.onTextBoxSubmit(name, value)
             end
             return
         end
-        
-        -- Clamp to valid range
         scale = math.max(uiScaleMin, math.min(uiScaleMax, scale))
-        
-        -- Update textbox to show clamped value
         if uiScaleTextBox then
             textbox.setText(uiScaleTextBox, tostring(scale))
         end
-        
+        pendingSettings.uiScale = scale
         engine.logInfo("UI scale ready to apply: " .. tostring(scale))
         
     elseif name == "framelimit_input" then
@@ -348,31 +332,24 @@ function settingsMenu.onTextBoxSubmit(name, value)
             end
             return
         end
-        
-        -- Clamp to valid range
         frameLimit = math.max(frameLimitMin, math.min(frameLimitMax, math.floor(frameLimit)))
-        
-        -- Update textbox to show clamped value
         if frameLimitTextBox then
             textbox.setText(frameLimitTextBox, tostring(frameLimit))
         end
-        
+        pendingSettings.frameLimit = frameLimit
         engine.logInfo("Frame limit ready to apply: " .. tostring(frameLimit))
     end
 end
 
--- Revert settings to saved config (discard unsaved changes)
 function settingsMenu.revertSettings()
     engine.logInfo("Reverting settings to saved config...")
     
-    -- Read saved config from engine
     local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
     
-    -- Check if UI scale changed (need to revert visual changes)
     local scaleChanged = (currentSettings.uiScale ~= uiScale)
+    local fullscreenChanged = (currentSettings.fullscreen ~= fs)
     local frameLimitChanged = (currentSettings.frameLimit ~= frameLimit)
     
-    -- Reset currentSettings to saved values
     currentSettings.width = w
     currentSettings.height = h
     currentSettings.fullscreen = fs
@@ -381,12 +358,15 @@ function settingsMenu.revertSettings()
     currentSettings.frameLimit = frameLimit
     currentSettings.msaa = msaa
     
-    -- If scale was changed but not saved, revert it in engine
+    if fullscreenChanged then
+        engine.setFullscreen(fs)
+        engine.logInfo("Fullscreen reverted to: " .. tostring(fs))
+    end
+    
     if scaleChanged then
         engine.setUIScale(uiScale)
         engine.logInfo("UI scale reverted to: " .. tostring(uiScale))
         
-        -- Recalculate scaled sizes
         fontSize = math.floor(baseFontSize * uiScale)
         checkboxSize = math.floor(baseCheckboxSize * uiScale)
         buttonSize = math.floor(baseButtonSize * uiScale)
@@ -395,7 +375,6 @@ function settingsMenu.revertSettings()
         split = math.floor(baseSplit * uiScale)
     end
     
-    -- If frame limit was changed but not saved, revert it
     if frameLimitChanged then
         engine.setFrameLimit(frameLimit)
         engine.logInfo("Frame limit reverted to: " .. tostring(frameLimit))
@@ -404,12 +383,10 @@ function settingsMenu.revertSettings()
     engine.logInfo("Settings reverted.")
 end
 
--- Call this when Back is pressed
 function settingsMenu.onBack()
     settingsMenu.revertSettings()
 end
 
--- Reload settings from engine config
 function settingsMenu.reloadSettings()
     local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
     
@@ -421,7 +398,6 @@ function settingsMenu.reloadSettings()
     currentSettings.frameLimit = frameLimit or 60
     currentSettings.msaa = msaa
     
-    -- Recalculate scaled sizes
     fontSize = math.floor(baseFontSize * uiScale)
     checkboxSize = math.floor(baseCheckboxSize * uiScale)
     buttonSize = math.floor(baseButtonSize * uiScale)
@@ -433,14 +409,8 @@ function settingsMenu.reloadSettings()
 end
 
 function settingsMenu.shutdown()
-    if uiScaleTextBox then
-        textbox.destroy(uiScaleTextBox)
-        uiScaleTextBox = nil
-    end
-    if frameLimitTextBox then
-        textbox.destroy(frameLimitTextBox)
-        frameLimitTextBox = nil
-    end
+    textbox.destroyAll()
+    checkbox.destroyAll()
     if page then
         UI.deletePage(page)
     end

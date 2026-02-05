@@ -1,7 +1,23 @@
 -- TextBox UI component (using engine focus and text buffer)
 local textbox = {}
 
+-----------------------------------------------------------
+-- Constants
+-----------------------------------------------------------
 local TEXTBOX_CALLBACK = "onTextBoxClick"
+
+-- Textbox types
+local TextBoxType = {
+    TEXT = "text",           -- Any text
+    NUMBER = "number",       -- Numbers only (integer)
+    DECIMAL = "decimal",     -- Numbers with decimal point
+    SCALE = "scale",         -- Scale value (e.g., "1.5x")
+}
+textbox.Type = TextBoxType
+
+-----------------------------------------------------------
+-- Module State
+-----------------------------------------------------------
 
 -- Storage for all textboxes
 local textboxes = {}
@@ -15,19 +31,14 @@ local assetsLoaded = false
 -- Default tile size for 9-tile boxes
 local defaultTileSize = 16
 
--- Cursor blink state
+-- Cursor blink state (shared across all textboxes)
 local cursorBlinkTime = 0
 local cursorBlinkRate = 0.5
 local cursorVisible = true
 
--- Textbox types
-local TextBoxType = {
-    TEXT = "text",           -- Any text
-    NUMBER = "number",       -- Numbers only (integer)
-    DECIMAL = "decimal",     -- Numbers with decimal point
-    SCALE = "scale",         -- Scale value (e.g., "1.5x")
-}
-textbox.Type = TextBoxType
+-----------------------------------------------------------
+-- Initialization
+-----------------------------------------------------------
 
 function textbox.init()
     if assetsLoaded then return end
@@ -58,6 +69,10 @@ function textbox.init()
     
     assetsLoaded = true
 end
+
+-----------------------------------------------------------
+-- Creation / Destruction
+-----------------------------------------------------------
 
 function textbox.new(params)
     local id = nextId
@@ -170,11 +185,34 @@ function textbox.destroy(id)
         UI.clearFocus()
     end
     
+    -- Note: We don't destroy the UI elements here because 
+    -- they will be destroyed when the page is deleted.
+    -- We just remove our tracking of them.
+    
     textboxes[id] = nil
     engine.logInfo("TextBox destroyed: " .. tb.name)
 end
 
--- Validate input character based on textbox type
+function textbox.destroyAll()
+    -- Clear any focus first
+    UI.clearFocus()
+    
+    -- Clear all textbox entries
+    for id, tb in pairs(textboxes) do
+        engine.logInfo("TextBox destroyed: " .. tb.name)
+    end
+    textboxes = {}
+    nextId = 1
+    
+    -- Reset cursor state
+    cursorVisible = true
+    cursorBlinkTime = 0
+end
+
+-----------------------------------------------------------
+-- Validation
+-----------------------------------------------------------
+
 function textbox.isValidChar(id, char)
     local tb = textboxes[id]
     if not tb then return false end
@@ -182,17 +220,13 @@ function textbox.isValidChar(id, char)
     local currentText = UI.getTextInput(tb.boxId) or ""
     
     if tb.textType == TextBoxType.TEXT then
-        -- Allow any printable character
         return true
     elseif tb.textType == TextBoxType.NUMBER then
-        -- Only digits
         return char:match("^%d$") ~= nil
     elseif tb.textType == TextBoxType.DECIMAL or tb.textType == TextBoxType.SCALE then
-        -- Digits and one decimal point
         if char:match("^%d$") then
             return true
         elseif char == "." then
-            -- Only allow one decimal point
             return not currentText:find("%.")
         end
         return false
@@ -201,14 +235,16 @@ function textbox.isValidChar(id, char)
     return true
 end
 
--- Format display text based on type
+-----------------------------------------------------------
+-- Value Access
+-----------------------------------------------------------
+
 function textbox.formatDisplayText(id)
     local tb = textboxes[id]
     if not tb then return "" end
     
     local text = UI.getTextInput(tb.boxId) or ""
     
-    -- Add suffix if needed
     if tb.suffix ~= "" and text ~= "" then
         return text .. tb.suffix
     end
@@ -216,14 +252,12 @@ function textbox.formatDisplayText(id)
     return text
 end
 
--- Get the raw value (without suffix)
 function textbox.getValue(id)
     local tb = textboxes[id]
     if not tb then return "" end
     return UI.getTextInput(tb.boxId) or ""
 end
 
--- Get numeric value (for number/decimal/scale types)
 function textbox.getNumericValue(id)
     local tb = textboxes[id]
     if not tb then return 0 end
@@ -231,7 +265,23 @@ function textbox.getNumericValue(id)
     return tonumber(text) or 0
 end
 
--- Update the displayed text and cursor position
+function textbox.getText(id)
+    local tb = textboxes[id]
+    if not tb then return "" end
+    return UI.getTextInput(tb.boxId) or ""
+end
+
+function textbox.setText(id, text)
+    local tb = textboxes[id]
+    if not tb then return end
+    UI.setTextInput(tb.boxId, text)
+    textbox.updateDisplay(id)
+end
+
+-----------------------------------------------------------
+-- Display Updates
+-----------------------------------------------------------
+
 function textbox.updateDisplay(id)
     local tb = textboxes[id]
     if not tb then return end
@@ -248,7 +298,7 @@ function textbox.updateDisplay(id)
     -- Right justify: position text so it ends at the right edge
     local textX = tb.width - tb.textPadding - textWidth
     if textX < tb.textPadding then
-        textX = tb.textPadding  -- Don't go past left edge
+        textX = tb.textPadding
     end
     
     -- Update text position and content
@@ -258,16 +308,13 @@ function textbox.updateDisplay(id)
     
     -- Update cursor position
     if tb.cursorId then
-        -- Calculate cursor X based on text before cursor
         local textBeforeCursor = rawText:sub(1, cursorPos)
         local cursorTextWidth = engine.getTextWidth(tb.font, textBeforeCursor, tb.fontSize)
         local cursorX = textX + cursorTextWidth - (engine.getTextWidth(tb.font, "|", tb.fontSize) / 2)
-        
         UI.setPosition(tb.cursorId, cursorX, textY)
     end
 end
 
--- Update cursor blink (call this from update loop)
 function textbox.update(dt)
     cursorBlinkTime = cursorBlinkTime + dt
     
@@ -275,7 +322,6 @@ function textbox.update(dt)
         cursorBlinkTime = cursorBlinkTime - cursorBlinkRate
         cursorVisible = not cursorVisible
         
-        -- Update cursor visibility for focused textbox
         local focusedId = textbox.getFocusedId()
         if focusedId then
             local tb = textboxes[focusedId]
@@ -286,7 +332,10 @@ function textbox.update(dt)
     end
 end
 
--- Find textbox by element handle
+-----------------------------------------------------------
+-- Focus Management
+-----------------------------------------------------------
+
 function textbox.findByElementHandle(elemHandle)
     for id, tb in pairs(textboxes) do
         if tb.boxId == elemHandle then
@@ -296,7 +345,6 @@ function textbox.findByElementHandle(elemHandle)
     return nil
 end
 
--- Handle click with element handle - this is the new approach
 function textbox.handleClickByElement(elemHandle)
     local id = textbox.findByElementHandle(elemHandle)
     if id then
@@ -306,22 +354,10 @@ function textbox.handleClickByElement(elemHandle)
     return false
 end
 
--- Check if an element handle belongs to a textbox
 function textbox.isTextBoxElement(elemHandle)
     return textbox.findByElementHandle(elemHandle) ~= nil
 end
 
--- Handle click callback - find which textbox was clicked and focus it
-function textbox.handleCallback(callbackName)
-    for id, tb in pairs(textboxes) do
-        if tb.callbackName == callbackName then
-            textbox.focus(id)
-            return true
-        end
-    end
-    return false
-end
--- Keep old callback method for compatibility
 function textbox.handleCallback(callbackName, elemHandle)
     if callbackName == TEXTBOX_CALLBACK and elemHandle then
         return textbox.handleClickByElement(elemHandle)
@@ -329,7 +365,6 @@ function textbox.handleCallback(callbackName, elemHandle)
     return false
 end
 
--- Focus a textbox by its local id
 function textbox.focus(id)
     local tb = textboxes[id]
     if not tb then return end
@@ -365,7 +400,6 @@ function textbox.focus(id)
     engine.logInfo("TextBox focused: " .. tb.name)
 end
 
--- Unfocus a textbox by its local id
 function textbox.unfocus(id)
     local tb = textboxes[id]
     if not tb then return end
@@ -374,10 +408,8 @@ function textbox.unfocus(id)
         UI.clearFocus()
     end
     
-    -- Update visual
     UI.setBoxTextures(tb.boxId, texSetNormal)
     
-    -- Hide cursor
     if tb.cursorId then
         UI.setVisible(tb.cursorId, false)
     end
@@ -385,7 +417,6 @@ function textbox.unfocus(id)
     engine.logInfo("TextBox unfocused: " .. tb.name)
 end
 
--- Unfocus all textboxes
 function textbox.unfocusAll()
     for id, tb in pairs(textboxes) do
         if tb.boxId and UI.hasFocus(tb.boxId) then
@@ -393,18 +424,15 @@ function textbox.unfocusAll()
             return
         end
     end
-    -- Also clear focus if something else had it
     UI.clearFocus()
 end
 
--- Check if a textbox is focused
 function textbox.isFocused(id)
     local tb = textboxes[id]
     if not tb then return false end
     return UI.hasFocus(tb.boxId)
 end
 
--- Get the currently focused textbox id (local id, not element handle)
 function textbox.getFocusedId()
     for id, tb in pairs(textboxes) do
         if tb.boxId and UI.hasFocus(tb.boxId) then
@@ -414,35 +442,20 @@ function textbox.getFocusedId()
     return nil
 end
 
--- Get the element handle for a textbox
 function textbox.getElementHandle(id)
     local tb = textboxes[id]
     if not tb then return nil end
     return tb.boxId
 end
 
--- Check if a callback name belongs to a textbox
 function textbox.isTextBoxCallback(callbackName)
     if not callbackName then return false end
     return callbackName == TEXTBOX_CALLBACK
 end
 
 -----------------------------------------------------------
--- Text Buffer Operations (delegate to engine)
+-- Cursor Operations (delegate to UI)
 -----------------------------------------------------------
-
-function textbox.getText(id)
-    local tb = textboxes[id]
-    if not tb then return "" end
-    return UI.getTextInput(tb.boxId) or ""
-end
-
-function textbox.setText(id, text)
-    local tb = textboxes[id]
-    if not tb then return end
-    UI.setTextInput(tb.boxId, text)
-    textbox.updateDisplay(id)
-end
 
 function textbox.getCursor(id)
     local tb = textboxes[id]
@@ -461,7 +474,6 @@ function textbox.insertChar(id, char)
     local tb = textboxes[id]
     if not tb then return end
     
-    -- Validate character
     if not textbox.isValidChar(id, char) then
         return
     end
@@ -509,7 +521,6 @@ end
 -- Input Event Handlers (called from ui_manager)
 -----------------------------------------------------------
 
--- Handle character input for the focused textbox
 function textbox.onCharInput(char)
     local id = textbox.getFocusedId()
     if id then
@@ -520,7 +531,6 @@ function textbox.onCharInput(char)
     return false
 end
 
--- Handle backspace for the focused textbox
 function textbox.onBackspace()
     local id = textbox.getFocusedId()
     if id then
@@ -531,7 +541,6 @@ function textbox.onBackspace()
     return false
 end
 
--- Handle delete key for the focused textbox
 function textbox.onDelete()
     local id = textbox.getFocusedId()
     if id then
@@ -542,7 +551,6 @@ function textbox.onDelete()
     return false
 end
 
--- Handle cursor keys
 function textbox.onCursorLeft()
     local id = textbox.getFocusedId()
     if id then
@@ -583,7 +591,6 @@ function textbox.onEnd()
     return false
 end
 
--- Handle submit (Enter key)
 function textbox.onSubmit()
     local id = textbox.getFocusedId()
     if id then
@@ -591,14 +598,12 @@ function textbox.onSubmit()
         local value = textbox.getValue(id)
         local displayText = textbox.formatDisplayText(id)
         engine.logInfo("TextBox submitted: " .. tb.name .. " = '" .. displayText .. "' (value=" .. value .. ")")
-        -- Unfocus after submit
         textbox.unfocus(id)
         return true, value, id, tb.name
     end
     return false, nil, nil, nil
 end
 
--- Handle escape (unfocus)
 function textbox.onEscape()
     local id = textbox.getFocusedId()
     if id then
@@ -606,39 +611,6 @@ function textbox.onEscape()
         return true
     end
     return false
-end
-
-function textbox.destroy(id)
-    local tb = textboxes[id]
-    if not tb then return end
-    
-    -- Clear focus if this was focused
-    if tb.boxId and UI.hasFocus(tb.boxId) then
-        UI.clearFocus()
-    end
-    
-    -- Note: We don't destroy the UI elements here because 
-    -- they will be destroyed when the page is deleted.
-    -- We just remove our tracking of them.
-    
-    textboxes[id] = nil
-    engine.logInfo("TextBox destroyed: " .. tb.name)
-end
-
--- Destroy all textboxes (useful when rebuilding UI)
-function textbox.destroyAll()
-    -- Clear any focus first
-    UI.clearFocus()
-    
-    -- Clear all textbox entries
-    for id, tb in pairs(textboxes) do
-        engine.logInfo("TextBox destroyed: " .. tb.name)
-    end
-    textboxes = {}
-    nextId = 1
-    -- Reset cursor state
-    cursorVisible = true
-    cursorBlinkTime = 0
 end
 
 return textbox

@@ -22,12 +22,13 @@ local initialized = false
 -- Sub-modules (declared here so all functions can access them)
 local mainMenu = nil
 local settingsMenu = nil
-local textbox = nil  -- MOVED: declare at module level
+local textbox = nil
+local checkbox = nil  -- ADD THIS
 
 -- Current active menu
 local currentMenu = "main"
 
--- Helper to handle unfocusing (MOVED: define before it's used)
+-- Helper to handle unfocusing
 local function handleNonTextBoxClick()
     if textbox then
         textbox.unfocusAll()
@@ -37,8 +38,8 @@ end
 function uiManager.init(scriptId)
     engine.logInfo("UI Manager initializing...")
     
-    -- CHANGED: assign to module-level variable, not local
     textbox = require("scripts.ui.textbox")
+    checkbox = require("scripts.ui.checkbox")  -- ADD THIS
 
     uiscale = engine.getUIScale()
     
@@ -184,10 +185,39 @@ function uiManager.onTextBoxClick(elemHandle)
 end
 
 -----------------------------------------------------------
+-- Generic UI Click Handler (called by engine for UI clicks)
+-----------------------------------------------------------
+
+function uiManager.onUIClick(callbackName, elemHandle)
+    -- Unfocus textboxes when clicking elsewhere
+    handleNonTextBoxClick()
+    
+    -- Try checkbox first
+    if checkbox and checkbox.handleCallback(callbackName, elemHandle) then
+        return true
+    end
+    
+    -- Try textbox
+    if textbox and textbox.handleCallback(callbackName, elemHandle) then
+        return true
+    end
+    
+    return false
+end
+
+-- Direct callback for checkbox clicks (if engine calls by callback name)
+function uiManager.onCheckboxClick(elemHandle)
+    handleNonTextBoxClick()
+    if checkbox then
+        return checkbox.handleClickByElement(elemHandle)
+    end
+    return false
+end
+
+-----------------------------------------------------------
 -- Input Event Forwarding to Textboxes
 -----------------------------------------------------------
 
--- Character input for UI elements
 function uiManager.onUICharInput(char)
     if textbox then
         return textbox.onCharInput(char)
@@ -195,7 +225,6 @@ function uiManager.onUICharInput(char)
     return false
 end
 
--- Backspace
 function uiManager.onUIBackspace()
     if textbox then
         return textbox.onBackspace()
@@ -203,7 +232,6 @@ function uiManager.onUIBackspace()
     return false
 end
 
--- Delete
 function uiManager.onUIDelete()
     if textbox then
         return textbox.onDelete()
@@ -211,7 +239,6 @@ function uiManager.onUIDelete()
     return false
 end
 
--- Cursor keys
 function uiManager.onUICursorLeft()
     if textbox then
         return textbox.onCursorLeft()
@@ -240,7 +267,6 @@ function uiManager.onUIEnd()
     return false
 end
 
--- Submit (Enter)
 function uiManager.onUISubmit()
     if textbox then
         local handled, value, id, name = textbox.onSubmit()
@@ -253,7 +279,6 @@ function uiManager.onUISubmit()
     return false
 end
 
--- Escape - unfocus
 function uiManager.onUIEscape()
     if textbox then
         return textbox.onEscape()
@@ -261,7 +286,6 @@ function uiManager.onUIEscape()
     return false
 end
 
--- Focus lost (clicked outside)
 function uiManager.onUIFocusLost()
     if textbox then
         textbox.unfocusAll()

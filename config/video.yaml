@@ -1,5 +1,5 @@
 video:
-  frame_limit: 30
+  frame_limit: 60
   fullscreen: false
   msaa: 1
   resolution:
