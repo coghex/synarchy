@@ -88,7 +88,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "requestFocus"      (requestFocusFn env)
   registerLuaFunction "releaseFocus"      (releaseFocusFn env)
   registerLuaFunction "getFocusId"        (getFocusIdFn env)
-  
+ 
   -- Shell functions
   registerLuaFunction "shellExecute" shellExecuteFn
   
@@ -114,6 +114,26 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "addChild"       (uiAddChildFn env)
   registerLuaFunction "removeElement"  (uiRemoveElementFn env)
   registerLuaFunction "deleteElement"  (uiDeleteElementFn env)
+
+  -- Text buffer operations
+  registerLuaFunction "enableTextInput" (uiEnableTextInputFn env)
+  registerLuaFunction "getTextInput" (uiGetTextFn env)
+  registerLuaFunction "setTextInput" (uiSetTextInputFn env)
+  registerLuaFunction "getCursor" (uiGetCursorFn env)
+  registerLuaFunction "setCursor" (uiSetCursorFn env)
+  registerLuaFunction "insertChar" (uiInsertCharFn env)
+  registerLuaFunction "deleteBackward" (uiDeleteBackwardFn env)
+  registerLuaFunction "deleteForward" (uiDeleteForwardFn env)
+  registerLuaFunction "cursorLeft" (uiCursorLeftFn env)
+  registerLuaFunction "cursorRight" (uiCursorRightFn env)
+  registerLuaFunction "cursorHome" (uiCursorHomeFn env)
+  registerLuaFunction "cursorEnd" (uiCursorEndFn env)
+
+  -- UI Focus functions
+  registerLuaFunction "setFocus"       (uiSetFocusFn env)
+  registerLuaFunction "clearFocus"     (uiClearFocusFn env)
+  registerLuaFunction "getFocus"       (uiGetFocusFn env)
+  registerLuaFunction "hasFocus"       (uiHasFocusFn env)
   
   -- UI Property functions
   registerLuaFunction "setPosition"  (uiSetPositionFn env)
@@ -127,6 +147,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setOnClick"   (uiSetOnClickFn env)
   
   -- UI textures
+  registerLuaFunction "setBoxTextures" (uiSetBoxTexturesFn env)
   registerLuaFunction "loadBoxTextures" (uiLoadBoxTexturesFn env)
   
   Lua.setglobal (Lua.Name "UI")

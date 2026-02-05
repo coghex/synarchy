@@ -232,6 +232,26 @@ processLuaMsg env ls stateRef msg = case msg of
       [ScriptNumber (fromIntegral buttonNum), ScriptNumber x, ScriptNumber y]
   LuaUIClickEvent elemHandle callbackName → do
     broadcastToModules ls callbackName []
+  LuaUICharInput c → 
+    broadcastToModules ls "onUICharInput" [ScriptString (T.singleton c)]
+  LuaUIBackspace → 
+    broadcastToModules ls "onUIBackspace" []
+  LuaUIDelete → 
+    broadcastToModules ls "onUIDelete" []
+  LuaUISubmit → 
+    broadcastToModules ls "onUISubmit" []
+  LuaUIEscape → 
+    broadcastToModules ls "onUIEscape" []
+  LuaUICursorLeft → 
+    broadcastToModules ls "onUICursorLeft" []
+  LuaUICursorRight → 
+    broadcastToModules ls "onUICursorRight" []
+  LuaUIHome → 
+    broadcastToModules ls "onUIHome" []
+  LuaUIEnd → 
+    broadcastToModules ls "onUIEnd" []
+  LuaUIFocusLost → 
+    broadcastToModules ls "onUIFocusLost" []
   LuaKeyDownEvent key → 
     broadcastToModules ls "onKeyDown" [ScriptString (keyToText key)]
   LuaKeyUpEvent key → 

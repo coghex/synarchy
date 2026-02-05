@@ -1,4 +1,5 @@
 -- Settings Menu Module
+local textbox = require("scripts.ui.textbox")
 local settingsMenu = {}
 
 local page = nil
@@ -13,6 +14,7 @@ local btnHeight = 64
 local split = 100
 local uiCreated = false
 local uiscale = 1.0
+local uiScaleTextBox
 
 -- Checkbox textures
 local texCheckboxChecked = nil
@@ -44,7 +46,7 @@ function settingsMenu.init(boxTex, font, width, height)
     -- Load checkbox textures
     texCheckboxChecked = engine.loadTexture("assets/textures/ui/checkboxchecked.png")
     texCheckboxUnchecked = engine.loadTexture("assets/textures/ui/checkboxunchecked.png")
-    
+    textbox.init()
     -- Load current settings
     local w, h, fs, vs, msaa = engine.getVideoConfig()
     currentSettings.width = w
@@ -100,6 +102,22 @@ function settingsMenu.createUI()
     local yPos = 360
     local scalingLabel = UI.newText("scaling_label", "UI Scaling", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
     UI.addChild(panel, scalingLabel, rowX, yPos + 8)
+    local textboxWidth = math.floor(150 * uiscale)
+    local textboxHeight = math.floor(40 * uiscale)
+    local textboxX = panelWidth - rowX - textboxWidth
+    uiScaleTextBox = textbox.new({
+        name = "uiscale_input",
+        x = textboxX,
+        y = yPos - (textboxHeight / 2) + 8,
+        width = textboxWidth,
+        height = textboxHeight,
+        page = page,
+        parent = panel,
+        uiScale = uiscale,
+        font = menuFont,
+        fontSize = 24,
+        default = tostring(engine.getUIScale())
+    })
     
     -- Back button
     local btnX = (panelWidth - btnWidth) / 2
@@ -172,7 +190,15 @@ function settingsMenu.onFramebufferResize(width, height)
     end
 end
 
+function settingsMenu.handleTextBoxClick(callbackName)
+    return textbox.handleCallback(callbackName)
+end
+
 function settingsMenu.shutdown()
+    if uiScaleTextBox then
+        textbox.destroy(uiScaleTextBox)
+        uiScaleTextBox = nil
+    end
     if page then
         UI.deletePage(page)
     end

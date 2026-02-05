@@ -6,6 +6,8 @@ module UI.Types
   , BoxTextureHandle(..)
     -- Layers
   , UILayer(..)
+  , TextBuffer(..)
+  , emptyBuffer
     -- Page
   , UIPage(..)
     -- Element
@@ -23,6 +25,7 @@ module UI.Types
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import qualified Data.Set as Set
 import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
 
@@ -51,6 +54,7 @@ data UIPage = UIPage
   , upZIndex       :: Int
   , upVisible      :: Bool
   , upRootElements :: [ElementHandle]
+  , upFocusedElement :: Maybe ElementHandle
   } deriving (Show)
 
 -- | A UI element
@@ -67,6 +71,7 @@ data UIElement = UIElement
   , ueChildren   :: [ElementHandle]
   , ueRenderData :: UIRenderData
   , ueOnClick    :: Maybe Text
+  , ueTextBuffer  :: Maybe TextBuffer
   } deriving (Show)
 
 -- | What an element renders as
@@ -76,6 +81,19 @@ data UIRenderData
   | RenderText UITextStyle
   | RenderSprite UISpriteStyle
   deriving (Show)
+
+-- | Text buffer with cursor state (for text input elements)
+data TextBuffer = TextBuffer
+  { tbContent :: T.Text  -- ^ The actual text
+  , tbCursor  :: Int     -- ^ Cursor position (character index)
+  } deriving (Show, Eq)
+
+-- | Empty text buffer
+emptyBuffer :: TextBuffer
+emptyBuffer = TextBuffer
+  { tbContent = T.empty
+  , tbCursor  = 0
+  }
 
 -- A handle to a group of 9 textures
 newtype BoxTextureHandle = BoxTextureHandle { unBoxTextureHandle :: Word32 }
@@ -122,6 +140,7 @@ data UIPageManager = UIPageManager
   , upmHovered       :: Maybe ElementHandle
   , upmBoxTextures   :: Map.Map BoxTextureHandle BoxTextureSet
   , upmNextBoxTexId  :: Word32
+  , upmGlobalFocus :: Maybe ElementHandle       
   } deriving (Show)
 
 emptyUIPageManager :: UIPageManager
@@ -134,4 +153,5 @@ emptyUIPageManager = UIPageManager
   , upmHovered      = Nothing
   , upmBoxTextures  = Map.empty
   , upmNextBoxTexId = 1
+  , upmGlobalFocus = Nothing
   }

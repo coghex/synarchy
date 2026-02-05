@@ -18,6 +18,17 @@ module UI.Manager
   , addElementToPage
   , addChildElement
   , removeElement
+  -- Focus operations
+  , setElementFocus
+  , clearElementFocus
+  , getElementFocus
+  , getPageFocus
+  , clearPageFocus
+    -- Text buffer operations
+  , enableTextInput
+  , getTextBuffer
+  , setTextBuffer
+  , modifyTextBuffer
     -- Property setters
   , setElementPosition
   , setElementSize
@@ -39,6 +50,7 @@ module UI.Manager
     -- Box textures
   , registerBoxTextures
   , getBoxTextureSet
+  , setBoxTextures
   ) where
 
 import UPrelude
@@ -63,6 +75,7 @@ createPage name layer mgr =
           , upZIndex       = 0
           , upVisible      = False
           , upRootElements = []
+          , upFocusedElement = Nothing
           }
     in (handle, mgr
           { upmPages      = Map.insert handle page (upmPages mgr)
@@ -156,6 +169,7 @@ createElementInternal name width height pageHandle renderData mgr =
           , ueChildren   = []
           , ueRenderData = renderData
           , ueOnClick    = Nothing
+          , ueTextBuffer  = Nothing
           }
     in (handle, mgr
           { upmElements   = Map.insert handle element (upmElements mgr)
@@ -227,6 +241,41 @@ removeElement handle mgr =
     case Map.lookup handle (upmElements mgr) of
         Nothing -> mgr
         Just element -> removeElementReference handle element mgr
+
+-----------------------------------------------------------
+-- Focus Operations
+-----------------------------------------------------------
+
+-- | Set focus to an element (also updates page's remembered focus)
+setElementFocus :: ElementHandle -> UIPageManager -> UIPageManager
+setElementFocus handle mgr =
+    case Map.lookup handle (upmElements mgr) of
+        Nothing -> mgr
+        Just elem ->
+            let pageHandle = uePage elem
+                mgr' = mgr { upmGlobalFocus = Just handle }
+            in modifyPage pageHandle mgr' $ \page ->
+                page { upFocusedElement = Just handle }
+
+-- | Clear global focus (page still remembers its last focused element)
+clearElementFocus :: UIPageManager -> UIPageManager
+clearElementFocus mgr = mgr { upmGlobalFocus = Nothing }
+
+-- | Get currently focused element globally
+getElementFocus :: UIPageManager -> Maybe ElementHandle
+getElementFocus = upmGlobalFocus
+
+-- | Get a page's remembered focused element
+getPageFocus :: PageHandle -> UIPageManager -> Maybe ElementHandle
+getPageFocus handle mgr = 
+    case Map.lookup handle (upmPages mgr) of
+        Nothing -> Nothing
+        Just page -> upFocusedElement page
+
+-- | Clear a page's remembered focus
+clearPageFocus :: PageHandle -> UIPageManager -> UIPageManager
+clearPageFocus handle = modifyPage handle `flip` \page ->
+    page { upFocusedElement = Nothing }
 
 -----------------------------------------------------------
 -- Property Setters
@@ -392,6 +441,34 @@ findClickableElementAt pos mgr =
                 in thisClickable ++ childClickables
 
 -----------------------------------------------------------
+-- Text Buffer Operations
+-----------------------------------------------------------
+
+-- | Enable text input on an element (initializes empty buffer)
+enableTextInput :: ElementHandle -> UIPageManager -> UIPageManager
+enableTextInput handle = modifyElement handle `flip` \elem ->
+    elem { ueTextBuffer = Just emptyBuffer }
+
+-- | Get an element's text buffer
+getTextBuffer :: ElementHandle -> UIPageManager -> Maybe TextBuffer
+getTextBuffer handle mgr =
+    case Map.lookup handle (upmElements mgr) of
+        Nothing -> Nothing
+        Just elem -> ueTextBuffer elem
+
+-- | Set an element's text buffer
+setTextBuffer :: ElementHandle -> TextBuffer -> UIPageManager -> UIPageManager
+setTextBuffer handle buffer = modifyElement handle `flip` \elem ->
+    elem { ueTextBuffer = Just buffer }
+
+-- | Modify an element's text buffer with a function
+modifyTextBuffer :: ElementHandle -> (TextBuffer -> TextBuffer) -> UIPageManager -> UIPageManager
+modifyTextBuffer handle f = modifyElement handle `flip` \elem ->
+    case ueTextBuffer elem of
+        Nothing -> elem  -- No buffer, do nothing
+        Just buf -> elem { ueTextBuffer = Just (f buf) }
+
+-----------------------------------------------------------
 -- Box Textures
 -----------------------------------------------------------
 
@@ -405,6 +482,12 @@ registerBoxTextures texSet mgr =
 
 getBoxTextureSet :: BoxTextureHandle -> UIPageManager -> Maybe BoxTextureSet
 getBoxTextureSet handle mgr = Map.lookup handle (upmBoxTextures mgr)
+
+setBoxTextures :: ElementHandle -> BoxTextureHandle -> UIPageManager -> UIPageManager
+setBoxTextures handle texHandle = modifyElement handle `flip` \elem ->
+    case ueRenderData elem of
+        RenderBox style -> elem { ueRenderData = RenderBox style { ubsTextures = texHandle } }
+        _ -> elem
 
 -----------------------------------------------------------
 -- Internal Helpers

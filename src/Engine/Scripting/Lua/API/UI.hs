@@ -15,6 +15,24 @@ module Engine.Scripting.Lua.API.UI
   , uiAddChildFn
   , uiRemoveElementFn
   , uiDeleteElementFn
+    -- Focus operations
+  , uiSetFocusFn
+  , uiClearFocusFn
+  , uiGetFocusFn
+  , uiHasFocusFn
+    -- Text buffer operations
+  , uiEnableTextInputFn
+  , uiGetTextFn
+  , uiSetTextInputFn
+  , uiGetCursorFn
+  , uiSetCursorFn
+  , uiInsertCharFn
+  , uiDeleteBackwardFn
+  , uiDeleteForwardFn
+  , uiCursorLeftFn
+  , uiCursorRightFn
+  , uiCursorHomeFn
+  , uiCursorEndFn
     -- Properties
   , uiSetPositionFn
   , uiSetSizeFn
@@ -25,6 +43,7 @@ module Engine.Scripting.Lua.API.UI
   , uiSetColorFn
   , uiSetTextFn
   , uiSetSpriteTextureFn
+  , uiSetBoxTexturesFn
   , uiLoadBoxTexturesFn
   ) where
 
@@ -38,6 +57,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
 import UI.Types
 import UI.Manager
+import qualified UI.TextBuffer as TB
 
 -----------------------------------------------------------
 -- Page Functions
@@ -308,6 +328,193 @@ uiDeleteElementFn env = do
     return 0
 
 -----------------------------------------------------------
+-- Focus Operations
+-----------------------------------------------------------
+
+-- | UI.setFocus(elementHandle)
+uiSetFocusFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiSetFocusFn env = do
+    elemArg <- Lua.tointeger 1
+    case elemArg of
+        Just e -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+            (setElementFocus (ElementHandle $ fromIntegral e) mgr, ())
+        Nothing -> pure ()
+    return 0
+
+-- | UI.clearFocus()
+uiClearFocusFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiClearFocusFn env = do
+    Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+        (clearElementFocus mgr, ())
+    return 0
+
+-- | UI.getFocus() -> elementHandle or nil
+uiGetFocusFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiGetFocusFn env = do
+    mgr <- Lua.liftIO $ readIORef (uiManagerRef env)
+    case getElementFocus mgr of
+        Just (ElementHandle h) -> Lua.pushinteger (fromIntegral h)
+        Nothing -> Lua.pushnil
+    return 1
+
+-- | UI.hasFocus(elementHandle) -> boolean
+uiHasFocusFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiHasFocusFn env = do
+    elemArg <- Lua.tointeger 1
+    mgr <- Lua.liftIO $ readIORef (uiManagerRef env)
+    let isFocused = case (elemArg, getElementFocus mgr) of
+            (Just e, Just (ElementHandle h)) -> fromIntegral e == h
+            _ -> False
+    Lua.pushboolean isFocused
+    return 1
+
+-----------------------------------------------------------
+-- Text Buffer Operations
+-----------------------------------------------------------
+
+-- | UI.enableTextInput(elementHandle) - Enable text input on an element
+uiEnableTextInputFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiEnableTextInputFn env = do
+    elemArg <- Lua.tointeger 1
+    case elemArg of
+        Just e -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+            (enableTextInput (ElementHandle $ fromIntegral e) mgr, ())
+        Nothing -> pure ()
+    return 0
+
+-- | UI.getText(elementHandle) -> string or nil
+uiGetTextFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiGetTextFn env = do
+    elemArg <- Lua.tointeger 1
+    case elemArg of
+        Just e -> do
+            mgr <- Lua.liftIO $ readIORef (uiManagerRef env)
+            case getTextBuffer (ElementHandle $ fromIntegral e) mgr of
+                Just buf -> Lua.pushstring (TE.encodeUtf8 $ tbContent buf)
+                Nothing -> Lua.pushnil
+        Nothing -> Lua.pushnil
+    return 1
+
+-- | UI.setTextInput(elementHandle, text) - Set the text content
+uiSetTextInputFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiSetTextInputFn env = do
+    elemArg <- Lua.tointeger 1
+    textArg <- Lua.tostring 2
+    case (elemArg, textArg) of
+        (Just e, Just txtBS) -> do
+            let txt = TE.decodeUtf8 txtBS
+                elemHandle = ElementHandle (fromIntegral e)
+            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+                let newBuffer = TextBuffer { tbContent = txt, tbCursor = T.length txt }
+                in (setTextBuffer elemHandle newBuffer mgr, ())
+        _ -> pure ()
+    return 0
+
+-- | UI.getCursor(elementHandle) -> int or nil
+uiGetCursorFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiGetCursorFn env = do
+    elemArg <- Lua.tointeger 1
+    case elemArg of
+        Just e -> do
+            mgr <- Lua.liftIO $ readIORef (uiManagerRef env)
+            case getTextBuffer (ElementHandle $ fromIntegral e) mgr of
+                Just buf -> Lua.pushinteger (fromIntegral $ tbCursor buf)
+                Nothing -> Lua.pushnil
+        Nothing -> Lua.pushnil
+    return 1
+
+-- | UI.setCursor(elementHandle, position)
+uiSetCursorFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiSetCursorFn env = do
+    elemArg <- Lua.tointeger 1
+    posArg <- Lua.tointeger 2
+    case (elemArg, posArg) of
+        (Just e, Just pos) -> do
+            let elemHandle = ElementHandle (fromIntegral e)
+            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+                (modifyTextBuffer elemHandle (\buf -> 
+                    buf { tbCursor = max 0 (min (T.length $ tbContent buf) (fromIntegral pos)) }
+                ) mgr, ())
+        _ -> pure ()
+    return 0
+
+-- | UI.insertChar(elementHandle, char) - Insert character at cursor
+uiInsertCharFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiInsertCharFn env = do
+    elemArg <- Lua.tointeger 1
+    charArg <- Lua.tostring 2
+    case (elemArg, charArg) of
+        (Just e, Just charBS) -> do
+            let elemHandle = ElementHandle (fromIntegral e)
+                charText = TE.decodeUtf8 charBS
+            case T.uncons charText of
+                Just (c, _) -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+                    (modifyTextBuffer elemHandle (TB.insertChar c) mgr, ())
+                Nothing -> pure ()
+        _ -> pure ()
+    return 0
+
+-- | UI.deleteBackward(elementHandle) - Delete character before cursor (Backspace)
+uiDeleteBackwardFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiDeleteBackwardFn env = do
+    elemArg <- Lua.tointeger 1
+    case elemArg of
+        Just e -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+            (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.deleteBackward mgr, ())
+        Nothing -> pure ()
+    return 0
+
+-- | UI.deleteForward(elementHandle) - Delete character at cursor (Delete)
+uiDeleteForwardFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiDeleteForwardFn env = do
+    elemArg <- Lua.tointeger 1
+    case elemArg of
+        Just e -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+            (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.deleteForward mgr, ())
+        Nothing -> pure ()
+    return 0
+
+-- | UI.cursorLeft(elementHandle)
+uiCursorLeftFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiCursorLeftFn env = do
+    elemArg <- Lua.tointeger 1
+    case elemArg of
+        Just e -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+            (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.cursorLeft mgr, ())
+        Nothing -> pure ()
+    return 0
+
+-- | UI.cursorRight(elementHandle)
+uiCursorRightFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiCursorRightFn env = do
+    elemArg <- Lua.tointeger 1
+    case elemArg of
+        Just e -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+            (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.cursorRight mgr, ())
+        Nothing -> pure ()
+    return 0
+
+-- | UI.cursorHome(elementHandle)
+uiCursorHomeFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiCursorHomeFn env = do
+    elemArg <- Lua.tointeger 1
+    case elemArg of
+        Just e -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+            (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.cursorHome mgr, ())
+        Nothing -> pure ()
+    return 0
+
+-- | UI.cursorEnd(elementHandle)
+uiCursorEndFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiCursorEndFn env = do
+    elemArg <- Lua.tointeger 1
+    case elemArg of
+        Just e -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+            (modifyTextBuffer (ElementHandle $ fromIntegral e) TB.cursorEnd mgr, ())
+        Nothing -> pure ()
+    return 0
+
+-----------------------------------------------------------
 -- Properties
 -----------------------------------------------------------
 
@@ -443,6 +650,19 @@ uiSetSpriteTextureFn env = do
     case (elemArg, texArg) of
         (Just e, Just t) -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
             (setSpriteTexture (ElementHandle $ fromIntegral e) (TextureHandle $ fromIntegral t) mgr, ())
+        _ -> pure ()
+    
+    return 0
+
+-- | UI.setBoxTextures(elementHandle, boxTextureHandle)
+uiSetBoxTexturesFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiSetBoxTexturesFn env = do
+    elemArg <- Lua.tointeger 1
+    texArg <- Lua.tointeger 2
+    
+    case (elemArg, texArg) of
+        (Just e, Just t) -> Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
+            (setBoxTextures (ElementHandle $ fromIntegral e) (BoxTextureHandle $ fromIntegral t) mgr, ())
         _ -> pure ()
     
     return 0

@@ -21,7 +21,7 @@ import Engine.Scripting.Lua.Types
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Core.Queue as Q
 import UI.Manager (findClickableElementAt)
-import UI.Types (ElementHandle(..))
+import UI.Types (ElementHandle(..), UIPageManager(..), upmGlobalFocus)
 import UI.Focus (FocusManager, getInputMode, InputMode(..), clearFocus
                 , FocusId(..), fmCurrentFocus)
 
@@ -90,34 +90,14 @@ processInput ∷ EngineEnv → InputState → InputEvent → IO InputState
 processInput env inpSt event = case event of
     InputKeyEvent glfwKey keyState mods → do
         focusMgr ← readIORef (focusManagerRef env)
-        let mode = getInputMode focusMgr
-        let key = fromGLFWKey glfwKey
-        case mode of
-          GameInputMode → do
+        uiMgr ← readIORef (uiManagerRef env)
+        let shellMode = getInputMode focusMgr
+            uiFocus = upmGlobalFocus uiMgr
+            key = fromGLFWKey glfwKey
+        case (shellMode, uiFocus) of
+          (TextInputMode (FocusId fid),_) → do
             logger ← readIORef (loggerRef env)
-            logDebug logger CatInput $ "Input mode: GameInputMode, key=" <> T.pack (show key)
-            when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $
-                Q.writeQueue (luaQueue env) LuaShellToggle
-            when (key ≠ KeyGrave) $ do
-                let lq = luaQueue env
-                when (keyState ≡ GLFW.KeyState'Pressed) $
-                    Q.writeQueue lq (LuaKeyDownEvent key)
-                when (keyState ≡ GLFW.KeyState'Released) $
-                    Q.writeQueue lq (LuaKeyUpEvent key)
-            -- get current key bindings
-            bindings ← readIORef (keyBindingsRef env)
-            -- check for special key combinations
-            case getKeyForAction "escape" bindings of
-              Just escapeKeyName → do
-                logDebug logger CatInput $ "Key binding: action=escape, key=" <> escapeKeyName
-                when (Just key ≡ textToKey escapeKeyName
-                      ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-                    logDebug logger CatInput "Action triggered: escape"
-                    writeIORef (lifecycleRef env) CleaningUp
-              Nothing → return ()
-          TextInputMode (FocusId fid) → do
-            logger ← readIORef (loggerRef env)
-            logDebug logger CatInput $ "Input mode: TextInputMode, focusId=" <> T.pack (show fid)
+            logDebug logger CatInput $ "Input mode: ShellTextInput, focusId=" <> T.pack (show fid)
             when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
                 Q.writeQueue (luaQueue env) LuaShellToggle
             when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
@@ -150,14 +130,78 @@ processInput env inpSt event = case event of
                    ∧ (GLFW.modifierKeysControl mods)) $
                 Q.writeQueue (luaQueue env) (LuaInterrupt fid)
             return ()
+
+         -- UI element has focus (no shell focus)
+          (GameInputMode, Just (ElementHandle elemId)) → do
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatInput $ "Input mode: UITextInput, elementId=" <> T.pack (show elemId)
+            -- Grave key always toggles shell
+            when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) LuaShellToggle
+            -- Escape unfocuses UI element
+            when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) LuaUIEscape
+            -- Text input keys
+            when (key ≡ KeyBackspace ∧ isKeyDown keyState) $
+                Q.writeQueue (luaQueue env) LuaUIBackspace
+            when (key ≡ KeyEnter ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) LuaUISubmit
+            when (key ≡ KeyLeft ∧ isKeyDown keyState) $
+                Q.writeQueue (luaQueue env) LuaUICursorLeft
+            when (key ≡ KeyRight ∧ isKeyDown keyState) $
+                Q.writeQueue (luaQueue env) LuaUICursorRight
+            when ((key ≡ KeyHome ∧ keyState ≡ GLFW.KeyState'Pressed)
+                 ∨ (key ≡ KeyA ∧ keyState ≡ GLFW.KeyState'Pressed
+                   ∧ (GLFW.modifierKeysControl mods))) $
+                Q.writeQueue (luaQueue env) LuaUIHome
+            when ((key ≡ KeyEnd ∧ keyState ≡ GLFW.KeyState'Pressed)
+                 ∨ (key ≡ KeyE ∧ keyState ≡ GLFW.KeyState'Pressed
+                   ∧ (GLFW.modifierKeysControl mods))) $
+                Q.writeQueue (luaQueue env) LuaUIEnd
+            when (key ≡ KeyDelete ∧ isKeyDown keyState) $
+                Q.writeQueue (luaQueue env) LuaUIDelete
+            return ()
+          
+          -- Game input mode (no focus)
+          (GameInputMode, Nothing) → do
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatInput $ "Input mode: GameInputMode, key=" <> T.pack (show key)
+            when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $
+                Q.writeQueue (luaQueue env) LuaShellToggle
+            when (key ≠ KeyGrave) $ do
+                let lq = luaQueue env
+                when (keyState ≡ GLFW.KeyState'Pressed) $
+                    Q.writeQueue lq (LuaKeyDownEvent key)
+                when (keyState ≡ GLFW.KeyState'Released) $
+                    Q.writeQueue lq (LuaKeyUpEvent key)
+            -- get current key bindings
+            bindings ← readIORef (keyBindingsRef env)
+            -- check for special key combinations
+            case getKeyForAction "escape" bindings of
+              Just escapeKeyName → do
+                logDebug logger CatInput $ "Key binding: action=escape, key=" <> escapeKeyName
+                when (Just key ≡ textToKey escapeKeyName
+                      ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
+                    logDebug logger CatInput "Action triggered: escape"
+                    writeIORef (lifecycleRef env) CleaningUp
+              Nothing → return ()
+
         return $ updateKeyState inpSt glfwKey keyState mods
+
     InputCharEvent c → do
         when (c ≠ '`') $ do
           focusMgr ← readIORef (focusManagerRef env)
-          case fmCurrentFocus focusMgr of
-            Just (FocusId fid) →
+          uiMgr ← readIORef (uiManagerRef env)
+          
+          case (fmCurrentFocus focusMgr, upmGlobalFocus uiMgr) of
+            -- Shell has focus - send to shell
+            (Just (FocusId fid), _) →
               Q.writeQueue (luaQueue env) (LuaCharInput fid c)
-            Nothing → return ()
+            -- UI element has focus - send to UI
+            (Nothing, Just _elemHandle) →
+              Q.writeQueue (luaQueue env) (LuaUICharInput c)
+            -- No focus - ignore
+            (Nothing, Nothing) → return ()
         return inpSt
     InputMouseEvent btn pos state → do
         let lq = luaQueue env
@@ -191,6 +235,8 @@ processInput env inpSt event = case event of
                     Q.writeQueue lq (LuaUIClickEvent elemHandle callback)
                     logDebug logger CatUI $ "UI element clicked: " <> callback
                 Nothing → do
+                    -- Clicked outside UI - clear UI focus
+                    Q.writeQueue lq LuaUIFocusLost
                     Q.writeQueue lq (LuaMouseDownEvent btn x y)
         
         when (state ≡ GLFW.MouseButtonState'Released) $ do

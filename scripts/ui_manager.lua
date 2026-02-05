@@ -19,15 +19,26 @@ local menuFontHandle = nil
 local titleFontHandle = nil
 local initialized = false
 
--- Sub-modules
+-- Sub-modules (declared here so all functions can access them)
 local mainMenu = nil
 local settingsMenu = nil
+local textbox = nil  -- MOVED: declare at module level
 
 -- Current active menu
 local currentMenu = "main"
 
+-- Helper to handle unfocusing (MOVED: define before it's used)
+local function handleNonTextBoxClick()
+    if textbox then
+        textbox.unfocusAll()
+    end
+end
+
 function uiManager.init(scriptId)
     engine.logInfo("UI Manager initializing...")
+    
+    -- CHANGED: assign to module-level variable, not local
+    textbox = require("scripts.ui.textbox")
 
     uiscale = engine.getUIScale()
     
@@ -48,6 +59,7 @@ function uiManager.init(scriptId)
     local texSE = engine.loadTexture("assets/textures/box/boxse.png")
     local texSW = engine.loadTexture("assets/textures/box/boxsw.png")
     boxTexSet = UI.loadBoxTextures(texCenter, texN, texS, texE, texW, texNE, texNW, texSE, texSW)
+    
     -- Load button textures
     local btnTexCenter = engine.loadTexture("assets/textures/button/button.png")
     local btnTexN = engine.loadTexture("assets/textures/button/buttonn.png")
@@ -119,6 +131,7 @@ function uiManager.showMenu(menuName)
 end
 
 function uiManager.onSettings()
+    handleNonTextBoxClick()
     uiManager.showMenu("settings")
 end
 
@@ -128,18 +141,22 @@ end
 
 -- Settings menu callbacks
 function uiManager.onSettingsBack()
+    handleNonTextBoxClick()
     uiManager.showMenu("main")
 end
 
 function uiManager.onSettingsSave()
+    handleNonTextBoxClick()
     if settingsMenu then settingsMenu.onSave() end
 end
 
 function uiManager.onToggle_fullscreen()
+    handleNonTextBoxClick()
     if settingsMenu then settingsMenu.onToggle_fullscreen() end
 end
 
 function uiManager.onCancel()
+    handleNonTextBoxClick()
     uiManager.showMenu("main")
 end
 
@@ -149,6 +166,94 @@ end
 function uiManager.shutdown()
     if mainMenu then mainMenu.shutdown() end
     if settingsMenu then settingsMenu.shutdown() end
+end
+
+function uiManager.onTextBoxClick()
+    if settingsMenu then settingsMenu.handleTextBoxClick("onTextBoxClick") end
+end
+
+-----------------------------------------------------------
+-- Input Event Forwarding to Textboxes
+-----------------------------------------------------------
+
+-- Character input for UI elements
+function uiManager.onUICharInput(char)
+    if textbox then
+        return textbox.onCharInput(char)
+    end
+    return false
+end
+
+-- Backspace
+function uiManager.onUIBackspace()
+    if textbox then
+        return textbox.onBackspace()
+    end
+    return false
+end
+
+-- Delete
+function uiManager.onUIDelete()
+    if textbox then
+        return textbox.onDelete()
+    end
+    return false
+end
+
+-- Cursor keys
+function uiManager.onUICursorLeft()
+    if textbox then
+        return textbox.onCursorLeft()
+    end
+    return false
+end
+
+function uiManager.onUICursorRight()
+    if textbox then
+        return textbox.onCursorRight()
+    end
+    return false
+end
+
+function uiManager.onUIHome()
+    if textbox then
+        return textbox.onHome()
+    end
+    return false
+end
+
+function uiManager.onUIEnd()
+    if textbox then
+        return textbox.onEnd()
+    end
+    return false
+end
+
+-- Submit (Enter)
+function uiManager.onUISubmit()
+    if textbox then
+        local handled, text = textbox.onSubmit()
+        if handled and text then
+            engine.logInfo("UI Submit received: " .. tostring(text))
+        end
+        return handled
+    end
+    return false
+end
+
+-- Escape - unfocus
+function uiManager.onUIEscape()
+    if textbox then
+        return textbox.onEscape()
+    end
+    return false
+end
+
+-- Focus lost (clicked outside)
+function uiManager.onUIFocusLost()
+    if textbox then
+        textbox.unfocusAll()
+    end
 end
 
 return uiManager

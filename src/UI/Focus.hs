@@ -23,16 +23,11 @@ import UPrelude
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
+import UI.Types (TextBuffer(..), emptyBuffer)
 
 -- | Unique identifier for focusable elements
 newtype FocusId = FocusId { unFocusId ∷ Word32 }
   deriving (Eq, Ord, Show)
-
--- | Text buffer with cursor state
-data TextBuffer = TextBuffer
-  { tbContent ∷ T.Text  -- ^ The actual text
-  , tbCursor  ∷ Int     -- ^ Cursor position (character index)
-  } deriving (Show, Eq)
 
 -- | A focusable UI element
 data FocusTarget = FocusTarget
@@ -54,13 +49,6 @@ data InputMode
   = GameInputMode           -- ^ No text field focused, keys go to game
   | TextInputMode FocusId   -- ^ This text field has focus
   deriving (Show, Eq)
-
--- | Empty text buffer
-emptyBuffer ∷ TextBuffer
-emptyBuffer = TextBuffer
-  { tbContent = T.empty
-  , tbCursor  = 0
-  }
 
 -- | Create empty focus manager
 createFocusManager ∷ FocusManager
