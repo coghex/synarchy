@@ -5,7 +5,7 @@ local shell = {}
 local myScriptId = nil
 
 -- State
-local visible = false
+local shellvisible = false
 local focusId = nil
 local inputBuffer = ""
 local history = {}
@@ -87,6 +87,8 @@ function shell.init(scriptId)
     lineHeight = math.floor(lineHeight * uiscale)
 
     shellFont = engine.loadFont("assets/fonts/shell.ttf", fontSize)
+    engine.logInfo("Shell font loaded with handle: " .. tostring(shellFont))
+    engine.logInfo("shell font size: " .. tostring(fontSize))
     
     texBox = engine.loadTexture("assets/textures/box/box.png")
     texBoxN = engine.loadTexture("assets/textures/box/boxn.png")
@@ -105,7 +107,7 @@ function shell.init(scriptId)
 end
 
 function shell.update(dt)
-    if not visible then return end
+    if not shellvisible then return end
     
     -- dt will be ~0.5, so just toggle every call
     cursorVisible = not cursorVisible
@@ -142,13 +144,13 @@ function shell.onTextSubmit(fid)
 end
 
 function shell.onFocusLost(fid)
-    if fid == focusId and visible then
+    if fid == focusId and shellvisible then
         shell.hide()
     end
 end
 
 function shell.toggle()
-    if visible then
+    if shellvisible then
         shell.hide()
     else
         shell.show()
@@ -156,7 +158,7 @@ function shell.toggle()
 end
 
 function shell.show()
-    visible = true
+    shellvisible = true
     cursorVisible = true
     cursorBlinkTime = 0
     engine.requestFocus(focusId)
@@ -171,7 +173,7 @@ function shell.show()
 end
 
 function shell.hide()
-    visible = false
+    shellvisible = false
     engine.releaseFocus()
     
     -- Just hide, don't destroy
@@ -194,17 +196,17 @@ function shell.hide()
 end
 
 function shell.updateDisplay()
-    if not visible then return end
-    updateInputScroll()
+    if not shellvisible then return end
+    shell.updateInputScroll()
     if objBufferText then
-        engine.setText(objBufferText, getVisibleInput())
+        engine.setText(objBufferText, shell.getVisibleInput())
     end
     shell.updateCursorPos()
     shell.updateGhostText()
 end
 
 function shell.isVisible()
-    return visible
+    return shellvisible
 end
 
 function shell.getFocusId()
@@ -280,7 +282,7 @@ function shell.cmdClear()
         engine.destroy(obj)
     end
     historyTextObjects = {}
-    if visible then
+    if shellvisible then
         shell.rebuildBox()
     end
 end
@@ -295,7 +297,7 @@ function shell.rebuildHistoryDisplay()
     end
     historyTextObjects = {}
     
-    if not visible then return end
+    if not shellvisible then return end
     if #history == 0 then return end
     
     local fbWidth, fbHeight = engine.getFramebufferSize()
@@ -303,7 +305,7 @@ function shell.rebuildHistoryDisplay()
     local textX = baseX + tileSize + historyPadding
     local maxTextWidth = middleWidth - historyPadding * 2
     
-    local promptY = getPromptY()
+    local promptY = shell.getPromptY()
     local y = promptY - lineHeight
     
     for i = #history, 1, -1 do
@@ -320,7 +322,7 @@ function shell.rebuildHistoryDisplay()
                 resultColor = "red"
             end
             
-            local resultLines = wrapText(entry.result, maxTextWidth - 20, shellFont)
+            local resultLines = shell.wrapText(entry.result, maxTextWidth - 20, shellFont)
             for j = #resultLines, 1, -1 do
                 if y < marginTop + tileSize then break end
                 local resultObj = engine.spawnText(textX + 20, y, shellFont, resultLines[j], resultColor, shellLayer, fontSize)
@@ -331,7 +333,7 @@ function shell.rebuildHistoryDisplay()
         
         -- Command (potentially multi-line)
         local cmdText = "$> " .. entry.command
-        local cmdLines = wrapText(cmdText, maxTextWidth, shellFont)
+        local cmdLines = shell.wrapText(cmdText, maxTextWidth, shellFont)
         for j = #cmdLines, 1, -1 do
             if y < marginTop + tileSize then break end
             local cmdObj = engine.spawnText(textX, y, shellFont, cmdLines[j], "white", shellLayer, fontSize)
@@ -347,7 +349,7 @@ end
 
 function shell.rebuildBox()
     local fbWidth, fbHeight = engine.getFramebufferSize()
-    local boxHeight = calculateBoxHeight()
+    local boxHeight = shell.calculateBoxHeight()
     local middleHeight = boxHeight - tileSize * 2
     local baseX = marginLeft
     local baseY = fbHeight - marginBottom - boxHeight
@@ -422,10 +424,10 @@ end
 
 function shell.updateCursorPos()
     if not objCursor then return end
-    if not visible then return end
+    if not shellvisible then return end
     
     local fbWidth, fbHeight = engine.getFramebufferSize()
-    local boxHeight = calculateBoxHeight()
+    local boxHeight = shell.calculateBoxHeight()
     local baseX = marginLeft
     local baseY = fbHeight - marginBottom - boxHeight
     local middleHeight = boxHeight - tileSize * 2
@@ -450,30 +452,30 @@ function shell.addHistory(command, result, isError)
         result = result,
         isError = isError
     })
-    if visible then
+    if shellvisible then
         shell.rebuildBox()
         shell.rebuildHistoryDisplay()
     end
 end
 
-function getPromptY()
+function shell.getPromptY()
     local fbWidth, fbHeight = engine.getFramebufferSize()
-    local boxHeight = calculateBoxHeight()
+    local boxHeight = shell.calculateBoxHeight()
     local baseY = fbHeight - marginBottom - boxHeight
     local middleHeight = boxHeight - tileSize * 2
     local row2Y = baseY + tileSize + middleHeight + tileSize / 2
     return row2Y - fontSize
 end
 
-function getMaxInputWidth()
+function shell.getMaxInputWidth()
     if maxInputWidth > 0 then return maxInputWidth end
     maxInputWidth = middleWidth - 100
     return maxInputWidth
 end
 
 -- Update scroll position based on cursor
-function updateInputScroll()
-    local maxWidth = getMaxInputWidth()
+function shell.updateInputScroll()
+    local maxWidth = shell.getMaxInputWidth()
     
     -- If cursor moved left of scroll offset, scroll left
     if cursorPos < inputScrollOffset then
@@ -498,13 +500,13 @@ function updateInputScroll()
 end
 
 -- Get the visible portion of input buffer
-function getVisibleInput()
-    local maxWidth = getMaxInputWidth()
-    local visible = inputBuffer:sub(inputScrollOffset + 1)
+function shell.getVisibleInput()
+    local maxWidth = shell.getMaxInputWidth()
+    local shellvisible = inputBuffer:sub(inputScrollOffset + 1)
     
     -- Trim to fit width
-    for i = #visible, 1, -1 do
-        local test = visible:sub(1, i)
+    for i = #shellvisible, 1, -1 do
+        local test = shellvisible:sub(1, i)
         if engine.getTextWidth(shellFont, test, fontSize) <= maxWidth then
             return test
         end
@@ -512,7 +514,7 @@ function getVisibleInput()
     return ""
 end
 
-function calculateBoxHeight()
+function shell.calculateBoxHeight()
     local promptPadding = 20
     local baseHeight = tileSize * 2 + lineHeight - promptPadding
     
@@ -523,7 +525,7 @@ function calculateBoxHeight()
     local maxTextWidth = middleWidth - historyPadding * 2
     local historyLines = 0
     for _, entry in ipairs(history) do
-        historyLines = historyLines + countLinesForEntry(entry, maxTextWidth, shellFont)
+        historyLines = historyLines + shell.countLinesForEntry(entry, maxTextWidth, shellFont)
     end
     
     local historyHeight = historyLines * lineHeight
@@ -535,7 +537,7 @@ function calculateBoxHeight()
     return math.min(neededHeight, maxHeight)
 end
 
-local function longestCommonPrefix(strings)
+function shell.longestCommonPrefix(strings)
     if #strings == 0 then return "" end
     if #strings == 1 then return strings[1] end
     
@@ -553,12 +555,12 @@ local function longestCommonPrefix(strings)
 end
 
 -- Get the current word being typed (handles engine.xxx)
-function getCurrentWord()
+function shell.getCurrentWord()
     return inputBuffer:match("[%w_%.]+$") or ""
 end
 
 -- Wrap text into multiple lines that fit within maxWidth (by character)
-function wrapText(text, maxWidth, font)
+function shell.wrapText(text, maxWidth, font)
     local lines = {}
     local currentLine = ""
     
@@ -587,7 +589,7 @@ function wrapText(text, maxWidth, font)
 end
 
 -- Wrap text into multiple lines that fit within maxWidth
-function wrapTextByWord(text, maxWidth, font)
+function shell.wrapTextByWord(text, maxWidth, font)
     local lines = {}
     local currentLine = ""
     
@@ -616,21 +618,21 @@ function wrapTextByWord(text, maxWidth, font)
 end
 
 -- Count lines needed for a history entry
-function countLinesForEntry(entry, maxWidth, font)
+function shell.countLinesForEntry(entry, maxWidth, font)
     local lines = 0
     
     local cmdText = "$> " .. entry.command
-    lines = lines + #wrapText(cmdText, maxWidth, font)
+    lines = lines + #shell.wrapText(cmdText, maxWidth, font)
     
     if entry.result and entry.result ~= "" and entry.result ~= "nil" then
-        lines = lines + #wrapText(entry.result, maxWidth - 20, font)
+        lines = lines + #shell.wrapText(entry.result, maxWidth - 20, font)
     end
     
     return lines
 end
 
 -- More general table member completion
-function getTableCompletions(tableName, memberPrefix)
+function shell.getTableCompletions(tableName, memberPrefix)
     local results = {}
     local tbl = _G[tableName] or (shellSandbox and shellSandbox[tableName])
     if type(tbl) == "table" then
@@ -643,22 +645,25 @@ function getTableCompletions(tableName, memberPrefix)
     return results
 end
 
-function shell.getCompletions(prefix)
-    local results = {}
-    local seen = {}
-    
-    local function addUnique(str)
-        if not seen[str] then
-            seen[str] = true
-            table.insert(results, str)
-        end
+function shell.addUnique(str)
+    if not seen[str] then
+        seen[str] = true
+        table.insert(results, str)
     end
+end
+
+function shell.getCompletions(prefix)
+    shell._completionResults = {}
+    shell._completionSeen = {}
     
     -- Check for table.member pattern
     local tableName, memberPrefix = prefix:match("^([%w_]+)%.(.*)$")
     if tableName then
-        for _, completion in ipairs(getTableCompletions(tableName, memberPrefix)) do
-            addUnique(completion)
+        for _, completion in ipairs(shell.getTableCompletions(tableName, memberPrefix)) do
+            if not shell._completionSeen[completion] then
+                shell._completionSeen[completion] = true
+                table.insert(shell._completionResults, completion)
+            end
         end
     else
         -- Lua keywords
@@ -670,14 +675,20 @@ function shell.getCompletions(prefix)
         }
         for _, kw in ipairs(keywords) do
             if kw:sub(1, #prefix) == prefix then
-                addUnique(kw)
+                if not shell._completionSeen[kw] then
+                    shell._completionSeen[kw] = true
+                    table.insert(shell._completionResults, kw)
+                end
             end
         end
         
         -- Globals
         for name, _ in pairs(_G) do
             if type(name) == "string" and name:sub(1, #prefix) == prefix then
-                addUnique(name)
+                if not shell._completionSeen[name] then
+                    shell._completionSeen[name] = true
+                    table.insert(shell._completionResults, name)
+                end
             end
         end
         
@@ -685,7 +696,10 @@ function shell.getCompletions(prefix)
         if shellSandbox then
             for name, _ in pairs(shellSandbox) do
                 if type(name) == "string" and name:sub(1, #prefix) == prefix then
-                    addUnique(name)
+                    if not shell._completionSeen[name] then
+                        shell._completionSeen[name] = true
+                        table.insert(shell._completionResults, name)
+                    end
                 end
             end
         end
@@ -693,18 +707,21 @@ function shell.getCompletions(prefix)
         -- Command history
         for _, entry in ipairs(history) do
             if entry.command:sub(1, #prefix) == prefix then
-                addUnique(entry.command)
+                if not shell._completionSeen[entry.command] then
+                    shell._completionSeen[entry.command] = true
+                    table.insert(shell._completionResults, entry.command)
+                end
             end
         end
     end
     
-    table.sort(results)
-    return results
+    table.sort(shell._completionResults)
+    return shell._completionResults
 end
 
 -- Update ghost text showing completion hint
 function shell.updateGhostText()
-    if not visible then return end
+    if not shellvisible then return end
     if cursorPos ~= #inputBuffer then
         if ghostText then
             engine.setVisible(ghostText, false)
@@ -713,7 +730,7 @@ function shell.updateGhostText()
         return
     end
     
-    local prefix = getCurrentWord()
+    local prefix = shell.getCurrentWord()
     
     if #prefix == 0 then
         if ghostText then
@@ -726,9 +743,9 @@ function shell.updateGhostText()
     currentCompletions = shell.getCompletions(prefix)
     
     if #currentCompletions > 0 then
-        local commonPrefix = longestCommonPrefix(currentCompletions)
+        local commonPrefix = shell.longestCommonPrefix(currentCompletions)
         local ghostPart = commonPrefix:sub(#prefix + 1)
-        local maxWidth = getMaxInputWidth()
+        local maxWidth = shell.getMaxInputWidth()
         local currentWidth = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1), fontSize)
         local ghostWidth = engine.getTextWidth(shellFont, ghostPart, fontSize)
 
@@ -742,7 +759,7 @@ function shell.updateGhostText()
             
             -- Position after cursor
             local fbWidth, fbHeight = engine.getFramebufferSize()
-            local boxHeight = calculateBoxHeight()
+            local boxHeight = shell.calculateBoxHeight()
             local baseX = marginLeft
             local baseY = fbHeight - marginBottom - boxHeight
             local middleHeight = boxHeight - tileSize * 2
@@ -770,13 +787,13 @@ end
 
 -- Tab completion - complete to common prefix
 function shell.onTab()
-    local prefix = getCurrentWord()
+    local prefix = shell.getCurrentWord()
     if #prefix == 0 then return end
     
     local completions = shell.getCompletions(prefix)
     if #completions == 0 then return end
     
-    local commonPrefix = longestCommonPrefix(completions)
+    local commonPrefix = shell.longestCommonPrefix(completions)
     local addition = commonPrefix:sub(#prefix + 1)
     
     if #addition > 0 then
@@ -893,7 +910,7 @@ function shell.onFramebufferResize(width, height)
     maxInputWidth = 0
     
     -- If visible, rebuild everything with new dimensions
-    if visible then
+    if shellvisible then
         shell.rebuildBox()
         shell.rebuildHistoryDisplay()
         shell.updateCursorPos()

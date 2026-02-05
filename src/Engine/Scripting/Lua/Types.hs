@@ -75,7 +75,7 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaUnregisterFocusable Word32
                     deriving (Eq, Show)
 
--- | messages from set to lua from anywhere
+-- | messages to lua from anywhere
 data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaFontLoaded FontHandle FilePath
             | LuaFontLoadFailed Text
@@ -113,6 +113,9 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaUIHome
             | LuaUIEnd
             | LuaUIFocusLost
+            | LuaDebugShow
+            | LuaDebugHide
+            | LuaDebugToggle
             deriving (Eq, Show)
 
 -- | Lua execution result

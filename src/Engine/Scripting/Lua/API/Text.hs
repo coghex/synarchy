@@ -25,22 +25,33 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Monad.Logger (LogLevel(..), defaultLoc)
 import Control.Monad.IO.Class (liftIO)
 
-loadFontFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
-loadFontFn backendState = do
+loadFontFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
+loadFontFn env backendState = do
   path ← Lua.tostring 1
   size ← Lua.tointeger 2
   case (path, size) of
     (Just pathBS, Just sizeVal) → do
       handle ← Lua.liftIO $ do
-        let pathStr = TE.decodeUtf8 pathBS
+        let pathStr = T.unpack $ TE.decodeUtf8 pathBS
             (lteq, _) = lbsMsgQueues backendState
-        pool ← readIORef (lbsAssetPool backendState)
-        handle ← generateFontHandle pool
-        updateFontState handle
-          (AssetLoading (T.unpack pathStr) [] 0.0) pool
-        writeIORef (lbsAssetPool backendState) pool
-        Q.writeQueue lteq (LuaLoadFontRequest handle (T.unpack pathStr) (fromIntegral sizeVal))
-        return handle
+        
+        -- Check if font is already cached
+        fontCache ← readIORef (fontCacheRef env)
+        let cacheKey = (pathStr, -1)  -- -1 for SDF fonts
+        
+        case Map.lookup cacheKey (fcPathCache fontCache) of
+          Just existingHandle → do
+            -- Font already loaded, return existing handle
+            return existingHandle
+          Nothing → do
+            -- Generate new handle and request load
+            pool ← readIORef (lbsAssetPool backendState)
+            handle ← generateFontHandle pool
+            updateFontState handle
+              (AssetLoading pathStr [] 0.0) pool
+            writeIORef (lbsAssetPool backendState) pool
+            Q.writeQueue lteq (LuaLoadFontRequest handle pathStr (fromIntegral sizeVal))
+            return handle
       let (FontHandle n) = handle
       Lua.pushinteger (Lua.Integer $ fromIntegral n)
     _ → Lua.pushnil

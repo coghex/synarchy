@@ -42,6 +42,7 @@ initializeEngine = do
   
   -- Initialize lifecycle ref
   lifecycleRef ← newIORef EngineStarting
+  fpsRef ← newIORef 0.0
   
   -- Initialize logging
   logger ← initLogger defaultLogConfig { lcMinLevel = LevelDebug }
@@ -82,6 +83,7 @@ initializeEngine = do
         , videoConfigRef     = videoConfigRef
         , windowSizeRef      = windowSizeRef
         , framebufferSizeRef = framebufferSizeRef
+        , fpsRef             = fpsRef
         , eventQueue         = eventQueue
         , inputQueue         = inputQueue
         , loggerRef          = loggerRef

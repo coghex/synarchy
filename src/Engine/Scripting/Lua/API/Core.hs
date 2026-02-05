@@ -1,5 +1,6 @@
 module Engine.Scripting.Lua.API.Core
   ( quitFn
+  , getFPSFn
   , loadScriptFn
   , killScriptFn
   , setTickIntervalFn
@@ -30,6 +31,12 @@ quitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 quitFn env = do
   liftIO $ writeIORef (lifecycleRef env) CleaningUp
   return 0
+
+getFPSFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getFPSFn env = do
+  fps ← liftIO $ readIORef (fpsRef env)
+  Lua.pushnumber (Lua.Number fps)
+  return 1
 
 setTickIntervalFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 setTickIntervalFn env backendState = do

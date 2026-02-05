@@ -57,7 +57,6 @@ function textbox.init()
     texSetSelected = UI.loadBoxTextures(texCenterSel, texNSel, texSSel, texESel, texWSel, texNESel, texNWSel, texSESel, texSWSel)
     
     assetsLoaded = true
-    engine.logInfo("TextBox module initialized")
 end
 
 function textbox.new(params)
@@ -158,8 +157,6 @@ function textbox.new(params)
     
     -- Initial display update
     textbox.updateDisplay(id)
-    
-    engine.logInfo("TextBox created: " .. tb.name .. " (id=" .. id .. ", type=" .. tb.textType .. ")")
     
     return id
 end

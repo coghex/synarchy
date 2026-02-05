@@ -3,8 +3,12 @@ local game = {}
 
 local shellScriptId = nil
 local uiScriptId = nil
+local debugScriptId = nil
 
 function game.init(scriptId)
+    -- Initialize debug
+    debugScriptId = engine.loadScript("scripts/debug.lua", 0.1)
+
     -- Initialize shell
     shellScriptId = engine.loadScript("scripts/shell.lua", 0.5)
     
@@ -28,6 +32,9 @@ function game.onKeyUp(key)
 end
 
 function game.shutdown()
+    if debugScriptId then
+        engine.killScript(debugScriptId)
+    end
     if shellScriptId then
         engine.killScript(shellScriptId)
     end

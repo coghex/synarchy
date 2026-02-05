@@ -26,6 +26,7 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Map as Map
+import Data.List (find)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
@@ -260,6 +261,51 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onKeyUp" [ScriptString (keyToText key)]
   LuaShellToggle → 
     broadcastToModules ls "onShellToggle" []
+  LuaDebugToggle → do
+    logger ← readIORef (loggerRef env)
+    logDebug logger CatLua "Debug overlay toggle requested"
+    scriptsMap ← readTVarIO (lbsScripts ls)
+    -- Find the debug script by path
+    let mDebugScript = find (\s → scriptPath s == "scripts/debug.lua")
+                            (Map.elems scriptsMap)
+    case mDebugScript of
+      Just debugScript → do
+        when (isValidRef (scriptModuleRef debugScript)) $ do
+          _ ← callModuleFunction (lbsLuaState ls)
+                                 (scriptModuleRef debugScript) "toggle" []
+          return ()
+      Nothing → 
+        logWarn logger CatLua "Debug script not found"
+  LuaDebugShow → do
+    logger ← readIORef (loggerRef env)
+    logDebug logger CatLua "Debug overlay show requested"
+    scriptsMap ← readTVarIO (lbsScripts ls)
+    -- Find the debug script by path
+    let mDebugScript = find (\s → scriptPath s == "scripts/debug.lua")
+                            (Map.elems scriptsMap)
+    case mDebugScript of
+      Just debugScript → do
+        when (isValidRef (scriptModuleRef debugScript)) $ do
+          _ ← callModuleFunction (lbsLuaState ls)
+                                 (scriptModuleRef debugScript) "show" []
+          return ()
+      Nothing → 
+        logWarn logger CatLua "Debug script not found"
+  LuaDebugHide → do
+    logger ← readIORef (loggerRef env)
+    logDebug logger CatLua "Debug overlay hide requested"
+    scriptsMap ← readTVarIO (lbsScripts ls)
+    -- Find the debug script by path
+    let mDebugScript = find (\s → scriptPath s == "scripts/debug.lua")
+                            (Map.elems scriptsMap)
+    case mDebugScript of
+      Just debugScript → do
+        when (isValidRef (scriptModuleRef debugScript)) $ do
+          _ ← callModuleFunction (lbsLuaState ls)
+                                 (scriptModuleRef debugScript) "hide" []
+          return ()
+      Nothing → 
+        logWarn logger CatLua "Debug script not found"
   LuaWindowResize w h → do
     broadcastToModules ls "onWindowResize"
       [ScriptNumber (fromIntegral w), ScriptNumber (fromIntegral h)]

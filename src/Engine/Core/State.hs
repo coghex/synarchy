@@ -38,6 +38,7 @@ data EngineEnv = EngineEnv
   , videoConfigRef     ∷ IORef VideoConfig
   , windowSizeRef      ∷ IORef (Int, Int)
   , framebufferSizeRef ∷ IORef (Int, Int)
+  , fpsRef             ∷ IORef Double
   , eventQueue         ∷ Q.Queue Event
   , inputQueue         ∷ Q.Queue InputEvent
   , loggerRef          ∷ IORef LoggerState

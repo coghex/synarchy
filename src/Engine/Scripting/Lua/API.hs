@@ -7,7 +7,8 @@ import UPrelude
 import Engine.Scripting.Lua.Types (LuaBackendState)
 import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn, 
                                       setTickIntervalFn, pauseScriptFn, 
-                                      resumeScriptFn, quitFn)
+                                      resumeScriptFn, quitFn, getFPSFn)
+import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , saveVideoConfigFn, setUIScaleFn)
 import Engine.Scripting.Lua.API.Graphics (loadTextureFn, spawnSpriteFn, setPosFn,
@@ -45,6 +46,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "logInfo"         (logInfoFn env)
   registerLuaFunction "logWarn"         (logWarnFn env)
   registerLuaFunction "logDebug"        (logDebugFn env)
+  registerLuaFunction "showDebug"       (showDebugFn backendState)
+  registerLuaFunction "hideDebug"       (hideDebugFn backendState)
+  registerLuaFunction "toggleDebug"     (toggleDebugFn backendState)
+  registerLuaFunction "getFPS"          (getFPSFn env)
   registerLuaFunction "loadScript"      (loadScriptFn env backendState lst)
   registerLuaFunction "killScript"      (killScriptFn env backendState lst)
   registerLuaFunction "pauseScript"     (pauseScriptFn backendState)
@@ -78,7 +83,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getWorldCoord"     (getWorldCoordFn env backendState)
   
   -- Text functions
-  registerLuaFunction "loadFont"     (loadFontFn backendState)
+  registerLuaFunction "loadFont"     (loadFontFn env backendState)
   registerLuaFunction "spawnText"    (spawnTextFn env backendState)
   registerLuaFunction "setText"      (setTextFn env)
   registerLuaFunction "getText"      (getTextFn env)

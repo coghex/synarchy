@@ -8,7 +8,7 @@ import qualified Data.Vector.Unboxed as VU
 import Data.Word (Word8)
 import Data.Char (ord)
 import Data.Array.IO (IOArray, newArray, writeArray, getElems)
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef, atomicModifyIORef', IORef)
 import Foreign.Ptr (castPtr)
 import Foreign.Marshal.Array (pokeArray)
 import Engine.Asset.Types
@@ -114,39 +114,56 @@ loadSDFFont requestedHandle fontPath = do
     
     -- Use a special cache key for SDF fonts (size = -1 to indicate SDF)
     case Map.lookup (fontPath, -1) (fcPathCache cache) of
-        Just handle -> do
-            logWarnM CatFont $ "SDF Font already loaded: " <> T.pack fontPath
-            return handle
-        Nothing -> do
-            fontDescLayout <- case fontDescriptorLayout gs of
-                Nothing -> logAndThrowM CatFont (ExGraphics DescriptorError)
-                              "Font descriptor layout not initialized"
-                Just layout -> return layout
+        Just existingHandle -> do
+            logDebugSM CatFont "SDF Font already loaded, reusing atlas"
+                [("path", T.pack fontPath)
+                ,("existing_handle", T.pack $ show existingHandle)
+                ,("requested_handle", T.pack $ show requestedHandle)]
             
-            loggerRef' <- asks loggerRef
-            logger <- liftIO $ readIORef loggerRef'
-            atlas <- liftIO $ generateSDFFontAtlas logger fontPath
-            
-            logDebugSM CatFont "SDF Atlas texture dimensions"
-                [("width", T.pack $ show $ faAtlasWidth atlas)
-                ,("height", T.pack $ show $ faAtlasHeight atlas)
-                ,("glyph_count", T.pack $ show $ Map.size $ faGlyphData atlas)]
-            
-            -- Upload to GPU (same as regular font)
-            (texHandle, descriptorSet, imgView, samp) <- uploadFontAtlasToGPU atlas fontDescLayout
-            
-            let newAtlas = atlas { faTexture = texHandle
-                                 , faDescriptorSet = Just descriptorSet
-                                 , faImageView = Just imgView
-                                 , faSampler = Just samp }
-                handle = requestedHandle
-            
-            liftIO $ atomicModifyIORef' cacheRef $ \c -> ((c
-                { fcFonts = Map.insert handle newAtlas (fcFonts c)
-                , fcPathCache = Map.insert (fontPath, -1) handle (fcPathCache c) }
-                ), ())
-            
-            return handle
+            -- Get the existing atlas and register it under the new handle too
+            case Map.lookup existingHandle (fcFonts cache) of
+                Just existingAtlas -> do
+                    liftIO $ atomicModifyIORef' cacheRef $ \c -> ((c
+                        { fcFonts = Map.insert requestedHandle existingAtlas (fcFonts c)
+                        }), ())
+                    return requestedHandle
+                Nothing -> do
+                    -- Shouldn't happen, but fall through to load
+                    logWarnM CatFont "Cached font handle has no atlas, reloading"
+                    loadNewSDFFont requestedHandle fontPath cacheRef gs
+        Nothing -> loadNewSDFFont requestedHandle fontPath cacheRef gs
+
+-- Helper to load a new SDF font (extracted from original loadSDFFont)
+loadNewSDFFont :: FontHandle -> FilePath -> IORef FontCache -> GraphicsState -> EngineM ε σ FontHandle
+loadNewSDFFont requestedHandle fontPath cacheRef gs = do
+    fontDescLayout <- case fontDescriptorLayout gs of
+        Nothing -> logAndThrowM CatFont (ExGraphics DescriptorError)
+                      "Font descriptor layout not initialized"
+        Just layout -> return layout
+    
+    loggerRef' <- asks loggerRef
+    logger <- liftIO $ readIORef loggerRef'
+    atlas <- liftIO $ generateSDFFontAtlas logger fontPath
+    
+    logDebugSM CatFont "SDF Atlas texture dimensions"
+        [("width", T.pack $ show $ faAtlasWidth atlas)
+        ,("height", T.pack $ show $ faAtlasHeight atlas)
+        ,("glyph_count", T.pack $ show $ Map.size $ faGlyphData atlas)]
+    
+    -- Upload to GPU (same as regular font)
+    (texHandle, descriptorSet, imgView, samp) <- uploadFontAtlasToGPU atlas fontDescLayout
+    
+    let newAtlas = atlas { faTexture = texHandle
+                         , faDescriptorSet = Just descriptorSet
+                         , faImageView = Just imgView
+                         , faSampler = Just samp }
+    
+    liftIO $ atomicModifyIORef' cacheRef $ \c -> ((c
+        { fcFonts = Map.insert requestedHandle newAtlas (fcFonts c)
+        , fcPathCache = Map.insert (fontPath, -1) requestedHandle (fcPathCache c) }
+        ), ())
+    
+    return requestedHandle
 
 -----------------------------------------------------------
 -- Atlas Generation with STB
