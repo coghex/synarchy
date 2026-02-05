@@ -8,7 +8,7 @@ local visible = false
 local uiCreated = false
 
 -- Configuration
-local baseFontSize = 24
+local baseFontSize = 32
 local baseMargin = 10
 
 function debugOverlay.init(scriptId)

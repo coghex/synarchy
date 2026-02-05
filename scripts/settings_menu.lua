@@ -23,9 +23,9 @@ local split = 100
 
 local uiCreated = false
 
+-- Remove duplicate declaration
 local uiScaleTextBox = nil
 local frameLimitTextBox = nil
-local uiScaleTextBox = nil
 local uiScaleMin = 0.5
 local uiScaleMax = 4.0
 local frameLimitMin = 30
@@ -41,6 +41,7 @@ local currentSettings = {
     fullscreen = false,
     uiScale = 1.0,
     vsync = true,
+    frameLimit = 60,
     msaa = 0
 }
 
@@ -70,12 +71,7 @@ function settingsMenu.init(boxTex, font, width, height)
     textbox.init()
     
     -- Load current settings
-    local w, h, fs, vs, msaa = engine.getVideoConfig()
-    currentSettings.width = w
-    currentSettings.height = h
-    currentSettings.fullscreen = fs
-    currentSettings.vsync = vs
-    currentSettings.msaa = msaa
+    settingsMenu.reloadSettings()
     
     settingsMenu.createUI()
 end
@@ -143,7 +139,7 @@ function settingsMenu.createUI()
         height = textboxHeight,
         page = page,
         parent = panel,
-        uiscale = uiscale,  -- FIXED: lowercase to match textbox.lua
+        uiscale = uiscale,
         font = menuFont,
         fontSize = 24,
         default = tostring(currentSettings.uiScale),
@@ -151,7 +147,7 @@ function settingsMenu.createUI()
     })
 
     -- Frame limit row
-    yPos = yPos + 160  -- Move down for next row
+    yPos = yPos + 160
     local frameLimitLabel = UI.newText("framelimit_label", "Frame Limit", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
     UI.addChild(panel, frameLimitLabel, rowX, yPos + 8)
     
@@ -167,7 +163,7 @@ function settingsMenu.createUI()
         font = menuFont,
         fontSize = 24,
         default = tostring(currentSettings.frameLimit or 60),
-        textType = textbox.Type.NUMBER,  -- Integer only
+        textType = textbox.Type.NUMBER,
     })
     
     -- Button row - Back, Apply, Save
@@ -254,13 +250,13 @@ function settingsMenu.onApply()
         end
     end
     
-    -- Get frame limit from textbox
+    -- Get frame limit from textbox and apply it
     if frameLimitTextBox then
         local frameLimit = textbox.getNumericValue(frameLimitTextBox)
         if frameLimit >= frameLimitMin and frameLimit <= frameLimitMax then
-            currentSettings.frameLimit = frameLimit
-            -- TODO: engine.setFrameLimit(frameLimit) when available
-            engine.logInfo("Frame limit set to: " .. tostring(frameLimit))
+            currentSettings.frameLimit = math.floor(frameLimit)
+            engine.setFrameLimit(currentSettings.frameLimit)
+            engine.logInfo("Frame limit applied: " .. tostring(currentSettings.frameLimit))
         else
             engine.logWarn("Frame limit out of range: " .. tostring(frameLimit))
         end
@@ -308,6 +304,10 @@ function settingsMenu.onFramebufferResize(width, height)
             textbox.destroy(uiScaleTextBox)
             uiScaleTextBox = nil
         end
+        if frameLimitTextBox then
+            textbox.destroy(frameLimitTextBox)
+            frameLimitTextBox = nil
+        end
         settingsMenu.createUI()
     end
 end
@@ -320,7 +320,6 @@ function settingsMenu.onTextBoxSubmit(name, value)
     engine.logInfo("TextBox submit: " .. tostring(name) .. " = " .. tostring(value))
     
     if name == "uiscale_input" then
-        -- Handle UI scale
         local scale = tonumber(value)
         if not scale then
             engine.logWarn("Invalid UI scale value: " .. tostring(value))
@@ -331,13 +330,7 @@ function settingsMenu.onTextBoxSubmit(name, value)
         end
         
         -- Clamp to valid range
-        if scale < uiScaleMin then
-            scale = uiScaleMin
-            engine.logInfo("UI scale clamped to minimum: " .. tostring(scale))
-        elseif scale > uiScaleMax then
-            scale = uiScaleMax
-            engine.logInfo("UI scale clamped to maximum: " .. tostring(scale))
-        end
+        scale = math.max(uiScaleMin, math.min(uiScaleMax, scale))
         
         -- Update textbox to show clamped value
         if uiScaleTextBox then
@@ -347,7 +340,6 @@ function settingsMenu.onTextBoxSubmit(name, value)
         engine.logInfo("UI scale ready to apply: " .. tostring(scale))
         
     elseif name == "framelimit_input" then
-        -- Handle frame limit
         local frameLimit = tonumber(value)
         if not frameLimit then
             engine.logWarn("Invalid frame limit value: " .. tostring(value))
@@ -358,13 +350,7 @@ function settingsMenu.onTextBoxSubmit(name, value)
         end
         
         -- Clamp to valid range
-        if frameLimit < frameLimitMin then
-            frameLimit = frameLimitMin
-            engine.logInfo("Frame limit clamped to minimum: " .. tostring(frameLimit))
-        elseif frameLimit > frameLimitMax then
-            frameLimit = frameLimitMax
-            engine.logInfo("Frame limit clamped to maximum: " .. tostring(frameLimit))
-        end
+        frameLimit = math.max(frameLimitMin, math.min(frameLimitMax, math.floor(frameLimit)))
         
         -- Update textbox to show clamped value
         if frameLimitTextBox then
@@ -375,63 +361,16 @@ function settingsMenu.onTextBoxSubmit(name, value)
     end
 end
 
-function settingsMenu.onApply()
-    engine.logInfo("Applying settings...")
-    
-    local scaleChanged = false
-    
-    -- Get current UI scale from textbox and apply it
-    if uiScaleTextBox then
-        local scale = textbox.getNumericValue(uiScaleTextBox)
-        if scale >= uiScaleMin and scale <= uiScaleMax then
-            if currentSettings.uiScale ~= scale then
-                scaleChanged = true
-                currentSettings.uiScale = scale
-                engine.setUIScale(scale)
-                
-                -- Recalculate scaled sizes
-                fontSize = math.floor(baseFontSize * scale)
-                checkboxSize = math.floor(baseCheckboxSize * scale)
-                buttonSize = math.floor(baseButtonSize * scale)
-                btnWidth = math.floor(baseBtnWidth * scale)
-                btnHeight = math.floor(baseBtnHeight * scale)
-                split = math.floor(baseSplit * scale)
-                
-                engine.logInfo("UI scale applied: " .. tostring(scale))
-            end
-        else
-            engine.logWarn("UI scale out of range: " .. tostring(scale))
-        end
-    end
-    
-    -- Get frame limit from textbox
-    if frameLimitTextBox then
-        local frameLimit = textbox.getNumericValue(frameLimitTextBox)
-        if frameLimit >= frameLimitMin and frameLimit <= frameLimitMax then
-            currentSettings.frameLimit = frameLimit
-            -- TODO: engine.setFrameLimit(frameLimit) when available
-            engine.logInfo("Frame limit set to: " .. tostring(frameLimit))
-        else
-            engine.logWarn("Frame limit out of range: " .. tostring(frameLimit))
-        end
-    end
-    
-    if scaleChanged then
-        -- Rebuild UI with new scale
-        settingsMenu.createUI()
-        settingsMenu.show()
-    end
-end
-
 -- Revert settings to saved config (discard unsaved changes)
 function settingsMenu.revertSettings()
     engine.logInfo("Reverting settings to saved config...")
     
     -- Read saved config from engine
-    local w, h, fs, uiScale, vs, msaa = engine.getVideoConfig()
+    local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
     
     -- Check if UI scale changed (need to revert visual changes)
     local scaleChanged = (currentSettings.uiScale ~= uiScale)
+    local frameLimitChanged = (currentSettings.frameLimit ~= frameLimit)
     
     -- Reset currentSettings to saved values
     currentSettings.width = w
@@ -439,6 +378,7 @@ function settingsMenu.revertSettings()
     currentSettings.fullscreen = fs
     currentSettings.uiScale = uiScale
     currentSettings.vsync = vs
+    currentSettings.frameLimit = frameLimit
     currentSettings.msaa = msaa
     
     -- If scale was changed but not saved, revert it in engine
@@ -455,6 +395,12 @@ function settingsMenu.revertSettings()
         split = math.floor(baseSplit * uiScale)
     end
     
+    -- If frame limit was changed but not saved, revert it
+    if frameLimitChanged then
+        engine.setFrameLimit(frameLimit)
+        engine.logInfo("Frame limit reverted to: " .. tostring(frameLimit))
+    end
+    
     engine.logInfo("Settings reverted.")
 end
 
@@ -465,15 +411,15 @@ end
 
 -- Reload settings from engine config
 function settingsMenu.reloadSettings()
-    local w, h, fs, uiScale, vs, framelimit, msaa = engine.getVideoConfig()
+    local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
     
     currentSettings.width = w
     currentSettings.height = h
     currentSettings.fullscreen = fs
     currentSettings.uiScale = uiScale
     currentSettings.vsync = vs
+    currentSettings.frameLimit = frameLimit or 60
     currentSettings.msaa = msaa
-    currentSettings.frameLimit = framelimit
     
     -- Recalculate scaled sizes
     fontSize = math.floor(baseFontSize * uiScale)
@@ -490,6 +436,10 @@ function settingsMenu.shutdown()
     if uiScaleTextBox then
         textbox.destroy(uiScaleTextBox)
         uiScaleTextBox = nil
+    end
+    if frameLimitTextBox then
+        textbox.destroy(frameLimitTextBox)
+        frameLimitTextBox = nil
     end
     if page then
         UI.deletePage(page)

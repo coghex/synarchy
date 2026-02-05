@@ -1085,7 +1085,7 @@ getTextureSystemOrFail	src/Engine/Graphics/Vulkan/Recreate.hs	184;"	f
 getUIScaleFn	src/Engine/Scripting/Lua/API/Graphics.hs	47;"	f
 getVertexAttributeDescriptions	src/Engine/Graphics/Vulkan/Vertex.hs	89;"	f
 getVertexBindingDescription	src/Engine/Graphics/Vulkan/Vertex.hs	81;"	f
-getVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	19;"	f
+getVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	20;"	f
 getVisiblePages	src/UI/Manager.hs	117;"	f
 getWindowSize	src/Engine/Graphics/Window/GLFW.hs	163;"	f
 getWindowSizeFn	src/Engine/Scripting/Lua/API/Input.hs	76;"	f
@@ -1375,8 +1375,8 @@ registerFocusTarget	src/UI/Focus.hs	70;"	f
 registerFocusableFn	src/Engine/Scripting/Lua/API/Focus.hs	14;"	f
 registerFunction	src/Engine/Scripting/Backend.hs	35;"	f
 registerLogAPI	src/Engine/Scripting/Lua/API/Log.hs	90;"	f
-registerLuaAPI	src/Engine/Scripting/Lua/API.hs	40;"	f
-registerLuaFunction	src/Engine/Scripting/Lua/API.hs	33;"	f
+registerLuaAPI	src/Engine/Scripting/Lua/API.hs	41;"	f
+registerLuaFunction	src/Engine/Scripting/Lua/API.hs	34;"	f
 registerTexture	src/Engine/Graphics/Vulkan/Texture/Bindless.hs	198;"	f
 releaseFocusFn	src/Engine/Scripting/Lua/API/Focus.hs	38;"	f
 reloadScript	src/Engine/Scripting/Backend.hs	29;"	f
@@ -1410,7 +1410,7 @@ runLuaLoop	src/Engine/Scripting/Lua/Thread.hs	144;"	f
 safeVectorHead	src/Engine/Loop/Resource.hs	90;"	f
 safeVectorIndex	src/Engine/Loop/Resource.hs	84;"	f
 saveVideoConfig	src/Engine/Graphics/Config.hs	100;"	f
-saveVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	67;"	f
+saveVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	68;"	f
 scale	src/Engine/Scene/Base.hs	15;"	f
 scaleForPixelHeight	src/Engine/Graphics/Font/STB.hs	115;"	f
 sceneActive	src/Engine/Scene/Types/Manager.hs	20;"	f
@@ -1444,6 +1444,7 @@ setElementSize	src/UI/Manager.hs	288;"	f
 setElementVisible	src/UI/Manager.hs	292;"	f
 setElementZIndex	src/UI/Manager.hs	304;"	f
 setFocus	src/UI/Focus.hs	94;"	f
+setFrameLimitFn	src/Engine/Scripting/Lua/API/Config.hs	93;"	f
 setFullscreenFn	src/Engine/Scripting/Lua/API/Graphics.hs	32;"	f
 setPosFn	src/Engine/Scripting/Lua/API/Graphics.hs	118;"	f
 setSizeFn	src/Engine/Scripting/Lua/API/Graphics.hs	155;"	f
@@ -1454,8 +1455,8 @@ setTextBuffer	src/UI/Manager.hs	460;"	f
 setTextColor	src/UI/Manager.hs	320;"	f
 setTextFn	src/Engine/Scripting/Lua/API/Text.hs	93;"	f
 setTickIntervalFn	src/Engine/Scripting/Lua/API/Core.hs	41;"	f
-setUIScaleFn	src/Engine/Scripting/Lua/API/Config.hs	77;"	f
-setVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	34;"	f
+setUIScaleFn	src/Engine/Scripting/Lua/API/Config.hs	78;"	f
+setVideoConfigFn	src/Engine/Scripting/Lua/API/Config.hs	35;"	f
 setVisibleFn	src/Engine/Scripting/Lua/API/Graphics.hs	174;"	f
 setWindowShouldClose	src/Engine/Graphics/Window/GLFW.hs	159;"	f
 setWindowTitle	src/Engine/Graphics/Window/GLFW.hs	171;"	f

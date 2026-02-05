@@ -5,6 +5,7 @@ module Engine.Scripting.Lua.API.Config
   , setVideoConfigFn
   , saveVideoConfigFn
   , setUIScaleFn
+  , setFrameLimitFn
   ) where
 
 import UPrelude
@@ -86,5 +87,20 @@ setUIScaleFn env = do
                 writeIORef (videoConfigRef env) newConfig
             Lua.pushboolean True
         Nothing -> Lua.pushboolean False
-    
+    return 1
+
+-- | set frame limit only
+setFrameLimitFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+setFrameLimitFn env = do
+    frameLimitArg <- Lua.tointeger 1
+    case frameLimitArg of
+        Just fl -> do
+            Lua.liftIO $ do
+                oldConfig <- readIORef (videoConfigRef env)
+                let newConfig = oldConfig { vcFrameLimit = if fl > 0 then
+                                                             Just (fromIntegral fl)
+                                                           else Nothing }
+                writeIORef (videoConfigRef env) newConfig
+            Lua.pushboolean True
+        Nothing -> Lua.pushboolean False
     return 1
