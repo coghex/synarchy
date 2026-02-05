@@ -142,6 +142,7 @@ end
 -- Settings menu callbacks
 function uiManager.onSettingsBack()
     handleNonTextBoxClick()
+    if settingsMenu then settingsMenu.onBack() end
     uiManager.showMenu("main")
 end
 

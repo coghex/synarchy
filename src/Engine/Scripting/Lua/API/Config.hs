@@ -26,7 +26,7 @@ getVideoConfigFn env = do
     Lua.pushnumber (Lua.Number scale)
     Lua.pushboolean (vcVSync config)
     Lua.pushinteger (fromIntegral $ vcMSAA config)
-    return 5
+    return 6
 
 -- | Set video config (doesn't save to file)
 -- engine.setVideoConfig(width, height, fullscreen, uiscale, vsync, msaa)

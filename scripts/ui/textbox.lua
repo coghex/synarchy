@@ -605,7 +605,7 @@ function textbox.destroyAll()
         engine.logInfo("TextBox destroyed: " .. tb.name)
     end
     textboxes = {}
-    
+    nextId = 1
     -- Reset cursor state
     cursorVisible = true
     cursorBlinkTime = 0

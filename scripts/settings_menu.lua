@@ -245,6 +245,8 @@ function settingsMenu.onSave()
 end
 
 function settingsMenu.show()
+    settingsMenu.reloadSettings()
+    settingsMenu.createUI()
     if page then
         UI.showPage(page)
     end
@@ -300,6 +302,68 @@ function settingsMenu.onTextBoxSubmit(value)
     end
     
     engine.logInfo("UI scale ready to apply: " .. tostring(scale))
+end
+
+-- Revert settings to saved config (discard unsaved changes)
+function settingsMenu.revertSettings()
+    engine.logInfo("Reverting settings to saved config...")
+    
+    -- Read saved config from engine
+    local w, h, fs, uiScale, vs, msaa = engine.getVideoConfig()
+    
+    -- Check if UI scale changed (need to revert visual changes)
+    local scaleChanged = (currentSettings.uiScale ~= uiScale)
+    
+    -- Reset currentSettings to saved values
+    currentSettings.width = w
+    currentSettings.height = h
+    currentSettings.fullscreen = fs
+    currentSettings.uiScale = uiScale
+    currentSettings.vsync = vs
+    currentSettings.msaa = msaa
+    
+    -- If scale was changed but not saved, revert it in engine
+    if scaleChanged then
+        engine.setUIScale(uiScale)
+        engine.logInfo("UI scale reverted to: " .. tostring(uiScale))
+        
+        -- Recalculate scaled sizes
+        fontSize = math.floor(baseFontSize * uiScale)
+        checkboxSize = math.floor(baseCheckboxSize * uiScale)
+        buttonSize = math.floor(baseButtonSize * uiScale)
+        btnWidth = math.floor(baseBtnWidth * uiScale)
+        btnHeight = math.floor(baseBtnHeight * uiScale)
+        split = math.floor(baseSplit * uiScale)
+    end
+    
+    engine.logInfo("Settings reverted.")
+end
+
+-- Call this when Back is pressed
+function settingsMenu.onBack()
+    settingsMenu.revertSettings()
+end
+
+-- Reload settings from engine config
+function settingsMenu.reloadSettings()
+    local w, h, fs, uiScale, vs, msaa = engine.getVideoConfig()
+    
+    currentSettings.width = w
+    currentSettings.height = h
+    currentSettings.fullscreen = fs
+    currentSettings.uiScale = uiScale
+    currentSettings.vsync = vs
+    currentSettings.msaa = msaa
+    
+    -- Recalculate scaled sizes
+    fontSize = math.floor(baseFontSize * uiScale)
+    checkboxSize = math.floor(baseCheckboxSize * uiScale)
+    buttonSize = math.floor(baseButtonSize * uiScale)
+    btnWidth = math.floor(baseBtnWidth * uiScale)
+    btnHeight = math.floor(baseBtnHeight * uiScale)
+    split = math.floor(baseSplit * uiScale)
+    
+    engine.logDebug("Settings reloaded from config")
 end
 
 function settingsMenu.shutdown()
