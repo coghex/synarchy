@@ -6,15 +6,25 @@ local page = nil
 local boxTexSet = nil
 local menuFont = nil
 local fbW, fbH = 0, 0
+local baseFontSize = 32
+local baseCheckboxSize = 48
+local baseButtonSize = 64
+local baseBtnWidth = 160
+local baseBtnHeight = 64
+local baseSplit = 100
+
+-- Scaled values (computed in init)
 local fontSize = 32
 local checkboxSize = 48
 local buttonSize = 64
 local btnWidth = 160
 local btnHeight = 64
 local split = 100
+
 local uiCreated = false
-local uiscale = 1.0
-local uiScaleTextBox
+local uiScaleTextBox = nil
+local uiScaleMin = 0.5
+local uiScaleMax = 4.0
 
 -- Checkbox textures
 local texCheckboxChecked = nil
@@ -24,6 +34,7 @@ local currentSettings = {
     width = 800,
     height = 600,
     fullscreen = false,
+    uiScale = 1.0,
     vsync = true,
     msaa = 0
 }
@@ -35,18 +46,24 @@ function settingsMenu.init(boxTex, font, width, height)
     menuFont = font
     fbW = width
     fbH = height
-    uiscale = engine.getUIScale()
-    fontSize = math.floor(fontSize * uiscale)
-    checkboxSize = math.floor(checkboxSize * uiscale)
-    buttonSize = math.floor(buttonSize * uiscale)
-    btnWidth = math.floor(btnWidth * uiscale)
-    btnHeight = math.floor(btnHeight * uiscale)
-    split = math.floor(split * uiscale)
+    
+    -- Get UI scale from engine config
+    currentSettings.uiScale = engine.getUIScale()
+    local uiscale = currentSettings.uiScale
+    
+    -- Apply scaling to sizes
+    fontSize = math.floor(baseFontSize * uiscale)
+    checkboxSize = math.floor(baseCheckboxSize * uiscale)
+    buttonSize = math.floor(baseButtonSize * uiscale)
+    btnWidth = math.floor(baseBtnWidth * uiscale)
+    btnHeight = math.floor(baseBtnHeight * uiscale)
+    split = math.floor(baseSplit * uiscale)
     
     -- Load checkbox textures
     texCheckboxChecked = engine.loadTexture("assets/textures/ui/checkboxchecked.png")
     texCheckboxUnchecked = engine.loadTexture("assets/textures/ui/checkboxunchecked.png")
     textbox.init()
+    
     -- Load current settings
     local w, h, fs, vs, msaa = engine.getVideoConfig()
     currentSettings.width = w
@@ -59,10 +76,16 @@ function settingsMenu.init(boxTex, font, width, height)
 end
 
 function settingsMenu.createUI()
+    -- Destroy old textbox if it exists
+    textbox.destroyAll()
+    uiScaleTextBox = nil
+    
     if uiCreated and page then
         UI.deletePage(page)
         elements = {}
     end
+    
+    local uiscale = currentSettings.uiScale
     
     page = UI.newPage("settings_menu", "modal")
     
@@ -99,9 +122,10 @@ function settingsMenu.createUI()
     UI.setOnClick(elements.fullscreenCheckbox, "onToggle_fullscreen")
 
     -- UI scaling row
-    local yPos = 360
+    yPos = 360
     local scalingLabel = UI.newText("scaling_label", "UI Scaling", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
     UI.addChild(panel, scalingLabel, rowX, yPos + 8)
+    
     local textboxWidth = math.floor(150 * uiscale)
     local textboxHeight = math.floor(40 * uiscale)
     local textboxX = panelWidth - rowX - textboxWidth
@@ -113,18 +137,22 @@ function settingsMenu.createUI()
         height = textboxHeight,
         page = page,
         parent = panel,
-        uiScale = uiscale,
+        uiscale = uiscale,  -- FIXED: lowercase to match textbox.lua
         font = menuFont,
         fontSize = 24,
-        default = tostring(engine.getUIScale())
+        default = tostring(currentSettings.uiScale),
+        textType = textbox.Type.SCALE
     })
     
-    -- Back button
-    local btnX = (panelWidth - btnWidth) / 2
+    -- Button row - Back, Apply, Save
+    local btnSpacing = math.floor(20 * uiscale)
+    local totalBtnWidth = (btnWidth * 3) + (btnSpacing * 2)
+    local btnStartX = (panelWidth - totalBtnWidth) / 2
     local btnY = panelHeight - 120
     
+    -- Back button
     local backBtn = UI.newBox("back_btn", btnWidth, btnHeight, boxTexSet, fontSize, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, backBtn, btnX-split, btnY)
+    UI.addChild(panel, backBtn, btnStartX, btnY)
     UI.setClickable(backBtn, true)
     UI.setZIndex(backBtn, 20)
     UI.setOnClick(backBtn, "onSettingsBack")
@@ -132,15 +160,28 @@ function settingsMenu.createUI()
     local backLabel = UI.newText("back_label", "Back", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
     local backLabelWidth = engine.getTextWidth(menuFont, "Back", fontSize)
     UI.addChild(backBtn, backLabel, (btnWidth - backLabelWidth) / 2, (btnHeight / 2) + (fontSize / 2))
+    
+    -- Apply button
+    local applyBtn = UI.newBox("apply_btn", btnWidth, btnHeight, boxTexSet, fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    UI.addChild(panel, applyBtn, btnStartX + btnWidth + btnSpacing, btnY)
+    UI.setClickable(applyBtn, true)
+    UI.setZIndex(applyBtn, 20)
+    UI.setOnClick(applyBtn, "onSettingsApply")
+    
+    local applyLabel = UI.newText("apply_label", "Apply", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    local applyLabelWidth = engine.getTextWidth(menuFont, "Apply", fontSize)
+    UI.addChild(applyBtn, applyLabel, (btnWidth - applyLabelWidth) / 2, (btnHeight / 2) + (fontSize / 2))
+    
     -- Save button
     local saveBtn = UI.newBox("save_btn", btnWidth, btnHeight, boxTexSet, fontSize, 1.0, 1.0, 1.0, 1.0, page)
-    local backlabelWidth = engine.getTextWidth(menuFont, "Save", fontSize)
-    UI.addChild(panel, saveBtn, btnX+split, btnY)
+    UI.addChild(panel, saveBtn, btnStartX + (btnWidth + btnSpacing) * 2, btnY)
     UI.setClickable(saveBtn, true)
     UI.setZIndex(saveBtn, 20)
     UI.setOnClick(saveBtn, "onSettingsSave")
+    
     local saveLabel = UI.newText("save_label", "Save", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(saveBtn, saveLabel, (btnWidth - backlabelWidth) / 2, (btnHeight / 2) + (fontSize / 2))
+    local saveLabelWidth = engine.getTextWidth(menuFont, "Save", fontSize)
+    UI.addChild(saveBtn, saveLabel, (btnWidth - saveLabelWidth) / 2, (btnHeight / 2) + (fontSize / 2))
     
     uiCreated = true
 end
@@ -158,16 +199,49 @@ function settingsMenu.getSettings()
     return currentSettings
 end
 
+function settingsMenu.onApply()
+    engine.logInfo("Applying settings...")
+    
+    -- Get current UI scale from textbox and apply it
+    if uiScaleTextBox then
+        local scale = textbox.getNumericValue(uiScaleTextBox)
+        if scale >= uiScaleMin and scale <= uiScaleMax then
+            currentSettings.uiScale = scale
+            engine.setUIScale(scale)
+            
+            -- Recalculate scaled sizes
+            fontSize = math.floor(baseFontSize * scale)
+            checkboxSize = math.floor(baseCheckboxSize * scale)
+            buttonSize = math.floor(baseButtonSize * scale)
+            btnWidth = math.floor(baseBtnWidth * scale)
+            btnHeight = math.floor(baseBtnHeight * scale)
+            split = math.floor(baseSplit * scale)
+            
+            -- Destroy old textbox BEFORE rebuilding UI
+            textbox.destroy(uiScaleTextBox)
+            uiScaleTextBox = nil
+            
+            -- Rebuild UI with new scale
+            settingsMenu.createUI()
+            settingsMenu.show()
+            
+            engine.logInfo("UI scale applied: " .. tostring(scale))
+        else
+            engine.logWarn("UI scale out of range: " .. tostring(scale))
+        end
+    end
+end
+
 function settingsMenu.onSave()
-    -- Save settings to config file or apply them as needed
-    engine.setVideoConfig(
-        currentSettings.width,
-        currentSettings.height,
-        currentSettings.fullscreen,
-        currentSettings.vsync,
-        currentSettings.msaa
-    )
+    engine.logInfo("Saving settings...")
+    
+    -- Apply first to make sure current values are set
+    settingsMenu.onApply()
+    
+    -- Save video config to file
     engine.saveVideoConfig()
+    
+    engine.logInfo("Settings saved.")
 end
 
 function settingsMenu.show()
@@ -186,12 +260,46 @@ function settingsMenu.onFramebufferResize(width, height)
     fbW = width
     fbH = height
     if uiCreated then
+        -- Destroy old textbox before recreating
+        if uiScaleTextBox then
+            textbox.destroy(uiScaleTextBox)
+            uiScaleTextBox = nil
+        end
         settingsMenu.createUI()
     end
 end
 
 function settingsMenu.handleTextBoxClick(callbackName)
     return textbox.handleCallback(callbackName)
+end
+
+function settingsMenu.onTextBoxSubmit(value)
+    -- Check if we have a valid scale value
+    local scale = tonumber(value)
+    if not scale then
+        engine.logWarn("Invalid UI scale value: " .. tostring(value))
+        -- Reset to current value
+        if uiScaleTextBox then
+            textbox.setText(uiScaleTextBox, tostring(currentSettings.uiScale))
+        end
+        return
+    end
+    
+    -- Clamp to valid range
+    if scale < uiScaleMin then
+        scale = uiScaleMin
+        engine.logInfo("UI scale clamped to minimum: " .. tostring(scale))
+    elseif scale > uiScaleMax then
+        scale = uiScaleMax
+        engine.logInfo("UI scale clamped to maximum: " .. tostring(scale))
+    end
+    
+    -- Update textbox to show clamped value
+    if uiScaleTextBox then
+        textbox.setText(uiScaleTextBox, tostring(scale))
+    end
+    
+    engine.logInfo("UI scale ready to apply: " .. tostring(scale))
 end
 
 function settingsMenu.shutdown()

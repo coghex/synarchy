@@ -150,6 +150,11 @@ function uiManager.onSettingsSave()
     if settingsMenu then settingsMenu.onSave() end
 end
 
+function uiManager.onSettingsApply()
+    handleNonTextBoxClick()
+    if settingsMenu then settingsMenu.onApply() end
+end
+
 function uiManager.onToggle_fullscreen()
     handleNonTextBoxClick()
     if settingsMenu then settingsMenu.onToggle_fullscreen() end
@@ -161,6 +166,9 @@ function uiManager.onCancel()
 end
 
 function uiManager.update(dt)
+    if textbox then
+        textbox.update(dt)
+    end
 end
 
 function uiManager.shutdown()
@@ -235,6 +243,7 @@ function uiManager.onUISubmit()
         local handled, text = textbox.onSubmit()
         if handled and text then
             engine.logInfo("UI Submit received: " .. tostring(text))
+            if settingsMenu then settingsMenu.onTextBoxSubmit(text) end
         end
         return handled
     end

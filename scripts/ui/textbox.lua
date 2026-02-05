@@ -13,6 +13,20 @@ local assetsLoaded = false
 -- Default tile size for 9-tile boxes
 local defaultTileSize = 16
 
+-- Cursor blink state
+local cursorBlinkTime = 0
+local cursorBlinkRate = 0.5
+local cursorVisible = true
+
+-- Textbox types
+local TextBoxType = {
+    TEXT = "text",           -- Any text
+    NUMBER = "number",       -- Numbers only (integer)
+    DECIMAL = "decimal",     -- Numbers with decimal point
+    SCALE = "scale",         -- Scale value (e.g., "1.5x")
+}
+textbox.Type = TextBoxType
+
 function textbox.init()
     if assetsLoaded then return end
     
@@ -51,6 +65,7 @@ function textbox.new(params)
     local uiscale = params.uiscale or 1.0
     local tileSize = math.floor((params.tileSize or defaultTileSize) * uiscale)
     local fontSize = math.floor((params.fontSize or 24) * uiscale)
+    local textPadding = math.floor(8 * uiscale)
     
     local tb = {
         id = id,
@@ -61,14 +76,23 @@ function textbox.new(params)
         height = params.height or 40,
         tileSize = tileSize,
         fontSize = fontSize,
+        textPadding = textPadding,
         page = params.page,
         parent = params.parent,
         boxId = nil,
         textId = nil,
+        cursorId = nil,
         defaultValue = params.default or "",
         callbackName = "onTextBoxClick",
         font = params.font,
+        textType = params.textType or TextBoxType.TEXT,
+        suffix = "",  -- Suffix to display (e.g., "x" for scale)
     }
+    
+    -- Set suffix based on type
+    if tb.textType == TextBoxType.SCALE then
+        tb.suffix = "x"
+    end
     
     -- Create the box using UI system (9-tile) with WHITE background
     tb.boxId = UI.newBox(
@@ -84,9 +108,10 @@ function textbox.new(params)
     -- Enable text input on this element (creates the buffer in engine)
     UI.enableTextInput(tb.boxId)
     
-    -- Set default value if provided
-    if tb.defaultValue ~= "" then
-        UI.setTextInput(tb.boxId, tb.defaultValue)
+    -- Set default value if provided (strip suffix for storage)
+    local cleanDefault = tb.defaultValue:gsub("x$", "")
+    if cleanDefault ~= "" then
+        UI.setTextInput(tb.boxId, cleanDefault)
     end
     
     -- Add to parent or page
@@ -98,18 +123,30 @@ function textbox.new(params)
     
     -- Create text element for display (BLACK text)
     if tb.font then
-        local textPadding = 8
         local textY = (tb.height / 2) + (tb.fontSize / 3)
         tb.textId = UI.newText(
             tb.name .. "_text",
-            tb.defaultValue,
+            "",
             tb.font,
             tb.fontSize,
             0.0, 0.0, 0.0, 1.0,
             tb.page
         )
-        UI.addChild(tb.boxId, tb.textId, textPadding, textY)
+        UI.addChild(tb.boxId, tb.textId, tb.textPadding, textY)
         UI.setZIndex(tb.textId, 1)
+        
+        -- Create cursor element (BLACK, initially hidden)
+        tb.cursorId = UI.newText(
+            tb.name .. "_cursor",
+            "|",
+            tb.font,
+            tb.fontSize,
+            0.0, 0.0, 0.0, 1.0,
+            tb.page
+        )
+        UI.addChild(tb.boxId, tb.cursorId, tb.textPadding, textY)
+        UI.setZIndex(tb.cursorId, 2)
+        UI.setVisible(tb.cursorId, false)
     end
     
     -- Make it clickable
@@ -117,7 +154,11 @@ function textbox.new(params)
     UI.setOnClick(tb.boxId, tb.callbackName)
     
     textboxes[id] = tb
-    engine.logInfo("TextBox created: " .. tb.name .. " (id=" .. id .. ", boxId=" .. tb.boxId .. ")")
+    
+    -- Initial display update
+    textbox.updateDisplay(id)
+    
+    engine.logInfo("TextBox created: " .. tb.name .. " (id=" .. id .. ", type=" .. tb.textType .. ")")
     
     return id
 end
@@ -133,6 +174,118 @@ function textbox.destroy(id)
     
     textboxes[id] = nil
     engine.logInfo("TextBox destroyed: " .. tb.name)
+end
+
+-- Validate input character based on textbox type
+function textbox.isValidChar(id, char)
+    local tb = textboxes[id]
+    if not tb then return false end
+    
+    local currentText = UI.getTextInput(tb.boxId) or ""
+    
+    if tb.textType == TextBoxType.TEXT then
+        -- Allow any printable character
+        return true
+    elseif tb.textType == TextBoxType.NUMBER then
+        -- Only digits
+        return char:match("^%d$") ~= nil
+    elseif tb.textType == TextBoxType.DECIMAL or tb.textType == TextBoxType.SCALE then
+        -- Digits and one decimal point
+        if char:match("^%d$") then
+            return true
+        elseif char == "." then
+            -- Only allow one decimal point
+            return not currentText:find("%.")
+        end
+        return false
+    end
+    
+    return true
+end
+
+-- Format display text based on type
+function textbox.formatDisplayText(id)
+    local tb = textboxes[id]
+    if not tb then return "" end
+    
+    local text = UI.getTextInput(tb.boxId) or ""
+    
+    -- Add suffix if needed
+    if tb.suffix ~= "" and text ~= "" then
+        return text .. tb.suffix
+    end
+    
+    return text
+end
+
+-- Get the raw value (without suffix)
+function textbox.getValue(id)
+    local tb = textboxes[id]
+    if not tb then return "" end
+    return UI.getTextInput(tb.boxId) or ""
+end
+
+-- Get numeric value (for number/decimal/scale types)
+function textbox.getNumericValue(id)
+    local tb = textboxes[id]
+    if not tb then return 0 end
+    local text = UI.getTextInput(tb.boxId) or "0"
+    return tonumber(text) or 0
+end
+
+-- Update the displayed text and cursor position
+function textbox.updateDisplay(id)
+    local tb = textboxes[id]
+    if not tb then return end
+    if not tb.textId then return end
+    
+    local displayText = textbox.formatDisplayText(id)
+    local rawText = UI.getTextInput(tb.boxId) or ""
+    local cursorPos = UI.getCursor(tb.boxId) or 0
+    
+    -- Calculate text width for right justification
+    local textWidth = engine.getTextWidth(tb.font, displayText, tb.fontSize)
+    local availableWidth = tb.width - (tb.textPadding * 2)
+    
+    -- Right justify: position text so it ends at the right edge
+    local textX = tb.width - tb.textPadding - textWidth
+    if textX < tb.textPadding then
+        textX = tb.textPadding  -- Don't go past left edge
+    end
+    
+    -- Update text position and content
+    UI.setText(tb.textId, displayText)
+    local textY = (tb.height / 2) + (tb.fontSize / 3)
+    UI.setPosition(tb.textId, textX, textY)
+    
+    -- Update cursor position
+    if tb.cursorId then
+        -- Calculate cursor X based on text before cursor
+        local textBeforeCursor = rawText:sub(1, cursorPos)
+        local cursorTextWidth = engine.getTextWidth(tb.font, textBeforeCursor, tb.fontSize)
+        local cursorX = textX + cursorTextWidth - (engine.getTextWidth(tb.font, "|", tb.fontSize) / 2)
+        
+        UI.setPosition(tb.cursorId, cursorX, textY)
+    end
+end
+
+-- Update cursor blink (call this from update loop)
+function textbox.update(dt)
+    cursorBlinkTime = cursorBlinkTime + dt
+    
+    if cursorBlinkTime >= cursorBlinkRate then
+        cursorBlinkTime = cursorBlinkTime - cursorBlinkRate
+        cursorVisible = not cursorVisible
+        
+        -- Update cursor visibility for focused textbox
+        local focusedId = textbox.getFocusedId()
+        if focusedId then
+            local tb = textboxes[focusedId]
+            if tb and tb.cursorId then
+                UI.setVisible(tb.cursorId, cursorVisible)
+            end
+        end
+    end
 end
 
 -- Handle click callback - find which textbox was clicked and focus it
@@ -155,6 +308,9 @@ function textbox.focus(id)
     for otherId, otherTb in pairs(textboxes) do
         if otherId ~= id and otherTb.boxId and UI.hasFocus(otherTb.boxId) then
             UI.setBoxTextures(otherTb.boxId, texSetNormal)
+            if otherTb.cursorId then
+                UI.setVisible(otherTb.cursorId, false)
+            end
         end
     end
     
@@ -163,6 +319,18 @@ function textbox.focus(id)
     
     -- Update visual
     UI.setBoxTextures(tb.boxId, texSetSelected)
+    
+    -- Show cursor and reset blink
+    if tb.cursorId then
+        cursorVisible = true
+        cursorBlinkTime = 0
+        UI.setVisible(tb.cursorId, true)
+    end
+    
+    -- Move cursor to end
+    local text = UI.getTextInput(tb.boxId) or ""
+    UI.setCursor(tb.boxId, #text)
+    textbox.updateDisplay(id)
     
     engine.logInfo("TextBox focused: " .. tb.name)
 end
@@ -178,6 +346,11 @@ function textbox.unfocus(id)
     
     -- Update visual
     UI.setBoxTextures(tb.boxId, texSetNormal)
+    
+    -- Hide cursor
+    if tb.cursorId then
+        UI.setVisible(tb.cursorId, false)
+    end
     
     engine.logInfo("TextBox unfocused: " .. tb.name)
 end
@@ -224,16 +397,6 @@ function textbox.isTextBoxCallback(callbackName)
     return callbackName == "onTextBoxClick"
 end
 
--- Update the displayed text from the buffer
-function textbox.updateDisplay(id)
-    local tb = textboxes[id]
-    if not tb then return end
-    if not tb.textId then return end
-    
-    local text = UI.getTextInput(tb.boxId) or ""
-    UI.setText(tb.textId, text)
-end
-
 -----------------------------------------------------------
 -- Text Buffer Operations (delegate to engine)
 -----------------------------------------------------------
@@ -261,11 +424,18 @@ function textbox.setCursor(id, pos)
     local tb = textboxes[id]
     if not tb then return end
     UI.setCursor(tb.boxId, pos)
+    textbox.updateDisplay(id)
 end
 
 function textbox.insertChar(id, char)
     local tb = textboxes[id]
     if not tb then return end
+    
+    -- Validate character
+    if not textbox.isValidChar(id, char) then
+        return
+    end
+    
     UI.insertChar(tb.boxId, char)
 end
 
@@ -347,6 +517,7 @@ function textbox.onCursorLeft()
     local id = textbox.getFocusedId()
     if id then
         textbox.cursorLeft(id)
+        textbox.updateDisplay(id)
         return true
     end
     return false
@@ -356,6 +527,7 @@ function textbox.onCursorRight()
     local id = textbox.getFocusedId()
     if id then
         textbox.cursorRight(id)
+        textbox.updateDisplay(id)
         return true
     end
     return false
@@ -365,6 +537,7 @@ function textbox.onHome()
     local id = textbox.getFocusedId()
     if id then
         textbox.cursorHome(id)
+        textbox.updateDisplay(id)
         return true
     end
     return false
@@ -374,6 +547,7 @@ function textbox.onEnd()
     local id = textbox.getFocusedId()
     if id then
         textbox.cursorEnd(id)
+        textbox.updateDisplay(id)
         return true
     end
     return false
@@ -384,11 +558,12 @@ function textbox.onSubmit()
     local id = textbox.getFocusedId()
     if id then
         local tb = textboxes[id]
-        local text = textbox.getText(id)
-        engine.logInfo("TextBox submitted: " .. tb.name .. " = '" .. text .. "'")
+        local value = textbox.getValue(id)
+        local displayText = textbox.formatDisplayText(id)
+        engine.logInfo("TextBox submitted: " .. tb.name .. " = '" .. displayText .. "' (value=" .. value .. ")")
         -- Unfocus after submit
         textbox.unfocus(id)
-        return true, text
+        return true, value
     end
     return false, nil
 end
@@ -401,6 +576,39 @@ function textbox.onEscape()
         return true
     end
     return false
+end
+
+function textbox.destroy(id)
+    local tb = textboxes[id]
+    if not tb then return end
+    
+    -- Clear focus if this was focused
+    if tb.boxId and UI.hasFocus(tb.boxId) then
+        UI.clearFocus()
+    end
+    
+    -- Note: We don't destroy the UI elements here because 
+    -- they will be destroyed when the page is deleted.
+    -- We just remove our tracking of them.
+    
+    textboxes[id] = nil
+    engine.logInfo("TextBox destroyed: " .. tb.name)
+end
+
+-- Destroy all textboxes (useful when rebuilding UI)
+function textbox.destroyAll()
+    -- Clear any focus first
+    UI.clearFocus()
+    
+    -- Clear all textbox entries
+    for id, tb in pairs(textboxes) do
+        engine.logInfo("TextBox destroyed: " .. tb.name)
+    end
+    textboxes = {}
+    
+    -- Reset cursor state
+    cursorVisible = true
+    cursorBlinkTime = 0
 end
 
 return textbox
