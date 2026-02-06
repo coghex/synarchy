@@ -1,15 +1,16 @@
 -- Debug overlay module
 local scale = require("scripts.ui.scale")
+local label = require("scripts.ui.label")
 local debugOverlay = {}
 
-local page = nil
-local fpsText = nil
-local debugFont = nil
-local visible = false
-local uiCreated = false
+debugOverlay.page = nil
+debugOverlay.fpsLabelId = nil
+debugOverlay.debugFont = nil
+debugOverlay.visible = false
+debugOverlay.uiCreated = false
 
 -- Base sizes (unscaled)
-local baseSizes = {
+debugOverlay.baseSizes = {
     fontSize = 32,
     margin = 10,
 }
@@ -17,72 +18,78 @@ local baseSizes = {
 function debugOverlay.init(scriptId)
     engine.logInfo("Debug overlay initializing...")
     
-    debugFont = engine.loadFont("assets/fonts/shell.ttf", baseSizes.fontSize)
-    engine.logInfo("Debug font loaded: " .. tostring(debugFont))
+    debugOverlay.debugFont = engine.loadFont("assets/fonts/shell.ttf", debugOverlay.baseSizes.fontSize)
+    engine.logInfo("Debug font loaded: " .. tostring(debugOverlay.debugFont))
     
     engine.logDebug("Debug overlay initialized")
 end
 
 function debugOverlay.createUI()
-    if uiCreated and page then
-        UI.deletePage(page)
+    if debugOverlay.uiCreated and debugOverlay.page then
+        UI.deletePage(debugOverlay.page)
+        label.destroyAll()
+        debugOverlay.fpsLabelId = nil
     end
     
-    local s = scale.applyAll(baseSizes)
+    local s = scale.applyAll(debugOverlay.baseSizes)
+    local uiscale = scale.get()
     
-    page = UI.newPage("debug_overlay", "overlay")
+    debugOverlay.page = UI.newPage("debug_overlay", "overlay")
     
-    fpsText = UI.newText(
-        "fps_text",
-        "FPS: --",
-        debugFont,
-        s.fontSize,
-        0.0, 1.0, 0.0, 1.0,
-        page
-    )
-    UI.addToPage(page, fpsText, s.margin, s.margin + s.fontSize)
-    UI.setZIndex(fpsText, 1000)
+    -- FPS label in top-left corner
+    debugOverlay.fpsLabelId = label.new({
+        name = "fps_text",
+        text = "FPS: --",
+        font = debugOverlay.debugFont,
+        fontSize = debugOverlay.baseSizes.fontSize,
+        color = {0.0, 1.0, 0.0, 1.0},  -- Green
+        page = debugOverlay.page,
+        uiscale = uiscale,
+        x = s.margin,
+        y = s.margin + s.fontSize,
+        zIndex = 1000,
+    })
     
-    uiCreated = true
+    debugOverlay.uiCreated = true
     engine.logDebug("Debug UI created")
 end
 
 function debugOverlay.update(dt)
-    if not visible then return end
+    if not debugOverlay.visible then return end
     
     local fps = engine.getFPS()
     
-    if fpsText then
-        UI.setText(fpsText, "FPS: " .. tostring(math.floor(fps)))
+    if debugOverlay.fpsLabelId then
+        label.setText(debugOverlay.fpsLabelId, "FPS: " .. tostring(math.floor(fps)))
     end
 end
 
 function debugOverlay.show()
-    if not uiCreated then
+    if not debugOverlay.uiCreated then
         debugOverlay.createUI()
     end
     
-    visible = true
+    debugOverlay.visible = true
     
-    if page then
-        UI.showPage(page)
+    if debugOverlay.page then
+        UI.showPage(debugOverlay.page)
     end
     
     engine.logInfo("Debug overlay shown")
 end
 
 function debugOverlay.hide()
-    visible = false
+    debugOverlay.visible = false
     
-    if page then
-        UI.hidePage(page)
+    if debugOverlay.page then
+        UI.hidePage(debugOverlay.page)
     end
     
     engine.logInfo("Debug overlay hidden")
 end
 
 function debugOverlay.toggle()
-    if visible then
+    if debugOverlay.visible then
         debugOverlay.hide()
     else
         debugOverlay.show()
@@ -90,23 +97,24 @@ function debugOverlay.toggle()
 end
 
 function debugOverlay.isVisible()
-    return visible
+    return debugOverlay.visible
 end
 
 function debugOverlay.onFramebufferResize(width, height)
-    if uiCreated then
+    if debugOverlay.uiCreated then
         debugOverlay.createUI()
-        if visible then
-            UI.showPage(page)
+        if debugOverlay.visible then
+            UI.showPage(debugOverlay.page)
         end
     end
 end
 
 function debugOverlay.shutdown()
-    if page then
-        UI.hidePage(page)
-        UI.deletePage(page)
-        page = nil
+    label.destroyAll()
+    if debugOverlay.page then
+        UI.hidePage(debugOverlay.page)
+        UI.deletePage(debugOverlay.page)
+        debugOverlay.page = nil
     end
 end
 

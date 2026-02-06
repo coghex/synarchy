@@ -339,38 +339,6 @@ function panel.placeColumn(id, elements, sizes, options)
 end
 
 -----------------------------------------------------------
--- Text Helper
------------------------------------------------------------
-
-function panel.placeText(id, text, font, fontSize, color, options)
-    local p = panel.panels[id]
-    if not p then return nil end
-    
-    color = color or {1.0, 1.0, 1.0, 1.0}
-    options = options or {}
-    
-    local textElem = UI.newText(
-        options.name or (p.name .. "_text_" .. #p.elements),
-        text,
-        font,
-        fontSize,
-        color[1], color[2], color[3], color[4],
-        p.page
-    )
-    
-    -- Calculate text size
-    local width = engine.getTextWidth(font, text, fontSize)
-    local height = fontSize
-    
-    options.width = width
-    options.height = height
-    
-    panel.place(id, textElem, options)
-    
-    return textElem
-end
-
------------------------------------------------------------
 -- Queries
 -----------------------------------------------------------
 

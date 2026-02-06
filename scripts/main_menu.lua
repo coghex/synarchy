@@ -2,6 +2,7 @@
 local scale = require("scripts.ui.scale")
 local panel = require("scripts.ui.panel")
 local button = require("scripts.ui.button")
+local label = require("scripts.ui.label")
 local mainMenu = {}
 
 mainMenu.page = nil
@@ -13,6 +14,8 @@ mainMenu.titleFont = nil
 mainMenu.fbW = 0
 mainMenu.fbH = 0
 mainMenu.uiCreated = false
+
+mainMenu.titleLabelId = nil
 
 -- Base sizes (unscaled)
 mainMenu.baseSizes = {
@@ -50,9 +53,11 @@ function mainMenu.createUI()
     if mainMenu.uiCreated then
         if mainMenu.page then
             UI.deletePage(mainMenu.page)
+            label.destroyAll()
             button.destroyAll()
             panel.destroyAll()
             mainMenu.buttons = {}
+            mainMenu.titleLabelId = nil
         end
     end
     
@@ -100,13 +105,21 @@ function mainMenu.createUI()
     
     local baseZ = panel.getZIndex(mainMenu.panelId)
     
-    -- Create title above menu panel
-    local titleStr = "Ecce Homo"
-    local titleWidth = engine.getTextWidth(mainMenu.titleFont, titleStr, s.titleFontSize)
-    local titleX = (mainMenu.fbW - titleWidth) / 2
+    -- Create title above menu panel using label component
+    mainMenu.titleLabelId = label.new({
+        name = "title",
+        text = "Ecce Homo",
+        font = mainMenu.titleFont,
+        fontSize = mainMenu.baseSizes.titleFontSize,
+        color = {1.0, 1.0, 1.0, 1.0},
+        page = mainMenu.page,
+        uiscale = uiscale,
+    })
+    
+    local titleW, titleH = label.getSize(mainMenu.titleLabelId)
+    local titleX = (mainMenu.fbW - titleW) / 2
     local titleY = menuY - s.titleOffset
-    local titleText = UI.newText("title", titleStr, mainMenu.titleFont, s.titleFontSize, 1.0, 1.0, 1.0, 1.0, mainMenu.page)
-    UI.addToPage(mainMenu.page, titleText, titleX, titleY)
+    UI.addToPage(mainMenu.page, label.getElementHandle(mainMenu.titleLabelId), titleX, titleY)
     
     -- Create menu buttons and collect them for placeColumn
     local buttonElements = {}
@@ -185,6 +198,7 @@ function mainMenu.onFramebufferResize(width, height)
 end
 
 function mainMenu.shutdown()
+    label.destroyAll()
     button.destroyAll()
     panel.destroyAll()
     if mainMenu.page then

@@ -5,45 +5,44 @@ local textbox = {}
 -----------------------------------------------------------
 -- Constants
 -----------------------------------------------------------
-local TEXTBOX_CALLBACK = "onTextBoxClick"
+textbox.CALLBACK = "onTextBoxClick"
 
-local TextBoxType = {
+textbox.Type = {
     TEXT = "text",
     NUMBER = "number",
     DECIMAL = "decimal",
     SCALE = "scale",
 }
-textbox.Type = TextBoxType
 
 -----------------------------------------------------------
 -- Module State
 -----------------------------------------------------------
 
-local textboxes = {}
-local nextId = 1
+textbox.textboxes = {}
+textbox.nextId = 1
 
-local texSetNormal = nil
-local texSetSelected = nil
-local assetsLoaded = false
+textbox.texSetNormal = nil
+textbox.texSetSelected = nil
+textbox.assetsLoaded = false
 
-local defaultTileSize = 16
+textbox.defaultTileSize = 16
 
-local cursorBlinkTime = 0
-local cursorBlinkRate = 0.5
-local cursorVisible = true
+textbox.cursorBlinkTime = 0
+textbox.cursorBlinkRate = 0.5
+textbox.cursorVisible = true
 
 -----------------------------------------------------------
 -- Initialization
 -----------------------------------------------------------
 
 function textbox.init()
-    if assetsLoaded then return end
+    if textbox.assetsLoaded then return end
     
     -- Use the utility to load 9-tile textures (with caching)
-    texSetNormal = boxTextures.load("assets/textures/ui/textbox", "textbox")
-    texSetSelected = boxTextures.load("assets/textures/ui/textboxselected", "textbox")
+    textbox.texSetNormal = boxTextures.load("assets/textures/ui/textbox", "textbox")
+    textbox.texSetSelected = boxTextures.load("assets/textures/ui/textboxselected", "textbox")
     
-    assetsLoaded = true
+    textbox.assetsLoaded = true
     engine.logDebug("TextBox module initialized")
 end
 
@@ -52,11 +51,13 @@ end
 -----------------------------------------------------------
 
 function textbox.new(params)
-    local id = nextId
-    nextId = nextId + 1
+    local id = textbox.nextId
+    textbox.nextId = textbox.nextId + 1
     
     local uiscale = params.uiscale or 1.0
-    local tileSize = math.floor((params.tileSize or defaultTileSize) * uiscale)
+    local width = math.floor((params.width or 200) * uiscale)
+    local height = math.floor((params.height or 40) * uiscale)
+    local tileSize = math.floor((params.tileSize or textbox.defaultTileSize) * uiscale)
     local fontSize = math.floor((params.fontSize or 24) * uiscale)
     local textPadding = math.floor(8 * uiscale)
     
@@ -65,8 +66,8 @@ function textbox.new(params)
         name = params.name or ("textbox_" .. id),
         x = params.x or 0,
         y = params.y or 0,
-        width = params.width or 200,
-        height = params.height or 40,
+        width = width,
+        height = height,
         tileSize = tileSize,
         fontSize = fontSize,
         textPadding = textPadding,
@@ -77,11 +78,12 @@ function textbox.new(params)
         cursorId = nil,
         defaultValue = params.default or "",
         font = params.font,
-        textType = params.textType or TextBoxType.TEXT,
+        textType = params.textType or textbox.Type.TEXT,
         suffix = "",
+        uiscale = uiscale,
     }
     
-    if tb.textType == TextBoxType.SCALE then
+    if tb.textType == textbox.Type.SCALE then
         tb.suffix = "x"
     end
     
@@ -89,7 +91,7 @@ function textbox.new(params)
         tb.name .. "_box",
         tb.width,
         tb.height,
-        texSetNormal,
+        textbox.texSetNormal,
         tb.tileSize,
         1.0, 1.0, 1.0, 1.0,
         tb.page
@@ -135,9 +137,9 @@ function textbox.new(params)
     end
     
     UI.setClickable(tb.boxId, true)
-    UI.setOnClick(tb.boxId, TEXTBOX_CALLBACK)
+    UI.setOnClick(tb.boxId, textbox.CALLBACK)
     
-    textboxes[id] = tb
+    textbox.textboxes[id] = tb
     
     textbox.updateDisplay(id)
     
@@ -145,28 +147,28 @@ function textbox.new(params)
 end
 
 function textbox.destroy(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     
     if tb.boxId and UI.hasFocus(tb.boxId) then
         UI.clearFocus()
     end
     
-    textboxes[id] = nil
-    engine.logInfo("TextBox destroyed: " .. tb.name)
+    textbox.textboxes[id] = nil
+    engine.logDebug("TextBox destroyed: " .. tb.name)
 end
 
 function textbox.destroyAll()
     UI.clearFocus()
     
-    for id, tb in pairs(textboxes) do
+    for id, tb in pairs(textbox.textboxes) do
         engine.logDebug("TextBox destroyed: " .. tb.name)
     end
-    textboxes = {}
-    nextId = 1
+    textbox.textboxes = {}
+    textbox.nextId = 1
     
-    cursorVisible = true
-    cursorBlinkTime = 0
+    textbox.cursorVisible = true
+    textbox.cursorBlinkTime = 0
 end
 
 -----------------------------------------------------------
@@ -174,16 +176,16 @@ end
 -----------------------------------------------------------
 
 function textbox.isValidChar(id, char)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return false end
     
     local currentText = UI.getTextInput(tb.boxId) or ""
     
-    if tb.textType == TextBoxType.TEXT then
+    if tb.textType == textbox.Type.TEXT then
         return true
-    elseif tb.textType == TextBoxType.NUMBER then
+    elseif tb.textType == textbox.Type.NUMBER then
         return char:match("^%d$") ~= nil
-    elseif tb.textType == TextBoxType.DECIMAL or tb.textType == TextBoxType.SCALE then
+    elseif tb.textType == textbox.Type.DECIMAL or tb.textType == textbox.Type.SCALE then
         if char:match("^%d$") then
             return true
         elseif char == "." then
@@ -200,7 +202,7 @@ end
 -----------------------------------------------------------
 
 function textbox.formatDisplayText(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return "" end
     
     local text = UI.getTextInput(tb.boxId) or ""
@@ -213,26 +215,26 @@ function textbox.formatDisplayText(id)
 end
 
 function textbox.getValue(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return "" end
     return UI.getTextInput(tb.boxId) or ""
 end
 
 function textbox.getNumericValue(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return 0 end
     local text = UI.getTextInput(tb.boxId) or "0"
     return tonumber(text) or 0
 end
 
 function textbox.getText(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return "" end
     return UI.getTextInput(tb.boxId) or ""
 end
 
 function textbox.setText(id, text)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     UI.setTextInput(tb.boxId, text)
     textbox.updateDisplay(id)
@@ -243,7 +245,7 @@ end
 -----------------------------------------------------------
 
 function textbox.updateDisplay(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     if not tb.textId then return end
     
@@ -272,17 +274,17 @@ function textbox.updateDisplay(id)
 end
 
 function textbox.update(dt)
-    cursorBlinkTime = cursorBlinkTime + dt
+    textbox.cursorBlinkTime = textbox.cursorBlinkTime + dt
     
-    if cursorBlinkTime >= cursorBlinkRate then
-        cursorBlinkTime = cursorBlinkTime - cursorBlinkRate
-        cursorVisible = not cursorVisible
+    if textbox.cursorBlinkTime >= textbox.cursorBlinkRate then
+        textbox.cursorBlinkTime = textbox.cursorBlinkTime - textbox.cursorBlinkRate
+        textbox.cursorVisible = not textbox.cursorVisible
         
         local focusedId = textbox.getFocusedId()
         if focusedId then
-            local tb = textboxes[focusedId]
+            local tb = textbox.textboxes[focusedId]
             if tb and tb.cursorId then
-                UI.setVisible(tb.cursorId, cursorVisible)
+                UI.setVisible(tb.cursorId, textbox.cursorVisible)
             end
         end
     end
@@ -293,7 +295,7 @@ end
 -----------------------------------------------------------
 
 function textbox.findByElementHandle(elemHandle)
-    for id, tb in pairs(textboxes) do
+    for id, tb in pairs(textbox.textboxes) do
         if tb.boxId == elemHandle then
             return id
         end
@@ -315,19 +317,19 @@ function textbox.isTextBoxElement(elemHandle)
 end
 
 function textbox.handleCallback(callbackName, elemHandle)
-    if callbackName == TEXTBOX_CALLBACK and elemHandle then
+    if callbackName == textbox.CALLBACK and elemHandle then
         return textbox.handleClickByElement(elemHandle)
     end
     return false
 end
 
 function textbox.focus(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     
-    for otherId, otherTb in pairs(textboxes) do
+    for otherId, otherTb in pairs(textbox.textboxes) do
         if otherId ~= id and otherTb.boxId and UI.hasFocus(otherTb.boxId) then
-            UI.setBoxTextures(otherTb.boxId, texSetNormal)
+            UI.setBoxTextures(otherTb.boxId, textbox.texSetNormal)
             if otherTb.cursorId then
                 UI.setVisible(otherTb.cursorId, false)
             end
@@ -335,11 +337,11 @@ function textbox.focus(id)
     end
     
     UI.setFocus(tb.boxId)
-    UI.setBoxTextures(tb.boxId, texSetSelected)
+    UI.setBoxTextures(tb.boxId, textbox.texSetSelected)
     
     if tb.cursorId then
-        cursorVisible = true
-        cursorBlinkTime = 0
+        textbox.cursorVisible = true
+        textbox.cursorBlinkTime = 0
         UI.setVisible(tb.cursorId, true)
     end
     
@@ -351,14 +353,14 @@ function textbox.focus(id)
 end
 
 function textbox.unfocus(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     
     if UI.hasFocus(tb.boxId) then
         UI.clearFocus()
     end
     
-    UI.setBoxTextures(tb.boxId, texSetNormal)
+    UI.setBoxTextures(tb.boxId, textbox.texSetNormal)
     
     if tb.cursorId then
         UI.setVisible(tb.cursorId, false)
@@ -368,7 +370,7 @@ function textbox.unfocus(id)
 end
 
 function textbox.unfocusAll()
-    for id, tb in pairs(textboxes) do
+    for id, tb in pairs(textbox.textboxes) do
         if tb.boxId and UI.hasFocus(tb.boxId) then
             textbox.unfocus(id)
             return
@@ -378,13 +380,13 @@ function textbox.unfocusAll()
 end
 
 function textbox.isFocused(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return false end
     return UI.hasFocus(tb.boxId)
 end
 
 function textbox.getFocusedId()
-    for id, tb in pairs(textboxes) do
+    for id, tb in pairs(textbox.textboxes) do
         if tb.boxId and UI.hasFocus(tb.boxId) then
             return id
         end
@@ -393,14 +395,14 @@ function textbox.getFocusedId()
 end
 
 function textbox.getElementHandle(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return nil end
     return tb.boxId
 end
 
 function textbox.isTextBoxCallback(callbackName)
     if not callbackName then return false end
-    return callbackName == TEXTBOX_CALLBACK
+    return callbackName == textbox.CALLBACK
 end
 
 -----------------------------------------------------------
@@ -408,20 +410,20 @@ end
 -----------------------------------------------------------
 
 function textbox.getCursor(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return 0 end
     return UI.getCursor(tb.boxId) or 0
 end
 
 function textbox.setCursor(id, pos)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     UI.setCursor(tb.boxId, pos)
     textbox.updateDisplay(id)
 end
 
 function textbox.insertChar(id, char)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     
     if not textbox.isValidChar(id, char) then
@@ -432,37 +434,37 @@ function textbox.insertChar(id, char)
 end
 
 function textbox.deleteBackward(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     UI.deleteBackward(tb.boxId)
 end
 
 function textbox.deleteForward(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     UI.deleteForward(tb.boxId)
 end
 
 function textbox.cursorLeft(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     UI.cursorLeft(tb.boxId)
 end
 
 function textbox.cursorRight(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     UI.cursorRight(tb.boxId)
 end
 
 function textbox.cursorHome(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     UI.cursorHome(tb.boxId)
 end
 
 function textbox.cursorEnd(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return end
     UI.cursorEnd(tb.boxId)
 end
@@ -544,7 +546,7 @@ end
 function textbox.onSubmit()
     local id = textbox.getFocusedId()
     if id then
-        local tb = textboxes[id]
+        local tb = textbox.textboxes[id]
         local value = textbox.getValue(id)
         local displayText = textbox.formatDisplayText(id)
         engine.logDebug("TextBox submitted: " .. tb.name .. " = '" .. displayText .. "' (value=" .. value .. ")")
@@ -563,8 +565,12 @@ function textbox.onEscape()
     return false
 end
 
+-----------------------------------------------------------
+-- Size Query
+-----------------------------------------------------------
+
 function textbox.getSize(id)
-    local tb = textboxes[id]
+    local tb = textbox.textboxes[id]
     if not tb then return 0, 0 end
     return tb.width, tb.height
 end

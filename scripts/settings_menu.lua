@@ -1,6 +1,7 @@
 -- Settings Menu Module
 local scale = require("scripts.ui.scale")
 local panel = require("scripts.ui.panel")
+local label = require("scripts.ui.label")
 local textbox = require("scripts.ui.textbox")
 local checkbox = require("scripts.ui.checkbox")
 local button = require("scripts.ui.button")
@@ -27,6 +28,11 @@ settingsMenu.baseSizes = {
 }
 
 settingsMenu.uiCreated = false
+
+settingsMenu.titleLabelId = nil
+settingsMenu.fullscreenLabelId = nil
+settingsMenu.scalingLabelId = nil
+settingsMenu.frameLimitLabelId = nil
 
 settingsMenu.uiScaleTextBox = nil
 settingsMenu.frameLimitTextBox = nil
@@ -75,11 +81,16 @@ function settingsMenu.init(panelTex, btnTex, font, width, height)
 end
 
 function settingsMenu.createUI()
+    label.destroyAll()
     textbox.destroyAll()
     checkbox.destroyAll()
     button.destroyAll()
     panel.destroyAll()
     
+    settingsMenu.titleLabelId = nil
+    settingsMenu.fullscreenLabelId = nil
+    settingsMenu.scalingLabelId = nil
+    settingsMenu.frameLimitLabelId = nil
     settingsMenu.uiScaleTextBox = nil
     settingsMenu.frameLimitTextBox = nil
     settingsMenu.fullscreenCheckboxId = nil
@@ -126,23 +137,27 @@ function settingsMenu.createUI()
     })
     
     local baseZ = panel.getZIndex(settingsMenu.panelId)
-    local bounds = panel.getContentBounds(settingsMenu.panelId)
     
-    -- Title (centered at top)
-    local titleText = panel.placeText(
-        settingsMenu.panelId,
-        "Settings",
-        settingsMenu.menuFont,
-        s.fontSize,
-        {1.0, 1.0, 1.0, 1.0},
-        {
-            x = "50%",
-            y = "0px",
-            origin = "top-center",
-            name = "settings_title",
-        }
-    )
-    UI.setZIndex(titleText, baseZ + 1)
+    -- Title label (centered at top)
+    settingsMenu.titleLabelId = label.new({
+        name = "settings_title",
+        text = "Settings",
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.fontSize,
+        color = {1.0, 1.0, 1.0, 1.0},
+        page = settingsMenu.page,
+        uiscale = uiscale,
+        zIndex = baseZ + 1,
+    })
+    
+    local titleW, titleH = label.getSize(settingsMenu.titleLabelId)
+    panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.titleLabelId), {
+        x = "50%",
+        y = "0px",
+        origin = "top-center",
+        width = titleW,
+        height = titleH,
+    })
     
     -- Calculate row positions
     local rowY1 = s.fontSize + s.rowSpacing
@@ -150,20 +165,25 @@ function settingsMenu.createUI()
     local rowY3 = rowY2 + s.rowSpacing
     
     -- Row 1: Fullscreen label and checkbox
-    local fullscreenLabel = panel.placeText(
-        settingsMenu.panelId,
-        "Fullscreen",
-        settingsMenu.menuFont,
-        s.fontSize,
-        {1.0, 1.0, 1.0, 1.0},
-        {
-            x = "0px",
-            y = rowY1 .. "px",
-            origin = "top-left",
-            name = "fullscreen_label",
-        }
-    )
-    UI.setZIndex(fullscreenLabel, baseZ + 1)
+    settingsMenu.fullscreenLabelId = label.new({
+        name = "fullscreen_label",
+        text = "Fullscreen",
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.fontSize,
+        color = {1.0, 1.0, 1.0, 1.0},
+        page = settingsMenu.page,
+        uiscale = uiscale,
+        zIndex = baseZ + 1,
+    })
+    
+    local flLabelW, flLabelH = label.getSize(settingsMenu.fullscreenLabelId)
+    panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.fullscreenLabelId), {
+        x = "0px",
+        y = rowY1 .. "px",
+        origin = "top-left",
+        width = flLabelW,
+        height = flLabelH,
+    })
     
     settingsMenu.fullscreenCheckboxId = checkbox.new({
         name = "fullscreen",
@@ -173,7 +193,7 @@ function settingsMenu.createUI()
         default = settingsMenu.currentSettings.fullscreen,
         onChange = function(checked, id, name)
             settingsMenu.pendingSettings.fullscreen = checked
-            engine.logDebug("Fullscreen pending: " .. tostring(checked))
+            engine.logInfo("Fullscreen pending: " .. tostring(checked))
         end,
     })
     
@@ -188,25 +208,30 @@ function settingsMenu.createUI()
     UI.setZIndex(checkbox.getElementHandle(settingsMenu.fullscreenCheckboxId), baseZ + 1)
     
     -- Row 2: UI Scaling label and textbox
-    local scalingLabel = panel.placeText(
-        settingsMenu.panelId,
-        "UI Scaling",
-        settingsMenu.menuFont,
-        s.fontSize,
-        {1.0, 1.0, 1.0, 1.0},
-        {
-            x = "0px",
-            y = rowY2 .. "px",
-            origin = "top-left",
-            name = "scaling_label",
-        }
-    )
-    UI.setZIndex(scalingLabel, baseZ + 1)
+    settingsMenu.scalingLabelId = label.new({
+        name = "scaling_label",
+        text = "UI Scaling",
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.fontSize,
+        color = {1.0, 1.0, 1.0, 1.0},
+        page = settingsMenu.page,
+        uiscale = uiscale,
+        zIndex = baseZ + 1,
+    })
+    
+    local scLabelW, scLabelH = label.getSize(settingsMenu.scalingLabelId)
+    panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.scalingLabelId), {
+        x = "0px",
+        y = rowY2 .. "px",
+        origin = "top-left",
+        width = scLabelW,
+        height = scLabelH,
+    })
     
     settingsMenu.uiScaleTextBox = textbox.new({
         name = "uiscale_input",
-        width = s.textboxWidth,
-        height = s.textboxHeight,
+        width = settingsMenu.baseSizes.textboxWidth,
+        height = settingsMenu.baseSizes.textboxHeight,
         page = settingsMenu.page,
         uiscale = uiscale,
         font = settingsMenu.menuFont,
@@ -225,25 +250,30 @@ function settingsMenu.createUI()
     })
     
     -- Row 3: Frame Limit label and textbox
-    local frameLimitLabel = panel.placeText(
-        settingsMenu.panelId,
-        "Frame Limit",
-        settingsMenu.menuFont,
-        s.fontSize,
-        {1.0, 1.0, 1.0, 1.0},
-        {
-            x = "0px",
-            y = rowY3 .. "px",
-            origin = "top-left",
-            name = "framelimit_label",
-        }
-    )
-    UI.setZIndex(frameLimitLabel, baseZ + 1)
+    settingsMenu.frameLimitLabelId = label.new({
+        name = "framelimit_label",
+        text = "Frame Limit",
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.fontSize,
+        color = {1.0, 1.0, 1.0, 1.0},
+        page = settingsMenu.page,
+        uiscale = uiscale,
+        zIndex = baseZ + 1,
+    })
+    
+    local frLabelW, frLabelH = label.getSize(settingsMenu.frameLimitLabelId)
+    panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.frameLimitLabelId), {
+        x = "0px",
+        y = rowY3 .. "px",
+        origin = "top-left",
+        width = frLabelW,
+        height = frLabelH,
+    })
     
     settingsMenu.frameLimitTextBox = textbox.new({
         name = "framelimit_input",
-        width = s.textboxWidth,
-        height = s.textboxHeight,
+        width = settingsMenu.baseSizes.textboxWidth,
+        height = settingsMenu.baseSizes.textboxHeight,
         page = settingsMenu.page,
         uiscale = uiscale,
         font = settingsMenu.menuFont,
@@ -353,14 +383,14 @@ function settingsMenu.getSettings()
 end
 
 function settingsMenu.onApply()
-    engine.logDebug("Applying settings...")
+    engine.logInfo("Applying settings...")
     
     local scaleChanged = false
     
     if settingsMenu.pendingSettings.fullscreen ~= settingsMenu.currentSettings.fullscreen then
         settingsMenu.currentSettings.fullscreen = settingsMenu.pendingSettings.fullscreen
         engine.setFullscreen(settingsMenu.currentSettings.fullscreen)
-        engine.logDebug("Fullscreen applied: " .. tostring(settingsMenu.currentSettings.fullscreen))
+        engine.logInfo("Fullscreen applied: " .. tostring(settingsMenu.currentSettings.fullscreen))
     end
     
     if settingsMenu.uiScaleTextBox then
@@ -371,7 +401,7 @@ function settingsMenu.onApply()
                 settingsMenu.currentSettings.uiScale = newScale
                 settingsMenu.pendingSettings.uiScale = newScale
                 engine.setUIScale(newScale)
-                engine.logDebug("UI scale applied: " .. tostring(newScale))
+                engine.logInfo("UI scale applied: " .. tostring(newScale))
             end
         else
             engine.logWarn("UI scale out of range: " .. tostring(newScale))
@@ -384,7 +414,7 @@ function settingsMenu.onApply()
             settingsMenu.currentSettings.frameLimit = math.floor(frameLimit)
             settingsMenu.pendingSettings.frameLimit = settingsMenu.currentSettings.frameLimit
             engine.setFrameLimit(settingsMenu.currentSettings.frameLimit)
-            engine.logDebug("Frame limit applied: " .. tostring(settingsMenu.currentSettings.frameLimit))
+            engine.logInfo("Frame limit applied: " .. tostring(settingsMenu.currentSettings.frameLimit))
         else
             engine.logWarn("Frame limit out of range: " .. tostring(frameLimit))
         end
@@ -397,10 +427,10 @@ function settingsMenu.onApply()
 end
 
 function settingsMenu.onSave()
-    engine.logDebug("Saving settings...")
+    engine.logInfo("Saving settings...")
     settingsMenu.onApply()
     engine.saveVideoConfig()
-    engine.logDebug("Settings saved.")
+    engine.logInfo("Settings saved.")
 end
 
 function settingsMenu.show()
@@ -426,7 +456,7 @@ function settingsMenu.onFramebufferResize(width, height)
 end
 
 function settingsMenu.onTextBoxSubmit(name, value)
-    engine.logDebug("TextBox submit: " .. tostring(name) .. " = " .. tostring(value))
+    engine.logInfo("TextBox submit: " .. tostring(name) .. " = " .. tostring(value))
     
     if name == "uiscale_input" then
         local newScale = tonumber(value)
@@ -459,7 +489,7 @@ function settingsMenu.onTextBoxSubmit(name, value)
 end
 
 function settingsMenu.revertSettings()
-    engine.logDebug("Reverting settings to saved config...")
+    engine.logInfo("Reverting settings to saved config...")
     
     local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
     
@@ -505,6 +535,7 @@ function settingsMenu.reloadSettings()
 end
 
 function settingsMenu.shutdown()
+    label.destroyAll()
     textbox.destroyAll()
     checkbox.destroyAll()
     button.destroyAll()
