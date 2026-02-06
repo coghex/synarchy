@@ -1,4 +1,5 @@
 -- TextBox UI component (using engine focus and text buffer)
+local boxTextures = require("scripts.ui.box_textures")
 local textbox = {}
 
 -----------------------------------------------------------
@@ -6,12 +7,11 @@ local textbox = {}
 -----------------------------------------------------------
 local TEXTBOX_CALLBACK = "onTextBoxClick"
 
--- Textbox types
 local TextBoxType = {
-    TEXT = "text",           -- Any text
-    NUMBER = "number",       -- Numbers only (integer)
-    DECIMAL = "decimal",     -- Numbers with decimal point
-    SCALE = "scale",         -- Scale value (e.g., "1.5x")
+    TEXT = "text",
+    NUMBER = "number",
+    DECIMAL = "decimal",
+    SCALE = "scale",
 }
 textbox.Type = TextBoxType
 
@@ -19,19 +19,15 @@ textbox.Type = TextBoxType
 -- Module State
 -----------------------------------------------------------
 
--- Storage for all textboxes
 local textboxes = {}
 local nextId = 1
 
--- Shared textures (loaded once) - 9-tile box texture sets
 local texSetNormal = nil
 local texSetSelected = nil
 local assetsLoaded = false
 
--- Default tile size for 9-tile boxes
 local defaultTileSize = 16
 
--- Cursor blink state (shared across all textboxes)
 local cursorBlinkTime = 0
 local cursorBlinkRate = 0.5
 local cursorVisible = true
@@ -43,31 +39,12 @@ local cursorVisible = true
 function textbox.init()
     if assetsLoaded then return end
     
-    -- Load normal textbox textures (9-tile)
-    local texCenter = engine.loadTexture("assets/textures/ui/textbox/textbox.png")
-    local texN = engine.loadTexture("assets/textures/ui/textbox/textboxn.png")
-    local texS = engine.loadTexture("assets/textures/ui/textbox/textboxs.png")
-    local texE = engine.loadTexture("assets/textures/ui/textbox/textboxe.png")
-    local texW = engine.loadTexture("assets/textures/ui/textbox/textboxw.png")
-    local texNE = engine.loadTexture("assets/textures/ui/textbox/textboxne.png")
-    local texNW = engine.loadTexture("assets/textures/ui/textbox/textboxnw.png")
-    local texSE = engine.loadTexture("assets/textures/ui/textbox/textboxse.png")
-    local texSW = engine.loadTexture("assets/textures/ui/textbox/textboxsw.png")
-    texSetNormal = UI.loadBoxTextures(texCenter, texN, texS, texE, texW, texNE, texNW, texSE, texSW)
-    
-    -- Load selected textbox textures (9-tile)
-    local texCenterSel = engine.loadTexture("assets/textures/ui/textboxselected/textbox.png")
-    local texNSel = engine.loadTexture("assets/textures/ui/textboxselected/textboxn.png")
-    local texSSel = engine.loadTexture("assets/textures/ui/textboxselected/textboxs.png")
-    local texESel = engine.loadTexture("assets/textures/ui/textboxselected/textboxe.png")
-    local texWSel = engine.loadTexture("assets/textures/ui/textboxselected/textboxw.png")
-    local texNESel = engine.loadTexture("assets/textures/ui/textboxselected/textboxne.png")
-    local texNWSel = engine.loadTexture("assets/textures/ui/textboxselected/textboxnw.png")
-    local texSESel = engine.loadTexture("assets/textures/ui/textboxselected/textboxse.png")
-    local texSWSel = engine.loadTexture("assets/textures/ui/textboxselected/textboxsw.png")
-    texSetSelected = UI.loadBoxTextures(texCenterSel, texNSel, texSSel, texESel, texWSel, texNESel, texNWSel, texSESel, texSWSel)
+    -- Use the utility to load 9-tile textures (with caching)
+    texSetNormal = boxTextures.load("assets/textures/ui/textbox", "textbox")
+    texSetSelected = boxTextures.load("assets/textures/ui/textboxselected", "textbox")
     
     assetsLoaded = true
+    engine.logInfo("TextBox module initialized")
 end
 
 -----------------------------------------------------------
@@ -101,15 +78,13 @@ function textbox.new(params)
         defaultValue = params.default or "",
         font = params.font,
         textType = params.textType or TextBoxType.TEXT,
-        suffix = "",  -- Suffix to display (e.g., "x" for scale)
+        suffix = "",
     }
     
-    -- Set suffix based on type
     if tb.textType == TextBoxType.SCALE then
         tb.suffix = "x"
     end
     
-    -- Create the box using UI system (9-tile) with WHITE background
     tb.boxId = UI.newBox(
         tb.name .. "_box",
         tb.width,
@@ -120,23 +95,19 @@ function textbox.new(params)
         tb.page
     )
     
-    -- Enable text input on this element (creates the buffer in engine)
     UI.enableTextInput(tb.boxId)
     
-    -- Set default value if provided (strip suffix for storage)
     local cleanDefault = tb.defaultValue:gsub("x$", "")
     if cleanDefault ~= "" then
         UI.setTextInput(tb.boxId, cleanDefault)
     end
     
-    -- Add to parent or page
     if tb.parent then
         UI.addChild(tb.parent, tb.boxId, tb.x, tb.y)
     elseif tb.page then
         UI.addToPage(tb.page, tb.boxId, tb.x, tb.y)
     end
     
-    -- Create text element for display (BLACK text)
     if tb.font then
         local textY = (tb.height / 2) + (tb.fontSize / 3)
         tb.textId = UI.newText(
@@ -150,7 +121,6 @@ function textbox.new(params)
         UI.addChild(tb.boxId, tb.textId, tb.textPadding, textY)
         UI.setZIndex(tb.textId, 1)
         
-        -- Create cursor element (BLACK, initially hidden)
         tb.cursorId = UI.newText(
             tb.name .. "_cursor",
             "|",
@@ -164,13 +134,11 @@ function textbox.new(params)
         UI.setVisible(tb.cursorId, false)
     end
     
-    -- Make it clickable
     UI.setClickable(tb.boxId, true)
     UI.setOnClick(tb.boxId, TEXTBOX_CALLBACK)
     
     textboxes[id] = tb
     
-    -- Initial display update
     textbox.updateDisplay(id)
     
     return id
@@ -180,31 +148,23 @@ function textbox.destroy(id)
     local tb = textboxes[id]
     if not tb then return end
     
-    -- Clear focus if this was focused
     if tb.boxId and UI.hasFocus(tb.boxId) then
         UI.clearFocus()
     end
-    
-    -- Note: We don't destroy the UI elements here because 
-    -- they will be destroyed when the page is deleted.
-    -- We just remove our tracking of them.
     
     textboxes[id] = nil
     engine.logInfo("TextBox destroyed: " .. tb.name)
 end
 
 function textbox.destroyAll()
-    -- Clear any focus first
     UI.clearFocus()
     
-    -- Clear all textbox entries
     for id, tb in pairs(textboxes) do
         engine.logInfo("TextBox destroyed: " .. tb.name)
     end
     textboxes = {}
     nextId = 1
     
-    -- Reset cursor state
     cursorVisible = true
     cursorBlinkTime = 0
 end
@@ -291,22 +251,18 @@ function textbox.updateDisplay(id)
     local rawText = UI.getTextInput(tb.boxId) or ""
     local cursorPos = UI.getCursor(tb.boxId) or 0
     
-    -- Calculate text width for right justification
     local textWidth = engine.getTextWidth(tb.font, displayText, tb.fontSize)
     local availableWidth = tb.width - (tb.textPadding * 2)
     
-    -- Right justify: position text so it ends at the right edge
     local textX = tb.width - tb.textPadding - textWidth
     if textX < tb.textPadding then
         textX = tb.textPadding
     end
     
-    -- Update text position and content
     UI.setText(tb.textId, displayText)
     local textY = (tb.height / 2) + (tb.fontSize / 3)
     UI.setPosition(tb.textId, textX, textY)
     
-    -- Update cursor position
     if tb.cursorId then
         local textBeforeCursor = rawText:sub(1, cursorPos)
         local cursorTextWidth = engine.getTextWidth(tb.font, textBeforeCursor, tb.fontSize)
@@ -369,7 +325,6 @@ function textbox.focus(id)
     local tb = textboxes[id]
     if not tb then return end
     
-    -- Unfocus any previously focused textbox (update visuals)
     for otherId, otherTb in pairs(textboxes) do
         if otherId ~= id and otherTb.boxId and UI.hasFocus(otherTb.boxId) then
             UI.setBoxTextures(otherTb.boxId, texSetNormal)
@@ -379,20 +334,15 @@ function textbox.focus(id)
         end
     end
     
-    -- Set engine focus to this element
     UI.setFocus(tb.boxId)
-    
-    -- Update visual
     UI.setBoxTextures(tb.boxId, texSetSelected)
     
-    -- Show cursor and reset blink
     if tb.cursorId then
         cursorVisible = true
         cursorBlinkTime = 0
         UI.setVisible(tb.cursorId, true)
     end
     
-    -- Move cursor to end
     local text = UI.getTextInput(tb.boxId) or ""
     UI.setCursor(tb.boxId, #text)
     textbox.updateDisplay(id)
@@ -454,7 +404,7 @@ function textbox.isTextBoxCallback(callbackName)
 end
 
 -----------------------------------------------------------
--- Cursor Operations (delegate to UI)
+-- Cursor Operations
 -----------------------------------------------------------
 
 function textbox.getCursor(id)
@@ -518,7 +468,7 @@ function textbox.cursorEnd(id)
 end
 
 -----------------------------------------------------------
--- Input Event Handlers (called from ui_manager)
+-- Input Event Handlers
 -----------------------------------------------------------
 
 function textbox.onCharInput(char)

@@ -2,6 +2,7 @@
 local uiManager = {}
 
 -- Shared resources
+local boxTextures = require("scripts.ui.box_textures")
 local boxTexSet = nil
 local btnTexSet = nil
 local menuFont = nil
@@ -39,7 +40,7 @@ function uiManager.init(scriptId)
     engine.logInfo("UI Manager initializing...")
     
     textbox = require("scripts.ui.textbox")
-    checkbox = require("scripts.ui.checkbox")  -- ADD THIS
+    checkbox = require("scripts.ui.checkbox")
 
     uiscale = engine.getUIScale()
     
@@ -49,29 +50,8 @@ function uiManager.init(scriptId)
     menuFont = menuFontHandle
     titleFont = titleFontHandle
     
-    -- Load box textures
-    local texCenter = engine.loadTexture("assets/textures/box/box.png")
-    local texN = engine.loadTexture("assets/textures/box/boxn.png")
-    local texS = engine.loadTexture("assets/textures/box/boxs.png")
-    local texE = engine.loadTexture("assets/textures/box/boxe.png")
-    local texW = engine.loadTexture("assets/textures/box/boxw.png")
-    local texNE = engine.loadTexture("assets/textures/box/boxne.png")
-    local texNW = engine.loadTexture("assets/textures/box/boxnw.png")
-    local texSE = engine.loadTexture("assets/textures/box/boxse.png")
-    local texSW = engine.loadTexture("assets/textures/box/boxsw.png")
-    boxTexSet = UI.loadBoxTextures(texCenter, texN, texS, texE, texW, texNE, texNW, texSE, texSW)
-    
-    -- Load button textures
-    local btnTexCenter = engine.loadTexture("assets/textures/button/button.png")
-    local btnTexN = engine.loadTexture("assets/textures/button/buttonn.png")
-    local btnTexS = engine.loadTexture("assets/textures/button/buttons.png")
-    local btnTexE = engine.loadTexture("assets/textures/button/buttone.png")
-    local btnTexW = engine.loadTexture("assets/textures/button/buttonw.png")
-    local btnTexNE = engine.loadTexture("assets/textures/button/buttonne.png")
-    local btnTexNW = engine.loadTexture("assets/textures/button/buttonnw.png")
-    local btnTexSE = engine.loadTexture("assets/textures/button/buttonse.png")
-    local btnTexSW = engine.loadTexture("assets/textures/button/buttonsw.png")
-    btnTexSet = UI.loadBoxTextures(btnTexCenter, btnTexN, btnTexS, btnTexE, btnTexW, btnTexNE, btnTexNW, btnTexSE, btnTexSW)
+    boxTexSet = boxTextures.load("assets/textures/box", "box")
+    btnTexSet = boxTextures.load("assets/textures/button", "button")
     
     -- Load sub-modules
     mainMenu = require("scripts.main_menu")
