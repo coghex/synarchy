@@ -1,4 +1,5 @@
 -- Debug overlay module
+local scale = require("scripts.ui.scale")
 local debugOverlay = {}
 
 local page = nil
@@ -7,14 +8,16 @@ local debugFont = nil
 local visible = false
 local uiCreated = false
 
--- Configuration
-local baseFontSize = 32
-local baseMargin = 10
+-- Base sizes (unscaled)
+local baseSizes = {
+    fontSize = 32,
+    margin = 10,
+}
 
 function debugOverlay.init(scriptId)
     engine.logInfo("Debug overlay initializing...")
     
-    debugFont = engine.loadFont("assets/fonts/shell.ttf", baseFontSize)
+    debugFont = engine.loadFont("assets/fonts/shell.ttf", baseSizes.fontSize)
     engine.logInfo("Debug font loaded: " .. tostring(debugFont))
     
     engine.logDebug("Debug overlay initialized")
@@ -25,23 +28,19 @@ function debugOverlay.createUI()
         UI.deletePage(page)
     end
     
-    local uiscale = engine.getUIScale()
-    local fontSize = math.floor(baseFontSize * uiscale)
-    local margin = math.floor(baseMargin * uiscale)
+    local s = scale.applyAll(baseSizes)
     
-    -- Create overlay page
     page = UI.newPage("debug_overlay", "overlay")
     
-    -- FPS text in top-left corner
     fpsText = UI.newText(
         "fps_text",
         "FPS: --",
         debugFont,
-        fontSize,
-        0.0, 1.0, 0.0, 1.0,  -- Green color
+        s.fontSize,
+        0.0, 1.0, 0.0, 1.0,
         page
     )
-    UI.addToPage(page, fpsText, margin, margin + fontSize)
+    UI.addToPage(page, fpsText, s.margin, s.margin + s.fontSize)
     UI.setZIndex(fpsText, 1000)
     
     uiCreated = true
@@ -51,7 +50,6 @@ end
 function debugOverlay.update(dt)
     if not visible then return end
     
-    -- Get FPS from engine (updated every second in Haskell)
     local fps = engine.getFPS()
     
     if fpsText then
@@ -117,6 +115,5 @@ function debugOverlay.onKeyDown(key)
         debugOverlay.toggle()
     end
 end
-
 
 return debugOverlay

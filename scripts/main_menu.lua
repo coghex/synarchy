@@ -1,4 +1,5 @@
 -- Main Menu Module (pure module, no global callbacks)
+local scale = require("scripts.ui.scale")
 local mainMenu = {}
 
 local page = nil
@@ -9,26 +10,19 @@ local fbW, fbH = 0, 0
 local uiCreated = false
 
 -- Base sizes (unscaled)
-local baseTitleFontSize = 96
-local baseFontSize = 24
-local baseButtonWidth = 300
-local baseButtonHeight = 60
-local baseButtonSpacing = 20
-local baseButtonTileSize = 64
-local baseButtonPaddingX = 120
-local baseMenuPaddingX = 80
-local baseMenuPaddingY = 80
-
--- Scaled sizes (computed in createUI)
-local titleFontSize = 96
-local fontSize = 24
-local buttonWidth = 300
-local buttonHeight = 60
-local buttonSpacing = 20
-local buttonTileSize = 64
-local buttonPaddingX = 120
-local menuPaddingX = 80
-local menuPaddingY = 80
+local baseSizes = {
+    titleFontSize = 96,
+    fontSize = 24,
+    buttonWidth = 300,
+    buttonHeight = 60,
+    buttonSpacing = 20,
+    buttonTileSize = 64,
+    buttonPaddingX = 120,
+    menuPaddingX = 80,
+    menuPaddingY = 80,
+    titleOffset = 60,
+    labelOffsetY = 8,
+}
 
 local buttons = {}
 
@@ -56,74 +50,62 @@ function mainMenu.createUI()
         end
     end
     
-    -- Get current UI scale and apply to all sizes
-    local uiscale = engine.getUIScale()
-    fontSize = math.floor(baseFontSize * uiscale)
-    titleFontSize = math.floor(baseTitleFontSize * uiscale)
-    buttonWidth = math.floor(baseButtonWidth * uiscale)
-    buttonHeight = math.floor(baseButtonHeight * uiscale)
-    buttonSpacing = math.floor(baseButtonSpacing * uiscale)
-    buttonTileSize = math.floor(baseButtonTileSize * uiscale)
-    buttonPaddingX = math.floor(baseButtonPaddingX * uiscale)
-    menuPaddingX = math.floor(baseMenuPaddingX * uiscale)
-    menuPaddingY = math.floor(baseMenuPaddingY * uiscale)
+    -- Apply scaling to all base sizes
+    local s = scale.applyAll(baseSizes)
     
-    engine.logDebug("Creating main menu with framebuffer size: " .. fbW .. " x " .. fbH .. ", scale: " .. uiscale)
+    engine.logDebug("Creating main menu with framebuffer size: " .. fbW .. " x " .. fbH .. ", scale: " .. scale.get())
     
     page = UI.newPage("main_menu", "menu")
 
     -- Calculate max text width
     local maxLabelWidth = 0
     for i, item in ipairs(menuItems) do
-        local labelWidth = engine.getTextWidth(menuFont, item.label, fontSize)
+        local labelWidth = engine.getTextWidth(menuFont, item.label, s.fontSize)
         if labelWidth > maxLabelWidth then
             maxLabelWidth = labelWidth
         end
     end
     
-    local buttonWidth = maxLabelWidth + buttonPaddingX
+    local buttonWidth = maxLabelWidth + s.buttonPaddingX
     
     -- Calculate menu dimensions
-    local menuHeight = #menuItems * (buttonHeight + buttonSpacing) + buttonSpacing + menuPaddingY
-    local menuWidth = buttonWidth + menuPaddingX
+    local menuHeight = #menuItems * (s.buttonHeight + s.buttonSpacing) + s.buttonSpacing + s.menuPaddingY
+    local menuWidth = buttonWidth + s.menuPaddingX
     
     -- Center the menu box
     local menuX = (fbW - menuWidth) / 2
     local menuY = (fbH - menuHeight) / 2
     
     -- Create menu container box
-    local menuBox = UI.newBox("menu_box", menuWidth, menuHeight, boxTexSet, buttonTileSize, 1.0, 1.0, 1.0, 1.0, page)
+    local menuBox = UI.newBox("menu_box", menuWidth, menuHeight, boxTexSet, s.buttonTileSize, 1.0, 1.0, 1.0, 1.0, page)
     UI.addToPage(page, menuBox, menuX, menuY)
     UI.setZIndex(menuBox, 1)
     
     -- Create title above menu box
     local titleStr = "Ecce Homo"
-    local titleWidth = engine.getTextWidth(titleFont, titleStr, titleFontSize)
+    local titleWidth = engine.getTextWidth(titleFont, titleStr, s.titleFontSize)
     local titleX = (fbW - titleWidth) / 2
-    local titleY = menuY - math.floor(60 * uiscale)
-    local titleText = UI.newText("title", titleStr, titleFont, titleFontSize, 1.0, 1.0, 1.0, 1.0, page)
+    local titleY = menuY - s.titleOffset
+    local titleText = UI.newText("title", titleStr, titleFont, s.titleFontSize, 1.0, 1.0, 1.0, 1.0, page)
     UI.addToPage(page, titleText, titleX, titleY)
     
     -- Create menu buttons inside the menu box
-    local buttonX = (menuWidth - buttonWidth) / 2
-    
     for i, item in ipairs(menuItems) do
-        local buttonOffsetX = menuPaddingX / 2
-        local buttonOffsetY = menuPaddingY / 2
-        local buttonY = buttonSpacing + (i - 1) * (buttonHeight + buttonSpacing) + buttonOffsetY
+        local buttonOffsetY = s.menuPaddingY / 2
+        local buttonY = s.buttonSpacing + (i - 1) * (s.buttonHeight + s.buttonSpacing) + buttonOffsetY
         
-        local labelWidth = engine.getTextWidth(menuFont, item.label, fontSize)
-        local thisButtonWidth = labelWidth + buttonPaddingX
+        local labelWidth = engine.getTextWidth(menuFont, item.label, s.fontSize)
+        local thisButtonWidth = labelWidth + s.buttonPaddingX
         local thisButtonX = (menuWidth - thisButtonWidth) / 2
-        local btn = UI.newBox(item.name, thisButtonWidth, buttonHeight, boxTexSet, buttonTileSize, 1.0, 1.0, 1.0, 1.0, page)
+        local btn = UI.newBox(item.name, thisButtonWidth, s.buttonHeight, boxTexSet, s.buttonTileSize, 1.0, 1.0, 1.0, 1.0, page)
         UI.addChild(menuBox, btn, thisButtonX, buttonY)
         UI.setZIndex(btn, 2)
         UI.setClickable(btn, true)
         UI.setOnClick(btn, item.callback)
         
         local labelX = (thisButtonWidth - labelWidth) / 2
-        local labelY = (buttonHeight / 2) + math.floor(8 * uiscale)
-        local label = UI.newText(item.name .. "_label", item.label, menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
+        local labelY = (s.buttonHeight / 2) + s.labelOffsetY
+        local label = UI.newText(item.name .. "_label", item.label, menuFont, s.fontSize, 1.0, 1.0, 1.0, 1.0, page)
         UI.addChild(btn, label, labelX, labelY)
         
         buttons[item.name] = {
@@ -137,7 +119,6 @@ function mainMenu.createUI()
 end
 
 function mainMenu.show()
-    -- Rebuild UI to pick up any scale changes
     mainMenu.createUI()
     if page then
         UI.showPage(page)

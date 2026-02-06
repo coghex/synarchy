@@ -1,4 +1,5 @@
 !_TAG_FILE_SORTED	1	//
+.	scripts/ui/scale.hs	15;"	o
 API	src/Engine/Scripting/Lua/API.hs	1;"	m
 AnyBackend	src/Engine/Scripting/Backend.hs	43;"	t
 AssetAllocationFailed	src/Engine/Core/Error/Exception.hs	104;"	C
@@ -1231,6 +1232,7 @@ loadTextureAtlas	src/Engine/Asset/Manager.hs	157;"	f
 loadTextureAtlasWithHandle	src/Engine/Asset/Manager.hs	165;"	f
 loadTextureFn	src/Engine/Scripting/Lua/API/Graphics.hs	53;"	f
 loadVideoConfig	src/Engine/Graphics/Config.hs	81;"	f
+local	scripts/ui/scale.hs	2;"	f
 localToWorldMatrix	src/Engine/Scene/Graph.hs	127;"	f
 locally	src/Engine/Core/Resource.hs	43;"	f
 logAndThrow	src/Engine/Core/Log.hs	567;"	f

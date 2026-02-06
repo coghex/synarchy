@@ -1,4 +1,5 @@
 -- Settings Menu Module
+local scale = require("scripts.ui.scale")
 local textbox = require("scripts.ui.textbox")
 local checkbox = require("scripts.ui.checkbox")
 local button = require("scripts.ui.button")
@@ -9,19 +10,22 @@ local panelTexSet = nil
 local buttonTexSet = nil
 local menuFont = nil
 local fbW, fbH = 0, 0
-local baseFontSize = 32
-local baseCheckboxSize = 48
-local baseButtonSize = 64
-local baseBtnWidth = 200
-local baseBtnHeight = 64
-local baseSplit = 100
 
-local fontSize = 32
-local checkboxSize = 48
-local buttonSize = 64
-local btnWidth = 160
-local btnHeight = 64
-local split = 100
+-- Base sizes (unscaled)
+local baseSizes = {
+    fontSize = 32,
+    checkboxSize = 48,
+    btnWidth = 200,
+    btnHeight = 64,
+    topMargin = 80,
+    bottomMargin = 100,
+    rowSpacing = 120,
+    rowX = 100,
+    titleOffset = 60,
+    textboxWidth = 150,
+    textboxHeight = 40,
+    btnSpacing = 20,
+}
 
 local uiCreated = false
 
@@ -49,8 +53,6 @@ local currentSettings = {
 
 local pendingSettings = {}
 
-local elements = {}
-
 local showMenuCallback = nil
 
 function settingsMenu.setShowMenuCallback(callback)
@@ -64,15 +66,7 @@ function settingsMenu.init(panelTex, btnTex, font, width, height)
     fbW = width
     fbH = height
     
-    currentSettings.uiScale = engine.getUIScale()
-    local uiscale = currentSettings.uiScale
-    
-    fontSize = math.floor(baseFontSize * uiscale)
-    checkboxSize = math.floor(baseCheckboxSize * uiscale)
-    buttonSize = math.floor(baseButtonSize * uiscale)
-    btnWidth = math.floor(baseBtnWidth * uiscale)
-    btnHeight = math.floor(baseBtnHeight * uiscale)
-    split = math.floor(baseSplit * uiscale)
+    currentSettings.uiScale = scale.get()
     
     textbox.init()
     checkbox.init()
@@ -94,7 +88,6 @@ function settingsMenu.createUI()
     
     if uiCreated and page then
         UI.deletePage(page)
-        elements = {}
     end
     
     pendingSettings = {
@@ -104,6 +97,7 @@ function settingsMenu.createUI()
     }
     
     local uiscale = currentSettings.uiScale
+    local s = scale.applyAllWith(baseSizes, uiscale)
     
     page = UI.newPage("settings_menu", "modal")
     
@@ -113,40 +107,34 @@ function settingsMenu.createUI()
     local panelX = (fbW - panelWidth) / 2
     local panelY = (fbH - panelHeight) / 2
     
-    -- Scaled margins and spacing
-    local topMargin = math.floor(80 * uiscale)
-    local bottomMargin = math.floor(100 * uiscale)
-    local rowSpacing = math.floor(120 * uiscale)
-    local rowX = math.floor(100 * uiscale)
-    
     local panel = UI.newBox("settings_panel", panelWidth, panelHeight, panelTexSet, 64, 1.0, 1.0, 1.0, 1.0, page)
     UI.addToPage(page, panel, panelX, panelY)
     UI.setZIndex(panel, 10)
     
-    -- Title - positioned below top margin
-    local titleY = topMargin + fontSize
-    local titleText = UI.newText("settings_title", "Settings", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
-    local titleWidth = engine.getTextWidth(menuFont, "Settings", fontSize)
+    -- Title
+    local titleY = s.topMargin + s.fontSize
+    local titleText = UI.newText("settings_title", "Settings", menuFont, s.fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    local titleWidth = engine.getTextWidth(menuFont, "Settings", s.fontSize)
     UI.addChild(panel, titleText, (panelWidth - titleWidth) / 2, titleY)
     
     -- Content area starts after title
-    local contentStartY = titleY + math.floor(60 * uiscale)
+    local contentStartY = titleY + s.titleOffset
     
     -- Fullscreen toggle row
     local yPos = contentStartY
     
-    local labelText = UI.newText("fullscreen_label", "Fullscreen", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, labelText, rowX, yPos + (fontSize / 2))
+    local labelText = UI.newText("fullscreen_label", "Fullscreen", menuFont, s.fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    UI.addChild(panel, labelText, s.rowX, yPos + (s.fontSize / 2))
     
-    local checkboxX = panelWidth - rowX - checkboxSize
+    local checkboxX = panelWidth - s.rowX - s.checkboxSize
     fullscreenCheckboxId = checkbox.new({
         name = "fullscreen",
-        size = baseCheckboxSize,
+        size = baseSizes.checkboxSize,
         uiscale = uiscale,
         page = page,
         parent = panel,
         x = checkboxX,
-        y = yPos - (checkboxSize / 2) + (fontSize / 2),
+        y = yPos - (s.checkboxSize / 2) + (s.fontSize / 2),
         default = currentSettings.fullscreen,
         onChange = function(checked, id, name)
             pendingSettings.fullscreen = checked
@@ -156,19 +144,17 @@ function settingsMenu.createUI()
     UI.setZIndex(checkbox.getElementHandle(fullscreenCheckboxId), 20)
 
     -- UI scaling row
-    yPos = yPos + rowSpacing
-    local scalingLabel = UI.newText("scaling_label", "UI Scaling", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, scalingLabel, rowX, yPos + (fontSize / 2))
+    yPos = yPos + s.rowSpacing
+    local scalingLabel = UI.newText("scaling_label", "UI Scaling", menuFont, s.fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    UI.addChild(panel, scalingLabel, s.rowX, yPos + (s.fontSize / 2))
     
-    local textboxWidth = math.floor(150 * uiscale)
-    local textboxHeight = math.floor(40 * uiscale)
-    local textboxX = panelWidth - rowX - textboxWidth
+    local textboxX = panelWidth - s.rowX - s.textboxWidth
     uiScaleTextBox = textbox.new({
         name = "uiscale_input",
         x = textboxX,
         y = yPos,
-        width = textboxWidth,
-        height = textboxHeight,
+        width = s.textboxWidth,
+        height = s.textboxHeight,
         page = page,
         parent = panel,
         uiscale = uiscale,
@@ -179,16 +165,16 @@ function settingsMenu.createUI()
     })
 
     -- Frame limit row
-    yPos = yPos + rowSpacing
-    local frameLimitLabel = UI.newText("framelimit_label", "Frame Limit", menuFont, fontSize, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, frameLimitLabel, rowX, yPos + (fontSize / 2))
+    yPos = yPos + s.rowSpacing
+    local frameLimitLabel = UI.newText("framelimit_label", "Frame Limit", menuFont, s.fontSize, 1.0, 1.0, 1.0, 1.0, page)
+    UI.addChild(panel, frameLimitLabel, s.rowX, yPos + (s.fontSize / 2))
     
     frameLimitTextBox = textbox.new({
         name = "framelimit_input",
         x = textboxX,
         y = yPos,
-        width = textboxWidth,
-        height = textboxHeight,
+        width = s.textboxWidth,
+        height = s.textboxHeight,
         page = page,
         parent = panel,
         uiscale = uiscale,
@@ -198,11 +184,10 @@ function settingsMenu.createUI()
         textType = textbox.Type.NUMBER,
     })
     
-    -- Button row - positioned from bottom
-    local btnSpacing = math.floor(20 * uiscale)
-    local totalBtnWidth = (btnWidth * 3) + (btnSpacing * 2)
+    -- Button row
+    local totalBtnWidth = (s.btnWidth * 3) + (s.btnSpacing * 2)
     local btnStartX = (panelWidth - totalBtnWidth) / 2
-    local btnY = panelHeight - bottomMargin - btnHeight
+    local btnY = panelHeight - s.bottomMargin - s.btnHeight
     
     -- Back button
     backButtonId = button.new({
@@ -210,9 +195,9 @@ function settingsMenu.createUI()
         text = "Back",
         x = btnStartX,
         y = btnY,
-        width = baseBtnWidth,
-        height = baseBtnHeight,
-        fontSize = baseFontSize,
+        width = baseSizes.btnWidth,
+        height = baseSizes.btnHeight,
+        fontSize = baseSizes.fontSize,
         uiscale = uiscale,
         page = page,
         parent = panel,
@@ -232,11 +217,11 @@ function settingsMenu.createUI()
     applyButtonId = button.new({
         name = "apply_btn",
         text = "Apply",
-        x = btnStartX + btnWidth + btnSpacing,
+        x = btnStartX + s.btnWidth + s.btnSpacing,
         y = btnY,
-        width = baseBtnWidth,
-        height = baseBtnHeight,
-        fontSize = baseFontSize,
+        width = baseSizes.btnWidth,
+        height = baseSizes.btnHeight,
+        fontSize = baseSizes.fontSize,
         uiscale = uiscale,
         page = page,
         parent = panel,
@@ -253,11 +238,11 @@ function settingsMenu.createUI()
     saveButtonId = button.new({
         name = "save_btn",
         text = "Save",
-        x = btnStartX + (btnWidth + btnSpacing) * 2,
+        x = btnStartX + (s.btnWidth + s.btnSpacing) * 2,
         y = btnY,
-        width = baseBtnWidth,
-        height = baseBtnHeight,
-        fontSize = baseFontSize,
+        width = baseSizes.btnWidth,
+        height = baseSizes.btnHeight,
+        fontSize = baseSizes.fontSize,
         uiscale = uiscale,
         page = page,
         parent = panel,
@@ -289,25 +274,17 @@ function settingsMenu.onApply()
     end
     
     if uiScaleTextBox then
-        local scale = textbox.getNumericValue(uiScaleTextBox)
-        if scale >= uiScaleMin and scale <= uiScaleMax then
-            if currentSettings.uiScale ~= scale then
+        local newScale = textbox.getNumericValue(uiScaleTextBox)
+        if newScale >= uiScaleMin and newScale <= uiScaleMax then
+            if currentSettings.uiScale ~= newScale then
                 scaleChanged = true
-                currentSettings.uiScale = scale
-                pendingSettings.uiScale = scale
-                engine.setUIScale(scale)
-                
-                fontSize = math.floor(baseFontSize * scale)
-                checkboxSize = math.floor(baseCheckboxSize * scale)
-                buttonSize = math.floor(baseButtonSize * scale)
-                btnWidth = math.floor(baseBtnWidth * scale)
-                btnHeight = math.floor(baseBtnHeight * scale)
-                split = math.floor(baseSplit * scale)
-                
-                engine.logInfo("UI scale applied: " .. tostring(scale))
+                currentSettings.uiScale = newScale
+                pendingSettings.uiScale = newScale
+                engine.setUIScale(newScale)
+                engine.logInfo("UI scale applied: " .. tostring(newScale))
             end
         else
-            engine.logWarn("UI scale out of range: " .. tostring(scale))
+            engine.logWarn("UI scale out of range: " .. tostring(newScale))
         end
     end
     
@@ -362,18 +339,18 @@ function settingsMenu.onTextBoxSubmit(name, value)
     engine.logInfo("TextBox submit: " .. tostring(name) .. " = " .. tostring(value))
     
     if name == "uiscale_input" then
-        local scale = tonumber(value)
-        if not scale then
+        local newScale = tonumber(value)
+        if not newScale then
             if uiScaleTextBox then
                 textbox.setText(uiScaleTextBox, tostring(currentSettings.uiScale))
             end
             return
         end
-        scale = math.max(uiScaleMin, math.min(uiScaleMax, scale))
+        newScale = math.max(uiScaleMin, math.min(uiScaleMax, newScale))
         if uiScaleTextBox then
-            textbox.setText(uiScaleTextBox, tostring(scale))
+            textbox.setText(uiScaleTextBox, tostring(newScale))
         end
-        pendingSettings.uiScale = scale
+        pendingSettings.uiScale = newScale
         
     elseif name == "framelimit_input" then
         local frameLimit = tonumber(value)
@@ -414,12 +391,6 @@ function settingsMenu.revertSettings()
     
     if scaleChanged then
         engine.setUIScale(uiScale)
-        fontSize = math.floor(baseFontSize * uiScale)
-        checkboxSize = math.floor(baseCheckboxSize * uiScale)
-        buttonSize = math.floor(baseButtonSize * uiScale)
-        btnWidth = math.floor(baseBtnWidth * uiScale)
-        btnHeight = math.floor(baseBtnHeight * uiScale)
-        split = math.floor(baseSplit * uiScale)
     end
     
     if frameLimitChanged then
@@ -441,13 +412,6 @@ function settingsMenu.reloadSettings()
     currentSettings.vsync = vs
     currentSettings.frameLimit = frameLimit or 60
     currentSettings.msaa = msaa
-    
-    fontSize = math.floor(baseFontSize * uiScale)
-    checkboxSize = math.floor(baseCheckboxSize * uiScale)
-    buttonSize = math.floor(baseButtonSize * uiScale)
-    btnWidth = math.floor(baseBtnWidth * uiScale)
-    btnHeight = math.floor(baseBtnHeight * uiScale)
-    split = math.floor(baseSplit * uiScale)
 end
 
 function settingsMenu.shutdown()
