@@ -190,4 +190,10 @@ function checkbox.getName(id)
     return cb.name
 end
 
+function checkbox.getSize(id)
+    local cb = checkboxes[id]
+    if not cb then return 0, 0 end
+    return cb.size, cb.size
+end
+
 return checkbox

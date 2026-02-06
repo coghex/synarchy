@@ -150,4 +150,10 @@ function button.getElementHandle(id)
     return btn.boxId
 end
 
+function button.getSize(id)
+    local btn = buttons[id]
+    if not btn then return 0, 0 end
+    return btn.width, btn.height
+end
+
 return button

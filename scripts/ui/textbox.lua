@@ -563,4 +563,10 @@ function textbox.onEscape()
     return false
 end
 
+function textbox.getSize(id)
+    local tb = textboxes[id]
+    if not tb then return 0, 0 end
+    return tb.width, tb.height
+end
+
 return textbox

@@ -1,47 +1,46 @@
 -- Settings Menu Module
 local scale = require("scripts.ui.scale")
+local panel = require("scripts.ui.panel")
 local textbox = require("scripts.ui.textbox")
 local checkbox = require("scripts.ui.checkbox")
 local button = require("scripts.ui.button")
 local settingsMenu = {}
 
-local page = nil
-local panelTexSet = nil
-local buttonTexSet = nil
-local menuFont = nil
-local fbW, fbH = 0, 0
+settingsMenu.page = nil
+settingsMenu.panelId = nil
+settingsMenu.panelTexSet = nil
+settingsMenu.buttonTexSet = nil
+settingsMenu.menuFont = nil
+settingsMenu.fbW = 0
+settingsMenu.fbH = 0
 
 -- Base sizes (unscaled)
-local baseSizes = {
+settingsMenu.baseSizes = {
     fontSize = 32,
     checkboxSize = 48,
     btnWidth = 200,
     btnHeight = 64,
-    topMargin = 80,
-    bottomMargin = 100,
-    rowSpacing = 120,
-    rowX = 100,
-    titleOffset = 60,
     textboxWidth = 150,
     textboxHeight = 40,
+    rowSpacing = 100,
     btnSpacing = 20,
 }
 
-local uiCreated = false
+settingsMenu.uiCreated = false
 
-local uiScaleTextBox = nil
-local frameLimitTextBox = nil
-local fullscreenCheckboxId = nil
-local backButtonId = nil
-local applyButtonId = nil
-local saveButtonId = nil
+settingsMenu.uiScaleTextBox = nil
+settingsMenu.frameLimitTextBox = nil
+settingsMenu.fullscreenCheckboxId = nil
+settingsMenu.backButtonId = nil
+settingsMenu.applyButtonId = nil
+settingsMenu.saveButtonId = nil
 
-local uiScaleMin = 0.5
-local uiScaleMax = 4.0
-local frameLimitMin = 30
-local frameLimitMax = 240
+settingsMenu.uiScaleMin = 0.5
+settingsMenu.uiScaleMax = 4.0
+settingsMenu.frameLimitMin = 30
+settingsMenu.frameLimitMax = 240
 
-local currentSettings = {
+settingsMenu.currentSettings = {
     width = 800,
     height = 600,
     fullscreen = false,
@@ -51,22 +50,22 @@ local currentSettings = {
     msaa = 0
 }
 
-local pendingSettings = {}
+settingsMenu.pendingSettings = {}
 
-local showMenuCallback = nil
+settingsMenu.showMenuCallback = nil
 
 function settingsMenu.setShowMenuCallback(callback)
-    showMenuCallback = callback
+    settingsMenu.showMenuCallback = callback
 end
 
 function settingsMenu.init(panelTex, btnTex, font, width, height)
-    panelTexSet = panelTex
-    buttonTexSet = btnTex
-    menuFont = font
-    fbW = width
-    fbH = height
+    settingsMenu.panelTexSet = panelTex
+    settingsMenu.buttonTexSet = btnTex
+    settingsMenu.menuFont = font
+    settingsMenu.fbW = width
+    settingsMenu.fbH = height
     
-    currentSettings.uiScale = scale.get()
+    settingsMenu.currentSettings.uiScale = scale.get()
     
     textbox.init()
     checkbox.init()
@@ -79,154 +78,220 @@ function settingsMenu.createUI()
     textbox.destroyAll()
     checkbox.destroyAll()
     button.destroyAll()
-    uiScaleTextBox = nil
-    frameLimitTextBox = nil
-    fullscreenCheckboxId = nil
-    backButtonId = nil
-    applyButtonId = nil
-    saveButtonId = nil
+    panel.destroyAll()
     
-    if uiCreated and page then
-        UI.deletePage(page)
+    settingsMenu.uiScaleTextBox = nil
+    settingsMenu.frameLimitTextBox = nil
+    settingsMenu.fullscreenCheckboxId = nil
+    settingsMenu.backButtonId = nil
+    settingsMenu.applyButtonId = nil
+    settingsMenu.saveButtonId = nil
+    settingsMenu.panelId = nil
+    
+    if settingsMenu.uiCreated and settingsMenu.page then
+        UI.deletePage(settingsMenu.page)
     end
     
-    pendingSettings = {
-        fullscreen = currentSettings.fullscreen,
-        uiScale = currentSettings.uiScale,
-        frameLimit = currentSettings.frameLimit,
+    settingsMenu.pendingSettings = {
+        fullscreen = settingsMenu.currentSettings.fullscreen,
+        uiScale = settingsMenu.currentSettings.uiScale,
+        frameLimit = settingsMenu.currentSettings.frameLimit,
     }
     
-    local uiscale = currentSettings.uiScale
-    local s = scale.applyAllWith(baseSizes, uiscale)
+    local uiscale = settingsMenu.currentSettings.uiScale
+    local s = scale.applyAllWith(settingsMenu.baseSizes, uiscale)
     
-    page = UI.newPage("settings_menu", "modal")
+    settingsMenu.page = UI.newPage("settings_menu", "modal")
     
     -- Panel sizing
-    local panelWidth = math.floor(fbW * 0.7)
-    local panelHeight = math.floor(fbH * 0.7)
-    local panelX = (fbW - panelWidth) / 2
-    local panelY = (fbH - panelHeight) / 2
+    local panelWidth = math.floor(settingsMenu.fbW * 0.7)
+    local panelHeight = math.floor(settingsMenu.fbH * 0.7)
+    local panelX = (settingsMenu.fbW - panelWidth) / 2
+    local panelY = (settingsMenu.fbH - panelHeight) / 2
     
-    local panel = UI.newBox("settings_panel", panelWidth, panelHeight, panelTexSet, 64, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addToPage(page, panel, panelX, panelY)
-    UI.setZIndex(panel, 10)
-    
-    -- Title
-    local titleY = s.topMargin + s.fontSize
-    local titleText = UI.newText("settings_title", "Settings", menuFont, s.fontSize, 1.0, 1.0, 1.0, 1.0, page)
-    local titleWidth = engine.getTextWidth(menuFont, "Settings", s.fontSize)
-    UI.addChild(panel, titleText, (panelWidth - titleWidth) / 2, titleY)
-    
-    -- Content area starts after title
-    local contentStartY = titleY + s.titleOffset
-    
-    -- Fullscreen toggle row
-    local yPos = contentStartY
-    
-    local labelText = UI.newText("fullscreen_label", "Fullscreen", menuFont, s.fontSize, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, labelText, s.rowX, yPos + (s.fontSize / 2))
-    
-    local checkboxX = panelWidth - s.rowX - s.checkboxSize
-    fullscreenCheckboxId = checkbox.new({
-        name = "fullscreen",
-        size = baseSizes.checkboxSize,
+    -- Create panel
+    settingsMenu.panelId = panel.new({
+        name = "settings_panel",
+        page = settingsMenu.page,
+        x = panelX,
+        y = panelY,
+        width = panelWidth,
+        height = panelHeight,
+        textureSet = settingsMenu.panelTexSet,
+        color = {1.0, 1.0, 1.0, 1.0},
+        tileSize = 64,
+        zIndex = 10,
+        padding = { top = 80, bottom = 120, left = 60, right = 60 },
         uiscale = uiscale,
-        page = page,
-        parent = panel,
-        x = checkboxX,
-        y = yPos - (s.checkboxSize / 2) + (s.fontSize / 2),
-        default = currentSettings.fullscreen,
+    })
+    
+    local baseZ = panel.getZIndex(settingsMenu.panelId)
+    local bounds = panel.getContentBounds(settingsMenu.panelId)
+    
+    -- Title (centered at top)
+    local titleText = panel.placeText(
+        settingsMenu.panelId,
+        "Settings",
+        settingsMenu.menuFont,
+        s.fontSize,
+        {1.0, 1.0, 1.0, 1.0},
+        {
+            x = "50%",
+            y = "0px",
+            origin = "top-center",
+            name = "settings_title",
+        }
+    )
+    UI.setZIndex(titleText, baseZ + 1)
+    
+    -- Calculate row positions
+    local rowY1 = s.fontSize + s.rowSpacing
+    local rowY2 = rowY1 + s.rowSpacing
+    local rowY3 = rowY2 + s.rowSpacing
+    
+    -- Row 1: Fullscreen label and checkbox
+    local fullscreenLabel = panel.placeText(
+        settingsMenu.panelId,
+        "Fullscreen",
+        settingsMenu.menuFont,
+        s.fontSize,
+        {1.0, 1.0, 1.0, 1.0},
+        {
+            x = "0px",
+            y = rowY1 .. "px",
+            origin = "top-left",
+            name = "fullscreen_label",
+        }
+    )
+    UI.setZIndex(fullscreenLabel, baseZ + 1)
+    
+    settingsMenu.fullscreenCheckboxId = checkbox.new({
+        name = "fullscreen",
+        size = settingsMenu.baseSizes.checkboxSize,
+        uiscale = uiscale,
+        page = settingsMenu.page,
+        default = settingsMenu.currentSettings.fullscreen,
         onChange = function(checked, id, name)
-            pendingSettings.fullscreen = checked
+            settingsMenu.pendingSettings.fullscreen = checked
             engine.logInfo("Fullscreen pending: " .. tostring(checked))
         end,
     })
-    UI.setZIndex(checkbox.getElementHandle(fullscreenCheckboxId), 20)
-
-    -- UI scaling row
-    yPos = yPos + s.rowSpacing
-    local scalingLabel = UI.newText("scaling_label", "UI Scaling", menuFont, s.fontSize, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, scalingLabel, s.rowX, yPos + (s.fontSize / 2))
     
-    local textboxX = panelWidth - s.rowX - s.textboxWidth
-    uiScaleTextBox = textbox.new({
+    local cbW, cbH = checkbox.getSize(settingsMenu.fullscreenCheckboxId)
+    panel.place(settingsMenu.panelId, checkbox.getElementHandle(settingsMenu.fullscreenCheckboxId), {
+        x = "100%",
+        y = rowY1 .. "px",
+        origin = "top-right",
+        width = cbW,
+        height = cbH,
+    })
+    UI.setZIndex(checkbox.getElementHandle(settingsMenu.fullscreenCheckboxId), baseZ + 1)
+    
+    -- Row 2: UI Scaling label and textbox
+    local scalingLabel = panel.placeText(
+        settingsMenu.panelId,
+        "UI Scaling",
+        settingsMenu.menuFont,
+        s.fontSize,
+        {1.0, 1.0, 1.0, 1.0},
+        {
+            x = "0px",
+            y = rowY2 .. "px",
+            origin = "top-left",
+            name = "scaling_label",
+        }
+    )
+    UI.setZIndex(scalingLabel, baseZ + 1)
+    
+    settingsMenu.uiScaleTextBox = textbox.new({
         name = "uiscale_input",
-        x = textboxX,
-        y = yPos,
         width = s.textboxWidth,
         height = s.textboxHeight,
-        page = page,
-        parent = panel,
+        page = settingsMenu.page,
         uiscale = uiscale,
-        font = menuFont,
+        font = settingsMenu.menuFont,
         fontSize = 24,
-        default = tostring(currentSettings.uiScale),
+        default = tostring(settingsMenu.currentSettings.uiScale),
         textType = textbox.Type.SCALE
     })
-
-    -- Frame limit row
-    yPos = yPos + s.rowSpacing
-    local frameLimitLabel = UI.newText("framelimit_label", "Frame Limit", menuFont, s.fontSize, 1.0, 1.0, 1.0, 1.0, page)
-    UI.addChild(panel, frameLimitLabel, s.rowX, yPos + (s.fontSize / 2))
     
-    frameLimitTextBox = textbox.new({
+    local tbW, tbH = textbox.getSize(settingsMenu.uiScaleTextBox)
+    panel.place(settingsMenu.panelId, textbox.getElementHandle(settingsMenu.uiScaleTextBox), {
+        x = "100%",
+        y = rowY2 .. "px",
+        origin = "top-right",
+        width = tbW,
+        height = tbH,
+    })
+    
+    -- Row 3: Frame Limit label and textbox
+    local frameLimitLabel = panel.placeText(
+        settingsMenu.panelId,
+        "Frame Limit",
+        settingsMenu.menuFont,
+        s.fontSize,
+        {1.0, 1.0, 1.0, 1.0},
+        {
+            x = "0px",
+            y = rowY3 .. "px",
+            origin = "top-left",
+            name = "framelimit_label",
+        }
+    )
+    UI.setZIndex(frameLimitLabel, baseZ + 1)
+    
+    settingsMenu.frameLimitTextBox = textbox.new({
         name = "framelimit_input",
-        x = textboxX,
-        y = yPos,
         width = s.textboxWidth,
         height = s.textboxHeight,
-        page = page,
-        parent = panel,
+        page = settingsMenu.page,
         uiscale = uiscale,
-        font = menuFont,
+        font = settingsMenu.menuFont,
         fontSize = 24,
-        default = tostring(currentSettings.frameLimit or 60),
+        default = tostring(settingsMenu.currentSettings.frameLimit or 60),
         textType = textbox.Type.NUMBER,
     })
     
-    -- Button row
-    local totalBtnWidth = (s.btnWidth * 3) + (s.btnSpacing * 2)
-    local btnStartX = (panelWidth - totalBtnWidth) / 2
-    local btnY = panelHeight - s.bottomMargin - s.btnHeight
+    local flW, flH = textbox.getSize(settingsMenu.frameLimitTextBox)
+    panel.place(settingsMenu.panelId, textbox.getElementHandle(settingsMenu.frameLimitTextBox), {
+        x = "100%",
+        y = rowY3 .. "px",
+        origin = "top-right",
+        width = flW,
+        height = flH,
+    })
     
-    -- Back button
-    backButtonId = button.new({
+    -- Create buttons
+    settingsMenu.backButtonId = button.new({
         name = "back_btn",
         text = "Back",
-        x = btnStartX,
-        y = btnY,
-        width = baseSizes.btnWidth,
-        height = baseSizes.btnHeight,
-        fontSize = baseSizes.fontSize,
+        width = settingsMenu.baseSizes.btnWidth,
+        height = settingsMenu.baseSizes.btnHeight,
+        fontSize = settingsMenu.baseSizes.fontSize,
         uiscale = uiscale,
-        page = page,
-        parent = panel,
-        font = menuFont,
-        textureSet = buttonTexSet,
+        page = settingsMenu.page,
+        font = settingsMenu.menuFont,
+        textureSet = settingsMenu.buttonTexSet,
         bgColor = {1.0, 1.0, 1.0, 1.0},
         textColor = {0.0, 0.0, 0.0, 1.0},
         onClick = function(id, name)
             settingsMenu.onBack()
-            if showMenuCallback then
-                showMenuCallback("main")
+            if settingsMenu.showMenuCallback then
+                settingsMenu.showMenuCallback("main")
             end
         end,
     })
     
-    -- Apply button
-    applyButtonId = button.new({
+    settingsMenu.applyButtonId = button.new({
         name = "apply_btn",
         text = "Apply",
-        x = btnStartX + s.btnWidth + s.btnSpacing,
-        y = btnY,
-        width = baseSizes.btnWidth,
-        height = baseSizes.btnHeight,
-        fontSize = baseSizes.fontSize,
+        width = settingsMenu.baseSizes.btnWidth,
+        height = settingsMenu.baseSizes.btnHeight,
+        fontSize = settingsMenu.baseSizes.fontSize,
         uiscale = uiscale,
-        page = page,
-        parent = panel,
-        font = menuFont,
-        textureSet = buttonTexSet,
+        page = settingsMenu.page,
+        font = settingsMenu.menuFont,
+        textureSet = settingsMenu.buttonTexSet,
         bgColor = {1.0, 1.0, 1.0, 1.0},
         textColor = {0.0, 0.0, 0.0, 1.0},
         onClick = function(id, name)
@@ -234,20 +299,16 @@ function settingsMenu.createUI()
         end,
     })
     
-    -- Save button
-    saveButtonId = button.new({
+    settingsMenu.saveButtonId = button.new({
         name = "save_btn",
         text = "Save",
-        x = btnStartX + (s.btnWidth + s.btnSpacing) * 2,
-        y = btnY,
-        width = baseSizes.btnWidth,
-        height = baseSizes.btnHeight,
-        fontSize = baseSizes.fontSize,
+        width = settingsMenu.baseSizes.btnWidth,
+        height = settingsMenu.baseSizes.btnHeight,
+        fontSize = settingsMenu.baseSizes.fontSize,
         uiscale = uiscale,
-        page = page,
-        parent = panel,
-        font = menuFont,
-        textureSet = buttonTexSet,
+        page = settingsMenu.page,
+        font = settingsMenu.menuFont,
+        textureSet = settingsMenu.buttonTexSet,
         bgColor = {1.0, 1.0, 1.0, 1.0},
         textColor = {0.0, 0.0, 0.0, 1.0},
         onClick = function(id, name)
@@ -255,11 +316,40 @@ function settingsMenu.createUI()
         end,
     })
     
-    uiCreated = true
+    -- Get button sizes and place in row at bottom
+    local backW, backH = button.getSize(settingsMenu.backButtonId)
+    local applyW, applyH = button.getSize(settingsMenu.applyButtonId)
+    local saveW, saveH = button.getSize(settingsMenu.saveButtonId)
+    
+    panel.placeRow(
+        settingsMenu.panelId,
+        {
+            button.getElementHandle(settingsMenu.backButtonId),
+            button.getElementHandle(settingsMenu.applyButtonId),
+            button.getElementHandle(settingsMenu.saveButtonId),
+        },
+        {
+            { width = backW, height = backH },
+            { width = applyW, height = applyH },
+            { width = saveW, height = saveH },
+        },
+        {
+            x = "50%",
+            y = "100%",
+            origin = "bottom-center",
+            spacing = s.btnSpacing,
+        }
+    )
+    
+    UI.setZIndex(button.getElementHandle(settingsMenu.backButtonId), baseZ + 1)
+    UI.setZIndex(button.getElementHandle(settingsMenu.applyButtonId), baseZ + 1)
+    UI.setZIndex(button.getElementHandle(settingsMenu.saveButtonId), baseZ + 1)
+    
+    settingsMenu.uiCreated = true
 end
 
 function settingsMenu.getSettings()
-    return currentSettings
+    return settingsMenu.currentSettings
 end
 
 function settingsMenu.onApply()
@@ -267,19 +357,19 @@ function settingsMenu.onApply()
     
     local scaleChanged = false
     
-    if pendingSettings.fullscreen ~= currentSettings.fullscreen then
-        currentSettings.fullscreen = pendingSettings.fullscreen
-        engine.setFullscreen(currentSettings.fullscreen)
-        engine.logInfo("Fullscreen applied: " .. tostring(currentSettings.fullscreen))
+    if settingsMenu.pendingSettings.fullscreen ~= settingsMenu.currentSettings.fullscreen then
+        settingsMenu.currentSettings.fullscreen = settingsMenu.pendingSettings.fullscreen
+        engine.setFullscreen(settingsMenu.currentSettings.fullscreen)
+        engine.logInfo("Fullscreen applied: " .. tostring(settingsMenu.currentSettings.fullscreen))
     end
     
-    if uiScaleTextBox then
-        local newScale = textbox.getNumericValue(uiScaleTextBox)
-        if newScale >= uiScaleMin and newScale <= uiScaleMax then
-            if currentSettings.uiScale ~= newScale then
+    if settingsMenu.uiScaleTextBox then
+        local newScale = textbox.getNumericValue(settingsMenu.uiScaleTextBox)
+        if newScale >= settingsMenu.uiScaleMin and newScale <= settingsMenu.uiScaleMax then
+            if settingsMenu.currentSettings.uiScale ~= newScale then
                 scaleChanged = true
-                currentSettings.uiScale = newScale
-                pendingSettings.uiScale = newScale
+                settingsMenu.currentSettings.uiScale = newScale
+                settingsMenu.pendingSettings.uiScale = newScale
                 engine.setUIScale(newScale)
                 engine.logInfo("UI scale applied: " .. tostring(newScale))
             end
@@ -288,13 +378,13 @@ function settingsMenu.onApply()
         end
     end
     
-    if frameLimitTextBox then
-        local frameLimit = textbox.getNumericValue(frameLimitTextBox)
-        if frameLimit >= frameLimitMin and frameLimit <= frameLimitMax then
-            currentSettings.frameLimit = math.floor(frameLimit)
-            pendingSettings.frameLimit = currentSettings.frameLimit
-            engine.setFrameLimit(currentSettings.frameLimit)
-            engine.logInfo("Frame limit applied: " .. tostring(currentSettings.frameLimit))
+    if settingsMenu.frameLimitTextBox then
+        local frameLimit = textbox.getNumericValue(settingsMenu.frameLimitTextBox)
+        if frameLimit >= settingsMenu.frameLimitMin and frameLimit <= settingsMenu.frameLimitMax then
+            settingsMenu.currentSettings.frameLimit = math.floor(frameLimit)
+            settingsMenu.pendingSettings.frameLimit = settingsMenu.currentSettings.frameLimit
+            engine.setFrameLimit(settingsMenu.currentSettings.frameLimit)
+            engine.logInfo("Frame limit applied: " .. tostring(settingsMenu.currentSettings.frameLimit))
         else
             engine.logWarn("Frame limit out of range: " .. tostring(frameLimit))
         end
@@ -316,21 +406,21 @@ end
 function settingsMenu.show()
     settingsMenu.reloadSettings()
     settingsMenu.createUI()
-    if page then
-        UI.showPage(page)
+    if settingsMenu.page then
+        UI.showPage(settingsMenu.page)
     end
 end
 
 function settingsMenu.hide()
-    if page then
-        UI.hidePage(page)
+    if settingsMenu.page then
+        UI.hidePage(settingsMenu.page)
     end
 end
 
 function settingsMenu.onFramebufferResize(width, height)
-    fbW = width
-    fbH = height
-    if uiCreated then
+    settingsMenu.fbW = width
+    settingsMenu.fbH = height
+    if settingsMenu.uiCreated then
         settingsMenu.createUI()
     end
 end
@@ -341,30 +431,30 @@ function settingsMenu.onTextBoxSubmit(name, value)
     if name == "uiscale_input" then
         local newScale = tonumber(value)
         if not newScale then
-            if uiScaleTextBox then
-                textbox.setText(uiScaleTextBox, tostring(currentSettings.uiScale))
+            if settingsMenu.uiScaleTextBox then
+                textbox.setText(settingsMenu.uiScaleTextBox, tostring(settingsMenu.currentSettings.uiScale))
             end
             return
         end
-        newScale = math.max(uiScaleMin, math.min(uiScaleMax, newScale))
-        if uiScaleTextBox then
-            textbox.setText(uiScaleTextBox, tostring(newScale))
+        newScale = math.max(settingsMenu.uiScaleMin, math.min(settingsMenu.uiScaleMax, newScale))
+        if settingsMenu.uiScaleTextBox then
+            textbox.setText(settingsMenu.uiScaleTextBox, tostring(newScale))
         end
-        pendingSettings.uiScale = newScale
+        settingsMenu.pendingSettings.uiScale = newScale
         
     elseif name == "framelimit_input" then
         local frameLimit = tonumber(value)
         if not frameLimit then
-            if frameLimitTextBox then
-                textbox.setText(frameLimitTextBox, tostring(currentSettings.frameLimit or 60))
+            if settingsMenu.frameLimitTextBox then
+                textbox.setText(settingsMenu.frameLimitTextBox, tostring(settingsMenu.currentSettings.frameLimit or 60))
             end
             return
         end
-        frameLimit = math.max(frameLimitMin, math.min(frameLimitMax, math.floor(frameLimit)))
-        if frameLimitTextBox then
-            textbox.setText(frameLimitTextBox, tostring(frameLimit))
+        frameLimit = math.max(settingsMenu.frameLimitMin, math.min(settingsMenu.frameLimitMax, math.floor(frameLimit)))
+        if settingsMenu.frameLimitTextBox then
+            textbox.setText(settingsMenu.frameLimitTextBox, tostring(frameLimit))
         end
-        pendingSettings.frameLimit = frameLimit
+        settingsMenu.pendingSettings.frameLimit = frameLimit
     end
 end
 
@@ -373,17 +463,17 @@ function settingsMenu.revertSettings()
     
     local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
     
-    local scaleChanged = (currentSettings.uiScale ~= uiScale)
-    local fullscreenChanged = (currentSettings.fullscreen ~= fs)
-    local frameLimitChanged = (currentSettings.frameLimit ~= frameLimit)
+    local scaleChanged = (settingsMenu.currentSettings.uiScale ~= uiScale)
+    local fullscreenChanged = (settingsMenu.currentSettings.fullscreen ~= fs)
+    local frameLimitChanged = (settingsMenu.currentSettings.frameLimit ~= frameLimit)
     
-    currentSettings.width = w
-    currentSettings.height = h
-    currentSettings.fullscreen = fs
-    currentSettings.uiScale = uiScale
-    currentSettings.vsync = vs
-    currentSettings.frameLimit = frameLimit
-    currentSettings.msaa = msaa
+    settingsMenu.currentSettings.width = w
+    settingsMenu.currentSettings.height = h
+    settingsMenu.currentSettings.fullscreen = fs
+    settingsMenu.currentSettings.uiScale = uiScale
+    settingsMenu.currentSettings.vsync = vs
+    settingsMenu.currentSettings.frameLimit = frameLimit
+    settingsMenu.currentSettings.msaa = msaa
     
     if fullscreenChanged then
         engine.setFullscreen(fs)
@@ -405,21 +495,22 @@ end
 function settingsMenu.reloadSettings()
     local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
     
-    currentSettings.width = w
-    currentSettings.height = h
-    currentSettings.fullscreen = fs
-    currentSettings.uiScale = uiScale
-    currentSettings.vsync = vs
-    currentSettings.frameLimit = frameLimit or 60
-    currentSettings.msaa = msaa
+    settingsMenu.currentSettings.width = w
+    settingsMenu.currentSettings.height = h
+    settingsMenu.currentSettings.fullscreen = fs
+    settingsMenu.currentSettings.uiScale = uiScale
+    settingsMenu.currentSettings.vsync = vs
+    settingsMenu.currentSettings.frameLimit = frameLimit or 60
+    settingsMenu.currentSettings.msaa = msaa
 end
 
 function settingsMenu.shutdown()
     textbox.destroyAll()
     checkbox.destroyAll()
     button.destroyAll()
-    if page then
-        UI.deletePage(page)
+    panel.destroyAll()
+    if settingsMenu.page then
+        UI.deletePage(settingsMenu.page)
     end
 end
 
