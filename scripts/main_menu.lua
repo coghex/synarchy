@@ -38,7 +38,7 @@ local menuItems = {
     { name = "quit", label = "Quit", callback = "onQuit" }
 }
 
-function mainMenu.init(boxTex, font, tFont, width, height)
+function mainMenu.init(boxTex, btnTex, font, tFont, width, height)
     boxTexSet = boxTex
     menuFont = font
     titleFont = tFont
@@ -92,7 +92,7 @@ function mainMenu.createUI()
     local menuY = (fbH - menuHeight) / 2
     
     -- Create menu container box
-    local menuBox = UI.newBox("menu_box", menuWidth, menuHeight, boxTexSet, buttonTileSize, 0.2, 0.2, 0.3, 0.9, page)
+    local menuBox = UI.newBox("menu_box", menuWidth, menuHeight, boxTexSet, buttonTileSize, 1.0, 1.0, 1.0, 1.0, page)
     UI.addToPage(page, menuBox, menuX, menuY)
     UI.setZIndex(menuBox, 1)
     
@@ -115,7 +115,7 @@ function mainMenu.createUI()
         local labelWidth = engine.getTextWidth(menuFont, item.label, fontSize)
         local thisButtonWidth = labelWidth + buttonPaddingX
         local thisButtonX = (menuWidth - thisButtonWidth) / 2
-        local btn = UI.newBox(item.name, thisButtonWidth, buttonHeight, boxTexSet, buttonTileSize, 0.3, 0.4, 0.5, 1.0, page)
+        local btn = UI.newBox(item.name, thisButtonWidth, buttonHeight, boxTexSet, buttonTileSize, 1.0, 1.0, 1.0, 1.0, page)
         UI.addChild(menuBox, btn, thisButtonX, buttonY)
         UI.setZIndex(btn, 2)
         UI.setClickable(btn, true)

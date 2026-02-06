@@ -1,7 +1,6 @@
 -- UI Manager - coordinates all UI pages
 local uiManager = {}
 
--- Shared resources
 local boxTextures = require("scripts.ui.box_textures")
 local boxTexSet = nil
 local btnTexSet = nil
@@ -10,7 +9,6 @@ local titleFont = nil
 local fbW, fbH = 0, 0
 local uiscale = 1.0
 
--- Font loading state
 local fontsLoaded = {
     menu = false,
     title = false
@@ -20,16 +18,14 @@ local menuFontHandle = nil
 local titleFontHandle = nil
 local initialized = false
 
--- Sub-modules (declared here so all functions can access them)
 local mainMenu = nil
 local settingsMenu = nil
 local textbox = nil
-local checkbox = nil  -- ADD THIS
+local checkbox = nil
+local button = nil
 
--- Current active menu
 local currentMenu = "main"
 
--- Helper to handle unfocusing
 local function handleNonTextBoxClick()
     if textbox then
         textbox.unfocusAll()
@@ -41,10 +37,10 @@ function uiManager.init(scriptId)
     
     textbox = require("scripts.ui.textbox")
     checkbox = require("scripts.ui.checkbox")
+    button = require("scripts.ui.button")
 
     uiscale = engine.getUIScale()
     
-    -- Load fonts
     menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)
     titleFontHandle = engine.loadFont("assets/fonts/gothic.ttf", 96)
     menuFont = menuFontHandle
@@ -53,9 +49,12 @@ function uiManager.init(scriptId)
     boxTexSet = boxTextures.load("assets/textures/box", "box")
     btnTexSet = boxTextures.load("assets/textures/button", "button")
     
-    -- Load sub-modules
     mainMenu = require("scripts.main_menu")
     settingsMenu = require("scripts.settings_menu")
+    
+    settingsMenu.setShowMenuCallback(function(menuName)
+        uiManager.showMenu(menuName)
+    end)
     
     engine.logDebug("UI Manager waiting for assets...")
 end
@@ -78,8 +77,8 @@ end
 function uiManager.checkReady()
     if fontsReady and fbW > 0 and fbH > 0 then
         if not initialized then
-            mainMenu.init(boxTexSet, menuFont, titleFont, fbW, fbH)
-            settingsMenu.init(btnTexSet, menuFont, fbW, fbH)
+            mainMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
+            settingsMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -120,7 +119,6 @@ function uiManager.onQuit()
     engine.quit()
 end
 
--- Settings menu callbacks
 function uiManager.onSettingsBack()
     handleNonTextBoxClick()
     if settingsMenu then settingsMenu.onBack() end
@@ -135,11 +133,6 @@ end
 function uiManager.onSettingsApply()
     handleNonTextBoxClick()
     if settingsMenu then settingsMenu.onApply() end
-end
-
-function uiManager.onToggle_fullscreen()
-    handleNonTextBoxClick()
-    if settingsMenu then settingsMenu.onToggle_fullscreen() end
 end
 
 function uiManager.onCancel()
@@ -164,32 +157,18 @@ function uiManager.onTextBoxClick(elemHandle)
     end
 end
 
------------------------------------------------------------
--- Generic UI Click Handler (called by engine for UI clicks)
------------------------------------------------------------
-
-function uiManager.onUIClick(callbackName, elemHandle)
-    -- Unfocus textboxes when clicking elsewhere
-    handleNonTextBoxClick()
-    
-    -- Try checkbox first
-    if checkbox and checkbox.handleCallback(callbackName, elemHandle) then
-        return true
-    end
-    
-    -- Try textbox
-    if textbox and textbox.handleCallback(callbackName, elemHandle) then
-        return true
-    end
-    
-    return false
-end
-
--- Direct callback for checkbox clicks (if engine calls by callback name)
 function uiManager.onCheckboxClick(elemHandle)
     handleNonTextBoxClick()
     if checkbox then
         return checkbox.handleClickByElement(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onButtonClick(elemHandle)
+    handleNonTextBoxClick()
+    if button then
+        return button.handleClickByElement(elemHandle)
     end
     return false
 end
