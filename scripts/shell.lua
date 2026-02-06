@@ -1,4 +1,5 @@
 -- Shell module for debug console
+local boxTextures = require("scripts.ui.box_textures")
 local shell = {}
 
 -- Script ID (passed from engine)
@@ -18,6 +19,9 @@ local marginLeft = 40
 local marginBottom = 40
 local marginTop = 40
 
+-- UI page
+local shellPage = nil
+
 -- Textures (loaded on init)
 local texBox = nil
 local texBoxN = nil
@@ -29,7 +33,7 @@ local texBoxNW = nil
 local texBoxSE = nil
 local texBoxSW = nil
 
--- UI object IDs for the 9-box (persistent - spawned once)
+-- UI element IDs for the 9-box
 local objBox = nil
 local objBoxN = nil
 local objBoxS = nil
@@ -40,15 +44,14 @@ local objBoxNW = nil
 local objBoxSE = nil
 local objBoxSW = nil
 
--- Text object for prompt
+-- Text element IDs
 local objPrompt = nil
 local objBufferText = nil
 
--- Track if box sprites have been created
+-- Track if box elements have been created
 local boxSpawned = false
 
 -- Font
-local fontHandle = nil
 local shellFont = nil
 
 -- Cursor
@@ -62,7 +65,6 @@ local inputScrollOffset = 0
 -- Configuration
 local tileSize = 64
 local middleWidth = 1200
-local shellLayer = 10
 local fontSize = 32
 local maxInputWidth = 0
 
@@ -102,6 +104,9 @@ function shell.init(scriptId)
     
     engine.logDebug("Shell textures loaded")
     
+    shellPage = UI.newPage("shell", "debug")
+    engine.logDebug("Shell page created: " .. tostring(shellPage))
+    
     focusId = engine.registerFocusable(true, 0)
     engine.logDebug("Shell initialized with focusId: " .. tostring(focusId))
 end
@@ -112,13 +117,18 @@ function shell.update(dt)
     -- dt will be ~0.5, so just toggle every call
     cursorVisible = not cursorVisible
     if objCursor then
-        engine.setVisible(objCursor, cursorVisible)
+        UI.setVisible(objCursor, cursorVisible)
     end
 end
 
 function shell.shutdown()
     engine.logDebug("Shell module shutting down")
-    shell.destroyAllSprites()
+    shell.destroyAllElements()
+    if shellPage then
+        UI.hidePage(shellPage)
+        UI.deletePage(shellPage)
+        shellPage = nil
+    end
 end
 
 function shell.onShellToggle()
@@ -164,42 +174,26 @@ function shell.show()
     engine.requestFocus(focusId)
     local scaleChanged = shell.rescale()
     if scaleChanged and boxSpawned then
-        shell.destroyAllSprites()
+        shell.destroyAllElements()
         boxSpawned = false
     end
     
     shell.rebuildBox()
     shell.rebuildHistoryDisplay()
+    UI.showPage(shellPage)
 end
 
 function shell.hide()
     shellvisible = false
     engine.releaseFocus()
-    
-    -- Just hide, don't destroy
-    if objBoxNW then engine.setVisible(objBoxNW, false) end
-    if objBoxN then engine.setVisible(objBoxN, false) end
-    if objBoxNE then engine.setVisible(objBoxNE, false) end
-    if objBoxW then engine.setVisible(objBoxW, false) end
-    if objBox then engine.setVisible(objBox, false) end
-    if objBoxE then engine.setVisible(objBoxE, false) end
-    if objBoxSW then engine.setVisible(objBoxSW, false) end
-    if objBoxS then engine.setVisible(objBoxS, false) end
-    if objBoxSE then engine.setVisible(objBoxSE, false) end
-    if objPrompt then engine.setVisible(objPrompt, false) end
-    if objBufferText then engine.setVisible(objBufferText, false) end
-    if objCursor then engine.setVisible(objCursor, false) end
-    if ghostText then engine.setVisible(ghostText, false) end
-    for _, obj in ipairs(historyTextObjects) do
-        engine.setVisible(obj, false)
-    end
+    UI.hidePage(shellPage)
 end
 
 function shell.updateDisplay()
     if not shellvisible then return end
     shell.updateInputScroll()
     if objBufferText then
-        engine.setText(objBufferText, shell.getVisibleInput())
+        UI.setText(objBufferText, shell.getVisibleInput())
     end
     shell.updateCursorPos()
     shell.updateGhostText()
@@ -279,7 +273,7 @@ function shell.cmdClear()
     history = {}
     -- Destroy history text objects
     for _, obj in ipairs(historyTextObjects) do
-        engine.destroy(obj)
+        UI.deleteElement(obj)
     end
     historyTextObjects = {}
     if shellvisible then
@@ -293,7 +287,7 @@ end
 
 function shell.rebuildHistoryDisplay()
     for _, obj in ipairs(historyTextObjects) do
-        engine.destroy(obj)
+        UI.deleteElement(obj)
     end
     historyTextObjects = {}
     
@@ -313,19 +307,27 @@ function shell.rebuildHistoryDisplay()
         
         -- Result (potentially multi-line)
         if entry.result and entry.result ~= "" and entry.result ~= "nil" then
-            local resultColor = "white"
+            local resultColor = {1.0, 1.0, 1.0, 1.0}
             if entry.result == "OK" then
-                resultColor = "green"
+                resultColor = {0.0, 1.0, 0.0, 1.0}
             elseif entry.result:match("^undefined:") then
-                resultColor = "orange"
+                resultColor = {1.0, 0.65, 0.0, 1.0}
             elseif entry.isError then
-                resultColor = "red"
+                resultColor = {1.0, 0.0, 0.0, 1.0}
             end
             
             local resultLines = shell.wrapText(entry.result, maxTextWidth - 20, shellFont)
             for j = #resultLines, 1, -1 do
                 if y < marginTop + tileSize then break end
-                local resultObj = engine.spawnText(textX + 20, y, shellFont, resultLines[j], resultColor, shellLayer, fontSize)
+                local resultObj = UI.newText(
+                    "shell_result_" .. i .. "_" .. j,
+                    resultLines[j],
+                    shellFont,
+                    fontSize,
+                    resultColor[1], resultColor[2], resultColor[3], resultColor[4],
+                    shellPage
+                )
+                UI.addToPage(shellPage, resultObj, textX + 20, y)
                 table.insert(historyTextObjects, resultObj)
                 y = y - lineHeight
             end
@@ -336,7 +338,15 @@ function shell.rebuildHistoryDisplay()
         local cmdLines = shell.wrapText(cmdText, maxTextWidth, shellFont)
         for j = #cmdLines, 1, -1 do
             if y < marginTop + tileSize then break end
-            local cmdObj = engine.spawnText(textX, y, shellFont, cmdLines[j], "white", shellLayer, fontSize)
+            local cmdObj = UI.newText(
+                "shell_cmd_" .. i .. "_" .. j,
+                cmdLines[j],
+                shellFont,
+                fontSize,
+                1.0, 1.0, 1.0, 1.0,
+                shellPage
+            )
+            UI.addToPage(shellPage, cmdObj, textX, y)
             table.insert(historyTextObjects, cmdObj)
             y = y - lineHeight
         end
@@ -364,60 +374,70 @@ function shell.rebuildBox()
     local bufferX = promptX + promptWidth + 10
     
     if not boxSpawned then
-        -- First time: spawn all sprites
-        objBoxNW = engine.spawnSprite(baseX + tileSize / 2, row0Y, tileSize, tileSize, texBoxNW, shellLayer)
-        objBoxN  = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row0Y, middleWidth, tileSize, texBoxN, shellLayer)
-        objBoxNE = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row0Y, tileSize, tileSize, texBoxNE, shellLayer)
+        -- First time: create all UI elements
+        objBoxNW = UI.newSprite("shell_nw", tileSize, tileSize, texBoxNW, 1.0, 1.0, 1.0, 1.0, shellPage)
+        objBoxN  = UI.newSprite("shell_n", middleWidth, tileSize, texBoxN, 1.0, 1.0, 1.0, 1.0, shellPage)
+        objBoxNE = UI.newSprite("shell_ne", tileSize, tileSize, texBoxNE, 1.0, 1.0, 1.0, 1.0, shellPage)
         
-        objBoxW  = engine.spawnSprite(baseX + tileSize / 2, middleY, tileSize, middleHeight, texBoxW, shellLayer)
-        objBox   = engine.spawnSprite(baseX + tileSize + middleWidth / 2, middleY, middleWidth, middleHeight, texBox, shellLayer)
-        objBoxE  = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, middleY, tileSize, middleHeight, texBoxE, shellLayer)
+        objBoxW  = UI.newSprite("shell_w", tileSize, middleHeight, texBoxW, 1.0, 1.0, 1.0, 1.0, shellPage)
+        objBox   = UI.newSprite("shell_c", middleWidth, middleHeight, texBox, 1.0, 1.0, 1.0, 1.0, shellPage)
+        objBoxE  = UI.newSprite("shell_e", tileSize, middleHeight, texBoxE, 1.0, 1.0, 1.0, 1.0, shellPage)
         
-        objBoxSW = engine.spawnSprite(baseX + tileSize / 2, row2Y, tileSize, tileSize, texBoxSW, shellLayer)
-        objBoxS  = engine.spawnSprite(baseX + tileSize + middleWidth / 2, row2Y, middleWidth, tileSize, texBoxS, shellLayer)
-        objBoxSE = engine.spawnSprite(baseX + tileSize + middleWidth + tileSize / 2, row2Y, tileSize, tileSize, texBoxSE, shellLayer)
+        objBoxSW = UI.newSprite("shell_sw", tileSize, tileSize, texBoxSW, 1.0, 1.0, 1.0, 1.0, shellPage)
+        objBoxS  = UI.newSprite("shell_s", middleWidth, tileSize, texBoxS, 1.0, 1.0, 1.0, 1.0, shellPage)
+        objBoxSE = UI.newSprite("shell_se", tileSize, tileSize, texBoxSE, 1.0, 1.0, 1.0, 1.0, shellPage)
         
-        objPrompt = engine.spawnText(promptX, promptY, shellFont, "$>", "white", shellLayer, fontSize)
-        objBufferText = engine.spawnText(bufferX, promptY, shellFont, inputBuffer, "white", shellLayer, fontSize)
-        objCursor = engine.spawnText(bufferX, promptY, shellFont, "|", "white", shellLayer, fontSize)
+        -- ... rest of addToPage calls unchanged ...
+        
+        UI.addToPage(shellPage, objBoxNW, baseX, row0Y - tileSize / 2)
+        UI.addToPage(shellPage, objBoxN,  baseX + tileSize, row0Y - tileSize / 2)
+        UI.addToPage(shellPage, objBoxNE, baseX + tileSize + middleWidth, row0Y - tileSize / 2)
+        
+        UI.addToPage(shellPage, objBoxW,  baseX, row0Y + tileSize / 2)
+        UI.addToPage(shellPage, objBox,   baseX + tileSize, row0Y + tileSize / 2)
+        UI.addToPage(shellPage, objBoxE,  baseX + tileSize + middleWidth, row0Y + tileSize / 2)
+        
+        UI.addToPage(shellPage, objBoxSW, baseX, row0Y + tileSize / 2 + middleHeight)
+        UI.addToPage(shellPage, objBoxS,  baseX + tileSize, row0Y + tileSize / 2 + middleHeight)
+        UI.addToPage(shellPage, objBoxSE, baseX + tileSize + middleWidth, row0Y + tileSize / 2 + middleHeight)
+        
+        objPrompt = UI.newText("shell_prompt", "$>", shellFont, fontSize, 1.0, 1.0, 1.0, 1.0, shellPage)
+        UI.addToPage(shellPage, objPrompt, promptX, promptY)
+        
+        objBufferText = UI.newText("shell_buffer", inputBuffer, shellFont, fontSize, 1.0, 1.0, 1.0, 1.0, shellPage)
+        UI.addToPage(shellPage, objBufferText, bufferX, promptY)
+        
+        objCursor = UI.newText("shell_cursor", "|", shellFont, fontSize, 1.0, 1.0, 1.0, 1.0, shellPage)
+        UI.addToPage(shellPage, objCursor, bufferX, promptY)
         
         boxSpawned = true
     else
-        -- Reposition and resize existing sprites
-        engine.setVisible(objBoxNW, true)
-        engine.setVisible(objBoxN, true)
-        engine.setVisible(objBoxNE, true)
-        engine.setVisible(objBoxW, true)
-        engine.setVisible(objBox, true)
-        engine.setVisible(objBoxE, true)
-        engine.setVisible(objBoxSW, true)
-        engine.setVisible(objBoxS, true)
-        engine.setVisible(objBoxSE, true)
-        engine.setVisible(objPrompt, true)
-        engine.setVisible(objBufferText, true)
+        -- Reposition and resize existing elements
         
         -- Top row
-        engine.setPos(objBoxNW, baseX + tileSize / 2, row0Y)
-        engine.setPos(objBoxN, baseX + tileSize + middleWidth / 2, row0Y)
-        engine.setPos(objBoxNE, baseX + tileSize + middleWidth + tileSize / 2, row0Y)
+        UI.setPosition(objBoxNW, baseX, row0Y - tileSize / 2)
+        UI.setPosition(objBoxN,  baseX + tileSize, row0Y - tileSize / 2)
+        UI.setSize(objBoxN, middleWidth, tileSize)
+        UI.setPosition(objBoxNE, baseX + tileSize + middleWidth, row0Y - tileSize / 2)
         
         -- Middle row - reposition and resize
-        engine.setPos(objBoxW, baseX + tileSize / 2, middleY)
-        engine.setSize(objBoxW, tileSize, middleHeight)
-        engine.setPos(objBox, baseX + tileSize + middleWidth / 2, middleY)
-        engine.setSize(objBox, middleWidth, middleHeight)
-        engine.setPos(objBoxE, baseX + tileSize + middleWidth + tileSize / 2, middleY)
-        engine.setSize(objBoxE, tileSize, middleHeight)
+        UI.setPosition(objBoxW,  baseX, row0Y + tileSize / 2)
+        UI.setSize(objBoxW, tileSize, middleHeight)
+        UI.setPosition(objBox,   baseX + tileSize, row0Y + tileSize / 2)
+        UI.setSize(objBox, middleWidth, middleHeight)
+        UI.setPosition(objBoxE,  baseX + tileSize + middleWidth, row0Y + tileSize / 2)
+        UI.setSize(objBoxE, tileSize, middleHeight)
         
         -- Bottom row
-        engine.setPos(objBoxSW, baseX + tileSize / 2, row2Y)
-        engine.setPos(objBoxS, baseX + tileSize + middleWidth / 2, row2Y)
-        engine.setPos(objBoxSE, baseX + tileSize + middleWidth + tileSize / 2, row2Y)
+        UI.setPosition(objBoxSW, baseX, row0Y + tileSize / 2 + middleHeight)
+        UI.setPosition(objBoxS,  baseX + tileSize, row0Y + tileSize / 2 + middleHeight)
+        UI.setSize(objBoxS, middleWidth, tileSize)
+        UI.setPosition(objBoxSE, baseX + tileSize + middleWidth, row0Y + tileSize / 2 + middleHeight)
         
         -- Prompt
-        engine.setPos(objPrompt, promptX, promptY)
-        engine.setPos(objBufferText, bufferX, promptY)
-        engine.setVisible(objCursor, cursorVisible)
+        UI.setPosition(objPrompt, promptX, promptY)
+        UI.setPosition(objBufferText, bufferX, promptY)
+        UI.setVisible(objCursor, cursorVisible)
         shell.updateCursorPos()
     end
 end
@@ -443,7 +463,7 @@ function shell.updateCursorPos()
     local cursorWidth = engine.getTextWidth(shellFont, "|", fontSize)
     local cursorX = bufferX + textWidth - cursorWidth / 2
     
-    engine.setPos(objCursor, cursorX, promptY)
+    UI.setPosition(objCursor, cursorX, promptY)
 end
 
 function shell.addHistory(command, result, isError)
@@ -502,11 +522,11 @@ end
 -- Get the visible portion of input buffer
 function shell.getVisibleInput()
     local maxWidth = shell.getMaxInputWidth()
-    local shellvisible = inputBuffer:sub(inputScrollOffset + 1)
+    local visibleText = inputBuffer:sub(inputScrollOffset + 1)
     
     -- Trim to fit width
-    for i = #shellvisible, 1, -1 do
-        local test = shellvisible:sub(1, i)
+    for i = #visibleText, 1, -1 do
+        local test = visibleText:sub(1, i)
         if engine.getTextWidth(shellFont, test, fontSize) <= maxWidth then
             return test
         end
@@ -645,13 +665,6 @@ function shell.getTableCompletions(tableName, memberPrefix)
     return results
 end
 
-function shell.addUnique(str)
-    if not seen[str] then
-        seen[str] = true
-        table.insert(results, str)
-    end
-end
-
 function shell.getCompletions(prefix)
     shell._completionResults = {}
     shell._completionSeen = {}
@@ -724,7 +737,7 @@ function shell.updateGhostText()
     if not shellvisible then return end
     if cursorPos ~= #inputBuffer then
         if ghostText then
-            engine.setVisible(ghostText, false)
+            UI.setVisible(ghostText, false)
         end
         currentCompletions = {}
         return
@@ -734,7 +747,7 @@ function shell.updateGhostText()
     
     if #prefix == 0 then
         if ghostText then
-            engine.setVisible(ghostText, false)
+            UI.setVisible(ghostText, false)
         end
         currentCompletions = {}
         return
@@ -751,10 +764,11 @@ function shell.updateGhostText()
 
         if #ghostPart > 0 and (currentWidth + ghostWidth) <= maxWidth then
             if not ghostText then
-                ghostText = engine.spawnText(0, 0, shellFont, ghostPart, "ghost", shellLayer, fontSize)
+                ghostText = UI.newText("shell_ghost", ghostPart, shellFont, fontSize, 0.5, 0.5, 0.5, 0.5, shellPage)
+                UI.addToPage(shellPage, ghostText, 0, 0)
             else
-                engine.setText(ghostText, ghostPart)
-                engine.setVisible(ghostText, true)
+                UI.setText(ghostText, ghostPart)
+                UI.setVisible(ghostText, true)
             end
             
             -- Position after cursor
@@ -772,15 +786,15 @@ function shell.updateGhostText()
             local cursorWidth = engine.getTextWidth(shellFont, "|", fontSize)
             local cursorX = bufferX + textWidth - cursorWidth / 2
             
-            engine.setPos(ghostText, cursorX, promptY)
+            UI.setPosition(ghostText, cursorX, promptY)
         else
             if ghostText then
-                engine.setVisible(ghostText, false)
+                UI.setVisible(ghostText, false)
             end
         end
     else
         if ghostText then
-            engine.setVisible(ghostText, false)
+            UI.setVisible(ghostText, false)
         end
     end
 end
@@ -911,12 +925,10 @@ function shell.onFramebufferResize(width, height)
     
     -- If visible, rebuild everything with new dimensions
     if shellvisible then
+        shell.destroyAllElements()
+        boxSpawned = false
         shell.rebuildBox()
         shell.rebuildHistoryDisplay()
-        shell.updateCursorPos()
-        if ghostText then
-            shell.updateGhostText()
-        end
     end
 end
 
@@ -955,27 +967,29 @@ function shell.rescale()
     return true
 end
 
--- Destroy all shell sprites (for rescale rebuild)
-function shell.destroyAllSprites()
-    if objBoxNW then engine.destroy(objBoxNW); objBoxNW = nil end
-    if objBoxN then engine.destroy(objBoxN); objBoxN = nil end
-    if objBoxNE then engine.destroy(objBoxNE); objBoxNE = nil end
-    if objBoxW then engine.destroy(objBoxW); objBoxW = nil end
-    if objBox then engine.destroy(objBox); objBox = nil end
-    if objBoxE then engine.destroy(objBoxE); objBoxE = nil end
-    if objBoxSW then engine.destroy(objBoxSW); objBoxSW = nil end
-    if objBoxS then engine.destroy(objBoxS); objBoxS = nil end
-    if objBoxSE then engine.destroy(objBoxSE); objBoxSE = nil end
-    if objPrompt then engine.destroy(objPrompt); objPrompt = nil end
-    if objBufferText then engine.destroy(objBufferText); objBufferText = nil end
-    if objCursor then engine.destroy(objCursor); objCursor = nil end
-    if ghostText then engine.destroy(ghostText); ghostText = nil end
+-- Destroy all shell UI elements (for rescale rebuild)
+function shell.destroyAllElements()
+    if objBoxNW then UI.deleteElement(objBoxNW); objBoxNW = nil end
+    if objBoxN then UI.deleteElement(objBoxN); objBoxN = nil end
+    if objBoxNE then UI.deleteElement(objBoxNE); objBoxNE = nil end
+    if objBoxW then UI.deleteElement(objBoxW); objBoxW = nil end
+    if objBox then UI.deleteElement(objBox); objBox = nil end
+    if objBoxE then UI.deleteElement(objBoxE); objBoxE = nil end
+    if objBoxSW then UI.deleteElement(objBoxSW); objBoxSW = nil end
+    if objBoxS then UI.deleteElement(objBoxS); objBoxS = nil end
+    if objBoxSE then UI.deleteElement(objBoxSE); objBoxSE = nil end
+    if objPrompt then UI.deleteElement(objPrompt); objPrompt = nil end
+    if objBufferText then UI.deleteElement(objBufferText); objBufferText = nil end
+    if objCursor then UI.deleteElement(objCursor); objCursor = nil end
+    if ghostText then UI.deleteElement(ghostText); ghostText = nil end
     
     -- Destroy history text objects
     for _, obj in ipairs(historyTextObjects) do
-        engine.destroy(obj)
+        UI.deleteElement(obj)
     end
     historyTextObjects = {}
+    
+    boxSpawned = false
 end
 
 return shell

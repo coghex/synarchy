@@ -6,16 +6,16 @@ local label = {}
 -- Module State
 -----------------------------------------------------------
 
-label.labels = {}
-label.nextId = 1
+local labels = {}
+local nextId = 1
 
 -----------------------------------------------------------
 -- Creation / Destruction
 -----------------------------------------------------------
 
 function label.new(params)
-    local id = label.nextId
-    label.nextId = label.nextId + 1
+    local id = nextId
+    nextId = nextId + 1
     
     local uiscale = params.uiscale or scale.get()
     local fontSize = math.floor((params.fontSize or 24) * uiscale)
@@ -40,12 +40,10 @@ function label.new(params)
         uiscale = uiscale,
     }
     
-    -- Calculate width
     if font and text ~= "" then
         lbl.width = engine.getTextWidth(font, text, fontSize)
     end
     
-    -- Create the text element
     lbl.textId = UI.newText(
         lbl.name .. "_text",
         text,
@@ -55,7 +53,6 @@ function label.new(params)
         lbl.page
     )
     
-    -- Position if x/y provided (otherwise use panel.place later)
     if params.x and params.y and not params.parent then
         UI.addToPage(lbl.page, lbl.textId, params.x, params.y)
     elseif params.x and params.y and params.parent then
@@ -66,21 +63,21 @@ function label.new(params)
         UI.setZIndex(lbl.textId, params.zIndex)
     end
     
-    label.labels[id] = lbl
+    labels[id] = lbl
     
     return id
 end
 
 function label.destroy(id)
-    local lbl = label.labels[id]
+    local lbl = labels[id]
     if not lbl then return end
     
-    label.labels[id] = nil
+    labels[id] = nil
 end
 
 function label.destroyAll()
-    label.labels = {}
-    label.nextId = 1
+    labels = {}
+    nextId = 1
 end
 
 -----------------------------------------------------------
@@ -88,32 +85,30 @@ end
 -----------------------------------------------------------
 
 function label.setText(id, text)
-    local lbl = label.labels[id]
+    local lbl = labels[id]
     if not lbl then return end
     
     lbl.text = text
     
-    -- Recalculate width
     if lbl.font and text ~= "" then
         lbl.width = engine.getTextWidth(lbl.font, text, lbl.fontSize)
     else
         lbl.width = 0
     end
     
-    -- Update UI element
     if lbl.textId then
         UI.setText(lbl.textId, text)
     end
 end
 
 function label.getText(id)
-    local lbl = label.labels[id]
+    local lbl = labels[id]
     if not lbl then return "" end
     return lbl.text
 end
 
 function label.setColor(id, color)
-    local lbl = label.labels[id]
+    local lbl = labels[id]
     if not lbl then return end
     
     lbl.color = color
@@ -128,31 +123,31 @@ end
 -----------------------------------------------------------
 
 function label.getSize(id)
-    local lbl = label.labels[id]
+    local lbl = labels[id]
     if not lbl then return 0, 0 end
     return lbl.width, lbl.height
 end
 
 function label.getElementHandle(id)
-    local lbl = label.labels[id]
+    local lbl = labels[id]
     if not lbl then return nil end
     return lbl.textId
 end
 
 function label.getName(id)
-    local lbl = label.labels[id]
+    local lbl = labels[id]
     if not lbl then return nil end
     return lbl.name
 end
 
 function label.getFont(id)
-    local lbl = label.labels[id]
+    local lbl = labels[id]
     if not lbl then return nil end
     return lbl.font
 end
 
 function label.getFontSize(id)
-    local lbl = label.labels[id]
+    local lbl = labels[id]
     if not lbl then return 0 end
     return lbl.fontSize
 end
