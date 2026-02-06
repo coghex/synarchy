@@ -33,7 +33,7 @@ local function handleNonTextBoxClick()
 end
 
 function uiManager.init(scriptId)
-    engine.logInfo("UI Manager initializing...")
+    engine.logDebug("UI Manager initializing...")
     
     textbox = require("scripts.ui.textbox")
     checkbox = require("scripts.ui.checkbox")
@@ -230,7 +230,7 @@ function uiManager.onUISubmit()
     if textbox then
         local handled, value, id, name = textbox.onSubmit()
         if handled and value then
-            engine.logInfo("UI Submit received: " .. tostring(value) .. " from " .. tostring(name))
+            engine.logDebug("UI Submit received: " .. tostring(value) .. " from " .. tostring(name))
             if settingsMenu then settingsMenu.onTextBoxSubmit(name, value) end
         end
         return handled

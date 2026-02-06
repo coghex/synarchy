@@ -28,7 +28,7 @@ function checkbox.init()
     texUnchecked = engine.loadTexture("assets/textures/ui/checkboxunchecked.png")
     
     assetsLoaded = true
-    engine.logInfo("Checkbox module initialized")
+    engine.logDebug("Checkbox module initialized")
 end
 
 -----------------------------------------------------------
@@ -76,7 +76,7 @@ function checkbox.new(params)
     
     checkboxes[id] = cb
     
-    engine.logInfo("Checkbox created: " .. cb.name .. " (checked=" .. tostring(cb.checked) .. ")")
+    engine.logDebug("Checkbox created: " .. cb.name .. " (checked=" .. tostring(cb.checked) .. ")")
     
     return id
 end
@@ -91,7 +91,7 @@ end
 
 function checkbox.destroyAll()
     for id, cb in pairs(checkboxes) do
-        engine.logInfo("Checkbox destroyed: " .. cb.name)
+        engine.logDebug("Checkbox destroyed: " .. cb.name)
     end
     checkboxes = {}
     nextId = 1
@@ -126,7 +126,7 @@ function checkbox.toggle(id)
     local tex = cb.checked and texChecked or texUnchecked
     UI.setSpriteTexture(cb.spriteId, tex)
     
-    engine.logInfo("Checkbox toggled: " .. cb.name .. " = " .. tostring(cb.checked))
+    engine.logDebug("Checkbox toggled: " .. cb.name .. " = " .. tostring(cb.checked))
     
     -- Fire optional callback
     if cb.onChange then

@@ -173,7 +173,7 @@ function settingsMenu.createUI()
         default = settingsMenu.currentSettings.fullscreen,
         onChange = function(checked, id, name)
             settingsMenu.pendingSettings.fullscreen = checked
-            engine.logInfo("Fullscreen pending: " .. tostring(checked))
+            engine.logDebug("Fullscreen pending: " .. tostring(checked))
         end,
     })
     
@@ -353,14 +353,14 @@ function settingsMenu.getSettings()
 end
 
 function settingsMenu.onApply()
-    engine.logInfo("Applying settings...")
+    engine.logDebug("Applying settings...")
     
     local scaleChanged = false
     
     if settingsMenu.pendingSettings.fullscreen ~= settingsMenu.currentSettings.fullscreen then
         settingsMenu.currentSettings.fullscreen = settingsMenu.pendingSettings.fullscreen
         engine.setFullscreen(settingsMenu.currentSettings.fullscreen)
-        engine.logInfo("Fullscreen applied: " .. tostring(settingsMenu.currentSettings.fullscreen))
+        engine.logDebug("Fullscreen applied: " .. tostring(settingsMenu.currentSettings.fullscreen))
     end
     
     if settingsMenu.uiScaleTextBox then
@@ -371,7 +371,7 @@ function settingsMenu.onApply()
                 settingsMenu.currentSettings.uiScale = newScale
                 settingsMenu.pendingSettings.uiScale = newScale
                 engine.setUIScale(newScale)
-                engine.logInfo("UI scale applied: " .. tostring(newScale))
+                engine.logDebug("UI scale applied: " .. tostring(newScale))
             end
         else
             engine.logWarn("UI scale out of range: " .. tostring(newScale))
@@ -384,7 +384,7 @@ function settingsMenu.onApply()
             settingsMenu.currentSettings.frameLimit = math.floor(frameLimit)
             settingsMenu.pendingSettings.frameLimit = settingsMenu.currentSettings.frameLimit
             engine.setFrameLimit(settingsMenu.currentSettings.frameLimit)
-            engine.logInfo("Frame limit applied: " .. tostring(settingsMenu.currentSettings.frameLimit))
+            engine.logDebug("Frame limit applied: " .. tostring(settingsMenu.currentSettings.frameLimit))
         else
             engine.logWarn("Frame limit out of range: " .. tostring(frameLimit))
         end
@@ -397,10 +397,10 @@ function settingsMenu.onApply()
 end
 
 function settingsMenu.onSave()
-    engine.logInfo("Saving settings...")
+    engine.logDebug("Saving settings...")
     settingsMenu.onApply()
     engine.saveVideoConfig()
-    engine.logInfo("Settings saved.")
+    engine.logDebug("Settings saved.")
 end
 
 function settingsMenu.show()
@@ -426,7 +426,7 @@ function settingsMenu.onFramebufferResize(width, height)
 end
 
 function settingsMenu.onTextBoxSubmit(name, value)
-    engine.logInfo("TextBox submit: " .. tostring(name) .. " = " .. tostring(value))
+    engine.logDebug("TextBox submit: " .. tostring(name) .. " = " .. tostring(value))
     
     if name == "uiscale_input" then
         local newScale = tonumber(value)
@@ -459,7 +459,7 @@ function settingsMenu.onTextBoxSubmit(name, value)
 end
 
 function settingsMenu.revertSettings()
-    engine.logInfo("Reverting settings to saved config...")
+    engine.logDebug("Reverting settings to saved config...")
     
     local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
     

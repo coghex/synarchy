@@ -87,8 +87,8 @@ function shell.init(scriptId)
     lineHeight = math.floor(lineHeight * uiscale)
 
     shellFont = engine.loadFont("assets/fonts/shell.ttf", fontSize)
-    engine.logInfo("Shell font loaded with handle: " .. tostring(shellFont))
-    engine.logInfo("shell font size: " .. tostring(fontSize))
+    engine.logDebug("Shell font loaded with handle: " .. tostring(shellFont))
+    engine.logDebug("shell font size: " .. tostring(fontSize))
     
     texBox = engine.loadTexture("assets/textures/box/box.png")
     texBoxN = engine.loadTexture("assets/textures/box/boxn.png")

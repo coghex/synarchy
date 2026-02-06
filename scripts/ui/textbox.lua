@@ -44,7 +44,7 @@ function textbox.init()
     texSetSelected = boxTextures.load("assets/textures/ui/textboxselected", "textbox")
     
     assetsLoaded = true
-    engine.logInfo("TextBox module initialized")
+    engine.logDebug("TextBox module initialized")
 end
 
 -----------------------------------------------------------
@@ -160,7 +160,7 @@ function textbox.destroyAll()
     UI.clearFocus()
     
     for id, tb in pairs(textboxes) do
-        engine.logInfo("TextBox destroyed: " .. tb.name)
+        engine.logDebug("TextBox destroyed: " .. tb.name)
     end
     textboxes = {}
     nextId = 1
@@ -347,7 +347,7 @@ function textbox.focus(id)
     UI.setCursor(tb.boxId, #text)
     textbox.updateDisplay(id)
     
-    engine.logInfo("TextBox focused: " .. tb.name)
+    engine.logDebug("TextBox focused: " .. tb.name)
 end
 
 function textbox.unfocus(id)
@@ -364,7 +364,7 @@ function textbox.unfocus(id)
         UI.setVisible(tb.cursorId, false)
     end
     
-    engine.logInfo("TextBox unfocused: " .. tb.name)
+    engine.logDebug("TextBox unfocused: " .. tb.name)
 end
 
 function textbox.unfocusAll()
@@ -547,7 +547,7 @@ function textbox.onSubmit()
         local tb = textboxes[id]
         local value = textbox.getValue(id)
         local displayText = textbox.formatDisplayText(id)
-        engine.logInfo("TextBox submitted: " .. tb.name .. " = '" .. displayText .. "' (value=" .. value .. ")")
+        engine.logDebug("TextBox submitted: " .. tb.name .. " = '" .. displayText .. "' (value=" .. value .. ")")
         textbox.unfocus(id)
         return true, value, id, tb.name
     end
