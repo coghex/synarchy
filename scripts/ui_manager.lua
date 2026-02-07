@@ -44,9 +44,11 @@ function uiManager.init(scriptId)
     button = require("scripts.ui.button")
     dropdown = require("scripts.ui.dropdown")
     scrollbar = require("scripts.ui.scrollbar")
+    tabbar = require("scripts.ui.tabbar")
 
     button.init()
     scrollbar.init()
+    tabbar.init()
     uiscale = engine.getUIScale()
     
     menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)
@@ -243,6 +245,13 @@ function uiManager.onButtonClick(elemHandle)
     handleNonTextBoxClick()
     if button then
         return button.handleClickByElement(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onTabClick(elemHandle)
+    if tabbar then
+        return tabbar.handleCallback("onTabClick", elemHandle)
     end
     return false
 end

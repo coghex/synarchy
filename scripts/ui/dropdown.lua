@@ -1029,6 +1029,12 @@ function dropdown.onEscape()
     return true
 end
 
+function dropdown.getArrowHandle(id)
+    local dd = dropdowns[id]
+    if not dd then return nil end
+    return dd.arrowSpriteId
+end
+
 -----------------------------------------------------------
 -- Update
 -----------------------------------------------------------
@@ -1090,6 +1096,20 @@ function dropdown.getSize(id)
     local dd = dropdowns[id]
     if not dd then return 0, 0 end
     return dd.width, dd.height
+end
+
+function dropdown.setVisible(id, visible)
+    local dd = dropdowns[id]
+    if not dd then return end
+    
+    if dd.displayBoxId then UI.setVisible(dd.displayBoxId, visible) end
+    if dd.displayTextId then UI.setVisible(dd.displayTextId, visible) end
+    if dd.cursorId and not visible then UI.setVisible(dd.cursorId, false) end
+    if dd.arrowSpriteId then UI.setVisible(dd.arrowSpriteId, visible) end
+    
+    if not visible and dd.open then
+        dropdown.closeList(id)
+    end
 end
 
 function dropdown.setPosition(id, x, y)

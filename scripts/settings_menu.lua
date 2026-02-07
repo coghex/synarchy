@@ -6,6 +6,7 @@ local textbox = require("scripts.ui.textbox")
 local checkbox = require("scripts.ui.checkbox")
 local button = require("scripts.ui.button")
 local dropdown = require("scripts.ui.dropdown")
+local tabbar = require("scripts.ui.tabbar")
 local settingsMenu = {}
 
 settingsMenu.page = nil
@@ -27,9 +28,20 @@ settingsMenu.baseSizes = {
     dropdownHeight = 40,
     rowSpacing = 100,
     btnSpacing = 20,
+    tabHeight = 40,
+    tabFontSize = 24,
 }
 
 settingsMenu.uiCreated = false
+settingsMenu.tabBarId = nil
+settingsMenu.activeTab = "graphics"
+
+-- Tab content element handles (for show/hide)
+settingsMenu.tabContent = {
+    system = {},
+    graphics = {},
+    input = {},
+}
 
 settingsMenu.titleLabelId = nil
 settingsMenu.resolutionLabelId = nil
@@ -52,24 +64,20 @@ settingsMenu.frameLimitMax = 240
 
 -- Standard resolutions grouped by aspect ratio
 settingsMenu.resolutions = {
-    -- 16:9
     { text = "1280x720",   value = "1280x720",   width = 1280,  height = 720 },
     { text = "1366x768",   value = "1366x768",   width = 1366,  height = 768 },
     { text = "1600x900",   value = "1600x900",   width = 1600,  height = 900 },
     { text = "1920x1080",  value = "1920x1080",  width = 1920,  height = 1080 },
     { text = "2560x1440",  value = "2560x1440",  width = 2560,  height = 1440 },
     { text = "3840x2160",  value = "3840x2160",  width = 3840,  height = 2160 },
-    -- 16:10
     { text = "1280x800",   value = "1280x800",   width = 1280,  height = 800 },
     { text = "1440x900",   value = "1440x900",   width = 1440,  height = 900 },
     { text = "1680x1050",  value = "1680x1050",  width = 1680,  height = 1050 },
     { text = "1920x1200",  value = "1920x1200",  width = 1920,  height = 1200 },
     { text = "2560x1600",  value = "2560x1600",  width = 2560,  height = 1600 },
-    -- 4:3
     { text = "800x600",    value = "800x600",     width = 800,   height = 600 },
     { text = "1024x768",   value = "1024x768",    width = 1024,  height = 768 },
     { text = "1600x1200",  value = "1600x1200",   width = 1600,  height = 1200 },
-    -- 21:9 ultrawide
     { text = "2560x1080",  value = "2560x1080",  width = 2560,  height = 1080 },
     { text = "3440x1440",  value = "3440x1440",  width = 3440,  height = 1440 },
 }
@@ -92,12 +100,10 @@ function settingsMenu.setShowMenuCallback(callback)
     settingsMenu.showMenuCallback = callback
 end
 
--- Build a resolution string from width/height
 function settingsMenu.resolutionString(w, h)
     return tostring(w) .. "x" .. tostring(h)
 end
 
--- Find the resolution entry matching width/height, or nil
 function settingsMenu.findResolutionIndex(w, h)
     local target = settingsMenu.resolutionString(w, h)
     for i, res in ipairs(settingsMenu.resolutions) do
@@ -120,6 +126,7 @@ function settingsMenu.init(panelTex, btnTex, font, width, height)
     textbox.init()
     checkbox.init()
     dropdown.init()
+    tabbar.init()
     
     settingsMenu.reloadSettings()
     settingsMenu.createUI()
@@ -131,6 +138,7 @@ function settingsMenu.createUI()
     checkbox.destroyAll()
     button.destroyAll()
     dropdown.destroyAll()
+    tabbar.destroyAll()
     panel.destroyAll()
     
     settingsMenu.titleLabelId = nil
@@ -146,6 +154,8 @@ function settingsMenu.createUI()
     settingsMenu.applyButtonId = nil
     settingsMenu.saveButtonId = nil
     settingsMenu.panelId = nil
+    settingsMenu.tabBarId = nil
+    settingsMenu.tabContent = { system = {}, graphics = {}, input = {} }
     
     if settingsMenu.uiCreated and settingsMenu.page then
         UI.deletePage(settingsMenu.page)
@@ -170,7 +180,6 @@ function settingsMenu.createUI()
     local panelX = (settingsMenu.fbW - panelWidth) / 2
     local panelY = (settingsMenu.fbH - panelHeight) / 2
     
-    -- Create panel
     settingsMenu.panelId = panel.new({
         name = "settings_panel",
         page = settingsMenu.page,
@@ -187,8 +196,9 @@ function settingsMenu.createUI()
     })
     
     local baseZ = panel.getZIndex(settingsMenu.panelId)
+    local bounds = panel.getContentBounds(settingsMenu.panelId)
     
-    -- Title label (centered at top)
+    -- Title
     settingsMenu.titleLabelId = label.new({
         name = "settings_title",
         text = "Settings",
@@ -209,199 +219,56 @@ function settingsMenu.createUI()
         height = titleH,
     })
     
-    -- Calculate row positions
-    local rowY1 = s.fontSize + s.rowSpacing
-    local rowY2 = rowY1 + s.rowSpacing
-    local rowY3 = rowY2 + s.rowSpacing
-    local rowY4 = rowY3 + s.rowSpacing
+    -- Tab bar below title
+    local tabY = panelY + bounds.y + s.fontSize + math.floor(20 * uiscale)
+    local tabFrameHeight = panelHeight - bounds.y - s.fontSize
+        - math.floor(20 * uiscale) - s.tabHeight - s.btnHeight
+        - math.floor(40 * uiscale) - bounds.y
     
-    -- Row 1: Resolution label and dropdown
-    settingsMenu.resolutionLabelId = label.new({
-        name = "resolution_label",
-        text = "Resolution",
-        font = settingsMenu.menuFont,
-        fontSize = settingsMenu.baseSizes.fontSize,
-        color = {1.0, 1.0, 1.0, 1.0},
+    settingsMenu.tabBarId = tabbar.new({
+        name = "settings_tabs",
         page = settingsMenu.page,
+        x = panelX + bounds.x,
+        y = tabY,
+        width = bounds.width,
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.tabFontSize,
+        tabHeight = settingsMenu.baseSizes.tabHeight,
+        frameHeight = tabFrameHeight,
         uiscale = uiscale,
         zIndex = baseZ + 1,
-    })
-    
-    local resLabelW, resLabelH = label.getSize(settingsMenu.resolutionLabelId)
-    panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.resolutionLabelId), {
-        x = "0px",
-        y = rowY1 .. "px",
-        origin = "top-left",
-        width = resLabelW,
-        height = resLabelH,
-    })
-    
-    local currentRes = settingsMenu.resolutionString(
-        settingsMenu.currentSettings.width,
-        settingsMenu.currentSettings.height
-    )
-    
-    local bounds = panel.getContentBounds(settingsMenu.panelId)
-    
-    settingsMenu.resolutionDropdownId = dropdown.new({
-        name = "resolution",
-        options = settingsMenu.resolutions,
-        default = currentRes,
-        font = settingsMenu.menuFont,
-        fontSize = 24,
-        height = settingsMenu.baseSizes.dropdownHeight,
-        page = settingsMenu.page,
-        x = 0,
-        y = 0,
-        uiscale = uiscale,
-        zIndex = baseZ + 2,
-        validateChar = dropdown.resolutionValidator,
-        matchFn = dropdown.resolutionMatcher,
-        maxVisibleOptions = 8,
-        onChange = function(value, text, id, name)
-            local w, h = value:match("^(%d+)x(%d+)$")
-            if w and h then
-                settingsMenu.pendingSettings.width = tonumber(w)
-                settingsMenu.pendingSettings.height = tonumber(h)
-                engine.logInfo("Resolution pending: " .. text)
-            end
+        textColor = {0.0, 0.0, 0.0, 1.0},
+        selectedTextColor = {1.0, 1.0, 1.0, 1.0},
+        tabs = {
+            { name = "System",   key = "system" },
+            { name = "Graphics", key = "graphics" },
+            { name = "Input",    key = "input" },
+        },
+        onChange = function(key, index, tbId)
+            settingsMenu.onTabChanged(key)
         end,
     })
     
-    local ddW, ddH = dropdown.getSize(settingsMenu.resolutionDropdownId)
-    dropdown.setPosition(settingsMenu.resolutionDropdownId,
-        panelX + bounds.x + bounds.width - ddW,
-        panelY + bounds.y + rowY1)
-
-    -- Row 2: Fullscreen label and checkbox
-    settingsMenu.fullscreenLabelId = label.new({
-        name = "fullscreen_label",
-        text = "Fullscreen",
-        font = settingsMenu.menuFont,
-        fontSize = settingsMenu.baseSizes.fontSize,
-        color = {1.0, 1.0, 1.0, 1.0},
-        page = settingsMenu.page,
-        uiscale = uiscale,
-        zIndex = baseZ + 1,
-    })
+    -- Select the active tab
+    tabbar.selectByKey(settingsMenu.tabBarId, settingsMenu.activeTab)
     
-    local flLabelW, flLabelH = label.getSize(settingsMenu.fullscreenLabelId)
-    panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.fullscreenLabelId), {
-        x = "0px",
-        y = rowY2 .. "px",
-        origin = "top-left",
-        width = flLabelW,
-        height = flLabelH,
-    })
+    -- Get frame bounds for content placement
+    local frameX, frameY, frameW, frameH = tabbar.getFrameBounds(settingsMenu.tabBarId)
+    local contentPadding = math.floor(20 * uiscale)
+    local contentX = frameX + contentPadding
+    local contentY = frameY + contentPadding
+    local contentW = frameW - (contentPadding * 2)
     
-    settingsMenu.fullscreenCheckboxId = checkbox.new({
-        name = "fullscreen",
-        size = settingsMenu.baseSizes.checkboxSize,
-        uiscale = uiscale,
-        page = settingsMenu.page,
-        default = settingsMenu.currentSettings.fullscreen,
-        onChange = function(checked, id, name)
-            settingsMenu.pendingSettings.fullscreen = checked
-            engine.logInfo("Fullscreen pending: " .. tostring(checked))
-        end,
-    })
+    -- Build graphics tab content
+    settingsMenu.createGraphicsTab(contentX, contentY, contentW, s, baseZ, uiscale)
     
-    local cbW, cbH = checkbox.getSize(settingsMenu.fullscreenCheckboxId)
-    panel.place(settingsMenu.panelId, checkbox.getElementHandle(settingsMenu.fullscreenCheckboxId), {
-        x = "100%",
-        y = rowY2 .. "px",
-        origin = "top-right",
-        width = cbW,
-        height = cbH,
-    })
+    -- Build system tab content (placeholder)
+    settingsMenu.createSystemTab(contentX, contentY, contentW, s, baseZ, uiscale)
     
-    -- Row 3: UI Scaling label and textbox
-    settingsMenu.scalingLabelId = label.new({
-        name = "scaling_label",
-        text = "UI Scaling",
-        font = settingsMenu.menuFont,
-        fontSize = settingsMenu.baseSizes.fontSize,
-        color = {1.0, 1.0, 1.0, 1.0},
-        page = settingsMenu.page,
-        uiscale = uiscale,
-        zIndex = baseZ + 1,
-    })
+    -- Build input tab content (placeholder)
+    settingsMenu.createInputTab(contentX, contentY, contentW, s, baseZ, uiscale)
     
-    local scLabelW, scLabelH = label.getSize(settingsMenu.scalingLabelId)
-    panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.scalingLabelId), {
-        x = "0px",
-        y = rowY3 .. "px",
-        origin = "top-left",
-        width = scLabelW,
-        height = scLabelH,
-    })
-    
-    settingsMenu.uiScaleTextBox = textbox.new({
-        name = "uiscale_input",
-        width = settingsMenu.baseSizes.textboxWidth,
-        height = settingsMenu.baseSizes.textboxHeight,
-        page = settingsMenu.page,
-        uiscale = uiscale,
-        font = settingsMenu.menuFont,
-        fontSize = 24,
-        default = tostring(settingsMenu.currentSettings.uiScale),
-        textType = textbox.Type.SCALE
-    })
-    
-    local tbW, tbH = textbox.getSize(settingsMenu.uiScaleTextBox)
-    panel.place(settingsMenu.panelId, textbox.getElementHandle(settingsMenu.uiScaleTextBox), {
-        x = "100%",
-        y = rowY3 .. "px",
-        origin = "top-right",
-        width = tbW,
-        height = tbH,
-    })
-    -- Give UI scale textbox a unique z-index so its text child lands on a unique layer
-    
-    -- Row 4: Frame Limit label and textbox
-    settingsMenu.frameLimitLabelId = label.new({
-        name = "framelimit_label",
-        text = "Frame Limit",
-        font = settingsMenu.menuFont,
-        fontSize = settingsMenu.baseSizes.fontSize,
-        color = {1.0, 1.0, 1.0, 1.0},
-        page = settingsMenu.page,
-        uiscale = uiscale,
-        zIndex = baseZ + 1,
-    })
-    
-    local frLabelW, frLabelH = label.getSize(settingsMenu.frameLimitLabelId)
-    panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.frameLimitLabelId), {
-        x = "0px",
-        y = rowY4 .. "px",
-        origin = "top-left",
-        width = frLabelW,
-        height = frLabelH,
-    })
-    
-    settingsMenu.frameLimitTextBox = textbox.new({
-        name = "framelimit_input",
-        width = settingsMenu.baseSizes.textboxWidth,
-        height = settingsMenu.baseSizes.textboxHeight,
-        page = settingsMenu.page,
-        uiscale = uiscale,
-        font = settingsMenu.menuFont,
-        fontSize = 24,
-        default = tostring(settingsMenu.currentSettings.frameLimit or 60),
-        textType = textbox.Type.NUMBER,
-    })
-    
-    local flW, flH = textbox.getSize(settingsMenu.frameLimitTextBox)
-    panel.place(settingsMenu.panelId, textbox.getElementHandle(settingsMenu.frameLimitTextBox), {
-        x = "100%",
-        y = rowY4 .. "px",
-        origin = "top-right",
-        width = flW,
-        height = flH,
-    })
-    -- Give frame limit textbox a unique z-index
-    
-    -- Create buttons
+    -- Buttons at bottom
     settingsMenu.backButtonId = button.new({
         name = "back_btn",
         text = "Back",
@@ -456,7 +323,6 @@ function settingsMenu.createUI()
         end,
     })
     
-    -- Get button sizes and place in row at bottom
     local backW, backH = button.getSize(settingsMenu.backButtonId)
     local applyW, applyH = button.getSize(settingsMenu.applyButtonId)
     local saveW, saveH = button.getSize(settingsMenu.saveButtonId)
@@ -485,8 +351,264 @@ function settingsMenu.createUI()
     UI.setZIndex(button.getElementHandle(settingsMenu.applyButtonId), baseZ + 1)
     UI.setZIndex(button.getElementHandle(settingsMenu.saveButtonId), baseZ + 1)
     
+    -- Show only the active tab's content
+    settingsMenu.showTab(settingsMenu.activeTab)
+    
     settingsMenu.uiCreated = true
 end
+
+-----------------------------------------------------------
+-- Tab Content Creation
+-----------------------------------------------------------
+
+function settingsMenu.createGraphicsTab(contentX, contentY, contentW, s, baseZ, uiscale)
+    local rowY1 = contentY
+    local rowY2 = rowY1 + s.rowSpacing
+    local rowY3 = rowY2 + s.rowSpacing
+    local rowY4 = rowY3 + s.rowSpacing
+    
+    -- Row 1: Resolution
+    settingsMenu.resolutionLabelId = label.new({
+        name = "resolution_label",
+        text = "Resolution",
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.fontSize,
+        color = {1.0, 1.0, 1.0, 1.0},
+        page = settingsMenu.page,
+        uiscale = uiscale,
+        zIndex = baseZ + 2,
+    })
+    local resLabelHandle = label.getElementHandle(settingsMenu.resolutionLabelId)
+    UI.addToPage(settingsMenu.page, resLabelHandle, contentX, rowY1 + s.fontSize)
+    
+    local currentRes = settingsMenu.resolutionString(
+        settingsMenu.currentSettings.width,
+        settingsMenu.currentSettings.height
+    )
+    
+    local ddW_est = math.floor(200 * uiscale)
+    
+    settingsMenu.resolutionDropdownId = dropdown.new({
+        name = "resolution",
+        options = settingsMenu.resolutions,
+        default = currentRes,
+        font = settingsMenu.menuFont,
+        fontSize = 24,
+        height = settingsMenu.baseSizes.dropdownHeight,
+        page = settingsMenu.page,
+        x = 0,
+        y = 0,
+        uiscale = uiscale,
+        zIndex = baseZ + 2,
+        validateChar = dropdown.resolutionValidator,
+        matchFn = dropdown.resolutionMatcher,
+        maxVisibleOptions = 8,
+        onChange = function(value, text, id, name)
+            local w, h = value:match("^(%d+)x(%d+)$")
+            if w and h then
+                settingsMenu.pendingSettings.width = tonumber(w)
+                settingsMenu.pendingSettings.height = tonumber(h)
+                engine.logInfo("Resolution pending: " .. text)
+            end
+        end,
+    })
+    
+    local ddW, ddH = dropdown.getSize(settingsMenu.resolutionDropdownId)
+    dropdown.setPosition(settingsMenu.resolutionDropdownId,
+        contentX + contentW - ddW, rowY1)
+    
+    -- Row 2: Fullscreen
+    settingsMenu.fullscreenLabelId = label.new({
+        name = "fullscreen_label",
+        text = "Fullscreen",
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.fontSize,
+        color = {1.0, 1.0, 1.0, 1.0},
+        page = settingsMenu.page,
+        uiscale = uiscale,
+        zIndex = baseZ + 2,
+    })
+    local flLabelHandle = label.getElementHandle(settingsMenu.fullscreenLabelId)
+    UI.addToPage(settingsMenu.page, flLabelHandle, contentX, rowY2 + s.fontSize)
+    
+    settingsMenu.fullscreenCheckboxId = checkbox.new({
+        name = "fullscreen",
+        size = settingsMenu.baseSizes.checkboxSize,
+        uiscale = uiscale,
+        page = settingsMenu.page,
+        x = contentX + contentW - math.floor(settingsMenu.baseSizes.checkboxSize * uiscale),
+        y = rowY2,
+        default = settingsMenu.currentSettings.fullscreen,
+        onChange = function(checked, id, name)
+            settingsMenu.pendingSettings.fullscreen = checked
+            engine.logInfo("Fullscreen pending: " .. tostring(checked))
+        end,
+    })
+    local cbHandle = checkbox.getElementHandle(settingsMenu.fullscreenCheckboxId)
+    
+    -- Row 3: UI Scaling
+    settingsMenu.scalingLabelId = label.new({
+        name = "scaling_label",
+        text = "UI Scaling",
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.fontSize,
+        color = {1.0, 1.0, 1.0, 1.0},
+        page = settingsMenu.page,
+        uiscale = uiscale,
+        zIndex = baseZ + 2,
+    })
+    local scLabelHandle = label.getElementHandle(settingsMenu.scalingLabelId)
+    UI.addToPage(settingsMenu.page, scLabelHandle, contentX, rowY3 + s.fontSize)
+    
+    local tbW_est = math.floor(settingsMenu.baseSizes.textboxWidth * uiscale)
+    settingsMenu.uiScaleTextBox = textbox.new({
+        name = "uiscale_input",
+        width = settingsMenu.baseSizes.textboxWidth,
+        height = settingsMenu.baseSizes.textboxHeight,
+        page = settingsMenu.page,
+        x = contentX + contentW - tbW_est,
+        y = rowY3,
+        uiscale = uiscale,
+        font = settingsMenu.menuFont,
+        fontSize = 24,
+        default = tostring(settingsMenu.currentSettings.uiScale),
+        textType = textbox.Type.SCALE,
+        zIndex = baseZ + 2
+    })
+    local tbHandle = textbox.getElementHandle(settingsMenu.uiScaleTextBox)
+    
+    -- Row 4: Frame Limit
+    settingsMenu.frameLimitLabelId = label.new({
+        name = "framelimit_label",
+        text = "Frame Limit",
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.fontSize,
+        color = {1.0, 1.0, 1.0, 1.0},
+        page = settingsMenu.page,
+        uiscale = uiscale,
+        zIndex = baseZ + 2,
+    })
+    local frLabelHandle = label.getElementHandle(settingsMenu.frameLimitLabelId)
+    UI.addToPage(settingsMenu.page, frLabelHandle, contentX, rowY4 + s.fontSize)
+    
+    local flW_est = math.floor(settingsMenu.baseSizes.textboxWidth * uiscale)
+    settingsMenu.frameLimitTextBox = textbox.new({
+        name = "framelimit_input",
+        width = settingsMenu.baseSizes.textboxWidth,
+        height = settingsMenu.baseSizes.textboxHeight,
+        page = settingsMenu.page,
+        x = contentX + contentW - flW_est,
+        y = rowY4,
+        uiscale = uiscale,
+        font = settingsMenu.menuFont,
+        fontSize = 24,
+        default = tostring(settingsMenu.currentSettings.frameLimit or 60),
+        textType = textbox.Type.NUMBER,
+        zIndex = baseZ + 2,
+    })
+    local flHandle = textbox.getElementHandle(settingsMenu.frameLimitTextBox)
+    
+    -- Track all graphics tab elements for show/hide
+    settingsMenu.tabContent.graphics = {
+        resLabelHandle,
+        dropdown.getElementHandle(settingsMenu.resolutionDropdownId),
+        dropdown.getArrowHandle(settingsMenu.resolutionDropdownId),
+        flLabelHandle,
+        cbHandle,
+        scLabelHandle,
+        tbHandle,
+        frLabelHandle,
+        flHandle,
+    }
+end
+
+function settingsMenu.createSystemTab(contentX, contentY, contentW, s, baseZ, uiscale)
+    local placeholderLabel = label.new({
+        name = "system_placeholder",
+        text = "System settings coming soon...",
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.fontSize,
+        color = {0.7, 0.7, 0.7, 1.0},
+        page = settingsMenu.page,
+        uiscale = uiscale,
+        zIndex = baseZ + 2,
+    })
+    local handle = label.getElementHandle(placeholderLabel)
+    UI.addToPage(settingsMenu.page, handle, contentX, contentY + s.fontSize)
+    
+    settingsMenu.tabContent.system = { handle }
+end
+
+function settingsMenu.createInputTab(contentX, contentY, contentW, s, baseZ, uiscale)
+    local placeholderLabel = label.new({
+        name = "input_placeholder",
+        text = "Input settings coming soon...",
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.fontSize,
+        color = {0.7, 0.7, 0.7, 1.0},
+        page = settingsMenu.page,
+        uiscale = uiscale,
+        zIndex = baseZ + 2,
+    })
+    local handle = label.getElementHandle(placeholderLabel)
+    UI.addToPage(settingsMenu.page, handle, contentX, contentY + s.fontSize)
+    
+    settingsMenu.tabContent.input = { handle }
+end
+
+-----------------------------------------------------------
+-- Tab Switching
+-----------------------------------------------------------
+
+function settingsMenu.onTabChanged(key)
+    settingsMenu.activeTab = key
+    settingsMenu.showTab(key)
+end
+
+function settingsMenu.showTab(key)
+    for tabKey, _ in pairs(settingsMenu.tabContent) do
+        local visible = (tabKey == key)
+        
+        if tabKey == "graphics" then
+            if settingsMenu.resolutionLabelId then
+                label.setVisible(settingsMenu.resolutionLabelId, visible)
+            end
+            if settingsMenu.resolutionDropdownId then
+                dropdown.setVisible(settingsMenu.resolutionDropdownId, visible)
+            end
+            if settingsMenu.fullscreenLabelId then
+                label.setVisible(settingsMenu.fullscreenLabelId, visible)
+            end
+            if settingsMenu.fullscreenCheckboxId then
+                checkbox.setVisible(settingsMenu.fullscreenCheckboxId, visible)
+            end
+            if settingsMenu.scalingLabelId then
+                label.setVisible(settingsMenu.scalingLabelId, visible)
+            end
+            if settingsMenu.uiScaleTextBox then
+                textbox.setVisible(settingsMenu.uiScaleTextBox, visible)
+            end
+            if settingsMenu.frameLimitLabelId then
+                label.setVisible(settingsMenu.frameLimitLabelId, visible)
+            end
+            if settingsMenu.frameLimitTextBox then
+                textbox.setVisible(settingsMenu.frameLimitTextBox, visible)
+            end
+        elseif tabKey == "system" then
+            for _, handle in ipairs(settingsMenu.tabContent.system) do
+                UI.setVisible(handle, visible)
+            end
+        elseif tabKey == "input" then
+            for _, handle in ipairs(settingsMenu.tabContent.input) do
+                UI.setVisible(handle, visible)
+            end
+        end
+    end
+end
+
+-----------------------------------------------------------
+-- Settings Logic (unchanged)
+-----------------------------------------------------------
 
 function settingsMenu.getSettings()
     return settingsMenu.currentSettings
@@ -498,7 +620,6 @@ function settingsMenu.onApply()
     local scaleChanged = false
     local resolutionChanged = false
     
-    -- Apply resolution
     if settingsMenu.pendingSettings.width ~= settingsMenu.currentSettings.width
         or settingsMenu.pendingSettings.height ~= settingsMenu.currentSettings.height then
         settingsMenu.currentSettings.width = settingsMenu.pendingSettings.width
@@ -508,14 +629,12 @@ function settingsMenu.onApply()
             .. "x" .. settingsMenu.currentSettings.height)
     end
     
-    -- Apply fullscreen
     if settingsMenu.pendingSettings.fullscreen ~= settingsMenu.currentSettings.fullscreen then
         settingsMenu.currentSettings.fullscreen = settingsMenu.pendingSettings.fullscreen
         engine.setFullscreen(settingsMenu.currentSettings.fullscreen)
         engine.logInfo("Fullscreen applied: " .. tostring(settingsMenu.currentSettings.fullscreen))
     end
     
-    -- Apply UI scale
     if settingsMenu.uiScaleTextBox then
         local newScale = textbox.getNumericValue(settingsMenu.uiScaleTextBox)
         if newScale >= settingsMenu.uiScaleMin and newScale <= settingsMenu.uiScaleMax then
@@ -531,7 +650,6 @@ function settingsMenu.onApply()
         end
     end
     
-    -- Apply frame limit
     if settingsMenu.frameLimitTextBox then
         local frameLimit = textbox.getNumericValue(settingsMenu.frameLimitTextBox)
         if frameLimit >= settingsMenu.frameLimitMin and frameLimit <= settingsMenu.frameLimitMax then
@@ -544,7 +662,6 @@ function settingsMenu.onApply()
         end
     end
     
-    -- Apply resolution change via GLFW window resize
     if resolutionChanged then
         engine.setResolution(
             settingsMenu.currentSettings.width,
@@ -651,7 +768,7 @@ function settingsMenu.revertSettings()
     end
     
     if resChanged then
-        engine.setVideoConfig(w, h, fs, uiScale, vs, frameLimit, msaa)
+        engine.setResolution(w, h)
     end
 end
 
@@ -677,6 +794,7 @@ function settingsMenu.shutdown()
     checkbox.destroyAll()
     button.destroyAll()
     dropdown.destroyAll()
+    tabbar.destroyAll()
     panel.destroyAll()
     if settingsMenu.page then
         UI.deletePage(settingsMenu.page)

@@ -117,6 +117,13 @@ function checkbox.setChecked(id, checked)
     UI.setSpriteTexture(cb.spriteId, tex)
 end
 
+function checkbox.setVisible(id, visible)
+    local cb = checkboxes[id]
+    if not cb then return end
+    
+    if cb.spriteId then UI.setVisible(cb.spriteId, visible) end
+end
+
 function checkbox.toggle(id)
     local cb = checkboxes[id]
     if not cb then return false end

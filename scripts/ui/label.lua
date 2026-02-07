@@ -118,6 +118,13 @@ function label.setColor(id, color)
     end
 end
 
+function label.setVisible(id, visible)
+    local lb = labels[id]
+    if not lb then return end
+    
+    if lb.textId then UI.setVisible(lb.textId, visible) end
+end
+
 -----------------------------------------------------------
 -- Queries
 -----------------------------------------------------------
