@@ -174,6 +174,11 @@ function checkbox.isCheckboxCallback(callbackName)
     return callbackName == CHECKBOX_CALLBACK
 end
 
+function checkbox.onHoverEnter(id)
+end
+function checkbox.onHoverLeave(id)
+end
+
 -----------------------------------------------------------
 -- Queries
 -----------------------------------------------------------

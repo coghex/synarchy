@@ -154,7 +154,7 @@ function uiManager.update(dt)
         dropdown.update(dt)
     end
     
-    -- Hover detection
+    -- Hover detection with coordinate scaling
     local mx, my = engine.getMousePosition()
     if mx and my then
         local ww, wh = engine.getWindowSize()
@@ -162,6 +162,7 @@ function uiManager.update(dt)
             mx = mx * (fbW / ww)
             my = my * (fbH / wh)
         end
+        
         local elem, cb = UI.findHoverTarget(mx, my)
         
         if elem ~= hoveredElement then
@@ -177,6 +178,19 @@ function uiManager.update(dt)
                 uiManager.onHoverEnter(elem, cb)
             end
         end
+    end
+end
+
+function uiManager.onMouseDown(button_num, x, y)
+    -- Scale coordinates for dropdown click-outside detection
+    local ww, wh = engine.getWindowSize()
+    local sx, sy = x, y
+    if ww and wh and ww > 0 and wh > 0 then
+        sx = x * (fbW / ww)
+        sy = y * (fbH / wh)
+    end
+    if dropdown then
+        dropdown.onClickOutside(sx, sy)
     end
 end
 
@@ -247,12 +261,6 @@ function uiManager.onDropdownOptionClick(elemHandle)
     return false
 end
 
-function uiManager.onMouseDown(button_num, x, y)
-    if dropdown then
-        dropdown.onClickOutside(x, y)
-    end
-end
-
 function uiManager.onMouseUp(button_num, x, y)
     if button then
         button.onMouseUp()
@@ -263,7 +271,19 @@ end
 -- Input Event Forwarding to Textboxes
 -----------------------------------------------------------
 
+function uiManager.onDropdownDisplayClick(elemHandle)
+    handleNonTextBoxClick()
+    if dropdown then
+        return dropdown.handleCallback("onDropdownDisplayClick", elemHandle)
+    end
+    return false
+end
+
 function uiManager.onUICharInput(char)
+    -- Dropdown gets priority if focused
+    if dropdown and dropdown.getFocusedId() then
+        return dropdown.onCharInput(char)
+    end
     if textbox then
         return textbox.onCharInput(char)
     end
@@ -271,6 +291,9 @@ function uiManager.onUICharInput(char)
 end
 
 function uiManager.onUIBackspace()
+    if dropdown and dropdown.getFocusedId() then
+        return dropdown.onBackspace()
+    end
     if textbox then
         return textbox.onBackspace()
     end
@@ -278,6 +301,9 @@ function uiManager.onUIBackspace()
 end
 
 function uiManager.onUIDelete()
+    if dropdown and dropdown.getFocusedId() then
+        return dropdown.onDelete()
+    end
     if textbox then
         return textbox.onDelete()
     end
@@ -285,6 +311,9 @@ function uiManager.onUIDelete()
 end
 
 function uiManager.onUICursorLeft()
+    if dropdown and dropdown.getFocusedId() then
+        return dropdown.onCursorLeft()
+    end
     if textbox then
         return textbox.onCursorLeft()
     end
@@ -292,6 +321,9 @@ function uiManager.onUICursorLeft()
 end
 
 function uiManager.onUICursorRight()
+    if dropdown and dropdown.getFocusedId() then
+        return dropdown.onCursorRight()
+    end
     if textbox then
         return textbox.onCursorRight()
     end
@@ -299,6 +331,9 @@ function uiManager.onUICursorRight()
 end
 
 function uiManager.onUIHome()
+    if dropdown and dropdown.getFocusedId() then
+        return dropdown.onHome()
+    end
     if textbox then
         return textbox.onHome()
     end
@@ -306,6 +341,9 @@ function uiManager.onUIHome()
 end
 
 function uiManager.onUIEnd()
+    if dropdown and dropdown.getFocusedId() then
+        return dropdown.onEnd()
+    end
     if textbox then
         return textbox.onEnd()
     end
@@ -313,6 +351,9 @@ function uiManager.onUIEnd()
 end
 
 function uiManager.onUISubmit()
+    if dropdown and dropdown.getFocusedId() then
+        return dropdown.onSubmit()
+    end
     if textbox then
         local handled, value, id, name = textbox.onSubmit()
         if handled and value then
@@ -325,11 +366,13 @@ function uiManager.onUISubmit()
 end
 
 function uiManager.onUIEscape()
+    if dropdown and dropdown.getFocusedId() then
+        return dropdown.onEscape()
+    end
     if textbox then
         local handled = textbox.onEscape()
         if handled then return true end
     end
-    -- Also close any open dropdowns on Escape
     if dropdown then
         for id = 1, 100 do
             if dropdown.isOpen(id) then
@@ -342,6 +385,9 @@ function uiManager.onUIEscape()
 end
 
 function uiManager.onUIFocusLost()
+    if dropdown then
+        dropdown.unfocusAll()
+    end
     if textbox then
         textbox.unfocusAll()
     end

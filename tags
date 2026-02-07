@@ -905,7 +905,7 @@ emptyUIPageManager	src/UI/Types.hs	146;"	f
 enableCategory	src/Engine/Core/Log.hs	294;"	f
 enableDebug	src/Engine/Core/Types.hs	25;"	f
 enableLogFn	src/Engine/Scripting/Lua/API/Log.hs	142;"	f
-enableTextInput	src/UI/Manager.hs	507;"	f
+enableTextInput	src/UI/Manager.hs	505;"	f
 enableVSync	src/Engine/Core/Types.hs	24;"	f
 endVulkanCommandBuffer	src/Engine/Graphics/Vulkan/Command.hs	96;"	f
 engineConfig	src/Engine/Core/State.hs	37;"	f
@@ -1020,7 +1020,7 @@ getAvailableExtensions	src/Engine/Graphics/Vulkan/Instance.hs	176;"	f
 getAvailableLayers	src/Engine/Graphics/Vulkan/Instance.hs	181;"	f
 getBinDir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	67;"	f
 getBinDir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy/build/synarchy/autogen/Paths_synarchy.hs	67;"	f
-getBoxTextureSet	src/UI/Manager.hs	542;"	f
+getBoxTextureSet	src/UI/Manager.hs	540;"	f
 getChildZIndex	src/UI/Render.hs	167;"	f
 getCommandBuffer	src/Engine/Loop/Resource.hs	49;"	f
 getCurTime	src/Engine/Loop/Timing.hs	77;"	f
@@ -1078,7 +1078,7 @@ getSurfaceOrFail	src/Engine/Graphics/Vulkan/Recreate.hs	166;"	f
 getSwapchain	src/Engine/Loop/Resource.hs	63;"	f
 getSysconfDir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	93;"	f
 getSysconfDir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy/build/synarchy/autogen/Paths_synarchy.hs	93;"	f
-getTextBuffer	src/UI/Manager.hs	512;"	f
+getTextBuffer	src/UI/Manager.hs	510;"	f
 getTextFn	src/Engine/Scripting/Lua/API/Text.hs	111;"	f
 getTextWidthFn	src/Engine/Scripting/Lua/API/Text.hs	125;"	f
 getTextureAtlas	src/Engine/Asset/Manager.hs	318;"	f
@@ -1297,11 +1297,11 @@ makeQuadVertices	src/UI/Render.hs	297;"	f
 maxTimeout	src/Engine/Graphics/Vulkan/Types.hs	49;"	f
 mergeLayeredTextItems	src/UI/Render.hs	56;"	f
 mkErrorContext	src/Engine/Core/Error/Exception.hs	151;"	f
-modifyElement	src/UI/Manager.hs	555;"	f
+modifyElement	src/UI/Manager.hs	553;"	f
 modifyFocusTargetBuffer	src/UI/Focus.hs	121;"	f
-modifyPage	src/UI/Manager.hs	559;"	f
+modifyPage	src/UI/Manager.hs	557;"	f
 modifySceneNode	src/Engine/Scene/Graph.hs	96;"	f
-modifyTextBuffer	src/UI/Manager.hs	524;"	f
+modifyTextBuffer	src/UI/Manager.hs	522;"	f
 modifyVar	src/Engine/Core/Var.hs	27;"	f
 modifyVar'	src/Engine/Core/Var.hs	34;"	f
 mouseCallback	src/Engine/Input/Callback.hs	61;"	f
@@ -1377,7 +1377,7 @@ recordSceneCommandBuffer	src/Engine/Graphics/Vulkan/Command/Record.hs	35;"	f
 recordVulkanRenderCommands	src/Engine/Graphics/Vulkan/Framebuffer.hs	58;"	f
 recreateAllResources	src/Engine/Graphics/Vulkan/Recreate.hs	80;"	f
 recreateSwapchain	src/Engine/Graphics/Vulkan/Recreate.hs	33;"	f
-registerBoxTextures	src/UI/Manager.hs	534;"	f
+registerBoxTextures	src/UI/Manager.hs	532;"	f
 registerFocusTarget	src/UI/Focus.hs	70;"	f
 registerFocusableFn	src/Engine/Scripting/Lua/API/Focus.hs	14;"	f
 registerFunction	src/Engine/Scripting/Backend.hs	35;"	f
@@ -1439,7 +1439,7 @@ sdfBaseSize	src/Engine/Graphics/Font/Load.hs	298;"	f
 sdfPadding	src/Engine/Graphics/Font/Load.hs	302;"	f
 setActiveScene	src/Engine/Scene/Manager.hs	46;"	f
 setBoxColor	src/UI/Manager.hs	310;"	f
-setBoxTextures	src/UI/Manager.hs	545;"	f
+setBoxTextures	src/UI/Manager.hs	543;"	f
 setCategoryLevel	src/Engine/Core/Log.hs	288;"	f
 setColorFn	src/Engine/Scripting/Lua/API/Graphics.hs	137;"	f
 setDebugCategoryFn	src/Engine/Scripting/Lua/API/Log.hs	105;"	f
@@ -1458,7 +1458,7 @@ setSizeFn	src/Engine/Scripting/Lua/API/Graphics.hs	155;"	f
 setSpriteColor	src/UI/Manager.hs	334;"	f
 setSpriteTexture	src/UI/Manager.hs	328;"	f
 setText	src/UI/Manager.hs	316;"	f
-setTextBuffer	src/UI/Manager.hs	519;"	f
+setTextBuffer	src/UI/Manager.hs	517;"	f
 setTextColor	src/UI/Manager.hs	322;"	f
 setTextFn	src/Engine/Scripting/Lua/API/Text.hs	93;"	f
 setTickIntervalFn	src/Engine/Scripting/Lua/API/Core.hs	41;"	f

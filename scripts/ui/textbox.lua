@@ -566,6 +566,12 @@ function textbox.onEscape()
     return false
 end
 
+function textbox.onHoverEnter(id)
+end
+
+function textbox.onHoverLeave(id)
+end
+
 -----------------------------------------------------------
 -- Size Query
 -----------------------------------------------------------

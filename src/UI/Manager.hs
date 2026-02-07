@@ -454,7 +454,7 @@ findClickableAncestor handle mgr = go handle
                 Just parentHandle -> go parentHandle
                 Nothing -> Nothing
 
--- | Find the topmost visible element at a point (not just clickable ones)
+-- | Find the topmost visible element at a point (deepest child wins)
 findElementAt :: (Float, Float) -> UIPageManager -> Maybe ElementHandle
 findElementAt pos mgr =
     let visiblePages = Set.toList (upmVisiblePages mgr)
@@ -463,41 +463,39 @@ findElementAt pos mgr =
                 Just page -> upRootElements page
                 Nothing -> []
             ) visiblePages
-
-        -- Find all visible elements with a size that contain the point
-        hitElements = concatMap (findInTree pos) allRootHandles
-
-        -- Sort by effective depth: page layer + element z-index, highest first
-        sorted = sortOn (\eh ->
-            case Map.lookup eh (upmElements mgr) of
-                Just elem ->
-                    let page = Map.lookup (uePage elem) (upmPages mgr)
-                        pageLayerVal = case page of
-                            Just p -> fromEnum (upLayer p) * 1000000
-                            Nothing -> 0
-                        pageZVal = case page of
-                            Just p -> upZIndex p * 1000
-                            Nothing -> 0
-                        elemZVal = ueZIndex elem
-                    in negate (pageLayerVal + pageZVal + elemZVal)
+        -- Sort roots by z-index descending so higher z roots are checked first
+        sortedRoots = sortOn (\h ->
+            case Map.lookup h (upmElements mgr) of
+                Just e  -> negate (ueZIndex e)
                 Nothing -> 0
-            ) hitElements
-    in listToMaybe sorted
+            ) allRootHandles
+        -- Find first hit (highest z root, then deepest child within)
+        hitElements = concatMap (findInTree pos) sortedRoots
+    in listToMaybe hitElements
   where
     findInTree :: (Float, Float) -> ElementHandle -> [ElementHandle]
     findInTree point handle =
         case Map.lookup handle (upmElements mgr) of
             Nothing -> []
-            Just elem ->
-                let (w, h) = ueSize elem
-                    hasSize = w > 0 && h > 0
-                    thisHit =
-                        if ueVisible elem && hasSize && isPointInElement point elem mgr
-                        then [handle]
-                        else []
-                    childHits = concatMap (findInTree point) (ueChildren elem)
-                -- Children first so deeper/higher elements win
-                in childHits ++ thisHit
+            Just elem
+                | not (ueVisible elem) -> []
+                | otherwise ->
+                    let (w, h) = ueSize elem
+                        hasSize = w > 0 && h > 0
+                        inBounds = hasSize && isPointInElement point elem mgr
+                        -- Only recurse into children if point is within parent bounds
+                        -- (or parent has no bounds, like a container)
+                        shouldRecurse = inBounds || not hasSize
+                        sortedChildren = if shouldRecurse
+                            then sortOn (\ch ->
+                                    case Map.lookup ch (upmElements mgr) of
+                                        Just c  -> negate (ueZIndex c)
+                                        Nothing -> 0
+                                    ) (ueChildren elem)
+                            else []
+                        childHits = concatMap (findInTree point) sortedChildren
+                        thisHit = if inBounds then [handle] else []
+                    in childHits ++ thisHit
 
 -----------------------------------------------------------
 -- Text Buffer Operations

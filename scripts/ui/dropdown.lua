@@ -1,4 +1,4 @@
--- Dropdown UI component
+-- Dropdown UI component (combo box - editable + selectable)
 local scale = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
 local dropdown = {}
@@ -8,6 +8,7 @@ local dropdown = {}
 -----------------------------------------------------------
 local DROPDOWN_CALLBACK = "onDropdownClick"
 local OPTION_CALLBACK = "onDropdownOptionClick"
+local DISPLAY_CALLBACK = "onDropdownDisplayClick"
 
 -----------------------------------------------------------
 -- Module State
@@ -19,6 +20,9 @@ local nextId = 1
 local texArrowNormal = nil
 local texArrowClicked = nil
 local optionTexSet = nil
+local displayTexSetNormal = nil
+local displayTexSetFocused = nil
+local highlightTex = nil
 local assetsLoaded = false
 
 -----------------------------------------------------------
@@ -31,9 +35,128 @@ function dropdown.init()
     texArrowNormal = engine.loadTexture("assets/textures/ui/dropdown.png")
     texArrowClicked = engine.loadTexture("assets/textures/ui/dropdownclicked.png")
     optionTexSet = boxTextures.load("assets/textures/ui/textbox", "textbox")
+    displayTexSetNormal = optionTexSet
+    displayTexSetFocused = boxTextures.load("assets/textures/ui/textboxselected", "textbox")
+    highlightTex = engine.loadTexture("assets/textures/ui/highlight.png")
     
     assetsLoaded = true
     engine.logDebug("Dropdown module initialized")
+end
+
+-----------------------------------------------------------
+-- Input Validation
+-----------------------------------------------------------
+
+function dropdown.isValidChar(dd, char)
+    if not dd.validateChar then
+        -- Default: accept anything
+        return true
+    end
+    return dd.validateChar(char, dropdown.getInputText(dd))
+end
+
+function dropdown.getInputText(dd)
+    if dd.displayBoxId then
+        return UI.getTextInput(dd.displayBoxId) or ""
+    end
+    return ""
+end
+
+-- Built-in validator: resolution format (digits and x/X)
+function dropdown.resolutionValidator(char, currentText)
+    if char:match("^%d$") then
+        return true
+    elseif char == "x" or char == "X" then
+        -- Only one x allowed
+        return not currentText:lower():find("x")
+    end
+    return false
+end
+
+-- Built-in validator: numeric only
+function dropdown.numericValidator(char, currentText)
+    return char:match("^%d$") ~= nil
+end
+
+-----------------------------------------------------------
+-- Value Matching
+-----------------------------------------------------------
+
+-- Find the best matching option for typed input
+-- Returns option index or nil
+function dropdown.findBestMatch(dd, inputText)
+    if not inputText or inputText == "" then return nil end
+    
+    -- Try exact match first
+    local lower = inputText:lower()
+    for i, opt in ipairs(dd.options) do
+        if opt.value:lower() == lower or opt.text:lower() == lower then
+            return i
+        end
+    end
+    
+    -- If there's a matchFn, use it
+    if dd.matchFn then
+        return dd.matchFn(dd.options, inputText)
+    end
+    
+    -- Default: prefix match on text
+    for i, opt in ipairs(dd.options) do
+        if opt.text:lower():sub(1, #lower) == lower then
+            return i
+        end
+    end
+    
+    return nil
+end
+
+-- Built-in matcher: resolution (find nearest supported resolution)
+function dropdown.resolutionMatcher(options, inputText)
+    local w, h = inputText:lower():match("^(%d+)x(%d+)$")
+    if not w or not h then return nil end
+    
+    w = tonumber(w)
+    h = tonumber(h)
+    if not w or not h or w <= 0 or h <= 0 then return nil end
+    
+    -- Sort options by width ascending for searching
+    local candidates = {}
+    for i, opt in ipairs(options) do
+        if opt.width and opt.height then
+            table.insert(candidates, { index = i, w = opt.width, h = opt.height })
+        end
+    end
+    table.sort(candidates, function(a, b)
+        if a.w == b.w then return a.h < b.h end
+        return a.w < b.w
+    end)
+    
+    -- Find the next smallest width that has a height >= requested height
+    local bestIndex = nil
+    local bestDist = math.huge
+    
+    for _, c in ipairs(candidates) do
+        if c.w <= w and c.h >= h then
+            local dist = (w - c.w) + (c.h - h)
+            if dist < bestDist then
+                bestDist = dist
+                bestIndex = c.index
+            end
+        end
+    end
+    
+    -- If nothing fits, find closest overall
+    if not bestIndex then
+        for _, c in ipairs(candidates) do
+            local dist = math.abs(c.w - w) + math.abs(c.h - h)
+            if dist < bestDist then
+                bestDist = dist
+                bestIndex = c.index
+            end
+        end
+    end
+    
+    return bestIndex
 end
 
 -----------------------------------------------------------
@@ -68,7 +191,8 @@ function dropdown.new(params)
     local textPadding = math.floor(8 * uiscale)
     
     local textColor = params.textColor or {0.0, 0.0, 0.0, 1.0}
-    local highlightColor = params.highlightColor or {0.3, 0.5, 0.8, 1.0}
+    local highlightColor = params.highlightColor or {0.3, 0.5, 0.8, 0.8}
+    local highlightTextColor = params.highlightTextColor or {1.0, 1.0, 1.0, 1.0}
     
     local options = params.options or {}
     
@@ -95,16 +219,22 @@ function dropdown.new(params)
         options = options,
         selectedIndex = nil,
         open = false,
+        focused = false,
         onChange = params.onChange,
         textColor = textColor,
         highlightColor = highlightColor,
+        highlightTextColor = highlightTextColor,
         uiscale = uiscale,
         displayBoxId = nil,
         displayTextId = nil,
+        cursorId = nil,
         arrowSpriteId = nil,
         listBoxId = nil,
         optionElements = {},
         hoveredOptionIndex = nil,
+        -- Input validation and matching
+        validateChar = params.validateChar or nil,
+        matchFn = params.matchFn or nil,
     }
     
     if params.default then
@@ -119,20 +249,24 @@ function dropdown.new(params)
         dd.selectedIndex = 1
     end
     
-    -- Create display box
+    -- Create display box (also serves as text input)
     dd.displayBoxId = UI.newBox(
         dd.name .. "_display",
         dd.displayWidth,
         dd.height,
-        optionTexSet,
+        displayTexSetNormal,
         dd.tileSize,
         1.0, 1.0, 1.0, 1.0,
         dd.page
     )
     
+    -- Enable text input on the display box
+    UI.enableTextInput(dd.displayBoxId)
+    
     local displayText = ""
     if dd.selectedIndex and dd.options[dd.selectedIndex] then
         displayText = dd.options[dd.selectedIndex].text
+        UI.setTextInput(dd.displayBoxId, displayText)
     end
     
     local textY = (dd.height / 2) + (dd.fontSize / 3)
@@ -147,6 +281,19 @@ function dropdown.new(params)
     UI.addChild(dd.displayBoxId, dd.displayTextId, dd.textPadding, textY)
     UI.setZIndex(dd.displayTextId, 1)
     
+    -- Cursor (hidden by default)
+    dd.cursorId = UI.newText(
+        dd.name .. "_cursor",
+        "|",
+        dd.font,
+        dd.fontSize,
+        textColor[1], textColor[2], textColor[3], textColor[4],
+        dd.page
+    )
+    UI.addChild(dd.displayBoxId, dd.cursorId, dd.textPadding, textY)
+    UI.setZIndex(dd.cursorId, 2)
+    UI.setVisible(dd.cursorId, false)
+    
     dd.arrowSpriteId = UI.newSprite(
         dd.name .. "_arrow",
         dd.arrowSize,
@@ -158,12 +305,10 @@ function dropdown.new(params)
     UI.setClickable(dd.arrowSpriteId, true)
     UI.setOnClick(dd.arrowSpriteId, DROPDOWN_CALLBACK)
     
+    -- Display box click focuses for text input
     UI.setClickable(dd.displayBoxId, true)
-    UI.setOnClick(dd.displayBoxId, DROPDOWN_CALLBACK)
+    UI.setOnClick(dd.displayBoxId, DISPLAY_CALLBACK)
     
-    -- ALWAYS add to page directly, not as panel child.
-    -- The caller is responsible for positioning via setPosition.
-    -- This avoids additive z-index layer conflicts with sibling elements.
     UI.addToPage(dd.page, dd.displayBoxId, dd.x, dd.y)
     UI.addToPage(dd.page, dd.arrowSpriteId, dd.x + dd.displayWidth, dd.y)
     
@@ -186,6 +331,7 @@ function dropdown.destroy(id)
     if not dd then return end
     
     dropdown.closeList(id)
+    dropdown.unfocus(id)
     dropdowns[id] = nil
     engine.logDebug("Dropdown destroyed: " .. dd.name)
 end
@@ -195,9 +341,146 @@ function dropdown.destroyAll()
         if dd.open then
             dropdown.closeList(id)
         end
+        if dd.focused then
+            dropdown.unfocus(id)
+        end
     end
     dropdowns = {}
     nextId = 1
+end
+
+-----------------------------------------------------------
+-- Focus Management (Text Editing)
+-----------------------------------------------------------
+
+function dropdown.focus(id)
+    local dd = dropdowns[id]
+    if not dd then return end
+    if dd.focused then return end
+    
+    -- Unfocus any other focused dropdown
+    for otherId, otherDd in pairs(dropdowns) do
+        if otherId ~= id and otherDd.focused then
+            dropdown.unfocus(otherId)
+        end
+    end
+    
+    dd.focused = true
+    UI.setFocus(dd.displayBoxId)
+    UI.setBoxTextures(dd.displayBoxId, displayTexSetFocused)
+    
+    -- Set cursor to end of text
+    local text = UI.getTextInput(dd.displayBoxId) or ""
+    UI.setCursor(dd.displayBoxId, #text)
+    
+    if dd.cursorId then
+        UI.setVisible(dd.cursorId, true)
+    end
+    
+    dropdown.updateDisplay(id)
+    engine.logDebug("Dropdown focused: " .. dd.name)
+end
+
+function dropdown.unfocus(id)
+    local dd = dropdowns[id]
+    if not dd then return end
+    if not dd.focused then return end
+    
+    dd.focused = false
+    
+    if UI.hasFocus(dd.displayBoxId) then
+        UI.clearFocus()
+    end
+    
+    UI.setBoxTextures(dd.displayBoxId, displayTexSetNormal)
+    
+    if dd.cursorId then
+        UI.setVisible(dd.cursorId, false)
+    end
+    
+    -- Restore display to selected option text
+    local displayText = ""
+    if dd.selectedIndex and dd.options[dd.selectedIndex] then
+        displayText = dd.options[dd.selectedIndex].text
+    end
+    UI.setTextInput(dd.displayBoxId, displayText)
+    UI.setText(dd.displayTextId, displayText)
+    dropdown.updateDisplay(id)
+    
+    engine.logDebug("Dropdown unfocused: " .. dd.name)
+end
+
+function dropdown.unfocusAll()
+    for id, dd in pairs(dropdowns) do
+        if dd.focused then
+            dropdown.unfocus(id)
+        end
+    end
+end
+
+function dropdown.isFocused(id)
+    local dd = dropdowns[id]
+    if not dd then return false end
+    return dd.focused
+end
+
+function dropdown.getFocusedId()
+    for id, dd in pairs(dropdowns) do
+        if dd.focused then
+            return id
+        end
+    end
+    return nil
+end
+
+-----------------------------------------------------------
+-- Display Update
+-----------------------------------------------------------
+
+function dropdown.updateDisplay(id)
+    local dd = dropdowns[id]
+    if not dd then return end
+    if not dd.displayTextId then return end
+    
+    local text = UI.getTextInput(dd.displayBoxId) or ""
+    local cursorPos = UI.getCursor(dd.displayBoxId) or 0
+    
+    local textWidth = engine.getTextWidth(dd.font, text, dd.fontSize)
+    local textX = dd.textPadding
+    local textY = (dd.height / 2) + (dd.fontSize / 3)
+    
+    UI.setText(dd.displayTextId, text)
+    UI.setPosition(dd.displayTextId, textX, textY)
+    
+    if dd.cursorId and dd.focused then
+        local textBeforeCursor = text:sub(1, cursorPos)
+        local cursorTextWidth = engine.getTextWidth(dd.font, textBeforeCursor, dd.fontSize)
+        local cursorX = textX + cursorTextWidth - (engine.getTextWidth(dd.font, "|", dd.fontSize) / 2)
+        UI.setPosition(dd.cursorId, cursorX, textY)
+    end
+end
+
+-----------------------------------------------------------
+-- Text Input Submission
+-----------------------------------------------------------
+
+function dropdown.submitInput(id)
+    local dd = dropdowns[id]
+    if not dd then return end
+    
+    local inputText = UI.getTextInput(dd.displayBoxId) or ""
+    engine.logDebug("Dropdown submit: " .. dd.name .. " input='" .. inputText .. "'")
+    
+    local matchIndex = dropdown.findBestMatch(dd, inputText)
+    
+    if matchIndex then
+        dropdown.selectOption(id, matchIndex)
+    else
+        -- No match found, revert to previous selection
+        engine.logDebug("Dropdown no match for: " .. inputText)
+    end
+    
+    dropdown.unfocus(id)
 end
 
 -----------------------------------------------------------
@@ -232,7 +515,6 @@ function dropdown.openList(id)
         dd.page
     )
     
-    -- Add list to page directly, high z-index
     UI.addToPage(dd.page, dd.listBoxId, listX, listY)
     UI.setZIndex(dd.listBoxId, 500)
     
@@ -240,6 +522,19 @@ function dropdown.openList(id)
     for i, opt in ipairs(dd.options) do
         local optY = (i - 1) * dd.optionHeight
         local textY = optY + (dd.optionHeight / 2) + (dd.fontSize / 3)
+        
+        local highlightId = UI.newSprite(
+            dd.name .. "_opt_hl_" .. i,
+            dd.displayWidth,
+            dd.optionHeight,
+            highlightTex,
+            dd.highlightColor[1], dd.highlightColor[2],
+            dd.highlightColor[3], dd.highlightColor[4],
+            dd.page
+        )
+        UI.addChild(dd.listBoxId, highlightId, 0, optY)
+        UI.setZIndex(highlightId, 1)
+        UI.setVisible(highlightId, false)
         
         local optTextId = UI.newText(
             dd.name .. "_opt_" .. i,
@@ -250,7 +545,7 @@ function dropdown.openList(id)
             dd.page
         )
         UI.addChild(dd.listBoxId, optTextId, dd.textPadding, textY)
-        UI.setZIndex(optTextId, 1)
+        UI.setZIndex(optTextId, 3)
         
         local optBoxId = UI.newSprite(
             dd.name .. "_opt_hit_" .. i,
@@ -263,11 +558,12 @@ function dropdown.openList(id)
         UI.addChild(dd.listBoxId, optBoxId, 0, optY)
         UI.setClickable(optBoxId, true)
         UI.setOnClick(optBoxId, OPTION_CALLBACK)
-        UI.setZIndex(optBoxId, 2)
+        UI.setZIndex(optBoxId, 4)
         
         table.insert(dd.optionElements, {
             boxId = optBoxId,
             textId = optTextId,
+            highlightId = highlightId,
             index = i,
         })
     end
@@ -305,6 +601,67 @@ function dropdown.toggleList(id)
 end
 
 -----------------------------------------------------------
+-- Hover Handling
+-----------------------------------------------------------
+
+function dropdown.setHoveredOption(id, optionIndex)
+    local dd = dropdowns[id]
+    if not dd or not dd.open then return end
+    if dd.hoveredOptionIndex == optionIndex then return end
+    
+    if dd.hoveredOptionIndex then
+        local prevOpt = dd.optionElements[dd.hoveredOptionIndex]
+        if prevOpt then
+            UI.setVisible(prevOpt.highlightId, false)
+            UI.setColor(prevOpt.textId,
+                dd.textColor[1], dd.textColor[2],
+                dd.textColor[3], dd.textColor[4])
+        end
+    end
+    
+    dd.hoveredOptionIndex = optionIndex
+    
+    if optionIndex then
+        local opt = dd.optionElements[optionIndex]
+        if opt then
+            UI.setVisible(opt.highlightId, true)
+            UI.setColor(opt.textId,
+                dd.highlightTextColor[1], dd.highlightTextColor[2],
+                dd.highlightTextColor[3], dd.highlightTextColor[4])
+        end
+    end
+end
+
+function dropdown.clearHover(id)
+    dropdown.setHoveredOption(id, nil)
+end
+
+function dropdown.onHoverEnter(elemHandle)
+    for id, dd in pairs(dropdowns) do
+        if dd.open then
+            for _, opt in ipairs(dd.optionElements) do
+                if opt.boxId == elemHandle then
+                    dropdown.setHoveredOption(id, opt.index)
+                    return
+                end
+            end
+        end
+    end
+end
+
+function dropdown.onHoverLeave(elemHandle)
+    for id, dd in pairs(dropdowns) do
+        if dd.open and dd.hoveredOptionIndex then
+            local opt = dd.optionElements[dd.hoveredOptionIndex]
+            if opt and opt.boxId == elemHandle then
+                dropdown.clearHover(id)
+                return
+            end
+        end
+    end
+end
+
+-----------------------------------------------------------
 -- Selection
 -----------------------------------------------------------
 
@@ -316,11 +673,13 @@ function dropdown.selectOption(id, optionIndex)
     dd.selectedIndex = optionIndex
     local opt = dd.options[optionIndex]
     
+    UI.setTextInput(dd.displayBoxId, opt.text)
     if dd.displayTextId then
         UI.setText(dd.displayTextId, opt.text)
     end
     
     dropdown.closeList(id)
+    dropdown.unfocus(id)
     
     if dd.onChange then
         dd.onChange(opt.value, opt.text, id, dd.name)
@@ -334,6 +693,7 @@ function dropdown.setOptions(id, options, defaultValue)
     if not dd then return end
     
     dropdown.closeList(id)
+    dropdown.unfocus(id)
     
     dd.options = options
     dd.selectedIndex = nil
@@ -354,6 +714,7 @@ function dropdown.setOptions(id, options, defaultValue)
     if dd.selectedIndex and dd.options[dd.selectedIndex] then
         displayText = dd.options[dd.selectedIndex].text
     end
+    UI.setTextInput(dd.displayBoxId, displayText)
     if dd.displayTextId then
         UI.setText(dd.displayTextId, displayText)
     end
@@ -365,7 +726,10 @@ end
 
 function dropdown.findByElementHandle(elemHandle)
     for id, dd in pairs(dropdowns) do
-        if dd.arrowSpriteId == elemHandle or dd.displayBoxId == elemHandle then
+        if dd.displayBoxId == elemHandle then
+            return id, "display"
+        end
+        if dd.arrowSpriteId == elemHandle then
             return id, "toggle"
         end
         for _, opt in ipairs(dd.optionElements) do
@@ -382,6 +746,16 @@ function dropdown.handleCallback(callbackName, elemHandle)
         local id, action = dropdown.findByElementHandle(elemHandle)
         if id then
             dropdown.toggleList(id)
+            return true
+        end
+    elseif callbackName == DISPLAY_CALLBACK then
+        local id, action = dropdown.findByElementHandle(elemHandle)
+        if id then
+            local dd = dropdowns[id]
+            if dd.open then
+                dropdown.closeList(id)
+            end
+            dropdown.focus(id)
             return true
         end
     elseif callbackName == OPTION_CALLBACK then
@@ -403,14 +777,136 @@ function dropdown.onClickOutside(mouseX, mouseY)
                 dropdown.closeList(id)
             end
         end
+        if dd.focused then
+            local inDisplay = mouseX >= dd.x and mouseX <= dd.x + dd.displayWidth
+                and mouseY >= dd.y and mouseY <= dd.y + dd.height
+            if not inDisplay then
+                dropdown.submitInput(id)
+            end
+        end
     end
+end
+
+-----------------------------------------------------------
+-- Input Event Handlers (forwarded from uiManager)
+-----------------------------------------------------------
+
+function dropdown.onCharInput(char)
+    local id = dropdown.getFocusedId()
+    if not id then return false end
+    local dd = dropdowns[id]
+    
+    if not dropdown.isValidChar(dd, char) then
+        return true -- consumed but rejected
+    end
+    
+    UI.insertChar(dd.displayBoxId, char)
+    dropdown.updateDisplay(id)
+    return true
+end
+
+function dropdown.onBackspace()
+    local id = dropdown.getFocusedId()
+    if not id then return false end
+    local dd = dropdowns[id]
+    
+    UI.deleteBackward(dd.displayBoxId)
+    dropdown.updateDisplay(id)
+    return true
+end
+
+function dropdown.onDelete()
+    local id = dropdown.getFocusedId()
+    if not id then return false end
+    local dd = dropdowns[id]
+    
+    UI.deleteForward(dd.displayBoxId)
+    dropdown.updateDisplay(id)
+    return true
+end
+
+function dropdown.onCursorLeft()
+    local id = dropdown.getFocusedId()
+    if not id then return false end
+    local dd = dropdowns[id]
+    
+    UI.cursorLeft(dd.displayBoxId)
+    dropdown.updateDisplay(id)
+    return true
+end
+
+function dropdown.onCursorRight()
+    local id = dropdown.getFocusedId()
+    if not id then return false end
+    local dd = dropdowns[id]
+    
+    UI.cursorRight(dd.displayBoxId)
+    dropdown.updateDisplay(id)
+    return true
+end
+
+function dropdown.onHome()
+    local id = dropdown.getFocusedId()
+    if not id then return false end
+    local dd = dropdowns[id]
+    
+    UI.cursorHome(dd.displayBoxId)
+    dropdown.updateDisplay(id)
+    return true
+end
+
+function dropdown.onEnd()
+    local id = dropdown.getFocusedId()
+    if not id then return false end
+    local dd = dropdowns[id]
+    
+    UI.cursorEnd(dd.displayBoxId)
+    dropdown.updateDisplay(id)
+    return true
+end
+
+function dropdown.onSubmit()
+    local id = dropdown.getFocusedId()
+    if not id then return false end
+    
+    dropdown.submitInput(id)
+    return true
+end
+
+function dropdown.onEscape()
+    local id = dropdown.getFocusedId()
+    if not id then return false end
+    
+    dropdown.unfocus(id)
+    return true
 end
 
 -----------------------------------------------------------
 -- Update
 -----------------------------------------------------------
 
+-- Cursor blink state (shared with textbox timing from uiManager)
+local cursorBlinkTime = 0
+local cursorBlinkRate = 0.5
+local cursorVisible = true
+
 function dropdown.update(dt)
+    local id = dropdown.getFocusedId()
+    if not id then
+        cursorBlinkTime = 0
+        cursorVisible = true
+        return
+    end
+    
+    local dd = dropdowns[id]
+    cursorBlinkTime = cursorBlinkTime + dt
+    if cursorBlinkTime >= cursorBlinkRate then
+        cursorBlinkTime = cursorBlinkTime - cursorBlinkRate
+        cursorVisible = not cursorVisible
+        if dd.cursorId then
+            UI.setVisible(dd.cursorId, cursorVisible)
+        end
+    end
 end
 
 -----------------------------------------------------------
@@ -467,7 +963,9 @@ function dropdown.getElementHandle(id)
 end
 
 function dropdown.isDropdownCallback(callbackName)
-    return callbackName == DROPDOWN_CALLBACK or callbackName == OPTION_CALLBACK
+    return callbackName == DROPDOWN_CALLBACK
+        or callbackName == OPTION_CALLBACK
+        or callbackName == DISPLAY_CALLBACK
 end
 
 return dropdown
