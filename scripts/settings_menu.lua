@@ -257,6 +257,7 @@ function settingsMenu.createUI()
         zIndex = baseZ + 2,
         validateChar = dropdown.resolutionValidator,
         matchFn = dropdown.resolutionMatcher,
+        maxVisibleOptions = 8,
         onChange = function(value, text, id, name)
             local w, h = value:match("^(%d+)x(%d+)$")
             if w and h then

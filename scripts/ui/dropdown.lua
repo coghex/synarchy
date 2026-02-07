@@ -1,6 +1,7 @@
--- Dropdown UI component (combo box - editable + selectable)
+-- Dropdown UI component (combo box - editable + selectable + scrollable)
 local scale = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
+local scrollbar = require("scripts.ui.scrollbar")
 local dropdown = {}
 
 -----------------------------------------------------------
@@ -39,6 +40,8 @@ function dropdown.init()
     displayTexSetFocused = boxTextures.load("assets/textures/ui/textboxselected", "textbox")
     highlightTex = engine.loadTexture("assets/textures/ui/highlight.png")
     
+    scrollbar.init()
+    
     assetsLoaded = true
     engine.logDebug("Dropdown module initialized")
 end
@@ -49,7 +52,6 @@ end
 
 function dropdown.isValidChar(dd, char)
     if not dd.validateChar then
-        -- Default: accept anything
         return true
     end
     return dd.validateChar(char, dropdown.getInputText(dd))
@@ -67,7 +69,6 @@ function dropdown.resolutionValidator(char, currentText)
     if char:match("^%d$") then
         return true
     elseif char == "x" or char == "X" then
-        -- Only one x allowed
         return not currentText:lower():find("x")
     end
     return false
@@ -82,12 +83,9 @@ end
 -- Value Matching
 -----------------------------------------------------------
 
--- Find the best matching option for typed input
--- Returns option index or nil
 function dropdown.findBestMatch(dd, inputText)
     if not inputText or inputText == "" then return nil end
     
-    -- Try exact match first
     local lower = inputText:lower()
     for i, opt in ipairs(dd.options) do
         if opt.value:lower() == lower or opt.text:lower() == lower then
@@ -95,12 +93,10 @@ function dropdown.findBestMatch(dd, inputText)
         end
     end
     
-    -- If there's a matchFn, use it
     if dd.matchFn then
         return dd.matchFn(dd.options, inputText)
     end
     
-    -- Default: prefix match on text
     for i, opt in ipairs(dd.options) do
         if opt.text:lower():sub(1, #lower) == lower then
             return i
@@ -119,7 +115,6 @@ function dropdown.resolutionMatcher(options, inputText)
     h = tonumber(h)
     if not w or not h or w <= 0 or h <= 0 then return nil end
     
-    -- Sort options by width ascending for searching
     local candidates = {}
     for i, opt in ipairs(options) do
         if opt.width and opt.height then
@@ -131,7 +126,6 @@ function dropdown.resolutionMatcher(options, inputText)
         return a.w < b.w
     end)
     
-    -- Find the next smallest width that has a height >= requested height
     local bestIndex = nil
     local bestDist = math.huge
     
@@ -145,7 +139,6 @@ function dropdown.resolutionMatcher(options, inputText)
         end
     end
     
-    -- If nothing fits, find closest overall
     if not bestIndex then
         for _, c in ipairs(candidates) do
             local dist = math.abs(c.w - w) + math.abs(c.h - h)
@@ -235,6 +228,11 @@ function dropdown.new(params)
         -- Input validation and matching
         validateChar = params.validateChar or nil,
         matchFn = params.matchFn or nil,
+        -- Scrollbar
+        maxVisibleOptions = params.maxVisibleOptions or 8,
+        scrollbarId = nil,
+        scrollOffset = 0,
+        needsScroll = false,
     }
     
     if params.default then
@@ -321,7 +319,8 @@ function dropdown.new(params)
     
     engine.logDebug("Dropdown created: " .. dd.name
         .. " (" .. dd.displayWidth .. "+" .. dd.arrowSize .. ")"
-        .. " with " .. #dd.options .. " options")
+        .. " with " .. #dd.options .. " options"
+        .. " maxVisible=" .. dd.maxVisibleOptions)
     
     return id
 end
@@ -358,7 +357,6 @@ function dropdown.focus(id)
     if not dd then return end
     if dd.focused then return end
     
-    -- Unfocus any other focused dropdown
     for otherId, otherDd in pairs(dropdowns) do
         if otherId ~= id and otherDd.focused then
             dropdown.unfocus(otherId)
@@ -369,7 +367,6 @@ function dropdown.focus(id)
     UI.setFocus(dd.displayBoxId)
     UI.setBoxTextures(dd.displayBoxId, displayTexSetFocused)
     
-    -- Set cursor to end of text
     local text = UI.getTextInput(dd.displayBoxId) or ""
     UI.setCursor(dd.displayBoxId, #text)
     
@@ -398,7 +395,6 @@ function dropdown.unfocus(id)
         UI.setVisible(dd.cursorId, false)
     end
     
-    -- Restore display to selected option text
     local displayText = ""
     if dd.selectedIndex and dd.options[dd.selectedIndex] then
         displayText = dd.options[dd.selectedIndex].text
@@ -476,7 +472,6 @@ function dropdown.submitInput(id)
     if matchIndex then
         dropdown.selectOption(id, matchIndex)
     else
-        -- No match found, revert to previous selection
         engine.logDebug("Dropdown no match for: " .. inputText)
     end
     
@@ -499,9 +494,15 @@ function dropdown.openList(id)
     end
     
     dd.open = true
+    dd.scrollOffset = 0
+    dd.hoveredOptionIndex = nil
     UI.setSpriteTexture(dd.arrowSpriteId, texArrowClicked)
     
-    local listHeight = #dd.options * dd.optionHeight
+    local totalOptions = #dd.options
+    local visibleCount = math.min(totalOptions, dd.maxVisibleOptions)
+    dd.needsScroll = totalOptions > dd.maxVisibleOptions
+    
+    local listHeight = visibleCount * dd.optionHeight
     local listX = dd.x
     local listY = dd.y + dd.height
     
@@ -518,8 +519,9 @@ function dropdown.openList(id)
     UI.addToPage(dd.page, dd.listBoxId, listX, listY)
     UI.setZIndex(dd.listBoxId, 500)
     
+    -- Create only the visible option slots (virtual scrolling)
     dd.optionElements = {}
-    for i, opt in ipairs(dd.options) do
+    for i = 1, visibleCount do
         local optY = (i - 1) * dd.optionHeight
         local textY = optY + (dd.optionHeight / 2) + (dd.fontSize / 3)
         
@@ -536,9 +538,15 @@ function dropdown.openList(id)
         UI.setZIndex(highlightId, 1)
         UI.setVisible(highlightId, false)
         
+        local dataIndex = dd.scrollOffset + i
+        local optText = ""
+        if dataIndex <= totalOptions then
+            optText = dd.options[dataIndex].text
+        end
+        
         local optTextId = UI.newText(
             dd.name .. "_opt_" .. i,
-            opt.text,
+            optText,
             dd.font,
             dd.fontSize,
             dd.textColor[1], dd.textColor[2], dd.textColor[3], dd.textColor[4],
@@ -564,11 +572,38 @@ function dropdown.openList(id)
             boxId = optBoxId,
             textId = optTextId,
             highlightId = highlightId,
-            index = i,
+            slot = i,
         })
     end
     
-    engine.logDebug("Dropdown list opened: " .. dd.name)
+    -- Create scrollbar if needed
+    if dd.needsScroll then
+        local scrollTrackHeight = listHeight - (dd.arrowSize * 2) - (math.floor(4 * dd.uiscale) * 2)
+        if scrollTrackHeight < math.floor(20 * dd.uiscale) then
+            scrollTrackHeight = math.floor(20 * dd.uiscale)
+        end
+        
+        dd.scrollbarId = scrollbar.new({
+            name = dd.name .. "_scrollbar",
+            page = dd.page,
+            x = dd.x + dd.displayWidth,
+            y = listY,
+            buttonSize = dd.arrowSize,
+            trackHeight = scrollTrackHeight,
+            capHeight = math.floor(4 * dd.uiscale),
+            tileSize = math.floor(8 * dd.uiscale),
+            totalItems = totalOptions,
+            visibleItems = visibleCount,
+            uiscale = dd.uiscale,
+            onScroll = function(offset, sbId, sbName)
+                dropdown.onScrollChanged(id, offset)
+            end,
+        })
+    end
+    
+    engine.logDebug("Dropdown list opened: " .. dd.name
+        .. " visible=" .. visibleCount .. "/" .. totalOptions
+        .. " scroll=" .. tostring(dd.needsScroll))
 end
 
 function dropdown.closeList(id)
@@ -578,7 +613,13 @@ function dropdown.closeList(id)
     
     dd.open = false
     dd.hoveredOptionIndex = nil
+    dd.scrollOffset = 0
     UI.setSpriteTexture(dd.arrowSpriteId, texArrowNormal)
+    
+    if dd.scrollbarId then
+        scrollbar.destroy(dd.scrollbarId)
+        dd.scrollbarId = nil
+    end
     
     if dd.listBoxId then
         UI.deleteElement(dd.listBoxId)
@@ -601,13 +642,95 @@ function dropdown.toggleList(id)
 end
 
 -----------------------------------------------------------
+-- Virtual Scrolling
+-----------------------------------------------------------
+
+function dropdown.onScrollChanged(id, newOffset)
+    local dd = dropdowns[id]
+    if not dd or not dd.open then return end
+    
+    dd.scrollOffset = newOffset
+    dd.hoveredOptionIndex = nil
+    dropdown.refreshVisibleOptions(id)
+end
+
+function dropdown.refreshVisibleOptions(id)
+    local dd = dropdowns[id]
+    if not dd or not dd.open then return end
+    
+    for _, opt in ipairs(dd.optionElements) do
+        local dataIndex = dd.scrollOffset + opt.slot
+        
+        if dataIndex <= #dd.options then
+            local optData = dd.options[dataIndex]
+            UI.setText(opt.textId, optData.text)
+            UI.setVisible(opt.highlightId, false)
+            UI.setColor(opt.textId,
+                dd.textColor[1], dd.textColor[2],
+                dd.textColor[3], dd.textColor[4])
+        else
+            UI.setText(opt.textId, "")
+            UI.setVisible(opt.highlightId, false)
+        end
+    end
+end
+
+-----------------------------------------------------------
+-- Scroll Input Handling (mouse wheel)
+-----------------------------------------------------------
+
+function dropdown.onScroll(elemHandle, dx, dy)
+    -- Find which dropdown this scroll belongs to
+    for id, dd in pairs(dropdowns) do
+        if dd.open and dd.needsScroll and dd.scrollbarId then
+            -- Check if the element is part of this dropdown's list
+            local isInList = false
+            
+            -- Check list box itself
+            if elemHandle == dd.listBoxId then
+                isInList = true
+            end
+            
+            -- Check option elements
+            if not isInList then
+                for _, opt in ipairs(dd.optionElements) do
+                    if opt.boxId == elemHandle or opt.textId == elemHandle
+                        or opt.highlightId == elemHandle then
+                        isInList = true
+                        break
+                    end
+                end
+            end
+            
+            -- Check scrollbar elements
+            if not isInList then
+                local sbId, _ = scrollbar.findByElementHandle(elemHandle)
+                if sbId == dd.scrollbarId then
+                    isInList = true
+                end
+            end
+            
+            if isInList then
+                -- dy > 0 means scroll up, dy < 0 means scroll down
+                if dy > 0 then
+                    scrollbar.scrollUp(dd.scrollbarId)
+                elseif dy < 0 then
+                    scrollbar.scrollDown(dd.scrollbarId)
+                end
+                return
+            end
+        end
+    end
+end
+
+-----------------------------------------------------------
 -- Hover Handling
 -----------------------------------------------------------
 
-function dropdown.setHoveredOption(id, optionIndex)
+function dropdown.setHoveredOption(id, optionSlot)
     local dd = dropdowns[id]
     if not dd or not dd.open then return end
-    if dd.hoveredOptionIndex == optionIndex then return end
+    if dd.hoveredOptionIndex == optionSlot then return end
     
     if dd.hoveredOptionIndex then
         local prevOpt = dd.optionElements[dd.hoveredOptionIndex]
@@ -619,15 +742,18 @@ function dropdown.setHoveredOption(id, optionIndex)
         end
     end
     
-    dd.hoveredOptionIndex = optionIndex
+    dd.hoveredOptionIndex = optionSlot
     
-    if optionIndex then
-        local opt = dd.optionElements[optionIndex]
+    if optionSlot then
+        local opt = dd.optionElements[optionSlot]
         if opt then
-            UI.setVisible(opt.highlightId, true)
-            UI.setColor(opt.textId,
-                dd.highlightTextColor[1], dd.highlightTextColor[2],
-                dd.highlightTextColor[3], dd.highlightTextColor[4])
+            local dataIndex = dd.scrollOffset + optionSlot
+            if dataIndex >= 1 and dataIndex <= #dd.options then
+                UI.setVisible(opt.highlightId, true)
+                UI.setColor(opt.textId,
+                    dd.highlightTextColor[1], dd.highlightTextColor[2],
+                    dd.highlightTextColor[3], dd.highlightTextColor[4])
+            end
         end
     end
 end
@@ -641,7 +767,7 @@ function dropdown.onHoverEnter(elemHandle)
         if dd.open then
             for _, opt in ipairs(dd.optionElements) do
                 if opt.boxId == elemHandle then
-                    dropdown.setHoveredOption(id, opt.index)
+                    dropdown.setHoveredOption(id, opt.slot)
                     return
                 end
             end
@@ -734,7 +860,7 @@ function dropdown.findByElementHandle(elemHandle)
         end
         for _, opt in ipairs(dd.optionElements) do
             if opt.boxId == elemHandle then
-                return id, "option", opt.index
+                return id, "option", opt.slot
             end
         end
     end
@@ -759,9 +885,25 @@ function dropdown.handleCallback(callbackName, elemHandle)
             return true
         end
     elseif callbackName == OPTION_CALLBACK then
-        local id, action, optIndex = dropdown.findByElementHandle(elemHandle)
-        if id and optIndex then
-            dropdown.selectOption(id, optIndex)
+        local id, action, slot = dropdown.findByElementHandle(elemHandle)
+        if id and slot then
+            local dd = dropdowns[id]
+            local dataIndex = dd.scrollOffset + slot
+            if dataIndex >= 1 and dataIndex <= #dd.options then
+                dropdown.selectOption(id, dataIndex)
+            end
+            return true
+        end
+    elseif callbackName == "onScrollUp" then
+        local sbId, action = scrollbar.findByElementHandle(elemHandle)
+        if sbId then
+            scrollbar.scrollUp(sbId)
+            return true
+        end
+    elseif callbackName == "onScrollDown" then
+        local sbId, action = scrollbar.findByElementHandle(elemHandle)
+        if sbId then
+            scrollbar.scrollDown(sbId)
             return true
         end
     end
@@ -771,8 +913,14 @@ end
 function dropdown.onClickOutside(mouseX, mouseY)
     for id, dd in pairs(dropdowns) do
         if dd.open then
-            local totalHeight = dd.height + (#dd.options * dd.optionHeight)
-            if mouseX < dd.x or mouseX > dd.x + dd.width
+            local scrollWidth = 0
+            if dd.scrollbarId then
+                scrollWidth = scrollbar.getTrackWidth(dd.scrollbarId)
+            end
+            local visibleCount = math.min(#dd.options, dd.maxVisibleOptions)
+            local totalHeight = dd.height + (visibleCount * dd.optionHeight)
+            local totalWidth = dd.displayWidth + scrollWidth
+            if mouseX < dd.x or mouseX > dd.x + totalWidth
                 or mouseY < dd.y or mouseY > dd.y + totalHeight then
                 dropdown.closeList(id)
             end
@@ -797,7 +945,7 @@ function dropdown.onCharInput(char)
     local dd = dropdowns[id]
     
     if not dropdown.isValidChar(dd, char) then
-        return true -- consumed but rejected
+        return true
     end
     
     UI.insertChar(dd.displayBoxId, char)
@@ -885,7 +1033,6 @@ end
 -- Update
 -----------------------------------------------------------
 
--- Cursor blink state (shared with textbox timing from uiManager)
 local cursorBlinkTime = 0
 local cursorBlinkRate = 0.5
 local cursorVisible = true
@@ -966,6 +1113,8 @@ function dropdown.isDropdownCallback(callbackName)
     return callbackName == DROPDOWN_CALLBACK
         or callbackName == OPTION_CALLBACK
         or callbackName == DISPLAY_CALLBACK
+        or callbackName == "onScrollUp"
+        or callbackName == "onScrollDown"
 end
 
 return dropdown

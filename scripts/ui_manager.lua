@@ -43,8 +43,10 @@ function uiManager.init(scriptId)
     checkbox = require("scripts.ui.checkbox")
     button = require("scripts.ui.button")
     dropdown = require("scripts.ui.dropdown")
+    scrollbar = require("scripts.ui.scrollbar")
 
     button.init()
+    scrollbar.init()
     uiscale = engine.getUIScale()
     
     menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)
@@ -267,6 +269,20 @@ function uiManager.onMouseUp(button_num, x, y)
     end
 end
 
+function uiManager.onScrollUp(elemHandle)
+    if dropdown then
+        return dropdown.handleCallback("onScrollUp", elemHandle)
+    end
+    return false
+end
+
+function uiManager.onScrollDown(elemHandle)
+    if dropdown then
+        return dropdown.handleCallback("onScrollDown", elemHandle)
+    end
+    return false
+end
+
 -----------------------------------------------------------
 -- Input Event Forwarding to Textboxes
 -----------------------------------------------------------
@@ -390,6 +406,13 @@ function uiManager.onUIFocusLost()
     end
     if textbox then
         textbox.unfocusAll()
+    end
+end
+
+function uiManager.onUIScroll(elemHandle, dx, dy)
+    -- Forward scroll events to dropdown for scrollbar
+    if dropdown then
+        dropdown.onScroll(elemHandle, dx, dy)
     end
 end
 

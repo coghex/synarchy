@@ -103,6 +103,7 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaTextDelete Word32
             | LuaInterrupt Word32
             | LuaUIClickEvent ElementHandle Text
+            | LuaUIScrollEvent ElementHandle Double Double
             | LuaUICharInput Char
             | LuaUIBackspace
             | LuaUIDelete
