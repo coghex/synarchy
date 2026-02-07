@@ -38,6 +38,7 @@ module UI.Manager
   , setElementOnClick
   , isPointInElement
   , findClickableElementAt
+  , findClickableAncestor
   , setBoxColor
   , setText
   , setTextColor
@@ -47,6 +48,7 @@ module UI.Manager
   , getElementAbsolutePosition
   , getPageElements
   , getElementChildren
+  , findElementAt
     -- Box textures
   , registerBoxTextures
   , getBoxTextureSet
@@ -439,6 +441,63 @@ findClickableElementAt pos mgr =
                         else []
                     childClickables = concatMap (findClickableInTree point) (ueChildren elem)
                 in thisClickable ++ childClickables
+
+-- | Find the nearest ancestor (or self) that has an onClick callback
+findClickableAncestor :: ElementHandle -> UIPageManager -> Maybe (ElementHandle, Text)
+findClickableAncestor handle mgr = go handle
+  where
+    go h = case Map.lookup h (upmElements mgr) of
+        Nothing -> Nothing
+        Just elem -> case ueOnClick elem of
+            Just cb -> Just (h, cb)
+            Nothing -> case ueParent elem of
+                Just parentHandle -> go parentHandle
+                Nothing -> Nothing
+
+-- | Find the topmost visible element at a point (not just clickable ones)
+findElementAt :: (Float, Float) -> UIPageManager -> Maybe ElementHandle
+findElementAt pos mgr =
+    let visiblePages = Set.toList (upmVisiblePages mgr)
+        allRootHandles = concatMap (\ph ->
+            case Map.lookup ph (upmPages mgr) of
+                Just page -> upRootElements page
+                Nothing -> []
+            ) visiblePages
+
+        -- Find all visible elements with a size that contain the point
+        hitElements = concatMap (findInTree pos) allRootHandles
+
+        -- Sort by effective depth: page layer + element z-index, highest first
+        sorted = sortOn (\eh ->
+            case Map.lookup eh (upmElements mgr) of
+                Just elem ->
+                    let page = Map.lookup (uePage elem) (upmPages mgr)
+                        pageLayerVal = case page of
+                            Just p -> fromEnum (upLayer p) * 1000000
+                            Nothing -> 0
+                        pageZVal = case page of
+                            Just p -> upZIndex p * 1000
+                            Nothing -> 0
+                        elemZVal = ueZIndex elem
+                    in negate (pageLayerVal + pageZVal + elemZVal)
+                Nothing -> 0
+            ) hitElements
+    in listToMaybe sorted
+  where
+    findInTree :: (Float, Float) -> ElementHandle -> [ElementHandle]
+    findInTree point handle =
+        case Map.lookup handle (upmElements mgr) of
+            Nothing -> []
+            Just elem ->
+                let (w, h) = ueSize elem
+                    hasSize = w > 0 && h > 0
+                    thisHit =
+                        if ueVisible elem && hasSize && isPointInElement point elem mgr
+                        then [handle]
+                        else []
+                    childHits = concatMap (findInTree point) (ueChildren elem)
+                -- Children first so deeper/higher elements win
+                in childHits ++ thisHit
 
 -----------------------------------------------------------
 -- Text Buffer Operations

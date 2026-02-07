@@ -23,6 +23,10 @@ local settingsMenu = nil
 local textbox = nil
 local checkbox = nil
 local button = nil
+local dropdown = nil
+
+local hoveredElement = nil
+local hoveredCallback = nil
 
 local currentMenu = "main"
 
@@ -38,7 +42,9 @@ function uiManager.init(scriptId)
     textbox = require("scripts.ui.textbox")
     checkbox = require("scripts.ui.checkbox")
     button = require("scripts.ui.button")
+    dropdown = require("scripts.ui.dropdown")
 
+    button.init()
     uiscale = engine.getUIScale()
     
     menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)
@@ -47,7 +53,7 @@ function uiManager.init(scriptId)
     titleFont = titleFontHandle
     
     boxTexSet = boxTextures.load("assets/textures/box", "box")
-    btnTexSet = boxTextures.load("assets/textures/button", "button")
+    btnTexSet = boxTextures.load("assets/textures/ui/button", "button")
     
     mainMenu = require("scripts.main_menu")
     settingsMenu = require("scripts.settings_menu")
@@ -144,6 +150,58 @@ function uiManager.update(dt)
     if textbox then
         textbox.update(dt)
     end
+    if dropdown then
+        dropdown.update(dt)
+    end
+    
+    -- Hover detection
+    local mx, my = engine.getMousePosition()
+    if mx and my then
+        local ww, wh = engine.getWindowSize()
+        if ww and wh and ww > 0 and wh > 0 then
+            mx = mx * (fbW / ww)
+            my = my * (fbH / wh)
+        end
+        local elem, cb = UI.findHoverTarget(mx, my)
+        
+        if elem ~= hoveredElement then
+            -- Leave old element
+            if hoveredElement and hoveredCallback then
+                uiManager.onHoverLeave(hoveredElement, hoveredCallback)
+            end
+            
+            -- Enter new element
+            hoveredElement = elem
+            hoveredCallback = cb
+            if elem and cb then
+                uiManager.onHoverEnter(elem, cb)
+            end
+        end
+    end
+end
+
+function uiManager.onHoverEnter(elemHandle, callbackName)
+    if button and callbackName == "onButtonClick" then
+        button.onHoverEnter(elemHandle)
+    elseif checkbox and callbackName == "onCheckboxClick" then
+        checkbox.onHoverEnter(elemHandle)
+    elseif textbox and textbox.isTextBoxCallback(callbackName) then
+        textbox.onHoverEnter(elemHandle)
+    elseif dropdown and dropdown.isDropdownCallback(callbackName) then
+        dropdown.onHoverEnter(elemHandle)
+    end
+end
+
+function uiManager.onHoverLeave(elemHandle, callbackName)
+    if button and callbackName == "onButtonClick" then
+        button.onHoverLeave(elemHandle)
+    elseif checkbox and callbackName == "onCheckboxClick" then
+        checkbox.onHoverLeave(elemHandle)
+    elseif textbox and textbox.isTextBoxCallback(callbackName) then
+        textbox.onHoverLeave(elemHandle)
+    elseif dropdown and dropdown.isDropdownCallback(callbackName) then
+        dropdown.onHoverLeave(elemHandle)
+    end
 end
 
 function uiManager.shutdown()
@@ -171,6 +229,34 @@ function uiManager.onButtonClick(elemHandle)
         return button.handleClickByElement(elemHandle)
     end
     return false
+end
+
+function uiManager.onDropdownClick(elemHandle)
+    handleNonTextBoxClick()
+    if dropdown then
+        return dropdown.handleCallback("onDropdownClick", elemHandle)
+    end
+    return false
+end
+
+function uiManager.onDropdownOptionClick(elemHandle)
+    handleNonTextBoxClick()
+    if dropdown then
+        return dropdown.handleCallback("onDropdownOptionClick", elemHandle)
+    end
+    return false
+end
+
+function uiManager.onMouseDown(button_num, x, y)
+    if dropdown then
+        dropdown.onClickOutside(x, y)
+    end
+end
+
+function uiManager.onMouseUp(button_num, x, y)
+    if button then
+        button.onMouseUp()
+    end
 end
 
 -----------------------------------------------------------
@@ -240,7 +326,17 @@ end
 
 function uiManager.onUIEscape()
     if textbox then
-        return textbox.onEscape()
+        local handled = textbox.onEscape()
+        if handled then return true end
+    end
+    -- Also close any open dropdowns on Escape
+    if dropdown then
+        for id = 1, 100 do
+            if dropdown.isOpen(id) then
+                dropdown.closeList(id)
+                return true
+            end
+        end
     end
     return false
 end

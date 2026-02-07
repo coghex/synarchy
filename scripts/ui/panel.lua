@@ -111,6 +111,7 @@ function panel.new(params)
         boxId = nil,
         elements = {},
         uiscale = uiscale,
+        nextChildZ = 1,  -- auto-incrementing z-index for placed children
     }
     
     p.contentX = padding.left
@@ -199,6 +200,11 @@ function panel.place(id, elemHandle, options)
     
     UI.addChild(p.boxId, elemHandle, finalX, finalY)
     
+    -- Auto-assign a unique z-index unless caller explicitly set one via options
+    local z = options.zIndex or p.nextChildZ
+    UI.setZIndex(elemHandle, z)
+    p.nextChildZ = p.nextChildZ + 1
+    
     table.insert(p.elements, elemHandle)
     
     return elemHandle
@@ -250,6 +256,11 @@ function panel.placeRow(id, elements, sizes, options)
         local elemY = baseY + (maxHeight - size.height) / 2
         
         UI.addChild(p.boxId, elem, currentX, elemY)
+        
+        -- Auto-assign unique z-index
+        UI.setZIndex(elem, p.nextChildZ)
+        p.nextChildZ = p.nextChildZ + 1
+        
         table.insert(p.elements, elem)
         
         currentX = currentX + size.width + spacing
@@ -302,6 +313,11 @@ function panel.placeColumn(id, elements, sizes, options)
         local elemX = baseX + (maxWidth - size.width) / 2
         
         UI.addChild(p.boxId, elem, elemX, currentY)
+        
+        -- Auto-assign unique z-index
+        UI.setZIndex(elem, p.nextChildZ)
+        p.nextChildZ = p.nextChildZ + 1
+        
         table.insert(p.elements, elem)
         
         currentY = currentY + size.height + spacing

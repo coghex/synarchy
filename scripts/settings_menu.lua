@@ -5,6 +5,7 @@ local label = require("scripts.ui.label")
 local textbox = require("scripts.ui.textbox")
 local checkbox = require("scripts.ui.checkbox")
 local button = require("scripts.ui.button")
+local dropdown = require("scripts.ui.dropdown")
 local settingsMenu = {}
 
 settingsMenu.page = nil
@@ -23,6 +24,7 @@ settingsMenu.baseSizes = {
     btnHeight = 64,
     textboxWidth = 150,
     textboxHeight = 40,
+    dropdownHeight = 40,
     rowSpacing = 100,
     btnSpacing = 20,
 }
@@ -30,6 +32,8 @@ settingsMenu.baseSizes = {
 settingsMenu.uiCreated = false
 
 settingsMenu.titleLabelId = nil
+settingsMenu.resolutionLabelId = nil
+settingsMenu.resolutionDropdownId = nil
 settingsMenu.fullscreenLabelId = nil
 settingsMenu.scalingLabelId = nil
 settingsMenu.frameLimitLabelId = nil
@@ -45,6 +49,30 @@ settingsMenu.uiScaleMin = 0.5
 settingsMenu.uiScaleMax = 4.0
 settingsMenu.frameLimitMin = 30
 settingsMenu.frameLimitMax = 240
+
+-- Standard resolutions grouped by aspect ratio
+settingsMenu.resolutions = {
+    -- 16:9
+    { text = "1280x720",   value = "1280x720",   width = 1280,  height = 720 },
+    { text = "1366x768",   value = "1366x768",   width = 1366,  height = 768 },
+    { text = "1600x900",   value = "1600x900",   width = 1600,  height = 900 },
+    { text = "1920x1080",  value = "1920x1080",  width = 1920,  height = 1080 },
+    { text = "2560x1440",  value = "2560x1440",  width = 2560,  height = 1440 },
+    { text = "3840x2160",  value = "3840x2160",  width = 3840,  height = 2160 },
+    -- 16:10
+    { text = "1280x800",   value = "1280x800",   width = 1280,  height = 800 },
+    { text = "1440x900",   value = "1440x900",   width = 1440,  height = 900 },
+    { text = "1680x1050",  value = "1680x1050",  width = 1680,  height = 1050 },
+    { text = "1920x1200",  value = "1920x1200",  width = 1920,  height = 1200 },
+    { text = "2560x1600",  value = "2560x1600",  width = 2560,  height = 1600 },
+    -- 4:3
+    { text = "800x600",    value = "800x600",     width = 800,   height = 600 },
+    { text = "1024x768",   value = "1024x768",    width = 1024,  height = 768 },
+    { text = "1600x1200",  value = "1600x1200",   width = 1600,  height = 1200 },
+    -- 21:9 ultrawide
+    { text = "2560x1080",  value = "2560x1080",  width = 2560,  height = 1080 },
+    { text = "3440x1440",  value = "3440x1440",  width = 3440,  height = 1440 },
+}
 
 settingsMenu.currentSettings = {
     width = 800,
@@ -64,6 +92,22 @@ function settingsMenu.setShowMenuCallback(callback)
     settingsMenu.showMenuCallback = callback
 end
 
+-- Build a resolution string from width/height
+function settingsMenu.resolutionString(w, h)
+    return tostring(w) .. "x" .. tostring(h)
+end
+
+-- Find the resolution entry matching width/height, or nil
+function settingsMenu.findResolutionIndex(w, h)
+    local target = settingsMenu.resolutionString(w, h)
+    for i, res in ipairs(settingsMenu.resolutions) do
+        if res.value == target then
+            return i
+        end
+    end
+    return nil
+end
+
 function settingsMenu.init(panelTex, btnTex, font, width, height)
     settingsMenu.panelTexSet = panelTex
     settingsMenu.buttonTexSet = btnTex
@@ -75,6 +119,7 @@ function settingsMenu.init(panelTex, btnTex, font, width, height)
     
     textbox.init()
     checkbox.init()
+    dropdown.init()
     
     settingsMenu.reloadSettings()
     settingsMenu.createUI()
@@ -85,9 +130,12 @@ function settingsMenu.createUI()
     textbox.destroyAll()
     checkbox.destroyAll()
     button.destroyAll()
+    dropdown.destroyAll()
     panel.destroyAll()
     
     settingsMenu.titleLabelId = nil
+    settingsMenu.resolutionLabelId = nil
+    settingsMenu.resolutionDropdownId = nil
     settingsMenu.fullscreenLabelId = nil
     settingsMenu.scalingLabelId = nil
     settingsMenu.frameLimitLabelId = nil
@@ -104,6 +152,8 @@ function settingsMenu.createUI()
     end
     
     settingsMenu.pendingSettings = {
+        width = settingsMenu.currentSettings.width,
+        height = settingsMenu.currentSettings.height,
         fullscreen = settingsMenu.currentSettings.fullscreen,
         uiScale = settingsMenu.currentSettings.uiScale,
         frameLimit = settingsMenu.currentSettings.frameLimit,
@@ -163,8 +213,64 @@ function settingsMenu.createUI()
     local rowY1 = s.fontSize + s.rowSpacing
     local rowY2 = rowY1 + s.rowSpacing
     local rowY3 = rowY2 + s.rowSpacing
+    local rowY4 = rowY3 + s.rowSpacing
     
-    -- Row 1: Fullscreen label and checkbox
+    -- Row 1: Resolution label and dropdown
+    settingsMenu.resolutionLabelId = label.new({
+        name = "resolution_label",
+        text = "Resolution",
+        font = settingsMenu.menuFont,
+        fontSize = settingsMenu.baseSizes.fontSize,
+        color = {1.0, 1.0, 1.0, 1.0},
+        page = settingsMenu.page,
+        uiscale = uiscale,
+        zIndex = baseZ + 1,
+    })
+    
+    local resLabelW, resLabelH = label.getSize(settingsMenu.resolutionLabelId)
+    panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.resolutionLabelId), {
+        x = "0px",
+        y = rowY1 .. "px",
+        origin = "top-left",
+        width = resLabelW,
+        height = resLabelH,
+    })
+    
+    local currentRes = settingsMenu.resolutionString(
+        settingsMenu.currentSettings.width,
+        settingsMenu.currentSettings.height
+    )
+    
+    local bounds = panel.getContentBounds(settingsMenu.panelId)
+    
+    settingsMenu.resolutionDropdownId = dropdown.new({
+        name = "resolution",
+        options = settingsMenu.resolutions,
+        default = currentRes,
+        font = settingsMenu.menuFont,
+        fontSize = 24,
+        height = settingsMenu.baseSizes.dropdownHeight,
+        page = settingsMenu.page,
+        x = 0,
+        y = 0,
+        uiscale = uiscale,
+        zIndex = baseZ + 2,
+        onChange = function(value, text, id, name)
+            local w, h = value:match("^(%d+)x(%d+)$")
+            if w and h then
+                settingsMenu.pendingSettings.width = tonumber(w)
+                settingsMenu.pendingSettings.height = tonumber(h)
+                engine.logInfo("Resolution pending: " .. text)
+            end
+        end,
+    })
+    
+    local ddW, ddH = dropdown.getSize(settingsMenu.resolutionDropdownId)
+    dropdown.setPosition(settingsMenu.resolutionDropdownId,
+        panelX + bounds.x + bounds.width - ddW,
+        panelY + bounds.y + rowY1)
+
+    -- Row 2: Fullscreen label and checkbox
     settingsMenu.fullscreenLabelId = label.new({
         name = "fullscreen_label",
         text = "Fullscreen",
@@ -179,7 +285,7 @@ function settingsMenu.createUI()
     local flLabelW, flLabelH = label.getSize(settingsMenu.fullscreenLabelId)
     panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.fullscreenLabelId), {
         x = "0px",
-        y = rowY1 .. "px",
+        y = rowY2 .. "px",
         origin = "top-left",
         width = flLabelW,
         height = flLabelH,
@@ -200,14 +306,14 @@ function settingsMenu.createUI()
     local cbW, cbH = checkbox.getSize(settingsMenu.fullscreenCheckboxId)
     panel.place(settingsMenu.panelId, checkbox.getElementHandle(settingsMenu.fullscreenCheckboxId), {
         x = "100%",
-        y = rowY1 .. "px",
+        y = rowY2 .. "px",
         origin = "top-right",
         width = cbW,
         height = cbH,
     })
-    UI.setZIndex(checkbox.getElementHandle(settingsMenu.fullscreenCheckboxId), baseZ + 1)
+    --UI.setZIndex(checkbox.getElementHandle(settingsMenu.fullscreenCheckboxId), baseZ + 1)
     
-    -- Row 2: UI Scaling label and textbox
+    -- Row 3: UI Scaling label and textbox
     settingsMenu.scalingLabelId = label.new({
         name = "scaling_label",
         text = "UI Scaling",
@@ -222,7 +328,7 @@ function settingsMenu.createUI()
     local scLabelW, scLabelH = label.getSize(settingsMenu.scalingLabelId)
     panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.scalingLabelId), {
         x = "0px",
-        y = rowY2 .. "px",
+        y = rowY3 .. "px",
         origin = "top-left",
         width = scLabelW,
         height = scLabelH,
@@ -243,13 +349,15 @@ function settingsMenu.createUI()
     local tbW, tbH = textbox.getSize(settingsMenu.uiScaleTextBox)
     panel.place(settingsMenu.panelId, textbox.getElementHandle(settingsMenu.uiScaleTextBox), {
         x = "100%",
-        y = rowY2 .. "px",
+        y = rowY3 .. "px",
         origin = "top-right",
         width = tbW,
         height = tbH,
     })
+    -- Give UI scale textbox a unique z-index so its text child lands on a unique layer
+    --UI.setZIndex(textbox.getElementHandle(settingsMenu.uiScaleTextBox), 3)
     
-    -- Row 3: Frame Limit label and textbox
+    -- Row 4: Frame Limit label and textbox
     settingsMenu.frameLimitLabelId = label.new({
         name = "framelimit_label",
         text = "Frame Limit",
@@ -264,7 +372,7 @@ function settingsMenu.createUI()
     local frLabelW, frLabelH = label.getSize(settingsMenu.frameLimitLabelId)
     panel.place(settingsMenu.panelId, label.getElementHandle(settingsMenu.frameLimitLabelId), {
         x = "0px",
-        y = rowY3 .. "px",
+        y = rowY4 .. "px",
         origin = "top-left",
         width = frLabelW,
         height = frLabelH,
@@ -285,11 +393,13 @@ function settingsMenu.createUI()
     local flW, flH = textbox.getSize(settingsMenu.frameLimitTextBox)
     panel.place(settingsMenu.panelId, textbox.getElementHandle(settingsMenu.frameLimitTextBox), {
         x = "100%",
-        y = rowY3 .. "px",
+        y = rowY4 .. "px",
         origin = "top-right",
         width = flW,
         height = flH,
     })
+    -- Give frame limit textbox a unique z-index
+    --UI.setZIndex(textbox.getElementHandle(settingsMenu.frameLimitTextBox), 5)
     
     -- Create buttons
     settingsMenu.backButtonId = button.new({
@@ -386,13 +496,26 @@ function settingsMenu.onApply()
     engine.logInfo("Applying settings...")
     
     local scaleChanged = false
+    local resolutionChanged = false
     
+    -- Apply resolution
+    if settingsMenu.pendingSettings.width ~= settingsMenu.currentSettings.width
+        or settingsMenu.pendingSettings.height ~= settingsMenu.currentSettings.height then
+        settingsMenu.currentSettings.width = settingsMenu.pendingSettings.width
+        settingsMenu.currentSettings.height = settingsMenu.pendingSettings.height
+        resolutionChanged = true
+        engine.logInfo("Resolution applied: " .. settingsMenu.currentSettings.width
+            .. "x" .. settingsMenu.currentSettings.height)
+    end
+    
+    -- Apply fullscreen
     if settingsMenu.pendingSettings.fullscreen ~= settingsMenu.currentSettings.fullscreen then
         settingsMenu.currentSettings.fullscreen = settingsMenu.pendingSettings.fullscreen
         engine.setFullscreen(settingsMenu.currentSettings.fullscreen)
         engine.logInfo("Fullscreen applied: " .. tostring(settingsMenu.currentSettings.fullscreen))
     end
     
+    -- Apply UI scale
     if settingsMenu.uiScaleTextBox then
         local newScale = textbox.getNumericValue(settingsMenu.uiScaleTextBox)
         if newScale >= settingsMenu.uiScaleMin and newScale <= settingsMenu.uiScaleMax then
@@ -408,6 +531,7 @@ function settingsMenu.onApply()
         end
     end
     
+    -- Apply frame limit
     if settingsMenu.frameLimitTextBox then
         local frameLimit = textbox.getNumericValue(settingsMenu.frameLimitTextBox)
         if frameLimit >= settingsMenu.frameLimitMin and frameLimit <= settingsMenu.frameLimitMax then
@@ -418,6 +542,19 @@ function settingsMenu.onApply()
         else
             engine.logWarn("Frame limit out of range: " .. tostring(frameLimit))
         end
+    end
+    
+    -- Apply resolution via setVideoConfig (updates engine window)
+    if resolutionChanged then
+        engine.setVideoConfig(
+            settingsMenu.currentSettings.width,
+            settingsMenu.currentSettings.height,
+            settingsMenu.currentSettings.fullscreen,
+            settingsMenu.currentSettings.uiScale,
+            settingsMenu.currentSettings.vsync,
+            settingsMenu.currentSettings.frameLimit,
+            settingsMenu.currentSettings.msaa
+        )
     end
     
     if scaleChanged then
@@ -496,6 +633,7 @@ function settingsMenu.revertSettings()
     local scaleChanged = (settingsMenu.currentSettings.uiScale ~= uiScale)
     local fullscreenChanged = (settingsMenu.currentSettings.fullscreen ~= fs)
     local frameLimitChanged = (settingsMenu.currentSettings.frameLimit ~= frameLimit)
+    local resChanged = (settingsMenu.currentSettings.width ~= w or settingsMenu.currentSettings.height ~= h)
     
     settingsMenu.currentSettings.width = w
     settingsMenu.currentSettings.height = h
@@ -515,6 +653,10 @@ function settingsMenu.revertSettings()
     
     if frameLimitChanged then
         engine.setFrameLimit(frameLimit)
+    end
+    
+    if resChanged then
+        engine.setVideoConfig(w, h, fs, uiScale, vs, frameLimit, msaa)
     end
 end
 
@@ -539,6 +681,7 @@ function settingsMenu.shutdown()
     textbox.destroyAll()
     checkbox.destroyAll()
     button.destroyAll()
+    dropdown.destroyAll()
     panel.destroyAll()
     if settingsMenu.page then
         UI.deletePage(settingsMenu.page)

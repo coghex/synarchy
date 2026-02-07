@@ -15,6 +15,9 @@ module Engine.Scripting.Lua.API.UI
   , uiAddChildFn
   , uiRemoveElementFn
   , uiDeleteElementFn
+  , uiFindElementAtFn
+  , uiGetElementOnClickFn
+  , uiFindHoverTargetFn
     -- Focus operations
   , uiSetFocusFn
   , uiClearFocusFn
@@ -666,6 +669,59 @@ uiSetBoxTexturesFn env = do
         _ -> pure ()
     
     return 0
+
+-- | UI.findElementAt(x, y) -> elementHandle or nil
+uiFindElementAtFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiFindElementAtFn env = do
+    xArg <- Lua.tonumber 1
+    yArg <- Lua.tonumber 2
+    case (xArg, yArg) of
+        (Just x, Just y) -> do
+            mgr <- Lua.liftIO $ readIORef (uiManagerRef env)
+            case findElementAt (realToFrac x, realToFrac y) mgr of
+                Just (ElementHandle h) -> Lua.pushinteger (fromIntegral h)
+                Nothing -> Lua.pushnil
+        _ -> Lua.pushnil
+    return 1
+
+-- | UI.getElementOnClick(elementHandle) -> callbackName or nil
+uiGetElementOnClickFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiGetElementOnClickFn env = do
+    elemArg <- Lua.tointeger 1
+    case elemArg of
+        Just e -> do
+            mgr <- Lua.liftIO $ readIORef (uiManagerRef env)
+            case Map.lookup (ElementHandle $ fromIntegral e) (upmElements mgr) of
+                Just elem -> case ueOnClick elem of
+                    Just cb -> Lua.pushstring (TE.encodeUtf8 cb)
+                    Nothing -> Lua.pushnil
+                Nothing -> Lua.pushnil
+        Nothing -> Lua.pushnil
+    return 1
+
+-- | UI.findHoverTarget(x, y) -> elementHandle, callbackName  or  nil, nil
+uiFindHoverTargetFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+uiFindHoverTargetFn env = do
+    xArg <- Lua.tonumber 1
+    yArg <- Lua.tonumber 2
+    case (xArg, yArg) of
+        (Just x, Just y) -> do
+            mgr <- Lua.liftIO $ readIORef (uiManagerRef env)
+            case findElementAt (realToFrac x, realToFrac y) mgr of
+                Just hitElem -> case findClickableAncestor hitElem mgr of
+                    Just (ElementHandle h, cb) -> do
+                        Lua.pushinteger (fromIntegral h)
+                        Lua.pushstring (TE.encodeUtf8 cb)
+                    Nothing -> do
+                        Lua.pushnil
+                        Lua.pushnil
+                Nothing -> do
+                    Lua.pushnil
+                    Lua.pushnil
+        _ -> do
+            Lua.pushnil
+            Lua.pushnil
+    return 2
 
 -----------------------------------------------------------
 -- Helpers

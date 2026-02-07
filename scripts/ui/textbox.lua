@@ -262,6 +262,7 @@ function textbox.updateDisplay(id)
     
     UI.setText(tb.textId, displayText)
     local textY = (tb.height / 2) + (tb.fontSize / 3)
+    engine.logInfo("TBDEBUG " .. tb.name .. " text='" .. displayText .. "' textW=" .. tostring(textWidth) .. " textX=" .. tostring(textX) .. " textY=" .. tostring(textY) .. " boxId=" .. tostring(tb.boxId) .. " textId=" .. tostring(tb.textId))
     UI.setPosition(tb.textId, textX, textY)
     
     if tb.cursorId then
@@ -270,6 +271,7 @@ function textbox.updateDisplay(id)
         local cursorX = textX + cursorTextWidth - (engine.getTextWidth(tb.font, "|", tb.fontSize) / 2)
         UI.setPosition(tb.cursorId, cursorX, textY)
     end
+    engine.logInfo("TBDEBUG " .. tb.name .. " text='" .. displayText .. "' textW=" .. tostring(textWidth) .. " textX=" .. tostring(textX) .. " textY=" .. tostring(textY) .. " boxW=" .. tostring(tb.width) .. " boxH=" .. tostring(tb.height))
 end
 
 function textbox.update(dt)

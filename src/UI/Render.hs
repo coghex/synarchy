@@ -49,6 +49,42 @@ lookupTextureSlot bindless texHandle =
         Just bth -> fromIntegral $ fromBindlessHandle bth
         Nothing  -> 0.0
 
+-- | Merge TextItems sharing the same font within each layer into a single
+--   TextRenderBatch.  Two separate instanced draw calls for the same font
+--   in the same layer can cause the second to clobber the first on some
+--   drivers.  Merging guarantees one draw call per (font, layer).
+mergeLayeredTextItems :: Map.Map LayerId (V.Vector RenderItem)
+                      -> Map.Map LayerId (V.Vector RenderItem)
+mergeLayeredTextItems = Map.map mergeInLayer
+  where
+    mergeInLayer :: V.Vector RenderItem -> V.Vector RenderItem
+    mergeInLayer items =
+        let sprites = V.filter isSprite items
+            texts   = [t | TextItem t <- V.toList items]
+            merged  = mergeTextBatches texts
+        in sprites <> V.fromList (map TextItem merged)
+
+    isSprite (SpriteItem _) = True
+    isSprite _              = False
+
+    mergeTextBatches :: [TextRenderBatch] -> [TextRenderBatch]
+    mergeTextBatches [] = []
+    mergeTextBatches batches =
+        let grouped = Map.toList $ foldl' (\acc b ->
+                let key = trbFont b
+                    existing = Map.findWithDefault V.empty key acc
+                in Map.insert key (existing <> trbInstances b) acc
+              ) Map.empty batches
+            layer = trbLayer (head batches)
+        in [ TextRenderBatch
+               { trbFont      = font
+               , trbLayer     = layer
+               , trbInstances = insts
+               , trbObjects   = V.empty
+               }
+           | (font, insts) <- grouped
+           ]
+
 -- | Render all visible UI pages
 renderUIPages :: EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderUIPages = do
@@ -72,8 +108,10 @@ renderUIPages = do
             
             let allBatches = V.concat $ map fst results
                 allLayered = foldr (Map.unionWith (<>)) Map.empty (map snd results)
+                -- Merge text batches that share a font within each layer
+                mergedLayered = mergeLayeredTextItems allLayered
             
-            pure (allBatches, allLayered)
+            pure (allBatches, mergedLayered)
 
 -- | Render a single page
 renderPage :: UIPageManager -> BindlessTextureSystem -> FontCache -> UIPage 
@@ -104,7 +142,6 @@ renderElement mgr bindless fontCache baseLayerId handle = do
                         Just pos -> pos
                         Nothing  -> (0, 0)
                 
-                -- NEW: Add element z-index to the layer
                 let elemLayerId = LayerId $ unLayerId baseLayerId + fromIntegral (ueZIndex elem)
                 
                 (selfBatches, selfItems) <- renderElementData mgr bindless fontCache 
@@ -113,7 +150,6 @@ renderElement mgr bindless fontCache baseLayerId handle = do
                 let sortedChildren = sortOn (getChildZIndex mgr) (ueChildren elem)
                 childResults <- forM sortedChildren $ \childHandle ->
                     renderElement mgr bindless fontCache elemLayerId childHandle
-                    --                                   ^^^^^^^^^^^ Pass modified layerId to children
                 
                 let childBatches = V.concat $ map fst childResults
                     childLayered = foldr (Map.unionWith (<>)) Map.empty (map snd childResults)
@@ -207,16 +243,12 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
         midW = max 0 (w - ts * 2)
         midH = max 0 (h - ts * 2)
         
-        -- When box is smaller than 2*tileSize, center the tiles on the box
-        -- Calculate offset to keep box visually centered on the hit area
         offsetY = if h < ts * 2 then (h - ts * 2) / 2 else 0
         offsetX = if w < ts * 2 then (w - ts * 2) / 2 else 0
         
-        -- Adjusted base position
         baseX = x + offsetX
         baseY = y + offsetY
         
-        -- Top row
         nwX = baseX
         nwY = baseY
         nX  = baseX + ts
@@ -224,7 +256,6 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
         neX = baseX + ts + midW
         neY = baseY
         
-        -- Middle row
         wX  = baseX
         wY  = baseY + ts
         cX  = baseX + ts
@@ -232,7 +263,6 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
         eX  = baseX + ts + midW
         eY  = baseY + ts
         
-        -- Bottom row
         swX = baseX
         swY = baseY + ts + midH
         sX  = baseX + ts
@@ -240,7 +270,6 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
         seX = baseX + ts + midW
         seY = baseY + ts + midH
         
-        -- Create batch for each tile
         makeBatch tex px py pw ph = 
             let atlasId = lookupTextureSlot bindless tex
                 vertices = makeQuadVertices px py pw ph color atlasId

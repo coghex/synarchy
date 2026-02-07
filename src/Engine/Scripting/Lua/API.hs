@@ -122,6 +122,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "addChild"       (uiAddChildFn env)
   registerLuaFunction "removeElement"  (uiRemoveElementFn env)
   registerLuaFunction "deleteElement"  (uiDeleteElementFn env)
+  registerLuaFunction "findElementAt" (uiFindElementAtFn env)
+  registerLuaFunction "getElementOnClick" (uiGetElementOnClickFn env)
+  registerLuaFunction "findHoverTarget" (uiFindHoverTargetFn env)
 
   -- Text buffer operations
   registerLuaFunction "enableTextInput" (uiEnableTextInputFn env)

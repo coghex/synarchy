@@ -1,4 +1,5 @@
 -- Button UI component
+local boxTextures = require("scripts.ui.box_textures")
 local button = {}
 
 -----------------------------------------------------------
@@ -12,6 +13,25 @@ local BUTTON_CALLBACK = "onButtonClick"
 
 local buttons = {}
 local nextId = 1
+
+local texSetNormal = nil
+local texSetHovered = nil
+local texSetClicked = nil
+local assetsLoaded = false
+
+-----------------------------------------------------------
+-- Initialization
+-----------------------------------------------------------
+
+function button.init()
+    if assetsLoaded then return end
+    
+    texSetHovered = boxTextures.load("assets/textures/ui/buttonhovered", "buttonhovered")
+    texSetClicked = boxTextures.load("assets/textures/ui/buttonclicked", "buttonclicked")
+    
+    assetsLoaded = true
+    engine.logDebug("Button module initialized")
+end
 
 -----------------------------------------------------------
 -- Creation / Destruction
@@ -49,6 +69,10 @@ function button.new(params)
         callbackName = params.callbackName or BUTTON_CALLBACK,
         bgColor = bgColor,
         textColor = textColor,
+        normalTexSet = params.textureSet,
+        hoveredTexSet = texSetHovered,
+        clickedTexSet = texSetClicked,
+        state = "normal",  -- "normal", "hovered", "clicked"
     }
     
     if not params.textureSet then
@@ -86,6 +110,7 @@ function button.new(params)
         local labelY = (btn.height / 2) + (btn.fontSize / 2)
         
         UI.addChild(btn.boxId, btn.labelId, labelX, labelY)
+        UI.setZIndex(btn.labelId, 1)
     end
     
     UI.setClickable(btn.boxId, true)
@@ -109,6 +134,29 @@ function button.destroyAll()
 end
 
 -----------------------------------------------------------
+-- State Management
+-----------------------------------------------------------
+
+function button.setState(id, newState)
+    local btn = buttons[id]
+    if not btn then return end
+    if btn.state == newState then return end
+    
+    btn.state = newState
+    
+    local texSet = btn.normalTexSet
+    if newState == "hovered" and btn.hoveredTexSet then
+        texSet = btn.hoveredTexSet
+    elseif newState == "clicked" and btn.clickedTexSet then
+        texSet = btn.clickedTexSet
+    end
+    
+    if texSet then
+        UI.setBoxTextures(btn.boxId, texSet)
+    end
+end
+
+-----------------------------------------------------------
 -- Click Handling
 -----------------------------------------------------------
 
@@ -125,6 +173,8 @@ function button.handleClickByElement(elemHandle)
     local id = button.findByElementHandle(elemHandle)
     if id then
         local btn = buttons[id]
+        -- Show clicked texture
+        button.setState(id, "clicked")
         if btn.onClick then
             btn.onClick(id, btn.name)
         end
@@ -141,6 +191,41 @@ function button.handleCallback(callbackName, elemHandle)
 end
 
 -----------------------------------------------------------
+-- Hover Handling
+-----------------------------------------------------------
+
+function button.onHoverEnter(elemHandle)
+    local id = button.findByElementHandle(elemHandle)
+    if id then
+        local btn = buttons[id]
+        if btn and btn.state ~= "clicked" then
+            button.setState(id, "hovered")
+        end
+    end
+end
+
+function button.onHoverLeave(elemHandle)
+    local id = button.findByElementHandle(elemHandle)
+    if id then
+        button.setState(id, "normal")
+    end
+end
+
+-----------------------------------------------------------
+-- Mouse Up Handling
+-----------------------------------------------------------
+
+function button.onMouseUp()
+    for id, btn in pairs(buttons) do
+        if btn.state == "clicked" then
+            -- If mouse is still over the button, go to hovered; otherwise normal
+            -- For simplicity, go to normal — the next hover poll will fix it
+            button.setState(id, "normal")
+        end
+    end
+end
+
+-----------------------------------------------------------
 -- Queries
 -----------------------------------------------------------
 
@@ -154,6 +239,10 @@ function button.getSize(id)
     local btn = buttons[id]
     if not btn then return 0, 0 end
     return btn.width, btn.height
+end
+
+function button.isButtonCallback(callbackName)
+    return callbackName == BUTTON_CALLBACK
 end
 
 return button

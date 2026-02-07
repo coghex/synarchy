@@ -784,7 +784,7 @@ function shell.updateGhostText()
             local bufferX = promptX + promptWidth + 10
             local textWidth = engine.getTextWidth(shellFont, inputBuffer:sub(inputScrollOffset + 1), fontSize)
             local cursorWidth = engine.getTextWidth(shellFont, "|", fontSize)
-            local cursorX = bufferX + textWidth - cursorWidth / 2
+            local cursorX = bufferX + textWidth
             
             UI.setPosition(ghostText, cursorX, promptY)
         else
