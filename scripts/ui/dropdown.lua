@@ -717,10 +717,11 @@ function dropdown.onScroll(elemHandle, dx, dy)
                 elseif dy < 0 then
                     scrollbar.scrollDown(dd.scrollbarId)
                 end
-                return
+                return true  -- CHANGED: was bare "return", now returns true
             end
         end
     end
+    return false  -- ADDED: explicit false when no dropdown handled it
 end
 
 -----------------------------------------------------------

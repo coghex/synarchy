@@ -124,6 +124,14 @@ function checkbox.setVisible(id, visible)
     if cb.spriteId then UI.setVisible(cb.spriteId, visible) end
 end
 
+function checkbox.setPosition(id, x, y)
+    local cb = checkboxes[id]
+    if not cb then return end
+    cb.x = x
+    cb.y = y
+    if cb.spriteId then UI.setPosition(cb.spriteId, x, y) end
+end
+
 function checkbox.toggle(id)
     local cb = checkboxes[id]
     if not cb then return false end

@@ -5,5 +5,5 @@ video:
   resolution:
     height: 1080
     width: 1920
-  ui_scale: 1.5
+  ui_scale: 2
   vsync: false

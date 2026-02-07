@@ -118,6 +118,12 @@ function label.setColor(id, color)
     end
 end
 
+function label.setPosition(id, x, y)
+    local lbl = labels[id]
+    if not lbl then return end
+    if lbl.textId then UI.setPosition(lbl.textId, x, y) end
+end
+
 function label.setVisible(id, visible)
     local lb = labels[id]
     if not lb then return end

@@ -382,4 +382,16 @@ function scrollbar.isScrollbarCallback(callbackName)
     return callbackName == "onScrollUp" or callbackName == "onScrollDown"
 end
 
+function scrollbar.setZIndices(id, trackZ, buttonZ, tabZ)
+    local sb = scrollbars[id]
+    if not sb then return end
+    
+    UI.setZIndex(sb.trackTopId, trackZ)
+    UI.setZIndex(sb.trackMidId, trackZ)
+    UI.setZIndex(sb.trackBottomId, trackZ)
+    UI.setZIndex(sb.upButtonId, buttonZ)
+    UI.setZIndex(sb.downButtonId, buttonZ)
+    UI.setZIndex(sb.tabId, tabZ)
+end
+
 return scrollbar

@@ -49,10 +49,6 @@ lookupTextureSlot bindless texHandle =
         Just bth -> fromIntegral $ fromBindlessHandle bth
         Nothing  -> 0.0
 
--- | Merge TextItems sharing the same font within each layer into a single
---   TextRenderBatch.  Two separate instanced draw calls for the same font
---   in the same layer can cause the second to clobber the first on some
---   drivers.  Merging guarantees one draw call per (font, layer).
 mergeLayeredTextItems :: Map.Map LayerId (V.Vector RenderItem)
                       -> Map.Map LayerId (V.Vector RenderItem)
 mergeLayeredTextItems = Map.map mergeInLayer

@@ -433,6 +433,14 @@ function textbox.setVisible(id, visible)
     if tb.cursorId then UI.setVisible(tb.cursorId, visible and tb.boxId and UI.hasFocus(tb.boxId)) end
 end
 
+function textbox.setPosition(id, x, y)
+    local tb = textboxes[id]
+    if not tb then return end
+    tb.x = x
+    tb.y = y
+    if tb.boxId then UI.setPosition(tb.boxId, x, y) end
+end
+
 function textbox.insertChar(id, char)
     local tb = textboxes[id]
     if not tb then return end
