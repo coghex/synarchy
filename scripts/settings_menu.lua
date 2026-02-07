@@ -319,12 +319,6 @@ function settingsMenu.createUI()
         end,
     })
     
-    -- Explicitly set z-index on frame and tab boxes
-    -- tabbar.new sets frame to zIndex and tab boxes to zIndex+1
-    -- That gives us frame=Z_TAB_FRAME=14, tab boxes=15
-    -- The tab box text children are set to z=1 internally, 
-    -- so they render at 20+15+1=36 which is fine
-    
     -- Select the active tab
     tabbar.selectByKey(settingsMenu.tabBarId, settingsMenu.activeTab)
     
@@ -427,15 +421,9 @@ function settingsMenu.createUI()
     
     local totalBtnWidth = backW + s.btnSpacing + applyW + s.btnSpacing + saveW
     local btnStartX = panelX + bounds.x + (bounds.width - totalBtnWidth) / 2
-    local btnY = panelY + panelHeight - bounds.y - backH
-    -- bounds.y here is padding.top; for bottom we use the actual bottom padding
-    -- The panel bottom padding is 120*uiscale. bounds.y = padding.top = 80*uiscale
-    -- So the button row sits at:
     local bottomPadding = math.floor(120 * uiscale)
-    btnY = panelY + panelHeight - bottomPadding + (bottomPadding - backH) / 2
+    local btnY = panelY + panelHeight - bottomPadding + (bottomPadding - backH) / 2
     
-    -- buttons are already addToPage'd by button.new (since no parent is given)
-    -- We just need to set their positions
     local backHandle = button.getElementHandle(settingsMenu.backButtonId)
     local applyHandle = button.getElementHandle(settingsMenu.applyButtonId)
     local saveHandle = button.getElementHandle(settingsMenu.saveButtonId)
@@ -444,7 +432,6 @@ function settingsMenu.createUI()
     UI.setPosition(applyHandle, btnStartX + backW + s.btnSpacing, btnY)
     UI.setPosition(saveHandle, btnStartX + backW + s.btnSpacing + applyW + s.btnSpacing, btnY)
     
-    -- Explicitly ensure button z-index (button.new already sets it via params.zIndex)
     UI.setZIndex(backHandle, Z_BUTTONS)
     UI.setZIndex(applyHandle, Z_BUTTONS)
     UI.setZIndex(saveHandle, Z_BUTTONS)
@@ -506,7 +493,7 @@ function settingsMenu.onTabScroll(tabKey, offset)
     settingsMenu.refreshTabScroll(tabKey)
 end
 
--- Create a scrollbar for a tab if it needs one
+-- In createTabScrollbar, pass zIndex directly to scrollbar.new:
 function settingsMenu.createTabScrollbar(tabKey, frameX, frameY, frameW, frameH,
                                           totalRows, maxVisibleRows, uiscale, s)
     local ts = settingsMenu.tabScroll[tabKey]
@@ -515,11 +502,9 @@ function settingsMenu.createTabScrollbar(tabKey, frameX, frameY, frameW, frameH,
     ts.fontSize = s.fontSize
     
     if totalRows <= maxVisibleRows then
-        -- No scrollbar needed
         return
     end
     
-    -- Scrollbar along the right edge of the tab frame
     local sbButtonSize = math.floor(24 * uiscale)
     local sbCapHeight = math.floor(4 * uiscale)
     local sbTrackHeight = frameH - (sbButtonSize * 2) - (sbCapHeight * 2)
@@ -527,7 +512,7 @@ function settingsMenu.createTabScrollbar(tabKey, frameX, frameY, frameW, frameH,
         sbTrackHeight = math.floor(20 * uiscale)
     end
     
-    local sbX = frameX + frameW  -- just outside the right edge of the frame
+    local sbX = frameX + frameW
     local sbY = frameY
     
     ts.scrollbarId = scrollbar.new({
@@ -542,14 +527,11 @@ function settingsMenu.createTabScrollbar(tabKey, frameX, frameY, frameW, frameH,
         totalItems = totalRows,
         visibleItems = maxVisibleRows,
         uiscale = uiscale,
+        zIndex = { track = Z_SB_TRACK, button = Z_SB_BUTTONS, tab = Z_SB_TAB },
         onScroll = function(offset, sbId, sbName)
             settingsMenu.onTabScroll(tabKey, offset)
         end,
     })
-    
-    -- Override scrollbar z-indices to use our explicit scheme
-    -- (scrollbar.new sets 500/501/502 by default which is excessive)
-    scrollbar.setZIndices(ts.scrollbarId, Z_SB_TRACK, Z_SB_BUTTONS, Z_SB_TAB)
     
     engine.logDebug("Tab scrollbar created for '" .. tabKey
         .. "' totalRows=" .. totalRows
@@ -621,6 +603,10 @@ function settingsMenu.createGraphicsTab(contentX, contentY, contentW, contentH,
     local ddId = settingsMenu.resolutionDropdownId
     table.insert(ts.rowHandles, {
         labelHandle = resLabelHandle,
+        widgetHandles = {
+            dropdown.getElementHandle(ddId),
+            dropdown.getArrowHandle(ddId),
+        },
         widgetSetPosition = function(rowY)
             dropdown.setPosition(ddId, contentX + contentW - ddW, rowY)
         end,
@@ -662,6 +648,9 @@ function settingsMenu.createGraphicsTab(contentX, contentY, contentW, contentH,
     
     table.insert(ts.rowHandles, {
         labelHandle = flLabelHandle,
+        widgetHandles = {
+            checkbox.getElementHandle(cbId),
+        },
         widgetSetPosition = function(rowY)
             checkbox.setPosition(cbId,
                 contentX + contentW - cbSize, rowY)
@@ -704,6 +693,9 @@ function settingsMenu.createGraphicsTab(contentX, contentY, contentW, contentH,
     
     table.insert(ts.rowHandles, {
         labelHandle = scLabelHandle,
+        widgetHandles = {
+            textbox.getElementHandle(uiScaleId),
+        },
         widgetSetPosition = function(rowY)
             textbox.setPosition(uiScaleId,
                 contentX + contentW - tbW_est, rowY)
@@ -746,6 +738,9 @@ function settingsMenu.createGraphicsTab(contentX, contentY, contentW, contentH,
     
     table.insert(ts.rowHandles, {
         labelHandle = frLabelHandle,
+        widgetHandles = {
+            textbox.getElementHandle(flId),
+        },
         widgetSetPosition = function(rowY)
             textbox.setPosition(flId,
                 contentX + contentW - flW_est, rowY)
@@ -790,6 +785,7 @@ function settingsMenu.createSystemTab(contentX, contentY, contentW, contentH,
     
     table.insert(ts.rowHandles, {
         labelHandle = handle,
+        widgetHandles = {},
         widgetSetPosition = nil,
         widgetSetVisible = nil,
     })
@@ -828,6 +824,7 @@ function settingsMenu.createInputTab(contentX, contentY, contentW, contentH,
     
     table.insert(ts.rowHandles, {
         labelHandle = handle,
+        widgetHandles = {},
         widgetSetPosition = nil,
         widgetSetVisible = nil,
     })
@@ -900,10 +897,19 @@ function settingsMenu.onScroll(elemHandle, dx, dy)
         return doScroll()
     end
     
-    -- Check if the element belongs to any of the visible tab content rows
+    -- Check if the element belongs to any visible tab content row
+    -- This covers labels, checkboxes, textboxes, dropdowns, and any other widgets
     for _, row in ipairs(activeTs.rowHandles) do
         if row.labelHandle == elemHandle then
             return doScroll()
+        end
+        -- Check all widget element handles registered for this row
+        if row.widgetHandles then
+            for _, wh in ipairs(row.widgetHandles) do
+                if wh == elemHandle then
+                    return doScroll()
+                end
+            end
         end
     end
     
@@ -912,10 +918,6 @@ function settingsMenu.onScroll(elemHandle, dx, dy)
     if sbId and sbId == activeTs.scrollbarId then
         return doScroll()
     end
-    
-    -- NOTE: removed the mouse-position fallback that was here before.
-    -- It was too broad — it caught scroll events over dropdown option
-    -- lists that physically overlap the tab frame bounds.
     
     return false
 end

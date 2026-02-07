@@ -55,6 +55,23 @@ function scrollbar.new(params)
     local totalItems = params.totalItems or 1
     local visibleItems = params.visibleItems or 1
     
+    -- Z-index: callers can pass zIndex = { track = N, button = N+1, tab = N+2 }
+    -- or a single number (track=N, button=N+1, tab=N+2), or nil for defaults
+    local zTrack, zButton, zTab
+    if type(params.zIndex) == "table" then
+        zTrack  = params.zIndex.track  or 500
+        zButton = params.zIndex.button or 501
+        zTab    = params.zIndex.tab    or 502
+    elseif type(params.zIndex) == "number" then
+        zTrack  = params.zIndex
+        zButton = params.zIndex + 1
+        zTab    = params.zIndex + 2
+    else
+        zTrack  = 500
+        zButton = 501
+        zTab    = 502
+    end
+    
     local sb = {
         id = id,
         name = params.name or ("scrollbar_" .. id),
@@ -84,6 +101,10 @@ function scrollbar.new(params)
         tabMinHeight = math.floor(12 * uiscale),
         -- Callbacks
         onScroll = params.onScroll or nil,
+        -- Z indices
+        zTrack = zTrack,
+        zButton = zButton,
+        zTab = zTab,
     }
     
     sb.totalHeight = buttonSize + capHeight + trackHeight + capHeight + buttonSize
@@ -109,7 +130,7 @@ function scrollbar.new(params)
     
     -- Track top cap
     sb.trackTopId = UI.newSprite(
-        sb.name .. "_tracktop",
+        sb.name .. "_track_top",
         trackWidth,
         capHeight,
         texScrollBarTop,
@@ -119,9 +140,9 @@ function scrollbar.new(params)
     UI.addToPage(sb.page, sb.trackTopId, sb.x, currentY)
     currentY = currentY + capHeight
     
-    -- Track middle (stretched)
+    -- Track middle (stretchable)
     sb.trackMidId = UI.newSprite(
-        sb.name .. "_trackmid",
+        sb.name .. "_track_mid",
         trackWidth,
         trackHeight,
         texScrollBar,
@@ -133,7 +154,7 @@ function scrollbar.new(params)
     
     -- Track bottom cap
     sb.trackBottomId = UI.newSprite(
-        sb.name .. "_trackbot",
+        sb.name .. "_track_bottom",
         trackWidth,
         capHeight,
         texScrollBarBottom,
@@ -170,13 +191,13 @@ function scrollbar.new(params)
     local tabY = scrollbar.getTabY(sb)
     UI.addToPage(sb.page, sb.tabId, sb.x, tabY)
     
-    -- Z-index: track behind, buttons and tab in front
-    UI.setZIndex(sb.upButtonId, 501)
-    UI.setZIndex(sb.trackTopId, 500)
-    UI.setZIndex(sb.trackMidId, 500)
-    UI.setZIndex(sb.trackBottomId, 500)
-    UI.setZIndex(sb.downButtonId, 501)
-    UI.setZIndex(sb.tabId, 502)
+    -- Apply z-indices
+    UI.setZIndex(sb.upButtonId, zButton)
+    UI.setZIndex(sb.trackTopId, zTrack)
+    UI.setZIndex(sb.trackMidId, zTrack)
+    UI.setZIndex(sb.trackBottomId, zTrack)
+    UI.setZIndex(sb.downButtonId, zButton)
+    UI.setZIndex(sb.tabId, zTab)
     
     scrollbars[id] = sb
     
@@ -286,6 +307,7 @@ function scrollbar.setContentSize(id, totalItems, visibleItems)
     
     sb.totalItems = totalItems
     sb.visibleItems = visibleItems
+    
     scrollbar.recalcTab(sb)
     
     local maxOffset = math.max(0, sb.totalItems - sb.visibleItems)
@@ -385,6 +407,10 @@ end
 function scrollbar.setZIndices(id, trackZ, buttonZ, tabZ)
     local sb = scrollbars[id]
     if not sb then return end
+    
+    sb.zTrack = trackZ
+    sb.zButton = buttonZ
+    sb.zTab = tabZ
     
     UI.setZIndex(sb.trackTopId, trackZ)
     UI.setZIndex(sb.trackMidId, trackZ)

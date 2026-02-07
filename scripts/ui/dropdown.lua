@@ -517,7 +517,9 @@ function dropdown.openList(id)
     )
     
     UI.addToPage(dd.page, dd.listBoxId, listX, listY)
-    UI.setZIndex(dd.listBoxId, 500)
+    -- Use the dropdown's own zIndex + offset, not a hardcoded 500
+    local listZ = (dd.zIndex or 6) + 10
+    UI.setZIndex(dd.listBoxId, listZ)
     
     -- Create only the visible option slots (virtual scrolling)
     dd.optionElements = {}
@@ -595,6 +597,7 @@ function dropdown.openList(id)
             totalItems = totalOptions,
             visibleItems = visibleCount,
             uiscale = dd.uiscale,
+            zIndex = listZ,  -- scrollbar z relative to the list
             onScroll = function(offset, sbId, sbName)
                 dropdown.onScrollChanged(id, offset)
             end,

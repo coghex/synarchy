@@ -278,6 +278,15 @@ function uiManager.onMouseUp(button_num, x, y)
     end
 end
 
+function uiManager.onTabFrameScroll(elemHandle)
+    -- no-op: exists so the frame is clickable for scroll event detection
+    return false
+end
+
+-----------------------------------------------------------
+-- Scroll Button Clicks (scrollbar up/down arrows)
+-----------------------------------------------------------
+
 function uiManager.onScrollUp(elemHandle)
     -- Dropdown scrollbar buttons get priority (open dropdown is topmost)
     if dropdown then
@@ -286,8 +295,10 @@ function uiManager.onScrollUp(elemHandle)
     end
     -- Then try settings menu tab scrollbar
     if settingsMenu and currentMenu == "settings" then
-        if settingsMenu.handleScrollCallback("onScrollUp", elemHandle) then
-            return true
+        if settingsMenu.handleScrollCallback then
+            if settingsMenu.handleScrollCallback("onScrollUp", elemHandle) then
+                return true
+            end
         end
     end
     return false
@@ -301,12 +312,18 @@ function uiManager.onScrollDown(elemHandle)
     end
     -- Then try settings menu tab scrollbar
     if settingsMenu and currentMenu == "settings" then
-        if settingsMenu.handleScrollCallback("onScrollDown", elemHandle) then
-            return true
+        if settingsMenu.handleScrollCallback then
+            if settingsMenu.handleScrollCallback("onScrollDown", elemHandle) then
+                return true
+            end
         end
     end
     return false
 end
+
+-----------------------------------------------------------
+-- Mouse Wheel Scroll
+-----------------------------------------------------------
 
 function uiManager.onUIScroll(elemHandle, dx, dy)
     -- Open dropdown gets priority — it's the topmost modal-like widget
@@ -314,7 +331,7 @@ function uiManager.onUIScroll(elemHandle, dx, dy)
         local handled = dropdown.onScroll(elemHandle, dx, dy)
         if handled then return end
     end
-    -- Then try settings menu tab scrolling
+    -- Then try settings menu tab scrolling (handles all tab content elements)
     if settingsMenu and currentMenu == "settings" then
         if settingsMenu.onScroll(elemHandle, dx, dy) then
             return
@@ -445,52 +462,6 @@ function uiManager.onUIFocusLost()
     end
     if textbox then
         textbox.unfocusAll()
-    end
-end
-
-function uiManager.onTabFrameScroll(elemHandle)
-    -- This callback exists only so the frame element is "clickable"
-    -- and can be found by findClickableElementAt for scroll events.
-    -- Actual scrolling is handled in onUIScroll.
-    return false
-end
-
-function uiManager.onScrollUp(elemHandle)
-    -- Try settings menu tab scrollbar first
-    if settingsMenu and currentMenu == "settings" then
-        if settingsMenu.handleScrollCallback("onScrollUp", elemHandle) then
-            return true
-        end
-    end
-    if dropdown then
-        return dropdown.handleCallback("onScrollUp", elemHandle)
-    end
-    return false
-end
-
-function uiManager.onScrollDown(elemHandle)
-    -- Try settings menu tab scrollbar first
-    if settingsMenu and currentMenu == "settings" then
-        if settingsMenu.handleScrollCallback("onScrollDown", elemHandle) then
-            return true
-        end
-    end
-    if dropdown then
-        return dropdown.handleCallback("onScrollDown", elemHandle)
-    end
-    return false
-end
-
-function uiManager.onUIScroll(elemHandle, dx, dy)
-    -- Try settings menu tab scrolling first
-    if settingsMenu and currentMenu == "settings" then
-        if settingsMenu.onScroll(elemHandle, dx, dy) then
-            return
-        end
-    end
-    -- Forward scroll events to dropdown for scrollbar
-    if dropdown then
-        dropdown.onScroll(elemHandle, dx, dy)
     end
 end
 
