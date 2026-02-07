@@ -150,7 +150,7 @@ function data.apply(widgetValues)
     -- VSync
     if data.pending.vsync ~= data.current.vsync then
         data.current.vsync = data.pending.vsync
-        -- TODO: call engine.setVSync(data.current.vsync)
+        engine.setVSync(data.current.vsync)
         engine.logInfo("VSync applied: " .. tostring(data.current.vsync))
     end
 
@@ -233,6 +233,8 @@ function data.revert()
     if data.current.width ~= w or data.current.height ~= h then
         engine.setResolution(w, h)
     end
+
+    if data.current.vsync ~= vs then engine.setVSync(vs) end
 
     data.current.width      = w
     data.current.height     = h

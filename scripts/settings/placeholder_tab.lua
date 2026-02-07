@@ -8,6 +8,7 @@ local placeholderTab = {}
 --            contentX, contentY, zContent }
 -- Returns: rowHandles[]
 function placeholderTab.create(params)
+    local track = params.trackLabel or function(id) return id end
     local labelId = label.new({
         name     = params.name,
         text     = params.text,

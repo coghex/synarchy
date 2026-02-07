@@ -17,6 +17,11 @@ mainMenu.uiCreated = false
 
 mainMenu.titleLabelId = nil
 
+-- Owned element IDs for scoped cleanup
+mainMenu.ownedLabels  = {}
+mainMenu.ownedButtons = {}
+mainMenu.ownedPanels  = {}
+
 -- Base sizes (unscaled)
 mainMenu.baseSizes = {
     titleFontSize = 96,
@@ -38,6 +43,19 @@ mainMenu.menuItems = {
     { name = "quit", label = "Quit", callback = "onQuit" }
 }
 
+-----------------------------------------------------------
+-- Scoped cleanup
+-----------------------------------------------------------
+
+function mainMenu.destroyOwned()
+    for _, id in ipairs(mainMenu.ownedLabels)  do label.destroy(id) end
+    for _, id in ipairs(mainMenu.ownedButtons) do button.destroy(id) end
+    for _, id in ipairs(mainMenu.ownedPanels)  do panel.destroy(id) end
+    mainMenu.ownedLabels  = {}
+    mainMenu.ownedButtons = {}
+    mainMenu.ownedPanels  = {}
+end
+
 function mainMenu.init(boxTex, btnTex, font, tFont, width, height)
     mainMenu.boxTexSet = boxTex
     mainMenu.buttonTexSet = btnTex
@@ -53,9 +71,7 @@ function mainMenu.createUI()
     if mainMenu.uiCreated then
         if mainMenu.page then
             UI.deletePage(mainMenu.page)
-            label.destroyAll()
-            button.destroyAll()
-            panel.destroyAll()
+            mainMenu.destroyOwned()
             mainMenu.buttons = {}
             mainMenu.titleLabelId = nil
         end
@@ -102,6 +118,7 @@ function mainMenu.createUI()
         padding = { top = s.menuPaddingY / 2, bottom = s.menuPaddingY / 2, left = s.menuPaddingX / 2, right = s.menuPaddingX / 2 },
         uiscale = 1.0,  -- Already scaled above
     })
+    table.insert(mainMenu.ownedPanels, mainMenu.panelId)
     
     local baseZ = panel.getZIndex(mainMenu.panelId)
     
@@ -115,6 +132,7 @@ function mainMenu.createUI()
         page = mainMenu.page,
         uiscale = uiscale,
     })
+    table.insert(mainMenu.ownedLabels, mainMenu.titleLabelId)
     
     local titleW, titleH = label.getSize(mainMenu.titleLabelId)
     local titleX = (mainMenu.fbW - titleW) / 2
@@ -144,6 +162,7 @@ function mainMenu.createUI()
             textColor = {1.0, 1.0, 1.0, 1.0},
             callbackName = item.callback,
         })
+        table.insert(mainMenu.ownedButtons, btnId)
         
         local btnW, btnH = button.getSize(btnId)
         
@@ -198,9 +217,7 @@ function mainMenu.onFramebufferResize(width, height)
 end
 
 function mainMenu.shutdown()
-    label.destroyAll()
-    button.destroyAll()
-    panel.destroyAll()
+    mainMenu.destroyOwned()
     if mainMenu.page then
         UI.deletePage(mainMenu.page)
     end

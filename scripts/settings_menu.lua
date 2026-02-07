@@ -86,6 +86,15 @@ settingsMenu.backButtonId  = nil
 settingsMenu.applyButtonId = nil
 settingsMenu.saveButtonId  = nil
 
+-- Owned element IDs for scoped cleanup
+settingsMenu.ownedLabels     = {}
+settingsMenu.ownedTextboxes  = {}
+settingsMenu.ownedCheckboxes = {}
+settingsMenu.ownedButtons    = {}
+settingsMenu.ownedDropdowns  = {}
+settingsMenu.ownedPanels     = {}
+settingsMenu.ownedTabbars    = {}
+
 -----------------------------------------------------------
 -- Tab registry
 -- Each entry: { key, name, createFn(params) → rowHandles[] }
@@ -143,6 +152,58 @@ local function resetScrollStates()
 end
 
 -----------------------------------------------------------
+-- Scoped cleanup: destroy only elements we created
+-----------------------------------------------------------
+
+function settingsMenu.destroyOwned()
+    for _, id in ipairs(settingsMenu.ownedLabels)     do label.destroy(id) end
+    for _, id in ipairs(settingsMenu.ownedTextboxes)   do textbox.destroy(id) end
+    for _, id in ipairs(settingsMenu.ownedCheckboxes)  do checkbox.destroy(id) end
+    for _, id in ipairs(settingsMenu.ownedButtons)     do button.destroy(id) end
+    for _, id in ipairs(settingsMenu.ownedDropdowns)   do dropdown.destroy(id) end
+    for _, id in ipairs(settingsMenu.ownedPanels)      do panel.destroy(id) end
+    for _, id in ipairs(settingsMenu.ownedTabbars)     do tabbar.destroy(id) end
+
+    settingsMenu.ownedLabels     = {}
+    settingsMenu.ownedTextboxes  = {}
+    settingsMenu.ownedCheckboxes = {}
+    settingsMenu.ownedButtons    = {}
+    settingsMenu.ownedDropdowns  = {}
+    settingsMenu.ownedPanels     = {}
+    settingsMenu.ownedTabbars    = {}
+end
+
+-- Tracking helpers — call after every widget .new()
+function settingsMenu.trackLabel(id)
+    table.insert(settingsMenu.ownedLabels, id)
+    return id
+end
+function settingsMenu.trackTextbox(id)
+    table.insert(settingsMenu.ownedTextboxes, id)
+    return id
+end
+function settingsMenu.trackCheckbox(id)
+    table.insert(settingsMenu.ownedCheckboxes, id)
+    return id
+end
+function settingsMenu.trackButton(id)
+    table.insert(settingsMenu.ownedButtons, id)
+    return id
+end
+function settingsMenu.trackDropdown(id)
+    table.insert(settingsMenu.ownedDropdowns, id)
+    return id
+end
+function settingsMenu.trackPanel(id)
+    table.insert(settingsMenu.ownedPanels, id)
+    return id
+end
+function settingsMenu.trackTabbar(id)
+    table.insert(settingsMenu.ownedTabbars, id)
+    return id
+end
+
+-----------------------------------------------------------
 -- Public: callbacks from ui_manager
 -----------------------------------------------------------
 
@@ -178,14 +239,10 @@ end
 -----------------------------------------------------------
 
 function settingsMenu.createUI()
-    -- Tear down old UI
-    label.destroyAll()
-    textbox.destroyAll()
-    checkbox.destroyAll()
-    button.destroyAll()
-    dropdown.destroyAll()
-    tabbar.destroyAll()
-    panel.destroyAll()
+    -- Tear down owned elements only (not global destroyAll)
+    settingsMenu.destroyOwned()
+
+    -- Destroy tab scrollbars
     for _, ts in pairs(settingsMenu.tabScroll) do
         if ts.scrollbarId then scrollbar.destroy(ts.scrollbarId) end
     end
@@ -214,7 +271,7 @@ function settingsMenu.createUI()
     local panelX = (settingsMenu.fbW - panelWidth) / 2
     local panelY = (settingsMenu.fbH - panelHeight) / 2
 
-    settingsMenu.panelId = panel.new({
+    settingsMenu.panelId = settingsMenu.trackPanel(panel.new({
         name       = "settings_panel",
         page       = settingsMenu.page,
         x = panelX, y = panelY,
@@ -226,7 +283,7 @@ function settingsMenu.createUI()
         zIndex     = Z_PANEL,
         padding    = { top = 80, bottom = 120, left = 60, right = 60 },
         uiscale    = uiscale,
-    })
+    }))
     local bounds = panel.getContentBounds(settingsMenu.panelId)
 
     -- Title
@@ -252,7 +309,7 @@ end
 -----------------------------------------------------------
 
 function settingsMenu.createTitle(panelX, panelY, bounds, s, uiscale)
-    local titleLabelId = label.new({
+    local titleLabelId = settingsMenu.trackLabel(label.new({
         name     = "settings_title",
         text     = "Settings",
         font     = settingsMenu.menuFont,
@@ -260,7 +317,7 @@ function settingsMenu.createTitle(panelX, panelY, bounds, s, uiscale)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = settingsMenu.page,
         uiscale  = uiscale,
-    })
+    }))
     local titleW, _ = label.getSize(titleLabelId)
     local titleHandle = label.getElementHandle(titleLabelId)
     local titleX = panelX + bounds.x + (bounds.width - titleW) / 2
@@ -286,7 +343,7 @@ function settingsMenu.createTabBar(panelX, panelY, panelWidth, panelHeight,
         table.insert(tabList, { name = def.name, key = def.key })
     end
 
-    settingsMenu.tabBarId = tabbar.new({
+    settingsMenu.tabBarId = settingsMenu.trackTabbar(tabbar.new({
         name              = "settings_tabs",
         page              = settingsMenu.page,
         x                 = panelX + bounds.x,
@@ -304,7 +361,7 @@ function settingsMenu.createTabBar(panelX, panelY, panelWidth, panelHeight,
         onChange = function(key, index, tbId)
             settingsMenu.onTabChanged(key)
         end,
-    })
+    }))
 
     tabbar.selectByKey(settingsMenu.tabBarId, settingsMenu.activeTab)
 
@@ -351,6 +408,11 @@ function settingsMenu.createAllTabs(s, uiscale)
             zWidgets        = Z_WIDGETS,
             currentSettings = data.current,
             pendingSettings = data.pending,
+            -- Pass tracking functions so tabs can register their widgets
+            trackLabel      = settingsMenu.trackLabel,
+            trackTextbox    = settingsMenu.trackTextbox,
+            trackCheckbox   = settingsMenu.trackCheckbox,
+            trackDropdown   = settingsMenu.trackDropdown,
         })
 
         -- Scrollbar if needed
@@ -369,7 +431,7 @@ end
 
 function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
                                      bounds, s, uiscale)
-    settingsMenu.backButtonId = button.new({
+    settingsMenu.backButtonId = settingsMenu.trackButton(button.new({
         name       = "back_btn",
         text       = "Back",
         width      = settingsMenu.baseSizes.btnWidth,
@@ -388,9 +450,9 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
                 settingsMenu.showMenuCallback("main")
             end
         end,
-    })
+    }))
 
-    settingsMenu.applyButtonId = button.new({
+    settingsMenu.applyButtonId = settingsMenu.trackButton(button.new({
         name       = "apply_btn",
         text       = "Apply",
         width      = settingsMenu.baseSizes.btnWidth,
@@ -406,9 +468,9 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         onClick = function(id, name)
             settingsMenu.onApply()
         end,
-    })
+    }))
 
-    settingsMenu.saveButtonId = button.new({
+    settingsMenu.saveButtonId = settingsMenu.trackButton(button.new({
         name       = "save_btn",
         text       = "Save",
         width      = settingsMenu.baseSizes.btnWidth,
@@ -424,7 +486,7 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         onClick = function(id, name)
             settingsMenu.onSave()
         end,
-    })
+    }))
 
     local backW, backH   = button.getSize(settingsMenu.backButtonId)
     local applyW, _      = button.getSize(settingsMenu.applyButtonId)
@@ -658,20 +720,14 @@ function settingsMenu.onFramebufferResize(width, height)
 end
 
 -----------------------------------------------------------
--- Shutdown
+-- Shutdown (full teardown — only called at app exit)
 -----------------------------------------------------------
 
 function settingsMenu.shutdown()
     for _, ts in pairs(settingsMenu.tabScroll) do
         if ts.scrollbarId then scrollbar.destroy(ts.scrollbarId) end
     end
-    label.destroyAll()
-    textbox.destroyAll()
-    checkbox.destroyAll()
-    button.destroyAll()
-    dropdown.destroyAll()
-    tabbar.destroyAll()
-    panel.destroyAll()
+    settingsMenu.destroyOwned()
     if settingsMenu.page then UI.deletePage(settingsMenu.page) end
 end
 

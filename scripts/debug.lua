@@ -25,9 +25,12 @@ function debugOverlay.init(scriptId)
 end
 
 function debugOverlay.createUI()
+    
     if debugOverlay.uiCreated and debugOverlay.page then
         UI.deletePage(debugOverlay.page)
-        label.destroyAll()
+        if debugOverlay.fpsLabelId then
+            label.destroy(debugOverlay.fpsLabelId)
+        end
         debugOverlay.fpsLabelId = nil
     end
     
@@ -36,13 +39,12 @@ function debugOverlay.createUI()
     
     debugOverlay.page = UI.newPage("debug_overlay", "overlay")
     
-    -- FPS label in top-left corner
     debugOverlay.fpsLabelId = label.new({
         name = "fps_text",
         text = "FPS: --",
         font = debugOverlay.debugFont,
         fontSize = debugOverlay.baseSizes.fontSize,
-        color = {0.0, 1.0, 0.0, 1.0},  -- Green
+        color = {0.0, 1.0, 0.0, 1.0},
         page = debugOverlay.page,
         uiscale = uiscale,
         x = s.margin,
@@ -55,12 +57,13 @@ function debugOverlay.createUI()
 end
 
 function debugOverlay.update(dt)
-    if not debugOverlay.visible then return end
-    
     local fps = engine.getFPS()
-    
     if debugOverlay.fpsLabelId then
-        label.setText(debugOverlay.fpsLabelId, "FPS: " .. tostring(math.floor(fps)))
+        local text = "FPS: " .. tostring(math.floor(fps))
+        label.setText(debugOverlay.fpsLabelId, text)
+        -- Check if the label actually exists in the label module
+        local current = label.getText(debugOverlay.fpsLabelId)
+    else
     end
 end
 
@@ -75,7 +78,7 @@ function debugOverlay.show()
         UI.showPage(debugOverlay.page)
     end
     
-    engine.logInfo("Debug overlay shown")
+    engine.logDebug("Debug overlay shown")
 end
 
 function debugOverlay.hide()
@@ -85,7 +88,7 @@ function debugOverlay.hide()
         UI.hidePage(debugOverlay.page)
     end
     
-    engine.logInfo("Debug overlay hidden")
+    engine.logDebug("Debug overlay hidden")
 end
 
 function debugOverlay.toggle()
@@ -110,7 +113,10 @@ function debugOverlay.onFramebufferResize(width, height)
 end
 
 function debugOverlay.shutdown()
-    label.destroyAll()
+    if debugOverlay.fpsLabelId then
+        label.destroy(debugOverlay.fpsLabelId)
+        debugOverlay.fpsLabelId = nil
+    end
     if debugOverlay.page then
         UI.hidePage(debugOverlay.page)
         UI.deletePage(debugOverlay.page)

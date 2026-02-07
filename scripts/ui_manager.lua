@@ -101,10 +101,22 @@ function uiManager.onFramebufferResize(width, height)
     fbW = width
     fbH = height
     
+    if not initialized then
+        -- First time: wait for fonts + framebuffer before creating anything
+        uiManager.checkReady()
+        return
+    end
+    
+    -- Already initialized: rebuild menus in place and re-show current
     if mainMenu then mainMenu.onFramebufferResize(width, height) end
     if settingsMenu then settingsMenu.onFramebufferResize(width, height) end
     
-    uiManager.checkReady()
+    -- Re-show the active menu so pages become visible after rebuild
+    if currentMenu == "main" then
+        if mainMenu and mainMenu.page then UI.showPage(mainMenu.page) end
+    elseif currentMenu == "settings" then
+        if settingsMenu and settingsMenu.page then UI.showPage(settingsMenu.page) end
+    end
 end
 
 function uiManager.showMenu(menuName)

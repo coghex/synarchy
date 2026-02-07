@@ -8,6 +8,7 @@ module Engine.Scripting.Lua.API.Config
   , setFrameLimitFn
   , setResolutionFn
   , setWindowModeFn
+  , setVSyncFn
   ) where
 
 import UPrelude
@@ -17,7 +18,7 @@ import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (logInfo, LogCategory(..))
+import Engine.Core.Log (logInfo, logWarn, LogCategory(..))
 import Engine.Graphics.Config
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scripting.Lua.Types (LuaToEngineMsg(..))
@@ -154,4 +155,15 @@ setWindowModeFn env = do
                 Nothing -> pure ()
         Nothing -> pure ()
     
+    return 0
+
+-- | engine.setVSync(enabled)
+setVSyncFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+setVSyncFn env = do
+    vsyncArg <- Lua.toboolean 1
+    Lua.liftIO $ do
+            let lteq = luaToEngineQueue env
+            Q.writeQueue lteq (LuaSetVSync vsyncArg)
+            oldConfig <- readIORef (videoConfigRef env)
+            writeIORef (videoConfigRef env) $ oldConfig { vcVSync = vsyncArg }
     return 0

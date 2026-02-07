@@ -165,4 +165,16 @@ function label.getFontSize(id)
     return lbl.fontSize
 end
 
+-----------------------------------------------------------
+-- Targeted Destruction
+-----------------------------------------------------------
+
+-- Destroy a list of label IDs (for module-scoped cleanup)
+function label.destroyList(ids)
+    if not ids then return end
+    for _, id in ipairs(ids) do
+        label.destroy(id)
+    end
+end
+
 return label

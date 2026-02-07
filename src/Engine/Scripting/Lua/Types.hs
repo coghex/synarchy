@@ -51,6 +51,7 @@ data LuaLogLevel = LuaLogDebug
 -- | messages from lua to the main thread
 data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSetWindowMode WindowMode
+                    | LuaSetVSync Bool
                     | LuaSetResolution Int Int
                     | LuaLoadTextureRequest TextureHandle FilePath
                     | LuaLoadFontRequest FontHandle FilePath Int

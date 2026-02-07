@@ -19,6 +19,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Config (WindowMode(..), VideoConfig(..))
 import Engine.Graphics.Font.Load (loadSDFFont)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
+import Engine.Graphics.Vulkan.Recreate (recreateSwapchain)
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scene.Base
 import Engine.Scene.Graph (modifySceneNode, deleteSceneNode)
@@ -50,6 +51,11 @@ handleLuaMessage msg = do
                 [("width", T.pack $ show w)
                 ,("height", T.pack $ show h)]
             handleSetResolution w h
+
+        LuaSetVSync enabled → do
+            logDebugSM CatLua "Setting VSync"
+                [("enabled", if enabled then "true" else "false")]
+            handleSetVSync enabled
 
         LuaLoadFontRequest handle path size → do
             logDebugSM CatLua "Loading font"
@@ -158,7 +164,16 @@ handleSetWindowMode mode = do
                                 mMode ← GLFW.getVideoMode monitor
                                 case mMode of
                                     Nothing → pure ()
-                                    Just vm → GLFW.setFullscreen win monitor vm
+                                    Just vm → do
+                                      GLFW.setFullscreen win monitor vm
+                                      (winW, winH) ← GLFW.getWindowSize win
+                                      (fbW, fbH) ← GLFW.getFramebufferSize win
+                                      writeIORef (windowSizeRef env) (winW, winH)
+                                      writeIORef (framebufferSizeRef env) (fbW, fbH)
+                                      Q.writeQueue (luaQueue env)
+                                                   (LuaWindowResize winW winH)
+                                      Q.writeQueue (luaQueue env)
+                                                   (LuaFramebufferResize fbW fbH)
 
                     BorderlessWindowed → do
                         mMonitor ← GLFW.getPrimaryMonitor
@@ -175,9 +190,16 @@ handleSetWindowMode mode = do
                                         GLFW.setWindowed win monW monH 0 0
                                         -- Remove decorations
                                         GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated False
-                                        -- Position at origin and size to monitor
-                                        GLFW.setWindowPos win 0 0
-                                        GLFW.setWindowSize win monW monH
+                                        (winW, winH) ← GLFW.getWindowSize win
+                                        (fbW, fbH) ← GLFW.getFramebufferSize win
+                                        writeIORef (windowSizeRef env) (winW, winH)
+                                        writeIORef (framebufferSizeRef env) (fbW, fbH)
+                                        Q.writeQueue (luaQueue env)
+                                                     (LuaWindowResize winW winH)
+                                        Q.writeQueue (luaQueue env)
+                                                     (LuaFramebufferResize fbW fbH)
+  
+
 
                     Windowed → do
                         ws ← readIORef (windowStateRef env)
@@ -187,6 +209,32 @@ handleSetWindowMode mode = do
                         GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated True
                         -- Switch to windowed with cached geometry
                         GLFW.setWindowed win ww wh wx wy
+                        (winW, winH) ← GLFW.getWindowSize win
+                        (fbW, fbH) ← GLFW.getFramebufferSize win
+                        writeIORef (windowSizeRef env) (winW, winH)
+                        writeIORef (framebufferSizeRef env) (fbW, fbH)
+                        Q.writeQueue (luaQueue env)
+                                     (LuaWindowResize winW winH)
+                        Q.writeQueue (luaQueue env)
+                                     (LuaFramebufferResize fbW fbH)
+
+
+handleSetVSync ∷ Bool → EngineM ε σ ()
+handleSetVSync vsync = do
+    -- Update the config so recreateSwapchain reads the new value
+    env ← ask
+    liftIO $ do
+        oldConfig ← readIORef (videoConfigRef env)
+        writeIORef (videoConfigRef env) $ oldConfig { vcVSync = vsync }
+    
+    -- Recreate the swapchain with the new present mode
+    state ← gets graphicsState
+    case glfwWindow state of
+        Nothing → logWarnM CatGraphics "Cannot set VSync: no window"
+        Just window → do
+            logInfoM CatGraphics $ "Recreating swapchain for VSync change: "
+                <> if vsync then "enabled" else "disabled"
+            recreateSwapchain window
 
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
