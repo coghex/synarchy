@@ -37,6 +37,7 @@ data EngineEnv = EngineEnv
   { engineConfig       ∷ EngineConfig
   , videoConfigRef     ∷ IORef VideoConfig
   , windowSizeRef      ∷ IORef (Int, Int)
+  , windowStateRef     ∷ IORef WindowState
   , framebufferSizeRef ∷ IORef (Int, Int)
   , fpsRef             ∷ IORef Double
   , eventQueue         ∷ Q.Queue Event
@@ -117,4 +118,14 @@ data GraphicsState = GraphicsState
   , vulkanCleanup          ∷ Cleanup
   }
 
+-- | Cached windowed-mode geometry for restoring after fullscreen
+data WindowState = WindowState
+  { wsWindowedPos  ∷ (Int, Int)   -- ^ Last known windowed position
+  , wsWindowedSize ∷ (Int, Int)   -- ^ Last known windowed size (screen coords)
+  } deriving (Show)
 
+defaultWindowState ∷ WindowState
+defaultWindowState = WindowState
+  { wsWindowedPos  = (100, 100)
+  , wsWindowedSize = (800, 600)
+  }

@@ -5,7 +5,7 @@ module Engine.Scripting.Lua.Message
 import UPrelude
 import qualified Data.Map as Map
 import qualified Data.Text as T
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Data.Time.Clock (getCurrentTime)
 import System.FilePath (takeBaseName)
 import Engine.Asset.Handle
@@ -16,6 +16,7 @@ import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfo
 import Engine.Core.Monad
 import Engine.Core.State
 import qualified Engine.Core.Queue as Q
+import Engine.Graphics.Config (WindowMode(..), VideoConfig(..))
 import Engine.Graphics.Font.Load (loadSDFFont)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Graphics.Window.Types (Window(..))
@@ -40,10 +41,9 @@ processLuaMessages = do
 handleLuaMessage ∷ LuaToEngineMsg → EngineM ε σ ()
 handleLuaMessage msg = do
     case msg of
-        LuaSetFullscreen fullscreen → do
-            logDebugSM CatLua "Setting fullscreen"
-                [("fullscreen", if fullscreen then "true" else "false")]
-            handleSetFullscreen fullscreen
+        LuaSetWindowMode mode → do
+            logDebugM CatLua $ "Setting window mode: " <> T.pack (show mode)
+            handleSetWindowMode mode
 
         LuaSetResolution w h → do
             logDebugSM CatLua "Setting resolution"
@@ -113,38 +113,80 @@ handleLuaMessage msg = do
             logDebugM CatLua $ "Destroying object " <> T.pack (show objId)
             handleDestroy objId
 
-handleSetFullscreen :: Bool -> EngineM ε σ ()
-handleSetFullscreen fullscreen = do
-    state <- gets graphicsState
-    case glfwWindow state of
-        Nothing -> logWarnM CatGraphics "Cannot set fullscreen: no window"
-        Just (Window win) -> liftIO $ do
-            if fullscreen
-                then do
-                    -- Get primary monitor and its video mode
-                    mMonitor <- GLFW.getPrimaryMonitor
-                    case mMonitor of
-                        Nothing -> return ()
-                        Just monitor -> do
-                            mMode <- GLFW.getVideoMode monitor
-                            case mMode of
-                                Nothing -> return ()
-                                Just mode -> do
-                                    let w = GLFW.videoModeWidth mode
-                                        h = GLFW.videoModeHeight mode
-                                        r = GLFW.videoModeRefreshRate mode
-                                    GLFW.setFullscreen win monitor mode
-                else do
-                    -- Return to windowed mode (you may want to save/restore previous size)
-                    GLFW.setWindowed win 1280 720 100 100
-
 handleSetResolution :: Int -> Int -> EngineM ε σ ()
 handleSetResolution w h = do
     state <- gets graphicsState
     case glfwWindow state of
         Nothing -> logWarnM CatGraphics "Cannot set resolution: no window"
-        Just (Window win) -> liftIO $ 
-            GLFW.setWindowSize win w h
+        Just (Window win) -> liftIO $ do
+            -- w,h are the desired framebuffer size from the user
+            -- GLFW.setWindowSize operates in screen coordinates
+            -- On HiDPI, screen coords ≠ framebuffer pixels
+            (fbW, fbH) <- GLFW.getFramebufferSize win
+            (winW, winH) <- GLFW.getWindowSize win
+            let scaleX = if winW > 0 then fromIntegral fbW / fromIntegral winW else 1.0 :: Double
+                scaleY = if winH > 0 then fromIntegral fbH / fromIntegral winH else 1.0 :: Double
+                newWinW = round (fromIntegral w / scaleX)
+                newWinH = round (fromIntegral h / scaleY)
+            GLFW.setWindowSize win newWinW newWinH
+
+handleSetWindowMode ∷ WindowMode → EngineM ε σ ()
+handleSetWindowMode mode = do
+    state ← gets graphicsState
+    case glfwWindow state of
+        Nothing → logWarnM CatGraphics "Cannot set window mode: no window"
+        Just (Window win) → do
+            env ← ask
+            liftIO $ do
+                -- Before changing mode, cache current windowed geometry
+                -- (only if we're currently in windowed mode)
+                currentConfig ← readIORef (videoConfigRef env)
+                when (vcWindowMode currentConfig ≡ Windowed) $ do
+                    (wx, wy) ← GLFW.getWindowPos win
+                    (ww, wh) ← GLFW.getWindowSize win
+                    writeIORef (windowStateRef env) $ WindowState
+                        { wsWindowedPos  = (wx, wy)
+                        , wsWindowedSize = (ww, wh)
+                        }
+
+                case mode of
+                    Fullscreen → do
+                        mMonitor ← GLFW.getPrimaryMonitor
+                        case mMonitor of
+                            Nothing → pure ()
+                            Just monitor → do
+                                mMode ← GLFW.getVideoMode monitor
+                                case mMode of
+                                    Nothing → pure ()
+                                    Just vm → GLFW.setFullscreen win monitor vm
+
+                    BorderlessWindowed → do
+                        mMonitor ← GLFW.getPrimaryMonitor
+                        case mMonitor of
+                            Nothing → pure ()
+                            Just monitor → do
+                                mMode ← GLFW.getVideoMode monitor
+                                case mMode of
+                                    Nothing → pure ()
+                                    Just vm → do
+                                        let monW = GLFW.videoModeWidth vm
+                                            monH = GLFW.videoModeHeight vm
+                                        -- Switch to windowed first (unset monitor)
+                                        GLFW.setWindowed win monW monH 0 0
+                                        -- Remove decorations
+                                        GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated False
+                                        -- Position at origin and size to monitor
+                                        GLFW.setWindowPos win 0 0
+                                        GLFW.setWindowSize win monW monH
+
+                    Windowed → do
+                        ws ← readIORef (windowStateRef env)
+                        let (wx, wy) = wsWindowedPos ws
+                            (ww, wh) = wsWindowedSize ws
+                        -- Restore decorations
+                        GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated True
+                        -- Switch to windowed with cached geometry
+                        GLFW.setWindowed win ww wh wx wy
 
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()

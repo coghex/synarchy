@@ -17,7 +17,8 @@ import Engine.Core.Types
 import Engine.Core.Var
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Camera (defaultCamera, defaultUICamera)
-import Engine.Graphics.Config (loadVideoConfig, VideoConfig(..))
+import Engine.Graphics.Config (loadVideoConfig, VideoConfig(..)
+                              , WindowMode(..))
 import Engine.Graphics.Font.Data (defaultFontCache)
 import Engine.Input.Bindings (loadKeyBindings)
 import Engine.Input.Types (defaultInputState)
@@ -62,6 +63,7 @@ initializeEngine = do
   videoConfig ← loadVideoConfig logger "config/video.yaml"
   videoConfigRef ← newIORef $ videoConfig
   windowSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
+  windowStateRef ← newIORef defaultWindowState
   framebufferSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
   
   -- Create camera references
@@ -82,6 +84,7 @@ initializeEngine = do
         { engineConfig       = defaultEngineConfig
         , videoConfigRef     = videoConfigRef
         , windowSizeRef      = windowSizeRef
+        , windowStateRef     = windowStateRef
         , framebufferSizeRef = framebufferSizeRef
         , fpsRef             = fpsRef
         , eventQueue         = eventQueue

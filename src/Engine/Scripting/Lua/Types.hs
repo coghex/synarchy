@@ -10,6 +10,7 @@ import Engine.Asset.Handle
 import Engine.Input.Types
 import Engine.Scene.Base
 import Engine.Graphics.Vulkan.Types.Vertex
+import Engine.Graphics.Config (WindowMode(..))
 import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
@@ -49,7 +50,7 @@ data LuaLogLevel = LuaLogDebug
 
 -- | messages from lua to the main thread
 data LuaToEngineMsg = LuaLog LuaLogLevel String
-                    | LuaSetFullscreen Bool
+                    | LuaSetWindowMode WindowMode
                     | LuaSetResolution Int Int
                     | LuaLoadTextureRequest TextureHandle FilePath
                     | LuaLoadFontRequest FontHandle FilePath Int

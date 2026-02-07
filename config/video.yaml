@@ -1,6 +1,6 @@
 video:
   frame_limit: 60
-  fullscreen: false
+  window_mode: windowed
   msaa: 1
   resolution:
     height: 1080

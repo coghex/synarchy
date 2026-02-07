@@ -7,6 +7,7 @@ module Engine.Scripting.Lua.API.Config
   , setUIScaleFn
   , setFrameLimitFn
   , setResolutionFn
+  , setWindowModeFn
   ) where
 
 import UPrelude
@@ -29,7 +30,7 @@ getVideoConfigFn env = do
     let scale = realToFrac (vcUIScale config) :: Double
     Lua.pushinteger (fromIntegral $ vcWidth config)
     Lua.pushinteger (fromIntegral $ vcHeight config)
-    Lua.pushboolean (vcFullscreen config)
+    Lua.pushstring (TE.encodeUtf8 $ windowModeToText $ vcWindowMode config)
     Lua.pushnumber (Lua.Number scale)
     Lua.pushboolean (vcVSync config)
     Lua.pushinteger (maybe 0 fromIntegral $ vcFrameLimit config)
@@ -41,7 +42,7 @@ setVideoConfigFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
 setVideoConfigFn env = do
     widthArg <- Lua.tointeger 1
     heightArg <- Lua.tointeger 2
-    fullscreenArg <- Lua.toboolean 3
+    fullscreenArg <- Lua.tostring 3
     uiScale <- Lua.tonumber 4
     vsyncArg <- Lua.toboolean 5
     framelimitArg <- Lua.tointeger 6
@@ -49,13 +50,16 @@ setVideoConfigFn env = do
     
     case (widthArg, heightArg, fullscreenArg, uiScale, vsyncArg,
          framelimitArg, msaaArg) of
-        (Just w, Just h, fs, Just uis, vs, Just fl, Just m) -> do
+        (Just w, Just h, Just wmBS, Just uis, vs, Just fl, Just m) -> do
+            let wm = case windowModeFromText (TE.decodeUtf8 wmBS) of
+                        Just mode -> mode
+                        Nothing   -> Windowed
             Lua.liftIO $ do
                 oldConfig <- readIORef (videoConfigRef env)
                 let newConfig = oldConfig
                       { vcWidth = fromIntegral w
                       , vcHeight = fromIntegral h
-                      , vcFullscreen = fs
+                      , vcWindowMode = wm
                       , vcUIScale = realToFrac uis
                       , vcVSync = vs
                       , vcFrameLimit = if fl > 0 then Just (fromIntegral fl)
@@ -131,3 +135,23 @@ setResolutionFn env = do
             Lua.pushboolean True
         _ -> Lua.pushboolean False
     return 1
+
+-- | engine.setWindowMode(modeString)
+-- modeString: "fullscreen", "borderless", or "windowed"
+setWindowModeFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+setWindowModeFn env = do
+    modeArg <- Lua.tostring 1
+    
+    case modeArg of
+        Just modeBS -> do
+            let modeText = TE.decodeUtf8 modeBS
+            case windowModeFromText modeText of
+                Just wm -> Lua.liftIO $ do
+                    let lteq = luaToEngineQueue env
+                    Q.writeQueue lteq (LuaSetWindowMode wm)
+                    oldConfig <- readIORef (videoConfigRef env)
+                    writeIORef (videoConfigRef env) $ oldConfig { vcWindowMode = wm }
+                Nothing -> pure ()
+        Nothing -> pure ()
+    
+    return 0

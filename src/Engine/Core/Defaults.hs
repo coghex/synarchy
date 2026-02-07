@@ -49,7 +49,9 @@ defaultWindowConfig ∷ VideoConfig → WindowConfig
 defaultWindowConfig vc = WindowConfig
   { wcWidth      = vcWidth vc
   , wcHeight     = vcHeight vc
-  , wcFullscreen = vcFullscreen vc
+  , wcFullscreen = case (vcWindowMode vc) of
+      Fullscreen -> True
+      _          -> False
   , wcTitle      = T.pack "Synarchy"
   , wcResizable  = True
   }

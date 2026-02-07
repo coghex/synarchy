@@ -84,16 +84,6 @@ function data.findResolutionIndex(w, h)
     return nil
 end
 
--- Convert legacy fullscreen bool to windowMode string
-function data.fullscreenToWindowMode(fs)
-    if fs then return "fullscreen" else return "windowed" end
-end
-
--- Convert windowMode string to fullscreen bool (for engine API compat)
-function data.windowModeToFullscreen(mode)
-    return mode == "fullscreen"
-end
-
 function data.msaaToString(msaa)
     return tostring(msaa or 0)
 end
@@ -122,16 +112,14 @@ end
 -----------------------------------------------------------
 
 function data.reload()
-    local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
+    local w, h, wm, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
     data.current.width      = w
     data.current.height     = h
-    data.current.windowMode = data.fullscreenToWindowMode(fs)
+    data.current.windowMode = wm
     data.current.uiScale    = uiScale
     data.current.vsync      = vs
     data.current.frameLimit = frameLimit or 60
     data.current.msaa       = msaa or 0
-    -- TODO: load brightness from engine config when engine supports it
-    -- data.current.brightness = engine.getBrightness() or 100
 end
 
 -----------------------------------------------------------
@@ -155,9 +143,7 @@ function data.apply(widgetValues)
     -- Window Mode
     if data.pending.windowMode ~= data.current.windowMode then
         data.current.windowMode = data.pending.windowMode
-        -- TODO: call engine.setWindowMode(data.current.windowMode)
-        -- For now, use fullscreen bool for backwards compat
-        engine.setFullscreen(data.windowModeToFullscreen(data.current.windowMode))
+        engine.setWindowMode(data.current.windowMode)
         engine.logInfo("Window mode applied: " .. data.current.windowMode)
     end
 
@@ -237,31 +223,24 @@ end
 function data.revert()
     engine.logInfo("Reverting settings to saved config...")
 
-    local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
+    local w, h, wm, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
 
-    local savedMode = data.fullscreenToWindowMode(fs)
-
-    if data.current.windowMode ~= savedMode then
-        engine.setFullscreen(fs)
-        -- TODO: engine.setWindowMode(savedMode) when supported
+    if data.current.windowMode ~= wm then
+        engine.setWindowMode(wm)
     end
     if data.current.uiScale ~= uiScale then engine.setUIScale(uiScale) end
     if data.current.frameLimit ~= frameLimit then engine.setFrameLimit(frameLimit) end
     if data.current.width ~= w or data.current.height ~= h then
         engine.setResolution(w, h)
     end
-    -- TODO: revert vsync when engine.setVSync() exists
-    -- TODO: revert msaa when engine.setMSAA() exists
-    -- TODO: revert brightness when engine.setBrightness() exists
 
     data.current.width      = w
     data.current.height     = h
-    data.current.windowMode = savedMode
+    data.current.windowMode = wm
     data.current.uiScale    = uiScale
     data.current.vsync      = vs
     data.current.frameLimit = frameLimit
     data.current.msaa       = msaa or 0
-    -- TODO: data.current.brightness = engine.getBrightness() or 100
 end
 
 -----------------------------------------------------------
