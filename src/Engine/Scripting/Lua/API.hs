@@ -11,7 +11,7 @@ import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn,
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , saveVideoConfigFn, setUIScaleFn
-                                       , setFrameLimitFn)
+                                       , setFrameLimitFn, setResolutionFn)
 import Engine.Scripting.Lua.API.Graphics (loadTextureFn, spawnSpriteFn, setPosFn,
                                            setColorFn, setSizeFn, setVisibleFn
                                            , destroyFn, setFullscreenFn, getUIScaleFn)
@@ -63,6 +63,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "saveVideoConfig" (saveVideoConfigFn env)
   registerLuaFunction "setUIScale"      (setUIScaleFn env)
   registerLuaFunction "setFrameLimit"   (setFrameLimitFn env)
+  registerLuaFunction "setResolution"   (setResolutionFn env)
   
   -- Graphics functions
   registerLuaFunction "loadTexture"   (loadTextureFn backendState)

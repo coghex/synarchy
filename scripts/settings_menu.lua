@@ -314,7 +314,6 @@ function settingsMenu.createUI()
         width = cbW,
         height = cbH,
     })
-    --UI.setZIndex(checkbox.getElementHandle(settingsMenu.fullscreenCheckboxId), baseZ + 1)
     
     -- Row 3: UI Scaling label and textbox
     settingsMenu.scalingLabelId = label.new({
@@ -358,7 +357,6 @@ function settingsMenu.createUI()
         height = tbH,
     })
     -- Give UI scale textbox a unique z-index so its text child lands on a unique layer
-    --UI.setZIndex(textbox.getElementHandle(settingsMenu.uiScaleTextBox), 3)
     
     -- Row 4: Frame Limit label and textbox
     settingsMenu.frameLimitLabelId = label.new({
@@ -402,7 +400,6 @@ function settingsMenu.createUI()
         height = flH,
     })
     -- Give frame limit textbox a unique z-index
-    --UI.setZIndex(textbox.getElementHandle(settingsMenu.frameLimitTextBox), 5)
     
     -- Create buttons
     settingsMenu.backButtonId = button.new({
@@ -547,16 +544,11 @@ function settingsMenu.onApply()
         end
     end
     
-    -- Apply resolution via setVideoConfig (updates engine window)
+    -- Apply resolution change via GLFW window resize
     if resolutionChanged then
-        engine.setVideoConfig(
+        engine.setResolution(
             settingsMenu.currentSettings.width,
-            settingsMenu.currentSettings.height,
-            settingsMenu.currentSettings.fullscreen,
-            settingsMenu.currentSettings.uiScale,
-            settingsMenu.currentSettings.vsync,
-            settingsMenu.currentSettings.frameLimit,
-            settingsMenu.currentSettings.msaa
+            settingsMenu.currentSettings.height
         )
     end
     

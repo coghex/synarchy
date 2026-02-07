@@ -45,6 +45,12 @@ handleLuaMessage msg = do
                 [("fullscreen", if fullscreen then "true" else "false")]
             handleSetFullscreen fullscreen
 
+        LuaSetResolution w h → do
+            logDebugSM CatLua "Setting resolution"
+                [("width", T.pack $ show w)
+                ,("height", T.pack $ show h)]
+            handleSetResolution w h
+
         LuaLoadFontRequest handle path size → do
             logDebugSM CatLua "Loading font"
                 [("path", T.pack path)
@@ -131,6 +137,14 @@ handleSetFullscreen fullscreen = do
                 else do
                     -- Return to windowed mode (you may want to save/restore previous size)
                     GLFW.setWindowed win 1280 720 100 100
+
+handleSetResolution :: Int -> Int -> EngineM ε σ ()
+handleSetResolution w h = do
+    state <- gets graphicsState
+    case glfwWindow state of
+        Nothing -> logWarnM CatGraphics "Cannot set resolution: no window"
+        Just (Window win) -> liftIO $ 
+            GLFW.setWindowSize win w h
 
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
