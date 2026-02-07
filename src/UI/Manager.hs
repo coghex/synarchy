@@ -402,7 +402,7 @@ findClickableElementAt pos mgr =
         -- Find all clickable elements in the tree that contain the point
         clickableElements = concatMap (findClickableInTree pos) allRootHandles
         
-        -- Sort by layer and zIndex (highest first)
+        -- Sort by layer and ACCUMULATED zIndex (highest first)
         sorted = sortOn (\eh -> 
             case Map.lookup eh (upmElements mgr) of
                 Just elem -> 
@@ -413,7 +413,7 @@ findClickableElementAt pos mgr =
                         pageZVal = case page of
                             Just p -> upZIndex p * 1000
                             Nothing -> 0
-                        elemZVal = ueZIndex elem
+                        elemZVal = accumulatedZIndex eh
                         totalVal = pageLayerVal + pageZVal + elemZVal
                     in negate totalVal  -- Negate for descending sort (highest first)
                 Nothing -> 0
@@ -426,6 +426,17 @@ findClickableElementAt pos mgr =
             Nothing -> Nothing
         [] -> Nothing
   where
+    -- Compute the accumulated z-index by walking up the parent chain
+    accumulatedZIndex :: ElementHandle -> Int
+    accumulatedZIndex handle =
+        case Map.lookup handle (upmElements mgr) of
+            Nothing -> 0
+            Just elem ->
+                let parentZ = case ueParent elem of
+                        Nothing -> 0
+                        Just parentHandle -> accumulatedZIndex parentHandle
+                in parentZ + ueZIndex elem
+
     -- Find all clickable elements in the tree that contain the point
     findClickableInTree :: (Float, Float) -> ElementHandle -> [ElementHandle]
     findClickableInTree point handle =

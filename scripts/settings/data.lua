@@ -7,10 +7,12 @@ local data = {}
 -- Constants
 -----------------------------------------------------------
 
-data.uiScaleMin = 0.5
-data.uiScaleMax = 4.0
+data.uiScaleMin    = 0.5
+data.uiScaleMax    = 4.0
 data.frameLimitMin = 30
 data.frameLimitMax = 240
+data.brightnessMin = 50
+data.brightnessMax = 300
 
 -- Standard resolutions
 data.resolutions = {
@@ -32,18 +34,34 @@ data.resolutions = {
     { text = "3440x1440",  value = "3440x1440",  width = 3440,  height = 1440 },
 }
 
+-- Window modes
+data.windowModes = {
+    { text = "Fullscreen",          value = "fullscreen" },
+    { text = "Borderless Windowed", value = "borderless" },
+    { text = "Windowed",            value = "windowed" },
+}
+
+-- MSAA options
+data.msaaOptions = {
+    { text = "Off", value = "0" },
+    { text = "2x",  value = "2" },
+    { text = "4x",  value = "4" },
+    { text = "8x",  value = "8" },
+}
+
 -----------------------------------------------------------
 -- State
 -----------------------------------------------------------
 
 data.current = {
-    width = 800,
-    height = 600,
-    fullscreen = false,
-    uiScale = 1.0,
-    vsync = true,
+    width      = 800,
+    height     = 600,
+    windowMode = "fullscreen",  -- "fullscreen", "borderless", "windowed"
+    uiScale    = 1.0,
+    vsync      = true,
     frameLimit = 60,
-    msaa = 0,
+    msaa       = 0,
+    brightness = 100,
 }
 
 data.pending = {}
@@ -66,13 +84,36 @@ function data.findResolutionIndex(w, h)
     return nil
 end
 
+-- Convert legacy fullscreen bool to windowMode string
+function data.fullscreenToWindowMode(fs)
+    if fs then return "fullscreen" else return "windowed" end
+end
+
+-- Convert windowMode string to fullscreen bool (for engine API compat)
+function data.windowModeToFullscreen(mode)
+    return mode == "fullscreen"
+end
+
+function data.msaaToString(msaa)
+    return tostring(msaa or 0)
+end
+
+function data.msaaFromString(str)
+    local n = tonumber(str)
+    if n == 2 or n == 4 or n == 8 then return n end
+    return 0
+end
+
 function data.resetPending()
     data.pending = {
         width      = data.current.width,
         height     = data.current.height,
-        fullscreen = data.current.fullscreen,
+        windowMode = data.current.windowMode,
         uiScale    = data.current.uiScale,
+        vsync      = data.current.vsync,
         frameLimit = data.current.frameLimit,
+        msaa       = data.current.msaa,
+        brightness = data.current.brightness,
     }
 end
 
@@ -84,11 +125,13 @@ function data.reload()
     local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
     data.current.width      = w
     data.current.height     = h
-    data.current.fullscreen = fs
+    data.current.windowMode = data.fullscreenToWindowMode(fs)
     data.current.uiScale    = uiScale
     data.current.vsync      = vs
     data.current.frameLimit = frameLimit or 60
-    data.current.msaa       = msaa
+    data.current.msaa       = msaa or 0
+    -- TODO: load brightness from engine config when engine supports it
+    -- data.current.brightness = engine.getBrightness() or 100
 end
 
 -----------------------------------------------------------
@@ -109,11 +152,34 @@ function data.apply(widgetValues)
             .. data.current.width .. "x" .. data.current.height)
     end
 
-    -- Fullscreen
-    if data.pending.fullscreen ~= data.current.fullscreen then
-        data.current.fullscreen = data.pending.fullscreen
-        engine.setFullscreen(data.current.fullscreen)
-        engine.logInfo("Fullscreen applied: " .. tostring(data.current.fullscreen))
+    -- Window Mode
+    if data.pending.windowMode ~= data.current.windowMode then
+        data.current.windowMode = data.pending.windowMode
+        -- TODO: call engine.setWindowMode(data.current.windowMode)
+        -- For now, use fullscreen bool for backwards compat
+        engine.setFullscreen(data.windowModeToFullscreen(data.current.windowMode))
+        engine.logInfo("Window mode applied: " .. data.current.windowMode)
+    end
+
+    -- VSync
+    if data.pending.vsync ~= data.current.vsync then
+        data.current.vsync = data.pending.vsync
+        -- TODO: call engine.setVSync(data.current.vsync)
+        engine.logInfo("VSync applied: " .. tostring(data.current.vsync))
+    end
+
+    -- MSAA
+    if data.pending.msaa ~= data.current.msaa then
+        data.current.msaa = data.pending.msaa
+        -- TODO: call engine.setMSAA(data.current.msaa)
+        engine.logInfo("MSAA applied: " .. tostring(data.current.msaa))
+    end
+
+    -- Brightness
+    if data.pending.brightness ~= data.current.brightness then
+        data.current.brightness = data.pending.brightness
+        -- TODO: call engine.setBrightness(data.current.brightness)
+        engine.logInfo("Brightness applied: " .. tostring(data.current.brightness))
     end
 
     -- UI Scale (read from widget)
@@ -173,24 +239,33 @@ function data.revert()
 
     local w, h, fs, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
 
-    if data.current.fullscreen ~= fs then engine.setFullscreen(fs) end
+    local savedMode = data.fullscreenToWindowMode(fs)
+
+    if data.current.windowMode ~= savedMode then
+        engine.setFullscreen(fs)
+        -- TODO: engine.setWindowMode(savedMode) when supported
+    end
     if data.current.uiScale ~= uiScale then engine.setUIScale(uiScale) end
     if data.current.frameLimit ~= frameLimit then engine.setFrameLimit(frameLimit) end
     if data.current.width ~= w or data.current.height ~= h then
         engine.setResolution(w, h)
     end
+    -- TODO: revert vsync when engine.setVSync() exists
+    -- TODO: revert msaa when engine.setMSAA() exists
+    -- TODO: revert brightness when engine.setBrightness() exists
 
     data.current.width      = w
     data.current.height     = h
-    data.current.fullscreen = fs
+    data.current.windowMode = savedMode
     data.current.uiScale    = uiScale
     data.current.vsync      = vs
     data.current.frameLimit = frameLimit
-    data.current.msaa       = msaa
+    data.current.msaa       = msaa or 0
+    -- TODO: data.current.brightness = engine.getBrightness() or 100
 end
 
 -----------------------------------------------------------
--- TextBox submit validation (called from settings_menu)
+-- TextBox submit validation (called from graphics_tab)
 -----------------------------------------------------------
 
 function data.validateTextBoxSubmit(name, value)
@@ -206,6 +281,13 @@ function data.validateTextBoxSubmit(name, value)
         n = math.max(data.frameLimitMin,
             math.min(data.frameLimitMax, math.floor(n)))
         data.pending.frameLimit = n
+        return n, nil
+    elseif name == "brightness_input" then
+        local n = tonumber(value)
+        if not n then return nil, data.current.brightness end
+        n = math.max(data.brightnessMin,
+            math.min(data.brightnessMax, math.floor(n)))
+        data.pending.brightness = n
         return n, nil
     end
     return nil, nil

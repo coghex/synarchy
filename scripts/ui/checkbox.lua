@@ -52,7 +52,8 @@ function checkbox.new(params)
         parent = params.parent,
         spriteId = nil,
         checked = params.default or false,
-        onChange = params.onChange,  -- optional callback function(checked, id, name)
+        onChange = params.onChange,
+        zIndex = params.zIndex or nil,
     }
     
     local tex = cb.checked and texChecked or texUnchecked
@@ -73,6 +74,11 @@ function checkbox.new(params)
     
     UI.setClickable(cb.spriteId, true)
     UI.setOnClick(cb.spriteId, CHECKBOX_CALLBACK)
+    
+    -- Apply z-index if provided
+    if cb.zIndex then
+        UI.setZIndex(cb.spriteId, cb.zIndex)
+    end
     
     checkboxes[id] = cb
     
@@ -143,7 +149,6 @@ function checkbox.toggle(id)
     
     engine.logDebug("Checkbox toggled: " .. cb.name .. " = " .. tostring(cb.checked))
     
-    -- Fire optional callback
     if cb.onChange then
         cb.onChange(cb.checked, id, cb.name)
     end
