@@ -10,7 +10,7 @@ import Engine.Asset.Handle
 import Engine.Input.Types
 import Engine.Scene.Base
 import Engine.Graphics.Vulkan.Types.Vertex
-import Engine.Graphics.Config (WindowMode(..))
+import Engine.Graphics.Config (WindowMode(..), TextureFilter(..))
 import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
@@ -56,6 +56,7 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSetResolution Int Int
                     | LuaSetBrightness Int
                     | LuaSetPixelSnap Bool
+                    | LuaSetTextureFilter TextureFilter
                     | LuaLoadTextureRequest TextureHandle FilePath
                     | LuaLoadFontRequest FontHandle FilePath Int
                     | LuaSpawnTextRequest ObjectId Float Float FontHandle

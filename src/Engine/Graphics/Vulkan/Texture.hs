@@ -259,15 +259,18 @@ transitionImageLayout (VulkanImage image _) format transition
   cmdPipelineBarrier cmdBuf srcStage dstStage zero
     V.empty V.empty (V.singleton $ SomeStruct barrier)
 
-createTextureSampler ∷ Device → PhysicalDevice → EngineM ε σ Sampler
-createTextureSampler dev pdev = do
+createTextureSampler ∷ Device → PhysicalDevice → Filter → EngineM ε σ Sampler
+createTextureSampler dev pdev filterMode = do
   props ← getPhysicalDeviceProperties pdev
-  let samplerInfo = zero
-        { magFilter = FILTER_NEAREST
-        , minFilter = FILTER_NEAREST
-        , addressModeU = SAMPLER_ADDRESS_MODE_REPEAT
-        , addressModeV = SAMPLER_ADDRESS_MODE_REPEAT
-        , addressModeW = SAMPLER_ADDRESS_MODE_REPEAT
+  let addrMode = case filterMode of
+        FILTER_LINEAR → SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+        _             → SAMPLER_ADDRESS_MODE_REPEAT
+      samplerInfo = zero
+        { magFilter = filterMode
+        , minFilter = filterMode
+        , addressModeU = addrMode
+        , addressModeV = addrMode
+        , addressModeW = addrMode
         , anisotropyEnable = False
         , maxAnisotropy = 1
         , borderColor = BORDER_COLOR_INT_OPAQUE_BLACK
@@ -277,22 +280,25 @@ createTextureSampler dev pdev = do
         , mipmapMode = SAMPLER_MIPMAP_MODE_NEAREST
         , mipLodBias = 0
         , minLod = 0
-        , maxLod = fromIntegral 0  -- disable mipmapping for now
+        , maxLod = 0
         }
   
   allocResource (\s → destroySampler dev s Nothing) $
     createSampler dev samplerInfo Nothing
 
-createTextureSampler' ∷ Device → PhysicalDevice → EngineM ε σ (Sampler,IO ())
-createTextureSampler' dev pdev = do
+createTextureSampler' ∷ Device → PhysicalDevice → Filter → EngineM ε σ (Sampler, IO ())
+createTextureSampler' dev pdev filterMode = do
   logDebugM CatTexture "Creating texture sampler"
   props ← getPhysicalDeviceProperties pdev
-  let samplerInfo = zero
-        { magFilter = FILTER_NEAREST
-        , minFilter = FILTER_NEAREST
-        , addressModeU = SAMPLER_ADDRESS_MODE_REPEAT
-        , addressModeV = SAMPLER_ADDRESS_MODE_REPEAT
-        , addressModeW = SAMPLER_ADDRESS_MODE_REPEAT
+  let addrMode = case filterMode of
+        FILTER_LINEAR → SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+        _             → SAMPLER_ADDRESS_MODE_REPEAT
+      samplerInfo = zero
+        { magFilter = filterMode
+        , minFilter = filterMode
+        , addressModeU = addrMode
+        , addressModeV = addrMode
+        , addressModeW = addrMode
         , anisotropyEnable = False
         , maxAnisotropy = 1
         , borderColor = BORDER_COLOR_INT_OPAQUE_BLACK
@@ -302,7 +308,7 @@ createTextureSampler' dev pdev = do
         , mipmapMode = SAMPLER_MIPMAP_MODE_NEAREST
         , mipLodBias = 0
         , minLod = 0
-        , maxLod = fromIntegral 0  -- disable mipmapping for now
+        , maxLod = 0
         }
   
   allocResource'IO (\s → destroySampler dev s Nothing) $

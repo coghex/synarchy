@@ -8,9 +8,10 @@
 --   3. VSync           (checkbox)
 --   4. Frame Limit     (textbox)
 --   5. MSAA            (dropdown)
---   6. Brightness      (textbox)
+--   6. Brightness      (slider)
 --   7. UI Scaling      (textbox)
 --   8. Pixel Snap      (checkbox)
+--   9. Texture Filter  (dropdown)
 local label    = require("scripts.ui.label")
 local textbox  = require("scripts.ui.textbox")
 local checkbox = require("scripts.ui.checkbox")
@@ -21,17 +22,19 @@ local data     = require("scripts.settings.data")
 local graphicsTab = {}
 
 -- Widget IDs stored here so settings_menu can read values at apply time
-graphicsTab.resolutionDropdownId  = nil
-graphicsTab.windowModeDropdownId  = nil
-graphicsTab.vsyncCheckboxId       = nil
-graphicsTab.frameLimitTextBoxId   = nil
-graphicsTab.msaaDropdownId        = nil
-graphicsTab.brightnessTextBoxId   = nil
-graphicsTab.uiScaleTextBoxId      = nil
+graphicsTab.resolutionDropdownId    = nil
+graphicsTab.windowModeDropdownId    = nil
+graphicsTab.vsyncCheckboxId         = nil
+graphicsTab.frameLimitTextBoxId     = nil
+graphicsTab.msaaDropdownId          = nil
+graphicsTab.brightnessSlider        = nil
+graphicsTab.uiScaleTextBoxId        = nil
+graphicsTab.pixelSnapCheckboxId     = nil
+graphicsTab.textureFilterDropdownId = nil
 
 -----------------------------------------------------------
 -- MSAA dropdown validators
--- Only allow digits that could form "0", "2", "4", "8"
+-- Only allow digits that could form "1", "2", "4", "8"
 -----------------------------------------------------------
 
 function graphicsTab.msaaValidator(char)
@@ -40,7 +43,7 @@ end
 
 function graphicsTab.msaaMatcher(inputText, options)
     if not inputText or inputText == "" then return nil end
-    -- Match against the value field (e.g. "0", "2", "4", "8")
+    -- Match against the value field (e.g. "1", "2", "4", "8")
     for i, opt in ipairs(options) do
         if opt.value == inputText then
             return i
@@ -78,6 +81,32 @@ function graphicsTab.windowModeMatcher(inputText, options)
 end
 
 -----------------------------------------------------------
+-- Texture filter dropdown validators
+-----------------------------------------------------------
+
+function graphicsTab.textureFilterValidator(char)
+    local c = char:lower()
+    return c == "n" or c == "l"
+end
+
+function graphicsTab.textureFilterMatcher(inputText, options)
+    if not inputText or inputText == "" then return nil end
+    local lower = inputText:lower()
+    for i, opt in ipairs(options) do
+        if opt.text:lower():sub(1, #lower) == lower then
+            return i
+        end
+    end
+    -- Also match against the value field
+    for i, opt in ipairs(options) do
+        if opt.value:lower():sub(1, #lower) == lower then
+            return i
+        end
+    end
+    return nil
+end
+
+-----------------------------------------------------------
 -- Create all rows
 -----------------------------------------------------------
 
@@ -86,6 +115,7 @@ end
 --   contentX, contentY, contentW,
 --   zContent, zWidgets,
 --   currentSettings, pendingSettings,
+--   trackLabel, trackTextbox, trackCheckbox, trackDropdown,
 -- }
 -- Returns: rowHandles[]
 function graphicsTab.create(params)
@@ -109,10 +139,13 @@ function graphicsTab.create(params)
         return cy + s.rowSpacing * n
     end
 
+    -- Checkbox size used by multiple rows
+    local cbSize = math.floor(base.checkboxSize * uiscale)
+
     ---------------------------------------------------------
     -- Row 1: Resolution (dropdown)
     ---------------------------------------------------------
-    local resLabelId = label.new({
+    local resLabelId = params.trackLabel(label.new({
         name     = "resolution_label",
         text     = "Resolution",
         font     = font,
@@ -120,7 +153,7 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
-    })
+    }))
     local resLabelHandle = label.getElementHandle(resLabelId)
     UI.addToPage(page, resLabelHandle, cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(resLabelHandle, zContent)
@@ -128,7 +161,7 @@ function graphicsTab.create(params)
     local currentRes = data.resolutionString(
         data.current.width, data.current.height)
 
-    graphicsTab.resolutionDropdownId = dropdown.new({
+    graphicsTab.resolutionDropdownId = params.trackDropdown(dropdown.new({
         name              = "resolution",
         options           = data.resolutions,
         default           = currentRes,
@@ -150,7 +183,7 @@ function graphicsTab.create(params)
                 engine.logInfo("Resolution pending: " .. text)
             end
         end,
-    })
+    }))
 
     local ddResId = graphicsTab.resolutionDropdownId
     local ddResW, _ = dropdown.getSize(ddResId)
@@ -174,7 +207,7 @@ function graphicsTab.create(params)
     ---------------------------------------------------------
     -- Row 2: Window Mode (dropdown)
     ---------------------------------------------------------
-    local wmLabelId = label.new({
+    local wmLabelId = params.trackLabel(label.new({
         name     = "windowmode_label",
         text     = "Window Mode",
         font     = font,
@@ -182,12 +215,12 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
-    })
+    }))
     local wmLabelHandle = label.getElementHandle(wmLabelId)
     UI.addToPage(page, wmLabelHandle, cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(wmLabelHandle, zContent)
 
-    graphicsTab.windowModeDropdownId = dropdown.new({
+    graphicsTab.windowModeDropdownId = params.trackDropdown(dropdown.new({
         name              = "window_mode",
         options           = data.windowModes,
         default           = data.current.windowMode,
@@ -205,7 +238,7 @@ function graphicsTab.create(params)
             pending.windowMode = value
             engine.logInfo("Window mode pending: " .. text)
         end,
-    })
+    }))
 
     local ddWmId = graphicsTab.windowModeDropdownId
     local ddWmW, _ = dropdown.getSize(ddWmId)
@@ -229,7 +262,7 @@ function graphicsTab.create(params)
     ---------------------------------------------------------
     -- Row 3: VSync (checkbox)
     ---------------------------------------------------------
-    local vsLabelId = label.new({
+    local vsLabelId = params.trackLabel(label.new({
         name     = "vsync_label",
         text     = "VSync",
         font     = font,
@@ -237,13 +270,12 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
-    })
+    }))
     local vsLabelHandle = label.getElementHandle(vsLabelId)
     UI.addToPage(page, vsLabelHandle, cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(vsLabelHandle, zContent)
 
-    local cbSize = math.floor(base.checkboxSize * uiscale)
-    graphicsTab.vsyncCheckboxId = checkbox.new({
+    graphicsTab.vsyncCheckboxId = params.trackCheckbox(checkbox.new({
         name    = "vsync",
         size    = base.checkboxSize,
         uiscale = uiscale,
@@ -256,7 +288,7 @@ function graphicsTab.create(params)
             pending.vsync = checked
             engine.logInfo("VSync pending: " .. tostring(checked))
         end,
-    })
+    }))
     local vsCbId = graphicsTab.vsyncCheckboxId
 
     table.insert(rows, {
@@ -276,7 +308,7 @@ function graphicsTab.create(params)
     ---------------------------------------------------------
     -- Row 4: Frame Limit (textbox)
     ---------------------------------------------------------
-    local flLabelId = label.new({
+    local flLabelId = params.trackLabel(label.new({
         name     = "framelimit_label",
         text     = "Frame Limit",
         font     = font,
@@ -284,13 +316,13 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
-    })
+    }))
     local flLabelHandle = label.getElementHandle(flLabelId)
     UI.addToPage(page, flLabelHandle, cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(flLabelHandle, zContent)
 
     local flW = math.floor(base.textboxWidth * uiscale)
-    graphicsTab.frameLimitTextBoxId = textbox.new({
+    graphicsTab.frameLimitTextBoxId = params.trackTextbox(textbox.new({
         name     = "framelimit_input",
         width    = base.textboxWidth,
         height   = base.textboxHeight,
@@ -303,7 +335,7 @@ function graphicsTab.create(params)
         default  = tostring(data.current.frameLimit or 60),
         textType = textbox.Type.NUMBER,
         zIndex   = zWidgets,
-    })
+    }))
     local flId = graphicsTab.frameLimitTextBoxId
 
     table.insert(rows, {
@@ -323,7 +355,7 @@ function graphicsTab.create(params)
     ---------------------------------------------------------
     -- Row 5: MSAA (dropdown)
     ---------------------------------------------------------
-    local msaaLabelId = label.new({
+    local msaaLabelId = params.trackLabel(label.new({
         name     = "msaa_label",
         text     = "Anti-Aliasing",
         font     = font,
@@ -331,12 +363,12 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
-    })
+    }))
     local msaaLabelHandle = label.getElementHandle(msaaLabelId)
     UI.addToPage(page, msaaLabelHandle, cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(msaaLabelHandle, zContent)
 
-    graphicsTab.msaaDropdownId = dropdown.new({
+    graphicsTab.msaaDropdownId = params.trackDropdown(dropdown.new({
         name              = "msaa",
         options           = data.msaaOptions,
         default           = data.msaaToString(data.current.msaa),
@@ -354,7 +386,7 @@ function graphicsTab.create(params)
             pending.msaa = data.msaaFromString(value)
             engine.logInfo("MSAA pending: " .. text)
         end,
-    })
+    }))
 
     local ddMsaaId = graphicsTab.msaaDropdownId
     local ddMsaaW, _ = dropdown.getSize(ddMsaaId)
@@ -376,10 +408,9 @@ function graphicsTab.create(params)
     rowIndex = rowIndex + 1
 
     ---------------------------------------------------------
-    -- Row 6: Brightness (textbox — TODO: replace with slider)
+    -- Row 6: Brightness (slider)
     ---------------------------------------------------------
-
-    local brLabelId = label.new({
+    local brLabelId = params.trackLabel(label.new({
         name     = "brightness_label",
         text     = "Brightness",
         font     = font,
@@ -387,7 +418,7 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
-    })
+    }))
     local brLabelHandle = label.getElementHandle(brLabelId)
     UI.addToPage(page, brLabelHandle, cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(brLabelHandle, zContent)
@@ -432,7 +463,7 @@ function graphicsTab.create(params)
     ---------------------------------------------------------
     -- Row 7: UI Scaling (textbox)
     ---------------------------------------------------------
-    local scaleLabelId = label.new({
+    local scaleLabelId = params.trackLabel(label.new({
         name     = "scaling_label",
         text     = "UI Scaling",
         font     = font,
@@ -440,13 +471,13 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
-    })
+    }))
     local scaleLabelHandle = label.getElementHandle(scaleLabelId)
     UI.addToPage(page, scaleLabelHandle, cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(scaleLabelHandle, zContent)
 
     local tbW = math.floor(base.textboxWidth * uiscale)
-    graphicsTab.uiScaleTextBoxId = textbox.new({
+    graphicsTab.uiScaleTextBoxId = params.trackTextbox(textbox.new({
         name     = "uiscale_input",
         width    = base.textboxWidth,
         height   = base.textboxHeight,
@@ -459,7 +490,7 @@ function graphicsTab.create(params)
         default  = tostring(data.current.uiScale),
         textType = textbox.Type.SCALE,
         zIndex   = zWidgets,
-    })
+    }))
     local scaleId = graphicsTab.uiScaleTextBoxId
 
     table.insert(rows, {
@@ -477,9 +508,9 @@ function graphicsTab.create(params)
     rowIndex = rowIndex + 1
 
     ---------------------------------------------------------
-    -- Row 8: Pixel Snap (checkbox)  — insert after UI Scaling
+    -- Row 8: Pixel Snap (checkbox)
     ---------------------------------------------------------
-    local psLabelId = label.new({
+    local psLabelId = params.trackLabel(label.new({
         name     = "pixelsnap_label",
         text     = "Pixel Snap",
         font     = font,
@@ -487,12 +518,12 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
-    })
+    }))
     local psLabelHandle = label.getElementHandle(psLabelId)
     UI.addToPage(page, psLabelHandle, cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(psLabelHandle, zContent)
 
-    graphicsTab.pixelSnapCheckboxId = checkbox.new({
+    graphicsTab.pixelSnapCheckboxId = params.trackCheckbox(checkbox.new({
         name    = "pixel_snap",
         size    = base.checkboxSize,
         uiscale = uiscale,
@@ -505,7 +536,7 @@ function graphicsTab.create(params)
             pending.pixelSnap = checked
             engine.logInfo("Pixel snap pending: " .. tostring(checked))
         end,
-    })
+    }))
     local psCbId = graphicsTab.pixelSnapCheckboxId
 
     table.insert(rows, {
@@ -518,6 +549,61 @@ function graphicsTab.create(params)
         end,
         widgetSetVisible = function(vis)
             checkbox.setVisible(psCbId, vis)
+        end,
+    })
+    rowIndex = rowIndex + 1
+
+    ---------------------------------------------------------
+    -- Row 9: Texture Filter (dropdown)
+    ---------------------------------------------------------
+    local tfLabelId = params.trackLabel(label.new({
+        name     = "texture_filter_label",
+        text     = "Texture Filter",
+        font     = font,
+        fontSize = base.fontSize,
+        color    = {1.0, 1.0, 1.0, 1.0},
+        page     = page,
+        uiscale  = uiscale,
+    }))
+    local tfLabelHandle = label.getElementHandle(tfLabelId)
+    UI.addToPage(page, tfLabelHandle, cx, rowY(rowIndex) + s.fontSize)
+    UI.setZIndex(tfLabelHandle, zContent)
+
+    graphicsTab.textureFilterDropdownId = params.trackDropdown(dropdown.new({
+        name              = "texture_filter",
+        options           = data.textureFilterOptions,
+        default           = data.current.textureFilter,
+        font              = font,
+        fontSize          = 24,
+        height            = base.dropdownHeight,
+        page              = page,
+        x = 0, y = 0,
+        uiscale           = uiscale,
+        zIndex            = zWidgets,
+        validateChar      = graphicsTab.textureFilterValidator,
+        matchFn           = graphicsTab.textureFilterMatcher,
+        maxVisibleOptions = 2,
+        onChange = function(value, text, id, name)
+            pending.textureFilter = value
+            engine.logInfo("Texture filter pending: " .. text)
+        end,
+    }))
+
+    local ddTfId = graphicsTab.textureFilterDropdownId
+    local ddTfW, _ = dropdown.getSize(ddTfId)
+    dropdown.setPosition(ddTfId, cx + cw - ddTfW, rowY(rowIndex))
+
+    table.insert(rows, {
+        labelHandle = tfLabelHandle,
+        widgetHandles = {
+            dropdown.getElementHandle(ddTfId),
+            dropdown.getArrowHandle(ddTfId),
+        },
+        widgetSetPosition = function(ry)
+            dropdown.setPosition(ddTfId, cx + cw - ddTfW, ry)
+        end,
+        widgetSetVisible = function(vis)
+            dropdown.setVisible(ddTfId, vis)
         end,
     })
     rowIndex = rowIndex + 1
@@ -564,7 +650,6 @@ function graphicsTab.onTextBoxSubmit(name, value)
             textbox.setText(target, tostring(validated or fallback))
         end
     end
-    -- brightness_input case removed — slider handles it directly
 end
 
 return graphicsTab

@@ -49,6 +49,7 @@ import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Asset.Handle
 import Engine.Graphics.Types
+import Engine.Graphics.Config (textureFilterToVulkan)
 import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Image (VulkanImage(..))
@@ -209,8 +210,11 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
       ((vulkanImage@(VulkanImage image imageMemory), imageView, mipLevels), imageCleanup) ←
         createTextureImageView' pDevice device cmdPool cmdQueue path
         
+      env ← ask
+      filterMode ← liftIO $ readIORef (textureFilterRef env)
+      let vkFilter = textureFilterToVulkan filterMode
       (sampler, samplerCleanup) ←
-        createTextureSampler' device pDevice
+        createTextureSampler' device pDevice vkFilter
 
       -- Register with bindless system using the provided handle
       bindlessSlot ← case textureSystem (graphicsState state) of

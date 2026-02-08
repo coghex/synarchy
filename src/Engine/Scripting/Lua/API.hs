@@ -14,7 +14,7 @@ import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , setFrameLimitFn, setResolutionFn
                                        , setWindowModeFn, setVSyncFn
                                        , setMSAAFn, setBrightnessFn
-                                       , setPixelSnapFn)
+                                       , setPixelSnapFn, setTextureFilterFn)
 import Engine.Scripting.Lua.API.Graphics (loadTextureFn, spawnSpriteFn, setPosFn,
                                            setColorFn, setSizeFn, setVisibleFn
                                            , destroyFn, getUIScaleFn)
@@ -46,32 +46,33 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   Lua.newtable
   
   -- Core functions
-  registerLuaFunction "quit"            (quitFn env)
-  registerLuaFunction "logInfo"         (logInfoFn env)
-  registerLuaFunction "logWarn"         (logWarnFn env)
-  registerLuaFunction "logDebug"        (logDebugFn env)
-  registerLuaFunction "showDebug"       (showDebugFn backendState)
-  registerLuaFunction "hideDebug"       (hideDebugFn backendState)
-  registerLuaFunction "toggleDebug"     (toggleDebugFn backendState)
-  registerLuaFunction "getFPS"          (getFPSFn env)
-  registerLuaFunction "loadScript"      (loadScriptFn env backendState lst)
-  registerLuaFunction "killScript"      (killScriptFn env backendState lst)
-  registerLuaFunction "pauseScript"     (pauseScriptFn backendState)
-  registerLuaFunction "resumeScript"    (resumeScriptFn backendState)
-  registerLuaFunction "setTickInterval" (setTickIntervalFn env backendState)
+  registerLuaFunction "quit"              (quitFn env)
+  registerLuaFunction "logInfo"           (logInfoFn env)
+  registerLuaFunction "logWarn"           (logWarnFn env)
+  registerLuaFunction "logDebug"          (logDebugFn env)
+  registerLuaFunction "showDebug"         (showDebugFn backendState)
+  registerLuaFunction "hideDebug"         (hideDebugFn backendState)
+  registerLuaFunction "toggleDebug"       (toggleDebugFn backendState)
+  registerLuaFunction "getFPS"            (getFPSFn env)
+  registerLuaFunction "loadScript"        (loadScriptFn env backendState lst)
+  registerLuaFunction "killScript"        (killScriptFn env backendState lst)
+  registerLuaFunction "pauseScript"       (pauseScriptFn backendState)
+  registerLuaFunction "resumeScript"      (resumeScriptFn backendState)
+  registerLuaFunction "setTickInterval"   (setTickIntervalFn env backendState)
 
   -- Config functions
-  registerLuaFunction "getVideoConfig"  (getVideoConfigFn env)
-  registerLuaFunction "setVideoConfig"  (setVideoConfigFn env)
-  registerLuaFunction "saveVideoConfig" (saveVideoConfigFn env)
-  registerLuaFunction "setUIScale"      (setUIScaleFn env)
-  registerLuaFunction "setFrameLimit"   (setFrameLimitFn env)
-  registerLuaFunction "setResolution"   (setResolutionFn env)
-  registerLuaFunction "setWindowMode"   (setWindowModeFn env)
-  registerLuaFunction "setVSync"        (setVSyncFn env)
-  registerLuaFunction "setMSAA"         (setMSAAFn env)
-  registerLuaFunction "setBrightness"   (setBrightnessFn env)
-  registerLuaFunction "setPixelSnap"    (setPixelSnapFn env)
+  registerLuaFunction "getVideoConfig"    (getVideoConfigFn env)
+  registerLuaFunction "setVideoConfig"    (setVideoConfigFn env)
+  registerLuaFunction "saveVideoConfig"   (saveVideoConfigFn env)
+  registerLuaFunction "setUIScale"        (setUIScaleFn env)
+  registerLuaFunction "setFrameLimit"     (setFrameLimitFn env)
+  registerLuaFunction "setResolution"     (setResolutionFn env)
+  registerLuaFunction "setWindowMode"     (setWindowModeFn env)
+  registerLuaFunction "setVSync"          (setVSyncFn env)
+  registerLuaFunction "setMSAA"           (setMSAAFn env)
+  registerLuaFunction "setBrightness"     (setBrightnessFn env)
+  registerLuaFunction "setPixelSnap"      (setPixelSnapFn env)
+  registerLuaFunction "setTextureFilter"  (setTextureFilterFn env)
   
   -- Graphics functions
   registerLuaFunction "loadTexture"   (loadTextureFn backendState)

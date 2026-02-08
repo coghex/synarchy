@@ -42,6 +42,7 @@ data EngineEnv = EngineEnv
   , fpsRef             ∷ IORef Double
   , brightnessRef      ∷ IORef Int
   , pixelSnapRef       ∷ IORef Bool
+  , textureFilterRef   ∷ IORef TextureFilter
   , eventQueue         ∷ Q.Queue Event
   , inputQueue         ∷ Q.Queue InputEvent
   , loggerRef          ∷ IORef LoggerState

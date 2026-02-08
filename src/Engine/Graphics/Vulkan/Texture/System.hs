@@ -50,21 +50,16 @@ createTextureSystem pdev dev cmdPool queue config = do
 
 -- | Load a texture into the system
 -- Returns the slot index for shader use
-loadTexture ∷ Device
-            → PhysicalDevice
-            → CommandPool
-            → Queue
-            → TextureHandle
-            → FilePath
-            → BindlessTextureSystem
-            → EngineM ε σ (Word32, BindlessTextureSystem)
-loadTexture dev pdev cmdPool queue texHandle path system = do
+loadTexture ∷ Device → PhysicalDevice → CommandPool → Queue
+  → TextureHandle → FilePath → Filter → BindlessTextureSystem
+  → EngineM ε σ (Word32, BindlessTextureSystem)
+loadTexture dev pdev cmdPool queue texHandle path filterMode system = do
     -- Load the texture image
     (vulkanImage, imageView, _mipLevels) ← 
       createTextureImageView pdev dev cmdPool queue path
     
     -- Create sampler
-    sampler ← createTextureSampler dev pdev
+    sampler ← createTextureSampler dev pdev filterMode
     
     -- Register in bindless system
     (mbHandle, newBindless) ← registerTexture dev texHandle imageView sampler system

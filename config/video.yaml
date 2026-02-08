@@ -1,11 +1,12 @@
 video:
+  brightness: 100
   frame_limit: 30
   msaa: 1
+  pixel_snap: true
   resolution:
     height: 1080
     width: 1920
+  texture_filter: nearest
   ui_scale: 2
   vsync: true
   window_mode: windowed
-  brightness: 100
-  pixel_snap: false

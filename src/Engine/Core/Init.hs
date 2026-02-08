@@ -67,6 +67,7 @@ initializeEngine = do
   framebufferSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
   brightnessRef ← newIORef (vcBrightness videoConfig)
   pixelSnapRef ← newIORef (vcPixelSnap videoConfig)
+  textureFilterRef ← newIORef (vcTextureFilter videoConfig)
   
   -- Create camera references
   cameraRef ← newIORef defaultCamera
@@ -91,6 +92,7 @@ initializeEngine = do
         , fpsRef             = fpsRef
         , brightnessRef      = brightnessRef
         , pixelSnapRef       = pixelSnapRef
+        , textureFilterRef   = textureFilterRef
         , eventQueue         = eventQueue
         , inputQueue         = inputQueue
         , loggerRef          = loggerRef

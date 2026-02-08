@@ -16,7 +16,8 @@ import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfo
 import Engine.Core.Monad
 import Engine.Core.State
 import qualified Engine.Core.Queue as Q
-import Engine.Graphics.Config (WindowMode(..), VideoConfig(..))
+import Engine.Graphics.Config (WindowMode(..), VideoConfig(..), TextureFilter(..)
+                              , textureFilterToText)
 import Engine.Graphics.Font.Load (loadSDFFont)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Graphics.Vulkan.Recreate (recreateSwapchain)
@@ -71,6 +72,10 @@ handleLuaMessage msg = do
             logDebugSM CatLua "Setting pixel snap"
                 [("enabled", if enabled then "true" else "false")]
             handleSetPixelSnap enabled
+
+        LuaSetTextureFilter tf → do
+            logDebugM CatLua $ "Setting texture filter: " <> T.pack (show tf)
+            handleSetTextureFilter tf
 
         LuaLoadFontRequest handle path size → do
             logDebugSM CatLua "Loading font"
@@ -279,6 +284,18 @@ handleSetPixelSnap enabled = do
     env ← ask
     liftIO $ writeIORef (pixelSnapRef env) enabled
     logDebugM CatGraphics $ "Pixel snap " <> if enabled then "enabled" else "disabled"
+
+handleSetTextureFilter :: TextureFilter -> EngineM ε σ ()
+handleSetTextureFilter tf = do
+    env <- ask
+    liftIO $ writeIORef (textureFilterRef env) tf
+    state <- gets graphicsState
+    case (vulkanDevice state, vulkanPDevice state, textureSystem state) of
+        (Just dev, Just pdev, Just bindless) -> do
+            logInfoM CatTexture $ "Texture filter set to: " 
+                <> textureFilterToText tf
+                <> " (takes effect on next texture load or restart)"
+        _ -> pure ()
 
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()

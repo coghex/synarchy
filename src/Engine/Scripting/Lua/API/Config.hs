@@ -12,6 +12,7 @@ module Engine.Scripting.Lua.API.Config
   , setMSAAFn
   , setBrightnessFn
   , setPixelSnapFn
+  , setTextureFilterFn
   ) where
 
 import UPrelude
@@ -41,7 +42,8 @@ getVideoConfigFn env = do
     Lua.pushinteger (fromIntegral $ vcMSAA config)
     Lua.pushinteger (fromIntegral $ vcBrightness config)
     Lua.pushboolean (vcPixelSnap config)
-    return 9
+    Lua.pushstring (TE.encodeUtf8 $ textureFilterToText $ vcTextureFilter config)
+    return 10
 
 -- | Set video config (doesn't save to file)
 setVideoConfigFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
@@ -55,10 +57,11 @@ setVideoConfigFn env = do
     msaaArg <- Lua.tointeger 7
     brightnessArg <- Lua.tointeger 8
     pixelSnapArg <- Lua.toboolean 9
+    textureFilterArg <- Lua.tostring 10
     
     case (widthArg, heightArg, fullscreenArg, uiScaleArg, vsyncArg,
-         framelimitArg, msaaArg, brightnessArg, pixelSnapArg) of
-        (Just w, Just h, Just wmBS, Just uis, vs, Just fl, Just m, Just b, ps) -> do
+         framelimitArg, msaaArg, brightnessArg, pixelSnapArg, textureFilterArg) of
+        (Just w, Just h, Just wmBS, Just uis, vs, Just fl, Just m, Just b, ps, Just tf) -> do
             let wm = case windowModeFromText (TE.decodeUtf8 wmBS) of
                         Just mode -> mode
                         Nothing   -> Windowed
@@ -74,6 +77,10 @@ setVideoConfigFn env = do
                                                  else Nothing
                       , vcMSAA = fromIntegral m
                       , vcBrightness = fromIntegral b
+                      , vcPixelSnap = ps
+                      , vcTextureFilter = case textureFilterFromText (TE.decodeUtf8 tf) of
+                                          Just filter -> filter
+                                          Nothing     -> vcTextureFilter oldConfig
                       }
                 writeIORef (videoConfigRef env) newConfig
             Lua.pushboolean True
@@ -209,4 +216,21 @@ setPixelSnapFn env = do
         writeIORef (pixelSnapRef env) enabled
         oldConfig <- readIORef (videoConfigRef env)
         writeIORef (videoConfigRef env) $ oldConfig { vcPixelSnap = enabled }
+    return 0
+
+setTextureFilterFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+setTextureFilterFn env = do
+    filterArg <- Lua.tostring 1
+    case filterArg of
+        Just filterBS -> do
+            let filterText = TE.decodeUtf8 filterBS
+            case textureFilterFromText filterText of
+                Just tf -> Lua.liftIO $ do
+                    writeIORef (textureFilterRef env) tf
+                    oldConfig <- readIORef (videoConfigRef env)
+                    writeIORef (videoConfigRef env) $ oldConfig { vcTextureFilter = tf }
+                    let lteq = luaToEngineQueue env
+                    Q.writeQueue lteq (LuaSetTextureFilter tf)
+                Nothing -> pure ()
+        Nothing -> pure ()
     return 0

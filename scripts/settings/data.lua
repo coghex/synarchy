@@ -49,20 +49,27 @@ data.msaaOptions = {
     { text = "8x",  value = "8" },
 }
 
+-- Texture filter options
+data.textureFilterOptions = {
+    { text = "Nearest (Pixel)", value = "nearest" },
+    { text = "Linear (Smooth)", value = "linear" },
+}
+
 -----------------------------------------------------------
 -- State
 -----------------------------------------------------------
 
 data.current = {
-    width      = 800,
-    height     = 600,
-    windowMode = "fullscreen",  -- "fullscreen", "borderless", "windowed"
-    uiScale    = 1.0,
-    vsync      = true,
-    frameLimit = 60,
-    msaa       = 1,
-    brightness = 100,
-    pixelSnap  = false,
+    width         = 800,
+    height        = 600,
+    windowMode    = "fullscreen",  -- "fullscreen", "borderless", "windowed"
+    uiScale       = 1.0,
+    vsync         = true,
+    frameLimit    = 60,
+    msaa          = 1,
+    brightness    = 100,
+    pixelSnap     = false,
+    textureFilter = "nearest",     -- "nearest" or "linear"
 }
 
 data.pending = {}
@@ -95,35 +102,50 @@ function data.msaaFromString(str)
     return 1
 end
 
+function data.findTextureFilterIndex(filter)
+    for i, opt in ipairs(data.textureFilterOptions) do
+        if opt.value == filter then
+            return i
+        end
+    end
+    return 1  -- default to nearest
+end
+
 function data.resetPending()
     data.pending = {
-        width      = data.current.width,
-        height     = data.current.height,
-        windowMode = data.current.windowMode,
-        uiScale    = data.current.uiScale,
-        vsync      = data.current.vsync,
-        frameLimit = data.current.frameLimit,
-        msaa       = data.current.msaa,
-        brightness = data.current.brightness,
-        pixelSnap  = data.current.pixelSnap,
+        width         = data.current.width,
+        height        = data.current.height,
+        windowMode    = data.current.windowMode,
+        uiScale       = data.current.uiScale,
+        vsync         = data.current.vsync,
+        frameLimit    = data.current.frameLimit,
+        msaa          = data.current.msaa,
+        brightness    = data.current.brightness,
+        pixelSnap     = data.current.pixelSnap,
+        textureFilter = data.current.textureFilter,
     }
 end
 
 -----------------------------------------------------------
 -- Load from engine
+-- getVideoConfig returns 10 values:
+--   w, h, wm, uiScale, vs, frameLimit, msaa, brightness,
+--   pixelSnap, textureFilter
 -----------------------------------------------------------
 
 function data.reload()
-    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness, pixelSnap = engine.getVideoConfig()
-    data.current.width      = w
-    data.current.height     = h
-    data.current.windowMode = wm
-    data.current.uiScale    = uiScale
-    data.current.vsync      = vs
-    data.current.frameLimit = frameLimit or 60
-    data.current.msaa       = msaa or 1
-    data.current.brightness = brightness or 100
-    data.current.pixelSnap  = pixelSnap or false
+    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness,
+          pixelSnap, textureFilter = engine.getVideoConfig()
+    data.current.width         = w
+    data.current.height        = h
+    data.current.windowMode    = wm
+    data.current.uiScale       = uiScale
+    data.current.vsync         = vs
+    data.current.frameLimit    = frameLimit or 60
+    data.current.msaa          = msaa or 1
+    data.current.brightness    = brightness or 100
+    data.current.pixelSnap     = pixelSnap or false
+    data.current.textureFilter = textureFilter or "nearest"
 end
 
 -----------------------------------------------------------
@@ -165,7 +187,7 @@ function data.apply(widgetValues)
         engine.logInfo("MSAA applied: " .. tostring(data.current.msaa))
     end
 
-    -- Brightness
+    -- Brightness (from pending, set by dropdown onChange callbacks)
     if data.pending.brightness ~= data.current.brightness then
         data.current.brightness = data.pending.brightness
         engine.setBrightness(data.current.brightness)
@@ -177,6 +199,13 @@ function data.apply(widgetValues)
         data.current.pixelSnap = data.pending.pixelSnap
         engine.setPixelSnap(data.current.pixelSnap)
         engine.logInfo("Pixel Snap applied: " .. tostring(data.current.pixelSnap))
+    end
+
+    -- Texture Filter
+    if data.pending.textureFilter ~= data.current.textureFilter then
+        data.current.textureFilter = data.pending.textureFilter
+        engine.setTextureFilter(data.current.textureFilter)
+        engine.logInfo("Texture filter applied: " .. data.current.textureFilter)
     end
 
     -- UI Scale (read from widget)
@@ -248,7 +277,8 @@ end
 function data.revert()
     engine.logInfo("Reverting settings to saved config...")
 
-    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness, pixelSnap = engine.getVideoConfig()
+    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness,
+          pixelSnap, textureFilter = engine.getVideoConfig()
 
     if data.current.windowMode ~= wm then
         engine.setWindowMode(wm)
@@ -269,16 +299,21 @@ function data.revert()
     if data.current.pixelSnap ~= savedPixelSnap then
         engine.setPixelSnap(savedPixelSnap)
     end
+    local savedTextureFilter = textureFilter or "nearest"
+    if data.current.textureFilter ~= savedTextureFilter then
+        engine.setTextureFilter(savedTextureFilter)
+    end
 
-    data.current.width      = w
-    data.current.height     = h
-    data.current.windowMode = wm
-    data.current.uiScale    = uiScale
-    data.current.vsync      = vs
-    data.current.frameLimit = frameLimit
-    data.current.msaa       = msaa or 1
-    data.current.brightness = brightness or 100
-    data.current.pixelSnap  = savedPixelSnap
+    data.current.width         = w
+    data.current.height        = h
+    data.current.windowMode    = wm
+    data.current.uiScale       = uiScale
+    data.current.vsync         = vs
+    data.current.frameLimit    = frameLimit
+    data.current.msaa          = msaa or 1
+    data.current.brightness    = brightness or 100
+    data.current.pixelSnap     = savedPixelSnap
+    data.current.textureFilter = savedTextureFilter
 end
 
 -----------------------------------------------------------

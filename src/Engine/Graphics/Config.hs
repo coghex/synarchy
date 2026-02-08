@@ -3,6 +3,7 @@ module Engine.Graphics.Config
   , VideoConfigFile(..)
   , Resolution(..)
   , WindowMode(..)
+  , TextureFilter(..)
   , defaultVideoConfig
   , loadVideoConfig
   , saveVideoConfig
@@ -11,6 +12,9 @@ module Engine.Graphics.Config
   , msaaToSampleCount
   , clampSampleCount
   , brightnessToMultiplier
+  , textureFilterToVulkan
+  , textureFilterToText
+  , textureFilterFromText
   ) where
 
 import UPrelude
@@ -20,7 +24,7 @@ import Data.Aeson ((.:), (.!=), (.=), (.:?), FromJSON(..), ToJSON(..)
                    , Value(..), withText)
 import Data.Bits ((.&.))
 import Engine.Core.Log (LoggerState, logWarn, LogCategory(..), logInfo)
-import Vulkan.Core10 (SampleCountFlags, SampleCountFlagBits(..))
+import Vulkan.Core10 (SampleCountFlags, SampleCountFlagBits(..), Filter(..))
 
 -- | Convert user-facing MSAA int (1,2,4,8) to Vulkan sample count
 msaaToSampleCount ∷ Int → SampleCountFlagBits
@@ -80,43 +84,76 @@ instance FromJSON WindowMode where
 instance ToJSON WindowMode where
     toJSON = toJSON . windowModeToText
 
+-- | Texture filtering mode
+data TextureFilter
+    = FilterNearest    -- ^ Pixel-perfect (best for pixel art)
+    | FilterLinear     -- ^ Smooth bilinear interpolation
+    deriving (Show, Eq, Ord, Enum, Bounded)
+
+textureFilterToText :: TextureFilter -> Text
+textureFilterToText FilterNearest = "nearest"
+textureFilterToText FilterLinear  = "linear"
+
+textureFilterFromText :: Text -> Maybe TextureFilter
+textureFilterFromText t = case T.toLower t of
+    "nearest" -> Just FilterNearest
+    "linear"  -> Just FilterLinear
+    _         -> Nothing
+
+instance FromJSON TextureFilter where
+    parseJSON = withText "TextureFilter" $ \t ->
+        case textureFilterFromText t of
+            Just tf -> pure tf
+            Nothing -> fail $ "Unknown texture filter: " <> T.unpack t
+
+instance ToJSON TextureFilter where
+    toJSON = toJSON . textureFilterToText
+
+-- | Convert to Vulkan filter enum
+textureFilterToVulkan :: TextureFilter -> Filter
+textureFilterToVulkan FilterNearest = FILTER_NEAREST
+textureFilterToVulkan FilterLinear  = FILTER_LINEAR
+
 -- | Video configuration settings
 data VideoConfig = VideoConfig
-    { vcWidth        ∷ Int
-    , vcHeight       ∷ Int
-    , vcWindowMode   ∷ WindowMode
-    , vcUIScale      ∷ Float
-    , vcVSync        ∷ Bool
-    , vcFrameLimit   ∷ Maybe Int
-    , vcMSAA         ∷ Int
-    , vcBrightness   ∷ Int
-    , vcPixelSnap    ∷ Bool
+    { vcWidth         ∷ Int
+    , vcHeight        ∷ Int
+    , vcWindowMode    ∷ WindowMode
+    , vcUIScale       ∷ Float
+    , vcVSync         ∷ Bool
+    , vcFrameLimit    ∷ Maybe Int
+    , vcMSAA          ∷ Int
+    , vcBrightness    ∷ Int
+    , vcPixelSnap     ∷ Bool
+    , vcTextureFilter ∷ TextureFilter
     } deriving (Show, Eq)
 
 -- | Default video configuration fallback
 defaultVideoConfig ∷ VideoConfig
 defaultVideoConfig = VideoConfig
-    { vcWidth      = 800
-    , vcHeight     = 600
-    , vcWindowMode = Windowed
-    , vcUIScale    = 1.0
-    , vcVSync      = True
-    , vcFrameLimit = Nothing
-    , vcMSAA       = 1
-    , vcBrightness = 100
-    , vcPixelSnap  = False
+    { vcWidth         = 800
+    , vcHeight        = 600
+    , vcWindowMode    = Windowed
+    , vcUIScale       = 1.0
+    , vcVSync         = True
+    , vcFrameLimit    = Nothing
+    , vcMSAA          = 1
+    , vcBrightness    = 100
+    , vcPixelSnap     = False
+    , vcTextureFilter = FilterNearest
     }
 
 -- | Yaml structure for video configuration
 data VideoConfigFile = VideoConfigFile
-    { vfResolution  ∷ Resolution
-    , vfWindowMode  ∷ WindowMode
-    , vfUIScale     ∷ Float
-    , vfVSync       ∷ Bool
-    , vfFrameLimit  ∷ Maybe Int
-    , vfMSAA        ∷ Int
-    , vfBrightness  ∷ Int
-    , vfPixelSnap   ∷ Bool
+    { vfResolution    ∷ Resolution
+    , vfWindowMode    ∷ WindowMode
+    , vfUIScale       ∷ Float
+    , vfVSync         ∷ Bool
+    , vfFrameLimit    ∷ Maybe Int
+    , vfMSAA          ∷ Int
+    , vfBrightness    ∷ Int
+    , vfPixelSnap     ∷ Bool
+    , vfTextureFilter ∷ TextureFilter
     } deriving (Show, Eq)
 
 data Resolution = Resolution
@@ -149,6 +186,7 @@ instance FromJSON VideoConfigFile where
         <*> videoObj .: "msaa" .!= 1
         <*> videoObj .: "brightness" .!= 100
         <*> videoObj .: "pixel_snap" .!= False
+        <*> videoObj .: "texture_filter" .!= FilterNearest
     parseJSON _ = fail "Expected an object for VideoConfigFile"
 
 instance ToJSON Resolution where
@@ -158,7 +196,7 @@ instance ToJSON Resolution where
         ]
 
 instance ToJSON VideoConfigFile where
-    toJSON (VideoConfigFile res wm uis vs fl msaa b ps) = Yaml.object
+    toJSON (VideoConfigFile res wm uis vs fl msaa b ps tf) = Yaml.object
         [ "video" .= Yaml.object
             [ "resolution"  .= res
             , "window_mode" .= wm
@@ -168,6 +206,7 @@ instance ToJSON VideoConfigFile where
             , "msaa"        .= msaa
             , "brightness"  .= b
             , "pixel_snap"  .= ps
+            , "texture_filter" .= textureFilterToText tf
             ]
         ]
 
@@ -193,6 +232,7 @@ loadVideoConfig logger path = do
             , vcMSAA       = vfMSAA vf
             , vcBrightness  = vfBrightness vf
             , vcPixelSnap   = vfPixelSnap vf
+            , vcTextureFilter = vfTextureFilter vf
             }
 
 -- | Save video configuration to a YAML file
@@ -210,6 +250,7 @@ saveVideoConfig logger path config = do
           , vfMSAA = vcMSAA config
           , vfBrightness = vcBrightness config
           , vfPixelSnap = vcPixelSnap config
+          , vfTextureFilter = vcTextureFilter config
           }
     Yaml.encodeFile path videoFile
     logInfo logger CatInit $ "Video config saved to " <> T.pack path
