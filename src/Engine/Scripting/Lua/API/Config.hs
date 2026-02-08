@@ -38,7 +38,8 @@ getVideoConfigFn env = do
     Lua.pushboolean (vcVSync config)
     Lua.pushinteger (maybe 0 fromIntegral $ vcFrameLimit config)
     Lua.pushinteger (fromIntegral $ vcMSAA config)
-    return 7
+    Lua.pushinteger (fromIntegral $ vcBrightness config)
+    return 8
 
 -- | Set video config (doesn't save to file)
 setVideoConfigFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
@@ -46,14 +47,15 @@ setVideoConfigFn env = do
     widthArg <- Lua.tointeger 1
     heightArg <- Lua.tointeger 2
     fullscreenArg <- Lua.tostring 3
-    uiScale <- Lua.tonumber 4
+    uiScaleArg <- Lua.tonumber 4
     vsyncArg <- Lua.toboolean 5
     framelimitArg <- Lua.tointeger 6
     msaaArg <- Lua.tointeger 7
+    brightnessArg <- Lua.tointeger 8
     
-    case (widthArg, heightArg, fullscreenArg, uiScale, vsyncArg,
-         framelimitArg, msaaArg) of
-        (Just w, Just h, Just wmBS, Just uis, vs, Just fl, Just m) -> do
+    case (widthArg, heightArg, fullscreenArg, uiScaleArg, vsyncArg,
+         framelimitArg, msaaArg, brightnessArg) of
+        (Just w, Just h, Just wmBS, Just uis, vs, Just fl, Just m, Just b) -> do
             let wm = case windowModeFromText (TE.decodeUtf8 wmBS) of
                         Just mode -> mode
                         Nothing   -> Windowed
@@ -68,6 +70,7 @@ setVideoConfigFn env = do
                       , vcFrameLimit = if fl > 0 then Just (fromIntegral fl)
                                                  else Nothing
                       , vcMSAA = fromIntegral m
+                      , vcBrightness = fromIntegral b
                       }
                 writeIORef (videoConfigRef env) newConfig
             Lua.pushboolean True
@@ -185,13 +188,13 @@ setMSAAFn env = do
 
 setBrightnessFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
 setBrightnessFn env = do
-    brightnessArg <- Lua.tonumber 1
+    brightnessArg <- Lua.tointeger 1
     brightness ← case brightnessArg of
-        Just b  -> pure b
-        Nothing -> pure 1.0
+        Just b  -> pure $ fromIntegral b
+        Nothing -> pure 100
     Lua.liftIO $ do
             let lteq = luaToEngineQueue env
-            Q.writeQueue lteq (LuaSetBrightness (round brightness))
+            Q.writeQueue lteq (LuaSetBrightness brightness)
             oldConfig <- readIORef (videoConfigRef env)
-            writeIORef (videoConfigRef env) $ oldConfig { vcBrightness = realToFrac brightness }
+            writeIORef (videoConfigRef env) $ oldConfig { vcBrightness = brightness }
     return 0

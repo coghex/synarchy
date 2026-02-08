@@ -45,9 +45,7 @@ initializeEngine = do
   lifecycleRef ← newIORef EngineStarting
   fpsRef ← newIORef 0.0
 
-  -- Initialize brightness ref
-  brightnessRef ← newIORef 1.0
-  
+ 
   -- Initialize logging
   logger ← initLogger defaultLogConfig { lcMinLevel = LevelDebug }
   loggerRef ← newIORef logger
@@ -68,6 +66,7 @@ initializeEngine = do
   windowSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
   windowStateRef ← newIORef defaultWindowState
   framebufferSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
+  brightnessRef ← newIORef (vcBrightness videoConfig)
   
   -- Create camera references
   cameraRef ← newIORef defaultCamera

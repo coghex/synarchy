@@ -271,15 +271,17 @@ createUniformBuffersForFrames :: Device -> PhysicalDevice
   -> GLFWRaw.Window -> V.Vector DescriptorSet -> EngineM ε σ ()
 createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
   (width, height) <- GLFW.getFramebufferSize glfwWin
-  
+  env <- ask
+  let cRef   = cameraRef env
+      uiCRef = uiCameraRef env
+      bRef   = brightnessRef env
   state <- gets graphicsState
-  cameraRef <- asks cameraRef
-  uiCameraRef <- asks uiCameraRef
-  camera <- liftIO $ readIORef cameraRef
+  camera <- liftIO $ readIORef cRef
+  brightnessInt ← liftIO $ readIORef bRef
   
   -- UPDATE: Create/update UI camera with actual framebuffer size
   let uiCamera = defaultUICamera (fromIntegral width) (fromIntegral height)
-  liftIO $ writeIORef uiCameraRef uiCamera  -- Update the ref with correct size
+  liftIO $ writeIORef uiCRef uiCamera  -- Update the ref with correct size
   
   let uboData = UBO 
           identity 
@@ -287,13 +289,13 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
           (createProjectionMatrix camera (fromIntegral width) (fromIntegral height))
           (createUIViewMatrix uiCamera)
           (createUIProjectionMatrix uiCamera)
-          1.0
+          (brightnessToMultiplier brightnessInt)
       uboSize = fromIntegral $ sizeOf uboData
       numFrames = gcMaxFrames defaultGraphicsConfig
   
   uniformBuffers <- V.generateM (fromIntegral numFrames) $ \_ -> do
       (buffer, memory) <- createUniformBuffer device physicalDevice uboSize
-      updateUniformBuffer device memory (UBO identity identity identity identity identity 1.0)
+      updateUniformBuffer device memory (UBO identity identity identity identity identity (brightnessToMultiplier brightnessInt))
       pure (buffer, memory)
   
   modify $ \s -> s { graphicsState = (graphicsState s) {

@@ -10,6 +10,7 @@ module Engine.Graphics.Config
   , windowModeFromText
   , msaaToSampleCount
   , clampSampleCount
+  , brightnessToMultiplier
   ) where
 
 import UPrelude
@@ -88,7 +89,7 @@ data VideoConfig = VideoConfig
     , vcVSync        ∷ Bool
     , vcFrameLimit   ∷ Maybe Int
     , vcMSAA         ∷ Int
-    , vcBrightness   ∷ Float
+    , vcBrightness   ∷ Int
     } deriving (Show, Eq)
 
 -- | Default video configuration fallback
@@ -101,7 +102,7 @@ defaultVideoConfig = VideoConfig
     , vcVSync      = True
     , vcFrameLimit = Nothing
     , vcMSAA       = 1
-    , vcBrightness = 1.0
+    , vcBrightness = 100
     }
 
 -- | Yaml structure for video configuration
@@ -112,7 +113,7 @@ data VideoConfigFile = VideoConfigFile
     , vfVSync       ∷ Bool
     , vfFrameLimit  ∷ Maybe Int
     , vfMSAA        ∷ Int
-    , vfBrightness  ∷ Float
+    , vfBrightness  ∷ Int
     } deriving (Show, Eq)
 
 data Resolution = Resolution
@@ -143,7 +144,7 @@ instance FromJSON VideoConfigFile where
         <*> videoObj .: "vsync" .!= True
         <*> videoObj .: "frame_limit" .!= Nothing
         <*> videoObj .: "msaa" .!= 1
-        <*> videoObj .: "brightness" .!= 1.0
+        <*> videoObj .: "brightness" .!= 100
     parseJSON _ = fail "Expected an object for VideoConfigFile"
 
 instance ToJSON Resolution where
@@ -164,6 +165,9 @@ instance ToJSON VideoConfigFile where
             , "brightness"  .= b
             ]
         ]
+
+brightnessToMultiplier ∷ Int → Float
+brightnessToMultiplier pct = fromIntegral (max 50 (min 300 pct)) / 100.0
 
 -- | Load video configuration from a YAML file
 loadVideoConfig ∷ LoggerState → FilePath → IO VideoConfig

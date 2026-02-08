@@ -120,6 +120,7 @@ function data.reload()
     data.current.vsync      = vs
     data.current.frameLimit = frameLimit or 60
     data.current.msaa       = msaa or 1
+    data.current.brightness = brightness or 100
 end
 
 -----------------------------------------------------------
@@ -236,6 +237,9 @@ function data.revert()
 
     if data.current.vsync ~= vs then engine.setVSync(vs) end
     if data.current.msaa ~= (msaa or 1) then engine.setMSAA(msaa or 1) end
+    if data.current.brightness ~= brightness then
+        engine.setBrightness(brightness)
+    end
 
     data.current.width      = w
     data.current.height     = h
@@ -244,6 +248,7 @@ function data.revert()
     data.current.vsync      = vs
     data.current.frameLimit = frameLimit
     data.current.msaa       = msaa or 1
+    data.current.brightness = brightness or 100
 end
 
 -----------------------------------------------------------

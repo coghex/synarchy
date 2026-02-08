@@ -265,7 +265,7 @@ handleSetMSAA msaa = do
 handleSetBrightness ∷ Int → EngineM ε σ ()
 handleSetBrightness pct = do
     env ← ask
-    let brightness = fromIntegral (max 50 (min 300 pct)) / 100.0
+    let brightness = max 50 (min 300 pct)
     liftIO $ writeIORef (brightnessRef env) brightness
     logInfoM CatGraphics $ "Brightness set to " <> T.pack (show pct) <> "%"
 

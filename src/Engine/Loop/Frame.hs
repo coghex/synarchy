@@ -21,6 +21,7 @@ import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
                                    , SystemError(..))
 import Engine.Graphics.Base
 import Engine.Graphics.Camera
+import Engine.Graphics.Config (brightnessToMultiplier)
 import Engine.Graphics.Font.Draw (cleanupPendingInstanceBuffers)
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Graphics.Types (DevQueues(..), SwapchainInfo(..))
@@ -219,7 +220,8 @@ updateUniformBufferForFrame win frameIdx = do
                               (createProjectionMatrix camera 
                                   (fromIntegral fbWidth) (fromIntegral fbHeight))
                               (createUIViewMatrix uiCamera)
-                              (createUIProjectionMatrix uiCamera) brightness
+                              (createUIProjectionMatrix uiCamera)
+                              (brightnessToMultiplier brightness)
             
             liftIO $ writeIORef (windowSizeRef env) (winWidth, winHeight)
             liftIO $ writeIORef (framebufferSizeRef env) (fbWidth, fbHeight)
