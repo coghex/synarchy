@@ -11,6 +11,7 @@ module Engine.Graphics.Vulkan.Texture.Bindless
     -- * Texture Management
   , registerTexture
   , unregisterTexture
+  , rewriteAllSamplers
   , getTextureSlotIndex
   ) where
 
@@ -75,6 +76,7 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
     , btsSlotAllocator    = slotAllocator
     , btsUndefinedTexture = undefinedTex
     , btsHandleMap        = Map.empty
+    , btsImageViews       = Map.empty
     }
 
 -- | Initialize all descriptor slots with the undefined texture
@@ -213,9 +215,11 @@ registerTexture dev texHandle imageView sampler system = do
 
           let bindlessHandle = toBindlessHandle slot texHandle
               newHandleMap = Map.insert texHandle bindlessHandle (btsHandleMap system)
+              newImageViews = Map.insert texHandle imageView (btsImageViews system)
               newSystem = system
                 { btsSlotAllocator = newAllocator
                 , btsHandleMap = newHandleMap
+                , btsImageViews = newImageViews
                 }
 
           pure (Just bindlessHandle, newSystem)
@@ -238,11 +242,31 @@ unregisterTexture dev texHandle system = do
 
       let newAllocator = freeSlot slot (btsSlotAllocator system)
           newHandleMap = Map.delete texHandle (btsHandleMap system)
+          newImageViews = Map.delete texHandle (btsImageViews system)
 
       pure $ system
         { btsSlotAllocator = newAllocator
         , btsHandleMap = newHandleMap
+        , btsImageViews = newImageViews
         }
+
+-- | Rewrite all texture slots with a new sampler.
+-- The images stay the same, only the sampler changes.
+-- This is safe to call at any time thanks to UPDATE_AFTER_BIND.
+rewriteAllSamplers :: Device
+                   -> Sampler       -- ^ The new sampler
+                   -> BindlessTextureSystem
+                   -> EngineM ε σ ()
+rewriteAllSamplers dev newSampler system = do
+    let descSet = btsDescriptorSet system
+        config  = btsConfig system
+    -- Rewrite every occupied slot
+    forM_ (Map.toList $ btsHandleMap system) $ \(texHandle, bindlessHandle) -> do
+        let slotIdx = tsIndex (bthSlot bindlessHandle)
+        case Map.lookup texHandle (btsImageViews system) of
+            Just imageView ->
+                writeDescriptorSlot dev descSet config slotIdx imageView newSampler
+            Nothing -> pure ()  -- shouldn't happen
 
 -- | Get the slot index for a texture handle
 getTextureSlotIndex ∷ TextureHandle → BindlessTextureSystem → Word32

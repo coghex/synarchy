@@ -17,10 +17,12 @@ import Engine.Core.Monad
 import Engine.Core.State
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Config (WindowMode(..), VideoConfig(..), TextureFilter(..)
-                              , textureFilterToText)
+                              , textureFilterToText, textureFilterToVulkan)
 import Engine.Graphics.Font.Load (loadSDFFont)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Graphics.Vulkan.Recreate (recreateSwapchain)
+import Engine.Graphics.Vulkan.Texture (createTextureSampler)
+import Engine.Graphics.Vulkan.Texture.Bindless (rewriteAllSamplers)
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scene.Base
 import Engine.Scene.Graph (modifySceneNode, deleteSceneNode)
@@ -73,9 +75,21 @@ handleLuaMessage msg = do
                 [("enabled", if enabled then "true" else "false")]
             handleSetPixelSnap enabled
 
-        LuaSetTextureFilter tf → do
-            logDebugM CatLua $ "Setting texture filter: " <> T.pack (show tf)
-            handleSetTextureFilter tf
+        LuaSetTextureFilter tf -> do
+            logInfoM CatTexture $ "Texture filter changed to: " <> textureFilterToText tf
+            env <- ask
+            liftIO $ writeIORef (textureFilterRef env) tf
+            -- Live-update all existing texture samplers
+            gs <- gets graphicsState
+            case (vulkanDevice gs, vulkanPDevice gs, textureSystem gs) of
+                (Just dev, Just pdev, Just bindless) -> do
+                    let vkFilter = textureFilterToVulkan tf
+                    -- Create one new sampler with the desired filter
+                    newSampler <- createTextureSampler dev pdev vkFilter
+                    -- Rewrite every bindless slot to use it
+                    rewriteAllSamplers dev newSampler bindless
+                    logInfoM CatTexture "All texture samplers updated live"
+                _ -> pure ()
 
         LuaLoadFontRequest handle path size → do
             logDebugSM CatLua "Loading font"

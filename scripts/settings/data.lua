@@ -13,6 +13,7 @@ data.frameLimitMin = 30
 data.frameLimitMax = 240
 data.brightnessMin = 50
 data.brightnessMax = 300
+data.savedBrightness = nil
 
 -- Standard resolutions
 data.resolutions = {
@@ -146,6 +147,7 @@ function data.reload()
     data.current.brightness    = brightness or 100
     data.current.pixelSnap     = pixelSnap or false
     data.current.textureFilter = textureFilter or "nearest"
+    data.savedBrightness = data.current.brightness
 end
 
 -----------------------------------------------------------
@@ -291,10 +293,10 @@ function data.revert()
 
     if data.current.vsync ~= vs then engine.setVSync(vs) end
     if data.current.msaa ~= (msaa or 1) then engine.setMSAA(msaa or 1) end
-    local savedBrightness = brightness or 100
-    if data.current.brightness ~= savedBrightness then
-        engine.setBrightness(savedBrightness)
-    end
+
+    local revertBrightness = data.savedBrightness or 100
+    engine.setBrightness(revertBrightness)
+
     local savedPixelSnap = pixelSnap or false
     if data.current.pixelSnap ~= savedPixelSnap then
         engine.setPixelSnap(savedPixelSnap)
@@ -311,7 +313,7 @@ function data.revert()
     data.current.vsync         = vs
     data.current.frameLimit    = frameLimit
     data.current.msaa          = msaa or 1
-    data.current.brightness    = brightness or 100
+    data.current.brightness    = savedBrightness
     data.current.pixelSnap     = savedPixelSnap
     data.current.textureFilter = savedTextureFilter
 end

@@ -51,19 +51,19 @@ local Z_BUTTONS     = 10
 -- Base sizes (unscaled)
 -----------------------------------------------------------
 settingsMenu.baseSizes = {
-    fontSize       = 32,
-    checkboxSize   = 48,
+    fontSize       = 24,
+    checkboxSize   = 36,
     btnWidth       = 200,
-    btnHeight      = 64,
+    btnHeight      = 52,
     textboxWidth   = 150,
-    textboxHeight  = 40,
-    dropdownHeight = 40,
+    textboxHeight  = 36,
+    dropdownHeight = 36,
     sliderWidth    = 200,
-    sliderHeight   = 24,
-    rowSpacing     = 100,
-    btnSpacing     = 20,
-    tabHeight      = 40,
-    tabFontSize    = 24,
+    sliderHeight   = 20,
+    rowSpacing     = 56,
+    btnSpacing     = 16,
+    tabHeight      = 32,
+    tabFontSize    = 20,
 }
 
 -----------------------------------------------------------
@@ -277,8 +277,8 @@ function settingsMenu.createUI()
     settingsMenu.page = UI.newPage("settings_menu", "modal")
 
     -- Panel
-    local panelWidth  = math.floor(settingsMenu.fbW * 0.7)
-    local panelHeight = math.floor(settingsMenu.fbH * 0.7)
+    local panelWidth  = math.floor(settingsMenu.fbW * 0.8)
+    local panelHeight = math.floor(settingsMenu.fbH * 0.8)
     local panelX = (settingsMenu.fbW - panelWidth) / 2
     local panelY = (settingsMenu.fbH - panelHeight) / 2
 
@@ -292,7 +292,7 @@ function settingsMenu.createUI()
         color      = {1.0, 1.0, 1.0, 1.0},
         tileSize   = 64,
         zIndex     = Z_PANEL,
-        padding    = { top = 80, bottom = 120, left = 60, right = 60 },
+        padding    = { top = 60, bottom = 100, left = 50, right = 50 },
         uiscale    = uiscale,
     }))
     local bounds = panel.getContentBounds(settingsMenu.panelId)
@@ -504,7 +504,7 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     local saveW, _       = button.getSize(settingsMenu.saveButtonId)
     local totalBtnW      = backW + s.btnSpacing + applyW + s.btnSpacing + saveW
     local btnStartX      = panelX + bounds.x + (bounds.width - totalBtnW) / 2
-    local bottomPad      = math.floor(120 * uiscale)
+    local bottomPad      = math.floor(100 * uiscale)
     local btnY           = panelY + panelHeight - bottomPad
                            + (bottomPad - backH) / 2
 

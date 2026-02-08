@@ -12,7 +12,7 @@ import Engine.Asset.Handle (TextureHandle)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlotAllocator)
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle)
 import Engine.Graphics.Vulkan.Types.Texture (UndefinedTexture)
-import Vulkan.Core10 (DescriptorPool, DescriptorSetLayout, DescriptorSet)
+import Vulkan.Core10 (DescriptorPool, DescriptorSetLayout, DescriptorSet, ImageView)
 
 -- | Configuration for the bindless texture system
 data BindlessConfig = BindlessConfig
@@ -30,6 +30,7 @@ data BindlessTextureSystem = BindlessTextureSystem
   , btsSlotAllocator    ∷ !TextureSlotAllocator
   , btsUndefinedTexture ∷ !UndefinedTexture
   , btsHandleMap        ∷ !(Map.Map TextureHandle BindlessTextureHandle)
+  , btsImageViews       ∷ !(Map.Map TextureHandle ImageView)
   } deriving (Show)
 
 -- | Configuration for the texture system
