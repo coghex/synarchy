@@ -20,6 +20,8 @@ local initialized = false
 
 local mainMenu = nil
 local settingsMenu = nil
+local createWorldMenu = nil
+local createWorldMenu = nil
 local textbox = nil
 local checkbox = nil
 local button = nil
@@ -64,8 +66,13 @@ function uiManager.init(scriptId)
     
     mainMenu = require("scripts.main_menu")
     settingsMenu = require("scripts.settings_menu")
+    createWorldMenu = require("scripts.create_world_menu")
     
     settingsMenu.setShowMenuCallback(function(menuName)
+        uiManager.showMenu(menuName)
+    end)
+
+    createWorldMenu.setShowMenuCallback(function(menuName)
         uiManager.showMenu(menuName)
     end)
     
@@ -92,6 +99,7 @@ function uiManager.checkReady()
         if not initialized then
             mainMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
             settingsMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+            createWorldMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -113,12 +121,15 @@ function uiManager.onFramebufferResize(width, height)
     -- Already initialized: rebuild menus in place and re-show current
     if mainMenu then mainMenu.onFramebufferResize(width, height) end
     if settingsMenu then settingsMenu.onFramebufferResize(width, height) end
+    if createWorldMenu then createWorldMenu.onFramebufferResize(width, height) end
     
     -- Re-show the active menu so pages become visible after rebuild
     if currentMenu == "main" then
         if mainMenu and mainMenu.page then UI.showPage(mainMenu.page) end
     elseif currentMenu == "settings" then
         if settingsMenu and settingsMenu.page then UI.showPage(settingsMenu.page) end
+    elseif currentMenu == "create_world" then
+        if createWorldMenu and createWorldMenu.page then UI.showPage(createWorldMenu.page) end
     end
 end
 
@@ -127,12 +138,20 @@ function uiManager.showMenu(menuName)
     
     mainMenu.hide()
     settingsMenu.hide()
+    createWorldMenu.hide()
     
     if menuName == "main" then
         mainMenu.show()
     elseif menuName == "settings" then
         settingsMenu.show()
+    elseif menuName == "create_world" then
+        createWorldMenu.show()
     end
+end
+
+function uiManager.onCreateWorld()
+    handleNonTextBoxClick()
+    uiManager.showMenu("create_world")
 end
 
 function uiManager.onSettings()
@@ -257,6 +276,7 @@ end
 function uiManager.shutdown()
     if mainMenu then mainMenu.shutdown() end
     if settingsMenu then settingsMenu.shutdown() end
+    if createWorldMenu then createWorldMenu.shutdown() end  -- NEW
 end
 
 function uiManager.onTextBoxClick(elemHandle)

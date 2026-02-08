@@ -41,7 +41,7 @@ mainMenu.baseSizes = {
 mainMenu.buttons = {}
 
 mainMenu.menuItems = {
-    { name = "create_world", label = "Create World", callback = "onSettings" },
+    { name = "create_world", label = "Create World", callback = "onCreateWorld" },
     { name = "settings", label = "Settings", callback = "onSettings" },
     { name = "quit", label = "Quit", callback = "onQuit" }
 }
