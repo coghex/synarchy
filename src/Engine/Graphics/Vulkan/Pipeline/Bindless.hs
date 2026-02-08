@@ -28,7 +28,14 @@ createBindlessPipeline ∷ Device
 createBindlessPipeline device renderPass swapExtent uniformLayout textureLayout sampleCount = do
   (pipeline, pipelineLayout) ← createBindlessPipelineWithShader 
       device renderPass swapExtent uniformLayout textureLayout sampleCount bindlessVertexShaderCode
-  -- ... cleanup unchanged ...
+  let cleanupAction = do
+          destroyPipeline device pipeline Nothing
+          destroyPipelineLayout device pipelineLayout Nothing
+  modify $ \s → s { graphicsState = (graphicsState s) {
+      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
+          cleanupBindless = cleanupAction
+      }
+  }}
   pure (pipeline, pipelineLayout)
 
 -- | Create a pipeline for bindless UI rendering (UI camera)

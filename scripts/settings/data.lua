@@ -235,6 +235,7 @@ function data.revert()
     end
 
     if data.current.vsync ~= vs then engine.setVSync(vs) end
+    if data.current.msaa ~= (msaa or 1) then engine.setMSAA(msaa or 1) end
 
     data.current.width      = w
     data.current.height     = h
