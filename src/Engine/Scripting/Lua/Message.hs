@@ -158,17 +158,25 @@ handleSetResolution w h = do
     state <- gets graphicsState
     case glfwWindow state of
         Nothing -> logWarnM CatGraphics "Cannot set resolution: no window"
-        Just (Window win) -> liftIO $ do
-            -- w,h are the desired framebuffer size from the user
-            -- GLFW.setWindowSize operates in screen coordinates
-            -- On HiDPI, screen coords ≠ framebuffer pixels
-            (fbW, fbH) <- GLFW.getFramebufferSize win
-            (winW, winH) <- GLFW.getWindowSize win
-            let scaleX = if winW > 0 then fromIntegral fbW / fromIntegral winW else 1.0 :: Double
-                scaleY = if winH > 0 then fromIntegral fbH / fromIntegral winH else 1.0 :: Double
-                newWinW = round (fromIntegral w / scaleX)
-                newWinH = round (fromIntegral h / scaleY)
-            GLFW.setWindowSize win newWinW newWinH
+        Just (Window win) -> do
+            -- w, h are logical window dimensions (screen coordinates)
+            -- On HiDPI displays, GLFW.setWindowSize expects logical pixels (screen coordinates)
+            -- The framebuffer will automatically be scaled by the OS content scale
+            liftIO $ GLFW.setWindowSize win w h
+            -- Update our refs with the actual sizes after resize
+            env <- ask
+            liftIO $ do
+                (winW, winH) <- GLFW.getWindowSize win
+                (fbW, fbH) <- GLFW.getFramebufferSize win
+                writeIORef (windowSizeRef env) (winW, winH)
+                writeIORef (framebufferSizeRef env) (fbW, fbH)
+                
+                -- Notify Lua of the actual sizes
+                Q.writeQueue (luaQueue env) (LuaWindowResize winW winH)
+                Q.writeQueue (luaQueue env) (LuaFramebufferResize fbW fbH)
+            
+            logInfoM CatGraphics $ "Window resized to " 
+                <> T.pack (show w) <> "x" <> T.pack (show h) <> " (logical pixels)"
 
 handleSetWindowMode ∷ WindowMode → EngineM ε σ ()
 handleSetWindowMode mode = do

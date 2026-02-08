@@ -94,7 +94,10 @@ createWindow config = do
       Nothing → logAndThrowM CatGraphics (ExInit WindowCreationFailed) $
                  T.pack $ "Failed to create GLFW window with dimensions: "
                  ⧺ show (wcWidth config) ⧺ "x" ⧺ show (wcHeight config)
-      Just win → pure $ Window win
+      Just win → do
+        actualSize ← liftIO $ GLFW.getWindowSize win
+        logInfoM CatGraphics $ "Window created with actual size: " <> T.pack (show actualSize)
+        pure $ Window win
   let Window win = window
   -- apply fullscreen if needed
   when (wcFullscreen config) $ do

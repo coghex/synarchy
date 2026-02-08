@@ -88,6 +88,7 @@ settingsMenu.tabScroll = {}
 settingsMenu.backButtonId  = nil
 settingsMenu.applyButtonId = nil
 settingsMenu.saveButtonId  = nil
+settingsMenu.defaultsButtonId = nil
 
 -- Owned element IDs for scoped cleanup
 settingsMenu.ownedLabels     = {}
@@ -153,6 +154,13 @@ local function resetScrollStates()
     for _, def in ipairs(tabDefs) do
         settingsMenu.tabScroll[def.key] = emptyScrollState()
     end
+end
+
+function settingsMenu.onDefaults()
+    engine.logInfo("Loading defaults...")
+    data.loadDefaults()
+    settingsMenu.createUI()
+    if settingsMenu.page then UI.showPage(settingsMenu.page) end
 end
 
 -----------------------------------------------------------
@@ -463,6 +471,24 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         end,
     }))
 
+    settingsMenu.defaultsButtonId = settingsMenu.trackButton(button.new({
+        name       = "defaults_btn",
+        text       = "Defaults",
+        width      = settingsMenu.baseSizes.btnWidth,
+        height     = settingsMenu.baseSizes.btnHeight,
+        fontSize   = settingsMenu.baseSizes.fontSize,
+        uiscale    = uiscale,
+        page       = settingsMenu.page,
+        font       = settingsMenu.menuFont,
+        textureSet = settingsMenu.buttonTexSet,
+        bgColor    = {1.0, 1.0, 1.0, 1.0},
+        textColor  = {0.0, 0.0, 0.0, 1.0},
+        zIndex     = Z_BUTTONS,
+        onClick = function(id, name)
+            settingsMenu.onDefaults()
+        end,
+    }))
+
     settingsMenu.applyButtonId = settingsMenu.trackButton(button.new({
         name       = "apply_btn",
         text       = "Apply",
@@ -500,25 +526,33 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
     }))
 
     local backW, backH   = button.getSize(settingsMenu.backButtonId)
+    local defaultsW, _   = button.getSize(settingsMenu.defaultsButtonId)
     local applyW, _      = button.getSize(settingsMenu.applyButtonId)
     local saveW, _       = button.getSize(settingsMenu.saveButtonId)
-    local totalBtnW      = backW + s.btnSpacing + applyW + s.btnSpacing + saveW
+    local totalBtnW      = backW + s.btnSpacing + defaultsW + s.btnSpacing 
+                           + applyW + s.btnSpacing + saveW
     local btnStartX      = panelX + bounds.x + (bounds.width - totalBtnW) / 2
     local bottomPad      = math.floor(100 * uiscale)
     local btnY           = panelY + panelHeight - bottomPad
                            + (bottomPad - backH) / 2
 
     local backH_   = button.getElementHandle(settingsMenu.backButtonId)
+    local defaultsH_   = button.getElementHandle(settingsMenu.defaultsButtonId)
     local applyH_  = button.getElementHandle(settingsMenu.applyButtonId)
     local saveH_   = button.getElementHandle(settingsMenu.saveButtonId)
 
-    UI.setPosition(backH_,  btnStartX, btnY)
-    UI.setPosition(applyH_, btnStartX + backW + s.btnSpacing, btnY)
-    UI.setPosition(saveH_,  btnStartX + backW + s.btnSpacing + applyW
-                            + s.btnSpacing, btnY)
-    UI.setZIndex(backH_,  Z_BUTTONS)
-    UI.setZIndex(applyH_, Z_BUTTONS)
-    UI.setZIndex(saveH_,  Z_BUTTONS)
+    UI.setPosition(backH_,     btnStartX, btnY)
+    UI.setPosition(defaultsH_, btnStartX + backW + s.btnSpacing, btnY)
+    UI.setPosition(applyH_,    btnStartX + backW + s.btnSpacing 
+                               + defaultsW + s.btnSpacing, btnY)
+    UI.setPosition(saveH_,     btnStartX + backW + s.btnSpacing 
+                               + defaultsW + s.btnSpacing 
+                               + applyW + s.btnSpacing, btnY)
+    
+    UI.setZIndex(backH_,     Z_BUTTONS)
+    UI.setZIndex(defaultsH_, Z_BUTTONS)
+    UI.setZIndex(applyH_,    Z_BUTTONS)
+    UI.setZIndex(saveH_,     Z_BUTTONS)
 end
 
 -----------------------------------------------------------

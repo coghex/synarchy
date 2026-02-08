@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.Config
     getVideoConfigFn
   , setVideoConfigFn
   , saveVideoConfigFn
+  , loadDefaultConfigFn
   , setUIScaleFn
   , setFrameLimitFn
   , setResolutionFn
@@ -96,6 +97,31 @@ saveVideoConfigFn env = do
         logger <- readIORef (loggerRef env)
         saveVideoConfig logger "config/video.yaml" config
     return 0
+
+-- | Load default video config from video_default.yaml
+-- Returns same values as getVideoConfigFn
+loadDefaultConfigFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+loadDefaultConfigFn env = do
+    Lua.liftIO $ do
+        logger <- readIORef (loggerRef env)
+        defaultConfig <- loadVideoConfig logger "config/video_default.yaml"
+        writeIORef (videoConfigRef env) defaultConfig
+        logInfo logger CatInit "Loaded default video config"
+    
+    -- Return same values as getVideoConfigFn
+    config <- Lua.liftIO $ readIORef (videoConfigRef env)
+    let scale = realToFrac (vcUIScale config) :: Double
+    Lua.pushinteger (fromIntegral $ vcWidth config)
+    Lua.pushinteger (fromIntegral $ vcHeight config)
+    Lua.pushstring (TE.encodeUtf8 $ windowModeToText $ vcWindowMode config)
+    Lua.pushnumber (Lua.Number scale)
+    Lua.pushboolean (vcVSync config)
+    Lua.pushinteger (maybe 0 fromIntegral $ vcFrameLimit config)
+    Lua.pushinteger (fromIntegral $ vcMSAA config)
+    Lua.pushinteger (fromIntegral $ vcBrightness config)
+    Lua.pushboolean (vcPixelSnap config)
+    Lua.pushstring (TE.encodeUtf8 $ textureFilterToText $ vcTextureFilter config)
+    return 10
 
 -- | Set UI scale only
 setUIScaleFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults

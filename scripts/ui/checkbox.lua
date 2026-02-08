@@ -92,7 +92,7 @@ function checkbox.destroy(id)
     if not cb then return end
     
     checkboxes[id] = nil
-    engine.logInfo("Checkbox destroyed: " .. cb.name)
+    engine.logDebug("Checkbox destroyed: " .. cb.name)
 end
 
 function checkbox.destroyAll()

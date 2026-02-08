@@ -76,6 +76,81 @@ data.current = {
 data.pending = {}
 
 -----------------------------------------------------------
+-- Load factory defaults from video_default.yaml
+-- and apply to engine
+-----------------------------------------------------------
+
+-----------------------------------------------------------
+-- Load factory defaults from video_default.yaml
+-- and apply to engine
+-----------------------------------------------------------
+
+-----------------------------------------------------------
+-- Load factory defaults from video_default.yaml
+-- and apply to engine
+-----------------------------------------------------------
+
+function data.loadDefaults()
+    engine.logInfo("Loading factory default settings...")
+
+    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness,
+          pixelSnap, textureFilter = engine.loadDefaultConfig()
+
+    -- DEBUG: Log what defaults gave us
+    engine.logInfo("loadDefaultConfig() returned: " .. w .. "x" .. h)
+
+    -- Auto-adjust UI scale for large/HiDPI displays
+    -- If the resolution is very high, scale up the UI so it's not tiny
+    local screenArea = w * h
+    local is1080p = screenArea >= (1920 * 1080 * 0.9)
+    local is1440p = screenArea >= (2560 * 1440 * 0.9)
+    local is4K = screenArea >= (3840 * 2160 * 0.9)
+    
+    if is4K then
+        uiScale = uiScale * 2.5
+        engine.logInfo("Detected 4K+ display, scaling UI to: " .. tostring(uiScale))
+    elseif is1440p then
+        uiScale = uiScale * 2.0
+        engine.logInfo("Detected 1440p+ display, scaling UI to: " .. tostring(uiScale))
+    elseif is1080p then
+        uiScale = uiScale * 1.5
+        engine.logInfo("Detected 1080p+ display, scaling UI to: " .. tostring(uiScale))
+    end
+
+
+    -- Update current state
+    data.current.width         = w
+    data.current.height        = h
+    data.current.windowMode    = wm
+    data.current.uiScale       = uiScale
+    data.current.vsync         = vs
+    data.current.frameLimit    = frameLimit or 60
+    data.current.msaa          = msaa or 1
+    data.current.brightness    = brightness or 100
+    data.current.pixelSnap     = pixelSnap or false
+    data.current.textureFilter = textureFilter or "nearest"
+    
+    -- Snapshot brightness for revert
+    data.savedBrightness = data.current.brightness
+
+    -- Push all values to engine via individual setters
+    engine.setResolution(data.current.width, data.current.height)
+    engine.setWindowMode(data.current.windowMode)
+    engine.setUIScale(data.current.uiScale)
+    engine.setVSync(data.current.vsync)
+    engine.setFrameLimit(data.current.frameLimit)
+    engine.setMSAA(data.current.msaa)
+    engine.setBrightness(data.current.brightness)
+    engine.setPixelSnap(data.current.pixelSnap)
+    engine.setTextureFilter(data.current.textureFilter)
+
+    -- Reset pending to match current
+    data.resetPending()
+
+    engine.logInfo("Default settings loaded and applied.")
+end
+
+-----------------------------------------------------------
 -- Helpers
 -----------------------------------------------------------
 
@@ -137,6 +212,9 @@ end
 function data.reload()
     local w, h, wm, uiScale, vs, frameLimit, msaa, brightness,
           pixelSnap, textureFilter = engine.getVideoConfig()
+    -- DEBUG: Log what we're loading
+    engine.logInfo("reload() got resolution: " .. w .. "x" .. h 
+                  .. ", uiScale: " .. tostring(uiScale))
     data.current.width         = w
     data.current.height        = h
     data.current.windowMode    = wm
