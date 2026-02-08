@@ -153,6 +153,7 @@ library
                      Engine.Graphics.Vulkan.Image
                      Engine.Graphics.Vulkan.Init
                      Engine.Graphics.Vulkan.Instance
+                     Engine.Graphics.Vulkan.MSAA
                      Engine.Graphics.Vulkan.Pipeline
                      Engine.Graphics.Vulkan.Pipeline.Bindless
                      Engine.Graphics.Vulkan.Recreate

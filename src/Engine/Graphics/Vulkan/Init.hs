@@ -39,6 +39,7 @@ import Engine.Graphics.Vulkan.Instance (createVulkanInstance)
 import Engine.Graphics.Vulkan.Pipeline
 import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline
                                                 , createBindlessUIPipeline)
+import Engine.Graphics.Vulkan.MSAA (createMSAAColorImage)
 import Engine.Graphics.Vulkan.Swapchain
 import Engine.Graphics.Vulkan.Sync (createSyncObjects)
 import Engine.Graphics.Vulkan.Texture
@@ -106,6 +107,16 @@ initializeVulkan window = do
   
   -- Log swapchain support
   support ← querySwapchainSupport physicalDevice surface
+
+  -- read msaa from config, determine appropriate sample count
+  let msaaInt = vcMSAA videoConfig
+      requestedSamples = msaaToSampleCount msaaInt
+  -- query device limits to clamp sample count
+  let supportedSamples = framebufferColorSampleCounts (limits props)
+      sampleCount = clampSampleCount supportedSamples requestedSamples
+  logDebugSM CatVulkan "MSAA configuration"
+    [("requested", T.pack $ show msaaInt)
+    ,("actual_samples", T.pack $ show sampleCount)]
   
   -- Create sync objects
   syncObjects ← createSyncObjects device defaultGraphicsConfig
@@ -175,7 +186,7 @@ initializeVulkan window = do
   createUniformBuffersForFrames device physicalDevice glfwWin descSets
   
   -- Create render pass
-  renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo)
+  renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo) sampleCount
   modify $ \s → s { graphicsState = (graphicsState s) {
                       vulkanRenderPass = Just renderPass } }
   
@@ -183,14 +194,16 @@ initializeVulkan window = do
   logDebugM CatGraphics "Creating bindless pipeline"
   (bindlessPipe, bindlessPipeLayout) ← 
     createBindlessPipeline device renderPass (siSwapExtent swapInfo) 
-                           (dmUniformLayout descManager) bindlessTexLayout
+                           (dmUniformLayout descManager)
+                           bindlessTexLayout sampleCount
   logDebugM CatGraphics "Bindless pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                           bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout) } }
   logDebugM CatGraphics "Creating bindless UI pipeline"
   (bindlessUIPipe, bindlessUIPipeLayout) ← 
     createBindlessUIPipeline device renderPass (siSwapExtent swapInfo) 
-                             (dmUniformLayout descManager) bindlessTexLayout
+                             (dmUniformLayout descManager)
+                             bindlessTexLayout sampleCount
   logDebugM CatGraphics "Bindless UI pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                           bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout) } }
@@ -198,14 +211,16 @@ initializeVulkan window = do
   -- Create font pipeline
   logDebugM CatGraphics "Creating font pipeline"
   (fontPipe, fontPipeLayout, fontDescLayout) ←
-    createFontPipeline device renderPass (siSwapExtent swapInfo) (dmUniformLayout descManager)
+    createFontPipeline device renderPass (siSwapExtent swapInfo)
+                              (dmUniformLayout descManager) sampleCount
   logDebugM CatGraphics "Font pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontPipeline = Just (fontPipe, fontPipeLayout)
                     , fontDescriptorLayout = Just fontDescLayout } }
   logDebugM CatGraphics "Creating font UI pipeline"
   (fontUIPipe, fontUIPipeLayout) ←
-    createFontUIPipeline device renderPass (siSwapExtent swapInfo) (dmUniformLayout descManager) fontDescLayout
+    createFontUIPipeline device renderPass (siSwapExtent swapInfo)
+                         (dmUniformLayout descManager) fontDescLayout sampleCount
   logDebugM CatGraphics "Font UI pipeline created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout) } }
@@ -222,10 +237,26 @@ initializeVulkan window = do
                         Just si → Just si { siSwapImgViews = imageViews }
                         Nothing → Nothing } }
   
+  -- Create MSAA color image if needed
+  mMsaaImageView ← if sampleCount /= SAMPLE_COUNT_1_BIT
+    then do
+      (img, mem, view) ← createMSAAColorImage physicalDevice device
+                                              (siSwapImgFormat swapInfo)
+                                              (siSwapExtent swapInfo) sampleCount
+      modify $ \s → s { graphicsState = (graphicsState s) {
+                          msaaColorImage = Just (img, mem, view) } }
+      logDebugM CatGraphics "MSAA color image created successfully"
+      pure (Just view)
+    else do
+      modify $ \s → s { graphicsState = (graphicsState s) {
+                          msaaColorImage = Nothing } }
+      pure Nothing
+  
   -- Create framebuffers
   logDebugSM CatGraphics "Creating framebuffers"
     [("count", T.pack $ show $ V.length imageViews)]
-  framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews
+  framebuffers ← createVulkanFramebuffers device renderPass swapInfo
+                                          imageViews mMsaaImageView
   logDebugM CatGraphics "Framebuffers created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       framebuffers = Just framebuffers } }

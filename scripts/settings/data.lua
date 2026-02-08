@@ -43,7 +43,7 @@ data.windowModes = {
 
 -- MSAA options
 data.msaaOptions = {
-    { text = "Off", value = "0" },
+    { text = "Off", value = "1" },
     { text = "2x",  value = "2" },
     { text = "4x",  value = "4" },
     { text = "8x",  value = "8" },
@@ -60,7 +60,7 @@ data.current = {
     uiScale    = 1.0,
     vsync      = true,
     frameLimit = 60,
-    msaa       = 0,
+    msaa       = 1,
     brightness = 100,
 }
 
@@ -85,13 +85,13 @@ function data.findResolutionIndex(w, h)
 end
 
 function data.msaaToString(msaa)
-    return tostring(msaa or 0)
+    return tostring(msaa or 1)
 end
 
 function data.msaaFromString(str)
     local n = tonumber(str)
     if n == 2 or n == 4 or n == 8 then return n end
-    return 0
+    return 1
 end
 
 function data.resetPending()
@@ -119,7 +119,7 @@ function data.reload()
     data.current.uiScale    = uiScale
     data.current.vsync      = vs
     data.current.frameLimit = frameLimit or 60
-    data.current.msaa       = msaa or 0
+    data.current.msaa       = msaa or 1
 end
 
 -----------------------------------------------------------
@@ -157,7 +157,7 @@ function data.apply(widgetValues)
     -- MSAA
     if data.pending.msaa ~= data.current.msaa then
         data.current.msaa = data.pending.msaa
-        -- TODO: call engine.setMSAA(data.current.msaa)
+        engine.setMSAA(data.current.msaa)
         engine.logInfo("MSAA applied: " .. tostring(data.current.msaa))
     end
 
@@ -242,7 +242,7 @@ function data.revert()
     data.current.uiScale    = uiScale
     data.current.vsync      = vs
     data.current.frameLimit = frameLimit
-    data.current.msaa       = msaa or 0
+    data.current.msaa       = msaa or 1
 end
 
 -----------------------------------------------------------

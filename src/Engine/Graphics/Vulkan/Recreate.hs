@@ -25,6 +25,7 @@ import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Cleanup
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
+import Engine.Graphics.Vulkan.MSAA
 import Engine.Graphics.Font.Draw
 import Vulkan.Core10
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
@@ -94,12 +95,20 @@ recreateAllResources pDevice device queues surface window = do
     env <- ask
     videoConfig ← liftIO $ readIORef (videoConfigRef env)
     let vsyncEnabled = vcVSync videoConfig
+        msaaInt      = vcMSAA videoConfig
     swapInfo <- createVulkanSwapchain pDevice device queues surface vsyncEnabled
     modify $ \s -> s { graphicsState = (graphicsState s) {
         swapchainInfo = Just swapInfo
     }}
     
     let newExtent = siSwapExtent swapInfo
+        imgFormat = siSwapImgFormat swapInfo
+    
+    -- 1.5. Determine actual sample count (clamp to device support)
+    deviceProps <- getPhysicalDeviceProperties pDevice
+    let supportedSamples = framebufferColorSampleCounts (limits deviceProps)
+        requestedSamples = msaaToSampleCount msaaInt
+        sampleCount      = clampSampleCount supportedSamples requestedSamples
     
     -- 2. Image views
     imageViews <- createSwapchainImageViews device swapInfo
@@ -108,42 +117,56 @@ recreateAllResources pDevice device queues surface window = do
             Just si -> Just si { siSwapImgViews = imageViews }
             Nothing -> Nothing } }
     
-    -- 3. Render pass
-    renderPass <- createVulkanRenderPass device (siSwapImgFormat swapInfo)
+    -- 2.5. MSAA color image (only if sample count > 1)
+    mMsaaView <- if sampleCount /= SAMPLE_COUNT_1_BIT
+        then do
+            (img, mem, view) <- createMSAAColorImage pDevice device imgFormat newExtent sampleCount
+            modify $ \s -> s { graphicsState = (graphicsState s) {
+                msaaColorImage = Just (img, mem, view)
+            }}
+            pure (Just view)
+        else do
+            modify $ \s -> s { graphicsState = (graphicsState s) {
+                msaaColorImage = Nothing
+            }}
+            pure Nothing
+    
+    -- 3. Render pass (now MSAA-aware)
+    renderPass <- createVulkanRenderPass device imgFormat sampleCount
     modify $ \s -> s { graphicsState = (graphicsState s) {
         vulkanRenderPass = Just renderPass
     }}
     
-    -- 4. Framebuffers
-    framebuffers <- createVulkanFramebuffers device renderPass swapInfo imageViews
+    -- 4. Framebuffers (now MSAA-aware)
+    framebuffers <- createVulkanFramebuffers device renderPass swapInfo imageViews mMsaaView
     modify $ \s -> s { graphicsState = (graphicsState s) {
         framebuffers = Just framebuffers
     }}
     
-    -- 5. Bindless pipeline
+    -- 5. Bindless pipeline (pass sample count)
     (bindlessPipe, bindlessPipeLayout) <- 
-        createBindlessPipeline device renderPass newExtent uniformLayout bindlessLayout
+        createBindlessPipeline device renderPass newExtent uniformLayout bindlessLayout sampleCount
     modify $ \s -> s { graphicsState = (graphicsState s) {
         bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout)
     }}
     
-    -- 6. Bindless UI pipeline
+    -- 6. Bindless UI pipeline (pass sample count)
     (bindlessUIPipe, bindlessUIPipeLayout) <- 
-        createBindlessUIPipeline device renderPass newExtent uniformLayout bindlessLayout
+        createBindlessUIPipeline device renderPass newExtent uniformLayout bindlessLayout sampleCount
     modify $ \s -> s { graphicsState = (graphicsState s) {
         bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout)
     }}
     
-    -- 7. Font pipeline
+    -- 7. Font pipeline (pass sample count)
     (fontPipe, fontPipeLayout, _) <- 
-        createFontPipeline device renderPass newExtent uniformLayout
+        createFontPipeline device renderPass newExtent uniformLayout sampleCount
     modify $ \s -> s { graphicsState = (graphicsState s) {
         fontPipeline = Just (fontPipe, fontPipeLayout)
     }}
     
-    -- 8. Font UI pipeline
+    -- 8. Font UI pipeline (pass sample count)
     (fontUIPipe, fontUIPipeLayout) <- 
-        createFontUIPipeline device renderPass newExtent uniformLayout fontDescLayout
+        createFontUIPipeline device renderPass newExtent uniformLayout fontDescLayout sampleCount
     modify $ \s -> s { graphicsState = (graphicsState s) {
         fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout)
     }}

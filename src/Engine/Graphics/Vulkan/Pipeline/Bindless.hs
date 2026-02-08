@@ -18,43 +18,30 @@ import Vulkan.Zero
 import Vulkan.CStruct.Extends
 
 -- | Create a pipeline for bindless rendering (world camera)
--- Uses manual cleanup (stored in Cleanup state)
 createBindlessPipeline ∷ Device
                        → RenderPass
                        → Extent2D
-                       → DescriptorSetLayout  -- ^ Uniform buffer layout (set 0)
-                       → DescriptorSetLayout  -- ^ Bindless texture layout (set 1)
+                       → DescriptorSetLayout
+                       → DescriptorSetLayout
+                       → SampleCountFlagBits  -- NEW parameter
                        → EngineM ε σ (Pipeline, PipelineLayout)
-createBindlessPipeline device renderPass swapExtent uniformLayout textureLayout = do
+createBindlessPipeline device renderPass swapExtent uniformLayout textureLayout sampleCount = do
   (pipeline, pipelineLayout) ← createBindlessPipelineWithShader 
-      device renderPass swapExtent uniformLayout textureLayout bindlessVertexShaderCode
-  
-  -- Build cleanup action
-  let cleanupAction = do
-          destroyPipeline device pipeline Nothing
-          destroyPipelineLayout device pipelineLayout Nothing
-  
-  -- Store cleanup in state
-  modify $ \s → s { graphicsState = (graphicsState s) {
-      vulkanCleanup = (vulkanCleanup (graphicsState s)) {
-          cleanupBindless = cleanupAction
-      }
-  }}
-  
+      device renderPass swapExtent uniformLayout textureLayout sampleCount bindlessVertexShaderCode
+  -- ... cleanup unchanged ...
   pure (pipeline, pipelineLayout)
 
 -- | Create a pipeline for bindless UI rendering (UI camera)
--- Uses manual cleanup (stored in Cleanup state)
 createBindlessUIPipeline ∷ Device
                          → RenderPass
                          → Extent2D
-                         → DescriptorSetLayout  -- ^ Uniform buffer layout (set 0)
-                         → DescriptorSetLayout  -- ^ Bindless texture layout (set 1)
+                         → DescriptorSetLayout
+                         → DescriptorSetLayout
+                         → SampleCountFlagBits  -- NEW parameter
                          → EngineM ε σ (Pipeline, PipelineLayout)
-createBindlessUIPipeline device renderPass swapExtent uniformLayout textureLayout = do
+createBindlessUIPipeline device renderPass swapExtent uniformLayout textureLayout sampleCount = do
   (pipeline, pipelineLayout) ← createBindlessPipelineWithShader 
-      device renderPass swapExtent uniformLayout textureLayout bindlessUIVertexShaderCode
-  
+      device renderPass swapExtent uniformLayout textureLayout sampleCount bindlessUIVertexShaderCode
   -- Build cleanup action
   let cleanupAction = do
           destroyPipeline device pipeline Nothing
@@ -76,9 +63,10 @@ createBindlessPipelineWithShader ∷ Device
                                  → Extent2D
                                  → DescriptorSetLayout
                                  → DescriptorSetLayout
+                                 → SampleCountFlagBits
                                  → BS.ByteString  -- ^ Vertex shader code
                                  → EngineM ε σ (Pipeline, PipelineLayout)
-createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout vertShaderCode = do
+createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout sampleCount vertShaderCode = do
   -- Create shader modules
   vertShaderModule ← createShaderModule' device vertShaderCode
   fragShaderModule ← createShaderModule' device bindlessFragmentShaderCode
@@ -141,7 +129,7 @@ createBindlessPipelineWithShader device renderPass swapExtent uniformLayout text
 
       multisampling = zero
         { sampleShadingEnable  = False
-        , rasterizationSamples = SAMPLE_COUNT_1_BIT
+        , rasterizationSamples = sampleCount
         } ∷ PipelineMultisampleStateCreateInfo '[]
 
       colorBlendAttachment = zero

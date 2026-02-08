@@ -101,6 +101,7 @@ data GraphicsState = GraphicsState
   , currentFrame       ∷ Word32
   , framebuffers       ∷ Maybe (V.Vector Vk.Framebuffer)
   , swapchainInfo      ∷ Maybe SwapchainInfo
+  , msaaColorImage     ∷ Maybe (Vk.Image, Vk.DeviceMemory, Vk.ImageView)
   , syncObjects        ∷ Maybe SyncObjects
   , vertexBuffer       ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))

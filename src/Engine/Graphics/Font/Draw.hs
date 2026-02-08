@@ -117,9 +117,10 @@ cleanupPendingInstanceBuffers = do
 -----------------------------------------------------------
 
 -- | Create font rendering pipeline with instancing
-createFontPipeline ∷ Device → RenderPass → Extent2D → DescriptorSetLayout 
-                   → EngineM ε σ (Pipeline, PipelineLayout, DescriptorSetLayout)
-createFontPipeline device renderPass swapExtent uniformLayout = do
+createFontPipeline ∷ Device → RenderPass → Extent2D
+  → DescriptorSetLayout → SampleCountFlagBits
+  → EngineM ε σ (Pipeline, PipelineLayout, DescriptorSetLayout)
+createFontPipeline device renderPass swapExtent uniformLayout sampleCount = do
     -- Create font-specific texture layout
     fontTexLayout ← createFontTextureLayout device
     
@@ -208,7 +209,7 @@ createFontPipeline device renderPass swapExtent uniformLayout = do
     
         multisampling = (zero ∷ PipelineMultisampleStateCreateInfo '[])
           { sampleShadingEnable = False
-          , rasterizationSamples = SAMPLE_COUNT_1_BIT
+          , rasterizationSamples = sampleCount
           }
     
         colorBlendAttachment = zero
@@ -330,8 +331,9 @@ createFontTextureLayout device = do
 
 -- | Create font UI rendering pipeline (uses UI camera)
 createFontUIPipeline ∷ Device → RenderPass → Extent2D → DescriptorSetLayout 
-    → DescriptorSetLayout → EngineM ε σ (Pipeline, PipelineLayout)
-createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout = do
+    → DescriptorSetLayout → SampleCountFlagBits
+    → EngineM ε σ (Pipeline, PipelineLayout)
+createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout sampleCount = do
     let Extent2D w h = swapExtent
         pipelineLayoutInfo = zero
           { setLayouts = V.fromList [uniformLayout, fontTexLayout]
@@ -409,7 +411,7 @@ createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout = 
     
         multisampling = (zero ∷ PipelineMultisampleStateCreateInfo '[])
           { sampleShadingEnable = False
-          , rasterizationSamples = SAMPLE_COUNT_1_BIT
+          , rasterizationSamples = sampleCount
           }
     
         colorBlendAttachment = zero

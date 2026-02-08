@@ -33,7 +33,7 @@ graphicsTab.uiScaleTextBoxId      = nil
 -----------------------------------------------------------
 
 function graphicsTab.msaaValidator(char)
-    return char == "0" or char == "2" or char == "4" or char == "8"
+    return char == "1" or char == "2" or char == "4" or char == "8"
 end
 
 function graphicsTab.msaaMatcher(inputText, options)

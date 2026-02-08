@@ -57,6 +57,11 @@ handleLuaMessage msg = do
                 [("enabled", if enabled then "true" else "false")]
             handleSetVSync enabled
 
+        LuaSetMSAA msaa → do
+            logDebugSM CatLua "Setting MSAA"
+                [("samples", T.pack $ show msaa)]
+            handleSetMSAA msaa
+
         LuaLoadFontRequest handle path size → do
             logDebugSM CatLua "Loading font"
                 [("path", T.pack path)
@@ -234,6 +239,22 @@ handleSetVSync vsync = do
         Just window → do
             logInfoM CatGraphics $ "Recreating swapchain for VSync change: "
                 <> if vsync then "enabled" else "disabled"
+            recreateSwapchain window
+
+-- | Handle MSAA change — same pattern as VSync
+handleSetMSAA ∷ Int → EngineM ε σ ()
+handleSetMSAA msaa = do
+    env ← ask
+    liftIO $ do
+        oldConfig ← readIORef (videoConfigRef env)
+        writeIORef (videoConfigRef env) $ oldConfig { vcMSAA = msaa }
+    
+    state ← gets graphicsState
+    case glfwWindow state of
+        Nothing → logWarnM CatGraphics "Cannot set MSAA: no window"
+        Just window → do
+            logInfoM CatGraphics $ "Recreating swapchain for MSAA change: "
+                <> T.pack (show msaa) <> "x"
             recreateSwapchain window
 
 -- | Handle texture load request

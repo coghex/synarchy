@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.Config
   , setResolutionFn
   , setWindowModeFn
   , setVSyncFn
+  , setMSAAFn
   ) where
 
 import UPrelude
@@ -166,4 +167,17 @@ setVSyncFn env = do
             Q.writeQueue lteq (LuaSetVSync vsyncArg)
             oldConfig <- readIORef (videoConfigRef env)
             writeIORef (videoConfigRef env) $ oldConfig { vcVSync = vsyncArg }
+    return 0
+
+setMSAAFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+setMSAAFn env = do
+    msaaArg <- Lua.tointeger 1
+    msaa ← case msaaArg of
+        Just m  -> pure (fromIntegral m)
+        Nothing -> pure 0
+    Lua.liftIO $ do
+            let lteq = luaToEngineQueue env
+            Q.writeQueue lteq (LuaSetMSAA msaa)
+            oldConfig <- readIORef (videoConfigRef env)
+            writeIORef (videoConfigRef env) $ oldConfig { vcMSAA = msaa }
     return 0
