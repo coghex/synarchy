@@ -14,6 +14,7 @@ local label    = require("scripts.ui.label")
 local textbox  = require("scripts.ui.textbox")
 local checkbox = require("scripts.ui.checkbox")
 local dropdown = require("scripts.ui.dropdown")
+local slider   = require("scripts.ui.slider")
 local data     = require("scripts.settings.data")
 
 local graphicsTab = {}
@@ -376,6 +377,7 @@ function graphicsTab.create(params)
     ---------------------------------------------------------
     -- Row 6: Brightness (textbox — TODO: replace with slider)
     ---------------------------------------------------------
+
     local brLabelId = label.new({
         name     = "brightness_label",
         text     = "Brightness",
@@ -389,33 +391,36 @@ function graphicsTab.create(params)
     UI.addToPage(page, brLabelHandle, cx, rowY(rowIndex) + s.fontSize)
     UI.setZIndex(brLabelHandle, zContent)
 
-    local brW = math.floor(base.textboxWidth * uiscale)
-    graphicsTab.brightnessTextBoxId = textbox.new({
-        name     = "brightness_input",
-        width    = base.textboxWidth,
-        height   = base.textboxHeight,
+    local slW = math.floor((base.sliderWidth or 200) * uiscale)
+    graphicsTab.brightnessSlider = slider.new({
+        name     = "brightness",
+        width    = base.sliderWidth or 200,
+        height   = base.sliderHeight or 24,
+        min      = data.brightnessMin,
+        max      = data.brightnessMax,
+        default  = data.current.brightness,
         page     = page,
-        x        = cx + cw - brW,
+        x        = cx + cw - slW,
         y        = rowY(rowIndex),
         uiscale  = uiscale,
-        font     = font,
-        fontSize = 24,
-        default  = tostring(data.current.brightness or 100),
-        textType = textbox.Type.NUMBER,
         zIndex   = zWidgets,
+        onChange  = function(value, id, name)
+            pending.brightness = math.floor(value)
+        end,
     })
-    local brId = graphicsTab.brightnessTextBoxId
+    local brSliderId = graphicsTab.brightnessSlider
 
     table.insert(rows, {
         labelHandle = brLabelHandle,
         widgetHandles = {
-            textbox.getElementHandle(brId),
+            slider.getElementHandle(brSliderId),
+            slider.getKnobHandle(brSliderId),
         },
         widgetSetPosition = function(ry)
-            textbox.setPosition(brId, cx + cw - brW, ry)
+            slider.setPosition(brSliderId, cx + cw - slW, ry)
         end,
         widgetSetVisible = function(vis)
-            textbox.setVisible(brId, vis)
+            slider.setVisible(brSliderId, vis)
         end,
     })
     rowIndex = rowIndex + 1
@@ -482,8 +487,8 @@ function graphicsTab.getWidgetValues()
     if graphicsTab.frameLimitTextBoxId then
         vals.frameLimit = textbox.getNumericValue(graphicsTab.frameLimitTextBoxId)
     end
-    if graphicsTab.brightnessTextBoxId then
-        vals.brightness = textbox.getNumericValue(graphicsTab.brightnessTextBoxId)
+    if graphicsTab.brightnessSlider then
+        vals.brightness = slider.getValue(graphicsTab.brightnessSlider)
     end
     return vals
 end
@@ -508,12 +513,8 @@ function graphicsTab.onTextBoxSubmit(name, value)
         if target then
             textbox.setText(target, tostring(validated or fallback))
         end
-    elseif name == "brightness_input" then
-        local target = graphicsTab.brightnessTextBoxId
-        if target then
-            textbox.setText(target, tostring(validated or fallback))
-        end
     end
+    -- brightness_input case removed — slider handles it directly
 end
 
 return graphicsTab

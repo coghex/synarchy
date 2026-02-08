@@ -11,6 +11,7 @@ local button         = require("scripts.ui.button")
 local dropdown       = require("scripts.ui.dropdown")
 local tabbar         = require("scripts.ui.tabbar")
 local scrollbar      = require("scripts.ui.scrollbar")
+local slider         = require("scripts.ui.slider")
 local data           = require("scripts.settings.data")
 local graphicsTab    = require("scripts.settings.graphics_tab")
 local placeholderTab = require("scripts.settings.placeholder_tab")
@@ -57,6 +58,8 @@ settingsMenu.baseSizes = {
     textboxWidth   = 150,
     textboxHeight  = 40,
     dropdownHeight = 40,
+    sliderWidth    = 200,
+    sliderHeight   = 24,
     rowSpacing     = 100,
     btnSpacing     = 20,
     tabHeight      = 40,
@@ -94,6 +97,7 @@ settingsMenu.ownedButtons    = {}
 settingsMenu.ownedDropdowns  = {}
 settingsMenu.ownedPanels     = {}
 settingsMenu.ownedTabbars    = {}
+settingsMenu.ownedSliders    = {}
 
 -----------------------------------------------------------
 -- Tab registry
@@ -163,6 +167,7 @@ function settingsMenu.destroyOwned()
     for _, id in ipairs(settingsMenu.ownedDropdowns)   do dropdown.destroy(id) end
     for _, id in ipairs(settingsMenu.ownedPanels)      do panel.destroy(id) end
     for _, id in ipairs(settingsMenu.ownedTabbars)     do tabbar.destroy(id) end
+    for _, id in ipairs(settingsMenu.ownedSliders)     do slider.destroy(id) end
 
     settingsMenu.ownedLabels     = {}
     settingsMenu.ownedTextboxes  = {}
@@ -171,6 +176,7 @@ function settingsMenu.destroyOwned()
     settingsMenu.ownedDropdowns  = {}
     settingsMenu.ownedPanels     = {}
     settingsMenu.ownedTabbars    = {}
+    settingsMenu.ownedSliders    = {}
 end
 
 -- Tracking helpers — call after every widget .new()
@@ -202,6 +208,10 @@ function settingsMenu.trackTabbar(id)
     table.insert(settingsMenu.ownedTabbars, id)
     return id
 end
+function settingsMenu.trackSlider(id)
+    table.insert(settingsMenu.ownedSliders, id)
+    return id
+end
 
 -----------------------------------------------------------
 -- Public: callbacks from ui_manager
@@ -229,6 +239,7 @@ function settingsMenu.init(panelTex, btnTex, font, width, height)
     dropdown.init()
     tabbar.init()
     scrollbar.init()
+    slider.init()
 
     data.reload()
     settingsMenu.createUI()

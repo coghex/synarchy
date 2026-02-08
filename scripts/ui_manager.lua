@@ -24,6 +24,7 @@ local textbox = nil
 local checkbox = nil
 local button = nil
 local dropdown = nil
+local slider = nil
 
 local hoveredElement = nil
 local hoveredCallback = nil
@@ -45,10 +46,12 @@ function uiManager.init(scriptId)
     dropdown = require("scripts.ui.dropdown")
     scrollbar = require("scripts.ui.scrollbar")
     tabbar = require("scripts.ui.tabbar")
+    slider = require("scripts.ui.slider")
 
     button.init()
     scrollbar.init()
     tabbar.init()
+    slider.init()
     uiscale = engine.getUIScale()
     
     menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)
@@ -169,6 +172,19 @@ function uiManager.update(dt)
     if dropdown then
         dropdown.update(dt)
     end
+
+    -- slider drag detection
+    if slider and slider.getDraggingId() then
+        local mx, my = engine.getMousePosition()
+        if mx and my then
+            local ww, wh = engine.getWindowSize()
+            if ww and wh and ww > 0 and wh > 0 then
+                mx = mx * (fbW / ww)
+                my = my * (fbH / wh)
+            end
+            slider.onDragMove(mx, my)
+        end
+    end
     
     -- Hover detection with coordinate scaling
     local mx, my = engine.getMousePosition()
@@ -219,6 +235,8 @@ function uiManager.onHoverEnter(elemHandle, callbackName)
         textbox.onHoverEnter(elemHandle)
     elseif dropdown and dropdown.isDropdownCallback(callbackName) then
         dropdown.onHoverEnter(elemHandle)
+    elseif slider and slider.isSliderCallback(callbackName) then
+        slider.onHoverEnter(elemHandle)
     end
 end
 
@@ -231,6 +249,8 @@ function uiManager.onHoverLeave(elemHandle, callbackName)
         textbox.onHoverLeave(elemHandle)
     elseif dropdown and dropdown.isDropdownCallback(callbackName) then
         dropdown.onHoverLeave(elemHandle)
+    elseif slider and slider.isSliderCallback(callbackName) then
+        slider.onHoverLeave(elemHandle)
     end
 end
 
@@ -285,6 +305,9 @@ function uiManager.onDropdownOptionClick(elemHandle)
 end
 
 function uiManager.onMouseUp(button_num, x, y)
+    if slider then
+        slider.onMouseUp()
+    end
     if button then
         button.onMouseUp()
     end
@@ -329,6 +352,26 @@ function uiManager.onScrollDown(elemHandle)
                 return true
             end
         end
+    end
+    return false
+end
+
+-------------------------------------------------------------
+--- Slider Clicks
+-------------------------------------------------------------
+
+function uiManager.onSliderTrackClick(elemHandle)
+    handleNonTextBoxClick()
+    if slider then
+        return slider.handleCallback("onSliderTrackClick", elemHandle)
+    end
+    return false
+end
+
+function uiManager.onSliderKnobClick(elemHandle)
+    handleNonTextBoxClick()
+    if slider then
+        return slider.handleCallback("onSliderKnobClick", elemHandle)
     end
     return false
 end
