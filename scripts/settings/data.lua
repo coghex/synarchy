@@ -112,7 +112,7 @@ end
 -----------------------------------------------------------
 
 function data.reload()
-    local w, h, wm, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
+    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness = engine.getVideoConfig()
     data.current.width      = w
     data.current.height     = h
     data.current.windowMode = wm
@@ -185,6 +185,20 @@ function data.apply(widgetValues)
         end
     end
 
+    -- Brightness (live-previewed, just commit to current)
+    if widgetValues.brightness then
+        local br = math.floor(widgetValues.brightness)
+        br = math.max(data.brightnessMin, math.min(data.brightnessMax, br))
+        if data.current.brightness ~= br then
+            data.current.brightness = br
+            data.pending.brightness = br
+            -- Engine already has this value from live preview,
+            -- but ensure it's set in case apply is called without slider interaction
+            engine.setBrightness(br)
+            engine.logInfo("Brightness applied: " .. tostring(br))
+        end
+    end
+
     -- Frame Limit (read from widget)
     if widgetValues.frameLimit then
         local fl = widgetValues.frameLimit
@@ -224,7 +238,7 @@ end
 function data.revert()
     engine.logInfo("Reverting settings to saved config...")
 
-    local w, h, wm, uiScale, vs, frameLimit, msaa = engine.getVideoConfig()
+    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness = engine.getVideoConfig()
 
     if data.current.windowMode ~= wm then
         engine.setWindowMode(wm)
@@ -237,8 +251,9 @@ function data.revert()
 
     if data.current.vsync ~= vs then engine.setVSync(vs) end
     if data.current.msaa ~= (msaa or 1) then engine.setMSAA(msaa or 1) end
-    if data.current.brightness ~= brightness then
-        engine.setBrightness(brightness)
+    local savedBrightness = brightness or 100
+    if data.current.brightness ~= savedBrightness then
+        engine.setBrightness(savedBrightness)
     end
 
     data.current.width      = w

@@ -405,7 +405,10 @@ function graphicsTab.create(params)
         uiscale  = uiscale,
         zIndex   = zWidgets,
         onChange  = function(value, id, name)
-            pending.brightness = math.floor(value)
+            local clamped = math.floor(value)
+            pending.brightness = clamped
+            -- brightness is a live preview
+            engine.setBrightness(clamped)
         end,
     })
     local brSliderId = graphicsTab.brightnessSlider

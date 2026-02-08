@@ -267,7 +267,7 @@ handleSetBrightness pct = do
     env ← ask
     let brightness = max 50 (min 300 pct)
     liftIO $ writeIORef (brightnessRef env) brightness
-    logInfoM CatGraphics $ "Brightness set to " <> T.pack (show pct) <> "%"
+    logDebugM CatGraphics $ "Brightness set to " <> T.pack (show pct) <> "%"
 
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
