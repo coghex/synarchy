@@ -255,6 +255,7 @@ function dropdown.new(params)
         displayTexSetNormal,
         dd.tileSize,
         1.0, 1.0, 1.0, 1.0,
+        0,
         dd.page
     )
     
@@ -513,6 +514,7 @@ function dropdown.openList(id)
         optionTexSet,
         dd.tileSize,
         1.0, 1.0, 1.0, 1.0,
+        0,
         dd.page
     )
     

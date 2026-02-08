@@ -1,5 +1,5 @@
 video:
-  frame_limit: 120
+  frame_limit: 30
   msaa: 1
   resolution:
     height: 1080
@@ -8,3 +8,4 @@ video:
   vsync: true
   window_mode: windowed
   brightness: 100
+  pixel_snap: false

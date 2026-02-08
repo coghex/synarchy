@@ -1,9 +1,11 @@
 video:
   frame_limit: 60
-  fullscreen: false
-  ui_scale: 1.0
   msaa: 1
   resolution:
-    height: 600
-    width: 800
+    height: 1080
+    width: 1920
+  ui_scale: 1.0
   vsync: true
+  window_mode: windowed
+  brightness: 100
+  pixel_snap: false

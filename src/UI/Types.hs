@@ -116,6 +116,7 @@ data UIBoxStyle = UIBoxStyle
   { ubsTextures :: BoxTextureHandle
   , ubsTileSize :: Float
   , ubsColor    :: (Float, Float, Float, Float)
+  , ubsOverflow :: Float
   } deriving (Show)
 
 data UITextStyle = UITextStyle

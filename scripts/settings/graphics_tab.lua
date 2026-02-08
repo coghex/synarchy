@@ -8,8 +8,9 @@
 --   3. VSync           (checkbox)
 --   4. Frame Limit     (textbox)
 --   5. MSAA            (dropdown)
---   6. Brightness      (textbox — TODO: replace with slider)
+--   6. Brightness      (textbox)
 --   7. UI Scaling      (textbox)
+--   8. Pixel Snap      (checkbox)
 local label    = require("scripts.ui.label")
 local textbox  = require("scripts.ui.textbox")
 local checkbox = require("scripts.ui.checkbox")
@@ -471,6 +472,52 @@ function graphicsTab.create(params)
         end,
         widgetSetVisible = function(vis)
             textbox.setVisible(scaleId, vis)
+        end,
+    })
+    rowIndex = rowIndex + 1
+
+    ---------------------------------------------------------
+    -- Row 8: Pixel Snap (checkbox)  — insert after UI Scaling
+    ---------------------------------------------------------
+    local psLabelId = label.new({
+        name     = "pixelsnap_label",
+        text     = "Pixel Snap",
+        font     = font,
+        fontSize = base.fontSize,
+        color    = {1.0, 1.0, 1.0, 1.0},
+        page     = page,
+        uiscale  = uiscale,
+    })
+    local psLabelHandle = label.getElementHandle(psLabelId)
+    UI.addToPage(page, psLabelHandle, cx, rowY(rowIndex) + s.fontSize)
+    UI.setZIndex(psLabelHandle, zContent)
+
+    graphicsTab.pixelSnapCheckboxId = checkbox.new({
+        name    = "pixel_snap",
+        size    = base.checkboxSize,
+        uiscale = uiscale,
+        page    = page,
+        x       = cx + cw - cbSize,
+        y       = rowY(rowIndex),
+        default = data.current.pixelSnap,
+        zIndex  = zWidgets,
+        onChange = function(checked, id, name)
+            pending.pixelSnap = checked
+            engine.logInfo("Pixel snap pending: " .. tostring(checked))
+        end,
+    })
+    local psCbId = graphicsTab.pixelSnapCheckboxId
+
+    table.insert(rows, {
+        labelHandle = psLabelHandle,
+        widgetHandles = {
+            checkbox.getElementHandle(psCbId),
+        },
+        widgetSetPosition = function(ry)
+            checkbox.setPosition(psCbId, cx + cw - cbSize, ry)
+        end,
+        widgetSetVisible = function(vis)
+            checkbox.setVisible(psCbId, vis)
         end,
     })
     rowIndex = rowIndex + 1

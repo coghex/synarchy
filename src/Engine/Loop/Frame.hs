@@ -213,6 +213,7 @@ updateUniformBufferForFrame win frameIdx = do
             
             camera ← liftIO $ readIORef (cameraRef env)
             brightness ← liftIO $ readIORef (brightnessRef env)
+            pixelSnap ← liftIO $ readIORef (pixelSnapRef env)
             
             -- Update UI camera to use framebuffer dimensions
             let uiCamera = UICamera (fromIntegral fbWidth) (fromIntegral fbHeight)
@@ -222,6 +223,8 @@ updateUniformBufferForFrame win frameIdx = do
                               (createUIViewMatrix uiCamera)
                               (createUIProjectionMatrix uiCamera)
                               (brightnessToMultiplier brightness)
+                              (fromIntegral fbWidth) (fromIntegral fbHeight)
+                              (if pixelSnap then 1.0 else 0.0)
             
             liftIO $ writeIORef (windowSizeRef env) (winWidth, winHeight)
             liftIO $ writeIORef (framebufferSizeRef env) (fbWidth, fbHeight)

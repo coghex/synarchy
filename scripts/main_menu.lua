@@ -25,14 +25,17 @@ mainMenu.ownedPanels  = {}
 -- Base sizes (unscaled)
 mainMenu.baseSizes = {
     titleFontSize = 96,
-    fontSize = 24,
-    buttonHeight = 60,
-    buttonSpacing = 20,
+    fontSize = 32,
+    buttonHeight = 80,
+    buttonSpacing = 24,
     buttonTileSize = 64,
-    buttonPaddingX = 120,
-    menuPaddingX = 80,
-    menuPaddingY = 80,
-    titleOffset = 60,
+    buttonPaddingX = 160,
+    buttonOverflow = 16,
+    menuPaddingX = 100,
+    menuPaddingY = 100,
+    menuTileSize = 64,
+    menuOverflow = 0,
+    titleOffset = 80,
 }
 
 mainMenu.buttons = {}
@@ -113,7 +116,8 @@ function mainMenu.createUI()
         height = menuHeight,
         textureSet = mainMenu.boxTexSet,
         color = {1.0, 1.0, 1.0, 1.0},
-        tileSize = s.buttonTileSize,
+        tileSize = s.menuTileSize,
+        overflow = s.menuOverflow,
         zIndex = 1,
         padding = { top = s.menuPaddingY / 2, bottom = s.menuPaddingY / 2, left = s.menuPaddingX / 2, right = s.menuPaddingX / 2 },
         uiscale = 1.0,  -- Already scaled above
@@ -153,11 +157,12 @@ function mainMenu.createUI()
             width = thisButtonWidth / uiscale,  -- Base size (button.new will scale it)
             height = mainMenu.baseSizes.buttonHeight,
             fontSize = mainMenu.baseSizes.fontSize,
+            tileSize = mainMenu.baseSizes.buttonTileSize,
+            overflow = mainMenu.baseSizes.buttonOverflow,
             uiscale = uiscale,
             page = mainMenu.page,
             font = mainMenu.menuFont,
             textureSet = mainMenu.boxTexSet,
-            tileSize = s.buttonTileSize,
             bgColor = {1.0, 1.0, 1.0, 1.0},
             textColor = {1.0, 1.0, 1.0, 1.0},
             callbackName = item.callback,

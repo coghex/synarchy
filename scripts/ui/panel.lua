@@ -129,6 +129,7 @@ function panel.new(params)
         params.textureSet,
         tileSize,
         color[1], color[2], color[3], color[4],
+        params.overflow or 0,
         p.page
     )
     

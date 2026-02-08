@@ -185,6 +185,7 @@ function scrollbar.new(params)
         texScrollTabSet,
         sb.tileSize,
         1.0, 1.0, 1.0, 1.0,
+        0,
         sb.page
     )
     

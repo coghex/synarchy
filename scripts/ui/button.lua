@@ -78,6 +78,7 @@ function button.new(params)
     if not params.textureSet then
         engine.logError("Button '" .. btn.name .. "' created without textureSet!")
     end
+    local overflow = params.overflow or 0
     
     btn.boxId = UI.newBox(
         btn.name .. "_box",
@@ -86,6 +87,7 @@ function button.new(params)
         params.textureSet,
         btn.tileSize,
         bgColor[1], bgColor[2], bgColor[3], bgColor[4],
+        overflow,
         btn.page
     )
     

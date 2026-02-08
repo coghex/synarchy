@@ -61,6 +61,9 @@ data UniformBufferObject = UBO
     , uboUIView ∷ M44 Float  -- UI view matrix
     , uboUIProj ∷ M44 Float  -- UI projection matrix
     , uboBrightness ∷ Float  -- brightness factor
+    , uboScreenW    ∷ Float  -- screen width
+    , uboScreenH    ∷ Float  -- screen height
+    , uboPixelSnap  ∷ Float  -- pixel snapping factor
     } deriving (Show)
 
 instance Storable UniformBufferObject where
@@ -73,10 +76,16 @@ instance Storable UniformBufferObject where
         <*> peek (castPtr $ ptr `plusPtr` (3 * sizeOf (undefined ∷ M44 Float)))
         <*> peek (castPtr $ ptr `plusPtr` (4 * sizeOf (undefined ∷ M44 Float)))
         <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float)))
-    poke ptr (UBO model view proj uiView uiProj brightness) = do
+        <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 4))
+        <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 8))
+        <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 12))
+    poke ptr (UBO model view proj uiView uiProj brightness screenW screenH pixelSnap) = do
         poke (castPtr ptr) model
         poke (castPtr $ ptr `plusPtr` sizeOf model) view
         poke (castPtr $ ptr `plusPtr` (2 * sizeOf model)) proj
         poke (castPtr $ ptr `plusPtr` (3 * sizeOf model)) uiView
         poke (castPtr $ ptr `plusPtr` (4 * sizeOf model)) uiProj
         poke (castPtr $ ptr `plusPtr` (5 * sizeOf model)) brightness
+        poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 4)) screenW
+        poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 8)) screenH
+        poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 12)) pixelSnap

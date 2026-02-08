@@ -62,6 +62,7 @@ data.current = {
     frameLimit = 60,
     msaa       = 1,
     brightness = 100,
+    pixelSnap  = false,
 }
 
 data.pending = {}
@@ -104,6 +105,7 @@ function data.resetPending()
         frameLimit = data.current.frameLimit,
         msaa       = data.current.msaa,
         brightness = data.current.brightness,
+        pixelSnap  = data.current.pixelSnap,
     }
 end
 
@@ -112,7 +114,7 @@ end
 -----------------------------------------------------------
 
 function data.reload()
-    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness = engine.getVideoConfig()
+    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness, pixelSnap = engine.getVideoConfig()
     data.current.width      = w
     data.current.height     = h
     data.current.windowMode = wm
@@ -121,6 +123,7 @@ function data.reload()
     data.current.frameLimit = frameLimit or 60
     data.current.msaa       = msaa or 1
     data.current.brightness = brightness or 100
+    data.current.pixelSnap  = pixelSnap or false
 end
 
 -----------------------------------------------------------
@@ -167,6 +170,13 @@ function data.apply(widgetValues)
         data.current.brightness = data.pending.brightness
         engine.setBrightness(data.current.brightness)
         engine.logInfo("Brightness applied: " .. tostring(data.current.brightness))
+    end
+
+    -- Pixel Snap
+    if data.pending.pixelSnap ~= data.current.pixelSnap then
+        data.current.pixelSnap = data.pending.pixelSnap
+        engine.setPixelSnap(data.current.pixelSnap)
+        engine.logInfo("Pixel Snap applied: " .. tostring(data.current.pixelSnap))
     end
 
     -- UI Scale (read from widget)
@@ -238,7 +248,7 @@ end
 function data.revert()
     engine.logInfo("Reverting settings to saved config...")
 
-    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness = engine.getVideoConfig()
+    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness, pixelSnap = engine.getVideoConfig()
 
     if data.current.windowMode ~= wm then
         engine.setWindowMode(wm)
@@ -255,6 +265,10 @@ function data.revert()
     if data.current.brightness ~= savedBrightness then
         engine.setBrightness(savedBrightness)
     end
+    local savedPixelSnap = pixelSnap or false
+    if data.current.pixelSnap ~= savedPixelSnap then
+        engine.setPixelSnap(savedPixelSnap)
+    end
 
     data.current.width      = w
     data.current.height     = h
@@ -264,6 +278,7 @@ function data.revert()
     data.current.frameLimit = frameLimit
     data.current.msaa       = msaa or 1
     data.current.brightness = brightness or 100
+    data.current.pixelSnap  = savedPixelSnap
 end
 
 -----------------------------------------------------------

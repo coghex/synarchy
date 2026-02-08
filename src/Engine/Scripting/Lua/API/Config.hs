@@ -11,6 +11,7 @@ module Engine.Scripting.Lua.API.Config
   , setVSyncFn
   , setMSAAFn
   , setBrightnessFn
+  , setPixelSnapFn
   ) where
 
 import UPrelude
@@ -39,7 +40,8 @@ getVideoConfigFn env = do
     Lua.pushinteger (maybe 0 fromIntegral $ vcFrameLimit config)
     Lua.pushinteger (fromIntegral $ vcMSAA config)
     Lua.pushinteger (fromIntegral $ vcBrightness config)
-    return 8
+    Lua.pushboolean (vcPixelSnap config)
+    return 9
 
 -- | Set video config (doesn't save to file)
 setVideoConfigFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
@@ -52,10 +54,11 @@ setVideoConfigFn env = do
     framelimitArg <- Lua.tointeger 6
     msaaArg <- Lua.tointeger 7
     brightnessArg <- Lua.tointeger 8
+    pixelSnapArg <- Lua.toboolean 9
     
     case (widthArg, heightArg, fullscreenArg, uiScaleArg, vsyncArg,
-         framelimitArg, msaaArg, brightnessArg) of
-        (Just w, Just h, Just wmBS, Just uis, vs, Just fl, Just m, Just b) -> do
+         framelimitArg, msaaArg, brightnessArg, pixelSnapArg) of
+        (Just w, Just h, Just wmBS, Just uis, vs, Just fl, Just m, Just b, ps) -> do
             let wm = case windowModeFromText (TE.decodeUtf8 wmBS) of
                         Just mode -> mode
                         Nothing   -> Windowed
@@ -197,4 +200,13 @@ setBrightnessFn env = do
             Q.writeQueue lteq (LuaSetBrightness brightness)
             oldConfig <- readIORef (videoConfigRef env)
             writeIORef (videoConfigRef env) $ oldConfig { vcBrightness = brightness }
+    return 0
+
+setPixelSnapFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+setPixelSnapFn env = do
+    enabled <- Lua.toboolean 1
+    Lua.liftIO $ do
+        writeIORef (pixelSnapRef env) enabled
+        oldConfig <- readIORef (videoConfigRef env)
+        writeIORef (videoConfigRef env) $ oldConfig { vcPixelSnap = enabled }
     return 0

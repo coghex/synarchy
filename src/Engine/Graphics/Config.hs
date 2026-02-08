@@ -90,6 +90,7 @@ data VideoConfig = VideoConfig
     , vcFrameLimit   ∷ Maybe Int
     , vcMSAA         ∷ Int
     , vcBrightness   ∷ Int
+    , vcPixelSnap    ∷ Bool
     } deriving (Show, Eq)
 
 -- | Default video configuration fallback
@@ -103,6 +104,7 @@ defaultVideoConfig = VideoConfig
     , vcFrameLimit = Nothing
     , vcMSAA       = 1
     , vcBrightness = 100
+    , vcPixelSnap  = False
     }
 
 -- | Yaml structure for video configuration
@@ -114,6 +116,7 @@ data VideoConfigFile = VideoConfigFile
     , vfFrameLimit  ∷ Maybe Int
     , vfMSAA        ∷ Int
     , vfBrightness  ∷ Int
+    , vfPixelSnap   ∷ Bool
     } deriving (Show, Eq)
 
 data Resolution = Resolution
@@ -145,6 +148,7 @@ instance FromJSON VideoConfigFile where
         <*> videoObj .: "frame_limit" .!= Nothing
         <*> videoObj .: "msaa" .!= 1
         <*> videoObj .: "brightness" .!= 100
+        <*> videoObj .: "pixel_snap" .!= False
     parseJSON _ = fail "Expected an object for VideoConfigFile"
 
 instance ToJSON Resolution where
@@ -154,7 +158,7 @@ instance ToJSON Resolution where
         ]
 
 instance ToJSON VideoConfigFile where
-    toJSON (VideoConfigFile res wm uis vs fl msaa b) = Yaml.object
+    toJSON (VideoConfigFile res wm uis vs fl msaa b ps) = Yaml.object
         [ "video" .= Yaml.object
             [ "resolution"  .= res
             , "window_mode" .= wm
@@ -163,6 +167,7 @@ instance ToJSON VideoConfigFile where
             , "frame_limit" .= fl
             , "msaa"        .= msaa
             , "brightness"  .= b
+            , "pixel_snap"  .= ps
             ]
         ]
 
@@ -187,6 +192,7 @@ loadVideoConfig logger path = do
             , vcFrameLimit = vfFrameLimit vf
             , vcMSAA       = vfMSAA vf
             , vcBrightness  = vfBrightness vf
+            , vcPixelSnap   = vfPixelSnap vf
             }
 
 -- | Save video configuration to a YAML file
@@ -203,6 +209,7 @@ saveVideoConfig logger path config = do
           , vfFrameLimit = vcFrameLimit config
           , vfMSAA = vcMSAA config
           , vfBrightness = vcBrightness config
+          , vfPixelSnap = vcPixelSnap config
           }
     Yaml.encodeFile path videoFile
     logInfo logger CatInit $ "Video config saved to " <> T.pack path

@@ -93,6 +93,7 @@ function textbox.new(params)
         texSetNormal,
         tb.tileSize,
         1.0, 1.0, 1.0, 1.0,
+        0,
         tb.page
     )
     

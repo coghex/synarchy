@@ -142,7 +142,7 @@ uiNewElementFn env = do
     
     return 1
 
--- | UI.newBox(name, width, height, boxTexHandle, tileSize, r, g, b, a, pageHandle) -> elementHandle
+-- | UI.newBox(name, width, height, boxTexHandle, tileSize, r, g, b, a, overflow, pageHandle) -> elementHandle
 uiNewBoxFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
 uiNewBoxFn env = do
     nameArg <- Lua.tostring 1
@@ -154,19 +154,21 @@ uiNewBoxFn env = do
     gArg <- Lua.tonumber 7
     bArg <- Lua.tonumber 8
     aArg <- Lua.tonumber 9
-    pageArg <- Lua.tointeger 10
+    overflowArg <- Lua.tonumber 10
+    pageArg <- Lua.tointeger 11
     
-    case (nameArg, widthArg, heightArg, boxTexArg, tileSizeArg, rArg, gArg, bArg, aArg, pageArg) of
-        (Just nameBS, Just w, Just h, Just bt, Just ts, Just r, Just g, Just b, Just a, Just p) -> do
+    case (nameArg, widthArg, heightArg, boxTexArg, tileSizeArg, rArg, gArg, bArg, aArg, overflowArg, pageArg) of
+        (Just nameBS, Just w, Just h, Just bt, Just ts, Just r, Just g, Just b, Just a, Just ovf, Just p) -> do
             let name = TE.decodeUtf8 nameBS
                 boxTexHandle = BoxTextureHandle (fromIntegral bt)
                 tileSize = realToFrac ts
                 color = (realToFrac r, realToFrac g, realToFrac b, realToFrac a)
                 pageHandle = PageHandle (fromIntegral p)
+                overflow = realToFrac ovf
             
             handle <- Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr ->
                 let (elemH, newMgr) = createBox name (realToFrac w) (realToFrac h) 
-                                        boxTexHandle tileSize color pageHandle mgr
+                                        boxTexHandle tileSize color overflow pageHandle mgr
                 in (newMgr, elemH)
             
             Lua.pushinteger (fromIntegral $ unElementHandle handle)

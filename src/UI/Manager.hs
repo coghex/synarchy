@@ -132,13 +132,14 @@ createElement name width height pageHandle mgr =
     createElementInternal name width height pageHandle RenderNone mgr
 
 createBox :: Text -> Float -> Float -> BoxTextureHandle -> Float 
-          -> (Float, Float, Float, Float) -> PageHandle 
+          -> (Float, Float, Float, Float) -> Float -> PageHandle 
           -> UIPageManager -> (ElementHandle, UIPageManager)
-createBox name width height texHandle tileSize color pageHandle mgr =
+createBox name width height texHandle tileSize color overflow pageHandle mgr =
     let style = UIBoxStyle
           { ubsTextures = texHandle
           , ubsTileSize = tileSize
           , ubsColor    = color
+          , ubsOverflow = overflow
           }
     in createElementInternal name width height pageHandle (RenderBox style) mgr
 

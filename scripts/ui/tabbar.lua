@@ -106,6 +106,7 @@ function tabbar.new(params)
         texSetFrame,
         tb.frameTileSize,
         1.0, 1.0, 1.0, 1.0,
+        0,
         tb.page
     )
     UI.addToPage(tb.page, tb.frameBoxId, tb.frameX, tb.frameY)
@@ -124,6 +125,7 @@ function tabbar.new(params)
             texSet,
             tileSize,
             1.0, 1.0, 1.0, 1.0,
+            0,
             tb.page
         )
         UI.addToPage(tb.page, tab.boxId, currentX, tb.y)

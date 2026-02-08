@@ -183,7 +183,14 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
                     let (w, h) = ueSize elem
                         tileSize = ubsTileSize style
                         color = ubsColor style
-                        batches = makeBoxBatches bindless texSet absX absY w h tileSize color layerId
+                        overflow = ubsOverflow style
+                        -- Expand the visual box by overflow on each side
+                        -- Element position/size stays the same for hit testing
+                        vx = absX - overflow
+                        vy = absY - overflow
+                        vw = w + overflow * 2
+                        vh = h + overflow * 2
+                        batches = makeBoxBatches bindless texSet vx vy vw vh tileSize color layerId
                         items = V.map SpriteItem batches
                     pure (batches, items)
         
@@ -236,35 +243,36 @@ makeBoxBatches :: BindlessTextureSystem -> BoxTextureSet
 makeBoxBatches bindless texSet x y w h tileSize color layerId =
     let ts = tileSize
         
+        -- When the element is smaller than 2*tileSize, let the tiles
+        -- overlap naturally from the origin. The middle section becomes 0
+        -- (or negative, clamped to 0) and corners/edges simply overlap.
+        -- This preserves the element's position — no offset correction.
         midW = max 0 (w - ts * 2)
         midH = max 0 (h - ts * 2)
         
-        offsetY = if h < ts * 2 then (h - ts * 2) / 2 else 0
-        offsetX = if w < ts * 2 then (w - ts * 2) / 2 else 0
+        -- No offset — always start at the element's actual position.
+        -- Tiles that are larger than the element will extend beyond its
+        -- bounds, which looks intentional for stylised buttons.
+        nwX = x
+        nwY = y
+        nX  = x + ts
+        nY  = y
+        neX = x + ts + midW
+        neY = y
         
-        baseX = x + offsetX
-        baseY = y + offsetY
+        wX  = x
+        wY  = y + ts
+        cX  = x + ts
+        cY  = y + ts
+        eX  = x + ts + midW
+        eY  = y + ts
         
-        nwX = baseX
-        nwY = baseY
-        nX  = baseX + ts
-        nY  = baseY
-        neX = baseX + ts + midW
-        neY = baseY
-        
-        wX  = baseX
-        wY  = baseY + ts
-        cX  = baseX + ts
-        cY  = baseY + ts
-        eX  = baseX + ts + midW
-        eY  = baseY + ts
-        
-        swX = baseX
-        swY = baseY + ts + midH
-        sX  = baseX + ts
-        sY  = baseY + ts + midH
-        seX = baseX + ts + midW
-        seY = baseY + ts + midH
+        swX = x
+        swY = y + ts + midH
+        sX  = x + ts
+        sY  = y + ts + midH
+        seX = x + ts + midW
+        seY = y + ts + midH
         
         makeBatch tex px py pw ph = 
             let atlasId = lookupTextureSlot bindless tex
@@ -300,17 +308,12 @@ makeQuadVertices x y w h (cr, cg, cb, ca) atlasId =
         x1 = x + w
         y1 = y + h
         
-        u0 = 0.0
-        v0 = 0.0
-        u1 = 1.0
-        v1 = 1.0
-        
         col = Vec4 cr cg cb ca
         
-        v1' = Vertex (Vec2 x0 y0) (Vec2 u0 v0) col atlasId
-        v2' = Vertex (Vec2 x1 y0) (Vec2 u1 v0) col atlasId
-        v3' = Vertex (Vec2 x0 y1) (Vec2 u0 v1) col atlasId
-        v4' = Vertex (Vec2 x1 y0) (Vec2 u1 v0) col atlasId
-        v5' = Vertex (Vec2 x1 y1) (Vec2 u1 v1) col atlasId
-        v6' = Vertex (Vec2 x0 y1) (Vec2 u0 v1) col atlasId
+        v1' = Vertex (Vec2 x0 y0) (Vec2 0 0) col atlasId
+        v2' = Vertex (Vec2 x1 y0) (Vec2 1 0) col atlasId
+        v3' = Vertex (Vec2 x0 y1) (Vec2 0 1) col atlasId
+        v4' = Vertex (Vec2 x1 y0) (Vec2 1 0) col atlasId
+        v5' = Vertex (Vec2 x1 y1) (Vec2 1 1) col atlasId
+        v6' = Vertex (Vec2 x0 y1) (Vec2 0 1) col atlasId
     in V.fromList [v1', v2', v3', v4', v5', v6']

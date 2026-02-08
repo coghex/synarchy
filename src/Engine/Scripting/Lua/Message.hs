@@ -67,6 +67,11 @@ handleLuaMessage msg = do
                 [("brightness", T.pack $ show brightness)]
             handleSetBrightness brightness
 
+        LuaSetPixelSnap enabled → do
+            logDebugSM CatLua "Setting pixel snap"
+                [("enabled", if enabled then "true" else "false")]
+            handleSetPixelSnap enabled
+
         LuaLoadFontRequest handle path size → do
             logDebugSM CatLua "Loading font"
                 [("path", T.pack path)
@@ -268,6 +273,12 @@ handleSetBrightness pct = do
     let brightness = max 50 (min 300 pct)
     liftIO $ writeIORef (brightnessRef env) brightness
     logDebugM CatGraphics $ "Brightness set to " <> T.pack (show pct) <> "%"
+
+handleSetPixelSnap ∷ Bool → EngineM ε σ ()
+handleSetPixelSnap enabled = do
+    env ← ask
+    liftIO $ writeIORef (pixelSnapRef env) enabled
+    logDebugM CatGraphics $ "Pixel snap " <> if enabled then "enabled" else "disabled"
 
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
