@@ -10,6 +10,7 @@ module Engine.Scripting.Lua.API.Config
   , setWindowModeFn
   , setVSyncFn
   , setMSAAFn
+  , setBrightnessFn
   ) where
 
 import UPrelude
@@ -180,4 +181,17 @@ setMSAAFn env = do
             Q.writeQueue lteq (LuaSetMSAA msaa)
             oldConfig <- readIORef (videoConfigRef env)
             writeIORef (videoConfigRef env) $ oldConfig { vcMSAA = msaa }
+    return 0
+
+setBrightnessFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+setBrightnessFn env = do
+    brightnessArg <- Lua.tonumber 1
+    brightness ← case brightnessArg of
+        Just b  -> pure b
+        Nothing -> pure 1.0
+    Lua.liftIO $ do
+            let lteq = luaToEngineQueue env
+            Q.writeQueue lteq (LuaSetBrightness (round brightness))
+            oldConfig <- readIORef (videoConfigRef env)
+            writeIORef (videoConfigRef env) $ oldConfig { vcBrightness = realToFrac brightness }
     return 0

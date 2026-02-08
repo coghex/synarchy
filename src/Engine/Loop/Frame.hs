@@ -211,6 +211,7 @@ updateUniformBufferForFrame win frameIdx = do
                 ,("winSize", T.pack (show winWidth) <> "x" <> T.pack (show winHeight))]
             
             camera ← liftIO $ readIORef (cameraRef env)
+            brightness ← liftIO $ readIORef (brightnessRef env)
             
             -- Update UI camera to use framebuffer dimensions
             let uiCamera = UICamera (fromIntegral fbWidth) (fromIntegral fbHeight)
@@ -218,7 +219,7 @@ updateUniformBufferForFrame win frameIdx = do
                               (createProjectionMatrix camera 
                                   (fromIntegral fbWidth) (fromIntegral fbHeight))
                               (createUIViewMatrix uiCamera)
-                              (createUIProjectionMatrix uiCamera)
+                              (createUIProjectionMatrix uiCamera) brightness
             
             liftIO $ writeIORef (windowSizeRef env) (winWidth, winHeight)
             liftIO $ writeIORef (framebufferSizeRef env) (fbWidth, fbHeight)

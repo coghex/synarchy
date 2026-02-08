@@ -7,3 +7,4 @@ video:
   ui_scale: 2
   vsync: true
   window_mode: windowed
+  brightness: 100

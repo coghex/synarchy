@@ -81,13 +81,14 @@ instance ToJSON WindowMode where
 
 -- | Video configuration settings
 data VideoConfig = VideoConfig
-    { vcWidth      ∷ Int
-    , vcHeight     ∷ Int
-    , vcWindowMode ∷ WindowMode
-    , vcUIScale    ∷ Float
-    , vcVSync      ∷ Bool
-    , vcFrameLimit ∷ Maybe Int
-    , vcMSAA       ∷ Int
+    { vcWidth        ∷ Int
+    , vcHeight       ∷ Int
+    , vcWindowMode   ∷ WindowMode
+    , vcUIScale      ∷ Float
+    , vcVSync        ∷ Bool
+    , vcFrameLimit   ∷ Maybe Int
+    , vcMSAA         ∷ Int
+    , vcBrightness   ∷ Float
     } deriving (Show, Eq)
 
 -- | Default video configuration fallback
@@ -100,6 +101,7 @@ defaultVideoConfig = VideoConfig
     , vcVSync      = True
     , vcFrameLimit = Nothing
     , vcMSAA       = 1
+    , vcBrightness = 1.0
     }
 
 -- | Yaml structure for video configuration
@@ -110,6 +112,7 @@ data VideoConfigFile = VideoConfigFile
     , vfVSync       ∷ Bool
     , vfFrameLimit  ∷ Maybe Int
     , vfMSAA        ∷ Int
+    , vfBrightness  ∷ Float
     } deriving (Show, Eq)
 
 data Resolution = Resolution
@@ -140,6 +143,7 @@ instance FromJSON VideoConfigFile where
         <*> videoObj .: "vsync" .!= True
         <*> videoObj .: "frame_limit" .!= Nothing
         <*> videoObj .: "msaa" .!= 1
+        <*> videoObj .: "brightness" .!= 1.0
     parseJSON _ = fail "Expected an object for VideoConfigFile"
 
 instance ToJSON Resolution where
@@ -149,7 +153,7 @@ instance ToJSON Resolution where
         ]
 
 instance ToJSON VideoConfigFile where
-    toJSON (VideoConfigFile res wm uis vs fl msaa) = Yaml.object
+    toJSON (VideoConfigFile res wm uis vs fl msaa b) = Yaml.object
         [ "video" .= Yaml.object
             [ "resolution"  .= res
             , "window_mode" .= wm
@@ -157,6 +161,7 @@ instance ToJSON VideoConfigFile where
             , "vsync"       .= vs
             , "frame_limit" .= fl
             , "msaa"        .= msaa
+            , "brightness"  .= b
             ]
         ]
 
@@ -177,6 +182,7 @@ loadVideoConfig logger path = do
             , vcVSync      = vfVSync vf
             , vcFrameLimit = vfFrameLimit vf
             , vcMSAA       = vfMSAA vf
+            , vcBrightness  = vfBrightness vf
             }
 
 -- | Save video configuration to a YAML file
@@ -192,6 +198,7 @@ saveVideoConfig logger path config = do
           , vfVSync = vcVSync config
           , vfFrameLimit = vcFrameLimit config
           , vfMSAA = vcMSAA config
+          , vfBrightness = vcBrightness config
           }
     Yaml.encodeFile path videoFile
     logInfo logger CatInit $ "Video config saved to " <> T.pack path

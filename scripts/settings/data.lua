@@ -164,7 +164,7 @@ function data.apply(widgetValues)
     -- Brightness
     if data.pending.brightness ~= data.current.brightness then
         data.current.brightness = data.pending.brightness
-        -- TODO: call engine.setBrightness(data.current.brightness)
+        engine.setBrightness(data.current.brightness)
         engine.logInfo("Brightness applied: " .. tostring(data.current.brightness))
     end
 

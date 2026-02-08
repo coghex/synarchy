@@ -40,6 +40,7 @@ data EngineEnv = EngineEnv
   , windowStateRef     ∷ IORef WindowState
   , framebufferSizeRef ∷ IORef (Int, Int)
   , fpsRef             ∷ IORef Double
+  , brightnessRef      ∷ IORef Float
   , eventQueue         ∷ Q.Queue Event
   , inputQueue         ∷ Q.Queue InputEvent
   , loggerRef          ∷ IORef LoggerState

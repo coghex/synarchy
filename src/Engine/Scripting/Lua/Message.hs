@@ -62,6 +62,11 @@ handleLuaMessage msg = do
                 [("samples", T.pack $ show msaa)]
             handleSetMSAA msaa
 
+        LuaSetBrightness brightness → do
+            logDebugSM CatLua "Setting brightness"
+                [("brightness", T.pack $ show brightness)]
+            handleSetBrightness brightness
+
         LuaLoadFontRequest handle path size → do
             logDebugSM CatLua "Loading font"
                 [("path", T.pack path)
@@ -256,6 +261,13 @@ handleSetMSAA msaa = do
             logInfoM CatGraphics $ "Recreating swapchain for MSAA change: "
                 <> T.pack (show msaa) <> "x"
             recreateSwapchain window
+
+handleSetBrightness ∷ Int → EngineM ε σ ()
+handleSetBrightness pct = do
+    env ← ask
+    let brightness = fromIntegral (max 50 (min 300 pct)) / 100.0
+    liftIO $ writeIORef (brightnessRef env) brightness
+    logInfoM CatGraphics $ "Brightness set to " <> T.pack (show pct) <> "%"
 
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()

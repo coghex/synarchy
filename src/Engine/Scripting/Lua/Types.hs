@@ -54,6 +54,7 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSetVSync Bool
                     | LuaSetMSAA Int
                     | LuaSetResolution Int Int
+                    | LuaSetBrightness Int
                     | LuaLoadTextureRequest TextureHandle FilePath
                     | LuaLoadFontRequest FontHandle FilePath Int
                     | LuaSpawnTextRequest ObjectId Float Float FontHandle

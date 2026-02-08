@@ -287,12 +287,13 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
           (createProjectionMatrix camera (fromIntegral width) (fromIntegral height))
           (createUIViewMatrix uiCamera)
           (createUIProjectionMatrix uiCamera)
+          1.0
       uboSize = fromIntegral $ sizeOf uboData
       numFrames = gcMaxFrames defaultGraphicsConfig
   
   uniformBuffers <- V.generateM (fromIntegral numFrames) $ \_ -> do
       (buffer, memory) <- createUniformBuffer device physicalDevice uboSize
-      updateUniformBuffer device memory (UBO identity identity identity identity identity)
+      updateUniformBuffer device memory (UBO identity identity identity identity identity 1.0)
       pure (buffer, memory)
   
   modify $ \s -> s { graphicsState = (graphicsState s) {
