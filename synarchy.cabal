@@ -69,6 +69,7 @@ test-suite synarchy-test
                 , vector
                 , yaml
                 , aeson
+                , unordered-containers
                 , GLFW-b
                 , vulkan
                 , vulkan-utils
@@ -209,6 +210,7 @@ library
                      Engine.Scripting.Lua.API.Focus
                      Engine.Scripting.Lua.API.Shell
                      Engine.Scripting.Lua.API.UI
+                     Engine.Scripting.Lua.API.World
                      Engine.Core.Defaults
                      Engine.Core.Init
                      Engine.Core.Monad
@@ -247,6 +249,9 @@ library
                      UI.Manager
                      UI.Render
                      UI.TextBuffer
+                     World.Types
+                     World.Thread
+                     World.Render
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields
@@ -286,6 +291,7 @@ library
                  , vector
                  , yaml
                  , aeson
+                 , unordered-containers
                  , vulkan
                  , vulkan-utils
                  , template-haskell
@@ -389,6 +395,7 @@ executable synarchy
                  , vector
                  , yaml
                  , aeson
+                 , unordered-containers
                  , vulkan
                  , vulkan-utils
                  , template-haskell

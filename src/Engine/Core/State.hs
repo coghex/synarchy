@@ -31,34 +31,37 @@ import qualified Vulkan.Core10 as Vk
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 import UI.Types (UIPageManager)
 import UI.Focus (FocusManager)
+import World.Types (WorldCommand, WorldManager)
 
 -- | Engine environment (read-only)
 data EngineEnv = EngineEnv
-  { engineConfig       ∷ EngineConfig
-  , videoConfigRef     ∷ IORef VideoConfig
-  , windowSizeRef      ∷ IORef (Int, Int)
-  , windowStateRef     ∷ IORef WindowState
-  , framebufferSizeRef ∷ IORef (Int, Int)
-  , fpsRef             ∷ IORef Double
-  , brightnessRef      ∷ IORef Int
-  , pixelSnapRef       ∷ IORef Bool
-  , textureFilterRef   ∷ IORef TextureFilter
-  , eventQueue         ∷ Q.Queue Event
-  , inputQueue         ∷ Q.Queue InputEvent
-  , loggerRef          ∷ IORef LoggerState
-  , luaToEngineQueue   ∷ Q.Queue LuaToEngineMsg
-  , luaQueue           ∷ Q.Queue LuaMsg
-  , lifecycleRef       ∷ IORef EngineLifecycle
-  , assetPoolRef       ∷ IORef AssetPool
-  , nextObjectIdRef    ∷ IORef Word32
-  , fontCacheRef       ∷ IORef FontCache
-  , inputStateRef      ∷ IORef InputState
-  , keyBindingsRef     ∷ IORef KeyBindings
-  , textBuffersRef     ∷ IORef (Map.Map ObjectId Text)
-  , cameraRef          ∷ IORef Camera2D
-  , uiCameraRef        ∷ IORef UICamera
-  , uiManagerRef       ∷ IORef UIPageManager
-  , focusManagerRef    ∷ IORef FocusManager
+  { engineConfig        ∷ EngineConfig
+  , videoConfigRef      ∷ IORef VideoConfig
+  , windowSizeRef       ∷ IORef (Int, Int)
+  , windowStateRef      ∷ IORef WindowState
+  , framebufferSizeRef  ∷ IORef (Int, Int)
+  , fpsRef              ∷ IORef Double
+  , brightnessRef       ∷ IORef Int
+  , pixelSnapRef        ∷ IORef Bool
+  , textureFilterRef    ∷ IORef TextureFilter
+  , eventQueue          ∷ Q.Queue Event
+  , inputQueue          ∷ Q.Queue InputEvent
+  , loggerRef           ∷ IORef LoggerState
+  , luaToEngineQueue    ∷ Q.Queue LuaToEngineMsg
+  , luaQueue            ∷ Q.Queue LuaMsg
+  , lifecycleRef        ∷ IORef EngineLifecycle
+  , assetPoolRef        ∷ IORef AssetPool
+  , nextObjectIdRef     ∷ IORef Word32
+  , fontCacheRef        ∷ IORef FontCache
+  , inputStateRef       ∷ IORef InputState
+  , keyBindingsRef      ∷ IORef KeyBindings
+  , textBuffersRef      ∷ IORef (Map.Map ObjectId Text)
+  , cameraRef           ∷ IORef Camera2D
+  , uiCameraRef         ∷ IORef UICamera
+  , uiManagerRef        ∷ IORef UIPageManager
+  , focusManagerRef     ∷ IORef FocusManager
+  , worldManagerRef     ∷ IORef WorldManager
+  , worldQueue          ∷ Q.Queue WorldCommand
   }
 
 -- | Engine state (mutable)

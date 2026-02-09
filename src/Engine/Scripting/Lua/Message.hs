@@ -323,15 +323,8 @@ handleSetTextureFilter tf = do
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
 handleLoadTexture handle path = do
     logDebugM CatLua $ "Loading texture from Lua: " <> T.pack path
+                    <> " (handle: " <> T.pack (show handle) <> ")"
     assetId ← loadTextureAtlasWithHandle handle (T.pack $ takeBaseName path) path "default"
-    
-    apRef ← asks assetPoolRef
-    liftIO $ do
-      pool ← readIORef apRef
-      updateTextureState handle (AssetReady assetId []) pool
-    
-    pool ← liftIO $ readIORef apRef
-    modify $ \s → s { assetPool = pool }
     -- notify lua
     env ← ask
     let (TextureHandle h) = handle

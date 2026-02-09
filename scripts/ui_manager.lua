@@ -21,7 +21,8 @@ local initialized = false
 local mainMenu = nil
 local settingsMenu = nil
 local createWorldMenu = nil
-local createWorldMenu = nil
+local worldView = nil  -- NEW
+local worldManager = nil  -- NEW
 local textbox = nil
 local checkbox = nil
 local button = nil
@@ -67,6 +68,8 @@ function uiManager.init(scriptId)
     mainMenu = require("scripts.main_menu")
     settingsMenu = require("scripts.settings_menu")
     createWorldMenu = require("scripts.create_world_menu")
+    worldManager = require("scripts.world_manager")  -- NEW
+    worldView = require("scripts.world_view")  -- NEW
     
     settingsMenu.setShowMenuCallback(function(menuName)
         uiManager.showMenu(menuName)
@@ -92,6 +95,9 @@ function uiManager.onAssetLoaded(assetType, handle, path)
             uiManager.checkReady()
         end
     end
+    if worldView and worldView.onAssetLoaded then
+        worldView.onAssetLoaded(assetType, handle, path)
+    end
 end
 
 function uiManager.checkReady()
@@ -100,6 +106,7 @@ function uiManager.checkReady()
             mainMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
             settingsMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             createWorldMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+            worldView.init(fbW, fbH)  -- NEW
             uiManager.showMenu("main")
             initialized = true
         else
@@ -122,6 +129,7 @@ function uiManager.onFramebufferResize(width, height)
     if mainMenu then mainMenu.onFramebufferResize(width, height) end
     if settingsMenu then settingsMenu.onFramebufferResize(width, height) end
     if createWorldMenu then createWorldMenu.onFramebufferResize(width, height) end
+    if worldView then worldView.onFramebufferResize(width, height) end  -- NEW
     
     -- Re-show the active menu so pages become visible after rebuild
     if currentMenu == "main" then
@@ -130,6 +138,8 @@ function uiManager.onFramebufferResize(width, height)
         if settingsMenu and settingsMenu.page then UI.showPage(settingsMenu.page) end
     elseif currentMenu == "create_world" then
         if createWorldMenu and createWorldMenu.page then UI.showPage(createWorldMenu.page) end
+    elseif currentMenu == "world_view" then  -- NEW
+        if worldView and worldView.page then UI.showPage(worldView.page) end
     end
 end
 
@@ -139,6 +149,7 @@ function uiManager.showMenu(menuName)
     mainMenu.hide()
     settingsMenu.hide()
     createWorldMenu.hide()
+    worldView.hide()  -- NEW
     
     if menuName == "main" then
         mainMenu.show()
@@ -146,6 +157,8 @@ function uiManager.showMenu(menuName)
         settingsMenu.show()
     elseif menuName == "create_world" then
         createWorldMenu.show()
+    elseif menuName == "world_view" then  -- NEW
+        worldView.show()
     end
 end
 
@@ -190,6 +203,16 @@ function uiManager.update(dt)
     end
     if dropdown then
         dropdown.update(dt)
+    end
+    
+    -- NEW: Update world manager
+    if worldManager then
+        worldManager.update(dt)
+    end
+    
+    -- NEW: Update world view
+    if worldView then
+        worldView.update(dt)
     end
 
     -- slider drag detection
@@ -276,7 +299,8 @@ end
 function uiManager.shutdown()
     if mainMenu then mainMenu.shutdown() end
     if settingsMenu then settingsMenu.shutdown() end
-    if createWorldMenu then createWorldMenu.shutdown() end  -- NEW
+    if createWorldMenu then createWorldMenu.shutdown() end
+    if worldView then worldView.shutdown() end  -- NEW
 end
 
 function uiManager.onTextBoxClick(elemHandle)

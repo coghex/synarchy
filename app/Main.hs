@@ -21,6 +21,7 @@ import Engine.Input.Thread (startInputThread)
 import Engine.Loop (mainLoop)
 import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
 import Engine.Scripting.Lua.Backend (startLuaThread)
+import World.Thread (startWorldThread)
 
 main ∷ IO ()
 main = do
@@ -41,6 +42,7 @@ main = do
   -- Fork worker threads
   inputThreadState ← startInputThread env
   luaThreadState   ← startLuaThread env
+  worldThreadState ← startWorldThread env
   
   -- Load video configuration
   logger ← liftIO $ readIORef (loggerRef env)
@@ -76,4 +78,5 @@ main = do
         putStrLn $ displayException err
         shutdownThread inputThreadState
         shutdownThread luaThreadState
+        shutdownThread worldThreadState
     Right _ → pure ()

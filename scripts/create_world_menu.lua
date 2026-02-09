@@ -447,7 +447,9 @@ end
 
 function createWorldMenu.onGenerateWorld()
     engine.logInfo("Generating world...")
-    -- TODO: Implement world generation
+    if createWorldMenu.showMenuCallback then
+        createWorldMenu.showMenuCallback("world_view")
+    end
 end
 
 -----------------------------------------------------------

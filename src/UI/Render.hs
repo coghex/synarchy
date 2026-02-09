@@ -95,6 +95,7 @@ renderUIPages = do
             logWarnM CatUI "No bindless texture system available for UI rendering"
             pure (V.empty, Map.empty)
         Just bindless -> do
+            logDebugM CatUI $ "UI rendering with bindless texture system containing " <> T.pack (show $ Map.size (btsHandleMap bindless)) <> " textures"
             fontCache <- liftIO $ readIORef (fontCacheRef env)
             
             let visiblePages = getVisiblePages mgr

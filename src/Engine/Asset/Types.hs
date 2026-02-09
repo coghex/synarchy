@@ -22,7 +22,7 @@ data AssetPool = AssetPool
   , apFonts             ∷ Map.Map AssetId Font
   , apShaders           ∷ Map.Map AssetId ShaderProgram
   , apAssetPaths        ∷ Map.Map Text AssetId
-  , apNextAssetId       ∷ Int
+  , apNextAssetId       ∷ IORef Int
   , apNextTextureHandle ∷ IORef Int
   , apNextFontHandle    ∷ IORef Int
   , apNextShaderHandle  ∷ IORef Int
@@ -41,6 +41,7 @@ data GlyphInfo = GlyphInfo
 -- | Create default asset pool with initialized IORefs
 defaultAssetPool ∷ IO AssetPool
 defaultAssetPool = do
+  nextAssetIdRef ← newIORef 0  -- Add this line
   nextTextureHandleRef ← newIORef 0
   nextFontHandleRef ← newIORef 0
   nextShaderHandleRef ← newIORef 0
@@ -53,7 +54,7 @@ defaultAssetPool = do
     , apFonts          = Map.empty
     , apShaders        = Map.empty
     , apAssetPaths     = Map.empty
-    , apNextAssetId    = 0
+    , apNextAssetId    = nextAssetIdRef  -- Changed
     , apNextTextureHandle = nextTextureHandleRef
     , apNextFontHandle    = nextFontHandleRef
     , apNextShaderHandle  = nextShaderHandleRef

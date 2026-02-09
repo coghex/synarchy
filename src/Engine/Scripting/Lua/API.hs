@@ -29,6 +29,8 @@ import Engine.Scripting.Lua.API.Text (loadFontFn, spawnTextFn, setTextFn,
 import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn, 
                                         releaseFocusFn, getFocusIdFn)
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
+import Engine.Scripting.Lua.API.World (worldInitFn, worldShowFn, worldHideFn
+                                      , worldSetTextureFn)
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
@@ -173,3 +175,11 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadBoxTextures" (uiLoadBoxTexturesFn env)
   
   Lua.setglobal (Lua.Name "UI")
+
+  Lua.newtable
+
+  registerLuaFunction "init" (worldInitFn env)
+  registerLuaFunction "show" (worldShowFn env)
+  registerLuaFunction "hide" (worldHideFn env)
+  registerLuaFunction "setTexture" (worldSetTextureFn env)
+  Lua.setglobal (Lua.Name "world")

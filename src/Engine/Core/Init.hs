@@ -24,6 +24,7 @@ import Engine.Input.Bindings (loadKeyBindings)
 import Engine.Input.Types (defaultInputState)
 import UI.Focus (createFocusManager)
 import UI.Types (emptyUIPageManager)
+import World.Types (WorldCommand, emptyWorldManager)
 
 -- | Result of engine initialization
 data EngineInitResult = EngineInitResult
@@ -38,6 +39,7 @@ initializeEngine = do
   -- Initialize queues
   eventQueue ← Q.newQueue
   inputQueue ← Q.newQueue
+  worldQueue ← Q.newQueue
   luaToEngineQueue ← Q.newQueue
   engineToLuaQueue ← Q.newQueue
   
@@ -75,13 +77,15 @@ initializeEngine = do
                                            (fromIntegral (vcHeight videoConfig))
   -- Create UI manager references
   uiManagerRef ← newIORef emptyUIPageManager
+  -- create world manager references
+  worldManagerRef ← newIORef emptyWorldManager
   -- Create focus manager
   focusMgrRef ← newIORef createFocusManager
   -- text buffers reference
   textBuffersRef ← newIORef Map.empty
   -- font cache reference
   fontCache ← newIORef defaultFontCache
-  
+
   -- Build environment
   let env = EngineEnv
         { engineConfig       = defaultEngineConfig
@@ -108,6 +112,8 @@ initializeEngine = do
         , cameraRef          = cameraRef
         , uiCameraRef        = uiCameraRef
         , uiManagerRef       = uiManagerRef
+        , worldManagerRef    = worldManagerRef
+        , worldQueue         = worldQueue
         , focusManagerRef    = focusMgrRef
         }
   

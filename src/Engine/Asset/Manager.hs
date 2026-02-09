@@ -3,6 +3,7 @@ module Engine.Asset.Manager
   ( generateTextureHandle
   , generateFontHandle
   , generateShaderHandle
+  , generateAssetId
   , updateTextureState
   , updateFontState
   , updateShaderState
@@ -81,6 +82,12 @@ generateShaderHandle ∷ AssetPool → IO ShaderHandle
 generateShaderHandle pool =
   atomicModifyIORef' (apNextShaderHandle pool) $ \n →
     (n + 1, ShaderHandle n)
+
+-- | Generate an asset ID atomically
+generateAssetId ∷ AssetPool → IO AssetId
+generateAssetId pool =
+  atomicModifyIORef' (apNextAssetId pool) $ \n →
+    (n + 1, AssetId $ fromIntegral n)
 
 -- | Update texture handle state
 updateTextureState ∷ TextureHandle → AssetState AssetId → AssetPool → IO ()
@@ -177,18 +184,56 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
   state ← get
   let pool = assetPool state
       pathKey = T.pack path
+  
+  logDebugM CatAsset $ "Current atlas count: " <> T.pack (show $ Map.size $ apTextureAtlases pool)
+  
   -- check if the texture is already loaded
   case Map.lookup pathKey (apAssetPaths pool) of
     Just existingId → do
       logDebugSM CatAsset "Texture found in cache"
         [("asset_id", T.pack $ show existingId)
         ,("ref_count", T.pack $ show $ taRefCount $ (apTextureAtlases pool) Map.! existingId)]
+      
+      -- Get the existing atlas to find its bindless slot
+      let existingAtlas = (apTextureAtlases pool) Map.! existingId
+      
+      -- Register the NEW handle in bindless system pointing to the SAME slot
+      case (textureSystem (graphicsState state), taBindlessSlot existingAtlas) of
+        (Just bindless, Just slot) → do
+          logDebugM CatAsset $ "Registering duplicate handle " <> T.pack (show texHandle) 
+                            <> " for existing slot " <> T.pack (show slot)
+          
+          -- Get the existing bindless handle for this slot
+          case taInfo existingAtlas of
+            Just texInfo → do
+              device ← case vulkanDevice (graphicsState state) of
+                Just dev → pure dev
+                Nothing → logAndThrowM CatAsset (ExGraphics VulkanDeviceLost) "No device"
+              
+              -- Register the new TextureHandle pointing to the existing texture
+              (mbHandle, newBindless) ← registerTexture device texHandle 
+                                          (tiView texInfo) (tiSampler texInfo) bindless
+              modify $ \s → s { graphicsState = (graphicsState s) {
+                textureSystem = Just newBindless
+                } }
+              
+              logDebugM CatAsset $ "Duplicate handle registered: " <> T.pack (show texHandle)
+            Nothing → pure ()
+        _ → pure ()
+      
       modify $ \s → s { assetPool = (assetPool s) {
         apTextureAtlases = Map.adjust (\a → a { taRefCount = taRefCount a + 1 })
                                       existingId (apTextureAtlases pool) } }
       return existingId
     Nothing → do
-      let nextId = AssetId $ fromIntegral $ apNextAssetId pool
+      -- Generate unique asset ID atomically
+      nextId ← liftIO $ generateAssetId pool
+      
+      logDebugSM CatAsset "Creating new texture asset"
+        [("asset_id", T.pack $ show nextId)
+        ,("path", pathKey)
+        ,("handle", T.pack $ show texHandle)]
+      
       pDevice ← case (vulkanPDevice $ graphicsState state) of
         Nothing → logAndThrowM CatAsset (ExGraphics VulkanDeviceLost)
                     "No physical device found"
@@ -229,6 +274,8 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
               let slot = tsIndex $ bthSlot bHandle
               logDebugSM CatAsset "Bindless texture slot assigned"
                 [("slot", T.pack $ show slot)]
+              let mapSize = Map.size $ btsHandleMap newBindless
+              logDebugM CatAsset $ "Bindless handleMap now has " <> T.pack (show mapSize) <> " entries"
               pure $ Just slot
             Nothing → do
               logWarnM CatAsset $
@@ -269,18 +316,39 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
             , taTextureHandle = texHandle
             }
     
-      logDebugSM CatTexture "Texture loaded successfully"
+      logDebugSM CatTexture "Texture loaded and registered"
         [("name", name)
+        ,("asset_id", T.pack $ show nextId)
+        ,("handle", T.pack $ show texHandle)
         ,("mip_levels", T.pack $ show mipLevels)
         ,("bindless_slot", maybe "none" (T.pack . show) bindlessSlot)]
+
+      liftIO $ updateTextureState texHandle (AssetReady nextId []) pool
+      
+      -- Verify it was inserted
+      atlases <- liftIO $ readIORef (apTextureHandles pool)
+      logDebugM CatAsset $ "After insert, handle map has " <> T.pack (show $ Map.size atlases) <> " entries"
     
-      modify $ \s → s 
-        { assetPool = (assetPool s)
-            { apTextureAtlases = Map.insert nextId atlas (apTextureAtlases pool)
-            , apAssetPaths = Map.insert pathKey nextId (apAssetPaths pool)
-            , apNextAssetId = apNextAssetId pool + 1
-            }
-        }
+      -- Update state with fresh pool reads
+      modify $ \s → 
+        let currentPool = assetPool s
+        in s 
+          { assetPool = currentPool
+              { apTextureAtlases = Map.insert nextId atlas (apTextureAtlases currentPool)
+              , apAssetPaths = Map.insert pathKey nextId (apAssetPaths currentPool)
+              }
+          }
+      -- Atomically update the global IORef
+      env ← ask
+      liftIO $ atomicModifyIORef' (assetPoolRef env) $ \poolRef →
+        let updatedPoolRef = poolRef
+              { apTextureAtlases = Map.insert nextId atlas (apTextureAtlases poolRef)
+              , apAssetPaths = Map.insert pathKey nextId (apAssetPaths poolRef)
+              }
+        in (updatedPoolRef, ())
+      
+      finalPool ← gets assetPool
+      logDebugM CatAsset $ "Atlas inserted, new count: " <> T.pack (show $ Map.size $ apTextureAtlases finalPool)
     
       pure nextId
 
@@ -377,6 +445,8 @@ cleanupResources device state pool = do
                 (liftIO $ maybe (pure ()) id (taCleanup atlas))
             _ → pure ()
 
+    liftIO $ writeIORef (apNextAssetId pool) 0
+    
     modify $ \s → s 
         { graphicsState = (graphicsState s) 
             { cleanupStatus = Completed
@@ -384,7 +454,6 @@ cleanupResources device state pool = do
         , assetPool = (assetPool s) 
             { apTextureAtlases = Map.empty
             , apShaders = Map.empty
-            , apNextAssetId = 0
             }
         }
 

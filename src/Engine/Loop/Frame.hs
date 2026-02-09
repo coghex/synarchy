@@ -37,8 +37,10 @@ import Engine.Loop.Resource (validateDescriptorState, getFrameResources,
                               getQueues, extractWindow)
 import Engine.Scene.Render (updateSceneForRender, getCurrentRenderBatches
                            , ensureDynamicVertexBuffer, uploadBatchesToBuffer)
+import Engine.Scene.Base
 import Engine.Scene.Types
 import UI.Render (renderUIPages)
+import World.Render (updateWorldTiles)
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
@@ -97,6 +99,25 @@ drawFrame = do
             
             -- NOW reset fence since we're definitely going to submit
             liftIO $ resetFences device (V.singleton (frInFlight resources))
+
+            -- update world tiles
+            logDebugM CatRender "Updating world tiles for render..."
+            worldTileBatches ← updateWorldTiles
+            logDebugSM CatRender "Collected world tile batches"
+                [("count", T.pack $ show $ V.length worldTileBatches)]
+            
+            -- Convert world tile batches to RenderItems (wrap in SpriteItem)
+            let worldTileItems = V.map SpriteItem worldTileBatches
+                worldTilesByLayer = V.foldl' (\acc item → 
+                    let layer = case item of
+                          SpriteItem batch → rbLayer batch
+                          TextItem batch → trbLayer batch
+                    in Map.insertWith (<>) layer (V.singleton item) acc
+                  ) Map.empty worldTileItems
+            
+            logDebugM CatRender $ T.pack $ 
+                "World tiles organized into " <> show (Map.size worldTilesByLayer) <> " layers, " <>
+                "total items: " <> show (V.sum $ V.map V.length $ V.fromList $ Map.elems worldTilesByLayer)
             
             -- Update scene
             logDebugM CatRender "Updating scene for render..."
@@ -104,9 +125,10 @@ drawFrame = do
             sceneMgr ← gets sceneManager
             let worldLayeredBatches = bmLayeredBatches $ smBatchManager sceneMgr
             worldBatches ← getCurrentRenderBatches
+            let allWorldBatches = worldBatches <> worldTileBatches
             
             logDebugSM CatRender "Collected world batches"
-                [("count", T.pack $ show $ V.length worldBatches)
+                [("count", T.pack $ show $ V.length allWorldBatches)
                 ,("layers", T.pack $ show $ Map.size worldLayeredBatches)]
             
             -- render UI
@@ -118,8 +140,18 @@ drawFrame = do
                 ,("layers", T.pack $ show $ Map.size uiLayeredBatches)]
             
             -- merge world and UI batches
-            let batches = worldBatches <> uiBatches
-                layeredBatches = Map.unionWith (<>) worldLayeredBatches uiLayeredBatches
+            let batches = allWorldBatches <> uiBatches
+                layeredBatches = Map.unionsWith (<>) 
+                    [worldLayeredBatches, worldTilesByLayer, uiLayeredBatches]
+
+            -- Log final layer composition
+            logDebugM CatRender $ T.pack $ "Final layered batches:"
+            forM_ (Map.toList layeredBatches) $ \(LayerId lid, items) → do
+                let spriteCount = V.length $ V.filter (\case SpriteItem _ → True; _ → False) items
+                    textCount = V.length $ V.filter (\case TextItem _ → True; _ → False) items
+                logDebugM CatRender $ T.pack $ 
+                    "  Layer " <> show lid <> ": " <> show (V.length items) <> 
+                    " items (" <> show spriteCount <> " sprites, " <> show textCount <> " text)"
             
             logDebugSM CatRender "Total render batches"
                 [("total", T.pack $ show $ V.length batches)
@@ -191,6 +223,7 @@ drawFrame = do
             
             logDebugSM CatRender "Frame complete"
                 [("nextFrame", T.pack $ show nextFrame)]
+
 
 -- | Update uniform buffer for current frame
 updateUniformBufferForFrame ∷ GLFW.Window → Word32 → EngineM ε σ ()
