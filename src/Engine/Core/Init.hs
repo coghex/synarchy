@@ -118,6 +118,6 @@ initializeEngine = do
         }
   
   envVar   ← atomically $ newVar env
-  stateVar ← atomically $ newVar $ defaultEngineState assetPool
+  stateVar ← atomically $ newVar defaultEngineState
   
   pure $ EngineInitResult env envVar stateVar

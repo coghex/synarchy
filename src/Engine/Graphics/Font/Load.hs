@@ -497,7 +497,8 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
     
     updateDescriptorSets device (V.singleton writeDescriptorSet) V.empty
     -- Generate handle
-    pool ← gets assetPool
+    poolRef ← asks assetPoolRef
+    pool ← liftIO $ readIORef poolRef
     handle ← liftIO $ generateTextureHandle pool
     -- Cleanup staging buffer
     destroyBuffer device stagingBuffer Nothing

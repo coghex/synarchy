@@ -69,7 +69,6 @@ data EngineState = EngineState
   { timingState      ∷ TimingState
   , inputState       ∷ InputState
   , graphicsState    ∷ GraphicsState
-  , assetPool        ∷ AssetPool
   , assetConfig      ∷ AssetConfig
   , sceneManager     ∷ SceneManager
   }

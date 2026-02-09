@@ -56,8 +56,8 @@ defaultWindowConfig vc = WindowConfig
   , wcResizable  = True
   }
 
-defaultEngineState ∷ AssetPool → EngineState
-defaultEngineState pool = EngineState
+defaultEngineState ∷ EngineState
+defaultEngineState = EngineState
   { timingState = TimingState
     { frameCount       = 0
     , currentTime      = 0.0
@@ -100,7 +100,6 @@ defaultEngineState pool = EngineState
     , cleanupStatus          = NotStarted
     , vulkanCleanup          = emptyCleanup
     }
-  , assetPool        = pool
   , assetConfig      = AssetConfig 100 100 True True
   , sceneManager     = createSceneManager
   }
