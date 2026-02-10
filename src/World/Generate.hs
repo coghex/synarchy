@@ -2,53 +2,38 @@
 module World.Generate
     ( -- * Generation
       generateChunk
-      -- * Configuration
-    , WorldGenParams(..)
-    , defaultWorldGenParams
       -- * Coordinate helpers
     , chunkSize
     , globalToChunk
     , chunkToGlobal
     , chunkWorldBounds
+    , chunkLoadRadius
+    , cameraChunkCoord
       -- * Types re-export
     , ChunkCoord(..)
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import World.Types (Tile(..), ChunkCoord(..), Chunk)
+import World.Types (Tile(..), ChunkCoord(..), Chunk, WorldGenParams(..))
+import World.Grid (worldToGrid, tileHalfWidth, tileHalfDiamondHeight)
 
 -----------------------------------------------------------
 -- Constants
 -----------------------------------------------------------
 
--- | Tiles per chunk side
 chunkSize :: Int
 chunkSize = 16
 
------------------------------------------------------------
--- Generation Parameters
------------------------------------------------------------
-
--- | Pure, serializable world generation parameters.
---   Same params + same ChunkCoord = same Chunk, always.
-data WorldGenParams = WorldGenParams
-    { wgpSeed       :: !Word64
-    , wgpWorldSize  :: !Int     -- ^ World size in chunks (e.g. 64 → 64×64 chunks)
-    } deriving (Show, Eq)
-
-defaultWorldGenParams :: WorldGenParams
-defaultWorldGenParams = WorldGenParams
-    { wgpSeed      = 42
-    , wgpWorldSize = 64
-    }
+-- | How many chunks around the camera chunk to keep loaded.
+--   2 means a 5×5 grid (the camera chunk ± 2 in each direction).
+chunkLoadRadius :: Int
+chunkLoadRadius = 2
 
 -----------------------------------------------------------
 -- Coordinate Helpers
 -----------------------------------------------------------
 
--- | Convert global tile (x, y) to (ChunkCoord, local (lx, ly)).
---   Handles negative coordinates correctly.
 globalToChunk :: Int -> Int -> (ChunkCoord, (Int, Int))
 globalToChunk gx gy =
     let cx = floorDiv gx chunkSize
@@ -57,13 +42,10 @@ globalToChunk gx gy =
         ly = floorMod gy chunkSize
     in (ChunkCoord cx cy, (lx, ly))
 
--- | Convert (ChunkCoord, local) back to global tile coords.
 chunkToGlobal :: ChunkCoord -> Int -> Int -> (Int, Int)
 chunkToGlobal (ChunkCoord cx cy) lx ly =
     (cx * chunkSize + lx, cy * chunkSize + ly)
 
--- | Get the global tile coordinate range for a chunk.
---   Returns ((minX, minY), (maxX, maxY)) inclusive.
 chunkWorldBounds :: ChunkCoord -> ((Int, Int), (Int, Int))
 chunkWorldBounds (ChunkCoord cx cy) =
     let minX = cx * chunkSize
@@ -72,13 +54,17 @@ chunkWorldBounds (ChunkCoord cx cy) =
         maxY = minY + chunkSize - 1
     in ((minX, minY), (maxX, maxY))
 
--- | Floor division that works correctly for negative numbers.
---   (-1) `floorDiv` 16 = -1, not 0.
+-- | Determine which chunk the camera is currently in.
+--   Converts Camera2D world-space position → grid coord → chunk coord.
+cameraChunkCoord :: Float -> Float -> ChunkCoord
+cameraChunkCoord camX camY =
+    let (gx, gy) = worldToGrid camX camY
+        (coord, _) = globalToChunk gx gy
+    in coord
+
 floorDiv :: Int -> Int -> Int
 floorDiv a b = floor (fromIntegral a / fromIntegral b :: Double)
 
--- | Floor modulo that always returns [0, b).
---   (-1) `floorMod` 16 = 15, not -1.
 floorMod :: Int -> Int -> Int
 floorMod a b = a - floorDiv a b * b
 
@@ -86,12 +72,9 @@ floorMod a b = a - floorDiv a b * b
 -- Chunk Generation
 -----------------------------------------------------------
 
--- | Generate a single chunk. Pure and deterministic.
---   For now: flat grass at z=0 for every column.
 generateChunk :: WorldGenParams -> ChunkCoord -> Chunk
 generateChunk _params coord =
-    let ((minX, minY), (maxX, maxY)) = chunkWorldBounds coord
-        tiles = [ ((lx, ly, 0), Tile 1)  -- grass at z=0
+    let tiles = [ ((lx, ly, 0), Tile 1)
                 | lx <- [0 .. chunkSize - 1]
                 , ly <- [0 .. chunkSize - 1]
                 ]

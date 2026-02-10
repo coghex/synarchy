@@ -47,7 +47,7 @@ updateWorldTiles = do
             Nothing         -> return V.empty
     
     let allQuads = V.concat quads
-    liftIO $ logDebug logger CatSystem $ 
+    liftIO $ logDebug logger CatWorld $ 
         "Generated " <> T.pack (show $ V.length allQuads) <> " world tile quads"
     
     return allQuads
@@ -141,7 +141,7 @@ renderWorldQuads env worldState = do
         -- Chunk-level culling
         visibleChunks = filter (isChunkVisible vb . lcCoord) chunks
     
-    liftIO $ logDebug logger CatSystem $
+    liftIO $ logDebug logger CatWorld $
         "Chunk culling: " <> T.pack (show $ length chunks) <> " loaded, "
         <> T.pack (show $ length visibleChunks) <> " visible"
     
@@ -196,7 +196,7 @@ tileToQuad env textures worldX worldY worldZ tile = do
           Just bindless -> getTextureSlotIndex texHandle bindless
           Nothing       -> 0
 
-    liftIO $ logDebug logger CatSystem $ 
+    liftIO $ logDebug logger CatWorld $ 
         "TILE RENDER: texHandle=" <> T.pack (show texHandle)
         <> " slot=" <> T.pack (show actualSlot)
         

@@ -92,6 +92,7 @@ data LogCategory
   | CatInput
   | CatScene
   | CatUI
+  | CatWorld
   | CatThread
   | CatSystem
   | CatInit
