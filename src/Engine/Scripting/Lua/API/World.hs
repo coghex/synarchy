@@ -16,16 +16,19 @@ import Engine.Asset.Handle (TextureHandle(..))
 import World.Types (WorldCommand(..), WorldPageId(..), WorldTextureType(..))
 import Data.IORef (atomicModifyIORef')
 
--- | world.init(pageId)
--- Initialize a world page with given ID
+-- | world.init(pageId, seed, worldSizeInChunks)
 worldInitFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
 worldInitFn env = do
     pageIdArg <- Lua.tostring 1
+    seedArg   <- Lua.tointeger 2
+    sizeArg   <- Lua.tointeger 3
     
     case pageIdArg of
         Just pageIdBS -> Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
-            Q.writeQueue (worldQueue env) (WorldInit pageId)
+                seed   = maybe 42 fromIntegral seedArg
+                size   = maybe 64 fromIntegral sizeArg
+            Q.writeQueue (worldQueue env) (WorldInit pageId seed size)
         Nothing -> pure ()
     
     return 0

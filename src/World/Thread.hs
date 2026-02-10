@@ -15,6 +15,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import World.Types
+import World.Generate
 
 -----------------------------------------------------------
 -- Start World Thread
@@ -52,16 +53,15 @@ worldLoop env stateRef = do
             logDebug logger CatSystem "World thread stopping..."
             pure ()
         ThreadPaused -> do
-            threadDelay 100000  -- 100ms pause check
+            threadDelay 100000
             worldLoop env stateRef
         ThreadRunning -> do
-            -- Try to read a command (non-blocking)
             mCmd <- Q.tryReadQueue (worldQueue env)
             case mCmd of
                 Just cmd -> handleWorldCommand env logger cmd
                 Nothing -> return ()
             
-            threadDelay 16666  -- ~60 FPS
+            threadDelay 16666
             worldLoop env stateRef
 
 -----------------------------------------------------------
@@ -73,27 +73,41 @@ handleWorldCommand env logger cmd = do
     logDebug logger CatSystem $ "Processing world command: " <> T.pack (show cmd)
     
     case cmd of
-        WorldInit pageId -> do
+        WorldInit pageId seed worldSize -> do
             logDebug logger CatSystem $ "Initializing world: " <> unWorldPageId pageId
+                <> " (seed=" <> T.pack (show seed)
+                <> ", size=" <> T.pack (show worldSize) <> " chunks)"
             
             worldState <- emptyWorldState
             
-            -- Generate a small test grid
-            let gridSize = 8
-                tiles = [ ((x, y, 0), Tile 1) 
-                        | x <- [0..gridSize-1]
-                        , y <- [0..gridSize-1]
-                        ]
-            atomicModifyIORef' (wsTilesRef worldState) $ \tileData ->
-                let newTiles = foldl' (\acc ((x, y, z), t) -> HM.insert (x, y, z) t acc) 
-                                      (wtdTiles tileData) tiles
-                in (tileData { wtdTiles = newTiles }, ())
+            let params = defaultWorldGenParams
+                    { wgpSeed      = seed
+                    , wgpWorldSize = worldSize
+                    }
+            
+            -- Generate the initial 5×5 chunk grid around (0,0)
+            let loadRadius = 2
+                initialCoords = [ ChunkCoord cx cy
+                                | cx <- [-loadRadius .. loadRadius]
+                                , cy <- [-loadRadius .. loadRadius]
+                                ]
+                initialChunks = map (\coord -> LoadedChunk
+                    { lcCoord    = coord
+                    , lcTiles    = generateChunk params coord
+                    , lcModified = False
+                    }) initialCoords
+            
+            atomicModifyIORef' (wsTilesRef worldState) $ \_ ->
+                (WorldTileData { wtdChunks = initialChunks }, ())
             
             atomicModifyIORef' (worldManagerRef env) $ \manager ->
                 (manager { wmWorlds = (pageId, worldState) : wmWorlds manager }, ())
             
-            logInfo logger CatSystem $ "World initialized with " 
-                <> T.pack (show (length tiles)) <> " tiles: " <> unWorldPageId pageId
+            let totalTiles = sum $ map (HM.size . lcTiles) initialChunks
+            logInfo logger CatSystem $ "World initialized: " 
+                <> T.pack (show $ length initialChunks) <> " chunks, "
+                <> T.pack (show totalTiles) <> " tiles: " 
+                <> unWorldPageId pageId
         
         WorldShow pageId -> do
             logDebug logger CatSystem $ "Showing world: " <> unWorldPageId pageId
@@ -103,7 +117,6 @@ handleWorldCommand env logger cmd = do
                 then (manager, ())
                 else (manager { wmVisible = pageId : wmVisible manager }, ())
             
-            -- Log current state
             manager <- readIORef (worldManagerRef env)
             logDebug logger CatSystem $ 
                 "Visible worlds after show: " <> T.pack (show $ length $ wmVisible manager)
@@ -115,7 +128,6 @@ handleWorldCommand env logger cmd = do
                 (manager { wmVisible = filter (/= pageId) (wmVisible manager) }, ())
         
         WorldTick dt -> do
-            -- Future: world simulation tick
             return ()
         
         WorldSetTexture pageId texType texHandle -> do
@@ -124,7 +136,6 @@ handleWorldCommand env logger cmd = do
                 <> ", type: " <> T.pack (show texType)
                 <> ", handle: " <> T.pack (show texHandle)
             
-            -- Find the world and update its textures
             manager <- readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds manager) of
                 Just worldState -> do
@@ -137,13 +148,16 @@ handleWorldCommand env logger cmd = do
                 Nothing -> 
                     logDebug logger CatSystem $ 
                         "World not found for texture update: " <> unWorldPageId pageId
-        WorldSetCamera pageId cx cy -> do
+        
+        WorldSetCamera pageId x y -> do
             manager <- readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds manager) of
                 Just worldState ->
                     atomicModifyIORef' (wsCameraRef worldState) $ \_ ->
-                        (WorldCamera cx cy, ())
-                Nothing -> return ()
+                        (WorldCamera x y, ())
+                Nothing -> 
+                    logDebug logger CatSystem $ 
+                        "World not found for camera update: " <> unWorldPageId pageId
 
 unWorldPageId :: WorldPageId -> Text
 unWorldPageId (WorldPageId t) = t

@@ -11,13 +11,15 @@ worldManager.active = false
 function worldManager.createWorld(params)
     local worldId = params.worldId or "main_world"
     local grassTexture = params.grassTexture
+    local seed = params.seed or 42
+    local worldSize = params.worldSize or 64
     
-    engine.logInfo("Creating world: " .. worldId)
+    engine.logInfo("Creating world: " .. worldId 
+        .. " (seed=" .. seed .. ", size=" .. worldSize .. " chunks)")
     
-    -- Send init command to Haskell world thread
-    world.init(worldId)
+    -- Send init command with seed and world size
+    world.init(worldId, seed, worldSize)
     
-    -- Set grass texture if provided
     if grassTexture then
         world.setTexture(worldId, "grass", grassTexture)
         engine.logInfo("Set grass texture: " .. tostring(grassTexture))

@@ -255,6 +255,7 @@ library
                      World.Thread
                      World.Grid
                      World.Render
+                     World.Generate
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields
@@ -280,6 +281,7 @@ library
                  , containers
                  , filepath
                  , directory
+                 , hashable
                  , GLFW-b
                  , hslua
                  , JuicyPixels

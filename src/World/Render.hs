@@ -25,15 +25,15 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
-import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer)
+import World.Generate (chunkSize, chunkToGlobal, chunkWorldBounds)
+import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer,
+                   tileHalfWidth, tileHalfDiamondHeight)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
 -- Update World Tiles (called before scene rendering)
 -----------------------------------------------------------
 
--- | Generate quads for all visible world tiles,
---   sorted by depth for painter's algorithm
 updateWorldTiles :: EngineM ε σ (V.Vector SortableQuad)
 updateWorldTiles = do
     env <- ask
@@ -52,17 +52,10 @@ updateWorldTiles = do
     
     return allQuads
 
-unWorldPageId :: WorldPageId -> Text
-unWorldPageId (WorldPageId t) = t
-
 -----------------------------------------------------------
--- Tile Visibility
+-- View Bounds (for culling)
 -----------------------------------------------------------
 
--- | Camera view bounds in world-space.
--- The projection maps [-zoom*aspect, +zoom*aspect] × [-zoom, +zoom]
--- centered on camPosition. We add one tile of padding so tiles
--- that are partially on-screen still get drawn.
 data ViewBounds = ViewBounds
     { vbLeft   :: !Float
     , vbRight  :: !Float
@@ -77,8 +70,6 @@ computeViewBounds camera fbW fbH =
         aspect   = fromIntegral fbW / fromIntegral fbH
         halfW    = zoom * aspect
         halfH    = zoom
-        -- Pad by one full tile in each direction so partially-visible
-        -- tiles at the edges are not popped in/out
         padX     = tileWidth
         padY     = tileHeight
     in ViewBounds
@@ -88,8 +79,40 @@ computeViewBounds camera fbW fbH =
         , vbBottom = cy + halfH + padY
         }
 
--- | Check whether a tile's quad overlaps the camera view bounds.
--- drawX/drawY is the top-left of the sprite quad in world-space.
+-----------------------------------------------------------
+-- Chunk-Level Culling
+-----------------------------------------------------------
+
+-- | Test whether a chunk's bounding box overlaps the view.
+--   Uses the chunk's global tile range converted to world-space.
+isChunkVisible :: ViewBounds -> ChunkCoord -> Bool
+isChunkVisible vb coord =
+    let ((minGX, minGY), (maxGX, maxGY)) = chunkWorldBounds coord
+        -- Get world-space bounds of the chunk's tile quads.
+        -- gridToScreen gives top-left of each tile, so we need:
+        --   leftmost  = gridToScreen of the tile with smallest screen X
+        --   rightmost = gridToScreen of the tile with largest screen X + tileWidth
+        -- In isometric coords, screen X = (gx - gy) * halfWidth
+        -- so min screen X comes from (minGX, maxGY) and max from (maxGX, minGY)
+        (sxMin, _) = gridToScreen minGX maxGY
+        (sxMax, _) = gridToScreen maxGX minGY
+        chunkLeft  = sxMin
+        chunkRight = sxMax + tileWidth
+        -- Screen Y = (gx + gy) * halfDiamondHeight
+        -- min screen Y from (minGX, minGY), max from (maxGX, maxGY)
+        (_, syMin) = gridToScreen minGX minGY
+        (_, syMax) = gridToScreen maxGX maxGY
+        chunkTop    = syMin
+        chunkBottom = syMax + tileHeight
+    in not (chunkRight  < vbLeft vb
+         || chunkLeft   > vbRight vb
+         || chunkBottom < vbTop vb
+         || chunkTop    > vbBottom vb)
+
+-----------------------------------------------------------
+-- Tile-Level Culling
+-----------------------------------------------------------
+
 isTileVisible :: ViewBounds -> Float -> Float -> Bool
 isTileVisible vb drawX drawY =
     let tileRight  = drawX + tileWidth
@@ -100,7 +123,7 @@ isTileVisible vb drawX drawY =
          || drawY      > vbBottom vb)
 
 -----------------------------------------------------------
--- Render Single World to Quads
+-- Render World Quads
 -----------------------------------------------------------
 
 renderWorldQuads :: EngineEnv -> WorldState -> EngineM ε σ (V.Vector SortableQuad)
@@ -110,36 +133,45 @@ renderWorldQuads env worldState = do
     logger <- liftIO $ readIORef (loggerRef env)
     camera <- liftIO $ readIORef (cameraRef env)
     
-    let tiles = HM.toList (wtdTiles tileData)
-    
     (fbW, fbH) <- liftIO $ readIORef (framebufferSizeRef env)
     
     let vb = computeViewBounds camera fbW fbH
-    
-    -- Filter tiles by visibility before building quads
-    let visibleTiles = filter (isTileInView vb) tiles
+        chunks = wtdChunks tileData
+        
+        -- Chunk-level culling
+        visibleChunks = filter (isChunkVisible vb . lcCoord) chunks
     
     liftIO $ logDebug logger CatSystem $
-        "Tile culling: " <> T.pack (show $ length tiles) <> " total, "
-        <> T.pack (show $ length visibleTiles) <> " visible"
+        "Chunk culling: " <> T.pack (show $ length chunks) <> " loaded, "
+        <> T.pack (show $ length visibleChunks) <> " visible"
     
-    quads <- forM visibleTiles $ \((x, y, z), tile) ->
-        tileToQuad env textures x y z tile
+    -- For each visible chunk, extract visible tiles and build quads
+    chunkQuads <- forM visibleChunks $ \lc -> do
+        let coord = lcCoord lc
+            tileList = HM.toList (lcTiles lc)
+            
+            -- Filter tiles within this chunk by visibility
+            visibleTiles = filter (isTileInView vb coord) tileList
+        
+        quads <- forM visibleTiles $ \((lx, ly, z), tile) -> do
+            let (gx, gy) = chunkToGlobal coord lx ly
+            tileToQuad env textures gx gy z tile
+        
+        return $ V.fromList quads
     
-    return $ V.fromList quads
+    return $ V.concat chunkQuads
   where
-    -- | Check a tile by its grid coords against the view bounds.
-    -- Computes the draw position (same math as tileToQuad) and tests.
-    isTileInView :: ViewBounds -> ((Int, Int, Int), Tile) -> Bool
-    isTileInView vb ((gx, gy, gz), _) =
-        let (rawX, rawY) = gridToScreen gx gy
-            heightOffset = fromIntegral gz * tileSideHeight
+    isTileInView :: ViewBounds -> ChunkCoord -> ((Int, Int, Int), Tile) -> Bool
+    isTileInView vb coord ((lx, ly, z), _) =
+        let (gx, gy) = chunkToGlobal coord lx ly
+            (rawX, rawY) = gridToScreen gx gy
+            heightOffset = fromIntegral z * tileSideHeight
             drawX = rawX
             drawY = rawY - heightOffset
         in isTileVisible vb drawX drawY
 
 -----------------------------------------------------------
--- Convert Tile to Render Batch
+-- Convert Tile to Quad
 -----------------------------------------------------------
 
 tileToQuad :: EngineEnv -> WorldTextures
@@ -150,12 +182,10 @@ tileToQuad env textures worldX worldY worldZ tile = do
     
     let (rawX, rawY) = gridToScreen worldX worldY
         
-        -- Apply height offset (elevated tiles shift up)
         heightOffset = fromIntegral worldZ * tileSideHeight
         drawX = rawX
         drawY = rawY - heightOffset
 
-        -- Sort key: higher (gx + gy) = closer to viewer = drawn later
         sortKey = fromIntegral (worldX + worldY) 
                 + fromIntegral worldZ * 0.001
 
