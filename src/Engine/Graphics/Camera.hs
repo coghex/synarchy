@@ -20,21 +20,23 @@ import Engine.Input.Types (InputState(..))
 
 data Camera2D = Camera2D
     { camPosition ∷ (Float, Float)
+    , camVelocity ∷ (Float, Float)  -- ^ Current pan velocity (world units/sec)
     , camZoom     ∷ Float
     , camRotation ∷ Float
-    } deriving (Show, Eq)
-
-data UICamera = UICamera
-    { uiCamWidth  ∷ Float
-    , uiCamHeight ∷ Float
     } deriving (Show, Eq)
 
 defaultCamera ∷ Camera2D
 defaultCamera = Camera2D
     { camPosition = (0, 0)
+    , camVelocity = (0, 0)
     , camZoom     = 1.0
     , camRotation = 0.0
     }
+
+data UICamera = UICamera
+    { uiCamWidth  ∷ Float
+    , uiCamHeight ∷ Float
+    } deriving (Show, Eq)
 
 defaultUICamera ∷ Float → Float → UICamera
 defaultUICamera width height = UICamera
