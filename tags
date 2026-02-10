@@ -796,7 +796,7 @@ chunkToGlobal	src/World/Generate.hs	45;"	f
 chunkWorldBounds	src/World/Generate.hs	49;"	f
 clamp01	src/World/Render.hs	241;"	f
 clampAbs	src/Engine/Loop/Camera.hs	132;"	f
-clampInt	src/World/Generate.hs	130;"	f
+clampInt	src/World/Generate.hs	129;"	f
 clampSampleCount	src/Engine/Graphics/Config.hs	46;"	f
 cleanupAssetManager	src/Engine/Asset/Manager.hs	399;"	f
 cleanupBindless	src/Engine/Graphics/Vulkan/Types/Cleanup.hs	16;"	f
@@ -985,7 +985,7 @@ dynlibdir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy
 eirEnv	src/Engine/Core/Init.hs	31;"	f
 eirEnvVar	src/Engine/Core/Init.hs	32;"	f
 eirStateVar	src/Engine/Core/Init.hs	33;"	f
-elevationAt	src/World/Generate.hs	111;"	f
+elevationAt	src/World/Generate.hs	110;"	f
 emptyBuffer	src/UI/Types.hs	92;"	f
 emptyCallback	src/Engine/Input/Callback.hs	93;"	f
 emptyCleanup	src/Engine/Graphics/Vulkan/Types/Cleanup.hs	25;"	f
@@ -1112,7 +1112,7 @@ gcWorldLayer	src/World/Grid.hs	41;"	f
 gcWorldTileWidth	src/World/Grid.hs	40;"	f
 generateAssetId	src/Engine/Asset/Manager.hs	87;"	f
 generateChunk	src/World/Generate.hs	78;"	f
-generateColumn	src/World/Generate.hs	96;"	f
+generateColumn	src/World/Generate.hs	95;"	f
 generateFontAtlas	src/Engine/Graphics/Font/Load.hs	172;"	f
 generateFontHandle	src/Engine/Asset/Manager.hs	75;"	f
 generateQuadVertices	src/Engine/Scene/Batch/Vertex.hs	12;"	f
@@ -1238,8 +1238,8 @@ handleSetWindowMode	src/Engine/Scripting/Lua/Message.hs	181;"	f
 handleSpawnSprite	src/Engine/Scripting/Lua/Message.hs	383;"	f
 handleSpawnText	src/Engine/Scripting/Lua/Message.hs	348;"	f
 handleWorldCommand	src/World/Thread.hs	155;"	f
-hashCoord	src/World/Generate.hs	182;"	f
-hashToFloat	src/World/Generate.hs	175;"	f
+hashCoord	src/World/Generate.hs	181;"	f
+hashToFloat	src/World/Generate.hs	174;"	f
 hideDebugFn	src/Engine/Scripting/Lua/API/Debug.hs	21;"	f
 hidePage	src/UI/Manager.hs	107;"	f
 hideWindow	src/Engine/Graphics/Window/GLFW.hs	154;"	f
@@ -1341,7 +1341,7 @@ leMessage	src/Engine/Core/Log.hs	147;"	f
 leSrcLoc	src/Engine/Core/Log.hs	151;"	f
 leThreadId	src/Engine/Core/Log.hs	150;"	f
 leTimestamp	src/Engine/Core/Log.hs	149;"	f
-lerp	src/World/Generate.hs	200;"	f
+lerp	src/World/Generate.hs	199;"	f
 libdir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	98;"	f
 libdir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy/build/synarchy/autogen/Paths_synarchy.hs	98;"	f
 libexecdir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	98;"	f
@@ -1641,7 +1641,7 @@ smBatchManager	src/Engine/Scene/Types/Manager.hs	28;"	f
 smDirtyScenes	src/Engine/Scene/Types/Manager.hs	29;"	f
 smSceneGraphs	src/Engine/Scene/Types/Manager.hs	27;"	f
 smScenes	src/Engine/Scene/Types/Manager.hs	25;"	f
-smoothstep	src/World/Generate.hs	196;"	f
+smoothstep	src/World/Generate.hs	195;"	f
 spCleanup	src/Engine/Asset/Types.hs	141;"	f
 spId	src/Engine/Asset/Types.hs	135;"	f
 spModules	src/Engine/Asset/Types.hs	139;"	f
@@ -1911,7 +1911,7 @@ utsFont	src/UI/Types.hs	124;"	f
 utsSize	src/UI/Types.hs	125;"	f
 utsText	src/UI/Types.hs	123;"	f
 validateDescriptorState	src/Engine/Loop/Resource.hs	32;"	f
-valueNoise2D	src/World/Generate.hs	142;"	f
+valueNoise2D	src/World/Generate.hs	141;"	f
 vbBottom	src/World/Render.hs	63;"	f
 vbLeft	src/World/Render.hs	60;"	f
 vbRight	src/World/Render.hs	61;"	f

@@ -87,18 +87,17 @@ generateChunk params coord =
                 ]
     in HM.fromList tiles
 
--- | Generate all tiles for a single column at local (lx, ly).
---   The column is filled from min(0, surfaceZ) to max(0, surfaceZ)
---   so that:
---     - At z=0 there's always a tile (sea level reference)
---     - Elevated columns (surfaceZ > 0) have fill below for cliff faces
---     - Depressed columns (surfaceZ < 0) have fill above up to z=0
+-- | Generate tiles for a single column at local (lx, ly).
+--   The surface tile is at surfaceZ. Below the surface we fill
+--   down far enough that cliff faces are backed by geometry
+--   from any camera angle. We use a fixed fill depth rather
+--   than bridging to z=0.
 generateColumn :: Int -> Int -> Int -> [((Int, Int, Int), Tile)]
 generateColumn lx ly surfaceZ =
-    let lo = min 0 surfaceZ
-        hi = max 0 surfaceZ
-    in [ ((lx, ly, z), Tile 1)  -- all grass for now
-       | z <- [lo .. hi]
+    let fillDepth = 3  -- how many tiles below surface to fill for cliff faces
+        lo = surfaceZ - fillDepth
+    in [ ((lx, ly, z), Tile 1)
+       | z <- [lo .. surfaceZ]
        ]
 
 -----------------------------------------------------------
