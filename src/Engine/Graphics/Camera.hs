@@ -19,10 +19,12 @@ import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types (InputState(..))
 
 data Camera2D = Camera2D
-    { camPosition ∷ (Float, Float)
-    , camVelocity ∷ (Float, Float)  -- ^ Current pan velocity (world units/sec)
-    , camZoom     ∷ Float
-    , camRotation ∷ Float
+    { camPosition   ∷ (Float, Float)
+    , camVelocity   ∷ (Float, Float)  -- ^ Current pan velocity (world units/sec)
+    , camZoom       ∷ Float
+    , camRotation   ∷ Float
+    , camDragging   ∷ Bool   -- ^ Whether the camera is currently being dragged (panning)
+    , camDragOrigin ∷ (Double, Double)  -- ^ Mouse position where dragging started (screen coordinates)
     } deriving (Show, Eq)
 
 defaultCamera ∷ Camera2D
@@ -31,6 +33,8 @@ defaultCamera = Camera2D
     , camVelocity = (0, 0)
     , camZoom     = 1.0
     , camRotation = 0.0
+    , camDragging = False
+    , camDragOrigin = (0, 0)
     }
 
 data UICamera = UICamera

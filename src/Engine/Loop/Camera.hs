@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Engine.Loop.Camera
     ( updateCameraPanning
+    , updateCameraMouseDrag
     ) where
 
 import UPrelude
@@ -52,6 +53,64 @@ updateCameraPanning = do
 
         in (cam { camPosition = (cx', cy')
                 , camVelocity = (vx', vy') }, ())
+
+-- | Handle middle-mouse-button camera drag.
+--   Converts window-space mouse delta to world-space camera delta
+--   using the current zoom and window size.
+--   Call once per frame, after updateCameraPanning.
+updateCameraMouseDrag ∷ EngineM ε σ ()
+updateCameraMouseDrag = do
+    env ← ask
+    inpSt ← liftIO $ readIORef (inputStateRef env)
+    (winW, winH) ← liftIO $ readIORef (windowSizeRef env)
+
+    let middleDown = case Map.lookup GLFW.MouseButton'3 (inpMouseBtns inpSt) of
+                         Just True → True
+                         _         → False
+        mousePos = inpMousePos inpSt
+
+    liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
+        case (middleDown, camDragging cam) of
+
+            -- Just pressed: start drag, record origin, no movement yet
+            (True, False) →
+                ( cam { camDragging   = True
+                      , camDragOrigin = mousePos
+                      , camVelocity   = (0, 0)
+                      }
+                , () )
+
+            -- Held: compute delta from last frame's position, apply to camera
+            (True, True) →
+                let (mx, my)   = mousePos
+                    (ox, oy)   = camDragOrigin cam
+                    (cx, cy)   = camPosition cam
+                    zoom       = camZoom cam
+                    aspect     = fromIntegral winW / fromIntegral winH
+
+                    -- GLFW cursor positions are in window coordinates, not
+                    -- framebuffer pixels. Use windowSize for the conversion.
+                    -- Projection maps [-zoom*aspect, +zoom*aspect] → full window width
+                    pixToWorldX = 2.0 * realToFrac zoom * aspect / fromIntegral winW
+                    pixToWorldY = 2.0 * realToFrac zoom          / fromIntegral winH
+
+                    dx = -(mx - ox) * realToFrac pixToWorldX
+                    dy = -(my - oy) * realToFrac pixToWorldY
+
+                in ( cam { camPosition  = (cx + realToFrac dx, cy + realToFrac dy)
+                         , camDragOrigin = mousePos
+                         , camVelocity   = (0, 0)
+                         }
+                   , () )
+
+            -- Just released: stop drag
+            (False, True) →
+                ( cam { camDragging = False }
+                , () )
+
+            -- Not dragging, not pressed: nothing to do
+            (False, False) →
+                (cam, ())
 
 -- | Step a single axis velocity:
 --   If input is nonzero, accelerate towards maxSpd in that direction.
