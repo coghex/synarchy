@@ -5,6 +5,7 @@ module World.Render
 
 import UPrelude
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.State.Class (gets)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
@@ -13,12 +14,14 @@ import Engine.Asset.Handle
 import Engine.Asset.Manager
 import Engine.Asset.Base
 import Engine.Asset.Types (AssetPool(..), TextureAtlas(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
 import Engine.Core.Log (logDebug, LogCategory(..), logInfo, logWarn)
 import Engine.Scene.Base (LayerId(..), ObjectId(..))
 import Engine.Scene.Types (RenderBatch(..), SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
+import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
 import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer)
@@ -102,15 +105,16 @@ tileToQuad env camera textures _fbW _fbH worldX worldY worldZ tile = do
     pool <- liftIO $ readIORef (assetPoolRef env)
     mbAssetState <- liftIO $ lookupTextureAsset texHandle pool
     
-    actualSlot' <- case mbAssetState of
-        Just (AssetReady atlasId []) -> return atlasId
-        _ -> do
-            liftIO $ logWarn logger CatSystem $ 
-                "Texture not ready or not found! Handle: " <> T.pack (show texHandle)
-            return $ AssetId 0
+    gs <- gets graphicsState
+    let actualSlot = case textureSystem gs of
+          Just bindless -> getTextureSlotIndex texHandle bindless
+          Nothing       -> 0
+
+    liftIO $ logDebug logger CatSystem $ 
+        "TILE RENDER: texHandle=" <> T.pack (show texHandle)
+        <> " slot=" <> T.pack (show actualSlot)
         
-    let AssetId actualSlot = actualSlot'
-        vertices = V.fromList
+    let vertices = V.fromList
             [ Vertex (Vec2 drawX finalY)                          (Vec2 0 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
             , Vertex (Vec2 (drawX + tileWidth) finalY)            (Vec2 1 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
             , Vertex (Vec2 (drawX + tileWidth) (finalY + tileHeight)) (Vec2 1 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)

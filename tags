@@ -1146,7 +1146,7 @@ getTextureHandleState	src/Engine/Asset/Manager.hs	473;"	f
 getTextureSlotIndex	src/Engine/Graphics/Vulkan/Texture/Bindless.hs	272;"	f
 getTextureStateMap	src/Engine/Asset/Manager.hs	461;"	f
 getTextureSystemOrFail	src/Engine/Graphics/Vulkan/Recreate.hs	207;"	f
-getTileTexture	src/World/Render.hs	133;"	f
+getTileTexture	src/World/Render.hs	137;"	f
 getUIScaleFn	src/Engine/Scripting/Lua/API/Graphics.hs	31;"	f
 getVertexAttributeDescriptions	src/Engine/Graphics/Vulkan/Vertex.hs	89;"	f
 getVertexBindingDescription	src/Engine/Graphics/Vulkan/Vertex.hs	81;"	f
@@ -1478,7 +1478,7 @@ renderSpritesBindless	src/Engine/Graphics/Vulkan/Command/Sprite.hs	83;"	f
 renderSpritesBindlessUI	src/Engine/Graphics/Vulkan/Command/Sprite.hs	23;"	f
 renderTextBatchInline	src/Engine/Graphics/Vulkan/Command/Text.hs	28;"	f
 renderUIPages	src/UI/Render.hs	85;"	f
-renderWorldQuads	src/World/Render.hs	58;"	f
+renderWorldQuads	src/World/Render.hs	61;"	f
 requestFocusFn	src/Engine/Scripting/Lua/API/Focus.hs	28;"	f
 resHeight	src/Engine/Graphics/Config.hs	161;"	f
 resWidth	src/Engine/Graphics/Config.hs	160;"	f
@@ -1679,7 +1679,7 @@ tileHalfDiamondHeight	src/World/Grid.hs	83;"	f
 tileHalfWidth	src/World/Grid.hs	80;"	f
 tileHeight	src/World/Grid.hs	62;"	f
 tileSideHeight	src/World/Grid.hs	76;"	f
-tileToQuad	src/World/Render.hs	78;"	f
+tileToQuad	src/World/Render.hs	81;"	f
 tileType	src/World/Types.hs	22;"	f
 tileWidth	src/World/Grid.hs	58;"	f
 timingState	src/Engine/Core/State.hs	69;"	f
@@ -1791,8 +1791,8 @@ unEngineM	src/Engine/Core/Monad.hs	24;"	f
 unFocusId	src/UI/Focus.hs	29;"	f
 unLayerId	src/UI/Render.hs	33;"	f
 unPageHandle	src/UI/Types.hs	33;"	f
-unWorldPageId	src/World/Render.hs	51;"	f
-unWorldPageId	src/World/Thread.hs	140;"	f
+unWorldPageId	src/World/Render.hs	54;"	f
+unWorldPageId	src/World/Thread.hs	141;"	f
 undefinedHandle	src/Engine/Graphics/Vulkan/Texture/Handle.hs	22;"	f
 undefinedSlot	src/Engine/Graphics/Vulkan/Texture/Slot.hs	28;"	f
 undefinedTextureData	src/Engine/Graphics/Vulkan/Texture/Undefined.hs	31;"	f
@@ -1824,7 +1824,7 @@ updateTextureState	src/Engine/Asset/Manager.hs	93;"	f
 updateUniformBuffer	src/Engine/Graphics/Vulkan/Buffer.hs	65;"	f
 updateUniformBufferForFrame	src/Engine/Loop/Frame.hs	232;"	f
 updateWindowState	src/Engine/Input/Thread.hs	301;"	f
-updateWorldTiles	src/World/Render.hs	33;"	f
+updateWorldTiles	src/World/Render.hs	36;"	f
 updateWorldTransforms	src/Engine/Scene/Graph.hs	138;"	f
 uploadBatchesToBuffer	src/Engine/Scene/Render.hs	140;"	f
 uploadFontAtlasToGPU	src/Engine/Graphics/Font/Load.hs	377;"	f

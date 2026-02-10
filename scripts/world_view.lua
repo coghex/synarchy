@@ -58,6 +58,11 @@ function worldView.createWorld()
         engine.logWarn("Cannot create world, textures not loaded yet")
         return
     end
+
+    if worldManager.isActive() then
+        engine.logWarn("World already active, skipping creation")
+        return
+    end
     
     -- Pass texture handle to world manager
     worldManager.createWorld({ 

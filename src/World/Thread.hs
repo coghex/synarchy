@@ -76,23 +76,24 @@ handleWorldCommand env logger cmd = do
         WorldInit pageId -> do
             logDebug logger CatSystem $ "Initializing world: " <> unWorldPageId pageId
             
-            -- Create empty world state
             worldState <- emptyWorldState
             
-            -- Add one grass tile at (0,0) for testing
+            -- Generate a small test grid
+            let gridSize = 8
+                tiles = [ ((x, y, 0), Tile 1) 
+                        | x <- [0..gridSize-1]
+                        , y <- [0..gridSize-1]
+                        ]
             atomicModifyIORef' (wsTilesRef worldState) $ \tileData ->
-                let newTiles = HM.insert (0, 0, 0) (Tile 1)
-                             $ HM.insert (1, 0, 0) (Tile 1)
-                             $ HM.insert (0, 1, 0) (Tile 1)
-                             $ HM.insert (0, 0, 1) (Tile 1)
-                             $ (wtdTiles tileData)
+                let newTiles = foldl' (\acc ((x, y, z), t) -> HM.insert (x, y, z) t acc) 
+                                      (wtdTiles tileData) tiles
                 in (tileData { wtdTiles = newTiles }, ())
             
-            -- Add to world manager
             atomicModifyIORef' (worldManagerRef env) $ \manager ->
                 (manager { wmWorlds = (pageId, worldState) : wmWorlds manager }, ())
             
-            logInfo logger CatSystem $ "World initialized: " <> unWorldPageId pageId
+            logInfo logger CatSystem $ "World initialized with " 
+                <> T.pack (show (length tiles)) <> " tiles: " <> unWorldPageId pageId
         
         WorldShow pageId -> do
             logDebug logger CatSystem $ "Showing world: " <> unWorldPageId pageId
