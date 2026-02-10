@@ -232,6 +232,16 @@ processLuaMsg env ls stateRef msg = case msg of
           _                  → 0
     broadcastToModules ls "onMouseUp"
       [ScriptNumber (fromIntegral buttonNum), ScriptNumber x, ScriptNumber y]
+  LuaScrollEvent dx dy → do
+    broadcastToModules ls "onScroll"
+      [ ScriptNumber (realToFrac dx)
+      , ScriptNumber (realToFrac dy)
+      ]
+  LuaZSliceScroll dx dy → do
+    broadcastToModules ls "onZSliceScroll"
+      [ ScriptNumber (realToFrac dx)
+      , ScriptNumber (realToFrac dy)
+      ]
   LuaUIClickEvent elemHandle callbackName → do
     let (ElementHandle h) = elemHandle
     broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]

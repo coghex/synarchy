@@ -251,23 +251,38 @@ processInput env inpSt event = case event of
         logger ← readIORef (loggerRef env)
         logDebug logger CatInput $ "Scroll event: dx=" <> T.pack (show x) <> ", dy=" <> T.pack (show y)
         
-        -- Find the UI element under the mouse cursor and send scroll event
-        (winW, winH) ← readIORef (windowSizeRef env)
-        (fbW, fbH) ← readIORef (framebufferSizeRef env)
-        let (rawX, rawY) = inpMousePos inpSt
-            scaleX = fromIntegral fbW / fromIntegral winW
-            scaleY = fromIntegral fbH / fromIntegral winH
-            mouseX = realToFrac rawX * scaleX
-            mouseY = realToFrac rawY * scaleY
+        -- Check modifier keys for shift+scroll (z-slice)
+        inpSt' ← readIORef (inputStateRef env)
+        let shiftHeld = case Map.lookup GLFW.Key'LeftShift (inpKeyStates inpSt') of
+                Just ks → keyPressed ks
+                Nothing → case Map.lookup GLFW.Key'RightShift (inpKeyStates inpSt') of
+                    Just ks → keyPressed ks
+                    Nothing → False
         
-        uiMgr ← readIORef (uiManagerRef env)
-        case findClickableElementAt (mouseX, mouseY) uiMgr of
-            Just (elemHandle, _callback) → do
-                logDebug logger CatInput $ "Scroll on UI element: " <> T.pack (show elemHandle)
-                Q.writeQueue (luaQueue env) (LuaUIScrollEvent elemHandle x y)
-            Nothing → do
-                logDebug logger CatInput "Scroll with no UI element under cursor"
-                Q.writeQueue (luaQueue env) (LuaUIScrollEvent (ElementHandle 0) x y)
+        if shiftHeld
+        then do
+            -- Shift+scroll → z-slice adjustment
+            logDebug logger CatInput "Shift+scroll: z-slice adjustment"
+            Q.writeQueue (luaQueue env) (LuaZSliceScroll x y)
+        else do
+            -- Check if UI element is under cursor
+            (winW, winH) ← readIORef (windowSizeRef env)
+            (fbW, fbH) ← readIORef (framebufferSizeRef env)
+            let (rawX, rawY) = inpMousePos inpSt
+                scaleX = fromIntegral fbW / fromIntegral winW
+                scaleY = fromIntegral fbH / fromIntegral winH
+                mouseX = realToFrac rawX * scaleX
+                mouseY = realToFrac rawY * scaleY
+            
+            uiMgr ← readIORef (uiManagerRef env)
+            case findClickableElementAt (mouseX, mouseY) uiMgr of
+                Just (elemHandle, _callback) → do
+                    logDebug logger CatInput $ "Scroll on UI element: " <> T.pack (show elemHandle)
+                    Q.writeQueue (luaQueue env) (LuaUIScrollEvent elemHandle x y)
+                Nothing → do
+                    -- No UI element under cursor, and no focus → game scroll
+                    logDebug logger CatInput "Scroll: game scroll (camera zoom)"
+                    Q.writeQueue (luaQueue env) (LuaScrollEvent x y)
         
         return $ updateScrollState inpSt x y
     InputWindowEvent winEv → do

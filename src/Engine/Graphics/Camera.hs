@@ -25,6 +25,7 @@ data Camera2D = Camera2D
     , camRotation   ∷ Float
     , camDragging   ∷ Bool   -- ^ Whether the camera is currently being dragged (panning)
     , camDragOrigin ∷ (Double, Double)  -- ^ Mouse position where dragging started (screen coordinates)
+    , camZSlice     ∷ Int
     } deriving (Show, Eq)
 
 defaultCamera ∷ Camera2D
@@ -35,6 +36,7 @@ defaultCamera = Camera2D
     , camRotation = 0.0
     , camDragging = False
     , camDragOrigin = (0, 0)
+    , camZSlice = 6
     }
 
 data UICamera = UICamera

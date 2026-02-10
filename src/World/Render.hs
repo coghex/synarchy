@@ -70,8 +70,14 @@ computeViewBounds camera fbW fbH =
         aspect   = fromIntegral fbW / fromIntegral fbH
         halfW    = zoom * aspect
         halfH    = zoom
+        -- Extra padding to account for height offset of elevated tiles.
+        -- A tile at max z-slice shifts up by zSlice * tileSideHeight,
+        -- so it could be visible even if its base grid position is
+        -- below the view bottom.
+        zSlice   = camZSlice camera
+        maxHeightPad = fromIntegral (abs zSlice) * tileSideHeight
         padX     = tileWidth
-        padY     = tileHeight
+        padY     = tileHeight + maxHeightPad
     in ViewBounds
         { vbLeft   = cx - halfW - padX
         , vbRight  = cx + halfW + padX
@@ -84,22 +90,13 @@ computeViewBounds camera fbW fbH =
 -----------------------------------------------------------
 
 -- | Test whether a chunk's bounding box overlaps the view.
---   Uses the chunk's global tile range converted to world-space.
 isChunkVisible :: ViewBounds -> ChunkCoord -> Bool
 isChunkVisible vb coord =
     let ((minGX, minGY), (maxGX, maxGY)) = chunkWorldBounds coord
-        -- Get world-space bounds of the chunk's tile quads.
-        -- gridToScreen gives top-left of each tile, so we need:
-        --   leftmost  = gridToScreen of the tile with smallest screen X
-        --   rightmost = gridToScreen of the tile with largest screen X + tileWidth
-        -- In isometric coords, screen X = (gx - gy) * halfWidth
-        -- so min screen X comes from (minGX, maxGY) and max from (maxGX, minGY)
         (sxMin, _) = gridToScreen minGX maxGY
         (sxMax, _) = gridToScreen maxGX minGY
         chunkLeft  = sxMin
         chunkRight = sxMax + tileWidth
-        -- Screen Y = (gx + gy) * halfDiamondHeight
-        -- min screen Y from (minGX, minGY), max from (maxGX, maxGY)
         (_, syMin) = gridToScreen minGX minGY
         (_, syMax) = gridToScreen maxGX maxGY
         chunkTop    = syMin
@@ -108,6 +105,17 @@ isChunkVisible vb coord =
          || chunkLeft   > vbRight vb
          || chunkBottom < vbTop vb
          || chunkTop    > vbBottom vb)
+
+-- | Test whether a chunk has ANY tiles at or below the z-slice.
+--   If the minimum z in the chunk is above the slice, skip it entirely.
+isChunkBelowSlice :: Int -> LoadedChunk -> Bool
+isChunkBelowSlice zSlice lc =
+    -- Find the minimum z in this chunk.
+    -- If even the lowest tile is above the slice, the whole chunk is hidden.
+    case HM.keys (lcTiles lc) of
+        [] -> False
+        keys -> let minZ = minimum [ z | (_, _, z) <- keys ]
+                in minZ <= zSlice
 
 -----------------------------------------------------------
 -- Tile-Level Culling
@@ -136,26 +144,30 @@ renderWorldQuads env worldState = do
     (fbW, fbH) <- liftIO $ readIORef (framebufferSizeRef env)
     
     let vb = computeViewBounds camera fbW fbH
+        zSlice = camZSlice camera
         chunks = wtdChunks tileData
         
-        -- Chunk-level culling
-        visibleChunks = filter (isChunkVisible vb . lcCoord) chunks
+        -- Chunk-level culling: XY bounds + z-slice
+        visibleChunks = filter (\lc -> isChunkVisible vb (lcCoord lc)
+                                    && isChunkBelowSlice zSlice lc) chunks
     
     liftIO $ logDebug logger CatWorld $
         "Chunk culling: " <> T.pack (show $ length chunks) <> " loaded, "
         <> T.pack (show $ length visibleChunks) <> " visible"
+        <> " (zSlice=" <> T.pack (show zSlice) <> ")"
     
     -- For each visible chunk, extract visible tiles and build quads
     chunkQuads <- forM visibleChunks $ \lc -> do
         let coord = lcCoord lc
             tileList = HM.toList (lcTiles lc)
             
-            -- Filter tiles within this chunk by visibility
-            visibleTiles = filter (isTileInView vb coord) tileList
+            -- Filter tiles: XY visibility AND z <= zSlice
+            visibleTiles = filter (\t -> isTileInView vb coord t
+                                      && tileInSlice zSlice t) tileList
         
         quads <- forM visibleTiles $ \((lx, ly, z), tile) -> do
             let (gx, gy) = chunkToGlobal coord lx ly
-            tileToQuad env textures gx gy z tile
+            tileToQuad env textures gx gy z tile zSlice
         
         return $ V.fromList quads
     
@@ -169,15 +181,18 @@ renderWorldQuads env worldState = do
             drawX = rawX
             drawY = rawY - heightOffset
         in isTileVisible vb drawX drawY
+    
+    tileInSlice :: Int -> ((Int, Int, Int), Tile) -> Bool
+    tileInSlice zSlice ((_, _, z), _) = z <= zSlice
 
 -----------------------------------------------------------
 -- Convert Tile to Quad
 -----------------------------------------------------------
 
 tileToQuad :: EngineEnv -> WorldTextures
-  -> Int -> Int -> Int -> Tile 
+  -> Int -> Int -> Int -> Tile -> Int
            -> EngineM ε σ SortableQuad
-tileToQuad env textures worldX worldY worldZ tile = do
+tileToQuad env textures worldX worldY worldZ tile zSlice = do
     logger <- liftIO $ readIORef (loggerRef env)
     
     let (rawX, rawY) = gridToScreen worldX worldY
@@ -196,17 +211,23 @@ tileToQuad env textures worldX worldY worldZ tile = do
           Just bindless -> getTextureSlotIndex texHandle bindless
           Nothing       -> 0
 
+    -- Depth tint: tiles at the z-slice are full brightness,
+    -- tiles further below get progressively darker
+    let depth = zSlice - worldZ  -- 0 at slice, positive going deeper
+        brightness = clamp01 (1.0 - fromIntegral depth * 0.12)
+        tint = Vec4 brightness brightness brightness 1
+
     liftIO $ logDebug logger CatWorld $ 
         "TILE RENDER: texHandle=" <> T.pack (show texHandle)
         <> " slot=" <> T.pack (show actualSlot)
         
     let vertices = V.fromList
-            [ Vertex (Vec2 drawX drawY)                              (Vec2 0 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
-            , Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
-            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
-            , Vertex (Vec2 drawX drawY)                              (Vec2 0 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
-            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
-            , Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            [ Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot)
+            , Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot)
+            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot)
+            , Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot)
+            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot)
+            , Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot)
             ]
     
     return $ SortableQuad
@@ -215,6 +236,13 @@ tileToQuad env textures worldX worldY worldZ tile = do
         , sqTexture  = texHandle
         , sqLayer    = worldLayer
         }
+
+-- | Clamp a float to [0, 1]
+clamp01 :: Float -> Float
+clamp01 x
+    | x < 0    = 0
+    | x > 1    = 1
+    | otherwise = x
 
 -----------------------------------------------------------
 -- Helpers

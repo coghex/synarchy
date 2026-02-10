@@ -5,6 +5,8 @@ module Engine.Scripting.Lua.API.Camera
     , cameraSetPositionFn
     , cameraGetZoomFn
     , cameraSetZoomFn
+    , cameraGetZSliceFn
+    , cameraSetZSliceFn
     ) where
 
 import UPrelude
@@ -73,4 +75,22 @@ cameraSetZoomFn env = do
             atomicModifyIORef' (cameraRef env) $ \cam →
                 (cam { camZoom = max 0.1 (realToFrac z) }, ())
         _ → pure ()
+    return 0
+
+-- | camera.getZSlice() -> int
+cameraGetZSliceFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+cameraGetZSliceFn env = do
+    cam <- Lua.liftIO $ readIORef (cameraRef env)
+    Lua.pushinteger (fromIntegral $ camZSlice cam)
+    return 1
+
+-- | camera.setZSlice(z)
+cameraSetZSliceFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+cameraSetZSliceFn env = do
+    zArg <- Lua.tointeger 1
+    case zArg of
+        Just z -> Lua.liftIO $ 
+            atomicModifyIORef' (cameraRef env) $ \cam ->
+                (cam { camZSlice = fromIntegral z }, ())
+        Nothing -> pure ()
     return 0

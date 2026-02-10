@@ -89,6 +89,8 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaThreadKill
             | LuaMouseDownEvent GLFW.MouseButton Double Double
             | LuaMouseUpEvent GLFW.MouseButton Double Double
+            | LuaScrollEvent Double Double
+            | LuaZSliceScroll Double Double
             | LuaKeyDownEvent Key
             | LuaKeyUpEvent Key
             | LuaShellToggle

@@ -142,6 +142,39 @@ function worldView.onFramebufferResize(width, height)
 end
 
 -----------------------------------------------------------
+-- Z-Slice Control (shift+scroll)
+-----------------------------------------------------------
+
+function worldView.onZSliceScroll(dx, dy)
+    if not worldView.visible then return end
+    
+    local current = camera.getZSlice()
+    if dy > 0 then
+        camera.setZSlice(current + 1)
+        engine.logInfo("Z-slice: " .. tostring(current + 1))
+    elseif dy < 0 then
+        camera.setZSlice(current - 1)
+        engine.logInfo("Z-slice: " .. tostring(current - 1))
+    end
+end
+
+-----------------------------------------------------------
+-- Camera Zoom (normal scroll, no shift, no UI focus)
+-----------------------------------------------------------
+
+function worldView.onScroll(dx, dy)
+    if not worldView.visible then return end
+    
+    local current = camera.getZoom()
+    local zoomSpeed = 0.1
+    if dy > 0 then
+        camera.setZoom(math.max(0.1, current - zoomSpeed))
+    elseif dy < 0 then
+        camera.setZoom(current + zoomSpeed)
+    end
+end
+
+-----------------------------------------------------------
 -- Shutdown
 -----------------------------------------------------------
 

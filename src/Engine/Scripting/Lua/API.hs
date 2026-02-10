@@ -10,7 +10,9 @@ import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn,
                                       resumeScriptFn, quitFn, getFPSFn)
 import Engine.Scripting.Lua.API.Camera (cameraMoveFn, cameraSetPositionFn,
                                          cameraGetPositionFn, cameraSetZoomFn,
-                                         cameraGetZoomFn)
+                                         cameraGetZoomFn, cameraSetZSliceFn
+                                         , cameraGetZSliceFn)
+
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , saveVideoConfigFn, setUIScaleFn
@@ -197,4 +199,6 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getPosition" (cameraGetPositionFn env)
   registerLuaFunction "setZoom" (cameraSetZoomFn env)
   registerLuaFunction "getZoom" (cameraGetZoomFn env)
+  registerLuaFunction "setZSlice" (cameraSetZSliceFn env)
+  registerLuaFunction "getZSlice" (cameraGetZSliceFn env)
   Lua.setglobal (Lua.Name "camera")

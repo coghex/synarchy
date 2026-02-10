@@ -21,8 +21,8 @@ local initialized = false
 local mainMenu = nil
 local settingsMenu = nil
 local createWorldMenu = nil
-local worldView = nil  -- NEW
-local worldManager = nil  -- NEW
+local worldView = nil
+local worldManager = nil
 local textbox = nil
 local checkbox = nil
 local button = nil
@@ -106,7 +106,7 @@ function uiManager.checkReady()
             mainMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
             settingsMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             createWorldMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-            worldView.init(fbW, fbH)  -- NEW
+            worldView.init(fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -120,25 +120,22 @@ function uiManager.onFramebufferResize(width, height)
     fbH = height
     
     if not initialized then
-        -- First time: wait for fonts + framebuffer before creating anything
         uiManager.checkReady()
         return
     end
     
-    -- Already initialized: rebuild menus in place and re-show current
     if mainMenu then mainMenu.onFramebufferResize(width, height) end
     if settingsMenu then settingsMenu.onFramebufferResize(width, height) end
     if createWorldMenu then createWorldMenu.onFramebufferResize(width, height) end
-    if worldView then worldView.onFramebufferResize(width, height) end  -- NEW
+    if worldView then worldView.onFramebufferResize(width, height) end
     
-    -- Re-show the active menu so pages become visible after rebuild
     if currentMenu == "main" then
         if mainMenu and mainMenu.page then UI.showPage(mainMenu.page) end
     elseif currentMenu == "settings" then
         if settingsMenu and settingsMenu.page then UI.showPage(settingsMenu.page) end
     elseif currentMenu == "create_world" then
         if createWorldMenu and createWorldMenu.page then UI.showPage(createWorldMenu.page) end
-    elseif currentMenu == "world_view" then  -- NEW
+    elseif currentMenu == "world_view" then
         if worldView and worldView.page then UI.showPage(worldView.page) end
     end
 end
@@ -149,7 +146,7 @@ function uiManager.showMenu(menuName)
     mainMenu.hide()
     settingsMenu.hide()
     createWorldMenu.hide()
-    worldView.hide()  -- NEW
+    worldView.hide()
     
     if menuName == "main" then
         mainMenu.show()
@@ -157,7 +154,7 @@ function uiManager.showMenu(menuName)
         settingsMenu.show()
     elseif menuName == "create_world" then
         createWorldMenu.show()
-    elseif menuName == "world_view" then  -- NEW
+    elseif menuName == "world_view" then
         worldView.show()
     end
 end
@@ -205,12 +202,10 @@ function uiManager.update(dt)
         dropdown.update(dt)
     end
     
-    -- NEW: Update world manager
     if worldManager then
         worldManager.update(dt)
     end
     
-    -- NEW: Update world view
     if worldView then
         worldView.update(dt)
     end
@@ -240,12 +235,10 @@ function uiManager.update(dt)
         local elem, cb = UI.findHoverTarget(mx, my)
         
         if elem ~= hoveredElement then
-            -- Leave old element
             if hoveredElement and hoveredCallback then
                 uiManager.onHoverLeave(hoveredElement, hoveredCallback)
             end
             
-            -- Enter new element
             hoveredElement = elem
             hoveredCallback = cb
             if elem and cb then
@@ -256,7 +249,6 @@ function uiManager.update(dt)
 end
 
 function uiManager.onMouseDown(button_num, x, y)
-    -- Scale coordinates for dropdown click-outside detection
     local ww, wh = engine.getWindowSize()
     local sx, sy = x, y
     if ww and wh and ww > 0 and wh > 0 then
@@ -300,7 +292,7 @@ function uiManager.shutdown()
     if mainMenu then mainMenu.shutdown() end
     if settingsMenu then settingsMenu.shutdown() end
     if createWorldMenu then createWorldMenu.shutdown() end
-    if worldView then worldView.shutdown() end  -- NEW
+    if worldView then worldView.shutdown() end
 end
 
 function uiManager.onTextBoxClick(elemHandle)
@@ -358,7 +350,6 @@ function uiManager.onMouseUp(button_num, x, y)
 end
 
 function uiManager.onTabFrameScroll(elemHandle)
-    -- no-op: exists so the frame is clickable for scroll event detection
     return false
 end
 
@@ -367,12 +358,10 @@ end
 -----------------------------------------------------------
 
 function uiManager.onScrollUp(elemHandle)
-    -- Dropdown scrollbar buttons get priority (open dropdown is topmost)
     if dropdown then
         local handled = dropdown.handleCallback("onScrollUp", elemHandle)
         if handled then return true end
     end
-    -- Then try settings menu tab scrollbar
     if settingsMenu and currentMenu == "settings" then
         if settingsMenu.handleScrollCallback then
             if settingsMenu.handleScrollCallback("onScrollUp", elemHandle) then
@@ -384,12 +373,10 @@ function uiManager.onScrollUp(elemHandle)
 end
 
 function uiManager.onScrollDown(elemHandle)
-    -- Dropdown scrollbar buttons get priority
     if dropdown then
         local handled = dropdown.handleCallback("onScrollDown", elemHandle)
         if handled then return true end
     end
-    -- Then try settings menu tab scrollbar
     if settingsMenu and currentMenu == "settings" then
         if settingsMenu.handleScrollCallback then
             if settingsMenu.handleScrollCallback("onScrollDown", elemHandle) then
@@ -421,20 +408,38 @@ function uiManager.onSliderKnobClick(elemHandle)
 end
 
 -----------------------------------------------------------
--- Mouse Wheel Scroll
+-- Mouse Wheel Scroll (UI elements)
 -----------------------------------------------------------
 
 function uiManager.onUIScroll(elemHandle, dx, dy)
-    -- Open dropdown gets priority — it's the topmost modal-like widget
     if dropdown then
         local handled = dropdown.onScroll(elemHandle, dx, dy)
         if handled then return end
     end
-    -- Then try settings menu tab scrolling (handles all tab content elements)
     if settingsMenu and currentMenu == "settings" then
         if settingsMenu.onScroll(elemHandle, dx, dy) then
             return
         end
+    end
+end
+
+-----------------------------------------------------------
+-- Game Scroll (no UI element under cursor, no shift)
+-----------------------------------------------------------
+
+function uiManager.onScroll(dx, dy)
+    if currentMenu == "world_view" and worldView then
+        worldView.onScroll(dx, dy)
+    end
+end
+
+-----------------------------------------------------------
+-- Z-Slice Scroll (shift+scroll)
+-----------------------------------------------------------
+
+function uiManager.onZSliceScroll(dx, dy)
+    if currentMenu == "world_view" and worldView then
+        worldView.onZSliceScroll(dx, dy)
     end
 end
 
@@ -451,7 +456,6 @@ function uiManager.onDropdownDisplayClick(elemHandle)
 end
 
 function uiManager.onUICharInput(char)
-    -- Dropdown gets priority if focused
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onCharInput(char)
     end
