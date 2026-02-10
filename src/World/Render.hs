@@ -19,6 +19,7 @@ import Engine.Core.Monad (EngineM)
 import Engine.Core.Log (logDebug, LogCategory(..), logInfo, logWarn)
 import Engine.Scene.Base (LayerId(..), ObjectId(..))
 import Engine.Scene.Types (RenderBatch(..), SortableQuad(..))
+import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
@@ -55,6 +56,50 @@ unWorldPageId :: WorldPageId -> Text
 unWorldPageId (WorldPageId t) = t
 
 -----------------------------------------------------------
+-- Tile Visibility
+-----------------------------------------------------------
+
+-- | Camera view bounds in world-space.
+-- The projection maps [-zoom*aspect, +zoom*aspect] × [-zoom, +zoom]
+-- centered on camPosition. We add one tile of padding so tiles
+-- that are partially on-screen still get drawn.
+data ViewBounds = ViewBounds
+    { vbLeft   :: !Float
+    , vbRight  :: !Float
+    , vbTop    :: !Float
+    , vbBottom :: !Float
+    } deriving (Show)
+
+computeViewBounds :: Camera2D -> Int -> Int -> ViewBounds
+computeViewBounds camera fbW fbH =
+    let (cx, cy) = camPosition camera
+        zoom     = camZoom camera
+        aspect   = fromIntegral fbW / fromIntegral fbH
+        halfW    = zoom * aspect
+        halfH    = zoom
+        -- Pad by one full tile in each direction so partially-visible
+        -- tiles at the edges are not popped in/out
+        padX     = tileWidth
+        padY     = tileHeight
+    in ViewBounds
+        { vbLeft   = cx - halfW - padX
+        , vbRight  = cx + halfW + padX
+        , vbTop    = cy - halfH - padY
+        , vbBottom = cy + halfH + padY
+        }
+
+-- | Check whether a tile's quad overlaps the camera view bounds.
+-- drawX/drawY is the top-left of the sprite quad in world-space.
+isTileVisible :: ViewBounds -> Float -> Float -> Bool
+isTileVisible vb drawX drawY =
+    let tileRight  = drawX + tileWidth
+        tileBottom = drawY + tileHeight
+    in not (tileRight  < vbLeft vb
+         || drawX      > vbRight vb
+         || tileBottom < vbTop vb
+         || drawY      > vbBottom vb)
+
+-----------------------------------------------------------
 -- Render Single World to Quads
 -----------------------------------------------------------
 
@@ -63,15 +108,35 @@ renderWorldQuads env worldState = do
     tileData <- liftIO $ readIORef (wsTilesRef worldState)
     textures <- liftIO $ readIORef (wsTexturesRef worldState)
     logger <- liftIO $ readIORef (loggerRef env)
+    camera <- liftIO $ readIORef (cameraRef env)
     
     let tiles = HM.toList (wtdTiles tileData)
     
     (fbW, fbH) <- liftIO $ readIORef (framebufferSizeRef env)
     
-    quads <- forM tiles $ \((x, y, z), tile) ->
+    let vb = computeViewBounds camera fbW fbH
+    
+    -- Filter tiles by visibility before building quads
+    let visibleTiles = filter (isTileInView vb) tiles
+    
+    liftIO $ logDebug logger CatSystem $
+        "Tile culling: " <> T.pack (show $ length tiles) <> " total, "
+        <> T.pack (show $ length visibleTiles) <> " visible"
+    
+    quads <- forM visibleTiles $ \((x, y, z), tile) ->
         tileToQuad env textures x y z tile
     
     return $ V.fromList quads
+  where
+    -- | Check a tile by its grid coords against the view bounds.
+    -- Computes the draw position (same math as tileToQuad) and tests.
+    isTileInView :: ViewBounds -> ((Int, Int, Int), Tile) -> Bool
+    isTileInView vb ((gx, gy, gz), _) =
+        let (rawX, rawY) = gridToScreen gx gy
+            heightOffset = fromIntegral gz * tileSideHeight
+            drawX = rawX
+            drawY = rawY - heightOffset
+        in isTileVisible vb drawX drawY
 
 -----------------------------------------------------------
 -- Convert Tile to Render Batch
