@@ -19,8 +19,8 @@ newtype WorldPageId = WorldPageId Text
 -----------------------------------------------------------
 
 data Tile = Tile
-    { tileType   :: Word8   -- ^ Tile type (grass, stone, etc.)
-    , tileHeight :: Word8   -- ^ Height/elevation
+    { tileType :: Word8   -- ^ Tile type (grass, stone, etc.)
+    , tileElev :: Word8   -- ^ Height/elevation
     } deriving (Show, Eq)
 
 data WorldTileData = WorldTileData

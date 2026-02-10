@@ -251,6 +251,7 @@ library
                      UI.TextBuffer
                      World.Types
                      World.Thread
+                     World.Grid
                      World.Render
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures

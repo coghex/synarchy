@@ -21,13 +21,15 @@ import Engine.Scene.Types (RenderBatch(..), SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
+import World.Grid (tileWidth, tileHeight, gridToScreen)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
 -- Update World Tiles (called before scene rendering)
 -----------------------------------------------------------
 
--- | Now returns SortableQuads instead of RenderBatches
+-- | Generate quads for all visible world tiles,
+--   sorted by depth for painter's algorithm
 updateWorldTiles :: EngineM ε σ (V.Vector SortableQuad)
 updateWorldTiles = do
     env <- ask
@@ -53,7 +55,6 @@ unWorldPageId (WorldPageId t) = t
 -- Render Single World to Quads
 -----------------------------------------------------------
 
--- | Change the return type and use tileToQuad
 renderWorldQuads :: EngineEnv -> WorldState -> EngineM ε σ (V.Vector SortableQuad)
 renderWorldQuads env worldState = do
     tileData <- liftIO $ readIORef (wsTilesRef worldState)
@@ -74,36 +75,30 @@ renderWorldQuads env worldState = do
 -- Convert Tile to Render Batch
 -----------------------------------------------------------
 
--- | Convert a single tile to a SortableQuad for painter's algorithm sorting
 tileToQuad :: EngineEnv -> WorldCamera -> WorldTextures -> Int -> Int -> Int -> Int -> Tile 
            -> EngineM ε σ SortableQuad
-tileToQuad env camera textures fbW fbH worldX worldY tile = do
+tileToQuad env camera textures _fbW _fbH worldX worldY tile = do
     logger <- liftIO $ readIORef (loggerRef env)
     
-    worldCam <- liftIO $ readIORef (cameraRef env)
-
     refPool ← liftIO $ readIORef (assetPoolRef env)
     
-    let tileSizeW = 0.1
-        tileSizeH = 0.05
-
-        -- Isometric projection in world space
-        isoX = (fromIntegral worldX - fromIntegral worldY) * (tileSizeW / 2)
-        isoY = (fromIntegral worldX + fromIntegral worldY) * (tileSizeH / 2)
+    let -- Grid-to-screen gives us the top-left draw origin
+        (rawX, rawY) = gridToScreen worldX worldY
         
-        worldX' = isoX - wcX camera
-        worldY' = isoY - wcY camera
+        -- Apply world camera offset
+        drawX = rawX - wcX camera
+        drawY = rawY - wcY camera
         
-        heightOffset = (fromIntegral (tileHeight tile) :: Float) * 0.01
-        finalY = worldY' - heightOffset
+        -- Apply height offset (elevated tiles shift up)
+        heightOffset = fromIntegral (tileElev tile) * 0.01
+        finalY = drawY - heightOffset
 
-        -- Sort key: higher (worldX + worldY) = closer to viewer = drawn later
-        -- Height shifts tiles visually up but they should still occlude correctly
-        sortKey = fromIntegral (worldX + worldY) + fromIntegral (tileHeight tile) * 0.001
+        -- Sort key: higher (gx + gy) = closer to viewer = drawn later
+        sortKey = fromIntegral (worldX + worldY) 
+                + fromIntegral (tileElev tile) * 0.001
 
     let texHandle = getTileTexture textures (tileType tile)
     
-    -- Look up the bindless slot (same logic you already have)
     pool <- liftIO $ readIORef (assetPoolRef env)
     mbAssetState <- liftIO $ lookupTextureAsset texHandle pool
     
@@ -116,12 +111,12 @@ tileToQuad env camera textures fbW fbH worldX worldY tile = do
         
     let AssetId actualSlot = actualSlot'
         vertices = V.fromList
-            [ Vertex (Vec2 worldX' finalY) (Vec2 0.0 0.0) (Vec4 1.0 1.0 1.0 1.0) (fromIntegral actualSlot)
-            , Vertex (Vec2 (worldX' + tileSizeW) finalY) (Vec2 1.0 0.0) (Vec4 1.0 1.0 1.0 1.0) (fromIntegral actualSlot)
-            , Vertex (Vec2 (worldX' + tileSizeW) (finalY + tileSizeH)) (Vec2 1.0 1.0) (Vec4 1.0 1.0 1.0 1.0) (fromIntegral actualSlot)
-            , Vertex (Vec2 worldX' finalY) (Vec2 0.0 0.0) (Vec4 1.0 1.0 1.0 1.0) (fromIntegral actualSlot)
-            , Vertex (Vec2 (worldX' + tileSizeW) (finalY + tileSizeH)) (Vec2 1.0 1.0) (Vec4 1.0 1.0 1.0 1.0) (fromIntegral actualSlot)
-            , Vertex (Vec2 worldX' (finalY + tileSizeH)) (Vec2 0.0 1.0) (Vec4 1.0 1.0 1.0 1.0) (fromIntegral actualSlot)
+            [ Vertex (Vec2 drawX finalY)                          (Vec2 0 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            , Vertex (Vec2 (drawX + tileWidth) finalY)            (Vec2 1 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            , Vertex (Vec2 (drawX + tileWidth) (finalY + tileHeight)) (Vec2 1 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            , Vertex (Vec2 drawX finalY)                          (Vec2 0 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            , Vertex (Vec2 (drawX + tileWidth) (finalY + tileHeight)) (Vec2 1 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            , Vertex (Vec2 drawX (finalY + tileHeight))           (Vec2 0 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
             ]
     
     return $ SortableQuad
