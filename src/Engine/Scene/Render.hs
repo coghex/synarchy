@@ -182,3 +182,12 @@ uploadBatchesToBuffer batches dynamicBuffer = do
     logDebugM CatRender "Buffer upload complete"
     
     pure $ finalBuffer { sdbUsed = totalVertices }
+
+-- | Get world-layer DrawableObjects as SortableQuads for interleaving
+-- with world tiles. Filters to only world layers (< uiLayerThreshold).
+getWorldSceneQuads :: EngineM ε σ (V.Vector SortableQuad)
+getWorldSceneQuads = do
+    sceneMgr <- gets sceneManager
+    let bm = smBatchManager sceneMgr
+        worldObjs = V.filter (\obj -> doLayer obj < LayerId 10) (bmVisibleObjs bm)
+    pure $ V.map drawableToQuad worldObjs

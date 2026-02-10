@@ -35,10 +35,10 @@ import Engine.Input.Types (InputState(..))
 import Engine.Loop.Resource (validateDescriptorState, getFrameResources, 
                               getCommandBuffer, getDevice, getSwapchain,
                               getQueues, extractWindow)
-import Engine.Scene.Render (updateSceneForRender, getCurrentRenderBatches
-                           , ensureDynamicVertexBuffer, uploadBatchesToBuffer)
+import Engine.Scene.Render
 import Engine.Scene.Base
 import Engine.Scene.Types
+import Engine.Scene.Types.Batch
 import UI.Render (renderUIPages)
 import World.Render (updateWorldTiles)
 import Vulkan.Core10
@@ -100,38 +100,41 @@ drawFrame = do
             -- NOW reset fence since we're definitely going to submit
             liftIO $ resetFences device (V.singleton (frInFlight resources))
 
-            -- update world tiles
-            logDebugM CatRender "Updating world tiles for render..."
-            worldTileBatches ← updateWorldTiles
-            logDebugSM CatRender "Collected world tile batches"
-                [("count", T.pack $ show $ V.length worldTileBatches)]
+            -- 1. Collect world tile quads
+            worldTileQuads ← updateWorldTiles
             
-            -- Convert world tile batches to RenderItems (wrap in SpriteItem)
-            let worldTileItems = V.map SpriteItem worldTileBatches
-                worldTilesByLayer = V.foldl' (\acc item → 
-                    let layer = case item of
-                          SpriteItem batch → rbLayer batch
-                          TextItem batch → trbLayer batch
-                    in Map.insertWith (<>) layer (V.singleton item) acc
-                  ) Map.empty worldTileItems
+            logDebugSM CatRender "Collected world tile quads"
+                [("count", T.pack $ show $ V.length worldTileQuads)]
             
-            logDebugM CatRender $ T.pack $ 
-                "World tiles organized into " <> show (Map.size worldTilesByLayer) <> " layers, " <>
-                "total items: " <> show (V.sum $ V.map V.length $ V.fromList $ Map.elems worldTilesByLayer)
-            
-            -- Update scene
+            -- 2. Update scene (populates BatchManager with DrawableObjects)
             logDebugM CatRender "Updating scene for render..."
             updateSceneForRender
             sceneMgr ← gets sceneManager
-            let worldLayeredBatches = bmLayeredBatches $ smBatchManager sceneMgr
-            worldBatches ← getCurrentRenderBatches
-            let allWorldBatches = worldBatches <> worldTileBatches
             
-            logDebugSM CatRender "Collected world batches"
-                [("count", T.pack $ show $ V.length allWorldBatches)
-                ,("layers", T.pack $ show $ Map.size worldLayeredBatches)]
+            -- 3. Get scene sprites in world layers as SortableQuads
+            sceneQuads ← getWorldSceneQuads
             
-            -- render UI
+            logDebugSM CatRender "Collected scene quads for world layer"
+                [("count", T.pack $ show $ V.length sceneQuads)]
+            
+            -- 4. Merge world tiles + scene sprites, sort by painter's algorithm,
+            --    produce ONE RenderBatch for the world layer
+            let allWorldQuads = V.toList worldTileQuads <> V.toList sceneQuads
+                worldLayer = LayerId 1
+                worldBatch = mergeQuadsToBatch worldLayer allWorldQuads
+                worldBatches = if V.null (rbVertices worldBatch)
+                               then V.empty
+                               else V.singleton worldBatch
+                worldLayeredBatches = if V.null (rbVertices worldBatch)
+                                     then Map.empty
+                                     else Map.singleton worldLayer 
+                                            (V.singleton (SpriteItem worldBatch))
+            
+            logDebugSM CatRender "Merged world batches"
+                [("vertices", T.pack $ show $ V.length $ rbVertices worldBatch)
+                ,("drawCalls", T.pack $ show $ V.length worldBatches)]
+            
+            -- 5. Render UI
             logDebugM CatRender "Rendering UI pages..."
             (uiBatches, uiLayeredBatches) ← renderUIPages
             
@@ -139,10 +142,10 @@ drawFrame = do
                 [("count", T.pack $ show $ V.length uiBatches)
                 ,("layers", T.pack $ show $ Map.size uiLayeredBatches)]
             
-            -- merge world and UI batches
-            let batches = allWorldBatches <> uiBatches
+            -- 6. Final merge: world + UI
+            let batches = worldBatches <> uiBatches
                 layeredBatches = Map.unionsWith (<>) 
-                    [worldLayeredBatches, worldTilesByLayer, uiLayeredBatches]
+                    [worldLayeredBatches, uiLayeredBatches]
 
             -- Log final layer composition
             logDebugM CatRender $ T.pack $ "Final layered batches:"
