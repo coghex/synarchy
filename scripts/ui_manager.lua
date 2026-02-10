@@ -68,8 +68,8 @@ function uiManager.init(scriptId)
     mainMenu = require("scripts.main_menu")
     settingsMenu = require("scripts.settings_menu")
     createWorldMenu = require("scripts.create_world_menu")
-    worldManager = require("scripts.world_manager")  -- NEW
-    worldView = require("scripts.world_view")  -- NEW
+    worldManager = require("scripts.world_manager")
+    worldView = require("scripts.world_view")
     
     settingsMenu.setShowMenuCallback(function(menuName)
         uiManager.showMenu(menuName)

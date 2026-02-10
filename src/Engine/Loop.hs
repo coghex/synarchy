@@ -18,6 +18,7 @@ import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Input.Event (handleInputEvents)
 import Engine.Loop.Timing (updateFrameTiming)
 import Engine.Loop.Frame (drawFrame)
+import Engine.Loop.Camera (updateCameraPanning)
 import Engine.Scripting.Lua.Message (processLuaMessages)
 
 -- | Main engine loop
@@ -65,6 +66,7 @@ handleEngineRunning = do
     -- Process events
     GLFW.pollEvents
     handleInputEvents
+    updateCameraPanning
     processLuaMessages
     
     -- Check for shutdown

@@ -17,6 +17,8 @@ module World.Grid
     , gridToWorld
     , gridToScreen
     , worldToGrid
+      -- * Camera constants
+    , cameraPanSpeed
     ) where
 
 import UPrelude
@@ -36,6 +38,7 @@ data GridConfig = GridConfig
     , gcWorldTileWidth  :: !Float  -- ^ Sprite width in world-space units
     , gcWorldLayer      :: !LayerId -- ^ Layer for world tiles/sprites
     , gcUILayerThreshold :: !LayerId -- ^ Layers >= this use UI pipeline
+    , gcCameraPanSpeed   :: !Float  -- ^ Camera pan speed in world units per second
     } deriving (Show)
 
 defaultGridConfig :: GridConfig
@@ -46,6 +49,7 @@ defaultGridConfig = GridConfig
     , gcWorldTileWidth  = 0.15
     , gcWorldLayer      = LayerId 1
     , gcUILayerThreshold = LayerId 10
+    , gcCameraPanSpeed   = 0.5
     }
 
 -----------------------------------------------------------
@@ -90,6 +94,10 @@ worldLayer = gcWorldLayer defaultGridConfig
 -- | Layers >= this threshold use the UI pipeline
 uiLayerThreshold :: LayerId
 uiLayerThreshold = gcUILayerThreshold defaultGridConfig
+
+-- | Camera pan speed in world-space units per second
+cameraPanSpeed :: Float
+cameraPanSpeed = gcCameraPanSpeed defaultGridConfig
 
 -----------------------------------------------------------
 -- Coordinate Conversions

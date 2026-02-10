@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.World
     , worldShowFn
     , worldHideFn
     , worldSetTextureFn
+    , worldSetCameraFn
     ) where
 
 import UPrelude
@@ -73,6 +74,23 @@ worldSetTextureFn env = do
             Q.writeQueue (worldQueue env) (WorldSetTexture pageId texType texHandle)
         _ -> pure ()
     
+    return 0
+
+-- | world.setCamera(pageId, x, y)
+-- Sync camera position to world state for hit-testing / tile picking
+worldSetCameraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetCameraFn env = do
+    pageIdArg ← Lua.tostring 1
+    xArg ← Lua.tonumber 2
+    yArg ← Lua.tonumber 3
+
+    case (pageIdArg, xArg, yArg) of
+        (Just pageIdBS, Just (Lua.Number x), Just (Lua.Number y)) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env)
+                (WorldSetCamera pageId (realToFrac x) (realToFrac y))
+        _ → pure ()
+
     return 0
 
 parseTextureType :: Text -> WorldTextureType

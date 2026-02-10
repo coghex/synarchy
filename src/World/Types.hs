@@ -102,4 +102,5 @@ data WorldCommand
     | WorldHide WorldPageId      -- ^ Hide world
     | WorldTick Double           -- ^ Simulate world (dt)
     | WorldSetTexture WorldPageId WorldTextureType TextureHandle
+    | WorldSetCamera WorldPageId Float Float  -- ^ Set camera position (x, y)
     deriving (Show, Eq)

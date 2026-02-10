@@ -61,7 +61,6 @@ unWorldPageId (WorldPageId t) = t
 renderWorldQuads :: EngineEnv -> WorldState -> EngineM ε σ (V.Vector SortableQuad)
 renderWorldQuads env worldState = do
     tileData <- liftIO $ readIORef (wsTilesRef worldState)
-    camera <- liftIO $ readIORef (wsCameraRef worldState)
     textures <- liftIO $ readIORef (wsTexturesRef worldState)
     logger <- liftIO $ readIORef (loggerRef env)
     
@@ -70,7 +69,7 @@ renderWorldQuads env worldState = do
     (fbW, fbH) <- liftIO $ readIORef (framebufferSizeRef env)
     
     quads <- forM tiles $ \((x, y, z), tile) ->
-        tileToQuad env camera textures fbW fbH x y z tile
+        tileToQuad env textures x y z tile
     
     return $ V.fromList quads
 
@@ -78,32 +77,24 @@ renderWorldQuads env worldState = do
 -- Convert Tile to Render Batch
 -----------------------------------------------------------
 
-tileToQuad :: EngineEnv -> WorldCamera -> WorldTextures
-  -> Int -> Int -> Int -> Int -> Int -> Tile 
+tileToQuad :: EngineEnv -> WorldTextures
+  -> Int -> Int -> Int -> Tile 
            -> EngineM ε σ SortableQuad
-tileToQuad env camera textures _fbW _fbH worldX worldY worldZ tile = do
+tileToQuad env textures worldX worldY worldZ tile = do
     logger <- liftIO $ readIORef (loggerRef env)
-    
-    refPool ← liftIO $ readIORef (assetPoolRef env)
     
     let (rawX, rawY) = gridToScreen worldX worldY
         
-        -- Apply world camera offset
-        drawX = rawX - wcX camera
-        drawY = rawY - wcY camera
-        
         -- Apply height offset (elevated tiles shift up)
         heightOffset = fromIntegral worldZ * tileSideHeight
-        finalY = drawY - heightOffset
+        drawX = rawX
+        drawY = rawY - heightOffset
 
         -- Sort key: higher (gx + gy) = closer to viewer = drawn later
         sortKey = fromIntegral (worldX + worldY) 
                 + fromIntegral worldZ * 0.001
 
     let texHandle = getTileTexture textures (tileType tile)
-    
-    pool <- liftIO $ readIORef (assetPoolRef env)
-    mbAssetState <- liftIO $ lookupTextureAsset texHandle pool
     
     gs <- gets graphicsState
     let actualSlot = case textureSystem gs of
@@ -115,12 +106,12 @@ tileToQuad env camera textures _fbW _fbH worldX worldY worldZ tile = do
         <> " slot=" <> T.pack (show actualSlot)
         
     let vertices = V.fromList
-            [ Vertex (Vec2 drawX finalY)                          (Vec2 0 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
-            , Vertex (Vec2 (drawX + tileWidth) finalY)            (Vec2 1 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
-            , Vertex (Vec2 (drawX + tileWidth) (finalY + tileHeight)) (Vec2 1 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
-            , Vertex (Vec2 drawX finalY)                          (Vec2 0 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
-            , Vertex (Vec2 (drawX + tileWidth) (finalY + tileHeight)) (Vec2 1 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
-            , Vertex (Vec2 drawX (finalY + tileHeight))           (Vec2 0 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            [ Vertex (Vec2 drawX drawY)                              (Vec2 0 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            , Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            , Vertex (Vec2 drawX drawY)                              (Vec2 0 0) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
+            , Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) (Vec4 1 1 1 1) (fromIntegral actualSlot)
             ]
     
     return $ SortableQuad

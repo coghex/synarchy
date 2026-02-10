@@ -62,10 +62,10 @@ getKeyForAction = Map.lookup
 
 -- | parse key name to GLFW key
 parseKeyName ∷ Text → Maybe GLFW.Key
-parseKeyName "W"      = Just GLFW.Key'W
-parseKeyName "A"      = Just GLFW.Key'A
-parseKeyName "S"      = Just GLFW.Key'S
-parseKeyName "D"      = Just GLFW.Key'D
+parseKeyName "Up"     = Just GLFW.Key'Up
+parseKeyName "Down"   = Just GLFW.Key'Down
+parseKeyName "Left"   = Just GLFW.Key'Left
+parseKeyName "Right"  = Just GLFW.Key'Right
 parseKeyName "Escape" = Just GLFW.Key'Escape
 parseKeyName "Grave"  = Just GLFW.Key'GraveAccent
 parseKeyName _        = Nothing

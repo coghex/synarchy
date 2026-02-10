@@ -84,7 +84,7 @@ createViewMatrix camera =
                         (V4 0 1 0 0)
                         (V4 0 0 1 0)
                         (V4 (-px * cosθ + py * sinθ)    -- Rotated X translation
-                            (py * cosθ + px * sinθ)    -- Rotated Y translation
+                            (-py * cosθ - px * sinθ)    -- Rotated Y translation
                             0 1)
         
         -- Then create rotation matrix

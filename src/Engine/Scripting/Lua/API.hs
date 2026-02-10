@@ -8,6 +8,9 @@ import Engine.Scripting.Lua.Types (LuaBackendState)
 import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn, 
                                       setTickIntervalFn, pauseScriptFn, 
                                       resumeScriptFn, quitFn, getFPSFn)
+import Engine.Scripting.Lua.API.Camera (cameraMoveFn, cameraSetPositionFn,
+                                         cameraGetPositionFn, cameraSetZoomFn,
+                                         cameraGetZoomFn)
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , saveVideoConfigFn, setUIScaleFn
@@ -30,7 +33,7 @@ import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn,
                                         releaseFocusFn, getFocusIdFn)
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
 import Engine.Scripting.Lua.API.World (worldInitFn, worldShowFn, worldHideFn
-                                      , worldSetTextureFn)
+                                      , worldSetTextureFn, worldSetCameraFn)
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
@@ -176,10 +179,22 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   
   Lua.setglobal (Lua.Name "UI")
 
+  -- World table
   Lua.newtable
 
   registerLuaFunction "init" (worldInitFn env)
   registerLuaFunction "show" (worldShowFn env)
   registerLuaFunction "hide" (worldHideFn env)
   registerLuaFunction "setTexture" (worldSetTextureFn env)
+  registerLuaFunction "setCamera" (worldSetCameraFn env)
   Lua.setglobal (Lua.Name "world")
+
+  -- Camera table
+  Lua.newtable
+
+  registerLuaFunction "move" (cameraMoveFn env)
+  registerLuaFunction "setPosition" (cameraSetPositionFn env)
+  registerLuaFunction "getPosition" (cameraGetPositionFn env)
+  registerLuaFunction "setZoom" (cameraSetZoomFn env)
+  registerLuaFunction "getZoom" (cameraGetZoomFn env)
+  Lua.setglobal (Lua.Name "camera")

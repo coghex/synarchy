@@ -294,6 +294,7 @@ updateKeyState state key keyState mods = state
     where
         newKeyState = KeyState
             { keyPressed = keyState ≡ GLFW.KeyState'Pressed
+                         ∨ keyState ≡ GLFW.KeyState'Repeating
             , keyMods = mods
             , keyTime = 0.0
             }

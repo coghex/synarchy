@@ -137,6 +137,13 @@ handleWorldCommand env logger cmd = do
                 Nothing -> 
                     logDebug logger CatSystem $ 
                         "World not found for texture update: " <> unWorldPageId pageId
+        WorldSetCamera pageId cx cy -> do
+            manager <- readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds manager) of
+                Just worldState ->
+                    atomicModifyIORef' (wsCameraRef worldState) $ \_ ->
+                        (WorldCamera cx cy, ())
+                Nothing -> return ()
 
 unWorldPageId :: WorldPageId -> Text
 unWorldPageId (WorldPageId t) = t

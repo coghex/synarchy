@@ -36,7 +36,6 @@ function worldView.onAssetLoaded(assetType, handle, path)
             worldView.texturesLoaded = true
             engine.logDebug("World textures loaded - GRASS TEXTURE READY")
             
-            -- If we're already visible, create the world now
             if worldView.visible then
                 engine.logInfo("World visible, creating world with loaded texture...")
                 worldView.createWorld()
@@ -64,7 +63,6 @@ function worldView.createWorld()
         return
     end
     
-    -- Pass texture handle to world manager
     worldManager.createWorld({ 
         worldId = "main_world",
         grassTexture = worldView.grassTexture
@@ -81,14 +79,7 @@ function worldView.createUI()
         UI.deletePage(worldView.page)
     end
     
-    -- Create UI page for HUD overlays
     worldView.page = UI.newPage("world_view_hud", "hud")
-    
-    -- TODO: Add HUD elements here
-    -- - Resource counters
-    -- - Minimap
-    -- - Build menus
-    -- etc.
     
     engine.logInfo("World view UI created")
 end
@@ -105,7 +96,6 @@ function worldView.show()
     worldView.visible = true
     UI.showPage(worldView.page)
     
-    -- Create world if textures are ready
     if worldView.texturesLoaded then
         worldView.createWorld()
     else
@@ -133,11 +123,10 @@ end
 function worldView.update(dt)
     if not worldView.visible then return end
     
+    -- Camera panning is handled in Haskell (Engine.Loop.Camera)
+    
     -- Update world state
     worldManager.update(dt)
-    
-    -- Update HUD
-    -- TODO: update resource displays, etc.
 end
 
 -----------------------------------------------------------
