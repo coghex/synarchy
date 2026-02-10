@@ -1,10 +1,18 @@
 {-# LANGUAGE Strict #-}
 module World.Grid
-    ( -- * Tile dimensions (world-space units)
-      tileWidth
+    ( -- * Grid configuration
+      GridConfig(..)
+    , defaultGridConfig
+      -- * Derived constants (from defaultGridConfig)
+    , tileWidth
     , tileHeight
     , tileDiamondHeight
     , tileSideHeight
+    , tileHalfWidth
+    , tileHalfDiamondHeight
+      -- * Layer constants
+    , worldLayer
+    , uiLayerThreshold
       -- * Coordinate conversions
     , gridToWorld
     , gridToScreen
@@ -12,58 +20,98 @@ module World.Grid
     ) where
 
 import UPrelude
+import Engine.Scene.Base (LayerId(..))
 
--- | Full sprite dimensions in world-space units
--- Ratio must match sprite pixel ratio: 96:64 = 3:2
+-----------------------------------------------------------
+-- Grid Configuration
+-----------------------------------------------------------
+
+-- | All world grid constants in one place.
+-- Changing the sprite size or proportions only requires
+-- editing defaultGridConfig — everything else is derived.
+data GridConfig = GridConfig
+    { gcTilePixelWidth  :: !Int    -- ^ Sprite width in pixels (96)
+    , gcTilePixelHeight :: !Int    -- ^ Sprite height in pixels (64)
+    , gcSidePixels      :: !Int    -- ^ Side-face height in pixels (16)
+    , gcWorldTileWidth  :: !Float  -- ^ Sprite width in world-space units
+    , gcWorldLayer      :: !LayerId -- ^ Layer for world tiles/sprites
+    , gcUILayerThreshold :: !LayerId -- ^ Layers >= this use UI pipeline
+    } deriving (Show)
+
+defaultGridConfig :: GridConfig
+defaultGridConfig = GridConfig
+    { gcTilePixelWidth  = 96
+    , gcTilePixelHeight = 64
+    , gcSidePixels      = 16
+    , gcWorldTileWidth  = 0.15
+    , gcWorldLayer      = LayerId 1
+    , gcUILayerThreshold = LayerId 10
+    }
+
+-----------------------------------------------------------
+-- Derived Constants
+-----------------------------------------------------------
+
+-- | All derived values computed from defaultGridConfig.
+-- These are top-level CAFs — computed once, shared everywhere.
+
 tileWidth :: Float
-tileWidth = 0.15
+tileWidth = gcWorldTileWidth defaultGridConfig
 
+-- | Full sprite height, maintaining pixel aspect ratio
 tileHeight :: Float
-tileHeight = 0.10
+tileHeight = tileWidth * fromIntegral ph / fromIntegral pw
+  where
+    pw = gcTilePixelWidth defaultGridConfig
+    ph = gcTilePixelHeight defaultGridConfig
 
--- | The diamond (top face) portion: 48/64 of the full height
+-- | Diamond (top face) height: the isometric footprint
 tileDiamondHeight :: Float
-tileDiamondHeight = tileHeight * (48.0 / 64.0)  -- 0.075
+tileDiamondHeight = tileWidth * fromIntegral diamondPx / fromIntegral pw
+  where
+    pw = gcTilePixelWidth defaultGridConfig
+    diamondPx = gcTilePixelHeight defaultGridConfig - gcSidePixels defaultGridConfig
 
--- | The side face portion: 16/64 of the full height
+-- | Side face height: one elevation level
 tileSideHeight :: Float
-tileSideHeight = tileHeight * (16.0 / 64.0)  -- 0.025
+tileSideHeight = tileWidth * fromIntegral (gcSidePixels defaultGridConfig) 
+              / fromIntegral (gcTilePixelWidth defaultGridConfig)
 
--- | Half-tile dimensions for grid spacing
-halfWidth :: Float
-halfWidth = tileWidth / 2.0    -- 0.075
+tileHalfWidth :: Float
+tileHalfWidth = tileWidth / 2.0
 
-halfDiamondHeight :: Float
-halfDiamondHeight = tileDiamondHeight / 2.0  -- 0.0375
+tileHalfDiamondHeight :: Float
+tileHalfDiamondHeight = tileDiamondHeight / 2.0
+
+-- | The layer used for world tiles and world-space scene sprites
+worldLayer :: LayerId
+worldLayer = gcWorldLayer defaultGridConfig
+
+-- | Layers >= this threshold use the UI pipeline
+uiLayerThreshold :: LayerId
+uiLayerThreshold = gcUILayerThreshold defaultGridConfig
+
+-----------------------------------------------------------
+-- Coordinate Conversions
+-----------------------------------------------------------
 
 -- | Convert grid coordinates to world-space position.
 -- Returns the TOP-CENTER of the diamond for tile (gx, gy).
--- This is the anchor point — draw the sprite offset from here.
 gridToWorld :: Int -> Int -> (Float, Float)
 gridToWorld gx gy =
-    let sx = fromIntegral (gx - gy) * halfWidth
-        sy = fromIntegral (gx + gy) * halfDiamondHeight
+    let sx = fromIntegral (gx - gy) * tileHalfWidth
+        sy = fromIntegral (gx + gy) * tileHalfDiamondHeight
     in (sx, sy)
 
 -- | Convert grid coordinates to sprite draw origin (top-left of quad).
--- This is what you pass to the vertex generator.
 gridToScreen :: Int -> Int -> (Float, Float)
 gridToScreen gx gy =
     let (cx, cy) = gridToWorld gx gy
-    in (cx - halfWidth, cy)
+    in (cx - tileHalfWidth, cy)
 
 -- | Convert world-space position back to nearest grid coordinates.
--- Useful for mouse picking later.
 worldToGrid :: Float -> Float -> (Int, Int)
 worldToGrid wx wy =
-    let -- Invert the grid-to-world equations:
-        -- wx = (gx - gy) * halfWidth
-        -- wy = (gx + gy) * halfDiamondHeight
-        -- Solve:
-        -- gx - gy = wx / halfWidth
-        -- gx + gy = wy / halfDiamondHeight
-        -- gx = (wx/halfWidth + wy/halfDiamondHeight) / 2
-        -- gy = (wy/halfDiamondHeight - wx/halfWidth) / 2
-        fgx = (wx / halfWidth + wy / halfDiamondHeight) / 2.0
-        fgy = (wy / halfDiamondHeight - wx / halfWidth) / 2.0
+    let fgx = (wx / tileHalfWidth + wy / tileHalfDiamondHeight) / 2.0
+        fgy = (wy / tileHalfDiamondHeight - wx / tileHalfWidth) / 2.0
     in (round fgx, round fgy)

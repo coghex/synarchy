@@ -81,8 +81,10 @@ handleWorldCommand env logger cmd = do
             
             -- Add one grass tile at (0,0) for testing
             atomicModifyIORef' (wsTilesRef worldState) $ \tileData ->
-                let newTiles = HM.insert (0, 0) (Tile 1 0)
-                             $ HM.insert (1, 0) (Tile 1 0)
+                let newTiles = HM.insert (0, 0, 0) (Tile 1)
+                             $ HM.insert (1, 0, 0) (Tile 1)
+                             $ HM.insert (0, 1, 0) (Tile 1)
+                             $ HM.insert (0, 0, 1) (Tile 1)
                              $ (wtdTiles tileData)
                 in (tileData { wtdTiles = newTiles }, ())
             

@@ -41,6 +41,7 @@ import Engine.Scene.Types
 import Engine.Scene.Types.Batch
 import UI.Render (renderUIPages)
 import World.Render (updateWorldTiles)
+import World.Grid (worldLayer)
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
@@ -120,7 +121,6 @@ drawFrame = do
             -- 4. Merge world tiles + scene sprites, sort by painter's algorithm,
             --    produce ONE RenderBatch for the world layer
             let allWorldQuads = V.toList worldTileQuads <> V.toList sceneQuads
-                worldLayer = LayerId 1
                 worldBatch = mergeQuadsToBatch worldLayer allWorldQuads
                 worldBatches = if V.null (rbVertices worldBatch)
                                then V.empty

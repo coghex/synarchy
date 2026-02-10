@@ -23,13 +23,10 @@ import Engine.Graphics.Vulkan.Command.Sprite (renderSpritesBindless, renderSprit
 import Engine.Graphics.Vulkan.Command.Text (renderTextBatchInline)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types
+import World.Grid (uiLayerThreshold)
 import Vulkan.Core10
 import Vulkan.Core10.CommandBufferBuilding (ClearValue(..), ClearColorValue(..))
 import Vulkan.Zero
-
--- | Layer ID threshold to separate world and UI layers
-uiLayerThreshold ∷ LayerId
-uiLayerThreshold = LayerId 10
 
 -- | Record scene command buffer with sprite and text batches
 recordSceneCommandBuffer ∷ CommandBuffer → Word64 → SceneDynamicBuffer 

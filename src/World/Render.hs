@@ -21,7 +21,7 @@ import Engine.Scene.Types (RenderBatch(..), SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
-import World.Grid (tileWidth, tileHeight, gridToScreen)
+import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
@@ -66,8 +66,8 @@ renderWorldQuads env worldState = do
     
     (fbW, fbH) <- liftIO $ readIORef (framebufferSizeRef env)
     
-    quads <- forM tiles $ \((x, y), tile) ->
-        tileToQuad env camera textures fbW fbH x y tile
+    quads <- forM tiles $ \((x, y, z), tile) ->
+        tileToQuad env camera textures fbW fbH x y z tile
     
     return $ V.fromList quads
 
@@ -75,27 +75,27 @@ renderWorldQuads env worldState = do
 -- Convert Tile to Render Batch
 -----------------------------------------------------------
 
-tileToQuad :: EngineEnv -> WorldCamera -> WorldTextures -> Int -> Int -> Int -> Int -> Tile 
+tileToQuad :: EngineEnv -> WorldCamera -> WorldTextures
+  -> Int -> Int -> Int -> Int -> Int -> Tile 
            -> EngineM ε σ SortableQuad
-tileToQuad env camera textures _fbW _fbH worldX worldY tile = do
+tileToQuad env camera textures _fbW _fbH worldX worldY worldZ tile = do
     logger <- liftIO $ readIORef (loggerRef env)
     
     refPool ← liftIO $ readIORef (assetPoolRef env)
     
-    let -- Grid-to-screen gives us the top-left draw origin
-        (rawX, rawY) = gridToScreen worldX worldY
+    let (rawX, rawY) = gridToScreen worldX worldY
         
         -- Apply world camera offset
         drawX = rawX - wcX camera
         drawY = rawY - wcY camera
         
         -- Apply height offset (elevated tiles shift up)
-        heightOffset = fromIntegral (tileElev tile) * 0.01
+        heightOffset = fromIntegral worldZ * tileSideHeight
         finalY = drawY - heightOffset
 
         -- Sort key: higher (gx + gy) = closer to viewer = drawn later
         sortKey = fromIntegral (worldX + worldY) 
-                + fromIntegral (tileElev tile) * 0.001
+                + fromIntegral worldZ * 0.001
 
     let texHandle = getTileTexture textures (tileType tile)
     
@@ -123,7 +123,7 @@ tileToQuad env camera textures _fbW _fbH worldX worldY tile = do
         { sqSortKey  = sortKey
         , sqVertices = vertices
         , sqTexture  = texHandle
-        , sqLayer    = LayerId 1
+        , sqLayer    = worldLayer
         }
 
 -----------------------------------------------------------
