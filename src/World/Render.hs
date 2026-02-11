@@ -25,7 +25,7 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
-import World.Generate (chunkSize, chunkToGlobal, chunkWorldBounds)
+import World.Generate (chunkSize, chunkToGlobal, chunkWorldBounds, viewDepth)
 import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer,
                    tileHalfWidth, tileHalfDiamondHeight)
 import qualified Data.Vector as V
@@ -183,7 +183,7 @@ renderWorldQuads env worldState = do
         in isTileVisible vb drawX drawY
     
     tileInSlice :: Int -> ((Int, Int, Int), Tile) -> Bool
-    tileInSlice zSlice ((_, _, z), _) = z <= zSlice
+    tileInSlice zSlice ((_, _, z), _) = z <= zSlice && z >= (zSlice - viewDepth)
 
 -----------------------------------------------------------
 -- Convert Tile to Quad
