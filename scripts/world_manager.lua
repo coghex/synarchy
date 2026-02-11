@@ -11,7 +11,7 @@ worldManager.active = false
 function worldManager.createWorld(params)
     local worldId = params.worldId or "main_world"
     local seed = params.seed or 42
-    local worldSize = params.worldSize or 64
+    local worldSize = params.worldSize or 128
     
     engine.logInfo("Creating world: " .. worldId 
         .. " (seed=" .. seed .. ", size=" .. worldSize .. " chunks)")

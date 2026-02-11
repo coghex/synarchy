@@ -7,7 +7,9 @@ module World.Plate
     , plateAt
     , twoNearestPlates
     , elevationAtGlobal
+      -- * Boundary classification
     , isGlacierZone
+    , isBeyondGlacier
     ) where
 
 import UPrelude
@@ -188,10 +190,17 @@ glacierWidthRows = 16
 isGlacierZone :: Int -> Int -> Int -> Bool
 isGlacierZone worldSize gx gy =
     let halfTiles = (worldSize * 16) `div` 2
-        maxDiag = halfTiles + halfTiles   -- max |gx + gy|
-        glacierEdge = maxDiag - glacierWidthRows
+        glacierEdge = halfTiles - glacierWidthRows
         screenRow = gx + gy
     in abs screenRow >= glacierEdge
+
+-- | True if this tile is completely outside the playable world
+--   (past the glacier border). These tiles should not be generated.
+isBeyondGlacier :: Int -> Int -> Int -> Bool
+isBeyondGlacier worldSize gx gy =
+    let halfTiles = (worldSize * 16) `div` 2
+        screenRow = gx + gy
+    in abs screenRow > halfTiles
 
 -----------------------------------------------------------
 -- Global Elevation Query
@@ -203,6 +212,7 @@ isGlacierZone worldSize gx gy =
 elevationAtGlobal :: Word64 -> [TectonicPlate] -> Int -> Int -> Int -> (Int, MaterialId)
 elevationAtGlobal seed plates worldSize gx gy
     -- Glacier zone: flat glacier at sea level
+    | isBeyondGlacier worldSize gx gy = (0, matGranite)
     | isGlacierZone worldSize gx gy = (0, matGlacier)
     | otherwise =
     let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed plates gx gy

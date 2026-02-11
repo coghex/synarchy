@@ -21,9 +21,8 @@ cameraYLimit :: Float
 cameraYLimit =
     let worldSizeChunks = 128
         halfTiles = (worldSizeChunks * chunkSize) `div` 2
-        maxDiag = halfTiles + halfTiles
         glacierBuffer = chunkSize * 2           -- 2 rows back from glacier
-        maxRow = maxDiag - glacierBuffer
+        maxRow = halfTiles - glacierBuffer
     in fromIntegral maxRow * tileHalfDiamondHeight
 
 updateCameraPanning ∷ EngineM ε σ ()

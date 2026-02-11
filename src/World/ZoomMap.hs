@@ -19,7 +19,8 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Material (MaterialId(..))
-import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal)
+import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
+                   , isBeyondGlacier)
 import World.Generate (chunkSize)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
@@ -129,6 +130,7 @@ renderZoomChunks env worldState camera fbW fbH zoomAlpha = do
                                   drawX = wcx - chunkWorldWidth / 2.0
                                   drawY = wcy
                             , isChunkInView vb drawX drawY
+                            , not (isBeyondGlacier worldSize midGX midGY)
                             , let -- Sample center for material/elevation
                                   (elev, mat) = elevationAtGlobal seed plates worldSize midGX midGY
                                   texHandle = getZoomTexture textures (unMaterialId mat) elev

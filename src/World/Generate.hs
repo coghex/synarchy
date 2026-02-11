@@ -21,7 +21,8 @@ import Data.Word (Word32, Word64)
 import qualified Data.HashMap.Strict as HM
 import World.Types (Tile(..), ChunkCoord(..), Chunk, WorldGenParams(..))
 import World.Material (MaterialId(..))
-import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal)
+import World.Plate (TectonicPlate(..), generatePlates
+                   , elevationAtGlobal, isBeyondGlacier)
 import World.Grid (worldToGrid)
 
 -----------------------------------------------------------
@@ -88,7 +89,6 @@ generateChunk params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
         plates = generatePlates seed worldSize (wgpPlateCount params)
-        (surfaceElev, _mat) = elevationAtGlobal seed plates worldSize 0 0
 
         -- Build a local elevation + material map for this chunk
         -- plus a 1-tile border for neighbor lookups
@@ -96,6 +96,7 @@ generateChunk params coord =
                   | lx <- [-1 .. chunkSize]
                   , ly <- [-1 .. chunkSize]
                   , let (gx, gy) = chunkToGlobal coord lx ly
+                  , not (isBeyondGlacier worldSize gx gy)
                   ]
         elevMap = HM.fromList columns
 
@@ -107,6 +108,8 @@ generateChunk params coord =
         tiles = [ tile
                 | lx <- [0 .. chunkSize - 1]
                 , ly <- [0 .. chunkSize - 1]
+                , let (gx, gy) = chunkToGlobal coord lx ly
+                , not (isBeyondGlacier worldSize gx gy)
                 , let (surfZ, mat) = case HM.lookup (lx, ly) elevMap of
                           Just v  -> v
                           Nothing -> (0, MaterialId 1)
