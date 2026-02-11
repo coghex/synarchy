@@ -216,23 +216,26 @@ chunkToZoomQuad texHandle drawX drawY alpha ccx ccy = do
 -- Helpers
 -----------------------------------------------------------
 
+-- | Generic texture selector based on material ID and elevation
+selectTexture :: (WorldTextures -> TextureHandle)  -- ^ Glacier selector
+              -> (WorldTextures -> TextureHandle)  -- ^ Ocean selector
+              -> (WorldTextures -> TextureHandle)  -- ^ Granite selector
+              -> (WorldTextures -> TextureHandle)  -- ^ Diorite selector
+              -> (WorldTextures -> TextureHandle)  -- ^ Gabbro selector
+              -> WorldTextures -> Word8 -> Int -> TextureHandle
+selectTexture glacierSel oceanSel graniteSel dioriteSel gabbroSel textures mat elev
+    | mat == 250       = glacierSel textures
+    | elev < -100      = oceanSel textures
+    | mat == 1         = graniteSel textures
+    | mat == 2         = dioriteSel textures
+    | mat == 3         = gabbroSel textures
+    | otherwise        = graniteSel textures  -- default to granite
+
 getZoomTexture :: WorldTextures -> Word8 -> Int -> TextureHandle
-getZoomTexture textures 250 _ = wtZoomGlacier textures
-getZoomTexture textures _mat elev
-    | elev < -100 = wtZoomOcean textures
-getZoomTexture textures 1 _ = wtZoomGranite textures
-getZoomTexture textures 2 _ = wtZoomDiorite textures
-getZoomTexture textures 3 _ = wtZoomGabbro textures
-getZoomTexture textures _ _ = wtZoomGranite textures
+getZoomTexture = selectTexture wtZoomGlacier wtZoomOcean wtZoomGranite wtZoomDiorite wtZoomGabbro
 
 getBgTexture :: WorldTextures -> Word8 -> Int -> TextureHandle
-getBgTexture textures 250 _ = wtBgGlacier textures
-getBgTexture textures _mat elev
-    | elev < -100 = wtBgOcean textures
-getBgTexture textures 1 _ = wtBgGranite textures
-getBgTexture textures 2 _ = wtBgDiorite textures
-getBgTexture textures 3 _ = wtBgGabbro textures
-getBgTexture textures _ _ = wtBgGranite textures
+getBgTexture = selectTexture wtBgGlacier wtBgOcean wtBgGranite wtBgDiorite wtBgGabbro
 
 clamp01 :: Float -> Float
 clamp01 x
