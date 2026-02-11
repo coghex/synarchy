@@ -22,7 +22,7 @@ import qualified Data.HashMap.Strict as HM
 import World.Types (Tile(..), ChunkCoord(..), Chunk, WorldGenParams(..))
 import World.Material (MaterialId(..))
 import World.Plate (TectonicPlate(..), generatePlates
-                   , elevationAtGlobal, isBeyondGlacier)
+                   , elevationAtGlobal, isBeyondGlacier, wrapGlobalX)
 import World.Grid (worldToGrid)
 
 -----------------------------------------------------------
@@ -90,37 +90,35 @@ generateChunk params coord =
         worldSize = wgpWorldSize params
         plates = generatePlates seed worldSize (wgpPlateCount params)
 
-        -- Build a local elevation + material map for this chunk
-        -- plus a 1-tile border for neighbor lookups
-        columns = [ ((lx, ly), elevationAtGlobal seed plates worldSize gx gy)
+        -- Wrap global X for border tiles that may cross the seam
+        wrapGX gx = wrapGlobalX worldSize gx
+
+        columns = [ ((lx, ly), elevationAtGlobal seed plates worldSize (wrapGX gx) gy)
                   | lx <- [-1 .. chunkSize]
                   , ly <- [-1 .. chunkSize]
                   , let (gx, gy) = chunkToGlobal coord lx ly
-                  , not (isBeyondGlacier worldSize gx gy)
+                  , not (isBeyondGlacier worldSize (wrapGX gx) gy)
                   ]
         elevMap = HM.fromList columns
 
         lookupElev lx ly = case HM.lookup (lx, ly) elevMap of
             Just (z, _) -> z
-            Nothing     -> 0  -- shouldn't happen with border
+            Nothing     -> 0
 
-        -- Generate exposed tiles for each column inside the chunk
         tiles = [ tile
                 | lx <- [0 .. chunkSize - 1]
                 , ly <- [0 .. chunkSize - 1]
                 , let (gx, gy) = chunkToGlobal coord lx ly
-                , not (isBeyondGlacier worldSize gx gy)
+                , not (isBeyondGlacier worldSize (wrapGX gx) gy)
                 , let (surfZ, mat) = case HM.lookup (lx, ly) elevMap of
                           Just v  -> v
                           Nothing -> (0, MaterialId 1)
-                      -- Find the lowest neighbor surface elevation
                       neighborMinZ = minimum
                           [ lookupElev (lx - 1) ly
                           , lookupElev (lx + 1) ly
                           , lookupElev lx (ly - 1)
                           , lookupElev lx (ly + 1)
                           ]
-                      -- Expose from neighborMinZ to surfZ, capped by viewDepth
                       exposeFrom = max (surfZ - viewDepth) neighborMinZ
                 , tile <- generateExposedColumn lx ly surfZ exposeFrom (unMaterialId mat)
                 ]

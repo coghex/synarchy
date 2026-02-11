@@ -13,7 +13,7 @@ import Engine.Core.State (EngineEnv(..), EngineState(..), TimingState(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Input.Types (InputState(..), KeyState(..))
 import World.Grid (cameraPanSpeed, cameraPanAccel, cameraPanFriction,
-                   tileHalfDiamondHeight)
+                   tileHalfDiamondHeight, tileHalfWidth)
 import World.Generate (chunkSize)
 import Control.Monad.State.Class (gets)
 
@@ -24,6 +24,21 @@ cameraYLimit =
         glacierBuffer = chunkSize * 2           -- 2 rows back from glacier
         maxRow = halfTiles - glacierBuffer
     in fromIntegral maxRow * tileHalfDiamondHeight
+
+-- | World width in screen-space X for wrapping.
+cameraXWrap :: Float
+cameraXWrap =
+    let worldSizeChunks = 128
+        halfTiles = (worldSizeChunks * chunkSize) `div` 2
+    in fromIntegral halfTiles * tileHalfWidth
+
+-- | Wrap camera X into [-cameraXWrap, cameraXWrap)
+wrapCameraX :: Float -> Float
+wrapCameraX x =
+    let w = cameraXWrap * 2.0
+        shifted = x + cameraXWrap
+        wrapped = shifted - w * fromIntegral (floor (shifted / w) :: Int)
+    in wrapped - cameraXWrap
 
 updateCameraPanning ∷ EngineM ε σ ()
 updateCameraPanning = do
@@ -53,7 +68,7 @@ updateCameraPanning = do
             vy' = stepAxis inputY vy accel friction maxSpd dtF
 
             (cx, cy) = camPosition cam
-            cx' = cx + vx' * dtF
+            cx' = wrapCameraX (cx + vx' * dtF)
             rawY = cy + vy' * dtF
             cy' = clampF (-cameraYLimit) cameraYLimit rawY
 
@@ -99,7 +114,7 @@ updateCameraMouseDrag = do
 
                     newY = clampF (-cameraYLimit) cameraYLimit (cy + realToFrac dy)
 
-                in ( cam { camPosition  = (cx + realToFrac dx, newY)
+                in ( cam { camPosition  = (wrapCameraX (cx + realToFrac dx), newY)
                          , camDragOrigin = mousePos
                          , camVelocity   = (0, 0)
                          }

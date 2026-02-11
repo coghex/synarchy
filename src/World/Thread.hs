@@ -133,34 +133,34 @@ updateChunkLoading env logger = do
         camChunk = cameraChunkCoord camX camY
         ChunkCoord ccx ccy = camChunk
         
-        -- All chunks that should be loaded
         neededCoords = [ ChunkCoord (ccx + dx) (ccy + dy)
                        | dx <- [-chunkLoadRadius .. chunkLoadRadius]
                        , dy <- [-chunkLoadRadius .. chunkLoadRadius]
                        ]
     
-    -- Process each visible world
     forM_ (wmVisible manager) $ \pageId ->
         case lookup pageId (wmWorlds manager) of
             Nothing -> return ()
             Just worldState -> do
                 mParams <- readIORef (wsGenParamsRef worldState)
                 case mParams of
-                    Nothing -> return ()  -- world not initialized yet
+                    Nothing -> return ()
                     Just params -> do
                         tileData <- readIORef (wsTilesRef worldState)
                         
-                        -- Clamp to world bounds
                         let halfSize = wgpWorldSize params `div` 2
-                            inBounds (ChunkCoord cx cy) =
-                                cx >= -halfSize && cx < halfSize &&
+                            -- Y is clamped (glacier), X wraps
+                            wrapChunkX cx =
+                                let wrapped = ((cx + halfSize) `mod` (halfSize * 2) + (halfSize * 2))
+                                              `mod` (halfSize * 2) - halfSize
+                                in wrapped
+                            inBoundsY (ChunkCoord _ cy) =
                                 cy >= -halfSize && cy < halfSize
-                            validCoords = filter inBounds neededCoords
+                            wrapCoord (ChunkCoord cx cy) = ChunkCoord (wrapChunkX cx) cy
+                            validCoords = map wrapCoord $ filter inBoundsY neededCoords
                         
-                        -- Find which chunks need loading vs promoting
                         let (toPromote, toGenerate) = partitionChunks validCoords tileData
                         
-                        -- Only do work if there's something to generate
                         when (not $ null toGenerate) $ do
                             let newChunks = map (\coord -> LoadedChunk
                                     { lcCoord    = coord
@@ -170,7 +170,6 @@ updateChunkLoading env logger = do
                             
                             atomicModifyIORef' (wsTilesRef worldState) $ \td ->
                                 let td' = foldl' (\acc lc -> insertChunk lc acc) td newChunks
-                                    -- Promote all existing needed chunks to MRU
                                     td'' = foldl' (\acc coord -> promoteChunk coord acc) td' toPromote
                                 in (td'', ())
                             
@@ -180,8 +179,6 @@ updateChunkLoading env logger = do
                                 <> " (" <> T.pack (show $ chunkCount tileData + length toGenerate)
                                 <> " total)"
                         
-                        -- Promote existing chunks even when nothing new is generated
-                        -- (keeps MRU order accurate for future unloading)
                         when (not (null toPromote) && null toGenerate) $ do
                             atomicModifyIORef' (wsTilesRef worldState) $ \td ->
                                 let td' = foldl' (\acc coord -> promoteChunk coord acc) td toPromote

@@ -20,7 +20,7 @@ import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Material (MaterialId(..))
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
-                   , isBeyondGlacier)
+                   , isBeyondGlacier, wrapGlobalX)
 import World.Generate (chunkSize)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
@@ -111,32 +111,47 @@ renderZoomChunks env worldState camera fbW fbH zoomAlpha = do
 
                 halfSize = worldSize `div` 2
 
-                -- Iterate ALL chunks in the world, filter by screen-space visibility.
-                -- For a 64x64 world = 4096 chunks, this is trivially fast.
+                -- Wrap chunk X coordinate
+                wrapCX cx = ((cx + halfSize) `mod` (halfSize * 2) + (halfSize * 2))
+                            `mod` (halfSize * 2) - halfSize
+
+                -- Iterate all Y chunks, but for X we need to figure out
+                -- which wrapped X range is visible. Simplest: iterate all
+                -- X chunks and let the screen-space visibility test cull.
                 allCoords = [ (ccx, ccy)
                             | ccx <- [-halfSize .. halfSize - 1]
                             , ccy <- [-halfSize .. halfSize - 1]
                             ]
 
-            -- Build quads only for chunks whose screen-space position overlaps the view
             let quadsData = [ (ccx, ccy, texHandle, drawX, drawY)
                             | (ccx, ccy) <- allCoords
-                            , let -- Center of this chunk in grid space
-                                  midGX = ccx * chunkSize + chunkSize `div` 2
+                            , let midGX = ccx * chunkSize + chunkSize `div` 2
                                   midGY = ccy * chunkSize + chunkSize `div` 2
-                                  -- World-space center of the chunk diamond
                                   (wcx, wcy) = gridToWorld midGX midGY
-                                  -- Quad top-left corner
                                   drawX = wcx - chunkWorldWidth / 2.0
                                   drawY = wcy
                             , isChunkInView vb drawX drawY
                             , not (isBeyondGlacier worldSize midGX midGY)
-                            , let -- Sample center for material/elevation
-                                  (elev, mat) = elevationAtGlobal seed plates worldSize midGX midGY
+                            , let wrappedGX = wrapGlobalX worldSize midGX
+                                  (elev, mat) = elevationAtGlobal seed plates worldSize wrappedGX midGY
                                   texHandle = getZoomTexture textures (unMaterialId mat) elev
                             ]
+                worldScreenWidth = fromIntegral (worldSize * chunkSize) * tileHalfWidth
 
-            quads <- forM quadsData $ \(ccx, ccy, texHandle, drawX, drawY) ->
+                 -- For each chunk in view, also consider the
+                 -- wrapped neighbors on the left and right edges of the world.
+                 -- This handles the case where the camera is near
+                 -- the edge and chunks from the opposite edge should be visible.
+                allQuadsData = quadsData
+                    ++ [ (ccx, ccy, texHandle, drawX + worldScreenWidth, drawY)
+                       | (ccx, ccy, texHandle, drawX, drawY) <- quadsData
+                       , isChunkInView vb (drawX + worldScreenWidth) drawY
+                       ]
+                    ++ [ (ccx, ccy, texHandle, drawX - worldScreenWidth, drawY)
+                       | (ccx, ccy, texHandle, drawX, drawY) <- quadsData
+                       , isChunkInView vb (drawX - worldScreenWidth) drawY
+                       ]
+            quads <- forM allQuadsData $ \(ccx, ccy, texHandle, drawX, drawY) ->
                 chunkToZoomQuad texHandle drawX drawY zoomAlpha ccx ccy
 
             return $ V.fromList quads

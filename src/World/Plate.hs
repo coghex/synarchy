@@ -10,6 +10,8 @@ module World.Plate
       -- * Boundary classification
     , isGlacierZone
     , isBeyondGlacier
+      -- * wrapping
+    , wrapGlobalX
     ) where
 
 import UPrelude
@@ -109,28 +111,26 @@ generateOnePlate seed worldSize plateIndex =
 -- Plate Queries
 -----------------------------------------------------------
 
--- | Find the nearest plate to a global position.
-plateAt :: Word64 -> [TectonicPlate] -> Int -> Int -> (TectonicPlate, Float)
-plateAt seed plates gx gy =
-    let ranked = rankPlates seed plates gx gy
+plateAt :: Word64 -> Int -> [TectonicPlate] -> Int -> Int -> (TectonicPlate, Float)
+plateAt seed worldSize plates gx gy =
+    let ranked = rankPlates seed worldSize plates gx gy
     in head ranked
 
--- | Find the two nearest plates. Returns ((nearest, dist), (second, dist)).
-twoNearestPlates :: Word64 -> [TectonicPlate] -> Int -> Int
+twoNearestPlates :: Word64 -> Int -> [TectonicPlate] -> Int -> Int
                  -> ((TectonicPlate, Float), (TectonicPlate, Float))
-twoNearestPlates seed plates gx gy =
-    let ranked = rankPlates seed plates gx gy
+twoNearestPlates seed worldSize plates gx gy =
+    let ranked = rankPlates seed worldSize plates gx gy
     in case ranked of
         (a:b:_) -> (a, b)
-        [a]     -> (a, a)  -- only one plate
+        [a]     -> (a, a)
         _       -> error "no plates"
 
--- | Rank all plates by jittered distance.
-rankPlates :: Word64 -> [TectonicPlate] -> Int -> Int -> [(TectonicPlate, Float)]
-rankPlates seed plates gx gy =
+-- | Rank all plates by jittered distance, using wrapped X.
+rankPlates :: Word64 -> Int -> [TectonicPlate] -> Int -> Int -> [(TectonicPlate, Float)]
+rankPlates seed worldSize plates gx gy =
     let jitter = jitterAmount seed gx gy
         withDist plate =
-            let dx = fromIntegral (gx - plateCenterX plate) :: Float
+            let dx = fromIntegral (wrappedDeltaX worldSize gx (plateCenterX plate)) :: Float
                 dy = fromIntegral (gy - plateCenterY plate) :: Float
             in (plate, sqrt (dx * dx + dy * dy) + jitter)
     in sortBy (comparing snd) (map withDist plates)
@@ -141,25 +141,22 @@ rankPlates seed plates gx gy =
 
 -- | Classify the boundary between two plates.
 --   Uses the relative drift vectors projected onto the boundary normal.
-classifyBoundary :: TectonicPlate -> TectonicPlate -> BoundaryType
-classifyBoundary plateA plateB =
-    let -- Normal from A toward B
-        nxRaw = fromIntegral (plateCenterX plateB - plateCenterX plateA) :: Float
+classifyBoundary :: Int -> TectonicPlate -> TectonicPlate -> BoundaryType
+classifyBoundary worldSize plateA plateB =
+    let nxRaw = fromIntegral (wrappedDeltaX worldSize
+                    (plateCenterX plateA) (plateCenterX plateB)) :: Float
         nyRaw = fromIntegral (plateCenterY plateB - plateCenterY plateA) :: Float
         nLen  = sqrt (nxRaw * nxRaw + nyRaw * nyRaw)
         (nx, ny) = if nLen > 0.001
                    then (nxRaw / nLen, nyRaw / nLen)
                    else (1.0, 0.0)
 
-        -- Tangent (perpendicular to normal)
         (tx, ty) = (-ny, nx)
 
-        -- Relative motion along normal: positive = converging
         approachA = plateDriftX plateA * nx + plateDriftY plateA * ny
         approachB = plateDriftX plateB * nx + plateDriftY plateB * ny
-        approach  = approachA - approachB  -- positive = A moving toward B
+        approach  = approachA - approachB
 
-        -- Relative motion along tangent
         shearA = plateDriftX plateA * tx + plateDriftY plateA * ty
         shearB = plateDriftX plateB * tx + plateDriftY plateB * ty
         shear  = abs (shearA - shearB)
@@ -203,6 +200,33 @@ isBeyondGlacier worldSize gx gy =
     in abs screenRow > halfTiles
 
 -----------------------------------------------------------
+-- Cylindrical Wrapping
+-----------------------------------------------------------
+
+-- | Total width of the world in tiles (for X-axis wrapping).
+worldWidthTiles :: Int -> Int
+worldWidthTiles worldSize = worldSize * 16
+
+-- | Wrap a global X coordinate into the valid range [-halfTiles, halfTiles).
+wrapGlobalX :: Int -> Int -> Int
+wrapGlobalX worldSize gx =
+    let w = worldWidthTiles worldSize
+        halfW = w `div` 2
+        -- Shift into [0, w) then back to [-halfW, halfW)
+        wrapped = ((gx + halfW) `mod` w + w) `mod` w - halfW
+    in wrapped
+
+-- | Compute the shortest wrapped distance in X between two points.
+wrappedDeltaX :: Int -> Int -> Int -> Int
+wrappedDeltaX worldSize x1 x2 =
+    let w = worldWidthTiles worldSize
+        raw = x2 - x1
+        -- Shift into [-w/2, w/2)
+        halfW = w `div` 2
+        wrapped = ((raw + halfW) `mod` w + w) `mod` w - halfW
+    in wrapped
+
+-----------------------------------------------------------
 -- Global Elevation Query
 -----------------------------------------------------------
 
@@ -210,24 +234,23 @@ isBeyondGlacier worldSize gx gy =
 --   Returns (surfaceZ, materialId).
 --   Glacier zones at north/south edges override normal plate generation.
 elevationAtGlobal :: Word64 -> [TectonicPlate] -> Int -> Int -> Int -> (Int, MaterialId)
-elevationAtGlobal seed plates worldSize gx gy
-    | isBeyondGlacier worldSize gx gy = (0, matGlacier)
-    | isGlacierZone worldSize gx gy =
-        -- Compute normal terrain elevation, then override material
-        -- and raise by 3 to form a wall
-        let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed plates gx gy
+elevationAtGlobal seed plates worldSize gx gy =
+    let gx' = wrapGlobalX worldSize gx
+    in if isBeyondGlacier worldSize gx' gy then (0, matGlacier)
+    else if isGlacierZone worldSize gx' gy then
+        let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy
             myPlate = plateA
             baseElev = plateBaseElev myPlate
             boundaryDist = (distB - distA) / 2.0
-            boundary = classifyBoundary plateA plateB
+            boundary = classifyBoundary worldSize plateA plateB
             side = SidePlateA
             boundaryEffect = boundaryElevation boundary side plateA plateB boundaryDist
-            localNoise = elevationNoise seed gx gy
+            localNoise = elevationNoise seed gx' gy
             noiseScale = if plateIsLand myPlate then 50 else 20
             terrainElev = baseElev + boundaryEffect + localNoise * noiseScale
         in (terrainElev + 3, matGlacier)
-    | otherwise =
-    let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed plates gx gy
+    else
+    let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy
 
         myPlate = plateA
         material = plateMaterial myPlate
@@ -235,14 +258,14 @@ elevationAtGlobal seed plates worldSize gx gy
 
         boundaryDist = (distB - distA) / 2.0
 
-        boundary = classifyBoundary plateA plateB
+        boundary = classifyBoundary worldSize plateA plateB
 
         side = SidePlateA
 
         boundaryEffect = boundaryElevation boundary side
                            plateA plateB boundaryDist
 
-        localNoise = elevationNoise seed gx gy
+        localNoise = elevationNoise seed gx' gy
         noiseScale = if plateIsLand myPlate then 50 else 20
 
         finalElev = baseElev + boundaryEffect + localNoise * noiseScale
