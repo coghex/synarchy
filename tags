@@ -678,6 +678,7 @@ ZoomGabbroTexture	src/World/Types.hs	240;"	C
 ZoomGraniteTexture	src/World/Types.hs	238;"	C
 ZoomMap	src/World/ZoomMap.hs	2;"	m
 ZoomOceanTexture	src/World/Types.hs	241;"	C
+ZoomViewBounds	src/World/ZoomMap.hs	57;"	t
 a	src/Engine/Graphics/Vulkan/Types/Vertex.hs	48;"	f
 acEnableHotReload	src/Engine/Asset/Types.hs	71;"	f
 acMaxShaderPrograms	src/Engine/Asset/Types.hs	69;"	f
@@ -715,7 +716,7 @@ apShaderHandles	src/Engine/Asset/Types.hs	31;"	f
 apShaders	src/Engine/Asset/Types.hs	23;"	f
 apTextureAtlases	src/Engine/Asset/Types.hs	21;"	f
 apTextureHandles	src/Engine/Asset/Types.hs	29;"	f
-applyFriction	src/Engine/Loop/Camera.hs	140;"	f
+applyFriction	src/Engine/Loop/Camera.hs	141;"	f
 applyTransform	src/Engine/Graphics/Transform.hs	48;"	f
 asDependents	src/Engine/Asset/Handle.hs	31;"	f
 asDependents	src/Engine/Asset/Handle.hs	36;"	f
@@ -825,13 +826,13 @@ chunkCount	src/World/Types.hs	89;"	f
 chunkLoadRadius	src/World/Generate.hs	34;"	f
 chunkSize	src/World/Generate.hs	31;"	f
 chunkToGlobal	src/World/Generate.hs	54;"	f
-chunkToZoomQuad	src/World/ZoomMap.hs	137;"	f
+chunkToZoomQuad	src/World/ZoomMap.hs	146;"	f
 chunkWorldBounds	src/World/Generate.hs	58;"	f
 chunkWorldDiamondHeight	src/World/Grid.hs	131;"	f
 chunkWorldWidth	src/World/Grid.hs	126;"	f
 clamp01	src/World/Render.hs	298;"	f
-clamp01	src/World/ZoomMap.hs	188;"	f
-clampAbs	src/Engine/Loop/Camera.hs	132;"	f
+clamp01	src/World/ZoomMap.hs	193;"	f
+clampAbs	src/Engine/Loop/Camera.hs	133;"	f
 clampInt	src/World/Plate.hs	330;"	f
 clampSampleCount	src/Engine/Graphics/Config.hs	46;"	f
 classifyBoundary	src/World/Plate.hs	141;"	f
@@ -862,6 +863,7 @@ colorToVec4	src/Math.hs	11;"	f
 combineTransforms	src/Engine/Graphics/Transform.hs	68;"	f
 computeAmbientLight	src/Engine/Loop/Frame.hs	52;"	f
 computeViewBounds	src/World/Render.hs	104;"	f
+computeZoomViewBounds	src/World/ZoomMap.hs	64;"	f
 contextCallStack	src/Engine/Core/Error/Exception.hs	132;"	f
 convergentEffect	src/World/Plate.hs	244;"	f
 convertToTextBatches	src/Engine/Scene/Batch/Text.hs	95;"	f
@@ -1172,7 +1174,7 @@ generateQuadVertices	src/Engine/Scene/Batch/Vertex.hs	14;"	f
 generateSDFFontAtlas	src/Engine/Graphics/Font/Load.hs	306;"	f
 generateShaderHandle	src/Engine/Asset/Manager.hs	81;"	f
 generateTextureHandle	src/Engine/Asset/Manager.hs	69;"	f
-generateZoomMapQuads	src/World/ZoomMap.hs	36;"	f
+generateZoomMapQuads	src/World/ZoomMap.hs	33;"	f
 getAllFontHandles	src/Engine/Asset/Manager.hs	135;"	f
 getAllShaderHandles	src/Engine/Asset/Manager.hs	141;"	f
 getAllTextureHandles	src/Engine/Asset/Manager.hs	129;"	f
@@ -1258,7 +1260,7 @@ getWindowSize	src/Engine/Graphics/Window/GLFW.hs	166;"	f
 getWindowSizeFn	src/Engine/Scripting/Lua/API/Input.hs	76;"	f
 getWorldCoordFn	src/Engine/Scripting/Lua/API/Input.hs	92;"	f
 getWorldSceneQuads	src/Engine/Scene/Render.hs	188;"	f
-getZoomTexture	src/World/ZoomMap.hs	180;"	f
+getZoomTexture	src/World/ZoomMap.hs	185;"	f
 giAdvance	src/Engine/Asset/Types.hs	38;"	f
 giBearing	src/Engine/Asset/Types.hs	37;"	f
 giSize	src/Engine/Asset/Types.hs	36;"	f
@@ -1340,6 +1342,7 @@ isActionDown	src/Engine/Input/Bindings.hs	53;"	f
 isActionDownFn	src/Engine/Scripting/Lua/API/Input.hs	36;"	f
 isBindlessSupported	src/Engine/Graphics/Vulkan/Capability.hs	60;"	f
 isChunkBelowSlice	src/World/Render.hs	146;"	f
+isChunkInView	src/World/ZoomMap.hs	82;"	f
 isChunkVisible	src/World/Render.hs	128;"	f
 isDeviceSuitable	src/Engine/Graphics/Vulkan/Device.hs	194;"	f
 isEnabled	src/Engine/Core/Log.hs	307;"	f
@@ -1616,7 +1619,7 @@ renderSpritesBindlessUI	src/Engine/Graphics/Vulkan/Command/Sprite.hs	23;"	f
 renderTextBatchInline	src/Engine/Graphics/Vulkan/Command/Text.hs	28;"	f
 renderUIPages	src/UI/Render.hs	85;"	f
 renderWorldQuads	src/World/Render.hs	172;"	f
-renderZoomChunks	src/World/ZoomMap.hs	61;"	f
+renderZoomChunks	src/World/ZoomMap.hs	95;"	f
 requestFocusFn	src/Engine/Scripting/Lua/API/Focus.hs	28;"	f
 resHeight	src/Engine/Graphics/Config.hs	161;"	f
 resWidth	src/Engine/Graphics/Config.hs	160;"	f
@@ -1752,7 +1755,7 @@ startWorldThread	src/World/Thread.hs	28;"	f
 stbFontData	src/Engine/Graphics/Font/STB.hs	36;"	f
 stbFontInfo	src/Engine/Graphics/Font/STB.hs	37;"	f
 stbFontSize	src/Engine/Graphics/Font/STB.hs	38;"	f
-stepAxis	src/Engine/Loop/Camera.hs	118;"	f
+stepAxis	src/Engine/Loop/Camera.hs	119;"	f
 stiDimensions	src/Engine/Asset/Types.hs	85;"	f
 stiPosition	src/Engine/Asset/Types.hs	84;"	f
 stiRotated	src/Engine/Asset/Types.hs	86;"	f
@@ -1958,7 +1961,7 @@ upRootElements	src/UI/Types.hs	56;"	f
 upVisible	src/UI/Types.hs	55;"	f
 upZIndex	src/UI/Types.hs	54;"	f
 updateBatches	src/Engine/Scene/Batch/Update.hs	21;"	f
-updateCameraMouseDrag	src/Engine/Loop/Camera.hs	61;"	f
+updateCameraMouseDrag	src/Engine/Loop/Camera.hs	62;"	f
 updateCameraPanning	src/Engine/Loop/Camera.hs	21;"	f
 updateChunkLoading	src/World/Thread.hs	127;"	f
 updateFontState	src/Engine/Asset/Manager.hs	99;"	f
@@ -2152,6 +2155,10 @@ zIndex	src/Engine/Scene/Base.hs	16;"	f
 zoomFadeEnd	src/World/Grid.hs	140;"	f
 zoomFadeStart	src/World/Grid.hs	136;"	f
 zoomMapLayer	src/World/Grid.hs	122;"	f
+zvBottom	src/World/ZoomMap.hs	61;"	f
+zvLeft	src/World/ZoomMap.hs	58;"	f
+zvRight	src/World/ZoomMap.hs	59;"	f
+zvTop	src/World/ZoomMap.hs	60;"	f
 ⊘	src/UPrelude.hs	131;"	o
 ⊙	src/UPrelude.hs	136;"	o
 ⊚	src/UPrelude.hs	108;"	o

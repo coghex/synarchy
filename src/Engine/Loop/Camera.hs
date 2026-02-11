@@ -38,9 +38,10 @@ updateCameraPanning = do
 
     liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
         let (vx, vy) = camVelocity cam
-            maxSpd   = cameraPanSpeed
-            accel    = cameraPanAccel
-            friction = cameraPanFriction
+            zoom     = camZoom cam
+            maxSpd   = cameraPanSpeed * zoom
+            accel    = cameraPanAccel * zoom
+            friction = cameraPanFriction * zoom
 
             -- Accelerate or decelerate each axis independently
             vx' = stepAxis inputX vx accel friction maxSpd dtF

@@ -20,7 +20,7 @@ import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Material (MaterialId(..))
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal)
-import World.Generate (chunkSize, chunkToGlobal)
+import World.Generate (chunkSize)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
                    zoomFadeStart, zoomFadeEnd)
@@ -30,9 +30,6 @@ import qualified Data.Vector as V
 -- Generate Zoom Map Quads
 -----------------------------------------------------------
 
--- | Produce one diamond quad per visible chunk, colored by
---   the dominant material at the chunk center.
---   Alpha is controlled by zoomAlpha (0 = invisible, 1 = opaque).
 generateZoomMapQuads :: EngineM ε σ (V.Vector SortableQuad)
 generateZoomMapQuads = do
     env <- ask
@@ -41,7 +38,6 @@ generateZoomMapQuads = do
     worldManager <- liftIO $ readIORef (worldManagerRef env)
 
     let zoom = camZoom camera
-        -- Compute zoom map alpha: 0 below fadeStart, 1 above fadeEnd
         zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
 
     if zoomAlpha <= 0.001
@@ -53,6 +49,44 @@ generateZoomMapQuads = do
                                          fbW fbH zoomAlpha
                     Nothing         -> return V.empty
             return $ V.concat quads
+
+-----------------------------------------------------------
+-- Screen-Space View Bounds
+-----------------------------------------------------------
+
+data ZoomViewBounds = ZoomViewBounds
+    { zvLeft   :: !Float
+    , zvRight  :: !Float
+    , zvTop    :: !Float
+    , zvBottom :: !Float
+    }
+
+computeZoomViewBounds :: Camera2D -> Int -> Int -> ZoomViewBounds
+computeZoomViewBounds camera fbW fbH =
+    let (cx, cy) = camPosition camera
+        zoom = camZoom camera
+        aspect = fromIntegral fbW / fromIntegral fbH
+        halfW = zoom * aspect
+        halfH = zoom
+        -- Padding: one extra chunk width/height for partial visibility
+        padX = chunkWorldWidth
+        padY = chunkWorldDiamondHeight
+    in ZoomViewBounds
+        { zvLeft   = cx - halfW - padX
+        , zvRight  = cx + halfW + padX
+        , zvTop    = cy - halfH - padY
+        , zvBottom = cy + halfH + padY
+        }
+
+-- | Check if a chunk diamond overlaps the screen-space view bounds.
+isChunkInView :: ZoomViewBounds -> Float -> Float -> Bool
+isChunkInView vb drawX drawY =
+    let right  = drawX + chunkWorldWidth
+        bottom = drawY + chunkWorldDiamondHeight
+    in not (right  < zvLeft vb
+         || drawX  > zvRight vb
+         || bottom < zvTop vb
+         || drawY  > zvBottom vb)
 
 -----------------------------------------------------------
 -- Render Zoom Chunks
@@ -72,61 +106,36 @@ renderZoomChunks env worldState camera fbW fbH zoomAlpha = do
                 worldSize = wgpWorldSize params
                 plates = generatePlates seed worldSize (wgpPlateCount params)
 
-                -- Determine which chunks are in view at this zoom level
-                (cx, cy) = camPosition camera
-                zoom = camZoom camera
-                aspect = fromIntegral fbW / fromIntegral fbH
-                halfW = zoom * aspect
-                halfH = zoom
-
-                -- How many chunks fit in the view?
-                -- Each chunk is chunkSize tiles wide in grid space.
-                -- In screen space, roughly chunkWorldWidth across.
-                -- Add padding for partial visibility
-                chunkRadius = ceiling (halfW / chunkWorldWidth) + 2
-
-                -- Camera position in grid coords, then chunk coords
-                camGX = round (cx / tileHalfWidth) :: Int
-                camGY = round (cy / tileHalfDiamondHeight) :: Int
-                camCX = camGX `div` chunkSize
-                camCY = camGY `div` chunkSize
+                vb = computeZoomViewBounds camera fbW fbH
 
                 halfSize = worldSize `div` 2
 
-                -- All chunk coords in view
-                visibleCoords = [ (ccx, ccy)
-                                | dx <- [-chunkRadius .. chunkRadius]
-                                , dy <- [-chunkRadius .. chunkRadius]
-                                , let ccx = camCX + dx
-                                      ccy = camCY + dy
-                                , ccx >= -halfSize && ccx < halfSize
-                                , ccy >= -halfSize && ccy < halfSize
-                                ]
+                -- Iterate ALL chunks in the world, filter by screen-space visibility.
+                -- For a 64x64 world = 4096 chunks, this is trivially fast.
+                allCoords = [ (ccx, ccy)
+                            | ccx <- [-halfSize .. halfSize - 1]
+                            , ccy <- [-halfSize .. halfSize - 1]
+                            ]
 
-            -- Build quads for each visible chunk
-            quads <- forM visibleCoords $ \(ccx, ccy) -> do
-                let -- Sample the center tile of this chunk
-                    centerLX = chunkSize `div` 2
-                    centerLY = chunkSize `div` 2
-                    (centerGX, centerGY) = ( ccx * chunkSize + centerLX
-                                           , ccy * chunkSize + centerLY )
-                    (elev, mat) = elevationAtGlobal seed plates centerGX centerGY
+            -- Build quads only for chunks whose screen-space position overlaps the view
+            let quadsData = [ (ccx, ccy, texHandle, drawX, drawY)
+                            | (ccx, ccy) <- allCoords
+                            , let -- Center of this chunk in grid space
+                                  midGX = ccx * chunkSize + chunkSize `div` 2
+                                  midGY = ccy * chunkSize + chunkSize `div` 2
+                                  -- World-space center of the chunk diamond
+                                  (wcx, wcy) = gridToWorld midGX midGY
+                                  -- Quad top-left corner
+                                  drawX = wcx - chunkWorldWidth / 2.0
+                                  drawY = wcy
+                            , isChunkInView vb drawX drawY
+                            , let -- Sample center for material/elevation
+                                  (elev, mat) = elevationAtGlobal seed plates midGX midGY
+                                  texHandle = getZoomTexture textures (unMaterialId mat) elev
+                            ]
 
-                    -- Pick texture based on material and elevation
-                    texHandle = getZoomTexture textures (unMaterialId mat) elev
-
-                    -- Chunk position: use the grid coords of corner (0,0) of this chunk
-                    (chunkGX, chunkGY) = (ccx * chunkSize, ccy * chunkSize)
-                    -- The center of the chunk diamond in grid space
-                    (midGX, midGY) = ( chunkGX + chunkSize `div` 2
-                                     , chunkGY + chunkSize `div` 2 )
-                    -- World-space center of the chunk diamond
-                    (wcx, wcy) = gridToWorld midGX midGY
-                    -- Quad top-left
-                    drawX = wcx - chunkWorldWidth / 2.0
-                    drawY = wcy
-
-                chunkToZoomQuad env texHandle drawX drawY zoomAlpha ccx ccy
+            quads <- forM quadsData $ \(ccx, ccy, texHandle, drawX, drawY) ->
+                chunkToZoomQuad texHandle drawX drawY zoomAlpha ccx ccy
 
             return $ V.fromList quads
 
@@ -134,22 +143,20 @@ renderZoomChunks env worldState camera fbW fbH zoomAlpha = do
 -- Chunk to Zoom Quad
 -----------------------------------------------------------
 
-chunkToZoomQuad :: EngineEnv -> TextureHandle
+chunkToZoomQuad :: TextureHandle
                -> Float -> Float -> Float
                -> Int -> Int
                -> EngineM ε σ SortableQuad
-chunkToZoomQuad _env texHandle drawX drawY alpha ccx ccy = do
+chunkToZoomQuad texHandle drawX drawY alpha ccx ccy = do
     gs <- gets graphicsState
     let actualSlot = case textureSystem gs of
           Just bindless -> getTextureSlotIndex texHandle bindless
           Nothing       -> 0
 
-        -- No face map for flat diamond sprites — use slot 0 (default)
         fmSlot = fromIntegral (defaultFaceMapSlot gs)
 
         tint = Vec4 1.0 1.0 1.0 alpha
 
-        -- Sort key: chunk coordinates for back-to-front
         sortKey = fromIntegral (ccx + ccy)
 
         w = chunkWorldWidth
@@ -175,15 +182,13 @@ chunkToZoomQuad _env texHandle drawX drawY alpha ccx ccy = do
 -- Helpers
 -----------------------------------------------------------
 
--- | Pick zoom texture based on material and elevation.
---   Ocean plates (negative elevation) get the ocean texture.
 getZoomTexture :: WorldTextures -> Word8 -> Int -> TextureHandle
 getZoomTexture textures _mat elev
     | elev < -100 = wtZoomOcean textures
 getZoomTexture textures 1 _ = wtZoomGranite textures
 getZoomTexture textures 2 _ = wtZoomDiorite textures
 getZoomTexture textures 3 _ = wtZoomGabbro textures
-getZoomTexture textures _ _ = wtZoomGranite textures  -- fallback
+getZoomTexture textures _ _ = wtZoomGranite textures
 
 clamp01 :: Float -> Float
 clamp01 x
