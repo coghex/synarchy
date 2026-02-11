@@ -130,9 +130,11 @@ generateChunk params coord =
                           , lookupElev lx (ly - 1)
                           , lookupElev lx (ly + 1)
                           ]
-                      exposeFrom = max (surfZ - viewDepth) neighborMinZ
+                      -- Clamp: never skip the surface tile itself
+                      exposeFrom = min surfZ (max (surfZ - viewDepth) neighborMinZ)
                 , tile <- generateExposedColumn lx ly surfZ exposeFrom (unMaterialId mat)
                 ]
+
     in (HM.fromList tiles, surfaceMap)
 
 -- | Generate only the exposed tiles for a column.

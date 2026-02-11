@@ -1176,7 +1176,7 @@ gcWorldLayer	src/World/Grid.hs	46;"	f
 gcWorldTileWidth	src/World/Grid.hs	45;"	f
 generateAssetId	src/Engine/Asset/Manager.hs	87;"	f
 generateChunk	src/World/Generate.hs	88;"	f
-generateExposedColumn	src/World/Generate.hs	141;"	f
+generateExposedColumn	src/World/Generate.hs	143;"	f
 generateFontAtlas	src/Engine/Graphics/Font/Load.hs	172;"	f
 generateFontHandle	src/Engine/Asset/Manager.hs	75;"	f
 generateOnePlate	src/World/Plate.hs	61;"	f
