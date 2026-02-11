@@ -81,10 +81,11 @@ floorMod a b = a - floorDiv a b * b
 -----------------------------------------------------------
 
 -- | Generate a single chunk. Pure and deterministic.
+--   Returns (tiles, surfaceMap) where surfaceMap maps (lx,ly) -> surfaceZ.
 --   Only produces tiles that are exposed to the surface:
 --   the top tile of each column, plus any tiles whose side
 --   face is visible because a neighbor column is shorter.
-generateChunk :: WorldGenParams -> ChunkCoord -> Chunk
+generateChunk :: WorldGenParams -> ChunkCoord -> (Chunk, HM.HashMap (Int, Int) Int)
 generateChunk params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -105,6 +106,16 @@ generateChunk params coord =
             Just (z, _) -> z
             Nothing     -> 0
 
+        -- Build the surface elevation map for this chunk's own columns
+        surfaceMap = HM.fromList
+            [ ((lx, ly), surfZ)
+            | lx <- [0 .. chunkSize - 1]
+            , ly <- [0 .. chunkSize - 1]
+            , let (gx, gy) = chunkToGlobal coord lx ly
+            , not (isBeyondGlacier worldSize (wrapGX gx) gy)
+            , let surfZ = lookupElev lx ly
+            ]
+
         tiles = [ tile
                 | lx <- [0 .. chunkSize - 1]
                 , ly <- [0 .. chunkSize - 1]
@@ -122,7 +133,7 @@ generateChunk params coord =
                       exposeFrom = max (surfZ - viewDepth) neighborMinZ
                 , tile <- generateExposedColumn lx ly surfZ exposeFrom (unMaterialId mat)
                 ]
-    in HM.fromList tiles
+    in (HM.fromList tiles, surfaceMap)
 
 -- | Generate only the exposed tiles for a column.
 --   Always includes the surface tile. Below that, includes

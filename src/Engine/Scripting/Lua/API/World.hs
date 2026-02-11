@@ -166,6 +166,7 @@ parseTextureType "granite"     = GraniteTexture
 parseTextureType "diorite"     = DioriteTexture
 parseTextureType "gabbro"      = GabbroTexture
 parseTextureType "glacier"      = GlacierTexture
+parseTextureType "blank"        = BlankTexture
 parseTextureType "notexture"   = NoTexture
 parseTextureType "iso_facemap" = IsoFaceMap
 parseTextureType "nofacemap"   = NoFaceMap

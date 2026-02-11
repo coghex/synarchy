@@ -37,9 +37,6 @@ import qualified Data.Vector as V
 -- World Screen Width (wrapping period in screen-space X)
 -----------------------------------------------------------
 
--- | The world wrapping period in screen-space X.
---   When grid-X shifts by worldSize*chunkSize tiles,
---   screenX shifts by worldSize*chunkSize*tileHalfWidth.
 worldScreenWidth :: Float
 worldScreenWidth =
     let worldSizeChunks = 128
@@ -131,13 +128,9 @@ computeViewBounds camera fbW fbH =
 -- Chunk-Level Culling (wrap-aware)
 -----------------------------------------------------------
 
--- | Find the best screen-X offset for a chunk so it's closest
---   to the camera. Returns the offset to add to screen coords.
 bestWrapOffset :: Float -> Float -> Float
 bestWrapOffset camX chunkScreenX =
     let wsw = worldScreenWidth
-        -- Try base, +wsw, -wsw; pick whichever puts the chunk
-        -- closest to the camera X
         candidates = [0, wsw, -wsw]
         dist offset = abs (chunkScreenX + offset - camX)
     in minimumBy (\a b -> compare (dist a) (dist b)) candidates
@@ -145,7 +138,6 @@ bestWrapOffset camX chunkScreenX =
     minimumBy f (x:xs) = foldl' (\best c -> if f c best == LT then c else best) x xs
     minimumBy _ []      = 0
 
--- | Test whether a chunk overlaps the view at a given X offset.
 isChunkVisibleWrapped :: ViewBounds -> Float -> ChunkCoord -> Maybe Float
 isChunkVisibleWrapped vb camX coord =
     let ((minGX, minGY), (maxGX, maxGY)) = chunkWorldBounds coord
@@ -154,7 +146,6 @@ isChunkVisibleWrapped vb camX coord =
         (_, syMin) = gridToScreen minGX minGY
         (_, syMax) = gridToScreen maxGX maxGY
 
-        -- Use the chunk center X to pick the best wrap offset
         chunkCenterX = (sxMin + sxMax + tileWidth) / 2.0
         offset = bestWrapOffset camX chunkCenterX
 
@@ -169,13 +160,13 @@ isChunkVisibleWrapped vb camX coord =
                     || chunkTop    > vbBottom vb)
     in if visible then Just offset else Nothing
 
--- | Test whether a chunk has ANY tiles at or below the z-slice.
-isChunkBelowSlice :: Int -> LoadedChunk -> Bool
-isChunkBelowSlice zSlice lc =
-    case HM.keys (lcTiles lc) of
-        [] -> False
-        keys -> let minZ = minimum [ z | (_, _, z) <- keys ]
-                in minZ <= zSlice
+-- | Now checks whether a chunk has any column whose surface
+--   is at or below the z-slice (meaning it could have real tiles)
+--   OR any column whose surface is above the z-slice (blank fill needed).
+--   In practice: any chunk with non-empty surface map is potentially visible.
+isChunkRelevantForSlice :: Int -> LoadedChunk -> Bool
+isChunkRelevantForSlice _zSlice lc =
+    not (HM.null (lcSurfaceMap lc))
 
 -----------------------------------------------------------
 -- Tile-Level Culling
@@ -209,11 +200,10 @@ renderWorldQuads env worldState zoomAlpha = do
         chunks = wtdChunks tileData
         (camX, _camY) = camPosition camera
         
-        -- Chunk-level culling: wrap-aware XY bounds + z-slice
         visibleChunksWithOffset =
             [ (lc, offset)
             | lc <- chunks
-            , isChunkBelowSlice zSlice lc
+            , isChunkRelevantForSlice zSlice lc
             , Just offset <- [isChunkVisibleWrapped vb camX (lcCoord lc)]
             ]
     
@@ -224,16 +214,42 @@ renderWorldQuads env worldState zoomAlpha = do
     
     chunkQuads <- forM visibleChunksWithOffset $ \(lc, xOffset) -> do
         let coord = lcCoord lc
-            tileList = HM.toList (lcTiles lc)
+            tileMap = lcTiles lc
+            surfMap = lcSurfaceMap lc
+            tileList = HM.toList tileMap
             
+            -- Real tiles in the z-slice window
             visibleTiles = filter (\t -> isTileInView vb coord zSlice xOffset t
                                       && tileInSlice zSlice t) tileList
         
-        quads <- forM visibleTiles $ \((lx, ly, z), tile) -> do
+        realQuads <- forM visibleTiles $ \((lx, ly, z), tile) -> do
             let (gx, gy) = chunkToGlobal coord lx ly
             tileToQuad env textures gx gy z tile zSlice zoomAlpha xOffset
+
+        -- Blank fill tiles: for every column where surfaceZ > zSlice
+        -- and there's no real tile at the zSlice level, emit a blank quad.
+        let blankTiles =
+                [ (lx, ly)
+                | lx <- [0 .. chunkSize - 1]
+                , ly <- [0 .. chunkSize - 1]
+                , let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
+                -- Surface is above the z-slice (column is solid here)
+                , surfZ > zSlice
+                -- No real tile stored at this z level
+                , not (HM.member (lx, ly, zSlice) tileMap)
+                -- Check if it's on screen
+                , let (gx, gy) = chunkToGlobal coord lx ly
+                      (rawX, rawY) = gridToScreen gx gy
+                      drawX = rawX + xOffset
+                      drawY = rawY  -- relativeZ = zSlice - zSlice = 0
+                , isTileVisible vb drawX drawY
+                ]
+
+        blankQuads <- forM blankTiles $ \(lx, ly) -> do
+            let (gx, gy) = chunkToGlobal coord lx ly
+            blankTileToQuad env textures gx gy zSlice zSlice zoomAlpha xOffset
         
-        return $ V.fromList quads
+        return $ V.fromList realQuads <> V.fromList blankQuads
     
     return $ V.concat chunkQuads
   where
@@ -312,6 +328,62 @@ tileToQuad env textures worldX worldY worldZ tile zSlice tileAlpha xOffset = do
         }
 
 -----------------------------------------------------------
+-- Blank Tile Quad (fills gaps in solid interior)
+-----------------------------------------------------------
+
+-- | Render a blank tile at the z-slice for columns where the surface
+--   is above the slice but no real tile exists at that elevation.
+blankTileToQuad :: EngineEnv -> WorldTextures
+  -> Int -> Int -> Int -> Int -> Float -> Float
+  -> EngineM ε σ SortableQuad
+blankTileToQuad env textures worldX worldY worldZ zSlice tileAlpha xOffset = do
+    let (rawX, rawY) = gridToScreen worldX worldY
+        
+        relativeZ = worldZ - zSlice
+        heightOffset = fromIntegral relativeZ * tileSideHeight
+        drawX = rawX + xOffset
+        drawY = rawY - heightOffset
+
+        sortKey = fromIntegral (worldX + worldY) 
+                + fromIntegral relativeZ * 0.001
+
+    let texHandle = wtBlankTexture textures
+    
+    gs <- gets graphicsState
+    let actualSlot = case textureSystem gs of
+          Just bindless -> getTextureSlotIndex texHandle bindless
+          Nothing       -> 0
+
+    -- Use the isometric face map for the blank tile so it
+    -- has the same diamond shape as real tiles
+    let fmHandle = wtIsoFaceMap textures
+        fmSlot = case textureSystem gs of
+          Just bindless ->
+            let s = getTextureSlotIndex fmHandle bindless
+            in if s == 0
+               then fromIntegral (defaultFaceMapSlot gs)
+               else fromIntegral s
+          Nothing -> fromIntegral (defaultFaceMapSlot gs)
+
+    let tint = Vec4 1.0 1.0 1.0 tileAlpha
+
+    let vertices = V.fromList
+            [ Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+            ]
+    
+    return $ SortableQuad
+        { sqSortKey  = sortKey
+        , sqVertices = vertices
+        , sqTexture  = texHandle
+        , sqLayer    = worldLayer
+        }
+
+-----------------------------------------------------------
 -- Helpers
 -----------------------------------------------------------
 
@@ -326,6 +398,7 @@ getTileTexture textures 1 = wtGraniteTexture textures
 getTileTexture textures 2 = wtGabbroTexture textures
 getTileTexture textures 3 = wtDioriteTexture textures
 getTileTexture textures 250 = wtGlacierTexture textures
+getTileTexture textures 255 = wtBlankTexture textures
 getTileTexture textures _ = wtNoTexture textures
 
 getTileFaceMapTexture :: WorldTextures -> Word8 -> TextureHandle

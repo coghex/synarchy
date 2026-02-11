@@ -31,9 +31,10 @@ instance Hashable ChunkCoord where
 type Chunk = HM.HashMap (Int, Int, Int) Tile
 
 data LoadedChunk = LoadedChunk
-    { lcCoord    :: !ChunkCoord
-    , lcTiles    :: !Chunk
-    , lcModified :: !Bool
+    { lcCoord      :: !ChunkCoord
+    , lcTiles      :: !Chunk
+    , lcSurfaceMap :: !(HM.HashMap (Int, Int) Int)
+    , lcModified   :: !Bool
     } deriving (Show, Eq)
 
 -----------------------------------------------------------
@@ -117,6 +118,7 @@ data WorldTextures = WorldTextures
     , wtZoomOcean       :: TextureHandle
     , wtGlacierTexture  :: TextureHandle
     , wtZoomGlacier     :: TextureHandle
+    , wtBlankTexture    :: TextureHandle
     } deriving (Show, Eq)
 
 defaultWorldTextures :: WorldTextures
@@ -133,6 +135,7 @@ defaultWorldTextures = WorldTextures
     , wtZoomOcean       = TextureHandle 0
     , wtGlacierTexture  = TextureHandle 0
     , wtZoomGlacier     = TextureHandle 0
+    , wtBlankTexture    = TextureHandle 0
     }
 
 -----------------------------------------------------------
@@ -264,6 +267,7 @@ data WorldTextureType
     | ZoomOceanTexture
     | GlacierTexture
     | ZoomGlacierTexture
+    | BlankTexture
     deriving (Show, Eq)
 
 data WorldCommand

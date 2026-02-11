@@ -163,11 +163,14 @@ updateChunkLoading env logger = do
                         let (toPromote, toGenerate) = partitionChunks validCoords tileData
                         
                         when (not $ null toGenerate) $ do
-                            let newChunks = map (\coord -> LoadedChunk
-                                    { lcCoord    = coord
-                                    , lcTiles    = generateChunk params coord
-                                    , lcModified = False
-                                    }) toGenerate
+                            let newChunks = map (\coord ->
+                                    let (chunkTiles, surfMap) = generateChunk params coord
+                                    in LoadedChunk
+                                        { lcCoord      = coord
+                                        , lcTiles      = chunkTiles
+                                        , lcSurfaceMap = surfMap
+                                        , lcModified   = False
+                                        }) toGenerate
                             
                             atomicModifyIORef' (wsTilesRef worldState) $ \td ->
                                 let td' = foldl' (\acc lc -> insertChunk lc acc) td newChunks
@@ -227,11 +230,14 @@ handleWorldCommand env logger cmd = do
                                 | cx <- [-chunkLoadRadius .. chunkLoadRadius]
                                 , cy <- [-chunkLoadRadius .. chunkLoadRadius]
                                 ]
-                initialChunks = map (\coord -> LoadedChunk
-                    { lcCoord    = coord
-                    , lcTiles    = generateChunk params coord
-                    , lcModified = False
-                    }) initialCoords
+                initialChunks = map (\coord ->
+                    let (chunkTiles, surfMap) = generateChunk params coord
+                    in LoadedChunk
+                        { lcCoord      = coord
+                        , lcTiles      = chunkTiles
+                        , lcSurfaceMap = surfMap
+                        , lcModified   = False
+                        }) initialCoords
             
             atomicModifyIORef' (wsTilesRef worldState) $ \_ ->
                 (WorldTileData { wtdChunks = initialChunks }, ())
@@ -289,6 +295,7 @@ handleWorldCommand env logger cmd = do
                             DioriteTexture -> wt { wtDioriteTexture = texHandle }
                             GabbroTexture  -> wt { wtGabbroTexture  = texHandle }
                             GlacierTexture -> wt { wtGlacierTexture = texHandle }
+                            BlankTexture   -> wt { wtBlankTexture   = texHandle }
                             NoTexture      -> wt { wtNoTexture      = texHandle }
                             IsoFaceMap     -> wt { wtIsoFaceMap     = texHandle }
                             NoFaceMap      -> wt { wtNoFaceMap      = texHandle }

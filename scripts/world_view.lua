@@ -15,6 +15,7 @@ worldView.textures = {
     gabbro = nil,
     glacier = nil,
     noTexture = nil,
+    blankTexture = nil,
     isoFaceMap = nil,
     noFaceMap = nil,
     zoomGranite = nil,
@@ -41,6 +42,7 @@ function worldView.init(width, height)
     worldView.textures.diorite    = engine.loadTexture("assets/textures/world/diorite/diorite.png")
     worldView.textures.gabbro     = engine.loadTexture("assets/textures/world/gabbro/gabbro.png")
     worldView.textures.glacier    = engine.loadTexture("assets/textures/world/glacier/glacier.png")
+    worldView.textures.blankTexture = engine.loadTexture("assets/textures/world/blanktexture.png")
     worldView.textures.noTexture  = engine.loadTexture("assets/textures/world/notexture.png")
     worldView.textures.isoFaceMap = engine.loadTexture("assets/textures/world/facemap/isoface.png")
     worldView.textures.noFaceMap  = engine.loadTexture("assets/textures/world/facemap/noface.png")
@@ -106,6 +108,7 @@ function worldView.createWorld()
         dioriteTexture = worldView.textures.diorite,
         gabbroTexture  = worldView.textures.gabbro,
         glacierTexture = worldView.textures.glacier,
+        blankTexture   = worldView.textures.blankTexture,
         noTexture      = worldView.textures.noTexture,
         isoFaceMap     = worldView.textures.isoFaceMap,
         zoomGranite    = worldView.textures.zoomGranite,

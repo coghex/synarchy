@@ -32,6 +32,9 @@ function worldManager.createWorld(params)
     if params.glacierTexture then
         world.setTexture(worldId, "glacier", params.glacierTexture)
     end
+    if params.blankTexture then
+        world.setTexture(worldId, "blank", params.blankTexture)
+    end
     if params.noTexture then
         world.setTexture(worldId, "notexture", params.noTexture)
     end
