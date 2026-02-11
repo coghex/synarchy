@@ -16,7 +16,7 @@ import Engine.Asset.Base
 import Engine.Asset.Types (AssetPool(..), TextureAtlas(..))
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
-import Engine.Core.Log (logDebug, LogCategory(..), logInfo, logWarn)
+import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Scene.Base (LayerId(..), ObjectId(..))
 import Engine.Scene.Types (RenderBatch(..), SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..))
@@ -87,10 +87,6 @@ updateWorldTiles = do
                 Nothing -> return ()
 
     let allQuads = bgQuads <> tileQuads <> zoomQuads
-    liftIO $ logDebug logger CatWorld $
-        "Generated " <> T.pack (show $ V.length tileQuads) <> " tile quads, "
-        <> T.pack (show $ V.length zoomQuads) <> " zoom quads, "
-        <> T.pack (show $ V.length bgQuads) <> " bg quads"
 
     return allQuads
 
@@ -193,6 +189,16 @@ renderWorldQuads env worldState zoomAlpha = do
     
     (fbW, fbH) <- liftIO $ readIORef (framebufferSizeRef env)
     
+    -- Look up graphics state ONCE for the whole frame
+    gs <- gets graphicsState
+    let lookupSlot texHandle = fromIntegral $ case textureSystem gs of
+            Just bindless -> getTextureSlotIndex texHandle bindless
+            Nothing       -> 0
+        defFmSlot = fromIntegral (defaultFaceMapSlot gs)
+        lookupFmSlot texHandle =
+            let s = lookupSlot texHandle
+            in if s == 0 then defFmSlot else fromIntegral s
+    
     let vb = computeViewBounds camera fbW fbH
         zSlice = camZSlice camera
         chunks = HM.elems (wtdChunks tileData)
@@ -205,120 +211,81 @@ renderWorldQuads env worldState zoomAlpha = do
             , Just offset <- [isChunkVisibleWrapped vb camX (lcCoord lc)]
             ]
     
-    liftIO $ logDebug logger CatWorld $
-        "Chunk culling: " <> T.pack (show $ length chunks) <> " loaded, "
-        <> T.pack (show $ length visibleChunksWithOffset) <> " visible"
-        <> " (zSlice=" <> T.pack (show zSlice) <> ")"
-    
-    chunkQuads <- forM visibleChunksWithOffset $ \(lc, xOffset) -> do
-        let coord = lcCoord lc
-            tileMap = lcTiles lc
-            surfMap = lcSurfaceMap lc
-            tileList = HM.toList tileMap
+    let chunkQuads = concatMap (\(lc, xOffset) ->
+            let coord = lcCoord lc
+                tileMap = lcTiles lc
+                surfMap = lcSurfaceMap lc
+                
+                realQuads =
+                    [ tileToQuad lookupSlot lookupFmSlot textures gx gy z tile zSlice zoomAlpha xOffset
+                    | ((lx, ly, z), tile) <- HM.toList tileMap
+                    , z <= zSlice && z >= (zSlice - viewDepth)
+                    , let (gx, gy) = chunkToGlobal coord lx ly
+                          (rawX, rawY) = gridToScreen gx gy
+                          relativeZ = z - zSlice
+                          heightOffset = fromIntegral relativeZ * tileSideHeight
+                          drawX = rawX + xOffset
+                          drawY = rawY - heightOffset
+                    , isTileVisible vb drawX drawY
+                    ]
+                
+                blankQuads =
+                    [ blankTileToQuad lookupSlot lookupFmSlot textures gx gy zSlice zSlice zoomAlpha xOffset
+                    | lx <- [0 .. chunkSize - 1]
+                    , ly <- [0 .. chunkSize - 1]
+                    , let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
+                    , surfZ > zSlice
+                    , not (HM.member (lx, ly, zSlice) tileMap)
+                    , let (gx, gy) = chunkToGlobal coord lx ly
+                          (rawX, rawY) = gridToScreen gx gy
+                          drawX = rawX + xOffset
+                          drawY = rawY
+                    , isTileVisible vb drawX drawY
+                    ]
             
-            -- Real tiles in the z-slice window
-            visibleTiles = filter (\t -> isTileInView vb coord zSlice xOffset t
-                                      && tileInSlice zSlice t) tileList
-        
-        realQuads <- forM visibleTiles $ \((lx, ly, z), tile) -> do
-            let (gx, gy) = chunkToGlobal coord lx ly
-            tileToQuad env textures gx gy z tile zSlice zoomAlpha xOffset
-
-        -- Blank fill tiles: for every column where surfaceZ > zSlice
-        -- and there's no real tile at the zSlice level, emit a blank quad.
-        let blankTiles =
-                [ (lx, ly)
-                | lx <- [0 .. chunkSize - 1]
-                , ly <- [0 .. chunkSize - 1]
-                , let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
-                -- Surface is above the z-slice (column is solid here)
-                , surfZ > zSlice
-                -- No real tile stored at this z level
-                , not (HM.member (lx, ly, zSlice) tileMap)
-                -- Check if it's on screen
-                , let (gx, gy) = chunkToGlobal coord lx ly
-                      (rawX, rawY) = gridToScreen gx gy
-                      drawX = rawX + xOffset
-                      drawY = rawY  -- relativeZ = zSlice - zSlice = 0
-                , isTileVisible vb drawX drawY
-                ]
-
-        blankQuads <- forM blankTiles $ \(lx, ly) -> do
-            let (gx, gy) = chunkToGlobal coord lx ly
-            blankTileToQuad env textures gx gy zSlice zSlice zoomAlpha xOffset
-        
-        return $ V.fromList realQuads <> V.fromList blankQuads
+            in realQuads <> blankQuads
+            ) visibleChunksWithOffset
     
-    return $ V.concat chunkQuads
+    return $ V.fromList chunkQuads
   where
-    isTileInView :: ViewBounds -> ChunkCoord -> Int -> Float
-                 -> ((Int, Int, Int), Tile) -> Bool
-    isTileInView vb coord zSlice' xOffset ((lx, ly, z), _) =
-        let (gx, gy) = chunkToGlobal coord lx ly
-            (rawX, rawY) = gridToScreen gx gy
-            relativeZ = z - zSlice'
-            heightOffset = fromIntegral relativeZ * tileSideHeight
-            drawX = rawX + xOffset
-            drawY = rawY - heightOffset
-        in isTileVisible vb drawX drawY
-    tileInSlice :: Int -> ((Int, Int, Int), Tile) -> Bool
-    tileInSlice zSlice ((_, _, z), _) = z <= zSlice && z >= (zSlice - viewDepth)
+    isTileVisible :: ViewBounds -> Float -> Float -> Bool
+    isTileVisible vb drawX drawY =
+        let tileRight  = drawX + tileWidth
+            tileBottom = drawY + tileHeight
+        in not (tileRight  < vbLeft vb
+             || drawX      > vbRight vb
+             || tileBottom < vbTop vb
+             || drawY      > vbBottom vb)
 
 -----------------------------------------------------------
 -- Convert Tile to Quad
 -----------------------------------------------------------
 
-tileToQuad :: EngineEnv -> WorldTextures
-  -> Int -> Int -> Int -> Tile -> Int -> Float -> Float
-           -> EngineM ε σ SortableQuad
-tileToQuad env textures worldX worldY worldZ tile zSlice tileAlpha xOffset = do
-    logger <- liftIO $ readIORef (loggerRef env)
-    
+tileToQuad :: (TextureHandle -> Int) -> (TextureHandle -> Float)
+           -> WorldTextures
+           -> Int -> Int -> Int -> Tile -> Int -> Float -> Float
+           -> SortableQuad
+tileToQuad lookupSlot lookupFmSlot textures worldX worldY worldZ tile zSlice tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen worldX worldY
-        
         relativeZ = worldZ - zSlice
         heightOffset = fromIntegral relativeZ * tileSideHeight
         drawX = rawX + xOffset
         drawY = rawY - heightOffset
-
         sortKey = fromIntegral (worldX + worldY) 
                 + fromIntegral relativeZ * 0.001
-
-    let texHandle = getTileTexture textures (tileType tile)
-    
-    gs <- gets graphicsState
-    let actualSlot = case textureSystem gs of
-          Just bindless -> getTextureSlotIndex texHandle bindless
-          Nothing       -> 0
-
-    let fmHandle = getTileFaceMapTexture textures (tileType tile)
-        fmSlot = case textureSystem gs of
-          Just bindless ->
-            let s = getTextureSlotIndex fmHandle bindless
-            in if s == 0
-               then fromIntegral (defaultFaceMapSlot gs)
-               else fromIntegral s
-          Nothing -> fromIntegral (defaultFaceMapSlot gs)
-
-    let depth = zSlice - worldZ
+        texHandle = getTileTexture textures (tileType tile)
+        actualSlot = lookupSlot texHandle
+        fmHandle = getTileFaceMapTexture textures (tileType tile)
+        fmSlot = lookupFmSlot fmHandle
+        depth = zSlice - worldZ
         brightness = clamp01 (1.0 - fromIntegral depth * 0.12)
         tint = Vec4 brightness brightness brightness tileAlpha
-
-    liftIO $ logDebug logger CatWorld $ 
-        "TILE RENDER: texHandle=" <> T.pack (show texHandle)
-        <> " slot=" <> T.pack (show actualSlot)
-        <> " faceMap=" <> T.pack (show fmSlot)
-        
-    let vertices = V.fromList
-            [ Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
-            ]
-    
-    return $ SortableQuad
+        v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+        vertices = V.fromListN 6 [v0, v1, v2, v0, v2, v3]
+    in SortableQuad
         { sqSortKey  = sortKey
         , sqVertices = vertices
         , sqTexture  = texHandle
@@ -331,41 +298,23 @@ tileToQuad env textures worldX worldY worldZ tile zSlice tileAlpha xOffset = do
 
 -- | Render a blank tile at the z-slice for columns where the surface
 --   is above the slice but no real tile exists at that elevation.
-blankTileToQuad :: EngineEnv -> WorldTextures
-  -> Int -> Int -> Int -> Int -> Float -> Float
-  -> EngineM ε σ SortableQuad
-blankTileToQuad env textures worldX worldY worldZ zSlice tileAlpha xOffset = do
+blankTileToQuad :: (TextureHandle -> Int) -> (TextureHandle -> Float)
+               -> WorldTextures
+               -> Int -> Int -> Int -> Int -> Float -> Float
+               -> SortableQuad
+blankTileToQuad lookupSlot lookupFmSlot textures worldX worldY worldZ zSlice tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen worldX worldY
-        
         relativeZ = worldZ - zSlice
         heightOffset = fromIntegral relativeZ * tileSideHeight
         drawX = rawX + xOffset
         drawY = rawY - heightOffset
-
-        sortKey = fromIntegral (worldX + worldY) 
+        sortKey = fromIntegral (worldX + worldY)
                 + fromIntegral relativeZ * 0.001
-
-    let texHandle = wtBlankTexture textures
-    
-    gs <- gets graphicsState
-    let actualSlot = case textureSystem gs of
-          Just bindless -> getTextureSlotIndex texHandle bindless
-          Nothing       -> 0
-
-    -- Use the isometric face map for the blank tile so it
-    -- has the same diamond shape as real tiles
-    let fmHandle = wtIsoFaceMap textures
-        fmSlot = case textureSystem gs of
-          Just bindless ->
-            let s = getTextureSlotIndex fmHandle bindless
-            in if s == 0
-               then fromIntegral (defaultFaceMapSlot gs)
-               else fromIntegral s
-          Nothing -> fromIntegral (defaultFaceMapSlot gs)
-
-    let tint = Vec4 1.0 1.0 1.0 tileAlpha
-
-    let vertices = V.fromList
+        texHandle = wtBlankTexture textures
+        actualSlot = lookupSlot texHandle
+        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+        tint = Vec4 1.0 1.0 1.0 tileAlpha
+        vertices = V.fromListN 6
             [ Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
             , Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
             , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
@@ -373,8 +322,7 @@ blankTileToQuad env textures worldX worldY worldZ zSlice tileAlpha xOffset = do
             , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
             , Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
             ]
-    
-    return $ SortableQuad
+    in SortableQuad
         { sqSortKey  = sortKey
         , sqVertices = vertices
         , sqTexture  = texHandle

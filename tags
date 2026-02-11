@@ -633,7 +633,7 @@ Vertex	src/Engine/Scene/Batch/Vertex.hs	2;"	m
 VertexBufferError	src/Engine/Core/Error/Exception.hs	55;"	C
 VideoConfig	src/Engine/Graphics/Config.hs	118;"	t
 VideoConfigFile	src/Engine/Graphics/Config.hs	147;"	t
-ViewBounds	src/World/Render.hs	101;"	t
+ViewBounds	src/World/Render.hs	97;"	t
 Visibility	src/Engine/Scene/Batch/Visibility.hs	2;"	m
 VulkanCommandCollection	src/Engine/Graphics/Vulkan/Command.hs	35;"	t
 VulkanCore	src/Engine/Graphics/Vulkan/Types/Core.hs	12;"	t
@@ -745,7 +745,7 @@ bcDescriptorSet	src/Engine/Graphics/Vulkan/Texture/Types.hs	21;"	f
 bcMaxTextures	src/Engine/Graphics/Vulkan/Texture/Types.hs	19;"	f
 bcTextureBinding	src/Engine/Graphics/Vulkan/Texture/Types.hs	20;"	f
 beginVulkanCommandBuffer	src/Engine/Graphics/Vulkan/Command.hs	86;"	f
-bestWrapOffset	src/World/Render.hs	129;"	f
+bestWrapOffset	src/World/Render.hs	125;"	f
 bindir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	98;"	f
 bindir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy/build/synarchy/autogen/Paths_synarchy.hs	98;"	f
 bindlessFragmentShaderCode	src/Engine/Graphics/Vulkan/ShaderCode.hs	147;"	f
@@ -754,7 +754,7 @@ bindlessUIFragmentShaderCode	src/Engine/Graphics/Vulkan/ShaderCode.hs	256;"	f
 bindlessUIPipeline	src/Engine/Core/State.hs	117;"	f
 bindlessUIVertexShaderCode	src/Engine/Graphics/Vulkan/ShaderCode.hs	216;"	f
 bindlessVertexShaderCode	src/Engine/Graphics/Vulkan/ShaderCode.hs	90;"	f
-blankTileToQuad	src/World/Render.hs	334;"	f
+blankTileToQuad	src/World/Render.hs	301;"	f
 bmBatches	src/Engine/Scene/Types/Batch.hs	108;"	f
 bmDirtyBatches	src/Engine/Scene/Types/Batch.hs	111;"	f
 bmLayeredBatches	src/Engine/Scene/Types/Batch.hs	112;"	f
@@ -841,12 +841,11 @@ chunkCount	src/World/Types.hs	87;"	f
 chunkLoadRadius	src/World/Generate.hs	35;"	f
 chunkSize	src/World/Generate.hs	32;"	f
 chunkToGlobal	src/World/Generate.hs	55;"	f
-chunkToZoomQuad	src/World/ZoomMap.hs	204;"	f
 chunkWorldBounds	src/World/Generate.hs	59;"	f
 chunkWorldDiamondHeight	src/World/Grid.hs	136;"	f
 chunkWorldWidth	src/World/Grid.hs	131;"	f
-clamp01	src/World/Render.hs	388;"	f
-clamp01	src/World/ZoomMap.hs	261;"	f
+clamp01	src/World/Render.hs	336;"	f
+clamp01	src/World/ZoomMap.hs	253;"	f
 clampAbs	src/Engine/Loop/Camera.hs	143;"	f
 clampF	src/Engine/Loop/Camera.hs	155;"	f
 clampInt	src/World/Plate.hs	417;"	f
@@ -878,7 +877,7 @@ color	src/Engine/Graphics/Vulkan/Types/Vertex.hs	69;"	f
 colorToVec4	src/Math.hs	11;"	f
 combineTransforms	src/Engine/Graphics/Transform.hs	68;"	f
 computeAmbientLight	src/Engine/Loop/Frame.hs	52;"	f
-computeViewBounds	src/World/Render.hs	108;"	f
+computeViewBounds	src/World/Render.hs	104;"	f
 computeZoomViewBounds	src/World/ZoomMap.hs	119;"	f
 contextCallStack	src/Engine/Core/Error/Exception.hs	132;"	f
 convergentEffect	src/World/Plate.hs	332;"	f
@@ -1069,7 +1068,7 @@ enableVSync	src/Engine/Core/Types.hs	24;"	f
 endVulkanCommandBuffer	src/Engine/Graphics/Vulkan/Command.hs	96;"	f
 engineConfig	src/Engine/Core/State.hs	38;"	f
 ensureDynamicVertexBuffer	src/Engine/Scene/Render.hs	103;"	f
-entryToQuads	src/World/ZoomMap.hs	182;"	f
+entryToQuadsList	src/World/ZoomMap.hs	215;"	f
 errorContext	src/Engine/Core/Error/Exception.hs	125;"	f
 errorMsg	src/Engine/Core/Error/Exception.hs	124;"	f
 errorType	src/Engine/Core/Error/Exception.hs	123;"	f
@@ -1199,7 +1198,7 @@ getAllShaderHandles	src/Engine/Asset/Manager.hs	141;"	f
 getAllTextureHandles	src/Engine/Asset/Manager.hs	129;"	f
 getAvailableExtensions	src/Engine/Graphics/Vulkan/Instance.hs	176;"	f
 getAvailableLayers	src/Engine/Graphics/Vulkan/Instance.hs	181;"	f
-getBgTexture	src/World/ZoomMap.hs	252;"	f
+getBgTexture	src/World/ZoomMap.hs	244;"	f
 getBinDir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	67;"	f
 getBinDir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy/build/synarchy/autogen/Paths_synarchy.hs	67;"	f
 getBoxTextureSet	src/UI/Manager.hs	552;"	f
@@ -1269,8 +1268,8 @@ getTextureHandleState	src/Engine/Asset/Manager.hs	473;"	f
 getTextureSlotIndex	src/Engine/Graphics/Vulkan/Texture/Bindless.hs	272;"	f
 getTextureStateMap	src/Engine/Asset/Manager.hs	461;"	f
 getTextureSystemOrFail	src/Engine/Graphics/Vulkan/Recreate.hs	207;"	f
-getTileFaceMapTexture	src/World/Render.hs	402;"	f
-getTileTexture	src/World/Render.hs	394;"	f
+getTileFaceMapTexture	src/World/Render.hs	350;"	f
+getTileTexture	src/World/Render.hs	342;"	f
 getUIScaleFn	src/Engine/Scripting/Lua/API/Graphics.hs	31;"	f
 getVertexAttributeDescriptions	src/Engine/Graphics/Vulkan/Vertex.hs	90;"	f
 getVertexBindingDescription	src/Engine/Graphics/Vulkan/Vertex.hs	82;"	f
@@ -1280,7 +1279,7 @@ getWindowSize	src/Engine/Graphics/Window/GLFW.hs	166;"	f
 getWindowSizeFn	src/Engine/Scripting/Lua/API/Input.hs	76;"	f
 getWorldCoordFn	src/Engine/Scripting/Lua/API/Input.hs	92;"	f
 getWorldSceneQuads	src/Engine/Scene/Render.hs	188;"	f
-getZoomTexture	src/World/ZoomMap.hs	243;"	f
+getZoomTexture	src/World/ZoomMap.hs	235;"	f
 giAdvance	src/Engine/Asset/Types.hs	38;"	f
 giBearing	src/Engine/Asset/Types.hs	37;"	f
 giSize	src/Engine/Asset/Types.hs	36;"	f
@@ -1364,8 +1363,8 @@ isActionDownFn	src/Engine/Scripting/Lua/API/Input.hs	36;"	f
 isBeyondGlacier	src/World/Plate.hs	195;"	f
 isBindlessSupported	src/Engine/Graphics/Vulkan/Capability.hs	60;"	f
 isChunkInView	src/World/ZoomMap.hs	135;"	f
-isChunkRelevantForSlice	src/World/Render.hs	165;"	f
-isChunkVisibleWrapped	src/World/Render.hs	139;"	f
+isChunkRelevantForSlice	src/World/Render.hs	161;"	f
+isChunkVisibleWrapped	src/World/Render.hs	135;"	f
 isDeviceSuitable	src/Engine/Graphics/Vulkan/Device.hs	194;"	f
 isEnabled	src/Engine/Core/Log.hs	307;"	f
 isGlacierZone	src/World/Plate.hs	186;"	f
@@ -1376,7 +1375,7 @@ isNodeVisible	src/Engine/Scene/Batch/Visibility.hs	13;"	f
 isPathSeparator	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	131;"	f
 isPathSeparator	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy/build/synarchy/autogen/Paths_synarchy.hs	131;"	f
 isPointInElement	src/UI/Manager.hs	383;"	f
-isTileVisible	src/World/Render.hs	173;"	f
+isTileVisible	src/World/Render.hs	169;"	f
 isUILayer	src/Engine/Scene/Batch/Visibility.hs	37;"	f
 isUndefinedHandle	src/Engine/Graphics/Vulkan/Texture/Handle.hs	29;"	f
 isValidRef	src/Engine/Scripting/Lua/Util.hs	20;"	f
@@ -1521,6 +1520,7 @@ maxTimeout	src/Engine/Graphics/Vulkan/Types.hs	49;"	f
 mergeLayeredTextItems	src/UI/Render.hs	52;"	f
 mergeQuadsToBatch	src/Engine/Scene/Types/Batch.hs	61;"	f
 mkErrorContext	src/Engine/Core/Error/Exception.hs	151;"	f
+mkZoomQuad	src/World/ZoomMap.hs	191;"	f
 modifyElement	src/UI/Manager.hs	565;"	f
 modifyFocusTargetBuffer	src/UI/Focus.hs	121;"	f
 modifyPage	src/UI/Manager.hs	569;"	f
@@ -1643,7 +1643,7 @@ renderSpritesBindless	src/Engine/Graphics/Vulkan/Command/Sprite.hs	83;"	f
 renderSpritesBindlessUI	src/Engine/Graphics/Vulkan/Command/Sprite.hs	23;"	f
 renderTextBatchInline	src/Engine/Graphics/Vulkan/Command/Text.hs	28;"	f
 renderUIPages	src/UI/Render.hs	85;"	f
-renderWorldQuads	src/World/Render.hs	186;"	f
+renderWorldQuads	src/World/Render.hs	182;"	f
 requestFocusFn	src/Engine/Scripting/Lua/API/Focus.hs	28;"	f
 resHeight	src/Engine/Graphics/Config.hs	161;"	f
 resWidth	src/Engine/Graphics/Config.hs	160;"	f
@@ -1850,7 +1850,7 @@ tileHalfWidth	src/World/Grid.hs	96;"	f
 tileHeight	src/World/Grid.hs	78;"	f
 tileSideHeight	src/World/Grid.hs	92;"	f
 tileSlopeId	src/World/Types.hs	66;"	f
-tileToQuad	src/World/Render.hs	271;"	f
+tileToQuad	src/World/Render.hs	264;"	f
 tileType	src/World/Types.hs	65;"	f
 tileWidth	src/World/Grid.hs	74;"	f
 timingState	src/Engine/Core/State.hs	70;"	f
@@ -2026,10 +2026,10 @@ utsSize	src/UI/Types.hs	125;"	f
 utsText	src/UI/Types.hs	123;"	f
 validateDescriptorState	src/Engine/Loop/Resource.hs	32;"	f
 valueNoise2D	src/World/Plate.hs	438;"	f
-vbBottom	src/World/Render.hs	105;"	f
-vbLeft	src/World/Render.hs	102;"	f
-vbRight	src/World/Render.hs	103;"	f
-vbTop	src/World/Render.hs	104;"	f
+vbBottom	src/World/Render.hs	101;"	f
+vbLeft	src/World/Render.hs	98;"	f
+vbRight	src/World/Render.hs	99;"	f
+vbTop	src/World/Render.hs	100;"	f
 vcBrightness	src/Engine/Graphics/Config.hs	126;"	f
 vcDevice	src/Engine/Graphics/Vulkan/Types/Core.hs	15;"	f
 vcFrameLimit	src/Engine/Graphics/Config.hs	124;"	f

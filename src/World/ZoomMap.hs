@@ -162,79 +162,71 @@ renderFromCache env worldState camera fbW fbH alpha texturePicker layer = do
     textures <- liftIO $ readIORef (wsTexturesRef worldState)
     cache    <- liftIO $ readIORef (wsZoomCacheRef worldState)
 
+    -- Look up graphics state ONCE
+    gs <- gets graphicsState
+    let lookupSlot texHandle = fromIntegral $ case textureSystem gs of
+            Just bindless -> getTextureSlotIndex texHandle bindless
+            Nothing       -> 0
+        defFmSlot = fromIntegral (defaultFaceMapSlot gs)
+
     case mParams of
         Nothing -> return V.empty
         Just params -> do
             let vb = computeZoomViewBounds camera fbW fbH
                 wsw = worldScreenWidth (wgpWorldSize params)
 
-            -- Iterate the cached entries. For each, try base position
-            -- and ±1 world width. Only emit quads that are in view.
-            let visible = V.concatMap (entryToQuads vb wsw textures texturePicker) cache
+                visible = concatMap
+                    (entryToQuadsList vb wsw textures texturePicker)
+                    (V.toList cache)
 
-            quads <- V.mapM (\(ccx, ccy, th, dx, dy) ->
-                chunkToZoomQuad th dx dy alpha ccx ccy layer) visible
+                -- Fully pure — no V.mapM needed
+                quads = V.fromList
+                    [ mkZoomQuad lookupSlot defFmSlot th dx dy alpha ccx ccy layer
+                    | (ccx, ccy, th, dx, dy) <- visible
+                    ]
 
             return quads
 
--- | For a single cached entry, produce 0-3 candidate quads
---   (base position and ±1 wrap).
-entryToQuads :: ZoomViewBounds -> Float -> WorldTextures
-             -> (WorldTextures -> Word8 -> Int -> TextureHandle)
-             -> ZoomChunkEntry
-             -> V.Vector (Int, Int, TextureHandle, Float, Float)
-entryToQuads vb wsw textures texturePicker entry =
-    let ccx = zceChunkX entry
-        ccy = zceChunkY entry
-        baseX = zceDrawX entry
-        baseY = zceDrawY entry
-        texHandle = texturePicker textures (zceTexIndex entry) (zceElev entry)
-
-        candidates = filter (\(_, _, _, dx, dy) -> isChunkInView vb dx dy)
-            [ (ccx, ccy, texHandle, baseX - wsw, baseY)
-            , (ccx, ccy, texHandle, baseX,       baseY)
-            , (ccx, ccy, texHandle, baseX + wsw, baseY)
-            ]
-    in V.fromList candidates
-
------------------------------------------------------------
--- Chunk to Zoom Quad
------------------------------------------------------------
-
-chunkToZoomQuad :: TextureHandle
-               -> Float -> Float -> Float
-               -> Int -> Int -> LayerId
-               -> EngineM ε σ SortableQuad
-chunkToZoomQuad texHandle drawX drawY alpha ccx ccy layer = do
-    gs <- gets graphicsState
-    let actualSlot = case textureSystem gs of
-          Just bindless -> getTextureSlotIndex texHandle bindless
-          Nothing       -> 0
-
-        fmSlot = fromIntegral (defaultFaceMapSlot gs)
-
-        tint = Vec4 1.0 1.0 1.0 alpha
-
-        sortKey = fromIntegral (ccx + ccy)
-
+-- | Pure zoom quad builder. No EngineM needed.
+mkZoomQuad :: (TextureHandle -> Int) -> Float -> TextureHandle
+           -> Float -> Float -> Float -> Int -> Int -> LayerId
+           -> SortableQuad
+mkZoomQuad lookupSlot defFmSlot texHandle drawX drawY alpha ccx ccy layer =
+    let actualSlot = lookupSlot texHandle
         w = chunkWorldWidth
         h = chunkWorldDiamondHeight
-
-        vertices = V.fromList
-            [ Vertex (Vec2 drawX drawY)               (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 (drawX + w) drawY)          (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 (drawX + w) (drawY + h))    (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 drawX drawY)                (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 (drawX + w) (drawY + h))    (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 drawX (drawY + h))          (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+        tint = Vec4 1.0 1.0 1.0 alpha
+        sortKey = fromIntegral (ccx + ccy)
+        vertices = V.fromListN 6
+            [ Vertex (Vec2 drawX drawY)               (Vec2 0 0) tint (fromIntegral actualSlot) defFmSlot
+            , Vertex (Vec2 (drawX + w) drawY)          (Vec2 1 0) tint (fromIntegral actualSlot) defFmSlot
+            , Vertex (Vec2 (drawX + w) (drawY + h))    (Vec2 1 1) tint (fromIntegral actualSlot) defFmSlot
+            , Vertex (Vec2 drawX drawY)                (Vec2 0 0) tint (fromIntegral actualSlot) defFmSlot
+            , Vertex (Vec2 (drawX + w) (drawY + h))    (Vec2 1 1) tint (fromIntegral actualSlot) defFmSlot
+            , Vertex (Vec2 drawX (drawY + h))          (Vec2 0 1) tint (fromIntegral actualSlot) defFmSlot
             ]
-
-    return $ SortableQuad
+    in SortableQuad
         { sqSortKey  = sortKey
         , sqVertices = vertices
         , sqTexture  = texHandle
         , sqLayer    = layer
         }
+
+entryToQuadsList :: ZoomViewBounds -> Float -> WorldTextures
+                 -> (WorldTextures -> Word8 -> Int -> TextureHandle)
+                 -> ZoomChunkEntry
+                 -> [(Int, Int, TextureHandle, Float, Float)]
+entryToQuadsList vb wsw textures texturePicker entry =
+    let ccx = zceChunkX entry
+        ccy = zceChunkY entry
+        baseX = zceDrawX entry
+        baseY = zceDrawY entry
+        texHandle = texturePicker textures (zceTexIndex entry) (zceElev entry)
+    in filter (\(_, _, _, dx, dy) -> isChunkInView vb dx dy)
+        [ (ccx, ccy, texHandle, baseX - wsw, baseY)
+        , (ccx, ccy, texHandle, baseX,       baseY)
+        , (ccx, ccy, texHandle, baseX + wsw, baseY)
+        ]
 
 -----------------------------------------------------------
 -- Helpers
