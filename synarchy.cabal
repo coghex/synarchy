@@ -257,6 +257,8 @@ library
                      World.Grid
                      World.Render
                      World.Generate
+                     World.Plate
+                     World.Material
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields

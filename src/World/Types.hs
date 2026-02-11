@@ -104,13 +104,21 @@ data WorldCamera = WorldCamera
 
 data WorldTextures = WorldTextures
     { wtGraniteTexture  :: TextureHandle
+    , wtGabbroTexture   :: TextureHandle
+    , wtDioriteTexture  :: TextureHandle
     , wtIsoFaceMap      :: TextureHandle
+    , wtNoTexture       :: TextureHandle
+    , wtNoFaceMap       :: TextureHandle
     } deriving (Show, Eq)
 
 defaultWorldTextures :: WorldTextures
 defaultWorldTextures = WorldTextures
     { wtGraniteTexture  = TextureHandle 0
+    , wtGabbroTexture   = TextureHandle 0
+    , wtDioriteTexture  = TextureHandle 0
+    , wtNoTexture       = TextureHandle 0
     , wtIsoFaceMap      = TextureHandle 0
+    , wtNoFaceMap       = TextureHandle 0
     }
 
 -----------------------------------------------------------

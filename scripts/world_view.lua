@@ -8,7 +8,7 @@ worldView.visible = false
 worldView.fbW = 0
 worldView.fbH = 0
 worldView.graniteTexture = nil
-worldView.graniteFaceMap = nil
+worldView.isoFaceMap = nil
 worldView.texturesLoaded = false
 worldView.faceMapLoaded = false
 
@@ -22,7 +22,7 @@ function worldView.init(width, height)
     
     -- Load world textures
     worldView.graniteTexture = engine.loadTexture("assets/textures/world/granite/granite.png")
-    worldView.graniteFaceMap = engine.loadTexture("assets/textures/world/facemap/isoface.png")
+    worldView.isoFaceMap = engine.loadTexture("assets/textures/world/facemap/isoface.png")
     
 end
 
@@ -36,7 +36,7 @@ function worldView.onAssetLoaded(assetType, handle, path)
     if assetType == "texture" then
         if handle == worldView.graniteTexture then
             worldView.texturesLoaded = true
-        elseif handle == worldView.graniteFaceMap then
+        elseif handle == worldView.isoFaceMap then
             worldView.faceMapLoaded = true
         else
             engine.logDebug("Texture loaded but not granite: " .. tostring(handle))
@@ -70,7 +70,7 @@ function worldView.createWorld()
     worldManager.createWorld({ 
         worldId = "main_world",
         graniteTexture = worldView.graniteTexture,
-        graniteFaceMap = worldView.graniteFaceMap,
+        isoFaceMap = worldView.isoFaceMap,
     })
     worldManager.showWorld()
 end

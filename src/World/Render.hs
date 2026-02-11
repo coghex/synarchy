@@ -261,9 +261,12 @@ clamp01 x
     | otherwise = x
 
 getTileTexture :: WorldTextures -> Word8 -> TextureHandle
-getTileTexture textures 1 = wtGraniteTexture textures  -- grass
-getTileTexture _        _ = TextureHandle 0
+getTileTexture textures 1 = wtGraniteTexture textures
+getTileTexture textures 2 = wtGabbroTexture textures
+getTileTexture textures 3 = wtDioriteTexture textures
+getTileTexture textures _ = wtNoTexture textures
 
 getTileFaceMapTexture :: WorldTextures -> Word8 -> TextureHandle
-getTileFaceMapTexture textures 1 = wtIsoFaceMap textures  -- grass face map
-getTileFaceMapTexture _        _ = TextureHandle 0
+getTileFaceMapTexture textures mat
+    | mat >= 1 && mat <= 3 = wtIsoFaceMap textures -- shared face map
+    | otherwise            = wtNoFaceMap textures

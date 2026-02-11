@@ -18,6 +18,8 @@ import Data.Bits (xor, shiftR, (.&.))
 import Data.Word (Word32, Word64)
 import qualified Data.HashMap.Strict as HM
 import World.Types (Tile(..), ChunkCoord(..), Chunk, WorldGenParams(..))
+import World.Material (MaterialId(..), matGranite)
+import World.Plate (TectonicPlate(..), generatePlates, plateAt)
 import World.Grid (worldToGrid)
 
 -----------------------------------------------------------
@@ -71,59 +73,58 @@ floorMod a b = a - floorDiv a b * b
 -----------------------------------------------------------
 
 -- | Generate a single chunk. Pure and deterministic.
---   Samples multi-octave value noise per column to get elevation
---   in the range [-3, +3]. Each column is fully filled from
---   min(0, surface) to max(0, surface) so cliff faces are
---   visible from any camera rotation.
+--   Uses tectonic plates to determine base elevation and material,
+--   then adds local noise for surface texture.
 generateChunk :: WorldGenParams -> ChunkCoord -> Chunk
 generateChunk params coord =
     let seed = wgpSeed params
+        plates = generatePlates seed (wgpWorldSize params) (wgpPlateCount params)
         tiles = [ tile
                 | lx <- [0 .. chunkSize - 1]
                 , ly <- [0 .. chunkSize - 1]
                 , let (gx, gy) = chunkToGlobal coord lx ly
-                      surfaceZ = elevationAt seed gx gy
-                , tile <- generateColumn lx ly surfaceZ
+                      (surfaceZ, material) = columnInfo seed plates gx gy
+                , tile <- generateColumn lx ly surfaceZ (unMaterialId material)
                 ]
     in HM.fromList tiles
 
+-- | Determine surface elevation and material for a column.
+--   Combines plate base elevation with local noise.
+columnInfo :: Word64 -> [TectonicPlate] -> Int -> Int -> (Int, MaterialId)
+columnInfo seed plates gx gy =
+    let (plate, _dist) = plateAt seed plates gx gy
+        baseElev = plateBaseElev plate
+        material = plateMaterial plate
+
+        -- Local noise: small variation on top of plate elevation
+        -- This gives texture to the surface — not perfectly flat continents
+        localNoise = elevationNoise seed gx gy
+        surfaceZ = clampInt (-5) 5 (baseElev + localNoise)
+
+    in (surfaceZ, material)
+
+-- | Local elevation noise: adds small bumps and dips to plate surfaces.
+--   Returns -1, 0, or +1 typically.
+elevationNoise :: Word64 -> Int -> Int -> Int
+elevationNoise seed gx gy =
+    let -- Two octaves: gentle rolling + fine detail
+        e1 = valueNoise2D (seed + 10) gx gy 12  -- broad
+        e2 = valueNoise2D (seed + 11) gx gy 5   -- fine
+        raw = e1 * 0.7 + e2 * 0.3               -- [0, 1]
+        -- Map to [-1.5, +1.5] so most values round to -1, 0, or +1
+        mapped = (raw - 0.5) * 3.0
+    in clampInt (-2) 2 (round mapped)
+
 -- | Generate tiles for a single column at local (lx, ly).
---   The surface tile is at surfaceZ. Below the surface we fill
---   down far enough that cliff faces are backed by geometry
---   from any camera angle. We use a fixed fill depth rather
---   than bridging to z=0.
-generateColumn :: Int -> Int -> Int -> [((Int, Int, Int), Tile)]
-generateColumn lx ly surfaceZ =
-    let fillDepth = 3  -- how many tiles below surface to fill for cliff faces
+--   The surface tile is at surfaceZ with the given material.
+--   Below the surface we fill down for cliff face visibility.
+generateColumn :: Int -> Int -> Int -> Word8 -> [((Int, Int, Int), Tile)]
+generateColumn lx ly surfaceZ material =
+    let fillDepth = 3
         lo = surfaceZ - fillDepth
-    in [ ((lx, ly, z), Tile 1 0)
+    in [ ((lx, ly, z), Tile material 0)  -- slopeId=0 (flat) for now
        | z <- [lo .. surfaceZ]
        ]
-
------------------------------------------------------------
--- Elevation
------------------------------------------------------------
-
--- | Multi-octave elevation at a global grid position.
---   Returns an integer z-level in [-3, +3].
---   Uses 3 octaves with different sub-seeds so they don't correlate.
-elevationAt :: Word64 -> Int -> Int -> Int
-elevationAt seed gx gy =
-    let -- Octave 1: broad hills (scale 12 — spans ~1 chunk)
-        e1 = valueNoise2D (seed + 0) gx gy 12
-        -- Octave 2: medium bumps (scale 6 — a few per chunk)
-        e2 = valueNoise2D (seed + 1) gx gy 6
-        -- Octave 3: fine detail (scale 3 — many per chunk)
-        e3 = valueNoise2D (seed + 2) gx gy 3
-
-        -- Weighted sum, raw is in [0, 1]
-        raw = e1 * 0.6 + e2 * 0.25 + e3 * 0.15
-
-        -- Map [0, 1] → [-3, +3]
-        -- 0.0 → -3, 0.5 → 0, 1.0 → +3
-        mapped = (raw - 0.5) * 6.0
-
-    in clampInt (-3) 3 (round mapped)
 
 -- | Clamp an Int to [lo, hi]
 clampInt :: Int -> Int -> Int -> Int
@@ -136,54 +137,38 @@ clampInt lo hi x
 -- Value Noise (pure, hash-based)
 -----------------------------------------------------------
 
--- | 2D value noise with bilinear interpolation.
---   Returns a value in [0, 1]. Pure and deterministic.
 valueNoise2D :: Word64 -> Int -> Int -> Int -> Float
 valueNoise2D seed x y scale =
-    let -- Grid cell coordinates
-        fx = fromIntegral x / fromIntegral scale :: Float
+    let fx = fromIntegral x / fromIntegral scale :: Float
         fy = fromIntegral y / fromIntegral scale :: Float
         ix = floor fx :: Int
         iy = floor fy :: Int
-
-        -- Fractional position within cell
         tx = fx - fromIntegral ix
         ty = fy - fromIntegral iy
-
-        -- Smooth interpolation (Hermite smoothstep)
         sx = smoothstep tx
         sy = smoothstep ty
-
-        -- Hash at four corners of the grid cell
         v00 = hashToFloat seed ix       iy
         v10 = hashToFloat seed (ix + 1) iy
         v01 = hashToFloat seed ix       (iy + 1)
         v11 = hashToFloat seed (ix + 1) (iy + 1)
-
-        -- Bilinear interpolation
         top    = lerp sx v00 v10
         bottom = lerp sx v01 v11
-
     in lerp sy top bottom
 
 -----------------------------------------------------------
 -- Hash & Math Utilities
 -----------------------------------------------------------
 
--- | Hash two ints and a seed to a float in [0, 1].
 hashToFloat :: Word64 -> Int -> Int -> Float
 hashToFloat seed x y =
     let h = hashCoord seed x y
     in fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF :: Word32)
 
--- | Integer hash combining seed with coordinates.
---   Deterministic, good distribution (murmur3-style finalizer).
 hashCoord :: Word64 -> Int -> Int -> Word32
 hashCoord seed x y =
     let h0 = fromIntegral seed :: Word64
         h1 = h0 `xor` (fromIntegral x * 0x517cc1b727220a95)
         h2 = h1 `xor` (fromIntegral y * 0x6c62272e07bb0142)
-        -- Murmur3 finalizer
         h3 = h2 `xor` (h2 `shiftR` 33)
         h4 = h3 * 0xff51afd7ed558ccd
         h5 = h4 `xor` (h4 `shiftR` 33)
@@ -191,10 +176,8 @@ hashCoord seed x y =
         h7 = h6 `xor` (h6 `shiftR` 33)
     in fromIntegral (h7 .&. 0xFFFFFFFF)
 
--- | Hermite smoothstep: 3t² - 2t³
 smoothstep :: Float -> Float
 smoothstep t = t * t * (3.0 - 2.0 * t)
 
--- | Linear interpolation
 lerp :: Float -> Float -> Float -> Float
 lerp t a b = a + t * (b - a)
