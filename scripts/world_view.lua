@@ -19,7 +19,7 @@ function worldView.init(width, height)
     worldView.fbH = height
     
     -- Load world textures
-    worldView.grassTexture = engine.loadTexture("assets/textures/grass.png")
+    worldView.grassTexture = engine.loadTexture("assets/textures/world/grass/grass.png")
     
     engine.logInfo("World view initialized, grass texture handle: " .. tostring(worldView.grassTexture))
 end
