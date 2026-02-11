@@ -34,6 +34,19 @@ import World.ZoomMap (generateZoomMapQuads)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
+-- World Screen Width (wrapping period in screen-space X)
+-----------------------------------------------------------
+
+-- | The world wrapping period in screen-space X.
+--   When grid-X shifts by worldSize*chunkSize tiles,
+--   screenX shifts by worldSize*chunkSize*tileHalfWidth.
+worldScreenWidth :: Float
+worldScreenWidth =
+    let worldSizeChunks = 128
+        worldTiles = worldSizeChunks * chunkSize
+    in fromIntegral worldTiles * tileHalfWidth
+
+-----------------------------------------------------------
 -- Update World Tiles (called before scene rendering)
 -----------------------------------------------------------
 
@@ -44,12 +57,10 @@ updateWorldTiles = do
     camera <- liftIO $ readIORef (cameraRef env)
 
     let zoom = camZoom camera
-        -- Tile alpha: 1.0 at zoomFadeStart, 0.0 at zoomFadeEnd
         tileAlpha = clamp01 (1.0 - (zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
 
     worldManager <- liftIO $ readIORef (worldManagerRef env)
 
-    -- Tile quads (skip entirely if fully faded out)
     tileQuads <- if tileAlpha <= 0.001
         then return V.empty
         else do
@@ -59,11 +70,8 @@ updateWorldTiles = do
                     Nothing         -> return V.empty
             return $ V.concat quads
 
-    -- Zoom map quads
     zoomQuads <- generateZoomMapQuads
 
-    -- Auto-set z-slice when transitioning from zoom map to tile view
-    -- This runs when we're in the crossfade zone
     when (tileAlpha > 0.001 && tileAlpha < 0.999) $ do
         worldManager' <- liftIO $ readIORef (worldManagerRef env)
         forM_ (wmVisible worldManager') $ \pageId ->
@@ -109,8 +117,6 @@ computeViewBounds camera fbW fbH =
         aspect   = fromIntegral fbW / fromIntegral fbH
         halfW    = zoom * aspect
         halfH    = zoom
-        -- Padding only needs to cover the viewDepth window,
-        -- not the absolute z-slice value
         maxHeightPad = fromIntegral viewDepth * tileSideHeight
         padX     = tileWidth
         padY     = tileHeight + maxHeightPad
@@ -122,32 +128,50 @@ computeViewBounds camera fbW fbH =
         }
 
 -----------------------------------------------------------
--- Chunk-Level Culling
+-- Chunk-Level Culling (wrap-aware)
 -----------------------------------------------------------
 
--- | Test whether a chunk's bounding box overlaps the view.
-isChunkVisible :: ViewBounds -> ChunkCoord -> Bool
-isChunkVisible vb coord =
+-- | Find the best screen-X offset for a chunk so it's closest
+--   to the camera. Returns the offset to add to screen coords.
+bestWrapOffset :: Float -> Float -> Float
+bestWrapOffset camX chunkScreenX =
+    let wsw = worldScreenWidth
+        -- Try base, +wsw, -wsw; pick whichever puts the chunk
+        -- closest to the camera X
+        candidates = [0, wsw, -wsw]
+        dist offset = abs (chunkScreenX + offset - camX)
+    in minimumBy (\a b -> compare (dist a) (dist b)) candidates
+  where
+    minimumBy f (x:xs) = foldl' (\best c -> if f c best == LT then c else best) x xs
+    minimumBy _ []      = 0
+
+-- | Test whether a chunk overlaps the view at a given X offset.
+isChunkVisibleWrapped :: ViewBounds -> Float -> ChunkCoord -> Maybe Float
+isChunkVisibleWrapped vb camX coord =
     let ((minGX, minGY), (maxGX, maxGY)) = chunkWorldBounds coord
         (sxMin, _) = gridToScreen minGX maxGY
         (sxMax, _) = gridToScreen maxGX minGY
-        chunkLeft  = sxMin
-        chunkRight = sxMax + tileWidth
         (_, syMin) = gridToScreen minGX minGY
         (_, syMax) = gridToScreen maxGX maxGY
+
+        -- Use the chunk center X to pick the best wrap offset
+        chunkCenterX = (sxMin + sxMax + tileWidth) / 2.0
+        offset = bestWrapOffset camX chunkCenterX
+
+        chunkLeft   = sxMin + offset
+        chunkRight  = sxMax + tileWidth + offset
         chunkTop    = syMin
         chunkBottom = syMax + tileHeight
-    in not (chunkRight  < vbLeft vb
-         || chunkLeft   > vbRight vb
-         || chunkBottom < vbTop vb
-         || chunkTop    > vbBottom vb)
+
+        visible = not (chunkRight  < vbLeft vb
+                    || chunkLeft   > vbRight vb
+                    || chunkBottom < vbTop vb
+                    || chunkTop    > vbBottom vb)
+    in if visible then Just offset else Nothing
 
 -- | Test whether a chunk has ANY tiles at or below the z-slice.
---   If the minimum z in the chunk is above the slice, skip it entirely.
 isChunkBelowSlice :: Int -> LoadedChunk -> Bool
 isChunkBelowSlice zSlice lc =
-    -- Find the minimum z in this chunk.
-    -- If even the lowest tile is above the slice, the whole chunk is hidden.
     case HM.keys (lcTiles lc) of
         [] -> False
         keys -> let minZ = minimum [ z | (_, _, z) <- keys ]
@@ -183,40 +207,44 @@ renderWorldQuads env worldState zoomAlpha = do
     let vb = computeViewBounds camera fbW fbH
         zSlice = camZSlice camera
         chunks = wtdChunks tileData
+        (camX, _camY) = camPosition camera
         
-        -- Chunk-level culling: XY bounds + z-slice
-        visibleChunks = filter (\lc -> isChunkVisible vb (lcCoord lc)
-                                    && isChunkBelowSlice zSlice lc) chunks
+        -- Chunk-level culling: wrap-aware XY bounds + z-slice
+        visibleChunksWithOffset =
+            [ (lc, offset)
+            | lc <- chunks
+            , isChunkBelowSlice zSlice lc
+            , Just offset <- [isChunkVisibleWrapped vb camX (lcCoord lc)]
+            ]
     
     liftIO $ logDebug logger CatWorld $
         "Chunk culling: " <> T.pack (show $ length chunks) <> " loaded, "
-        <> T.pack (show $ length visibleChunks) <> " visible"
+        <> T.pack (show $ length visibleChunksWithOffset) <> " visible"
         <> " (zSlice=" <> T.pack (show zSlice) <> ")"
     
-    -- For each visible chunk, extract visible tiles and build quads
-    chunkQuads <- forM visibleChunks $ \lc -> do
+    chunkQuads <- forM visibleChunksWithOffset $ \(lc, xOffset) -> do
         let coord = lcCoord lc
             tileList = HM.toList (lcTiles lc)
             
-            -- Filter tiles: XY visibility AND z <= zSlice
-            visibleTiles = filter (\t -> isTileInView vb coord zSlice t
+            visibleTiles = filter (\t -> isTileInView vb coord zSlice xOffset t
                                       && tileInSlice zSlice t) tileList
         
         quads <- forM visibleTiles $ \((lx, ly, z), tile) -> do
             let (gx, gy) = chunkToGlobal coord lx ly
-            tileToQuad env textures gx gy z tile zSlice zoomAlpha
+            tileToQuad env textures gx gy z tile zSlice zoomAlpha xOffset
         
         return $ V.fromList quads
     
     return $ V.concat chunkQuads
   where
-    isTileInView :: ViewBounds -> ChunkCoord -> Int -> ((Int, Int, Int), Tile) -> Bool
-    isTileInView vb coord zSlice' ((lx, ly, z), _) =
+    isTileInView :: ViewBounds -> ChunkCoord -> Int -> Float
+                 -> ((Int, Int, Int), Tile) -> Bool
+    isTileInView vb coord zSlice' xOffset ((lx, ly, z), _) =
         let (gx, gy) = chunkToGlobal coord lx ly
             (rawX, rawY) = gridToScreen gx gy
             relativeZ = z - zSlice'
             heightOffset = fromIntegral relativeZ * tileSideHeight
-            drawX = rawX
+            drawX = rawX + xOffset
             drawY = rawY - heightOffset
         in isTileVisible vb drawX drawY
     tileInSlice :: Int -> ((Int, Int, Int), Tile) -> Bool
@@ -227,22 +255,18 @@ renderWorldQuads env worldState zoomAlpha = do
 -----------------------------------------------------------
 
 tileToQuad :: EngineEnv -> WorldTextures
-  -> Int -> Int -> Int -> Tile -> Int -> Float
+  -> Int -> Int -> Int -> Tile -> Int -> Float -> Float
            -> EngineM ε σ SortableQuad
-tileToQuad env textures worldX worldY worldZ tile zSlice tileAlpha = do
+tileToQuad env textures worldX worldY worldZ tile zSlice tileAlpha xOffset = do
     logger <- liftIO $ readIORef (loggerRef env)
     
     let (rawX, rawY) = gridToScreen worldX worldY
         
-        -- Height offset RELATIVE to the z-slice.
-        -- Tiles at the z-slice appear at the base grid position.
-        -- Tiles below shift down, tiles above shift up.
         relativeZ = worldZ - zSlice
         heightOffset = fromIntegral relativeZ * tileSideHeight
-        drawX = rawX
+        drawX = rawX + xOffset
         drawY = rawY - heightOffset
 
-        -- Sort key: use relative Z for proper painter's ordering
         sortKey = fromIntegral (worldX + worldY) 
                 + fromIntegral relativeZ * 0.001
 
@@ -253,20 +277,16 @@ tileToQuad env textures worldX worldY worldZ tile zSlice tileAlpha = do
           Just bindless -> getTextureSlotIndex texHandle bindless
           Nothing       -> 0
 
-    -- Look up the face map for this tile type
     let fmHandle = getTileFaceMapTexture textures (tileType tile)
         fmSlot = case textureSystem gs of
           Just bindless ->
             let s = getTextureSlotIndex fmHandle bindless
             in if s == 0
-               -- Handle not registered yet, fall back to default face map
                then fromIntegral (defaultFaceMapSlot gs)
                else fromIntegral s
           Nothing -> fromIntegral (defaultFaceMapSlot gs)
 
-    -- Depth tint: tiles at the z-slice are full brightness,
-    -- tiles further below get progressively darker
-    let depth = zSlice - worldZ  -- 0 at slice, positive going deeper
+    let depth = zSlice - worldZ
         brightness = clamp01 (1.0 - fromIntegral depth * 0.12)
         tint = Vec4 brightness brightness brightness tileAlpha
 
@@ -295,7 +315,6 @@ tileToQuad env textures worldX worldY worldZ tile zSlice tileAlpha = do
 -- Helpers
 -----------------------------------------------------------
 
--- | Clamp a float to [0, 1]
 clamp01 :: Float -> Float
 clamp01 x
     | x < 0    = 0
@@ -311,6 +330,6 @@ getTileTexture textures _ = wtNoTexture textures
 
 getTileFaceMapTexture :: WorldTextures -> Word8 -> TextureHandle
 getTileFaceMapTexture textures mat
-    | mat >= 1 && mat <= 3 = wtIsoFaceMap textures -- shared face map
+    | mat >= 1 && mat <= 3 = wtIsoFaceMap textures
     | mat == 250           = wtIsoFaceMap textures
     | otherwise            = wtNoFaceMap textures

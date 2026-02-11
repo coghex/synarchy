@@ -627,7 +627,7 @@ Vertex	src/Engine/Scene/Batch/Vertex.hs	2;"	m
 VertexBufferError	src/Engine/Core/Error/Exception.hs	55;"	C
 VideoConfig	src/Engine/Graphics/Config.hs	118;"	t
 VideoConfigFile	src/Engine/Graphics/Config.hs	147;"	t
-ViewBounds	src/World/Render.hs	98;"	t
+ViewBounds	src/World/Render.hs	106;"	t
 Visibility	src/Engine/Scene/Batch/Visibility.hs	2;"	m
 VulkanCommandCollection	src/Engine/Graphics/Vulkan/Command.hs	35;"	t
 VulkanCore	src/Engine/Graphics/Vulkan/Types/Core.hs	12;"	t
@@ -738,6 +738,7 @@ bcDescriptorSet	src/Engine/Graphics/Vulkan/Texture/Types.hs	21;"	f
 bcMaxTextures	src/Engine/Graphics/Vulkan/Texture/Types.hs	19;"	f
 bcTextureBinding	src/Engine/Graphics/Vulkan/Texture/Types.hs	20;"	f
 beginVulkanCommandBuffer	src/Engine/Graphics/Vulkan/Command.hs	86;"	f
+bestWrapOffset	src/World/Render.hs	136;"	f
 bindir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	98;"	f
 bindir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy/build/synarchy/autogen/Paths_synarchy.hs	98;"	f
 bindlessFragmentShaderCode	src/Engine/Graphics/Vulkan/ShaderCode.hs	147;"	f
@@ -836,7 +837,7 @@ chunkToZoomQuad	src/World/ZoomMap.hs	179;"	f
 chunkWorldBounds	src/World/Generate.hs	59;"	f
 chunkWorldDiamondHeight	src/World/Grid.hs	131;"	f
 chunkWorldWidth	src/World/Grid.hs	126;"	f
-clamp01	src/World/Render.hs	299;"	f
+clamp01	src/World/Render.hs	318;"	f
 clamp01	src/World/ZoomMap.hs	227;"	f
 clampAbs	src/Engine/Loop/Camera.hs	143;"	f
 clampF	src/Engine/Loop/Camera.hs	155;"	f
@@ -869,7 +870,7 @@ color	src/Engine/Graphics/Vulkan/Types/Vertex.hs	69;"	f
 colorToVec4	src/Math.hs	11;"	f
 combineTransforms	src/Engine/Graphics/Transform.hs	68;"	f
 computeAmbientLight	src/Engine/Loop/Frame.hs	52;"	f
-computeViewBounds	src/World/Render.hs	105;"	f
+computeViewBounds	src/World/Render.hs	113;"	f
 computeZoomViewBounds	src/World/ZoomMap.hs	99;"	f
 contextCallStack	src/Engine/Core/Error/Exception.hs	132;"	f
 convergentEffect	src/World/Plate.hs	332;"	f
@@ -1257,8 +1258,8 @@ getTextureHandleState	src/Engine/Asset/Manager.hs	473;"	f
 getTextureSlotIndex	src/Engine/Graphics/Vulkan/Texture/Bindless.hs	272;"	f
 getTextureStateMap	src/Engine/Asset/Manager.hs	461;"	f
 getTextureSystemOrFail	src/Engine/Graphics/Vulkan/Recreate.hs	207;"	f
-getTileFaceMapTexture	src/World/Render.hs	312;"	f
-getTileTexture	src/World/Render.hs	305;"	f
+getTileFaceMapTexture	src/World/Render.hs	331;"	f
+getTileTexture	src/World/Render.hs	324;"	f
 getUIScaleFn	src/Engine/Scripting/Lua/API/Graphics.hs	31;"	f
 getVertexAttributeDescriptions	src/Engine/Graphics/Vulkan/Vertex.hs	90;"	f
 getVertexBindingDescription	src/Engine/Graphics/Vulkan/Vertex.hs	82;"	f
@@ -1351,9 +1352,9 @@ isActionDown	src/Engine/Input/Bindings.hs	53;"	f
 isActionDownFn	src/Engine/Scripting/Lua/API/Input.hs	36;"	f
 isBeyondGlacier	src/World/Plate.hs	195;"	f
 isBindlessSupported	src/Engine/Graphics/Vulkan/Capability.hs	60;"	f
-isChunkBelowSlice	src/World/Render.hs	147;"	f
+isChunkBelowSlice	src/World/Render.hs	173;"	f
 isChunkInView	src/World/ZoomMap.hs	115;"	f
-isChunkVisible	src/World/Render.hs	129;"	f
+isChunkVisibleWrapped	src/World/Render.hs	149;"	f
 isDeviceSuitable	src/Engine/Graphics/Vulkan/Device.hs	194;"	f
 isEnabled	src/Engine/Core/Log.hs	307;"	f
 isGlacierZone	src/World/Plate.hs	186;"	f
@@ -1364,7 +1365,7 @@ isNodeVisible	src/Engine/Scene/Batch/Visibility.hs	13;"	f
 isPathSeparator	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	131;"	f
 isPathSeparator	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy/build/synarchy/autogen/Paths_synarchy.hs	131;"	f
 isPointInElement	src/UI/Manager.hs	383;"	f
-isTileVisible	src/World/Render.hs	160;"	f
+isTileVisible	src/World/Render.hs	184;"	f
 isUILayer	src/Engine/Scene/Batch/Visibility.hs	37;"	f
 isUndefinedHandle	src/Engine/Graphics/Vulkan/Texture/Handle.hs	29;"	f
 isValidRef	src/Engine/Scripting/Lua/Util.hs	20;"	f
@@ -1631,7 +1632,7 @@ renderSpritesBindless	src/Engine/Graphics/Vulkan/Command/Sprite.hs	83;"	f
 renderSpritesBindlessUI	src/Engine/Graphics/Vulkan/Command/Sprite.hs	23;"	f
 renderTextBatchInline	src/Engine/Graphics/Vulkan/Command/Text.hs	28;"	f
 renderUIPages	src/UI/Render.hs	85;"	f
-renderWorldQuads	src/World/Render.hs	173;"	f
+renderWorldQuads	src/World/Render.hs	197;"	f
 requestFocusFn	src/Engine/Scripting/Lua/API/Focus.hs	28;"	f
 resHeight	src/Engine/Graphics/Config.hs	161;"	f
 resWidth	src/Engine/Graphics/Config.hs	160;"	f
@@ -1838,7 +1839,7 @@ tileHalfWidth	src/World/Grid.hs	95;"	f
 tileHeight	src/World/Grid.hs	77;"	f
 tileSideHeight	src/World/Grid.hs	91;"	f
 tileSlopeId	src/World/Types.hs	64;"	f
-tileToQuad	src/World/Render.hs	229;"	f
+tileToQuad	src/World/Render.hs	257;"	f
 tileType	src/World/Types.hs	63;"	f
 tileWidth	src/World/Grid.hs	73;"	f
 timingState	src/Engine/Core/State.hs	70;"	f
@@ -1990,7 +1991,7 @@ updateTextureState	src/Engine/Asset/Manager.hs	93;"	f
 updateUniformBuffer	src/Engine/Graphics/Vulkan/Buffer.hs	65;"	f
 updateUniformBufferForFrame	src/Engine/Loop/Frame.hs	243;"	f
 updateWindowState	src/Engine/Input/Thread.hs	317;"	f
-updateWorldTiles	src/World/Render.hs	40;"	f
+updateWorldTiles	src/World/Render.hs	53;"	f
 updateWorldTransforms	src/Engine/Scene/Graph.hs	138;"	f
 uploadBatchesToBuffer	src/Engine/Scene/Render.hs	140;"	f
 uploadFontAtlasToGPU	src/Engine/Graphics/Font/Load.hs	377;"	f
@@ -2014,10 +2015,10 @@ utsSize	src/UI/Types.hs	125;"	f
 utsText	src/UI/Types.hs	123;"	f
 validateDescriptorState	src/Engine/Loop/Resource.hs	32;"	f
 valueNoise2D	src/World/Plate.hs	438;"	f
-vbBottom	src/World/Render.hs	102;"	f
-vbLeft	src/World/Render.hs	99;"	f
-vbRight	src/World/Render.hs	100;"	f
-vbTop	src/World/Render.hs	101;"	f
+vbBottom	src/World/Render.hs	110;"	f
+vbLeft	src/World/Render.hs	107;"	f
+vbRight	src/World/Render.hs	108;"	f
+vbTop	src/World/Render.hs	109;"	f
 vcBrightness	src/Engine/Graphics/Config.hs	126;"	f
 vcDevice	src/Engine/Graphics/Vulkan/Types/Core.hs	15;"	f
 vcFrameLimit	src/Engine/Graphics/Config.hs	124;"	f
@@ -2119,6 +2120,7 @@ worldLayer	src/World/Grid.hs	102;"	f
 worldLoop	src/World/Thread.hs	52;"	f
 worldManagerRef	src/Engine/Core/State.hs	63;"	f
 worldQueue	src/Engine/Core/State.hs	64;"	f
+worldScreenWidth	src/World/Render.hs	43;"	f
 worldScreenWidth	src/World/ZoomMap.hs	129;"	f
 worldSetCameraFn	src/Engine/Scripting/Lua/API/World.hs	84;"	f
 worldSetDateFn	src/Engine/Scripting/Lua/API/World.hs	131;"	f
