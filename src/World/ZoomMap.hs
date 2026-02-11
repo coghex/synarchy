@@ -21,7 +21,7 @@ import World.Types
 import World.Material (MaterialId(..))
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
                    , isBeyondGlacier, wrapGlobalX)
-import World.Generate (chunkSize)
+import World.Generate (chunkSize, cameraChunkCoord)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
                    zoomFadeStart, zoomFadeEnd)
@@ -69,9 +69,8 @@ computeZoomViewBounds camera fbW fbH =
         aspect = fromIntegral fbW / fromIntegral fbH
         halfW = zoom * aspect
         halfH = zoom
-        -- Padding: one extra chunk width/height for partial visibility
-        padX = chunkWorldWidth
-        padY = chunkWorldDiamondHeight
+        padX = chunkWorldWidth * 2.0
+        padY = chunkWorldDiamondHeight * 2.0
     in ZoomViewBounds
         { zvLeft   = cx - halfW - padX
         , zvRight  = cx + halfW + padX
@@ -79,7 +78,6 @@ computeZoomViewBounds camera fbW fbH =
         , zvBottom = cy + halfH + padY
         }
 
--- | Check if a chunk diamond overlaps the screen-space view bounds.
 isChunkInView :: ZoomViewBounds -> Float -> Float -> Bool
 isChunkInView vb drawX drawY =
     let right  = drawX + chunkWorldWidth
@@ -110,48 +108,63 @@ renderZoomChunks env worldState camera fbW fbH zoomAlpha = do
                 vb = computeZoomViewBounds camera fbW fbH
 
                 halfSize = worldSize `div` 2
+                worldChunks = worldSize
 
-                -- Wrap chunk X coordinate
-                wrapCX cx = ((cx + halfSize) `mod` (halfSize * 2) + (halfSize * 2))
-                            `mod` (halfSize * 2) - halfSize
+                -- Find which chunk the camera is in (in grid space)
+                (camX, camY) = camPosition camera
+                camChunk = cameraChunkCoord camX camY
+                ChunkCoord camCX camCY = camChunk
 
-                -- Iterate all Y chunks, but for X we need to figure out
-                -- which wrapped X range is visible. Simplest: iterate all
-                -- X chunks and let the screen-space visibility test cull.
-                allCoords = [ (ccx, ccy)
-                            | ccx <- [-halfSize .. halfSize - 1]
-                            , ccy <- [-halfSize .. halfSize - 1]
-                            ]
+                -- How far we need to look in chunk-grid space to fill the screen.
+                -- In isometric, screen-X = (gx-gy)*tileHalfWidth, screen-Y = (gx+gy)*tileHalfDiamondHeight
+                -- A step of 1 chunk in grid-X changes screen-X by chunkSize*tileHalfWidth
+                -- and screen-Y by chunkSize*tileHalfDiamondHeight.
+                -- To cover the screen we need radius in BOTH grid axes.
+                zoom = camZoom camera
+                aspect = fromIntegral fbW / fromIntegral fbH
+                halfW = zoom * aspect
+                halfH = zoom
+                -- Each chunk step in grid-X adds tileHalfWidth*chunkSize to screen-X
+                -- and tileHalfDiamondHeight*chunkSize to screen-Y.
+                -- To be safe, compute radius from the larger of the two projections.
+                chunkStepScreenX = fromIntegral chunkSize * tileHalfWidth
+                chunkStepScreenY = fromIntegral chunkSize * tileHalfDiamondHeight
+                -- We need enough chunks in each grid axis to cover both screen axes
+                radiusX = ceiling ((halfW + halfH) / chunkStepScreenX) + 2
+                radiusY = ceiling ((halfW + halfH) / chunkStepScreenY) + 2
 
-            let quadsData = [ (ccx, ccy, texHandle, drawX, drawY)
-                            | (ccx, ccy) <- allCoords
-                            , let midGX = ccx * chunkSize + chunkSize `div` 2
-                                  midGY = ccy * chunkSize + chunkSize `div` 2
-                                  (wcx, wcy) = gridToWorld midGX midGY
-                                  drawX = wcx - chunkWorldWidth / 2.0
-                                  drawY = wcy
-                            , isChunkInView vb drawX drawY
-                            , not (isBeyondGlacier worldSize midGX midGY)
-                            , let wrappedGX = wrapGlobalX worldSize midGX
-                                  (elev, mat) = elevationAtGlobal seed plates worldSize wrappedGX midGY
-                                  texHandle = getZoomTexture textures (unMaterialId mat) elev
-                            ]
-                worldScreenWidth = fromIntegral (worldSize * chunkSize) * tileHalfWidth
+                -- Wrap a chunk X coordinate into [-halfSize, halfSize)
+                wrapCX cx = ((cx + halfSize) `mod` worldChunks + worldChunks)
+                            `mod` worldChunks - halfSize
 
-                 -- For each chunk in view, also consider the
-                 -- wrapped neighbors on the left and right edges of the world.
-                 -- This handles the case where the camera is near
-                 -- the edge and chunks from the opposite edge should be visible.
-                allQuadsData = quadsData
-                    ++ [ (ccx, ccy, texHandle, drawX + worldScreenWidth, drawY)
-                       | (ccx, ccy, texHandle, drawX, drawY) <- quadsData
-                       , isChunkInView vb (drawX + worldScreenWidth) drawY
-                       ]
-                    ++ [ (ccx, ccy, texHandle, drawX - worldScreenWidth, drawY)
-                       | (ccx, ccy, texHandle, drawX, drawY) <- quadsData
-                       , isChunkInView vb (drawX - worldScreenWidth) drawY
-                       ]
-            quads <- forM allQuadsData $ \(ccx, ccy, texHandle, drawX, drawY) ->
+                inBoundsY cy = cy >= -halfSize && cy < halfSize
+
+            -- Iterate chunks in a radius around the camera chunk.
+            -- Use RAW (unwrapped) coords for screen position so it's continuous.
+            -- Use WRAPPED coords for world data lookups.
+            let quadsData =
+                    [ (wrappedCX, ccy, texHandle, drawX, drawY)
+                    | dx <- [-radiusX .. radiusX]
+                    , dy <- [-radiusY .. radiusY]
+                    , let rawCX = camCX + dx
+                          ccy   = camCY + dy
+                    , inBoundsY ccy
+                    , let wrappedCX = wrapCX rawCX
+                          -- Screen position uses RAW chunk X (continuous, no seam)
+                          midGX_raw = rawCX * chunkSize + chunkSize `div` 2
+                          midGY     = ccy * chunkSize + chunkSize `div` 2
+                          (wcx, wcy) = gridToWorld midGX_raw midGY
+                          drawX = wcx - chunkWorldWidth / 2.0
+                          drawY = wcy
+                    , isChunkInView vb drawX drawY
+                    , let -- World data uses WRAPPED chunk X
+                          midGX_wrapped = wrappedCX * chunkSize + chunkSize `div` 2
+                    , not (isBeyondGlacier worldSize midGX_wrapped midGY)
+                    , let (elev, mat) = elevationAtGlobal seed plates worldSize midGX_wrapped midGY
+                          texHandle = getZoomTexture textures (unMaterialId mat) elev
+                    ]
+
+            quads <- forM quadsData $ \(ccx, ccy, texHandle, drawX, drawY) ->
                 chunkToZoomQuad texHandle drawX drawY zoomAlpha ccx ccy
 
             return $ V.fromList quads

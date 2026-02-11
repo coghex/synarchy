@@ -21,24 +21,28 @@ cameraYLimit :: Float
 cameraYLimit =
     let worldSizeChunks = 128
         halfTiles = (worldSizeChunks * chunkSize) `div` 2
-        glacierBuffer = chunkSize * 2           -- 2 rows back from glacier
+        glacierBuffer = chunkSize * 2
         maxRow = halfTiles - glacierBuffer
     in fromIntegral maxRow * tileHalfDiamondHeight
 
--- | World width in screen-space X for wrapping.
+-- | The full world width in screen-space X.
+--   Wrapping grid-X by worldSize chunks (= worldSize * chunkSize tiles)
+--   shifts screen-X by (worldSize * chunkSize * tileHalfWidth),
+--   because screenX = (gx - gy) * tileHalfWidth and only gx changes.
 cameraXWrap :: Float
 cameraXWrap =
     let worldSizeChunks = 128
-        halfTiles = (worldSizeChunks * chunkSize) `div` 2
-    in fromIntegral halfTiles * tileHalfWidth
+        worldTiles = worldSizeChunks * chunkSize
+    in fromIntegral worldTiles * tileHalfWidth
 
--- | Wrap camera X into [-cameraXWrap, cameraXWrap)
+-- | Wrap camera X into [-cameraXWrap/2, cameraXWrap/2)
 wrapCameraX :: Float -> Float
 wrapCameraX x =
-    let w = cameraXWrap * 2.0
-        shifted = x + cameraXWrap
+    let w = cameraXWrap
+        halfW = w / 2.0
+        shifted = x + halfW
         wrapped = shifted - w * fromIntegral (floor (shifted / w) :: Int)
-    in wrapped - cameraXWrap
+    in wrapped - halfW
 
 updateCameraPanning ∷ EngineM ε σ ()
 updateCameraPanning = do
@@ -72,7 +76,6 @@ updateCameraPanning = do
             rawY = cy + vy' * dtF
             cy' = clampF (-cameraYLimit) cameraYLimit rawY
 
-            -- Kill velocity if we hit the boundary
             vy'' = if cy' /= rawY then 0 else vy'
 
         in (cam { camPosition = (cx', cy')

@@ -718,7 +718,7 @@ apShaderHandles	src/Engine/Asset/Types.hs	31;"	f
 apShaders	src/Engine/Asset/Types.hs	23;"	f
 apTextureAtlases	src/Engine/Asset/Types.hs	21;"	f
 apTextureHandles	src/Engine/Asset/Types.hs	29;"	f
-applyFriction	src/Engine/Loop/Camera.hs	146;"	f
+applyFriction	src/Engine/Loop/Camera.hs	149;"	f
 applyTransform	src/Engine/Graphics/Transform.hs	48;"	f
 asDependents	src/Engine/Asset/Handle.hs	31;"	f
 asDependents	src/Engine/Asset/Handle.hs	36;"	f
@@ -813,7 +813,7 @@ cameraRef	src/Engine/Core/State.hs	59;"	f
 cameraSetPositionFn	src/Engine/Scripting/Lua/API/Camera.hs	47;"	f
 cameraSetZSliceFn	src/Engine/Scripting/Lua/API/Camera.hs	88;"	f
 cameraSetZoomFn	src/Engine/Scripting/Lua/API/Camera.hs	70;"	f
-cameraXWrap	src/Engine/Loop/Camera.hs	29;"	f
+cameraXWrap	src/Engine/Loop/Camera.hs	32;"	f
 cameraYLimit	src/Engine/Loop/Camera.hs	20;"	f
 capabilities	src/Engine/Graphics/Types.hs	40;"	f
 catchEngine	src/Engine/Core/Error/Exception.hs	155;"	f
@@ -830,14 +830,14 @@ chunkCount	src/World/Types.hs	89;"	f
 chunkLoadRadius	src/World/Generate.hs	35;"	f
 chunkSize	src/World/Generate.hs	32;"	f
 chunkToGlobal	src/World/Generate.hs	55;"	f
-chunkToZoomQuad	src/World/ZoomMap.hs	163;"	f
+chunkToZoomQuad	src/World/ZoomMap.hs	176;"	f
 chunkWorldBounds	src/World/Generate.hs	59;"	f
 chunkWorldDiamondHeight	src/World/Grid.hs	131;"	f
 chunkWorldWidth	src/World/Grid.hs	126;"	f
 clamp01	src/World/Render.hs	299;"	f
-clamp01	src/World/ZoomMap.hs	211;"	f
-clampAbs	src/Engine/Loop/Camera.hs	140;"	f
-clampF	src/Engine/Loop/Camera.hs	152;"	f
+clamp01	src/World/ZoomMap.hs	224;"	f
+clampAbs	src/Engine/Loop/Camera.hs	143;"	f
+clampF	src/Engine/Loop/Camera.hs	155;"	f
 clampInt	src/World/Plate.hs	392;"	f
 clampSampleCount	src/Engine/Graphics/Config.hs	46;"	f
 classifyBoundary	src/World/Plate.hs	144;"	f
@@ -1265,7 +1265,7 @@ getWindowSize	src/Engine/Graphics/Window/GLFW.hs	166;"	f
 getWindowSizeFn	src/Engine/Scripting/Lua/API/Input.hs	76;"	f
 getWorldCoordFn	src/Engine/Scripting/Lua/API/Input.hs	92;"	f
 getWorldSceneQuads	src/Engine/Scene/Render.hs	188;"	f
-getZoomTexture	src/World/ZoomMap.hs	202;"	f
+getZoomTexture	src/World/ZoomMap.hs	215;"	f
 giAdvance	src/Engine/Asset/Types.hs	38;"	f
 giBearing	src/Engine/Asset/Types.hs	37;"	f
 giSize	src/Engine/Asset/Types.hs	36;"	f
@@ -1349,7 +1349,7 @@ isActionDownFn	src/Engine/Scripting/Lua/API/Input.hs	36;"	f
 isBeyondGlacier	src/World/Plate.hs	196;"	f
 isBindlessSupported	src/Engine/Graphics/Vulkan/Capability.hs	60;"	f
 isChunkBelowSlice	src/World/Render.hs	147;"	f
-isChunkInView	src/World/ZoomMap.hs	83;"	f
+isChunkInView	src/World/ZoomMap.hs	81;"	f
 isChunkVisible	src/World/Render.hs	129;"	f
 isDeviceSuitable	src/Engine/Graphics/Vulkan/Device.hs	194;"	f
 isEnabled	src/Engine/Core/Log.hs	307;"	f
@@ -1628,7 +1628,7 @@ renderSpritesBindlessUI	src/Engine/Graphics/Vulkan/Command/Sprite.hs	23;"	f
 renderTextBatchInline	src/Engine/Graphics/Vulkan/Command/Text.hs	28;"	f
 renderUIPages	src/UI/Render.hs	85;"	f
 renderWorldQuads	src/World/Render.hs	173;"	f
-renderZoomChunks	src/World/ZoomMap.hs	96;"	f
+renderZoomChunks	src/World/ZoomMap.hs	94;"	f
 requestFocusFn	src/Engine/Scripting/Lua/API/Focus.hs	28;"	f
 resHeight	src/Engine/Graphics/Config.hs	161;"	f
 resWidth	src/Engine/Graphics/Config.hs	160;"	f
@@ -1764,7 +1764,7 @@ startWorldThread	src/World/Thread.hs	28;"	f
 stbFontData	src/Engine/Graphics/Font/STB.hs	36;"	f
 stbFontInfo	src/Engine/Graphics/Font/STB.hs	37;"	f
 stbFontSize	src/Engine/Graphics/Font/STB.hs	38;"	f
-stepAxis	src/Engine/Loop/Camera.hs	130;"	f
+stepAxis	src/Engine/Loop/Camera.hs	133;"	f
 stiDimensions	src/Engine/Asset/Types.hs	85;"	f
 stiPosition	src/Engine/Asset/Types.hs	84;"	f
 stiRotated	src/Engine/Asset/Types.hs	86;"	f
@@ -1970,8 +1970,8 @@ upRootElements	src/UI/Types.hs	56;"	f
 upVisible	src/UI/Types.hs	55;"	f
 upZIndex	src/UI/Types.hs	54;"	f
 updateBatches	src/Engine/Scene/Batch/Update.hs	21;"	f
-updateCameraMouseDrag	src/Engine/Loop/Camera.hs	81;"	f
-updateCameraPanning	src/Engine/Loop/Camera.hs	43;"	f
+updateCameraMouseDrag	src/Engine/Loop/Camera.hs	84;"	f
+updateCameraPanning	src/Engine/Loop/Camera.hs	47;"	f
 updateChunkLoading	src/World/Thread.hs	127;"	f
 updateFontState	src/Engine/Asset/Manager.hs	99;"	f
 updateFrameTiming	src/Engine/Loop/Timing.hs	21;"	f
@@ -2126,7 +2126,7 @@ worldShowFn	src/Engine/Scripting/Lua/API/World.hs	41;"	f
 worldTimeToSunAngle	src/World/Types.hs	157;"	f
 worldToGrid	src/World/Grid.hs	162;"	f
 worldWidthTiles	src/World/Plate.hs	207;"	f
-wrapCameraX	src/Engine/Loop/Camera.hs	36;"	f
+wrapCameraX	src/Engine/Loop/Camera.hs	39;"	f
 wrapGlobalX	src/World/Plate.hs	211;"	f
 wrappedDeltaX	src/World/Plate.hs	220;"	f
 writeChannel	src/Engine/Core/Queue.hs	41;"	f
