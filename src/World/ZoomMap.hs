@@ -333,11 +333,11 @@ chunkToBackgroundQuad texHandle drawX drawY ccx ccy = do
 
         vertices = V.fromList
             [ Vertex (Vec2 drawX drawY)               (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 (drawX + w) drawY)          (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 (drawX + w) (drawY + h))    (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 drawX drawY)                (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 (drawX + w) (drawY + h))    (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-            , Vertex (Vec2 drawX (drawY + h))          (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + w) drawY)         (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + w) (drawY + h))   (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 drawX drawY)               (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + w) (drawY + h))   (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 drawX (drawY + h))         (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
             ]
 
     return $ SortableQuad
