@@ -24,11 +24,12 @@ createBindlessPipeline ∷ Device
                        → Extent2D
                        → DescriptorSetLayout
                        → DescriptorSetLayout
-                       → SampleCountFlagBits  -- NEW parameter
+                       → SampleCountFlagBits
                        → EngineM ε σ (Pipeline, PipelineLayout)
 createBindlessPipeline device renderPass swapExtent uniformLayout textureLayout sampleCount = do
   (pipeline, pipelineLayout) ← createBindlessPipelineWithShader 
-      device renderPass swapExtent uniformLayout textureLayout sampleCount bindlessVertexShaderCode
+      device renderPass swapExtent uniformLayout textureLayout sampleCount
+      bindlessVertexShaderCode bindlessFragmentShaderCode
   let cleanupAction = do
           destroyPipeline device pipeline Nothing
           destroyPipelineLayout device pipelineLayout Nothing
@@ -45,26 +46,23 @@ createBindlessUIPipeline ∷ Device
                          → Extent2D
                          → DescriptorSetLayout
                          → DescriptorSetLayout
-                         → SampleCountFlagBits  -- NEW parameter
+                         → SampleCountFlagBits
                          → EngineM ε σ (Pipeline, PipelineLayout)
 createBindlessUIPipeline device renderPass swapExtent uniformLayout textureLayout sampleCount = do
   (pipeline, pipelineLayout) ← createBindlessPipelineWithShader 
-      device renderPass swapExtent uniformLayout textureLayout sampleCount bindlessUIVertexShaderCode
-  -- Build cleanup action
+      device renderPass swapExtent uniformLayout textureLayout sampleCount
+      bindlessUIVertexShaderCode bindlessUIFragmentShaderCode
   let cleanupAction = do
           destroyPipeline device pipeline Nothing
           destroyPipelineLayout device pipelineLayout Nothing
-  
-  -- Store cleanup in state
   modify $ \s → s { graphicsState = (graphicsState s) {
       vulkanCleanup = (vulkanCleanup (graphicsState s)) {
           cleanupBindlessUI = cleanupAction
       }
   }}
-  
   pure (pipeline, pipelineLayout)
 
--- | Internal helper to create bindless pipeline with specified vertex shader
+-- | Internal helper to create bindless pipeline with specified shaders
 -- Does NOT register cleanup - caller is responsible
 createBindlessPipelineWithShader ∷ Device
                                  → RenderPass
@@ -73,11 +71,12 @@ createBindlessPipelineWithShader ∷ Device
                                  → DescriptorSetLayout
                                  → SampleCountFlagBits
                                  → BS.ByteString  -- ^ Vertex shader code
+                                 → BS.ByteString  -- ^ Fragment shader code
                                  → EngineM ε σ (Pipeline, PipelineLayout)
-createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout sampleCount vertShaderCode = do
+createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout sampleCount vertShaderCode fragShaderCode = do
   -- Create shader modules
   vertShaderModule ← createShaderModule' device vertShaderCode
-  fragShaderModule ← createShaderModule' device bindlessUIFragmentShaderCode
+  fragShaderModule ← createShaderModule' device fragShaderCode
 
   let vertShaderStageInfo = zero
         { stage = SHADER_STAGE_VERTEX_BIT
@@ -165,7 +164,6 @@ createBindlessPipelineWithShader device renderPass swapExtent uniformLayout text
         , pushConstantRanges = V.empty
         }
 
-  -- Create pipeline layout WITHOUT allocResource
   pipelineLayout ← createPipelineLayout device pipelineLayoutInfo Nothing
 
   let pipelineInfo = zero
@@ -183,13 +181,11 @@ createBindlessPipelineWithShader device renderPass swapExtent uniformLayout text
         , basePipelineIndex  = (-1)
         } ∷ GraphicsPipelineCreateInfo '[]
 
-  -- Create pipeline WITHOUT allocResource
   (_, pipelinesVec) ← createGraphicsPipelines
     device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
 
   let !pipeline = V.head pipelinesVec
 
-  -- Destroy shader modules
   destroyShaderModule device vertShaderModule Nothing
   destroyShaderModule device fragShaderModule Nothing
 
