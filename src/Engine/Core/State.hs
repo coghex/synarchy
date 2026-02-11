@@ -62,6 +62,7 @@ data EngineEnv = EngineEnv
   , focusManagerRef     ∷ IORef FocusManager
   , worldManagerRef     ∷ IORef WorldManager
   , worldQueue          ∷ Q.Queue WorldCommand
+  , sunAngleRef         ∷ IORef Float
   }
 
 -- | Engine state (mutable)
@@ -111,6 +112,7 @@ data GraphicsState = GraphicsState
   , vertexBuffer       ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))
   , textureSystem      ∷ Maybe BindlessTextureSystem
+  , defaultFaceMapSlot ∷ Word32
   , bindlessPipeline   ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , bindlessUIPipeline ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , fontPipeline       ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)

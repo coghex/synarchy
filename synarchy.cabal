@@ -170,6 +170,7 @@ library
                      Engine.Graphics.Vulkan.Types.Vertex
                      Engine.Graphics.Vulkan.Texture
                      Engine.Graphics.Vulkan.Texture.Undefined
+                     Engine.Graphics.Vulkan.Texture.DefaultFaceMap
                      Engine.Graphics.Vulkan.Texture.Types
                      Engine.Graphics.Vulkan.Texture.Slot
                      Engine.Graphics.Vulkan.Texture.System

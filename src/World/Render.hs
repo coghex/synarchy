@@ -211,6 +211,17 @@ tileToQuad env textures worldX worldY worldZ tile zSlice = do
           Just bindless -> getTextureSlotIndex texHandle bindless
           Nothing       -> 0
 
+    -- Look up the face map for this tile type
+    let fmHandle = getTileFaceMapTexture textures (tileType tile)
+        fmSlot = case textureSystem gs of
+          Just bindless ->
+            let s = getTextureSlotIndex fmHandle bindless
+            in if s == 0
+               -- Handle not registered yet, fall back to default face map
+               then fromIntegral (defaultFaceMapSlot gs)
+               else fromIntegral s
+          Nothing -> fromIntegral (defaultFaceMapSlot gs)
+
     -- Depth tint: tiles at the z-slice are full brightness,
     -- tiles further below get progressively darker
     let depth = zSlice - worldZ  -- 0 at slice, positive going deeper
@@ -220,14 +231,15 @@ tileToQuad env textures worldX worldY worldZ tile zSlice = do
     liftIO $ logDebug logger CatWorld $ 
         "TILE RENDER: texHandle=" <> T.pack (show texHandle)
         <> " slot=" <> T.pack (show actualSlot)
+        <> " faceMap=" <> T.pack (show fmSlot)
         
     let vertices = V.fromList
-            [ Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot)
-            , Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot)
-            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot)
-            , Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot)
-            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot)
-            , Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot)
+            [ Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
             ]
     
     return $ SortableQuad
@@ -237,6 +249,10 @@ tileToQuad env textures worldX worldY worldZ tile zSlice = do
         , sqLayer    = worldLayer
         }
 
+-----------------------------------------------------------
+-- Helpers
+-----------------------------------------------------------
+
 -- | Clamp a float to [0, 1]
 clamp01 :: Float -> Float
 clamp01 x
@@ -244,10 +260,10 @@ clamp01 x
     | x > 1    = 1
     | otherwise = x
 
------------------------------------------------------------
--- Helpers
------------------------------------------------------------
-
 getTileTexture :: WorldTextures -> Word8 -> TextureHandle
 getTileTexture textures 1 = wtGrassTexture textures  -- grass
 getTileTexture _        _ = TextureHandle 0
+
+getTileFaceMapTexture :: WorldTextures -> Word8 -> TextureHandle
+getTileFaceMapTexture textures 1 = wtGrassFaceMap textures  -- grass face map
+getTileFaceMapTexture _        _ = TextureHandle 0

@@ -92,6 +92,9 @@ setupShellSandbox lst = Lua.runWith lst $ do
     
     -- Engine API (your safe functions)
     copyGlobalTable "engine"
+    copyGlobalTable "UI"
+    copyGlobalTable "camera"
+    copyGlobalTable "world"
     
     -- Safe subset of os
     Lua.newtable

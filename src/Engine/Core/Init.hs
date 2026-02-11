@@ -85,6 +85,8 @@ initializeEngine = do
   textBuffersRef ← newIORef Map.empty
   -- font cache reference
   fontCache ← newIORef defaultFontCache
+  -- start time at noon
+  sunAngleRef ← newIORef 0.25
 
   -- Build environment
   let env = EngineEnv
@@ -115,6 +117,7 @@ initializeEngine = do
         , worldManagerRef    = worldManagerRef
         , worldQueue         = worldQueue
         , focusManagerRef    = focusMgrRef
+        , sunAngleRef        = sunAngleRef
         }
   
   envVar   ← atomically $ newVar env

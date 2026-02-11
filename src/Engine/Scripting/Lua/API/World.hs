@@ -5,6 +5,7 @@ module Engine.Scripting.Lua.API.World
     , worldHideFn
     , worldSetTextureFn
     , worldSetCameraFn
+    , worldSetSunAngleFn
     ) where
 
 import UPrelude
@@ -96,6 +97,18 @@ worldSetCameraFn env = do
 
     return 0
 
+worldSetSunAngleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetSunAngleFn env = do
+    angleArg ← Lua.tonumber 1
+
+    case angleArg of
+        Just (Lua.Number angle) → Lua.liftIO $ do
+            atomicModifyIORef' (sunAngleRef env) $ \_ -> (realToFrac angle, ())
+        _ → pure ()
+
+    return 0
+
 parseTextureType :: Text -> WorldTextureType
-parseTextureType "grass" = GrassTexture
-parseTextureType _ = GrassTexture  -- Default
+parseTextureType "grass"         = GrassTexture
+parseTextureType "grass_facemap" = GrassFaceMap
+parseTextureType _               = GrassTexture  -- Default

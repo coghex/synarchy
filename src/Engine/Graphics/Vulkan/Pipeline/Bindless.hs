@@ -12,7 +12,8 @@ import Engine.Core.State
 import Engine.Graphics.Vulkan.Vertex
 import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..))
 import Engine.Graphics.Vulkan.ShaderCode (bindlessVertexShaderCode, bindlessFragmentShaderCode
-                                         , bindlessUIVertexShaderCode)
+                                         , bindlessUIVertexShaderCode
+                                         , bindlessUIFragmentShaderCode)
 import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
@@ -76,7 +77,7 @@ createBindlessPipelineWithShader ∷ Device
 createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout sampleCount vertShaderCode = do
   -- Create shader modules
   vertShaderModule ← createShaderModule' device vertShaderCode
-  fragShaderModule ← createShaderModule' device bindlessFragmentShaderCode
+  fragShaderModule ← createShaderModule' device bindlessUIFragmentShaderCode
 
   let vertShaderStageInfo = zero
         { stage = SHADER_STAGE_VERTEX_BIT

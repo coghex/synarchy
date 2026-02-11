@@ -54,20 +54,37 @@ data CleanupStatus = NotStarted | InProgress | Completed
   deriving (Show, Eq)
 
 -- | Uniform buffer object matching shader layout
+-- Layout (std140-ish, matching GLSL):
+--   mat4 model       (offset   0, 64 bytes)
+--   mat4 view        (offset  64, 64 bytes)
+--   mat4 proj        (offset 128, 64 bytes)
+--   mat4 uiView      (offset 192, 64 bytes)
+--   mat4 uiProj      (offset 256, 64 bytes)
+--   float brightness  (offset 320)
+--   float screenW     (offset 324)
+--   float screenH     (offset 328)
+--   float pixelSnap   (offset 332)
+--   float sunAngle    (offset 336)
+--   float ambientLight(offset 340)
+--   <padding>         (offset 344-351, 8 bytes padding to 16-byte boundary)
+-- Total: 5*64 + 32 = 352 bytes
 data UniformBufferObject = UBO
-    { uboModel  ∷ M44 Float  -- model matrix
-    , uboView   ∷ M44 Float  -- view matrix
-    , uboProj   ∷ M44 Float  -- projection matrix
-    , uboUIView ∷ M44 Float  -- UI view matrix
-    , uboUIProj ∷ M44 Float  -- UI projection matrix
-    , uboBrightness ∷ Float  -- brightness factor
-    , uboScreenW    ∷ Float  -- screen width
-    , uboScreenH    ∷ Float  -- screen height
-    , uboPixelSnap  ∷ Float  -- pixel snapping factor
+    { uboModel        ∷ M44 Float  -- model matrix
+    , uboView         ∷ M44 Float  -- view matrix
+    , uboProj         ∷ M44 Float  -- projection matrix
+    , uboUIView       ∷ M44 Float  -- UI view matrix
+    , uboUIProj       ∷ M44 Float  -- UI projection matrix
+    , uboBrightness   ∷ Float      -- brightness factor
+    , uboScreenW      ∷ Float      -- screen width
+    , uboScreenH      ∷ Float      -- screen height
+    , uboPixelSnap    ∷ Float      -- pixel snapping factor
+    , uboSunAngle     ∷ Float      -- day/night cycle angle (0..1)
+    , uboAmbientLight ∷ Float      -- minimum ambient brightness
     } deriving (Show)
 
 instance Storable UniformBufferObject where
-    sizeOf _ = 5 * sizeOf (undefined ∷ M44 Float) + 16
+    -- 5 matrices (64 bytes each) + 6 floats (24 bytes) + 8 bytes padding = 352
+    sizeOf _ = 5 * sizeOf (undefined ∷ M44 Float) + 32
     alignment _ = 16  -- Vulkan requires 16-byte alignment for uniform buffers
     peek ptr = UBO
         <$> peek (castPtr ptr)
@@ -79,7 +96,9 @@ instance Storable UniformBufferObject where
         <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 4))
         <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 8))
         <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 12))
-    poke ptr (UBO model view proj uiView uiProj brightness screenW screenH pixelSnap) = do
+        <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 16))
+        <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 20))
+    poke ptr (UBO model view proj uiView uiProj brightness screenW screenH pixelSnap sunAngle ambientLight) = do
         poke (castPtr ptr) model
         poke (castPtr $ ptr `plusPtr` sizeOf model) view
         poke (castPtr $ ptr `plusPtr` (2 * sizeOf model)) proj
@@ -89,3 +108,5 @@ instance Storable UniformBufferObject where
         poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 4)) screenW
         poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 8)) screenH
         poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 12)) pixelSnap
+        poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 16)) sunAngle
+        poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 20)) ambientLight

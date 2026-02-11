@@ -19,22 +19,23 @@ import Vulkan.Core10
 import Vulkan.Zero
 
 -- Updated quad vertices to create two quads side by side with different atlas IDs
+-- faceMapId = 0 means use the default (undefined/top-lit) face map
 quadVertices ∷ [Vertex]
 quadVertices =
     -- Left quad (atlas ID 0)
-    [ Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0  -- Bottom left
-    , Vertex (Vec2 (-0.5) (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 0  -- Bottom right
-    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0  -- Top right
-    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0  -- Top right
-    , Vertex (Vec2 (-1.5)   0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 0  -- Top left
-    , Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0  -- Bottom left
+    [ Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0 0
+    , Vertex (Vec2 (-0.5) (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 0 0
+    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0 0
+    , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0 0
+    , Vertex (Vec2 (-1.5)   0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 0 0
+    , Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0 0
     -- Right quad (atlas ID 1)
-    , Vertex (Vec2   0.5  (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 1  -- Bottom left
-    , Vertex (Vec2   1.5  (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 1  -- Bottom right
-    , Vertex (Vec2   1.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 1  -- Top right
-    , Vertex (Vec2   1.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 1  -- Top right
-    , Vertex (Vec2   0.5    0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 1  -- Top left
-    , Vertex (Vec2   0.5  (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 1  -- Bottom left
+    , Vertex (Vec2   0.5  (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 1 0
+    , Vertex (Vec2   1.5  (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 1 0
+    , Vertex (Vec2   1.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 1 0
+    , Vertex (Vec2   1.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 1 0
+    , Vertex (Vec2   0.5    0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 1 0
+    , Vertex (Vec2   0.5  (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 1 0
     ]
 
 -- | Create vertex buffer from vertices
@@ -81,7 +82,7 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
 getVertexBindingDescription ∷ VertexInputBindingDescription
 getVertexBindingDescription = zero
     { binding = 0
-    , stride = 36
+    , stride = 40  -- was 36, now 40 with faceMapId
     , inputRate = VERTEX_INPUT_RATE_VERTEX
     }
 
@@ -106,10 +107,16 @@ getVertexAttributeDescriptions = V.fromList
         , format = FORMAT_R32G32B32A32_SFLOAT
         , offset = 16
         }
-    , zero  -- Atlas ID
+    , zero  -- Atlas ID (texture index)
         { location = 3
         , binding = 0
         , format = FORMAT_R32_SFLOAT
         , offset = 32
+        }
+    , zero  -- Face Map ID
+        { location = 4
+        , binding = 0
+        , format = FORMAT_R32_SFLOAT
+        , offset = 36
         }
     ]

@@ -30,10 +30,11 @@ collectSpriteBatches ∷ SceneGraph → Camera2D → Float → Float → EngineM
 collectSpriteBatches graph camera viewWidth viewHeight = do
     gs ← gets graphicsState
     let texSystem = textureSystem gs
+        fmSlot = fromIntegral (defaultFaceMapSlot gs) ∷ Float
         allNodes = Map.elems (sgNodes graph)
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject && nodeVisible n) allNodes
         visibleSprites = filter (isNodeVisible camera viewWidth viewHeight) spriteNodes
-        drawableObjs = mapMaybe (nodeToDrawable graph texSystem) visibleSprites
+        drawableObjs = mapMaybe (nodeToDrawable graph texSystem fmSlot) visibleSprites
     
     logDebugSM CatScene "Sprite batch generation"
         [("totalSprites", T.pack $ show $ length spriteNodes)
@@ -47,10 +48,11 @@ collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → Engine
 collectVisibleObjects graph camera viewWidth viewHeight = do
     gs ← gets graphicsState
     let texSystem = textureSystem gs
+        fmSlot = fromIntegral (defaultFaceMapSlot gs) ∷ Float
         allNodes = Map.elems (sgNodes graph)
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject && nodeVisible n) allNodes
         visibleNodes = filter (\n → isUILayer (nodeLayer n) || isNodeVisible camera viewWidth viewHeight n) spriteNodes
-        drawableObjs = mapMaybe (nodeToDrawable graph texSystem) visibleNodes
+        drawableObjs = mapMaybe (nodeToDrawable graph texSystem fmSlot) visibleNodes
     
     logDebugSM CatScene "Visible object culling"
         [("totalObjects", T.pack $ show $ length spriteNodes)
@@ -59,8 +61,8 @@ collectVisibleObjects graph camera viewWidth viewHeight = do
     pure $ V.fromList drawableObjs
 
 -- | Convert scene node to drawable object (sprites only)
-nodeToDrawable ∷ SceneGraph → Maybe BindlessTextureSystem → SceneNode → Maybe DrawableObject
-nodeToDrawable graph bts node = do
+nodeToDrawable ∷ SceneGraph → Maybe BindlessTextureSystem → Float → SceneNode → Maybe DrawableObject
+nodeToDrawable graph bts fmSlot node = do
     guard (nodeType node ≡ SpriteObject)
     textureHandle ← nodeTexture node
     worldTrans ← Map.lookup (nodeId node) (sgWorldTrans graph)
@@ -69,7 +71,7 @@ nodeToDrawable graph bts node = do
                     Just bts' → fromIntegral $ getTextureSlotIndex textureHandle bts'
                     Nothing   → 0
     
-    let vertices = generateQuadVertices node worldTrans atlasId
+    let vertices = generateQuadVertices node worldTrans atlasId fmSlot
         
     return DrawableObject
         { doId = nodeId node

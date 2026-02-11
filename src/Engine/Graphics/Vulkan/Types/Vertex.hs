@@ -17,8 +17,11 @@ vertexColorOffset = 16
 vertexAtlasIdOffset :: Int
 vertexAtlasIdOffset = 32
 
+vertexFaceMapIdOffset :: Int
+vertexFaceMapIdOffset = 36
+
 vertexTotalSize :: Int
-vertexTotalSize = 36
+vertexTotalSize = 40
 
 -- | 2D vector for positions and texture coordinates
 data Vec2 = Vec2 
@@ -61,10 +64,11 @@ instance Storable Vec4 where
         Storable.pokeElemOff (castPtr ptr ∷ Ptr Float) 3 a'
 
 data Vertex = Vertex
-    { pos     ∷ !Vec2  -- ^ Position (layout = 0)
-    , tex     ∷ !Vec2  -- ^ Texture coordinates (layout = 1)
-    , color   ∷ !Vec4  -- ^ Color (layout = 2)
-    , atlasId ∷ !Float -- ^ Atlas ID (layout = 3)
+    { pos       ∷ !Vec2  -- ^ Position (layout = 0)
+    , tex       ∷ !Vec2  -- ^ Texture coordinates (layout = 1)
+    , color     ∷ !Vec4  -- ^ Color (layout = 2)
+    , atlasId   ∷ !Float -- ^ Atlas ID (layout = 3)
+    , faceMapId ∷ !Float -- ^ Face map texture slot (layout = 4)
     } deriving (Show, Eq)
 
 instance Storable Vertex where
@@ -75,9 +79,11 @@ instance Storable Vertex where
         t ← peek (ptr `plusPtr` vertexTexCoordOffset)
         c ← peek (ptr `plusPtr` vertexColorOffset)
         a ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexAtlasIdOffset) ∷ Ptr Float) 0
-        return $! Vertex p t c a
-    poke ptr (Vertex p t c a) = do
+        f ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexFaceMapIdOffset) ∷ Ptr Float) 0
+        return $! Vertex p t c a f
+    poke ptr (Vertex p t c a f) = do
         poke (ptr `plusPtr` vertexPositionOffset) p
         poke (ptr `plusPtr` vertexTexCoordOffset) t
         poke (ptr `plusPtr` vertexColorOffset) c
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexAtlasIdOffset) ∷ Ptr Float) 0 a
+        Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexFaceMapIdOffset) ∷ Ptr Float) 0 f

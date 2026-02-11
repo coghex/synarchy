@@ -45,10 +45,13 @@ import Engine.Graphics.Vulkan.Sync (createSyncObjects)
 import Engine.Graphics.Vulkan.Texture
 import Engine.Graphics.Vulkan.Texture.System
 import Engine.Graphics.Vulkan.Texture.Types
+import Engine.Graphics.Vulkan.Texture.DefaultFaceMap (createDefaultFaceMap
+                                                     , DefaultFaceMap(..))
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Vertex
+import Engine.Loop.Frame (computeAmbientLight)
 import Engine.Scene.Manager (createScene, setActiveScene)
 import Engine.Scene.Types
 import Vulkan.Core10
@@ -172,8 +175,11 @@ initializeVulkan window = do
         }
   texSystem ← createTextureSystem physicalDevice device cmdPool 
                                    (graphicsQueue queues) texSystemConfig
+  (defaultFaceMap, texSystemWithFaceMap) ← createDefaultFaceMap
+      physicalDevice device cmdPool (graphicsQueue queues) texSystem
   modify $ \s → s { graphicsState = (graphicsState s) {
-                      textureSystem = Just texSystem } }
+                        textureSystem = Just texSystemWithFaceMap
+                      , defaultFaceMapSlot = dfmSlot defaultFaceMap } }
   
   -- Create default scene
   let defaultSceneId = "default"
@@ -264,8 +270,6 @@ initializeVulkan window = do
   logDebugM CatInit "Vulkan initialization complete"
   pure cmdPool
 
--- In src/Engine/Graphics/Vulkan/Init.hs
--- Replace the createUniformBuffersForFrames function:
 
 createUniformBuffersForFrames :: Device -> PhysicalDevice 
   -> GLFWRaw.Window -> V.Vector DescriptorSet -> EngineM ε σ ()
@@ -280,12 +284,14 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
   camera <- liftIO $ readIORef cRef
   brightnessInt ← liftIO $ readIORef bRef
   pixelSnap ← liftIO $ readIORef psRef
+  sunAngle ← liftIO $ readIORef (sunAngleRef env)
   
   -- UPDATE: Create/update UI camera with actual framebuffer size
   let uiCamera = defaultUICamera (fromIntegral width) (fromIntegral height)
   liftIO $ writeIORef uiCRef uiCamera  -- Update the ref with correct size
   
-  let uboData = UBO 
+  let ambientLight = computeAmbientLight sunAngle
+      uboData = UBO 
           identity 
           (createViewMatrix camera) 
           (createProjectionMatrix camera (fromIntegral width) (fromIntegral height))
@@ -294,12 +300,20 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
           (brightnessToMultiplier brightnessInt)
           (fromIntegral width) (fromIntegral height)
           (if pixelSnap then 1.0 else 0.0)
+          sunAngle
+          ambientLight
       uboSize = fromIntegral $ sizeOf uboData
       numFrames = gcMaxFrames defaultGraphicsConfig
   
   uniformBuffers <- V.generateM (fromIntegral numFrames) $ \_ -> do
       (buffer, memory) <- createUniformBuffer device physicalDevice uboSize
-      updateUniformBuffer device memory (UBO identity identity identity identity identity (brightnessToMultiplier brightnessInt) (fromIntegral width) (fromIntegral height) (if pixelSnap then 1.0 else 0.0))
+      updateUniformBuffer device memory
+          (UBO identity identity identity identity identity
+               (brightnessToMultiplier brightnessInt)
+               (fromIntegral width) (fromIntegral height)
+               (if pixelSnap then 1.0 else 0.0)
+               sunAngle
+               ambientLight)
       pure (buffer, memory)
   
   modify $ \s -> s { graphicsState = (graphicsState s) {

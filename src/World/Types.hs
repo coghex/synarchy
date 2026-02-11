@@ -100,12 +100,14 @@ data WorldCamera = WorldCamera
 -----------------------------------------------------------
 
 data WorldTextures = WorldTextures
-    { wtGrassTexture :: TextureHandle
+    { wtGrassTexture  :: TextureHandle
+    , wtGrassFaceMap  :: TextureHandle  -- ^ Face map for grass tiles
     } deriving (Show, Eq)
 
 defaultWorldTextures :: WorldTextures
 defaultWorldTextures = WorldTextures
-    { wtGrassTexture = TextureHandle 0
+    { wtGrassTexture  = TextureHandle 0
+    , wtGrassFaceMap  = TextureHandle 0  -- will use defaultFaceMapSlot until set
     }
 
 -----------------------------------------------------------
@@ -148,6 +150,7 @@ emptyWorldManager = WorldManager
 
 data WorldTextureType
     = GrassTexture
+    | GrassFaceMap
     deriving (Show, Eq)
 
 data WorldCommand

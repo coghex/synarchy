@@ -3,6 +3,7 @@ module Engine.Loop.Frame
   ( drawFrame
   , updateUniformBufferForFrame
   , submitFrame
+  , computeAmbientLight
   ) where
 
 import UPrelude
@@ -48,6 +49,23 @@ import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_KHR_swapchain hiding (acquireNextImageKHRSafe)
 import GHC.Stack (HasCallStack)
 
+-- | Compute ambient light from sun angle
+-- Bright during the day, dark at night, smooth transitions at dawn/dusk
+computeAmbientLight ∷ Float → Float
+computeAmbientLight sunAngle =
+    let angle = sunAngle * 2.0 * pi
+        sunHeight = sin angle
+        -- During day (sunHeight > 0): ambient = 0.6..1.0
+        -- During night (sunHeight < 0): ambient = 0.15..0.6
+        -- Smooth transition via sunHeight
+    in if sunHeight >= 0
+       then 0.6 + 0.4 * sunHeight   -- day: 0.6 at horizon, 1.0 at noon
+       else 0.15 + 0.45 * (1.0 + sunHeight)  -- night: 0.15 at midnight, 0.6 at horizon
+
+-- | Sun cycle speed: full cycle every 600 seconds
+sunCycleSpeed ∷ Double
+sunCycleSpeed = 1.0 / 600.0
+
 -- | Draw a single frame
 drawFrame ∷ EngineM ε σ ()
 drawFrame = do
@@ -83,12 +101,10 @@ drawFrame = do
         Left ERROR_OUT_OF_DATE_KHR → do
             logInfoM CatGraphics "Swapchain out of date on acquire, recreating..."
             recreateSwapchain window
-            -- Fence is still signaled, next frame will wait and it will return immediately
         
         Left SUBOPTIMAL_KHR → do
             logDebugM CatGraphics "Swapchain suboptimal on acquire, recreating..."
             recreateSwapchain window
-            -- Fence is still signaled, next frame will wait and it will return immediately
         
         Left err → logAndThrowM CatGraphics
           (ExGraphics SwapchainError) $ T.pack $
@@ -100,6 +116,15 @@ drawFrame = do
             
             -- NOW reset fence since we're definitely going to submit
             liftIO $ resetFences device (V.singleton (frInFlight resources))
+
+            -- Tick the sun angle
+            env ← ask
+            dt ← gets (deltaTime . timingState)
+            liftIO $ atomicModifyIORef' (sunAngleRef env) $ \sa →
+                let sa' = sa + realToFrac (dt * sunCycleSpeed)
+                    -- Wrap around [0, 1)
+                    sa'' = sa' - fromIntegral (floor sa' ∷ Int)
+                in (sa'', ())
 
             -- 1. Collect world tile quads
             worldTileQuads ← updateWorldTiles
@@ -250,6 +275,9 @@ updateUniformBufferForFrame win frameIdx = do
             camera ← liftIO $ readIORef (cameraRef env)
             brightness ← liftIO $ readIORef (brightnessRef env)
             pixelSnap ← liftIO $ readIORef (pixelSnapRef env)
+            sunAngle ← liftIO $ readIORef (sunAngleRef env)
+            
+            let ambientLight = computeAmbientLight sunAngle
             
             -- Update UI camera to use framebuffer dimensions
             let uiCamera = UICamera (fromIntegral fbWidth) (fromIntegral fbHeight)
@@ -261,6 +289,8 @@ updateUniformBufferForFrame win frameIdx = do
                               (brightnessToMultiplier brightness)
                               (fromIntegral fbWidth) (fromIntegral fbHeight)
                               (if pixelSnap then 1.0 else 0.0)
+                              sunAngle
+                              ambientLight
             
             liftIO $ writeIORef (windowSizeRef env) (winWidth, winHeight)
             liftIO $ writeIORef (framebufferSizeRef env) (fbWidth, fbHeight)

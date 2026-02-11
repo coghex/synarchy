@@ -299,6 +299,8 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
         ]
 
 -- | Generate quad vertices for a UI element
+-- faceMapId = 0 → default face map (UI uses the UI pipeline which
+-- ignores face-map lighting entirely, so this value is just padding)
 makeQuadVertices :: Float -> Float -> Float -> Float 
                  -> (Float, Float, Float, Float) 
                  -> Float
@@ -310,11 +312,12 @@ makeQuadVertices x y w h (cr, cg, cb, ca) atlasId =
         y1 = y + h
         
         col = Vec4 cr cg cb ca
+        fmId = 0  -- default face map for UI
         
-        v1' = Vertex (Vec2 x0 y0) (Vec2 0 0) col atlasId
-        v2' = Vertex (Vec2 x1 y0) (Vec2 1 0) col atlasId
-        v3' = Vertex (Vec2 x0 y1) (Vec2 0 1) col atlasId
-        v4' = Vertex (Vec2 x1 y0) (Vec2 1 0) col atlasId
-        v5' = Vertex (Vec2 x1 y1) (Vec2 1 1) col atlasId
-        v6' = Vertex (Vec2 x0 y1) (Vec2 0 1) col atlasId
+        v1' = Vertex (Vec2 x0 y0) (Vec2 0 0) col atlasId fmId
+        v2' = Vertex (Vec2 x1 y0) (Vec2 1 0) col atlasId fmId
+        v3' = Vertex (Vec2 x0 y1) (Vec2 0 1) col atlasId fmId
+        v4' = Vertex (Vec2 x1 y0) (Vec2 1 0) col atlasId fmId
+        v5' = Vertex (Vec2 x1 y1) (Vec2 1 1) col atlasId fmId
+        v6' = Vertex (Vec2 x0 y1) (Vec2 0 1) col atlasId fmId
     in V.fromList [v1', v2', v3', v4', v5', v6']

@@ -89,6 +89,7 @@ defaultEngineState = EngineState
     , vertexBuffer           = Nothing
     , uniformBuffers         = Nothing
     , textureSystem          = Nothing
+    , defaultFaceMapSlot     = 0
     , bindlessPipeline       = Nothing
     , bindlessUIPipeline     = Nothing
     , fontPipeline           = Nothing

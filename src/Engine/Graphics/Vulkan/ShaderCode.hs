@@ -9,6 +9,7 @@ module Engine.Graphics.Vulkan.ShaderCode
     , bindlessVertexShaderCode
     , bindlessFragmentShaderCode
     , bindlessUIVertexShaderCode
+    , bindlessUIFragmentShaderCode
     ) where
 
 import Vulkan.Utils.ShaderQQ.GLSL.Glslang (vert, frag)
@@ -36,6 +37,8 @@ fontVertexShaderCode = [vert|
         float screenW;
         float screenH;
         float pixelSnap;
+        float sunAngle;
+        float ambientLight;
     } ubo;
 
     layout(location = 0) out vec2 fragTexCoord;
@@ -81,7 +84,7 @@ fontFragmentShaderCode = [frag|
     }
 |]
 
--- | Bindless vertex shader (world camera)
+-- | Bindless vertex shader (world camera) with face map support
 -- Pixel snap: shifts all vertices uniformly by removing the fractional
 -- pixel offset, so quads translate rigidly without distortion
 bindlessVertexShaderCode :: BS.ByteString
@@ -93,6 +96,7 @@ bindlessVertexShaderCode = [vert|
     layout(location = 1) in vec2 inTexCoord;
     layout(location = 2) in vec4 inColor;
     layout(location = 3) in float inTexIndex;
+    layout(location = 4) in float inFaceMapIndex;
 
     layout(set = 0, binding = 0) uniform UniformBufferObject {
         mat4 model;
@@ -104,12 +108,17 @@ bindlessVertexShaderCode = [vert|
         float screenW;
         float screenH;
         float pixelSnap;
+        float sunAngle;
+        float ambientLight;
     } ubo;
 
     layout(location = 0) out vec2 fragTexCoord;
     layout(location = 1) out vec4 fragColor;
     layout(location = 2) out flat int fragTexIndex;
     layout(location = 3) out float fragBrightness;
+    layout(location = 4) out flat int fragFaceMapIndex;
+    layout(location = 5) out float fragSunAngle;
+    layout(location = 6) out float fragAmbientLight;
 
     void main() {
         vec4 worldPos = ubo.model * vec4(inPosition.xy, 0.0, 1.0);
@@ -127,12 +136,114 @@ bindlessVertexShaderCode = [vert|
         fragColor = inColor;
         fragTexIndex = int(inTexIndex);
         fragBrightness = ubo.brightness;
+        fragFaceMapIndex = int(inFaceMapIndex);
+        fragSunAngle = ubo.sunAngle;
+        fragAmbientLight = ubo.ambientLight;
     }
 |]
 
--- | Bindless fragment shader
+-- | Bindless fragment shader with face-map directional lighting
+-- Used for world-space rendering (tiles, scene sprites)
 bindlessFragmentShaderCode :: BS.ByteString
 bindlessFragmentShaderCode = [frag|
+    #version 450
+    #extension GL_ARB_separate_shader_objects : enable
+    #extension GL_EXT_nonuniform_qualifier : enable
+
+    layout(location = 0) in vec2 fragTexCoord;
+    layout(location = 1) in vec4 fragColor;
+    layout(location = 2) in flat int fragTexIndex;
+    layout(location = 3) in float fragBrightness;
+    layout(location = 4) in flat int fragFaceMapIndex;
+    layout(location = 5) in float fragSunAngle;
+    layout(location = 6) in float fragAmbientLight;
+
+    layout(set = 1, binding = 0) uniform sampler2D textures[16384];
+
+    layout(location = 0) out vec4 outColor;
+
+    void main() {
+        vec4 texColor = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord);
+
+        // Sample face map
+        vec3 faceRaw = texture(textures[nonuniformEXT(fragFaceMapIndex)], fragTexCoord).rgb;
+
+        // Normalize weights (R=right, G=top, B=left)
+        float total = faceRaw.r + faceRaw.g + faceRaw.b;
+        vec3 weights;
+        if (total < 0.001) {
+            // Default to pure top-facing
+            weights = vec3(0.0, 1.0, 0.0);
+        } else {
+            weights = faceRaw / total;
+        }
+
+        // Compute sun parameters from sunAngle (0..1 full cycle)
+        float angle = fragSunAngle * 6.28318530718; // 2*PI
+        float sunHeight = sin(angle);   // peaks at noon (0.25), negative at night
+        float sunDir    = cos(angle);   // positive = east (lights left), negative = west (lights right)
+        float ambient   = fragAmbientLight;
+
+        // Per-face brightness
+        float topBright   = ambient + (1.0 - ambient) * max(0.0, sunHeight);
+        float leftBright  = ambient + (1.0 - ambient) * max(0.0, sunHeight) * max(0.0, sunDir) * 0.8;
+        float rightBright = ambient + (1.0 - ambient) * max(0.0, sunHeight) * max(0.0, -sunDir) * 0.8;
+
+        // Blend per-face lighting by face map weights
+        float brightness = weights.r * rightBright + weights.g * topBright + weights.b * leftBright;
+
+        // Apply global brightness multiplier and vertex color
+        vec4 color = texColor * fragColor;
+        color.rgb *= brightness * fragBrightness;
+        outColor = color;
+    }
+|]
+
+-- | Bindless UI vertex shader (uses UI camera matrices)
+-- NO pixel snap — UI vertices are already in integer pixel coordinates,
+-- and the orthographic projection maps them 1:1 to screen pixels.
+bindlessUIVertexShaderCode :: BS.ByteString
+bindlessUIVertexShaderCode = [vert|
+    #version 450
+    #extension GL_ARB_separate_shader_objects : enable
+
+    layout(location = 0) in vec2 inPosition;
+    layout(location = 1) in vec2 inTexCoord;
+    layout(location = 2) in vec4 inColor;
+    layout(location = 3) in float inTexIndex;
+    layout(location = 4) in float inFaceMapIndex;
+
+    layout(set = 0, binding = 0) uniform UniformBufferObject {
+        mat4 model;
+        mat4 view;
+        mat4 proj;
+        mat4 uiView;
+        mat4 uiProj;
+        float brightness;
+        float screenW;
+        float screenH;
+        float pixelSnap;
+        float sunAngle;
+        float ambientLight;
+    } ubo;
+
+    layout(location = 0) out vec2 fragTexCoord;
+    layout(location = 1) out vec4 fragColor;
+    layout(location = 2) out flat int fragTexIndex;
+    layout(location = 3) out float fragBrightness;
+
+    void main() {
+        gl_Position = ubo.uiProj * vec4(inPosition.xy, 0.0, 1.0);
+        fragTexCoord = inTexCoord;
+        fragColor = inColor;
+        fragTexIndex = int(inTexIndex);
+        fragBrightness = ubo.brightness;
+    }
+|]
+
+-- | Bindless UI fragment shader — no face-map lighting, UI is unaffected by day/night
+bindlessUIFragmentShaderCode :: BS.ByteString
+bindlessUIFragmentShaderCode = [frag|
     #version 450
     #extension GL_ARB_separate_shader_objects : enable
     #extension GL_EXT_nonuniform_qualifier : enable
@@ -154,53 +265,8 @@ bindlessFragmentShaderCode = [frag|
     }
 |]
 
--- | Bindless UI vertex shader (uses UI camera matrices)
--- NO pixel snap — UI vertices are already in integer pixel coordinates,
--- and the orthographic projection maps them 1:1 to screen pixels.
--- Applying pixel snap here causes seams in 9-tile boxes because the
--- snap-to-pixel roundtrip through the projection matrix introduces
--- rounding errors between adjacent tile edges.
-bindlessUIVertexShaderCode :: BS.ByteString
-bindlessUIVertexShaderCode = [vert|
-    #version 450
-    #extension GL_ARB_separate_shader_objects : enable
-
-    layout(location = 0) in vec2 inPosition;
-    layout(location = 1) in vec2 inTexCoord;
-    layout(location = 2) in vec4 inColor;
-    layout(location = 3) in float inTexIndex;
-
-    layout(set = 0, binding = 0) uniform UniformBufferObject {
-        mat4 model;
-        mat4 view;
-        mat4 proj;
-        mat4 uiView;
-        mat4 uiProj;
-        float brightness;
-        float screenW;
-        float screenH;
-        float pixelSnap;
-    } ubo;
-
-    layout(location = 0) out vec2 fragTexCoord;
-    layout(location = 1) out vec4 fragColor;
-    layout(location = 2) out flat int fragTexIndex;
-    layout(location = 3) out float fragBrightness;
-
-    void main() {
-        gl_Position = ubo.uiProj * vec4(inPosition.xy, 0.0, 1.0);
-        fragTexCoord = inTexCoord;
-        fragColor = inColor;
-        fragTexIndex = int(inTexIndex);
-        fragBrightness = ubo.brightness;
-    }
-|]
-
 -- | Font UI vertex shader (uses UI projection matrix)
 -- NO pixel snap — same reasoning as bindlessUIVertexShaderCode.
--- Font positions are already in pixel coordinates; the orthographic
--- projection handles the mapping. CPU-side rounding in layoutTextUI
--- is sufficient.
 fontUIVertexShaderCode :: BS.ByteString
 fontUIVertexShaderCode = [vert|
     #version 450
@@ -222,6 +288,8 @@ fontUIVertexShaderCode = [vert|
         float screenW;
         float screenH;
         float pixelSnap;
+        float sunAngle;
+        float ambientLight;
     } ubo;
 
     layout(location = 0) out vec2 fragTexCoord;
