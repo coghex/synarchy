@@ -10,8 +10,8 @@ worldManager.active = false
 
 function worldManager.createWorld(params)
     local worldId = params.worldId or "main_world"
-    local grassTexture = params.grassTexture
-    local grassFaceMap = params.grassFaceMap
+    local graniteTexture = params.graniteTexture
+    local isoFaceMap = params.isoFaceMap
     local seed = params.seed or 42
     local worldSize = params.worldSize or 64
     
@@ -21,14 +21,12 @@ function worldManager.createWorld(params)
     -- Send init command with seed and world size
     world.init(worldId, seed, worldSize)
     
-    if grassTexture then
-        world.setTexture(worldId, "grass", grassTexture)
-        engine.logInfo("Set grass texture: " .. tostring(grassTexture))
+    if graniteTexture then
+        world.setTexture(worldId, "granite", graniteTexture)
     end
     
-    if grassFaceMap then
-        world.setTexture(worldId, "grass_facemap", grassFaceMap)
-        engine.logInfo("Set grass face map: " .. tostring(grassFaceMap))
+    if isoFaceMap then
+        world.setTexture(worldId, "iso_facemap", isoFaceMap)
     end
     
     worldManager.currentWorld = worldId

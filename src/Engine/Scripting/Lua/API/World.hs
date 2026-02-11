@@ -162,6 +162,6 @@ worldSetTimeScaleFn env = do
     return 0
 
 parseTextureType :: Text -> WorldTextureType
-parseTextureType "grass"         = GrassTexture
-parseTextureType "grass_facemap" = GrassFaceMap
-parseTextureType _               = GrassTexture
+parseTextureType "granite"     = GraniteTexture
+parseTextureType "iso_facemap" = IsoFaceMap
+parseTextureType _             = NoTexture

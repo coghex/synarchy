@@ -273,8 +273,8 @@ handleWorldCommand env logger cmd = do
             case lookup pageId (wmWorlds mgr) of
                 Just worldState -> do
                     let updateTextures wt = case texType of
-                            GrassTexture -> wt { wtGrassTexture = texHandle }
-                            GrassFaceMap -> wt { wtGrassFaceMap = texHandle }
+                            GraniteTexture -> wt { wtGraniteTexture = texHandle }
+                            IsoFaceMap -> wt { wtIsoFaceMap = texHandle }
                     atomicModifyIORef' (wsTexturesRef worldState) 
                         (\wt -> (updateTextures wt, ()))
                     logDebug logger CatWorld $ 

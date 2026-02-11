@@ -96,7 +96,7 @@ generateColumn :: Int -> Int -> Int -> [((Int, Int, Int), Tile)]
 generateColumn lx ly surfaceZ =
     let fillDepth = 3  -- how many tiles below surface to fill for cliff faces
         lo = surfaceZ - fillDepth
-    in [ ((lx, ly, z), Tile 1)
+    in [ ((lx, ly, z), Tile 1 0)
        | z <- [lo .. surfaceZ]
        ]
 

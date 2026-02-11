@@ -43,12 +43,14 @@ data LoadedChunk = LoadedChunk
 data WorldGenParams = WorldGenParams
     { wgpSeed       :: !Word64
     , wgpWorldSize  :: !Int     -- ^ World size in chunks (e.g. 64 → 64×64 chunks)
+    , wgpPlateCount :: !Int     -- ^ Number of tectonic plates (for worldgen)
     } deriving (Show, Eq)
 
 defaultWorldGenParams :: WorldGenParams
 defaultWorldGenParams = WorldGenParams
     { wgpSeed      = 42
     , wgpWorldSize = 64
+    , wgpPlateCount = 10
     }
 
 -----------------------------------------------------------
@@ -57,6 +59,7 @@ defaultWorldGenParams = WorldGenParams
 
 data Tile = Tile
     { tileType :: Word8
+    , tileSlopeId :: Word8
     } deriving (Show, Eq)
 
 data WorldTileData = WorldTileData
@@ -100,14 +103,14 @@ data WorldCamera = WorldCamera
 -----------------------------------------------------------
 
 data WorldTextures = WorldTextures
-    { wtGrassTexture  :: TextureHandle
-    , wtGrassFaceMap  :: TextureHandle
+    { wtGraniteTexture  :: TextureHandle
+    , wtIsoFaceMap      :: TextureHandle
     } deriving (Show, Eq)
 
 defaultWorldTextures :: WorldTextures
 defaultWorldTextures = WorldTextures
-    { wtGrassTexture  = TextureHandle 0
-    , wtGrassFaceMap  = TextureHandle 0
+    { wtGraniteTexture  = TextureHandle 0
+    , wtIsoFaceMap      = TextureHandle 0
     }
 
 -----------------------------------------------------------
@@ -210,8 +213,9 @@ emptyWorldManager = WorldManager
 -----------------------------------------------------------
 
 data WorldTextureType
-    = GrassTexture
-    | GrassFaceMap
+    = GraniteTexture
+    | NoTexture
+    | IsoFaceMap
     deriving (Show, Eq)
 
 data WorldCommand

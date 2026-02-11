@@ -7,8 +7,8 @@ worldView.page = nil
 worldView.visible = false
 worldView.fbW = 0
 worldView.fbH = 0
-worldView.grassTexture = nil
-worldView.grassFaceMap = nil
+worldView.graniteTexture = nil
+worldView.graniteFaceMap = nil
 worldView.texturesLoaded = false
 worldView.faceMapLoaded = false
 
@@ -21,11 +21,9 @@ function worldView.init(width, height)
     worldView.fbH = height
     
     -- Load world textures
-    worldView.grassTexture = engine.loadTexture("assets/textures/world/grass/grass.png")
-    worldView.grassFaceMap = engine.loadTexture("assets/textures/world/grass/grassface.png")
+    worldView.graniteTexture = engine.loadTexture("assets/textures/world/granite/granite.png")
+    worldView.graniteFaceMap = engine.loadTexture("assets/textures/world/facemap/isoface.png")
     
-    engine.logInfo("World view initialized, grass texture handle: " .. tostring(worldView.grassTexture)
-        .. ", grass face map handle: " .. tostring(worldView.grassFaceMap))
 end
 
 -----------------------------------------------------------
@@ -36,14 +34,12 @@ function worldView.onAssetLoaded(assetType, handle, path)
     engine.logDebug("Asset loaded callback: " .. assetType .. " handle=" .. tostring(handle) .. " path=" .. path)
     
     if assetType == "texture" then
-        if handle == worldView.grassTexture then
+        if handle == worldView.graniteTexture then
             worldView.texturesLoaded = true
-            engine.logDebug("World textures loaded - GRASS TEXTURE READY")
-        elseif handle == worldView.grassFaceMap then
+        elseif handle == worldView.graniteFaceMap then
             worldView.faceMapLoaded = true
-            engine.logDebug("World textures loaded - GRASS FACE MAP READY")
         else
-            engine.logDebug("Texture loaded but not grass: " .. tostring(handle))
+            engine.logDebug("Texture loaded but not granite: " .. tostring(handle))
         end
         
         -- Only create world once BOTH textures are loaded
@@ -61,11 +57,6 @@ end
 -----------------------------------------------------------
 
 function worldView.createWorld()
-    engine.logInfo("createWorld called, texturesLoaded=" .. tostring(worldView.texturesLoaded)
-        .. " faceMapLoaded=" .. tostring(worldView.faceMapLoaded)
-        .. " grassTexture=" .. tostring(worldView.grassTexture)
-        .. " grassFaceMap=" .. tostring(worldView.grassFaceMap))
-    
     if not worldView.texturesLoaded or not worldView.faceMapLoaded then
         engine.logWarn("Cannot create world, textures not loaded yet")
         return
@@ -78,8 +69,8 @@ function worldView.createWorld()
     
     worldManager.createWorld({ 
         worldId = "main_world",
-        grassTexture = worldView.grassTexture,
-        grassFaceMap = worldView.grassFaceMap,
+        graniteTexture = worldView.graniteTexture,
+        graniteFaceMap = worldView.graniteFaceMap,
     })
     worldManager.showWorld()
 end
