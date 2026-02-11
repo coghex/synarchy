@@ -38,7 +38,7 @@ chunkLoadRadius = 2
 -- | How many z-levels below the z-slice are rendered.
 --   This is a RENDER window, not a generation limit.
 viewDepth :: Int
-viewDepth = 50
+viewDepth = 100
 
 -----------------------------------------------------------
 -- Coordinate Helpers

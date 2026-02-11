@@ -25,11 +25,11 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
-import World.Generate (chunkSize, chunkToGlobal, chunkWorldBounds, viewDepth)
+import World.Generate (chunkSize, chunkToGlobal, chunkWorldBounds, viewDepth
+                      , globalToChunk)
 import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer,
                    tileHalfWidth, tileHalfDiamondHeight, zoomFadeStart, zoomFadeEnd
                    , worldToGrid, zoomFadeStart, zoomFadeEnd)
-import World.Plate (generatePlates, elevationAtGlobal)
 import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
 import qualified Data.Vector as V
 
@@ -71,15 +71,13 @@ updateWorldTiles = do
         forM_ (wmVisible worldManager') $ \pageId ->
             case lookup pageId (wmWorlds worldManager') of
                 Just worldState -> do
-                    mParams <- liftIO $ readIORef (wsGenParamsRef worldState)
-                    case mParams of
-                        Just params -> do
-                            let seed = wgpSeed params
-                                worldSize = wgpWorldSize params
-                                plates = generatePlates seed (wgpWorldSize params) (wgpPlateCount params)
-                                (camX, camY) = camPosition camera
-                                (gx, gy) = worldToGrid camX camY
-                                (surfElev, _) = elevationAtGlobal seed plates worldSize gx gy
+                    tileData <- liftIO $ readIORef (wsTilesRef worldState)
+                    let (camX, camY) = camPosition camera
+                        (gx, gy) = worldToGrid camX camY
+                        (chunkCoord, (lx, ly)) = globalToChunk gx gy
+                    case lookupChunk chunkCoord tileData of
+                        Just lc -> do
+                            let surfElev = HM.lookupDefault 0 (lx, ly) (lcSurfaceMap lc)
                                 targetZ = surfElev + 3
                             liftIO $ atomicModifyIORef' (cameraRef env) $ \cam ->
                                 (cam { camZSlice = targetZ }, ())
