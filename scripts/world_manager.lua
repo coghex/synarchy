@@ -59,6 +59,21 @@ function worldManager.createWorld(params)
     if params.zoomGlacier then
         world.setTexture(worldId, "zoom_glacier", params.zoomGlacier)
     end
+    if params.bgGranite then
+        world.setTexture(worldId, "bg_granite", params.bgGranite)
+    end
+    if params.bgDiorite then
+        world.setTexture(worldId, "bg_diorite", params.bgDiorite)
+    end
+    if params.bgGabbro then
+        world.setTexture(worldId, "bg_gabbro", params.bgGabbro)
+    end
+    if params.bgOcean then
+        world.setTexture(worldId, "bg_ocean", params.bgOcean)
+    end
+    if params.bgGlacier then
+        world.setTexture(worldId, "bg_glacier", params.bgGlacier)
+    end
     
     worldManager.currentWorld = worldId
     

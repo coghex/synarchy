@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module World.ZoomMap
     ( generateZoomMapQuads
+    , generateBackgroundQuads
     , buildZoomCache
     ) where
 
@@ -23,7 +24,7 @@ import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
 import World.Generate (chunkSize)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
-                   zoomFadeStart, zoomFadeEnd)
+                   zoomFadeStart, zoomFadeEnd, backgroundMapLayer)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
@@ -224,8 +225,121 @@ getZoomTexture textures 2 _ = wtZoomDiorite textures
 getZoomTexture textures 3 _ = wtZoomGabbro textures
 getZoomTexture textures _ _ = wtZoomGranite textures
 
+getBgTexture :: WorldTextures -> Word8 -> Int -> TextureHandle
+getBgTexture textures 250 _ = wtBgGlacier textures
+getBgTexture textures _mat elev
+    | elev < -100 = wtBgOcean textures
+getBgTexture textures 1 _ = wtBgGranite textures
+getBgTexture textures 2 _ = wtBgDiorite textures
+getBgTexture textures 3 _ = wtBgGabbro textures
+getBgTexture textures _ _ = wtBgGranite textures
+
 clamp01 :: Float -> Float
 clamp01 x
     | x < 0    = 0
     | x > 1    = 1
     | otherwise = x
+
+-----------------------------------------------------------
+-- Generate Background Quads (called every frame)
+-----------------------------------------------------------
+
+generateBackgroundQuads :: EngineM ε σ (V.Vector SortableQuad)
+generateBackgroundQuads = do
+    env <- ask
+    camera <- liftIO $ readIORef (cameraRef env)
+    (fbW, fbH) <- liftIO $ readIORef (framebufferSizeRef env)
+    worldManager <- liftIO $ readIORef (worldManagerRef env)
+
+    -- Always render at full opacity, no zoom check
+    quads <- forM (wmVisible worldManager) $ \pageId ->
+        case lookup pageId (wmWorlds worldManager) of
+            Just worldState -> renderBackgroundFromCache env worldState camera
+                                 fbW fbH
+            Nothing         -> return V.empty
+    return $ V.concat quads
+
+-----------------------------------------------------------
+-- Render Background From Cache
+-----------------------------------------------------------
+
+renderBackgroundFromCache :: EngineEnv -> WorldState -> Camera2D
+                          -> Int -> Int
+                          -> EngineM ε σ (V.Vector SortableQuad)
+renderBackgroundFromCache env worldState camera fbW fbH = do
+    mParams  <- liftIO $ readIORef (wsGenParamsRef worldState)
+    textures <- liftIO $ readIORef (wsTexturesRef worldState)
+    cache    <- liftIO $ readIORef (wsZoomCacheRef worldState)
+
+    case mParams of
+        Nothing -> return V.empty
+        Just params -> do
+            let vb = computeZoomViewBounds camera fbW fbH
+                wsw = worldScreenWidth (wgpWorldSize params)
+
+            -- Iterate the cached entries using background textures
+            let visible = V.concatMap (bgEntryToQuads vb wsw textures) cache
+
+            quads <- V.mapM (\(ccx, ccy, th, dx, dy) ->
+                chunkToBackgroundQuad th dx dy ccx ccy) visible
+
+            return quads
+
+-- | For a single cached entry, produce 0-3 candidate quads
+--   (base position and ±1 wrap) using background textures.
+bgEntryToQuads :: ZoomViewBounds -> Float -> WorldTextures
+               -> ZoomChunkEntry
+               -> V.Vector (Int, Int, TextureHandle, Float, Float)
+bgEntryToQuads vb wsw textures entry =
+    let ccx = zceChunkX entry
+        ccy = zceChunkY entry
+        baseX = zceDrawX entry
+        baseY = zceDrawY entry
+        texHandle = getBgTexture textures (zceTexIndex entry) (zceElev entry)
+
+        candidates = filter (\(_, _, _, dx, dy) -> isChunkInView vb dx dy)
+            [ (ccx, ccy, texHandle, baseX - wsw, baseY)
+            , (ccx, ccy, texHandle, baseX,       baseY)
+            , (ccx, ccy, texHandle, baseX + wsw, baseY)
+            ]
+    in V.fromList candidates
+
+-----------------------------------------------------------
+-- Chunk to Background Quad
+-----------------------------------------------------------
+
+chunkToBackgroundQuad :: TextureHandle
+                      -> Float -> Float
+                      -> Int -> Int
+                      -> EngineM ε σ SortableQuad
+chunkToBackgroundQuad texHandle drawX drawY ccx ccy = do
+    gs <- gets graphicsState
+    let actualSlot = case textureSystem gs of
+          Just bindless -> getTextureSlotIndex texHandle bindless
+          Nothing       -> 0
+
+        fmSlot = fromIntegral (defaultFaceMapSlot gs)
+
+        -- Always full opacity for background
+        tint = Vec4 1.0 1.0 1.0 1.0
+
+        sortKey = fromIntegral (ccx + ccy)
+
+        w = chunkWorldWidth
+        h = chunkWorldDiamondHeight
+
+        vertices = V.fromList
+            [ Vertex (Vec2 drawX drawY)               (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + w) drawY)          (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + w) (drawY + h))    (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 drawX drawY)                (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 (drawX + w) (drawY + h))    (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+            , Vertex (Vec2 drawX (drawY + h))          (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+            ]
+
+    return $ SortableQuad
+        { sqSortKey  = sortKey
+        , sqVertices = vertices
+        , sqTexture  = texHandle
+        , sqLayer    = backgroundMapLayer
+        }

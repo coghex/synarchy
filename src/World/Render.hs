@@ -30,7 +30,7 @@ import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLay
                    tileHalfWidth, tileHalfDiamondHeight, zoomFadeStart, zoomFadeEnd
                    , worldToGrid, zoomFadeStart, zoomFadeEnd)
 import World.Plate (generatePlates, elevationAtGlobal)
-import World.ZoomMap (generateZoomMapQuads)
+import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
@@ -57,6 +57,8 @@ updateWorldTiles = do
         tileAlpha = clamp01 (1.0 - (zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
 
     worldManager <- liftIO $ readIORef (worldManagerRef env)
+
+    bgQuads <- generateBackgroundQuads
 
     tileQuads <- if tileAlpha <= 0.001
         then return V.empty
@@ -89,9 +91,10 @@ updateWorldTiles = do
                         Nothing -> return ()
                 Nothing -> return ()
 
-    let allQuads = tileQuads <> zoomQuads
+    let allQuads = bgQuads <> tileQuads <> zoomQuads
     liftIO $ logDebug logger CatWorld $
-        "Generated " <> T.pack (show $ V.length tileQuads) <> " tile quads, "
+        "Generated " <> T.pack (show $ V.length bgQuads) <> " background quads, "
+        <> T.pack (show $ V.length tileQuads) <> " tile quads, "
         <> T.pack (show $ V.length zoomQuads) <> " zoom quads"
 
     return allQuads

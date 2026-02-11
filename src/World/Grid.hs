@@ -13,6 +13,7 @@ module World.Grid
       -- * Layer constants
     , worldLayer
     , uiLayerThreshold
+    , backgroundMapLayer
       -- * Coordinate conversions
     , gridToWorld
     , gridToScreen
@@ -105,6 +106,10 @@ worldLayer = gcWorldLayer defaultGridConfig
 -- | Layers >= this threshold use the UI pipeline
 uiLayerThreshold :: LayerId
 uiLayerThreshold = gcUILayerThreshold defaultGridConfig
+
+-- | Layer for background zoom map (renders behind everything)
+backgroundMapLayer :: LayerId
+backgroundMapLayer = LayerId 0
 
 -- | Camera pan speed in world-space units per second
 cameraPanSpeed :: Float
