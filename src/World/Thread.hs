@@ -11,6 +11,7 @@ import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef', newIORef)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Monad (forever)
 import Control.Exception (SomeException, catch)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
@@ -30,7 +31,8 @@ startWorldThread env = do
     threadId <- catch
         (do
             logInfo logger CatWorld "Starting world thread..."
-            tid <- forkIO $ worldLoop env stateRef
+            lastTimeRef <- getPOSIXTime >>= newIORef . realToFrac
+            tid <- forkIO $ worldLoop env stateRef lastTimeRef
             logInfo logger CatWorld "World thread started"
             return tid
         )
@@ -45,8 +47,8 @@ startWorldThread env = do
 -- World Loop
 -----------------------------------------------------------
 
-worldLoop :: EngineEnv -> IORef ThreadControl -> IO ()
-worldLoop env stateRef = do
+worldLoop :: EngineEnv -> IORef ThreadControl -> IORef Double -> IO ()
+worldLoop env stateRef lastTimeRef = do
     control <- readIORef stateRef
     logger <- readIORef (loggerRef env)
     
@@ -56,19 +58,64 @@ worldLoop env stateRef = do
             pure ()
         ThreadPaused -> do
             threadDelay 100000
-            worldLoop env stateRef
+            worldLoop env stateRef lastTimeRef
         ThreadRunning -> do
+            -- Calculate delta time
+            now <- realToFrac <$> getPOSIXTime
+            lastTime <- readIORef lastTimeRef
+            let dt = now - lastTime :: Double
+            writeIORef lastTimeRef now
+            
             -- Process all pending commands
-            mCmd <- Q.tryReadQueue (worldQueue env)
-            case mCmd of
-                Just cmd -> handleWorldCommand env logger cmd
-                Nothing -> return ()
+            processAllCommands env logger
+            
+            -- Tick world time for all visible worlds and update sunAngleRef
+            tickWorldTime env (realToFrac dt)
             
             -- Check chunk loading for all visible worlds
             updateChunkLoading env logger
             
             threadDelay 16666
-            worldLoop env stateRef
+            worldLoop env stateRef lastTimeRef
+
+-- | Drain all pending commands from the queue
+processAllCommands :: EngineEnv -> LoggerState -> IO ()
+processAllCommands env logger = do
+    mCmd <- Q.tryReadQueue (worldQueue env)
+    case mCmd of
+        Just cmd -> do
+            handleWorldCommand env logger cmd
+            processAllCommands env logger  -- drain all pending
+        Nothing -> return ()
+
+-----------------------------------------------------------
+-- World Time Tick
+-----------------------------------------------------------
+
+-- | Advance time for all visible worlds, write sun angle to the shared ref.
+--   If multiple worlds are visible, the first one's time wins for sun angle.
+tickWorldTime :: EngineEnv -> Float -> IO ()
+tickWorldTime env dt = do
+    manager <- readIORef (worldManagerRef env)
+    
+    -- Tick each visible world's time
+    forM_ (wmVisible manager) $ \pageId ->
+        case lookup pageId (wmWorlds manager) of
+            Nothing -> return ()
+            Just worldState -> do
+                timeScale <- readIORef (wsTimeScaleRef worldState)
+                atomicModifyIORef' (wsTimeRef worldState) $ \wt ->
+                    (advanceWorldTime timeScale dt wt, ())
+    
+    -- Write sun angle from the first visible world
+    case wmVisible manager of
+        (pageId:_) -> case lookup pageId (wmWorlds manager) of
+            Just worldState -> do
+                wt <- readIORef (wsTimeRef worldState)
+                let sunAngle = worldTimeToSunAngle wt
+                atomicModifyIORef' (sunAngleRef env) $ \_ -> (sunAngle, ())
+            Nothing -> return ()
+        [] -> return ()
 
 -----------------------------------------------------------
 -- Chunk Loading
@@ -245,6 +292,47 @@ handleWorldCommand env logger cmd = do
                 Nothing -> 
                     logDebug logger CatWorld $ 
                         "World not found for camera update: " <> unWorldPageId pageId
+
+        WorldSetTime pageId hour minute -> do
+            logDebug logger CatWorld $
+                "Setting time for world: " <> unWorldPageId pageId
+                <> " to " <> T.pack (show hour) <> ":" <> T.pack (show minute)
+            mgr <- readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState -> do
+                    let clampedH = max 0 (min 23 hour)
+                        clampedM = max 0 (min 59 minute)
+                    atomicModifyIORef' (wsTimeRef worldState) $ \_ ->
+                        (WorldTime clampedH clampedM, ())
+                Nothing ->
+                    logDebug logger CatWorld $
+                        "World not found for time update: " <> unWorldPageId pageId
+
+        WorldSetDate pageId year month day -> do
+            logDebug logger CatWorld $
+                "Setting date for world: " <> unWorldPageId pageId
+                <> " to " <> T.pack (show year) <> "-"
+                <> T.pack (show month) <> "-" <> T.pack (show day)
+            mgr <- readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState ->
+                    atomicModifyIORef' (wsDateRef worldState) $ \_ ->
+                        (WorldDate year month day, ())
+                Nothing ->
+                    logDebug logger CatWorld $
+                        "World not found for date update: " <> unWorldPageId pageId
+
+        WorldSetTimeScale pageId scale -> do
+            logDebug logger CatWorld $
+                "Setting time scale for world: " <> unWorldPageId pageId
+                <> " to " <> T.pack (show scale) <> " game-min/real-sec"
+            mgr <- readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState ->
+                    writeIORef (wsTimeScaleRef worldState) scale
+                Nothing ->
+                    logDebug logger CatWorld $
+                        "World not found for time scale update: " <> unWorldPageId pageId
 
 unWorldPageId :: WorldPageId -> Text
 unWorldPageId (WorldPageId t) = t

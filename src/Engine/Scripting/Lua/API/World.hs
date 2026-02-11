@@ -6,6 +6,9 @@ module Engine.Scripting.Lua.API.World
     , worldSetTextureFn
     , worldSetCameraFn
     , worldSetSunAngleFn
+    , worldSetTimeFn
+    , worldSetDateFn
+    , worldSetTimeScaleFn
     ) where
 
 import UPrelude
@@ -35,7 +38,6 @@ worldInitFn env = do
     return 0
 
 -- | world.show(pageId)
--- Make a world page visible for rendering
 worldShowFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
 worldShowFn env = do
     pageIdArg <- Lua.tostring 1
@@ -49,7 +51,6 @@ worldShowFn env = do
     return 0
 
 -- | world.hide(pageId)
--- Hide a world page from rendering
 worldHideFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
 worldHideFn env = do
     pageIdArg <- Lua.tostring 1
@@ -63,7 +64,6 @@ worldHideFn env = do
     return 0
 
 -- | world.setTexture(pageId, textureType, textureHandle)
--- Set a texture for a specific tile type in a world
 worldSetTextureFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
 worldSetTextureFn env = do
     pageIdArg <- Lua.tostring 1
@@ -81,7 +81,6 @@ worldSetTextureFn env = do
     return 0
 
 -- | world.setCamera(pageId, x, y)
--- Sync camera position to world state for hit-testing / tile picking
 worldSetCameraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetCameraFn env = do
     pageIdArg ← Lua.tostring 1
@@ -97,6 +96,8 @@ worldSetCameraFn env = do
 
     return 0
 
+-- | world.setSunAngle(angle)
+-- Direct override of sun angle (0..1), bypasses time system
 worldSetSunAngleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetSunAngleFn env = do
     angleArg ← Lua.tonumber 1
@@ -108,7 +109,59 @@ worldSetSunAngleFn env = do
 
     return 0
 
+-- | world.setTime(pageId, hour, minute)
+-- Set the world clock. The world thread will compute sun angle from this.
+worldSetTimeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetTimeFn env = do
+    pageIdArg ← Lua.tostring 1
+    hourArg   ← Lua.tointeger 2
+    minuteArg ← Lua.tointeger 3
+
+    case (pageIdArg, hourArg, minuteArg) of
+        (Just pageIdBS, Just h, Just m) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env)
+                (WorldSetTime pageId (fromIntegral h) (fromIntegral m))
+        _ → pure ()
+
+    return 0
+
+-- | world.setDate(pageId, year, month, day)
+-- Set the world date. Currently unused for sun angle (placeholder for seasons).
+worldSetDateFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetDateFn env = do
+    pageIdArg ← Lua.tostring 1
+    yearArg   ← Lua.tointeger 2
+    monthArg  ← Lua.tointeger 3
+    dayArg    ← Lua.tointeger 4
+
+    case (pageIdArg, yearArg, monthArg, dayArg) of
+        (Just pageIdBS, Just y, Just mo, Just d) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env)
+                (WorldSetDate pageId (fromIntegral y) (fromIntegral mo) (fromIntegral d))
+        _ → pure ()
+
+    return 0
+
+-- | world.setTimeScale(pageId, scale)
+-- Set how fast time passes: game-minutes per real-second.
+-- 1.0 = real-time, 60.0 = 1 game-hour per real-second, 0.0 = paused
+worldSetTimeScaleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetTimeScaleFn env = do
+    pageIdArg ← Lua.tostring 1
+    scaleArg  ← Lua.tonumber 2
+
+    case (pageIdArg, scaleArg) of
+        (Just pageIdBS, Just (Lua.Number s)) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env)
+                (WorldSetTimeScale pageId (realToFrac s))
+        _ → pure ()
+
+    return 0
+
 parseTextureType :: Text -> WorldTextureType
 parseTextureType "grass"         = GrassTexture
 parseTextureType "grass_facemap" = GrassFaceMap
-parseTextureType _               = GrassTexture  -- Default
+parseTextureType _               = GrassTexture

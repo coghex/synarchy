@@ -36,7 +36,8 @@ import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn,
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
 import Engine.Scripting.Lua.API.World (worldInitFn, worldShowFn, worldHideFn
                                       , worldSetTextureFn, worldSetCameraFn
-                                      , worldSetSunAngleFn)
+                                      , worldSetSunAngleFn, worldSetTimeFn
+                                      , worldSetDateFn, worldSetTimeScaleFn)
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
@@ -191,6 +192,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setTexture" (worldSetTextureFn env)
   registerLuaFunction "setCamera" (worldSetCameraFn env)
   registerLuaFunction "setSunAngle" (worldSetSunAngleFn env)
+  registerLuaFunction "setTime" (worldSetTimeFn env)
+  registerLuaFunction "setDate" (worldSetDateFn env)
+  registerLuaFunction "setTimeScale" (worldSetTimeScaleFn env)
   Lua.setglobal (Lua.Name "world")
 
   -- Camera table

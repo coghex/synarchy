@@ -49,18 +49,13 @@ import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_KHR_swapchain hiding (acquireNextImageKHRSafe)
 import GHC.Stack (HasCallStack)
 
--- | Compute ambient light from sun angle
--- Bright during the day, dark at night, smooth transitions at dawn/dusk
 computeAmbientLight ∷ Float → Float
 computeAmbientLight sunAngle =
     let angle = sunAngle * 2.0 * pi
         sunHeight = sin angle
-        -- During day (sunHeight > 0): ambient = 0.6..1.0
-        -- During night (sunHeight < 0): ambient = 0.15..0.6
-        -- Smooth transition via sunHeight
     in if sunHeight >= 0
-       then 0.6 + 0.4 * sunHeight   -- day: 0.6 at horizon, 1.0 at noon
-       else 0.15 + 0.45 * (1.0 + sunHeight)  -- night: 0.15 at midnight, 0.6 at horizon
+       then 0.5 + 0.2 * sunHeight   -- day: 0.5 at horizon, 0.7 at noon
+       else 0.15 + 0.35 * (1.0 + sunHeight)  -- night: 0.15 at midnight, 0.5 at horizon
 
 -- | Sun cycle speed: full cycle every 600 seconds
 sunCycleSpeed ∷ Double
@@ -116,15 +111,6 @@ drawFrame = do
             
             -- NOW reset fence since we're definitely going to submit
             liftIO $ resetFences device (V.singleton (frInFlight resources))
-
-            -- Tick the sun angle
-            env ← ask
-            dt ← gets (deltaTime . timingState)
-            liftIO $ atomicModifyIORef' (sunAngleRef env) $ \sa →
-                let sa' = sa + realToFrac (dt * sunCycleSpeed)
-                    -- Wrap around [0, 1)
-                    sa'' = sa' - fromIntegral (floor sa' ∷ Int)
-                in (sa'', ())
 
             -- 1. Collect world tile quads
             worldTileQuads ← updateWorldTiles

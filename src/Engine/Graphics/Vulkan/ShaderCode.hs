@@ -184,10 +184,21 @@ bindlessFragmentShaderCode = [frag|
         float sunDir    = cos(angle);   // positive = east (lights left), negative = west (lights right)
         float ambient   = fragAmbientLight;
 
-        // Per-face brightness
-        float topBright   = ambient + (1.0 - ambient) * max(0.0, sunHeight);
-        float leftBright  = ambient + (1.0 - ambient) * max(0.0, sunHeight) * max(0.0, sunDir) * 0.8;
-        float rightBright = ambient + (1.0 - ambient) * max(0.0, sunHeight) * max(0.0, -sunDir) * 0.8;
+        // Directional intensity: how much direct sunlight is available
+        float sunIntensity = max(0.0, sunHeight);
+
+        // Top face: ambient + full direct sun
+        float topBright = ambient + (1.0 - ambient) * sunIntensity;
+
+        // Side faces: slightly darker base + directional bias from sun angle
+        // sideShadow controls how much darker sides are than top (0.85 = 15% darker)
+        float sideShadow = 0.85;
+        float sideAmbient = ambient * sideShadow;
+
+        // Directional component: the lit side gets more, shadow side gets less
+        float directStrength = (1.0 - ambient) * sunIntensity;
+        float leftBright  = sideAmbient + directStrength * (0.4 + 0.6 * max(0.0, sunDir));
+        float rightBright = sideAmbient + directStrength * (0.4 + 0.6 * max(0.0, -sunDir));
 
         // Blend per-face lighting by face map weights
         float brightness = weights.r * rightBright + weights.g * topBright + weights.b * leftBright;

@@ -101,13 +101,67 @@ data WorldCamera = WorldCamera
 
 data WorldTextures = WorldTextures
     { wtGrassTexture  :: TextureHandle
-    , wtGrassFaceMap  :: TextureHandle  -- ^ Face map for grass tiles
+    , wtGrassFaceMap  :: TextureHandle
     } deriving (Show, Eq)
 
 defaultWorldTextures :: WorldTextures
 defaultWorldTextures = WorldTextures
     { wtGrassTexture  = TextureHandle 0
-    , wtGrassFaceMap  = TextureHandle 0  -- will use defaultFaceMapSlot until set
+    , wtGrassFaceMap  = TextureHandle 0
+    }
+
+-----------------------------------------------------------
+-- World Time
+-----------------------------------------------------------
+
+-- | Time of day in the world.
+--   hour: 0-23, minute: 0-59
+--   sunAngle is derived: 0.0 = midnight, 0.25 = 6am (dawn),
+--                         0.5 = noon, 0.75 = 6pm (dusk)
+data WorldTime = WorldTime
+    { wtHour   :: !Int   -- ^ 0-23
+    , wtMinute :: !Int   -- ^ 0-59
+    } deriving (Show, Eq)
+
+defaultWorldTime :: WorldTime
+defaultWorldTime = WorldTime
+    { wtHour   = 10     -- start at 10:00am (pleasant morning light)
+    , wtMinute = 0
+    }
+
+-- | Convert world time to sun angle (0.0 .. 1.0)
+--   Mapping: midnight (0:00) = 0.0, 6am = 0.25, noon = 0.5, 6pm = 0.75
+worldTimeToSunAngle :: WorldTime -> Float
+worldTimeToSunAngle (WorldTime h m) =
+    let totalMinutes = fromIntegral h * 60.0 + fromIntegral m :: Float
+    in totalMinutes / 1440.0   -- 1440 = 24 * 60
+
+-- | Advance world time by a number of real seconds, scaled by a speed factor.
+--   Returns the new time (wraps at 24:00).
+--   timeScale: how many game-minutes pass per real-second.
+advanceWorldTime :: Float -> Float -> WorldTime -> WorldTime
+advanceWorldTime timeScale dtSeconds (WorldTime h m) =
+    let totalMinutes = fromIntegral h * 60 + fromIntegral m :: Float
+        newTotal = totalMinutes + timeScale * dtSeconds
+        -- Wrap around 1440 minutes (24 hours)
+        wrapped = newTotal - 1440.0 * fromIntegral (floor (newTotal / 1440.0) :: Int)
+        newH = floor wrapped `div` 60
+        newM = floor wrapped `mod` 60
+    in WorldTime (newH `mod` 24) (newM `mod` 60)
+
+-- | World date (placeholder for seasons).
+--   Currently unused for sun angle calculation.
+data WorldDate = WorldDate
+    { wdYear  :: !Int
+    , wdMonth :: !Int   -- ^ 1-12
+    , wdDay   :: !Int   -- ^ 1-31
+    } deriving (Show, Eq)
+
+defaultWorldDate :: WorldDate
+defaultWorldDate = WorldDate
+    { wdYear  = 1
+    , wdMonth = 1
+    , wdDay   = 1
     }
 
 -----------------------------------------------------------
@@ -119,15 +173,22 @@ data WorldState = WorldState
     , wsCameraRef    :: IORef WorldCamera
     , wsTexturesRef  :: IORef WorldTextures
     , wsGenParamsRef :: IORef (Maybe WorldGenParams)
+    , wsTimeRef      :: IORef WorldTime
+    , wsDateRef      :: IORef WorldDate
+    , wsTimeScaleRef :: IORef Float    -- ^ Game-minutes per real-second
     }
 
 emptyWorldState :: IO WorldState
 emptyWorldState = do
-    tilesRef    <- newIORef emptyWorldTileData
-    cameraRef   <- newIORef (WorldCamera 0 0)
-    texturesRef <- newIORef defaultWorldTextures
+    tilesRef     <- newIORef emptyWorldTileData
+    cameraRef    <- newIORef (WorldCamera 0 0)
+    texturesRef  <- newIORef defaultWorldTextures
     genParamsRef <- newIORef Nothing
+    timeRef      <- newIORef defaultWorldTime
+    dateRef      <- newIORef defaultWorldDate
+    timeScaleRef <- newIORef 1.0   -- 1 game-minute per real-second
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
+                        timeRef dateRef timeScaleRef
 
 -----------------------------------------------------------
 -- World Manager
@@ -160,4 +221,7 @@ data WorldCommand
     | WorldTick Double
     | WorldSetTexture WorldPageId WorldTextureType TextureHandle
     | WorldSetCamera WorldPageId Float Float
+    | WorldSetTime WorldPageId Int Int         -- ^ hour minute
+    | WorldSetDate WorldPageId Int Int Int     -- ^ year month day
+    | WorldSetTimeScale WorldPageId Float      -- ^ game-minutes per real-second
     deriving (Show, Eq)
