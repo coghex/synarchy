@@ -211,9 +211,21 @@ isBeyondGlacier worldSize gx gy =
 --   Glacier zones at north/south edges override normal plate generation.
 elevationAtGlobal :: Word64 -> [TectonicPlate] -> Int -> Int -> Int -> (Int, MaterialId)
 elevationAtGlobal seed plates worldSize gx gy
-    -- Glacier zone: flat glacier at sea level
-    | isBeyondGlacier worldSize gx gy = (0, matGranite)
-    | isGlacierZone worldSize gx gy = (0, matGlacier)
+    | isBeyondGlacier worldSize gx gy = (0, matGlacier)
+    | isGlacierZone worldSize gx gy =
+        -- Compute normal terrain elevation, then override material
+        -- and raise by 3 to form a wall
+        let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed plates gx gy
+            myPlate = plateA
+            baseElev = plateBaseElev myPlate
+            boundaryDist = (distB - distA) / 2.0
+            boundary = classifyBoundary plateA plateB
+            side = SidePlateA
+            boundaryEffect = boundaryElevation boundary side plateA plateB boundaryDist
+            localNoise = elevationNoise seed gx gy
+            noiseScale = if plateIsLand myPlate then 50 else 20
+            terrainElev = baseElev + boundaryEffect + localNoise * noiseScale
+        in (terrainElev + 3, matGlacier)
     | otherwise =
     let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed plates gx gy
 
