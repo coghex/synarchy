@@ -35,8 +35,8 @@ chunkSize = 16
 chunkLoadRadius :: Int
 chunkLoadRadius = 2
 
--- | How many z-levels below a surface are considered for
---   side-face exposure. Also used as the render window depth.
+-- | How many z-levels below the z-slice are rendered.
+--   This is a RENDER window, not a generation limit.
 viewDepth :: Int
 viewDepth = 50
 
@@ -130,11 +130,11 @@ generateChunk params coord =
                           , lookupElev lx (ly - 1)
                           , lookupElev lx (ly + 1)
                           ]
-                      -- Clamp: never skip the surface tile itself
-                      exposeFrom = min surfZ (max (surfZ - viewDepth) neighborMinZ)
+                      -- Generate tiles all the way down to the shortest neighbor.
+                      -- No viewDepth cap here — viewDepth only limits rendering.
+                      exposeFrom = min surfZ neighborMinZ
                 , tile <- generateExposedColumn lx ly surfZ exposeFrom (unMaterialId mat)
                 ]
-
     in (HM.fromList tiles, surfaceMap)
 
 -- | Generate only the exposed tiles for a column.
