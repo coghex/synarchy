@@ -49,7 +49,7 @@ data WorldGenParams = WorldGenParams
 defaultWorldGenParams :: WorldGenParams
 defaultWorldGenParams = WorldGenParams
     { wgpSeed      = 42
-    , wgpWorldSize = 64
+    , wgpWorldSize = 128
     , wgpPlateCount = 10
     }
 

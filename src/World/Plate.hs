@@ -187,8 +187,9 @@ glacierWidthRows = 16
 --   in the (gx+gy) axis, so we place the glacier at the extremes.
 isGlacierZone :: Int -> Int -> Int -> Bool
 isGlacierZone worldSize gx gy =
-    let halfDiag = (worldSize * 16)  -- max value of |gx + gy| in the world
-        glacierEdge = halfDiag - glacierWidthRows
+    let halfTiles = (worldSize * 16) `div` 2
+        maxDiag = halfTiles + halfTiles   -- max |gx + gy|
+        glacierEdge = maxDiag - glacierWidthRows
         screenRow = gx + gy
     in abs screenRow >= glacierEdge
 

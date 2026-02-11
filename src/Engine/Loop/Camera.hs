@@ -19,10 +19,11 @@ import Control.Monad.State.Class (gets)
 
 cameraYLimit :: Float
 cameraYLimit =
-    let worldSizeChunks = 64
-        halfDiag = worldSizeChunks * chunkSize  -- max |gx+gy|
+    let worldSizeChunks = 128
+        halfTiles = (worldSizeChunks * chunkSize) `div` 2
+        maxDiag = halfTiles + halfTiles
         glacierBuffer = chunkSize * 2           -- 2 rows back from glacier
-        maxRow = halfDiag - glacierBuffer
+        maxRow = maxDiag - glacierBuffer
     in fromIntegral maxRow * tileHalfDiamondHeight
 
 updateCameraPanning ∷ EngineM ε σ ()
