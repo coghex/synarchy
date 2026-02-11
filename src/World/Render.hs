@@ -195,7 +195,7 @@ renderWorldQuads env worldState zoomAlpha = do
     
     let vb = computeViewBounds camera fbW fbH
         zSlice = camZSlice camera
-        chunks = wtdChunks tileData
+        chunks = HM.elems (wtdChunks tileData)
         (camX, _camY) = camPosition camera
         
         visibleChunksWithOffset =

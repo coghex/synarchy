@@ -2,11 +2,12 @@
 module World.Types where
 
 import UPrelude
-import Data.List (find, partition)
+import Data.List (find, partition, sortOn)
 import Data.Hashable (Hashable(..))
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
+import Data.Hashable (Hashable(..))
 import Data.IORef (IORef, newIORef)
 import Engine.Asset.Handle (TextureHandle(..))
 import qualified Engine.Core.Queue as Q
@@ -66,31 +67,54 @@ data Tile = Tile
     } deriving (Show, Eq)
 
 data WorldTileData = WorldTileData
-    { wtdChunks :: ![LoadedChunk]
+    { wtdChunks    :: !(HM.HashMap ChunkCoord LoadedChunk)
+    , wtdMaxChunks :: !Int
     } deriving (Show, Eq)
 
 emptyWorldTileData :: WorldTileData
 emptyWorldTileData = WorldTileData
-    { wtdChunks = []
+    { wtdChunks = HM.empty
+    , wtdMaxChunks = 200
     }
 
 lookupChunk :: ChunkCoord -> WorldTileData -> Maybe LoadedChunk
-lookupChunk coord wtd =
-    find (\lc -> lcCoord lc == coord) (wtdChunks wtd)
+lookupChunk coord wtd = HM.lookup coord (wtdChunks wtd)
 
 insertChunk :: LoadedChunk -> WorldTileData -> WorldTileData
 insertChunk lc wtd =
-    let others = filter (\c -> lcCoord c /= lcCoord lc) (wtdChunks wtd)
-    in wtd { wtdChunks = lc : others }
-
-promoteChunk :: ChunkCoord -> WorldTileData -> WorldTileData
-promoteChunk coord wtd =
-    case partition (\c -> lcCoord c == coord) (wtdChunks wtd) of
-        ([found], rest) -> wtd { wtdChunks = found : rest }
-        _               -> wtd
+    wtd { wtdChunks = HM.insert (lcCoord lc) lc (wtdChunks wtd) }
 
 chunkCount :: WorldTileData -> Int
-chunkCount = length . wtdChunks
+chunkCount = HM.size . wtdChunks
+
+-- | Evict chunks that are far from the camera, keeping at most wtdMaxChunks.
+--   Keeps all chunks within the keep radius, evicts furthest-first beyond that.
+--   Never evicts modified chunks (future-proofing for when chunks can be edited).
+evictDistantChunks :: ChunkCoord -> Int -> WorldTileData -> WorldTileData
+evictDistantChunks (ChunkCoord camCX camCY) keepRadius wtd =
+    let chunks = wtdChunks wtd
+        maxC   = wtdMaxChunks wtd
+    in if HM.size chunks <= maxC
+       then wtd
+       else
+         let -- Must-keep: modified or within keep radius
+             keep = HM.filterWithKey (\coord lc ->
+                 let ChunkCoord cx cy = coord
+                     dx = abs (cx - camCX)
+                     dy = abs (cy - camCY)
+                 in lcModified lc || (dx <= keepRadius && dy <= keepRadius)
+                 ) chunks
+             -- Everything else is a candidate for eviction
+             candidates = HM.filterWithKey (\coord _ -> not (HM.member coord keep)) chunks
+             -- Sort candidates by distance (furthest first), keep only what fits
+             candidateList = sortOn (\lc ->
+                 let ChunkCoord cx cy = lcCoord lc
+                 in negate (abs (cx - camCX) + abs (cy - camCY))
+                 ) (HM.elems candidates)
+             roomLeft = max 0 (maxC - HM.size keep)
+             kept = take roomLeft candidateList
+             keptMap = HM.fromList [(lcCoord lc, lc) | lc <- kept]
+         in wtd { wtdChunks = HM.union keep keptMap }
 
 -----------------------------------------------------------
 -- World Camera

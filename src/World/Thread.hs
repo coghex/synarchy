@@ -174,7 +174,7 @@ updateChunkLoading env logger = do
                             
                             atomicModifyIORef' (wsTilesRef worldState) $ \td ->
                                 let td' = foldl' (\acc lc -> insertChunk lc acc) td newChunks
-                                    td'' = foldl' (\acc coord -> promoteChunk coord acc) td' toPromote
+                                    td'' = evictDistantChunks camChunk chunkLoadRadius td'
                                 in (td'', ())
                             
                             logDebug logger CatWorld $
@@ -183,19 +183,11 @@ updateChunkLoading env logger = do
                                 <> " (" <> T.pack (show $ chunkCount tileData + length toGenerate)
                                 <> " total)"
                         
-                        when (not (null toPromote) && null toGenerate) $ do
-                            atomicModifyIORef' (wsTilesRef worldState) $ \td ->
-                                let td' = foldl' (\acc coord -> promoteChunk coord acc) td toPromote
-                                in (td', ())
-
 -- | Partition needed chunk coords into those already loaded (promote)
 --   and those that need generation.
 partitionChunks :: [ChunkCoord] -> WorldTileData -> ([ChunkCoord], [ChunkCoord])
 partitionChunks coords tileData =
-    let isLoaded coord = case lookupChunk coord tileData of
-            Just _  -> True
-            Nothing -> False
-    in partition isLoaded coords
+    partition (\coord -> HM.member coord (wtdChunks tileData)) coords
 
 -----------------------------------------------------------
 -- Command Handler
@@ -240,7 +232,8 @@ handleWorldCommand env logger cmd = do
                         }) initialCoords
             
             atomicModifyIORef' (wsTilesRef worldState) $ \_ ->
-                (WorldTileData { wtdChunks = initialChunks }, ())
+                (WorldTileData { wtdChunks = HM.fromList [(lcCoord lc, lc) | lc <- initialChunks]
+                               , wtdMaxChunks = 200 }, ())
             
             atomicModifyIORef' (worldManagerRef env) $ \mgr ->
                 (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
