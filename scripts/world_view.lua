@@ -13,6 +13,7 @@ worldView.textures = {
     granite = nil,
     diorite = nil,
     gabbro = nil,
+    glacier = nil,
     noTexture = nil,
     isoFaceMap = nil,
     noFaceMap = nil,
@@ -20,6 +21,7 @@ worldView.textures = {
     zoomDiorite = nil,
     zoomGabbro = nil,
     zoomOcean = nil,
+    zoomGlacier = nil,
 }
 
 -- Track which textures have loaded
@@ -38,6 +40,7 @@ function worldView.init(width, height)
     worldView.textures.granite    = engine.loadTexture("assets/textures/world/granite/granite.png")
     worldView.textures.diorite    = engine.loadTexture("assets/textures/world/diorite/diorite.png")
     worldView.textures.gabbro     = engine.loadTexture("assets/textures/world/gabbro/gabbro.png")
+    worldView.textures.glacier    = engine.loadTexture("assets/textures/world/glacier/glacier.png")
     worldView.textures.noTexture  = engine.loadTexture("assets/textures/world/notexture.png")
     worldView.textures.isoFaceMap = engine.loadTexture("assets/textures/world/facemap/isoface.png")
     worldView.textures.noFaceMap  = engine.loadTexture("assets/textures/world/facemap/noface.png")
@@ -45,6 +48,7 @@ function worldView.init(width, height)
     worldView.textures.zoomDiorite  = engine.loadTexture("assets/textures/world/zoommap/diorite_chunk.png")
     worldView.textures.zoomGabbro   = engine.loadTexture("assets/textures/world/zoommap/gabbro_chunk.png")
     worldView.textures.zoomOcean    = engine.loadTexture("assets/textures/world/zoommap/ocean_chunk.png")
+    worldView.textures.zoomGlacier  = engine.loadTexture("assets/textures/world/zoommap/glacier_chunk.png")
     
     engine.logInfo("World view initialized, loading " .. worldView.texturesNeeded .. " textures")
 end
@@ -101,12 +105,14 @@ function worldView.createWorld()
         graniteTexture = worldView.textures.granite,
         dioriteTexture = worldView.textures.diorite,
         gabbroTexture  = worldView.textures.gabbro,
+        glacierTexture = worldView.textures.glacier,
         noTexture      = worldView.textures.noTexture,
         isoFaceMap     = worldView.textures.isoFaceMap,
         zoomGranite    = worldView.textures.zoomGranite,
         zoomDiorite    = worldView.textures.zoomDiorite,
         zoomGabbro     = worldView.textures.zoomGabbro,
         zoomOcean      = worldView.textures.zoomOcean,
+        zoomGlacier    = worldView.textures.zoomGlacier,
     })
     worldManager.showWorld()
 end

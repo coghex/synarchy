@@ -7,6 +7,7 @@ module World.Plate
     , plateAt
     , twoNearestPlates
     , elevationAtGlobal
+    , isGlacierZone
     ) where
 
 import UPrelude
@@ -14,7 +15,7 @@ import Data.Bits (xor, shiftR, (.&.))
 import Data.Word (Word32, Word64)
 import Data.List (sortBy)
 import Data.Ord (comparing)
-import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro)
+import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro, matGlacier)
 
 -----------------------------------------------------------
 -- Tectonic Plate
@@ -171,38 +172,53 @@ classifyBoundary plateA plateB =
             else Transform shear
 
 -----------------------------------------------------------
+-- Glacier Border
+-----------------------------------------------------------
+
+-- | How many tile-rows wide the glacier zone is at each pole.
+--   One "row" in screen space is one unit of (gx + gy).
+glacierWidthRows :: Int
+glacierWidthRows = 16
+
+-- | Check if a global tile position is in the glacier zone.
+--   The glacier border runs horizontally on screen (constant screenY).
+--   In grid space, screenY is proportional to (gx + gy).
+--   The world extends from roughly -(worldSize*16) to +(worldSize*16)
+--   in the (gx+gy) axis, so we place the glacier at the extremes.
+isGlacierZone :: Int -> Int -> Int -> Bool
+isGlacierZone worldSize gx gy =
+    let halfDiag = (worldSize * 16)  -- max value of |gx + gy| in the world
+        glacierEdge = halfDiag - glacierWidthRows
+        screenRow = gx + gy
+    in abs screenRow >= glacierEdge
+
+-----------------------------------------------------------
 -- Global Elevation Query
 -----------------------------------------------------------
 
 -- | Pure elevation query for any global tile position.
 --   Returns (surfaceZ, materialId).
---   Combines plate base elevation + boundary effects + local noise.
-elevationAtGlobal :: Word64 -> [TectonicPlate] -> Int -> Int -> (Int, MaterialId)
-elevationAtGlobal seed plates gx gy =
+--   Glacier zones at north/south edges override normal plate generation.
+elevationAtGlobal :: Word64 -> [TectonicPlate] -> Int -> Int -> Int -> (Int, MaterialId)
+elevationAtGlobal seed plates worldSize gx gy
+    -- Glacier zone: flat glacier at sea level
+    | isGlacierZone worldSize gx gy = (0, matGlacier)
+    | otherwise =
     let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed plates gx gy
 
-        -- Which plate does this column belong to?
         myPlate = plateA
         material = plateMaterial myPlate
         baseElev = plateBaseElev myPlate
 
-        -- Distance to the boundary (approximated as the midpoint
-        -- between the two nearest plate distances)
         boundaryDist = (distB - distA) / 2.0
-        -- boundaryDist ≈ 0 at the boundary, large deep inside plateA
 
-        -- Boundary classification
         boundary = classifyBoundary plateA plateB
 
-        -- Which side am I on?
-        side = SidePlateA  -- we always belong to plateA (nearest)
+        side = SidePlateA
 
-        -- Boundary elevation effect
         boundaryEffect = boundaryElevation boundary side
                            plateA plateB boundaryDist
 
-        -- Local surface noise (scaled up for real elevations)
-        -- Gives +/- 50m of variation on continents, +/- 20m on ocean
         localNoise = elevationNoise seed gx gy
         noiseScale = if plateIsLand myPlate then 50 else 20
 

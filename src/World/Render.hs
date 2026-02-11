@@ -73,10 +73,11 @@ updateWorldTiles = do
                     case mParams of
                         Just params -> do
                             let seed = wgpSeed params
+                                worldSize = wgpWorldSize params
                                 plates = generatePlates seed (wgpWorldSize params) (wgpPlateCount params)
                                 (camX, camY) = camPosition camera
                                 (gx, gy) = worldToGrid camX camY
-                                (surfElev, _) = elevationAtGlobal seed plates gx gy
+                                (surfElev, _) = elevationAtGlobal seed plates worldSize gx gy
                                 targetZ = surfElev + 3
                             liftIO $ atomicModifyIORef' (cameraRef env) $ \cam ->
                                 (cam { camZSlice = targetZ }, ())
@@ -305,9 +306,11 @@ getTileTexture :: WorldTextures -> Word8 -> TextureHandle
 getTileTexture textures 1 = wtGraniteTexture textures
 getTileTexture textures 2 = wtGabbroTexture textures
 getTileTexture textures 3 = wtDioriteTexture textures
+getTileTexture textures 250 = wtGlacierTexture textures
 getTileTexture textures _ = wtNoTexture textures
 
 getTileFaceMapTexture :: WorldTextures -> Word8 -> TextureHandle
 getTileFaceMapTexture textures mat
     | mat >= 1 && mat <= 3 = wtIsoFaceMap textures -- shared face map
+    | mat == 250           = wtIsoFaceMap textures
     | otherwise            = wtNoFaceMap textures

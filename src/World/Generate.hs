@@ -86,11 +86,13 @@ floorMod a b = a - floorDiv a b * b
 generateChunk :: WorldGenParams -> ChunkCoord -> Chunk
 generateChunk params coord =
     let seed = wgpSeed params
-        plates = generatePlates seed (wgpWorldSize params) (wgpPlateCount params)
+        worldSize = wgpWorldSize params
+        plates = generatePlates seed worldSize (wgpPlateCount params)
+        (surfaceElev, _mat) = elevationAtGlobal seed plates worldSize 0 0
 
         -- Build a local elevation + material map for this chunk
         -- plus a 1-tile border for neighbor lookups
-        columns = [ ((lx, ly), elevationAtGlobal seed plates gx gy)
+        columns = [ ((lx, ly), elevationAtGlobal seed plates worldSize gx gy)
                   | lx <- [-1 .. chunkSize]
                   , ly <- [-1 .. chunkSize]
                   , let (gx, gy) = chunkToGlobal coord lx ly

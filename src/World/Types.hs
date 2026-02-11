@@ -113,6 +113,8 @@ data WorldTextures = WorldTextures
     , wtZoomGabbro      :: TextureHandle
     , wtZoomDiorite     :: TextureHandle
     , wtZoomOcean       :: TextureHandle
+    , wtGlacierTexture  :: TextureHandle
+    , wtZoomGlacier     :: TextureHandle
     } deriving (Show, Eq)
 
 defaultWorldTextures :: WorldTextures
@@ -127,6 +129,8 @@ defaultWorldTextures = WorldTextures
     , wtZoomGabbro      = TextureHandle 0
     , wtZoomDiorite     = TextureHandle 0
     , wtZoomOcean       = TextureHandle 0
+    , wtGlacierTexture  = TextureHandle 0
+    , wtZoomGlacier     = TextureHandle 0
     }
 
 -----------------------------------------------------------
@@ -239,6 +243,8 @@ data WorldTextureType
     | ZoomDioriteTexture
     | ZoomGabbroTexture
     | ZoomOceanTexture
+    | GlacierTexture
+    | ZoomGlacierTexture
     deriving (Show, Eq)
 
 data WorldCommand

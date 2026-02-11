@@ -239,7 +239,7 @@ handleWorldCommand env logger cmd = do
             
             -- Set the camera z-slice to just above the surface at (0,0)
             let plates = generatePlates seed worldSize (wgpPlateCount params)
-                (surfaceElev, _mat) = elevationAtGlobal seed plates 0 0
+                (surfaceElev, _mat) = elevationAtGlobal seed plates worldSize 0 0
                 startZSlice = surfaceElev + 3
             atomicModifyIORef' (cameraRef env) $ \cam ->
                 (cam { camZSlice = startZSlice }, ())
@@ -286,6 +286,7 @@ handleWorldCommand env logger cmd = do
                             GraniteTexture -> wt { wtGraniteTexture = texHandle }
                             DioriteTexture -> wt { wtDioriteTexture = texHandle }
                             GabbroTexture  -> wt { wtGabbroTexture  = texHandle }
+                            GlacierTexture -> wt { wtGlacierTexture = texHandle }
                             NoTexture      -> wt { wtNoTexture      = texHandle }
                             IsoFaceMap     -> wt { wtIsoFaceMap     = texHandle }
                             NoFaceMap      -> wt { wtNoFaceMap      = texHandle }
@@ -293,6 +294,7 @@ handleWorldCommand env logger cmd = do
                             ZoomDioriteTexture  -> wt { wtZoomDiorite    = texHandle }
                             ZoomGabbroTexture   -> wt { wtZoomGabbro     = texHandle }
                             ZoomOceanTexture    -> wt { wtZoomOcean      = texHandle }
+                            ZoomGlacierTexture  -> wt { wtZoomGlacier     = texHandle }
                     atomicModifyIORef' (wsTexturesRef worldState) 
                         (\wt -> (updateTextures wt, ()))
                     logDebug logger CatWorld $ 

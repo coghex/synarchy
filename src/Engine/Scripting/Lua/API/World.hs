@@ -165,6 +165,7 @@ parseTextureType :: Text -> WorldTextureType
 parseTextureType "granite"     = GraniteTexture
 parseTextureType "diorite"     = DioriteTexture
 parseTextureType "gabbro"      = GabbroTexture
+parseTextureType "glacier"      = GlacierTexture
 parseTextureType "notexture"   = NoTexture
 parseTextureType "iso_facemap" = IsoFaceMap
 parseTextureType "nofacemap"   = NoFaceMap
@@ -172,4 +173,5 @@ parseTextureType "zoom_granite" = ZoomGraniteTexture
 parseTextureType "zoom_diorite" = ZoomDioriteTexture
 parseTextureType "zoom_gabbro"  = ZoomGabbroTexture
 parseTextureType "zoom_ocean"   = ZoomOceanTexture 
+parseTextureType "zoom_glacier"  = ZoomGlacierTexture
 parseTextureType _             = NoTexture

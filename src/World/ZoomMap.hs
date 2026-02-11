@@ -130,7 +130,7 @@ renderZoomChunks env worldState camera fbW fbH zoomAlpha = do
                                   drawY = wcy
                             , isChunkInView vb drawX drawY
                             , let -- Sample center for material/elevation
-                                  (elev, mat) = elevationAtGlobal seed plates midGX midGY
+                                  (elev, mat) = elevationAtGlobal seed plates worldSize midGX midGY
                                   texHandle = getZoomTexture textures (unMaterialId mat) elev
                             ]
 
@@ -183,6 +183,7 @@ chunkToZoomQuad texHandle drawX drawY alpha ccx ccy = do
 -----------------------------------------------------------
 
 getZoomTexture :: WorldTextures -> Word8 -> Int -> TextureHandle
+getZoomTexture textures 250 _ = wtZoomGlacier textures
 getZoomTexture textures _mat elev
     | elev < -100 = wtZoomOcean textures
 getZoomTexture textures 1 _ = wtZoomGranite textures

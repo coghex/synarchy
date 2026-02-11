@@ -29,6 +29,9 @@ function worldManager.createWorld(params)
     if params.gabbroTexture then
         world.setTexture(worldId, "gabbro", params.gabbroTexture)
     end
+    if params.glacierTexture then
+        world.setTexture(worldId, "glacier", params.glacierTexture)
+    end
     if params.noTexture then
         world.setTexture(worldId, "notexture", params.noTexture)
     end
@@ -49,6 +52,9 @@ function worldManager.createWorld(params)
     end
     if params.zoomOcean then
         world.setTexture(worldId, "zoom_ocean", params.zoomOcean)
+    end
+    if params.zoomGlacier then
+        world.setTexture(worldId, "zoom_glacier", params.zoomGlacier)
     end
     
     worldManager.currentWorld = worldId
