@@ -20,6 +20,7 @@ import qualified Engine.Core.Queue as Q
 import World.Types
 import World.Generate
 import World.Plate (generatePlates, elevationAtGlobal)
+import World.ZoomMap (buildZoomCache)
 
 -----------------------------------------------------------
 -- Start World Thread
@@ -216,6 +217,10 @@ handleWorldCommand env logger cmd = do
             
             -- Store gen params for on-demand chunk loading
             writeIORef (wsGenParamsRef worldState) (Just params)
+
+            -- Build zoom map cache (one-time computation)
+            let zoomCache = buildZoomCache params
+            writeIORef (wsZoomCacheRef worldState) zoomCache
             
             -- Generate the initial 5×5 chunk grid around (0,0)
             let initialCoords = [ ChunkCoord cx cy

@@ -125,10 +125,9 @@ twoNearestPlates seed worldSize plates gx gy =
         [a]     -> (a, a)
         _       -> error "no plates"
 
--- | Rank all plates by jittered distance, using wrapped X.
 rankPlates :: Word64 -> Int -> [TectonicPlate] -> Int -> Int -> [(TectonicPlate, Float)]
 rankPlates seed worldSize plates gx gy =
-    let jitter = jitterAmount seed gx gy
+    let jitter = jitterAmount seed worldSize gx gy
         withDist plate =
             let dx = fromIntegral (wrappedDeltaX worldSize gx (plateCenterX plate)) :: Float
                 dy = fromIntegral (gy - plateCenterY plate) :: Float
@@ -226,6 +225,33 @@ wrappedDeltaX worldSize x1 x2 =
         wrapped = ((raw + halfW) `mod` w + w) `mod` w - halfW
     in wrapped
 
+-- | Value noise that tiles seamlessly in X with period = worldWidthTiles.
+--   Works by wrapping the noise grid cell X index so that cells at the
+--   seam boundary reference the same hash values.
+wrappedValueNoise2D :: Word64 -> Int -> Int -> Int -> Int -> Float
+wrappedValueNoise2D seed worldSize x y scale =
+    let w = worldWidthTiles worldSize
+        fx = fromIntegral x / fromIntegral scale :: Float
+        fy = fromIntegral y / fromIntegral scale :: Float
+        ix = floor fx :: Int
+        iy = floor fy :: Int
+        tx = fx - fromIntegral ix
+        ty = fy - fromIntegral iy
+        sx = smoothstep tx
+        sy = smoothstep ty
+        -- Wrap the noise cell X coordinates so they tile
+        cellsInX = w `div` scale  -- how many noise cells span the world
+        wrapIx i = ((i `mod` cellsInX) + cellsInX) `mod` cellsInX
+        ix0 = wrapIx ix
+        ix1 = wrapIx (ix + 1)
+        v00 = hashToFloat' (hashCoord seed ix0     iy)
+        v10 = hashToFloat' (hashCoord seed ix1     iy)
+        v01 = hashToFloat' (hashCoord seed ix0     (iy + 1))
+        v11 = hashToFloat' (hashCoord seed ix1     (iy + 1))
+        top    = lerp sx v00 v10
+        bottom = lerp sx v01 v11
+    in lerp sy top bottom
+
 -----------------------------------------------------------
 -- Global Elevation Query
 -----------------------------------------------------------
@@ -245,7 +271,7 @@ elevationAtGlobal seed plates worldSize gx gy =
             boundary = classifyBoundary worldSize plateA plateB
             side = SidePlateA
             boundaryEffect = boundaryElevation boundary side plateA plateB boundaryDist
-            localNoise = elevationNoise seed gx' gy
+            localNoise = elevationNoise seed worldSize gx' gy
             noiseScale = if plateIsLand myPlate then 50 else 20
             terrainElev = baseElev + boundaryEffect + localNoise * noiseScale
         in (terrainElev + 3, matGlacier)
@@ -265,7 +291,7 @@ elevationAtGlobal seed plates worldSize gx gy =
         boundaryEffect = boundaryElevation boundary side
                            plateA plateB boundaryDist
 
-        localNoise = elevationNoise seed gx' gy
+        localNoise = elevationNoise seed worldSize gx' gy
         noiseScale = if plateIsLand myPlate then 50 else 20
 
         finalElev = baseElev + boundaryEffect + localNoise * noiseScale
@@ -379,12 +405,11 @@ transformEffect boundaryDist =
 -- Local Noise
 -----------------------------------------------------------
 
--- | Local elevation noise. Returns small integers (-2 to +2).
---   Gets multiplied by a scale factor in elevationAtGlobal.
-elevationNoise :: Word64 -> Int -> Int -> Int
-elevationNoise seed gx gy =
-    let e1 = valueNoise2D (seed + 10) gx gy 12
-        e2 = valueNoise2D (seed + 11) gx gy 5
+-- | Local elevation noise, wrapping in X.
+elevationNoise :: Word64 -> Int -> Int -> Int -> Int
+elevationNoise seed worldSize gx gy =
+    let e1 = wrappedValueNoise2D (seed + 10) worldSize gx gy 12
+        e2 = wrappedValueNoise2D (seed + 11) worldSize gx gy 5
         raw = e1 * 0.7 + e2 * 0.3
         mapped = (raw - 0.5) * 3.0
     in clampInt (-2) 2 (round mapped)
@@ -399,10 +424,10 @@ clampInt lo hi x
 -- Jitter
 -----------------------------------------------------------
 
-jitterAmount :: Word64 -> Int -> Int -> Float
-jitterAmount seed gx gy =
-    let n1 = valueNoise2D seed gx gy 20
-        n2 = valueNoise2D (seed + 99) gx gy 8
+jitterAmount :: Word64 -> Int -> Int -> Int -> Float
+jitterAmount seed worldSize gx gy =
+    let n1 = wrappedValueNoise2D seed worldSize gx gy 20
+        n2 = wrappedValueNoise2D (seed + 99) worldSize gx gy 8
         combined = n1 * 0.7 + n2 * 0.3
     in (combined - 0.5) * 80.0
 

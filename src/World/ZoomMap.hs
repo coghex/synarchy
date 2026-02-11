@@ -1,16 +1,15 @@
 {-# LANGUAGE Strict #-}
 module World.ZoomMap
     ( generateZoomMapQuads
+    , buildZoomCache
     ) where
 
 import UPrelude
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
-import qualified Data.Text as T
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
-import Engine.Core.Log (logDebug, LogCategory(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..))
@@ -20,15 +19,50 @@ import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Material (MaterialId(..))
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
-                   , isBeyondGlacier, wrapGlobalX)
-import World.Generate (chunkSize, cameraChunkCoord)
+                   , isBeyondGlacier)
+import World.Generate (chunkSize)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
                    zoomFadeStart, zoomFadeEnd)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
--- Generate Zoom Map Quads
+-- Build Zoom Cache (called once at world init)
+-----------------------------------------------------------
+
+-- | Pre-compute all zoom map entries. Called once when the
+--   world is created. Returns a vector of entries for every
+--   visible (non-beyond-glacier) chunk in the world.
+buildZoomCache :: WorldGenParams -> V.Vector ZoomChunkEntry
+buildZoomCache params =
+    let seed = wgpSeed params
+        worldSize = wgpWorldSize params
+        plates = generatePlates seed worldSize (wgpPlateCount params)
+        halfSize = worldSize `div` 2
+
+        entries =
+            [ ZoomChunkEntry
+                { zceChunkX   = ccx
+                , zceChunkY   = ccy
+                , zceDrawX    = drawX
+                , zceDrawY    = drawY
+                , zceTexIndex = unMaterialId mat
+                , zceElev     = elev
+                }
+            | ccx <- [-halfSize .. halfSize - 1]
+            , ccy <- [-halfSize .. halfSize - 1]
+            , let midGX = ccx * chunkSize + chunkSize `div` 2
+                  midGY = ccy * chunkSize + chunkSize `div` 2
+            , not (isBeyondGlacier worldSize midGX midGY)
+            , let (elev, mat) = elevationAtGlobal seed plates worldSize midGX midGY
+                  (wcx, wcy) = gridToWorld midGX midGY
+                  drawX = wcx - chunkWorldWidth / 2.0
+                  drawY = wcy
+            ]
+    in V.fromList entries
+
+-----------------------------------------------------------
+-- Generate Zoom Map Quads (called every frame)
 -----------------------------------------------------------
 
 generateZoomMapQuads :: EngineM ε σ (V.Vector SortableQuad)
@@ -46,7 +80,7 @@ generateZoomMapQuads = do
         else do
             quads <- forM (wmVisible worldManager) $ \pageId ->
                 case lookup pageId (wmWorlds worldManager) of
-                    Just worldState -> renderZoomChunks env worldState camera
+                    Just worldState -> renderFromCache env worldState camera
                                          fbW fbH zoomAlpha
                     Nothing         -> return V.empty
             return $ V.concat quads
@@ -88,86 +122,55 @@ isChunkInView vb drawX drawY =
          || drawY  > zvBottom vb)
 
 -----------------------------------------------------------
--- Render Zoom Chunks
+-- Render From Cache
 -----------------------------------------------------------
 
-renderZoomChunks :: EngineEnv -> WorldState -> Camera2D
-                 -> Int -> Int -> Float
-                 -> EngineM ε σ (V.Vector SortableQuad)
-renderZoomChunks env worldState camera fbW fbH zoomAlpha = do
-    mParams <- liftIO $ readIORef (wsGenParamsRef worldState)
+-- | World width in screen-space X for wrapping.
+worldScreenWidth :: Int -> Float
+worldScreenWidth worldSize =
+    fromIntegral (worldSize * chunkSize) * tileHalfWidth
+
+renderFromCache :: EngineEnv -> WorldState -> Camera2D
+               -> Int -> Int -> Float
+               -> EngineM ε σ (V.Vector SortableQuad)
+renderFromCache env worldState camera fbW fbH zoomAlpha = do
+    mParams  <- liftIO $ readIORef (wsGenParamsRef worldState)
     textures <- liftIO $ readIORef (wsTexturesRef worldState)
+    cache    <- liftIO $ readIORef (wsZoomCacheRef worldState)
 
     case mParams of
         Nothing -> return V.empty
         Just params -> do
-            let seed = wgpSeed params
-                worldSize = wgpWorldSize params
-                plates = generatePlates seed worldSize (wgpPlateCount params)
+            let vb = computeZoomViewBounds camera fbW fbH
+                wsw = worldScreenWidth (wgpWorldSize params)
 
-                vb = computeZoomViewBounds camera fbW fbH
+            -- Iterate the cached entries. For each, try base position
+            -- and ±1 world width. Only emit quads that are in view.
+            let visible = V.concatMap (entryToQuads vb wsw textures) cache
 
-                halfSize = worldSize `div` 2
-                worldChunks = worldSize
+            quads <- V.mapM (\(ccx, ccy, th, dx, dy) ->
+                chunkToZoomQuad th dx dy zoomAlpha ccx ccy) visible
 
-                -- Find which chunk the camera is in (in grid space)
-                (camX, camY) = camPosition camera
-                camChunk = cameraChunkCoord camX camY
-                ChunkCoord camCX camCY = camChunk
+            return quads
 
-                -- How far we need to look in chunk-grid space to fill the screen.
-                -- In isometric, screen-X = (gx-gy)*tileHalfWidth, screen-Y = (gx+gy)*tileHalfDiamondHeight
-                -- A step of 1 chunk in grid-X changes screen-X by chunkSize*tileHalfWidth
-                -- and screen-Y by chunkSize*tileHalfDiamondHeight.
-                -- To cover the screen we need radius in BOTH grid axes.
-                zoom = camZoom camera
-                aspect = fromIntegral fbW / fromIntegral fbH
-                halfW = zoom * aspect
-                halfH = zoom
-                -- Each chunk step in grid-X adds tileHalfWidth*chunkSize to screen-X
-                -- and tileHalfDiamondHeight*chunkSize to screen-Y.
-                -- To be safe, compute radius from the larger of the two projections.
-                chunkStepScreenX = fromIntegral chunkSize * tileHalfWidth
-                chunkStepScreenY = fromIntegral chunkSize * tileHalfDiamondHeight
-                -- We need enough chunks in each grid axis to cover both screen axes
-                radiusX = ceiling ((halfW + halfH) / chunkStepScreenX) + 2
-                radiusY = ceiling ((halfW + halfH) / chunkStepScreenY) + 2
+-- | For a single cached entry, produce 0-3 candidate quads
+--   (base position and ±1 wrap).
+entryToQuads :: ZoomViewBounds -> Float -> WorldTextures
+             -> ZoomChunkEntry
+             -> V.Vector (Int, Int, TextureHandle, Float, Float)
+entryToQuads vb wsw textures entry =
+    let ccx = zceChunkX entry
+        ccy = zceChunkY entry
+        baseX = zceDrawX entry
+        baseY = zceDrawY entry
+        texHandle = getZoomTexture textures (zceTexIndex entry) (zceElev entry)
 
-                -- Wrap a chunk X coordinate into [-halfSize, halfSize)
-                wrapCX cx = ((cx + halfSize) `mod` worldChunks + worldChunks)
-                            `mod` worldChunks - halfSize
-
-                inBoundsY cy = cy >= -halfSize && cy < halfSize
-
-            -- Iterate chunks in a radius around the camera chunk.
-            -- Use RAW (unwrapped) coords for screen position so it's continuous.
-            -- Use WRAPPED coords for world data lookups.
-            let quadsData =
-                    [ (wrappedCX, ccy, texHandle, drawX, drawY)
-                    | dx <- [-radiusX .. radiusX]
-                    , dy <- [-radiusY .. radiusY]
-                    , let rawCX = camCX + dx
-                          ccy   = camCY + dy
-                    , inBoundsY ccy
-                    , let wrappedCX = wrapCX rawCX
-                          -- Screen position uses RAW chunk X (continuous, no seam)
-                          midGX_raw = rawCX * chunkSize + chunkSize `div` 2
-                          midGY     = ccy * chunkSize + chunkSize `div` 2
-                          (wcx, wcy) = gridToWorld midGX_raw midGY
-                          drawX = wcx - chunkWorldWidth / 2.0
-                          drawY = wcy
-                    , isChunkInView vb drawX drawY
-                    , let -- World data uses WRAPPED chunk X
-                          midGX_wrapped = wrappedCX * chunkSize + chunkSize `div` 2
-                    , not (isBeyondGlacier worldSize midGX_wrapped midGY)
-                    , let (elev, mat) = elevationAtGlobal seed plates worldSize midGX_wrapped midGY
-                          texHandle = getZoomTexture textures (unMaterialId mat) elev
-                    ]
-
-            quads <- forM quadsData $ \(ccx, ccy, texHandle, drawX, drawY) ->
-                chunkToZoomQuad texHandle drawX drawY zoomAlpha ccx ccy
-
-            return $ V.fromList quads
+        candidates = filter (\(_, _, _, dx, dy) -> isChunkInView vb dx dy)
+            [ (ccx, ccy, texHandle, baseX - wsw, baseY)
+            , (ccx, ccy, texHandle, baseX,       baseY)
+            , (ccx, ccy, texHandle, baseX + wsw, baseY)
+            ]
+    in V.fromList candidates
 
 -----------------------------------------------------------
 -- Chunk to Zoom Quad
