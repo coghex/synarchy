@@ -23,10 +23,15 @@ worldView.textures = {
     zoomGabbro = nil,
     zoomOcean = nil,
     zoomGlacier = nil,
+    bgGranite = nil,
+    bgDiorite = nil,
+    bgGabbro = nil,
+    bgGlacier = nil,
+    bgOcean = nil,
 }
 
 -- Track which textures have loaded
-worldView.texturesNeeded = 10
+worldView.texturesNeeded = 15
 worldView.texturesLoadedCount = 0
 
 -----------------------------------------------------------
@@ -51,6 +56,11 @@ function worldView.init(width, height)
     worldView.textures.zoomGabbro   = engine.loadTexture("assets/textures/world/zoommap/gabbro_chunk.png")
     worldView.textures.zoomOcean    = engine.loadTexture("assets/textures/world/zoommap/ocean_chunk.png")
     worldView.textures.zoomGlacier  = engine.loadTexture("assets/textures/world/zoommap/glacier_chunk.png")
+    worldView.textures.bgGranite    = engine.loadTexture("assets/textures/world/zoommap/granite_chunk_background.png")
+    worldView.textures.bgDiorite    = engine.loadTexture("assets/textures/world/zoommap/diorite_chunk_background.png")
+    worldView.textures.bgGabbro     = engine.loadTexture("assets/textures/world/zoommap/gabbro_chunk_background.png")
+    worldView.textures.bgOcean      = engine.loadTexture("assets/textures/world/zoommap/ocean_chunk_background.png")
+    worldView.textures.bgGlacier    = engine.loadTexture("assets/textures/world/zoommap/glacier_chunk_background.png")
     
     engine.logInfo("World view initialized, loading " .. worldView.texturesNeeded .. " textures")
 end
@@ -116,6 +126,11 @@ function worldView.createWorld()
         zoomGabbro     = worldView.textures.zoomGabbro,
         zoomOcean      = worldView.textures.zoomOcean,
         zoomGlacier    = worldView.textures.zoomGlacier,
+        bgGranite      = worldView.textures.bgGranite,
+        bgDiorite      = worldView.textures.bgDiorite,
+        bgGabbro       = worldView.textures.bgGabbro,
+        bgOcean        = worldView.textures.bgOcean,
+        bgGlacier      = worldView.textures.bgGlacier,
     })
     worldManager.showWorld()
 end

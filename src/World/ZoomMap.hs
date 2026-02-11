@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module World.ZoomMap
     ( generateZoomMapQuads
+    , generateBackgroundQuads
     , buildZoomCache
     ) where
 
@@ -11,6 +12,7 @@ import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
 import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
@@ -23,7 +25,7 @@ import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
 import World.Generate (chunkSize)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
-                   zoomFadeStart, zoomFadeEnd)
+                   backgroundMapLayer, zoomFadeStart, zoomFadeEnd)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
@@ -81,9 +83,27 @@ generateZoomMapQuads = do
             quads <- forM (wmVisible worldManager) $ \pageId ->
                 case lookup pageId (wmWorlds worldManager) of
                     Just worldState -> renderFromCache env worldState camera
-                                         fbW fbH zoomAlpha
+                                         fbW fbH zoomAlpha getZoomTexture zoomMapLayer
                     Nothing         -> return V.empty
             return $ V.concat quads
+
+-----------------------------------------------------------
+-- Generate Background Quads (called every frame, always visible)
+-----------------------------------------------------------
+
+generateBackgroundQuads :: EngineM ε σ (V.Vector SortableQuad)
+generateBackgroundQuads = do
+    env <- ask
+    camera <- liftIO $ readIORef (cameraRef env)
+    (fbW, fbH) <- liftIO $ readIORef (framebufferSizeRef env)
+    worldManager <- liftIO $ readIORef (worldManagerRef env)
+
+    quads <- forM (wmVisible worldManager) $ \pageId ->
+        case lookup pageId (wmWorlds worldManager) of
+            Just worldState -> renderFromCache env worldState camera
+                                 fbW fbH 1.0 getBgTexture backgroundMapLayer
+            Nothing         -> return V.empty
+    return $ V.concat quads
 
 -----------------------------------------------------------
 -- Screen-Space View Bounds
@@ -122,7 +142,7 @@ isChunkInView vb drawX drawY =
          || drawY  > zvBottom vb)
 
 -----------------------------------------------------------
--- Render From Cache
+-- Render From Cache (shared by zoom map and background)
 -----------------------------------------------------------
 
 -- | World width in screen-space X for wrapping.
@@ -130,10 +150,14 @@ worldScreenWidth :: Int -> Float
 worldScreenWidth worldSize =
     fromIntegral (worldSize * chunkSize) * tileHalfWidth
 
+-- | Shared render function. Takes a texture picker and target layer
+--   so it can be used for both the zoom map and background.
 renderFromCache :: EngineEnv -> WorldState -> Camera2D
                -> Int -> Int -> Float
+               -> (WorldTextures -> Word8 -> Int -> TextureHandle)
+               -> LayerId
                -> EngineM ε σ (V.Vector SortableQuad)
-renderFromCache env worldState camera fbW fbH zoomAlpha = do
+renderFromCache env worldState camera fbW fbH alpha texturePicker layer = do
     mParams  <- liftIO $ readIORef (wsGenParamsRef worldState)
     textures <- liftIO $ readIORef (wsTexturesRef worldState)
     cache    <- liftIO $ readIORef (wsZoomCacheRef worldState)
@@ -146,24 +170,25 @@ renderFromCache env worldState camera fbW fbH zoomAlpha = do
 
             -- Iterate the cached entries. For each, try base position
             -- and ±1 world width. Only emit quads that are in view.
-            let visible = V.concatMap (entryToQuads vb wsw textures) cache
+            let visible = V.concatMap (entryToQuads vb wsw textures texturePicker) cache
 
             quads <- V.mapM (\(ccx, ccy, th, dx, dy) ->
-                chunkToZoomQuad th dx dy zoomAlpha ccx ccy) visible
+                chunkToZoomQuad th dx dy alpha ccx ccy layer) visible
 
             return quads
 
 -- | For a single cached entry, produce 0-3 candidate quads
 --   (base position and ±1 wrap).
 entryToQuads :: ZoomViewBounds -> Float -> WorldTextures
+             -> (WorldTextures -> Word8 -> Int -> TextureHandle)
              -> ZoomChunkEntry
              -> V.Vector (Int, Int, TextureHandle, Float, Float)
-entryToQuads vb wsw textures entry =
+entryToQuads vb wsw textures texturePicker entry =
     let ccx = zceChunkX entry
         ccy = zceChunkY entry
         baseX = zceDrawX entry
         baseY = zceDrawY entry
-        texHandle = getZoomTexture textures (zceTexIndex entry) (zceElev entry)
+        texHandle = texturePicker textures (zceTexIndex entry) (zceElev entry)
 
         candidates = filter (\(_, _, _, dx, dy) -> isChunkInView vb dx dy)
             [ (ccx, ccy, texHandle, baseX - wsw, baseY)
@@ -178,9 +203,9 @@ entryToQuads vb wsw textures entry =
 
 chunkToZoomQuad :: TextureHandle
                -> Float -> Float -> Float
-               -> Int -> Int
+               -> Int -> Int -> LayerId
                -> EngineM ε σ SortableQuad
-chunkToZoomQuad texHandle drawX drawY alpha ccx ccy = do
+chunkToZoomQuad texHandle drawX drawY alpha ccx ccy layer = do
     gs <- gets graphicsState
     let actualSlot = case textureSystem gs of
           Just bindless -> getTextureSlotIndex texHandle bindless
@@ -208,7 +233,7 @@ chunkToZoomQuad texHandle drawX drawY alpha ccx ccy = do
         { sqSortKey  = sortKey
         , sqVertices = vertices
         , sqTexture  = texHandle
-        , sqLayer    = zoomMapLayer
+        , sqLayer    = layer
         }
 
 -----------------------------------------------------------
@@ -223,6 +248,15 @@ getZoomTexture textures 1 _ = wtZoomGranite textures
 getZoomTexture textures 2 _ = wtZoomDiorite textures
 getZoomTexture textures 3 _ = wtZoomGabbro textures
 getZoomTexture textures _ _ = wtZoomGranite textures
+
+getBgTexture :: WorldTextures -> Word8 -> Int -> TextureHandle
+getBgTexture textures 250 _ = wtBgGlacier textures
+getBgTexture textures _mat elev
+    | elev < -100 = wtBgOcean textures
+getBgTexture textures 1 _ = wtBgGranite textures
+getBgTexture textures 2 _ = wtBgDiorite textures
+getBgTexture textures 3 _ = wtBgGabbro textures
+getBgTexture textures _ _ = wtBgGranite textures
 
 clamp01 :: Float -> Float
 clamp01 x

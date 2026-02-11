@@ -129,21 +129,24 @@ drawFrame = do
             logDebugSM CatRender "Collected scene quads for world layer"
                 [("count", T.pack $ show $ V.length sceneQuads)]
             
-            -- 4. Merge world tiles + scene sprites, sort by painter's algorithm,
-            --    produce ONE RenderBatch for the world layer
+            -- 4. Merge world tiles + scene sprites, grouped by layer.
+            --    Each distinct sqLayer gets its own RenderBatch so that
+            --    layer ordering is respected (e.g. background layer 0
+            --    behind world tiles layer 1 behind zoom map layer 2).
             let allWorldQuads = V.toList worldTileQuads <> V.toList sceneQuads
-                worldBatch = mergeQuadsToBatch worldLayer allWorldQuads
-                worldBatches = if V.null (rbVertices worldBatch)
-                               then V.empty
-                               else V.singleton worldBatch
-                worldLayeredBatches = if V.null (rbVertices worldBatch)
-                                     then Map.empty
-                                     else Map.singleton worldLayer 
-                                            (V.singleton (SpriteItem worldBatch))
-            
-            logDebugSM CatRender "Merged world batches"
-                [("vertices", T.pack $ show $ V.length $ rbVertices worldBatch)
-                ,("drawCalls", T.pack $ show $ V.length worldBatches)]
+                -- Group quads by their sqLayer
+                groupedByLayer = Map.fromListWith (<>)
+                    [ (sqLayer q, [q]) | q <- allWorldQuads ]
+                -- One RenderBatch per layer
+                perLayerBatches = Map.mapWithKey
+                    (\layer quads -> mergeQuadsToBatch layer quads)
+                    groupedByLayer
+                -- For vertex upload (flat list of batches)
+                worldBatches = V.fromList $ Map.elems perLayerBatches
+                -- For draw ordering (layered map of render items)
+                worldLayeredBatches = Map.map
+                    (\batch -> V.singleton (SpriteItem batch))
+                    perLayerBatches
             
             -- 5. Render UI
             logDebugM CatRender "Rendering UI pages..."

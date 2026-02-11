@@ -30,7 +30,7 @@ import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLay
                    tileHalfWidth, tileHalfDiamondHeight, zoomFadeStart, zoomFadeEnd
                    , worldToGrid, zoomFadeStart, zoomFadeEnd)
 import World.Plate (generatePlates, elevationAtGlobal)
-import World.ZoomMap (generateZoomMapQuads)
+import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
@@ -42,10 +42,6 @@ worldScreenWidth =
     let worldSizeChunks = 128
         worldTiles = worldSizeChunks * chunkSize
     in fromIntegral worldTiles * tileHalfWidth
-
------------------------------------------------------------
--- Update World Tiles (called before scene rendering)
------------------------------------------------------------
 
 updateWorldTiles :: EngineM ε σ (V.Vector SortableQuad)
 updateWorldTiles = do
@@ -68,6 +64,7 @@ updateWorldTiles = do
             return $ V.concat quads
 
     zoomQuads <- generateZoomMapQuads
+    bgQuads   <- generateBackgroundQuads
 
     when (tileAlpha > 0.001 && tileAlpha < 0.999) $ do
         worldManager' <- liftIO $ readIORef (worldManagerRef env)
@@ -89,10 +86,11 @@ updateWorldTiles = do
                         Nothing -> return ()
                 Nothing -> return ()
 
-    let allQuads = tileQuads <> zoomQuads
+    let allQuads = bgQuads <> tileQuads <> zoomQuads
     liftIO $ logDebug logger CatWorld $
         "Generated " <> T.pack (show $ V.length tileQuads) <> " tile quads, "
-        <> T.pack (show $ V.length zoomQuads) <> " zoom quads"
+        <> T.pack (show $ V.length zoomQuads) <> " zoom quads, "
+        <> T.pack (show $ V.length bgQuads) <> " bg quads"
 
     return allQuads
 

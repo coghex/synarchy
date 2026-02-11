@@ -13,6 +13,7 @@ module World.Grid
       -- * Layer constants
     , worldLayer
     , uiLayerThreshold
+    , backgroundMapLayer
       -- * Coordinate conversions
     , gridToWorld
     , gridToScreen
@@ -117,6 +118,10 @@ cameraPanAccel = gcCameraPanAccel defaultGridConfig
 -- | Camera friction (deceleration) in world-space units per second²
 cameraPanFriction :: Float
 cameraPanFriction = gcCameraPanFriction defaultGridConfig
+
+-- | Layer for background map chunks (renders below world tiles)
+backgroundMapLayer :: LayerId
+backgroundMapLayer = LayerId 0
 
 -- | Layer for zoom map chunks (renders above world tiles)
 zoomMapLayer :: LayerId
