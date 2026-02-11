@@ -132,7 +132,7 @@ function createWorldMenu.init(panelTex, btnTex, font, width, height)
     createWorldMenu.fbH          = height
 
     -- Load world preview texture
-    createWorldMenu.worldPreviewTexture = engine.loadTexture("assets/textures/world/world.png")
+    createWorldMenu.worldPreviewTexture = engine.loadTexture("assets/textures/world/notexture.png")
 
     createWorldMenu.createUI()
 end

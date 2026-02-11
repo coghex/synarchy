@@ -222,8 +222,11 @@ emptyWorldManager = WorldManager
 
 data WorldTextureType
     = GraniteTexture
+    | DioriteTexture
+    | GabbroTexture
     | NoTexture
     | IsoFaceMap
+    | NoFaceMap
     deriving (Show, Eq)
 
 data WorldCommand

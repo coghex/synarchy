@@ -163,5 +163,9 @@ worldSetTimeScaleFn env = do
 
 parseTextureType :: Text -> WorldTextureType
 parseTextureType "granite"     = GraniteTexture
+parseTextureType "diorite"     = DioriteTexture
+parseTextureType "gabbro"      = GabbroTexture
+parseTextureType "notexture"   = NoTexture
 parseTextureType "iso_facemap" = IsoFaceMap
+parseTextureType "nofacemap"   = NoFaceMap
 parseTextureType _             = NoTexture

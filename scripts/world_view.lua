@@ -7,10 +7,20 @@ worldView.page = nil
 worldView.visible = false
 worldView.fbW = 0
 worldView.fbH = 0
-worldView.graniteTexture = nil
-worldView.isoFaceMap = nil
-worldView.texturesLoaded = false
-worldView.faceMapLoaded = false
+
+-- Texture handles
+worldView.textures = {
+    granite = nil,
+    diorite = nil,
+    gabbro = nil,
+    noTexture = nil,
+    isoFaceMap = nil,
+    noFaceMap = nil,
+}
+
+-- Track which textures have loaded
+worldView.texturesNeeded = 6
+worldView.texturesLoadedCount = 0
 
 -----------------------------------------------------------
 -- Init
@@ -20,10 +30,15 @@ function worldView.init(width, height)
     worldView.fbW = width
     worldView.fbH = height
     
-    -- Load world textures
-    worldView.graniteTexture = engine.loadTexture("assets/textures/world/granite/granite.png")
-    worldView.isoFaceMap = engine.loadTexture("assets/textures/world/facemap/isoface.png")
+    -- Load all world textures
+    worldView.textures.granite    = engine.loadTexture("assets/textures/world/granite/granite.png")
+    worldView.textures.diorite    = engine.loadTexture("assets/textures/world/diorite/diorite.png")
+    worldView.textures.gabbro     = engine.loadTexture("assets/textures/world/gabbro/gabbro.png")
+    worldView.textures.noTexture  = engine.loadTexture("assets/textures/world/notexture.png")
+    worldView.textures.isoFaceMap = engine.loadTexture("assets/textures/world/facemap/isoface.png")
+    worldView.textures.noFaceMap  = engine.loadTexture("assets/textures/world/facemap/noface.png")
     
+    engine.logInfo("World view initialized, loading " .. worldView.texturesNeeded .. " textures")
 end
 
 -----------------------------------------------------------
@@ -31,23 +46,28 @@ end
 -----------------------------------------------------------
 
 function worldView.onAssetLoaded(assetType, handle, path)
-    engine.logDebug("Asset loaded callback: " .. assetType .. " handle=" .. tostring(handle) .. " path=" .. path)
+    if assetType ~= "texture" then return end
     
-    if assetType == "texture" then
-        if handle == worldView.graniteTexture then
-            worldView.texturesLoaded = true
-        elseif handle == worldView.isoFaceMap then
-            worldView.faceMapLoaded = true
-        else
-            engine.logDebug("Texture loaded but not granite: " .. tostring(handle))
+    local matched = false
+    for name, texHandle in pairs(worldView.textures) do
+        if handle == texHandle then
+            engine.logDebug("World texture loaded: " .. name .. " handle=" .. tostring(handle))
+            matched = true
+            break
         end
-        
-        -- Only create world once BOTH textures are loaded
-        if worldView.texturesLoaded and worldView.faceMapLoaded then
-            if worldView.visible then
-                engine.logInfo("World visible, all textures loaded, creating world...")
-                worldView.createWorld()
-            end
+    end
+    
+    if not matched then return end
+    
+    worldView.texturesLoadedCount = worldView.texturesLoadedCount + 1
+    engine.logInfo("World textures: " .. worldView.texturesLoadedCount 
+        .. "/" .. worldView.texturesNeeded .. " loaded")
+    
+    -- Only create world once ALL textures are loaded
+    if worldView.texturesLoadedCount >= worldView.texturesNeeded then
+        if worldView.visible then
+            engine.logInfo("All world textures loaded, creating world...")
+            worldView.createWorld()
         end
     end
 end
@@ -57,8 +77,9 @@ end
 -----------------------------------------------------------
 
 function worldView.createWorld()
-    if not worldView.texturesLoaded or not worldView.faceMapLoaded then
-        engine.logWarn("Cannot create world, textures not loaded yet")
+    if worldView.texturesLoadedCount < worldView.texturesNeeded then
+        engine.logWarn("Cannot create world, textures not loaded yet ("
+            .. worldView.texturesLoadedCount .. "/" .. worldView.texturesNeeded .. ")")
         return
     end
 
@@ -69,8 +90,11 @@ function worldView.createWorld()
     
     worldManager.createWorld({ 
         worldId = "main_world",
-        graniteTexture = worldView.graniteTexture,
-        isoFaceMap = worldView.isoFaceMap,
+        graniteTexture = worldView.textures.granite,
+        dioriteTexture = worldView.textures.diorite,
+        gabbroTexture  = worldView.textures.gabbro,
+        noTexture      = worldView.textures.noTexture,
+        isoFaceMap     = worldView.textures.isoFaceMap,
     })
     worldManager.showWorld()
 end
@@ -101,10 +125,11 @@ function worldView.show()
     worldView.visible = true
     UI.showPage(worldView.page)
     
-    if worldView.texturesLoaded and worldView.faceMapLoaded then
+    if worldView.texturesLoadedCount >= worldView.texturesNeeded then
         worldView.createWorld()
     else
-        engine.logInfo("World view shown, waiting for textures...")
+        engine.logInfo("World view shown, waiting for textures... ("
+            .. worldView.texturesLoadedCount .. "/" .. worldView.texturesNeeded .. ")")
     end
     
     engine.logInfo("World view shown")
@@ -127,10 +152,6 @@ end
 
 function worldView.update(dt)
     if not worldView.visible then return end
-    
-    -- Camera panning is handled in Haskell (Engine.Loop.Camera)
-    
-    -- Update world state
     worldManager.update(dt)
 end
 

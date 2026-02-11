@@ -274,7 +274,11 @@ handleWorldCommand env logger cmd = do
                 Just worldState -> do
                     let updateTextures wt = case texType of
                             GraniteTexture -> wt { wtGraniteTexture = texHandle }
-                            IsoFaceMap -> wt { wtIsoFaceMap = texHandle }
+                            DioriteTexture -> wt { wtDioriteTexture = texHandle }
+                            GabbroTexture  -> wt { wtGabbroTexture  = texHandle }
+                            NoTexture      -> wt { wtNoTexture      = texHandle }
+                            IsoFaceMap     -> wt { wtIsoFaceMap     = texHandle }
+                            NoFaceMap      -> wt { wtNoFaceMap      = texHandle }
                     atomicModifyIORef' (wsTexturesRef worldState) 
                         (\wt -> (updateTextures wt, ()))
                     logDebug logger CatWorld $ 

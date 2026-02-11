@@ -10,8 +10,6 @@ worldManager.active = false
 
 function worldManager.createWorld(params)
     local worldId = params.worldId or "main_world"
-    local graniteTexture = params.graniteTexture
-    local isoFaceMap = params.isoFaceMap
     local seed = params.seed or 42
     local worldSize = params.worldSize or 64
     
@@ -21,12 +19,24 @@ function worldManager.createWorld(params)
     -- Send init command with seed and world size
     world.init(worldId, seed, worldSize)
     
-    if graniteTexture then
-        world.setTexture(worldId, "granite", graniteTexture)
+    -- Set all material textures
+    if params.graniteTexture then
+        world.setTexture(worldId, "granite", params.graniteTexture)
     end
-    
-    if isoFaceMap then
-        world.setTexture(worldId, "iso_facemap", isoFaceMap)
+    if params.dioriteTexture then
+        world.setTexture(worldId, "diorite", params.dioriteTexture)
+    end
+    if params.gabbroTexture then
+        world.setTexture(worldId, "gabbro", params.gabbroTexture)
+    end
+    if params.noTexture then
+        world.setTexture(worldId, "notexture", params.noTexture)
+    end
+    if params.isoFaceMap then
+        world.setTexture(worldId, "iso_facemap", params.isoFaceMap)
+    end
+    if params.noFaceMap then
+        world.setTexture(worldId, "nofacemap", params.noFaceMap)
     end
     
     worldManager.currentWorld = worldId
@@ -68,7 +78,6 @@ function worldManager.destroyWorld(worldId)
     end
     
     worldManager.hideWorld(worldId)
-    -- Future: send destroy command to Haskell
     
     if worldManager.currentWorld == worldId then
         worldManager.currentWorld = nil
@@ -81,9 +90,6 @@ end
 
 function worldManager.update(dt)
     if not worldManager.active then return end
-    
-    -- Future: tick world simulation
-    -- world.tick(dt)
 end
 
 -----------------------------------------------------------
