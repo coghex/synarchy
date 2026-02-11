@@ -259,6 +259,7 @@ library
                      World.Generate
                      World.Plate
                      World.Material
+                     World.ZoomMap
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields

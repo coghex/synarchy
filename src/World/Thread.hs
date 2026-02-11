@@ -289,6 +289,10 @@ handleWorldCommand env logger cmd = do
                             NoTexture      -> wt { wtNoTexture      = texHandle }
                             IsoFaceMap     -> wt { wtIsoFaceMap     = texHandle }
                             NoFaceMap      -> wt { wtNoFaceMap      = texHandle }
+                            ZoomGraniteTexture  -> wt { wtZoomGranite    = texHandle }
+                            ZoomDioriteTexture  -> wt { wtZoomDiorite    = texHandle }
+                            ZoomGabbroTexture   -> wt { wtZoomGabbro     = texHandle }
+                            ZoomOceanTexture    -> wt { wtZoomOcean      = texHandle }
                     atomicModifyIORef' (wsTexturesRef worldState) 
                         (\wt -> (updateTextures wt, ()))
                     logDebug logger CatWorld $ 

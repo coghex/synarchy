@@ -38,6 +38,18 @@ function worldManager.createWorld(params)
     if params.noFaceMap then
         world.setTexture(worldId, "nofacemap", params.noFaceMap)
     end
+    if params.zoomGranite then
+        world.setTexture(worldId, "zoom_granite", params.zoomGranite)
+    end
+    if params.zoomDiorite then
+        world.setTexture(worldId, "zoom_diorite", params.zoomDiorite)
+    end
+    if params.zoomGabbro then
+        world.setTexture(worldId, "zoom_gabbro", params.zoomGabbro)
+    end
+    if params.zoomOcean then
+        world.setTexture(worldId, "zoom_ocean", params.zoomOcean)
+    end
     
     worldManager.currentWorld = worldId
     

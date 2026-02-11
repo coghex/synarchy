@@ -9,7 +9,7 @@ import Control.Monad.State.Class (gets)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Asset.Handle
 import Engine.Asset.Manager
 import Engine.Asset.Base
@@ -27,7 +27,10 @@ import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
 import World.Generate (chunkSize, chunkToGlobal, chunkWorldBounds, viewDepth)
 import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer,
-                   tileHalfWidth, tileHalfDiamondHeight)
+                   tileHalfWidth, tileHalfDiamondHeight, zoomFadeStart, zoomFadeEnd
+                   , worldToGrid, zoomFadeStart, zoomFadeEnd)
+import World.Plate (generatePlates, elevationAtGlobal)
+import World.ZoomMap (generateZoomMapQuads)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
@@ -38,18 +41,53 @@ updateWorldTiles :: EngineM ε σ (V.Vector SortableQuad)
 updateWorldTiles = do
     env <- ask
     logger <- liftIO $ readIORef (loggerRef env)
-    
+    camera <- liftIO $ readIORef (cameraRef env)
+
+    let zoom = camZoom camera
+        -- Tile alpha: 1.0 at zoomFadeStart, 0.0 at zoomFadeEnd
+        tileAlpha = clamp01 (1.0 - (zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
+
     worldManager <- liftIO $ readIORef (worldManagerRef env)
-    
-    quads <- forM (wmVisible worldManager) $ \pageId ->
-        case lookup pageId (wmWorlds worldManager) of
-            Just worldState -> renderWorldQuads env worldState
-            Nothing         -> return V.empty
-    
-    let allQuads = V.concat quads
-    liftIO $ logDebug logger CatWorld $ 
-        "Generated " <> T.pack (show $ V.length allQuads) <> " world tile quads"
-    
+
+    -- Tile quads (skip entirely if fully faded out)
+    tileQuads <- if tileAlpha <= 0.001
+        then return V.empty
+        else do
+            quads <- forM (wmVisible worldManager) $ \pageId ->
+                case lookup pageId (wmWorlds worldManager) of
+                    Just worldState -> renderWorldQuads env worldState tileAlpha
+                    Nothing         -> return V.empty
+            return $ V.concat quads
+
+    -- Zoom map quads
+    zoomQuads <- generateZoomMapQuads
+
+    -- Auto-set z-slice when transitioning from zoom map to tile view
+    -- This runs when we're in the crossfade zone
+    when (tileAlpha > 0.001 && tileAlpha < 0.999) $ do
+        worldManager' <- liftIO $ readIORef (worldManagerRef env)
+        forM_ (wmVisible worldManager') $ \pageId ->
+            case lookup pageId (wmWorlds worldManager') of
+                Just worldState -> do
+                    mParams <- liftIO $ readIORef (wsGenParamsRef worldState)
+                    case mParams of
+                        Just params -> do
+                            let seed = wgpSeed params
+                                plates = generatePlates seed (wgpWorldSize params) (wgpPlateCount params)
+                                (camX, camY) = camPosition camera
+                                (gx, gy) = worldToGrid camX camY
+                                (surfElev, _) = elevationAtGlobal seed plates gx gy
+                                targetZ = surfElev + 3
+                            liftIO $ atomicModifyIORef' (cameraRef env) $ \cam ->
+                                (cam { camZSlice = targetZ }, ())
+                        Nothing -> return ()
+                Nothing -> return ()
+
+    let allQuads = tileQuads <> zoomQuads
+    liftIO $ logDebug logger CatWorld $
+        "Generated " <> T.pack (show $ V.length tileQuads) <> " tile quads, "
+        <> T.pack (show $ V.length zoomQuads) <> " zoom quads"
+
     return allQuads
 
 -----------------------------------------------------------
@@ -131,8 +169,9 @@ isTileVisible vb drawX drawY =
 -- Render World Quads
 -----------------------------------------------------------
 
-renderWorldQuads :: EngineEnv -> WorldState -> EngineM ε σ (V.Vector SortableQuad)
-renderWorldQuads env worldState = do
+renderWorldQuads :: EngineEnv -> WorldState -> Float
+  -> EngineM ε σ (V.Vector SortableQuad)
+renderWorldQuads env worldState zoomAlpha = do
     tileData <- liftIO $ readIORef (wsTilesRef worldState)
     textures <- liftIO $ readIORef (wsTexturesRef worldState)
     logger <- liftIO $ readIORef (loggerRef env)
@@ -164,7 +203,7 @@ renderWorldQuads env worldState = do
         
         quads <- forM visibleTiles $ \((lx, ly, z), tile) -> do
             let (gx, gy) = chunkToGlobal coord lx ly
-            tileToQuad env textures gx gy z tile zSlice
+            tileToQuad env textures gx gy z tile zSlice zoomAlpha
         
         return $ V.fromList quads
     
@@ -187,9 +226,9 @@ renderWorldQuads env worldState = do
 -----------------------------------------------------------
 
 tileToQuad :: EngineEnv -> WorldTextures
-  -> Int -> Int -> Int -> Tile -> Int
+  -> Int -> Int -> Int -> Tile -> Int -> Float
            -> EngineM ε σ SortableQuad
-tileToQuad env textures worldX worldY worldZ tile zSlice = do
+tileToQuad env textures worldX worldY worldZ tile zSlice tileAlpha = do
     logger <- liftIO $ readIORef (loggerRef env)
     
     let (rawX, rawY) = gridToScreen worldX worldY
@@ -228,7 +267,7 @@ tileToQuad env textures worldX worldY worldZ tile zSlice = do
     -- tiles further below get progressively darker
     let depth = zSlice - worldZ  -- 0 at slice, positive going deeper
         brightness = clamp01 (1.0 - fromIntegral depth * 0.12)
-        tint = Vec4 brightness brightness brightness 1
+        tint = Vec4 brightness brightness brightness tileAlpha
 
     liftIO $ logDebug logger CatWorld $ 
         "TILE RENDER: texHandle=" <> T.pack (show texHandle)

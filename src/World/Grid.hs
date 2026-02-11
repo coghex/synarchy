@@ -21,6 +21,11 @@ module World.Grid
     , cameraPanSpeed
     , cameraPanAccel
     , cameraPanFriction
+    , zoomMapLayer
+    , chunkWorldWidth
+    , chunkWorldDiamondHeight
+    , zoomFadeStart
+    , zoomFadeEnd
     ) where
 
 import UPrelude
@@ -112,6 +117,28 @@ cameraPanAccel = gcCameraPanAccel defaultGridConfig
 -- | Camera friction (deceleration) in world-space units per second²
 cameraPanFriction :: Float
 cameraPanFriction = gcCameraPanFriction defaultGridConfig
+
+-- | Layer for zoom map chunks (renders above world tiles)
+zoomMapLayer :: LayerId
+zoomMapLayer = LayerId 2
+
+-- | Screen-space width of a full chunk diamond
+chunkWorldWidth :: Float
+chunkWorldWidth = fromIntegral chunkSizePx * tileWidth
+  where chunkSizePx = 16  -- chunkSize, but we avoid circular import
+
+-- | Screen-space diamond height of a full chunk
+chunkWorldDiamondHeight :: Float
+chunkWorldDiamondHeight = fromIntegral chunkSizePx * tileDiamondHeight
+  where chunkSizePx = 16
+
+-- | Zoom level where the map starts fading in (alpha = 0 here)
+zoomFadeStart :: Float
+zoomFadeStart = 5.0
+
+-- | Zoom level where the map is fully opaque (tiles fully hidden)
+zoomFadeEnd :: Float
+zoomFadeEnd = 8.0
 
 -----------------------------------------------------------
 -- Coordinate Conversions

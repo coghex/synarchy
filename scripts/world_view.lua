@@ -16,10 +16,14 @@ worldView.textures = {
     noTexture = nil,
     isoFaceMap = nil,
     noFaceMap = nil,
+    zoomGranite = nil,
+    zoomDiorite = nil,
+    zoomGabbro = nil,
+    zoomOcean = nil,
 }
 
 -- Track which textures have loaded
-worldView.texturesNeeded = 6
+worldView.texturesNeeded = 10
 worldView.texturesLoadedCount = 0
 
 -----------------------------------------------------------
@@ -37,6 +41,10 @@ function worldView.init(width, height)
     worldView.textures.noTexture  = engine.loadTexture("assets/textures/world/notexture.png")
     worldView.textures.isoFaceMap = engine.loadTexture("assets/textures/world/facemap/isoface.png")
     worldView.textures.noFaceMap  = engine.loadTexture("assets/textures/world/facemap/noface.png")
+    worldView.textures.zoomGranite  = engine.loadTexture("assets/textures/world/zoommap/granite_chunk.png")
+    worldView.textures.zoomDiorite  = engine.loadTexture("assets/textures/world/zoommap/diorite_chunk.png")
+    worldView.textures.zoomGabbro   = engine.loadTexture("assets/textures/world/zoommap/gabbro_chunk.png")
+    worldView.textures.zoomOcean    = engine.loadTexture("assets/textures/world/zoommap/ocean_chunk.png")
     
     engine.logInfo("World view initialized, loading " .. worldView.texturesNeeded .. " textures")
 end
@@ -95,6 +103,10 @@ function worldView.createWorld()
         gabbroTexture  = worldView.textures.gabbro,
         noTexture      = worldView.textures.noTexture,
         isoFaceMap     = worldView.textures.isoFaceMap,
+        zoomGranite    = worldView.textures.zoomGranite,
+        zoomDiorite    = worldView.textures.zoomDiorite,
+        zoomGabbro     = worldView.textures.zoomGabbro,
+        zoomOcean      = worldView.textures.zoomOcean,
     })
     worldManager.showWorld()
 end
@@ -177,10 +189,10 @@ function worldView.onZSliceScroll(dx, dy)
     local current = camera.getZSlice()
     if dy > 0 then
         camera.setZSlice(current + 1)
-        engine.logInfo("Z-slice: " .. tostring(current + 1))
+        engine.logDebug("Z-slice: " .. tostring(current + 1))
     elseif dy < 0 then
         camera.setZSlice(current - 1)
-        engine.logInfo("Z-slice: " .. tostring(current - 1))
+        engine.logDebug("Z-slice: " .. tostring(current - 1))
     end
 end
 
