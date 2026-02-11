@@ -5,13 +5,14 @@ module World.Plate
     , generatePlates
       -- * Queries
     , plateAt
+    , twoNearestPlates
     , elevationAtGlobal
     ) where
 
 import UPrelude
 import Data.Bits (xor, shiftR, (.&.))
 import Data.Word (Word32, Word64)
-import Data.List (minimumBy)
+import Data.List (sortBy)
 import Data.Ord (comparing)
 import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro)
 
@@ -25,9 +26,24 @@ data TectonicPlate = TectonicPlate
     , plateIsLand   :: !Bool
     , plateBaseElev :: !Int
     , plateMaterial :: !MaterialId
+    , plateDensity  :: !Float     -- ^ Crust density, determines subduction
     , plateDriftX   :: !Float
     , plateDriftY   :: !Float
     } deriving (Show)
+
+-----------------------------------------------------------
+-- Boundary Classification
+-----------------------------------------------------------
+
+data BoundaryType
+    = Convergent !Float    -- ^ approach speed (positive = converging faster)
+    | Divergent  !Float    -- ^ separation speed
+    | Transform  !Float    -- ^ shear magnitude
+    deriving (Show)
+
+-- | Which side of the boundary this column is on.
+data BoundarySide = SidePlateA | SidePlateB
+    deriving (Show, Eq)
 
 -----------------------------------------------------------
 -- Plate Generation
@@ -46,15 +62,19 @@ generateOnePlate seed worldSize plateIndex =
         h4 = plateHash seed plateIndex 4
         h5 = plateHash seed plateIndex 5
         h6 = plateHash seed plateIndex 6
+        h7 = plateHash seed plateIndex 7
+        h8 = plateHash seed plateIndex 8
 
         cx = hashToRange h1 (-halfTiles) halfTiles
         cy = hashToRange h2 (-halfTiles) halfTiles
 
+        -- ~40% oceanic, 60% continental
         isLand = hashToFloat' h3 > 0.4
 
+        -- Land: 0 to 1000m, Ocean: -6000 to -3000m
         baseElev = if isLand
-                   then hashToRange h4 0 2
-                   else hashToRange h4 (-3) (-1)
+                   then hashToRange h4 0 1000
+                   else hashToRange h4 (-6000) (-3000)
 
         matChoice = hashToRange h5 0 2
         material = case matChoice of
@@ -62,8 +82,14 @@ generateOnePlate seed worldSize plateIndex =
             1 -> matDiorite
             _ -> matGabbro
 
+        -- Crust density: ocean crust is denser than continental
+        density = if isLand
+                  then 2.7 + hashToFloat' h8 * 0.2    -- 2.7 - 2.9
+                  else 3.0 + hashToFloat' h8 * 0.3    -- 3.0 - 3.3
+
+        -- Drift direction (not normalized — magnitude implies speed)
         driftX = hashToFloat' h6 * 2.0 - 1.0
-        driftY = hashToFloat' (plateHash seed plateIndex 7) * 2.0 - 1.0
+        driftY = hashToFloat' h7 * 2.0 - 1.0
 
     in TectonicPlate
         { plateCenterX  = cx
@@ -71,22 +97,78 @@ generateOnePlate seed worldSize plateIndex =
         , plateIsLand   = isLand
         , plateBaseElev = baseElev
         , plateMaterial = material
+        , plateDensity  = density
         , plateDriftX   = driftX
         , plateDriftY   = driftY
         }
 
 -----------------------------------------------------------
--- Plate Query
+-- Plate Queries
 -----------------------------------------------------------
 
+-- | Find the nearest plate to a global position.
 plateAt :: Word64 -> [TectonicPlate] -> Int -> Int -> (TectonicPlate, Float)
 plateAt seed plates gx gy =
+    let ranked = rankPlates seed plates gx gy
+    in head ranked
+
+-- | Find the two nearest plates. Returns ((nearest, dist), (second, dist)).
+twoNearestPlates :: Word64 -> [TectonicPlate] -> Int -> Int
+                 -> ((TectonicPlate, Float), (TectonicPlate, Float))
+twoNearestPlates seed plates gx gy =
+    let ranked = rankPlates seed plates gx gy
+    in case ranked of
+        (a:b:_) -> (a, b)
+        [a]     -> (a, a)  -- only one plate
+        _       -> error "no plates"
+
+-- | Rank all plates by jittered distance.
+rankPlates :: Word64 -> [TectonicPlate] -> Int -> Int -> [(TectonicPlate, Float)]
+rankPlates seed plates gx gy =
     let jitter = jitterAmount seed gx gy
-        distTo plate =
+        withDist plate =
             let dx = fromIntegral (gx - plateCenterX plate) :: Float
                 dy = fromIntegral (gy - plateCenterY plate) :: Float
-            in sqrt (dx * dx + dy * dy) + jitter
-    in minimumBy (comparing snd) [(plate, distTo plate) | plate <- plates]
+            in (plate, sqrt (dx * dx + dy * dy) + jitter)
+    in sortBy (comparing snd) (map withDist plates)
+
+-----------------------------------------------------------
+-- Boundary Classification
+-----------------------------------------------------------
+
+-- | Classify the boundary between two plates.
+--   Uses the relative drift vectors projected onto the boundary normal.
+classifyBoundary :: TectonicPlate -> TectonicPlate -> BoundaryType
+classifyBoundary plateA plateB =
+    let -- Normal from A toward B
+        nxRaw = fromIntegral (plateCenterX plateB - plateCenterX plateA) :: Float
+        nyRaw = fromIntegral (plateCenterY plateB - plateCenterY plateA) :: Float
+        nLen  = sqrt (nxRaw * nxRaw + nyRaw * nyRaw)
+        (nx, ny) = if nLen > 0.001
+                   then (nxRaw / nLen, nyRaw / nLen)
+                   else (1.0, 0.0)
+
+        -- Tangent (perpendicular to normal)
+        (tx, ty) = (-ny, nx)
+
+        -- Relative motion along normal: positive = converging
+        approachA = plateDriftX plateA * nx + plateDriftY plateA * ny
+        approachB = plateDriftX plateB * nx + plateDriftY plateB * ny
+        approach  = approachA - approachB  -- positive = A moving toward B
+
+        -- Relative motion along tangent
+        shearA = plateDriftX plateA * tx + plateDriftY plateA * ty
+        shearB = plateDriftX plateB * tx + plateDriftY plateB * ty
+        shear  = abs (shearA - shearB)
+
+        convergentThreshold = 0.3
+        divergentThreshold  = -0.3
+
+    in if approach > convergentThreshold
+       then Convergent approach
+       else if approach < divergentThreshold
+            then Divergent (abs approach)
+            else Transform shear
 
 -----------------------------------------------------------
 -- Global Elevation Query
@@ -94,16 +176,149 @@ plateAt seed plates gx gy =
 
 -- | Pure elevation query for any global tile position.
 --   Returns (surfaceZ, materialId).
---   Works across chunk boundaries — used for neighbor lookups.
+--   Combines plate base elevation + boundary effects + local noise.
 elevationAtGlobal :: Word64 -> [TectonicPlate] -> Int -> Int -> (Int, MaterialId)
 elevationAtGlobal seed plates gx gy =
-    let (plate, _dist) = plateAt seed plates gx gy
-        baseElev = plateBaseElev plate
-        material = plateMaterial plate
-        localNoise = elevationNoise seed gx gy
-    in (baseElev + localNoise, material)
+    let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed plates gx gy
 
--- | Local elevation noise: adds small variation to plate surfaces.
+        -- Which plate does this column belong to?
+        myPlate = plateA
+        material = plateMaterial myPlate
+        baseElev = plateBaseElev myPlate
+
+        -- Distance to the boundary (approximated as the midpoint
+        -- between the two nearest plate distances)
+        boundaryDist = (distB - distA) / 2.0
+        -- boundaryDist ≈ 0 at the boundary, large deep inside plateA
+
+        -- Boundary classification
+        boundary = classifyBoundary plateA plateB
+
+        -- Which side am I on?
+        side = SidePlateA  -- we always belong to plateA (nearest)
+
+        -- Boundary elevation effect
+        boundaryEffect = boundaryElevation boundary side
+                           plateA plateB boundaryDist
+
+        -- Local surface noise (scaled up for real elevations)
+        -- Gives +/- 50m of variation on continents, +/- 20m on ocean
+        localNoise = elevationNoise seed gx gy
+        noiseScale = if plateIsLand myPlate then 50 else 20
+
+        finalElev = baseElev + boundaryEffect + localNoise * noiseScale
+
+    in (finalElev, material)
+
+-----------------------------------------------------------
+-- Boundary Elevation Profiles
+-----------------------------------------------------------
+
+-- | Compute the elevation modification from a plate boundary.
+--   boundaryDist: distance from the boundary (0 = at boundary, positive = inside plateA)
+boundaryElevation :: BoundaryType -> BoundarySide
+                  -> TectonicPlate -> TectonicPlate
+                  -> Float -> Int
+boundaryElevation boundary _side plateA plateB boundaryDist =
+    let bothLand  = plateIsLand plateA && plateIsLand plateB
+        bothOcean = not (plateIsLand plateA) && not (plateIsLand plateB)
+        -- oceanMeetsLand: plateA is always the one we're on
+        aIsLand   = plateIsLand plateA
+        bIsLand   = plateIsLand plateB
+    in case boundary of
+
+        -- CONVERGENT: plates pushing together
+        Convergent strength -> convergentEffect
+            aIsLand bIsLand bothLand bothOcean
+            (plateDensity plateA) (plateDensity plateB)
+            strength boundaryDist
+
+        -- DIVERGENT: plates pulling apart
+        Divergent strength -> divergentEffect
+            aIsLand bothOcean strength boundaryDist
+
+        -- TRANSFORM: plates sliding past each other
+        Transform _shear -> transformEffect boundaryDist
+
+-- | Convergent boundary elevation effect.
+convergentEffect :: Bool -> Bool -> Bool -> Bool
+                 -> Float -> Float -> Float -> Float -> Int
+convergentEffect aIsLand bIsLand bothLand bothOcean
+                 densityA densityB strength boundaryDist =
+    let -- Smooth falloff: 1.0 at boundary, 0.0 at fadeRange
+        fadeRange = 200.0  -- tiles over which the effect fades
+        peakRange = 30.0   -- tiles of peak elevation near boundary
+        t = max 0.0 (1.0 - max 0.0 (abs boundaryDist - peakRange) / fadeRange)
+        -- Smooth the falloff
+        t' = t * t * (3.0 - 2.0 * t)
+
+    in if bothLand then
+        -- Land-land convergent: mountain range on both sides
+        -- Neither subducts easily, both push up
+        -- Peak: 3000 - 8000m depending on strength
+        let peakElev = 3000 + round (5000.0 * strength * t')
+        in round (fromIntegral peakElev * t')
+
+    else if bothOcean then
+        -- Ocean-ocean: denser plate subducts
+        -- Trench on the subducting side, island arc on the other
+        let isSubducting = densityA > densityB
+        in if isSubducting
+           -- We're the denser plate: trench
+           then let trenchDepth = -2000 - round (3000.0 * strength)
+                in round (fromIntegral trenchDepth * t')
+           -- We're the overriding plate: slight uplift (island arc)
+           else round (500.0 * strength * t')
+
+    else if aIsLand && not bIsLand then
+        -- We're on the land plate, ocean is subducting under us
+        -- Mountain range on land side (Andes-style)
+        let peakElev = 2000 + round (4000.0 * strength)
+        in round (fromIntegral peakElev * t')
+
+    else
+        -- We're on the ocean plate, land is the other
+        -- Deep trench on ocean side (Mariana-style)
+        let trenchDepth = -3000 - round (5000.0 * strength)
+        in round (fromIntegral trenchDepth * t')
+
+-- | Divergent boundary elevation effect.
+--   Rift valley / mid-ocean ridge.
+divergentEffect :: Bool -> Bool -> Float -> Float -> Int
+divergentEffect aIsLand bothOcean strength boundaryDist =
+    let fadeRange = 150.0
+        peakRange = 20.0
+        t = max 0.0 (1.0 - max 0.0 (abs boundaryDist - peakRange) / fadeRange)
+        t' = t * t * (3.0 - 2.0 * t)
+    in if bothOcean then
+        -- Mid-ocean ridge: slight uplift at boundary
+        let ridgeHeight = 500 + round (1000.0 * strength)
+        in round (fromIntegral ridgeHeight * t')
+    else if aIsLand then
+        -- Continental rift valley: depression
+        let riftDepth = -500 - round (2000.0 * strength)
+        in round (fromIntegral riftDepth * t')
+    else
+        -- Ocean side of a rift: gentle slope down
+        let depth = -200 - round (800.0 * strength)
+        in round (fromIntegral depth * t')
+
+-- | Transform boundary: minimal elevation effect.
+--   Slight disruption near the fault line.
+transformEffect :: Float -> Int
+transformEffect boundaryDist =
+    let fadeRange = 50.0
+        t = max 0.0 (1.0 - abs boundaryDist / fadeRange)
+        t' = t * t * (3.0 - 2.0 * t)
+        -- Minor ridges/valleys: +/- 100m
+    in round (100.0 * t' * (if boundaryDist > 0 then 1.0 else -1.0))
+
+-----------------------------------------------------------
+-- Local Noise
+-----------------------------------------------------------
+
+-- | Local elevation noise. Returns small integers (-2 to +2).
+--   Gets multiplied by a scale factor in elevationAtGlobal.
 elevationNoise :: Word64 -> Int -> Int -> Int
 elevationNoise seed gx gy =
     let e1 = valueNoise2D (seed + 10) gx gy 12

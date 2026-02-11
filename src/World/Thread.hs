@@ -19,6 +19,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 import qualified Engine.Core.Queue as Q
 import World.Types
 import World.Generate
+import World.Plate (generatePlates, elevationAtGlobal)
 
 -----------------------------------------------------------
 -- Start World Thread
@@ -236,11 +237,20 @@ handleWorldCommand env logger cmd = do
             atomicModifyIORef' (worldManagerRef env) $ \mgr ->
                 (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
             
+            -- Set the camera z-slice to just above the surface at (0,0)
+            let plates = generatePlates seed worldSize (wgpPlateCount params)
+                (surfaceElev, _mat) = elevationAtGlobal seed plates 0 0
+                startZSlice = surfaceElev + 3
+            atomicModifyIORef' (cameraRef env) $ \cam ->
+                (cam { camZSlice = startZSlice }, ())
+            
             let totalTiles = sum $ map (HM.size . lcTiles) initialChunks
             logInfo logger CatWorld $ "World initialized: " 
                 <> T.pack (show $ length initialChunks) <> " chunks, "
-                <> T.pack (show totalTiles) <> " tiles: " 
-                <> unWorldPageId pageId
+                <> T.pack (show totalTiles) <> " tiles, "
+                <> "surface at z=" <> T.pack (show surfaceElev)
+                <> ", zSlice set to " <> T.pack (show startZSlice)
+                <> ": " <> unWorldPageId pageId
         
         WorldShow pageId -> do
             logDebug logger CatWorld $ "Showing world: " <> unWorldPageId pageId

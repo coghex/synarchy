@@ -70,12 +70,9 @@ computeViewBounds camera fbW fbH =
         aspect   = fromIntegral fbW / fromIntegral fbH
         halfW    = zoom * aspect
         halfH    = zoom
-        -- Extra padding to account for height offset of elevated tiles.
-        -- A tile at max z-slice shifts up by zSlice * tileSideHeight,
-        -- so it could be visible even if its base grid position is
-        -- below the view bottom.
-        zSlice   = camZSlice camera
-        maxHeightPad = fromIntegral (abs zSlice) * tileSideHeight
+        -- Padding only needs to cover the viewDepth window,
+        -- not the absolute z-slice value
+        maxHeightPad = fromIntegral viewDepth * tileSideHeight
         padX     = tileWidth
         padY     = tileHeight + maxHeightPad
     in ViewBounds
@@ -162,7 +159,7 @@ renderWorldQuads env worldState = do
             tileList = HM.toList (lcTiles lc)
             
             -- Filter tiles: XY visibility AND z <= zSlice
-            visibleTiles = filter (\t -> isTileInView vb coord t
+            visibleTiles = filter (\t -> isTileInView vb coord zSlice t
                                       && tileInSlice zSlice t) tileList
         
         quads <- forM visibleTiles $ \((lx, ly, z), tile) -> do
@@ -173,15 +170,15 @@ renderWorldQuads env worldState = do
     
     return $ V.concat chunkQuads
   where
-    isTileInView :: ViewBounds -> ChunkCoord -> ((Int, Int, Int), Tile) -> Bool
-    isTileInView vb coord ((lx, ly, z), _) =
+    isTileInView :: ViewBounds -> ChunkCoord -> Int -> ((Int, Int, Int), Tile) -> Bool
+    isTileInView vb coord zSlice' ((lx, ly, z), _) =
         let (gx, gy) = chunkToGlobal coord lx ly
             (rawX, rawY) = gridToScreen gx gy
-            heightOffset = fromIntegral z * tileSideHeight
+            relativeZ = z - zSlice'
+            heightOffset = fromIntegral relativeZ * tileSideHeight
             drawX = rawX
             drawY = rawY - heightOffset
         in isTileVisible vb drawX drawY
-    
     tileInSlice :: Int -> ((Int, Int, Int), Tile) -> Bool
     tileInSlice zSlice ((_, _, z), _) = z <= zSlice && z >= (zSlice - viewDepth)
 
@@ -197,12 +194,17 @@ tileToQuad env textures worldX worldY worldZ tile zSlice = do
     
     let (rawX, rawY) = gridToScreen worldX worldY
         
-        heightOffset = fromIntegral worldZ * tileSideHeight
+        -- Height offset RELATIVE to the z-slice.
+        -- Tiles at the z-slice appear at the base grid position.
+        -- Tiles below shift down, tiles above shift up.
+        relativeZ = worldZ - zSlice
+        heightOffset = fromIntegral relativeZ * tileSideHeight
         drawX = rawX
         drawY = rawY - heightOffset
 
+        -- Sort key: use relative Z for proper painter's ordering
         sortKey = fromIntegral (worldX + worldY) 
-                + fromIntegral worldZ * 0.001
+                + fromIntegral relativeZ * 0.001
 
     let texHandle = getTileTexture textures (tileType tile)
     
