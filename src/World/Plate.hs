@@ -61,7 +61,7 @@ generatePlates seed worldSize plateCount =
 
 generateOnePlate ∷ Word64 → Int → Int → TectonicPlate
 generateOnePlate seed worldSize plateIndex =
-    let halfTiles = (worldSize * worldSize) `div` 2
+    let halfTiles = (worldSize * chunkSize) `div` 2
         h1 = plateHash seed plateIndex 1
         h2 = plateHash seed plateIndex 2
         h3 = plateHash seed plateIndex 3
@@ -185,7 +185,7 @@ glacierWidthRows = chunkSize
 --   in the (gx+gy) axis, so we place the glacier at the extremes.
 isGlacierZone ∷ Int → Int → Int → Bool
 isGlacierZone worldSize gx gy =
-    let halfTiles = (worldSize * 16) `div` 2
+    let halfTiles = (worldSize * chunkSize) `div` 2
         glacierEdge = halfTiles - glacierWidthRows
         screenRow = gx + gy
     in abs screenRow ≥ glacierEdge
@@ -195,7 +195,7 @@ isGlacierZone worldSize gx gy =
 
 isBeyondGlacier ∷ Int → Int → Int → Bool
 isBeyondGlacier worldSize gx gy =
-    let halfTiles = (worldSize * 16) `div` 2
+    let halfTiles = (worldSize * chunkSize) `div` 2
         screenRow = gx + gy
     in abs screenRow > halfTiles
 
@@ -205,7 +205,7 @@ isBeyondGlacier worldSize gx gy =
 
 -- | Total width of the world in tiles (for X-axis wrapping).
 worldWidthTiles ∷ Int → Int
-worldWidthTiles worldSize = worldSize * 16
+worldWidthTiles worldSize = worldSize * chunkSize
 
 -- | Wrap a global X coordinate into the valid range [-halfTiles, halfTiles).
 wrapGlobalX ∷ Int → Int → Int
