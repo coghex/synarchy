@@ -19,7 +19,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
-import World.Material (MaterialId(..))
+import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
                    , isBeyondGlacier)
 import World.Generate (chunkSize)
@@ -66,13 +66,17 @@ buildZoomCache params =
                   midGY = ccy * chunkSize + chunkSize `div` 2
             , not (isBeyondGlacier worldSize midGX midGY)
             , let (baseElev, baseMat) = elevationAtGlobal seed plates worldSize midGX midGY
-                  -- Apply every geo event to this sample point
-                  (finalElev, finalMat) = applyAllEvents allEvents worldSize
-                                              midGX midGY baseElev (unMaterialId baseMat)
+                  -- Skip geology for glacier tiles
+                  (finalElev, finalMat) =
+                      if baseMat == matGlacier
+                      then (baseElev, unMaterialId baseMat)
+                      else applyAllEvents allEvents worldSize
+                               midGX midGY baseElev (unMaterialId baseMat)
                   (wcx, wcy) = gridToWorld midGX midGY
                   drawX = wcx - chunkWorldWidth / 2.0
                   drawY = wcy
             ]
+
     in V.fromList entries
 
 -- | Fold all geological events over a single tile position.

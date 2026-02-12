@@ -770,7 +770,7 @@ ZoomLavaTexture	src/World/Types.hs	652;"	C
 ZoomMap	src/World/ZoomMap.hs	2;"	m
 ZoomObsidianTexture	src/World/Types.hs	671;"	C
 ZoomOceanTexture	src/World/Types.hs	648;"	C
-ZoomViewBounds	src/World/ZoomMap.hs	141;"	t
+ZoomViewBounds	src/World/ZoomMap.hs	145;"	t
 _craterXor	src/World/Geology.hs	238;"	f
 a	src/Engine/Graphics/Vulkan/Types/Vertex.hs	48;"	f
 acEnableHotReload	src/Engine/Asset/Types.hs	71;"	f
@@ -811,7 +811,7 @@ apShaderHandles	src/Engine/Asset/Types.hs	31;"	f
 apShaders	src/Engine/Asset/Types.hs	23;"	f
 apTextureAtlases	src/Engine/Asset/Types.hs	21;"	f
 apTextureHandles	src/Engine/Asset/Types.hs	29;"	f
-applyAllEvents	src/World/ZoomMap.hs	82;"	f
+applyAllEvents	src/World/ZoomMap.hs	86;"	f
 applyCaldera	src/World/Geology.hs	814;"	f
 applyCinderCone	src/World/Geology.hs	729;"	f
 applyCrater	src/World/Geology.hs	417;"	f
@@ -971,7 +971,7 @@ chunkWorldBounds	src/World/Generate.hs	61;"	f
 chunkWorldDiamondHeight	src/World/Grid.hs	136;"	f
 chunkWorldWidth	src/World/Grid.hs	131;"	f
 clamp01	src/World/Render.hs	334;"	f
-clamp01	src/World/ZoomMap.hs	287;"	f
+clamp01	src/World/ZoomMap.hs	291;"	f
 clampAbs	src/Engine/Loop/Camera.hs	143;"	f
 clampF	src/Engine/Loop/Camera.hs	155;"	f
 clampInt	src/World/Plate.hs	419;"	f
@@ -1004,7 +1004,7 @@ colorToVec4	src/Math.hs	11;"	f
 combineTransforms	src/Engine/Graphics/Transform.hs	68;"	f
 computeAmbientLight	src/Engine/Loop/Frame.hs	52;"	f
 computeViewBounds	src/World/Render.hs	102;"	f
-computeZoomViewBounds	src/World/ZoomMap.hs	148;"	f
+computeZoomViewBounds	src/World/ZoomMap.hs	152;"	f
 contextCallStack	src/Engine/Core/Error/Exception.hs	132;"	f
 convergentEffect	src/World/Plate.hs	334;"	f
 convertToTextBatches	src/Engine/Scene/Batch/Text.hs	95;"	f
@@ -1147,8 +1147,8 @@ deltaTime	src/Engine/Core/State.hs	87;"	f
 depAssetId	src/Engine/Asset/Handle.hs	44;"	f
 depType	src/Engine/Asset/Handle.hs	45;"	f
 describeCapability	src/Engine/Graphics/Vulkan/Capability.hs	79;"	f
-describeEvolution	src/World/Thread.hs	447;"	f
-describeFeature	src/World/Thread.hs	413;"	f
+describeEvolution	src/World/Thread.hs	446;"	f
+describeFeature	src/World/Thread.hs	412;"	f
 descriptorState	src/Engine/Core/State.hs	104;"	f
 destroyBindlessTextureSystem	src/Engine/Graphics/Vulkan/Texture/Bindless.hs	279;"	f
 destroyFn	src/Engine/Scripting/Lua/API/Graphics.hs	175;"	f
@@ -1208,7 +1208,7 @@ enableVSync	src/Engine/Core/Types.hs	24;"	f
 endVulkanCommandBuffer	src/Engine/Graphics/Vulkan/Command.hs	96;"	f
 engineConfig	src/Engine/Core/State.hs	38;"	f
 ensureDynamicVertexBuffer	src/Engine/Scene/Render.hs	103;"	f
-entryToQuadsList	src/World/ZoomMap.hs	244;"	f
+entryToQuadsList	src/World/ZoomMap.hs	248;"	f
 epChemical	src/World/Types.hs	532;"	f
 epHydraulic	src/World/Types.hs	529;"	f
 epIntensity	src/World/Types.hs	528;"	f
@@ -1349,7 +1349,7 @@ gcWorldTileWidth	src/World/Grid.hs	46;"	f
 generateAndRegister	src/World/Geology.hs	1122;"	f
 generateAndRegisterN	src/World/Geology.hs	1161;"	f
 generateAssetId	src/Engine/Asset/Manager.hs	87;"	f
-generateBackgroundQuads	src/World/ZoomMap.hs	123;"	f
+generateBackgroundQuads	src/World/ZoomMap.hs	127;"	f
 generateCaldera	src/World/Geology.hs	1266;"	f
 generateChunk	src/World/Generate.hs	90;"	f
 generateCinderCone	src/World/Geology.hs	1226;"	f
@@ -1372,13 +1372,13 @@ generateSuperVolcano	src/World/Geology.hs	1354;"	f
 generateTextureHandle	src/Engine/Asset/Manager.hs	69;"	f
 generateVolcanoAttempt	src/World/Geology.hs	540;"	f
 generateVolcanoes	src/World/Geology.hs	526;"	f
-generateZoomMapQuads	src/World/ZoomMap.hs	99;"	f
+generateZoomMapQuads	src/World/ZoomMap.hs	103;"	f
 getAllFontHandles	src/Engine/Asset/Manager.hs	135;"	f
 getAllShaderHandles	src/Engine/Asset/Manager.hs	141;"	f
 getAllTextureHandles	src/Engine/Asset/Manager.hs	129;"	f
 getAvailableExtensions	src/Engine/Graphics/Vulkan/Instance.hs	176;"	f
 getAvailableLayers	src/Engine/Graphics/Vulkan/Instance.hs	181;"	f
-getBgTexture	src/World/ZoomMap.hs	276;"	f
+getBgTexture	src/World/ZoomMap.hs	280;"	f
 getBinDir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	67;"	f
 getBinDir	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy/build/synarchy/autogen/Paths_synarchy.hs	67;"	f
 getBoxTextureSet	src/UI/Manager.hs	552;"	f
@@ -1461,7 +1461,7 @@ getWindowSize	src/Engine/Graphics/Window/GLFW.hs	166;"	f
 getWindowSizeFn	src/Engine/Scripting/Lua/API/Input.hs	76;"	f
 getWorldCoordFn	src/Engine/Scripting/Lua/API/Input.hs	92;"	f
 getWorldSceneQuads	src/Engine/Scene/Render.hs	188;"	f
-getZoomTexture	src/World/ZoomMap.hs	264;"	f
+getZoomTexture	src/World/ZoomMap.hs	268;"	f
 giAdvance	src/Engine/Asset/Types.hs	38;"	f
 giBearing	src/Engine/Asset/Types.hs	37;"	f
 giSize	src/Engine/Asset/Types.hs	36;"	f
@@ -1565,7 +1565,7 @@ isActionDown	src/Engine/Input/Bindings.hs	53;"	f
 isActionDownFn	src/Engine/Scripting/Lua/API/Input.hs	36;"	f
 isBeyondGlacier	src/World/Plate.hs	197;"	f
 isBindlessSupported	src/Engine/Graphics/Vulkan/Capability.hs	60;"	f
-isChunkInView	src/World/ZoomMap.hs	164;"	f
+isChunkInView	src/World/ZoomMap.hs	168;"	f
 isChunkRelevantForSlice	src/World/Render.hs	159;"	f
 isChunkVisibleWrapped	src/World/Render.hs	133;"	f
 isDeviceSuitable	src/Engine/Graphics/Vulkan/Device.hs	194;"	f
@@ -1749,7 +1749,7 @@ mcPhaseOffset	src/World/Types.hs	311;"	f
 mergeLayeredTextItems	src/UI/Render.hs	52;"	f
 mergeQuadsToBatch	src/Engine/Scene/Types/Batch.hs	61;"	f
 mkErrorContext	src/Engine/Core/Error/Exception.hs	151;"	f
-mkZoomQuad	src/World/ZoomMap.hs	220;"	f
+mkZoomQuad	src/World/ZoomMap.hs	224;"	f
 modifyElement	src/UI/Manager.hs	565;"	f
 modifyFocusTargetBuffer	src/UI/Focus.hs	121;"	f
 modifyPage	src/UI/Manager.hs	569;"	f
@@ -1871,7 +1871,7 @@ removeElementReference	src/UI/Manager.hs	203;"	f
 renderElement	src/UI/Render.hs	129;"	f
 renderElementData	src/UI/Render.hs	171;"	f
 renderFinishedSemaphores	src/Engine/Graphics/Vulkan/Types.hs	23;"	f
-renderFromCache	src/World/ZoomMap.hs	184;"	f
+renderFromCache	src/World/ZoomMap.hs	188;"	f
 renderGlyphWithMetrics	src/Engine/Graphics/Font/Load.hs	235;"	f
 renderLayerItems	src/Engine/Graphics/Vulkan/Command/Record.hs	127;"	f
 renderPage	src/UI/Render.hs	114;"	f
@@ -2224,7 +2224,7 @@ unFocusId	src/UI/Focus.hs	29;"	f
 unLayerId	src/UI/Render.hs	33;"	f
 unMaterialId	src/World/Material.hs	31;"	f
 unPageHandle	src/UI/Types.hs	33;"	f
-unWorldPageId	src/World/Thread.hs	409;"	f
+unWorldPageId	src/World/Thread.hs	408;"	f
 undefinedHandle	src/Engine/Graphics/Vulkan/Texture/Handle.hs	22;"	f
 undefinedSlot	src/Engine/Graphics/Vulkan/Texture/Slot.hs	28;"	f
 undefinedTextureData	src/Engine/Graphics/Vulkan/Texture/Undefined.hs	31;"	f
@@ -2404,7 +2404,7 @@ worldLoop	src/World/Thread.hs	53;"	f
 worldManagerRef	src/Engine/Core/State.hs	63;"	f
 worldQueue	src/Engine/Core/State.hs	64;"	f
 worldScreenWidth	src/World/Render.hs	40;"	f
-worldScreenWidth	src/World/ZoomMap.hs	178;"	f
+worldScreenWidth	src/World/ZoomMap.hs	182;"	f
 worldSetCameraFn	src/Engine/Scripting/Lua/API/World.hs	84;"	f
 worldSetDateFn	src/Engine/Scripting/Lua/API/World.hs	131;"	f
 worldSetSunAngleFn	src/Engine/Scripting/Lua/API/World.hs	101;"	f
@@ -2494,10 +2494,10 @@ zceTexIndex	src/World/Types.hs	630;"	f
 zoomFadeEnd	src/World/Grid.hs	145;"	f
 zoomFadeStart	src/World/Grid.hs	141;"	f
 zoomMapLayer	src/World/Grid.hs	127;"	f
-zvBottom	src/World/ZoomMap.hs	145;"	f
-zvLeft	src/World/ZoomMap.hs	142;"	f
-zvRight	src/World/ZoomMap.hs	143;"	f
-zvTop	src/World/ZoomMap.hs	144;"	f
+zvBottom	src/World/ZoomMap.hs	149;"	f
+zvLeft	src/World/ZoomMap.hs	146;"	f
+zvRight	src/World/ZoomMap.hs	147;"	f
+zvTop	src/World/ZoomMap.hs	148;"	f
 ⊘	src/UPrelude.hs	131;"	o
 ⊙	src/UPrelude.hs	136;"	o
 ⊚	src/UPrelude.hs	108;"	o

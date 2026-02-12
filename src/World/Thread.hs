@@ -206,8 +206,7 @@ handleWorldCommand env logger cmd = do
             
             worldState <- emptyWorldState
             
-            --let timeline = buildTimeline seed worldSize 10
-            let timeline = emptyTimeline
+            let timeline = buildTimeline seed worldSize 10
                 params = defaultWorldGenParams
                     { wgpSeed        = seed
                     , wgpWorldSize   = worldSize
