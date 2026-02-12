@@ -6,7 +6,10 @@ import UPrelude
 import Engine.Scripting.Backend
 import qualified Engine.Scripting.Lua.Backend as Lua
 
--- | Create backend based on type (breaks circular dependency)
+-- -----------------------------------------------------------
+-- Backend creation
+-- -----------------------------------------------------------
+
 createBackend ∷ BackendType → IO AnyBackend
 createBackend LuaBackendType = do
   backend ← Lua.createLuaBackend
