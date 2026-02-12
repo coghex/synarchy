@@ -302,27 +302,3 @@ generateHydrothermalVent seed worldSize plates gx gy =
                 , htRadius        = radius
                 , htChimneyHeight = chimneyH
                 }
-
------------------------------------------------------------
--- TimelineBuildState Helpers (needed for generateAndRegister)
------------------------------------------------------------
-
--- | State threaded through timeline construction.
-data TimelineBuildState = TimelineBuildState
-    { tbsFeatures   :: ![PersistentFeature]
-    , tbsNextId     :: !Int
-    , tbsPeriods    :: ![GeoPeriod]       -- ^ Accumulated in reverse
-    , tbsPeriodIdx  :: !Int
-    }
-
--- | Helper to allocate a new feature ID.
-allocFeatureId :: TimelineBuildState -> (GeoFeatureId, TimelineBuildState)
-allocFeatureId tbs =
-    let fid = GeoFeatureId (tbsNextId tbs)
-    in (fid, tbs { tbsNextId = tbsNextId tbs + 1 })
-
--- | Helper to register a new persistent feature.
-registerFeature :: PersistentFeature -> TimelineBuildState -> TimelineBuildState
-registerFeature pf tbs = tbs
-    { tbsFeatures = pf : tbsFeatures tbs
-    }
