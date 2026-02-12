@@ -31,6 +31,10 @@ import Engine.Scene.Types
 import Engine.Scripting.Lua.Types
 import qualified Graphics.UI.GLFW as GLFW
 
+-- -----------------------------------------------------------
+-- Message processing
+-- -----------------------------------------------------------
+
 processLuaMessages ∷ EngineM ε σ ()
 processLuaMessages = do
     env ← ask
@@ -159,11 +163,7 @@ handleSetResolution w h = do
     case glfwWindow state of
         Nothing → logWarnM CatGraphics "Cannot set resolution: no window"
         Just (Window win) → do
-            -- w, h are logical window dimensions (screen coordinates)
-            -- On HiDPI displays, GLFW.setWindowSize expects logical pixels (screen coordinates)
-            -- The framebuffer will automatically be scaled by the OS content scale
             liftIO $ GLFW.setWindowSize win w h
-            -- Update our refs with the actual sizes after resize
             env ← ask
             liftIO $ do
                 (winW, winH) ← GLFW.getWindowSize win
@@ -171,7 +171,6 @@ handleSetResolution w h = do
                 writeIORef (windowSizeRef env) (winW, winH)
                 writeIORef (framebufferSizeRef env) (fbW, fbH)
                 
-                -- Notify Lua of the actual sizes
                 Q.writeQueue (luaQueue env) (LuaWindowResize winW winH)
                 Q.writeQueue (luaQueue env) (LuaFramebufferResize fbW fbH)
             
@@ -186,8 +185,6 @@ handleSetWindowMode mode = do
         Just (Window win) → do
             env ← ask
             liftIO $ do
-                -- Before changing mode, cache current windowed geometry
-                -- (only if we're currently in windowed mode)
                 currentConfig ← readIORef (videoConfigRef env)
                 when (vcWindowMode currentConfig ≡ Windowed) $ do
                     (wx, wy) ← GLFW.getWindowPos win
@@ -228,9 +225,7 @@ handleSetWindowMode mode = do
                                     Just vm → do
                                         let monW = GLFW.videoModeWidth vm
                                             monH = GLFW.videoModeHeight vm
-                                        -- Switch to windowed first (unset monitor)
                                         GLFW.setWindowed win monW monH 0 0
-                                        -- Remove decorations
                                         GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated False
                                         (winW, winH) ← GLFW.getWindowSize win
                                         (fbW, fbH) ← GLFW.getFramebufferSize win
@@ -240,16 +235,11 @@ handleSetWindowMode mode = do
                                                      (LuaWindowResize winW winH)
                                         Q.writeQueue (luaQueue env)
                                                      (LuaFramebufferResize fbW fbH)
-  
-
-
                     Windowed → do
                         ws ← readIORef (windowStateRef env)
                         let (wx, wy) = wsWindowedPos ws
                             (ww, wh) = wsWindowedSize ws
-                        -- Restore decorations
                         GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated True
-                        -- Switch to windowed with cached geometry
                         GLFW.setWindowed win ww wh wx wy
                         (winW, winH) ← GLFW.getWindowSize win
                         (fbW, fbH) ← GLFW.getFramebufferSize win
@@ -260,16 +250,17 @@ handleSetWindowMode mode = do
                         Q.writeQueue (luaQueue env)
                                      (LuaFramebufferResize fbW fbH)
 
+-- -----------------------------------------------------------
+-- Graphics quality handlers
+-- -----------------------------------------------------------
 
 handleSetVSync ∷ Bool → EngineM ε σ ()
 handleSetVSync vsync = do
-    -- Update the config so recreateSwapchain reads the new value
     env ← ask
     liftIO $ do
         oldConfig ← readIORef (videoConfigRef env)
         writeIORef (videoConfigRef env) $ oldConfig { vcVSync = vsync }
     
-    -- Recreate the swapchain with the new present mode
     state ← gets graphicsState
     case glfwWindow state of
         Nothing → logWarnM CatGraphics "Cannot set VSync: no window"
@@ -278,7 +269,6 @@ handleSetVSync vsync = do
                 <> if vsync then "enabled" else "disabled"
             recreateSwapchain window
 
--- | Handle MSAA change — same pattern as VSync
 handleSetMSAA ∷ Int → EngineM ε σ ()
 handleSetMSAA msaa = do
     env ← ask
@@ -319,20 +309,21 @@ handleSetTextureFilter tf = do
                 <> " (takes effect on next texture load or restart)"
         _ → pure ()
 
--- | Handle texture load request
+-- -----------------------------------------------------------
+-- Asset loading handlers
+-- -----------------------------------------------------------
+
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
 handleLoadTexture handle path = do
     logDebugM CatLua $ "Loading texture from Lua: " <> T.pack path
                     <> " (handle: " <> T.pack (show handle) <> ")"
     assetId ← loadTextureAtlasWithHandle handle (T.pack $ takeBaseName path) path "default"
-    -- notify lua
     env ← ask
     let (TextureHandle h) = handle
     liftIO $ Q.writeQueue (luaQueue env)
       (LuaAssetLoaded "texture" (fromIntegral h) (T.pack path))
     logDebugM CatLua $ "Texture loaded successfully: " <> T.pack path
 
--- | Handle font load request
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM ε σ ()
 handleLoadFont handle path size = do
     logDebugM CatLua $ "Loading font from Lua: " <> T.pack path
@@ -344,7 +335,10 @@ handleLoadFont handle path size = do
     liftIO $ Q.writeQueue etlq (LuaAssetLoaded "font" (fromIntegral h) (T.pack path))
     logDebugM CatLua $ "Font loaded successfully: " <> T.pack path
 
--- | Handle spawn text request
+-- -----------------------------------------------------------
+-- Object manipulation handlers
+-- -----------------------------------------------------------
+
 handleSpawnText ∷ ObjectId → Float → Float → FontHandle → Text
                 → Vec4 → LayerId → Float → EngineM ε σ ()
 handleSpawnText oid x y fontHandle text color layer size = do
@@ -370,7 +364,6 @@ handleSpawnText oid x y fontHandle text color layer size = do
           Nothing → logDebugM CatLua $ "Failed to add text object " <> T.pack (show oid)
       Nothing → logDebugM CatLua "Cannot spawn text: no active scene"
 
--- | Handle set text request
 handleSetText ∷ ObjectId → Text → EngineM ε σ ()
 handleSetText objId text = do
     env ← ask
@@ -379,7 +372,6 @@ handleSetText objId text = do
     modifySceneNode objId $ \node → node { nodeText = Just text }
     return ()
 
--- | Handle spawn sprite request
 handleSpawnSprite ∷ ObjectId → Float → Float → Float → Float 
                   → TextureHandle → LayerId → EngineM ε σ ()
 handleSpawnSprite objId x y width height texHandle layer = do

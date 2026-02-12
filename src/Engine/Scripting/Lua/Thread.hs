@@ -37,7 +37,10 @@ import Control.Monad.Logger (LogLevel(..), toLogStr, defaultLoc)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
 import System.Timeout (timeout)
 
--- | Start the Lua scripting thread
+-- -----------------------------------------------------------
+-- Thread startup
+-- -----------------------------------------------------------
+
 startLuaThread ∷ EngineEnv → IO ThreadState
 startLuaThread env = do
     let apRef     = assetPoolRef env
@@ -56,7 +59,6 @@ startLuaThread env = do
             setupShellSandbox (lbsLuaState backendState)
             logDebug logger CatLua "Shell sandbox set up."
             
-            -- Load init.lua as a module
             let scriptPath = "scripts/init.lua"
             currentTime ← getCurrentTime
             let currentSecs = realToFrac $ utctDayTime currentTime
@@ -121,7 +123,10 @@ startLuaThread env = do
         )
     return $ ThreadState stateRef threadId
 
--- | Create Lua backend state
+-- -----------------------------------------------------------
+-- Backend state creation
+-- -----------------------------------------------------------
+
 createLuaBackendState ∷ Q.Queue LuaToEngineMsg → Q.Queue LuaMsg
                       → IORef AssetPool → IORef Word32
                       → IORef InputState → IO LuaBackendState
@@ -140,7 +145,10 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef = do
     , lbsInputState   = inputSRef
     }
 
--- | Lua event loop
+-- -----------------------------------------------------------
+-- Event loop
+-- -----------------------------------------------------------
+
 runLuaLoop ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
 runLuaLoop env ls stateRef = do
     control ← readIORef stateRef
@@ -185,7 +193,10 @@ runLuaLoop env ls stateRef = do
                         Map.adjust (\s → s { scriptNextTick = scriptNextTick s + scriptTickRate s }) sid
                   runLuaLoop env ls stateRef
 
--- | Process messages from anywhere to lua
+-- -----------------------------------------------------------
+-- Message processing
+-- -----------------------------------------------------------
+
 processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
 processLuaMsgs env ls stateRef = do
     let (_, etlq) = lbsMsgQueues ls
@@ -198,7 +209,6 @@ processLuaMsgs env ls stateRef = do
             processLuaMsgs env ls stateRef
         Nothing → return ()
 
--- | Process a single lua message
 processLuaMsg ∷ EngineEnv → LuaBackendState → IORef ThreadControl → LuaMsg → IO ()
 processLuaMsg env ls stateRef msg = case msg of
   LuaTextureLoaded handle assetId → do
@@ -216,6 +226,11 @@ processLuaMsg env ls stateRef msg = case msg of
     logWarn logger CatLua $ 
         "Font load failed: " <> T.pack (show err)
   LuaThreadKill → writeIORef stateRef ThreadStopped
+
+-- -----------------------------------------------------------
+-- Event handlers (Mouse)
+-- -----------------------------------------------------------
+
   LuaMouseDownEvent button x y → do
     let buttonNum = case button of
           GLFW.MouseButton'1 → 1
@@ -232,6 +247,11 @@ processLuaMsg env ls stateRef msg = case msg of
           _                  → 0
     broadcastToModules ls "onMouseUp"
       [ScriptNumber (fromIntegral buttonNum), ScriptNumber x, ScriptNumber y]
+
+-- -----------------------------------------------------------
+-- Event handlers (Scroll)
+-- -----------------------------------------------------------
+
   LuaScrollEvent dx dy → do
     broadcastToModules ls "onScroll"
       [ ScriptNumber (realToFrac dx)
@@ -242,6 +262,11 @@ processLuaMsg env ls stateRef msg = case msg of
       [ ScriptNumber (realToFrac dx)
       , ScriptNumber (realToFrac dy)
       ]
+
+-- -----------------------------------------------------------
+-- Event handlers (UI)
+-- -----------------------------------------------------------
+
   LuaUIClickEvent elemHandle callbackName → do
     let (ElementHandle h) = elemHandle
     broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
@@ -272,10 +297,20 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onUIEnd" []
   LuaUIFocusLost → 
     broadcastToModules ls "onUIFocusLost" []
+
+-- -----------------------------------------------------------
+-- Event handlers (Keyboard)
+-- -----------------------------------------------------------
+
   LuaKeyDownEvent key → 
     broadcastToModules ls "onKeyDown" [ScriptString (keyToText key)]
   LuaKeyUpEvent key → 
     broadcastToModules ls "onKeyUp" [ScriptString (keyToText key)]
+
+-- -----------------------------------------------------------
+-- Event handlers (Debug/Shell)
+-- -----------------------------------------------------------
+
   LuaShellToggle → 
     broadcastToModules ls "onShellToggle" []
   LuaDebugToggle → do
@@ -323,18 +358,33 @@ processLuaMsg env ls stateRef msg = case msg of
           return ()
       Nothing → 
         logWarn logger CatLua "Debug script not found"
+
+-- -----------------------------------------------------------
+-- Event handlers (Window)
+-- -----------------------------------------------------------
+
   LuaWindowResize w h → do
     broadcastToModules ls "onWindowResize"
       [ScriptNumber (fromIntegral w), ScriptNumber (fromIntegral h)]
   LuaFramebufferResize w h → do
     broadcastToModules ls "onFramebufferResize"
       [ScriptNumber (fromIntegral w), ScriptNumber (fromIntegral h)]
+
+-- -----------------------------------------------------------
+-- Event handlers (Assets)
+-- -----------------------------------------------------------
+
   LuaAssetLoaded assetType handle path → do
     broadcastToModules ls "onAssetLoaded"
       [ ScriptString assetType
       , ScriptNumber (fromIntegral handle)
       , ScriptString path
       ]
+
+-- -----------------------------------------------------------
+-- Event handlers (Focus/Text Input)
+-- -----------------------------------------------------------
+
   LuaCharInput fid c → 
     broadcastToModules ls "onCharInput"
       [ScriptNumber (fromIntegral fid), ScriptString (T.singleton c)]
