@@ -3,7 +3,6 @@ module World.Types where
 
 import UPrelude
 import Data.List (find, partition, sortOn)
-import Data.Hashable (Hashable(..))
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
@@ -37,6 +36,9 @@ data LoadedChunk = LoadedChunk
     , lcSurfaceMap ∷ !(HM.HashMap (Int, Int) Int)
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
+
+chunkSize ∷ Int
+chunkSize = 16
 
 -----------------------------------------------------------
 -- World Generation Parameters

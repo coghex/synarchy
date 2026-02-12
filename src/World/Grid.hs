@@ -30,6 +30,7 @@ module World.Grid
     ) where
 
 import UPrelude
+import World.Types (chunkSize)
 import Engine.Scene.Base (LayerId(..))
 
 -----------------------------------------------------------
@@ -129,13 +130,11 @@ zoomMapLayer = LayerId 2
 
 -- | Screen-space width of a full chunk diamond
 chunkWorldWidth ∷ Float
-chunkWorldWidth = fromIntegral chunkSizePx * tileWidth
-  where chunkSizePx = 16  -- chunkSize, but we avoid circular import
+chunkWorldWidth = fromIntegral chunkSize * tileWidth
 
 -- | Screen-space diamond height of a full chunk
 chunkWorldDiamondHeight ∷ Float
-chunkWorldDiamondHeight = fromIntegral chunkSizePx * tileDiamondHeight
-  where chunkSizePx = 16
+chunkWorldDiamondHeight = fromIntegral chunkSize * tileDiamondHeight
 
 -- | Zoom level where the map starts fading in (alpha = 0 here)
 zoomFadeStart ∷ Float

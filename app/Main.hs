@@ -3,7 +3,7 @@ module Main where
 
 import UPrelude
 import Control.Exception (displayException)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef)
 import System.Environment (setEnv)
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Defaults (defaultWindowConfig)
@@ -11,8 +11,7 @@ import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), graphicsState, glfwWindow)
 import Engine.Core.Thread (shutdownThread)
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, withTiming, logInfoM)
-import Engine.Graphics.Config (loadVideoConfig)
+import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Graphics.Vulkan.Init (initializeVulkan)
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
@@ -45,7 +44,6 @@ main = do
   worldThreadState ← startWorldThread env
   
   -- Load video configuration
-  logger ← liftIO $ readIORef (loggerRef env)
   videoConfig ← readIORef (videoConfigRef env)
   
   -- Define main engine action
@@ -68,7 +66,7 @@ main = do
         mainLoop
         
         -- Shutdown
-        shutdownEngine window inputThreadState luaThreadState
+        shutdownEngine window worldThreadState inputThreadState luaThreadState
         logDebugM CatSystem "Engine shutdown complete."
   
   -- Run engine

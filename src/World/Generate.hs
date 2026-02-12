@@ -22,7 +22,8 @@ import Data.Bits (xor, shiftR, (.&.))
 import Data.Word (Word32, Word64)
 import qualified Data.HashMap.Strict as HM
 import World.Types (Tile(..), ChunkCoord(..), Chunk, WorldGenParams(..)
-                   , GeoTimeline(..), GeoPeriod(..), GeoEvent(..))
+                   , GeoTimeline(..), GeoPeriod(..), GeoEvent(..)
+                   , chunkSize)
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalX)
@@ -32,9 +33,6 @@ import World.Geology (applyGeoEvent, applyErosion, GeoModification(..))
 -----------------------------------------------------------
 -- Constants
 -----------------------------------------------------------
-
-chunkSize ∷ Int
-chunkSize = 16
 
 chunkLoadRadius ∷ Int
 chunkLoadRadius = 2

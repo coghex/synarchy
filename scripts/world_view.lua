@@ -10,49 +10,47 @@ worldView.fbH = 0
 
 -- Texture handles
 worldView.textures = {
-    granite = nil,
-    diorite = nil,
-    gabbro = nil,
-    glacier = nil,
-    lava = nil,
-    noTexture = nil,
-    blankTexture = nil,
-    isoFaceMap = nil,
-    noFaceMap = nil,
-    zoomGranite = nil,
-    zoomDiorite = nil,
-    zoomGabbro = nil,
-    zoomOcean = nil,
-    zoomGlacier = nil,
-    zoomLava = nil,
-    bgGranite = nil,
-    bgDiorite = nil,
-    bgGabbro = nil,
-    bgOcean = nil,
-    bgGlacier = nil,
-    bgLava = nil,
+    granite = -1,
+    diorite = -1,
+    gabbro = -1,
+    glacier = -1,
+    lava = -1,
+    noTexture = -1,
+    blankTexture = -1,
+    isoFaceMap = -1,
+    noFaceMap = -1,
+    zoomGranite = -1,
+    zoomDiorite = -1,
+    zoomGabbro = -1,
+    zoomOcean = -1,
+    zoomGlacier = -1,
+    zoomLava = -1,
+    bgGranite = -1,
+    bgDiorite = -1,
+    bgGabbro = -1,
+    bgOcean = -1,
+    bgGlacier = -1,
+    bgLava = -1,
     -- New materials
-    basalt = nil,
-    obsidian = nil,
-    sandstone = nil,
-    limestone = nil,
-    shale = nil,
-    impactite = nil,
-    iron = nil,
-    olivine = nil,
-    pyroxene = nil,
-    feldspar = nil,
+    basalt = -1,
+    obsidian = -1,
+    sandstone = -1,
+    limestone = -1,
+    shale = -1,
+    impactite = -1,
+    iron = -1,
+    olivine = -1,
+    pyroxene = -1,
+    feldspar = -1,
     -- Zoom variants
-    zoomBasalt = nil,
-    zoomObsidian = nil,
-    zoomImpactite = nil,
+    zoomBasalt = -1,
+    zoomObsidian = -1,
+    zoomImpactite = -1,
     -- Background variants
-    bgBasalt = nil,
-    bgImpactite = nil,
+    bgBasalt = -1,
+    bgImpactite = -1,
 }
-
--- Track which textures have loaded
-worldView.texturesNeeded = 28
+worldView.texturesNeeded = 0
 worldView.texturesLoadedCount = 0
 
 -----------------------------------------------------------
@@ -60,6 +58,10 @@ worldView.texturesLoadedCount = 0
 -----------------------------------------------------------
 
 function worldView.init(width, height)
+    -- Track which textures have loaded
+    worldView.texturesNeeded = getTableSize(worldView.textures)
+    worldView.texturesLoadedCount = 0
+
     worldView.fbW = width
     worldView.fbH = height
     
@@ -161,6 +163,7 @@ function worldView.createWorld()
         blankTexture   = worldView.textures.blankTexture,
         noTexture      = worldView.textures.noTexture,
         isoFaceMap     = worldView.textures.isoFaceMap,
+        noFaceMap      = worldView.textures.noFaceMap,
         zoomGranite    = worldView.textures.zoomGranite,
         zoomDiorite    = worldView.textures.zoomDiorite,
         zoomGabbro     = worldView.textures.zoomGabbro,
@@ -303,6 +306,18 @@ function worldView.shutdown()
     end
     
     worldManager.destroyWorld()
+end
+
+-----------------------------------------------------------
+-- Utility
+-----------------------------------------------------------
+
+function getTableSize(table)
+    local count = 0
+    for key, value in pairs(table) do
+        count = count + 1
+    end
+    return count
 end
 
 return worldView

@@ -20,6 +20,7 @@ import Data.Word (Word32, Word64)
 import Data.List (sortBy)
 import Data.Ord (comparing)
 import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro, matGlacier)
+import World.Types (chunkSize)
 
 -----------------------------------------------------------
 -- Tectonic Plate
@@ -174,10 +175,8 @@ classifyBoundary worldSize plateA plateB =
 -----------------------------------------------------------
 
 -- | How many tile-rows wide the glacier zone is at each pole.
---   Scales proportionally with world size.
---   At worldSize=128 this gives 16 (one chunk), preserving original behavior.
 glacierWidthRows ∷ Int
-glacierWidthRows = 16
+glacierWidthRows = chunkSize
 
 -- | Check if a global tile position is in the glacier zone.
 --   The glacier border runs horizontally on screen (constant screenY).

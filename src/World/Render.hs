@@ -37,10 +37,9 @@ import qualified Data.Vector as V
 -- World Screen Width (wrapping period in screen-space X)
 -----------------------------------------------------------
 
-worldScreenWidth ∷ Float
-worldScreenWidth =
-    let worldSizeChunks = 128
-        worldTiles = worldSizeChunks * chunkSize
+worldScreenWidth ∷ Int → Float
+worldScreenWidth worldSizeChunks =
+    let worldTiles = worldSizeChunks * chunkSize
     in fromIntegral worldTiles * tileHalfWidth
 
 updateWorldTiles ∷ EngineM ε σ (V.Vector SortableQuad)
@@ -120,9 +119,9 @@ computeViewBounds camera fbW fbH =
 -- Chunk-Level Culling (wrap-aware)
 -----------------------------------------------------------
 
-bestWrapOffset ∷ Float → Float → Float
-bestWrapOffset camX chunkScreenX =
-    let wsw = worldScreenWidth
+bestWrapOffset ∷ Int → Float → Float → Float
+bestWrapOffset worldSize camX chunkScreenX =
+    let wsw = worldScreenWidth worldSize
         candidates = [0, wsw, -wsw]
         dist offset = abs (chunkScreenX + offset - camX)
     in minimumBy (\a b → compare (dist a) (dist b)) candidates
@@ -130,8 +129,8 @@ bestWrapOffset camX chunkScreenX =
     minimumBy f (x:xs) = foldl' (\best c → if f c best ≡ LT then c else best) x xs
     minimumBy _ []      = 0
 
-isChunkVisibleWrapped ∷ ViewBounds → Float → ChunkCoord → Maybe Float
-isChunkVisibleWrapped vb camX coord =
+isChunkVisibleWrapped ∷ Int → ViewBounds → Float → ChunkCoord → Maybe Float
+isChunkVisibleWrapped worldSize vb camX coord =
     let ((minGX, minGY), (maxGX, maxGY)) = chunkWorldBounds coord
         (sxMin, _) = gridToScreen minGX maxGY
         (sxMax, _) = gridToScreen maxGX minGY
@@ -139,7 +138,7 @@ isChunkVisibleWrapped vb camX coord =
         (_, syMax) = gridToScreen maxGX maxGY
 
         chunkCenterX = (sxMin + sxMax + tileWidth) / 2.0
-        offset = bestWrapOffset camX chunkCenterX
+        offset = bestWrapOffset worldSize camX chunkCenterX
 
         chunkLeft   = sxMin + offset
         chunkRight  = sxMax + tileWidth + offset
@@ -182,6 +181,7 @@ renderWorldQuads ∷ EngineEnv → WorldState → Float
 renderWorldQuads env worldState zoomAlpha = do
     tileData ← liftIO $ readIORef (wsTilesRef worldState)
     textures ← liftIO $ readIORef (wsTexturesRef worldState)
+    paramsM ← liftIO $ readIORef (wsGenParamsRef worldState)
     logger ← liftIO $ readIORef (loggerRef env)
     camera ← liftIO $ readIORef (cameraRef env)
     
@@ -196,6 +196,9 @@ renderWorldQuads env worldState zoomAlpha = do
         lookupFmSlot texHandle =
             let s = lookupSlot texHandle
             in if s ≡ 0 then defFmSlot else fromIntegral s
+        worldSize = case paramsM of
+                      Nothing → 128
+                      Just params → wgpWorldSize params
     
     let vb = computeViewBounds camera fbW fbH
         zSlice = camZSlice camera
@@ -206,7 +209,7 @@ renderWorldQuads env worldState zoomAlpha = do
             [ (lc, offset)
             | lc ← chunks
             , isChunkRelevantForSlice zSlice lc
-            , Just offset ← [isChunkVisibleWrapped vb camX (lcCoord lc)]
+            , Just offset ← [isChunkVisibleWrapped worldSize vb camX (lcCoord lc)]
             ]
     
     let chunkQuads = concatMap (\(lc, xOffset) →
