@@ -181,10 +181,17 @@ isChunkVisibleWrapped ∷ CameraFacing → Int → ViewBounds → Float
   → ChunkCoord → Maybe Float
 isChunkVisibleWrapped facing worldSize vb camX coord =
     let ((minGX, minGY), (maxGX, maxGY)) = chunkWorldBounds coord
-        (sxMin, _) = gridToScreen facing minGX maxGY
-        (sxMax, _) = gridToScreen facing maxGX minGY
-        (_, syMin) = gridToScreen facing minGX minGY
-        (_, syMax) = gridToScreen facing maxGX maxGY
+        -- Project all four grid-space corners into screen space
+        corners = [ gridToScreen facing gx gy
+                  | gx ← [minGX, maxGX]
+                  , gy ← [minGY, maxGY]
+                  ]
+        sxs = map fst corners
+        sys = map snd corners
+        sxMin = minimum sxs
+        sxMax = maximum sxs
+        syMin = minimum sys
+        syMax = maximum sys
 
         chunkCenterX = (sxMin + sxMax + tileWidth) / 2.0
         offset = bestWrapOffset worldSize camX chunkCenterX

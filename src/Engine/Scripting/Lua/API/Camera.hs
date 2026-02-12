@@ -22,6 +22,7 @@ import World.Types
 import World.Material (MaterialId(..))
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Generate (globalToChunk, applyTimeline)
+import World.ZoomMap (buildZoomCache)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified HsLua as Lua
@@ -181,6 +182,8 @@ cameraGetFacingFn env = do
 -- Helper to invalidate all baked caches
 invalidateWorldCaches ∷ EngineEnv → IO ()
 invalidateWorldCaches env = do
+    camera <- readIORef (cameraRef env)
+    let facing = camFacing camera
     manager ← readIORef (worldManagerRef env)
     forM_ (wmWorlds manager) $ \(_, ws) → do
         writeIORef (wsQuadCacheRef ws)     Nothing
@@ -188,3 +191,7 @@ invalidateWorldCaches env = do
         writeIORef (wsBgQuadCacheRef ws)   Nothing
         writeIORef (wsBakedZoomRef ws)     V.empty
         writeIORef (wsBakedBgRef ws)       V.empty
+        mParams ← readIORef (wsGenParamsRef ws)
+        case mParams of
+            Just params → writeIORef (wsZoomCacheRef ws) (buildZoomCache facing params)
+            Nothing → return ()
