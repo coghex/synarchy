@@ -27,13 +27,19 @@ import Engine.Core.Log
 import Engine.Core.Error.Exception (EngineException, ExceptionType)
 import Engine.Core.State (EngineEnv(..))
 
--- | Get logger from engine environment
+-----------------------------------------------------------
+-- Logger Access
+-----------------------------------------------------------
+
 getLogger ∷ (MonadIO m, MonadReader EngineEnv m) ⇒ m LoggerState
 getLogger = do
   ref ← asks loggerRef
   liftIO $ readIORef ref
 
--- | Monadic versions that auto-fetch logger from environment
+-----------------------------------------------------------
+-- Basic Logging Functions
+-----------------------------------------------------------
+
 logDebugM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
           ⇒ LogCategory → Text → m ()
 logDebugM cat msg = do
@@ -58,7 +64,10 @@ logErrorM cat msg = do
   logger ← getLogger
   logError logger cat msg
 
--- Structured versions
+-----------------------------------------------------------
+-- Structured Logging Functions
+-----------------------------------------------------------
+
 logDebugSM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
            ⇒ LogCategory → Text → [(Text, Text)] → m ()
 logDebugSM cat msg fields = do
@@ -83,7 +92,10 @@ logErrorSM cat msg fields = do
   logger ← getLogger
   logErrorS logger cat msg fields
 
--- Context management
+-----------------------------------------------------------
+-- Context and Utilities
+-----------------------------------------------------------
+
 withLogContextM ∷ (MonadIO m, MonadReader EngineEnv m) 
                 ⇒ Text → m a → m a
 withLogContextM breadcrumb action = do
@@ -108,6 +120,6 @@ withTiming cat label action = do
   result ← action
   end ← liftIO getCurrentTime
   let durationMs = realToFrac (diffUTCTime end start * 1000) ∷ Double
-  when (durationMs > 1.0) $  -- Only log if > 1ms
+  when (durationMs > 1.0) $
     logDebugSM cat label [("duration_ms", T.pack $ show durationMs)]
   return result

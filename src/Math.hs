@@ -4,10 +4,19 @@ import UPrelude
 import Numeric (readHex)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 
+-----------------------------------------------------------
+-- Hex Parsing
+-----------------------------------------------------------
+
 readHex' ∷ ∀ α. (Num α, Eq α) ⇒ String → α
 readHex' s = case readHex s of
   [(n, "")] → n
   _         → 0
+
+-----------------------------------------------------------
+-- Color Parsing
+-----------------------------------------------------------
+
 colorToVec4 ∷ String → Vec4
 colorToVec4 ('#':r1:r2:g1:g2:b1:b2:[]) =
   let r = fromIntegral (readHex' ([r1, r2]) ∷ Int) / 255.0

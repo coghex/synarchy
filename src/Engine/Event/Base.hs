@@ -1,5 +1,10 @@
 module Engine.Event.Base where
+
 import UPrelude
+
+-----------------------------------------------------------
+-- System Events
+-----------------------------------------------------------
 
 data LogLevel = LogDebug Int | LogInfo | LogWarn | LogError
   deriving (Show, Eq, Ord)
