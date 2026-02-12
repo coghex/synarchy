@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module World.Geology.Types
     ( GeoModification(..)
+    , VolcanoEra(..)
     , noModification
     , CraterEra(..)
     , TimelineBuildState(..)
@@ -27,6 +28,16 @@ data GeoModification = GeoModification
 
 noModification :: GeoModification
 noModification = GeoModification 0 Nothing
+
+------------------------------------------------------------
+-- Volcano Era
+-------------------------------------------------------------
+
+-- | VolcanoEra determines where and what type of volcanoes form.
+data VolcanoEra
+    = VolcanoEra_Boundary    -- ^ Tied to convergent boundaries
+    | VolcanoEra_Hotspot     -- ^ Random placement on land
+    deriving (Show, Eq)
 
 -----------------------------------------------------------
 -- Crater Era

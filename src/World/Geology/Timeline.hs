@@ -32,12 +32,6 @@ import World.Geology.Generate
     )
 import World.Geology.Evolution (evolveOneFeature)
 
--- | VolcanoEra determines where and what type of volcanoes form.
-data VolcanoEra
-    = VolcanoEra_Boundary    -- ^ Tied to convergent boundaries
-    | VolcanoEra_Hotspot     -- ^ Random placement on land
-    deriving (Show, Eq)
-
 buildTimeline :: Word64 -> Int -> Int -> GeoTimeline
 buildTimeline seed worldSize plateCount =
     let plates = generatePlates seed worldSize plateCount

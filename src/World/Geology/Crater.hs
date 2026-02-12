@@ -9,7 +9,7 @@ module World.Geology.Crater
 import UPrelude
 import World.Types
 import World.Material
-import World.Plate (isBeyondGlacier, elevationAtGlobal)
+import World.Plate (isBeyondGlacier, elevationAtGlobal, TectonicPlate)
 import World.Geology.Types
 import World.Geology.Hash
 

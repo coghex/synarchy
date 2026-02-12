@@ -17,7 +17,7 @@ import UPrelude
 import Data.Bits (xor)
 import Data.Word (Word64)
 import World.Types
-import World.Plate (isBeyondGlacier, elevationAtGlobal)
+import World.Plate (isBeyondGlacier, elevationAtGlobal, TectonicPlate)
 import World.Geology.Types
 import World.Geology.Hash (hashGeo, hashToFloatGeo, hashToRangeGeo, scaleCount)
 
