@@ -27,12 +27,19 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LogLevel(..), defaultLoc)
 
--- | engine.getUIScale()
+-- -----------------------------------------------------------
+-- UI scale
+-- -----------------------------------------------------------
+
 getUIScaleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getUIScaleFn env = do
     vconfig ← Lua.liftIO $ readIORef (videoConfigRef env)
     Lua.pushnumber (Lua.Number (realToFrac (vcUIScale vconfig)))
     return 1
+
+-- -----------------------------------------------------------
+-- Texture loading
+-- -----------------------------------------------------------
 
 loadTextureFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 loadTextureFn backendState = do
@@ -53,6 +60,10 @@ loadTextureFn backendState = do
       Lua.pushnumber (Lua.Number (fromIntegral n))
     Nothing → Lua.pushnil
   return 1
+
+-- -----------------------------------------------------------
+-- Sprite operations
+-- -----------------------------------------------------------
 
 spawnSpriteFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 spawnSpriteFn env backendState = do
@@ -98,6 +109,10 @@ spawnSpriteFn env backendState = do
           "spawnSprite requires 5 arguments: x, y, width, height, textureHandle"
       Lua.pushnil
   return 1
+
+-- -----------------------------------------------------------
+-- Object manipulation
+-- -----------------------------------------------------------
 
 setPosFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 setPosFn env backendState = do

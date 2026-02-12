@@ -25,6 +25,10 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Monad.Logger (LogLevel(..), defaultLoc)
 import Control.Monad.IO.Class (liftIO)
 
+-- -----------------------------------------------------------
+-- Font loading
+-- -----------------------------------------------------------
+
 loadFontFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 loadFontFn env backendState = do
   path ← Lua.tostring 1
@@ -38,13 +42,10 @@ loadFontFn env backendState = do
         -- Check if font is already cached
         fontCache ← readIORef (fontCacheRef env)
         let cacheKey = (pathStr, -1)  -- -1 for SDF fonts
-        
         case Map.lookup cacheKey (fcPathCache fontCache) of
           Just existingHandle → do
-            -- Font already loaded, return existing handle
             return existingHandle
           Nothing → do
-            -- Generate new handle and request load
             pool ← readIORef (lbsAssetPool backendState)
             handle ← generateFontHandle pool
             updateFontState handle
@@ -57,6 +58,10 @@ loadFontFn env backendState = do
     _ → Lua.pushnil
   return 1
 
+-- -----------------------------------------------------------
+-- Text operations
+-- -----------------------------------------------------------
+
 spawnTextFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 spawnTextFn env backendState = do
   x ← Lua.tonumber 1
@@ -65,7 +70,7 @@ spawnTextFn env backendState = do
   text ← Lua.tostring 4
   color ← Lua.tostring 5
   layer ← Lua.tointeger 6
-  fontSize ← Lua.tonumber 7  -- NEW: Add size parameter
+  fontSize ← Lua.tonumber 7
   case (x, y, fontHandleNum, color, text, fontSize) of
     (Just xVal, Just yVal, Just fh, Just c, Just textBS, Just size) → do
       let layerId = LayerId $ fromIntegral $ fromMaybe 0 layer
@@ -122,11 +127,15 @@ getTextFn env = do
     _ → Lua.pushnil
   return 1
 
+-- -----------------------------------------------------------
+-- Width calculation
+-- -----------------------------------------------------------
+
 getTextWidthFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getTextWidthFn env = do
   fontHandleNum ← Lua.tointeger 1
   text ← Lua.tostring 2
-  fontSize ← Lua.tonumber 3  -- NEW: Add size parameter
+  fontSize ← Lua.tonumber 3
   case (fontHandleNum, text, fontSize) of
       (Just fh, Just textBS, Just size) → do
           width ← Lua.liftIO $ do

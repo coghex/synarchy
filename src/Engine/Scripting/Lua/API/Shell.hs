@@ -9,6 +9,10 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Char8 as BS
 
+-- -----------------------------------------------------------
+-- Shell execution
+-- -----------------------------------------------------------
+
 shellExecuteFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
 shellExecuteFn = do
   code ← Lua.tostring 1
@@ -64,8 +68,11 @@ shellTryLoadAndRun src = do
             Lua.pop 1
             return $ Left $ maybe "Parse error" TE.decodeUtf8 err
 
+-- -----------------------------------------------------------
+-- Sandbox setup
+-- -----------------------------------------------------------
+
 -- | Create a sandboxed environment for shell execution
--- This creates a global 'shellSandbox' table with only safe functions
 setupShellSandbox ∷ Lua.State → IO ()
 setupShellSandbox lst = Lua.runWith lst $ do
     Lua.newtable
@@ -103,19 +110,16 @@ setupShellSandbox lst = Lua.runWith lst $ do
     copyFromTable "os" "clock"
     copyFromTable "os" "difftime"
     Lua.setfield (-2) (Lua.Name "os")
-    
     Lua.setglobal (Lua.Name "shellSandbox")
   where
     copyGlobal ∷ BS.ByteString → Lua.LuaE Lua.Exception ()
     copyGlobal name = do
         _ ← Lua.getglobal (Lua.Name name)
         Lua.setfield (-2) (Lua.Name name)
-    
     copyGlobalTable ∷ BS.ByteString → Lua.LuaE Lua.Exception ()
     copyGlobalTable name = do
         _ ← Lua.getglobal (Lua.Name name)
         Lua.setfield (-2) (Lua.Name name)
-    
     copyFromTable ∷ BS.ByteString → BS.ByteString → Lua.LuaE Lua.Exception ()
     copyFromTable tableName funcName = do
         _ ← Lua.getglobal (Lua.Name tableName)
