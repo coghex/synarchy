@@ -12,13 +12,14 @@ import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Thread (ThreadState, shutdownThread)
-import Engine.Core.Error.Exception (EngineException(..), SystemError(..))
+import Engine.Core.Error.Exception (EngineException(..))
 import Engine.Graphics.Window.Types (Window(..))
-import Engine.Graphics.Vulkan.Types.Cleanup (Cleanup(..), runAllCleanups)
+import Engine.Graphics.Vulkan.Types.Cleanup (runAllCleanups)
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Input.Callback (clearGLFWCallbacks)
-import Engine.Scene.Types (createBatchManager, SceneManager(..))
-import Vulkan.Core10 (deviceWaitIdle)
+import Engine.Scene.Types (createBatchManager, SceneManager(..)
+                          , SceneDynamicBuffer(..), TextInstanceBuffer(..))
+import Vulkan.Core10 (deviceWaitIdle, destroyBuffer, freeMemory)
 
 -- | Shutdown the engine
 shutdownEngine ∷ Window → ThreadState → ThreadState → ThreadState
@@ -26,15 +27,32 @@ shutdownEngine ∷ Window → ThreadState → ThreadState → ThreadState
 shutdownEngine (Window win) worldThreadState inputThreadState luaThreadState = do
     logInfoM CatSystem "Starting engine shutdown..."
     state ← gets graphicsState
-    
+    let device = vulkanDevice state
+
     -- Clear batch manager
     logDebugM CatSystem "Clearing batch manager..."
     modify $ \s → s { sceneManager = (sceneManager s) {
                           smBatchManager = createBatchManager } }
+    -- Destroy cached text instance buffer
+    case device of
+        Just dev → do
+            case textInstanceBuffer state of
+                Just tib → liftIO $ do
+                    destroyBuffer dev (tibBuffer tib) Nothing
+                    freeMemory dev (tibMemory tib) Nothing
+                Nothing → pure ()
+            
+            -- Destroy cached dynamic vertex buffer
+            case dynamicVertexBuffer state of
+                Just sdb → liftIO $ do
+                    destroyBuffer dev (sdbBuffer sdb) Nothing
+                    freeMemory dev (sdbMemory sdb) Nothing
+                Nothing → pure ()
+        Nothing → logDebugM CatSystem "No Vulkan device found, skipping buffer cleanup"
     
     -- Wait for Vulkan device
     logDebugM CatSystem "Waiting for Vulkan device idle..."
-    forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
+    forM_ device $ \dev → liftIO $ deviceWaitIdle dev
 
     -- run manual cleanup actions
     logDebugM CatSystem "Running Vulkan cleanup actions..."

@@ -20,6 +20,7 @@ import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Types.Vertex
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.Buffer
+import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Window.Types
 import Engine.Graphics.Font.Data
 import qualified Engine.Graphics.Window.GLFW as GLFW
@@ -102,6 +103,7 @@ getCurrentRenderBatches = do
 -- | Create or resize dynamic vertex buffer for scene rendering.
 --   Reuses the cached buffer from GraphicsState when it's big enough.
 --   When a new buffer must be allocated, the old one is destroyed first.
+--   Uses createVulkanBufferManual because we manage the lifetime ourselves.
 ensureDynamicVertexBuffer ∷ Word64 → EngineM ε σ SceneDynamicBuffer
 ensureDynamicVertexBuffer requiredVertices = do
     state ← gets graphicsState
@@ -143,8 +145,8 @@ ensureDynamicVertexBuffer requiredVertices = do
                 [("vertices", T.pack $ show requiredVertices)
                 ,("sizeBytes", T.pack $ show paddedSize)]
 
-            -- Create new buffer
-            (memory, buffer) ← createVulkanBuffer
+            -- *** Use Manual — we own this buffer's lifetime ***
+            (memory, buffer) ← createVulkanBufferManual
                 device
                 pDevice
                 paddedSize

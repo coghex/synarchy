@@ -125,6 +125,7 @@ data GraphicsState = GraphicsState
   , cleanupStatus          ∷ CleanupStatus
   , vulkanCleanup          ∷ Cleanup
   , dynamicVertexBuffer    ∷ Maybe SceneDynamicBuffer
+  , textInstanceBuffer     ∷ Maybe TextInstanceBuffer
   }
 
 -- | Cached windowed-mode geometry for restoring after fullscreen

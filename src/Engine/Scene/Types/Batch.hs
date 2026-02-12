@@ -9,6 +9,7 @@ module Engine.Scene.Types.Batch
   , BatchManager(..)
   , createBatchManager
   , SceneDynamicBuffer(..)
+  , TextInstanceBuffer(..)
   , drawableToQuad
   , mergeQuadsToBatch
   ) where
@@ -128,4 +129,13 @@ data SceneDynamicBuffer = SceneDynamicBuffer
     , sdbMemory   ∷ Vk.DeviceMemory
     , sdbCapacity ∷ Word64
     , sdbUsed     ∷ Word64
+    } deriving (Show)
+
+-- | Cached instance buffer for text glyph rendering.
+--   Reused across frames; grown when needed.
+data TextInstanceBuffer = TextInstanceBuffer
+    { tibBuffer   ∷ Vk.Buffer
+    , tibMemory   ∷ Vk.DeviceMemory
+    , tibCapacity ∷ Word64    -- ^ Max glyph instances that fit
+    , tibUsed     ∷ Word64    -- ^ Glyph instances uploaded this frame
     } deriving (Show)

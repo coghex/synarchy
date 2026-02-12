@@ -101,6 +101,7 @@ defaultEngineState = EngineState
     , cleanupStatus          = NotStarted
     , vulkanCleanup          = emptyCleanup
     , dynamicVertexBuffer    = Nothing
+    , textInstanceBuffer      = Nothing
     }
   , assetConfig      = AssetConfig 100 100 True True
   , sceneManager     = createSceneManager

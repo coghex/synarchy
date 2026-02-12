@@ -23,7 +23,6 @@ import Engine.Core.Error.Exception (ExceptionType(..), GraphicsError(..)
 import Engine.Graphics.Base
 import Engine.Graphics.Camera
 import Engine.Graphics.Config (brightnessToMultiplier)
-import Engine.Graphics.Font.Draw (cleanupPendingInstanceBuffers)
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Graphics.Types (DevQueues(..), SwapchainInfo(..))
 import qualified Engine.Graphics.Window.GLFW as GLFW
@@ -85,7 +84,7 @@ drawFrame = do
     -- Wait for this frame's previous work to complete
     logDebugM CatRender "Waiting for previous frame fence..."
     liftIO $ waitForFences device (V.singleton (frInFlight resources)) True maxBound
-    
+
     -- Try to acquire image BEFORE resetting fence
     swapchain ← getSwapchain state
     logDebugM CatRender "Acquiring swapchain image..."
@@ -193,9 +192,6 @@ drawFrame = do
             -- Validate resources
             state'' ← gets graphicsState
             validateDescriptorState state''
-            
-            logDebugM CatRender "Cleaning up pending instance buffers..."
-            cleanupPendingInstanceBuffers
             
             -- Record command buffer
             logDebugM CatRender "Recording command buffer..."
