@@ -25,9 +25,16 @@ import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLay
 import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
 import qualified Data.Vector as V
 
--- | Epsilon for float comparison — sub-pixel threshold
+-----------------------------------------------------------
+-- Camera Change Detection
+-----------------------------------------------------------
+
+-- | Epsilon for float comparison.
+--   At tileWidth=0.15 / 96px, one pixel ≈ 0.0016 world units.
+--   A few-pixel tolerance prevents cache thrashing during
+--   momentum-based camera deceleration.
 camEpsilon ∷ Float
-camEpsilon = 0.001
+camEpsilon = 0.005
 
 -- | Check whether camera state has changed enough to require re-generating quads
 cameraChanged ∷ WorldCameraSnapshot → WorldCameraSnapshot → Bool
@@ -40,6 +47,10 @@ cameraChanged old new =
      ∨ wcsZSlice old ≢ wcsZSlice new
      ∨ wcsFbSize old ≢ wcsFbSize new
 
+-----------------------------------------------------------
+-- Top-Level Entry Point
+-----------------------------------------------------------
+
 updateWorldTiles ∷ EngineM ε σ (V.Vector SortableQuad)
 updateWorldTiles = do
     env ← ask
@@ -48,9 +59,11 @@ updateWorldTiles = do
 
     let zoom = camZoom camera
         tileAlpha = clamp01 (1.0 - (zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
+        zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
 
     worldManager ← liftIO $ readIORef (worldManagerRef env)
 
+    -- Tile quads: skip entirely when zoom map has fully taken over
     tileQuads ← if tileAlpha ≤ 0.001
         then return V.empty
         else do
@@ -78,9 +91,20 @@ updateWorldTiles = do
                     Nothing → return V.empty
             return $ V.concat quads
 
+    -- Zoom map quads: generateZoomMapQuads already checks zoomAlpha
+    -- internally and returns V.empty when fully zoomed in
     zoomQuads ← generateZoomMapQuads
-    bgQuads   ← generateBackgroundQuads
 
+    -- Background quads: only generate when zoom map is at least
+    -- partially visible. When fully zoomed in this saves iterating
+    -- ~12,000 baked entries × 3 wrap offsets = 36,000 visibility
+    -- tests per frame for zero visible output.
+    bgQuads ← if zoomAlpha ≤ 0.001
+        then return V.empty
+        else generateBackgroundQuads
+
+    -- Auto-adjust zSlice during zoom crossfade so tiles track the
+    -- surface under the camera
     when (tileAlpha > 0.001 ∧ tileAlpha < 0.999) $ do
         worldManager' ← liftIO $ readIORef (worldManagerRef env)
         forM_ (wmVisible worldManager') $ \pageId →
@@ -114,14 +138,19 @@ data ViewBounds = ViewBounds
     , vbBottom ∷ !Float
     } deriving (Show)
 
-computeViewBounds ∷ Camera2D → Int → Int → ViewBounds
-computeViewBounds camera fbW fbH =
+-- | Compute the screen-space AABB for view culling.
+--   The vertical padding accounts for tiles stacked below the
+--   z-slice (their side faces extend downward on screen).
+--   We use effectiveDepth here instead of the full viewDepth
+--   so the pad shrinks at close zoom, tightening the cull.
+computeViewBounds ∷ Camera2D → Int → Int → Int → ViewBounds
+computeViewBounds camera fbW fbH effDepth =
     let (cx, cy) = camPosition camera
         zoom     = camZoom camera
         aspect   = fromIntegral fbW / fromIntegral fbH
         halfW    = zoom * aspect
         halfH    = zoom
-        maxHeightPad = fromIntegral viewDepth * tileSideHeight
+        maxHeightPad = fromIntegral effDepth * tileSideHeight
         padX     = tileWidth
         padY     = tileHeight + maxHeightPad
     in ViewBounds
@@ -172,7 +201,7 @@ isChunkRelevantForSlice _zSlice lc =
     not (HM.null (lcSurfaceMap lc))
 
 -----------------------------------------------------------
--- Render World Quads (rewritten — no intermediate lists)
+-- Render World Quads
 -----------------------------------------------------------
 
 renderWorldQuads ∷ EngineEnv → WorldState → Float → WorldCameraSnapshot
@@ -198,10 +227,22 @@ renderWorldQuads env worldState zoomAlpha snap = do
                       Nothing → 128
                       Just params → wgpWorldSize params
 
-    let vb = computeViewBounds camera fbW fbH
-        zSlice = camZSlice camera
+    let zSlice = camZSlice camera
+        zoom   = camZoom camera
         chunks = HM.elems (wtdChunks tileData)
         (camX, _camY) = camPosition camera
+
+        -- Scale effective view depth with zoom level.
+        -- At close zoom (0.5) you see maybe 8 z-levels of cliff face.
+        -- At zoom 2.0 (crossfade) maybe 20. This caps how many tiles
+        -- pass the z-filter in the HashMap fold, so tiles buried far
+        -- below the surface are skipped without computing screen pos.
+        -- The full viewDepth (100) is the upper bound.
+        effectiveDepth = min viewDepth (max 8 (round (zoom * 10.0 ∷ Float)))
+
+        -- Use effectiveDepth for the view bounds padding too,
+        -- so the vertical cull window matches the z-range we accept.
+        vb = computeViewBounds camera fbW fbH effectiveDepth
 
         visibleChunksWithOffset =
             [ (lc, offset)
@@ -216,12 +257,13 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 tileMap = lcTiles lc
                 surfMap = lcSurfaceMap lc
 
-                -- Real tiles: fold the HashMap directly into a list of quads,
-                -- avoiding HM.toList → list comp → filter pipeline.
-                -- We accumulate into a difference list for O(1) append.
+                -- Real tiles: fold the HashMap directly into a list
+                -- of quads. The z-filter uses effectiveDepth so at
+                -- close zoom most deep tiles are rejected immediately
+                -- without computing their screen position.
                 !realQuads = HM.foldlWithKey'
                     (\acc (lx, ly, z) tile →
-                        if z ≤ zSlice ∧ z ≥ (zSlice - viewDepth)
+                        if z ≤ zSlice ∧ z ≥ (zSlice - effectiveDepth)
                         then let (gx, gy) = chunkToGlobal coord lx ly
                                  (rawX, rawY) = gridToScreen gx gy
                                  relativeZ = z - zSlice
