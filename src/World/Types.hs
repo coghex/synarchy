@@ -10,6 +10,7 @@ import Data.Hashable (Hashable(..))
 import Data.IORef (IORef, newIORef)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types.Batch (SortableQuad(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
 import qualified Engine.Core.Queue as Q
 
 -----------------------------------------------------------
@@ -597,6 +598,8 @@ data WorldState = WorldState
     , wsQuadCacheRef  ∷ IORef (Maybe WorldQuadCache)  -- ^ Cached quads for current camera state
     , wsZoomQuadCacheRef ∷ IORef (Maybe ZoomQuadCache)  -- ^ Cached quads for zoomed-out view
     , wsBgQuadCacheRef ∷ IORef (Maybe ZoomQuadCache)    -- ^ Cached quads for background layer
+    , wsBakedZoomRef ∷ IORef (V.Vector BakedZoomEntry)  -- ^ Pre-baked zoom entries with resolved textures and vertices
+    , wsBakedBgRef ∷ IORef (V.Vector BakedZoomEntry)    -- ^ Pre-baked background entries with resolved textures and vertices
     }
 
 emptyWorldState ∷ IO WorldState
@@ -612,9 +615,12 @@ emptyWorldState = do
     quadCacheRef  ← newIORef Nothing
     zoomQCRef   ← newIORef Nothing
     bgQCRef     ← newIORef Nothing
+    bakedZoomRef ← newIORef V.empty
+    bakedBgRef   ← newIORef V.empty
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
+                        bakedZoomRef bakedBgRef
 
 -----------------------------------------------------------
 -- World Manager
@@ -662,6 +668,26 @@ data ZoomQuadCache = ZoomQuadCache
     { zqcCamera ∷ !ZoomCameraSnapshot
     , zqcAlpha  ∷ !Float               -- ^ Alpha at time of caching
     , zqcQuads  ∷ !(V.Vector SortableQuad)
+    } deriving (Show)
+
+-----------------------------------------------------------
+-- Baked Zoom Entry (pre-resolved vertices)
+-----------------------------------------------------------
+
+-- | A zoom cache entry with vertices pre-baked.
+--   Texture slots are already resolved, vertices are ready to use.
+--   The hot render loop only needs to: test visibility, shift X, patch alpha.
+data BakedZoomEntry = BakedZoomEntry
+    { bzeChunkX  ∷ !Int
+    , bzeChunkY  ∷ !Int
+    , bzeDrawX   ∷ !Float       -- ^ Canonical draw X (before wrap offset)
+    , bzeDrawY   ∷ !Float
+    , bzeSortKey ∷ !Float
+    , bzeV0      ∷ !Vertex      -- ^ Top-left
+    , bzeV1      ∷ !Vertex      -- ^ Top-right
+    , bzeV2      ∷ !Vertex      -- ^ Bottom-right
+    , bzeV3      ∷ !Vertex      -- ^ Bottom-left
+    , bzeTexture ∷ !TextureHandle
     } deriving (Show)
 
 -----------------------------------------------------------

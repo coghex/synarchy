@@ -8,7 +8,7 @@ module World.ZoomMap
 import UPrelude
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, IORef)
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -33,13 +33,6 @@ import qualified Data.Vector as V
 -- Build Zoom Cache (called once at world init)
 -----------------------------------------------------------
 
--- | Pre-compute all zoom map entries. Called once when the
---   world is created. Returns a vector of entries for every
---   visible (non-beyond-glacier) chunk in the world.
---
---   Now applies the full geological timeline (craters, volcanoes,
---   etc.) to each chunk's midpoint so the zoomed-out map reflects
---   the actual post-geology terrain.
 buildZoomCache ∷ WorldGenParams → V.Vector ZoomChunkEntry
 buildZoomCache params =
     let seed = wgpSeed params
@@ -47,8 +40,6 @@ buildZoomCache params =
         plates = generatePlates seed worldSize (wgpPlateCount params)
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
-
-        -- Collect ALL events from every geological period, in order
         allEvents = concatMap gpEvents (gtPeriods timeline)
 
         entries =
@@ -66,7 +57,6 @@ buildZoomCache params =
                   midGY = ccy * chunkSize + chunkSize `div` 2
             , not (isBeyondGlacier worldSize midGX midGY)
             , let (baseElev, baseMat) = elevationAtGlobal seed plates worldSize midGX midGY
-                  -- Skip geology for glacier tiles
                   (finalElev, finalMat) =
                       if baseMat ≡ matGlacier
                       then (baseElev, unMaterialId baseMat)
@@ -79,10 +69,6 @@ buildZoomCache params =
 
     in V.fromList entries
 
--- | Fold all geological events over a single tile position.
---   Returns the final (elevation, materialId).
---   Events are applied in timeline order. Each event's elevation
---   delta is additive; material overrides replace the current material.
 applyAllEvents ∷ [GeoEvent] → Int → Int → Int → Int → Word8
                → (Int, Word8)
 applyAllEvents events worldSize gx gy baseElev baseMat =
@@ -97,24 +83,64 @@ applyAllEvents events worldSize gx gy baseElev baseMat =
         in (newElev, newMat)
 
 -----------------------------------------------------------
--- Zoom Camera Snapshot Comparison
+-- Bake Zoom Vertices (internal, called lazily on render thread)
 -----------------------------------------------------------
 
--- | Epsilon for float comparison — sub-pixel threshold
-zoomCamEpsilon ∷ Float
-zoomCamEpsilon = 0.001
+-- | Pre-bake per-entry vertex data. Called once on the render thread
+--   the first time we try to render and the baked cache is empty.
+--   All expensive work (texture picker, slot lookup, vertex construction)
+--   happens here and is never repeated.
+bakeEntries ∷ V.Vector ZoomChunkEntry
+            → (Word8 → Int → TextureHandle)
+            → (TextureHandle → Int)
+            → Float
+            → V.Vector BakedZoomEntry
+bakeEntries cache texPicker lookupSlot defFmSlot =
+    V.map bakeOne cache
+  where
+    bakeOne entry =
+        let texHandle = texPicker (zceTexIndex entry) (zceElev entry)
+            actualSlot = fromIntegral (lookupSlot texHandle)
+            drawX = zceDrawX entry
+            drawY = zceDrawY entry
+            w = chunkWorldWidth
+            h = chunkWorldDiamondHeight
+            white = Vec4 1.0 1.0 1.0 1.0
+        in BakedZoomEntry
+            { bzeChunkX  = zceChunkX entry
+            , bzeChunkY  = zceChunkY entry
+            , bzeDrawX   = drawX
+            , bzeDrawY   = drawY
+            , bzeSortKey = fromIntegral (zceChunkX entry + zceChunkY entry)
+            , bzeV0      = Vertex (Vec2 drawX drawY)            (Vec2 0 0) white actualSlot defFmSlot
+            , bzeV1      = Vertex (Vec2 (drawX + w) drawY)       (Vec2 1 0) white actualSlot defFmSlot
+            , bzeV2      = Vertex (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) white actualSlot defFmSlot
+            , bzeV3      = Vertex (Vec2 drawX (drawY + h))       (Vec2 0 1) white actualSlot defFmSlot
+            , bzeTexture = texHandle
+            }
 
-zoomCameraChanged ∷ ZoomCameraSnapshot → ZoomCameraSnapshot → Bool
-zoomCameraChanged old new =
-    let (ox, oy) = zcsPosition old
-        (nx, ny) = zcsPosition new
-    in abs (ox - nx) > zoomCamEpsilon
-     ∨ abs (oy - ny) > zoomCamEpsilon
-     ∨ abs (zcsZoom old - zcsZoom new) > zoomCamEpsilon
-     ∨ zcsFbSize old ≢ zcsFbSize new
+-- | Ensure the baked cache is populated, baking on first call.
+--   Returns the baked vector. Subsequent calls just read the IORef.
+ensureBaked ∷ IORef (V.Vector BakedZoomEntry)
+            → V.Vector ZoomChunkEntry
+            → WorldTextures
+            → (WorldTextures → Word8 → Int → TextureHandle)
+            → (TextureHandle → Int)
+            → Float
+            → EngineM ε σ (V.Vector BakedZoomEntry)
+ensureBaked bakedRef rawCache textures texPicker lookupSlot defFmSlot = do
+    existing ← liftIO $ readIORef bakedRef
+    if V.null existing ∧ not (V.null rawCache)
+        then do
+            let baked = bakeEntries rawCache
+                            (\mat elev → texPicker textures mat elev)
+                            lookupSlot defFmSlot
+            liftIO $ writeIORef bakedRef baked
+            return baked
+        else return existing
 
 -----------------------------------------------------------
--- Generate Zoom Map Quads (called every frame)
+-- Generate Zoom Map Quads
 -----------------------------------------------------------
 
 generateZoomMapQuads ∷ EngineM ε σ (V.Vector SortableQuad)
@@ -130,32 +156,17 @@ generateZoomMapQuads = do
     if zoomAlpha ≤ 0.001
         then return V.empty
         else do
-            let currentSnap = ZoomCameraSnapshot
-                    { zcsPosition = camPosition camera
-                    , zcsZoom     = zoom
-                    , zcsFbSize   = (fbW, fbH)
-                    }
             quads ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
-                    Just worldState → do
-                        cached ← liftIO $ readIORef (wsZoomQuadCacheRef worldState)
-                        case cached of
-                            Just zqc | not (zoomCameraChanged (zqcCamera zqc) currentSnap)
-                                     , abs (zqcAlpha zqc - zoomAlpha) < zoomCamEpsilon →
-                                -- Cache hit — reuse last frame's zoom quads
-                                return (zqcQuads zqc)
-                            _ → do
-                                -- Cache miss — regenerate
-                                result ← renderFromCache env worldState camera
-                                             fbW fbH zoomAlpha getZoomTexture zoomMapLayer
-                                liftIO $ writeIORef (wsZoomQuadCacheRef worldState) $
-                                    Just (ZoomQuadCache currentSnap zoomAlpha result)
-                                return result
-                    Nothing         → return V.empty
+                    Just worldState →
+                        renderFromBaked env worldState camera
+                            fbW fbH zoomAlpha getZoomTexture
+                            (wsBakedZoomRef worldState) zoomMapLayer
+                    Nothing → return V.empty
             return $ V.concat quads
 
 -----------------------------------------------------------
--- Generate Background Quads (called every frame, always visible)
+-- Generate Background Quads
 -----------------------------------------------------------
 
 generateBackgroundQuads ∷ EngineM ε σ (V.Vector SortableQuad)
@@ -165,28 +176,13 @@ generateBackgroundQuads = do
     (fbW, fbH) ← liftIO $ readIORef (framebufferSizeRef env)
     worldManager ← liftIO $ readIORef (worldManagerRef env)
 
-    let currentSnap = ZoomCameraSnapshot
-            { zcsPosition = camPosition camera
-            , zcsZoom     = camZoom camera
-            , zcsFbSize   = (fbW, fbH)
-            }
-
     quads ← forM (wmVisible worldManager) $ \pageId →
         case lookup pageId (wmWorlds worldManager) of
-            Just worldState → do
-                cached ← liftIO $ readIORef (wsBgQuadCacheRef worldState)
-                case cached of
-                    Just zqc | not (zoomCameraChanged (zqcCamera zqc) currentSnap) →
-                        -- Cache hit — reuse last frame's bg quads
-                        return (zqcQuads zqc)
-                    _ → do
-                        -- Cache miss — regenerate
-                        result ← renderFromCache env worldState camera
-                                     fbW fbH 1.0 getBgTexture backgroundMapLayer
-                        liftIO $ writeIORef (wsBgQuadCacheRef worldState) $
-                            Just (ZoomQuadCache currentSnap 1.0 result)
-                        return result
-            Nothing         → return V.empty
+            Just worldState →
+                renderFromBaked env worldState camera
+                    fbW fbH 1.0 getBgTexture
+                    (wsBakedBgRef worldState) backgroundMapLayer
+            Nothing → return V.empty
     return $ V.concat quads
 
 -----------------------------------------------------------
@@ -226,24 +222,22 @@ isChunkInView vb drawX drawY =
          ∨ drawY  > zvBottom vb)
 
 -----------------------------------------------------------
--- Render From Cache (shared by zoom map and background)
+-- Render From Baked Cache (hot path)
 -----------------------------------------------------------
 
--- | Shared render function. Folds the cache vector directly,
---   testing all 3 wrap offsets per entry inline. No intermediate
---   list or tuple allocation — accumulates into a strict list
---   then V.fromList once at the end.
-renderFromCache ∷ EngineEnv → WorldState → Camera2D
+-- | The hot render path. Lazily bakes on first call, then
+--   every subsequent frame just does view-cull + alpha stamp.
+renderFromBaked ∷ EngineEnv → WorldState → Camera2D
                → Int → Int → Float
                → (WorldTextures → Word8 → Int → TextureHandle)
+               → IORef (V.Vector BakedZoomEntry)
                → LayerId
                → EngineM ε σ (V.Vector SortableQuad)
-renderFromCache env worldState camera fbW fbH alpha texturePicker layer = do
+renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer = do
     mParams  ← liftIO $ readIORef (wsGenParamsRef worldState)
     textures ← liftIO $ readIORef (wsTexturesRef worldState)
-    cache    ← liftIO $ readIORef (wsZoomCacheRef worldState)
+    rawCache ← liftIO $ readIORef (wsZoomCacheRef worldState)
 
-    -- Look up graphics state ONCE
     gs ← gets graphicsState
     let lookupSlot texHandle = fromIntegral $ case textureSystem gs of
             Just bindless → getTextureSlotIndex texHandle bindless
@@ -253,53 +247,45 @@ renderFromCache env worldState camera fbW fbH alpha texturePicker layer = do
     case mParams of
         Nothing → return V.empty
         Just params → do
+            -- Lazy bake: only runs once, when bakedRef is empty
+            baked ← ensureBaked bakedRef rawCache textures
+                        texturePicker lookupSlot defFmSlot
+
             let vb = computeZoomViewBounds camera fbW fbH
                 wsw = worldScreenWidth (wgpWorldSize params)
 
-                -- Fold the vector directly — no V.toList, no concatMap,
-                -- no intermediate 5-tuple list.
+                -- Hot fold: only visibility + emit. No texture lookups.
                 !visibleQuads = V.foldl' (\acc entry →
-                    let texHandle = texturePicker textures
-                                      (zceTexIndex entry) (zceElev entry)
-                        baseX = zceDrawX entry
-                        baseY = zceDrawY entry
-                        ccx   = zceChunkX entry
-                        ccy   = zceChunkY entry
-                        -- Test all 3 wrap offsets inline
+                    let baseX = bzeDrawX entry
+                        baseY = bzeDrawY entry
                         tryOffset dx acc'
                             | isChunkInView vb dx baseY =
-                                mkZoomQuad lookupSlot defFmSlot texHandle
-                                    dx baseY alpha ccx ccy layer : acc'
+                                emitQuad entry dx alpha layer : acc'
                             | otherwise = acc'
                     in tryOffset (baseX - wsw)
                      $ tryOffset  baseX
                      $ tryOffset (baseX + wsw) acc
-                    ) [] cache
+                    ) [] baked
 
             return $! V.fromList visibleQuads
 
--- | Pure zoom quad builder. No EngineM needed.
-mkZoomQuad ∷ (TextureHandle → Int) → Float → TextureHandle
-           → Float → Float → Float → Int → Int → LayerId
-           → SortableQuad
-mkZoomQuad lookupSlot defFmSlot texHandle drawX drawY alpha ccx ccy layer =
-    let actualSlot = lookupSlot texHandle
-        w = chunkWorldWidth
-        h = chunkWorldDiamondHeight
-        tint = Vec4 1.0 1.0 1.0 alpha
-        sortKey = fromIntegral (ccx + ccy)
-        vertices = V.fromListN 6
-            [ Vertex (Vec2 drawX drawY)               (Vec2 0 0) tint (fromIntegral actualSlot) defFmSlot
-            , Vertex (Vec2 (drawX + w) drawY)          (Vec2 1 0) tint (fromIntegral actualSlot) defFmSlot
-            , Vertex (Vec2 (drawX + w) (drawY + h))    (Vec2 1 1) tint (fromIntegral actualSlot) defFmSlot
-            , Vertex (Vec2 drawX drawY)                (Vec2 0 0) tint (fromIntegral actualSlot) defFmSlot
-            , Vertex (Vec2 (drawX + w) (drawY + h))    (Vec2 1 1) tint (fromIntegral actualSlot) defFmSlot
-            , Vertex (Vec2 drawX (drawY + h))          (Vec2 0 1) tint (fromIntegral actualSlot) defFmSlot
-            ]
+-- | Emit a SortableQuad from a baked entry.
+--   Shifts X position for wrap offset, patches alpha channel.
+emitQuad ∷ BakedZoomEntry → Float → Float → LayerId → SortableQuad
+emitQuad entry dx alpha layer =
+    let !baseX = bzeDrawX entry
+        !xShift = dx - baseX
+        shiftV (Vertex (Vec2 px py) uv (Vec4 cr cg cb _) aid fid) =
+            Vertex (Vec2 (px + xShift) py) uv (Vec4 cr cg cb alpha) aid fid
+        v0 = shiftV (bzeV0 entry)
+        v1 = shiftV (bzeV1 entry)
+        v2 = shiftV (bzeV2 entry)
+        v3 = shiftV (bzeV3 entry)
+        vertices = V.fromListN 6 [v0, v1, v2, v0, v2, v3]
     in SortableQuad
-        { sqSortKey  = sortKey
+        { sqSortKey  = bzeSortKey entry
         , sqVertices = vertices
-        , sqTexture  = texHandle
+        , sqTexture  = bzeTexture entry
         , sqLayer    = layer
         }
 
