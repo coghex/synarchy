@@ -20,7 +20,10 @@ import Engine.Asset.Handle (TextureHandle(..))
 import World.Types (WorldCommand(..), WorldPageId(..), WorldTextureType(..))
 import Data.IORef (atomicModifyIORef')
 
--- | world.init(pageId, seed, worldSizeInChunks)
+-- -----------------------------------------------------------
+-- World initialization
+-- -----------------------------------------------------------
+
 worldInitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldInitFn env = do
     pageIdArg ← Lua.tostring 1
@@ -34,10 +37,12 @@ worldInitFn env = do
                 size   = maybe 64 fromIntegral sizeArg
             Q.writeQueue (worldQueue env) (WorldInit pageId seed size)
         Nothing → pure ()
-    
     return 0
 
--- | world.show(pageId)
+-- -----------------------------------------------------------
+-- World visibility
+-- -----------------------------------------------------------
+
 worldShowFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldShowFn env = do
     pageIdArg ← Lua.tostring 1
@@ -47,10 +52,8 @@ worldShowFn env = do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
             Q.writeQueue (worldQueue env) (WorldShow pageId)
         Nothing → pure ()
-    
     return 0
 
--- | world.hide(pageId)
 worldHideFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldHideFn env = do
     pageIdArg ← Lua.tostring 1
@@ -60,10 +63,12 @@ worldHideFn env = do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
             Q.writeQueue (worldQueue env) (WorldHide pageId)
         Nothing → pure ()
-    
     return 0
 
--- | world.setTexture(pageId, textureType, textureHandle)
+-- -----------------------------------------------------------
+-- World texture
+-- -----------------------------------------------------------
+
 worldSetTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetTextureFn env = do
     pageIdArg ← Lua.tostring 1
@@ -77,10 +82,12 @@ worldSetTextureFn env = do
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) (WorldSetTexture pageId texType texHandle)
         _ → pure ()
-    
     return 0
 
--- | world.setCamera(pageId, x, y)
+-- -----------------------------------------------------------
+-- World camera
+-- -----------------------------------------------------------
+
 worldSetCameraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetCameraFn env = do
     pageIdArg ← Lua.tostring 1
@@ -93,11 +100,12 @@ worldSetCameraFn env = do
             Q.writeQueue (worldQueue env)
                 (WorldSetCamera pageId (realToFrac x) (realToFrac y))
         _ → pure ()
-
     return 0
 
--- | world.setSunAngle(angle)
--- Direct override of sun angle (0..1), bypasses time system
+-- -----------------------------------------------------------
+-- World time/date/sun
+-- -----------------------------------------------------------
+
 worldSetSunAngleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetSunAngleFn env = do
     angleArg ← Lua.tonumber 1
@@ -106,11 +114,8 @@ worldSetSunAngleFn env = do
         Just (Lua.Number angle) → Lua.liftIO $ do
             atomicModifyIORef' (sunAngleRef env) $ \_ → (realToFrac angle, ())
         _ → pure ()
-
     return 0
 
--- | world.setTime(pageId, hour, minute)
--- Set the world clock. The world thread will compute sun angle from this.
 worldSetTimeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetTimeFn env = do
     pageIdArg ← Lua.tostring 1
@@ -123,11 +128,8 @@ worldSetTimeFn env = do
             Q.writeQueue (worldQueue env)
                 (WorldSetTime pageId (fromIntegral h) (fromIntegral m))
         _ → pure ()
-
     return 0
 
--- | world.setDate(pageId, year, month, day)
--- Set the world date. Currently unused for sun angle (placeholder for seasons).
 worldSetDateFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetDateFn env = do
     pageIdArg ← Lua.tostring 1
@@ -141,12 +143,8 @@ worldSetDateFn env = do
             Q.writeQueue (worldQueue env)
                 (WorldSetDate pageId (fromIntegral y) (fromIntegral mo) (fromIntegral d))
         _ → pure ()
-
     return 0
 
--- | world.setTimeScale(pageId, scale)
--- Set how fast time passes: game-minutes per real-second.
--- 1.0 = real-time, 60.0 = 1 game-hour per real-second, 0.0 = paused
 worldSetTimeScaleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetTimeScaleFn env = do
     pageIdArg ← Lua.tostring 1
@@ -158,7 +156,6 @@ worldSetTimeScaleFn env = do
             Q.writeQueue (worldQueue env)
                 (WorldSetTimeScale pageId (realToFrac s))
         _ → pure ()
-
     return 0
 
 parseTextureType ∷ Text → WorldTextureType
