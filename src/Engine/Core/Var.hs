@@ -1,4 +1,3 @@
--- Engine/Concurrent/Var.hs
 module Engine.Core.Var
   ( Var
   , newVar
@@ -12,6 +11,10 @@ module Engine.Core.Var
 
 import UPrelude
 import qualified Control.Concurrent.STM as STM
+
+-----------------------------------------------------------
+-- STM Variable Wrappers
+-----------------------------------------------------------
 
 type Var α = STM.TVar α
 

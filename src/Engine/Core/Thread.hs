@@ -5,35 +5,36 @@ import Control.Concurrent (threadDelay, ThreadId, killThread)
 import Data.IORef (IORef, readIORef, writeIORef)
 import Data.Foldable (forM_)
 
--- | Thread state with safe shutdown
+-----------------------------------------------------------
+-- Thread Control
+-----------------------------------------------------------
+
 data ThreadState = ThreadState
     { tsRunning  ∷ IORef ThreadControl
     , tsThreadId ∷ ThreadId }
 
--- | Thread state for control flow
 data ThreadControl = ThreadRunning | ThreadPaused | ThreadStopped
     deriving (Show, Eq)
 
--- | shutdown a thread gracefully
 shutdownThread ∷ ThreadState → IO ()
 shutdownThread ts = do
     tstate ← readIORef (tsRunning ts)
     case tstate of
-        ThreadStopped → pure () -- Thread has already stopped
+        ThreadStopped → pure ()
         _ → do
             writeIORef (tsRunning ts) ThreadStopped
             waitThreadComplete ts
 
--- | Wait for a thread to complete, ensuring graceful shutdown
 waitThreadComplete ∷ ThreadState → IO ()
 waitThreadComplete ts = waitThreadComplete' 0 ts
+
 waitThreadComplete' ∷ Int → ThreadState → IO ()
 waitThreadComplete' i ts = do
     tstate ← readIORef (tsRunning ts)
     case tstate of
-        ThreadStopped → pure () -- Thread has already stopped
+        ThreadStopped → pure ()
         _ → do
-            threadDelay 10000 -- Check every 10ms
-            if i ≥ 1000 -- Timeout after 10 seconds
-                then killThread (tsThreadId ts) -- Force kill
+            threadDelay 10000
+            if i ≥ 1000
+                then killThread (tsThreadId ts)
                 else waitThreadComplete' (i + 1) ts

@@ -1,7 +1,5 @@
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-
+{-# LANGUAGE TypeApplications, AllowAmbiguousTypes #-}
+{-# LANGUAGE ScopedTypeVariables, UnicodeSyntax #-}
 module Engine.Asset.Types where
 
 import UPrelude
@@ -14,9 +12,13 @@ import Engine.Asset.Base (AssetId, AssetStatus)
 import Engine.Asset.Handle
 import Engine.Scene.Base (ObjectId)
 import Engine.Graphics.Vulkan.Base (TextureInfo)
-import Engine.Graphics.Vulkan.Types.Texture (TextureData, TextureArrayState)
+import Engine.Graphics.Vulkan.Types.Texture
+  (TextureData, TextureArrayState)
 
--- | Asset pool containing all loaded assets
+-----------------------------------------------------------
+-- Asset Pool
+-----------------------------------------------------------
+
 data AssetPool = AssetPool
   { apTextureAtlases    ∷ Map.Map AssetId TextureAtlas
   , apFonts             ∷ Map.Map AssetId Font
@@ -26,35 +28,29 @@ data AssetPool = AssetPool
   , apNextTextureHandle ∷ IORef Int
   , apNextFontHandle    ∷ IORef Int
   , apNextShaderHandle  ∷ IORef Int
-  , apTextureHandles    ∷ IORef (Map.Map TextureHandle (AssetState AssetId))
-  , apFontHandles       ∷ IORef (Map.Map FontHandle (AssetState AssetId))
-  , apShaderHandles     ∷ IORef (Map.Map ShaderHandle (AssetState AssetId))
+  , apTextureHandles    ∷ IORef
+      (Map.Map TextureHandle (AssetState AssetId))
+  , apFontHandles       ∷ IORef
+      (Map.Map FontHandle (AssetState AssetId))
+  , apShaderHandles     ∷ IORef
+      (Map.Map ShaderHandle (AssetState AssetId))
   }
 
-data GlyphInfo = GlyphInfo
-  { giUVRect    ∷ (Float, Float, Float, Float)  -- ^ UV coordinates (u0, v0, u1, v1) in atlas
-  , giSize      ∷ (Float, Float)                -- ^ Glyph dimensions (width, height) in pixels
-  , giBearing   ∷ (Float, Float)                -- ^ Offset from baseline (x, y)
-  , giAdvance   ∷ Float                         -- ^ Horizontal advance to next glyph
-  } deriving (Show, Eq)
-
--- | Create default asset pool with initialized IORefs
 defaultAssetPool ∷ IO AssetPool
 defaultAssetPool = do
-  nextAssetIdRef ← newIORef 0  -- Add this line
+  nextAssetIdRef ← newIORef 0
   nextTextureHandleRef ← newIORef 0
   nextFontHandleRef ← newIORef 0
   nextShaderHandleRef ← newIORef 0
   textureHandlesRef ← newIORef Map.empty
   fontHandlesRef ← newIORef Map.empty
   shaderHandlesRef ← newIORef Map.empty
-  
   pure $ AssetPool
     { apTextureAtlases = Map.empty
     , apFonts          = Map.empty
     , apShaders        = Map.empty
     , apAssetPaths     = Map.empty
-    , apNextAssetId    = nextAssetIdRef  -- Changed
+    , apNextAssetId    = nextAssetIdRef
     , apNextTextureHandle = nextTextureHandleRef
     , apNextFontHandle    = nextFontHandleRef
     , apNextShaderHandle  = nextShaderHandleRef
@@ -63,7 +59,6 @@ defaultAssetPool = do
     , apShaderHandles     = shaderHandlesRef
     }
 
--- | Asset loading configuration
 data AssetConfig = AssetConfig
   { acMaxTextureAtlases ∷ Word32
   , acMaxShaderPrograms ∷ Word32
@@ -71,47 +66,59 @@ data AssetConfig = AssetConfig
   , acEnableHotReload   ∷ Bool
   } deriving (Show)
 
--- | Metadata for texture atlases
+-----------------------------------------------------------
+-- Texture Types
+-----------------------------------------------------------
+
 data AtlasMetadata = AtlasMetadata
-  { amDimensions    ∷ (Word32, Word32)  -- width and height
+  { amDimensions    ∷ (Word32, Word32)
   , amFormat        ∷ Format
   , amMipLevels     ∷ Word32
   , amSubTextures   ∷ Map.Map Text SubTextureInfo
   } deriving (Show)
 
--- | Information about a sub-texture in an atlas
 data SubTextureInfo = SubTextureInfo
-  { stiPosition     ∷ (Float, Float)    -- x, y position in atlas
-  , stiDimensions   ∷ (Float, Float)    -- width, height in atlas
-  , stiRotated      ∷ Bool              -- whether the subtexture is rotated
+  { stiPosition     ∷ (Float, Float)
+  , stiDimensions   ∷ (Float, Float)
+  , stiRotated      ∷ Bool
   } deriving (Show)
 
--- | Texture atlas resource
 data TextureAtlas = TextureAtlas
   { taId           ∷ AssetId
   , taName         ∷ Text
   , taPath         ∷ Text
   , taMetadata     ∷ AtlasMetadata
   , taStatus       ∷ AssetStatus
-  , taInfo         ∷ Maybe TextureInfo   -- Vulkan resources
+  , taInfo         ∷ Maybe TextureInfo
   , taRefCount     ∷ Word32
-  , taCleanup      ∷ Maybe (IO ()) -- cleanup function
-  , taBindlessSlot ∷ Maybe Word32  -- bindless texture slot index
-  , taTextureHandle ∷ TextureHandle -- handle for binless lookup
+  , taCleanup      ∷ Maybe (IO ())
+  , taBindlessSlot ∷ Maybe Word32
+  , taTextureHandle ∷ TextureHandle
   }
 
--- | Font resource (stub for future implementation)
+-----------------------------------------------------------
+-- Font Types
+-----------------------------------------------------------
+
+data GlyphInfo = GlyphInfo
+  { giUVRect    ∷ (Float, Float, Float, Float)  -- ^ (u0, v0, u1, v1)
+  , giSize      ∷ (Float, Float)                -- ^ (width, height)
+  , giBearing   ∷ (Float, Float)                -- ^ (x, y) from baseline
+  , giAdvance   ∷ Float                         -- ^ Horizontal advance
+  } deriving (Show, Eq)
+
 data Font = Font
   { fId         ∷ AssetId
   , fName       ∷ Text
   , fPath       ∷ Text
-  , fSize       ∷ Word32          -- Font size in pixels
+  , fSize       ∷ Word32
   , fStatus     ∷ AssetStatus
-  , fAtlasId    ∷ Maybe AssetId   -- References texture atlas with glyph data
-  , fGlyphMap   ∷ Map.Map Char GlyphInfo  -- Character → glyph lookup
+  , fAtlasId    ∷ Maybe AssetId
+  , fGlyphMap   ∷ Map.Map Char GlyphInfo
   , fRefCount   ∷ Word32
   , fCleanup    ∷ Maybe (IO ())
   }
+
 instance Show Font where
   show f = "Font { fId = " <> show (fId f)
          <> ", fName = " <> show (fName f)
@@ -119,18 +126,22 @@ instance Show Font where
          <> ", fSize = " <> show (fSize f)
          <> ", fStatus = " <> show (fStatus f)
          <> ", fAtlasId = " <> show (fAtlasId f)
-         <> ", fGlyphMap = <" <> show (Map.size (fGlyphMap f)) <> " glyphs>"
+         <> ", fGlyphMap = <" <> show (Map.size (fGlyphMap f))
+         <> " glyphs>"
          <> ", fRefCount = " <> show (fRefCount f)
-         <> ", fCleanup = " <> if isJust (fCleanup f) then "<present>" else "<absent> }"
-        
--- | Shader stage specification
+         <> ", fCleanup = " <> if isJust (fCleanup f)
+            then "<present>" else "<absent> }"
+
+-----------------------------------------------------------
+-- Shader Types
+-----------------------------------------------------------
+
 data ShaderStageInfo = ShaderStageInfo
   { ssiStage       ∷ ShaderStageFlags
   , ssiEntryPoint  ∷ Text
   , ssiPath        ∷ Text
   } deriving (Show)
 
--- | Shader program resource
 data ShaderProgram = ShaderProgram
   { spId           ∷ AssetId
   , spName         ∷ Text
@@ -138,8 +149,9 @@ data ShaderProgram = ShaderProgram
   , spStatus       ∷ AssetStatus
   , spModules      ∷ V.Vector ShaderModule
   , spRefCount     ∷ Word32
-  , spCleanup      ∷ Maybe (IO ())      -- cleanup function
+  , spCleanup      ∷ Maybe (IO ())
   }
+
 data TextureArrayManager = TextureArrayManager
   { tamArrays     ∷ Map.Map Text TextureArrayState
   , tamTextureMap ∷ Map.Map AssetId Text

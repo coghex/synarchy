@@ -1,7 +1,5 @@
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-
+{-# LANGUAGE TypeApplications, AllowAmbiguousTypes #-}
+{-# LANGUAGE ScopedTypeVariables, UnicodeSyntax #-}
 module Engine.Asset.Handle
   ( TextureHandle(..)
   , FontHandle(..)
@@ -14,7 +12,10 @@ module Engine.Asset.Handle
 import UPrelude
 import Engine.Asset.Base (AssetId)
 
--- | Asset Handles provide opaque references to assets
+-----------------------------------------------------------
+-- Asset Handles
+-----------------------------------------------------------
+
 newtype TextureHandle = TextureHandle Int
   deriving (Show, Eq, Ord)
 
@@ -24,35 +25,37 @@ newtype FontHandle = FontHandle Int
 newtype ShaderHandle = ShaderHandle Int
   deriving (Show, Eq, Ord)
 
--- | Asset state tracking
+-----------------------------------------------------------
+-- Asset State Tracking
+-----------------------------------------------------------
+
 data AssetState α
-  = AssetLoading 
+  = AssetLoading
     { asPath       ∷ FilePath
     , asDependents ∷ [Dependent]
-    , asProgress   ∷ Float 
+    , asProgress   ∷ Float
     }
-  | AssetReady 
+  | AssetReady
     { asValue      ∷ α
-    , asDependents ∷ [Dependent] 
+    , asDependents ∷ [Dependent]
     }
-  | AssetFailed 
+  | AssetFailed
     { asError ∷ Text }
   deriving (Show, Eq)
 
--- | Dependent asset information
 data Dependent = Dependent
   { depAssetId ∷ AssetId
   , depType    ∷ Text
   } deriving (Show, Eq)
 
--- | Asset handle type class (simplified - no pool dependencies)
+-----------------------------------------------------------
+-- Asset Handle Type Class
+-----------------------------------------------------------
+
 class (Eq h, Ord h, Show h) ⇒ AssetHandle h where
-  -- construct a handle from an integer
   fromInt ∷ Int → h
-  -- extract Int from handle
   toInt ∷ h → Int
 
--- Instances
 instance AssetHandle TextureHandle where
   fromInt       = TextureHandle
   toInt (TextureHandle n) = n
