@@ -17,20 +17,25 @@ import qualified Engine.Core.Queue as Q
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 
--- | Represents a single Lua script's metadata
+-- -----------------------------------------------------------
+-- Script types
+-- -----------------------------------------------------------
+
 data LuaScript = LuaScript
-  { scriptId        ∷ Word32   -- unique identifier
-  , scriptPath      ∷ FilePath -- path to the Lua script
-  , scriptTickRate  ∷ Double   -- seconds between updates
-  , scriptNextTick  ∷ Double   -- next scheduled tick time
-  , scriptModuleRef ∷ Lua.Reference -- reference to the returned table
-  , scriptPaused    ∷ Bool     -- is the script paused
+  { scriptId        ∷ Word32
+  , scriptPath      ∷ FilePath
+  , scriptTickRate  ∷ Double
+  , scriptNextTick  ∷ Double
+  , scriptModuleRef ∷ Lua.Reference
+  , scriptPaused    ∷ Bool
   } deriving (Eq, Show)
 
--- | Thread-safe map of Lua scripts
 type LuaScripts = TVar (Map.Map FilePath LuaScript)
 
--- | Lua-specific state (wraps Lua.  State with script tracking)
+-- -----------------------------------------------------------
+-- Backend state
+-- -----------------------------------------------------------
+
 data LuaBackendState = LuaBackendState
   { lbsLuaState     ∷ Lua.State
   , lbsScripts      ∷ TVar (Map.Map Word32 LuaScript)
@@ -41,14 +46,20 @@ data LuaBackendState = LuaBackendState
   , lbsInputState   ∷ IORef InputState
   }
 
--- | Log levels for Lua
+-- -----------------------------------------------------------
+-- Log levels
+-- -----------------------------------------------------------
+
 data LuaLogLevel = LuaLogDebug
                  | LuaLogInfo
                  | LuaLogWarn
                  | LuaLogError
                  deriving (Eq, Show)
 
--- | messages from lua to the main thread
+-- -----------------------------------------------------------
+-- Messages from Lua to engine
+-- -----------------------------------------------------------
+
 data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSetWindowMode WindowMode
                     | LuaSetVSync Bool
@@ -62,7 +73,7 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSpawnTextRequest ObjectId Float Float FontHandle
                                                    Text Vec4 LayerId Float
                     | LuaSpawnSpriteRequest
-                        { lssObjectId    ∷ ObjectId -- generated in lua thread
+                        { lssObjectId    ∷ ObjectId
                         , lssX           ∷ Float
                         , lssY           ∷ Float
                         , lssWidth       ∷ Float
@@ -82,7 +93,10 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaUnregisterFocusable Word32
                     deriving (Eq, Show)
 
--- | messages to lua from anywhere
+-- -----------------------------------------------------------
+-- Messages from engine to Lua
+-- -----------------------------------------------------------
+
 data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaFontLoaded FontHandle FilePath
             | LuaFontLoadFailed Text
@@ -128,7 +142,10 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaDebugToggle
             deriving (Eq, Show)
 
--- | Lua execution result
+-- -----------------------------------------------------------
+-- Execution result
+-- -----------------------------------------------------------
+
 data LuaResult = LuaSuccess
                | LuaError String
                | LuaNoop
