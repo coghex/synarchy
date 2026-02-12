@@ -8,7 +8,7 @@ import Control.Concurrent.STM.TQueue
 -- | Queue type for thread communication
 data Queue α = Queue
     { queueTQueue ∷ TQueue α    -- ^ Underlying STM TQueue
-    }
+    } deriving (Eq)
 
 -- | Create a new empty queue
 newQueue ∷ IO (Queue α)

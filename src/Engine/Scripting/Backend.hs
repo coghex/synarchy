@@ -41,7 +41,3 @@ class ScriptBackend backend where
 
 -- | Existential wrapper for any backend
 data AnyBackend = ∀ backend. ScriptBackend backend ⇒ AnyBackend backend
-
-throwUnsupportedBackend ∷ String → IO a
-throwUnsupportedBackend name = 
-  error $ name ++ " scripting backend not yet implemented.  Only Lua is currently supported."

@@ -5,7 +5,6 @@ import UPrelude
 import qualified Graphics.UI.GLFW as GLFW
 import Control.Concurrent.STM.TQueue
 import Data.IORef (IORef, readIORef)
-import System.IO.Unsafe (unsafePerformIO)
 import Engine.Input.Types
 import Engine.Core.State
 import Engine.Core.Queue

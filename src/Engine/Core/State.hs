@@ -63,7 +63,7 @@ data EngineEnv = EngineEnv
   , worldManagerRef     ∷ IORef WorldManager
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
-  }
+  } deriving (Eq)
 
 -- | Engine state (mutable)
 data EngineState = EngineState

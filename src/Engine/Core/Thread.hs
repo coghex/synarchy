@@ -3,7 +3,6 @@ module Engine.Core.Thread where
 import UPrelude
 import Control.Concurrent (threadDelay, ThreadId, killThread)
 import Data.IORef (IORef, readIORef, writeIORef)
-import Data.Foldable (forM_)
 
 -- | Thread state with safe shutdown
 data ThreadState = ThreadState

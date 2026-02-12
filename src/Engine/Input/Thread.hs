@@ -28,10 +28,7 @@ import UI.Focus (FocusManager, getInputMode, InputMode(..), clearFocus
 -- | Start the input processing thread
 startInputThread ∷ EngineEnv → IO ThreadState
 startInputThread env = do
-    let inputSRef     = inputStateRef env
-        apRef         = assetPoolRef env
-        objIdRef      = nextObjectIdRef env
-        logRef        = loggerRef env
+    let logRef        = loggerRef env
     logger ← readIORef logRef
     stateRef ← newIORef ThreadRunning
     threadId ← catch 

@@ -9,8 +9,7 @@ import Control.Concurrent (threadDelay)
 import Control.Monad (when)
 import Control.Monad.State (get, put)
 import Text.Printf (printf)
-import Data.Time.Clock (getCurrentTime, utctDayTime)
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds, getPOSIXTime)
 import qualified Data.Text as T
 import Engine.Graphics.Config (VideoConfig(..))
 import Engine.Core.Monad
@@ -75,4 +74,4 @@ updateFrameTiming = do
 
 -- | Get current time as Double
 getCurTime ∷ IO Double
-getCurTime = realToFrac . utctDayTime ⊚ getCurrentTime
+getCurTime = realToFrac ⊚ getPOSIXTime

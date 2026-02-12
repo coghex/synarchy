@@ -1,4 +1,3 @@
--- Engine/Concurrent/Var.hs
 module Engine.Core.Var
   ( Var
   , newVar

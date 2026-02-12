@@ -13,7 +13,7 @@ data InputState = InputState
     , inpMouseBtns ∷ Map.Map GLFW.MouseButton Bool
     , inpScrollDelta ∷ (Double, Double)  -- ^ Scroll wheel delta
     , inpWindowFocused ∷ Bool            -- ^ Is window currently focused
-    } deriving (Show)
+    } deriving (Show, Eq)
 
 -- | Main type for all input events
 data InputEvent 
