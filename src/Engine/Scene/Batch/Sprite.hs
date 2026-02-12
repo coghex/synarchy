@@ -25,7 +25,10 @@ import Engine.Core.State (EngineState(..), GraphicsState(..))
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 
--- | Collect sprite batches from scene graph
+-----------------------------------------------------------
+-- Sprite batch collection
+-----------------------------------------------------------
+
 collectSpriteBatches ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
 collectSpriteBatches graph camera viewWidth viewHeight = do
     gs ← gets graphicsState
@@ -35,15 +38,12 @@ collectSpriteBatches graph camera viewWidth viewHeight = do
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject ∧ nodeVisible n) allNodes
         visibleSprites = filter (isNodeVisible camera viewWidth viewHeight) spriteNodes
         drawableObjs = mapMaybe (nodeToDrawable graph texSystem fmSlot) visibleSprites
-    
     logDebugSM CatScene "Sprite batch generation"
         [("totalSprites", T.pack $ show $ length spriteNodes)
         ,("visibleSprites", T.pack $ show $ length visibleSprites)
         ,("drawableObjects", T.pack $ show $ length drawableObjs)]
-    
     pure $ V.fromList drawableObjs
 
--- | Collect visible objects from scene graph (with UI layer bypass)
 collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
 collectVisibleObjects graph camera viewWidth viewHeight = do
     gs ← gets graphicsState
@@ -53,26 +53,20 @@ collectVisibleObjects graph camera viewWidth viewHeight = do
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject ∧ nodeVisible n) allNodes
         visibleNodes = filter (\n → isUILayer (nodeLayer n) ∨ isNodeVisible camera viewWidth viewHeight n) spriteNodes
         drawableObjs = mapMaybe (nodeToDrawable graph texSystem fmSlot) visibleNodes
-    
     logDebugSM CatScene "Visible object culling"
         [("totalObjects", T.pack $ show $ length spriteNodes)
         ,("visibleObjects", T.pack $ show $ length visibleNodes)]
-    
     pure $ V.fromList drawableObjs
 
--- | Convert scene node to drawable object (sprites only)
 nodeToDrawable ∷ SceneGraph → Maybe BindlessTextureSystem → Float → SceneNode → Maybe DrawableObject
 nodeToDrawable graph bts fmSlot node = do
     guard (nodeType node ≡ SpriteObject)
     textureHandle ← nodeTexture node
     worldTrans ← Map.lookup (nodeId node) (sgWorldTrans graph)
-    
     let atlasId = case bts of
                     Just bts' → fromIntegral $ getTextureSlotIndex textureHandle bts'
                     Nothing   → 0
-    
-    let vertices = generateQuadVertices node worldTrans atlasId fmSlot
-        
+        vertices = generateQuadVertices node worldTrans atlasId fmSlot
     return DrawableObject
         { doId = nodeId node
         , doTexture = textureHandle

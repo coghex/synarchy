@@ -27,7 +27,11 @@ import Engine.Graphics.Window.Types (Window(..))
 import Vulkan.Core10
 import Vulkan.Zero
 
--- | Update scene and prepare render data
+-----------------------------------------------------------
+-- Scene update
+-----------------------------------------------------------
+
+updateSceneForRender ∷ EngineM ε σ ()
 updateSceneForRender ∷ EngineM ε σ ()
 updateSceneForRender = do
     state ← gets graphicsState
@@ -91,7 +95,6 @@ updateSceneForRender = do
             modify $ \s → s { sceneManager = updatedSceneMgr }
 
 -- | Get current render batches from scene
-getCurrentRenderBatches ∷ EngineM ε σ (V.Vector RenderBatch)
 getCurrentRenderBatches = do
     sceneMgr ← gets sceneManager
     let batches = getCurrentBatches sceneMgr
@@ -99,7 +102,11 @@ getCurrentRenderBatches = do
         [("count", T.pack $ show $ V.length batches)]
     pure batches
 
--- | Create or resize dynamic vertex buffer for scene rendering
+-----------------------------------------------------------
+-- Buffer management
+-----------------------------------------------------------
+
+ensureDynamicVertexBuffer ∷ Word64 → EngineM ε σ SceneDynamicBuffer
 ensureDynamicVertexBuffer ∷ Word64 → EngineM ε σ SceneDynamicBuffer
 ensureDynamicVertexBuffer requiredVertices = do
     state ← gets graphicsState
@@ -137,54 +144,37 @@ ensureDynamicVertexBuffer requiredVertices = do
         }
 
 -- | Upload batch vertices to dynamic buffer
-uploadBatchesToBuffer ∷ V.Vector RenderBatch → SceneDynamicBuffer → EngineM ε σ SceneDynamicBuffer
 uploadBatchesToBuffer batches dynamicBuffer = do
     state ← gets graphicsState
     device ← case vulkanDevice state of
         Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
                                            "No device"
         Just d → pure d
-    
-    -- Calculate total vertices needed
     let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
-    
     logDebugSM CatRender "Uploading batches to buffer"
         [("batches", T.pack $ show $ V.length batches)
         ,("totalVertices", T.pack $ show totalVertices)]
-    
-    -- Ensure buffer capacity
     finalBuffer ← if totalVertices > sdbCapacity dynamicBuffer
         then do
             logDebugM CatScene "Buffer too small, resizing..."
             ensureDynamicVertexBuffer totalVertices
         else pure dynamicBuffer
-    
-    -- Upload vertex data
     let totalSize = totalVertices * (fromIntegral vertexTotalSize)
-    
     dataPtr ← mapMemory device (sdbMemory finalBuffer) 0 totalSize zero
-    
-    -- Copy all batch vertices sequentially
     currentOffset ← liftIO $ newIORef (0 ∷ Int)
     V.forM_ batches $ \batch → do
         offset ← liftIO $ readIORef currentOffset
         let vertices = V.toList $ rbVertices batch
             batchSize = length vertices * fromIntegral vertexTotalSize
-        
         liftIO $ do
             let ptr = castPtr dataPtr `plusPtr` offset
             forM_ (zip [0..] vertices) $ \(i, vertex) → do
                 pokeByteOff ptr (i * fromIntegral vertexTotalSize) vertex
             writeIORef currentOffset (offset + batchSize)
-    
     unmapMemory device (sdbMemory finalBuffer)
-    
     logDebugM CatRender "Buffer upload complete"
-    
     pure $ finalBuffer { sdbUsed = totalVertices }
 
--- | Get world-layer DrawableObjects as SortableQuads for interleaving
--- with world tiles. Filters to only world layers (< uiLayerThreshold).
 getWorldSceneQuads ∷ EngineM ε σ (V.Vector SortableQuad)
 getWorldSceneQuads = do
     sceneMgr ← gets sceneManager

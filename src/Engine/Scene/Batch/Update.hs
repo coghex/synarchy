@@ -17,7 +17,10 @@ import Engine.Asset.Handle (TextureHandle, FontHandle)
 import Engine.Scene.Base (ObjectId, LayerId)
 import Engine.Scene.Types.Batch
 
--- | Update batches with new visible objects
+-----------------------------------------------------------
+-- Batch update functions
+-----------------------------------------------------------
+
 updateBatches ∷ V.Vector DrawableObject → BatchManager → BatchManager
 updateBatches objects manager =
     let groupedObjs = groupByTextureAndLayer objects
@@ -29,7 +32,6 @@ updateBatches objects manager =
         , bmDirtyBatches = dirtyKeys
         }
 
--- | Update batch manager with text batches
 updateTextBatches ∷ V.Vector TextRenderBatch → BatchManager → BatchManager
 updateTextBatches textBatches manager =
     let groupedText = V.foldl' (\acc trb →
@@ -37,7 +39,6 @@ updateTextBatches textBatches manager =
             in Map.insert key trb acc) Map.empty textBatches
     in manager { bmTextBatches = groupedText }
 
--- | Group drawable objects by texture and layer
 groupByTextureAndLayer ∷ V.Vector DrawableObject → [((TextureHandle, LayerId), V.Vector DrawableObject)]
 groupByTextureAndLayer objects =
     let objList = V.toList objects
@@ -48,7 +49,6 @@ groupByTextureAndLayer objects =
                         (obj:_) → ((doTexture obj, doLayer obj), V.fromList grp)) grouped
     in keyed
 
--- | Create a render batch from grouped objects
 createBatch ∷ ((TextureHandle, LayerId), V.Vector DrawableObject) → ((TextureHandle, LayerId), RenderBatch)
 createBatch ((textureId, layerId), objects) =
     let allVertices = V.concatMap doVertices objects
@@ -62,7 +62,6 @@ createBatch ((textureId, layerId), objects) =
             }
     in ((textureId, layerId), batch)
 
--- | Get render batches sorted by layer and z-index
 getSortedBatches ∷ BatchManager → V.Vector RenderBatch
 getSortedBatches manager =
     let batches = Map.elems (bmBatches manager)
@@ -76,24 +75,19 @@ getSortedBatches manager =
             zIndices = V.map doZIndex objects
         in if V.null zIndices then 0.0 else V.sum zIndices / fromIntegral (V.length zIndices)
 
--- | Build layered batches from sprite and text batches
 buildLayeredBatches ∷ BatchManager → BatchManager
 buildLayeredBatches manager =
     let sortedSprites = getSortedBatches manager
         sortedText = List.sortOn trbLayer $ Map.elems (bmTextBatches manager)
-        
         spriteLayers = V.foldl' (\acc batch →
             let layer = rbLayer batch
                 existing = Map.findWithDefault V.empty layer acc
             in Map.insert layer (V.snoc existing (SpriteItem batch)) acc
           ) Map.empty sortedSprites
-        
         textLayers = foldl' (\acc batch →
             let layer = trbLayer batch
                 existing = Map.findWithDefault V.empty layer acc
             in Map.insert layer (V.snoc existing (TextItem batch)) acc
           ) Map.empty sortedText
-        
         allLayers = Map.unionWith (V.++) spriteLayers textLayers
-        
     in manager { bmLayeredBatches = allLayers }

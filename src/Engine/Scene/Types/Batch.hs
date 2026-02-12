@@ -24,18 +24,17 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex)
 import Engine.Graphics.Font.Data (GlyphInstance)
 import qualified Vulkan.Core10 as Vk
 
--- | A sortable unit of vertices for painter's algorithm.
--- Both world tiles and scene sprites produce these.
--- After sorting by sqSortKey, vertices are concatenated
--- in order to get correct back-to-front rendering.
+-----------------------------------------------------------
+-- Batch types
+-----------------------------------------------------------
+
 data SortableQuad = SortableQuad
-    { sqSortKey  ∷ !Float       -- ^ Painter's algorithm depth (higher = drawn later = in front)
+    { sqSortKey  ∷ !Float
     , sqVertices ∷ V.Vector Vertex
-    , sqTexture  ∷ TextureHandle  -- ^ Needed for potential future per-texture batching
+    , sqTexture  ∷ TextureHandle
     , sqLayer    ∷ LayerId
     } deriving (Show)
 
--- | Drawable object ready for rendering
 data DrawableObject = DrawableObject
     { doId         ∷ ObjectId
     , doTexture    ∷ TextureHandle
@@ -44,8 +43,6 @@ data DrawableObject = DrawableObject
     , doLayer      ∷ LayerId
     } deriving (Show)
 
--- | Convert a DrawableObject to a SortableQuad
--- Used to bring scene sprites into the unified sort with world tiles
 drawableToQuad ∷ DrawableObject → SortableQuad
 drawableToQuad dobj = SortableQuad
     { sqSortKey  = doZIndex dobj
@@ -54,10 +51,6 @@ drawableToQuad dobj = SortableQuad
     , sqLayer    = doLayer dobj
     }
 
--- | Sort quads by painter's algorithm and merge into a single RenderBatch.
--- All quads MUST share the same layer. The texture field uses the first
--- quad's texture (irrelevant for bindless — the per-vertex atlasId drives
--- texture selection in the shader).
 mergeQuadsToBatch ∷ LayerId → [SortableQuad] → RenderBatch
 mergeQuadsToBatch layer quads =
     let sorted = List.sortOn sqSortKey quads
@@ -73,7 +66,7 @@ mergeQuadsToBatch layer quads =
         , rbDirty    = True
         }
 
--- | Render batch grouped by texture and layer
+data RenderBatch = RenderBatch
 data RenderBatch = RenderBatch
     { rbTexture    ∷ TextureHandle
     , rbLayer      ∷ LayerId
@@ -82,7 +75,7 @@ data RenderBatch = RenderBatch
     , rbDirty      ∷ Bool
     } deriving (Show)
 
--- | Text render batch grouped by font and layer
+data TextRenderBatch = TextRenderBatch
 data TextRenderBatch = TextRenderBatch
     { trbFont      ∷ FontHandle
     , trbLayer     ∷ LayerId
@@ -90,20 +83,20 @@ data TextRenderBatch = TextRenderBatch
     , trbObjects   ∷ V.Vector ObjectId
     } deriving (Show)
 
--- | Simplified text batch for conversion
+data TextBatch = TextBatch
 data TextBatch = TextBatch
     { tbFontHandle ∷ FontHandle
     , tbInstances  ∷ V.Vector GlyphInstance
     , tbLayer      ∷ LayerId
     } deriving (Show)
 
--- | Unified render item for layer-based rendering
+data RenderItem
 data RenderItem
   = SpriteItem RenderBatch
   | TextItem TextRenderBatch
   deriving (Show)
 
--- | Batch manager state
+data BatchManager = BatchManager
 data BatchManager = BatchManager
     { bmBatches        ∷ Map.Map (TextureHandle, LayerId) RenderBatch
     , bmTextBatches    ∷ Map.Map (FontHandle, LayerId) TextRenderBatch
@@ -112,7 +105,6 @@ data BatchManager = BatchManager
     , bmLayeredBatches ∷ Map.Map LayerId (V.Vector RenderItem)
     } deriving (Show)
 
--- | Create empty batch manager
 createBatchManager ∷ BatchManager
 createBatchManager = BatchManager
     { bmBatches = Map.empty
@@ -122,7 +114,7 @@ createBatchManager = BatchManager
     , bmLayeredBatches = Map.empty
     }
 
--- | Dynamic vertex buffer for scene rendering
+data SceneDynamicBuffer = SceneDynamicBuffer
 data SceneDynamicBuffer = SceneDynamicBuffer
     { sdbBuffer   ∷ Vk.Buffer
     , sdbMemory   ∷ Vk.DeviceMemory

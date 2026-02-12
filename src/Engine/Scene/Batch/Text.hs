@@ -24,15 +24,16 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 import Engine.Core.Log (LogCategory(..))
 
--- | Collect text batches from scene graph
+-----------------------------------------------------------
+-- Text batch collection
+-----------------------------------------------------------
+
 collectTextBatches ∷ SceneGraph → Float → Float → EngineM ε σ (V.Vector TextRenderBatch)
 collectTextBatches graph screenW screenH = do
   let allNodes = Map.elems (sgNodes graph)
       textNodes = filter (\n → nodeType n ≡ TextObject ∧ nodeVisible n) allNodes
-  
   logDebugSM CatScene "Text batch collection started"
       [("totalTextNodes", T.pack $ show $ length textNodes)]
-  
   cacheRef ← asks fontCacheRef
   cache ← liftIO $ readIORef cacheRef
   let grouped = groupByFontAndLayer textNodes
@@ -54,7 +55,7 @@ collectTextBatches graph screenW screenH = do
                                         Nothing → 32
                                         Just s → s
                           isUI = let (LayerId l) = layerId in l ≥ 10
-                      let instances = if isUI
+                          instances = if isUI
                                       then layoutTextUI atlas size x y text color
                                       else layoutText atlas size x y screenW screenH text color
                       return instances
@@ -73,14 +74,11 @@ collectTextBatches graph screenW screenH = do
               , trbObjects = V.fromList $ map nodeId nodes }
   let result = V.fromList $ catMaybes batches
       totalVertices = V.sum $ V.map (V.length . trbInstances) result
-  
   logDebugSM CatScene "Text batch generation complete"
       [("batches", T.pack $ show $ V.length result)
       ,("totalVertices", T.pack $ show totalVertices)]
-  
   return result
 
--- | Group text nodes by font and layer
 groupByFontAndLayer ∷ [SceneNode] → [((FontHandle, LayerId), [SceneNode])]
 groupByFontAndLayer nodes =
   let nodesWithFont = filter (isJust . nodeFont) nodes
@@ -91,7 +89,6 @@ groupByFontAndLayer nodes =
                       (n:_) → ((fromJust $ nodeFont n, nodeLayer n), grp)) grouped
   in keyed
 
--- | Convert TextRenderBatch to simplified TextBatch
 convertToTextBatches ∷ V.Vector TextRenderBatch → V.Vector TextBatch
 convertToTextBatches = V.map $ \trb → TextBatch
     { tbFontHandle = trbFont trb

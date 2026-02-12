@@ -10,7 +10,11 @@ import qualified Data.Set as Set
 import Engine.Scene.Base (ObjectId)
 import Engine.Scene.Types.Node (SceneNode, WorldTransform)
 
--- | Scene graph containing all nodes
+-----------------------------------------------------------
+-- Scene graph types
+-----------------------------------------------------------
+
+data SceneGraph = SceneGraph
 data SceneGraph = SceneGraph
     { sgNodes         ∷ Map.Map ObjectId SceneNode
     , sgRootNodes     ∷ Set.Set ObjectId
@@ -20,7 +24,6 @@ data SceneGraph = SceneGraph
     } deriving (Show)
 
 -- | Create an empty scene graph
-createEmptySceneGraph ∷ SceneGraph
 createEmptySceneGraph = SceneGraph
     { sgNodes = Map.empty
     , sgRootNodes = Set.empty

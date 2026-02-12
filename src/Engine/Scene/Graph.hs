@@ -21,7 +21,10 @@ import Engine.Scene.Types
 import Linear (M44, V3(..), (!*!), mkTransformation)
 import Linear.Quaternion (axisAngle)
 
--- | Add a node to the scene graph
+-----------------------------------------------------------
+-- Node management
+-----------------------------------------------------------
+
 addNode ∷ SceneNode → SceneGraph → (ObjectId, SceneGraph)
 addNode node graph = 
   let providedId = nodeId node
@@ -46,7 +49,6 @@ addNode node graph =
         }
       in (providedId, newGraph)
 
--- | Add a child node to a parent
 addChild ∷ ObjectId → ObjectId → SceneGraph → SceneGraph
 addChild parentId childId graph =
     case (Map.lookup parentId (sgNodes graph), Map.lookup childId (sgNodes graph)) of
@@ -62,8 +64,11 @@ addChild parentId childId graph =
             in newGraph
         _ → graph
 
--- | Modify the active scene graph directly
--- Returns True if the scene graph was found (even if transform is identity)
+-----------------------------------------------------------
+-- Scene graph operations
+-----------------------------------------------------------
+
+withSceneGraph ∷ (SceneGraph → SceneGraph) → EngineM ε σ Bool
 withSceneGraph ∷ (SceneGraph → SceneGraph) → EngineM ε σ Bool
 withSceneGraph f = do
     sceneMgr ← gets sceneManager
@@ -78,7 +83,6 @@ withSceneGraph f = do
 
 -- | Modify the active scene graph with a function that returns a result
 -- Returns Nothing if no active scene/graph, otherwise returns Just result
-withSceneGraphM ∷ (SceneGraph → (SceneGraph, a)) → EngineM ε σ (Maybe a)
 withSceneGraphM f = do
     sceneMgr ← gets sceneManager
     case smActiveScene sceneMgr of
@@ -91,8 +95,6 @@ withSceneGraphM f = do
           modify $ \s → s { sceneManager = sceneMgr { smSceneGraphs = updatedGraphs } }
           return (Just result)
 
--- | Modify a specific node in the active scene graph
--- Returns True only if the node was found and modified
 modifySceneNode ∷ ObjectId → (SceneNode → SceneNode) → EngineM ε σ Bool
 modifySceneNode objId f = do
     result ← withSceneGraphM $ \graph →
@@ -106,8 +108,6 @@ modifySceneNode objId f = do
           in (updatedGraph, True)
     return $ fromMaybe False result
 
--- | Remove a node from the active scene graph
--- Returns True only if the node existed and was removed
 deleteSceneNode ∷ ObjectId → EngineM ε σ Bool
 deleteSceneNode objId = do
     result ← withSceneGraphM $ \graph →
@@ -123,7 +123,11 @@ deleteSceneNode objId = do
         else (graph, False)
     return $ fromMaybe False result
 
--- | Convert local transform to world matrix
+-----------------------------------------------------------
+-- Transform operations
+-----------------------------------------------------------
+
+localToWorldMatrix ∷ Transform2D → M44 Float
 localToWorldMatrix ∷ Transform2D → M44 Float
 localToWorldMatrix transform =
     let (x, y) = position transform
@@ -135,7 +139,6 @@ localToWorldMatrix transform =
     in mkTransformation rotationQuat translation
 
 -- | Update world transforms for dirty nodes
-updateWorldTransforms ∷ SceneGraph → SceneGraph
 updateWorldTransforms graph =
     let updatedGraph = foldr updateNodeTransform graph (Set.toList $ sgDirtyNodes graph)
     in updatedGraph { sgDirtyNodes = Set.empty }
