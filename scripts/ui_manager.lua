@@ -568,4 +568,22 @@ function uiManager.onUIFocusLost()
     end
 end
 
+-----------------------------------------------------------
+-- Key Input Forwarding
+-----------------------------------------------------------
+
+function uiManager.onKeyDown(key)
+    if currentMenu == "world_view" and worldView then
+        worldView.onKeyDown(key)
+    end
+end
+
+function uiManager.onKeyUp(key)
+    if currentMenu == "world_view" and worldView then
+        if worldView.onKeyUp then
+            worldView.onKeyUp(key)
+        end
+    end
+end
+
 return uiManager

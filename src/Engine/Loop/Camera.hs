@@ -2,7 +2,6 @@
 module Engine.Loop.Camera
     ( updateCameraPanning
     , updateCameraMouseDrag
-    , updateCameraRotation
     ) where
 
 import UPrelude
@@ -154,32 +153,6 @@ updateCameraMouseDrag = do
 
             (False, False) →
                 (cam, ())
-
-updateCameraRotation ∷ EngineM ε σ ()
-updateCameraRotation = do
-    env ← ask
-    inpSt ← liftIO $ readIORef (inputStateRef env)
-
-    let justPressed k = case Map.lookup k (inpKeyStates inpSt) of
-                            Just ks → keyPressed ks
-                            Nothing → False
-
-    when (justPressed GLFW.Key'Q) $ liftIO $
-        atomicModifyIORef' (cameraRef env) $ \cam →
-            (cam { camFacing = rotateCCW (camFacing cam) }, ())
-
-    when (justPressed GLFW.Key'E) $ liftIO $
-        atomicModifyIORef' (cameraRef env) $ \cam →
-            (cam { camFacing = rotateCW (camFacing cam) }, ())
-    -- invalidate baked caches
-    when (justPressed GLFW.Key'Q ∨ justPressed GLFW.Key'E) $ liftIO $ do
-        manager ← readIORef (worldManagerRef env)
-        forM_ (wmWorlds manager) $ \(_, ws) → do
-            writeIORef (wsQuadCacheRef ws)     Nothing
-            writeIORef (wsZoomQuadCacheRef ws) Nothing
-            writeIORef (wsBgQuadCacheRef ws)   Nothing
-            writeIORef (wsBakedZoomRef ws)     V.empty
-            writeIORef (wsBakedBgRef ws)       V.empty
 
 stepAxis ∷ Float → Float → Float → Float → Float → Float → Float
 stepAxis input vel accel friction maxSpd dt

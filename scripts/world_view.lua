@@ -307,6 +307,22 @@ function worldView.onScroll(dx, dy)
 end
 
 -----------------------------------------------------------
+-- Key Input
+-----------------------------------------------------------
+
+function worldView.onKeyDown(key)
+    if not worldView.visible then return end
+
+    if key == "Q" then
+        camera.rotateCCW()
+        engine.logDebug("Camera rotated CCW, facing=" .. tostring(camera.getFacing()))
+    elseif key == "E" then
+        camera.rotateCW()
+        engine.logDebug("Camera rotated CW, facing=" .. tostring(camera.getFacing()))
+    end
+end
+
+-----------------------------------------------------------
 -- Shutdown
 -----------------------------------------------------------
 
