@@ -198,12 +198,12 @@ uploadBatchesToBuffer batches dynamicBuffer = do
     currentOffset ← liftIO $ newIORef (0 ∷ Int)
     V.forM_ batches $ \batch → do
         offset ← liftIO $ readIORef currentOffset
-        let vertices = V.toList $ rbVertices batch
-            batchSize = length vertices * fromIntegral vertexTotalSize
+        let !vertices = rbVertices batch
+            !batchSize = V.length vertices * fromIntegral vertexTotalSize
 
         liftIO $ do
             let ptr = castPtr dataPtr `plusPtr` offset
-            forM_ (zip [0..] vertices) $ \(i, vertex) → do
+            V.iforM_ vertices $ \i vertex →
                 pokeByteOff ptr (i * fromIntegral vertexTotalSize) vertex
             writeIORef currentOffset (offset + batchSize)
 

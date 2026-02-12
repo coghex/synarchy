@@ -66,9 +66,9 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
 
     -- ── Collect ALL text batches across every layer, upload once ──
     -- We walk layers in ascending order so the global index lines up.
-    let allTextBatches = V.concat
-          [ V.fromList [trb | TextItem trb ← V.toList items]
-          | (_, items) ← Map.toAscList layeredBatches ]
+    let allTextBatches = V.concatMap
+            (\(_, items) → V.mapMaybe (\case TextItem trb → Just trb; _ → Nothing) items)
+            (V.fromList $ Map.toAscList layeredBatches)
         totalGlyphs = V.sum $ V.map (fromIntegral . V.length . trbInstances) allTextBatches
 
     tib ← if totalGlyphs > 0
@@ -154,7 +154,7 @@ renderLayerItems cmdBuf state viewport scissor dynamicBuffer items
                  vertexOffsetRef device pDevice isUI
                  tib drawInfos batchIdxRef = do
     -- Render sprites in this layer
-    let spriteBatches = V.fromList [b | SpriteItem b ← V.toList items]
+    let spriteBatches = V.mapMaybe (\case SpriteItem b → Just b; _ → Nothing) items
     
     if isUI
         then renderSpritesBindlessUI cmdBuf state viewport scissor 
@@ -163,8 +163,7 @@ renderLayerItems cmdBuf state viewport scissor dynamicBuffer items
                                    dynamicBuffer spriteBatches vertexOffsetRef
     
     -- Render text in this layer
-    let textItems = V.fromList [trb | TextItem trb ← V.toList items]
-    
+    let textItems = V.mapMaybe (\case TextItem trb → Just trb; _ → Nothing) items 
     unless (V.null textItems) $ do
         let maybePipeline = if isUI 
                             then fontUIPipeline state 

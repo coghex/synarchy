@@ -33,6 +33,15 @@ shutdownEngine (Window win) worldThreadState inputThreadState luaThreadState = d
     logDebugM CatSystem "Clearing batch manager..."
     modify $ \s → s { sceneManager = (sceneManager s) {
                           smBatchManager = createBatchManager } }
+   
+    -- Wait for Vulkan device
+    logDebugM CatSystem "Waiting for Vulkan device idle..."
+    forM_ device $ \dev → liftIO $ deviceWaitIdle dev
+
+    -- run manual cleanup actions
+    logDebugM CatSystem "Running Vulkan cleanup actions..."
+    liftIO $ runAllCleanups (vulkanCleanup state)
+
     -- Destroy cached text instance buffer
     case device of
         Just dev → do
@@ -49,14 +58,6 @@ shutdownEngine (Window win) worldThreadState inputThreadState luaThreadState = d
                     freeMemory dev (sdbMemory sdb) Nothing
                 Nothing → pure ()
         Nothing → logDebugM CatSystem "No Vulkan device found, skipping buffer cleanup"
-    
-    -- Wait for Vulkan device
-    logDebugM CatSystem "Waiting for Vulkan device idle..."
-    forM_ device $ \dev → liftIO $ deviceWaitIdle dev
-
-    -- run manual cleanup actions
-    logDebugM CatSystem "Running Vulkan cleanup actions..."
-    liftIO $ runAllCleanups (vulkanCleanup state)
     
     -- GLFW cleanup
     logDebugM CatSystem "Cleaning up GLFW..."
