@@ -18,7 +18,7 @@ import Engine.Core.Error.Exception
 import Engine.Graphics.Camera ( Camera2D(..) )
 import Engine.Input.Types
 
------------ Event Processing -----------------------------------------------
+----------- Event Processing ------------------------------
 
 handleInputEvents ∷ EngineM ε σ ()
 handleInputEvents = do

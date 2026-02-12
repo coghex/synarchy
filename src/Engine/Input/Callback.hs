@@ -10,7 +10,7 @@ import Engine.Input.Types
 import Engine.Core.State
 import Engine.Core.Queue
 
------------ Setup -----------------------------------------------------------
+----------- Setup -----------------------------------------
 
 setupCallbacks ∷ GLFW.Window → IORef EngineLifecycle → Queue InputEvent → IO ()
 setupCallbacks window el queue = do
@@ -42,7 +42,7 @@ clearGLFWCallbacks window = do
     GLFW.setFramebufferSizeCallback window Nothing
     GLFW.setWindowFocusCallback window Nothing
 
------------ Callbacks -------------------------------------------------------
+----------- Callbacks -------------------------------------
 
 keyCallback ∷ Queue InputEvent → IORef EngineLifecycle → GLFW.Window
             → GLFW.Key → Int → GLFW.KeyState → GLFW.ModifierKeys → IO ()

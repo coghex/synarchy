@@ -25,7 +25,7 @@ import UI.Types (ElementHandle(..), UIPageManager(..), upmGlobalFocus)
 import UI.Focus (FocusManager, getInputMode, InputMode(..), clearFocus
                 , FocusId(..), fmCurrentFocus)
 
------------ Thread Management -----------------------------------------------
+----------- Thread Management -----------------------------
 
 startInputThread ∷ EngineEnv → IO ThreadState
 startInputThread env = do
@@ -69,7 +69,7 @@ runInputLoop env stateRef = do
         threadDelay 16666
         runInputLoop env stateRef
 
------------ Input Processing ------------------------------------------------
+----------- Input Processing ------------------------------
 
 processInputs ∷ EngineEnv → InputState → IO InputState
 processInputs env inpSt = do
@@ -268,7 +268,7 @@ processInput env inpSt event = case event of
             logDebug logger CatInput $ "Window minimize event: minimized=" <> T.pack (show minimized)
         return $ updateWindowState inpSt winEv
 
------------ State Updates ---------------------------------------------------
+----------- State Updates ---------------------------------
 
 updateKeyState ∷ InputState → GLFW.Key → GLFW.KeyState → GLFW.ModifierKeys → InputState
 updateKeyState state key keyState mods = state
@@ -294,7 +294,7 @@ updateMouseState state btn pos btnState = state
 updateScrollState ∷ InputState → Double → Double → InputState
 updateScrollState state x y = state { inpScrollDelta = (x, y) }
 
------------ Helpers ---------------------------------------------------------
+----------- Helpers ---------------------------------------
 
 isKeyDown ∷ GLFW.KeyState → Bool
 isKeyDown GLFW.KeyState'Pressed   = True

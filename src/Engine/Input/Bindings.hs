@@ -10,11 +10,11 @@ import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types
 import Engine.Core.Log (LoggerState, logWarn, logInfo, LogCategory(..), logDebug)
 
------------ Types -----------------------------------------------------------
+----------- Types -----------------------------------------
 
 type KeyBindings = Map.Map T.Text T.Text
 
------------ Default Bindings -----------------------------------------------
+----------- Default Bindings ------------------------------
 
 defaultKeyBindings ∷ KeyBindings
 defaultKeyBindings = Map.fromList
@@ -26,7 +26,7 @@ defaultKeyBindings = Map.fromList
     , ("shell", "Grave")
     ]
 
------------ YAML Parsing ---------------------------------------------------
+----------- YAML Parsing ----------------------------------
 
 data KeyBindingConfig = KeyBindingConfig
     { kbcBindings ∷ KeyBindings
@@ -37,7 +37,7 @@ instance FromJSON KeyBindingConfig where
     KeyBindingConfig ⊚ v .: "keybinds" .!= defaultKeyBindings
   parseJSON _ = fail "Expected Object for KeyBindingConfig value"
 
------------ Loading --------------------------------------------------------
+----------- Loading ---------------------------------------
 
 loadKeyBindings ∷ LoggerState → FilePath → IO KeyBindings
 loadKeyBindings logger path = do
@@ -53,7 +53,7 @@ loadKeyBindings logger path = do
             logDebug logger CatInput $ "Key bindings loaded: " <> T.pack (show (Map.size bindings)) <> " actions"
             return bindings
 
------------ Query Functions ------------------------------------------------
+----------- Query Functions -------------------------------
 
 isActionDown ∷ Text → KeyBindings → InputState → Bool
 isActionDown action bindings state =
@@ -64,7 +64,7 @@ isActionDown action bindings state =
 getKeyForAction ∷ Text → KeyBindings → Maybe Text
 getKeyForAction = Map.lookup
 
------------ Key Parsing ----------------------------------------------------
+----------- Key Parsing -----------------------------------
 
 parseKeyName ∷ Text → Maybe GLFW.Key
 parseKeyName "Up"     = Just GLFW.Key'Up

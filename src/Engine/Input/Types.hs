@@ -5,7 +5,7 @@ import UPrelude
 import qualified Data.Map as Map
 import qualified Graphics.UI.GLFW as GLFW
 
------------ Input State -----------------------------------------------------
+----------- Input State -----------------------------------
 
 data InputState = InputState 
     { inpKeyStates ∷ Map.Map GLFW.Key KeyState
@@ -16,7 +16,7 @@ data InputState = InputState
     , inpWindowFocused ∷ Bool            -- ^ Is window currently focused
     } deriving (Show)
 
------------ Input Events ----------------------------------------------------
+----------- Input Events ----------------------------------
 
 data InputEvent 
     = InputKeyEvent 
@@ -50,7 +50,7 @@ data WindowEvent
     | WindowMinimize Bool        -- ^ Window minimized/restored
     deriving (Show, Eq)
 
------------ Key State -------------------------------------------------------
+----------- Key State -------------------------------------
 
 data KeyState = KeyState
     { keyPressed ∷ Bool         -- ^ Is the key currently pressed
@@ -58,7 +58,7 @@ data KeyState = KeyState
     , keyTime    ∷ Double       -- ^ Time of last state change
     } deriving (Show, Eq)
 
------------ Key Types -------------------------------------------------------
+----------- Key Types -------------------------------------
 
 data Key
     = KeyA | KeyB | KeyC | KeyD | KeyE | KeyF | KeyG | KeyH | KeyI | KeyJ
@@ -74,7 +74,7 @@ data Key
     | KeyUnknown
     deriving (Eq, Ord, Show, Read, Enum, Bounded)
 
------------ Conversions -----------------------------------------------------
+----------- Conversions -----------------------------------
 
 fromGLFWKey ∷ GLFW.Key → Key
 fromGLFWKey GLFW.Key'A = KeyA
@@ -251,7 +251,7 @@ textToKey "Backspace" = Just KeyBackspace
 textToKey "Grave" = Just KeyGrave
 textToKey _ = Nothing
 
------------ Defaults --------------------------------------------------------
+----------- Defaults --------------------------------------
 
 defaultKeyState ∷ KeyState
 defaultKeyState = KeyState
