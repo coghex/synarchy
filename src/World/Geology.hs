@@ -253,17 +253,16 @@ data CraterEra
 --   determines size and whether a meteorite survives.
 generateCraters :: Word64 -> Int -> [TectonicPlate] -> CraterEra -> [CraterParams]
 generateCraters seed worldSize plates era =
-    let (count, minRadius, maxRadius, minDepth, maxDepth, rimMin, rimMax) = case era of
+    let (baseCount, minRadius, maxRadius, minDepth, maxDepth, rimMin, rimMax) = case era of
             CraterEra_Primordial -> (3,  40, 120, 30, 80, 10, 30)
             CraterEra_Late       -> (8,  10, 50,  8,  40, 3,  15)
 
+        count = scaleCount worldSize baseCount
         halfTiles = (worldSize * 16) `div` 2
 
         attempts = map (generateCraterAttempt seed worldSize plates
                             halfTiles minRadius maxRadius
                             minDepth maxDepth rimMin rimMax) [0 .. count * 3 - 1]
-        -- Take up to 'count' successful placements
-        -- (some attempts will land in ocean/glacier and be rejected)
         valid = take count [ cp | Just cp <- attempts ]
 
     in valid
@@ -1117,6 +1116,14 @@ applyHydrothermal params worldSize gx gy _baseElev =
 -- Feature Generation Helpers
 -----------------------------------------------------------
 
+-- | Scale a feature count by world area relative to a 128-chunk baseline.
+--   At worldSize=128 returns the base count unchanged.
+--   At worldSize=256 returns 4× the base count, etc.
+scaleCount :: Int -> Int -> Int
+scaleCount worldSize baseCount =
+    let areaRatio = (worldSize * worldSize) `div` (128 * 128)
+    in max baseCount (baseCount * areaRatio)
+
 -- | Generate and register a batch of volcanic features.
 --   Returns the list of new PersistentFeatures and updated state.
 generateAndRegister :: Word64 -> Int -> [TectonicPlate]
@@ -1128,8 +1135,8 @@ generateAndRegister :: Word64 -> Int -> [TectonicPlate]
                     -> ([PersistentFeature], TimelineBuildState)
 generateAndRegister seed worldSize plates _era mkFeature periodIdx tbs0 =
     let halfTiles = (worldSize * 16) `div` 2
-        maxAttempts = 40 :: Int
-        maxFeatures = 8 :: Int
+        maxFeatures = scaleCount worldSize 4
+        maxAttempts = maxFeatures * 5
 
         go attemptIdx count tbs acc
             | attemptIdx >= maxAttempts = (acc, tbs)
@@ -1164,9 +1171,11 @@ generateAndRegisterN :: Int -> Int -> Word64 -> Int -> [TectonicPlate]
                          -> Maybe VolcanicFeature)
                      -> Int -> TimelineBuildState
                      -> ([PersistentFeature], TimelineBuildState)
-generateAndRegisterN maxAttempts maxFeatures seed worldSize plates
+generateAndRegisterN baseMaxAttempts baseMaxFeatures seed worldSize plates
                      _era mkFeature periodIdx tbs0 =
     let halfTiles = (worldSize * 16) `div` 2
+        maxFeatures = scaleCount worldSize baseMaxFeatures
+        maxAttempts = scaleCount worldSize baseMaxAttempts
 
         go attemptIdx count tbs acc
             | attemptIdx >= maxAttempts = (acc, tbs)
@@ -1429,7 +1438,7 @@ buildEarlyVolcanism :: Word64 -> Int -> [TectonicPlate]
                     -> TimelineBuildState -> TimelineBuildState
 buildEarlyVolcanism seed worldSize plates tbs0 =
     let volcSeed = seed `xor` 0xB45A1F1C
-        periodIdx = tbsPeriodIdx tbs0
+        periodIdx = fromIntegral $ tbsPeriodIdx tbs0
 
         -- Shield volcanoes at hotspots
         (shields, tbs1) = generateAndRegister volcSeed worldSize plates
