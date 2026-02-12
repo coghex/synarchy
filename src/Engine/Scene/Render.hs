@@ -99,42 +99,70 @@ getCurrentRenderBatches = do
         [("count", T.pack $ show $ V.length batches)]
     pure batches
 
--- | Create or resize dynamic vertex buffer for scene rendering
+-- | Create or resize dynamic vertex buffer for scene rendering.
+--   Reuses the cached buffer from GraphicsState when it's big enough.
+--   When a new buffer must be allocated, the old one is destroyed first.
 ensureDynamicVertexBuffer ∷ Word64 → EngineM ε σ SceneDynamicBuffer
 ensureDynamicVertexBuffer requiredVertices = do
     state ← gets graphicsState
-    device ← case vulkanDevice state of
-        Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
-                                           "No device"
-        Just d → pure d
-    pDevice ← case vulkanPDevice state of
-        Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
-                                           "No physical device"
-        Just pd → pure pd
-    
-    -- Calculate required buffer size
-    let bufferSize = requiredVertices * (fromIntegral vertexTotalSize)
-        -- Add 50% padding for dynamic growth
-        paddedSize = bufferSize + (bufferSize `div` 2)
-    
-    logDebugSM CatRender "Creating dynamic vertex buffer"
-        [("vertices", T.pack $ show requiredVertices)
-        ,("sizeBytes", T.pack $ show paddedSize)]
-    
-    -- Create new buffer
-    (memory, buffer) ← createVulkanBuffer 
-        device 
-        pDevice 
-        paddedSize
-        (BUFFER_USAGE_VERTEX_BUFFER_BIT .|. BUFFER_USAGE_TRANSFER_DST_BIT)
-        (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
-    
-    pure $ SceneDynamicBuffer
-        { sdbBuffer = buffer
-        , sdbMemory = memory
-        , sdbCapacity = requiredVertices + (requiredVertices `div` 2)
-        , sdbUsed = 0
-        }
+
+    -- Check if we already have a buffer that's big enough
+    case dynamicVertexBuffer state of
+        Just existing | sdbCapacity existing ≥ requiredVertices → do
+            logDebugSM CatRender "Reusing existing dynamic vertex buffer"
+                [("capacity", T.pack $ show $ sdbCapacity existing)
+                ,("required", T.pack $ show requiredVertices)]
+            pure existing
+        mOld → do
+            -- Need a new buffer — first destroy the old one if it exists
+            device ← case vulkanDevice state of
+                Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
+                                                   "No device"
+                Just d → pure d
+            pDevice ← case vulkanPDevice state of
+                Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
+                                                   "No physical device"
+                Just pd → pure pd
+
+            -- Destroy old buffer
+            case mOld of
+                Just old → do
+                    logDebugSM CatRender "Destroying old dynamic vertex buffer"
+                        [("oldCapacity", T.pack $ show $ sdbCapacity old)]
+                    liftIO $ do
+                        destroyBuffer device (sdbBuffer old) Nothing
+                        freeMemory device (sdbMemory old) Nothing
+                Nothing → pure ()
+
+            -- Calculate required buffer size with 50% padding
+            let bufferSize = requiredVertices * (fromIntegral vertexTotalSize)
+                paddedSize = bufferSize + (bufferSize `div` 2)
+                paddedCapacity = requiredVertices + (requiredVertices `div` 2)
+
+            logDebugSM CatRender "Creating dynamic vertex buffer"
+                [("vertices", T.pack $ show requiredVertices)
+                ,("sizeBytes", T.pack $ show paddedSize)]
+
+            -- Create new buffer
+            (memory, buffer) ← createVulkanBuffer
+                device
+                pDevice
+                paddedSize
+                (BUFFER_USAGE_VERTEX_BUFFER_BIT .|. BUFFER_USAGE_TRANSFER_DST_BIT)
+                (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+
+            let newBuf = SceneDynamicBuffer
+                    { sdbBuffer = buffer
+                    , sdbMemory = memory
+                    , sdbCapacity = paddedCapacity
+                    , sdbUsed = 0
+                    }
+
+            -- Cache in GraphicsState
+            modify $ \s → s { graphicsState = (graphicsState s) {
+                dynamicVertexBuffer = Just newBuf } }
+
+            pure newBuf
 
 -- | Upload batch vertices to dynamic buffer
 uploadBatchesToBuffer ∷ V.Vector RenderBatch → SceneDynamicBuffer → EngineM ε σ SceneDynamicBuffer
@@ -144,44 +172,50 @@ uploadBatchesToBuffer batches dynamicBuffer = do
         Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
                                            "No device"
         Just d → pure d
-    
+
     -- Calculate total vertices needed
     let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
-    
+
     logDebugSM CatRender "Uploading batches to buffer"
         [("batches", T.pack $ show $ V.length batches)
         ,("totalVertices", T.pack $ show totalVertices)]
-    
-    -- Ensure buffer capacity
+
+    -- Ensure buffer capacity (this now reuses or grows as needed)
     finalBuffer ← if totalVertices > sdbCapacity dynamicBuffer
         then do
             logDebugM CatScene "Buffer too small, resizing..."
             ensureDynamicVertexBuffer totalVertices
         else pure dynamicBuffer
-    
+
     -- Upload vertex data
     let totalSize = totalVertices * (fromIntegral vertexTotalSize)
-    
+
     dataPtr ← mapMemory device (sdbMemory finalBuffer) 0 totalSize zero
-    
+
     -- Copy all batch vertices sequentially
     currentOffset ← liftIO $ newIORef (0 ∷ Int)
     V.forM_ batches $ \batch → do
         offset ← liftIO $ readIORef currentOffset
         let vertices = V.toList $ rbVertices batch
             batchSize = length vertices * fromIntegral vertexTotalSize
-        
+
         liftIO $ do
             let ptr = castPtr dataPtr `plusPtr` offset
             forM_ (zip [0..] vertices) $ \(i, vertex) → do
                 pokeByteOff ptr (i * fromIntegral vertexTotalSize) vertex
             writeIORef currentOffset (offset + batchSize)
-    
+
     unmapMemory device (sdbMemory finalBuffer)
-    
+
     logDebugM CatRender "Buffer upload complete"
-    
-    pure $ finalBuffer { sdbUsed = totalVertices }
+
+    let result = finalBuffer { sdbUsed = totalVertices }
+
+    -- Keep cache in sync after upload
+    modify $ \s → s { graphicsState = (graphicsState s) {
+        dynamicVertexBuffer = Just result } }
+
+    pure result
 
 -- | Get world-layer DrawableObjects as SortableQuads for interleaving
 -- with world tiles. Filters to only world layers (< uiLayerThreshold).

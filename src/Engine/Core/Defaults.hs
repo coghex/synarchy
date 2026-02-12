@@ -100,6 +100,7 @@ defaultEngineState = EngineState
     , pendingInstanceBuffers = V.empty
     , cleanupStatus          = NotStarted
     , vulkanCleanup          = emptyCleanup
+    , dynamicVertexBuffer    = Nothing
     }
   , assetConfig      = AssetConfig 100 100 True True
   , sceneManager     = createSceneManager

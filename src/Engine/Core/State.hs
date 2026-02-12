@@ -124,6 +124,7 @@ data GraphicsState = GraphicsState
   , pendingInstanceBuffers ∷ V.Vector (Vk.Buffer, Vk.DeviceMemory)
   , cleanupStatus          ∷ CleanupStatus
   , vulkanCleanup          ∷ Cleanup
+  , dynamicVertexBuffer    ∷ Maybe SceneDynamicBuffer
   }
 
 -- | Cached windowed-mode geometry for restoring after fullscreen
