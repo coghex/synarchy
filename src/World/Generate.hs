@@ -21,7 +21,7 @@ import Data.Word (Word32, Word64)
 import qualified Data.HashMap.Strict as HM
 import World.Types (Tile(..), ChunkCoord(..), Chunk, WorldGenParams(..)
                    , GeoTimeline(..), GeoPeriod(..), GeoEvent(..))
-import World.Material (MaterialId(..))
+import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalX)
 import World.Grid (worldToGrid)
@@ -97,8 +97,10 @@ generateChunk params coord =
         -- Wrap global X for border tiles that may cross the seam
         wrapGX gx = wrapGlobalX worldSize gx
 
-        columns = [ ((lx, ly), applyTimeline timeline worldSize (wrapGX gx) gy
-                                  (elevationAtGlobal seed plates worldSize (wrapGX gx) gy))
+        columns = [ ((lx, ly), let raw = elevationAtGlobal seed plates worldSize (wrapGX gx) gy
+                               in if snd raw == matGlacier
+                                  then raw  -- never apply geology to glacier tiles
+                                  else applyTimeline timeline worldSize (wrapGX gx) gy raw)
                   | lx <- [-1 .. chunkSize]
                   , ly <- [-1 .. chunkSize]
                   , let (gx, gy) = chunkToGlobal coord lx ly

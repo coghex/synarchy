@@ -157,7 +157,7 @@ function worldView.createWorld()
         dioriteTexture = worldView.textures.diorite,
         gabbroTexture  = worldView.textures.gabbro,
         glacierTexture = worldView.textures.glacier,
-        volcanicTexture = worldView.textures.lava,
+        lavaTexture = worldView.textures.lava,
         blankTexture   = worldView.textures.blankTexture,
         noTexture      = worldView.textures.noTexture,
         isoFaceMap     = worldView.textures.isoFaceMap,

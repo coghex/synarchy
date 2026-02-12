@@ -23,6 +23,7 @@ import World.Material (MaterialId(..))
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
                    , isBeyondGlacier)
 import World.Generate (chunkSize)
+import World.Geology (applyGeoEvent, GeoModification(..))
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
                    backgroundMapLayer, zoomFadeStart, zoomFadeEnd)
@@ -35,12 +36,20 @@ import qualified Data.Vector as V
 -- | Pre-compute all zoom map entries. Called once when the
 --   world is created. Returns a vector of entries for every
 --   visible (non-beyond-glacier) chunk in the world.
+--
+--   Now applies the full geological timeline (craters, volcanoes,
+--   etc.) to each chunk's midpoint so the zoomed-out map reflects
+--   the actual post-geology terrain.
 buildZoomCache :: WorldGenParams -> V.Vector ZoomChunkEntry
 buildZoomCache params =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
         plates = generatePlates seed worldSize (wgpPlateCount params)
         halfSize = worldSize `div` 2
+        timeline = wgpGeoTimeline params
+
+        -- Collect ALL events from every geological period, in order
+        allEvents = concatMap gpEvents (gtPeriods timeline)
 
         entries =
             [ ZoomChunkEntry
@@ -48,20 +57,40 @@ buildZoomCache params =
                 , zceChunkY   = ccy
                 , zceDrawX    = drawX
                 , zceDrawY    = drawY
-                , zceTexIndex = unMaterialId mat
-                , zceElev     = elev
+                , zceTexIndex = finalMat
+                , zceElev     = finalElev
                 }
             | ccx <- [-halfSize .. halfSize - 1]
             , ccy <- [-halfSize .. halfSize - 1]
             , let midGX = ccx * chunkSize + chunkSize `div` 2
                   midGY = ccy * chunkSize + chunkSize `div` 2
             , not (isBeyondGlacier worldSize midGX midGY)
-            , let (elev, mat) = elevationAtGlobal seed plates worldSize midGX midGY
+            , let (baseElev, baseMat) = elevationAtGlobal seed plates worldSize midGX midGY
+                  -- Apply every geo event to this sample point
+                  (finalElev, finalMat) = applyAllEvents allEvents worldSize
+                                              midGX midGY baseElev (unMaterialId baseMat)
                   (wcx, wcy) = gridToWorld midGX midGY
                   drawX = wcx - chunkWorldWidth / 2.0
                   drawY = wcy
             ]
     in V.fromList entries
+
+-- | Fold all geological events over a single tile position.
+--   Returns the final (elevation, materialId).
+--   Events are applied in timeline order. Each event's elevation
+--   delta is additive; material overrides replace the current material.
+applyAllEvents :: [GeoEvent] -> Int -> Int -> Int -> Int -> Word8
+               -> (Int, Word8)
+applyAllEvents events worldSize gx gy baseElev baseMat =
+    foldl' applyOne (baseElev, baseMat) events
+  where
+    applyOne (elev, mat) event =
+        let GeoModification deltaE mMat = applyGeoEvent event worldSize gx gy elev
+            newElev = elev + deltaE
+            newMat  = case mMat of
+                        Just m  -> m
+                        Nothing -> mat
+        in (newElev, newMat)
 
 -----------------------------------------------------------
 -- Generate Zoom Map Quads (called every frame)

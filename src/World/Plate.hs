@@ -174,7 +174,8 @@ classifyBoundary worldSize plateA plateB =
 -----------------------------------------------------------
 
 -- | How many tile-rows wide the glacier zone is at each pole.
---   One "row" in screen space is one unit of (gx + gy).
+--   Scales proportionally with world size.
+--   At worldSize=128 this gives 16 (one chunk), preserving original behavior.
 glacierWidthRows :: Int
 glacierWidthRows = 16
 
@@ -192,6 +193,7 @@ isGlacierZone worldSize gx gy =
 
 -- | True if this tile is completely outside the playable world
 --   (past the glacier border). These tiles should not be generated.
+
 isBeyondGlacier :: Int -> Int -> Int -> Bool
 isBeyondGlacier worldSize gx gy =
     let halfTiles = (worldSize * 16) `div` 2

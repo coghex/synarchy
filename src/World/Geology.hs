@@ -71,14 +71,30 @@ evolveOneFeature :: Word64 -> Int
                  -> PersistentFeature
                  -> ([GeoEvent], TimelineBuildState)
 evolveOneFeature seed periodIdx (events, tbs) pf =
+    -- Only evolve point features (shields, cinder cones, lava domes)
+    -- Fissures, tubes, vents, and supervolcanoes don't evolve this way
+    case pfFeature pf of
+        FissureVolcano _   -> (events, tbs)
+        LavaTube _         -> (events, tbs)
+        HydrothermalVent _ -> (events, tbs)
+        SuperVolcano _     -> (events, tbs)
+        Caldera _          -> (events, tbs)
+        _ -> evolvePointFeature seed periodIdx (events, tbs) pf
+
+-- | Evolution logic for point volcanic features only.
+evolvePointFeature :: Word64 -> Int
+                   -> ([GeoEvent], TimelineBuildState)
+                   -> PersistentFeature
+                   -> ([GeoEvent], TimelineBuildState)
+evolvePointFeature seed periodIdx (events, tbs) pf =
     let fid = pfId pf
         GeoFeatureId fidInt = fid
         h1 = hashGeo seed fidInt 40
         roll = hashToFloatGeo h1
     in case pfActivity pf of
         Active ->
-            if roll < 0.2
-            -- 20%: collapse into caldera
+            if roll < 0.15
+            -- 15%: collapse into caldera
             then let h2 = hashGeo seed fidInt 41
                      h3 = hashGeo seed fidInt 42
                      depth = hashToRangeGeo h2 50 200
@@ -89,7 +105,7 @@ evolveOneFeature seed periodIdx (events, tbs) pf =
                                   , pfLastActivePeriod = periodIdx }) tbs
                  in (evt : events, tbs')
 
-            else if roll < 0.5
+            else if roll < 0.45
             -- 30%: go dormant
             then let evt = VolcanicModify fid GoDormant
                      tbs' = updateFeature fid
@@ -97,12 +113,11 @@ evolveOneFeature seed periodIdx (events, tbs) pf =
                                   , pfLastActivePeriod = periodIdx }) tbs
                  in (evt : events, tbs')
 
-            else if roll < 0.7
-            -- 20%: parasitic eruption (spawn cinder cone on flank)
+            else if roll < 0.65
+            -- 20%: parasitic eruption
             then let (childId, tbs') = allocFeatureId tbs
                      h3 = hashGeo seed fidInt 43
                      h4 = hashGeo seed fidInt 44
-                     -- Place child on the flank of the parent
                      parentCenter = getFeatureCenter (pfFeature pf)
                      GeoCoord px py = parentCenter
                      angle = hashToFloatGeo h3 * 2.0 * 3.14159
@@ -133,7 +148,7 @@ evolveOneFeature seed periodIdx (events, tbs) pf =
                  in (evt : events, tbs''')
 
             else
-            -- 30%: stays active, grows taller
+            -- 35%: stays active, grows
             let h5 = hashGeo seed fidInt 49
                 heightGain = hashToRangeGeo h5 20 100
                 evt = VolcanicModify fid (Reactivate heightGain 0)
@@ -144,7 +159,6 @@ evolveOneFeature seed periodIdx (events, tbs) pf =
 
         Dormant ->
             if roll < 0.3
-            -- 30%: reactivate
             then let h5 = hashGeo seed fidInt 50
                      h6 = hashGeo seed fidInt 51
                      heightGain = hashToRangeGeo h5 30 150
@@ -157,15 +171,12 @@ evolveOneFeature seed periodIdx (events, tbs) pf =
                  in (evt : events, tbs')
 
             else if roll < 0.5
-            -- 20%: go extinct
             then let evt = VolcanicModify fid GoExtinct
                      tbs' = updateFeature fid
                          (\p -> p { pfActivity = Extinct }) tbs
                  in (evt : events, tbs')
 
-            else
-            -- 50%: stays dormant, no event emitted
-            (events, tbs)
+            else (events, tbs)
 
         Extinct   -> (events, tbs)
         Collapsed -> (events, tbs)
@@ -1146,6 +1157,43 @@ generateAndRegister seed worldSize plates _era mkFeature periodIdx tbs0 =
 
     in go 0 0 tbs0 []
 
+-- | Like generateAndRegister but with explicit max attempts and max features.
+generateAndRegisterN :: Int -> Int -> Word64 -> Int -> [TectonicPlate]
+                     -> VolcanoEra
+                     -> (Word64 -> Int -> [TectonicPlate] -> Int -> Int
+                         -> Maybe VolcanicFeature)
+                     -> Int -> TimelineBuildState
+                     -> ([PersistentFeature], TimelineBuildState)
+generateAndRegisterN maxAttempts maxFeatures seed worldSize plates
+                     _era mkFeature periodIdx tbs0 =
+    let halfTiles = (worldSize * 16) `div` 2
+
+        go attemptIdx count tbs acc
+            | attemptIdx >= maxAttempts = (acc, tbs)
+            | count >= maxFeatures     = (acc, tbs)
+            | otherwise =
+                let h1 = hashGeo seed attemptIdx 70
+                    h2 = hashGeo seed attemptIdx 71
+                    gx = hashToRangeGeo h1 (-halfTiles) (halfTiles - 1)
+                    gy = hashToRangeGeo h2 (-halfTiles) (halfTiles - 1)
+                in case mkFeature seed worldSize plates gx gy of
+                    Nothing -> go (attemptIdx + 1) count tbs acc
+                    Just feature ->
+                        let (fid, tbs') = allocFeatureId tbs
+                            pf = PersistentFeature
+                                { pfId               = fid
+                                , pfFeature          = feature
+                                , pfActivity         = Active
+                                , pfFormationPeriod   = periodIdx
+                                , pfLastActivePeriod  = periodIdx
+                                , pfEruptionCount     = 1
+                                , pfParentId          = Nothing
+                                }
+                            tbs'' = registerFeature pf tbs'
+                        in go (attemptIdx + 1) (count + 1) tbs'' (pf : acc)
+
+    in go 0 0 tbs0 []
+
 -----------------------------------------------------------
 -- Feature Constructors (called by generateAndRegister)
 -----------------------------------------------------------
@@ -1443,11 +1491,11 @@ buildLateVolcanism seed worldSize plates tbs0 =
                             VolcanoEra_Hotspot generateLavaTube periodIdx tbs2
 
         -- Rare: one supervolcano attempt
-        (supers, tbs4) = generateAndRegister (lateSeed + 3) worldSize plates
+        (supers, tbs4) = generateAndRegisterN 8 1 (lateSeed + 3) worldSize plates
                              VolcanoEra_Hotspot generateSuperVolcano periodIdx tbs3
 
         -- Calderas from collapsed earlier features
-        (calderas, tbs5) = generateAndRegister (lateSeed + 4) worldSize plates
+        (calderas, tbs5) = generateAndRegisterN 16 3 (lateSeed + 4) worldSize plates
                                VolcanoEra_Hotspot generateCaldera periodIdx tbs4
 
         allNew = cinders <> domes <> tubes <> supers <> calderas
