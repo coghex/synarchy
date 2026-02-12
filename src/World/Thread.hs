@@ -18,6 +18,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 import qualified Engine.Core.Queue as Q
 import World.Types
 import World.Generate
+import World.Grid (zoomFadeEnd)
 import World.Geology (buildTimeline)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.ZoomMap (buildZoomCache)
@@ -125,63 +126,70 @@ tickWorldTime env dt = do
 
 -- | Check camera position and load/promote chunks as needed.
 --   Runs every tick on the world thread.
+--   ONLY generates chunks when zoomed in enough to see tiles.
+--   When zoomed out past the fade threshold, the zoom map cache
+--   (built once at init) handles rendering — no chunk gen needed.
 updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
 updateChunkLoading env logger = do
-    manager ← readIORef (worldManagerRef env)
-    camera  ← readIORef (cameraRef env)
-    
-    let (camX, camY) = camPosition camera
-        camChunk = cameraChunkCoord camX camY
-        ChunkCoord ccx ccy = camChunk
-        
-        neededCoords = [ ChunkCoord (ccx + dx) (ccy + dy)
-                       | dx ← [-chunkLoadRadius .. chunkLoadRadius]
-                       , dy ← [-chunkLoadRadius .. chunkLoadRadius]
-                       ]
-    
-    forM_ (wmVisible manager) $ \pageId →
-        case lookup pageId (wmWorlds manager) of
-            Nothing → return ()
-            Just worldState → do
-                mParams ← readIORef (wsGenParamsRef worldState)
-                case mParams of
-                    Nothing → return ()
-                    Just params → do
-                        tileData ← readIORef (wsTilesRef worldState)
-                        
-                        let halfSize = wgpWorldSize params `div` 2
-                            -- Y is clamped (glacier), X wraps
-                            wrapChunkX cx =
-                                let wrapped = ((cx + halfSize) `mod` (halfSize * 2) + (halfSize * 2))
-                                              `mod` (halfSize * 2) - halfSize
-                                in wrapped
-                            inBoundsY (ChunkCoord _ cy) =
-                                cy ≥ -halfSize ∧ cy < halfSize
-                            wrapCoord (ChunkCoord cx cy) = ChunkCoord (wrapChunkX cx) cy
-                            validCoords = map wrapCoord $ filter inBoundsY neededCoords
-                        
-                        let (toPromote, toGenerate) = partitionChunks validCoords tileData
-                        
-                        when (not $ null toGenerate) $ do
-                            let newChunks = map (\coord →
-                                    let (chunkTiles, surfMap) = generateChunk params coord
-                                    in LoadedChunk
-                                        { lcCoord      = coord
-                                        , lcTiles      = chunkTiles
-                                        , lcSurfaceMap = surfMap
-                                        , lcModified   = False
-                                        }) toGenerate
-                            
-                            atomicModifyIORef' (wsTilesRef worldState) $ \td →
-                                let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
-                                    td'' = evictDistantChunks camChunk chunkLoadRadius td'
-                                in (td'', ())
-                            
-                            logDebug logger CatWorld $
-                                "Loaded " <> T.pack (show $ length toGenerate)
-                                <> " new chunks around " <> T.pack (show camChunk)
-                                <> " (" <> T.pack (show $ chunkCount tileData + length toGenerate)
-                                <> " total)"
+    camera ← readIORef (cameraRef env)
+    let zoom = camZoom camera
+
+    -- update chunk a little bit before the fade threshold
+    -- so that new chunks are ready to go as you zoom in
+    when (zoom < (zoomFadeEnd + 0.5)) $ do
+        manager ← readIORef (worldManagerRef env)
+
+        let (camX, camY) = camPosition camera
+            camChunk = cameraChunkCoord camX camY
+            ChunkCoord ccx ccy = camChunk
+
+            neededCoords = [ ChunkCoord (ccx + dx) (ccy + dy)
+                           | dx ← [-chunkLoadRadius .. chunkLoadRadius]
+                           , dy ← [-chunkLoadRadius .. chunkLoadRadius]
+                           ]
+
+        forM_ (wmVisible manager) $ \pageId →
+            case lookup pageId (wmWorlds manager) of
+                Nothing → return ()
+                Just worldState → do
+                    mParams ← readIORef (wsGenParamsRef worldState)
+                    case mParams of
+                        Nothing → return ()
+                        Just params → do
+                            tileData ← readIORef (wsTilesRef worldState)
+
+                            let halfSize = wgpWorldSize params `div` 2
+                                wrapChunkX cx =
+                                    let wrapped = ((cx + halfSize) `mod` (halfSize * 2) + (halfSize * 2))
+                                                  `mod` (halfSize * 2) - halfSize
+                                    in wrapped
+                                inBoundsY (ChunkCoord _ cy) =
+                                    cy ≥ -halfSize ∧ cy < halfSize
+                                wrapCoord (ChunkCoord cx cy) = ChunkCoord (wrapChunkX cx) cy
+                                validCoords = map wrapCoord $ filter inBoundsY neededCoords
+
+                            let (toPromote, toGenerate) = partitionChunks validCoords tileData
+
+                            when (not $ null toGenerate) $ do
+                                let newChunks = map (\coord →
+                                        let (chunkTiles, surfMap) = generateChunk params coord
+                                        in LoadedChunk
+                                            { lcCoord      = coord
+                                            , lcTiles      = chunkTiles
+                                            , lcSurfaceMap = surfMap
+                                            , lcModified   = False
+                                            }) toGenerate
+
+                                atomicModifyIORef' (wsTilesRef worldState) $ \td →
+                                    let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
+                                        td'' = evictDistantChunks camChunk chunkLoadRadius td'
+                                    in (td'', ())
+
+                                logDebug logger CatWorld $
+                                    "Loaded " <> T.pack (show $ length toGenerate)
+                                    <> " new chunks around " <> T.pack (show camChunk)
+                                    <> " (" <> T.pack (show $ chunkCount tileData + length toGenerate)
+                                    <> " total)"
                         
 -- | Partition needed chunk coords into those already loaded (promote)
 --   and those that need generation.

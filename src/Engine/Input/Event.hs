@@ -29,11 +29,5 @@ handleInputEvents = do
     let pressedKeys = Map.filter keyPressed (inpKeyStates sharedInput)
         keyCount = Map.size pressedKeys
     
-    when (keyCount > 0) $
-        logDebugSM CatInput "Input state update"
-            [("pressedKeys", T.pack $ show keyCount)
-            ,("mousePos", let (x,y) = inpMousePos sharedInput 
-                          in (T.pack (show x)) <> "," <> (T.pack (show y)))]
-    
     -- update local copy in engine state
     modify $ \s → s { inputState = sharedInput }
