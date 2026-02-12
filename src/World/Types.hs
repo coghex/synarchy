@@ -9,6 +9,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.Hashable (Hashable(..))
 import Data.IORef (IORef, newIORef)
 import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Scene.Types.Batch (SortableQuad(..))
 import qualified Engine.Core.Queue as Q
 
 -----------------------------------------------------------
@@ -125,6 +126,24 @@ evictDistantChunks (ChunkCoord camCX camCY) keepRadius wtd =
              kept = take roomLeft candidateList
              keptMap = HM.fromList [(lcCoord lc, lc) | lc ← kept]
          in wtd { wtdChunks = HM.union keep keptMap }
+
+-----------------------------------------------------------
+-- World Tile Quad Cache
+-----------------------------------------------------------
+
+-- | Snapshot of camera state used to generate cached quads.
+--   If the current camera matches this, we can reuse the quads.
+data WorldCameraSnapshot = WorldCameraSnapshot
+    { wcsPosition ∷ !(Float, Float)
+    , wcsZoom     ∷ !Float
+    , wcsZSlice   ∷ !Int
+    , wcsFbSize   ∷ !(Int, Int)
+    } deriving (Show, Eq)
+
+data WorldQuadCache = WorldQuadCache
+    { wqcCamera ∷ !WorldCameraSnapshot
+    , wqcQuads  ∷ !(V.Vector SortableQuad)
+    } deriving (Show)
 
 -----------------------------------------------------------
 -- World Camera
@@ -575,6 +594,7 @@ data WorldState = WorldState
     , wsDateRef      ∷ IORef WorldDate
     , wsTimeScaleRef ∷ IORef Float    -- ^ Game-minutes per real-second
     , wsZoomCacheRef ∷ IORef (V.Vector ZoomChunkEntry)  -- ^ Pre-computed zoom map cache for current world state
+    , wsQuadCacheRef  ∷ IORef (Maybe WorldQuadCache)  -- ^ Cached quads for current camera state
     }
 
 emptyWorldState ∷ IO WorldState
@@ -587,8 +607,10 @@ emptyWorldState = do
     dateRef      ← newIORef defaultWorldDate
     timeScaleRef ← newIORef 1.0   -- 1 game-minute per real-second
     zoomCacheRef ← newIORef V.empty
+    quadCacheRef  ← newIORef Nothing
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
+                        quadCacheRef
 
 -----------------------------------------------------------
 -- World Manager
