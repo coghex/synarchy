@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.MSAA
   ( createMSAAColorImage
   ) where
@@ -116,7 +116,7 @@ findMemType typeBits requiredFlags memTypes =
     let indexed = V.imap (,) memTypes
         matches = V.filter (\(i, mt) →
             testBit typeBits (fromIntegral i)
-            && (propertyFlags mt .&. requiredFlags) == requiredFlags
+            ∧ (propertyFlags mt .&. requiredFlags) ≡ requiredFlags
           ) indexed
     in case V.null matches of
         True  → Nothing

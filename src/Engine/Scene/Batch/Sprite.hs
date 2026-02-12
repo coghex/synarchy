@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scene.Batch.Sprite
   ( collectSpriteBatches
   , collectVisibleObjects
@@ -32,7 +32,7 @@ collectSpriteBatches graph camera viewWidth viewHeight = do
     let texSystem = textureSystem gs
         fmSlot = fromIntegral (defaultFaceMapSlot gs) ∷ Float
         allNodes = Map.elems (sgNodes graph)
-        spriteNodes = filter (\n → nodeType n ≡ SpriteObject && nodeVisible n) allNodes
+        spriteNodes = filter (\n → nodeType n ≡ SpriteObject ∧ nodeVisible n) allNodes
         visibleSprites = filter (isNodeVisible camera viewWidth viewHeight) spriteNodes
         drawableObjs = mapMaybe (nodeToDrawable graph texSystem fmSlot) visibleSprites
     
@@ -50,8 +50,8 @@ collectVisibleObjects graph camera viewWidth viewHeight = do
     let texSystem = textureSystem gs
         fmSlot = fromIntegral (defaultFaceMapSlot gs) ∷ Float
         allNodes = Map.elems (sgNodes graph)
-        spriteNodes = filter (\n → nodeType n ≡ SpriteObject && nodeVisible n) allNodes
-        visibleNodes = filter (\n → isUILayer (nodeLayer n) || isNodeVisible camera viewWidth viewHeight n) spriteNodes
+        spriteNodes = filter (\n → nodeType n ≡ SpriteObject ∧ nodeVisible n) allNodes
+        visibleNodes = filter (\n → isUILayer (nodeLayer n) ∨ isNodeVisible camera viewWidth viewHeight n) spriteNodes
         drawableObjs = mapMaybe (nodeToDrawable graph texSystem fmSlot) visibleNodes
     
     logDebugSM CatScene "Visible object culling"

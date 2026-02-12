@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Font.Draw
     ( createFontPipeline
     , createFontUIPipeline
@@ -45,8 +45,8 @@ import Vulkan.CStruct.Extends
 -----------------------------------------------------------
 
 -- | Layout text into glyph instances (converts pixels to world coords)
-layoutText :: FontAtlas -> Float -> Float -> Float -> Float -> Float
-  -> Text -> (Float, Float, Float, Float) -> V.Vector GlyphInstance
+layoutText ∷ FontAtlas → Float → Float → Float → Float → Float
+  → Text → (Float, Float, Float, Float) → V.Vector GlyphInstance
 layoutText atlas desiredSize startX startY screenW screenH text color =
     let baseSize = fromIntegral $ faFontSize atlas
         scaleFactor = desiredSize / baseSize
@@ -61,8 +61,8 @@ layoutText atlas desiredSize startX startY screenW screenH text color =
     pixelToNdcH ph = (ph / screenH) * 2.0
     layoutChar scaleFactor (currentX, acc) char =
         case Map.lookup char (faGlyphData atlas) of
-            Nothing -> (currentX, acc)
-            Just glyphInfo ->
+            Nothing → (currentX, acc)
+            Just glyphInfo →
                 let -- Scale all glyph metrics by scaleFactor
                     (bearingX, bearingY) = giBearing glyphInfo
                     (w, h) = giSize glyphInfo
@@ -468,8 +468,8 @@ createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout sa
     pure (pipeline, pipelineLayout)
 
 -- | Layout text into glyph instances for UI (pixel coordinates, with scaling)
-layoutTextUI :: FontAtlas -> Float -> Float -> Float -> Text
-  -> (Float, Float, Float, Float) -> V.Vector GlyphInstance
+layoutTextUI ∷ FontAtlas → Float → Float → Float → Text
+  → (Float, Float, Float, Float) → V.Vector GlyphInstance
 layoutTextUI atlas desiredSize startX startY text color =
     let baseSize = fromIntegral $ faFontSize atlas  -- e.g., 48 (the SDF base size)
         scaleFactor = desiredSize / baseSize         -- e.g., 96/48 = 2.0
@@ -480,8 +480,8 @@ layoutTextUI atlas desiredSize startX startY text color =
   where
     layoutChar scaleFactor (currentX, acc) char =
         case Map.lookup char (faGlyphData atlas) of
-            Nothing -> (currentX, acc)
-            Just glyphInfo ->
+            Nothing → (currentX, acc)
+            Just glyphInfo →
                 let -- Scale all glyph metrics by scaleFactor
                     (bearingX, bearingY) = giBearing glyphInfo
                     (w, h) = giSize glyphInfo

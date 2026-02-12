@@ -10,15 +10,15 @@ readHex' s = case readHex s of
   _         → 0
 colorToVec4 ∷ String → Vec4
 colorToVec4 ('#':r1:r2:g1:g2:b1:b2:[]) =
-  let r = fromIntegral (readHex' ([r1, r2]) :: Int) / 255.0
-      g = fromIntegral (readHex' ([g1, g2]) :: Int) / 255.0
-      b = fromIntegral (readHex' ([b1, b2]) :: Int) / 255.0
+  let r = fromIntegral (readHex' ([r1, r2]) ∷ Int) / 255.0
+      g = fromIntegral (readHex' ([g1, g2]) ∷ Int) / 255.0
+      b = fromIntegral (readHex' ([b1, b2]) ∷ Int) / 255.0
   in Vec4 r g b 1.0
 colorToVec4 ('#':r1:r2:g1:g2:b1:b2:a1:a2:[]) =
-  let r = fromIntegral (readHex' ([r1, r2]) :: Int) / 255.0
-      g = fromIntegral (readHex' ([g1, g2]) :: Int) / 255.0
-      b = fromIntegral (readHex' ([b1, b2]) :: Int) / 255.0
-      a = fromIntegral (readHex' ([a1, a2]) :: Int) / 255.0
+  let r = fromIntegral (readHex' ([r1, r2]) ∷ Int) / 255.0
+      g = fromIntegral (readHex' ([g1, g2]) ∷ Int) / 255.0
+      b = fromIntegral (readHex' ([b1, b2]) ∷ Int) / 255.0
+      a = fromIntegral (readHex' ([a1, a2]) ∷ Int) / 255.0
   in Vec4 r g b a
 colorToVec4 ("red") = Vec4 1.0 0 0 1.0
 colorToVec4 ("green") = Vec4 0 1.0 0 1.0

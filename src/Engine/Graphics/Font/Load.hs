@@ -101,20 +101,20 @@ loadFont requestedHandle fontPath fontSize = do
             return handle
 
 -- | Load an SDF font (generates atlas once, scalable to any size)
-loadSDFFont :: FontHandle -> FilePath -> EngineM ε σ FontHandle
+loadSDFFont ∷ FontHandle → FilePath → EngineM ε σ FontHandle
 loadSDFFont requestedHandle fontPath = do
     logDebugSM CatFont "SDF Font atlas generation started"
         [("path", T.pack fontPath)
         ,("base_size", T.pack $ show sdfBaseSize)
         ,("char_range", "' ' to '~'")]
     
-    cacheRef <- asks fontCacheRef
-    cache <- liftIO $ readIORef cacheRef
-    gs <- gets graphicsState
+    cacheRef ← asks fontCacheRef
+    cache ← liftIO $ readIORef cacheRef
+    gs ← gets graphicsState
     
     -- Use a special cache key for SDF fonts (size = -1 to indicate SDF)
     case Map.lookup (fontPath, -1) (fcPathCache cache) of
-        Just existingHandle -> do
+        Just existingHandle → do
             logDebugSM CatFont "SDF Font already loaded, reusing atlas"
                 [("path", T.pack fontPath)
                 ,("existing_handle", T.pack $ show existingHandle)
@@ -122,28 +122,28 @@ loadSDFFont requestedHandle fontPath = do
             
             -- Get the existing atlas and register it under the new handle too
             case Map.lookup existingHandle (fcFonts cache) of
-                Just existingAtlas -> do
-                    liftIO $ atomicModifyIORef' cacheRef $ \c -> ((c
+                Just existingAtlas → do
+                    liftIO $ atomicModifyIORef' cacheRef $ \c → ((c
                         { fcFonts = Map.insert requestedHandle existingAtlas (fcFonts c)
                         }), ())
                     return requestedHandle
-                Nothing -> do
+                Nothing → do
                     -- Shouldn't happen, but fall through to load
                     logWarnM CatFont "Cached font handle has no atlas, reloading"
                     loadNewSDFFont requestedHandle fontPath cacheRef gs
-        Nothing -> loadNewSDFFont requestedHandle fontPath cacheRef gs
+        Nothing → loadNewSDFFont requestedHandle fontPath cacheRef gs
 
 -- Helper to load a new SDF font (extracted from original loadSDFFont)
-loadNewSDFFont :: FontHandle -> FilePath -> IORef FontCache -> GraphicsState -> EngineM ε σ FontHandle
+loadNewSDFFont ∷ FontHandle → FilePath → IORef FontCache → GraphicsState → EngineM ε σ FontHandle
 loadNewSDFFont requestedHandle fontPath cacheRef gs = do
-    fontDescLayout <- case fontDescriptorLayout gs of
-        Nothing -> logAndThrowM CatFont (ExGraphics DescriptorError)
+    fontDescLayout ← case fontDescriptorLayout gs of
+        Nothing → logAndThrowM CatFont (ExGraphics DescriptorError)
                       "Font descriptor layout not initialized"
-        Just layout -> return layout
+        Just layout → return layout
     
-    loggerRef' <- asks loggerRef
-    logger <- liftIO $ readIORef loggerRef'
-    atlas <- liftIO $ generateSDFFontAtlas logger fontPath
+    loggerRef' ← asks loggerRef
+    logger ← liftIO $ readIORef loggerRef'
+    atlas ← liftIO $ generateSDFFontAtlas logger fontPath
     
     logDebugSM CatFont "SDF Atlas texture dimensions"
         [("width", T.pack $ show $ faAtlasWidth atlas)
@@ -151,14 +151,14 @@ loadNewSDFFont requestedHandle fontPath cacheRef gs = do
         ,("glyph_count", T.pack $ show $ Map.size $ faGlyphData atlas)]
     
     -- Upload to GPU (same as regular font)
-    (texHandle, descriptorSet, imgView, samp) <- uploadFontAtlasToGPU atlas fontDescLayout
+    (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas fontDescLayout
     
     let newAtlas = atlas { faTexture = texHandle
                          , faDescriptorSet = Just descriptorSet
                          , faImageView = Just imgView
                          , faSampler = Just samp }
     
-    liftIO $ atomicModifyIORef' cacheRef $ \c -> ((c
+    liftIO $ atomicModifyIORef' cacheRef $ \c → ((c
         { fcFonts = Map.insert requestedHandle newAtlas (fcFonts c)
         , fcPathCache = Map.insert (fontPath, -1) requestedHandle (fcPathCache c) }
         ), ())
@@ -295,39 +295,39 @@ nextPowerOf2 n = head $ dropWhile (< n) powersOf2
 -----------------------------------------------------------
 
 -- | The base size for SDF generation (atlas is generated once at this size)
-sdfBaseSize :: Int
+sdfBaseSize ∷ Int
 sdfBaseSize = 48
 
 -- | Padding around each SDF glyph (for distance field spread)
-sdfPadding :: Int
+sdfPadding ∷ Int
 sdfPadding = 6
 
 -- | Generate an SDF font atlas (scalable to any size)
-generateSDFFontAtlas :: LoggerState -> FilePath -> IO FontAtlas
+generateSDFFontAtlas ∷ LoggerState → FilePath → IO FontAtlas
 generateSDFFontAtlas logger fontPath = do
     logDebug logger CatFont $ "Generating SDF font atlas for: " <> T.pack fontPath
                             <> " base_size=" <> T.pack (show sdfBaseSize)
     
-    maybeFont <- loadSTBFont logger fontPath
+    maybeFont ← loadSTBFont logger fontPath
     case maybeFont of
-        Nothing -> error $ "Failed to load font: " ++ fontPath
-        Just font -> do
-            scale <- scaleForPixelHeight font (fromIntegral sdfBaseSize)
-            (ascent, descent, lineGap) <- getSTBFontMetrics font scale
+        Nothing → error $ "Failed to load font: " ++ fontPath
+        Just font → do
+            scale ← scaleForPixelHeight font (fromIntegral sdfBaseSize)
+            (ascent, descent, lineGap) ← getSTBFontMetrics font scale
             
             let chars = [' '..'~']
                 numChars = length chars
             
             -- Render all glyphs as SDF
-            glyphDataWithMetrics <- forM (zip chars [0..]) $ \(c, idx) -> do
-                result <- renderSTBGlyphSDF font c scale sdfPadding
-                (_, _, _, _, advance) <- getSTBGlyphMetrics font c scale
+            glyphDataWithMetrics ← forM (zip chars [0..]) $ \(c, idx) → do
+                result ← renderSTBGlyphSDF font c scale sdfPadding
+                (_, _, _, _, advance) ← getSTBGlyphMetrics font c scale
                 case result of
-                    Nothing -> do
+                    Nothing → do
                         when (c `notElem` [' ', '\n', '\t', '\r']) $
                             logWarn logger CatFont $ "Failed to rasterize SDF glyph: '" <> T.singleton c <> "'"
                         return (0, 0, 0, 0, [], advance)
-                    Just (w, h, xoff, yoff, pixels) -> do
+                    Just (w, h, xoff, yoff, pixels) → do
                         when (idx < 3) $
                             logDebug logger CatFont $ "SDF Glyph: char='" <> T.singleton c <> "' "
                                 <> "size=" <> T.pack (show w) <> "x" <> T.pack (show h)
@@ -338,8 +338,8 @@ generateSDFFontAtlas logger fontPath = do
             
             -- Calculate atlas dimensions
             let charsPerRow = 16
-                maxWidth = maximum $ map (\(w,_,_,_,_,_) -> w) glyphDataWithMetrics
-                maxHeight = maximum $ map (\(_,h,_,_,_,_) -> h) glyphDataWithMetrics
+                maxWidth = maximum $ map (\(w,_,_,_,_,_) → w) glyphDataWithMetrics
+                maxHeight = maximum $ map (\(_,h,_,_,_,_) → h) glyphDataWithMetrics
                 cellWidth = maxWidth + 2
                 cellHeight = maxHeight + 2
                 atlasWidth = nextPowerOf2 (charsPerRow * cellWidth)
@@ -350,7 +350,7 @@ generateSDFFontAtlas logger fontPath = do
                                     <> "x" <> T.pack (show atlasHeight)
             
             -- Pack glyphs into atlas
-            (atlasBitmap, glyphMap) <- packGlyphsSTBWithMetrics atlasWidth atlasHeight 
+            (atlasBitmap, glyphMap) ← packGlyphsSTBWithMetrics atlasWidth atlasHeight 
                                          charsPerRow cellWidth cellHeight glyphDataWithMetrics chars
             
             logDebug logger CatFont $ "SDF Atlas generated with " 

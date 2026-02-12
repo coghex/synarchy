@@ -57,22 +57,22 @@ loadFontFn env backendState = do
     _ → Lua.pushnil
   return 1
 
-spawnTextFn :: EngineEnv -> LuaBackendState -> Lua.LuaE Lua.Exception Lua.NumResults
+spawnTextFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 spawnTextFn env backendState = do
-  x <- Lua.tonumber 1
-  y <- Lua.tonumber 2
-  fontHandleNum <- Lua.tointeger 3
-  text <- Lua.tostring 4
-  color <- Lua.tostring 5
-  layer <- Lua.tointeger 6
-  fontSize <- Lua.tonumber 7  -- NEW: Add size parameter
+  x ← Lua.tonumber 1
+  y ← Lua.tonumber 2
+  fontHandleNum ← Lua.tointeger 3
+  text ← Lua.tostring 4
+  color ← Lua.tostring 5
+  layer ← Lua.tointeger 6
+  fontSize ← Lua.tonumber 7  -- NEW: Add size parameter
   case (x, y, fontHandleNum, color, text, fontSize) of
-    (Just xVal, Just yVal, Just fh, Just c, Just textBS, Just size) -> do
+    (Just xVal, Just yVal, Just fh, Just c, Just textBS, Just size) → do
       let layerId = LayerId $ fromIntegral $ fromMaybe 0 layer
-      objId <- Lua.liftIO $ do
-        logger <- readIORef $ loggerRef env
-        objId <- atomicModifyIORef' (lbsNextObjectId backendState) 
-            (\n -> (n + 1, ObjectId n))
+      objId ← Lua.liftIO $ do
+        logger ← readIORef $ loggerRef env
+        objId ← atomicModifyIORef' (lbsNextObjectId backendState) 
+            (\n → (n + 1, ObjectId n))
         logDebug logger CatLua $ "Lua spawning text with ID " 
                        <> T.pack (show objId)
         let fontHandle = FontHandle $ fromIntegral fh
@@ -85,7 +85,7 @@ spawnTextFn env backendState = do
         return objId
       let (ObjectId n) = objId
       Lua.pushinteger (Lua.Integer $ fromIntegral n)
-    _ -> do
+    _ → do
       Lua.pushstring "spawnText requires 7 arguments: x, y, fontHandle, text, color, layer, fontSize"
       Lua.pushnil
   return 1
@@ -122,20 +122,20 @@ getTextFn env = do
     _ → Lua.pushnil
   return 1
 
-getTextWidthFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+getTextWidthFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getTextWidthFn env = do
-  fontHandleNum <- Lua.tointeger 1
-  text <- Lua.tostring 2
-  fontSize <- Lua.tonumber 3  -- NEW: Add size parameter
+  fontHandleNum ← Lua.tointeger 1
+  text ← Lua.tostring 2
+  fontSize ← Lua.tonumber 3  -- NEW: Add size parameter
   case (fontHandleNum, text, fontSize) of
-      (Just fh, Just textBS, Just size) -> do
-          width <- Lua.liftIO $ do
+      (Just fh, Just textBS, Just size) → do
+          width ← Lua.liftIO $ do
               let fontHandle = FontHandle (fromIntegral fh)
                   textStr = T.unpack $ TE.decodeUtf8 textBS
-              fontCache <- readIORef (fontCacheRef env)
+              fontCache ← readIORef (fontCacheRef env)
               case Map.lookup fontHandle (fcFonts fontCache) of
-                  Nothing -> return 0.0
-                  Just atlas -> return $ calculateTextWidthScaled atlas (realToFrac size) textStr
+                  Nothing → return 0.0
+                  Just atlas → return $ calculateTextWidthScaled atlas (realToFrac size) textStr
           Lua.pushnumber (Lua.Number width)
-      _ -> Lua.pushnumber (Lua.Number 0)
+      _ → Lua.pushnumber (Lua.Number 0)
   return 1

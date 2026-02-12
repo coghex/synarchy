@@ -345,7 +345,7 @@ unloadAsset aid = do
   case Map.lookup aid (apTextureAtlases pool) of
     Just atlas → do
       let refCount = taRefCount atlas - 1
-      if refCount <= 0 then do
+      if refCount ≤ 0 then do
           liftIO $ maybe (pure ()) id (taCleanup atlas)
           liftIO $ atomicModifyIORef' poolRef $ \p → (p
             { apTextureAtlases = Map.delete aid (apTextureAtlases p)
@@ -361,7 +361,7 @@ unloadAsset aid = do
       case Map.lookup aid (apShaders pool) of
         Just program → do
           let newRefCount = spRefCount program - 1
-          if newRefCount <= 0 then do
+          if newRefCount ≤ 0 then do
                 liftIO $ maybe (pure ()) id (spCleanup program)
                 liftIO $ atomicModifyIORef' poolRef $ \p → (p
                   { apShaders = Map.delete aid (apShaders p)
@@ -403,7 +403,7 @@ cleanupAssetManager = do
     poolRef ← asks assetPoolRef
     pool ← liftIO $ readIORef poolRef
 
-    when (cleanupStatus state == InProgress) $
+    when (cleanupStatus state ≡ InProgress) $
       logAndThrowM CatAsset (ExGraphics CleanupError) $ "Cleanup already in progress"
     
     modify $ \s → s { graphicsState = (graphicsState s) { cleanupStatus = InProgress } }

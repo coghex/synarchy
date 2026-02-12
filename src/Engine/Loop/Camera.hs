@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Loop.Camera
     ( updateCameraPanning
     , updateCameraMouseDrag
@@ -17,7 +17,7 @@ import World.Grid (cameraPanSpeed, cameraPanAccel, cameraPanFriction,
 import World.Generate (chunkSize)
 import Control.Monad.State.Class (gets)
 
-cameraYLimit :: Float
+cameraYLimit ∷ Float
 cameraYLimit =
     let worldSizeChunks = 128
         halfTiles = (worldSizeChunks * chunkSize) `div` 2
@@ -29,19 +29,19 @@ cameraYLimit =
 --   Wrapping grid-X by worldSize chunks (= worldSize * chunkSize tiles)
 --   shifts screen-X by (worldSize * chunkSize * tileHalfWidth),
 --   because screenX = (gx - gy) * tileHalfWidth and only gx changes.
-cameraXWrap :: Float
+cameraXWrap ∷ Float
 cameraXWrap =
     let worldSizeChunks = 128
         worldTiles = worldSizeChunks * chunkSize
     in fromIntegral worldTiles * tileHalfWidth
 
 -- | Wrap camera X into [-cameraXWrap/2, cameraXWrap/2)
-wrapCameraX :: Float -> Float
+wrapCameraX ∷ Float → Float
 wrapCameraX x =
     let w = cameraXWrap
         halfW = w / 2.0
         shifted = x + halfW
-        wrapped = shifted - w * fromIntegral (floor (shifted / w) :: Int)
+        wrapped = shifted - w * fromIntegral (floor (shifted / w) ∷ Int)
     in wrapped - halfW
 
 updateCameraPanning ∷ EngineM ε σ ()
@@ -54,7 +54,7 @@ updateCameraPanning = do
                      Just ks → keyPressed ks
                      Nothing → False
 
-        dtF = realToFrac dt :: Float
+        dtF = realToFrac dt ∷ Float
 
         inputX = (if held GLFW.Key'Right then  1 else 0)
                + (if held GLFW.Key'Left  then -1 else 0)
@@ -76,7 +76,7 @@ updateCameraPanning = do
             rawY = cy + vy' * dtF
             cy' = clampF (-cameraYLimit) cameraYLimit rawY
 
-            vy'' = if cy' /= rawY then 0 else vy'
+            vy'' = if cy' ≢ rawY then 0 else vy'
 
         in (cam { camPosition = (cx', cy')
                 , camVelocity = (vx', vy'') }, ())
@@ -132,7 +132,7 @@ updateCameraMouseDrag = do
 
 stepAxis ∷ Float → Float → Float → Float → Float → Float → Float
 stepAxis input vel accel friction maxSpd dt
-    | input /= 0 =
+    | input ≢ 0 =
         let dv     = accel * dt * input
             vel'   = vel + dv
         in clampAbs vel' maxSpd
@@ -152,7 +152,7 @@ applyFriction v reduction
     | v < 0     = min 0 (v + reduction)
     | otherwise = 0
 
-clampF :: Float -> Float -> Float -> Float
+clampF ∷ Float → Float → Float → Float
 clampF lo hi x
     | x < lo    = lo
     | x > hi    = hi

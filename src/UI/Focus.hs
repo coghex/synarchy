@@ -105,12 +105,12 @@ focusNext fm =
                   $ filter ftAcceptsText
                   $ Map.elems (fmTargets fm)
       nextFocus = case fmCurrentFocus fm of
-        Nothing → ftId <$> listToMaybe textTargets
+        Nothing → ftId ⊚ listToMaybe textTargets
         Just current →
           let after = dropWhile (\t → ftId t ≢ current) textTargets
           in case drop 1 after of
                (next:_) → Just (ftId next)
-               []       → ftId <$> listToMaybe textTargets  -- wrap around
+               []       → ftId ⊚ listToMaybe textTargets  -- wrap around
   in fm { fmCurrentFocus = nextFocus }
 
 -- | Get a focus target by ID

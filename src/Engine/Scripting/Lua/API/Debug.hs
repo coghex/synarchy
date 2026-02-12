@@ -10,7 +10,7 @@ import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 
 -- | engine.showDebug()
-showDebugFn :: LuaBackendState -> Lua.LuaE Lua.Exception Lua.NumResults
+showDebugFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 showDebugFn backendState = do
     Lua.liftIO $ do
         let (_, etlq) = lbsMsgQueues backendState
@@ -18,7 +18,7 @@ showDebugFn backendState = do
     return 0
 
 -- | engine.hideDebug()
-hideDebugFn :: LuaBackendState -> Lua.LuaE Lua.Exception Lua.NumResults
+hideDebugFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 hideDebugFn backendState = do
     Lua.liftIO $ do
         let (_, etlq) = lbsMsgQueues backendState
@@ -26,7 +26,7 @@ hideDebugFn backendState = do
     return 0
 
 -- | engine.toggleDebug()
-toggleDebugFn :: LuaBackendState -> Lua.LuaE Lua.Exception Lua.NumResults
+toggleDebugFn ∷ LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults
 toggleDebugFn backendState = do
     Lua.liftIO $ do
         let (_, etlq) = lbsMsgQueues backendState

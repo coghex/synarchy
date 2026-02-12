@@ -148,7 +148,7 @@ createBindlessDescriptorSetLayout dev config = do
         { bindings = V.singleton binding
         , flags = DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT
         }
-        ::& bindingFlagsInfo
+        ∷& bindingFlagsInfo
         :& ()
 
   allocResource (\layout → destroyDescriptorSetLayout dev layout Nothing) $
@@ -253,20 +253,20 @@ unregisterTexture dev texHandle system = do
 -- | Rewrite all texture slots with a new sampler.
 -- The images stay the same, only the sampler changes.
 -- This is safe to call at any time thanks to UPDATE_AFTER_BIND.
-rewriteAllSamplers :: Device
-                   -> Sampler       -- ^ The new sampler
-                   -> BindlessTextureSystem
-                   -> EngineM ε σ ()
+rewriteAllSamplers ∷ Device
+                   → Sampler       -- ^ The new sampler
+                   → BindlessTextureSystem
+                   → EngineM ε σ ()
 rewriteAllSamplers dev newSampler system = do
     let descSet = btsDescriptorSet system
         config  = btsConfig system
     -- Rewrite every occupied slot
-    forM_ (Map.toList $ btsHandleMap system) $ \(texHandle, bindlessHandle) -> do
+    forM_ (Map.toList $ btsHandleMap system) $ \(texHandle, bindlessHandle) → do
         let slotIdx = tsIndex (bthSlot bindlessHandle)
         case Map.lookup texHandle (btsImageViews system) of
-            Just imageView ->
+            Just imageView →
                 writeDescriptorSlot dev descSet config slotIdx imageView newSampler
-            Nothing -> pure ()  -- shouldn't happen
+            Nothing → pure ()  -- shouldn't happen
 
 -- | Get the slot index for a texture handle
 getTextureSlotIndex ∷ TextureHandle → BindlessTextureSystem → Word32

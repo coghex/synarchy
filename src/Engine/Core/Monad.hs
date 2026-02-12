@@ -48,12 +48,12 @@ instance Applicative (EngineM ε σ) where
 
 instance Monad (EngineM ε σ) where
   return = pure
-  mx >>= k = EngineM $ \e s c → unEngineM mx e s $ \case
+  mx ⌦ k = EngineM $ \e s c → unEngineM mx e s $ \case
     Right x → unEngineM (k x) e s c
     Left ex → c (Left ex)
 
 instance MonadIO (EngineM ε σ) where
-  liftIO m = EngineM $ \_ _ c → m >>= (c ∘ Right)
+  liftIO m = EngineM $ \_ _ c → m ⌦ (c ∘ Right)
 
 instance MonadError EngineException (EngineM ε σ) where
   throwError e = EngineM $ \_ _ c → c (Left e)
@@ -64,13 +64,13 @@ instance MonadError EngineException (EngineM ε σ) where
 
 instance MonadReader EngineEnv (EngineM ε σ) where
   ask = EngineM $ \e _ c →
-    atomically (readVar e) >>= \env → c (Right env)
+    atomically (readVar e) ⌦ \env → c (Right env)
 
 instance MonadState EngineState (EngineM ε σ) where
   get = EngineM $ \_ s c →
-    atomically (readVar s) >>= \st → c (Right st)
+    atomically (readVar s) ⌦ \st → c (Right st)
   put newSt = EngineM $ \_ s c →
-    atomically (writeVar s newSt) >>= \_ → c (Right ())
+    atomically (writeVar s newSt) ⌦ \_ → c (Right ())
 
 getEngineVars ∷ EngineM ε σ (Var EngineEnv, Var EngineState)
 getEngineVars = EngineM $ \e s c → c (Right (e, s))

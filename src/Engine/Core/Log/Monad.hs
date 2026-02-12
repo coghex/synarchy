@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts, UnicodeSyntax #-}
 module Engine.Core.Log.Monad
   ( -- * Monad integration
     getLogger
@@ -28,86 +28,86 @@ import Engine.Core.Error.Exception (EngineException, ExceptionType)
 import Engine.Core.State (EngineEnv(..))
 
 -- | Get logger from engine environment
-getLogger :: (MonadIO m, MonadReader EngineEnv m) => m LoggerState
+getLogger ∷ (MonadIO m, MonadReader EngineEnv m) ⇒ m LoggerState
 getLogger = do
-  ref <- asks loggerRef
+  ref ← asks loggerRef
   liftIO $ readIORef ref
 
 -- | Monadic versions that auto-fetch logger from environment
-logDebugM :: (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
-          => LogCategory -> Text -> m ()
+logDebugM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
+          ⇒ LogCategory → Text → m ()
 logDebugM cat msg = do
-  logger <- getLogger
+  logger ← getLogger
   logDebug logger cat msg
 
-logInfoM :: (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
-         => LogCategory -> Text -> m ()
+logInfoM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
+         ⇒ LogCategory → Text → m ()
 logInfoM cat msg = do
-  logger <- getLogger
+  logger ← getLogger
   logInfo logger cat msg
 
-logWarnM :: (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
-         => LogCategory -> Text -> m ()
+logWarnM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
+         ⇒ LogCategory → Text → m ()
 logWarnM cat msg = do
-  logger <- getLogger
+  logger ← getLogger
   logWarn logger cat msg
 
-logErrorM :: (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
-          => LogCategory -> Text -> m ()
+logErrorM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
+          ⇒ LogCategory → Text → m ()
 logErrorM cat msg = do
-  logger <- getLogger
+  logger ← getLogger
   logError logger cat msg
 
 -- Structured versions
-logDebugSM :: (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
-           => LogCategory -> Text -> [(Text, Text)] -> m ()
+logDebugSM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
+           ⇒ LogCategory → Text → [(Text, Text)] → m ()
 logDebugSM cat msg fields = do
-  logger <- getLogger
+  logger ← getLogger
   logDebugS logger cat msg fields
 
-logInfoSM :: (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
-          => LogCategory -> Text -> [(Text, Text)] -> m ()
+logInfoSM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
+          ⇒ LogCategory → Text → [(Text, Text)] → m ()
 logInfoSM cat msg fields = do
-  logger <- getLogger
+  logger ← getLogger
   logInfoS logger cat msg fields
 
-logWarnSM :: (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
-          => LogCategory -> Text -> [(Text, Text)] -> m ()
+logWarnSM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
+          ⇒ LogCategory → Text → [(Text, Text)] → m ()
 logWarnSM cat msg fields = do
-  logger <- getLogger
+  logger ← getLogger
   logWarnS logger cat msg fields
 
-logErrorSM :: (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
-           => LogCategory -> Text -> [(Text, Text)] -> m ()
+logErrorSM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
+           ⇒ LogCategory → Text → [(Text, Text)] → m ()
 logErrorSM cat msg fields = do
-  logger <- getLogger
+  logger ← getLogger
   logErrorS logger cat msg fields
 
 -- Context management
-withLogContextM :: (MonadIO m, MonadReader EngineEnv m) 
-                => Text -> m a -> m a
+withLogContextM ∷ (MonadIO m, MonadReader EngineEnv m) 
+                ⇒ Text → m a → m a
 withLogContextM breadcrumb action = do
-  logger <- getLogger
+  logger ← getLogger
   withLogContext logger breadcrumb action
 
 -- Log and throw
-logAndThrowM :: (HasCallStack, MonadIO m, MonadReader EngineEnv m, MonadError EngineException m)
-             => LogCategory
-             -> ExceptionType
-             -> Text
-             -> m a
+logAndThrowM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m, MonadError EngineException m)
+             ⇒ LogCategory
+             → ExceptionType
+             → Text
+             → m a
 logAndThrowM cat exType msg = do
-  logger <- getLogger
+  logger ← getLogger
   logAndThrow logger cat exType msg
 
 {-# INLINE withTiming #-}
-withTiming :: (MonadIO m, MonadReader EngineEnv m) 
-           => LogCategory -> Text -> m a -> m a
+withTiming ∷ (MonadIO m, MonadReader EngineEnv m) 
+           ⇒ LogCategory → Text → m a → m a
 withTiming cat label action = do
-  start <- liftIO getCurrentTime
-  result <- action
-  end <- liftIO getCurrentTime
-  let durationMs = realToFrac (diffUTCTime end start * 1000) :: Double
+  start ← liftIO getCurrentTime
+  result ← action
+  end ← liftIO getCurrentTime
+  let durationMs = realToFrac (diffUTCTime end start * 1000) ∷ Double
   when (durationMs > 1.0) $  -- Only log if > 1ms
     logDebugSM cat label [("duration_ms", T.pack $ show durationMs)]
   return result

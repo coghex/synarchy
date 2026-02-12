@@ -1,4 +1,4 @@
-{-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE ExplicitForAll, UnicodeSyntax #-}
 module UPrelude
   ( module Prelude
   , module Prelude.Unicode
@@ -106,7 +106,7 @@ infixr 7 ⊙
 
 -- | '⊚' is an alias for fmap, applying a function to the result of a functor.
 (⊚) ∷ Functor f ⇒ (a → b) → f a → f b
-(⊚) = (F.<$>)
+(⊚) = (F.<⚞)
 {-# INLINE (⊚) #-}
 
 --------------------------------------------------------------------------------

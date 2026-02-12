@@ -43,9 +43,9 @@ undefinedTextureData = Vec.fromList pixels
     
     cell ∷ Int → Int → [Word8]
     cell x y = 
-      let evenCol = (x `div` 4) `mod` 2 == 0
-          evenRow = (y `div` 4) `mod` 2 == 0
-      in if evenCol == evenRow then magenta else black
+      let evenCol = (x `div` 4) `mod` 2 ≡ 0
+          evenRow = (y `div` 4) `mod` 2 ≡ 0
+      in if evenCol ≡ evenRow then magenta else black
 
 -- | Create the undefined texture with all necessary Vulkan resources
 -- Returns UndefinedTexture containing image, view, and sampler

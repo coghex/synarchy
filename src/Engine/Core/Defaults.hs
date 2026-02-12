@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP, UnicodeSyntax #-}
 module Engine.Core.Defaults where
 
 import UPrelude
@@ -50,8 +50,8 @@ defaultWindowConfig vc = WindowConfig
   { wcWidth      = vcWidth vc
   , wcHeight     = vcHeight vc
   , wcFullscreen = case (vcWindowMode vc) of
-      Fullscreen -> True
-      _          -> False
+      Fullscreen → True
+      _          → False
   , wcTitle      = T.pack "Synarchy"
   , wcResizable  = True
   }

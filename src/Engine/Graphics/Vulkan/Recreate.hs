@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Recreate
   ( recreateSwapchain
   ) where
@@ -31,25 +31,25 @@ import Vulkan.Core10
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 
 -- | Recreate the swapchain and all dependent resources
-recreateSwapchain :: Window -> EngineM ε σ ()
+recreateSwapchain ∷ Window → EngineM ε σ ()
 recreateSwapchain window = do
-    state <- gets graphicsState
+    state ← gets graphicsState
     
     -- Extract required handles
-    device <- getDeviceOrFail state
-    pDevice <- getPhysicalDeviceOrFail state
-    surface <- getSurfaceOrFail state
-    queues <- getQueuesOrFail state
+    device ← getDeviceOrFail state
+    pDevice ← getPhysicalDeviceOrFail state
+    surface ← getSurfaceOrFail state
+    queues ← getQueuesOrFail state
     
     -- Wait for device to be idle before destroying resources
     liftIO $ deviceWaitIdle device
     
     -- Get new window dimensions
     let Window glfwWin = window
-    (width, height) <- GLFW.getFramebufferSize glfwWin
+    (width, height) ← GLFW.getFramebufferSize glfwWin
     
     -- Handle minimized window (zero size)
-    if width == 0 || height == 0
+    if width ≡ 0 ∨ height ≡ 0
         then logDebugM CatSwapchain "Window minimized, skipping swapchain recreation"
         else do
             -- Run all existing cleanup actions
@@ -57,7 +57,7 @@ recreateSwapchain window = do
             liftIO $ runAllCleanups (vulkanCleanup state)
             
             -- Reset cleanup to empty (we'll rebuild it)
-            modify $ \s -> s { graphicsState = (graphicsState s) {
+            modify $ \s → s { graphicsState = (graphicsState s) {
                 vulkanCleanup = emptyCleanup
             }}
             
@@ -65,12 +65,12 @@ recreateSwapchain window = do
             recreateAllResources pDevice device queues surface window
             
             -- Reset frame index
-            modify $ \s -> s { graphicsState = (graphicsState s) { 
+            modify $ \s → s { graphicsState = (graphicsState s) { 
                 currentFrame = 0 
             }}
             
             -- Update UI camera with new dimensions
-            env <- ask
+            env ← ask
             liftIO $ writeIORef (uiCameraRef env) $ 
                 UICamera (fromIntegral width) (fromIntegral height)
             
@@ -78,26 +78,26 @@ recreateSwapchain window = do
                                     <> "x" <> (T.pack (show height))
 
 -- | Recreate all swapchain-dependent resources
-recreateAllResources :: PhysicalDevice -> Device -> DevQueues -> SurfaceKHR 
-                     -> Window -> EngineM ε σ ()
+recreateAllResources ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR 
+                     → Window → EngineM ε σ ()
 recreateAllResources pDevice device queues surface window = do
-    state <- gets graphicsState
+    state ← gets graphicsState
     
     -- Get descriptor manager and texture system (these survive recreation)
-    descManager <- getDescriptorManagerOrFail state
-    texSystem <- getTextureSystemOrFail state
-    fontDescLayout <- getFontDescriptorLayoutOrFail state
+    descManager ← getDescriptorManagerOrFail state
+    texSystem ← getTextureSystemOrFail state
+    fontDescLayout ← getFontDescriptorLayoutOrFail state
     
     let uniformLayout = dmUniformLayout descManager
         bindlessLayout = btsDescriptorLayout texSystem
     
     -- 1. Swapchain
-    env <- ask
+    env ← ask
     videoConfig ← liftIO $ readIORef (videoConfigRef env)
     let vsyncEnabled = vcVSync videoConfig
         msaaInt      = vcMSAA videoConfig
-    swapInfo <- createVulkanSwapchain pDevice device queues surface vsyncEnabled
-    modify $ \s -> s { graphicsState = (graphicsState s) {
+    swapInfo ← createVulkanSwapchain pDevice device queues surface vsyncEnabled
+    modify $ \s → s { graphicsState = (graphicsState s) {
         swapchainInfo = Just swapInfo
     }}
     
@@ -105,69 +105,69 @@ recreateAllResources pDevice device queues surface window = do
         imgFormat = siSwapImgFormat swapInfo
     
     -- 1.5. Determine actual sample count (clamp to device support)
-    deviceProps <- getPhysicalDeviceProperties pDevice
+    deviceProps ← getPhysicalDeviceProperties pDevice
     let supportedSamples = framebufferColorSampleCounts (limits deviceProps)
         requestedSamples = msaaToSampleCount msaaInt
         sampleCount      = clampSampleCount supportedSamples requestedSamples
     
     -- 2. Image views
-    imageViews <- createSwapchainImageViews device swapInfo
-    modify $ \s -> s { graphicsState = (graphicsState s) {
+    imageViews ← createSwapchainImageViews device swapInfo
+    modify $ \s → s { graphicsState = (graphicsState s) {
         swapchainInfo = case swapchainInfo (graphicsState s) of
-            Just si -> Just si { siSwapImgViews = imageViews }
-            Nothing -> Nothing } }
+            Just si → Just si { siSwapImgViews = imageViews }
+            Nothing → Nothing } }
     
     -- 2.5. MSAA color image (only if sample count > 1)
-    mMsaaView <- if sampleCount /= SAMPLE_COUNT_1_BIT
+    mMsaaView ← if sampleCount ≢ SAMPLE_COUNT_1_BIT
         then do
-            (img, mem, view) <- createMSAAColorImage pDevice device imgFormat newExtent sampleCount
-            modify $ \s -> s { graphicsState = (graphicsState s) {
+            (img, mem, view) ← createMSAAColorImage pDevice device imgFormat newExtent sampleCount
+            modify $ \s → s { graphicsState = (graphicsState s) {
                 msaaColorImage = Just (img, mem, view)
             }}
             pure (Just view)
         else do
-            modify $ \s -> s { graphicsState = (graphicsState s) {
+            modify $ \s → s { graphicsState = (graphicsState s) {
                 msaaColorImage = Nothing
             }}
             pure Nothing
     
     -- 3. Render pass (now MSAA-aware)
-    renderPass <- createVulkanRenderPass device imgFormat sampleCount
-    modify $ \s -> s { graphicsState = (graphicsState s) {
+    renderPass ← createVulkanRenderPass device imgFormat sampleCount
+    modify $ \s → s { graphicsState = (graphicsState s) {
         vulkanRenderPass = Just renderPass
     }}
     
     -- 4. Framebuffers (now MSAA-aware)
-    framebuffers <- createVulkanFramebuffers device renderPass swapInfo imageViews mMsaaView
-    modify $ \s -> s { graphicsState = (graphicsState s) {
+    framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews mMsaaView
+    modify $ \s → s { graphicsState = (graphicsState s) {
         framebuffers = Just framebuffers
     }}
     
     -- 5. Bindless pipeline (pass sample count)
-    (bindlessPipe, bindlessPipeLayout) <- 
+    (bindlessPipe, bindlessPipeLayout) ← 
         createBindlessPipeline device renderPass newExtent uniformLayout bindlessLayout sampleCount
-    modify $ \s -> s { graphicsState = (graphicsState s) {
+    modify $ \s → s { graphicsState = (graphicsState s) {
         bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout)
     }}
     
     -- 6. Bindless UI pipeline (pass sample count)
-    (bindlessUIPipe, bindlessUIPipeLayout) <- 
+    (bindlessUIPipe, bindlessUIPipeLayout) ← 
         createBindlessUIPipeline device renderPass newExtent uniformLayout bindlessLayout sampleCount
-    modify $ \s -> s { graphicsState = (graphicsState s) {
+    modify $ \s → s { graphicsState = (graphicsState s) {
         bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout)
     }}
     
     -- 7. Font pipeline (pass sample count)
-    (fontPipe, fontPipeLayout, _) <- 
+    (fontPipe, fontPipeLayout, _) ← 
         createFontPipeline device renderPass newExtent uniformLayout sampleCount
-    modify $ \s -> s { graphicsState = (graphicsState s) {
+    modify $ \s → s { graphicsState = (graphicsState s) {
         fontPipeline = Just (fontPipe, fontPipeLayout)
     }}
     
     -- 8. Font UI pipeline (pass sample count)
-    (fontUIPipe, fontUIPipeLayout) <- 
+    (fontUIPipe, fontUIPipeLayout) ← 
         createFontUIPipeline device renderPass newExtent uniformLayout fontDescLayout sampleCount
-    modify $ \s -> s { graphicsState = (graphicsState s) {
+    modify $ \s → s { graphicsState = (graphicsState s) {
         fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout)
     }}
     

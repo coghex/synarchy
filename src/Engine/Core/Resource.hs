@@ -1,4 +1,4 @@
-{-# LANGUAGE StrictData #-}
+{-# LANGUAGE StrictData, UnicodeSyntax #-}
 
 module Engine.Core.Resource
   ( allocResource
@@ -29,7 +29,7 @@ allocResource' free alloc = EngineM $ \e s c → unEngineM alloc e s $ \case
     → c' (Right ()) ⌦ \r → r ⚟ unEngineM (free a) e' s' pure))
 {-# INLINE allocResource' #-}
  -- | Version of allocResource' that returns an IO cleanup action
-allocResource'IO :: (α → EngineM' ε ()) → EngineM ε σ α 
+allocResource'IO ∷ (α → EngineM' ε ()) → EngineM ε σ α 
                 → EngineM ε σ (α, IO ())
 allocResource'IO free alloc = EngineM $ \e s c → unEngineM alloc e s $ \case
   Left ex → c (Left ex)

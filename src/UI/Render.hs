@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module UI.Render
   ( renderUIPages
   , uiLayerToLayerId
@@ -26,47 +26,47 @@ import UI.Types
 import UI.Manager (getVisiblePages, getElementAbsolutePosition, getBoxTextureSet)
 
 -- | Base layer offset for UI (world uses 0-9)
-uiLayerBase :: Int
+uiLayerBase ∷ Int
 uiLayerBase = 10
 
 -- Helper to unwrap LayerId
-unLayerId :: LayerId -> Word32
+unLayerId ∷ LayerId → Word32
 unLayerId (LayerId i) = fromIntegral i
 
 -- | Convert UI layer to render LayerId
-uiLayerToLayerId :: UILayer -> Int -> LayerId
+uiLayerToLayerId ∷ UILayer → Int → LayerId
 uiLayerToLayerId layer zIndex = LayerId $ fromIntegral $ case layer of
-    LayerHUD     -> uiLayerBase + 0
-    LayerMenu    -> uiLayerBase + 1
-    LayerModal   -> uiLayerBase + 10 + zIndex
-    LayerTooltip -> uiLayerBase + 100 + zIndex
-    LayerDebug   -> uiLayerBase + 200 + zIndex
+    LayerHUD     → uiLayerBase + 0
+    LayerMenu    → uiLayerBase + 1
+    LayerModal   → uiLayerBase + 10 + zIndex
+    LayerTooltip → uiLayerBase + 100 + zIndex
+    LayerDebug   → uiLayerBase + 200 + zIndex
 
 -- | Look up the bindless slot index for a texture handle
-lookupTextureSlot :: BindlessTextureSystem -> TextureHandle -> Float
+lookupTextureSlot ∷ BindlessTextureSystem → TextureHandle → Float
 lookupTextureSlot bindless texHandle =
     case Map.lookup texHandle (btsHandleMap bindless) of
-        Just bth -> fromIntegral $ fromBindlessHandle bth
-        Nothing  -> 0.0
+        Just bth → fromIntegral $ fromBindlessHandle bth
+        Nothing  → 0.0
 
-mergeLayeredTextItems :: Map.Map LayerId (V.Vector RenderItem)
-                      -> Map.Map LayerId (V.Vector RenderItem)
+mergeLayeredTextItems ∷ Map.Map LayerId (V.Vector RenderItem)
+                      → Map.Map LayerId (V.Vector RenderItem)
 mergeLayeredTextItems = Map.map mergeInLayer
   where
-    mergeInLayer :: V.Vector RenderItem -> V.Vector RenderItem
+    mergeInLayer ∷ V.Vector RenderItem → V.Vector RenderItem
     mergeInLayer items =
         let sprites = V.filter isSprite items
-            texts   = [t | TextItem t <- V.toList items]
+            texts   = [t | TextItem t ← V.toList items]
             merged  = mergeTextBatches texts
         in sprites <> V.fromList (map TextItem merged)
 
     isSprite (SpriteItem _) = True
     isSprite _              = False
 
-    mergeTextBatches :: [TextRenderBatch] -> [TextRenderBatch]
+    mergeTextBatches ∷ [TextRenderBatch] → [TextRenderBatch]
     mergeTextBatches [] = []
     mergeTextBatches batches =
-        let grouped = Map.toList $ foldl' (\acc b ->
+        let grouped = Map.toList $ foldl' (\acc b →
                 let key = trbFont b
                     existing = Map.findWithDefault V.empty key acc
                 in Map.insert key (existing <> trbInstances b) acc
@@ -78,29 +78,29 @@ mergeLayeredTextItems = Map.map mergeInLayer
                , trbInstances = insts
                , trbObjects   = V.empty
                }
-           | (font, insts) <- grouped
+           | (font, insts) ← grouped
            ]
 
 -- | Render all visible UI pages
-renderUIPages :: EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
+renderUIPages ∷ EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderUIPages = do
-    env <- ask
-    mgr <- liftIO $ readIORef (uiManagerRef env)
+    env ← ask
+    mgr ← liftIO $ readIORef (uiManagerRef env)
     
-    gs <- gets graphicsState
+    gs ← gets graphicsState
     let maybeBindless = textureSystem gs
     
     case maybeBindless of
-        Nothing -> do
+        Nothing → do
             logWarnM CatUI "No bindless texture system available for UI rendering"
             pure (V.empty, Map.empty)
-        Just bindless -> do
+        Just bindless → do
             logDebugM CatUI $ "UI rendering with bindless texture system containing " <> T.pack (show $ Map.size (btsHandleMap bindless)) <> " textures"
-            fontCache <- liftIO $ readIORef (fontCacheRef env)
+            fontCache ← liftIO $ readIORef (fontCacheRef env)
             
             let visiblePages = getVisiblePages mgr
             
-            results <- forM visiblePages $ \page -> 
+            results ← forM visiblePages $ \page → 
                 renderPage mgr bindless fontCache page
             
             let allBatches = V.concat $ map fst results
@@ -111,13 +111,13 @@ renderUIPages = do
             pure (allBatches, mergedLayered)
 
 -- | Render a single page
-renderPage :: UIPageManager -> BindlessTextureSystem -> FontCache -> UIPage 
-           -> EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
+renderPage ∷ UIPageManager → BindlessTextureSystem → FontCache → UIPage 
+           → EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderPage mgr bindless fontCache page = do
     let layerId = uiLayerToLayerId (upLayer page) (upZIndex page)
         rootElems = upRootElements page
     
-    results <- forM rootElems $ \elemHandle ->
+    results ← forM rootElems $ \elemHandle →
         renderElement mgr bindless fontCache layerId elemHandle
     
     let allBatches = V.concat $ map fst results
@@ -126,26 +126,26 @@ renderPage mgr bindless fontCache page = do
     pure (allBatches, allLayered)
 
 -- Replace renderElement function:
-renderElement :: UIPageManager -> BindlessTextureSystem -> FontCache
-              -> LayerId -> ElementHandle 
-              -> EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
+renderElement ∷ UIPageManager → BindlessTextureSystem → FontCache
+              → LayerId → ElementHandle 
+              → EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderElement mgr bindless fontCache baseLayerId handle = do
     case Map.lookup handle (upmElements mgr) of
-        Nothing -> pure (V.empty, Map.empty)
+        Nothing → pure (V.empty, Map.empty)
         Just elem
-            | not (ueVisible elem) -> pure (V.empty, Map.empty)
-            | otherwise -> do
+            | not (ueVisible elem) → pure (V.empty, Map.empty)
+            | otherwise → do
                 let (absX, absY) = case getElementAbsolutePosition handle mgr of
-                        Just pos -> pos
-                        Nothing  -> (0, 0)
+                        Just pos → pos
+                        Nothing  → (0, 0)
                 
                 let elemLayerId = LayerId $ unLayerId baseLayerId + fromIntegral (ueZIndex elem)
                 
-                (selfBatches, selfItems) <- renderElementData mgr bindless fontCache 
+                (selfBatches, selfItems) ← renderElementData mgr bindless fontCache 
                                               elemLayerId elem absX absY
                 
                 let sortedChildren = sortOn (getChildZIndex mgr) (ueChildren elem)
-                childResults <- forM sortedChildren $ \childHandle ->
+                childResults ← forM sortedChildren $ \childHandle →
                     renderElement mgr bindless fontCache elemLayerId childHandle
                 
                 let childBatches = V.concat $ map fst childResults
@@ -161,26 +161,26 @@ renderElement mgr bindless fontCache baseLayerId handle = do
                 pure (allBatches, allLayered)
 
 -- | Get z-index for sorting
-getChildZIndex :: UIPageManager -> ElementHandle -> Int
+getChildZIndex ∷ UIPageManager → ElementHandle → Int
 getChildZIndex mgr handle = 
     case Map.lookup handle (upmElements mgr) of
-        Nothing -> 0
-        Just elem -> ueZIndex elem
+        Nothing → 0
+        Just elem → ueZIndex elem
 
 -- | Render element's visual data
-renderElementData :: UIPageManager -> BindlessTextureSystem -> FontCache 
-                  -> LayerId -> UIElement -> Float -> Float 
-                  -> EngineM ε σ (V.Vector RenderBatch, V.Vector RenderItem)
+renderElementData ∷ UIPageManager → BindlessTextureSystem → FontCache 
+                  → LayerId → UIElement → Float → Float 
+                  → EngineM ε σ (V.Vector RenderBatch, V.Vector RenderItem)
 renderElementData mgr bindless fontCache layerId elem absX absY = 
     case ueRenderData elem of
-        RenderNone -> pure (V.empty, V.empty)
+        RenderNone → pure (V.empty, V.empty)
         
-        RenderBox style -> do
+        RenderBox style → do
             case getBoxTextureSet (ubsTextures style) mgr of
-                Nothing -> do
+                Nothing → do
                     logWarnM CatUI "UI box texture set not found"
                     pure (V.empty, V.empty)
-                Just texSet -> do
+                Just texSet → do
                     let (w, h) = ueSize elem
                         tileSize = ubsTileSize style
                         color = ubsColor style
@@ -195,13 +195,13 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
                         items = V.map SpriteItem batches
                     pure (batches, items)
         
-        RenderText style -> do
+        RenderText style → do
             let fontHandle = utsFont style
             case Map.lookup fontHandle (fcFonts fontCache) of
-                Nothing -> do
+                Nothing → do
                     logWarnM CatUI $ "Font cache miss: UI text font not found: " <> (T.pack (show fontHandle))
                     pure (V.empty, V.empty)
-                Just atlas -> do
+                Just atlas → do
                     logDebugM CatFont $ "Font cache hit: Found UI font " <> T.pack (show fontHandle)
                     let text = utsText style
                         (cr, cg, cb, ca) = utsColor style
@@ -222,7 +222,7 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
                                     }
                             pure (V.empty, V.singleton (TextItem textBatch))
         
-        RenderSprite style -> do
+        RenderSprite style → do
             let (w, h) = ueSize elem
                 color = ussColor style
                 tex = ussTexture style
@@ -237,10 +237,10 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
                     }
             pure (V.singleton batch, V.singleton (SpriteItem batch))
 
-makeBoxBatches :: BindlessTextureSystem -> BoxTextureSet 
-               -> Float -> Float -> Float -> Float -> Float 
-               -> (Float, Float, Float, Float) -> LayerId
-               -> V.Vector RenderBatch
+makeBoxBatches ∷ BindlessTextureSystem → BoxTextureSet 
+               → Float → Float → Float → Float → Float 
+               → (Float, Float, Float, Float) → LayerId
+               → V.Vector RenderBatch
 makeBoxBatches bindless texSet x y w h tileSize color layerId =
     let ts = tileSize
         
@@ -301,10 +301,10 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
 -- | Generate quad vertices for a UI element
 -- faceMapId = 0 → default face map (UI uses the UI pipeline which
 -- ignores face-map lighting entirely, so this value is just padding)
-makeQuadVertices :: Float -> Float -> Float -> Float 
-                 -> (Float, Float, Float, Float) 
-                 -> Float
-                 -> V.Vector Vertex
+makeQuadVertices ∷ Float → Float → Float → Float 
+                 → (Float, Float, Float, Float) 
+                 → Float
+                 → V.Vector Vertex
 makeQuadVertices x y w h (cr, cg, cb, ca) atlasId =
     let x0 = x
         y0 = y

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Input.Bindings where
 
 import UPrelude
@@ -14,7 +14,7 @@ import Engine.Core.Log (LoggerState, logWarn, logInfo, LogCategory(..), logDebug
 type KeyBindings = Map.Map T.Text T.Text
 
 -- | fallback default keybindings
-defaultKeyBindings :: KeyBindings
+defaultKeyBindings ∷ KeyBindings
 defaultKeyBindings = Map.fromList
     [ ("moveUp", "W")
     , ("moveDown", "S")
@@ -31,7 +31,7 @@ data KeyBindingConfig = KeyBindingConfig
 
 instance FromJSON KeyBindingConfig where
   parseJSON (Object v) =
-    KeyBindingConfig <$> v .: "keybinds" .!= defaultKeyBindings
+    KeyBindingConfig ⊚ v .: "keybinds" .!= defaultKeyBindings
   parseJSON _ = fail "Expected Object for KeyBindingConfig value"
 
 -- | Load keybindings from a YAML file

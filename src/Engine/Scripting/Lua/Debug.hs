@@ -1,4 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE ForeignFunctionInterface, UnicodeSyntax #-}
 module Engine.Scripting.Lua.Debug
     ( getSourceInfo
     , SourceInfo(..)
@@ -15,27 +15,27 @@ import HsLua.Core.Types (LuaE, State(..))
 
 -- | Source information from Lua debug API
 data SourceInfo = SourceInfo
-    { siSource      :: String
-    , siCurrentLine :: Int
+    { siSource      ∷ String
+    , siCurrentLine ∷ Int
     } deriving (Show, Eq)
 
 foreign import ccall unsafe "get_lua_caller_info"
-    c_get_lua_caller_info :: Ptr () -> CInt -> Ptr CString -> Ptr CInt -> IO CInt
+    c_get_lua_caller_info ∷ Ptr () → CInt → Ptr CString → Ptr CInt → IO CInt
 
 -- | Get source info for a given stack level
 -- Level 0 = current function, 1 = caller, 2 = caller's caller, etc.
-getSourceInfo :: Int -> LuaE e (Maybe SourceInfo)
+getSourceInfo ∷ Int → LuaE e (Maybe SourceInfo)
 getSourceInfo level = do
-    State lPtr <- Lua.state
-    Lua.liftIO $ alloca $ \sourcePtr ->
-        alloca $ \linePtr -> do
-            result <- c_get_lua_caller_info lPtr (fromIntegral level) sourcePtr linePtr
-            if result == 0
+    State lPtr ← Lua.state
+    Lua.liftIO $ alloca $ \sourcePtr →
+        alloca $ \linePtr → do
+            result ← c_get_lua_caller_info lPtr (fromIntegral level) sourcePtr linePtr
+            if result ≡ 0
                 then return Nothing
                 else do
-                    sourceCStr <- peek sourcePtr
-                    source <- peekCString sourceCStr
-                    line <- peek linePtr
+                    sourceCStr ← peek sourcePtr
+                    source ← peekCString sourceCStr
+                    line ← peek linePtr
                     return $ Just SourceInfo
                         { siSource = source
                         , siCurrentLine = fromIntegral line

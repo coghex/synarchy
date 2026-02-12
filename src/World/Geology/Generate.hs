@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Generate
     ( -- * Feature generation and registration
       generateShieldVolcano
@@ -27,29 +27,29 @@ import World.Geology.Hash (hashGeo, hashToFloatGeo, hashToRangeGeo, scaleCount)
 
 -- | Generate and register a batch of volcanic features.
 --   Returns the list of new PersistentFeatures and updated state.
-generateAndRegister :: Word64 -> Int -> [TectonicPlate]
-                    -> VolcanoEra
-                    -> (Word64 -> Int -> [TectonicPlate] -> Int -> Int
-                        -> Maybe VolcanicFeature)
-                    -> Int  -- ^ period index
-                    -> TimelineBuildState
-                    -> ([PersistentFeature], TimelineBuildState)
+generateAndRegister ∷ Word64 → Int → [TectonicPlate]
+                    → VolcanoEra
+                    → (Word64 → Int → [TectonicPlate] → Int → Int
+                        → Maybe VolcanicFeature)
+                    → Int  -- ^ period index
+                    → TimelineBuildState
+                    → ([PersistentFeature], TimelineBuildState)
 generateAndRegister seed worldSize plates _era mkFeature periodIdx tbs0 =
     let halfTiles = (worldSize * 16) `div` 2
         maxFeatures = scaleCount worldSize 4
         maxAttempts = maxFeatures * 5
 
         go attemptIdx count tbs acc
-            | attemptIdx >= maxAttempts = (acc, tbs)
-            | count >= maxFeatures     = (acc, tbs)
+            | attemptIdx ≥ maxAttempts = (acc, tbs)
+            | count ≥ maxFeatures     = (acc, tbs)
             | otherwise =
                 let h1 = hashGeo seed attemptIdx 70
                     h2 = hashGeo seed attemptIdx 71
                     gx = hashToRangeGeo h1 (-halfTiles) (halfTiles - 1)
                     gy = hashToRangeGeo h2 (-halfTiles) (halfTiles - 1)
                 in case mkFeature seed worldSize plates gx gy of
-                    Nothing -> go (attemptIdx + 1) count tbs acc
-                    Just feature ->
+                    Nothing → go (attemptIdx + 1) count tbs acc
+                    Just feature →
                         let (fid, tbs') = allocFeatureId tbs
                             pf = PersistentFeature
                                 { pfId               = fid
@@ -66,12 +66,12 @@ generateAndRegister seed worldSize plates _era mkFeature periodIdx tbs0 =
     in go 0 0 tbs0 []
 
 -- | Like generateAndRegister but with explicit max attempts and max features.
-generateAndRegisterN :: Int -> Int -> Word64 -> Int -> [TectonicPlate]
-                     -> VolcanoEra
-                     -> (Word64 -> Int -> [TectonicPlate] -> Int -> Int
-                         -> Maybe VolcanicFeature)
-                     -> Int -> TimelineBuildState
-                     -> ([PersistentFeature], TimelineBuildState)
+generateAndRegisterN ∷ Int → Int → Word64 → Int → [TectonicPlate]
+                     → VolcanoEra
+                     → (Word64 → Int → [TectonicPlate] → Int → Int
+                         → Maybe VolcanicFeature)
+                     → Int → TimelineBuildState
+                     → ([PersistentFeature], TimelineBuildState)
 generateAndRegisterN baseMaxAttempts baseMaxFeatures seed worldSize plates
                      _era mkFeature periodIdx tbs0 =
     let halfTiles = (worldSize * 16) `div` 2
@@ -79,16 +79,16 @@ generateAndRegisterN baseMaxAttempts baseMaxFeatures seed worldSize plates
         maxAttempts = scaleCount worldSize baseMaxAttempts
 
         go attemptIdx count tbs acc
-            | attemptIdx >= maxAttempts = (acc, tbs)
-            | count >= maxFeatures     = (acc, tbs)
+            | attemptIdx ≥ maxAttempts = (acc, tbs)
+            | count ≥ maxFeatures     = (acc, tbs)
             | otherwise =
                 let h1 = hashGeo seed attemptIdx 70
                     h2 = hashGeo seed attemptIdx 71
                     gx = hashToRangeGeo h1 (-halfTiles) (halfTiles - 1)
                     gy = hashToRangeGeo h2 (-halfTiles) (halfTiles - 1)
                 in case mkFeature seed worldSize plates gx gy of
-                    Nothing -> go (attemptIdx + 1) count tbs acc
-                    Just feature ->
+                    Nothing → go (attemptIdx + 1) count tbs acc
+                    Just feature →
                         let (fid, tbs') = allocFeatureId tbs
                             pf = PersistentFeature
                                 { pfId               = fid
@@ -109,11 +109,11 @@ generateAndRegisterN baseMaxAttempts baseMaxFeatures seed worldSize plates
 -----------------------------------------------------------
 
 -- | Try to place a shield volcano. Requires land.
-generateShieldVolcano :: Word64 -> Int -> [TectonicPlate]
-                      -> Int -> Int -> Maybe VolcanicFeature
+generateShieldVolcano ∷ Word64 → Int → [TectonicPlate]
+                      → Int → Int → Maybe VolcanicFeature
 generateShieldVolcano seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
-    in if elev < -100 || isBeyondGlacier worldSize gx gy
+    in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
        then Nothing
        else let h1 = hashGeo seed gx 80
                 h2 = hashGeo seed gy 81
@@ -133,11 +133,11 @@ generateShieldVolcano seed worldSize plates gx gy =
                 }
 
 -- | Try to place a cinder cone. Requires land.
-generateCinderCone :: Word64 -> Int -> [TectonicPlate]
-                   -> Int -> Int -> Maybe VolcanicFeature
+generateCinderCone ∷ Word64 → Int → [TectonicPlate]
+                   → Int → Int → Maybe VolcanicFeature
 generateCinderCone seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
-    in if elev < -100 || isBeyondGlacier worldSize gx gy
+    in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
        then Nothing
        else let h1 = hashGeo seed gx 90
                 h2 = hashGeo seed gy 91
@@ -156,11 +156,11 @@ generateCinderCone seed worldSize plates gx gy =
                 }
 
 -- | Try to place a lava dome. Requires land, prefers convergent boundaries.
-generateLavaDome :: Word64 -> Int -> [TectonicPlate]
-                 -> Int -> Int -> Maybe VolcanicFeature
+generateLavaDome ∷ Word64 → Int → [TectonicPlate]
+                 → Int → Int → Maybe VolcanicFeature
 generateLavaDome seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
-    in if elev < -100 || isBeyondGlacier worldSize gx gy
+    in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
        then Nothing
        else let h1 = hashGeo seed gx 100
                 h2 = hashGeo seed gy 101
@@ -173,11 +173,11 @@ generateLavaDome seed worldSize plates gx gy =
                 }
 
 -- | Try to place a caldera. Requires land.
-generateCaldera :: Word64 -> Int -> [TectonicPlate]
-                -> Int -> Int -> Maybe VolcanicFeature
+generateCaldera ∷ Word64 → Int → [TectonicPlate]
+                → Int → Int → Maybe VolcanicFeature
 generateCaldera seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
-    in if elev < -100 || isBeyondGlacier worldSize gx gy
+    in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
        then Nothing
        else let h1 = hashGeo seed gx 110
                 h2 = hashGeo seed gy 111
@@ -199,8 +199,8 @@ generateCaldera seed worldSize plates gx gy =
                 }
 
 -- | Try to place a fissure. Works on land or ocean divergent boundaries.
-generateFissure :: Word64 -> Int -> [TectonicPlate]
-                -> Int -> Int -> Maybe VolcanicFeature
+generateFissure ∷ Word64 → Int → [TectonicPlate]
+                → Int → Int → Maybe VolcanicFeature
 generateFissure seed worldSize plates gx gy =
     if isBeyondGlacier worldSize gx gy
     then Nothing
@@ -210,9 +210,9 @@ generateFissure seed worldSize plates gx gy =
              h4 = hashGeo seed (gx * gy) 123
              h5 = hashGeo seed (abs gx) 124
              -- Fissure direction: random angle
-             angle = hashToFloatGeo h1 * 2.0 * pi
+             angle = hashToFloatGeo h1 * 2.0 * π
              fissureLen = hashToRangeGeo h2 80 200
-             halfLen = fromIntegral fissureLen / 2.0 :: Float
+             halfLen = fromIntegral fissureLen / 2.0 ∷ Float
              ex = gx + round (halfLen * cos angle)
              ey = gy + round (halfLen * sin angle)
              sxCoord = gx - round (halfLen * cos angle)
@@ -230,20 +230,20 @@ generateFissure seed worldSize plates gx gy =
 
 -- | Try to place a lava tube. Should be on the flank of an existing
 --   shield volcano, but can also be standalone on basaltic terrain.
-generateLavaTube :: Word64 -> Int -> [TectonicPlate]
-                 -> Int -> Int -> Maybe VolcanicFeature
+generateLavaTube ∷ Word64 → Int → [TectonicPlate]
+                 → Int → Int → Maybe VolcanicFeature
 generateLavaTube seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
-    in if elev < -100 || isBeyondGlacier worldSize gx gy
+    in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
        then Nothing
        else let h1 = hashGeo seed gx 130
                 h2 = hashGeo seed gy 131
                 h3 = hashGeo seed (gx + gy) 132
                 h4 = hashGeo seed (gx * gy) 133
                 h5 = hashGeo seed (abs gx) 134
-                angle = hashToFloatGeo h1 * 2.0 * pi
+                angle = hashToFloatGeo h1 * 2.0 * π
                 tubeLen = hashToRangeGeo h2 40 120
-                halfLen = fromIntegral tubeLen / 2.0 :: Float
+                halfLen = fromIntegral tubeLen / 2.0 ∷ Float
                 ex = gx + round (halfLen * cos angle)
                 ey = gy + round (halfLen * sin angle)
                 sxCoord = gx - round (halfLen * cos angle)
@@ -261,11 +261,11 @@ generateLavaTube seed worldSize plates gx gy =
                 }
 
 -- | Try to place a supervolcano. Very rare. Requires land.
-generateSuperVolcano :: Word64 -> Int -> [TectonicPlate]
-                     -> Int -> Int -> Maybe VolcanicFeature
+generateSuperVolcano ∷ Word64 → Int → [TectonicPlate]
+                     → Int → Int → Maybe VolcanicFeature
 generateSuperVolcano seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
-    in if elev < -100 || isBeyondGlacier worldSize gx gy
+    in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
        then Nothing
        else let h1 = hashGeo seed gx 140
                 h2 = hashGeo seed gy 141
@@ -287,11 +287,11 @@ generateSuperVolcano seed worldSize plates gx gy =
                 }
 
 -- | Try to place a hydrothermal vent. Requires ocean floor.
-generateHydrothermalVent :: Word64 -> Int -> [TectonicPlate]
-                         -> Int -> Int -> Maybe VolcanicFeature
+generateHydrothermalVent ∷ Word64 → Int → [TectonicPlate]
+                         → Int → Int → Maybe VolcanicFeature
 generateHydrothermalVent seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
-    in if elev >= -100 || isBeyondGlacier worldSize gx gy
+    in if elev ≥ -100 ∨ isBeyondGlacier worldSize gx gy
        then Nothing  -- Must be in deep ocean
        else let h1 = hashGeo seed gx 150
                 h2 = hashGeo seed gy 151

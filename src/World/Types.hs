@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Types where
 
 import UPrelude
@@ -32,10 +32,10 @@ instance Hashable ChunkCoord where
 type Chunk = HM.HashMap (Int, Int, Int) Tile
 
 data LoadedChunk = LoadedChunk
-    { lcCoord      :: !ChunkCoord
-    , lcTiles      :: !Chunk
-    , lcSurfaceMap :: !(HM.HashMap (Int, Int) Int)
-    , lcModified   :: !Bool
+    { lcCoord      ∷ !ChunkCoord
+    , lcTiles      ∷ !Chunk
+    , lcSurfaceMap ∷ !(HM.HashMap (Int, Int) Int)
+    , lcModified   ∷ !Bool
     } deriving (Show, Eq)
 
 -----------------------------------------------------------
@@ -45,16 +45,16 @@ data LoadedChunk = LoadedChunk
 -- | Pure, serializable world generation parameters.
 --   Same params + same ChunkCoord = same Chunk, always.
 data WorldGenParams = WorldGenParams
-    { wgpSeed       :: !Word64
-    , wgpWorldSize  :: !Int     -- ^ World size in chunks (e.g. 64 → 64×64 chunks)
-    , wgpPlateCount :: !Int     -- ^ Number of tectonic plates (for worldgen)
-    , wgpCalender   :: !CalendarConfig  -- ^ Calendar configuration for time/date calculations
-    , wgpSunConfig   :: !SunConfig       -- ^ Sun configuration for time-of-day lighting
-    , wgpMoonConfig  :: !MoonConfig      -- ^ Moon configuration for lunar phases
-    , wgpGeoTimeline :: !GeoTimeline      -- ^ Geological timeline for terrain evolution
+    { wgpSeed       ∷ !Word64
+    , wgpWorldSize  ∷ !Int     -- ^ World size in chunks (e.g. 64 → 64×64 chunks)
+    , wgpPlateCount ∷ !Int     -- ^ Number of tectonic plates (for worldgen)
+    , wgpCalender   ∷ !CalendarConfig  -- ^ Calendar configuration for time/date calculations
+    , wgpSunConfig   ∷ !SunConfig       -- ^ Sun configuration for time-of-day lighting
+    , wgpMoonConfig  ∷ !MoonConfig      -- ^ Moon configuration for lunar phases
+    , wgpGeoTimeline ∷ !GeoTimeline      -- ^ Geological timeline for terrain evolution
     } deriving (Show, Eq)
 
-defaultWorldGenParams :: WorldGenParams
+defaultWorldGenParams ∷ WorldGenParams
 defaultWorldGenParams = WorldGenParams
     { wgpSeed      = 42
     , wgpWorldSize = 128
@@ -70,58 +70,58 @@ defaultWorldGenParams = WorldGenParams
 -----------------------------------------------------------
 
 data Tile = Tile
-    { tileType :: Word8
-    , tileSlopeId :: Word8
+    { tileType ∷ Word8
+    , tileSlopeId ∷ Word8
     } deriving (Show, Eq)
 
 data WorldTileData = WorldTileData
-    { wtdChunks    :: !(HM.HashMap ChunkCoord LoadedChunk)
-    , wtdMaxChunks :: !Int
+    { wtdChunks    ∷ !(HM.HashMap ChunkCoord LoadedChunk)
+    , wtdMaxChunks ∷ !Int
     } deriving (Show, Eq)
 
-emptyWorldTileData :: WorldTileData
+emptyWorldTileData ∷ WorldTileData
 emptyWorldTileData = WorldTileData
     { wtdChunks = HM.empty
     , wtdMaxChunks = 200
     }
 
-lookupChunk :: ChunkCoord -> WorldTileData -> Maybe LoadedChunk
+lookupChunk ∷ ChunkCoord → WorldTileData → Maybe LoadedChunk
 lookupChunk coord wtd = HM.lookup coord (wtdChunks wtd)
 
-insertChunk :: LoadedChunk -> WorldTileData -> WorldTileData
+insertChunk ∷ LoadedChunk → WorldTileData → WorldTileData
 insertChunk lc wtd =
     wtd { wtdChunks = HM.insert (lcCoord lc) lc (wtdChunks wtd) }
 
-chunkCount :: WorldTileData -> Int
+chunkCount ∷ WorldTileData → Int
 chunkCount = HM.size . wtdChunks
 
 -- | Evict chunks that are far from the camera, keeping at most wtdMaxChunks.
 --   Keeps all chunks within the keep radius, evicts furthest-first beyond that.
 --   Never evicts modified chunks (future-proofing for when chunks can be edited).
-evictDistantChunks :: ChunkCoord -> Int -> WorldTileData -> WorldTileData
+evictDistantChunks ∷ ChunkCoord → Int → WorldTileData → WorldTileData
 evictDistantChunks (ChunkCoord camCX camCY) keepRadius wtd =
     let chunks = wtdChunks wtd
         maxC   = wtdMaxChunks wtd
-    in if HM.size chunks <= maxC
+    in if HM.size chunks ≤ maxC
        then wtd
        else
          let -- Must-keep: modified or within keep radius
-             keep = HM.filterWithKey (\coord lc ->
+             keep = HM.filterWithKey (\coord lc →
                  let ChunkCoord cx cy = coord
                      dx = abs (cx - camCX)
                      dy = abs (cy - camCY)
-                 in lcModified lc || (dx <= keepRadius && dy <= keepRadius)
+                 in lcModified lc ∨ (dx ≤ keepRadius ∧ dy ≤ keepRadius)
                  ) chunks
              -- Everything else is a candidate for eviction
-             candidates = HM.filterWithKey (\coord _ -> not (HM.member coord keep)) chunks
+             candidates = HM.filterWithKey (\coord _ → not (HM.member coord keep)) chunks
              -- Sort candidates by distance (furthest first), keep only what fits
-             candidateList = sortOn (\lc ->
+             candidateList = sortOn (\lc →
                  let ChunkCoord cx cy = lcCoord lc
                  in negate (abs (cx - camCX) + abs (cy - camCY))
                  ) (HM.elems candidates)
              roomLeft = max 0 (maxC - HM.size keep)
              kept = take roomLeft candidateList
-             keptMap = HM.fromList [(lcCoord lc, lc) | lc <- kept]
+             keptMap = HM.fromList [(lcCoord lc, lc) | lc ← kept]
          in wtd { wtdChunks = HM.union keep keptMap }
 
 -----------------------------------------------------------
@@ -129,8 +129,8 @@ evictDistantChunks (ChunkCoord camCX camCY) keepRadius wtd =
 -----------------------------------------------------------
 
 data WorldCamera = WorldCamera
-    { wcX :: Float
-    , wcY :: Float
+    { wcX ∷ Float
+    , wcY ∷ Float
     } deriving (Show, Eq)
 
 -----------------------------------------------------------
@@ -138,46 +138,46 @@ data WorldCamera = WorldCamera
 -----------------------------------------------------------
 
 data WorldTextures = WorldTextures
-    { wtGraniteTexture  :: TextureHandle
-    , wtGabbroTexture   :: TextureHandle
-    , wtDioriteTexture  :: TextureHandle
-    , wtIsoFaceMap      :: TextureHandle
-    , wtNoTexture       :: TextureHandle
-    , wtNoFaceMap       :: TextureHandle
-    , wtZoomGranite     :: TextureHandle
-    , wtZoomGabbro      :: TextureHandle
-    , wtZoomDiorite     :: TextureHandle
-    , wtZoomOcean       :: TextureHandle
-    , wtZoomLava         :: TextureHandle
-    , wtGlacierTexture  :: TextureHandle
-    , wtLavaTexture     :: TextureHandle
-    , wtZoomGlacier     :: TextureHandle
-    , wtBlankTexture    :: TextureHandle
-    , wtBgGranite       :: TextureHandle
-    , wtBgGabbro        :: TextureHandle
-    , wtBgDiorite       :: TextureHandle
-    , wtBgOcean         :: TextureHandle
-    , wtBgGlacier       :: TextureHandle
-    , wtBgLava       :: TextureHandle
-    , wtBgLavaTexture    :: TextureHandle
-    , wtBasaltTexture   :: TextureHandle
-    , wtObsidianTexture :: TextureHandle
-    , wtSandstoneTexture :: TextureHandle
-    , wtLimestoneTexture :: TextureHandle
-    , wtShaleTexture    :: TextureHandle
-    , wtImpactiteTexture :: TextureHandle
-    , wtIronTexture     :: TextureHandle
-    , wtOlivineTexture  :: TextureHandle
-    , wtPyroxeneTexture :: TextureHandle
-    , wtFeldsparTexture :: TextureHandle
-    , wtZoomBasalt      :: TextureHandle
-    , wtZoomObsidian    :: TextureHandle
-    , wtZoomImpactite   :: TextureHandle
-    , wtBgBasalt        :: TextureHandle
-    , wtBgImpactite     :: TextureHandle
+    { wtGraniteTexture  ∷ TextureHandle
+    , wtGabbroTexture   ∷ TextureHandle
+    , wtDioriteTexture  ∷ TextureHandle
+    , wtIsoFaceMap      ∷ TextureHandle
+    , wtNoTexture       ∷ TextureHandle
+    , wtNoFaceMap       ∷ TextureHandle
+    , wtZoomGranite     ∷ TextureHandle
+    , wtZoomGabbro      ∷ TextureHandle
+    , wtZoomDiorite     ∷ TextureHandle
+    , wtZoomOcean       ∷ TextureHandle
+    , wtZoomLava         ∷ TextureHandle
+    , wtGlacierTexture  ∷ TextureHandle
+    , wtLavaTexture     ∷ TextureHandle
+    , wtZoomGlacier     ∷ TextureHandle
+    , wtBlankTexture    ∷ TextureHandle
+    , wtBgGranite       ∷ TextureHandle
+    , wtBgGabbro        ∷ TextureHandle
+    , wtBgDiorite       ∷ TextureHandle
+    , wtBgOcean         ∷ TextureHandle
+    , wtBgGlacier       ∷ TextureHandle
+    , wtBgLava       ∷ TextureHandle
+    , wtBgLavaTexture    ∷ TextureHandle
+    , wtBasaltTexture   ∷ TextureHandle
+    , wtObsidianTexture ∷ TextureHandle
+    , wtSandstoneTexture ∷ TextureHandle
+    , wtLimestoneTexture ∷ TextureHandle
+    , wtShaleTexture    ∷ TextureHandle
+    , wtImpactiteTexture ∷ TextureHandle
+    , wtIronTexture     ∷ TextureHandle
+    , wtOlivineTexture  ∷ TextureHandle
+    , wtPyroxeneTexture ∷ TextureHandle
+    , wtFeldsparTexture ∷ TextureHandle
+    , wtZoomBasalt      ∷ TextureHandle
+    , wtZoomObsidian    ∷ TextureHandle
+    , wtZoomImpactite   ∷ TextureHandle
+    , wtBgBasalt        ∷ TextureHandle
+    , wtBgImpactite     ∷ TextureHandle
     } deriving (Show, Eq)
 
-defaultWorldTextures :: WorldTextures
+defaultWorldTextures ∷ WorldTextures
 defaultWorldTextures = WorldTextures
     { wtGraniteTexture  = TextureHandle 0
     , wtGabbroTexture   = TextureHandle 0
@@ -227,11 +227,11 @@ defaultWorldTextures = WorldTextures
 --   sunAngle is derived: 0.0 = midnight, 0.25 = 6am (dawn),
 --                         0.5 = noon, 0.75 = 6pm (dusk)
 data WorldTime = WorldTime
-    { wtHour   :: !Int   -- ^ 0-23
-    , wtMinute :: !Int   -- ^ 0-59
+    { wtHour   ∷ !Int   -- ^ 0-23
+    , wtMinute ∷ !Int   -- ^ 0-59
     } deriving (Show, Eq)
 
-defaultWorldTime :: WorldTime
+defaultWorldTime ∷ WorldTime
 defaultWorldTime = WorldTime
     { wtHour   = 10     -- start at 10:00am (pleasant morning light)
     , wtMinute = 0
@@ -239,20 +239,20 @@ defaultWorldTime = WorldTime
 
 -- | Convert world time to sun angle (0.0 .. 1.0)
 --   Mapping: midnight (0:00) = 0.0, 6am = 0.25, noon = 0.5, 6pm = 0.75
-worldTimeToSunAngle :: WorldTime -> Float
+worldTimeToSunAngle ∷ WorldTime → Float
 worldTimeToSunAngle (WorldTime h m) =
-    let totalMinutes = fromIntegral h * 60.0 + fromIntegral m :: Float
+    let totalMinutes = fromIntegral h * 60.0 + fromIntegral m ∷ Float
     in totalMinutes / 1440.0   -- 1440 = 24 * 60
 
 -- | Advance world time by a number of real seconds, scaled by a speed factor.
 --   Returns the new time (wraps at 24:00).
 --   timeScale: how many game-minutes pass per real-second.
-advanceWorldTime :: Float -> Float -> WorldTime -> WorldTime
+advanceWorldTime ∷ Float → Float → WorldTime → WorldTime
 advanceWorldTime timeScale dtSeconds (WorldTime h m) =
-    let totalMinutes = fromIntegral h * 60 + fromIntegral m :: Float
+    let totalMinutes = fromIntegral h * 60 + fromIntegral m ∷ Float
         newTotal = totalMinutes + timeScale * dtSeconds
         -- Wrap around 1440 minutes (24 hours)
-        wrapped = newTotal - 1440.0 * fromIntegral (floor (newTotal / 1440.0) :: Int)
+        wrapped = newTotal - 1440.0 * fromIntegral (floor (newTotal / 1440.0) ∷ Int)
         newH = floor wrapped `div` 60
         newM = floor wrapped `mod` 60
     in WorldTime (newH `mod` 24) (newM `mod` 60)
@@ -260,12 +260,12 @@ advanceWorldTime timeScale dtSeconds (WorldTime h m) =
 -- | World date (placeholder for seasons).
 --   Currently unused for sun angle calculation.
 data WorldDate = WorldDate
-    { wdYear  :: !Int
-    , wdMonth :: !Int   -- ^ 1-12
-    , wdDay   :: !Int   -- ^ 1-31
+    { wdYear  ∷ !Int
+    , wdMonth ∷ !Int   -- ^ 1-12
+    , wdDay   ∷ !Int   -- ^ 1-31
     } deriving (Show, Eq)
 
-defaultWorldDate :: WorldDate
+defaultWorldDate ∷ WorldDate
 defaultWorldDate = WorldDate
     { wdYear  = 1
     , wdMonth = 1
@@ -277,13 +277,13 @@ defaultWorldDate = WorldDate
 -----------------------------------------------------------
 
 data CalendarConfig = CalendarConfig
-    { ccDaysPerMonth  :: !Int      -- ^ e.g. 30
-    , ccMonthsPerYear :: !Int      -- ^ e.g. 12
-    , ccHoursPerDay   :: !Int      -- ^ e.g. 24 (controls sun cycle)
-    , ccMinutesPerHour :: !Int     -- ^ e.g. 60
+    { ccDaysPerMonth  ∷ !Int      -- ^ e.g. 30
+    , ccMonthsPerYear ∷ !Int      -- ^ e.g. 12
+    , ccHoursPerDay   ∷ !Int      -- ^ e.g. 24 (controls sun cycle)
+    , ccMinutesPerHour ∷ !Int     -- ^ e.g. 60
     } deriving (Show, Eq)
 
-defaultCalendarConfig :: CalendarConfig
+defaultCalendarConfig ∷ CalendarConfig
 defaultCalendarConfig = CalendarConfig
     { ccDaysPerMonth   = 30
     , ccMonthsPerYear  = 12
@@ -296,22 +296,22 @@ defaultCalendarConfig = CalendarConfig
 -----------------------------------------------------------
 
 data SunConfig = SunConfig
-    { scTiltAngle    :: !Float   -- ^ Axial tilt in radians, controls season intensity
-    , scDayLength    :: !Float   -- ^ Base day/night ratio at equinox (0.5 = equal)
+    { scTiltAngle    ∷ !Float   -- ^ Axial tilt in radians, controls season intensity
+    , scDayLength    ∷ !Float   -- ^ Base day/night ratio at equinox (0.5 = equal)
     } deriving (Show, Eq)
 
-defaultSunConfig :: SunConfig
+defaultSunConfig ∷ SunConfig
 defaultSunConfig = SunConfig
     { scTiltAngle  = 0.4      -- ~23 degrees like Earth
     , scDayLength  = 0.5
     }
 
 data MoonConfig = MoonConfig
-    { mcCycleDays    :: !Int     -- ^ Days per lunar cycle
-    , mcPhaseOffset  :: !Float   -- ^ Starting phase offset (0.0-1.0)
+    { mcCycleDays    ∷ !Int     -- ^ Days per lunar cycle
+    , mcPhaseOffset  ∷ !Float   -- ^ Starting phase offset (0.0-1.0)
     } deriving (Show, Eq)
 
-defaultMoonConfig :: MoonConfig
+defaultMoonConfig ∷ MoonConfig
 defaultMoonConfig = MoonConfig
     { mcCycleDays   = 28
     , mcPhaseOffset = 0.0
@@ -334,22 +334,22 @@ data GeoScale
 -- | A single geological time period containing events and
 --   erosion parameters.
 data GeoPeriod = GeoPeriod
-    { gpName       :: !Text
-    , gpScale      :: !GeoScale
-    , gpDuration   :: !Int          -- ^ Relative duration (arbitrary units)
-    , gpEvents     :: ![GeoEvent]
-    , gpErosion    :: !ErosionParams
+    { gpName       ∷ !Text
+    , gpScale      ∷ !GeoScale
+    , gpDuration   ∷ !Int          -- ^ Relative duration (arbitrary units)
+    , gpEvents     ∷ ![GeoEvent]
+    , gpErosion    ∷ !ErosionParams
     } deriving (Show, Eq)
 
 -- | The full geological history, computed once at world init.
 data GeoTimeline = GeoTimeline
-    { gtSeed       :: !Word64
-    , gtWorldSize  :: !Int
-    , gtPeriods    :: ![GeoPeriod]
-    , gtFeatures   :: ![PersistentFeature]
+    { gtSeed       ∷ !Word64
+    , gtWorldSize  ∷ !Int
+    , gtPeriods    ∷ ![GeoPeriod]
+    , gtFeatures   ∷ ![PersistentFeature]
     } deriving (Show, Eq)
 
-emptyTimeline :: GeoTimeline
+emptyTimeline ∷ GeoTimeline
 emptyTimeline = GeoTimeline
     { gtSeed = 0
     , gtWorldSize = 128
@@ -375,23 +375,23 @@ data GeoEvent
 -- | How an existing feature evolves in a new period.
 data FeatureEvolution
     = Reactivate          -- ^ Dormant → Active, grows taller, new material
-        { feHeightGain    :: !Int       -- ^ Additional height from new eruption
-        , feLavaExtension :: !Int       -- ^ Additional lava flow radius
+        { feHeightGain    ∷ !Int       -- ^ Additional height from new eruption
+        , feLavaExtension ∷ !Int       -- ^ Additional lava flow radius
         }
     | GoDormant           -- ^ Active → Dormant, no shape change
     | GoExtinct           -- ^ Active/Dormant → Extinct
     | CollapseToCaldera   -- ^ Structure collapses
-        { feCollapseDepth :: !Int       -- ^ How deep the collapse goes
-        , feCollapseRatio :: !Float     -- ^ What fraction of the cone collapses (0.3-0.8)
+        { feCollapseDepth ∷ !Int       -- ^ How deep the collapse goes
+        , feCollapseRatio ∷ !Float     -- ^ What fraction of the cone collapses (0.3-0.8)
         }
     | ParasiticEruption   -- ^ New feature spawns on the flank
-        { feChildFeature  :: !VolcanicFeature  -- ^ The new cinder cone / dome
-        , feChildId       :: !GeoFeatureId     -- ^ ID for the child
+        { feChildFeature  ∷ !VolcanicFeature  -- ^ The new cinder cone / dome
+        , feChildId       ∷ !GeoFeatureId     -- ^ ID for the child
         }
     | FlankCollapse       -- ^ One side of the volcano collapses (Mt St Helens)
-        { feCollapseAngle :: !Float     -- ^ Direction of collapse (radians)
-        , feCollapseWidth :: !Float     -- ^ Angular width of the collapse sector
-        , feDebrisRadius  :: !Int       -- ^ How far the debris field extends
+        { feCollapseAngle ∷ !Float     -- ^ Direction of collapse (radians)
+        , feCollapseWidth ∷ !Float     -- ^ Angular width of the collapse sector
+        , feDebrisRadius  ∷ !Int       -- ^ How far the debris field extends
         }
     deriving (Show, Eq)
 
@@ -400,11 +400,11 @@ data GeoCoord = GeoCoord !Int !Int
     deriving (Show, Eq)
 
 data CraterParams = CraterParams
-    { cpCenter     :: !GeoCoord   -- ^ Impact center (global tile coords)
-    , cpRadius     :: !Int        -- ^ Outer rim radius in tiles
-    , cpDepth      :: !Int        -- ^ Depth at center relative to rim
-    , cpRimHeight  :: !Int        -- ^ Rim elevation above surroundings
-    , cpEjectaRadius :: !Int      -- ^ How far ejecta spreads beyond rim
+    { cpCenter     ∷ !GeoCoord   -- ^ Impact center (global tile coords)
+    , cpRadius     ∷ !Int        -- ^ Outer rim radius in tiles
+    , cpDepth      ∷ !Int        -- ^ Depth at center relative to rim
+    , cpRimHeight  ∷ !Int        -- ^ Rim elevation above surroundings
+    , cpEjectaRadius ∷ !Int      -- ^ How far ejecta spreads beyond rim
     , cpMeteorite  ∷ !(Maybe Word8) -- ^ Optional meteorite material ID at crater center
     } deriving (Show, Eq)
 
@@ -421,88 +421,88 @@ data VolcanicFeature
     deriving (Show, Eq)
 
 data ShieldParams = ShieldParams
-    { shCenter     :: !GeoCoord
-    , shBaseRadius :: !Int       -- ^ Very wide (60-120)
-    , shPeakHeight :: !Int       -- ^ Low relative to width (100-400)
-    , shSummitPit  :: !Bool      -- ^ Small summit crater?
-    , shPitRadius  :: !Int
-    , shPitDepth   :: !Int
+    { shCenter     ∷ !GeoCoord
+    , shBaseRadius ∷ !Int       -- ^ Very wide (60-120)
+    , shPeakHeight ∷ !Int       -- ^ Low relative to width (100-400)
+    , shSummitPit  ∷ !Bool      -- ^ Small summit crater?
+    , shPitRadius  ∷ !Int
+    , shPitDepth   ∷ !Int
     } deriving (Show, Eq)
 
 data CinderConeParams = CinderConeParams
-    { ccCenter     :: !GeoCoord
-    , ccBaseRadius :: !Int       -- ^ Small (5-15)
-    , ccPeakHeight :: !Int       -- ^ Moderate (50-200)
-    , ccCraterRadius :: !Int     -- ^ Always has a crater
-    , ccCraterDepth  :: !Int
+    { ccCenter     ∷ !GeoCoord
+    , ccBaseRadius ∷ !Int       -- ^ Small (5-15)
+    , ccPeakHeight ∷ !Int       -- ^ Moderate (50-200)
+    , ccCraterRadius ∷ !Int     -- ^ Always has a crater
+    , ccCraterDepth  ∷ !Int
     } deriving (Show, Eq)
 
 data LavaDomeParams = LavaDomeParams
-    { ldCenter     :: !GeoCoord
-    , ldBaseRadius :: !Int       -- ^ Small-medium (10-25)
-    , ldHeight     :: !Int       -- ^ Squat (50-150)
+    { ldCenter     ∷ !GeoCoord
+    , ldBaseRadius ∷ !Int       -- ^ Small-medium (10-25)
+    , ldHeight     ∷ !Int       -- ^ Squat (50-150)
     } deriving (Show, Eq)
 
 data CalderaParams = CalderaParams
-    { caCenter     :: !GeoCoord
-    , caOuterRadius :: !Int      -- ^ Rim outer edge (30-80)
-    , caInnerRadius :: !Int      -- ^ Rim inner edge (floor)
-    , caRimHeight   :: !Int      -- ^ Rim above surroundings
-    , caFloorDepth  :: !Int      -- ^ Floor below surroundings
-    , caHasLake     :: !Bool     -- ^ Future: water fill
+    { caCenter     ∷ !GeoCoord
+    , caOuterRadius ∷ !Int      -- ^ Rim outer edge (30-80)
+    , caInnerRadius ∷ !Int      -- ^ Rim inner edge (floor)
+    , caRimHeight   ∷ !Int      -- ^ Rim above surroundings
+    , caFloorDepth  ∷ !Int      -- ^ Floor below surroundings
+    , caHasLake     ∷ !Bool     -- ^ Future: water fill
     } deriving (Show, Eq)
 
 data FissureParams = FissureParams
-    { fpStart      :: !GeoCoord  -- ^ One end of the fissure
-    , fpEnd        :: !GeoCoord  -- ^ Other end
-    , fpWidth      :: !Int       -- ^ Half-width perpendicular to line (5-10)
-    , fpRidgeHeight :: !Int      -- ^ Height of the ridge (20-80)
-    , fpHasMagma   :: !Bool      -- ^ Active fissure with magma at center
+    { fpStart      ∷ !GeoCoord  -- ^ One end of the fissure
+    , fpEnd        ∷ !GeoCoord  -- ^ Other end
+    , fpWidth      ∷ !Int       -- ^ Half-width perpendicular to line (5-10)
+    , fpRidgeHeight ∷ !Int      -- ^ Height of the ridge (20-80)
+    , fpHasMagma   ∷ !Bool      -- ^ Active fissure with magma at center
     } deriving (Show, Eq)
 
 data LavaTubeParams = LavaTubeParams
-    { ltStart      :: !GeoCoord
-    , ltEnd        :: !GeoCoord
-    , ltWidth      :: !Int       -- ^ Tube width (3-6)
-    , ltRidgeHeight :: !Int      -- ^ Subtle surface bulge (5-15)
-    , ltCollapses  :: !Int       -- ^ Number of ceiling collapse pits
-    , ltCollapseSeed :: !Word64  -- ^ Seed for collapse placement
+    { ltStart      ∷ !GeoCoord
+    , ltEnd        ∷ !GeoCoord
+    , ltWidth      ∷ !Int       -- ^ Tube width (3-6)
+    , ltRidgeHeight ∷ !Int      -- ^ Subtle surface bulge (5-15)
+    , ltCollapses  ∷ !Int       -- ^ Number of ceiling collapse pits
+    , ltCollapseSeed ∷ !Word64  -- ^ Seed for collapse placement
     } deriving (Show, Eq)
 
 data SuperVolcanoParams = SuperVolcanoParams
-    { svCenter      :: !GeoCoord
-    , svCalderaRadius :: !Int    -- ^ Enormous (100-200)
-    , svRimHeight    :: !Int     -- ^ Low rim relative to size
-    , svFloorDepth   :: !Int     -- ^ Deep caldera
-    , svEjectaRadius :: !Int     -- ^ Ash/debris field (300+)
-    , svEjectaDepth  :: !Int     -- ^ Ash deposit thickness
+    { svCenter      ∷ !GeoCoord
+    , svCalderaRadius ∷ !Int    -- ^ Enormous (100-200)
+    , svRimHeight    ∷ !Int     -- ^ Low rim relative to size
+    , svFloorDepth   ∷ !Int     -- ^ Deep caldera
+    , svEjectaRadius ∷ !Int     -- ^ Ash/debris field (300+)
+    , svEjectaDepth  ∷ !Int     -- ^ Ash deposit thickness
     } deriving (Show, Eq)
 
 data HydrothermalParams = HydrothermalParams
-    { htCenter     :: !GeoCoord
-    , htRadius     :: !Int       -- ^ Tiny (3-8)
-    , htChimneyHeight :: !Int    -- ^ Small mound (10-30)
+    { htCenter     ∷ !GeoCoord
+    , htRadius     ∷ !Int       -- ^ Tiny (3-8)
+    , htChimneyHeight ∷ !Int    -- ^ Small mound (10-30)
     } deriving (Show, Eq)
 
 data LandslideParams = LandslideParams
-    { lsCenter     :: !GeoCoord
-    , lsRadius     :: !Int
-    , lsDirection  :: !Float      -- ^ Angle of slide (radians)
-    , lsVolume     :: !Int        -- ^ Amount of material displaced
+    { lsCenter     ∷ !GeoCoord
+    , lsRadius     ∷ !Int
+    , lsDirection  ∷ !Float      -- ^ Angle of slide (radians)
+    , lsVolume     ∷ !Int        -- ^ Amount of material displaced
     } deriving (Show, Eq)
 
 data GlaciationParams = GlaciationParams
-    { glLatitudeStart :: !Int     -- ^ How far from poles glaciers extend
-    , glThickness     :: !Int     -- ^ Ice sheet thickness
-    , glCarveDepth    :: !Int     -- ^ How deep glacial valleys are carved
-    , glSeed          :: !Word64  -- ^ Sub-seed for glacier flow noise
+    { glLatitudeStart ∷ !Int     -- ^ How far from poles glaciers extend
+    , glThickness     ∷ !Int     -- ^ Ice sheet thickness
+    , glCarveDepth    ∷ !Int     -- ^ How deep glacial valleys are carved
+    , glSeed          ∷ !Word64  -- ^ Sub-seed for glacier flow noise
     } deriving (Show, Eq)
 
 data FloodParams = FloodParams
-    { fpCenter     :: !GeoCoord
-    , fpRadius     :: !Int
-    , fpDepositDepth :: !Int      -- ^ Sediment deposited
-    , fpMaterial   :: !Word8      -- ^ Sediment material ID
+    { fpCenter     ∷ !GeoCoord
+    , fpRadius     ∷ !Int
+    , fpDepositDepth ∷ !Int      -- ^ Sediment deposited
+    , fpMaterial   ∷ !Word8      -- ^ Sediment material ID
     } deriving (Show, Eq)
 
 -----------------------------------------------------------
@@ -512,15 +512,15 @@ data FloodParams = FloodParams
 -- | Erosion configuration for a geological period.
 --   Different eras have different erosion characteristics.
 data ErosionParams = ErosionParams
-    { epIntensity    :: !Float    -- ^ Overall erosion strength (0.0-1.0)
-    , epHydraulic    :: !Float    -- ^ Water erosion strength
-    , epThermal      :: !Float    -- ^ Freeze-thaw weathering strength
-    , epWind         :: !Float    -- ^ Aeolian erosion (deserts, coastlines)
-    , epChemical     :: !Float    -- ^ Chemical weathering (limestone dissolution)
-    , epSeed         :: !Word64   -- ^ Sub-seed for erosion noise
+    { epIntensity    ∷ !Float    -- ^ Overall erosion strength (0.0-1.0)
+    , epHydraulic    ∷ !Float    -- ^ Water erosion strength
+    , epThermal      ∷ !Float    -- ^ Freeze-thaw weathering strength
+    , epWind         ∷ !Float    -- ^ Aeolian erosion (deserts, coastlines)
+    , epChemical     ∷ !Float    -- ^ Chemical weathering (limestone dissolution)
+    , epSeed         ∷ !Word64   -- ^ Sub-seed for erosion noise
     } deriving (Show, Eq)
 
-defaultErosionParams :: ErosionParams
+defaultErosionParams ∷ ErosionParams
 defaultErosionParams = ErosionParams
     { epIntensity  = 0.5
     , epHydraulic  = 0.7
@@ -551,13 +551,13 @@ data VolcanicActivity
 --   Tracks the feature's identity, current state, and history
 --   of modifications applied to it.
 data PersistentFeature = PersistentFeature
-    { pfId            :: !GeoFeatureId
-    , pfFeature       :: !VolcanicFeature   -- ^ Current shape
-    , pfActivity      :: !VolcanicActivity
-    , pfFormationPeriod :: !Int              -- ^ Index of period when created
-    , pfLastActivePeriod :: !Int             -- ^ Index of period last active
-    , pfEruptionCount :: !Int               -- ^ How many times it has erupted
-    , pfParentId      :: !(Maybe GeoFeatureId) -- ^ If parasitic (cinder cone on shield flank)
+    { pfId            ∷ !GeoFeatureId
+    , pfFeature       ∷ !VolcanicFeature   -- ^ Current shape
+    , pfActivity      ∷ !VolcanicActivity
+    , pfFormationPeriod ∷ !Int              -- ^ Index of period when created
+    , pfLastActivePeriod ∷ !Int             -- ^ Index of period last active
+    , pfEruptionCount ∷ !Int               -- ^ How many times it has erupted
+    , pfParentId      ∷ !(Maybe GeoFeatureId) -- ^ If parasitic (cinder cone on shield flank)
     } deriving (Show, Eq)
 
 -----------------------------------------------------------
@@ -565,26 +565,26 @@ data PersistentFeature = PersistentFeature
 -----------------------------------------------------------
 
 data WorldState = WorldState
-    { wsTilesRef     :: IORef WorldTileData
-    , wsCameraRef    :: IORef WorldCamera
-    , wsTexturesRef  :: IORef WorldTextures
-    , wsGenParamsRef :: IORef (Maybe WorldGenParams)
-    , wsTimeRef      :: IORef WorldTime
-    , wsDateRef      :: IORef WorldDate
-    , wsTimeScaleRef :: IORef Float    -- ^ Game-minutes per real-second
-    , wsZoomCacheRef :: IORef (V.Vector ZoomChunkEntry)  -- ^ Pre-computed zoom map cache for current world state
+    { wsTilesRef     ∷ IORef WorldTileData
+    , wsCameraRef    ∷ IORef WorldCamera
+    , wsTexturesRef  ∷ IORef WorldTextures
+    , wsGenParamsRef ∷ IORef (Maybe WorldGenParams)
+    , wsTimeRef      ∷ IORef WorldTime
+    , wsDateRef      ∷ IORef WorldDate
+    , wsTimeScaleRef ∷ IORef Float    -- ^ Game-minutes per real-second
+    , wsZoomCacheRef ∷ IORef (V.Vector ZoomChunkEntry)  -- ^ Pre-computed zoom map cache for current world state
     }
 
-emptyWorldState :: IO WorldState
+emptyWorldState ∷ IO WorldState
 emptyWorldState = do
-    tilesRef     <- newIORef emptyWorldTileData
-    cameraRef    <- newIORef (WorldCamera 0 0)
-    texturesRef  <- newIORef defaultWorldTextures
-    genParamsRef <- newIORef Nothing
-    timeRef      <- newIORef defaultWorldTime
-    dateRef      <- newIORef defaultWorldDate
-    timeScaleRef <- newIORef 1.0   -- 1 game-minute per real-second
-    zoomCacheRef <- newIORef V.empty
+    tilesRef     ← newIORef emptyWorldTileData
+    cameraRef    ← newIORef (WorldCamera 0 0)
+    texturesRef  ← newIORef defaultWorldTextures
+    genParamsRef ← newIORef Nothing
+    timeRef      ← newIORef defaultWorldTime
+    dateRef      ← newIORef defaultWorldDate
+    timeScaleRef ← newIORef 1.0   -- 1 game-minute per real-second
+    zoomCacheRef ← newIORef V.empty
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
 
@@ -593,11 +593,11 @@ emptyWorldState = do
 -----------------------------------------------------------
 
 data WorldManager = WorldManager
-    { wmWorlds  :: [(WorldPageId, WorldState)]
-    , wmVisible :: [WorldPageId]
+    { wmWorlds  ∷ [(WorldPageId, WorldState)]
+    , wmVisible ∷ [WorldPageId]
     }
 
-emptyWorldManager :: WorldManager
+emptyWorldManager ∷ WorldManager
 emptyWorldManager = WorldManager
     { wmWorlds  = []
     , wmVisible = []
@@ -610,12 +610,12 @@ emptyWorldManager = WorldManager
 -- | Pre-computed zoom map entry for one chunk.
 --   Stores everything needed to render the zoom quad.
 data ZoomChunkEntry = ZoomChunkEntry
-    { zceChunkX   :: !Int       -- ^ Canonical chunk X
-    , zceChunkY   :: !Int       -- ^ Canonical chunk Y
-    , zceDrawX    :: !Float     -- ^ Screen-space draw X
-    , zceDrawY    :: !Float     -- ^ Screen-space draw Y
-    , zceTexIndex :: !Word8     -- ^ Material ID (used to pick texture at render time)
-    , zceElev     :: !Int       -- ^ Elevation (used to pick texture at render time)
+    { zceChunkX   ∷ !Int       -- ^ Canonical chunk X
+    , zceChunkY   ∷ !Int       -- ^ Canonical chunk Y
+    , zceDrawX    ∷ !Float     -- ^ Screen-space draw X
+    , zceDrawY    ∷ !Float     -- ^ Screen-space draw Y
+    , zceTexIndex ∷ !Word8     -- ^ Material ID (used to pick texture at render time)
+    , zceElev     ∷ !Int       -- ^ Elevation (used to pick texture at render time)
     } deriving (Show, Eq)
 
 -----------------------------------------------------------

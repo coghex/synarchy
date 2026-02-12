@@ -154,7 +154,7 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
         (zero { commandPool = cmdPool
              , level = COMMAND_BUFFER_LEVEL_PRIMARY
              , commandBufferCount = 1 })
-        >>= pure . V.head
+        ⌦ pure . V.head
 
     beginCommandBuffer cmdBuf commandInfo
     

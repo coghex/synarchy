@@ -1,5 +1,5 @@
 -- src/Engine/Graphics/Camera.hs
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Camera
     ( Camera2D(..)
     , UICamera(..)
@@ -60,7 +60,7 @@ createUIViewMatrix _ =
 
 -- | UI camera projection matrix (pixel coordinates, origin at top-left, Y down - Vulkan style)
 -- Vulkan NDC: X [-1,1] left to right, Y [-1,1] top to bottom
-createUIProjectionMatrix :: UICamera -> M44 Float
+createUIProjectionMatrix ∷ UICamera → M44 Float
 createUIProjectionMatrix uiCam =
     let width  = uiCamWidth uiCam
         height = uiCamHeight uiCam

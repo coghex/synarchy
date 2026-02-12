@@ -1,5 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Command.Text
   ( renderTextBatchInline
   , createTextInstanceBuffer
@@ -80,7 +80,7 @@ createTextInstanceBuffer device pDevice instances = do
     let !instanceSize = fromIntegral $ sizeOf (undefined ∷ GlyphInstance)
         !instanceCount = V.length instances
         !bufferSize = fromIntegral $ instanceSize * instanceCount
-    when (instanceSize /= 48) $
+    when (instanceSize ≢ 48) $
         logWarnM CatFont $ "Warning: Unusual instance size, expected 48, got: "
                          <> (T.pack (show instanceSize))
     

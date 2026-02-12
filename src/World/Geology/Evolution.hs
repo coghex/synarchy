@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Evolution
     ( evolveOneFeature
     , evolvePointFeature
@@ -19,33 +19,33 @@ import World.Geology.Hash
 -- | Evolve a single persistent feature between geological periods.
 --   Decides whether it stays active, goes dormant, collapses,
 --   spawns parasitic cones, etc.
-evolveOneFeature :: Word64 -> Int
-                 -> ([GeoEvent], TimelineBuildState)
-                 -> PersistentFeature
-                 -> ([GeoEvent], TimelineBuildState)
+evolveOneFeature ∷ Word64 → Int
+                 → ([GeoEvent], TimelineBuildState)
+                 → PersistentFeature
+                 → ([GeoEvent], TimelineBuildState)
 evolveOneFeature seed periodIdx (events, tbs) pf =
     -- Only evolve point features (shields, cinder cones, lava domes)
     -- Fissures, tubes, vents, and supervolcanoes don't evolve this way
     case pfFeature pf of
-        FissureVolcano _   -> (events, tbs)
-        LavaTube _         -> (events, tbs)
-        HydrothermalVent _ -> (events, tbs)
-        SuperVolcano _     -> (events, tbs)
-        Caldera _          -> (events, tbs)
-        _ -> evolvePointFeature seed periodIdx (events, tbs) pf
+        FissureVolcano _   → (events, tbs)
+        LavaTube _         → (events, tbs)
+        HydrothermalVent _ → (events, tbs)
+        SuperVolcano _     → (events, tbs)
+        Caldera _          → (events, tbs)
+        _ → evolvePointFeature seed periodIdx (events, tbs) pf
 
 -- | Evolution logic for point volcanic features only.
-evolvePointFeature :: Word64 -> Int
-                   -> ([GeoEvent], TimelineBuildState)
-                   -> PersistentFeature
-                   -> ([GeoEvent], TimelineBuildState)
+evolvePointFeature ∷ Word64 → Int
+                   → ([GeoEvent], TimelineBuildState)
+                   → PersistentFeature
+                   → ([GeoEvent], TimelineBuildState)
 evolvePointFeature seed periodIdx (events, tbs) pf =
     let fid = pfId pf
         GeoFeatureId fidInt = fid
         h1 = hashGeo seed fidInt 40
         roll = hashToFloatGeo h1
     in case pfActivity pf of
-        Active ->
+        Active →
             if roll < 0.15
             -- 15%: collapse into caldera
             then let h2 = hashGeo seed fidInt 41
@@ -54,7 +54,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                      ratio = 0.3 + hashToFloatGeo h3 * 0.5
                      evt = VolcanicModify fid (CollapseToCaldera depth ratio)
                      tbs' = updateFeature fid
-                         (\p -> p { pfActivity = Collapsed
+                         (\p → p { pfActivity = Collapsed
                                   , pfLastActivePeriod = periodIdx }) tbs
                  in (evt : events, tbs')
 
@@ -62,7 +62,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
             -- 30%: go dormant
             then let evt = VolcanicModify fid GoDormant
                      tbs' = updateFeature fid
-                         (\p -> p { pfActivity = Dormant
+                         (\p → p { pfActivity = Dormant
                                   , pfLastActivePeriod = periodIdx }) tbs
                  in (evt : events, tbs')
 
@@ -97,7 +97,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                      evt = VolcanicModify fid (ParasiticEruption childFeature childId)
                      tbs'' = registerFeature childPf tbs'
                      tbs''' = updateFeature fid
-                         (\p -> p { pfEruptionCount = pfEruptionCount p + 1 }) tbs''
+                         (\p → p { pfEruptionCount = pfEruptionCount p + 1 }) tbs''
                  in (evt : events, tbs''')
 
             else
@@ -106,11 +106,11 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                 heightGain = hashToRangeGeo h5 20 100
                 evt = VolcanicModify fid (Reactivate heightGain 0)
                 tbs' = updateFeature fid
-                    (\p -> p { pfEruptionCount = pfEruptionCount p + 1
+                    (\p → p { pfEruptionCount = pfEruptionCount p + 1
                              , pfLastActivePeriod = periodIdx }) tbs
             in (evt : events, tbs')
 
-        Dormant ->
+        Dormant →
             if roll < 0.3
             then let h5 = hashGeo seed fidInt 50
                      h6 = hashGeo seed fidInt 51
@@ -118,7 +118,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                      lavaExt = hashToRangeGeo h6 5 20
                      evt = VolcanicModify fid (Reactivate heightGain lavaExt)
                      tbs' = updateFeature fid
-                         (\p -> p { pfActivity = Active
+                         (\p → p { pfActivity = Active
                                   , pfEruptionCount = pfEruptionCount p + 1
                                   , pfLastActivePeriod = periodIdx }) tbs
                  in (evt : events, tbs')
@@ -126,20 +126,20 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
             else if roll < 0.5
             then let evt = VolcanicModify fid GoExtinct
                      tbs' = updateFeature fid
-                         (\p -> p { pfActivity = Extinct }) tbs
+                         (\p → p { pfActivity = Extinct }) tbs
                  in (evt : events, tbs')
 
             else (events, tbs)
 
-        Extinct   -> (events, tbs)
-        Collapsed -> (events, tbs)
+        Extinct   → (events, tbs)
+        Collapsed → (events, tbs)
 
 -----------------------------------------------------------
 -- Feature Query Helpers
 -----------------------------------------------------------
 
 -- | Get center coordinates from any volcanic feature.
-getFeatureCenter :: VolcanicFeature -> GeoCoord
+getFeatureCenter ∷ VolcanicFeature → GeoCoord
 getFeatureCenter (ShieldVolcano p)    = shCenter p
 getFeatureCenter (CinderCone p)       = ccCenter p
 getFeatureCenter (LavaDome p)         = ldCenter p
@@ -150,7 +150,7 @@ getFeatureCenter (SuperVolcano p)     = svCenter p
 getFeatureCenter (HydrothermalVent p) = htCenter p
 
 -- | Get approximate radius from any volcanic feature.
-getFeatureRadius :: VolcanicFeature -> Int
+getFeatureRadius ∷ VolcanicFeature → Int
 getFeatureRadius (ShieldVolcano p)    = shBaseRadius p
 getFeatureRadius (CinderCone p)       = ccBaseRadius p
 getFeatureRadius (LavaDome p)         = ldBaseRadius p

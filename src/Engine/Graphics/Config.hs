@@ -36,9 +36,9 @@ msaaToSampleCount _ = SAMPLE_COUNT_1_BIT
 -- | Convert Vulkan sample count back to user-facing int
 sampleCountToMSAA ∷ SampleCountFlagBits → Int
 sampleCountToMSAA s
-  | s == SAMPLE_COUNT_8_BIT = 8
-  | s == SAMPLE_COUNT_4_BIT = 4
-  | s == SAMPLE_COUNT_2_BIT = 2
+  | s ≡ SAMPLE_COUNT_8_BIT = 8
+  | s ≡ SAMPLE_COUNT_4_BIT = 4
+  | s ≡ SAMPLE_COUNT_2_BIT = 2
   | otherwise               = 1
 
 -- | Clamp a requested sample count to the highest supported by the device.
@@ -54,7 +54,7 @@ clampSampleCount supported requested =
         , SAMPLE_COUNT_2_BIT
         , SAMPLE_COUNT_1_BIT
         ]
-    isSupported sc = (sc .&. supported) /= zeroBits
+    isSupported sc = (sc .&. supported) ≢ zeroBits
 
 -- | Window display mode
 data WindowMode
@@ -90,27 +90,27 @@ data TextureFilter
     | FilterLinear     -- ^ Smooth bilinear interpolation
     deriving (Show, Eq, Ord, Enum, Bounded)
 
-textureFilterToText :: TextureFilter -> Text
+textureFilterToText ∷ TextureFilter → Text
 textureFilterToText FilterNearest = "nearest"
 textureFilterToText FilterLinear  = "linear"
 
-textureFilterFromText :: Text -> Maybe TextureFilter
+textureFilterFromText ∷ Text → Maybe TextureFilter
 textureFilterFromText t = case T.toLower t of
-    "nearest" -> Just FilterNearest
-    "linear"  -> Just FilterLinear
-    _         -> Nothing
+    "nearest" → Just FilterNearest
+    "linear"  → Just FilterLinear
+    _         → Nothing
 
 instance FromJSON TextureFilter where
-    parseJSON = withText "TextureFilter" $ \t ->
+    parseJSON = withText "TextureFilter" $ \t →
         case textureFilterFromText t of
-            Just tf -> pure tf
-            Nothing -> fail $ "Unknown texture filter: " <> T.unpack t
+            Just tf → pure tf
+            Nothing → fail $ "Unknown texture filter: " <> T.unpack t
 
 instance ToJSON TextureFilter where
     toJSON = toJSON . textureFilterToText
 
 -- | Convert to Vulkan filter enum
-textureFilterToVulkan :: TextureFilter -> Filter
+textureFilterToVulkan ∷ TextureFilter → Filter
 textureFilterToVulkan FilterNearest = FILTER_NEAREST
 textureFilterToVulkan FilterLinear  = FILTER_LINEAR
 
@@ -163,7 +163,7 @@ data Resolution = Resolution
 
 instance FromJSON Resolution where
     parseJSON (Object v) = Resolution
-        <$> v .: "width"
+        ⊚ v .: "width"
         <*> v .: "height"
     parseJSON _ = fail "Expected an object for Resolution"
 
@@ -178,7 +178,7 @@ instance FromJSON VideoConfigFile where
               fs ← videoObj .: "fullscreen" .!= False
               pure $ if fs then Fullscreen else Windowed
       VideoConfigFile
-        <$> videoObj .: "resolution"
+        ⊚ videoObj .: "resolution"
         <*> pure windowMode
         <*> videoObj .: "ui_scale" .!= 1.0
         <*> videoObj .: "vsync" .!= True

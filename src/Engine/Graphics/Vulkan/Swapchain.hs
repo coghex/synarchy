@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE OverloadedLists, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Swapchain
   ( createVulkanSwapchain
   , createSwapchainImageViews
@@ -155,7 +155,7 @@ chooseSwapSurfaceFormat (SwapchainSupportDetails _ formats _) = best
         preferred = zero { format = FORMAT_B8G8R8A8_UNORM
                        , colorSpace = COLOR_SPACE_SRGB_NONLINEAR_KHR }
 
-chooseSwapPresentMode :: SwapchainSupportDetails -> Bool -> EngineM ε σ Swap.PresentModeKHR
+chooseSwapPresentMode ∷ SwapchainSupportDetails → Bool → EngineM ε σ Swap.PresentModeKHR
 chooseSwapPresentMode ssd vsyncEnabled = do
   let available = presentModes ssd
   

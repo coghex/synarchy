@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scene.Batch.Text
   ( collectTextBatches
   , groupByFontAndLayer
@@ -28,7 +28,7 @@ import Engine.Core.Log (LogCategory(..))
 collectTextBatches ∷ SceneGraph → Float → Float → EngineM ε σ (V.Vector TextRenderBatch)
 collectTextBatches graph screenW screenH = do
   let allNodes = Map.elems (sgNodes graph)
-      textNodes = filter (\n → nodeType n ≡ TextObject && nodeVisible n) allNodes
+      textNodes = filter (\n → nodeType n ≡ TextObject ∧ nodeVisible n) allNodes
   
   logDebugSM CatScene "Text batch collection started"
       [("totalTextNodes", T.pack $ show $ length textNodes)]
@@ -53,7 +53,7 @@ collectTextBatches graph screenW screenH = do
                           size = case nodeFontSize node of
                                         Nothing → 32
                                         Just s → s
-                          isUI = let (LayerId l) = layerId in l >= 10
+                          isUI = let (LayerId l) = layerId in l ≥ 10
                       let instances = if isUI
                                       then layoutTextUI atlas size x y text color
                                       else layoutText atlas size x y screenW screenH text color

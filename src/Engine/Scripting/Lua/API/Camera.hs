@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scripting.Lua.API.Camera
     ( cameraMoveFn
     , cameraGetPositionFn
@@ -79,21 +79,21 @@ cameraSetZoomFn env = do
     return 0
 
 -- | camera.getZSlice() -> int
-cameraGetZSliceFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+cameraGetZSliceFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraGetZSliceFn env = do
-    cam <- Lua.liftIO $ readIORef (cameraRef env)
+    cam ← Lua.liftIO $ readIORef (cameraRef env)
     Lua.pushinteger (fromIntegral $ camZSlice cam)
     return 1
 
 -- | camera.setZSlice(z)
-cameraSetZSliceFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+cameraSetZSliceFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraSetZSliceFn env = do
-    zArg <- Lua.tointeger 1
+    zArg ← Lua.tointeger 1
     case zArg of
-        Just z -> Lua.liftIO $ 
-            atomicModifyIORef' (cameraRef env) $ \cam ->
+        Just z → Lua.liftIO $ 
+            atomicModifyIORef' (cameraRef env) $ \cam →
                 (cam { camZSlice = fromIntegral z }, ())
-        Nothing -> pure ()
+        Nothing → pure ()
     return 0
 
 -- | camera.gotoTile(gx, gy)
@@ -101,18 +101,18 @@ cameraSetZSliceFn env = do
 --   Sets position, zoom to tile level, and computes the correct
 --   z-slice from the world gen params (works even if the chunk
 --   isn't loaded yet).
-cameraGotoTileFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+cameraGotoTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraGotoTileFn env = do
-    gxArg <- Lua.tointeger 1
-    gyArg <- Lua.tointeger 2
+    gxArg ← Lua.tointeger 1
+    gyArg ← Lua.tointeger 2
     case (gxArg, gyArg) of
-        (Just gxRaw, Just gyRaw) -> Lua.liftIO $ do
-            let gx = fromIntegral gxRaw :: Int
-                gy = fromIntegral gyRaw :: Int
+        (Just gxRaw, Just gyRaw) → Lua.liftIO $ do
+            let gx = fromIntegral gxRaw ∷ Int
+                gy = fromIntegral gyRaw ∷ Int
                 (wx, wy) = gridToWorld gx gy
 
             -- Set position and zoom
-            atomicModifyIORef' (cameraRef env) $ \cam ->
+            atomicModifyIORef' (cameraRef env) $ \cam →
                 (cam { camPosition = (wx, wy)
                      , camZoom     = 0.5
                      , camVelocity = (0, 0)
@@ -121,13 +121,13 @@ cameraGotoTileFn env = do
 
             -- Compute surface elevation from world gen params.
             -- This is a pure computation — no loaded chunks needed.
-            manager <- readIORef (worldManagerRef env)
-            forM_ (wmVisible manager) $ \pageId ->
+            manager ← readIORef (worldManagerRef env)
+            forM_ (wmVisible manager) $ \pageId →
                 case lookup pageId (wmWorlds manager) of
-                    Just worldState -> do
-                        mParams <- readIORef (wsGenParamsRef worldState)
+                    Just worldState → do
+                        mParams ← readIORef (wsGenParamsRef worldState)
                         case mParams of
-                            Just params -> do
+                            Just params → do
                                 let seed      = wgpSeed params
                                     worldSize = wgpWorldSize params
                                     timeline  = wgpGeoTimeline params
@@ -135,10 +135,10 @@ cameraGotoTileFn env = do
                                     (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
                                     (finalElev, _) = applyTimeline timeline worldSize gx gy (baseElev, baseMat)
                                     targetZ = finalElev + 3
-                                atomicModifyIORef' (cameraRef env) $ \cam ->
+                                atomicModifyIORef' (cameraRef env) $ \cam →
                                     (cam { camZSlice = targetZ }, ())
-                            Nothing -> return ()
-                    Nothing -> return ()
+                            Nothing → return ()
+                    Nothing → return ()
 
-        _ -> pure ()
+        _ → pure ()
     return 0

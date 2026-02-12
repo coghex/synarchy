@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Instance
   ( createVulkanInstance
   , destroyVulkanInstance
@@ -84,7 +84,7 @@ vulkanInstanceCreateInfo config = do
     , enabledExtensionNames = finalExts
     , flags                 = flags
     }
-    ::& debugUtilsMessengerCreateInfo
+    ∷& debugUtilsMessengerCreateInfo
     :& ()
 
 -- | Create and initialize Vulkan instance with optional debug messenger
@@ -134,7 +134,7 @@ createVulkanInstance config = do
           , enabledExtensionNames = V.fromList allExtensions
           , flags = INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
           }
-          ::& layerSettingsInfo
+          ∷& layerSettingsInfo
           :& debugUtilsMessengerCreateInfo
           :& ()
     

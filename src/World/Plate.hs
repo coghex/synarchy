@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Plate
     ( -- * Plate data
       TectonicPlate(..)
@@ -26,14 +26,14 @@ import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro, matGla
 -----------------------------------------------------------
 
 data TectonicPlate = TectonicPlate
-    { plateCenterX  :: !Int
-    , plateCenterY  :: !Int
-    , plateIsLand   :: !Bool
-    , plateBaseElev :: !Int
-    , plateMaterial :: !MaterialId
-    , plateDensity  :: !Float     -- ^ Crust density, determines subduction
-    , plateDriftX   :: !Float
-    , plateDriftY   :: !Float
+    { plateCenterX  ∷ !Int
+    , plateCenterY  ∷ !Int
+    , plateIsLand   ∷ !Bool
+    , plateBaseElev ∷ !Int
+    , plateMaterial ∷ !MaterialId
+    , plateDensity  ∷ !Float     -- ^ Crust density, determines subduction
+    , plateDriftX   ∷ !Float
+    , plateDriftY   ∷ !Float
     } deriving (Show)
 
 -----------------------------------------------------------
@@ -54,11 +54,11 @@ data BoundarySide = SidePlateA | SidePlateB
 -- Plate Generation
 -----------------------------------------------------------
 
-generatePlates :: Word64 -> Int -> Int -> [TectonicPlate]
+generatePlates ∷ Word64 → Int → Int → [TectonicPlate]
 generatePlates seed worldSize plateCount =
     map (generateOnePlate seed worldSize) [0 .. plateCount - 1]
 
-generateOnePlate :: Word64 -> Int -> Int -> TectonicPlate
+generateOnePlate ∷ Word64 → Int → Int → TectonicPlate
 generateOnePlate seed worldSize plateIndex =
     let halfTiles = (worldSize * 16) `div` 2
         h1 = plateHash seed plateIndex 1
@@ -83,9 +83,9 @@ generateOnePlate seed worldSize plateIndex =
 
         matChoice = hashToRange h5 0 2
         material = case matChoice of
-            0 -> matGranite
-            1 -> matDiorite
-            _ -> matGabbro
+            0 → matGranite
+            1 → matDiorite
+            _ → matGabbro
 
         -- Crust density: ocean crust is denser than continental
         density = if isLand
@@ -111,26 +111,26 @@ generateOnePlate seed worldSize plateIndex =
 -- Plate Queries
 -----------------------------------------------------------
 
-plateAt :: Word64 -> Int -> [TectonicPlate] -> Int -> Int -> (TectonicPlate, Float)
+plateAt ∷ Word64 → Int → [TectonicPlate] → Int → Int → (TectonicPlate, Float)
 plateAt seed worldSize plates gx gy =
     let ranked = rankPlates seed worldSize plates gx gy
     in head ranked
 
-twoNearestPlates :: Word64 -> Int -> [TectonicPlate] -> Int -> Int
-                 -> ((TectonicPlate, Float), (TectonicPlate, Float))
+twoNearestPlates ∷ Word64 → Int → [TectonicPlate] → Int → Int
+                 → ((TectonicPlate, Float), (TectonicPlate, Float))
 twoNearestPlates seed worldSize plates gx gy =
     let ranked = rankPlates seed worldSize plates gx gy
     in case ranked of
-        (a:b:_) -> (a, b)
-        [a]     -> (a, a)
-        _       -> error "no plates"
+        (a:b:_) → (a, b)
+        [a]     → (a, a)
+        _       → error "no plates"
 
-rankPlates :: Word64 -> Int -> [TectonicPlate] -> Int -> Int -> [(TectonicPlate, Float)]
+rankPlates ∷ Word64 → Int → [TectonicPlate] → Int → Int → [(TectonicPlate, Float)]
 rankPlates seed worldSize plates gx gy =
     let jitter = jitterAmount seed worldSize gx gy
         withDist plate =
-            let dx = fromIntegral (wrappedDeltaX worldSize gx (plateCenterX plate)) :: Float
-                dy = fromIntegral (gy - plateCenterY plate) :: Float
+            let dx = fromIntegral (wrappedDeltaX worldSize gx (plateCenterX plate)) ∷ Float
+                dy = fromIntegral (gy - plateCenterY plate) ∷ Float
             in (plate, sqrt (dx * dx + dy * dy) + jitter)
     in sortBy (comparing snd) (map withDist plates)
 
@@ -140,11 +140,11 @@ rankPlates seed worldSize plates gx gy =
 
 -- | Classify the boundary between two plates.
 --   Uses the relative drift vectors projected onto the boundary normal.
-classifyBoundary :: Int -> TectonicPlate -> TectonicPlate -> BoundaryType
+classifyBoundary ∷ Int → TectonicPlate → TectonicPlate → BoundaryType
 classifyBoundary worldSize plateA plateB =
     let nxRaw = fromIntegral (wrappedDeltaX worldSize
-                    (plateCenterX plateA) (plateCenterX plateB)) :: Float
-        nyRaw = fromIntegral (plateCenterY plateB - plateCenterY plateA) :: Float
+                    (plateCenterX plateA) (plateCenterX plateB)) ∷ Float
+        nyRaw = fromIntegral (plateCenterY plateB - plateCenterY plateA) ∷ Float
         nLen  = sqrt (nxRaw * nxRaw + nyRaw * nyRaw)
         (nx, ny) = if nLen > 0.001
                    then (nxRaw / nLen, nyRaw / nLen)
@@ -176,7 +176,7 @@ classifyBoundary worldSize plateA plateB =
 -- | How many tile-rows wide the glacier zone is at each pole.
 --   Scales proportionally with world size.
 --   At worldSize=128 this gives 16 (one chunk), preserving original behavior.
-glacierWidthRows :: Int
+glacierWidthRows ∷ Int
 glacierWidthRows = 16
 
 -- | Check if a global tile position is in the glacier zone.
@@ -184,17 +184,17 @@ glacierWidthRows = 16
 --   In grid space, screenY is proportional to (gx + gy).
 --   The world extends from roughly -(worldSize*16) to +(worldSize*16)
 --   in the (gx+gy) axis, so we place the glacier at the extremes.
-isGlacierZone :: Int -> Int -> Int -> Bool
+isGlacierZone ∷ Int → Int → Int → Bool
 isGlacierZone worldSize gx gy =
     let halfTiles = (worldSize * 16) `div` 2
         glacierEdge = halfTiles - glacierWidthRows
         screenRow = gx + gy
-    in abs screenRow >= glacierEdge
+    in abs screenRow ≥ glacierEdge
 
 -- | True if this tile is completely outside the playable world
 --   (past the glacier border). These tiles should not be generated.
 
-isBeyondGlacier :: Int -> Int -> Int -> Bool
+isBeyondGlacier ∷ Int → Int → Int → Bool
 isBeyondGlacier worldSize gx gy =
     let halfTiles = (worldSize * 16) `div` 2
         screenRow = gx + gy
@@ -205,11 +205,11 @@ isBeyondGlacier worldSize gx gy =
 -----------------------------------------------------------
 
 -- | Total width of the world in tiles (for X-axis wrapping).
-worldWidthTiles :: Int -> Int
+worldWidthTiles ∷ Int → Int
 worldWidthTiles worldSize = worldSize * 16
 
 -- | Wrap a global X coordinate into the valid range [-halfTiles, halfTiles).
-wrapGlobalX :: Int -> Int -> Int
+wrapGlobalX ∷ Int → Int → Int
 wrapGlobalX worldSize gx =
     let w = worldWidthTiles worldSize
         halfW = w `div` 2
@@ -218,7 +218,7 @@ wrapGlobalX worldSize gx =
     in wrapped
 
 -- | Compute the shortest wrapped distance in X between two points.
-wrappedDeltaX :: Int -> Int -> Int -> Int
+wrappedDeltaX ∷ Int → Int → Int → Int
 wrappedDeltaX worldSize x1 x2 =
     let w = worldWidthTiles worldSize
         raw = x2 - x1
@@ -230,13 +230,13 @@ wrappedDeltaX worldSize x1 x2 =
 -- | Value noise that tiles seamlessly in X with period = worldWidthTiles.
 --   Works by wrapping the noise grid cell X index so that cells at the
 --   seam boundary reference the same hash values.
-wrappedValueNoise2D :: Word64 -> Int -> Int -> Int -> Int -> Float
+wrappedValueNoise2D ∷ Word64 → Int → Int → Int → Int → Float
 wrappedValueNoise2D seed worldSize x y scale =
     let w = worldWidthTiles worldSize
-        fx = fromIntegral x / fromIntegral scale :: Float
-        fy = fromIntegral y / fromIntegral scale :: Float
-        ix = floor fx :: Int
-        iy = floor fy :: Int
+        fx = fromIntegral x / fromIntegral scale ∷ Float
+        fy = fromIntegral y / fromIntegral scale ∷ Float
+        ix = floor fx ∷ Int
+        iy = floor fy ∷ Int
         tx = fx - fromIntegral ix
         ty = fy - fromIntegral iy
         sx = smoothstep tx
@@ -261,7 +261,7 @@ wrappedValueNoise2D seed worldSize x y scale =
 -- | Pure elevation query for any global tile position.
 --   Returns (surfaceZ, materialId).
 --   Glacier zones at north/south edges override normal plate generation.
-elevationAtGlobal :: Word64 -> [TectonicPlate] -> Int -> Int -> Int -> (Int, MaterialId)
+elevationAtGlobal ∷ Word64 → [TectonicPlate] → Int → Int → Int → (Int, MaterialId)
 elevationAtGlobal seed plates worldSize gx gy =
     let gx' = wrapGlobalX worldSize gx
     in if isBeyondGlacier worldSize gx' gy then (0, matGlacier)
@@ -306,33 +306,33 @@ elevationAtGlobal seed plates worldSize gx gy =
 
 -- | Compute the elevation modification from a plate boundary.
 --   boundaryDist: distance from the boundary (0 = at boundary, positive = inside plateA)
-boundaryElevation :: BoundaryType -> BoundarySide
-                  -> TectonicPlate -> TectonicPlate
-                  -> Float -> Int
+boundaryElevation ∷ BoundaryType → BoundarySide
+                  → TectonicPlate → TectonicPlate
+                  → Float → Int
 boundaryElevation boundary _side plateA plateB boundaryDist =
-    let bothLand  = plateIsLand plateA && plateIsLand plateB
-        bothOcean = not (plateIsLand plateA) && not (plateIsLand plateB)
+    let bothLand  = plateIsLand plateA ∧ plateIsLand plateB
+        bothOcean = not (plateIsLand plateA) ∧ not (plateIsLand plateB)
         -- oceanMeetsLand: plateA is always the one we're on
         aIsLand   = plateIsLand plateA
         bIsLand   = plateIsLand plateB
     in case boundary of
 
         -- CONVERGENT: plates pushing together
-        Convergent strength -> convergentEffect
+        Convergent strength → convergentEffect
             aIsLand bIsLand bothLand bothOcean
             (plateDensity plateA) (plateDensity plateB)
             strength boundaryDist
 
         -- DIVERGENT: plates pulling apart
-        Divergent strength -> divergentEffect
+        Divergent strength → divergentEffect
             aIsLand bothOcean strength boundaryDist
 
         -- TRANSFORM: plates sliding past each other
-        Transform _shear -> transformEffect boundaryDist
+        Transform _shear → transformEffect boundaryDist
 
 -- | Convergent boundary elevation effect.
-convergentEffect :: Bool -> Bool -> Bool -> Bool
-                 -> Float -> Float -> Float -> Float -> Int
+convergentEffect ∷ Bool → Bool → Bool → Bool
+                 → Float → Float → Float → Float → Int
 convergentEffect aIsLand bIsLand bothLand bothOcean
                  densityA densityB strength boundaryDist =
     let -- Smooth falloff: 1.0 at boundary, 0.0 at fadeRange
@@ -360,7 +360,7 @@ convergentEffect aIsLand bIsLand bothLand bothOcean
            -- We're the overriding plate: slight uplift (island arc)
            else round (500.0 * strength * t')
 
-    else if aIsLand && not bIsLand then
+    else if aIsLand ∧ not bIsLand then
         -- We're on the land plate, ocean is subducting under us
         -- Mountain range on land side (Andes-style)
         let peakElev = 2000 + round (4000.0 * strength)
@@ -374,7 +374,7 @@ convergentEffect aIsLand bIsLand bothLand bothOcean
 
 -- | Divergent boundary elevation effect.
 --   Rift valley / mid-ocean ridge.
-divergentEffect :: Bool -> Bool -> Float -> Float -> Int
+divergentEffect ∷ Bool → Bool → Float → Float → Int
 divergentEffect aIsLand bothOcean strength boundaryDist =
     let fadeRange = 150.0
         peakRange = 20.0
@@ -395,7 +395,7 @@ divergentEffect aIsLand bothOcean strength boundaryDist =
 
 -- | Transform boundary: minimal elevation effect.
 --   Slight disruption near the fault line.
-transformEffect :: Float -> Int
+transformEffect ∷ Float → Int
 transformEffect boundaryDist =
     let fadeRange = 50.0
         t = max 0.0 (1.0 - abs boundaryDist / fadeRange)
@@ -408,7 +408,7 @@ transformEffect boundaryDist =
 -----------------------------------------------------------
 
 -- | Local elevation noise, wrapping in X.
-elevationNoise :: Word64 -> Int -> Int -> Int -> Int
+elevationNoise ∷ Word64 → Int → Int → Int → Int
 elevationNoise seed worldSize gx gy =
     let e1 = wrappedValueNoise2D (seed + 10) worldSize gx gy 12
         e2 = wrappedValueNoise2D (seed + 11) worldSize gx gy 5
@@ -416,7 +416,7 @@ elevationNoise seed worldSize gx gy =
         mapped = (raw - 0.5) * 3.0
     in clampInt (-2) 2 (round mapped)
 
-clampInt :: Int -> Int -> Int -> Int
+clampInt ∷ Int → Int → Int → Int
 clampInt lo hi x
     | x < lo    = lo
     | x > hi    = hi
@@ -426,7 +426,7 @@ clampInt lo hi x
 -- Jitter
 -----------------------------------------------------------
 
-jitterAmount :: Word64 -> Int -> Int -> Int -> Float
+jitterAmount ∷ Word64 → Int → Int → Int → Float
 jitterAmount seed worldSize gx gy =
     let n1 = wrappedValueNoise2D seed worldSize gx gy 20
         n2 = wrappedValueNoise2D (seed + 99) worldSize gx gy 8
@@ -437,12 +437,12 @@ jitterAmount seed worldSize gx gy =
 -- Noise & Hash
 -----------------------------------------------------------
 
-valueNoise2D :: Word64 -> Int -> Int -> Int -> Float
+valueNoise2D ∷ Word64 → Int → Int → Int → Float
 valueNoise2D seed x y scale =
-    let fx = fromIntegral x / fromIntegral scale :: Float
-        fy = fromIntegral y / fromIntegral scale :: Float
-        ix = floor fx :: Int
-        iy = floor fy :: Int
+    let fx = fromIntegral x / fromIntegral scale ∷ Float
+        fy = fromIntegral y / fromIntegral scale ∷ Float
+        ix = floor fx ∷ Int
+        iy = floor fy ∷ Int
         tx = fx - fromIntegral ix
         ty = fy - fromIntegral iy
         sx = smoothstep tx
@@ -455,13 +455,13 @@ valueNoise2D seed x y scale =
         bottom = lerp sx v01 v11
     in lerp sy top bottom
 
-plateHash :: Word64 -> Int -> Int -> Word32
+plateHash ∷ Word64 → Int → Int → Word32
 plateHash seed plateIdx propIdx =
     hashCoord (seed + fromIntegral propIdx * 7919) plateIdx propIdx
 
-hashCoord :: Word64 -> Int -> Int -> Word32
+hashCoord ∷ Word64 → Int → Int → Word32
 hashCoord seed x y =
-    let h0 = fromIntegral seed :: Word64
+    let h0 = fromIntegral seed ∷ Word64
         h1 = h0 `xor` (fromIntegral x * 0x517cc1b727220a95)
         h2 = h1 `xor` (fromIntegral y * 0x6c62272e07bb0142)
         h3 = h2 `xor` (h2 `shiftR` 33)
@@ -471,17 +471,17 @@ hashCoord seed x y =
         h7 = h6 `xor` (h6 `shiftR` 33)
     in fromIntegral (h7 .&. 0xFFFFFFFF)
 
-hashToFloat' :: Word32 -> Float
-hashToFloat' h = fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF :: Word32)
+hashToFloat' ∷ Word32 → Float
+hashToFloat' h = fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF ∷ Word32)
 
-hashToRange :: Word32 -> Int -> Int -> Int
+hashToRange ∷ Word32 → Int → Int → Int
 hashToRange h lo hi =
     let f = hashToFloat' h
         span' = hi - lo + 1
     in lo + floor (f * fromIntegral span')
 
-smoothstep :: Float -> Float
+smoothstep ∷ Float → Float
 smoothstep t = t * t * (3.0 - 2.0 * t)
 
-lerp :: Float -> Float -> Float -> Float
+lerp ∷ Float → Float → Float → Float
 lerp t a b = a + t * (b - a)

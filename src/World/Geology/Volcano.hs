@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Volcano
     ( applyVolcanicFeature
     , applyShieldVolcano
@@ -21,7 +21,7 @@ import World.Geology.Hash
 -- Volcanic Feature Dispatch
 -----------------------------------------------------------
 
-applyVolcanicFeature :: VolcanicFeature -> Int -> Int -> Int -> Int -> GeoModification
+applyVolcanicFeature ∷ VolcanicFeature → Int → Int → Int → Int → GeoModification
 applyVolcanicFeature (ShieldVolcano p)    ws gx gy e = applyShieldVolcano p ws gx gy e
 applyVolcanicFeature (CinderCone p)       ws gx gy e = applyCinderCone p ws gx gy e
 applyVolcanicFeature (LavaDome p)         ws gx gy e = applyLavaDome p ws gx gy e
@@ -46,22 +46,22 @@ applyVolcanicFeature (HydrothermalVent p) ws gx gy e = applyHydrothermal p ws gx
 --    ./     \.     <- convex flanks (gentle, wide)
 --   /.........\
 --
-applyShieldVolcano :: ShieldParams -> Int -> Int -> Int -> Int -> GeoModification
+applyShieldVolcano ∷ ShieldParams → Int → Int → Int → Int → GeoModification
 applyShieldVolcano params worldSize gx gy _baseElev =
     let GeoCoord cx cy = shCenter params
-        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) :: Float
-        dy = fromIntegral (gy - cy) :: Float
+        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) ∷ Float
+        dy = fromIntegral (gy - cy) ∷ Float
         dist = sqrt (dx * dx + dy * dy)
 
-        baseR = fromIntegral (shBaseRadius params) :: Float
-        peakH = fromIntegral (shPeakHeight params) :: Float
-        pitR  = fromIntegral (shPitRadius params) :: Float
-        pitD  = fromIntegral (shPitDepth params) :: Float
+        baseR = fromIntegral (shBaseRadius params) ∷ Float
+        peakH = fromIntegral (shPeakHeight params) ∷ Float
+        pitR  = fromIntegral (shPitRadius params) ∷ Float
+        pitD  = fromIntegral (shPitDepth params) ∷ Float
 
     in if dist > baseR
        then noModification
 
-       else if shSummitPit params && dist < pitR
+       else if shSummitPit params ∧ dist < pitR
        -- Summit pit: small depression at the very top
        then let t = dist / pitR  -- 0 at center, 1 at pit edge
                 -- Pit floor to rim transition
@@ -78,7 +78,7 @@ applyShieldVolcano params worldSize gx gy _baseElev =
        let t = dist / baseR  -- 0 at center, 1 at base edge
             -- Cosine profile: cos(t * pi/2) gives 1.0 at center, 0.0 at edge
             -- with a convex (bulging outward) shape
-           profile = cos (t * pi / 2.0)
+           profile = cos (t * π / 2.0)
            elevDelta = round (peakH * profile)
        in GeoModification elevDelta (Just (unMaterialId matBasalt))
 
@@ -93,17 +93,17 @@ applyShieldVolcano params worldSize gx gy _baseElev =
 --   /|    |\
 --  / |    | \
 --
-applyCinderCone :: CinderConeParams -> Int -> Int -> Int -> Int -> GeoModification
+applyCinderCone ∷ CinderConeParams → Int → Int → Int → Int → GeoModification
 applyCinderCone params worldSize gx gy _baseElev =
     let GeoCoord cx cy = ccCenter params
-        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) :: Float
-        dy = fromIntegral (gy - cy) :: Float
+        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) ∷ Float
+        dy = fromIntegral (gy - cy) ∷ Float
         dist = sqrt (dx * dx + dy * dy)
 
-        baseR   = fromIntegral (ccBaseRadius params) :: Float
-        peakH   = fromIntegral (ccPeakHeight params) :: Float
-        craterR = fromIntegral (ccCraterRadius params) :: Float
-        craterD = fromIntegral (ccCraterDepth params) :: Float
+        baseR   = fromIntegral (ccBaseRadius params) ∷ Float
+        peakH   = fromIntegral (ccPeakHeight params) ∷ Float
+        craterR = fromIntegral (ccCraterRadius params) ∷ Float
+        craterD = fromIntegral (ccCraterDepth params) ∷ Float
 
     in if dist > baseR
        then noModification
@@ -139,15 +139,15 @@ applyCinderCone params worldSize gx gy _baseElev =
 --    |      |
 --   _/      \_   <- abrupt base
 --
-applyLavaDome :: LavaDomeParams -> Int -> Int -> Int -> Int -> GeoModification
+applyLavaDome ∷ LavaDomeParams → Int → Int → Int → Int → GeoModification
 applyLavaDome params worldSize gx gy _baseElev =
     let GeoCoord cx cy = ldCenter params
-        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) :: Float
-        dy = fromIntegral (gy - cy) :: Float
+        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) ∷ Float
+        dy = fromIntegral (gy - cy) ∷ Float
         dist = sqrt (dx * dx + dy * dy)
 
-        baseR = fromIntegral (ldBaseRadius params) :: Float
-        height = fromIntegral (ldHeight params) :: Float
+        baseR = fromIntegral (ldBaseRadius params) ∷ Float
+        height = fromIntegral (ldHeight params) ∷ Float
 
     in if dist > baseR
        then noModification
@@ -178,17 +178,17 @@ applyLavaDome params worldSize gx gy _baseElev =
 --        /    \______/    \     <- flat caldera floor
 --   ____/                  \____
 --
-applyCaldera :: CalderaParams -> Int -> Int -> Int -> Int -> GeoModification
+applyCaldera ∷ CalderaParams → Int → Int → Int → Int → GeoModification
 applyCaldera params worldSize gx gy _baseElev =
     let GeoCoord cx cy = caCenter params
-        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) :: Float
-        dy = fromIntegral (gy - cy) :: Float
+        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) ∷ Float
+        dy = fromIntegral (gy - cy) ∷ Float
         dist = sqrt (dx * dx + dy * dy)
 
-        outerR = fromIntegral (caOuterRadius params) :: Float
-        innerR = fromIntegral (caInnerRadius params) :: Float
-        rimH   = fromIntegral (caRimHeight params) :: Float
-        floorD = fromIntegral (caFloorDepth params) :: Float
+        outerR = fromIntegral (caOuterRadius params) ∷ Float
+        innerR = fromIntegral (caInnerRadius params) ∷ Float
+        rimH   = fromIntegral (caRimHeight params) ∷ Float
+        floorD = fromIntegral (caFloorDepth params) ∷ Float
 
         -- Ejecta/slope extends 1.5x beyond the rim
         ejectaR = outerR * 1.5
@@ -238,19 +238,19 @@ applyCaldera params worldSize gx gy _baseElev =
 --    /  ||  \    <- gentle ridge slopes
 --   /   ||   \
 --
-applyFissure :: FissureParams -> Int -> Int -> Int -> Int -> GeoModification
+applyFissure ∷ FissureParams → Int → Int → Int → Int → GeoModification
 applyFissure params worldSize gx gy _baseElev =
     let GeoCoord sx sy = fpStart params
         GeoCoord ex ey = fpEnd params
 
         -- Current tile position relative to fissure start
         -- Use wrapped X for cylindrical world
-        px = fromIntegral (wrappedDeltaXGeo worldSize gx sx) :: Float
-        py = fromIntegral (gy - sy) :: Float
+        px = fromIntegral (wrappedDeltaXGeo worldSize gx sx) ∷ Float
+        py = fromIntegral (gy - sy) ∷ Float
 
         -- Fissure direction vector
-        fdx = fromIntegral (wrappedDeltaXGeo worldSize ex sx) :: Float
-        fdy = fromIntegral (ey - sy) :: Float
+        fdx = fromIntegral (wrappedDeltaXGeo worldSize ex sx) ∷ Float
+        fdy = fromIntegral (ey - sy) ∷ Float
         fLen = sqrt (fdx * fdx + fdy * fdy)
 
     in if fLen < 0.001
@@ -268,26 +268,26 @@ applyFissure params worldSize gx gy _baseElev =
            perpY = py - dot * ny
            perpDist = sqrt (perpX * perpX + perpY * perpY)
 
-           halfW   = fromIntegral (fpWidth params) :: Float
-           ridgeH  = fromIntegral (fpRidgeHeight params) :: Float
+           halfW   = fromIntegral (fpWidth params) ∷ Float
+           ridgeH  = fromIntegral (fpRidgeHeight params) ∷ Float
 
            -- Check if we're within the fissure's length
            -- Allow some taper at the ends
            alongT = dot / fLen  -- 0 at start, 1 at end
            endTaper = min 1.0 (min (alongT * 5.0) ((1.0 - alongT) * 5.0))
-           withinLength = alongT >= -0.05 && alongT <= 1.05
+           withinLength = alongT ≥ -0.05 ∧ alongT ≤ 1.05
 
-       in if not withinLength || perpDist > halfW
+       in if not withinLength ∨ perpDist > halfW
           then noModification
 
           else
           let -- Cross-section profile: ridge shape perpendicular to fissure
               crossT = perpDist / halfW  -- 0 at center, 1 at edge
-              profile = cos (crossT * pi / 2.0) * endTaper
+              profile = cos (crossT * π / 2.0) * endTaper
               elevDelta = round (ridgeH * profile)
 
               -- Central channel has magma if active
-              mat = if fpHasMagma params && crossT < 0.15
+              mat = if fpHasMagma params ∧ crossT < 0.15
                     then unMaterialId matMagma
                     else unMaterialId matBasalt
           in GeoModification elevDelta (Just mat)
@@ -303,16 +303,16 @@ applyFissure params worldSize gx gy _baseElev =
 --    /    \__  __/     \__  _/    \
 --             \/                       <- collapse pits (skylights)
 --
-applyLavaTube :: LavaTubeParams -> Int -> Int -> Int -> Int -> GeoModification
+applyLavaTube ∷ LavaTubeParams → Int → Int → Int → Int → GeoModification
 applyLavaTube params worldSize gx gy _baseElev =
     let GeoCoord sx sy = ltStart params
         GeoCoord ex ey = ltEnd params
 
-        px = fromIntegral (wrappedDeltaXGeo worldSize gx sx) :: Float
-        py = fromIntegral (gy - sy) :: Float
+        px = fromIntegral (wrappedDeltaXGeo worldSize gx sx) ∷ Float
+        py = fromIntegral (gy - sy) ∷ Float
 
-        fdx = fromIntegral (wrappedDeltaXGeo worldSize ex sx) :: Float
-        fdy = fromIntegral (ey - sy) :: Float
+        fdx = fromIntegral (wrappedDeltaXGeo worldSize ex sx) ∷ Float
+        fdy = fromIntegral (ey - sy) ∷ Float
         fLen = sqrt (fdx * fdx + fdy * fdy)
 
     in if fLen < 0.001
@@ -326,13 +326,13 @@ applyLavaTube params worldSize gx gy _baseElev =
            perpY = py - dot * ny
            perpDist = sqrt (perpX * perpX + perpY * perpY)
 
-           halfW  = fromIntegral (ltWidth params) :: Float
-           ridgeH = fromIntegral (ltRidgeHeight params) :: Float
+           halfW  = fromIntegral (ltWidth params) ∷ Float
+           ridgeH = fromIntegral (ltRidgeHeight params) ∷ Float
 
            alongT = dot / fLen
-           withinLength = alongT >= 0.0 && alongT <= 1.0
+           withinLength = alongT ≥ 0.0 ∧ alongT ≤ 1.0
 
-       in if not withinLength || perpDist > halfW
+       in if not withinLength ∨ perpDist > halfW
           then noModification
 
           else
@@ -341,16 +341,16 @@ applyLavaTube params worldSize gx gy _baseElev =
               collapseSeed = ltCollapseSeed params
               -- Generate collapse positions along the tube (0.0 to 1.0)
               collapsePositions =
-                  [ hashToFloatGeo (hashGeo collapseSeed i 60) | i <- [0 .. numCollapses - 1] ]
+                  [ hashToFloatGeo (hashGeo collapseSeed i 60) | i ← [0 .. numCollapses - 1] ]
               -- Check if we're near any collapse
               collapseRadius = halfW * 0.8
-              nearCollapse = any (\cPos ->
+              nearCollapse = any (\cPos →
                   let cDist = abs (alongT - cPos) * fLen
-                  in cDist < collapseRadius && perpDist < collapseRadius
+                  in cDist < collapseRadius ∧ perpDist < collapseRadius
                   ) collapsePositions
 
               crossT = perpDist / halfW
-              ridgeProfile = cos (crossT * pi / 2.0)
+              ridgeProfile = cos (crossT * π / 2.0)
 
           in if nearCollapse
              -- Collapse pit: depression where the roof fell in
@@ -377,18 +377,18 @@ applyLavaTube params worldSize gx gy _baseElev =
 --  /     /                                  \     \
 -- /     /           caldera floor            \     \
 --
-applySuperVolcano :: SuperVolcanoParams -> Int -> Int -> Int -> Int -> GeoModification
+applySuperVolcano ∷ SuperVolcanoParams → Int → Int → Int → Int → GeoModification
 applySuperVolcano params worldSize gx gy _baseElev =
     let GeoCoord cx cy = svCenter params
-        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) :: Float
-        dy = fromIntegral (gy - cy) :: Float
+        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) ∷ Float
+        dy = fromIntegral (gy - cy) ∷ Float
         dist = sqrt (dx * dx + dy * dy)
 
-        calderaR = fromIntegral (svCalderaRadius params) :: Float
-        rimH     = fromIntegral (svRimHeight params) :: Float
-        floorD   = fromIntegral (svFloorDepth params) :: Float
-        ejectaR  = fromIntegral (svEjectaRadius params) :: Float
-        ejectaD  = fromIntegral (svEjectaDepth params) :: Float
+        calderaR = fromIntegral (svCalderaRadius params) ∷ Float
+        rimH     = fromIntegral (svRimHeight params) ∷ Float
+        floorD   = fromIntegral (svFloorDepth params) ∷ Float
+        ejectaR  = fromIntegral (svEjectaRadius params) ∷ Float
+        ejectaD  = fromIntegral (svEjectaDepth params) ∷ Float
 
         -- Rim is a band around the caldera edge
         rimWidth = calderaR * 0.15
@@ -440,15 +440,15 @@ applySuperVolcano params worldSize gx gy _baseElev =
 --    / _|_ \     <- mound base
 --   /       \
 --
-applyHydrothermal :: HydrothermalParams -> Int -> Int -> Int -> Int -> GeoModification
+applyHydrothermal ∷ HydrothermalParams → Int → Int → Int → Int → GeoModification
 applyHydrothermal params worldSize gx gy _baseElev =
     let GeoCoord cx cy = htCenter params
-        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) :: Float
-        dy = fromIntegral (gy - cy) :: Float
+        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) ∷ Float
+        dy = fromIntegral (gy - cy) ∷ Float
         dist = sqrt (dx * dx + dy * dy)
 
-        radius = fromIntegral (htRadius params) :: Float
-        chimneyH = fromIntegral (htChimneyHeight params) :: Float
+        radius = fromIntegral (htRadius params) ∷ Float
+        chimneyH = fromIntegral (htChimneyHeight params) ∷ Float
 
     in if dist > radius
        then noModification

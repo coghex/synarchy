@@ -38,4 +38,4 @@ atomically ∷ STM.STM α → IO α
 atomically = STM.atomically
 
 dupVar ∷ Var a → IO (Var a)
-dupVar v = atomically $ readVar v >>= newVar >>= return
+dupVar v = atomically $ readVar v ⌦ newVar ⌦ return

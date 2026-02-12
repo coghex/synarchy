@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module UI.Manager
   ( -- Page operations
     createPage
@@ -67,7 +67,7 @@ import UI.Types
 -- Page Operations
 -----------------------------------------------------------
 
-createPage :: Text -> UILayer -> UIPageManager -> (PageHandle, UIPageManager)
+createPage ∷ Text → UILayer → UIPageManager → (PageHandle, UIPageManager)
 createPage name layer mgr =
     let handle = PageHandle (upmNextPageId mgr)
         page = UIPage
@@ -84,56 +84,56 @@ createPage name layer mgr =
           , upmNextPageId = upmNextPageId mgr + 1
           })
 
-deletePage :: PageHandle -> UIPageManager -> UIPageManager
+deletePage ∷ PageHandle → UIPageManager → UIPageManager
 deletePage handle mgr =
     case Map.lookup handle (upmPages mgr) of
-        Nothing -> mgr
-        Just page ->
+        Nothing → mgr
+        Just page →
             let mgrWithoutElements = foldr deleteElementTree mgr (upRootElements page)
             in mgrWithoutElements
                 { upmPages = Map.delete handle (upmPages mgrWithoutElements)
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgrWithoutElements)
                 }
 
-showPage :: PageHandle -> UIPageManager -> UIPageManager
+showPage ∷ PageHandle → UIPageManager → UIPageManager
 showPage handle mgr =
     case Map.lookup handle (upmPages mgr) of
-        Nothing -> mgr
-        Just page ->
+        Nothing → mgr
+        Just page →
             mgr { upmPages = Map.insert handle (page { upVisible = True }) (upmPages mgr)
                 , upmVisiblePages = Set.insert handle (upmVisiblePages mgr)
                 }
 
-hidePage :: PageHandle -> UIPageManager -> UIPageManager
+hidePage ∷ PageHandle → UIPageManager → UIPageManager
 hidePage handle mgr =
     case Map.lookup handle (upmPages mgr) of
-        Nothing -> mgr
-        Just page ->
+        Nothing → mgr
+        Just page →
             mgr { upmPages = Map.insert handle (page { upVisible = False }) (upmPages mgr)
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgr)
                 }
 
-getPage :: PageHandle -> UIPageManager -> Maybe UIPage
+getPage ∷ PageHandle → UIPageManager → Maybe UIPage
 getPage handle mgr = Map.lookup handle (upmPages mgr)
 
-getVisiblePages :: UIPageManager -> [UIPage]
+getVisiblePages ∷ UIPageManager → [UIPage]
 getVisiblePages mgr =
     let visibleList = mapMaybe (`Map.lookup` upmPages mgr) 
                               (Set.toList $ upmVisiblePages mgr)
-    in sortOn (\p -> (upLayer p, upZIndex p)) visibleList
+    in sortOn (\p → (upLayer p, upZIndex p)) visibleList
 
 -----------------------------------------------------------
 -- Element Creation
 -----------------------------------------------------------
 
-createElement :: Text -> Float -> Float -> PageHandle -> UIPageManager 
-              -> (ElementHandle, UIPageManager)
+createElement ∷ Text → Float → Float → PageHandle → UIPageManager 
+              → (ElementHandle, UIPageManager)
 createElement name width height pageHandle mgr =
     createElementInternal name width height pageHandle RenderNone mgr
 
-createBox :: Text -> Float -> Float -> BoxTextureHandle -> Float 
-          -> (Float, Float, Float, Float) -> Float -> PageHandle 
-          -> UIPageManager -> (ElementHandle, UIPageManager)
+createBox ∷ Text → Float → Float → BoxTextureHandle → Float 
+          → (Float, Float, Float, Float) → Float → PageHandle 
+          → UIPageManager → (ElementHandle, UIPageManager)
 createBox name width height texHandle tileSize color overflow pageHandle mgr =
     let style = UIBoxStyle
           { ubsTextures = texHandle
@@ -143,20 +143,20 @@ createBox name width height texHandle tileSize color overflow pageHandle mgr =
           }
     in createElementInternal name width height pageHandle (RenderBox style) mgr
 
-createText :: Text -> Text -> FontHandle -> Float -> (Float, Float, Float, Float) -> PageHandle 
-           -> UIPageManager -> (ElementHandle, UIPageManager)
+createText ∷ Text → Text → FontHandle → Float → (Float, Float, Float, Float) → PageHandle 
+           → UIPageManager → (ElementHandle, UIPageManager)
 createText name text font size color pageHandle mgr =
     createElementInternal name 0 0 pageHandle 
         (RenderText (UITextStyle text font size color)) mgr
 
-createSprite :: Text -> Float -> Float -> TextureHandle -> (Float, Float, Float, Float) 
-             -> PageHandle -> UIPageManager -> (ElementHandle, UIPageManager)
+createSprite ∷ Text → Float → Float → TextureHandle → (Float, Float, Float, Float) 
+             → PageHandle → UIPageManager → (ElementHandle, UIPageManager)
 createSprite name width height texture color pageHandle mgr =
     createElementInternal name width height pageHandle 
         (RenderSprite (UISpriteStyle texture color)) mgr
 
-createElementInternal :: Text -> Float -> Float -> PageHandle -> UIRenderData 
-                      -> UIPageManager -> (ElementHandle, UIPageManager)
+createElementInternal ∷ Text → Float → Float → PageHandle → UIRenderData 
+                      → UIPageManager → (ElementHandle, UIPageManager)
 createElementInternal name width height pageHandle renderData mgr =
     let handle = ElementHandle (upmNextElemId mgr)
         element = UIElement
@@ -179,274 +179,274 @@ createElementInternal name width height pageHandle renderData mgr =
           , upmNextElemId = upmNextElemId mgr + 1
           })
 
-deleteElement :: ElementHandle -> UIPageManager -> UIPageManager
+deleteElement ∷ ElementHandle → UIPageManager → UIPageManager
 deleteElement handle mgr = 
     case Map.lookup handle (upmElements mgr) of
-        Nothing -> mgr
-        Just element ->
+        Nothing → mgr
+        Just element →
             let mgrWithoutRef = removeElementReference handle element mgr
             in deleteElementTree handle mgrWithoutRef
 
-deleteElementTree :: ElementHandle -> UIPageManager -> UIPageManager
+deleteElementTree ∷ ElementHandle → UIPageManager → UIPageManager
 deleteElementTree handle mgr =
     case Map.lookup handle (upmElements mgr) of
-        Nothing -> mgr
-        Just element ->
+        Nothing → mgr
+        Just element →
             let mgrWithoutChildren = foldr deleteElementTree mgr (ueChildren element)
             in mgrWithoutChildren
                 { upmElements = Map.delete handle (upmElements mgrWithoutChildren)
-                , upmHovered = if upmHovered mgrWithoutChildren == Just handle 
+                , upmHovered = if upmHovered mgrWithoutChildren ≡ Just handle 
                                then Nothing 
                                else upmHovered mgrWithoutChildren
                 }
 
-removeElementReference :: ElementHandle -> UIElement -> UIPageManager -> UIPageManager
+removeElementReference ∷ ElementHandle → UIElement → UIPageManager → UIPageManager
 removeElementReference handle element mgr =
     case ueParent element of
-        Just parentHandle ->
-            modifyElement parentHandle mgr $ \parent ->
+        Just parentHandle →
+            modifyElement parentHandle mgr $ \parent →
                 parent { ueChildren = filter (/= handle) (ueChildren parent) }
-        Nothing ->
-            modifyPage (uePage element) mgr $ \page ->
+        Nothing →
+            modifyPage (uePage element) mgr $ \page →
                 page { upRootElements = filter (/= handle) (upRootElements page) }
 
-getElement :: ElementHandle -> UIPageManager -> Maybe UIElement
+getElement ∷ ElementHandle → UIPageManager → Maybe UIElement
 getElement handle mgr = Map.lookup handle (upmElements mgr)
 
 -----------------------------------------------------------
 -- Hierarchy
 -----------------------------------------------------------
 
-addElementToPage :: PageHandle -> ElementHandle -> Float -> Float 
-                 -> UIPageManager -> UIPageManager
+addElementToPage ∷ PageHandle → ElementHandle → Float → Float 
+                 → UIPageManager → UIPageManager
 addElementToPage pageHandle elemHandle x y mgr =
-    let mgr' = modifyElement elemHandle mgr $ \elem ->
+    let mgr' = modifyElement elemHandle mgr $ \elem →
             elem { uePosition = (x, y), uePage = pageHandle, ueParent = Nothing }
-    in modifyPage pageHandle mgr' $ \page ->
+    in modifyPage pageHandle mgr' $ \page →
             page { upRootElements = upRootElements page ++ [elemHandle] }
 
-addChildElement :: ElementHandle -> ElementHandle -> Float -> Float 
-                -> UIPageManager -> UIPageManager
+addChildElement ∷ ElementHandle → ElementHandle → Float → Float 
+                → UIPageManager → UIPageManager
 addChildElement parentHandle childHandle x y mgr =
     case Map.lookup parentHandle (upmElements mgr) of
-        Nothing -> mgr
-        Just parent ->
-            let mgr' = modifyElement childHandle mgr $ \child ->
+        Nothing → mgr
+        Just parent →
+            let mgr' = modifyElement childHandle mgr $ \child →
                     child { uePosition = (x, y)
                           , uePage     = uePage parent
                           , ueParent   = Just parentHandle 
                           }
-            in modifyElement parentHandle mgr' $ \p ->
+            in modifyElement parentHandle mgr' $ \p →
                     p { ueChildren = ueChildren p ++ [childHandle] }
 
-removeElement :: ElementHandle -> UIPageManager -> UIPageManager
+removeElement ∷ ElementHandle → UIPageManager → UIPageManager
 removeElement handle mgr =
     case Map.lookup handle (upmElements mgr) of
-        Nothing -> mgr
-        Just element -> removeElementReference handle element mgr
+        Nothing → mgr
+        Just element → removeElementReference handle element mgr
 
 -----------------------------------------------------------
 -- Focus Operations
 -----------------------------------------------------------
 
 -- | Set focus to an element (also updates page's remembered focus)
-setElementFocus :: ElementHandle -> UIPageManager -> UIPageManager
+setElementFocus ∷ ElementHandle → UIPageManager → UIPageManager
 setElementFocus handle mgr =
     case Map.lookup handle (upmElements mgr) of
-        Nothing -> mgr
-        Just elem ->
+        Nothing → mgr
+        Just elem →
             let pageHandle = uePage elem
                 mgr' = mgr { upmGlobalFocus = Just handle }
-            in modifyPage pageHandle mgr' $ \page ->
+            in modifyPage pageHandle mgr' $ \page →
                 page { upFocusedElement = Just handle }
 
 -- | Clear global focus (page still remembers its last focused element)
-clearElementFocus :: UIPageManager -> UIPageManager
+clearElementFocus ∷ UIPageManager → UIPageManager
 clearElementFocus mgr = mgr { upmGlobalFocus = Nothing }
 
 -- | Get currently focused element globally
-getElementFocus :: UIPageManager -> Maybe ElementHandle
+getElementFocus ∷ UIPageManager → Maybe ElementHandle
 getElementFocus = upmGlobalFocus
 
 -- | Get a page's remembered focused element
-getPageFocus :: PageHandle -> UIPageManager -> Maybe ElementHandle
+getPageFocus ∷ PageHandle → UIPageManager → Maybe ElementHandle
 getPageFocus handle mgr = 
     case Map.lookup handle (upmPages mgr) of
-        Nothing -> Nothing
-        Just page -> upFocusedElement page
+        Nothing → Nothing
+        Just page → upFocusedElement page
 
 -- | Clear a page's remembered focus
-clearPageFocus :: PageHandle -> UIPageManager -> UIPageManager
-clearPageFocus handle = modifyPage handle `flip` \page ->
+clearPageFocus ∷ PageHandle → UIPageManager → UIPageManager
+clearPageFocus handle = modifyPage handle `flip` \page →
     page { upFocusedElement = Nothing }
 
 -----------------------------------------------------------
 -- Property Setters
 -----------------------------------------------------------
 
-setElementPosition :: ElementHandle -> Float -> Float -> UIPageManager -> UIPageManager
+setElementPosition ∷ ElementHandle → Float → Float → UIPageManager → UIPageManager
 setElementPosition handle x y = modifyElement handle `flip` 
-    (\elem -> elem { uePosition = (x, y) })
+    (\elem → elem { uePosition = (x, y) })
 
-setElementSize :: ElementHandle -> Float -> Float -> UIPageManager -> UIPageManager
+setElementSize ∷ ElementHandle → Float → Float → UIPageManager → UIPageManager
 setElementSize handle w h = modifyElement handle `flip` 
-    (\elem -> elem { ueSize = (w, h) })
+    (\elem → elem { ueSize = (w, h) })
 
-setElementVisible :: ElementHandle -> Bool -> UIPageManager -> UIPageManager
+setElementVisible ∷ ElementHandle → Bool → UIPageManager → UIPageManager
 setElementVisible handle visible = modifyElement handle `flip` 
-    (\elem -> elem { ueVisible = visible })
+    (\elem → elem { ueVisible = visible })
 
-setElementClickable :: ElementHandle -> Bool -> UIPageManager -> UIPageManager
+setElementClickable ∷ ElementHandle → Bool → UIPageManager → UIPageManager
 setElementClickable handle clickable = modifyElement handle `flip` 
-    (\elem -> elem { ueClickable = clickable })
+    (\elem → elem { ueClickable = clickable })
 
-setElementOnClick :: ElementHandle -> Text -> UIPageManager -> UIPageManager
+setElementOnClick ∷ ElementHandle → Text → UIPageManager → UIPageManager
 setElementOnClick handle callbackName = modifyElement handle `flip` 
-    (\elem -> elem { ueOnClick = Just callbackName })
+    (\elem → elem { ueOnClick = Just callbackName })
 
-setElementZIndex :: ElementHandle -> Int -> UIPageManager -> UIPageManager
+setElementZIndex ∷ ElementHandle → Int → UIPageManager → UIPageManager
 setElementZIndex handle z = modifyElement handle `flip` 
-    (\elem -> elem { ueZIndex = z })
+    (\elem → elem { ueZIndex = z })
 
-setBoxColor :: ElementHandle -> (Float, Float, Float, Float) -> UIPageManager -> UIPageManager
-setBoxColor handle color = modifyElement handle `flip` \elem ->
+setBoxColor ∷ ElementHandle → (Float, Float, Float, Float) → UIPageManager → UIPageManager
+setBoxColor handle color = modifyElement handle `flip` \elem →
     case ueRenderData elem of
-        RenderBox style -> elem { ueRenderData = RenderBox style { ubsColor = color } }
-        _ -> elem
+        RenderBox style → elem { ueRenderData = RenderBox style { ubsColor = color } }
+        _ → elem
 
-setText :: ElementHandle -> Text -> UIPageManager -> UIPageManager
-setText handle text = modifyElement handle `flip` \elem ->
+setText ∷ ElementHandle → Text → UIPageManager → UIPageManager
+setText handle text = modifyElement handle `flip` \elem →
     case ueRenderData elem of
-        RenderText style -> elem { ueRenderData = RenderText style { utsText = text } }
-        _ -> elem
+        RenderText style → elem { ueRenderData = RenderText style { utsText = text } }
+        _ → elem
 
-setTextColor :: ElementHandle -> (Float, Float, Float, Float) -> UIPageManager -> UIPageManager
-setTextColor handle color = modifyElement handle `flip` \elem ->
+setTextColor ∷ ElementHandle → (Float, Float, Float, Float) → UIPageManager → UIPageManager
+setTextColor handle color = modifyElement handle `flip` \elem →
     case ueRenderData elem of
-        RenderText style -> elem { ueRenderData = RenderText style { utsColor = color } }
-        _ -> elem
+        RenderText style → elem { ueRenderData = RenderText style { utsColor = color } }
+        _ → elem
 
-setSpriteTexture :: ElementHandle -> TextureHandle -> UIPageManager -> UIPageManager
-setSpriteTexture handle texture = modifyElement handle `flip` \elem ->
+setSpriteTexture ∷ ElementHandle → TextureHandle → UIPageManager → UIPageManager
+setSpriteTexture handle texture = modifyElement handle `flip` \elem →
     case ueRenderData elem of
-        RenderSprite style -> elem { ueRenderData = RenderSprite style { ussTexture = texture } }
-        _ -> elem
+        RenderSprite style → elem { ueRenderData = RenderSprite style { ussTexture = texture } }
+        _ → elem
 
-setSpriteColor :: ElementHandle -> (Float, Float, Float, Float) -> UIPageManager -> UIPageManager
-setSpriteColor handle color = modifyElement handle `flip` \elem ->
+setSpriteColor ∷ ElementHandle → (Float, Float, Float, Float) → UIPageManager → UIPageManager
+setSpriteColor handle color = modifyElement handle `flip` \elem →
     case ueRenderData elem of
-        RenderSprite style -> elem { ueRenderData = RenderSprite style { ussColor = color } }
-        _ -> elem
+        RenderSprite style → elem { ueRenderData = RenderSprite style { ussColor = color } }
+        _ → elem
 
 -----------------------------------------------------------
 -- Queries
 -----------------------------------------------------------
 
-getElementAbsolutePosition :: ElementHandle -> UIPageManager -> Maybe (Float, Float)
+getElementAbsolutePosition ∷ ElementHandle → UIPageManager → Maybe (Float, Float)
 getElementAbsolutePosition handle mgr = 
     case Map.lookup handle (upmElements mgr) of
-        Nothing -> Nothing
-        Just elem -> Just $ computeAbsolutePos elem
+        Nothing → Nothing
+        Just elem → Just $ computeAbsolutePos elem
   where
     computeAbsolutePos element =
         let (ex, ey) = uePosition element
             (px, py) = case ueParent element of
-                Nothing -> (0, 0)
-                Just parentHandle -> 
+                Nothing → (0, 0)
+                Just parentHandle → 
                     case Map.lookup parentHandle (upmElements mgr) of
-                        Nothing -> (0, 0)
-                        Just parent -> computeAbsolutePos parent
+                        Nothing → (0, 0)
+                        Just parent → computeAbsolutePos parent
         in (px + ex, py + ey)
 
-getPageElements :: PageHandle -> UIPageManager -> [UIElement]
+getPageElements ∷ PageHandle → UIPageManager → [UIElement]
 getPageElements pageHandle mgr =
     case Map.lookup pageHandle (upmPages mgr) of
-        Nothing -> []
-        Just page -> concatMap collectElements (upRootElements page)
+        Nothing → []
+        Just page → concatMap collectElements (upRootElements page)
   where
     collectElements handle =
         case Map.lookup handle (upmElements mgr) of
-            Nothing -> []
-            Just elem -> elem : concatMap collectElements (ueChildren elem)
+            Nothing → []
+            Just elem → elem : concatMap collectElements (ueChildren elem)
 
-getElementChildren :: ElementHandle -> UIPageManager -> [UIElement]
+getElementChildren ∷ ElementHandle → UIPageManager → [UIElement]
 getElementChildren handle mgr =
     case Map.lookup handle (upmElements mgr) of
-        Nothing -> []
-        Just elem -> mapMaybe (`Map.lookup` upmElements mgr) (ueChildren elem)
+        Nothing → []
+        Just elem → mapMaybe (`Map.lookup` upmElements mgr) (ueChildren elem)
 
 -----------------------------------------------------------
 -- Click Detection
 -----------------------------------------------------------
 
 -- | Check if a point is inside an element's bounds (in screen coordinates)
-isPointInElement :: (Float, Float) -> UIElement -> UIPageManager -> Bool
+isPointInElement ∷ (Float, Float) → UIElement → UIPageManager → Bool
 isPointInElement (px, py) element mgr =
     if not (ueVisible element) then False
     else case getElementAbsolutePosition (ueHandle element) mgr of
-        Nothing -> False
-        Just (ex, ey) ->
+        Nothing → False
+        Just (ex, ey) →
             let (w, h) = ueSize element
-            in px >= ex && px <= (ex + w) &&
-               py >= ey && py <= (ey + h)
+            in px ≥ ex ∧ px ≤ (ex + w) &&
+               py ≥ ey ∧ py ≤ (ey + h)
 
-findClickableElementAt :: (Float, Float) -> UIPageManager -> Maybe (ElementHandle, Text)
+findClickableElementAt ∷ (Float, Float) → UIPageManager → Maybe (ElementHandle, Text)
 findClickableElementAt pos mgr =
     let visiblePages = Set.toList (upmVisiblePages mgr)
         -- Get all ROOT elements from visible pages
-        allRootHandles = concatMap (\ph -> 
+        allRootHandles = concatMap (\ph → 
             case Map.lookup ph (upmPages mgr) of
-                Just page -> upRootElements page
-                Nothing -> []
+                Just page → upRootElements page
+                Nothing → []
             ) visiblePages
         
         -- Find all clickable elements in the tree that contain the point
         clickableElements = concatMap (findClickableInTree pos) allRootHandles
         
         -- Sort by layer and ACCUMULATED zIndex (highest first)
-        sorted = sortOn (\eh -> 
+        sorted = sortOn (\eh → 
             case Map.lookup eh (upmElements mgr) of
-                Just elem -> 
+                Just elem → 
                     let page = Map.lookup (uePage elem) (upmPages mgr)
                         pageLayerVal = case page of
-                            Just p -> fromEnum (upLayer p) * 1000000
-                            Nothing -> 0
+                            Just p → fromEnum (upLayer p) * 1000000
+                            Nothing → 0
                         pageZVal = case page of
-                            Just p -> upZIndex p * 1000
-                            Nothing -> 0
+                            Just p → upZIndex p * 1000
+                            Nothing → 0
                         elemZVal = accumulatedZIndex eh
                         totalVal = pageLayerVal + pageZVal + elemZVal
                     in negate totalVal  -- Negate for descending sort (highest first)
-                Nothing -> 0
+                Nothing → 0
             ) clickableElements
     in case sorted of
-        (eh:_) -> case Map.lookup eh (upmElements mgr) of
-            Just elem -> case ueOnClick elem of
-                Just cb -> Just (eh, cb)
-                Nothing -> Nothing
-            Nothing -> Nothing
-        [] -> Nothing
+        (eh:_) → case Map.lookup eh (upmElements mgr) of
+            Just elem → case ueOnClick elem of
+                Just cb → Just (eh, cb)
+                Nothing → Nothing
+            Nothing → Nothing
+        [] → Nothing
   where
     -- Compute the accumulated z-index by walking up the parent chain
-    accumulatedZIndex :: ElementHandle -> Int
+    accumulatedZIndex ∷ ElementHandle → Int
     accumulatedZIndex handle =
         case Map.lookup handle (upmElements mgr) of
-            Nothing -> 0
-            Just elem ->
+            Nothing → 0
+            Just elem →
                 let parentZ = case ueParent elem of
-                        Nothing -> 0
-                        Just parentHandle -> accumulatedZIndex parentHandle
+                        Nothing → 0
+                        Just parentHandle → accumulatedZIndex parentHandle
                 in parentZ + ueZIndex elem
 
     -- Find all clickable elements in the tree that contain the point
-    findClickableInTree :: (Float, Float) -> ElementHandle -> [ElementHandle]
+    findClickableInTree ∷ (Float, Float) → ElementHandle → [ElementHandle]
     findClickableInTree point handle =
         case Map.lookup handle (upmElements mgr) of
-            Nothing -> []
-            Just elem ->
+            Nothing → []
+            Just elem →
                 let thisClickable = 
-                        if ueClickable elem && 
-                           ueVisible elem && 
+                        if ueClickable elem ∧ 
+                           ueVisible elem ∧ 
                            isJust (ueOnClick elem) &&
                            isPointInElement point elem mgr
                         then [handle]
@@ -455,54 +455,54 @@ findClickableElementAt pos mgr =
                 in thisClickable ++ childClickables
 
 -- | Find the nearest ancestor (or self) that has an onClick callback
-findClickableAncestor :: ElementHandle -> UIPageManager -> Maybe (ElementHandle, Text)
+findClickableAncestor ∷ ElementHandle → UIPageManager → Maybe (ElementHandle, Text)
 findClickableAncestor handle mgr = go handle
   where
     go h = case Map.lookup h (upmElements mgr) of
-        Nothing -> Nothing
-        Just elem -> case ueOnClick elem of
-            Just cb -> Just (h, cb)
-            Nothing -> case ueParent elem of
-                Just parentHandle -> go parentHandle
-                Nothing -> Nothing
+        Nothing → Nothing
+        Just elem → case ueOnClick elem of
+            Just cb → Just (h, cb)
+            Nothing → case ueParent elem of
+                Just parentHandle → go parentHandle
+                Nothing → Nothing
 
 -- | Find the topmost visible element at a point (deepest child wins)
-findElementAt :: (Float, Float) -> UIPageManager -> Maybe ElementHandle
+findElementAt ∷ (Float, Float) → UIPageManager → Maybe ElementHandle
 findElementAt pos mgr =
     let visiblePages = Set.toList (upmVisiblePages mgr)
-        allRootHandles = concatMap (\ph ->
+        allRootHandles = concatMap (\ph →
             case Map.lookup ph (upmPages mgr) of
-                Just page -> upRootElements page
-                Nothing -> []
+                Just page → upRootElements page
+                Nothing → []
             ) visiblePages
         -- Sort roots by z-index descending so higher z roots are checked first
-        sortedRoots = sortOn (\h ->
+        sortedRoots = sortOn (\h →
             case Map.lookup h (upmElements mgr) of
-                Just e  -> negate (ueZIndex e)
-                Nothing -> 0
+                Just e  → negate (ueZIndex e)
+                Nothing → 0
             ) allRootHandles
         -- Find first hit (highest z root, then deepest child within)
         hitElements = concatMap (findInTree pos) sortedRoots
     in listToMaybe hitElements
   where
-    findInTree :: (Float, Float) -> ElementHandle -> [ElementHandle]
+    findInTree ∷ (Float, Float) → ElementHandle → [ElementHandle]
     findInTree point handle =
         case Map.lookup handle (upmElements mgr) of
-            Nothing -> []
+            Nothing → []
             Just elem
-                | not (ueVisible elem) -> []
-                | otherwise ->
+                | not (ueVisible elem) → []
+                | otherwise →
                     let (w, h) = ueSize elem
-                        hasSize = w > 0 && h > 0
-                        inBounds = hasSize && isPointInElement point elem mgr
+                        hasSize = w > 0 ∧ h > 0
+                        inBounds = hasSize ∧ isPointInElement point elem mgr
                         -- Only recurse into children if point is within parent bounds
                         -- (or parent has no bounds, like a container)
-                        shouldRecurse = inBounds || not hasSize
+                        shouldRecurse = inBounds ∨ not hasSize
                         sortedChildren = if shouldRecurse
-                            then sortOn (\ch ->
+                            then sortOn (\ch →
                                     case Map.lookup ch (upmElements mgr) of
-                                        Just c  -> negate (ueZIndex c)
-                                        Nothing -> 0
+                                        Just c  → negate (ueZIndex c)
+                                        Nothing → 0
                                     ) (ueChildren elem)
                             else []
                         childHits = concatMap (findInTree point) sortedChildren
@@ -514,34 +514,34 @@ findElementAt pos mgr =
 -----------------------------------------------------------
 
 -- | Enable text input on an element (initializes empty buffer)
-enableTextInput :: ElementHandle -> UIPageManager -> UIPageManager
-enableTextInput handle = modifyElement handle `flip` \elem ->
+enableTextInput ∷ ElementHandle → UIPageManager → UIPageManager
+enableTextInput handle = modifyElement handle `flip` \elem →
     elem { ueTextBuffer = Just emptyBuffer }
 
 -- | Get an element's text buffer
-getTextBuffer :: ElementHandle -> UIPageManager -> Maybe TextBuffer
+getTextBuffer ∷ ElementHandle → UIPageManager → Maybe TextBuffer
 getTextBuffer handle mgr =
     case Map.lookup handle (upmElements mgr) of
-        Nothing -> Nothing
-        Just elem -> ueTextBuffer elem
+        Nothing → Nothing
+        Just elem → ueTextBuffer elem
 
 -- | Set an element's text buffer
-setTextBuffer :: ElementHandle -> TextBuffer -> UIPageManager -> UIPageManager
-setTextBuffer handle buffer = modifyElement handle `flip` \elem ->
+setTextBuffer ∷ ElementHandle → TextBuffer → UIPageManager → UIPageManager
+setTextBuffer handle buffer = modifyElement handle `flip` \elem →
     elem { ueTextBuffer = Just buffer }
 
 -- | Modify an element's text buffer with a function
-modifyTextBuffer :: ElementHandle -> (TextBuffer -> TextBuffer) -> UIPageManager -> UIPageManager
-modifyTextBuffer handle f = modifyElement handle `flip` \elem ->
+modifyTextBuffer ∷ ElementHandle → (TextBuffer → TextBuffer) → UIPageManager → UIPageManager
+modifyTextBuffer handle f = modifyElement handle `flip` \elem →
     case ueTextBuffer elem of
-        Nothing -> elem  -- No buffer, do nothing
-        Just buf -> elem { ueTextBuffer = Just (f buf) }
+        Nothing → elem  -- No buffer, do nothing
+        Just buf → elem { ueTextBuffer = Just (f buf) }
 
 -----------------------------------------------------------
 -- Box Textures
 -----------------------------------------------------------
 
-registerBoxTextures :: BoxTextureSet -> UIPageManager -> (BoxTextureHandle, UIPageManager)
+registerBoxTextures ∷ BoxTextureSet → UIPageManager → (BoxTextureHandle, UIPageManager)
 registerBoxTextures texSet mgr =
     let handle = BoxTextureHandle (upmNextBoxTexId mgr)
     in (handle, mgr
@@ -549,23 +549,23 @@ registerBoxTextures texSet mgr =
           , upmNextBoxTexId = upmNextBoxTexId mgr + 1
           })
 
-getBoxTextureSet :: BoxTextureHandle -> UIPageManager -> Maybe BoxTextureSet
+getBoxTextureSet ∷ BoxTextureHandle → UIPageManager → Maybe BoxTextureSet
 getBoxTextureSet handle mgr = Map.lookup handle (upmBoxTextures mgr)
 
-setBoxTextures :: ElementHandle -> BoxTextureHandle -> UIPageManager -> UIPageManager
-setBoxTextures handle texHandle = modifyElement handle `flip` \elem ->
+setBoxTextures ∷ ElementHandle → BoxTextureHandle → UIPageManager → UIPageManager
+setBoxTextures handle texHandle = modifyElement handle `flip` \elem →
     case ueRenderData elem of
-        RenderBox style -> elem { ueRenderData = RenderBox style { ubsTextures = texHandle } }
-        _ -> elem
+        RenderBox style → elem { ueRenderData = RenderBox style { ubsTextures = texHandle } }
+        _ → elem
 
 -----------------------------------------------------------
 -- Internal Helpers
 -----------------------------------------------------------
 
-modifyElement :: ElementHandle -> UIPageManager -> (UIElement -> UIElement) -> UIPageManager
+modifyElement ∷ ElementHandle → UIPageManager → (UIElement → UIElement) → UIPageManager
 modifyElement handle mgr f =
     mgr { upmElements = Map.adjust f handle (upmElements mgr) }
 
-modifyPage :: PageHandle -> UIPageManager -> (UIPage -> UIPage) -> UIPageManager
+modifyPage ∷ PageHandle → UIPageManager → (UIPage → UIPage) → UIPageManager
 modifyPage handle mgr f =
     mgr { upmPages = Map.adjust f handle (upmPages mgr) }

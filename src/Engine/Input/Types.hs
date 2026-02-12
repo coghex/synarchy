@@ -1,5 +1,5 @@
 -- File: Engine/Input/Types.hs
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Input.Types where
 
 import UPrelude
@@ -72,7 +72,7 @@ data Key
     deriving (Eq, Ord, Show, Read, Enum, Bounded)
 
 -- Convert GLFW key to our Key type
-fromGLFWKey :: GLFW.Key → Key
+fromGLFWKey ∷ GLFW.Key → Key
 fromGLFWKey GLFW.Key'A = KeyA
 fromGLFWKey GLFW.Key'B = KeyB
 fromGLFWKey GLFW.Key'C = KeyC
@@ -143,7 +143,7 @@ fromGLFWKey GLFW.Key'F12 = KeyF12
 fromGLFWKey _ = KeyUnknown
 
 -- Convert our Key to text (for Lua/YAML)
-keyToText :: Key → Text
+keyToText ∷ Key → Text
 keyToText KeyA = "A"
 keyToText KeyB = "B"
 keyToText KeyC = "C"

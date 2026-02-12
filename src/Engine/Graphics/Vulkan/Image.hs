@@ -167,7 +167,7 @@ findMemoryType pdev typeFilter properties = do
   let types = memoryTypes memProps
       suitable i memType = 
         testBit typeFilter (fromIntegral i) 
-        && (propertyFlags memType ⌃ properties) ≡ properties
+        ∧ (propertyFlags memType ⌃ properties) ≡ properties
       
       findType i
         | i ≥ fromIntegral (V.length types) = 

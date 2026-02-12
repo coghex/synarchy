@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Window.GLFW
   ( -- * Window Management
     createWindow
@@ -195,7 +195,7 @@ makeContextCurrent = liftIO ∘ GLFW.makeContextCurrent
 -- | Hint that we're on the main thread
 mainThreadHint ∷ EngineM ε σ ()
 mainThreadHint = do
-  logger ← liftIO . readIORef =<< asks loggerRef
+  logger ← liftIO . readIORef ⌫ asks loggerRef
   liftIO $ GLFW.setErrorCallback $ Just $ \errCode msg →
     logWarn logger CatGraphics $ T.pack $
       "GLFW error: " ⧺ show errCode ⧺ ": " ⧺ msg
@@ -221,8 +221,8 @@ createWindowSurface (Window win) inst = allocResource
         win
         nullPtr
         surfacePtr
-      if result == 0  -- VK_SUCCESS
-        then Right <$> peek surfacePtr
+      if result ≡ 0  -- VK_SUCCESS
+        then Right ⊚ peek surfacePtr
         else pure $ Left $ "Failed to create window surface, error code: "
                          ⧺ show result
 

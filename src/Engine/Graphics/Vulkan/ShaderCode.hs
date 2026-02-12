@@ -1,5 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE QuasiQuotes, UnicodeSyntax #-}
 
 module Engine.Graphics.Vulkan.ShaderCode
     ( fontVertexShaderCode
@@ -16,7 +16,7 @@ import Vulkan.Utils.ShaderQQ.GLSL.Glslang (vert, frag)
 import qualified Data.ByteString as BS
 
 -- | Font vertex shader (instanced rendering, world camera / NDC)
-fontVertexShaderCode :: BS.ByteString
+fontVertexShaderCode ∷ BS.ByteString
 fontVertexShaderCode = [vert|
     #version 450
 
@@ -65,7 +65,7 @@ fontVertexShaderCode = [vert|
 |]
 
 -- | Legacy font fragment shader (non-SDF, kept for compatibility)
-fontFragmentShaderCode :: BS.ByteString
+fontFragmentShaderCode ∷ BS.ByteString
 fontFragmentShaderCode = [frag|
     #version 450
 
@@ -87,7 +87,7 @@ fontFragmentShaderCode = [frag|
 -- | Bindless vertex shader (world camera) with face map support
 -- Pixel snap: shifts all vertices uniformly by removing the fractional
 -- pixel offset, so quads translate rigidly without distortion
-bindlessVertexShaderCode :: BS.ByteString
+bindlessVertexShaderCode ∷ BS.ByteString
 bindlessVertexShaderCode = [vert|
     #version 450
     #extension GL_ARB_separate_shader_objects : enable
@@ -144,7 +144,7 @@ bindlessVertexShaderCode = [vert|
 
 -- | Bindless fragment shader with face-map directional lighting
 -- Used for world-space rendering (tiles, scene sprites)
-bindlessFragmentShaderCode :: BS.ByteString
+bindlessFragmentShaderCode ∷ BS.ByteString
 bindlessFragmentShaderCode = [frag|
     #version 450
     #extension GL_ARB_separate_shader_objects : enable
@@ -213,7 +213,7 @@ bindlessFragmentShaderCode = [frag|
 -- | Bindless UI vertex shader (uses UI camera matrices)
 -- NO pixel snap — UI vertices are already in integer pixel coordinates,
 -- and the orthographic projection maps them 1:1 to screen pixels.
-bindlessUIVertexShaderCode :: BS.ByteString
+bindlessUIVertexShaderCode ∷ BS.ByteString
 bindlessUIVertexShaderCode = [vert|
     #version 450
     #extension GL_ARB_separate_shader_objects : enable
@@ -253,7 +253,7 @@ bindlessUIVertexShaderCode = [vert|
 |]
 
 -- | Bindless UI fragment shader — no face-map lighting, UI is unaffected by day/night
-bindlessUIFragmentShaderCode :: BS.ByteString
+bindlessUIFragmentShaderCode ∷ BS.ByteString
 bindlessUIFragmentShaderCode = [frag|
     #version 450
     #extension GL_ARB_separate_shader_objects : enable
@@ -278,7 +278,7 @@ bindlessUIFragmentShaderCode = [frag|
 
 -- | Font UI vertex shader (uses UI projection matrix)
 -- NO pixel snap — same reasoning as bindlessUIVertexShaderCode.
-fontUIVertexShaderCode :: BS.ByteString
+fontUIVertexShaderCode ∷ BS.ByteString
 fontUIVertexShaderCode = [vert|
     #version 450
 
@@ -319,7 +319,7 @@ fontUIVertexShaderCode = [vert|
 |]
 
 -- | Font SDF fragment shader (signed distance field rendering)
-fontSDFFragmentShaderCode :: BS.ByteString
+fontSDFFragmentShaderCode ∷ BS.ByteString
 fontSDFFragmentShaderCode = [frag|
     #version 450
 
