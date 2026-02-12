@@ -59,6 +59,13 @@ worldView.texturesLoadedCount = 0
 
 function worldView.init(width, height)
     -- Track which textures have loaded
+    local function getTableSize(t)
+        local c = 0
+        for k,v in pairs(t) do
+            c = c + 1
+        end
+        return c
+    end
     worldView.texturesNeeded = getTableSize(worldView.textures)
     worldView.texturesLoadedCount = 0
 
@@ -311,13 +318,5 @@ end
 -----------------------------------------------------------
 -- Utility
 -----------------------------------------------------------
-
-function getTableSize(table)
-    local count = 0
-    for key, value in pairs(table) do
-        count = count + 1
-    end
-    return count
-end
 
 return worldView

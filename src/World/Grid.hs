@@ -18,6 +18,7 @@ module World.Grid
     , gridToWorld
     , gridToScreen
     , worldToGrid
+    , worldScreenWidth
       -- * Camera constants
     , cameraPanSpeed
     , cameraPanAccel
@@ -143,6 +144,15 @@ zoomFadeStart = 2.0
 -- | Zoom level where the map is fully opaque (tiles fully hidden)
 zoomFadeEnd ∷ Float
 zoomFadeEnd = 2.5
+
+-----------------------------------------------------------
+-- World Screen Width (wrapping period in screen-space X)
+-----------------------------------------------------------
+
+worldScreenWidth ∷ Int → Float
+worldScreenWidth worldSizeChunks =
+    let worldTiles = worldSizeChunks * chunkSize
+    in fromIntegral worldTiles * tileHalfWidth
 
 -----------------------------------------------------------
 -- Coordinate Conversions

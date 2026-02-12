@@ -22,11 +22,11 @@ import World.Types
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
                    , isBeyondGlacier)
-import World.Generate (chunkSize)
 import World.Geology (applyGeoEvent, GeoModification(..))
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
-                   backgroundMapLayer, zoomFadeStart, zoomFadeEnd)
+                   backgroundMapLayer, zoomFadeStart, zoomFadeEnd,
+                   worldScreenWidth)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
@@ -177,11 +177,6 @@ isChunkInView vb drawX drawY =
 -----------------------------------------------------------
 -- Render From Cache (shared by zoom map and background)
 -----------------------------------------------------------
-
--- | World width in screen-space X for wrapping.
-worldScreenWidth ∷ Int → Float
-worldScreenWidth worldSize =
-    fromIntegral (worldSize * chunkSize) * tileHalfWidth
 
 -- | Shared render function. Takes a texture picker and target layer
 --   so it can be used for both the zoom map and background.

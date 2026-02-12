@@ -3,7 +3,6 @@ module World.Generate
     ( -- * Generation
       generateChunk
       -- * Coordinate helpers
-    , chunkSize
     , globalToChunk
     , chunkToGlobal
     , chunkWorldBounds

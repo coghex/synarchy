@@ -14,7 +14,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Input.Types (InputState(..), KeyState(..))
 import World.Grid (cameraPanSpeed, cameraPanAccel, cameraPanFriction,
                    tileHalfDiamondHeight, tileHalfWidth)
-import World.Generate (chunkSize)
+import World.Types (chunkSize)
 import Control.Monad.State.Class (gets)
 
 cameraYLimit ∷ Float

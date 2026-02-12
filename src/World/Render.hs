@@ -25,22 +25,12 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
-import World.Generate (chunkSize, chunkToGlobal, chunkWorldBounds, viewDepth
-                      , globalToChunk)
+import World.Generate (chunkToGlobal, chunkWorldBounds, viewDepth, globalToChunk)
 import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer,
                    tileHalfWidth, tileHalfDiamondHeight, zoomFadeStart, zoomFadeEnd
-                   , worldToGrid, zoomFadeStart, zoomFadeEnd)
+                   , worldToGrid, worldScreenWidth)
 import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
 import qualified Data.Vector as V
-
------------------------------------------------------------
--- World Screen Width (wrapping period in screen-space X)
------------------------------------------------------------
-
-worldScreenWidth ∷ Int → Float
-worldScreenWidth worldSizeChunks =
-    let worldTiles = worldSizeChunks * chunkSize
-    in fromIntegral worldTiles * tileHalfWidth
 
 updateWorldTiles ∷ EngineM ε σ (V.Vector SortableQuad)
 updateWorldTiles = do
@@ -158,19 +148,6 @@ isChunkVisibleWrapped worldSize vb camX coord =
 isChunkRelevantForSlice ∷ Int → LoadedChunk → Bool
 isChunkRelevantForSlice _zSlice lc =
     not (HM.null (lcSurfaceMap lc))
-
------------------------------------------------------------
--- Tile-Level Culling
------------------------------------------------------------
-
-isTileVisible ∷ ViewBounds → Float → Float → Bool
-isTileVisible vb drawX drawY =
-    let tileRight  = drawX + tileWidth
-        tileBottom = drawY + tileHeight
-    in not (tileRight  < vbLeft vb
-         ∨ drawX      > vbRight vb
-         ∨ tileBottom < vbTop vb
-         ∨ drawY      > vbBottom vb)
 
 -----------------------------------------------------------
 -- Render World Quads

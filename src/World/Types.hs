@@ -140,43 +140,42 @@ data WorldCamera = WorldCamera
 -----------------------------------------------------------
 
 data WorldTextures = WorldTextures
-    { wtGraniteTexture  ∷ TextureHandle
-    , wtGabbroTexture   ∷ TextureHandle
-    , wtDioriteTexture  ∷ TextureHandle
-    , wtIsoFaceMap      ∷ TextureHandle
-    , wtNoTexture       ∷ TextureHandle
-    , wtNoFaceMap       ∷ TextureHandle
-    , wtZoomGranite     ∷ TextureHandle
-    , wtZoomGabbro      ∷ TextureHandle
-    , wtZoomDiorite     ∷ TextureHandle
-    , wtZoomOcean       ∷ TextureHandle
+    { wtGraniteTexture   ∷ TextureHandle
+    , wtGabbroTexture    ∷ TextureHandle
+    , wtDioriteTexture   ∷ TextureHandle
+    , wtIsoFaceMap       ∷ TextureHandle
+    , wtNoTexture        ∷ TextureHandle
+    , wtNoFaceMap        ∷ TextureHandle
+    , wtZoomGranite      ∷ TextureHandle
+    , wtZoomGabbro       ∷ TextureHandle
+    , wtZoomDiorite      ∷ TextureHandle
+    , wtZoomOcean        ∷ TextureHandle
     , wtZoomLava         ∷ TextureHandle
-    , wtGlacierTexture  ∷ TextureHandle
-    , wtLavaTexture     ∷ TextureHandle
-    , wtZoomGlacier     ∷ TextureHandle
-    , wtBlankTexture    ∷ TextureHandle
-    , wtBgGranite       ∷ TextureHandle
-    , wtBgGabbro        ∷ TextureHandle
-    , wtBgDiorite       ∷ TextureHandle
-    , wtBgOcean         ∷ TextureHandle
-    , wtBgGlacier       ∷ TextureHandle
-    , wtBgLava       ∷ TextureHandle
-    , wtBgLavaTexture    ∷ TextureHandle
-    , wtBasaltTexture   ∷ TextureHandle
-    , wtObsidianTexture ∷ TextureHandle
+    , wtGlacierTexture   ∷ TextureHandle
+    , wtLavaTexture      ∷ TextureHandle
+    , wtZoomGlacier      ∷ TextureHandle
+    , wtBlankTexture     ∷ TextureHandle
+    , wtBgGranite        ∷ TextureHandle
+    , wtBgGabbro         ∷ TextureHandle
+    , wtBgDiorite        ∷ TextureHandle
+    , wtBgOcean          ∷ TextureHandle
+    , wtBgGlacier        ∷ TextureHandle
+    , wtBgLava           ∷ TextureHandle
+    , wtBasaltTexture    ∷ TextureHandle
+    , wtObsidianTexture  ∷ TextureHandle
     , wtSandstoneTexture ∷ TextureHandle
     , wtLimestoneTexture ∷ TextureHandle
-    , wtShaleTexture    ∷ TextureHandle
+    , wtShaleTexture     ∷ TextureHandle
     , wtImpactiteTexture ∷ TextureHandle
-    , wtIronTexture     ∷ TextureHandle
-    , wtOlivineTexture  ∷ TextureHandle
-    , wtPyroxeneTexture ∷ TextureHandle
-    , wtFeldsparTexture ∷ TextureHandle
-    , wtZoomBasalt      ∷ TextureHandle
-    , wtZoomObsidian    ∷ TextureHandle
-    , wtZoomImpactite   ∷ TextureHandle
-    , wtBgBasalt        ∷ TextureHandle
-    , wtBgImpactite     ∷ TextureHandle
+    , wtIronTexture      ∷ TextureHandle
+    , wtOlivineTexture   ∷ TextureHandle
+    , wtPyroxeneTexture  ∷ TextureHandle
+    , wtFeldsparTexture  ∷ TextureHandle
+    , wtZoomBasalt       ∷ TextureHandle
+    , wtZoomObsidian     ∷ TextureHandle
+    , wtZoomImpactite    ∷ TextureHandle
+    , wtBgBasalt         ∷ TextureHandle
+    , wtBgImpactite      ∷ TextureHandle
     } deriving (Show, Eq)
 
 defaultWorldTextures ∷ WorldTextures
@@ -215,7 +214,6 @@ defaultWorldTextures = WorldTextures
     , wtZoomBasalt       = TextureHandle 0
     , wtZoomObsidian     = TextureHandle 0
     , wtZoomImpactite    = TextureHandle 0
-    , wtBgLavaTexture     = TextureHandle 0
     , wtBgBasalt         = TextureHandle 0
     , wtBgImpactite      = TextureHandle 0
     }
