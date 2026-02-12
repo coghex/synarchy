@@ -234,7 +234,6 @@ renderWorldQuads env worldState zoomAlpha snap = do
 
     let zSlice = camZSlice camera
         zoom   = camZoom camera
-        facing = camFacing camera
         chunks = HM.elems (wtdChunks tileData)
         (camX, _camY) = camPosition camera
 
@@ -271,7 +270,6 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     (\acc (lx, ly, z) tile →
                         if z ≤ zSlice ∧ z ≥ (zSlice - effectiveDepth)
                         then let (gx, gy) = chunkToGlobal coord lx ly
-                                 facing = camFacing camera
                                  (rawX, rawY) = gridToScreen facing gx gy
                                  relativeZ = z - zSlice
                                  heightOffset = fromIntegral relativeZ * tileSideHeight

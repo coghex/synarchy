@@ -66,7 +66,8 @@ data CleanupStatus = NotStarted | InProgress | Completed
 --   float pixelSnap   (offset 332)
 --   float sunAngle    (offset 336)
 --   float ambientLight(offset 340)
---   <padding>         (offset 344-351, 8 bytes padding to 16-byte boundary)
+--   float cameraFacing (offset 344)
+--   <padding>         (offset 348-351, 4 bytes)
 -- Total: 5*64 + 32 = 352 bytes
 data UniformBufferObject = UBO
     { uboModel        ∷ M44 Float  -- model matrix

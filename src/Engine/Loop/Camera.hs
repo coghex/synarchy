@@ -84,14 +84,15 @@ updateCameraPanning = do
             (cx, cy) = camPosition cam
             rawCx = cx + vx' * dtF
             rawCy = cy + vy' * dtF
-            (cx', cy'') = wrapCameraAxis facing rawCx rawCy
-            cy' = clampF (-cameraYLimit) cameraYLimit cy''
-            rawY = cy + vy' * dtF
+            (wrappedCx, wrappedCy) = wrapCameraAxis facing rawCx rawCy
+            (cx', cy') = applyLimits facing wrappedCx wrappedCy
 
-            vy'' = if cy' ≢ rawY then 0 else vy'
+            -- Kill velocity on the clamped axis when hitting the wall
+            vx'' = if cx' ≢ wrappedCx then 0 else vx'
+            vy'' = if cy' ≢ wrappedCy then 0 else vy'
 
         in (cam { camPosition = (cx', cy')
-                , camVelocity = (vx', vy'') }, ())
+                , camVelocity = (vx'', vy'') }, ())
 
 -- When facing South/North: X wraps, Y is clamped (glaciers at top/bottom)
 -- When facing West/East:   Y wraps, X is clamped (glaciers at left/right)
@@ -139,7 +140,9 @@ updateCameraMouseDrag = do
 
                     newY = clampF (-cameraYLimit) cameraYLimit (cy + realToFrac dy)
 
-                in ( cam { camPosition  = (wrapCameraAxis facing (cx + realToFrac dx) newY)
+                    (wrappedX, wrappedY) = wrapCameraAxis facing (cx + realToFrac dx) (cy + realToFrac dy)
+                    (finalX, finalY) = applyLimits facing wrappedX wrappedY
+                in ( cam { camPosition = (finalX, finalY)
                          , camDragOrigin = mousePos
                          , camVelocity   = (0, 0)
                          }
