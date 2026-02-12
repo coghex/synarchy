@@ -257,6 +257,7 @@ library
                      World.Generate
                      World.Geology
                      World.Geology.Types
+                     World.Geology.Log
                      World.Geology.Hash
                      World.Geology.Crater
                      World.Geology.Volcano

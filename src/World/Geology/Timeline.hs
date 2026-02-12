@@ -1,22 +1,17 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
-
 module World.Geology.Timeline
     ( buildTimeline
-    , buildPrimordialBombardment
-    , buildLateBombardment
-    , buildEarlyVolcanism
-    , buildVolcanicEvolution
-    , buildLateVolcanism
-    , buildStabilization
     ) where
 
 import UPrelude
 import Data.Bits (xor)
 import Data.Word (Word64)
 import Data.List (foldl')
+import qualified Data.Text as T
 import World.Types
 import World.Plate (generatePlates, TectonicPlate)
 import World.Geology.Types
+import World.Geology.Hash
 import World.Geology.Crater (generateCraters)
 import World.Geology.Generate
     ( generateShieldVolcano
@@ -32,152 +27,376 @@ import World.Geology.Generate
     )
 import World.Geology.Evolution (evolveOneFeature)
 
+-----------------------------------------------------------
+-- Top Level
+-----------------------------------------------------------
+
 buildTimeline ∷ Word64 → Int → Int → GeoTimeline
 buildTimeline seed worldSize plateCount =
     let plates = generatePlates seed worldSize plateCount
+        gs0 = initGeoState seed worldSize plates
 
-        initialState = TimelineBuildState
+        tbs0 = TimelineBuildState
             { tbsFeatures  = []
             , tbsNextId    = 0
             , tbsPeriods   = []
             , tbsPeriodIdx = 0
+            , tbsGeoState  = gs0
             }
 
-        s1 = buildPrimordialBombardment seed worldSize plates initialState
-        s2 = buildLateBombardment seed worldSize plates s1
-        s3 = buildEarlyVolcanism seed worldSize plates s2
-        s4 = buildVolcanicEvolution seed worldSize plates s3
-        s5 = buildLateVolcanism seed worldSize plates s4
-        s6 = buildStabilization seed s5
+        -- Primordial bombardment stands alone, before the eon
+        s1 = buildPrimordialBombardment seed worldSize plates tbs0
+
+        -- The single development eon
+        s2 = buildEon seed worldSize plates s1
 
     in GeoTimeline
         { gtSeed      = seed
         , gtWorldSize = worldSize
-        , gtPeriods   = reverse (tbsPeriods s6)
-        , gtFeatures  = tbsFeatures s6
+        , gtPeriods   = reverse (tbsPeriods s2)
+        , gtFeatures  = tbsFeatures s2
         }
+
+-----------------------------------------------------------
+-- Primordial Bombardment (standalone, pre-eon)
+-----------------------------------------------------------
 
 buildPrimordialBombardment ∷ Word64 → Int → [TectonicPlate]
                            → TimelineBuildState → TimelineBuildState
 buildPrimordialBombardment seed worldSize plates tbs =
     let craterSeed = seed `xor` 0xDEADBEEF
         craters = generateCraters craterSeed worldSize plates CraterEra_Primordial
+        gs = tbsGeoState tbs
+        gs' = gs { gsDate = advanceGeoDate 500.0 (gsDate gs) }
         period = GeoPeriod
             { gpName     = "Primordial Bombardment"
             , gpScale    = Eon
-            , gpDuration = 100
+            , gpDuration = 500
             , gpEvents   = map CraterEvent craters
             , gpErosion  = ErosionParams 0.8 0.3 0.6 0.4 0.1 (seed + 1000)
             }
-    in addPeriod period tbs
+    in addPeriod period (tbs { tbsGeoState = gs' })
 
-buildLateBombardment ∷ Word64 → Int → [TectonicPlate]
+-----------------------------------------------------------
+-- Eon
+-----------------------------------------------------------
+
+-- | The single eon of geological development.
+--   Calls buildEra recursively, min 2, max 4.
+buildEon ∷ Word64 → Int → [TectonicPlate]
+         → TimelineBuildState → TimelineBuildState
+buildEon seed worldSize plates tbs =
+    buildEraLoop seed worldSize plates 0 2 4 tbs
+
+buildEraLoop ∷ Word64 → Int → [TectonicPlate]
+             → Int → Int → Int
+             → TimelineBuildState → TimelineBuildState
+buildEraLoop seed worldSize plates eraIdx minEras maxEras tbs
+    | eraIdx ≥ maxEras = tbs
+    | otherwise =
+        let eraSeed = seed `xor` (fromIntegral eraIdx * 0xA1B2C3D4)
+            s1 = buildEra eraSeed worldSize plates eraIdx tbs
+
+            -- Roll for continuation after meeting minimum
+            roll = hashToFloatGeo (hashGeo eraSeed eraIdx 300)
+            continue = eraIdx < (minEras - 1) ∨ roll < 0.5
+        in if continue
+           then buildEraLoop seed worldSize plates (eraIdx + 1) minEras maxEras s1
+           else s1
+
+-----------------------------------------------------------
+-- Era
+-----------------------------------------------------------
+
+-- | An era of geological history.
+--   Era-level events: flood basalts, massive impacts,
+--   continental-scale changes.
+--   Then recurses into periods.
+buildEra ∷ Word64 → Int → [TectonicPlate] → Int
+         → TimelineBuildState → TimelineBuildState
+buildEra seed worldSize plates eraIdx tbs =
+    let eraSeed = seed `xor` (fromIntegral eraIdx * 0xE1A2)
+        gs = tbsGeoState tbs
+
+        -- Era-level events
+        -- TODO: flood basalts, massive impacts, LIPs
+        -- For now, placeholder: just advance date and modify state
+        eraEvents = []
+
+        -- Era events get their own GeoPeriod
+        gs' = gs { gsDate = advanceGeoDate 100.0 (gsDate gs) }
+        eraPeriod = GeoPeriod
+            { gpName     = "Era " <> T.pack (show eraIdx) <> " Events"
+            , gpScale    = Era
+            , gpDuration = 100
+            , gpEvents   = eraEvents
+            , gpErosion  = ErosionParams 0.7 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx)
+            }
+        s1 = addPeriod eraPeriod (tbs { tbsGeoState = gs' })
+
+        -- Recurse into periods
+        s2 = buildPeriodLoop eraSeed worldSize plates 0 2 4 s1
+
+    in s2
+
+-----------------------------------------------------------
+-- Period
+-----------------------------------------------------------
+
+buildPeriodLoop ∷ Word64 → Int → [TectonicPlate]
+                → Int → Int → Int
+                → TimelineBuildState → TimelineBuildState
+buildPeriodLoop seed worldSize plates periodIdx minPeriods maxPeriods tbs
+    | periodIdx ≥ maxPeriods = tbs
+    | otherwise =
+        let periodSeed = seed `xor` (fromIntegral periodIdx * 0xB3C4D5E6)
+            s1 = buildPeriod periodSeed worldSize plates periodIdx tbs
+
+            roll = hashToFloatGeo (hashGeo periodSeed periodIdx 400)
+            continue = periodIdx < (minPeriods - 1) ∨ roll < 0.5
+        in if continue
+           then buildPeriodLoop seed worldSize plates (periodIdx + 1) minPeriods maxPeriods s1
+           else s1
+
+-- | A period of geological history.
+--   Period-level events: volcanism, tectonic changes,
+--   volcanic evolution.
+--   Then recurses into epochs.
+buildPeriod ∷ Word64 → Int → [TectonicPlate] → Int
+            → TimelineBuildState → TimelineBuildState
+buildPeriod seed worldSize plates periodIdx tbs =
+    let periodSeed = seed `xor` (fromIntegral periodIdx * 0xF1E2)
+        gs = tbsGeoState tbs
+
+        -- Period-level events: volcanism
+        -- Which volcanic features to generate depends on the period
+        -- and GeoState (e.g., high CO2 = more volcanic activity)
+        s1 = applyPeriodVolcanism periodSeed worldSize plates periodIdx tbs
+
+        -- Volcanic evolution of existing features
+        s2 = applyVolcanicEvolution periodSeed s1
+
+        -- Recurse into epochs
+        s3 = buildEpochLoop periodSeed worldSize plates 0 2 6 s2
+
+    in s3
+
+-- | Generate volcanic features for a period.
+--   Reads GeoState to influence what gets placed.
+applyPeriodVolcanism ∷ Word64 → Int → [TectonicPlate] → Int
                      → TimelineBuildState → TimelineBuildState
-buildLateBombardment seed worldSize plates tbs =
-    let craterSeed = (seed `xor` 0xDEADBEEF) + 1
-        craters = generateCraters craterSeed worldSize plates CraterEra_Late
-        period = GeoPeriod
-            { gpName     = "Late Bombardment"
-            , gpScale    = Era
-            , gpDuration = 50
-            , gpEvents   = map CraterEvent craters
-            , gpErosion  = ErosionParams 0.6 0.5 0.4 0.2 0.3 (seed + 2000)
-            }
-    in addPeriod period tbs
+applyPeriodVolcanism seed worldSize plates periodIdx tbs =
+    let gs = tbsGeoState tbs
+        volcSeed = seed `xor` 0xB45A1F1C
+        pIdx = tbsPeriodIdx tbs
 
-buildEarlyVolcanism ∷ Word64 → Int → [TectonicPlate]
-                    → TimelineBuildState → TimelineBuildState
-buildEarlyVolcanism seed worldSize plates tbs0 =
-    let volcSeed = seed `xor` 0xB45A1F1C
-        periodIdx = fromIntegral $ tbsPeriodIdx tbs0
+        -- Decide what to generate based on GeoState
+        -- High CO2 correlates with high volcanic activity
+        activityLevel = gsCO2 gs
 
-        -- Shield volcanoes at hotspots
-        (shields, tbs1) = generateAndRegister volcSeed worldSize plates
-                              VolcanoEra_Hotspot generateShieldVolcano periodIdx tbs0
+        -- Shield volcanoes (large, if activity is high enough)
+        (shields, tbs1) = if activityLevel > 0.8
+            then generateAndRegister volcSeed worldSize plates
+                     VolcanoEra_Hotspot generateShieldVolcano pIdx tbs
+            else ([], tbs)
 
-        -- Fissures at rift zones
+        -- Fissures
         (fissures, tbs2) = generateAndRegister (volcSeed + 1) worldSize plates
-                               VolcanoEra_Boundary generateFissure periodIdx tbs1
+                               VolcanoEra_Boundary generateFissure pIdx tbs1
 
-        -- Hydrothermal vents on ocean floor
-        (vents, tbs3) = generateAndRegister (volcSeed + 2) worldSize plates
-                            VolcanoEra_Boundary generateHydrothermalVent periodIdx tbs2
+        -- Cinder cones (common, small)
+        (cinders, tbs3) = generateAndRegister (volcSeed + 2) worldSize plates
+                              VolcanoEra_Boundary generateCinderCone pIdx tbs2
 
-        events = map (\pf → VolcanicEvent (pfFeature pf)) (shields <> fissures <> vents)
+        -- Hydrothermal vents
+        (vents, tbs4) = generateAndRegister (volcSeed + 3) worldSize plates
+                            VolcanoEra_Boundary generateHydrothermalVent pIdx tbs3
+
+        allNew = shields <> fissures <> cinders <> vents
+        events = map (\pf → VolcanicEvent (pfFeature pf)) allNew
+
+        -- Volcanism raises CO2 slightly
+        gs' = (tbsGeoState tbs4)
+            { gsCO2 = gsCO2 (tbsGeoState tbs4) + fromIntegral (length allNew) * 0.01
+            }
 
         period = GeoPeriod
-            { gpName     = "Early Volcanism"
-            , gpScale    = Era
-            , gpDuration = 70
+            { gpName     = "Volcanism " <> T.pack (show periodIdx)
+            , gpScale    = Period
+            , gpDuration = 50
             , gpEvents   = events
-            , gpErosion  = ErosionParams 0.6 0.6 0.4 0.2 0.3 (seed + 4000)
+            , gpErosion  = ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 4000)
             }
-    in addPeriod period tbs3
+    in addPeriod period (tbs4 { tbsGeoState = gs' })
 
-buildVolcanicEvolution ∷ Word64 → Int → [TectonicPlate]
-                       → TimelineBuildState → TimelineBuildState
-buildVolcanicEvolution seed _worldSize _plates tbs0 =
-    let periodIdx = tbsPeriodIdx tbs0
+-- | Evolve existing volcanic features.
+applyVolcanicEvolution ∷ Word64 → TimelineBuildState → TimelineBuildState
+applyVolcanicEvolution seed tbs =
+    let periodIdx = tbsPeriodIdx tbs
         evolSeed = seed `xor` 0xEF01F100
 
         (events, tbs1) = foldl' (evolveOneFeature evolSeed periodIdx)
-                                ([], tbs0) (tbsFeatures tbs0)
+                                ([], tbs) (tbsFeatures tbs)
 
         period = GeoPeriod
             { gpName     = "Volcanic Evolution"
             , gpScale    = Period
-            , gpDuration = 50
+            , gpDuration = 30
             , gpEvents   = events
             , gpErosion  = ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 5000)
             }
-    in addPeriod period tbs1
+    in if null events then tbs1
+       else addPeriod period tbs1
 
-buildLateVolcanism ∷ Word64 → Int → [TectonicPlate]
-                   → TimelineBuildState → TimelineBuildState
-buildLateVolcanism seed worldSize plates tbs0 =
-    let lateSeed = seed `xor` 0x1A7EF10D
-        periodIdx = tbsPeriodIdx tbs0
+-----------------------------------------------------------
+-- Epoch
+-----------------------------------------------------------
 
-        -- Cinder cones (common, small)
-        (cinders, tbs1) = generateAndRegister lateSeed worldSize plates
-                              VolcanoEra_Boundary generateCinderCone periodIdx tbs0
+buildEpochLoop ∷ Word64 → Int → [TectonicPlate]
+               → Int → Int → Int
+               → TimelineBuildState → TimelineBuildState
+buildEpochLoop seed worldSize plates epochIdx minEpochs maxEpochs tbs
+    | epochIdx ≥ maxEpochs = tbs
+    | otherwise =
+        let epochSeed = seed `xor` (fromIntegral epochIdx * 0xC5D6E7F8)
+            s1 = buildEpoch epochSeed worldSize plates epochIdx tbs
 
-        -- Lava domes at convergent boundaries
-        (domes, tbs2) = generateAndRegister (lateSeed + 1) worldSize plates
-                            VolcanoEra_Boundary generateLavaDome periodIdx tbs1
+            roll = hashToFloatGeo (hashGeo epochSeed epochIdx 500)
+            continue = epochIdx < (minEpochs - 1) ∨ roll < 0.5
+        in if continue
+           then buildEpochLoop seed worldSize plates (epochIdx + 1) minEpochs maxEpochs s1
+           else s1
 
-        -- Lava tubes (on existing volcanic terrain)
-        (tubes, tbs3) = generateAndRegister (lateSeed + 2) worldSize plates
-                            VolcanoEra_Hotspot generateLavaTube periodIdx tbs2
+-- | An epoch of geological history.
+--   Epoch-level events: glaciation, major river erosion,
+--   sea level changes.
+--   Then recurses into ages.
+buildEpoch ∷ Word64 → Int → [TectonicPlate] → Int
+           → TimelineBuildState → TimelineBuildState
+buildEpoch seed worldSize plates epochIdx tbs =
+    let epochSeed = seed `xor` (fromIntegral epochIdx * 0xA1A2)
+        gs = tbsGeoState tbs
 
-        -- Rare: one supervolcano attempt
-        (supers, tbs4) = generateAndRegisterN 8 1 (lateSeed + 3) worldSize plates
-                             VolcanoEra_Hotspot generateSuperVolcano periodIdx tbs3
+        -- Epoch-level events: glaciation if temperature is low enough
+        -- TODO: glaciation events based on regional temperature
+        -- TODO: river system establishment
+        epochEvents = []
 
-        -- Calderas from collapsed earlier features
-        (calderas, tbs5) = generateAndRegisterN 16 3 (lateSeed + 4) worldSize plates
-                               VolcanoEra_Hotspot generateCaldera periodIdx tbs4
+        gs' = gs { gsDate = advanceGeoDate 20.0 (gsDate gs) }
 
-        allNew = cinders <> domes <> tubes <> supers <> calderas
-        events = map (\pf → VolcanicEvent (pfFeature pf)) allNew
+        -- Only emit a period if there are epoch-level events
+        s1 = if null epochEvents then tbs { tbsGeoState = gs' }
+             else let period = GeoPeriod
+                          { gpName     = "Epoch " <> T.pack (show epochIdx)
+                          , gpScale    = Epoch
+                          , gpDuration = 20
+                          , gpEvents   = epochEvents
+                          , gpErosion  = ErosionParams 0.6 0.7 0.3 0.2 0.4 (seed + 6000)
+                          }
+                  in addPeriod period (tbs { tbsGeoState = gs' })
+
+        -- Recurse into ages
+        s2 = buildAgeLoop epochSeed worldSize plates 0 1 8 s1
+
+    in s2
+
+-----------------------------------------------------------
+-- Age
+-----------------------------------------------------------
+
+buildAgeLoop ∷ Word64 → Int → [TectonicPlate]
+             → Int → Int → Int
+             → TimelineBuildState → TimelineBuildState
+buildAgeLoop seed worldSize plates ageIdx minAges maxAges tbs
+    | ageIdx ≥ maxAges = tbs
+    | otherwise =
+        let ageSeed = seed `xor` (fromIntegral ageIdx * 0xD7E8F9A0)
+            s1 = buildAge ageSeed worldSize plates ageIdx tbs
+
+            roll = hashToFloatGeo (hashGeo ageSeed ageIdx 600)
+            continue = ageIdx < (minAges - 1) ∨ roll < 0.4
+        in if continue
+           then buildAgeLoop seed worldSize plates (ageIdx + 1) minAges maxAges s1
+           else s1
+
+-- | A single age — the finest granularity of the timeline.
+--   Always has erosion. May have small discrete events.
+--   Duration varies, which affects event probability.
+buildAge ∷ Word64 → Int → [TectonicPlate] → Int
+         → TimelineBuildState → TimelineBuildState
+buildAge seed worldSize plates ageIdx tbs =
+    let ageSeed = seed `xor` (fromIntegral ageIdx * 0xF0F1)
+        gs = tbsGeoState tbs
+
+        -- Determine age duration (millions of years)
+        -- Varies from 1 to 15 MY
+        durationHash = hashGeo ageSeed ageIdx 610
+        duration = 1.0 + hashToFloatGeo durationHash * 14.0 ∷ Float
+
+        -- Advance the date
+        gs1 = gs { gsDate = advanceGeoDate duration (gsDate gs) }
+
+        -- Event generation, probability scaled by duration
+        -- Longer ages = more likely to have events
+
+        -- Meteorite impacts
+        -- Base rate: roughly 1 per 50 MY for the whole world
+        -- So per age: duration/50 chance
+        meteoriteRoll = hashToFloatGeo (hashGeo ageSeed ageIdx 620)
+        meteoriteChance = duration / 50.0
+        meteorites = if meteoriteRoll < meteoriteChance
+            then let craterSeed = ageSeed `xor` 0xBEEF
+                     craters = generateCraters craterSeed worldSize plates CraterEra_Late
+                 -- Take just 1-2 craters for a single age impact
+                 in take (hashToRangeGeo (hashGeo ageSeed ageIdx 621) 1 2)
+                         (map CraterEvent craters)
+            else []
+
+        -- Landslides
+        -- TODO: generate based on steep terrain + precipitation
+        landslideRoll = hashToFloatGeo (hashGeo ageSeed ageIdx 630)
+        landslideChance = duration / 10.0
+        landslides = if landslideRoll < landslideChance
+            then []  -- TODO: generateLandslides
+            else []
+
+        -- Floods
+        floodRoll = hashToFloatGeo (hashGeo ageSeed ageIdx 640)
+        floodChance = duration / 20.0
+        floods = if floodRoll < floodChance
+            then []  -- TODO: generateFloods
+            else []
+
+        allEvents = meteorites <> landslides <> floods
+
+        -- CO2 slowly decays toward baseline through weathering
+        gs2 = gs1 { gsCO2 = max 0.5 (gsCO2 gs1 - duration * 0.005) }
+
+        -- Erosion params derived from current GeoState
+        erosion = erosionFromGeoState gs2 seed ageIdx
 
         period = GeoPeriod
-            { gpName     = "Late Volcanism"
-            , gpScale    = Period
-            , gpDuration = 40
-            , gpEvents   = events
-            , gpErosion  = ErosionParams 0.3 0.4 0.3 0.2 0.2 (seed + 6000)
+            { gpName     = "Age " <> T.pack (show (tbsPeriodIdx tbs))
+            , gpScale    = Age
+            , gpDuration = round duration
+            , gpEvents   = allEvents
+            , gpErosion  = erosion
             }
-    in addPeriod period tbs5
+    in addPeriod period (tbs { tbsGeoState = gs2 })
 
-buildStabilization ∷ Word64
-                   → TimelineBuildState → TimelineBuildState
-buildStabilization seed tbs =
-    let period = GeoPeriod
-            { gpName     = "Crustal Stabilization"
-            , gpScale    = Period
-            , gpDuration = 80
-            , gpEvents   = []
-            , gpErosion  = ErosionParams 0.9 0.8 0.3 0.2 0.5 (seed + 7000)
-            }
-    in addPeriod period tbs
+-- | Derive erosion parameters from current GeoState.
+--   Higher CO2 = more chemical weathering.
+--   This is where GeoState feeds into the per-tile application.
+erosionFromGeoState ∷ GeoState → Word64 → Int → ErosionParams
+erosionFromGeoState gs seed ageIdx =
+    let co2 = gsCO2 gs
+        -- Higher CO2 increases chemical weathering
+        chemical = min 1.0 (0.2 + (co2 - 1.0) * 0.3)
+    in ErosionParams
+        { epIntensity = 0.5
+        , epHydraulic = 0.5
+        , epThermal   = 0.3
+        , epWind      = 0.2
+        , epChemical  = chemical
+        , epSeed      = seed + fromIntegral ageIdx * 7
+        }
