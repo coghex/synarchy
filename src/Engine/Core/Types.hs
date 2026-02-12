@@ -17,11 +17,13 @@ import Engine.Core.Queue
 import Engine.Event.Types
 import Engine.Input.Types
 
--- | Engine configuration
+-----------------------------------------------------------
+-- Engine Configuration
+-----------------------------------------------------------
+
 data EngineConfig = EngineConfig
   { windowWidth     ∷ Int
   , windowHeight    ∷ Int
   , enableVSync     ∷ Bool
   , enableDebug     ∷ Bool
   }
-

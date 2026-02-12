@@ -16,10 +16,10 @@ import Engine.Core.Error.Exception (EngineException(..))
 import Engine.Core.State
 import Engine.Core.Var 
 
--- | Main engine monad transformer stack
--- ε = environment
--- σ = state
--- α = result
+-----------------------------------------------------------
+-- Engine Monad
+-----------------------------------------------------------
+
 newtype EngineM ε σ α = EngineM 
   { unEngineM ∷ Var EngineEnv 
               → Var EngineState 
@@ -27,16 +27,18 @@ newtype EngineM ε σ α = EngineM
               → IO σ 
   }
 
--- | Common case where σ is either an action or an error
 type EngineM' ε α = EngineM ε (Either EngineException α) α
 
--- | Run the engine monad
 runEngineM ∷ EngineM ε σ α 
          → Var EngineEnv 
          → Var EngineState 
          → (Either EngineException α → IO σ) 
          → IO σ
 runEngineM action env st cont = unEngineM action env st cont
+
+-----------------------------------------------------------
+-- Monad Instances
+-----------------------------------------------------------
 
 instance Functor (EngineM ε σ) where
   fmap f m = EngineM $ \e s c → unEngineM m e s (c ∘ fmap f)

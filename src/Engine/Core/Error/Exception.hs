@@ -118,19 +118,18 @@ data LuaError
   | LuaGenericError T.Text       -- ^ General Lua error with a specific message
   deriving (Show, Eq, Typeable)
 
--- | Main exception type with enhanced context
+-----------------------------------------------------------
+-- Exception Types
+-----------------------------------------------------------
+
 data EngineException = EngineException
   { errorType    ∷ ExceptionType  -- ^ Type of error
   , errorMsg     ∷ T.Text         -- ^ Error message
-  , errorContext ∷ ErrorContext -- ^ Additional context
+  , errorContext ∷ ErrorContext   -- ^ Additional context
   } deriving (Typeable)
+
 instance Eq EngineException where
   (==) a b = errorType a ≡ errorType b ∧ errorMsg a ≡ errorMsg b
-
--- | Error context, currently just a call stack
-data ErrorContext = ErrorContext
-  { contextCallStack ∷ CallStack
-  } deriving (Typeable)
 
 instance Show EngineException where
   show (EngineException etype msg ctx) = unlines
@@ -143,22 +142,26 @@ instance Show EngineException where
 instance Exception EngineException where
   displayException ex = show ex
 
--- | Helper function to throw engine exceptions
+data ErrorContext = ErrorContext
+  { contextCallStack ∷ CallStack
+  } deriving (Typeable)
+
+-----------------------------------------------------------
+-- Exception Functions
+-----------------------------------------------------------
+
 throwEngineException ∷ MonadError EngineException m ⇒ EngineException → m a
 throwEngineException = throwError
 
--- | Create error context from current call stack
 mkErrorContext ∷ HasCallStack ⇒ ErrorContext
 mkErrorContext = ErrorContext { contextCallStack = callStack }
 
--- | Catch EngineException in EngineM context
 catchEngine ∷ MonadError EngineException m 
            ⇒ m a                                  -- ^ Action that might fail
-           → (EngineException → m a)            -- ^ Handler for exceptions
+           → (EngineException → m a)              -- ^ Handler for exceptions
            → m a
 catchEngine action handler = catchError action handler
 
--- | Try running an action, returning Either
 tryEngine ∷ MonadError EngineException m 
          ⇒ m a 
          → m (Either EngineException a)

@@ -33,7 +33,10 @@ import UI.Types (UIPageManager)
 import UI.Focus (FocusManager)
 import World.Types (WorldCommand, WorldManager)
 
--- | Engine environment (read-only)
+-----------------------------------------------------------
+-- Engine Environment
+-----------------------------------------------------------
+
 data EngineEnv = EngineEnv
   { engineConfig        ∷ EngineConfig
   , videoConfigRef      ∷ IORef VideoConfig
@@ -65,7 +68,10 @@ data EngineEnv = EngineEnv
   , sunAngleRef         ∷ IORef Float
   }
 
--- | Engine state (mutable)
+-----------------------------------------------------------
+-- Engine State
+-----------------------------------------------------------
+
 data EngineState = EngineState
   { timingState      ∷ TimingState
   , inputState       ∷ InputState
@@ -75,10 +81,10 @@ data EngineState = EngineState
   }
 
 data EngineLifecycle
-  = EngineStarting        -- engine is initializing
-  | EngineRunning         -- engine is running normally
-  | CleaningUp            -- engine is cleaning up resources
-  | EngineStopped         -- engine has stopped
+  = EngineStarting
+  | EngineRunning
+  | CleaningUp
+  | EngineStopped
   deriving (Eq, Show)
 
 data TimingState = TimingState
@@ -120,13 +126,11 @@ data GraphicsState = GraphicsState
   , fontQuadBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , fontDescriptorPool ∷ Maybe Vk.DescriptorPool
   , fontDescriptorLayout   ∷ Maybe Vk.DescriptorSetLayout
-  -- instance buffers that survive across frames
   , pendingInstanceBuffers ∷ V.Vector (Vk.Buffer, Vk.DeviceMemory)
   , cleanupStatus          ∷ CleanupStatus
   , vulkanCleanup          ∷ Cleanup
   }
 
--- | Cached windowed-mode geometry for restoring after fullscreen
 data WindowState = WindowState
   { wsWindowedPos  ∷ (Int, Int)   -- ^ Last known windowed position
   , wsWindowedSize ∷ (Int, Int)   -- ^ Last known windowed size (screen coords)

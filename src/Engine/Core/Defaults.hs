@@ -20,6 +20,10 @@ import Engine.Graphics.Font.Data
 import Engine.Scene.Types
 import Vulkan.Zero
 
+-----------------------------------------------------------
+-- Engine Configuration
+-----------------------------------------------------------
+
 defaultEngineConfig ∷ EngineConfig
 defaultEngineConfig = EngineConfig 
   { windowWidth  = 800
@@ -55,6 +59,10 @@ defaultWindowConfig vc = WindowConfig
   , wcTitle      = T.pack "Synarchy"
   , wcResizable  = True
   }
+
+-----------------------------------------------------------
+-- Engine State
+-----------------------------------------------------------
 
 defaultEngineState ∷ EngineState
 defaultEngineState = EngineState
@@ -104,4 +112,3 @@ defaultEngineState = EngineState
   , assetConfig      = AssetConfig 100 100 True True
   , sceneManager     = createSceneManager
   }
-

@@ -26,42 +26,33 @@ import UI.Focus (createFocusManager)
 import UI.Types (emptyUIPageManager)
 import World.Types (WorldCommand, emptyWorldManager)
 
--- | Result of engine initialization
 data EngineInitResult = EngineInitResult
   { eirEnv      ∷ EngineEnv
   , eirEnvVar   ∷ Var EngineEnv
   , eirStateVar ∷ Var EngineState
   }
 
--- | Initialize all engine subsystems and create the environment
+-----------------------------------------------------------
+-- Engine Initialization
+-----------------------------------------------------------
+
 initializeEngine ∷ IO EngineInitResult
 initializeEngine = do
-  -- Initialize queues
   eventQueue ← Q.newQueue
   inputQueue ← Q.newQueue
   worldQueue ← Q.newQueue
   luaToEngineQueue ← Q.newQueue
   engineToLuaQueue ← Q.newQueue
-  
-  -- Initialize lifecycle ref
   lifecycleRef ← newIORef EngineStarting
   fpsRef ← newIORef 0.0
- 
-  -- Initialize logging
   logger ← initLogger defaultLogConfig { lcMinLevel = LevelDebug }
   loggerRef ← newIORef logger
-  
-  -- Initialize asset pool
   assetPool ← defaultAssetPool
   assetPoolRef ← newIORef assetPool
   nextObjectIdRef ← newIORef 0
-  
-  -- Initialize input state
   inputStateRef ← newIORef defaultInputState
   keyBindings ← loadKeyBindings logger "config/keybinds.yaml"
   keyBindingsRef ← newIORef keyBindings
-  
-  -- Load video config
   videoConfig ← loadVideoConfig logger "config/video.yaml"
   videoConfigRef ← newIORef $ videoConfig
   windowSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
@@ -70,25 +61,15 @@ initializeEngine = do
   brightnessRef ← newIORef (vcBrightness videoConfig)
   pixelSnapRef ← newIORef (vcPixelSnap videoConfig)
   textureFilterRef ← newIORef (vcTextureFilter videoConfig)
-  
-  -- Create camera references
   cameraRef ← newIORef defaultCamera
   uiCameraRef ← newIORef $ defaultUICamera (fromIntegral (vcWidth videoConfig))
                                            (fromIntegral (vcHeight videoConfig))
-  -- Create UI manager references
   uiManagerRef ← newIORef emptyUIPageManager
-  -- create world manager references
   worldManagerRef ← newIORef emptyWorldManager
-  -- Create focus manager
   focusMgrRef ← newIORef createFocusManager
-  -- text buffers reference
   textBuffersRef ← newIORef Map.empty
-  -- font cache reference
   fontCache ← newIORef defaultFontCache
-  -- start time at noon
   sunAngleRef ← newIORef 0.25
-
-  -- Build environment
   let env = EngineEnv
         { engineConfig       = defaultEngineConfig
         , videoConfigRef     = videoConfigRef
@@ -119,8 +100,6 @@ initializeEngine = do
         , focusManagerRef    = focusMgrRef
         , sunAngleRef        = sunAngleRef
         }
-  
   envVar   ← atomically $ newVar env
   stateVar ← atomically $ newVar defaultEngineState
-  
   pure $ EngineInitResult env envVar stateVar
