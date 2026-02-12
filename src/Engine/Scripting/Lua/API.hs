@@ -11,7 +11,7 @@ import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn,
 import Engine.Scripting.Lua.API.Camera (cameraMoveFn, cameraSetPositionFn,
                                          cameraGetPositionFn, cameraSetZoomFn,
                                          cameraGetZoomFn, cameraSetZSliceFn
-                                         , cameraGetZSliceFn)
+                                         , cameraGetZSliceFn, cameraGotoTileFn)
 
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
@@ -200,6 +200,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- Camera table
   Lua.newtable
 
+  registerLuaFunction "goToTile" (cameraGotoTileFn env)
   registerLuaFunction "move" (cameraMoveFn env)
   registerLuaFunction "setPosition" (cameraSetPositionFn env)
   registerLuaFunction "getPosition" (cameraGetPositionFn env)

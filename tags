@@ -774,6 +774,7 @@ applyCrater	src/World/Geology.hs	251;"	f
 applyErosion	src/World/Geology.hs	309;"	f
 applyFriction	src/Engine/Loop/Camera.hs	149;"	f
 applyGeoEvent	src/World/Geology.hs	224;"	f
+applyTimeline	src/Engine/Scripting/Lua/API/Camera.hs	149;"	f
 applyTimeline	src/World/Generate.hs	156;"	f
 applyTransform	src/Engine/Graphics/Transform.hs	48;"	f
 asDependents	src/Engine/Asset/Handle.hs	31;"	f
@@ -863,17 +864,18 @@ camVelocity	src/Engine/Graphics/Camera.hs	23;"	f
 camZSlice	src/Engine/Graphics/Camera.hs	28;"	f
 camZoom	src/Engine/Graphics/Camera.hs	24;"	f
 cameraChunkCoord	src/World/Generate.hs	69;"	f
-cameraGetPositionFn	src/Engine/Scripting/Lua/API/Camera.hs	36;"	f
-cameraGetZSliceFn	src/Engine/Scripting/Lua/API/Camera.hs	81;"	f
-cameraGetZoomFn	src/Engine/Scripting/Lua/API/Camera.hs	60;"	f
-cameraMoveFn	src/Engine/Scripting/Lua/API/Camera.hs	21;"	f
+cameraGetPositionFn	src/Engine/Scripting/Lua/API/Camera.hs	41;"	f
+cameraGetZSliceFn	src/Engine/Scripting/Lua/API/Camera.hs	83;"	f
+cameraGetZoomFn	src/Engine/Scripting/Lua/API/Camera.hs	63;"	f
+cameraGotoTileFn	src/Engine/Scripting/Lua/API/Camera.hs	105;"	f
+cameraMoveFn	src/Engine/Scripting/Lua/API/Camera.hs	27;"	f
 cameraPanAccel	src/World/Grid.hs	115;"	f
 cameraPanFriction	src/World/Grid.hs	119;"	f
 cameraPanSpeed	src/World/Grid.hs	111;"	f
 cameraRef	src/Engine/Core/State.hs	59;"	f
-cameraSetPositionFn	src/Engine/Scripting/Lua/API/Camera.hs	47;"	f
-cameraSetZSliceFn	src/Engine/Scripting/Lua/API/Camera.hs	88;"	f
-cameraSetZoomFn	src/Engine/Scripting/Lua/API/Camera.hs	70;"	f
+cameraSetPositionFn	src/Engine/Scripting/Lua/API/Camera.hs	51;"	f
+cameraSetZSliceFn	src/Engine/Scripting/Lua/API/Camera.hs	90;"	f
+cameraSetZoomFn	src/Engine/Scripting/Lua/API/Camera.hs	72;"	f
 cameraXWrap	src/Engine/Loop/Camera.hs	32;"	f
 cameraYLimit	src/Engine/Loop/Camera.hs	20;"	f
 capabilities	src/Engine/Graphics/Types.hs	40;"	f
@@ -1408,7 +1410,7 @@ handleSetVisible	src/Engine/Scripting/Lua/Message.hs	417;"	f
 handleSetWindowMode	src/Engine/Scripting/Lua/Message.hs	181;"	f
 handleSpawnSprite	src/Engine/Scripting/Lua/Message.hs	383;"	f
 handleSpawnText	src/Engine/Scripting/Lua/Message.hs	348;"	f
-handleWorldCommand	src/World/Thread.hs	196;"	f
+handleWorldCommand	src/World/Thread.hs	197;"	f
 hashCoord	src/World/Plate.hs	460;"	f
 hashGeo	src/World/Geology.hs	317;"	f
 hashToFloat'	src/World/Plate.hs	472;"	f
@@ -1672,7 +1674,7 @@ parseKeyName	src/Engine/Input/Bindings.hs	64;"	f
 parseLayer	src/Engine/Scripting/Lua/API/UI.hs	732;"	f
 parseLogLevel	src/Engine/Core/Log.hs	234;"	f
 parseTextureType	src/Engine/Scripting/Lua/API/World.hs	164;"	f
-partitionChunks	src/World/Thread.hs	188;"	f
+partitionChunks	src/World/Thread.hs	189;"	f
 pathSeparator	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/autogen/Paths_synarchy.hs	128;"	f
 pathSeparator	dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/x/synarchy/build/synarchy/autogen/Paths_synarchy.hs	128;"	f
 pauseScriptFn	src/Engine/Scripting/Lua/API/Core.hs	149;"	f
@@ -1700,7 +1702,7 @@ presentFamily	src/Engine/Graphics/Vulkan/Device.hs	36;"	f
 presentFrameWithResult	src/Engine/Loop/Frame.hs	307;"	f
 presentModes	src/Engine/Graphics/Types.hs	42;"	f
 presentQueue	src/Engine/Graphics/Types.hs	24;"	f
-processAllCommands	src/World/Thread.hs	84;"	f
+processAllCommands	src/World/Thread.hs	85;"	f
 processInput	src/Engine/Input/Thread.hs	89;"	f
 processInputs	src/Engine/Input/Thread.hs	79;"	f
 processLuaMessages	src/Engine/Scripting/Lua/Message.hs	34;"	f
@@ -1890,7 +1892,7 @@ ssiPath	src/Engine/Asset/Types.hs	130;"	f
 ssiStage	src/Engine/Asset/Types.hs	128;"	f
 startInputThread	src/Engine/Input/Thread.hs	29;"	f
 startLuaThread	src/Engine/Scripting/Lua/Thread.hs	41;"	f
-startWorldThread	src/World/Thread.hs	29;"	f
+startWorldThread	src/World/Thread.hs	30;"	f
 stbFontData	src/Engine/Graphics/Font/STB.hs	36;"	f
 stbFontInfo	src/Engine/Graphics/Font/STB.hs	37;"	f
 stbFontSize	src/Engine/Graphics/Font/STB.hs	38;"	f
@@ -1958,7 +1960,7 @@ tiLayout	src/Engine/Graphics/Vulkan/Base.hs	11;"	f
 tiMemory	src/Engine/Graphics/Vulkan/Base.hs	10;"	f
 tiSampler	src/Engine/Graphics/Vulkan/Base.hs	9;"	f
 tiView	src/Engine/Graphics/Vulkan/Base.hs	8;"	f
-tickWorldTime	src/World/Thread.hs	99;"	f
+tickWorldTime	src/World/Thread.hs	100;"	f
 tileDiamondHeight	src/World/Grid.hs	85;"	f
 tileHalfDiamondHeight	src/World/Grid.hs	99;"	f
 tileHalfWidth	src/World/Grid.hs	96;"	f
@@ -2082,7 +2084,7 @@ unFocusId	src/UI/Focus.hs	29;"	f
 unLayerId	src/UI/Render.hs	33;"	f
 unMaterialId	src/World/Material.hs	30;"	f
 unPageHandle	src/UI/Types.hs	33;"	f
-unWorldPageId	src/World/Thread.hs	379;"	f
+unWorldPageId	src/World/Thread.hs	395;"	f
 undefinedHandle	src/Engine/Graphics/Vulkan/Texture/Handle.hs	22;"	f
 undefinedSlot	src/Engine/Graphics/Vulkan/Texture/Slot.hs	28;"	f
 undefinedTextureData	src/Engine/Graphics/Vulkan/Texture/Undefined.hs	31;"	f
@@ -2102,7 +2104,7 @@ upZIndex	src/UI/Types.hs	54;"	f
 updateBatches	src/Engine/Scene/Batch/Update.hs	21;"	f
 updateCameraMouseDrag	src/Engine/Loop/Camera.hs	84;"	f
 updateCameraPanning	src/Engine/Loop/Camera.hs	47;"	f
-updateChunkLoading	src/World/Thread.hs	128;"	f
+updateChunkLoading	src/World/Thread.hs	129;"	f
 updateFontState	src/Engine/Asset/Manager.hs	99;"	f
 updateFrameTiming	src/Engine/Loop/Timing.hs	21;"	f
 updateKeyState	src/Engine/Input/Thread.hs	306;"	f
@@ -2254,7 +2256,7 @@ wmWorlds	src/World/Types.hs	466;"	f
 worldHideFn	src/Engine/Scripting/Lua/API/World.hs	54;"	f
 worldInitFn	src/Engine/Scripting/Lua/API/World.hs	24;"	f
 worldLayer	src/World/Grid.hs	103;"	f
-worldLoop	src/World/Thread.hs	52;"	f
+worldLoop	src/World/Thread.hs	53;"	f
 worldManagerRef	src/Engine/Core/State.hs	63;"	f
 worldQueue	src/Engine/Core/State.hs	64;"	f
 worldScreenWidth	src/World/Render.hs	40;"	f

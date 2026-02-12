@@ -19,6 +19,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 import qualified Engine.Core.Queue as Q
 import World.Types
 import World.Generate
+import World.Geology (buildTimeline)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.ZoomMap (buildZoomCache)
 
@@ -205,14 +206,29 @@ handleWorldCommand env logger cmd = do
             
             worldState <- emptyWorldState
             
-            let params = defaultWorldGenParams
-                    { wgpSeed      = seed
-                    , wgpWorldSize = worldSize
+            let timeline = buildTimeline seed worldSize 10
+                params = defaultWorldGenParams
+                    { wgpSeed        = seed
+                    , wgpWorldSize   = worldSize
+                    , wgpGeoTimeline = timeline
                     }
+            
+            -- Log crater locations so you can find them!
+            let craterEvents = concatMap gpEvents (gtPeriods timeline)
+            forM_ craterEvents $ \event -> case event of
+                CraterEvent cp -> do
+                    let GeoCoord cx cy = cpCenter cp
+                    logInfo logger CatWorld $ "Crater at global ("
+                        <> T.pack (show cx) <> ", " <> T.pack (show cy)
+                        <> ") radius=" <> T.pack (show (cpRadius cp))
+                        <> " depth=" <> T.pack (show (cpDepth cp))
+                        <> case cpMeteorite cp of
+                            Just m  -> " meteorite=" <> T.pack (show m)
+                            Nothing -> ""
+                _ -> return ()
             
             -- Store gen params for on-demand chunk loading
             writeIORef (wsGenParamsRef worldState) (Just params)
-
             -- Build zoom map cache (one-time computation)
             let zoomCache = buildZoomCache params
             writeIORef (wsZoomCacheRef worldState) zoomCache
