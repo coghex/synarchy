@@ -595,6 +595,8 @@ data WorldState = WorldState
     , wsTimeScaleRef ∷ IORef Float    -- ^ Game-minutes per real-second
     , wsZoomCacheRef ∷ IORef (V.Vector ZoomChunkEntry)  -- ^ Pre-computed zoom map cache for current world state
     , wsQuadCacheRef  ∷ IORef (Maybe WorldQuadCache)  -- ^ Cached quads for current camera state
+    , wsZoomQuadCacheRef ∷ IORef (Maybe ZoomQuadCache)  -- ^ Cached quads for zoomed-out view
+    , wsBgQuadCacheRef ∷ IORef (Maybe ZoomQuadCache)    -- ^ Cached quads for background layer
     }
 
 emptyWorldState ∷ IO WorldState
@@ -608,9 +610,11 @@ emptyWorldState = do
     timeScaleRef ← newIORef 1.0   -- 1 game-minute per real-second
     zoomCacheRef ← newIORef V.empty
     quadCacheRef  ← newIORef Nothing
+    zoomQCRef   ← newIORef Nothing
+    bgQCRef     ← newIORef Nothing
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
-                        quadCacheRef
+                        quadCacheRef zoomQCRef bgQCRef
 
 -----------------------------------------------------------
 -- World Manager
@@ -641,6 +645,24 @@ data ZoomChunkEntry = ZoomChunkEntry
     , zceTexIndex ∷ !Word8     -- ^ Material ID (used to pick texture at render time)
     , zceElev     ∷ !Int       -- ^ Elevation (used to pick texture at render time)
     } deriving (Show, Eq)
+
+-----------------------------------------------------------
+-- Zoom/Background Quad Cache
+-----------------------------------------------------------
+
+-- | Camera snapshot for zoom/bg caching.
+--   Simpler than WorldCameraSnapshot — no zSlice needed.
+data ZoomCameraSnapshot = ZoomCameraSnapshot
+    { zcsPosition ∷ !(Float, Float)
+    , zcsZoom     ∷ !Float
+    , zcsFbSize   ∷ !(Int, Int)
+    } deriving (Show, Eq)
+
+data ZoomQuadCache = ZoomQuadCache
+    { zqcCamera ∷ !ZoomCameraSnapshot
+    , zqcAlpha  ∷ !Float               -- ^ Alpha at time of caching
+    , zqcQuads  ∷ !(V.Vector SortableQuad)
+    } deriving (Show)
 
 -----------------------------------------------------------
 -- World Commands

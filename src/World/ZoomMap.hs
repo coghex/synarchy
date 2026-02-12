@@ -8,7 +8,7 @@ module World.ZoomMap
 import UPrelude
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -97,6 +97,23 @@ applyAllEvents events worldSize gx gy baseElev baseMat =
         in (newElev, newMat)
 
 -----------------------------------------------------------
+-- Zoom Camera Snapshot Comparison
+-----------------------------------------------------------
+
+-- | Epsilon for float comparison — sub-pixel threshold
+zoomCamEpsilon ∷ Float
+zoomCamEpsilon = 0.001
+
+zoomCameraChanged ∷ ZoomCameraSnapshot → ZoomCameraSnapshot → Bool
+zoomCameraChanged old new =
+    let (ox, oy) = zcsPosition old
+        (nx, ny) = zcsPosition new
+    in abs (ox - nx) > zoomCamEpsilon
+     ∨ abs (oy - ny) > zoomCamEpsilon
+     ∨ abs (zcsZoom old - zcsZoom new) > zoomCamEpsilon
+     ∨ zcsFbSize old ≢ zcsFbSize new
+
+-----------------------------------------------------------
 -- Generate Zoom Map Quads (called every frame)
 -----------------------------------------------------------
 
@@ -113,10 +130,27 @@ generateZoomMapQuads = do
     if zoomAlpha ≤ 0.001
         then return V.empty
         else do
+            let currentSnap = ZoomCameraSnapshot
+                    { zcsPosition = camPosition camera
+                    , zcsZoom     = zoom
+                    , zcsFbSize   = (fbW, fbH)
+                    }
             quads ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
-                    Just worldState → renderFromCache env worldState camera
-                                         fbW fbH zoomAlpha getZoomTexture zoomMapLayer
+                    Just worldState → do
+                        cached ← liftIO $ readIORef (wsZoomQuadCacheRef worldState)
+                        case cached of
+                            Just zqc | not (zoomCameraChanged (zqcCamera zqc) currentSnap)
+                                     , abs (zqcAlpha zqc - zoomAlpha) < zoomCamEpsilon →
+                                -- Cache hit — reuse last frame's zoom quads
+                                return (zqcQuads zqc)
+                            _ → do
+                                -- Cache miss — regenerate
+                                result ← renderFromCache env worldState camera
+                                             fbW fbH zoomAlpha getZoomTexture zoomMapLayer
+                                liftIO $ writeIORef (wsZoomQuadCacheRef worldState) $
+                                    Just (ZoomQuadCache currentSnap zoomAlpha result)
+                                return result
                     Nothing         → return V.empty
             return $ V.concat quads
 
@@ -131,10 +165,27 @@ generateBackgroundQuads = do
     (fbW, fbH) ← liftIO $ readIORef (framebufferSizeRef env)
     worldManager ← liftIO $ readIORef (worldManagerRef env)
 
+    let currentSnap = ZoomCameraSnapshot
+            { zcsPosition = camPosition camera
+            , zcsZoom     = camZoom camera
+            , zcsFbSize   = (fbW, fbH)
+            }
+
     quads ← forM (wmVisible worldManager) $ \pageId →
         case lookup pageId (wmWorlds worldManager) of
-            Just worldState → renderFromCache env worldState camera
-                                 fbW fbH 1.0 getBgTexture backgroundMapLayer
+            Just worldState → do
+                cached ← liftIO $ readIORef (wsBgQuadCacheRef worldState)
+                case cached of
+                    Just zqc | not (zoomCameraChanged (zqcCamera zqc) currentSnap) →
+                        -- Cache hit — reuse last frame's bg quads
+                        return (zqcQuads zqc)
+                    _ → do
+                        -- Cache miss — regenerate
+                        result ← renderFromCache env worldState camera
+                                     fbW fbH 1.0 getBgTexture backgroundMapLayer
+                        liftIO $ writeIORef (wsBgQuadCacheRef worldState) $
+                            Just (ZoomQuadCache currentSnap 1.0 result)
+                        return result
             Nothing         → return V.empty
     return $ V.concat quads
 
