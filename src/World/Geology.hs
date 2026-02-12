@@ -196,79 +196,29 @@ getFeatureRadius (LavaTube _)         = 30
 getFeatureRadius (SuperVolcano p)     = svCalderaRadius p
 getFeatureRadius (HydrothermalVent p) = htRadius p
 
--- | Build the full geological timeline from the world seed.
---   Deterministic — same seed always produces the same history.
 buildTimeline :: Word64 -> Int -> Int -> GeoTimeline
 buildTimeline seed worldSize plateCount =
     let plates = generatePlates seed worldSize plateCount
 
-        -- Sub-seeds for each phase of timeline generation
-        craterSeed   = seed `xor` 0xDEADBEEF
-        -- erosionSeed  = seed `xor` 0xER051
-        -- volcanoSeed  = seed `xor` 0xB45A1
-
-        -- Phase 1: Primordial bombardment (Eon scale)
-        --   Large craters on land, sets the gross terrain features
-        primordialCraters = generateCraters craterSeed worldSize plates
-                                CraterEra_Primordial
-
-        primordial = GeoPeriod
-            { gpName     = "Primordial Bombardment"
-            , gpScale    = Eon
-            , gpDuration = 100
-            , gpEvents   = map CraterEvent primordialCraters
-            , gpErosion  = ErosionParams
-                { epIntensity = 0.8
-                , epHydraulic = 0.3
-                , epThermal   = 0.6
-                , epWind      = 0.4
-                , epChemical  = 0.1
-                , epSeed      = seed + 1000
-                }
+        initialState = TimelineBuildState
+            { tbsFeatures  = []
+            , tbsNextId    = 0
+            , tbsPeriods   = []
+            , tbsPeriodIdx = 0
             }
 
-        -- Phase 2: Late bombardment (Era scale)
-        --   Smaller, fewer craters
-        lateCraters = generateCraters (craterSeed + 1) worldSize plates
-                          CraterEra_Late
-
-        lateBombardment = GeoPeriod
-            { gpName     = "Late Bombardment"
-            , gpScale    = Era
-            , gpDuration = 50
-            , gpEvents   = map CraterEvent lateCraters
-            , gpErosion  = ErosionParams
-                { epIntensity = 0.6
-                , epHydraulic = 0.5
-                , epThermal   = 0.4
-                , epWind      = 0.2
-                , epChemical  = 0.3
-                , epSeed      = seed + 2000
-                }
-            }
-
-        -- Phase 3: Stabilization (Period scale)
-        --   No impacts, heavy erosion smooths out the bombardment
-        stabilization = GeoPeriod
-            { gpName     = "Crustal Stabilization"
-            , gpScale    = Period
-            , gpDuration = 80
-            , gpEvents   = []
-            , gpErosion  = ErosionParams
-                { epIntensity = 0.9
-                , epHydraulic = 0.8
-                , epThermal   = 0.3
-                , epWind      = 0.2
-                , epChemical  = 0.5
-                , epSeed      = seed + 3000
-                }
-            }
+        s1 = buildPrimordialBombardment seed worldSize plates initialState
+        s2 = buildLateBombardment seed worldSize plates s1
+        s3 = buildEarlyVolcanism seed worldSize plates s2
+        s4 = buildVolcanicEvolution seed worldSize plates s3
+        s5 = buildLateVolcanism seed worldSize plates s4
+        s6 = buildStabilization seed s5
 
     in GeoTimeline
         { gtSeed      = seed
         , gtWorldSize = worldSize
-        , gtPeriods   = [primordial, lateBombardment, stabilization]
-        , gtFeatures  = []  -- No persistent features yet; they'll be added during evolution
+        , gtPeriods   = reverse (tbsPeriods s6)
+        , gtFeatures  = tbsFeatures s6
         }
 
 -- Hex literals for xor seeds (spelled with digits)
@@ -395,12 +345,44 @@ noModification = GeoModification 0 Nothing
 
 -- | Apply any geo event to a position.
 applyGeoEvent :: GeoEvent -> Int -> Int -> Int -> Int -> GeoModification
-applyGeoEvent (CraterEvent params) worldSize gx gy baseElev =
+applyGeoEvent (CraterEvent params)  worldSize gx gy baseElev =
     applyCrater params worldSize gx gy baseElev
-applyGeoEvent (VolcanicEvent _)     _ _ _ _ = noModification -- TODO
-applyGeoEvent (LandslideEvent _)   _ _ _ _ = noModification -- TODO
-applyGeoEvent (GlaciationEvent _)  _ _ _ _ = noModification -- TODO
-applyGeoEvent (FloodEvent _)       _ _ _ _ = noModification -- TODO
+applyGeoEvent (VolcanicEvent feature) worldSize gx gy baseElev =
+    applyVolcanicFeature feature worldSize gx gy baseElev
+applyGeoEvent (VolcanicModify _fid evolution) worldSize gx gy baseElev =
+    applyEvolution evolution worldSize gx gy baseElev
+applyGeoEvent (LandslideEvent _)    _ _ _ _ = noModification
+applyGeoEvent (GlaciationEvent _)   _ _ _ _ = noModification
+applyGeoEvent (FloodEvent _)        _ _ _ _ = noModification
+
+-----------------------------------------------------------
+-- Volcanic Feature Dispatch
+-----------------------------------------------------------
+
+applyVolcanicFeature :: VolcanicFeature -> Int -> Int -> Int -> Int -> GeoModification
+applyVolcanicFeature (ShieldVolcano p)    ws gx gy e = applyShieldVolcano p ws gx gy e
+applyVolcanicFeature (CinderCone p)       ws gx gy e = applyCinderCone p ws gx gy e
+applyVolcanicFeature (LavaDome p)         ws gx gy e = applyLavaDome p ws gx gy e
+applyVolcanicFeature (Caldera p)          ws gx gy e = applyCaldera p ws gx gy e
+applyVolcanicFeature (FissureVolcano p)   ws gx gy e = applyFissure p ws gx gy e
+applyVolcanicFeature (LavaTube p)         ws gx gy e = applyLavaTube p ws gx gy e
+applyVolcanicFeature (SuperVolcano p)     ws gx gy e = applySuperVolcano p ws gx gy e
+applyVolcanicFeature (HydrothermalVent p) ws gx gy e = applyHydrothermal p ws gx gy e
+
+-----------------------------------------------------------
+-- Feature Evolution Application
+-----------------------------------------------------------
+
+applyEvolution :: FeatureEvolution -> Int -> Int -> Int -> Int -> GeoModification
+applyEvolution (Reactivate heightGain _lavaExt) _ws _gx _gy _e =
+    GeoModification heightGain Nothing
+applyEvolution GoDormant _ _ _ _ = noModification
+applyEvolution GoExtinct _ _ _ _ = noModification
+applyEvolution (CollapseToCaldera depth _ratio) _ws _gx _gy _e =
+    GeoModification (negate depth) (Just (unMaterialId matObsidian))
+applyEvolution (ParasiticEruption childFeature _childId) ws gx gy e =
+    applyVolcanicFeature childFeature ws gx gy e
+applyEvolution (FlankCollapse _ _ _) _ _ _ _ = noModification
 
 -----------------------------------------------------------
 -- Crater Application
