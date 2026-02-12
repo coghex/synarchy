@@ -28,6 +28,10 @@ import Vulkan.Core10 (Device, CommandBuffer)
 import Vulkan.Extensions.VK_KHR_swapchain (SwapchainKHR)
 import GHC.Stack (HasCallStack)
 
+-----------------------------------------------------------
+-- Resource Validation and Extraction
+-----------------------------------------------------------
+
 -- | Validate descriptor state is ready for rendering
 validateDescriptorState ∷ GraphicsState → EngineM ε σ ()
 validateDescriptorState state = case descriptorState state of
@@ -37,7 +41,6 @@ validateDescriptorState state = case descriptorState state of
         logAndThrowM CatGraphics (ExGraphics DescriptorError)
             "No active descriptor sets"
 
--- | Get frame resources for a given frame index
 getFrameResources ∷ GraphicsState → Word32 → EngineM ε σ FrameResources
 getFrameResources state frameIdx = 
     case safeVectorIndex (frameResources state) (fromIntegral frameIdx) of
@@ -45,7 +48,6 @@ getFrameResources state frameIdx =
             "Frame index out of bounds: " <> T.pack (show frameIdx)
         Just res → pure res
 
--- | Get command buffer from frame resources
 getCommandBuffer ∷ FrameResources → EngineM ε σ CommandBuffer
 getCommandBuffer resources = 
     case safeVectorHead (frCommandBuffer resources) of
@@ -53,25 +55,21 @@ getCommandBuffer resources =
                                            "No command buffer"
         Just cb → pure cb
 
--- | Get Vulkan device
 getDevice ∷ GraphicsState → EngineM ε σ Device
 getDevice state = case vulkanDevice state of
     Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost) "No device"
     Just d  → pure d
 
--- | Get swapchain
 getSwapchain ∷ GraphicsState → EngineM ε σ SwapchainKHR
 getSwapchain state = case swapchainInfo state of
     Nothing → logAndThrowM CatGraphics (ExGraphics SwapchainError) "No swapchain"
     Just si → pure $ siSwapchain si
 
--- | Get device queues
 getQueues ∷ GraphicsState → EngineM ε σ DevQueues
 getQueues state = case deviceQueues state of
     Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost) "No queues"
     Just q  → pure q
 
--- | Extract window from graphics state
 extractWindow ∷ HasCallStack ⇒ GraphicsState → Either EngineException Window
 extractWindow state = case glfwWindow state of
     Nothing  → Left $ EngineException
@@ -80,13 +78,16 @@ extractWindow state = case glfwWindow state of
                   mkErrorContext
     Just win → Right win
 
+-----------------------------------------------------------
+-- Utility Functions
+-----------------------------------------------------------
+
 -- | Safe vector access by index
 safeVectorIndex ∷ V.Vector a → Int → Maybe a
 safeVectorIndex vec idx
   | idx ≥ 0 ∧ idx < V.length vec = Just (vec V.! idx)
   | otherwise = Nothing
 
--- | Safe vector head
 safeVectorHead ∷ V.Vector a → Maybe a
 safeVectorHead vec
   | V.null vec = Nothing

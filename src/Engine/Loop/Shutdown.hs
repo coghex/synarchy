@@ -20,48 +20,40 @@ import Engine.Input.Callback (clearGLFWCallbacks)
 import Engine.Scene.Types (createBatchManager, SceneManager(..))
 import Vulkan.Core10 (deviceWaitIdle)
 
+-----------------------------------------------------------
+-- Engine Shutdown
+-----------------------------------------------------------
+
 -- | Shutdown the engine
 shutdownEngine ∷ Window → ThreadState → ThreadState → EngineM ε σ ()
 shutdownEngine (Window win) inputThreadState luaThreadState = do
     logInfoM CatSystem "Starting engine shutdown..."
     state ← gets graphicsState
-    
-    -- Clear batch manager
     logDebugM CatSystem "Clearing batch manager..."
     modify $ \s → s { sceneManager = (sceneManager s) {
                           smBatchManager = createBatchManager } }
-    
-    -- Wait for Vulkan device
     logDebugM CatSystem "Waiting for Vulkan device idle..."
     forM_ (vulkanDevice state) $ \device → liftIO $ deviceWaitIdle device
-
-    -- run manual cleanup actions
     logDebugM CatSystem "Running Vulkan cleanup actions..."
     liftIO $ runAllCleanups (vulkanCleanup state)
-    
-    -- GLFW cleanup
     logDebugM CatSystem "Cleaning up GLFW..."
     liftIO $ GLFW.postEmptyEvent
     GLFW.setWindowShouldClose win True
     liftIO $ clearGLFWCallbacks win
-    
-    -- Shutdown threads
     env ← ask
     logDebugM CatSystem "Shutting down input thread..."
     liftIO $ shutdownThread inputThreadState
-    
     logDebugM CatSystem "Shutting down Lua thread..."
     liftIO $ shutdownThread luaThreadState
-
-    -- shut down logger
     logDebugM CatSystem "Shutting down logger..."
     logger ← liftIO $ readIORef $ loggerRef env
     liftIO $ shutdownLogger logger
-    
-    -- Mark engine as stopped
     liftIO $ writeIORef (lifecycleRef env) EngineStopped
-    
     logDebugM CatSystem "Engine shutdown complete"
+
+-----------------------------------------------------------
+-- Status Checking
+-----------------------------------------------------------
 
 -- | Check engine status for continuation
 checkStatus ∷ Either EngineException () → IO (Either EngineException ())

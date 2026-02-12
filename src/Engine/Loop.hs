@@ -21,31 +21,35 @@ import Engine.Loop.Frame (drawFrame)
 import Engine.Loop.Camera (updateCameraPanning, updateCameraMouseDrag)
 import Engine.Scripting.Lua.Message (processLuaMessages)
 
+-----------------------------------------------------------
+-- Main Loop
+-----------------------------------------------------------
+
 -- | Main engine loop
 mainLoop ∷ EngineM ε σ ()
 mainLoop = do
     env ← ask
     state ← gets graphicsState
     lifecycle ← liftIO $ readIORef (lifecycleRef env)
-
     case lifecycle of
         EngineStarting → handleEngineStarting env
         EngineRunning  → handleEngineRunning
         CleaningUp     → logDebugM CatSystem "Engine is cleaning up"
         EngineStopped  → logDebugM CatSystem "Engine has stopped"
 
+-----------------------------------------------------------
+-- State Handlers
+-----------------------------------------------------------
+
 -- | Handle engine starting state
 handleEngineStarting ∷ EngineEnv → EngineM ε σ ()
 handleEngineStarting env = do
     logDebugM CatSystem "Engine starting..."
     liftIO $ threadDelay 100000
-    
-    -- Clear the input queue before entering main loop
     flushed ← liftIO $ Q.flushQueue (inputQueue env)
     when (not $ null flushed) $
         logWarnM CatThread $ "Unexpected inputs during startup: "
                                  <> (T.pack (show (length flushed)) <> " events flushed")
-    
     logDebugM CatSystem "Engine running"
     liftIO $ writeIORef (lifecycleRef env) EngineRunning
     mainLoop
@@ -59,22 +63,15 @@ handleEngineRunning = do
                     (ExSystem (GLFWError "handleEngineRunning: "))
                     "No GLFW window available"
         Just w  → pure w
-    
     let Window glfwWin = window
-    
-   
-    -- Process events
     GLFW.pollEvents
     handleInputEvents
     updateCameraPanning
     updateCameraMouseDrag
     processLuaMessages
-    
-    -- Check for shutdown
     shouldClose ← GLFW.windowShouldClose glfwWin
     env ← ask
     lifecycle ← liftIO $ readIORef (lifecycleRef env)
-    
     if shouldClose ∨ lifecycle ≢ EngineRunning
         then do
             logInfoM CatSystem "Engine shutting down..."

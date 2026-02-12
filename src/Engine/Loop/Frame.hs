@@ -49,44 +49,41 @@ import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_KHR_swapchain hiding (acquireNextImageKHRSafe)
 import GHC.Stack (HasCallStack)
 
+-----------------------------------------------------------
+-- Lighting
+-----------------------------------------------------------
+
 computeAmbientLight ∷ Float → Float
 computeAmbientLight sunAngle =
     let angle = sunAngle * 2.0 * π
         sunHeight = sin angle
     in if sunHeight ≥ 0
-       then 0.5 + 0.2 * sunHeight   -- day: 0.5 at horizon, 0.7 at noon
-       else 0.15 + 0.35 * (1.0 + sunHeight)  -- night: 0.15 at midnight, 0.5 at horizon
+       then 0.5 + 0.2 * sunHeight
+       else 0.15 + 0.35 * (1.0 + sunHeight)
 
--- | Sun cycle speed: full cycle every 600 seconds
 sunCycleSpeed ∷ Double
 sunCycleSpeed = 1.0 / 600.0
+
+-----------------------------------------------------------
+-- Frame Rendering
+-----------------------------------------------------------
 
 -- | Draw a single frame
 drawFrame ∷ EngineM ε σ ()
 drawFrame = do
     state ← gets graphicsState
-    
-    -- Get window
     window@(Window win) ← case extractWindow state of
         Left err → logAndThrowM CatSystem
           (ExSystem (GLFWError "drawFrame: ")) $ T.pack $
             "No window: " ⧺ displayException err
         Right w → pure w
-    
     let frameIdx = currentFrame state
-    
     logDebugSM CatRender "Beginning frame render" 
         [("frame", T.pack $ show frameIdx)]
-    
-    -- Get frame resources and device early
     resources ← getFrameResources state frameIdx
     device ← getDevice state
-    
-    -- Wait for this frame's previous work to complete
     logDebugM CatRender "Waiting for previous frame fence..."
     liftIO $ waitForFences device (V.singleton (frInFlight resources)) True maxBound
-    
-    -- Try to acquire image BEFORE resetting fence
     swapchain ← getSwapchain state
     logDebugM CatRender "Acquiring swapchain image..."
     acquireResult ← liftIO $ acquireNextImageKHRSafe device swapchain maxBound
@@ -108,60 +105,34 @@ drawFrame = do
         Right imageIndex → do
             logDebugSM CatRender "Acquired swapchain image"
                 [("imageIndex", T.pack $ show imageIndex)]
-            
-            -- NOW reset fence since we're definitely going to submit
             liftIO $ resetFences device (V.singleton (frInFlight resources))
-
-            -- 1. Collect world tile quads
             worldTileQuads ← updateWorldTiles
-            
             logDebugSM CatRender "Collected world tile quads"
                 [("count", T.pack $ show $ V.length worldTileQuads)]
-            
-            -- 2. Update scene (populates BatchManager with DrawableObjects)
             logDebugM CatRender "Updating scene for render..."
             updateSceneForRender
             sceneMgr ← gets sceneManager
-            
-            -- 3. Get scene sprites in world layers as SortableQuads
             sceneQuads ← getWorldSceneQuads
-            
             logDebugSM CatRender "Collected scene quads for world layer"
                 [("count", T.pack $ show $ V.length sceneQuads)]
-            
-            -- 4. Merge world tiles + scene sprites, grouped by layer.
-            --    Each distinct sqLayer gets its own RenderBatch so that
-            --    layer ordering is respected (e.g. background layer 0
-            --    behind world tiles layer 1 behind zoom map layer 2).
             let allWorldQuads = V.toList worldTileQuads <> V.toList sceneQuads
-                -- Group quads by their sqLayer
                 groupedByLayer = Map.fromListWith (<>)
                     [ (sqLayer q, [q]) | q ← allWorldQuads ]
-                -- One RenderBatch per layer
                 perLayerBatches = Map.mapWithKey
                     (\layer quads → mergeQuadsToBatch layer quads)
                     groupedByLayer
-                -- For vertex upload (flat list of batches)
                 worldBatches = V.fromList $ Map.elems perLayerBatches
-                -- For draw ordering (layered map of render items)
                 worldLayeredBatches = Map.map
                     (\batch → V.singleton (SpriteItem batch))
                     perLayerBatches
-            
-            -- 5. Render UI
             logDebugM CatRender "Rendering UI pages..."
             (uiBatches, uiLayeredBatches) ← renderUIPages
-            
             logDebugSM CatRender "Collected UI batches"
                 [("count", T.pack $ show $ V.length uiBatches)
                 ,("layers", T.pack $ show $ Map.size uiLayeredBatches)]
-            
-            -- 6. Final merge: world + UI
             let batches = worldBatches <> uiBatches
                 layeredBatches = Map.unionsWith (<>) 
                     [worldLayeredBatches, uiLayeredBatches]
-
-            -- Log final layer composition
             logDebugM CatRender $ T.pack $ "Final layered batches:"
             forM_ (Map.toList layeredBatches) $ \(LayerId lid, items) → do
                 let spriteCount = V.length $ V.filter (\case SpriteItem _ → True; _ → False) items
@@ -169,47 +140,31 @@ drawFrame = do
                 logDebugM CatRender $ T.pack $ 
                     "  Layer " <> show lid <> ": " <> show (V.length items) <> 
                     " items (" <> show spriteCount <> " sprites, " <> show textCount <> " text)"
-            
             logDebugSM CatRender "Total render batches"
                 [("total", T.pack $ show $ V.length batches)
                 ,("totalLayers", T.pack $ show $ Map.size layeredBatches)]
-            
-            -- Update uniform buffer
             logDebugM CatRender "Updating uniform buffer..."
             updateUniformBufferForFrame win frameIdx
-            
-            -- Prepare dynamic vertex buffer
             let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
-            
             logDebugSM CatRender "Preparing vertex buffer"
                 [("vertices", T.pack $ show totalVertices)]
-            
             dynamicBuffer ← if totalVertices > 0
                 then do
                     buffer ← ensureDynamicVertexBuffer totalVertices
                     uploadBatchesToBuffer batches buffer
                 else ensureDynamicVertexBuffer 6
-            
-            -- Validate resources
             state'' ← gets graphicsState
             validateDescriptorState state''
-            
             logDebugM CatRender "Cleaning up pending instance buffers..."
             cleanupPendingInstanceBuffers
-            
-            -- Record command buffer
             logDebugM CatRender "Recording command buffer..."
             cmdBuffer ← getCommandBuffer resources
             liftIO $ resetCommandBuffer cmdBuffer zero
             recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex) 
                                      dynamicBuffer layeredBatches
-            
-            -- Submit
             logDebugM CatRender "Submitting frame to GPU..."
             queues ← getQueues state''
             submitFrame cmdBuffer resources queues
-            
-            -- Present - get fresh swapchain from state
             logDebugM CatRender "Presenting frame..."
             currentState ← gets graphicsState
             currentSwapchain ← getSwapchain currentState
@@ -232,15 +187,15 @@ drawFrame = do
                 
                 Right () → 
                     logDebugM CatRender "Frame presented successfully"
-            
-            -- Update frame index
             let nextFrame = (frameIdx + 1) `mod` fromIntegral (gcMaxFrames defaultGraphicsConfig)
             modify $ \s → s { graphicsState = (graphicsState s) {
                 currentFrame = nextFrame } }
-            
             logDebugSM CatRender "Frame complete"
                 [("nextFrame", T.pack $ show nextFrame)]
 
+-----------------------------------------------------------
+-- Uniform Buffer Updates
+-----------------------------------------------------------
 
 -- | Update uniform buffer for current frame
 updateUniformBufferForFrame ∷ GLFW.Window → Word32 → EngineM ε σ ()
@@ -251,24 +206,17 @@ updateUniformBufferForFrame win frameIdx = do
             let (_, memory) = buffers V.! fromIntegral frameIdx
             (fbWidth, fbHeight) ← GLFW.getFramebufferSize win
             (winWidth, winHeight) ← GLFW.getWindowSize win
-
-            -- Before writing
             env ← ask
             old ← liftIO $ readIORef (framebufferSizeRef env)
-            
             logDebugSM CatRender "Updating uniform buffer"
                 [("frame", T.pack $ show frameIdx)
                 ,("fbSize", T.pack (show fbWidth) <> "x" <> T.pack (show fbHeight))
                 ,("winSize", T.pack (show winWidth) <> "x" <> T.pack (show winHeight))]
-            
             camera ← liftIO $ readIORef (cameraRef env)
             brightness ← liftIO $ readIORef (brightnessRef env)
             pixelSnap ← liftIO $ readIORef (pixelSnapRef env)
             sunAngle ← liftIO $ readIORef (sunAngleRef env)
-            
             let ambientLight = computeAmbientLight sunAngle
-            
-            -- Update UI camera to use framebuffer dimensions
             let uiCamera = UICamera (fromIntegral fbWidth) (fromIntegral fbHeight)
             let uboData = UBO identity (createViewMatrix camera)
                               (createProjectionMatrix camera 
@@ -280,14 +228,16 @@ updateUniformBufferForFrame win frameIdx = do
                               (if pixelSnap then 1.0 else 0.0)
                               sunAngle
                               ambientLight
-            
             liftIO $ writeIORef (windowSizeRef env) (winWidth, winHeight)
             liftIO $ writeIORef (framebufferSizeRef env) (fbWidth, fbHeight)
-            
             updateUniformBuffer device memory uboData
         _ → logAndThrowM CatGraphics
           (ExGraphics VulkanDeviceLost) $
             T.pack "No device or uniform buffer"
+
+-----------------------------------------------------------
+-- Frame Submission and Presentation
+-----------------------------------------------------------
 
 -- | Submit frame to GPU
 submitFrame ∷ CommandBuffer → FrameResources → DevQueues → EngineM ε σ ()
@@ -303,7 +253,6 @@ submitFrame cmdBuffer resources queues = do
     liftIO $ queueSubmit (graphicsQueue queues) 
                (V.singleton $ SomeStruct submitInfo) (frInFlight resources)
 
--- | Present frame and return result for handling
 presentFrameWithResult ∷ FrameResources → DevQueues → SwapchainKHR → Word32 
                        → EngineM ε σ (Either Result ())
 presentFrameWithResult resources queues swapchain imageIndex = do
@@ -319,7 +268,6 @@ presentFrameWithResult resources queues swapchain imageIndex = do
         ERROR_OUT_OF_DATE_KHR → pure $ Left ERROR_OUT_OF_DATE_KHR
         err                   → pure $ Left err
 
--- | Safe wrapper for acquireNextImageKHR
 acquireNextImageKHRSafe ∷ Device → SwapchainKHR → Word64 → Semaphore → Fence 
                         → IO (Either Result Word32)
 acquireNextImageKHRSafe device swapchain timeout semaphore fence = do

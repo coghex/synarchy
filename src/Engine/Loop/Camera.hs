@@ -17,6 +17,10 @@ import World.Grid (cameraPanSpeed, cameraPanAccel, cameraPanFriction,
 import World.Generate (chunkSize)
 import Control.Monad.State.Class (gets)
 
+-----------------------------------------------------------
+-- Camera Limits and Wrapping
+-----------------------------------------------------------
+
 cameraYLimit ∷ Float
 cameraYLimit =
     let worldSizeChunks = 128
@@ -25,17 +29,12 @@ cameraYLimit =
         maxRow = halfTiles - glacierBuffer
     in fromIntegral maxRow * tileHalfDiamondHeight
 
--- | The full world width in screen-space X.
---   Wrapping grid-X by worldSize chunks (= worldSize * chunkSize tiles)
---   shifts screen-X by (worldSize * chunkSize * tileHalfWidth),
---   because screenX = (gx - gy) * tileHalfWidth and only gx changes.
 cameraXWrap ∷ Float
 cameraXWrap =
     let worldSizeChunks = 128
         worldTiles = worldSizeChunks * chunkSize
     in fromIntegral worldTiles * tileHalfWidth
 
--- | Wrap camera X into [-cameraXWrap/2, cameraXWrap/2)
 wrapCameraX ∷ Float → Float
 wrapCameraX x =
     let w = cameraXWrap
@@ -43,6 +42,10 @@ wrapCameraX x =
         shifted = x + halfW
         wrapped = shifted - w * fromIntegral (floor (shifted / w) ∷ Int)
     in wrapped - halfW
+
+-----------------------------------------------------------
+-- Camera Updates
+-----------------------------------------------------------
 
 updateCameraPanning ∷ EngineM ε σ ()
 updateCameraPanning = do
@@ -129,6 +132,10 @@ updateCameraMouseDrag = do
 
             (False, False) →
                 (cam, ())
+
+-----------------------------------------------------------
+-- Helper Functions
+-----------------------------------------------------------
 
 stepAxis ∷ Float → Float → Float → Float → Float → Float → Float
 stepAxis input vel accel friction maxSpd dt
