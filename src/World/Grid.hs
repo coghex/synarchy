@@ -28,11 +28,14 @@ module World.Grid
     , chunkWorldDiamondHeight
     , zoomFadeStart
     , zoomFadeEnd
+    , applyFacing
+    , unapplyFacing
     ) where
 
 import UPrelude
 import World.Types (chunkSize)
 import Engine.Scene.Base (LayerId(..))
+import Engine.Graphics.Camera (CameraFacing(..))
 
 -----------------------------------------------------------
 -- Grid Configuration
@@ -155,26 +158,42 @@ worldScreenWidth worldSizeChunks =
     in fromIntegral worldTiles * tileHalfWidth
 
 -----------------------------------------------------------
+-- Facing Transforms
+-----------------------------------------------------------
+
+-- | Rotate grid coordinates into screen-aligned axes.
+applyFacing ∷ CameraFacing → Int → Int → (Int, Int)
+applyFacing FaceSouth gx gy = ( gx,  gy)
+applyFacing FaceWest  gx gy = ( gy, -gx)
+applyFacing FaceNorth gx gy = (-gx, -gy)
+applyFacing FaceEast  gx gy = (-gy,  gx)
+
+-- | Inverse of applyFacing: screen-aligned axes back to grid.
+unapplyFacing ∷ CameraFacing → Int → Int → (Int, Int)
+unapplyFacing FaceSouth a b = ( a,  b)
+unapplyFacing FaceWest  a b = (-b,  a)
+unapplyFacing FaceNorth a b = (-a, -b)
+unapplyFacing FaceEast  a b = ( b, -a)
+
+-----------------------------------------------------------
 -- Coordinate Conversions
 -----------------------------------------------------------
 
--- | Convert grid coordinates to world-space position.
--- Returns the TOP-CENTER of the diamond for tile (gx, gy).
-gridToWorld ∷ Int → Int → (Float, Float)
-gridToWorld gx gy =
-    let sx = fromIntegral (gx - gy) * tileHalfWidth
-        sy = fromIntegral (gx + gy) * tileHalfDiamondHeight
+gridToWorld ∷ CameraFacing → Int → Int → (Float, Float)
+gridToWorld facing gx gy =
+    let (a, b) = applyFacing facing gx gy
+        sx = fromIntegral (a - b) * tileHalfWidth
+        sy = fromIntegral (a + b) * tileHalfDiamondHeight
     in (sx, sy)
 
--- | Convert grid coordinates to sprite draw origin (top-left of quad).
-gridToScreen ∷ Int → Int → (Float, Float)
-gridToScreen gx gy =
-    let (cx, cy) = gridToWorld gx gy
+gridToScreen ∷ CameraFacing → Int → Int → (Float, Float)
+gridToScreen facing gx gy =
+    let (cx, cy) = gridToWorld facing gx gy
     in (cx - tileHalfWidth, cy)
 
--- | Convert world-space position back to nearest grid coordinates.
-worldToGrid ∷ Float → Float → (Int, Int)
-worldToGrid wx wy =
-    let fgx = (wx / tileHalfWidth + wy / tileHalfDiamondHeight) / 2.0
-        fgy = (wy / tileHalfDiamondHeight - wx / tileHalfWidth) / 2.0
-    in (round fgx, round fgy)
+worldToGrid ∷ CameraFacing → Float → Float → (Int, Int)
+worldToGrid facing wx wy =
+    let fa = (wx / tileHalfWidth + wy / tileHalfDiamondHeight) / 2.0
+        fb = (wy / tileHalfDiamondHeight - wx / tileHalfWidth) / 2.0
+        (a, b) = (round fa, round fb)
+    in unapplyFacing facing a b

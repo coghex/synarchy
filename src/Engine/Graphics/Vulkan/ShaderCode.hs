@@ -39,6 +39,7 @@ fontVertexShaderCode = [vert|
         float pixelSnap;
         float sunAngle;
         float ambientLight;
+        float cameraFacing;
     } ubo;
 
     layout(location = 0) out vec2 fragTexCoord;
@@ -110,6 +111,7 @@ bindlessVertexShaderCode = [vert|
         float pixelSnap;
         float sunAngle;
         float ambientLight;
+        float cameraFacing;
     } ubo;
 
     layout(location = 0) out vec2 fragTexCoord;
@@ -119,6 +121,7 @@ bindlessVertexShaderCode = [vert|
     layout(location = 4) out flat int fragFaceMapIndex;
     layout(location = 5) out float fragSunAngle;
     layout(location = 6) out float fragAmbientLight;
+    layout(location = 7) out float fragCameraFacing;
 
     void main() {
         vec4 worldPos = ubo.model * vec4(inPosition.xy, 0.0, 1.0);
@@ -139,6 +142,7 @@ bindlessVertexShaderCode = [vert|
         fragFaceMapIndex = int(inFaceMapIndex);
         fragSunAngle = ubo.sunAngle;
         fragAmbientLight = ubo.ambientLight;
+        fragCameraFacing = ubo.cameraFacing;
     }
 |]
 
@@ -157,6 +161,7 @@ bindlessFragmentShaderCode = [frag|
     layout(location = 4) in flat int fragFaceMapIndex;
     layout(location = 5) in float fragSunAngle;
     layout(location = 6) in float fragAmbientLight;
+    layout(location = 7) in float fragCameraFacing;
 
     layout(set = 1, binding = 0) uniform sampler2D textures[16384];
 
@@ -164,46 +169,51 @@ bindlessFragmentShaderCode = [frag|
 
     void main() {
         vec4 texColor = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord);
-
-        // Sample face map
+        
         vec3 faceRaw = texture(textures[nonuniformEXT(fragFaceMapIndex)], fragTexCoord).rgb;
-
-        // Normalize weights (R=right, G=top, B=left)
         float total = faceRaw.r + faceRaw.g + faceRaw.b;
+        
         vec3 weights;
         if (total < 0.001) {
-            // Default to pure top-facing
             weights = vec3(0.0, 1.0, 0.0);
         } else {
             weights = faceRaw / total;
         }
-
-        // Compute sun parameters from sunAngle (0..1 full cycle)
-        float angle = fragSunAngle * 6.28318530718; // 2*PI
-        float sunHeight = sin(angle);   // peaks at noon (0.25), negative at night
-        float sunDir    = cos(angle);   // positive = east (lights left), negative = west (lights right)
-        float ambient   = fragAmbientLight;
-
-        // Directional intensity: how much direct sunlight is available
+        
+        // Swizzle face map channels based on camera rotation.
+        // The face map is baked: R=right, G=top, B=left (relative to FaceSouth).
+        // When we rotate the camera, the "right" side of the tile becomes
+        // a different side. For 90° rotations of an iso diamond,
+        // left and right simply swap on odd rotations.
+        int facing = int(fragCameraFacing + 0.5);
+        vec3 w;
+        if (facing == 0 || facing == 2) {
+            // South or North: R=right, B=left (default)
+            w = weights;
+        } else {
+            // West or East: the left/right sides swap
+            w = vec3(weights.b, weights.g, weights.r);
+        }
+        
+        // Sun direction rotated by camera facing
+        // Each 90° CW rotation shifts apparent sun direction by +PI/2
+        float facingOffset = float(facing) * 1.5707963;
+        float baseAngle = fragSunAngle * 6.28318530718;
+        float sunHeight = sin(baseAngle);
+        float sunDir = cos(baseAngle + facingOffset);
+        float ambient = fragAmbientLight;
         float sunIntensity = max(0.0, sunHeight);
-
-        // Top face: ambient + full direct sun
+        
         float topBright = ambient + (1.0 - ambient) * sunIntensity;
-
-        // Side faces: slightly darker base + directional bias from sun angle
-        // sideShadow controls how much darker sides are than top (0.85 = 15% darker)
+        
         float sideShadow = 0.85;
         float sideAmbient = ambient * sideShadow;
-
-        // Directional component: the lit side gets more, shadow side gets less
         float directStrength = (1.0 - ambient) * sunIntensity;
         float leftBright  = sideAmbient + directStrength * (0.4 + 0.6 * max(0.0, sunDir));
         float rightBright = sideAmbient + directStrength * (0.4 + 0.6 * max(0.0, -sunDir));
-
-        // Blend per-face lighting by face map weights
-        float brightness = weights.r * rightBright + weights.g * topBright + weights.b * leftBright;
-
-        // Apply global brightness multiplier and vertex color
+        
+        float brightness = w.r * rightBright + w.g * topBright + w.b * leftBright;
+        
         vec4 color = texColor * fragColor;
         color.rgb *= brightness * fragBrightness;
         outColor = color;
@@ -236,6 +246,7 @@ bindlessUIVertexShaderCode = [vert|
         float pixelSnap;
         float sunAngle;
         float ambientLight;
+        float cameraFacing;
     } ubo;
 
     layout(location = 0) out vec2 fragTexCoord;
@@ -301,6 +312,7 @@ fontUIVertexShaderCode = [vert|
         float pixelSnap;
         float sunAngle;
         float ambientLight;
+        float cameraFacing;
     } ubo;
 
     layout(location = 0) out vec2 fragTexCoord;

@@ -14,7 +14,7 @@ import Engine.Core.Monad (EngineM)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
-import Engine.Graphics.Camera (Camera2D(..))
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
@@ -33,8 +33,8 @@ import qualified Data.Vector as V
 -- Build Zoom Cache (called once at world init)
 -----------------------------------------------------------
 
-buildZoomCache ∷ WorldGenParams → V.Vector ZoomChunkEntry
-buildZoomCache params =
+buildZoomCache ∷ CameraFacing → WorldGenParams → V.Vector ZoomChunkEntry
+buildZoomCache facing params =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
         plates = generatePlates seed worldSize (wgpPlateCount params)
@@ -62,7 +62,7 @@ buildZoomCache params =
                       then (baseElev, unMaterialId baseMat)
                       else applyAllEvents allEvents worldSize
                                midGX midGY baseElev (unMaterialId baseMat)
-                  (wcx, wcy) = gridToWorld midGX midGY
+                  (wcx, wcy) = gridToWorld facing midGX midGY
                   drawX = wcx - chunkWorldWidth / 2.0
                   drawY = wcy
             ]

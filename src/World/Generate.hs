@@ -26,6 +26,7 @@ import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalX)
 import World.Grid (worldToGrid)
 import World.Geology (applyGeoEvent, applyErosion, GeoModification(..))
+import Engine.Graphics.Camera (CameraFacing(..))
 
 -----------------------------------------------------------
 -- Constants
@@ -63,9 +64,9 @@ chunkWorldBounds (ChunkCoord cx cy) =
         maxY = minY + chunkSize - 1
     in ((minX, minY), (maxX, maxY))
 
-cameraChunkCoord ∷ Float → Float → ChunkCoord
-cameraChunkCoord camX camY =
-    let (gx, gy) = worldToGrid camX camY
+cameraChunkCoord ∷ CameraFacing → Float → Float → ChunkCoord
+cameraChunkCoord facing camX camY =
+    let (gx, gy) = worldToGrid facing camX camY
         (coord, _) = globalToChunk gx gy
     in coord
 

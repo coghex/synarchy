@@ -140,7 +140,8 @@ updateChunkLoading env logger = do
         manager ← readIORef (worldManagerRef env)
 
         let (camX, camY) = camPosition camera
-            camChunk = cameraChunkCoord camX camY
+            facing = camFacing camera
+            camChunk = cameraChunkCoord facing camX camY
             ChunkCoord ccx ccy = camChunk
 
             neededCoords = [ ChunkCoord (ccx + dx) (ccy + dy)
@@ -247,7 +248,9 @@ handleWorldCommand env logger cmd = do
             -- Store gen params for on-demand chunk loading
             writeIORef (wsGenParamsRef worldState) (Just params)
             -- Build zoom map cache (one-time computation)
-            let zoomCache = buildZoomCache params
+            camera ← readIORef (cameraRef env)
+            let facing = camFacing camera
+                zoomCache = buildZoomCache facing params
             writeIORef (wsZoomCacheRef worldState) zoomCache
             
             -- Generate the initial 5×5 chunk grid around (0,0)

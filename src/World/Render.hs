@@ -12,7 +12,7 @@ import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
 import Engine.Scene.Base (LayerId(..), ObjectId(..))
 import Engine.Scene.Types (RenderBatch(..), SortableQuad(..))
-import Engine.Graphics.Camera (Camera2D(..))
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
@@ -21,7 +21,7 @@ import World.Types
 import World.Generate (chunkToGlobal, chunkWorldBounds, viewDepth, globalToChunk)
 import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer,
                    tileHalfWidth, tileHalfDiamondHeight, zoomFadeStart, zoomFadeEnd
-                   , worldToGrid, worldScreenWidth)
+                   , worldToGrid, worldScreenWidth, applyFacing)
 import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
 import qualified Data.Vector as V
 
@@ -46,6 +46,7 @@ cameraChanged old new =
      ∨ abs (wcsZoom old - wcsZoom new) > camEpsilon
      ∨ wcsZSlice old ≢ wcsZSlice new
      ∨ wcsFbSize old ≢ wcsFbSize new
+     ∨ wcsFacing old ≢ wcsFacing new
 
 -----------------------------------------------------------
 -- Top-Level Entry Point
@@ -72,6 +73,7 @@ updateWorldTiles = do
                     , wcsZoom     = zoom
                     , wcsZSlice   = camZSlice camera
                     , wcsFbSize   = (fbW, fbH)
+                    , wcsFacing   = camFacing camera
                     }
             -- Check per-world caches
             quads ← forM (wmVisible worldManager) $ \pageId →
@@ -112,7 +114,8 @@ updateWorldTiles = do
                 Just worldState → do
                     tileData ← liftIO $ readIORef (wsTilesRef worldState)
                     let (camX, camY) = camPosition camera
-                        (gx, gy) = worldToGrid camX camY
+                        facing = camFacing camera
+                        (gx, gy) = worldToGrid facing camX camY
                         (chunkCoord, (lx, ly)) = globalToChunk gx gy
                     case lookupChunk chunkCoord tileData of
                         Just lc → do
@@ -174,13 +177,14 @@ bestWrapOffset worldSize camX chunkScreenX =
     minimumBy f (x:xs) = foldl' (\best c → if f c best ≡ LT then c else best) x xs
     minimumBy _ []      = 0
 
-isChunkVisibleWrapped ∷ Int → ViewBounds → Float → ChunkCoord → Maybe Float
-isChunkVisibleWrapped worldSize vb camX coord =
+isChunkVisibleWrapped ∷ CameraFacing → Int → ViewBounds → Float
+  → ChunkCoord → Maybe Float
+isChunkVisibleWrapped facing worldSize vb camX coord =
     let ((minGX, minGY), (maxGX, maxGY)) = chunkWorldBounds coord
-        (sxMin, _) = gridToScreen minGX maxGY
-        (sxMax, _) = gridToScreen maxGX minGY
-        (_, syMin) = gridToScreen minGX minGY
-        (_, syMax) = gridToScreen maxGX maxGY
+        (sxMin, _) = gridToScreen facing minGX maxGY
+        (sxMax, _) = gridToScreen facing maxGX minGY
+        (_, syMin) = gridToScreen facing minGX minGY
+        (_, syMax) = gridToScreen facing maxGX maxGY
 
         chunkCenterX = (sxMin + sxMax + tileWidth) / 2.0
         offset = bestWrapOffset worldSize camX chunkCenterX
@@ -213,6 +217,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
     camera ← liftIO $ readIORef (cameraRef env)
 
     let (fbW, fbH) = wcsFbSize snap
+        facing = camFacing camera
 
     -- Look up graphics state ONCE for the whole frame
     gs ← gets graphicsState
@@ -229,6 +234,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
 
     let zSlice = camZSlice camera
         zoom   = camZoom camera
+        facing = camFacing camera
         chunks = HM.elems (wtdChunks tileData)
         (camX, _camY) = camPosition camera
 
@@ -248,7 +254,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
             [ (lc, offset)
             | lc ← chunks
             , isChunkRelevantForSlice zSlice lc
-            , Just offset ← [isChunkVisibleWrapped worldSize vb camX (lcCoord lc)]
+            , Just offset ← [isChunkVisibleWrapped facing worldSize vb camX (lcCoord lc)]
             ]
 
     -- Build per-chunk vectors directly, then concat once
@@ -265,13 +271,14 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     (\acc (lx, ly, z) tile →
                         if z ≤ zSlice ∧ z ≥ (zSlice - effectiveDepth)
                         then let (gx, gy) = chunkToGlobal coord lx ly
-                                 (rawX, rawY) = gridToScreen gx gy
+                                 facing = camFacing camera
+                                 (rawX, rawY) = gridToScreen facing gx gy
                                  relativeZ = z - zSlice
                                  heightOffset = fromIntegral relativeZ * tileSideHeight
                                  drawX = rawX + xOffset
                                  drawY = rawY - heightOffset
                              in if isTileVisible vb drawX drawY
-                                then tileToQuad lookupSlot lookupFmSlot textures
+                                then tileToQuad lookupSlot lookupFmSlot textures facing
                                        gx gy z tile zSlice zoomAlpha xOffset : acc
                                 else acc
                         else acc
@@ -279,7 +286,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
 
                 -- Blank tiles: iterate grid coords directly
                 !blankQuads =
-                    [ blankTileToQuad lookupSlot lookupFmSlot textures
+                    [ blankTileToQuad lookupSlot lookupFmSlot textures facing
                         gx gy zSlice zSlice zoomAlpha xOffset
                     | lx ← [0 .. chunkSize - 1]
                     , ly ← [0 .. chunkSize - 1]
@@ -287,7 +294,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     , surfZ > zSlice
                     , not (HM.member (lx, ly, zSlice) tileMap)
                     , let (gx, gy) = chunkToGlobal coord lx ly
-                          (rawX, rawY) = gridToScreen gx gy
+                          (rawX, rawY) = gridToScreen facing gx gy
                           drawX = rawX + xOffset
                           drawY = rawY
                     , isTileVisible vb drawX drawY
@@ -312,16 +319,17 @@ renderWorldQuads env worldState zoomAlpha snap = do
 -----------------------------------------------------------
 
 tileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
-           → WorldTextures
+           → WorldTextures → CameraFacing
            → Int → Int → Int → Tile → Int → Float → Float
            → SortableQuad
-tileToQuad lookupSlot lookupFmSlot textures worldX worldY worldZ tile zSlice tileAlpha xOffset =
-    let (rawX, rawY) = gridToScreen worldX worldY
+tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice tileAlpha xOffset =
+    let (rawX, rawY) = gridToScreen facing worldX worldY
+        (a, b) = applyFacing facing worldX worldY
         relativeZ = worldZ - zSlice
         heightOffset = fromIntegral relativeZ * tileSideHeight
         drawX = rawX + xOffset
         drawY = rawY - heightOffset
-        sortKey = fromIntegral (worldX + worldY)
+        sortKey = fromIntegral (a + b)
                 + fromIntegral relativeZ * 0.001
         texHandle = getTileTexture textures (tileType tile)
         actualSlot = lookupSlot texHandle
@@ -347,16 +355,17 @@ tileToQuad lookupSlot lookupFmSlot textures worldX worldY worldZ tile zSlice til
 -----------------------------------------------------------
 
 blankTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
-               → WorldTextures
+               → WorldTextures → CameraFacing
                → Int → Int → Int → Int → Float → Float
                → SortableQuad
-blankTileToQuad lookupSlot lookupFmSlot textures worldX worldY worldZ zSlice tileAlpha xOffset =
-    let (rawX, rawY) = gridToScreen worldX worldY
+blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSlice tileAlpha xOffset =
+    let (rawX, rawY) = gridToScreen facing worldX worldY
+        (a, b) = applyFacing facing worldX worldY
         relativeZ = worldZ - zSlice
         heightOffset = fromIntegral relativeZ * tileSideHeight
         drawX = rawX + xOffset
         drawY = rawY - heightOffset
-        sortKey = fromIntegral (worldX + worldY)
+        sortKey = fromIntegral (a + b)
                 + fromIntegral relativeZ * 0.001
         texHandle = wtBlankTexture textures
         actualSlot = lookupSlot texHandle

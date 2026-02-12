@@ -18,7 +18,8 @@ import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Input.Event (handleInputEvents)
 import Engine.Loop.Timing (updateFrameTiming)
 import Engine.Loop.Frame (drawFrame)
-import Engine.Loop.Camera (updateCameraPanning, updateCameraMouseDrag)
+import Engine.Loop.Camera (updateCameraPanning, updateCameraMouseDrag
+                          , updateCameraRotation)
 import Engine.Scripting.Lua.Message (processLuaMessages)
 
 -- | Main engine loop
@@ -67,6 +68,7 @@ handleEngineRunning = do
     GLFW.pollEvents
     handleInputEvents
     updateCameraPanning
+    updateCameraRotation
     updateCameraMouseDrag
     processLuaMessages
     

@@ -8,18 +8,22 @@ module Engine.Scripting.Lua.API.Camera
     , cameraGetZSliceFn
     , cameraSetZSliceFn
     , cameraGotoTileFn
+    , cameraRotateCWFn
+    , cameraRotateCCWFn
+    , cameraGetFacingFn
     ) where
 
 import UPrelude
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Graphics.Camera (Camera2D(..))
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
 import World.Grid (gridToWorld)
 import World.Types
 import World.Material (MaterialId(..))
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Generate (globalToChunk, applyTimeline)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector as V
 import qualified HsLua as Lua
 
 -- | camera.move(dx, dy)
@@ -109,7 +113,9 @@ cameraGotoTileFn env = do
         (Just gxRaw, Just gyRaw) → Lua.liftIO $ do
             let gx = fromIntegral gxRaw ∷ Int
                 gy = fromIntegral gyRaw ∷ Int
-                (wx, wy) = gridToWorld gx gy
+            cam ← readIORef (cameraRef env)
+            let facing = camFacing cam
+                (wx, wy) = gridToWorld facing gx gy
 
             -- Set position and zoom
             atomicModifyIORef' (cameraRef env) $ \cam →
@@ -142,3 +148,43 @@ cameraGotoTileFn env = do
 
         _ → pure ()
     return 0
+
+
+-- | camera.rotateCW()
+cameraRotateCWFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+cameraRotateCWFn env = do
+    Lua.liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
+        (cam { camFacing = rotateCW (camFacing cam) }, ())
+    -- Invalidate caches here too (same as step 5)
+    Lua.liftIO $ invalidateWorldCaches env
+    return 0
+
+-- | camera.rotateCCW()
+cameraRotateCCWFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+cameraRotateCCWFn env = do
+    Lua.liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
+        (cam { camFacing = rotateCCW (camFacing cam) }, ())
+    Lua.liftIO $ invalidateWorldCaches env
+    return 0
+
+-- | camera.getFacing() → int (0=South, 1=West, 2=North, 3=East)
+cameraGetFacingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+cameraGetFacingFn env = do
+    cam ← Lua.liftIO $ readIORef (cameraRef env)
+    Lua.pushinteger $ case camFacing cam of
+        FaceSouth → 0
+        FaceWest  → 1
+        FaceNorth → 2
+        FaceEast  → 3
+    return 1
+
+-- Helper to invalidate all baked caches
+invalidateWorldCaches ∷ EngineEnv → IO ()
+invalidateWorldCaches env = do
+    manager ← readIORef (worldManagerRef env)
+    forM_ (wmWorlds manager) $ \(_, ws) → do
+        writeIORef (wsQuadCacheRef ws)     Nothing
+        writeIORef (wsZoomQuadCacheRef ws) Nothing
+        writeIORef (wsBgQuadCacheRef ws)   Nothing
+        writeIORef (wsBakedZoomRef ws)     V.empty
+        writeIORef (wsBakedBgRef ws)       V.empty

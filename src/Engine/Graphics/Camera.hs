@@ -2,6 +2,9 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Camera
     ( Camera2D(..)
+    , CameraFacing(..)
+    , rotateCW
+    , rotateCCW
     , UICamera(..)
     , defaultCamera
     , defaultUICamera
@@ -18,13 +21,31 @@ import Linear.Matrix ((!*!))
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types (InputState(..))
 
+-- | Four camera facings, 90° apart.
+-- FaceSouth is the default (current) viewing direction.
+data CameraFacing = FaceSouth | FaceWest | FaceNorth | FaceEast
+    deriving (Show, Eq, Enum, Bounded)
+
+rotateCW ∷ CameraFacing → CameraFacing
+rotateCW FaceSouth = FaceWest
+rotateCW FaceWest  = FaceNorth
+rotateCW FaceNorth = FaceEast
+rotateCW FaceEast  = FaceSouth
+
+rotateCCW ∷ CameraFacing → CameraFacing
+rotateCCW FaceSouth = FaceEast
+rotateCCW FaceEast  = FaceNorth
+rotateCCW FaceNorth = FaceWest
+rotateCCW FaceWest  = FaceSouth
+
 data Camera2D = Camera2D
     { camPosition   ∷ (Float, Float)
-    , camVelocity   ∷ (Float, Float)  -- ^ Current pan velocity (world units/sec)
+    , camVelocity   ∷ (Float, Float)
     , camZoom       ∷ Float
     , camRotation   ∷ Float
-    , camDragging   ∷ Bool   -- ^ Whether the camera is currently being dragged (panning)
-    , camDragOrigin ∷ (Double, Double)  -- ^ Mouse position where dragging started (screen coordinates)
+    , camFacing     ∷ CameraFacing
+    , camDragging   ∷ Bool
+    , camDragOrigin ∷ (Double, Double)
     , camZSlice     ∷ Int
     } deriving (Show, Eq)
 
@@ -34,6 +55,7 @@ defaultCamera = Camera2D
     , camVelocity = (0, 0)
     , camZoom     = 1.0
     , camRotation = 0.0
+    , camFacing   = FaceSouth
     , camDragging = False
     , camDragOrigin = (0, 0)
     , camZSlice = 6

@@ -221,6 +221,12 @@ updateUniformBufferForFrame win frameIdx = do
             
             -- Update UI camera to use framebuffer dimensions
             let uiCamera = UICamera (fromIntegral fbWidth) (fromIntegral fbHeight)
+            -- camera rotation
+            let facingFloat = case camFacing camera of
+                    FaceSouth → 0.0
+                    FaceWest → 1.0
+                    FaceNorth → 2.0
+                    FaceEast → 3.0
             let uboData = UBO identity (createViewMatrix camera)
                               (createProjectionMatrix camera 
                                   (fromIntegral fbWidth) (fromIntegral fbHeight))
@@ -231,6 +237,7 @@ updateUniformBufferForFrame win frameIdx = do
                               (if pixelSnap then 1.0 else 0.0)
                               sunAngle
                               ambientLight
+                              facingFloat
             
             liftIO $ writeIORef (windowSizeRef env) (winWidth, winHeight)
             liftIO $ writeIORef (framebufferSizeRef env) (fbWidth, fbHeight)

@@ -11,6 +11,7 @@ import Data.IORef (IORef, newIORef)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types.Batch (SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
+import Engine.Graphics.Camera (CameraFacing(..))
 import qualified Engine.Core.Queue as Q
 
 -----------------------------------------------------------
@@ -139,6 +140,7 @@ data WorldCameraSnapshot = WorldCameraSnapshot
     , wcsZoom     ∷ !Float
     , wcsZSlice   ∷ !Int
     , wcsFbSize   ∷ !(Int, Int)
+    , wcsFacing   ∷ !CameraFacing
     } deriving (Show, Eq)
 
 data WorldQuadCache = WorldQuadCache

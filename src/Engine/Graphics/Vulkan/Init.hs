@@ -288,6 +288,11 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
   
   -- UPDATE: Create/update UI camera with actual framebuffer size
   let uiCamera = defaultUICamera (fromIntegral width) (fromIntegral height)
+      facing = case camFacing camera of
+          FaceSouth → 0.0
+          FaceWest → 1.0
+          FaceNorth → 2.0
+          FaceEast → 3.0
   liftIO $ writeIORef uiCRef uiCamera  -- Update the ref with correct size
   
   let ambientLight = computeAmbientLight sunAngle
@@ -302,6 +307,7 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
           (if pixelSnap then 1.0 else 0.0)
           sunAngle
           ambientLight
+          facing
       uboSize = fromIntegral $ sizeOf uboData
       numFrames = gcMaxFrames defaultGraphicsConfig
   
@@ -312,8 +318,7 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
                (brightnessToMultiplier brightnessInt)
                (fromIntegral width) (fromIntegral height)
                (if pixelSnap then 1.0 else 0.0)
-               sunAngle
-               ambientLight)
+               sunAngle ambientLight facing)
       pure (buffer, memory)
   
   modify $ \s → s { graphicsState = (graphicsState s) {

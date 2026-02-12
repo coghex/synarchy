@@ -80,6 +80,7 @@ data UniformBufferObject = UBO
     , uboPixelSnap    ∷ Float      -- pixel snapping factor
     , uboSunAngle     ∷ Float      -- day/night cycle angle (0..1)
     , uboAmbientLight ∷ Float      -- minimum ambient brightness
+    , uboCameraFacing ∷ Float      -- 0.0 = south, 1.0 = west, 2.0 = north, 3.0 = east
     } deriving (Show)
 
 instance Storable UniformBufferObject where
@@ -98,7 +99,8 @@ instance Storable UniformBufferObject where
         <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 12))
         <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 16))
         <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 20))
-    poke ptr (UBO model view proj uiView uiProj brightness screenW screenH pixelSnap sunAngle ambientLight) = do
+        <*> peek (castPtr $ ptr `plusPtr` (5 * sizeOf (undefined ∷ M44 Float) + 24))
+    poke ptr (UBO model view proj uiView uiProj brightness screenW screenH pixelSnap sunAngle ambientLight facing) = do
         poke (castPtr ptr) model
         poke (castPtr $ ptr `plusPtr` sizeOf model) view
         poke (castPtr $ ptr `plusPtr` (2 * sizeOf model)) proj
@@ -110,3 +112,4 @@ instance Storable UniformBufferObject where
         poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 12)) pixelSnap
         poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 16)) sunAngle
         poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 20)) ambientLight
+        poke (castPtr $ ptr `plusPtr` (5 * sizeOf model + 24)) facing

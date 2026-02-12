@@ -2,19 +2,21 @@
 module Engine.Loop.Camera
     ( updateCameraPanning
     , updateCameraMouseDrag
+    , updateCameraRotation
     ) where
 
 import UPrelude
 import qualified Data.Map as Map
+import qualified Data.Vector as V
 import qualified Graphics.UI.GLFW as GLFW
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.Monad (EngineM, liftIO)
 import Engine.Core.State (EngineEnv(..), EngineState(..), TimingState(..))
-import Engine.Graphics.Camera (Camera2D(..))
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
 import Engine.Input.Types (InputState(..), KeyState(..))
 import World.Grid (cameraPanSpeed, cameraPanAccel, cameraPanFriction,
                    tileHalfDiamondHeight, tileHalfWidth)
-import World.Types (chunkSize)
+import World.Types (chunkSize, WorldState(..), WorldManager(..))
 import Control.Monad.State.Class (gets)
 
 cameraYLimit ∷ Float
@@ -35,11 +37,18 @@ cameraXWrap =
         worldTiles = worldSizeChunks * chunkSize
     in fromIntegral worldTiles * tileHalfWidth
 
--- | Wrap camera X into [-cameraXWrap/2, cameraXWrap/2)
-wrapCameraX ∷ Float → Float
-wrapCameraX x =
+wrapCameraAxis ∷ CameraFacing → Float → Float → (Float, Float)
+wrapCameraAxis facing cx cy =
     let w = cameraXWrap
-        halfW = w / 2.0
+    in case facing of
+        FaceSouth → (wrapCoord w cx, cy)
+        FaceNorth → (wrapCoord w cx, cy)
+        FaceWest  → (cx, wrapCoord w cy)
+        FaceEast  → (cx, wrapCoord w cy)
+
+wrapCoord ∷ Float → Float → Float
+wrapCoord w x =
+    let halfW = w / 2.0
         shifted = x + halfW
         wrapped = shifted - w * fromIntegral (floor (shifted / w) ∷ Int)
     in wrapped - halfW
@@ -64,6 +73,7 @@ updateCameraPanning = do
     liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
         let (vx, vy) = camVelocity cam
             zoom     = camZoom cam
+            facing   = camFacing cam
             maxSpd   = cameraPanSpeed * zoom
             accel    = cameraPanAccel  * zoom
             friction = cameraPanFriction * zoom
@@ -72,14 +82,25 @@ updateCameraPanning = do
             vy' = stepAxis inputY vy accel friction maxSpd dtF
 
             (cx, cy) = camPosition cam
-            cx' = wrapCameraX (cx + vx' * dtF)
+            rawCx = cx + vx' * dtF
+            rawCy = cy + vy' * dtF
+            (cx', cy'') = wrapCameraAxis facing rawCx rawCy
+            cy' = clampF (-cameraYLimit) cameraYLimit cy''
             rawY = cy + vy' * dtF
-            cy' = clampF (-cameraYLimit) cameraYLimit rawY
 
             vy'' = if cy' ≢ rawY then 0 else vy'
 
         in (cam { camPosition = (cx', cy')
                 , camVelocity = (vx', vy'') }, ())
+
+-- When facing South/North: X wraps, Y is clamped (glaciers at top/bottom)
+-- When facing West/East:   Y wraps, X is clamped (glaciers at left/right)
+applyLimits ∷ CameraFacing → Float → Float → (Float, Float)
+applyLimits facing cx cy = case facing of
+    FaceSouth → (cx, clampF (-cameraYLimit) cameraYLimit cy)
+    FaceNorth → (cx, clampF (-cameraYLimit) cameraYLimit cy)
+    FaceWest  → (clampF (-cameraYLimit) cameraYLimit cx, cy)
+    FaceEast  → (clampF (-cameraYLimit) cameraYLimit cx, cy)
 
 updateCameraMouseDrag ∷ EngineM ε σ ()
 updateCameraMouseDrag = do
@@ -107,6 +128,7 @@ updateCameraMouseDrag = do
                     (ox, oy)   = camDragOrigin cam
                     (cx, cy)   = camPosition cam
                     zoom       = camZoom cam
+                    facing     = camFacing cam
                     aspect     = fromIntegral winW / fromIntegral winH
 
                     pixToWorldX = 2.0 * realToFrac zoom * aspect / fromIntegral winW
@@ -117,7 +139,7 @@ updateCameraMouseDrag = do
 
                     newY = clampF (-cameraYLimit) cameraYLimit (cy + realToFrac dy)
 
-                in ( cam { camPosition  = (wrapCameraX (cx + realToFrac dx), newY)
+                in ( cam { camPosition  = (wrapCameraAxis facing (cx + realToFrac dx) newY)
                          , camDragOrigin = mousePos
                          , camVelocity   = (0, 0)
                          }
@@ -129,6 +151,32 @@ updateCameraMouseDrag = do
 
             (False, False) →
                 (cam, ())
+
+updateCameraRotation ∷ EngineM ε σ ()
+updateCameraRotation = do
+    env ← ask
+    inpSt ← liftIO $ readIORef (inputStateRef env)
+
+    let justPressed k = case Map.lookup k (inpKeyStates inpSt) of
+                            Just ks → keyPressed ks
+                            Nothing → False
+
+    when (justPressed GLFW.Key'Q) $ liftIO $
+        atomicModifyIORef' (cameraRef env) $ \cam →
+            (cam { camFacing = rotateCCW (camFacing cam) }, ())
+
+    when (justPressed GLFW.Key'E) $ liftIO $
+        atomicModifyIORef' (cameraRef env) $ \cam →
+            (cam { camFacing = rotateCW (camFacing cam) }, ())
+    -- invalidate baked caches
+    when (justPressed GLFW.Key'Q ∨ justPressed GLFW.Key'E) $ liftIO $ do
+        manager ← readIORef (worldManagerRef env)
+        forM_ (wmWorlds manager) $ \(_, ws) → do
+            writeIORef (wsQuadCacheRef ws)     Nothing
+            writeIORef (wsZoomQuadCacheRef ws) Nothing
+            writeIORef (wsBgQuadCacheRef ws)   Nothing
+            writeIORef (wsBakedZoomRef ws)     V.empty
+            writeIORef (wsBakedBgRef ws)       V.empty
 
 stepAxis ∷ Float → Float → Float → Float → Float → Float → Float
 stepAxis input vel accel friction maxSpd dt
