@@ -176,6 +176,7 @@ data WorldTextures = WorldTextures
     , wtZoomImpactite    ∷ TextureHandle
     , wtBgBasalt         ∷ TextureHandle
     , wtBgImpactite      ∷ TextureHandle
+    , wtBgObsidian       ∷ TextureHandle
     } deriving (Show, Eq)
 
 defaultWorldTextures ∷ WorldTextures
@@ -216,6 +217,7 @@ defaultWorldTextures = WorldTextures
     , wtZoomImpactite    = TextureHandle 0
     , wtBgBasalt         = TextureHandle 0
     , wtBgImpactite      = TextureHandle 0
+    , wtBgObsidian       = TextureHandle 0
     }
 
 -----------------------------------------------------------
@@ -659,6 +661,7 @@ data WorldTextureType
     | ZoomImpactiteTexture
     | BgBasaltTexture
     | BgImpactiteTexture
+    | BgObsidianTexture
     deriving (Show, Eq)
 
 data WorldCommand

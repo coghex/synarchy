@@ -198,4 +198,5 @@ parseTextureType "zoom_obsidian"  = ZoomObsidianTexture
 parseTextureType "zoom_impactite" = ZoomImpactiteTexture
 parseTextureType "bg_basalt"      = BgBasaltTexture
 parseTextureType "bg_impactite"   = BgImpactiteTexture
+parseTextureType "bg_obsidian"    = BgObsidianTexture
 parseTextureType _                = NoTexture

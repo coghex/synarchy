@@ -76,6 +76,13 @@ infixl 4 ⊚
 infixr 5 ⊘
 infixr 7 ⊙
 
+-- | 'clamp01' restricts a floating-point number to the range [0, 1].
+clamp01 ∷ Float → Float
+clamp01 x
+    | x < 0    = 0
+    | x > 1    = 1
+    | otherwise = x
+
 --------------------------------------------------------------------------------
 -- Bitwise Operators
 --------------------------------------------------------------------------------

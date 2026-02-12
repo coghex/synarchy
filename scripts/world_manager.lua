@@ -125,6 +125,9 @@ function worldManager.createWorld(params)
     if params.bgImpactite then
         world.setTexture(worldId, "bg_impactite", params.bgImpactite)
     end
+    if params.bgObsidian then
+        world.setTexture(worldId, "bg_obsidian", params.bgObsidian)
+    end
     if params.bgLava then
         world.setTexture(worldId, "bg_lava", params.bgLava)
     end

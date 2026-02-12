@@ -6,17 +6,10 @@ module World.Render
 import UPrelude
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
-import qualified Data.Text as T
-import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Asset.Handle
-import Engine.Asset.Manager
-import Engine.Asset.Base
-import Engine.Asset.Types (AssetPool(..), TextureAtlas(..))
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
-import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Scene.Base (LayerId(..), ObjectId(..))
 import Engine.Scene.Types (RenderBatch(..), SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..))
@@ -35,7 +28,6 @@ import qualified Data.Vector as V
 updateWorldTiles ∷ EngineM ε σ (V.Vector SortableQuad)
 updateWorldTiles = do
     env ← ask
-    logger ← liftIO $ readIORef (loggerRef env)
     camera ← liftIO $ readIORef (cameraRef env)
 
     let zoom = camZoom camera
@@ -159,7 +151,6 @@ renderWorldQuads env worldState zoomAlpha = do
     tileData ← liftIO $ readIORef (wsTilesRef worldState)
     textures ← liftIO $ readIORef (wsTexturesRef worldState)
     paramsM ← liftIO $ readIORef (wsGenParamsRef worldState)
-    logger ← liftIO $ readIORef (loggerRef env)
     camera ← liftIO $ readIORef (cameraRef env)
     
     (fbW, fbH) ← liftIO $ readIORef (framebufferSizeRef env)
@@ -310,12 +301,6 @@ blankTileToQuad lookupSlot lookupFmSlot textures worldX worldY worldZ zSlice til
 -----------------------------------------------------------
 -- Helpers
 -----------------------------------------------------------
-
-clamp01 ∷ Float → Float
-clamp01 x
-    | x < 0    = 0
-    | x > 1    = 1
-    | otherwise = x
 
 getTileTexture ∷ WorldTextures → Word8 → TextureHandle
 getTileTexture textures 1   = wtGraniteTexture textures

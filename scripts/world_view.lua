@@ -49,6 +49,7 @@ worldView.textures = {
     -- Background variants
     bgBasalt = -1,
     bgImpactite = -1,
+    bgObsidian = -1,
 }
 worldView.texturesNeeded = 0
 worldView.texturesLoadedCount = 0
@@ -109,6 +110,7 @@ function worldView.init(width, height)
     worldView.textures.zoomImpactite  = engine.loadTexture("assets/textures/world/zoommap/impactite_chunk.png")
     worldView.textures.bgBasalt       = engine.loadTexture("assets/textures/world/zoommap/basalt_chunk_background.png")
     worldView.textures.bgImpactite    = engine.loadTexture("assets/textures/world/zoommap/impactite_chunk_background.png")
+    worldView.textures.bgObsidian     = engine.loadTexture("assets/textures/world/zoommap/obsidian_chunk_background.png")
     
     engine.logInfo("World view initialized, loading " .. worldView.texturesNeeded .. " textures")
 end
@@ -197,7 +199,8 @@ function worldView.createWorld()
         zoomImpactite    = worldView.textures.zoomImpactite,
         bgBasalt         = worldView.textures.bgBasalt,
         bgImpactite      = worldView.textures.bgImpactite,
-        bgLava           = worldView.textures.bgLava
+        bgLava           = worldView.textures.bgLava,
+        bgObsidian       = worldView.textures.bgObsidian,
     })
     worldManager.showWorld()
 end

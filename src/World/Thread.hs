@@ -9,7 +9,6 @@ import qualified Data.Text as T
 import Data.List (partition)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef', newIORef)
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Monad (forever)
 import Control.Exception (SomeException, catch)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
@@ -346,6 +345,7 @@ handleWorldCommand env logger cmd = do
                           ZoomImpactiteTexture → wt { wtZoomImpactite   = texHandle }
                           BgBasaltTexture     → wt { wtBgBasalt         = texHandle }
                           BgImpactiteTexture  → wt { wtBgImpactite      = texHandle }
+                          BgObsidianTexture    → wt { wtBgObsidian       = texHandle }
                     atomicModifyIORef' (wsTexturesRef worldState) 
                         (\wt → (updateTextures wt, ()))
                     logDebug logger CatWorld $ 

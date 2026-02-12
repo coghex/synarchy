@@ -61,7 +61,7 @@ generatePlates seed worldSize plateCount =
 
 generateOnePlate ∷ Word64 → Int → Int → TectonicPlate
 generateOnePlate seed worldSize plateIndex =
-    let halfTiles = (worldSize * 16) `div` 2
+    let halfTiles = (worldSize * worldSize) `div` 2
         h1 = plateHash seed plateIndex 1
         h2 = plateHash seed plateIndex 2
         h3 = plateHash seed plateIndex 3
