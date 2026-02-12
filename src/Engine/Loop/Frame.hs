@@ -118,13 +118,17 @@ drawFrame = do
             --    Each distinct sqLayer gets its own RenderBatch so that
             --    layer ordering is respected (e.g. background layer 0
             --    behind world tiles layer 1 behind zoom map layer 2).
+            --
+            --    Accumulate with (:) — O(1) per quad. Order doesn't matter
+            --    because mergeQuadsToBatch sorts by sqSortKey anyway.
             let allWorldQuads = worldTileQuads <> sceneQuads
                 groupedByLayer = V.foldl' (\acc q →
-                    Map.insertWith (<>) (sqLayer q) [q] acc)
+                    Map.insertWith (\new old → head new : old)
+                        (sqLayer q) [q] acc)
                     Map.empty allWorldQuads
                 -- One RenderBatch per layer
                 perLayerBatches = Map.mapWithKey
-                    (\layer quads → mergeQuadsToBatch layer quads)
+                    (\layer qs → mergeQuadsToBatch layer qs)
                     groupedByLayer
                 -- For vertex upload (flat list of batches)
                 worldBatches = V.fromList $ Map.elems perLayerBatches

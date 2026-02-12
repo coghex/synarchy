@@ -76,24 +76,31 @@ getSortedBatches manager =
             zIndices = V.map doZIndex objects
         in if V.null zIndices then 0.0 else V.sum zIndices / fromIntegral (V.length zIndices)
 
--- | Build layered batches from sprite and text batches
+-- | Build layered batches from sprite and text batches.
+--   Accumulates into lists (O(1) cons) then converts to vectors once,
+--   instead of using V.snoc which is O(n) per append.
 buildLayeredBatches ∷ BatchManager → BatchManager
 buildLayeredBatches manager =
     let sortedSprites = getSortedBatches manager
         sortedText = List.sortOn trbLayer $ Map.elems (bmTextBatches manager)
         
-        spriteLayers = V.foldl' (\acc batch →
+        -- Accumulate into lists with (:) — O(1) per item
+        spriteLists ∷ Map.Map LayerId [RenderItem]
+        spriteLists = V.foldl' (\acc batch →
             let layer = rbLayer batch
-                existing = Map.findWithDefault V.empty layer acc
-            in Map.insert layer (V.snoc existing (SpriteItem batch)) acc
+            in Map.insertWith (\new old → head new : old)
+                layer [SpriteItem batch] acc
           ) Map.empty sortedSprites
         
-        textLayers = foldl' (\acc batch →
+        textLists ∷ Map.Map LayerId [RenderItem]
+        textLists = foldl' (\acc batch →
             let layer = trbLayer batch
-                existing = Map.findWithDefault V.empty layer acc
-            in Map.insert layer (V.snoc existing (TextItem batch)) acc
+            in Map.insertWith (\new old → head new : old)
+                layer [TextItem batch] acc
           ) Map.empty sortedText
         
-        allLayers = Map.unionWith (V.++) spriteLayers textLayers
+        -- Merge lists, then convert to vectors once
+        allLists = Map.unionWith (⧺) spriteLists textLists
+        allLayers = Map.map V.fromList allLists
         
     in manager { bmLayeredBatches = allLayers }

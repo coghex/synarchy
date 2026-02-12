@@ -56,16 +56,19 @@ drawableToQuad dobj = SortableQuad
     }
 
 -- | Sort quads by painter's algorithm and merge into a single RenderBatch.
--- All quads MUST share the same layer. The texture field uses the first
--- quad's texture (irrelevant for bindless — the per-vertex atlasId drives
--- texture selection in the shader).
+--   All quads MUST share the same layer. The texture field uses the first
+--   quad's texture (irrelevant for bindless — the per-vertex atlasId drives
+--   texture selection in the shader).
+--
+--   Sorts once, then builds the final vertex vector with V.concatMap over
+--   a sorted vector. No intermediate list-of-vectors allocation.
 mergeQuadsToBatch ∷ LayerId → [SortableQuad] → RenderBatch
 mergeQuadsToBatch layer quads =
-    let sorted = List.sortOn sqSortKey quads
-        allVerts = V.concat $ map sqVertices sorted
-        tex = case sorted of
-                (q:_) → sqTexture q
-                []    → TextureHandle 0
+    let !sortedVec = V.fromList $ List.sortOn sqSortKey quads
+        !allVerts  = V.concatMap sqVertices sortedVec
+        tex = if V.null sortedVec
+              then TextureHandle 0
+              else sqTexture (V.unsafeHead sortedVec)
     in RenderBatch
         { rbTexture  = tex
         , rbLayer    = layer
