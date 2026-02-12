@@ -25,7 +25,8 @@ import UI.Types (ElementHandle(..), UIPageManager(..), upmGlobalFocus)
 import UI.Focus (FocusManager, getInputMode, InputMode(..), clearFocus
                 , FocusId(..), fmCurrentFocus)
 
--- | Start the input processing thread
+----------- Thread Management -----------------------------------------------
+
 startInputThread ∷ EngineEnv → IO ThreadState
 startInputThread env = do
     let inputSRef     = inputStateRef env
@@ -48,9 +49,7 @@ startInputThread env = do
         )
     return $ ThreadState stateRef threadId
 
--- | Main input processing loop with timing control
 runInputLoop ∷ EngineEnv → IORef ThreadControl → IO ()
-  -- read control state
 runInputLoop env stateRef = do
   control ← readIORef stateRef
   logger ← readIORef (loggerRef env)
@@ -62,20 +61,16 @@ runInputLoop env stateRef = do
         threadDelay 100000  -- 100ms pause check
         runInputLoop env stateRef
     ThreadRunning → do
-        -- Start frame timing
         frameStart ← getCurrentTime
-        -- Process all pending inputs
         let sharedInputRef = inputStateRef env
         inpSt ← readIORef sharedInputRef
         newInpSt ← processInputs env inpSt
-        -- write to the shared state
         writeIORef sharedInputRef newInpSt
-
-        threadDelay 16666  -- Fixed delay for ~60 FPS
-        -- Continue loop
+        threadDelay 16666
         runInputLoop env stateRef
 
--- | Process all queued inputs
+----------- Input Processing ------------------------------------------------
+
 processInputs ∷ EngineEnv → InputState → IO InputState
 processInputs env inpSt = do
     mEvent ← Q.tryReadQueue (inputQueue env)
@@ -85,7 +80,6 @@ processInputs env inpSt = do
             processInputs env newState
         Nothing → return inpSt
 
--- | Process individual input events
 processInput ∷ EngineEnv → InputState → InputEvent → IO InputState
 processInput env inpSt event = case event of
     InputKeyEvent glfwKey keyState mods → do
@@ -130,8 +124,6 @@ processInput env inpSt event = case event of
                    ∧ (GLFW.modifierKeysControl mods)) $
                 Q.writeQueue (luaQueue env) (LuaInterrupt fid)
             return ()
-
-         -- UI element has focus (no shell focus)
           (GameInputMode, Just (ElementHandle elemId)) → do
             logger ← readIORef (loggerRef env)
             logDebug logger CatInput $ "Input mode: UITextInput, elementId=" <> T.pack (show elemId)
@@ -161,8 +153,6 @@ processInput env inpSt event = case event of
             when (key ≡ KeyDelete ∧ isKeyDown keyState) $
                 Q.writeQueue (luaQueue env) LuaUIDelete
             return ()
-          
-          -- Game input mode (no focus)
           (GameInputMode, Nothing) → do
             logger ← readIORef (loggerRef env)
             logDebug logger CatInput $ "Input mode: GameInputMode, key=" <> T.pack (show key)
@@ -174,9 +164,7 @@ processInput env inpSt event = case event of
                     Q.writeQueue lq (LuaKeyDownEvent key)
                 when (keyState ≡ GLFW.KeyState'Released) $
                     Q.writeQueue lq (LuaKeyUpEvent key)
-            -- get current key bindings
             bindings ← readIORef (keyBindingsRef env)
-            -- check for special key combinations
             case getKeyForAction "escape" bindings of
               Just escapeKeyName → do
                 logDebug logger CatInput $ "Key binding: action=escape, key=" <> escapeKeyName
@@ -192,15 +180,11 @@ processInput env inpSt event = case event of
         when (c ≠ '`') $ do
           focusMgr ← readIORef (focusManagerRef env)
           uiMgr ← readIORef (uiManagerRef env)
-          
           case (fmCurrentFocus focusMgr, upmGlobalFocus uiMgr) of
-            -- Shell has focus - send to shell
             (Just (FocusId fid), _) →
               Q.writeQueue (luaQueue env) (LuaCharInput fid c)
-            -- UI element has focus - send to UI
             (Nothing, Just _elemHandle) →
               Q.writeQueue (luaQueue env) (LuaUICharInput c)
-            -- No focus - ignore
             (Nothing, Nothing) → return ()
         return inpSt
     InputMouseEvent btn pos state → do
@@ -211,61 +195,46 @@ processInput env inpSt event = case event of
         when (state ≡ GLFW.MouseButtonState'Pressed) $ do
             logDebug logger CatInput $ "Mouse button pressed: button=" <> T.pack (show btn)
                                     <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
-            
-            -- Get window and framebuffer sizes from InputState
             (winW, winH) ← readIORef (windowSizeRef env)
             (fbW, fbH) ← readIORef (framebufferSizeRef env)
-            
-            -- Calculate scale factors
             let scaleX = fromIntegral fbW / fromIntegral winW
                 scaleY = fromIntegral fbH / fromIntegral winH
                 mouseX = realToFrac x * scaleX
                 mouseY = realToFrac y * scaleY
-            
             logDebug logger CatUI $ "Click at (" <> T.pack (show mouseX) <> ", " <> T.pack (show mouseY) <> ")"
             logDebug logger CatInput $ "Converted mouse pos: (" <> T.pack (show mouseX) 
                                     <> ", " <> T.pack (show mouseY) <> ")"
             logDebug logger CatInput $ "Window: " <> T.pack (show winW) <> "x" <> T.pack (show winH)
                                     <> ", Framebuffer: " <> T.pack (show fbW) <> "x" <> T.pack (show fbH)
-            
-            -- Check for UI element clicks with converted coordinates
             uiMgr ← readIORef (uiManagerRef env)
             case findClickableElementAt (mouseX, mouseY) uiMgr of
                 Just (elemHandle, callback) → do
                     Q.writeQueue lq (LuaUIClickEvent elemHandle callback)
                     logDebug logger CatUI $ "UI element clicked: " <> callback
                 Nothing → do
-                    -- Clicked outside UI - clear UI focus
                     Q.writeQueue lq LuaUIFocusLost
                     Q.writeQueue lq (LuaMouseDownEvent btn x y)
-        
         when (state ≡ GLFW.MouseButtonState'Released) $ do
             logDebug logger CatInput $ "Mouse button released: button=" <> T.pack (show btn)
                                     <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
             Q.writeQueue lq (LuaMouseUpEvent btn x y)
-        
         return $ updateMouseState inpSt btn pos state
     InputCursorMove x y → 
         return $ inpSt { inpMousePos = (x, y) }
     InputScrollEvent x y → do
         logger ← readIORef (loggerRef env)
         logDebug logger CatInput $ "Scroll event: dx=" <> T.pack (show x) <> ", dy=" <> T.pack (show y)
-        
-        -- Check modifier keys for shift+scroll (z-slice)
         inpSt' ← readIORef (inputStateRef env)
         let shiftHeld = case Map.lookup GLFW.Key'LeftShift (inpKeyStates inpSt') of
                 Just ks → keyPressed ks
                 Nothing → case Map.lookup GLFW.Key'RightShift (inpKeyStates inpSt') of
                     Just ks → keyPressed ks
                     Nothing → False
-        
         if shiftHeld
         then do
-            -- Shift+scroll → z-slice adjustment
             logDebug logger CatInput "Shift+scroll: z-slice adjustment"
             Q.writeQueue (luaQueue env) (LuaZSliceScroll x y)
         else do
-            -- Check if UI element is under cursor
             (winW, winH) ← readIORef (windowSizeRef env)
             (fbW, fbH) ← readIORef (framebufferSizeRef env)
             let (rawX, rawY) = inpMousePos inpSt
@@ -273,17 +242,14 @@ processInput env inpSt event = case event of
                 scaleY = fromIntegral fbH / fromIntegral winH
                 mouseX = realToFrac rawX * scaleX
                 mouseY = realToFrac rawY * scaleY
-            
             uiMgr ← readIORef (uiManagerRef env)
             case findClickableElementAt (mouseX, mouseY) uiMgr of
                 Just (elemHandle, _callback) → do
                     logDebug logger CatInput $ "Scroll on UI element: " <> T.pack (show elemHandle)
                     Q.writeQueue (luaQueue env) (LuaUIScrollEvent elemHandle x y)
                 Nothing → do
-                    -- No UI element under cursor, and no focus → game scroll
                     logDebug logger CatInput "Scroll: game scroll (camera zoom)"
                     Q.writeQueue (luaQueue env) (LuaScrollEvent x y)
-        
         return $ updateScrollState inpSt x y
     InputWindowEvent winEv → do
         logger ← readIORef (loggerRef env)
@@ -302,7 +268,8 @@ processInput env inpSt event = case event of
             logDebug logger CatInput $ "Window minimize event: minimized=" <> T.pack (show minimized)
         return $ updateWindowState inpSt winEv
 
--- | Helper state update functions
+----------- State Updates ---------------------------------------------------
+
 updateKeyState ∷ InputState → GLFW.Key → GLFW.KeyState → GLFW.ModifierKeys → InputState
 updateKeyState state key keyState mods = state
     { inpKeyStates = Map.insert key newKeyState (inpKeyStates state) }
@@ -327,7 +294,8 @@ updateMouseState state btn pos btnState = state
 updateScrollState ∷ InputState → Double → Double → InputState
 updateScrollState state x y = state { inpScrollDelta = (x, y) }
 
--- | Helper to check if key is pressed or repeating
+----------- Helpers ---------------------------------------------------------
+
 isKeyDown ∷ GLFW.KeyState → Bool
 isKeyDown GLFW.KeyState'Pressed   = True
 isKeyDown GLFW.KeyState'Repeating = True

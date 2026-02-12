@@ -10,10 +10,12 @@ import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types
 import Engine.Core.Log (LoggerState, logWarn, logInfo, LogCategory(..), logDebug)
 
--- | maps action names to key names
+----------- Types -----------------------------------------------------------
+
 type KeyBindings = Map.Map T.Text T.Text
 
--- | fallback default keybindings
+----------- Default Bindings -----------------------------------------------
+
 defaultKeyBindings ∷ KeyBindings
 defaultKeyBindings = Map.fromList
     [ ("moveUp", "W")
@@ -24,7 +26,8 @@ defaultKeyBindings = Map.fromList
     , ("shell", "Grave")
     ]
 
--- | YAML structure
+----------- YAML Parsing ---------------------------------------------------
+
 data KeyBindingConfig = KeyBindingConfig
     { kbcBindings ∷ KeyBindings
     } deriving (Show, Eq)
@@ -34,7 +37,8 @@ instance FromJSON KeyBindingConfig where
     KeyBindingConfig ⊚ v .: "keybinds" .!= defaultKeyBindings
   parseJSON _ = fail "Expected Object for KeyBindingConfig value"
 
--- | Load keybindings from a YAML file
+----------- Loading --------------------------------------------------------
+
 loadKeyBindings ∷ LoggerState → FilePath → IO KeyBindings
 loadKeyBindings logger path = do
     result ← Yaml.decodeFileEither path
@@ -49,18 +53,19 @@ loadKeyBindings logger path = do
             logDebug logger CatInput $ "Key bindings loaded: " <> T.pack (show (Map.size bindings)) <> " actions"
             return bindings
 
--- | check if action is pressed
+----------- Query Functions ------------------------------------------------
+
 isActionDown ∷ Text → KeyBindings → InputState → Bool
 isActionDown action bindings state =
     case Map.lookup action bindings of
         Just keyName → checkKeyDown keyName state
         Nothing → False
 
--- | get key name for action
 getKeyForAction ∷ Text → KeyBindings → Maybe Text
 getKeyForAction = Map.lookup
 
--- | parse key name to GLFW key
+----------- Key Parsing ----------------------------------------------------
+
 parseKeyName ∷ Text → Maybe GLFW.Key
 parseKeyName "Up"     = Just GLFW.Key'Up
 parseKeyName "Down"   = Just GLFW.Key'Down
@@ -70,7 +75,6 @@ parseKeyName "Escape" = Just GLFW.Key'Escape
 parseKeyName "Grave"  = Just GLFW.Key'GraveAccent
 parseKeyName _        = Nothing
 
--- | check if key is down in input state
 checkKeyDown ∷ Text → InputState → Bool
 checkKeyDown keyName state =
     case parseKeyName keyName of

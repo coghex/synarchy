@@ -1,10 +1,11 @@
--- File: Engine/Input/Types.hs
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Input.Types where
 
 import UPrelude
 import qualified Data.Map as Map
 import qualified Graphics.UI.GLFW as GLFW
+
+----------- Input State -----------------------------------------------------
 
 data InputState = InputState 
     { inpKeyStates ∷ Map.Map GLFW.Key KeyState
@@ -15,7 +16,8 @@ data InputState = InputState
     , inpWindowFocused ∷ Bool            -- ^ Is window currently focused
     } deriving (Show)
 
--- | Main type for all input events
+----------- Input Events ----------------------------------------------------
+
 data InputEvent 
     = InputKeyEvent 
         { ikeKey      ∷ GLFW.Key        -- ^ The key being pressed/released
@@ -36,11 +38,10 @@ data InputEvent
     | InputCursorMove Double Double
     | InputScrollEvent
         { iseScrollX   ∷ Double         -- ^ Scroll X offset
-        , iseScrollY    ∷ Double         -- ^ Scroll Y offset
+        , iseScrollY    ∷ Double        -- ^ Scroll Y offset
         }
     deriving (Show, Eq)
 
--- | Window-specific events
 data WindowEvent 
     = WindowResize Int Int        -- ^ New width and height
     | FramebufferResize Int Int -- ^ New framebuffer width and height
@@ -49,14 +50,16 @@ data WindowEvent
     | WindowMinimize Bool        -- ^ Window minimized/restored
     deriving (Show, Eq)
 
--- | Helper type for keyboard state tracking
+----------- Key State -------------------------------------------------------
+
 data KeyState = KeyState
     { keyPressed ∷ Bool         -- ^ Is the key currently pressed
     , keyMods    ∷ GLFW.ModifierKeys  -- ^ Active modifiers when pressed
-    , keyTime    ∷ Double      -- ^ Time of last state change
+    , keyTime    ∷ Double       -- ^ Time of last state change
     } deriving (Show, Eq)
 
--- Custom key type (platform-independent)
+----------- Key Types -------------------------------------------------------
+
 data Key
     = KeyA | KeyB | KeyC | KeyD | KeyE | KeyF | KeyG | KeyH | KeyI | KeyJ
     | KeyK | KeyL | KeyM | KeyN | KeyO | KeyP | KeyQ | KeyR | KeyS | KeyT
@@ -71,7 +74,8 @@ data Key
     | KeyUnknown
     deriving (Eq, Ord, Show, Read, Enum, Bounded)
 
--- Convert GLFW key to our Key type
+----------- Conversions -----------------------------------------------------
+
 fromGLFWKey ∷ GLFW.Key → Key
 fromGLFWKey GLFW.Key'A = KeyA
 fromGLFWKey GLFW.Key'B = KeyB
@@ -142,7 +146,6 @@ fromGLFWKey GLFW.Key'F11 = KeyF11
 fromGLFWKey GLFW.Key'F12 = KeyF12
 fromGLFWKey _ = KeyUnknown
 
--- Convert our Key to text (for Lua/YAML)
 keyToText ∷ Key → Text
 keyToText KeyA = "A"
 keyToText KeyB = "B"
@@ -213,7 +216,6 @@ keyToText KeyF11 = "F11"
 keyToText KeyF12 = "F12"
 keyToText KeyUnknown = "Unknown"
 
--- Parse text to Key (for YAML keybindings)
 textToKey ∷ Text → Maybe Key
 textToKey "A" = Just KeyA
 textToKey "B" = Just KeyB
@@ -248,6 +250,8 @@ textToKey "Tab" = Just KeyTab
 textToKey "Backspace" = Just KeyBackspace
 textToKey "Grave" = Just KeyGrave
 textToKey _ = Nothing
+
+----------- Defaults --------------------------------------------------------
 
 defaultKeyState ∷ KeyState
 defaultKeyState = KeyState
