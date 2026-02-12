@@ -178,8 +178,10 @@ isChunkInView vb drawX drawY =
 -- Render From Cache (shared by zoom map and background)
 -----------------------------------------------------------
 
--- | Shared render function. Takes a texture picker and target layer
---   so it can be used for both the zoom map and background.
+-- | Shared render function. Folds the cache vector directly,
+--   testing all 3 wrap offsets per entry inline. No intermediate
+--   list or tuple allocation — accumulates into a strict list
+--   then V.fromList once at the end.
 renderFromCache ∷ EngineEnv → WorldState → Camera2D
                → Int → Int → Float
                → (WorldTextures → Word8 → Int → TextureHandle)
@@ -203,17 +205,27 @@ renderFromCache env worldState camera fbW fbH alpha texturePicker layer = do
             let vb = computeZoomViewBounds camera fbW fbH
                 wsw = worldScreenWidth (wgpWorldSize params)
 
-                visible = concatMap
-                    (entryToQuadsList vb wsw textures texturePicker)
-                    (V.toList cache)
+                -- Fold the vector directly — no V.toList, no concatMap,
+                -- no intermediate 5-tuple list.
+                !visibleQuads = V.foldl' (\acc entry →
+                    let texHandle = texturePicker textures
+                                      (zceTexIndex entry) (zceElev entry)
+                        baseX = zceDrawX entry
+                        baseY = zceDrawY entry
+                        ccx   = zceChunkX entry
+                        ccy   = zceChunkY entry
+                        -- Test all 3 wrap offsets inline
+                        tryOffset dx acc'
+                            | isChunkInView vb dx baseY =
+                                mkZoomQuad lookupSlot defFmSlot texHandle
+                                    dx baseY alpha ccx ccy layer : acc'
+                            | otherwise = acc'
+                    in tryOffset (baseX - wsw)
+                     $ tryOffset  baseX
+                     $ tryOffset (baseX + wsw) acc
+                    ) [] cache
 
-                -- Fully pure — no V.mapM needed
-                quads = V.fromList
-                    [ mkZoomQuad lookupSlot defFmSlot th dx dy alpha ccx ccy layer
-                    | (ccx, ccy, th, dx, dy) ← visible
-                    ]
-
-            return quads
+            return $! V.fromList visibleQuads
 
 -- | Pure zoom quad builder. No EngineM needed.
 mkZoomQuad ∷ (TextureHandle → Int) → Float → TextureHandle
@@ -239,22 +251,6 @@ mkZoomQuad lookupSlot defFmSlot texHandle drawX drawY alpha ccx ccy layer =
         , sqTexture  = texHandle
         , sqLayer    = layer
         }
-
-entryToQuadsList ∷ ZoomViewBounds → Float → WorldTextures
-                 → (WorldTextures → Word8 → Int → TextureHandle)
-                 → ZoomChunkEntry
-                 → [(Int, Int, TextureHandle, Float, Float)]
-entryToQuadsList vb wsw textures texturePicker entry =
-    let ccx = zceChunkX entry
-        ccy = zceChunkY entry
-        baseX = zceDrawX entry
-        baseY = zceDrawY entry
-        texHandle = texturePicker textures (zceTexIndex entry) (zceElev entry)
-    in filter (\(_, _, _, dx, dy) → isChunkInView vb dx dy)
-        [ (ccx, ccy, texHandle, baseX - wsw, baseY)
-        , (ccx, ccy, texHandle, baseX,       baseY)
-        , (ccx, ccy, texHandle, baseX + wsw, baseY)
-        ]
 
 -----------------------------------------------------------
 -- Helpers
@@ -285,5 +281,3 @@ getBgTexture textures 5   _ = wtBgObsidian textures
 getBgTexture textures 20  _ = wtBgImpactite textures
 getBgTexture textures 100 _ = wtBgLava textures
 getBgTexture textures _   _ = wtBgGranite textures
-
-

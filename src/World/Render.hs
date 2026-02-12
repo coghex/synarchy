@@ -221,7 +221,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 -- We accumulate into a difference list for O(1) append.
                 !realQuads = HM.foldlWithKey'
                     (\acc (lx, ly, z) tile →
-                        if z ≡ zSlice ∧ z ≥ (zSlice - viewDepth)
+                        if z ≤ zSlice ∧ z ≥ (zSlice - viewDepth)
                         then let (gx, gy) = chunkToGlobal coord lx ly
                                  (rawX, rawY) = gridToScreen gx gy
                                  relativeZ = z - zSlice
