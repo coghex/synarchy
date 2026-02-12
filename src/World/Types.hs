@@ -48,6 +48,10 @@ data WorldGenParams = WorldGenParams
     { wgpSeed       :: !Word64
     , wgpWorldSize  :: !Int     -- ^ World size in chunks (e.g. 64 → 64×64 chunks)
     , wgpPlateCount :: !Int     -- ^ Number of tectonic plates (for worldgen)
+    , wgpCalender   :: !CalendarConfig  -- ^ Calendar configuration for time/date calculations
+    , wgpSunConfig   :: !SunConfig       -- ^ Sun configuration for time-of-day lighting
+    , wgpMoonConfig  :: !MoonConfig      -- ^ Moon configuration for lunar phases
+    , wgpGeoTimeline :: !GeoTimeline      -- ^ Geological timeline for terrain evolution
     } deriving (Show, Eq)
 
 defaultWorldGenParams :: WorldGenParams
@@ -55,6 +59,17 @@ defaultWorldGenParams = WorldGenParams
     { wgpSeed      = 42
     , wgpWorldSize = 128
     , wgpPlateCount = 10
+    , wgpCalender = defaultCalendarConfig
+    , wgpSunConfig = defaultSunConfig
+    , wgpMoonConfig = defaultMoonConfig
+    , wgpGeoTimeline = emptyTimeline
+    }
+
+emptyTimeline :: GeoTimeline
+emptyTimeline = GeoTimeline
+    { gtSeed      = 0
+    , gtWorldSize = 128
+    , gtPeriods   = []
     }
 
 -----------------------------------------------------------
@@ -148,6 +163,21 @@ data WorldTextures = WorldTextures
     , wtBgDiorite       :: TextureHandle
     , wtBgOcean         :: TextureHandle
     , wtBgGlacier       :: TextureHandle
+    , wtBasaltTexture   :: TextureHandle
+    , wtObsidianTexture :: TextureHandle
+    , wtSandstoneTexture :: TextureHandle
+    , wtLimestoneTexture :: TextureHandle
+    , wtShaleTexture    :: TextureHandle
+    , wtImpactiteTexture :: TextureHandle
+    , wtIronTexture     :: TextureHandle
+    , wtOlivineTexture  :: TextureHandle
+    , wtPyroxeneTexture :: TextureHandle
+    , wtFeldsparTexture :: TextureHandle
+    , wtZoomBasalt      :: TextureHandle
+    , wtZoomObsidian    :: TextureHandle
+    , wtZoomImpactite   :: TextureHandle
+    , wtBgBasalt        :: TextureHandle
+    , wtBgImpactite     :: TextureHandle
     } deriving (Show, Eq)
 
 defaultWorldTextures :: WorldTextures
@@ -170,6 +200,21 @@ defaultWorldTextures = WorldTextures
     , wtBgDiorite       = TextureHandle 0
     , wtBgOcean         = TextureHandle 0
     , wtBgGlacier       = TextureHandle 0
+    , wtBasaltTexture    = TextureHandle 0
+    , wtObsidianTexture  = TextureHandle 0
+    , wtSandstoneTexture = TextureHandle 0
+    , wtLimestoneTexture = TextureHandle 0
+    , wtShaleTexture     = TextureHandle 0
+    , wtImpactiteTexture = TextureHandle 0
+    , wtIronTexture      = TextureHandle 0
+    , wtOlivineTexture   = TextureHandle 0
+    , wtPyroxeneTexture  = TextureHandle 0
+    , wtFeldsparTexture  = TextureHandle 0
+    , wtZoomBasalt       = TextureHandle 0
+    , wtZoomObsidian     = TextureHandle 0
+    , wtZoomImpactite    = TextureHandle 0
+    , wtBgBasalt         = TextureHandle 0
+    , wtBgImpactite      = TextureHandle 0
     }
 
 -----------------------------------------------------------
@@ -224,6 +269,165 @@ defaultWorldDate = WorldDate
     { wdYear  = 1
     , wdMonth = 1
     , wdDay   = 1
+    }
+
+-----------------------------------------------------------
+-- Calendar
+-----------------------------------------------------------
+
+data CalendarConfig = CalendarConfig
+    { ccDaysPerMonth  :: !Int      -- ^ e.g. 30
+    , ccMonthsPerYear :: !Int      -- ^ e.g. 12
+    , ccHoursPerDay   :: !Int      -- ^ e.g. 24 (controls sun cycle)
+    , ccMinutesPerHour :: !Int     -- ^ e.g. 60
+    } deriving (Show, Eq)
+
+defaultCalendarConfig :: CalendarConfig
+defaultCalendarConfig = CalendarConfig
+    { ccDaysPerMonth   = 30
+    , ccMonthsPerYear  = 12
+    , ccHoursPerDay    = 24
+    , ccMinutesPerHour = 60
+    }
+
+-----------------------------------------------------------
+-- Celestial Bodies
+-----------------------------------------------------------
+
+data SunConfig = SunConfig
+    { scTiltAngle    :: !Float   -- ^ Axial tilt in radians, controls season intensity
+    , scDayLength    :: !Float   -- ^ Base day/night ratio at equinox (0.5 = equal)
+    } deriving (Show, Eq)
+
+defaultSunConfig :: SunConfig
+defaultSunConfig = SunConfig
+    { scTiltAngle  = 0.4      -- ~23 degrees like Earth
+    , scDayLength  = 0.5
+    }
+
+data MoonConfig = MoonConfig
+    { mcCycleDays    :: !Int     -- ^ Days per lunar cycle
+    , mcPhaseOffset  :: !Float   -- ^ Starting phase offset (0.0-1.0)
+    } deriving (Show, Eq)
+
+defaultMoonConfig :: MoonConfig
+defaultMoonConfig = MoonConfig
+    { mcCycleDays   = 28
+    , mcPhaseOffset = 0.0
+    }
+
+-----------------------------------------------------------
+-- Geologic Timeline
+-----------------------------------------------------------
+
+-- | Scale of geological time periods.
+--   Controls how many erosion passes and how dramatic events are.
+data GeoScale
+    = Eon       -- ^ Billions of years — major crustal formation
+    | Era       -- ^ Hundreds of millions — large-scale events
+    | Period    -- ^ Tens of millions — mountain building, rifting
+    | Epoch     -- ^ Millions — climate shifts, glaciation
+    | Age       -- ^ Hundreds of thousands — local events, erosion detail
+    deriving (Show, Eq, Ord)
+
+-- | A single geological time period containing events and
+--   erosion parameters.
+data GeoPeriod = GeoPeriod
+    { gpName       :: !Text
+    , gpScale      :: !GeoScale
+    , gpDuration   :: !Int          -- ^ Relative duration (arbitrary units)
+    , gpEvents     :: ![GeoEvent]
+    , gpErosion    :: !ErosionParams
+    } deriving (Show, Eq)
+
+-- | The full geological history, computed once at world init.
+data GeoTimeline = GeoTimeline
+    { gtSeed       :: !Word64
+    , gtWorldSize  :: !Int
+    , gtPeriods    :: ![GeoPeriod]
+    } deriving (Show, Eq)
+
+-----------------------------------------------------------
+-- Geologic Events
+-----------------------------------------------------------
+
+-- | An event that modifies terrain. Each event is a pure
+--   function of position — no simulation state needed.
+data GeoEvent
+    = CraterEvent !CraterParams
+    | VolcanoEvent !VolcanoParams
+    | LandslideEvent !LandslideParams
+    | GlaciationEvent !GlaciationParams
+    | FloodEvent !FloodParams
+    deriving (Show, Eq)
+
+-- | Global tile coordinate for event placement.
+data GeoCoord = GeoCoord !Int !Int
+    deriving (Show, Eq)
+
+data CraterParams = CraterParams
+    { cpCenter     :: !GeoCoord   -- ^ Impact center (global tile coords)
+    , cpRadius     :: !Int        -- ^ Outer rim radius in tiles
+    , cpDepth      :: !Int        -- ^ Depth at center relative to rim
+    , cpRimHeight  :: !Int        -- ^ Rim elevation above surroundings
+    , cpEjectaRadius :: !Int      -- ^ How far ejecta spreads beyond rim
+    , cpMeteorite  ∷ !(Maybe Word8) -- ^ Optional meteorite material ID at crater center
+    } deriving (Show, Eq)
+
+data VolcanoParams = VolcanoParams
+    { vpCenter     :: !GeoCoord
+    , vpBaseRadius :: !Int        -- ^ Base radius of the cone
+    , vpPeakHeight :: !Int        -- ^ Height above surroundings
+    , vpCraterRadius :: !Int      -- ^ Caldera radius at top
+    , vpCraterDepth  :: !Int      -- ^ Caldera depth from peak
+    , vpMaterial   :: !Word8      -- ^ Volcanic rock material ID
+    , vpHasErupted :: !Bool       -- ^ Controls lava flow deposits
+    } deriving (Show, Eq)
+
+data LandslideParams = LandslideParams
+    { lsCenter     :: !GeoCoord
+    , lsRadius     :: !Int
+    , lsDirection  :: !Float      -- ^ Angle of slide (radians)
+    , lsVolume     :: !Int        -- ^ Amount of material displaced
+    } deriving (Show, Eq)
+
+data GlaciationParams = GlaciationParams
+    { glLatitudeStart :: !Int     -- ^ How far from poles glaciers extend
+    , glThickness     :: !Int     -- ^ Ice sheet thickness
+    , glCarveDepth    :: !Int     -- ^ How deep glacial valleys are carved
+    , glSeed          :: !Word64  -- ^ Sub-seed for glacier flow noise
+    } deriving (Show, Eq)
+
+data FloodParams = FloodParams
+    { fpCenter     :: !GeoCoord
+    , fpRadius     :: !Int
+    , fpDepositDepth :: !Int      -- ^ Sediment deposited
+    , fpMaterial   :: !Word8      -- ^ Sediment material ID
+    } deriving (Show, Eq)
+
+-----------------------------------------------------------
+-- Erosion
+-----------------------------------------------------------
+
+-- | Erosion configuration for a geological period.
+--   Different eras have different erosion characteristics.
+data ErosionParams = ErosionParams
+    { epIntensity    :: !Float    -- ^ Overall erosion strength (0.0-1.0)
+    , epHydraulic    :: !Float    -- ^ Water erosion strength
+    , epThermal      :: !Float    -- ^ Freeze-thaw weathering strength
+    , epWind         :: !Float    -- ^ Aeolian erosion (deserts, coastlines)
+    , epChemical     :: !Float    -- ^ Chemical weathering (limestone dissolution)
+    , epSeed         :: !Word64   -- ^ Sub-seed for erosion noise
+    } deriving (Show, Eq)
+
+defaultErosionParams :: ErosionParams
+defaultErosionParams = ErosionParams
+    { epIntensity  = 0.5
+    , epHydraulic  = 0.7
+    , epThermal    = 0.3
+    , epWind       = 0.1
+    , epChemical   = 0.2
+    , epSeed       = 0
     }
 
 -----------------------------------------------------------
@@ -303,10 +507,25 @@ data WorldTextureType
     | ZoomGlacierTexture
     | BlankTexture
     | BgGraniteTexture
-    | BgDioriteTexture
     | BgGabbroTexture
+    | BgDioriteTexture
     | BgOceanTexture
     | BgGlacierTexture
+    | BasaltTexture
+    | ObsidianTexture
+    | SandstoneTexture
+    | LimestoneTexture
+    | ShaleTexture
+    | ImpactiteTexture
+    | IronTexture
+    | OlivineTexture
+    | PyroxeneTexture
+    | FeldsparTexture
+    | ZoomBasaltTexture
+    | ZoomObsidianTexture
+    | ZoomImpactiteTexture
+    | BgBasaltTexture
+    | BgImpactiteTexture
     deriving (Show, Eq)
 
 data WorldCommand

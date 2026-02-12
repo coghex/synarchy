@@ -338,15 +338,28 @@ clamp01 x
     | otherwise = x
 
 getTileTexture :: WorldTextures -> Word8 -> TextureHandle
-getTileTexture textures 1 = wtGraniteTexture textures
-getTileTexture textures 2 = wtGabbroTexture textures
-getTileTexture textures 3 = wtDioriteTexture textures
+getTileTexture textures 1   = wtGraniteTexture textures
+getTileTexture textures 2   = wtDioriteTexture textures
+getTileTexture textures 3   = wtGabbroTexture textures
+getTileTexture textures 4   = wtBasaltTexture textures
+getTileTexture textures 5   = wtObsidianTexture textures
+getTileTexture textures 10  = wtSandstoneTexture textures
+getTileTexture textures 11  = wtLimestoneTexture textures
+getTileTexture textures 12  = wtShaleTexture textures
+getTileTexture textures 20  = wtImpactiteTexture textures
+getTileTexture textures 30  = wtIronTexture textures
+getTileTexture textures 31  = wtOlivineTexture textures
+getTileTexture textures 32  = wtPyroxeneTexture textures
+getTileTexture textures 33  = wtFeldsparTexture textures
 getTileTexture textures 250 = wtGlacierTexture textures
 getTileTexture textures 255 = wtBlankTexture textures
-getTileTexture textures _ = wtNoTexture textures
+getTileTexture textures _   = wtNoTexture textures
 
 getTileFaceMapTexture :: WorldTextures -> Word8 -> TextureHandle
 getTileFaceMapTexture textures mat
-    | mat >= 1 && mat <= 3 = wtIsoFaceMap textures
-    | mat == 250           = wtIsoFaceMap textures
-    | otherwise            = wtNoFaceMap textures
+    | mat >= 1 && mat <= 5   = wtIsoFaceMap textures  -- all igneous
+    | mat >= 10 && mat <= 12 = wtIsoFaceMap textures  -- sedimentary
+    | mat == 20              = wtIsoFaceMap textures  -- impactite
+    | mat >= 30 && mat <= 33 = wtIsoFaceMap textures  -- meteorite
+    | mat == 250             = wtIsoFaceMap textures  -- glacier
+    | otherwise              = wtNoFaceMap textures

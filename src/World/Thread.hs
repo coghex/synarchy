@@ -284,24 +284,39 @@ handleWorldCommand env logger cmd = do
             case lookup pageId (wmWorlds mgr) of
                 Just worldState -> do
                     let updateTextures wt = case texType of
-                            GraniteTexture -> wt { wtGraniteTexture = texHandle }
-                            DioriteTexture -> wt { wtDioriteTexture = texHandle }
-                            GabbroTexture  -> wt { wtGabbroTexture  = texHandle }
-                            GlacierTexture -> wt { wtGlacierTexture = texHandle }
-                            BlankTexture   -> wt { wtBlankTexture   = texHandle }
-                            NoTexture      -> wt { wtNoTexture      = texHandle }
-                            IsoFaceMap     -> wt { wtIsoFaceMap     = texHandle }
-                            NoFaceMap      -> wt { wtNoFaceMap      = texHandle }
-                            ZoomGraniteTexture  -> wt { wtZoomGranite    = texHandle }
-                            ZoomDioriteTexture  -> wt { wtZoomDiorite    = texHandle }
-                            ZoomGabbroTexture   -> wt { wtZoomGabbro     = texHandle }
-                            ZoomOceanTexture    -> wt { wtZoomOcean      = texHandle }
-                            ZoomGlacierTexture  -> wt { wtZoomGlacier     = texHandle }
-                            BgGraniteTexture    -> wt { wtBgGranite      = texHandle }
-                            BgGabbroTexture     -> wt { wtBgGabbro       = texHandle }
-                            BgDioriteTexture    -> wt { wtBgDiorite      = texHandle }
-                            BgOceanTexture      -> wt { wtBgOcean        = texHandle }
-                            BgGlacierTexture    -> wt { wtBgGlacier      = texHandle }
+                          GraniteTexture      -> wt { wtGraniteTexture   = texHandle }
+                          DioriteTexture      -> wt { wtDioriteTexture   = texHandle }
+                          GabbroTexture       -> wt { wtGabbroTexture    = texHandle }
+                          GlacierTexture      -> wt { wtGlacierTexture   = texHandle }
+                          BlankTexture        -> wt { wtBlankTexture     = texHandle }
+                          NoTexture           -> wt { wtNoTexture        = texHandle }
+                          IsoFaceMap          -> wt { wtIsoFaceMap       = texHandle }
+                          NoFaceMap           -> wt { wtNoFaceMap        = texHandle }
+                          ZoomGraniteTexture  -> wt { wtZoomGranite      = texHandle }
+                          ZoomDioriteTexture  -> wt { wtZoomDiorite      = texHandle }
+                          ZoomGabbroTexture   -> wt { wtZoomGabbro       = texHandle }
+                          ZoomOceanTexture    -> wt { wtZoomOcean        = texHandle }
+                          ZoomGlacierTexture  -> wt { wtZoomGlacier      = texHandle }
+                          BgGraniteTexture    -> wt { wtBgGranite        = texHandle }
+                          BgGabbroTexture     -> wt { wtBgGabbro         = texHandle }
+                          BgDioriteTexture    -> wt { wtBgDiorite        = texHandle }
+                          BgOceanTexture      -> wt { wtBgOcean          = texHandle }
+                          BgGlacierTexture    -> wt { wtBgGlacier        = texHandle }
+                          BasaltTexture       -> wt { wtBasaltTexture    = texHandle }
+                          ObsidianTexture     -> wt { wtObsidianTexture  = texHandle }
+                          SandstoneTexture    -> wt { wtSandstoneTexture = texHandle }
+                          LimestoneTexture    -> wt { wtLimestoneTexture = texHandle }
+                          ShaleTexture        -> wt { wtShaleTexture     = texHandle }
+                          ImpactiteTexture    -> wt { wtImpactiteTexture = texHandle }
+                          IronTexture         -> wt { wtIronTexture      = texHandle }
+                          OlivineTexture      -> wt { wtOlivineTexture   = texHandle }
+                          PyroxeneTexture     -> wt { wtPyroxeneTexture  = texHandle }
+                          FeldsparTexture     -> wt { wtFeldsparTexture  = texHandle }
+                          ZoomBasaltTexture   -> wt { wtZoomBasalt       = texHandle }
+                          ZoomObsidianTexture -> wt { wtZoomObsidian     = texHandle }
+                          ZoomImpactiteTexture -> wt { wtZoomImpactite   = texHandle }
+                          BgBasaltTexture     -> wt { wtBgBasalt         = texHandle }
+                          BgImpactiteTexture  -> wt { wtBgImpactite      = texHandle }
                     atomicModifyIORef' (wsTexturesRef worldState) 
                         (\wt -> (updateTextures wt, ()))
                     logDebug logger CatWorld $ 

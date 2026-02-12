@@ -59,9 +59,6 @@ function worldManager.createWorld(params)
     if params.zoomGlacier then
         world.setTexture(worldId, "zoom_glacier", params.zoomGlacier)
     end
-    if params.zoomGlacier then
-        world.setTexture(worldId, "zoom_glacier", params.zoomGlacier)
-    end
     if params.bgGranite then
         world.setTexture(worldId, "bg_granite", params.bgGranite)
     end
@@ -76,6 +73,51 @@ function worldManager.createWorld(params)
     end
     if params.bgGlacier then
         world.setTexture(worldId, "bg_glacier", params.bgGlacier)
+    end
+    if params.basaltTexture then
+        world.setTexture(worldId, "basalt", params.basaltTexture)
+    end
+    if params.obsidianTexture then
+        world.setTexture(worldId, "obsidian", params.obsidianTexture)
+    end
+    if params.sandstoneTexture then
+        world.setTexture(worldId, "sandstone", params.sandstoneTexture)
+    end
+    if params.limestoneTexture then
+        world.setTexture(worldId, "limestone", params.limestoneTexture)
+    end
+    if params.shaleTexture then
+        world.setTexture(worldId, "shale", params.shaleTexture)
+    end
+    if params.impactiteTexture then
+        world.setTexture(worldId, "impactite", params.impactiteTexture)
+    end
+    if params.ironTexture then
+        world.setTexture(worldId, "iron", params.ironTexture)
+    end
+    if params.olivineTexture then
+        world.setTexture(worldId, "olivine", params.olivineTexture)
+    end
+    if params.pyroxeneTexture then
+        world.setTexture(worldId, "pyroxene", params.pyroxeneTexture)
+    end
+    if params.feldsparTexture then
+        world.setTexture(worldId, "feldspar", params.feldsparTexture)
+    end
+    if params.zoomBasalt then
+        world.setTexture(worldId, "zoom_basalt", params.zoomBasalt)
+    end
+    if params.zoomObsidian then
+        world.setTexture(worldId, "zoom_obsidian", params.zoomObsidian)
+    end
+    if params.zoomImpactite then
+        world.setTexture(worldId, "zoom_impactite", params.zoomImpactite)
+    end
+    if params.bgBasalt then
+        world.setTexture(worldId, "bg_basalt", params.bgBasalt)
+    end
+    if params.bgImpactite then
+        world.setTexture(worldId, "bg_impactite", params.bgImpactite)
     end
     
     worldManager.currentWorld = worldId

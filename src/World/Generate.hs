@@ -19,11 +19,13 @@ import UPrelude
 import Data.Bits (xor, shiftR, (.&.))
 import Data.Word (Word32, Word64)
 import qualified Data.HashMap.Strict as HM
-import World.Types (Tile(..), ChunkCoord(..), Chunk, WorldGenParams(..))
+import World.Types (Tile(..), ChunkCoord(..), Chunk, WorldGenParams(..)
+                   , GeoTimeline(..), GeoPeriod(..), GeoEvent(..))
 import World.Material (MaterialId(..))
 import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalX)
 import World.Grid (worldToGrid)
+import World.Geology (applyGeoEvent, applyErosion, GeoModification(..))
 
 -----------------------------------------------------------
 -- Constants
@@ -89,12 +91,14 @@ generateChunk :: WorldGenParams -> ChunkCoord -> (Chunk, HM.HashMap (Int, Int) I
 generateChunk params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
+        timeline = wgpGeoTimeline params
         plates = generatePlates seed worldSize (wgpPlateCount params)
 
         -- Wrap global X for border tiles that may cross the seam
         wrapGX gx = wrapGlobalX worldSize gx
 
-        columns = [ ((lx, ly), elevationAtGlobal seed plates worldSize (wrapGX gx) gy)
+        columns = [ ((lx, ly), applyTimeline timeline worldSize (wrapGX gx) gy
+                                  (elevationAtGlobal seed plates worldSize (wrapGX gx) gy))
                   | lx <- [-1 .. chunkSize]
                   , ly <- [-1 .. chunkSize]
                   , let (gx, gy) = chunkToGlobal coord lx ly
@@ -146,3 +150,28 @@ generateExposedColumn lx ly surfaceZ exposeFrom material =
     [ ((lx, ly, z), Tile material 0)
     | z <- [exposeFrom .. surfaceZ]
     ]
+
+-- | Walk the geological timeline, applying each period's events
+--   and erosion to get the final elevation and material.
+applyTimeline :: GeoTimeline -> Int -> Int -> Int -> (Int, MaterialId) -> (Int, MaterialId)
+applyTimeline timeline worldSize gx gy (baseElev, baseMat) =
+    foldl' applyPeriod (baseElev, baseMat) (gtPeriods timeline)
+  where
+    applyPeriod (elev, mat) period =
+        let -- Apply each event in this period
+            (elev', mat') = foldl' applyOneEvent (elev, mat) (gpEvents period)
+            -- Apply erosion for this period
+            erosionMod = applyErosion (gpErosion period) worldSize gx gy elev'
+            elev'' = elev' + gmElevDelta erosionMod
+            mat'' = case gmMaterialOverride erosionMod of
+                Just m  -> MaterialId m
+                Nothing -> mat'
+        in (elev'', mat'')
+
+    applyOneEvent (elev, mat) event =
+        let mod' = applyGeoEvent event worldSize gx gy elev
+            elev' = elev + gmElevDelta mod'
+            mat'  = case gmMaterialOverride mod' of
+                Just m  -> MaterialId m
+                Nothing -> mat
+        in (elev', mat')

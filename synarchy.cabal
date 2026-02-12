@@ -255,6 +255,7 @@ library
                      World.Grid
                      World.Render
                      World.Generate
+                     World.Geology
                      World.Plate
                      World.Material
                      World.ZoomMap

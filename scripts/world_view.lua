@@ -26,12 +26,30 @@ worldView.textures = {
     bgGranite = nil,
     bgDiorite = nil,
     bgGabbro = nil,
-    bgGlacier = nil,
     bgOcean = nil,
+    bgGlacier = nil,
+    -- New materials
+    basalt = nil,
+    obsidian = nil,
+    sandstone = nil,
+    limestone = nil,
+    shale = nil,
+    impactite = nil,
+    iron = nil,
+    olivine = nil,
+    pyroxene = nil,
+    feldspar = nil,
+    -- Zoom variants
+    zoomBasalt = nil,
+    zoomObsidian = nil,
+    zoomImpactite = nil,
+    -- Background variants
+    bgBasalt = nil,
+    bgImpactite = nil,
 }
 
 -- Track which textures have loaded
-worldView.texturesNeeded = 15
+worldView.texturesNeeded = 28
 worldView.texturesLoadedCount = 0
 
 -----------------------------------------------------------
@@ -61,6 +79,21 @@ function worldView.init(width, height)
     worldView.textures.bgGabbro     = engine.loadTexture("assets/textures/world/zoommap/gabbro_chunk_background.png")
     worldView.textures.bgOcean      = engine.loadTexture("assets/textures/world/zoommap/ocean_chunk_background.png")
     worldView.textures.bgGlacier    = engine.loadTexture("assets/textures/world/zoommap/glacier_chunk_background.png")
+    worldView.textures.basalt       = engine.loadTexture("assets/textures/world/basalt/basalt.png")
+    worldView.textures.obsidian     = engine.loadTexture("assets/textures/world/obsidian/obsidian.png")
+    worldView.textures.sandstone    = engine.loadTexture("assets/textures/world/sandstone/sandstone.png")
+    worldView.textures.limestone    = engine.loadTexture("assets/textures/world/limestone/limestone.png")
+    worldView.textures.shale        = engine.loadTexture("assets/textures/world/shale/shale.png")
+    worldView.textures.impactite    = engine.loadTexture("assets/textures/world/impactite/impactite.png")
+    worldView.textures.iron         = engine.loadTexture("assets/textures/world/iron/iron.png")
+    worldView.textures.olivine      = engine.loadTexture("assets/textures/world/olivine/olivine.png")
+    worldView.textures.pyroxene     = engine.loadTexture("assets/textures/world/pyroxene/pyroxene.png")
+    worldView.textures.feldspar     = engine.loadTexture("assets/textures/world/feldspar/feldspar.png")
+    worldView.textures.zoomBasalt     = engine.loadTexture("assets/textures/world/zoommap/basalt_chunk.png")
+    worldView.textures.zoomObsidian   = engine.loadTexture("assets/textures/world/zoommap/obsidian_chunk.png")
+    worldView.textures.zoomImpactite  = engine.loadTexture("assets/textures/world/zoommap/impactite_chunk.png")
+    worldView.textures.bgBasalt       = engine.loadTexture("assets/textures/world/zoommap/basalt_chunk_background.png")
+    worldView.textures.bgImpactite    = engine.loadTexture("assets/textures/world/zoommap/impactite_chunk_background.png")
     
     engine.logInfo("World view initialized, loading " .. worldView.texturesNeeded .. " textures")
 end
@@ -131,6 +164,21 @@ function worldView.createWorld()
         bgGabbro       = worldView.textures.bgGabbro,
         bgOcean        = worldView.textures.bgOcean,
         bgGlacier      = worldView.textures.bgGlacier,
+        basaltTexture    = worldView.textures.basalt,
+        obsidianTexture  = worldView.textures.obsidian,
+        sandstoneTexture = worldView.textures.sandstone,
+        limestoneTexture = worldView.textures.limestone,
+        shaleTexture     = worldView.textures.shale,
+        impactiteTexture = worldView.textures.impactite,
+        ironTexture      = worldView.textures.iron,
+        olivineTexture   = worldView.textures.olivine,
+        pyroxeneTexture  = worldView.textures.pyroxene,
+        feldsparTexture  = worldView.textures.feldspar,
+        zoomBasalt       = worldView.textures.zoomBasalt,
+        zoomObsidian     = worldView.textures.zoomObsidian,
+        zoomImpactite    = worldView.textures.zoomImpactite,
+        bgBasalt         = worldView.textures.bgBasalt,
+        bgImpactite      = worldView.textures.bgImpactite,
     })
     worldManager.showWorld()
 end

@@ -236,19 +236,24 @@ getZoomTexture :: WorldTextures -> Word8 -> Int -> TextureHandle
 getZoomTexture textures 250 _ = wtZoomGlacier textures
 getZoomTexture textures _mat elev
     | elev < -100 = wtZoomOcean textures
-getZoomTexture textures 1 _ = wtZoomGranite textures
-getZoomTexture textures 2 _ = wtZoomDiorite textures
-getZoomTexture textures 3 _ = wtZoomGabbro textures
-getZoomTexture textures _ _ = wtZoomGranite textures
+getZoomTexture textures 1  _ = wtZoomGranite textures
+getZoomTexture textures 2  _ = wtZoomDiorite textures
+getZoomTexture textures 3  _ = wtZoomGabbro textures
+getZoomTexture textures 4  _ = wtZoomBasalt textures
+getZoomTexture textures 5  _ = wtZoomObsidian textures
+getZoomTexture textures 20 _ = wtZoomImpactite textures
+getZoomTexture textures _  _ = wtZoomGranite textures
 
 getBgTexture :: WorldTextures -> Word8 -> Int -> TextureHandle
 getBgTexture textures 250 _ = wtBgGlacier textures
 getBgTexture textures _mat elev
     | elev < -100 = wtBgOcean textures
-getBgTexture textures 1 _ = wtBgGranite textures
-getBgTexture textures 2 _ = wtBgDiorite textures
-getBgTexture textures 3 _ = wtBgGabbro textures
-getBgTexture textures _ _ = wtBgGranite textures
+getBgTexture textures 1  _ = wtBgGranite textures
+getBgTexture textures 2  _ = wtBgDiorite textures
+getBgTexture textures 3  _ = wtBgGabbro textures
+getBgTexture textures 4  _ = wtBgBasalt textures
+getBgTexture textures 20 _ = wtBgImpactite textures
+getBgTexture textures _  _ = wtBgGranite textures
 
 clamp01 :: Float -> Float
 clamp01 x
