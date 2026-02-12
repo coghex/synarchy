@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scene.Manager where
 
 import UPrelude
@@ -34,7 +34,7 @@ createScene sceneId camera manager =
 -- | Add object to scene
 addObjectToScene ∷ Text → SceneNode → SceneManager → Maybe (ObjectId, SceneManager)
 addObjectToScene sceneId node manager = do
-    graph <- Map.lookup sceneId (smSceneGraphs manager)
+    graph ← Map.lookup sceneId (smSceneGraphs manager)
     let (objId, newGraph) = addNode node graph
         updatedManager = manager
             { smSceneGraphs = Map.insert sceneId newGraph (smSceneGraphs manager)

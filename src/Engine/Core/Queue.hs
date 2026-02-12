@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Core.Queue where
 
 import UPrelude
@@ -12,7 +12,7 @@ data Queue α = Queue
 
 -- | Create a new empty queue
 newQueue ∷ IO (Queue α)
-newQueue = Queue <$> STM.atomically newTQueue
+newQueue = Queue ⊚ STM.atomically newTQueue
 
 -- | Write a value to a queue
 writeQueue ∷ Queue α → α → IO ()

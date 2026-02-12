@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP, UnicodeSyntax #-}
 module Engine.Loop.Frame
   ( drawFrame
   , updateUniformBufferForFrame
@@ -51,9 +51,9 @@ import GHC.Stack (HasCallStack)
 
 computeAmbientLight ∷ Float → Float
 computeAmbientLight sunAngle =
-    let angle = sunAngle * 2.0 * pi
+    let angle = sunAngle * 2.0 * π
         sunHeight = sin angle
-    in if sunHeight >= 0
+    in if sunHeight ≥ 0
        then 0.5 + 0.2 * sunHeight   -- day: 0.5 at horizon, 0.7 at noon
        else 0.15 + 0.35 * (1.0 + sunHeight)  -- night: 0.15 at midnight, 0.5 at horizon
 
@@ -136,16 +136,16 @@ drawFrame = do
             let allWorldQuads = V.toList worldTileQuads <> V.toList sceneQuads
                 -- Group quads by their sqLayer
                 groupedByLayer = Map.fromListWith (<>)
-                    [ (sqLayer q, [q]) | q <- allWorldQuads ]
+                    [ (sqLayer q, [q]) | q ← allWorldQuads ]
                 -- One RenderBatch per layer
                 perLayerBatches = Map.mapWithKey
-                    (\layer quads -> mergeQuadsToBatch layer quads)
+                    (\layer quads → mergeQuadsToBatch layer quads)
                     groupedByLayer
                 -- For vertex upload (flat list of batches)
                 worldBatches = V.fromList $ Map.elems perLayerBatches
                 -- For draw ordering (layered map of render items)
                 worldLayeredBatches = Map.map
-                    (\batch -> V.singleton (SpriteItem batch))
+                    (\batch → V.singleton (SpriteItem batch))
                     perLayerBatches
             
             -- 5. Render UI

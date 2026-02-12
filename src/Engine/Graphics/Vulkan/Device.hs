@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Device
   ( -- * Types
     QueueFamilyIndices(..)
@@ -51,7 +51,7 @@ createVulkanDevice inst physicalDevice surface = do
   
   -- Create unique queue create infos
   let queuePriority = 1.0
-      uniqueFamilies = if graphicsFamily indices == presentFamily indices
+      uniqueFamilies = if graphicsFamily indices ≡ presentFamily indices
                       then [graphicsFamily indices]
                       else [graphicsFamily indices, presentFamily indices]
       queueCreateInfos = map (\queueFamily → SomeStruct ((zero ∷ DeviceQueueCreateInfo '[])
@@ -79,7 +79,7 @@ createVulkanDevice inst physicalDevice surface = do
         , descriptorBindingPartiallyBound = True
         , descriptorBindingUpdateUnusedWhilePending = True
         , descriptorBindingVariableDescriptorCount = True
-        } :: PhysicalDeviceVulkan12Features
+        } ∷ PhysicalDeviceVulkan12Features
   
   logDebugM CatVulkan "Enabled Vulkan 1.2 descriptor indexing features"
   
@@ -132,7 +132,7 @@ pickPhysicalDevice inst surface = do
   let ratedDevices = V.zip scores devices
       bestDevice = V.maximumBy (\a b → compare (fst a) (fst b)) ratedDevices
   
-  if fst bestDevice == 0
+  if fst bestDevice ≡ 0
     then logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
       "Failed to find a suitable GPU"
     else return $ snd bestDevice
@@ -168,7 +168,7 @@ findQueueFamilies device surface = do
   
   -- Find graphics queue family
   let graphicsIdx = V.findIndex 
-        (\p → (queueFlags p) .&. QUEUE_GRAPHICS_BIT /= zeroBits) 
+        (\p → (queueFlags p) .&. QUEUE_GRAPHICS_BIT ≢ zeroBits) 
         props
   
   case graphicsIdx of
@@ -197,8 +197,8 @@ isDeviceSuitable ∷ PhysicalDevice
                  → Bool
 isDeviceSuitable device indices extensionsSupported =
   -- Check if device has all required queue families
-  graphicsFamily indices >= 0 && 
-  presentFamily indices >= 0 &&
+  graphicsFamily indices ≥ 0 ∧ 
+  presentFamily indices ≥ 0 &&
   -- Check if device supports required extensions
   extensionsSupported
 

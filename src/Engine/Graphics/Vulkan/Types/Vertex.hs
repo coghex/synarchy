@@ -1,26 +1,26 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Types.Vertex where
 import UPrelude
 import qualified Data.Text as T
 import qualified Foreign.Storable as Storable
 
 -- Constants for vertex layout
-vertexPositionOffset :: Int
+vertexPositionOffset ∷ Int
 vertexPositionOffset = 0
 
-vertexTexCoordOffset :: Int
+vertexTexCoordOffset ∷ Int
 vertexTexCoordOffset = 8
 
-vertexColorOffset :: Int
+vertexColorOffset ∷ Int
 vertexColorOffset = 16
 
-vertexAtlasIdOffset :: Int
+vertexAtlasIdOffset ∷ Int
 vertexAtlasIdOffset = 32
 
-vertexFaceMapIdOffset :: Int
+vertexFaceMapIdOffset ∷ Int
 vertexFaceMapIdOffset = 36
 
-vertexTotalSize :: Int
+vertexTotalSize ∷ Int
 vertexTotalSize = 40
 
 -- | 2D vector for positions and texture coordinates

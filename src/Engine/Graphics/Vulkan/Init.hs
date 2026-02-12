@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DataKinds, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Init
   ( initializeVulkan
   , createUniformBuffersForFrames
@@ -97,8 +97,8 @@ initializeVulkan window = do
                     } }
   
   -- Create swapchain
-  env <- ask
-  videoConfig <- liftIO $ readIORef (videoConfigRef env)
+  env ← ask
+  videoConfig ← liftIO $ readIORef (videoConfigRef env)
   let vsyncEnabled = vcVSync videoConfig
   
   logDebugSM CatVulkan "Creating swapchain"
@@ -244,7 +244,7 @@ initializeVulkan window = do
                         Nothing → Nothing } }
   
   -- Create MSAA color image if needed
-  mMsaaImageView ← if sampleCount /= SAMPLE_COUNT_1_BIT
+  mMsaaImageView ← if sampleCount ≢ SAMPLE_COUNT_1_BIT
     then do
       (img, mem, view) ← createMSAAColorImage physicalDevice device
                                               (siSwapImgFormat swapInfo)
@@ -271,17 +271,17 @@ initializeVulkan window = do
   pure cmdPool
 
 
-createUniformBuffersForFrames :: Device -> PhysicalDevice 
-  -> GLFWRaw.Window -> V.Vector DescriptorSet -> EngineM ε σ ()
+createUniformBuffersForFrames ∷ Device → PhysicalDevice 
+  → GLFWRaw.Window → V.Vector DescriptorSet → EngineM ε σ ()
 createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
-  (width, height) <- GLFW.getFramebufferSize glfwWin
-  env <- ask
+  (width, height) ← GLFW.getFramebufferSize glfwWin
+  env ← ask
   let cRef   = cameraRef env
       uiCRef = uiCameraRef env
       bRef   = brightnessRef env
       psRef  = pixelSnapRef env
-  state <- gets graphicsState
-  camera <- liftIO $ readIORef cRef
+  state ← gets graphicsState
+  camera ← liftIO $ readIORef cRef
   brightnessInt ← liftIO $ readIORef bRef
   pixelSnap ← liftIO $ readIORef psRef
   sunAngle ← liftIO $ readIORef (sunAngleRef env)
@@ -305,8 +305,8 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
       uboSize = fromIntegral $ sizeOf uboData
       numFrames = gcMaxFrames defaultGraphicsConfig
   
-  uniformBuffers <- V.generateM (fromIntegral numFrames) $ \_ -> do
-      (buffer, memory) <- createUniformBuffer device physicalDevice uboSize
+  uniformBuffers ← V.generateM (fromIntegral numFrames) $ \_ → do
+      (buffer, memory) ← createUniformBuffer device physicalDevice uboSize
       updateUniformBuffer device memory
           (UBO identity identity identity identity identity
                (brightnessToMultiplier brightnessInt)
@@ -316,23 +316,23 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
                ambientLight)
       pure (buffer, memory)
   
-  modify $ \s -> s { graphicsState = (graphicsState s) {
+  modify $ \s → s { graphicsState = (graphicsState s) {
                       uniformBuffers = Just uniformBuffers } }
   
   -- Update descriptor sets
-  forM_ (zip [0..] (V.toList uniformBuffers)) $ \(i, (buffer, _)) -> do
+  forM_ (zip [0..] (V.toList uniformBuffers)) $ \(i, (buffer, _)) → do
     logDebugSM CatDescriptor "Updating descriptor set"
-      [("set_index", T.pack $ show (i :: Int))
+      [("set_index", T.pack $ show (i ∷ Int))
       ,("binding", "0")
       ,("type", "UNIFORM_BUFFER")
       ,("count", "1")]
     
-    let bufferInfo = (zero :: DescriptorBufferInfo)
+    let bufferInfo = (zero ∷ DescriptorBufferInfo)
           { buffer = buffer
           , offset = 0
           , range  = uboSize
           }
-        write = (zero :: WriteDescriptorSet '[])
+        write = (zero ∷ WriteDescriptorSet '[])
           { dstSet          = descSets V.! i
           , dstBinding      = 0
           , dstArrayElement = 0

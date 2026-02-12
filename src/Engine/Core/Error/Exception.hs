@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveDataTypeable, UnicodeSyntax #-}
 module Engine.Core.Error.Exception
   ( -- * Types
     EngineException(..)
@@ -125,7 +125,7 @@ data EngineException = EngineException
   , errorContext ∷ ErrorContext -- ^ Additional context
   } deriving (Typeable)
 instance Eq EngineException where
-  (==) a b = errorType a == errorType b && errorMsg a == errorMsg b
+  (==) a b = errorType a ≡ errorType b ∧ errorMsg a ≡ errorMsg b
 
 -- | Error context, currently just a call stack
 data ErrorContext = ErrorContext
@@ -144,7 +144,7 @@ instance Exception EngineException where
   displayException ex = show ex
 
 -- | Helper function to throw engine exceptions
-throwEngineException :: MonadError EngineException m => EngineException -> m a
+throwEngineException ∷ MonadError EngineException m ⇒ EngineException → m a
 throwEngineException = throwError
 
 -- | Create error context from current call stack
@@ -152,14 +152,14 @@ mkErrorContext ∷ HasCallStack ⇒ ErrorContext
 mkErrorContext = ErrorContext { contextCallStack = callStack }
 
 -- | Catch EngineException in EngineM context
-catchEngine :: MonadError EngineException m 
-           => m a                                  -- ^ Action that might fail
-           -> (EngineException -> m a)            -- ^ Handler for exceptions
-           -> m a
+catchEngine ∷ MonadError EngineException m 
+           ⇒ m a                                  -- ^ Action that might fail
+           → (EngineException → m a)            -- ^ Handler for exceptions
+           → m a
 catchEngine action handler = catchError action handler
 
 -- | Try running an action, returning Either
-tryEngine :: MonadError EngineException m 
-         => m a 
-         -> m (Either EngineException a)
-tryEngine action = (Right <$> action) `catchEngine` (pure . Left)
+tryEngine ∷ MonadError EngineException m 
+         ⇒ m a 
+         → m (Either EngineException a)
+tryEngine action = (Right ⊚ action) `catchEngine` (pure . Left)

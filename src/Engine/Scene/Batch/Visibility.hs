@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scene.Batch.Visibility
   ( isNodeVisible
   , isUILayer
@@ -30,9 +30,9 @@ isNodeVisible camera viewWidth viewHeight node =
             nodeBottom = nodeY - sizeY * 0.5
             nodeTop = nodeY + sizeY * 0.5
             
-        in not (nodeRight < left || nodeLeft > right || 
-                nodeTop < bottom || nodeBottom > top)
+        in not (nodeRight < left ∨ nodeLeft > right ∨ 
+                nodeTop < bottom ∨ nodeBottom > top)
 
 -- | Check if a layer is a UI layer (always visible)
 isUILayer ∷ LayerId → Bool
-isUILayer (LayerId l) = l >= 10
+isUILayer (LayerId l) = l ≥ 10

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Crater
     ( generateCraters
     , generateCraterAttempt
@@ -20,11 +20,11 @@ import World.Geology.Hash
 -- | Generate a set of crater events for a bombardment era.
 --   Picks random land positions, avoids ocean and glacier,
 --   determines size and whether a meteorite survives.
-generateCraters :: Word64 -> Int -> [TectonicPlate] -> CraterEra -> [CraterParams]
+generateCraters ∷ Word64 → Int → [TectonicPlate] → CraterEra → [CraterParams]
 generateCraters seed worldSize plates era =
     let (baseCount, minRadius, maxRadius, minDepth, maxDepth, rimMin, rimMax) = case era of
-            CraterEra_Primordial -> (3,  40, 120, 30, 80, 10, 30)
-            CraterEra_Late       -> (8,  10, 50,  8,  40, 3,  15)
+            CraterEra_Primordial → (3,  40, 120, 30, 80, 10, 30)
+            CraterEra_Late       → (8,  10, 50,  8,  40, 3,  15)
 
         count = scaleCount worldSize baseCount
         halfTiles = (worldSize * 16) `div` 2
@@ -32,15 +32,15 @@ generateCraters seed worldSize plates era =
         attempts = map (generateCraterAttempt seed worldSize plates
                             halfTiles minRadius maxRadius
                             minDepth maxDepth rimMin rimMax) [0 .. count * 3 - 1]
-        valid = take count [ cp | Just cp <- attempts ]
+        valid = take count [ cp | Just cp ← attempts ]
 
     in valid
 
 -- | Try to place a single crater. Returns Nothing if it
 --   lands in ocean or glacier.
-generateCraterAttempt :: Word64 -> Int -> [TectonicPlate]
-                      -> Int -> Int -> Int -> Int -> Int -> Int -> Int
-                      -> Int -> Maybe CraterParams
+generateCraterAttempt ∷ Word64 → Int → [TectonicPlate]
+                      → Int → Int → Int → Int → Int → Int → Int
+                      → Int → Maybe CraterParams
 generateCraterAttempt seed worldSize plates halfTiles
                       minRadius maxRadius minDepth maxDepth
                       rimMin rimMax attemptIdx =
@@ -73,7 +73,7 @@ generateCraterAttempt seed worldSize plates halfTiles
         -- Meteorite survives in larger impacts
         meteoriteType = determineMeteoriteType seed attemptIdx radius
 
-    in if isOcean || isGlacier
+    in if isOcean ∨ isGlacier
        then Nothing
        else Just CraterParams
             { cpCenter       = GeoCoord gx gy
@@ -87,7 +87,7 @@ generateCraterAttempt seed worldSize plates halfTiles
 -- | Determine what type of meteorite (if any) survives the impact.
 --   Larger craters are more likely to leave meteorite fragments.
 --   Returns the material ID of the meteorite, or Nothing.
-determineMeteoriteType :: Word64 -> Int -> Int -> Maybe Word8
+determineMeteoriteType ∷ Word64 → Int → Int → Maybe Word8
 determineMeteoriteType seed attemptIdx radius =
     let h = hashGeo seed attemptIdx 10
         chance = hashToFloatGeo h
@@ -102,10 +102,10 @@ determineMeteoriteType seed attemptIdx radius =
        else let typeHash = hashGeo seed attemptIdx 11
                 typeVal  = hashToRangeGeo typeHash 0 3
             in Just $ case typeVal of
-                0 -> unMaterialId matIron      -- Iron meteorite
-                1 -> unMaterialId matOlivine   -- Stony (olivine-rich)
-                2 -> unMaterialId matPyroxene  -- Stony (pyroxene-rich)
-                _ -> unMaterialId matFeldspar  -- Stony (feldspar-rich)
+                0 → unMaterialId matIron      -- Iron meteorite
+                1 → unMaterialId matOlivine   -- Stony (olivine-rich)
+                2 → unMaterialId matPyroxene  -- Stony (pyroxene-rich)
+                _ → unMaterialId matFeldspar  -- Stony (feldspar-rich)
 
 -----------------------------------------------------------
 -- Crater Application
@@ -126,18 +126,18 @@ determineMeteoriteType seed attemptIdx radius =
 --                       \
 --                        \____  <- bowl floor
 --
-applyCrater :: CraterParams -> Int -> Int -> Int -> Int -> GeoModification
+applyCrater ∷ CraterParams → Int → Int → Int → Int → GeoModification
 applyCrater params worldSize gx gy _baseElev =
     let GeoCoord cx cy = cpCenter params
         -- Wrapped distance in X for cylindrical world
-        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) :: Float
-        dy = fromIntegral (gy - cy) :: Float
+        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) ∷ Float
+        dy = fromIntegral (gy - cy) ∷ Float
         dist = sqrt (dx * dx + dy * dy)
 
-        radius      = fromIntegral (cpRadius params) :: Float
-        depth       = fromIntegral (cpDepth params) :: Float
-        rimHeight   = fromIntegral (cpRimHeight params) :: Float
-        ejectaR     = fromIntegral (cpEjectaRadius params) :: Float
+        radius      = fromIntegral (cpRadius params) ∷ Float
+        depth       = fromIntegral (cpDepth params) ∷ Float
+        rimHeight   = fromIntegral (cpRimHeight params) ∷ Float
+        ejectaR     = fromIntegral (cpEjectaRadius params) ∷ Float
 
     in if dist > ejectaR
        -- Outside ejecta radius — no effect
@@ -174,6 +174,6 @@ applyCrater params worldSize gx gy _baseElev =
        let elevDelta = round (negate depth)
            centerDist = dist / (radius * 0.15)
            mat = case cpMeteorite params of
-               Just meteoriteMat | centerDist < 0.5 -> Just meteoriteMat
-               _ -> Just (unMaterialId matImpactite)
+               Just meteoriteMat | centerDist < 0.5 → Just meteoriteMat
+               _ → Just (unMaterialId matImpactite)
        in GeoModification elevDelta mat

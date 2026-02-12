@@ -83,7 +83,7 @@ extractWindow state = case glfwWindow state of
 -- | Safe vector access by index
 safeVectorIndex ∷ V.Vector a → Int → Maybe a
 safeVectorIndex vec idx
-  | idx >= 0 && idx < V.length vec = Just (vec V.! idx)
+  | idx ≥ 0 ∧ idx < V.length vec = Just (vec V.! idx)
   | otherwise = Nothing
 
 -- | Safe vector head

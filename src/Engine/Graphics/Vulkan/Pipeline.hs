@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Pipeline
   ( createVulkanRenderPass
   ) where
@@ -24,7 +24,7 @@ import Vulkan.CStruct.Extends
 -- When sampleCount > 1, uses a multisampled color attachment with resolve.
 createVulkanRenderPass ∷ Device → Format → SampleCountFlagBits → EngineM ε σ RenderPass
 createVulkanRenderPass device swapchainImageFormat sampleCount = do
-    renderPass ← if sampleCount == SAMPLE_COUNT_1_BIT
+    renderPass ← if sampleCount ≡ SAMPLE_COUNT_1_BIT
         then createRenderPassNoMSAA device swapchainImageFormat
         else createRenderPassMSAA device swapchainImageFormat sampleCount
 

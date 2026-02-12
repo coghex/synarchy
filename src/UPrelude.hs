@@ -1,4 +1,4 @@
-{-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE ExplicitForAll, UnicodeSyntax #-}
 module UPrelude
   ( module Prelude
   , module Prelude.Unicode

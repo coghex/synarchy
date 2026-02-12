@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Generate
     ( -- * Generation
       generateChunk
@@ -33,22 +33,22 @@ import World.Geology (applyGeoEvent, applyErosion, GeoModification(..))
 -- Constants
 -----------------------------------------------------------
 
-chunkSize :: Int
+chunkSize ∷ Int
 chunkSize = 16
 
-chunkLoadRadius :: Int
+chunkLoadRadius ∷ Int
 chunkLoadRadius = 2
 
 -- | How many z-levels below the z-slice are rendered.
 --   This is a RENDER window, not a generation limit.
-viewDepth :: Int
+viewDepth ∷ Int
 viewDepth = 100
 
 -----------------------------------------------------------
 -- Coordinate Helpers
 -----------------------------------------------------------
 
-globalToChunk :: Int -> Int -> (ChunkCoord, (Int, Int))
+globalToChunk ∷ Int → Int → (ChunkCoord, (Int, Int))
 globalToChunk gx gy =
     let cx = floorDiv gx chunkSize
         cy = floorDiv gy chunkSize
@@ -56,11 +56,11 @@ globalToChunk gx gy =
         ly = floorMod gy chunkSize
     in (ChunkCoord cx cy, (lx, ly))
 
-chunkToGlobal :: ChunkCoord -> Int -> Int -> (Int, Int)
+chunkToGlobal ∷ ChunkCoord → Int → Int → (Int, Int)
 chunkToGlobal (ChunkCoord cx cy) lx ly =
     (cx * chunkSize + lx, cy * chunkSize + ly)
 
-chunkWorldBounds :: ChunkCoord -> ((Int, Int), (Int, Int))
+chunkWorldBounds ∷ ChunkCoord → ((Int, Int), (Int, Int))
 chunkWorldBounds (ChunkCoord cx cy) =
     let minX = cx * chunkSize
         minY = cy * chunkSize
@@ -68,16 +68,16 @@ chunkWorldBounds (ChunkCoord cx cy) =
         maxY = minY + chunkSize - 1
     in ((minX, minY), (maxX, maxY))
 
-cameraChunkCoord :: Float -> Float -> ChunkCoord
+cameraChunkCoord ∷ Float → Float → ChunkCoord
 cameraChunkCoord camX camY =
     let (gx, gy) = worldToGrid camX camY
         (coord, _) = globalToChunk gx gy
     in coord
 
-floorDiv :: Int -> Int -> Int
-floorDiv a b = floor (fromIntegral a / fromIntegral b :: Double)
+floorDiv ∷ Int → Int → Int
+floorDiv a b = floor (fromIntegral a / fromIntegral b ∷ Double)
 
-floorMod :: Int -> Int -> Int
+floorMod ∷ Int → Int → Int
 floorMod a b = a - floorDiv a b * b
 
 -----------------------------------------------------------
@@ -89,7 +89,7 @@ floorMod a b = a - floorDiv a b * b
 --   Only produces tiles that are exposed to the surface:
 --   the top tile of each column, plus any tiles whose side
 --   face is visible because a neighbor column is shorter.
-generateChunk :: WorldGenParams -> ChunkCoord -> (Chunk, HM.HashMap (Int, Int) Int)
+generateChunk ∷ WorldGenParams → ChunkCoord → (Chunk, HM.HashMap (Int, Int) Int)
 generateChunk params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -100,38 +100,38 @@ generateChunk params coord =
         wrapGX gx = wrapGlobalX worldSize gx
 
         columns = [ ((lx, ly), let raw = elevationAtGlobal seed plates worldSize (wrapGX gx) gy
-                               in if snd raw == matGlacier
+                               in if snd raw ≡ matGlacier
                                   then raw  -- never apply geology to glacier tiles
                                   else applyTimeline timeline worldSize (wrapGX gx) gy raw)
-                  | lx <- [-1 .. chunkSize]
-                  , ly <- [-1 .. chunkSize]
+                  | lx ← [-1 .. chunkSize]
+                  , ly ← [-1 .. chunkSize]
                   , let (gx, gy) = chunkToGlobal coord lx ly
                   , not (isBeyondGlacier worldSize (wrapGX gx) gy)
                   ]
         elevMap = HM.fromList columns
 
         lookupElev lx ly = case HM.lookup (lx, ly) elevMap of
-            Just (z, _) -> z
-            Nothing     -> 0
+            Just (z, _) → z
+            Nothing     → 0
 
         -- Build the surface elevation map for this chunk's own columns
         surfaceMap = HM.fromList
             [ ((lx, ly), surfZ)
-            | lx <- [0 .. chunkSize - 1]
-            , ly <- [0 .. chunkSize - 1]
+            | lx ← [0 .. chunkSize - 1]
+            , ly ← [0 .. chunkSize - 1]
             , let (gx, gy) = chunkToGlobal coord lx ly
             , not (isBeyondGlacier worldSize (wrapGX gx) gy)
             , let surfZ = lookupElev lx ly
             ]
 
         tiles = [ tile
-                | lx <- [0 .. chunkSize - 1]
-                , ly <- [0 .. chunkSize - 1]
+                | lx ← [0 .. chunkSize - 1]
+                , ly ← [0 .. chunkSize - 1]
                 , let (gx, gy) = chunkToGlobal coord lx ly
                 , not (isBeyondGlacier worldSize (wrapGX gx) gy)
                 , let (surfZ, mat) = case HM.lookup (lx, ly) elevMap of
-                          Just v  -> v
-                          Nothing -> (0, MaterialId 1)
+                          Just v  → v
+                          Nothing → (0, MaterialId 1)
                       neighborMinZ = minimum
                           [ lookupElev (lx - 1) ly
                           , lookupElev (lx + 1) ly
@@ -141,23 +141,23 @@ generateChunk params coord =
                       -- Generate tiles all the way down to the shortest neighbor.
                       -- No viewDepth cap here — viewDepth only limits rendering.
                       exposeFrom = min surfZ neighborMinZ
-                , tile <- generateExposedColumn lx ly surfZ exposeFrom (unMaterialId mat)
+                , tile ← generateExposedColumn lx ly surfZ exposeFrom (unMaterialId mat)
                 ]
     in (HM.fromList tiles, surfaceMap)
 
 -- | Generate only the exposed tiles for a column.
 --   Always includes the surface tile. Below that, includes
 --   tiles down to exposeFrom (where a neighbor's surface is lower).
-generateExposedColumn :: Int -> Int -> Int -> Int -> Word8
-                      -> [((Int, Int, Int), Tile)]
+generateExposedColumn ∷ Int → Int → Int → Int → Word8
+                      → [((Int, Int, Int), Tile)]
 generateExposedColumn lx ly surfaceZ exposeFrom material =
     [ ((lx, ly, z), Tile material 0)
-    | z <- [exposeFrom .. surfaceZ]
+    | z ← [exposeFrom .. surfaceZ]
     ]
 
 -- | Walk the geological timeline, applying each period's events
 --   and erosion to get the final elevation and material.
-applyTimeline :: GeoTimeline -> Int -> Int -> Int -> (Int, MaterialId) -> (Int, MaterialId)
+applyTimeline ∷ GeoTimeline → Int → Int → Int → (Int, MaterialId) → (Int, MaterialId)
 applyTimeline timeline worldSize gx gy (baseElev, baseMat) =
     foldl' applyPeriod (baseElev, baseMat) (gtPeriods timeline)
   where
@@ -168,14 +168,14 @@ applyTimeline timeline worldSize gx gy (baseElev, baseMat) =
             erosionMod = applyErosion (gpErosion period) worldSize gx gy elev'
             elev'' = elev' + gmElevDelta erosionMod
             mat'' = case gmMaterialOverride erosionMod of
-                Just m  -> MaterialId m
-                Nothing -> mat'
+                Just m  → MaterialId m
+                Nothing → mat'
         in (elev'', mat'')
 
     applyOneEvent (elev, mat) event =
         let mod' = applyGeoEvent event worldSize gx gy elev
             elev' = elev + gmElevDelta mod'
             mat'  = case gmMaterialOverride mod' of
-                Just m  -> MaterialId m
-                Nothing -> mat
+                Just m  → MaterialId m
+                Nothing → mat
         in (elev', mat')

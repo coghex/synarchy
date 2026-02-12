@@ -16,7 +16,7 @@ calculateTextWidth atlas str =
         ]
 
 -- | Calculate text width at a desired font size (scaled)
-calculateTextWidthScaled :: FontAtlas -> Float -> String -> Double
+calculateTextWidthScaled ∷ FontAtlas → Float → String → Double
 calculateTextWidthScaled atlas desiredSize str = 
     let baseSize = fromIntegral $ faFontSize atlas
         scaleFactor = realToFrac desiredSize / baseSize

@@ -1,4 +1,4 @@
-{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ExistentialQuantification, UnicodeSyntax #-}
 
 module Engine.Scripting.Backend
   ( ScriptBackend(..)
@@ -21,27 +21,27 @@ data BackendType
 -- | Abstract interface for scripting backends
 class ScriptBackend backend where
   -- Lifecycle
-  initBackend      ::  backend -> IO ScriptContext
-  closeBackend     :: backend -> ScriptContext -> IO ()
+  initBackend      ∷  backend → IO ScriptContext
+  closeBackend     ∷ backend → ScriptContext → IO ()
   
   -- Script loading
-  loadScript       :: backend -> ScriptContext -> FilePath -> IO ScriptResult
-  reloadScript     :: backend -> ScriptContext -> FilePath -> IO ScriptResult
+  loadScript       ∷ backend → ScriptContext → FilePath → IO ScriptResult
+  reloadScript     ∷ backend → ScriptContext → FilePath → IO ScriptResult
   
   -- Function calls
-  callFunction     ::  backend -> ScriptContext -> T.Text -> [ScriptValue] -> IO ScriptResult
+  callFunction     ∷  backend → ScriptContext → T.Text → [ScriptValue] → IO ScriptResult
   
   -- API registration
-  registerFunction ::  backend -> ScriptContext -> T.Text 
-                   -> ([ScriptValue] -> IO [ScriptValue]) -> IO ()
+  registerFunction ∷  backend → ScriptContext → T.Text 
+                   → ([ScriptValue] → IO [ScriptValue]) → IO ()
   
   -- Introspection
-  backendName      :: backend -> T.Text
-  backendVersion   :: backend -> T.Text
+  backendName      ∷ backend → T.Text
+  backendVersion   ∷ backend → T.Text
 
 -- | Existential wrapper for any backend
-data AnyBackend = forall backend. ScriptBackend backend => AnyBackend backend
+data AnyBackend = ∀ backend. ScriptBackend backend ⇒ AnyBackend backend
 
-throwUnsupportedBackend :: String -> IO a
+throwUnsupportedBackend ∷ String → IO a
 throwUnsupportedBackend name = 
   error $ name ++ " scripting backend not yet implemented.  Only Lua is currently supported."

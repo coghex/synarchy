@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Render
     ( updateWorldTiles
     ) where
@@ -37,52 +37,52 @@ import qualified Data.Vector as V
 -- World Screen Width (wrapping period in screen-space X)
 -----------------------------------------------------------
 
-worldScreenWidth :: Float
+worldScreenWidth ∷ Float
 worldScreenWidth =
     let worldSizeChunks = 128
         worldTiles = worldSizeChunks * chunkSize
     in fromIntegral worldTiles * tileHalfWidth
 
-updateWorldTiles :: EngineM ε σ (V.Vector SortableQuad)
+updateWorldTiles ∷ EngineM ε σ (V.Vector SortableQuad)
 updateWorldTiles = do
-    env <- ask
-    logger <- liftIO $ readIORef (loggerRef env)
-    camera <- liftIO $ readIORef (cameraRef env)
+    env ← ask
+    logger ← liftIO $ readIORef (loggerRef env)
+    camera ← liftIO $ readIORef (cameraRef env)
 
     let zoom = camZoom camera
         tileAlpha = clamp01 (1.0 - (zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
 
-    worldManager <- liftIO $ readIORef (worldManagerRef env)
+    worldManager ← liftIO $ readIORef (worldManagerRef env)
 
-    tileQuads <- if tileAlpha <= 0.001
+    tileQuads ← if tileAlpha ≤ 0.001
         then return V.empty
         else do
-            quads <- forM (wmVisible worldManager) $ \pageId ->
+            quads ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
-                    Just worldState -> renderWorldQuads env worldState tileAlpha
-                    Nothing         -> return V.empty
+                    Just worldState → renderWorldQuads env worldState tileAlpha
+                    Nothing         → return V.empty
             return $ V.concat quads
 
-    zoomQuads <- generateZoomMapQuads
-    bgQuads   <- generateBackgroundQuads
+    zoomQuads ← generateZoomMapQuads
+    bgQuads   ← generateBackgroundQuads
 
-    when (tileAlpha > 0.001 && tileAlpha < 0.999) $ do
-        worldManager' <- liftIO $ readIORef (worldManagerRef env)
-        forM_ (wmVisible worldManager') $ \pageId ->
+    when (tileAlpha > 0.001 ∧ tileAlpha < 0.999) $ do
+        worldManager' ← liftIO $ readIORef (worldManagerRef env)
+        forM_ (wmVisible worldManager') $ \pageId →
             case lookup pageId (wmWorlds worldManager') of
-                Just worldState -> do
-                    tileData <- liftIO $ readIORef (wsTilesRef worldState)
+                Just worldState → do
+                    tileData ← liftIO $ readIORef (wsTilesRef worldState)
                     let (camX, camY) = camPosition camera
                         (gx, gy) = worldToGrid camX camY
                         (chunkCoord, (lx, ly)) = globalToChunk gx gy
                     case lookupChunk chunkCoord tileData of
-                        Just lc -> do
+                        Just lc → do
                             let surfElev = HM.lookupDefault 0 (lx, ly) (lcSurfaceMap lc)
                                 targetZ = surfElev + 3
-                            liftIO $ atomicModifyIORef' (cameraRef env) $ \cam ->
+                            liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
                                 (cam { camZSlice = targetZ }, ())
-                        Nothing -> return ()
-                Nothing -> return ()
+                        Nothing → return ()
+                Nothing → return ()
 
     let allQuads = bgQuads <> tileQuads <> zoomQuads
 
@@ -93,13 +93,13 @@ updateWorldTiles = do
 -----------------------------------------------------------
 
 data ViewBounds = ViewBounds
-    { vbLeft   :: !Float
-    , vbRight  :: !Float
-    , vbTop    :: !Float
-    , vbBottom :: !Float
+    { vbLeft   ∷ !Float
+    , vbRight  ∷ !Float
+    , vbTop    ∷ !Float
+    , vbBottom ∷ !Float
     } deriving (Show)
 
-computeViewBounds :: Camera2D -> Int -> Int -> ViewBounds
+computeViewBounds ∷ Camera2D → Int → Int → ViewBounds
 computeViewBounds camera fbW fbH =
     let (cx, cy) = camPosition camera
         zoom     = camZoom camera
@@ -120,17 +120,17 @@ computeViewBounds camera fbW fbH =
 -- Chunk-Level Culling (wrap-aware)
 -----------------------------------------------------------
 
-bestWrapOffset :: Float -> Float -> Float
+bestWrapOffset ∷ Float → Float → Float
 bestWrapOffset camX chunkScreenX =
     let wsw = worldScreenWidth
         candidates = [0, wsw, -wsw]
         dist offset = abs (chunkScreenX + offset - camX)
-    in minimumBy (\a b -> compare (dist a) (dist b)) candidates
+    in minimumBy (\a b → compare (dist a) (dist b)) candidates
   where
-    minimumBy f (x:xs) = foldl' (\best c -> if f c best == LT then c else best) x xs
+    minimumBy f (x:xs) = foldl' (\best c → if f c best ≡ LT then c else best) x xs
     minimumBy _ []      = 0
 
-isChunkVisibleWrapped :: ViewBounds -> Float -> ChunkCoord -> Maybe Float
+isChunkVisibleWrapped ∷ ViewBounds → Float → ChunkCoord → Maybe Float
 isChunkVisibleWrapped vb camX coord =
     let ((minGX, minGY), (maxGX, maxGY)) = chunkWorldBounds coord
         (sxMin, _) = gridToScreen minGX maxGY
@@ -147,16 +147,16 @@ isChunkVisibleWrapped vb camX coord =
         chunkBottom = syMax + tileHeight
 
         visible = not (chunkRight  < vbLeft vb
-                    || chunkLeft   > vbRight vb
-                    || chunkBottom < vbTop vb
-                    || chunkTop    > vbBottom vb)
+                    ∨ chunkLeft   > vbRight vb
+                    ∨ chunkBottom < vbTop vb
+                    ∨ chunkTop    > vbBottom vb)
     in if visible then Just offset else Nothing
 
 -- | Now checks whether a chunk has any column whose surface
 --   is at or below the z-slice (meaning it could have real tiles)
 --   OR any column whose surface is above the z-slice (blank fill needed).
 --   In practice: any chunk with non-empty surface map is potentially visible.
-isChunkRelevantForSlice :: Int -> LoadedChunk -> Bool
+isChunkRelevantForSlice ∷ Int → LoadedChunk → Bool
 isChunkRelevantForSlice _zSlice lc =
     not (HM.null (lcSurfaceMap lc))
 
@@ -164,38 +164,38 @@ isChunkRelevantForSlice _zSlice lc =
 -- Tile-Level Culling
 -----------------------------------------------------------
 
-isTileVisible :: ViewBounds -> Float -> Float -> Bool
+isTileVisible ∷ ViewBounds → Float → Float → Bool
 isTileVisible vb drawX drawY =
     let tileRight  = drawX + tileWidth
         tileBottom = drawY + tileHeight
     in not (tileRight  < vbLeft vb
-         || drawX      > vbRight vb
-         || tileBottom < vbTop vb
-         || drawY      > vbBottom vb)
+         ∨ drawX      > vbRight vb
+         ∨ tileBottom < vbTop vb
+         ∨ drawY      > vbBottom vb)
 
 -----------------------------------------------------------
 -- Render World Quads
 -----------------------------------------------------------
 
-renderWorldQuads :: EngineEnv -> WorldState -> Float
-  -> EngineM ε σ (V.Vector SortableQuad)
+renderWorldQuads ∷ EngineEnv → WorldState → Float
+  → EngineM ε σ (V.Vector SortableQuad)
 renderWorldQuads env worldState zoomAlpha = do
-    tileData <- liftIO $ readIORef (wsTilesRef worldState)
-    textures <- liftIO $ readIORef (wsTexturesRef worldState)
-    logger <- liftIO $ readIORef (loggerRef env)
-    camera <- liftIO $ readIORef (cameraRef env)
+    tileData ← liftIO $ readIORef (wsTilesRef worldState)
+    textures ← liftIO $ readIORef (wsTexturesRef worldState)
+    logger ← liftIO $ readIORef (loggerRef env)
+    camera ← liftIO $ readIORef (cameraRef env)
     
-    (fbW, fbH) <- liftIO $ readIORef (framebufferSizeRef env)
+    (fbW, fbH) ← liftIO $ readIORef (framebufferSizeRef env)
     
     -- Look up graphics state ONCE for the whole frame
-    gs <- gets graphicsState
+    gs ← gets graphicsState
     let lookupSlot texHandle = fromIntegral $ case textureSystem gs of
-            Just bindless -> getTextureSlotIndex texHandle bindless
-            Nothing       -> 0
+            Just bindless → getTextureSlotIndex texHandle bindless
+            Nothing       → 0
         defFmSlot = fromIntegral (defaultFaceMapSlot gs)
         lookupFmSlot texHandle =
             let s = lookupSlot texHandle
-            in if s == 0 then defFmSlot else fromIntegral s
+            in if s ≡ 0 then defFmSlot else fromIntegral s
     
     let vb = computeViewBounds camera fbW fbH
         zSlice = camZSlice camera
@@ -204,20 +204,20 @@ renderWorldQuads env worldState zoomAlpha = do
         
         visibleChunksWithOffset =
             [ (lc, offset)
-            | lc <- chunks
+            | lc ← chunks
             , isChunkRelevantForSlice zSlice lc
-            , Just offset <- [isChunkVisibleWrapped vb camX (lcCoord lc)]
+            , Just offset ← [isChunkVisibleWrapped vb camX (lcCoord lc)]
             ]
     
-    let chunkQuads = concatMap (\(lc, xOffset) ->
+    let chunkQuads = concatMap (\(lc, xOffset) →
             let coord = lcCoord lc
                 tileMap = lcTiles lc
                 surfMap = lcSurfaceMap lc
                 
                 realQuads =
                     [ tileToQuad lookupSlot lookupFmSlot textures gx gy z tile zSlice zoomAlpha xOffset
-                    | ((lx, ly, z), tile) <- HM.toList tileMap
-                    , z <= zSlice && z >= (zSlice - viewDepth)
+                    | ((lx, ly, z), tile) ← HM.toList tileMap
+                    , z ≤ zSlice ∧ z ≥ (zSlice - viewDepth)
                     , let (gx, gy) = chunkToGlobal coord lx ly
                           (rawX, rawY) = gridToScreen gx gy
                           relativeZ = z - zSlice
@@ -229,8 +229,8 @@ renderWorldQuads env worldState zoomAlpha = do
                 
                 blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures gx gy zSlice zSlice zoomAlpha xOffset
-                    | lx <- [0 .. chunkSize - 1]
-                    , ly <- [0 .. chunkSize - 1]
+                    | lx ← [0 .. chunkSize - 1]
+                    , ly ← [0 .. chunkSize - 1]
                     , let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
                     , surfZ > zSlice
                     , not (HM.member (lx, ly, zSlice) tileMap)
@@ -246,23 +246,23 @@ renderWorldQuads env worldState zoomAlpha = do
     
     return $ V.fromList chunkQuads
   where
-    isTileVisible :: ViewBounds -> Float -> Float -> Bool
+    isTileVisible ∷ ViewBounds → Float → Float → Bool
     isTileVisible vb drawX drawY =
         let tileRight  = drawX + tileWidth
             tileBottom = drawY + tileHeight
         in not (tileRight  < vbLeft vb
-             || drawX      > vbRight vb
-             || tileBottom < vbTop vb
-             || drawY      > vbBottom vb)
+             ∨ drawX      > vbRight vb
+             ∨ tileBottom < vbTop vb
+             ∨ drawY      > vbBottom vb)
 
 -----------------------------------------------------------
 -- Convert Tile to Quad
 -----------------------------------------------------------
 
-tileToQuad :: (TextureHandle -> Int) -> (TextureHandle -> Float)
-           -> WorldTextures
-           -> Int -> Int -> Int -> Tile -> Int -> Float -> Float
-           -> SortableQuad
+tileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+           → WorldTextures
+           → Int → Int → Int → Tile → Int → Float → Float
+           → SortableQuad
 tileToQuad lookupSlot lookupFmSlot textures worldX worldY worldZ tile zSlice tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen worldX worldY
         relativeZ = worldZ - zSlice
@@ -296,10 +296,10 @@ tileToQuad lookupSlot lookupFmSlot textures worldX worldY worldZ tile zSlice til
 
 -- | Render a blank tile at the z-slice for columns where the surface
 --   is above the slice but no real tile exists at that elevation.
-blankTileToQuad :: (TextureHandle -> Int) -> (TextureHandle -> Float)
-               -> WorldTextures
-               -> Int -> Int -> Int -> Int -> Float -> Float
-               -> SortableQuad
+blankTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+               → WorldTextures
+               → Int → Int → Int → Int → Float → Float
+               → SortableQuad
 blankTileToQuad lookupSlot lookupFmSlot textures worldX worldY worldZ zSlice tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen worldX worldY
         relativeZ = worldZ - zSlice
@@ -331,13 +331,13 @@ blankTileToQuad lookupSlot lookupFmSlot textures worldX worldY worldZ zSlice til
 -- Helpers
 -----------------------------------------------------------
 
-clamp01 :: Float -> Float
+clamp01 ∷ Float → Float
 clamp01 x
     | x < 0    = 0
     | x > 1    = 1
     | otherwise = x
 
-getTileTexture :: WorldTextures -> Word8 -> TextureHandle
+getTileTexture ∷ WorldTextures → Word8 → TextureHandle
 getTileTexture textures 1   = wtGraniteTexture textures
 getTileTexture textures 2   = wtDioriteTexture textures
 getTileTexture textures 3   = wtGabbroTexture textures
@@ -356,12 +356,12 @@ getTileTexture textures 250 = wtGlacierTexture textures
 getTileTexture textures 255 = wtBlankTexture textures
 getTileTexture textures _   = wtNoTexture textures
 
-getTileFaceMapTexture :: WorldTextures -> Word8 -> TextureHandle
+getTileFaceMapTexture ∷ WorldTextures → Word8 → TextureHandle
 getTileFaceMapTexture textures mat
-    | mat >= 1 && mat <= 5   = wtIsoFaceMap textures  -- all igneous
-    | mat >= 10 && mat <= 12 = wtIsoFaceMap textures  -- sedimentary
-    | mat == 20              = wtIsoFaceMap textures  -- impactite
-    | mat >= 30 && mat <= 33 = wtIsoFaceMap textures  -- meteorite
-    | mat == 100             = wtIsoFaceMap textures  -- lava
-    | mat == 250             = wtIsoFaceMap textures  -- glacier
+    | mat ≥ 1 ∧ mat ≤ 5   = wtIsoFaceMap textures  -- all igneous
+    | mat ≥ 10 ∧ mat ≤ 12 = wtIsoFaceMap textures  -- sedimentary
+    | mat ≡ 20              = wtIsoFaceMap textures  -- impactite
+    | mat ≥ 30 ∧ mat ≤ 33 = wtIsoFaceMap textures  -- meteorite
+    | mat ≡ 100             = wtIsoFaceMap textures  -- lava
+    | mat ≡ 250             = wtIsoFaceMap textures  -- glacier
     | otherwise              = wtNoFaceMap textures

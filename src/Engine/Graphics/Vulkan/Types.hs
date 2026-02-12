@@ -1,5 +1,5 @@
 -- Engine/Graphics/Vulkan/Types.hs
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Types where
 import UPrelude
 import qualified Data.Vector as V
@@ -87,7 +87,7 @@ instance Storable UniformBufferObject where
     sizeOf _ = 5 * sizeOf (undefined ∷ M44 Float) + 32
     alignment _ = 16  -- Vulkan requires 16-byte alignment for uniform buffers
     peek ptr = UBO
-        <$> peek (castPtr ptr)
+        ⊚ peek (castPtr ptr)
         <*> peek (castPtr $ ptr `plusPtr` sizeOf (undefined ∷ M44 Float))
         <*> peek (castPtr $ ptr `plusPtr` (2 * sizeOf (undefined ∷ M44 Float)))
         <*> peek (castPtr $ ptr `plusPtr` (3 * sizeOf (undefined ∷ M44 Float)))

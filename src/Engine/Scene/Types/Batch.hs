@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scene.Types.Batch
   ( SortableQuad(..)
   , DrawableObject(..)
@@ -29,10 +29,10 @@ import qualified Vulkan.Core10 as Vk
 -- After sorting by sqSortKey, vertices are concatenated
 -- in order to get correct back-to-front rendering.
 data SortableQuad = SortableQuad
-    { sqSortKey  :: !Float       -- ^ Painter's algorithm depth (higher = drawn later = in front)
-    , sqVertices :: V.Vector Vertex
-    , sqTexture  :: TextureHandle  -- ^ Needed for potential future per-texture batching
-    , sqLayer    :: LayerId
+    { sqSortKey  ∷ !Float       -- ^ Painter's algorithm depth (higher = drawn later = in front)
+    , sqVertices ∷ V.Vector Vertex
+    , sqTexture  ∷ TextureHandle  -- ^ Needed for potential future per-texture batching
+    , sqLayer    ∷ LayerId
     } deriving (Show)
 
 -- | Drawable object ready for rendering
@@ -46,7 +46,7 @@ data DrawableObject = DrawableObject
 
 -- | Convert a DrawableObject to a SortableQuad
 -- Used to bring scene sprites into the unified sort with world tiles
-drawableToQuad :: DrawableObject -> SortableQuad
+drawableToQuad ∷ DrawableObject → SortableQuad
 drawableToQuad dobj = SortableQuad
     { sqSortKey  = doZIndex dobj
     , sqVertices = doVertices dobj
@@ -58,13 +58,13 @@ drawableToQuad dobj = SortableQuad
 -- All quads MUST share the same layer. The texture field uses the first
 -- quad's texture (irrelevant for bindless — the per-vertex atlasId drives
 -- texture selection in the shader).
-mergeQuadsToBatch :: LayerId -> [SortableQuad] -> RenderBatch
+mergeQuadsToBatch ∷ LayerId → [SortableQuad] → RenderBatch
 mergeQuadsToBatch layer quads =
     let sorted = List.sortOn sqSortKey quads
         allVerts = V.concat $ map sqVertices sorted
         tex = case sorted of
-                (q:_) -> sqTexture q
-                []    -> TextureHandle 0
+                (q:_) → sqTexture q
+                []    → TextureHandle 0
     in RenderBatch
         { rbTexture  = tex
         , rbLayer    = layer

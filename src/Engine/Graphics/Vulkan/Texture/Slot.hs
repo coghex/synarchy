@@ -84,7 +84,7 @@ allocateSlot alloc
 freeSlot ∷ TextureSlot → TextureSlotAllocator → TextureSlotAllocator
 freeSlot slot alloc
   -- Don't allow freeing slot 0 (undefined texture)
-  | tsIndex slot == 0 = alloc
+  | tsIndex slot ≡ 0 = alloc
   -- Don't free if generation doesn't match (stale handle)
   | not (isValidSlot slot alloc) = alloc
   | otherwise = alloc
@@ -95,5 +95,5 @@ freeSlot slot alloc
 isValidSlot ∷ TextureSlot → TextureSlotAllocator → Bool
 isValidSlot slot alloc =
   case IntMap.lookup (fromIntegral $ tsIndex slot) (tsaGenerations alloc) of
-    Just gen → gen == tsGeneration slot
+    Just gen → gen ≡ tsGeneration slot
     Nothing  → False

@@ -34,6 +34,6 @@ waitThreadComplete' i ts = do
         ThreadStopped → pure () -- Thread has already stopped
         _ → do
             threadDelay 10000 -- Check every 10ms
-            if i >= 1000 -- Timeout after 10 seconds
+            if i ≥ 1000 -- Timeout after 10 seconds
                 then killThread (tsThreadId ts) -- Force kill
                 else waitThreadComplete' (i + 1) ts

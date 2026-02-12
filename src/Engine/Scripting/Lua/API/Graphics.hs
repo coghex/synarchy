@@ -28,9 +28,9 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LogLevel(..), defaultLoc)
 
 -- | engine.getUIScale()
-getUIScaleFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+getUIScaleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getUIScaleFn env = do
-    vconfig <- Lua.liftIO $ readIORef (videoConfigRef env)
+    vconfig ← Lua.liftIO $ readIORef (videoConfigRef env)
     Lua.pushnumber (Lua.Number (realToFrac (vcUIScale vconfig)))
     return 1
 

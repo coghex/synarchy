@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Types
     ( GeoModification(..)
     , VolcanoEra(..)
@@ -22,11 +22,11 @@ import World.Types
 --   Returns the elevation and material modification.
 --   Called per-tile during chunk generation.
 data GeoModification = GeoModification
-    { gmElevDelta   :: !Int         -- ^ Add to elevation
-    , gmMaterialOverride :: !(Maybe Word8) -- ^ Replace material if Just
+    { gmElevDelta   ∷ !Int         -- ^ Add to elevation
+    , gmMaterialOverride ∷ !(Maybe Word8) -- ^ Replace material if Just
     } deriving (Show)
 
-noModification :: GeoModification
+noModification ∷ GeoModification
 noModification = GeoModification 0 Nothing
 
 ------------------------------------------------------------
@@ -55,35 +55,35 @@ data CraterEra
 
 -- | State threaded through timeline construction.
 data TimelineBuildState = TimelineBuildState
-    { tbsFeatures   :: ![PersistentFeature]
-    , tbsNextId     :: !Int
-    , tbsPeriods    :: ![GeoPeriod]       -- ^ Accumulated in reverse
-    , tbsPeriodIdx  :: !Int
+    { tbsFeatures   ∷ ![PersistentFeature]
+    , tbsNextId     ∷ !Int
+    , tbsPeriods    ∷ ![GeoPeriod]       -- ^ Accumulated in reverse
+    , tbsPeriodIdx  ∷ !Int
     }
 
 -- | Helper to allocate a new feature ID.
-allocFeatureId :: TimelineBuildState -> (GeoFeatureId, TimelineBuildState)
+allocFeatureId ∷ TimelineBuildState → (GeoFeatureId, TimelineBuildState)
 allocFeatureId tbs =
     let fid = GeoFeatureId (tbsNextId tbs)
     in (fid, tbs { tbsNextId = tbsNextId tbs + 1 })
 
 -- | Helper to add a period and advance the index.
-addPeriod :: GeoPeriod -> TimelineBuildState -> TimelineBuildState
+addPeriod ∷ GeoPeriod → TimelineBuildState → TimelineBuildState
 addPeriod period tbs = tbs
     { tbsPeriods   = period : tbsPeriods tbs
     , tbsPeriodIdx = tbsPeriodIdx tbs + 1
     }
 
 -- | Helper to register a new persistent feature.
-registerFeature :: PersistentFeature -> TimelineBuildState -> TimelineBuildState
+registerFeature ∷ PersistentFeature → TimelineBuildState → TimelineBuildState
 registerFeature pf tbs = tbs
     { tbsFeatures = pf : tbsFeatures tbs
     }
 
 -- | Helper to update an existing feature's state.
-updateFeature :: GeoFeatureId -> (PersistentFeature -> PersistentFeature)
-              -> TimelineBuildState -> TimelineBuildState
+updateFeature ∷ GeoFeatureId → (PersistentFeature → PersistentFeature)
+              → TimelineBuildState → TimelineBuildState
 updateFeature fid f tbs = tbs
-    { tbsFeatures = map (\pf -> if pfId pf == fid then f pf else pf)
+    { tbsFeatures = map (\pf → if pfId pf ≡ fid then f pf else pf)
                         (tbsFeatures tbs)
     }

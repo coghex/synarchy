@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Erosion
     ( applyErosion
     ) where
@@ -13,5 +13,5 @@ import World.Geology.Types
 
 -- | Apply erosion to a tile position.
 --   Takes the post-event elevation and returns a modification.
-applyErosion :: ErosionParams -> Int -> Int -> Int -> Int -> GeoModification
+applyErosion ∷ ErosionParams → Int → Int → Int → Int → GeoModification
 applyErosion _params _worldSize _gx _gy _elev = noModification

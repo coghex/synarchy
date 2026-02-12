@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 
 module World.Geology.Timeline
     ( buildTimeline
@@ -32,7 +32,7 @@ import World.Geology.Generate
     )
 import World.Geology.Evolution (evolveOneFeature)
 
-buildTimeline :: Word64 -> Int -> Int -> GeoTimeline
+buildTimeline ∷ Word64 → Int → Int → GeoTimeline
 buildTimeline seed worldSize plateCount =
     let plates = generatePlates seed worldSize plateCount
 
@@ -57,8 +57,8 @@ buildTimeline seed worldSize plateCount =
         , gtFeatures  = tbsFeatures s6
         }
 
-buildPrimordialBombardment :: Word64 -> Int -> [TectonicPlate]
-                           -> TimelineBuildState -> TimelineBuildState
+buildPrimordialBombardment ∷ Word64 → Int → [TectonicPlate]
+                           → TimelineBuildState → TimelineBuildState
 buildPrimordialBombardment seed worldSize plates tbs =
     let craterSeed = seed `xor` 0xDEADBEEF
         craters = generateCraters craterSeed worldSize plates CraterEra_Primordial
@@ -71,8 +71,8 @@ buildPrimordialBombardment seed worldSize plates tbs =
             }
     in addPeriod period tbs
 
-buildLateBombardment :: Word64 -> Int -> [TectonicPlate]
-                     -> TimelineBuildState -> TimelineBuildState
+buildLateBombardment ∷ Word64 → Int → [TectonicPlate]
+                     → TimelineBuildState → TimelineBuildState
 buildLateBombardment seed worldSize plates tbs =
     let craterSeed = (seed `xor` 0xDEADBEEF) + 1
         craters = generateCraters craterSeed worldSize plates CraterEra_Late
@@ -85,8 +85,8 @@ buildLateBombardment seed worldSize plates tbs =
             }
     in addPeriod period tbs
 
-buildEarlyVolcanism :: Word64 -> Int -> [TectonicPlate]
-                    -> TimelineBuildState -> TimelineBuildState
+buildEarlyVolcanism ∷ Word64 → Int → [TectonicPlate]
+                    → TimelineBuildState → TimelineBuildState
 buildEarlyVolcanism seed worldSize plates tbs0 =
     let volcSeed = seed `xor` 0xB45A1F1C
         periodIdx = fromIntegral $ tbsPeriodIdx tbs0
@@ -103,7 +103,7 @@ buildEarlyVolcanism seed worldSize plates tbs0 =
         (vents, tbs3) = generateAndRegister (volcSeed + 2) worldSize plates
                             VolcanoEra_Boundary generateHydrothermalVent periodIdx tbs2
 
-        events = map (\pf -> VolcanicEvent (pfFeature pf)) (shields <> fissures <> vents)
+        events = map (\pf → VolcanicEvent (pfFeature pf)) (shields <> fissures <> vents)
 
         period = GeoPeriod
             { gpName     = "Early Volcanism"
@@ -114,8 +114,8 @@ buildEarlyVolcanism seed worldSize plates tbs0 =
             }
     in addPeriod period tbs3
 
-buildVolcanicEvolution :: Word64 -> Int -> [TectonicPlate]
-                       -> TimelineBuildState -> TimelineBuildState
+buildVolcanicEvolution ∷ Word64 → Int → [TectonicPlate]
+                       → TimelineBuildState → TimelineBuildState
 buildVolcanicEvolution seed _worldSize _plates tbs0 =
     let periodIdx = tbsPeriodIdx tbs0
         evolSeed = seed `xor` 0xEF01F100
@@ -132,8 +132,8 @@ buildVolcanicEvolution seed _worldSize _plates tbs0 =
             }
     in addPeriod period tbs1
 
-buildLateVolcanism :: Word64 -> Int -> [TectonicPlate]
-                   -> TimelineBuildState -> TimelineBuildState
+buildLateVolcanism ∷ Word64 → Int → [TectonicPlate]
+                   → TimelineBuildState → TimelineBuildState
 buildLateVolcanism seed worldSize plates tbs0 =
     let lateSeed = seed `xor` 0x1A7EF10D
         periodIdx = tbsPeriodIdx tbs0
@@ -159,7 +159,7 @@ buildLateVolcanism seed worldSize plates tbs0 =
                                VolcanoEra_Hotspot generateCaldera periodIdx tbs4
 
         allNew = cinders <> domes <> tubes <> supers <> calderas
-        events = map (\pf -> VolcanicEvent (pfFeature pf)) allNew
+        events = map (\pf → VolcanicEvent (pfFeature pf)) allNew
 
         period = GeoPeriod
             { gpName     = "Late Volcanism"
@@ -170,8 +170,8 @@ buildLateVolcanism seed worldSize plates tbs0 =
             }
     in addPeriod period tbs5
 
-buildStabilization :: Word64
-                   -> TimelineBuildState -> TimelineBuildState
+buildStabilization ∷ Word64
+                   → TimelineBuildState → TimelineBuildState
 buildStabilization seed tbs =
     let period = GeoPeriod
             { gpName     = "Crustal Stabilization"

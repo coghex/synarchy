@@ -27,7 +27,7 @@ undefinedHandle = BindlessTextureHandle
 
 -- | Check if this is the undefined texture handle
 isUndefinedHandle ∷ BindlessTextureHandle → Bool
-isUndefinedHandle h = bthSlot h == undefinedSlot
+isUndefinedHandle h = bthSlot h ≡ undefinedSlot
 
 -- | Create a bindless handle from a slot and asset handle
 toBindlessHandle ∷ TextureSlot → TextureHandle → BindlessTextureHandle

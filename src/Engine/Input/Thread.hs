@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Input.Thread where
 
 import UPrelude
@@ -40,7 +40,7 @@ startInputThread env = do
             tid ← forkIO $ runInputLoop env stateRef
             return tid
         ) 
-        (\(e :: SomeException) → do
+        (\(e ∷ SomeException) → do
             logError logger CatInput $ "Failed starting input thread: " <> T.pack (show e)
             Q.writeQueue (eventQueue env) $ EventError
               "startInputThread:" $ T.pack (show e)

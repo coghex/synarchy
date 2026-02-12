@@ -176,7 +176,7 @@ runLuaLoop env ls stateRef = do
                   let currentSecs' = realToFrac $ utctDayTime currentTime'
                   scriptsMap' ← readTVarIO (lbsScripts ls)
                   forM_ (Map.toList scriptsMap') $ \(sid, script) → do
-                    when (not (scriptPaused script) && currentSecs' ≥ scriptNextTick script) $ do
+                    when (not (scriptPaused script) ∧ currentSecs' ≥ scriptNextTick script) $ do
                       when (isValidRef (scriptModuleRef script)) $ do
                         let dt = scriptTickRate script
                         _ ← callModuleFunction (lbsLuaState ls) (scriptModuleRef script) "update" [ScriptNumber dt]
@@ -283,7 +283,7 @@ processLuaMsg env ls stateRef msg = case msg of
     logDebug logger CatLua "Debug overlay toggle requested"
     scriptsMap ← readTVarIO (lbsScripts ls)
     -- Find the debug script by path
-    let mDebugScript = find (\s → scriptPath s == "scripts/debug.lua")
+    let mDebugScript = find (\s → scriptPath s ≡ "scripts/debug.lua")
                             (Map.elems scriptsMap)
     case mDebugScript of
       Just debugScript → do
@@ -298,7 +298,7 @@ processLuaMsg env ls stateRef msg = case msg of
     logDebug logger CatLua "Debug overlay show requested"
     scriptsMap ← readTVarIO (lbsScripts ls)
     -- Find the debug script by path
-    let mDebugScript = find (\s → scriptPath s == "scripts/debug.lua")
+    let mDebugScript = find (\s → scriptPath s ≡ "scripts/debug.lua")
                             (Map.elems scriptsMap)
     case mDebugScript of
       Just debugScript → do
@@ -313,7 +313,7 @@ processLuaMsg env ls stateRef msg = case msg of
     logDebug logger CatLua "Debug overlay hide requested"
     scriptsMap ← readTVarIO (lbsScripts ls)
     -- Find the debug script by path
-    let mDebugScript = find (\s → scriptPath s == "scripts/debug.lua")
+    let mDebugScript = find (\s → scriptPath s ≡ "scripts/debug.lua")
                             (Map.elems scriptsMap)
     case mDebugScript of
       Just debugScript → do

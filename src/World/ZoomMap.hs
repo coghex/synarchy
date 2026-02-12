@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.ZoomMap
     ( generateZoomMapQuads
     , generateBackgroundQuads
@@ -40,7 +40,7 @@ import qualified Data.Vector as V
 --   Now applies the full geological timeline (craters, volcanoes,
 --   etc.) to each chunk's midpoint so the zoomed-out map reflects
 --   the actual post-geology terrain.
-buildZoomCache :: WorldGenParams -> V.Vector ZoomChunkEntry
+buildZoomCache ∷ WorldGenParams → V.Vector ZoomChunkEntry
 buildZoomCache params =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -60,15 +60,15 @@ buildZoomCache params =
                 , zceTexIndex = finalMat
                 , zceElev     = finalElev
                 }
-            | ccx <- [-halfSize .. halfSize - 1]
-            , ccy <- [-halfSize .. halfSize - 1]
+            | ccx ← [-halfSize .. halfSize - 1]
+            , ccy ← [-halfSize .. halfSize - 1]
             , let midGX = ccx * chunkSize + chunkSize `div` 2
                   midGY = ccy * chunkSize + chunkSize `div` 2
             , not (isBeyondGlacier worldSize midGX midGY)
             , let (baseElev, baseMat) = elevationAtGlobal seed plates worldSize midGX midGY
                   -- Skip geology for glacier tiles
                   (finalElev, finalMat) =
-                      if baseMat == matGlacier
+                      if baseMat ≡ matGlacier
                       then (baseElev, unMaterialId baseMat)
                       else applyAllEvents allEvents worldSize
                                midGX midGY baseElev (unMaterialId baseMat)
@@ -83,8 +83,8 @@ buildZoomCache params =
 --   Returns the final (elevation, materialId).
 --   Events are applied in timeline order. Each event's elevation
 --   delta is additive; material overrides replace the current material.
-applyAllEvents :: [GeoEvent] -> Int -> Int -> Int -> Int -> Word8
-               -> (Int, Word8)
+applyAllEvents ∷ [GeoEvent] → Int → Int → Int → Int → Word8
+               → (Int, Word8)
 applyAllEvents events worldSize gx gy baseElev baseMat =
     foldl' applyOne (baseElev, baseMat) events
   where
@@ -92,50 +92,50 @@ applyAllEvents events worldSize gx gy baseElev baseMat =
         let GeoModification deltaE mMat = applyGeoEvent event worldSize gx gy elev
             newElev = elev + deltaE
             newMat  = case mMat of
-                        Just m  -> m
-                        Nothing -> mat
+                        Just m  → m
+                        Nothing → mat
         in (newElev, newMat)
 
 -----------------------------------------------------------
 -- Generate Zoom Map Quads (called every frame)
 -----------------------------------------------------------
 
-generateZoomMapQuads :: EngineM ε σ (V.Vector SortableQuad)
+generateZoomMapQuads ∷ EngineM ε σ (V.Vector SortableQuad)
 generateZoomMapQuads = do
-    env <- ask
-    camera <- liftIO $ readIORef (cameraRef env)
-    (fbW, fbH) <- liftIO $ readIORef (framebufferSizeRef env)
-    worldManager <- liftIO $ readIORef (worldManagerRef env)
+    env ← ask
+    camera ← liftIO $ readIORef (cameraRef env)
+    (fbW, fbH) ← liftIO $ readIORef (framebufferSizeRef env)
+    worldManager ← liftIO $ readIORef (worldManagerRef env)
 
     let zoom = camZoom camera
         zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
 
-    if zoomAlpha <= 0.001
+    if zoomAlpha ≤ 0.001
         then return V.empty
         else do
-            quads <- forM (wmVisible worldManager) $ \pageId ->
+            quads ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
-                    Just worldState -> renderFromCache env worldState camera
+                    Just worldState → renderFromCache env worldState camera
                                          fbW fbH zoomAlpha getZoomTexture zoomMapLayer
-                    Nothing         -> return V.empty
+                    Nothing         → return V.empty
             return $ V.concat quads
 
 -----------------------------------------------------------
 -- Generate Background Quads (called every frame, always visible)
 -----------------------------------------------------------
 
-generateBackgroundQuads :: EngineM ε σ (V.Vector SortableQuad)
+generateBackgroundQuads ∷ EngineM ε σ (V.Vector SortableQuad)
 generateBackgroundQuads = do
-    env <- ask
-    camera <- liftIO $ readIORef (cameraRef env)
-    (fbW, fbH) <- liftIO $ readIORef (framebufferSizeRef env)
-    worldManager <- liftIO $ readIORef (worldManagerRef env)
+    env ← ask
+    camera ← liftIO $ readIORef (cameraRef env)
+    (fbW, fbH) ← liftIO $ readIORef (framebufferSizeRef env)
+    worldManager ← liftIO $ readIORef (worldManagerRef env)
 
-    quads <- forM (wmVisible worldManager) $ \pageId ->
+    quads ← forM (wmVisible worldManager) $ \pageId →
         case lookup pageId (wmWorlds worldManager) of
-            Just worldState -> renderFromCache env worldState camera
+            Just worldState → renderFromCache env worldState camera
                                  fbW fbH 1.0 getBgTexture backgroundMapLayer
-            Nothing         -> return V.empty
+            Nothing         → return V.empty
     return $ V.concat quads
 
 -----------------------------------------------------------
@@ -143,13 +143,13 @@ generateBackgroundQuads = do
 -----------------------------------------------------------
 
 data ZoomViewBounds = ZoomViewBounds
-    { zvLeft   :: !Float
-    , zvRight  :: !Float
-    , zvTop    :: !Float
-    , zvBottom :: !Float
+    { zvLeft   ∷ !Float
+    , zvRight  ∷ !Float
+    , zvTop    ∷ !Float
+    , zvBottom ∷ !Float
     }
 
-computeZoomViewBounds :: Camera2D -> Int -> Int -> ZoomViewBounds
+computeZoomViewBounds ∷ Camera2D → Int → Int → ZoomViewBounds
 computeZoomViewBounds camera fbW fbH =
     let (cx, cy) = camPosition camera
         zoom = camZoom camera
@@ -165,46 +165,46 @@ computeZoomViewBounds camera fbW fbH =
         , zvBottom = cy + halfH + padY
         }
 
-isChunkInView :: ZoomViewBounds -> Float -> Float -> Bool
+isChunkInView ∷ ZoomViewBounds → Float → Float → Bool
 isChunkInView vb drawX drawY =
     let right  = drawX + chunkWorldWidth
         bottom = drawY + chunkWorldDiamondHeight
     in not (right  < zvLeft vb
-         || drawX  > zvRight vb
-         || bottom < zvTop vb
-         || drawY  > zvBottom vb)
+         ∨ drawX  > zvRight vb
+         ∨ bottom < zvTop vb
+         ∨ drawY  > zvBottom vb)
 
 -----------------------------------------------------------
 -- Render From Cache (shared by zoom map and background)
 -----------------------------------------------------------
 
 -- | World width in screen-space X for wrapping.
-worldScreenWidth :: Int -> Float
+worldScreenWidth ∷ Int → Float
 worldScreenWidth worldSize =
     fromIntegral (worldSize * chunkSize) * tileHalfWidth
 
 -- | Shared render function. Takes a texture picker and target layer
 --   so it can be used for both the zoom map and background.
-renderFromCache :: EngineEnv -> WorldState -> Camera2D
-               -> Int -> Int -> Float
-               -> (WorldTextures -> Word8 -> Int -> TextureHandle)
-               -> LayerId
-               -> EngineM ε σ (V.Vector SortableQuad)
+renderFromCache ∷ EngineEnv → WorldState → Camera2D
+               → Int → Int → Float
+               → (WorldTextures → Word8 → Int → TextureHandle)
+               → LayerId
+               → EngineM ε σ (V.Vector SortableQuad)
 renderFromCache env worldState camera fbW fbH alpha texturePicker layer = do
-    mParams  <- liftIO $ readIORef (wsGenParamsRef worldState)
-    textures <- liftIO $ readIORef (wsTexturesRef worldState)
-    cache    <- liftIO $ readIORef (wsZoomCacheRef worldState)
+    mParams  ← liftIO $ readIORef (wsGenParamsRef worldState)
+    textures ← liftIO $ readIORef (wsTexturesRef worldState)
+    cache    ← liftIO $ readIORef (wsZoomCacheRef worldState)
 
     -- Look up graphics state ONCE
-    gs <- gets graphicsState
+    gs ← gets graphicsState
     let lookupSlot texHandle = fromIntegral $ case textureSystem gs of
-            Just bindless -> getTextureSlotIndex texHandle bindless
-            Nothing       -> 0
+            Just bindless → getTextureSlotIndex texHandle bindless
+            Nothing       → 0
         defFmSlot = fromIntegral (defaultFaceMapSlot gs)
 
     case mParams of
-        Nothing -> return V.empty
-        Just params -> do
+        Nothing → return V.empty
+        Just params → do
             let vb = computeZoomViewBounds camera fbW fbH
                 wsw = worldScreenWidth (wgpWorldSize params)
 
@@ -215,15 +215,15 @@ renderFromCache env worldState camera fbW fbH alpha texturePicker layer = do
                 -- Fully pure — no V.mapM needed
                 quads = V.fromList
                     [ mkZoomQuad lookupSlot defFmSlot th dx dy alpha ccx ccy layer
-                    | (ccx, ccy, th, dx, dy) <- visible
+                    | (ccx, ccy, th, dx, dy) ← visible
                     ]
 
             return quads
 
 -- | Pure zoom quad builder. No EngineM needed.
-mkZoomQuad :: (TextureHandle -> Int) -> Float -> TextureHandle
-           -> Float -> Float -> Float -> Int -> Int -> LayerId
-           -> SortableQuad
+mkZoomQuad ∷ (TextureHandle → Int) → Float → TextureHandle
+           → Float → Float → Float → Int → Int → LayerId
+           → SortableQuad
 mkZoomQuad lookupSlot defFmSlot texHandle drawX drawY alpha ccx ccy layer =
     let actualSlot = lookupSlot texHandle
         w = chunkWorldWidth
@@ -245,17 +245,17 @@ mkZoomQuad lookupSlot defFmSlot texHandle drawX drawY alpha ccx ccy layer =
         , sqLayer    = layer
         }
 
-entryToQuadsList :: ZoomViewBounds -> Float -> WorldTextures
-                 -> (WorldTextures -> Word8 -> Int -> TextureHandle)
-                 -> ZoomChunkEntry
-                 -> [(Int, Int, TextureHandle, Float, Float)]
+entryToQuadsList ∷ ZoomViewBounds → Float → WorldTextures
+                 → (WorldTextures → Word8 → Int → TextureHandle)
+                 → ZoomChunkEntry
+                 → [(Int, Int, TextureHandle, Float, Float)]
 entryToQuadsList vb wsw textures texturePicker entry =
     let ccx = zceChunkX entry
         ccy = zceChunkY entry
         baseX = zceDrawX entry
         baseY = zceDrawY entry
         texHandle = texturePicker textures (zceTexIndex entry) (zceElev entry)
-    in filter (\(_, _, _, dx, dy) -> isChunkInView vb dx dy)
+    in filter (\(_, _, _, dx, dy) → isChunkInView vb dx dy)
         [ (ccx, ccy, texHandle, baseX - wsw, baseY)
         , (ccx, ccy, texHandle, baseX,       baseY)
         , (ccx, ccy, texHandle, baseX + wsw, baseY)
@@ -265,7 +265,7 @@ entryToQuadsList vb wsw textures texturePicker entry =
 -- Helpers
 -----------------------------------------------------------
 
-getZoomTexture :: WorldTextures -> Word8 -> Int -> TextureHandle
+getZoomTexture ∷ WorldTextures → Word8 → Int → TextureHandle
 getZoomTexture textures 250 _ = wtZoomGlacier textures
 getZoomTexture textures _mat elev
     | elev < -100 = wtZoomOcean textures
@@ -277,7 +277,7 @@ getZoomTexture textures 5  _ = wtZoomObsidian textures
 getZoomTexture textures 20 _ = wtZoomImpactite textures
 getZoomTexture textures _  _ = wtZoomGranite textures
 
-getBgTexture :: WorldTextures -> Word8 -> Int -> TextureHandle
+getBgTexture ∷ WorldTextures → Word8 → Int → TextureHandle
 getBgTexture textures 250 _ = wtBgGlacier textures
 getBgTexture textures _mat elev
     | elev < -100 = wtBgOcean textures
@@ -288,7 +288,7 @@ getBgTexture textures 4  _ = wtBgBasalt textures
 getBgTexture textures 20 _ = wtBgImpactite textures
 getBgTexture textures _  _ = wtBgGranite textures
 
-clamp01 :: Float -> Float
+clamp01 ∷ Float → Float
 clamp01 x
     | x < 0    = 0
     | x > 1    = 1

@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP, UnicodeSyntax #-}
 module Engine.Loop
   ( mainLoop
   ) where
@@ -75,7 +75,7 @@ handleEngineRunning = do
     env ← ask
     lifecycle ← liftIO $ readIORef (lifecycleRef env)
     
-    if shouldClose || lifecycle ≢ EngineRunning
+    if shouldClose ∨ lifecycle ≢ EngineRunning
         then do
             logInfoM CatSystem "Engine shutting down..."
             liftIO $ writeIORef (lifecycleRef env) CleaningUp

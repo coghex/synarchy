@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scripting.Lua.API.World
     ( worldInitFn
     , worldShowFn
@@ -21,62 +21,62 @@ import World.Types (WorldCommand(..), WorldPageId(..), WorldTextureType(..))
 import Data.IORef (atomicModifyIORef')
 
 -- | world.init(pageId, seed, worldSizeInChunks)
-worldInitFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+worldInitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldInitFn env = do
-    pageIdArg <- Lua.tostring 1
-    seedArg   <- Lua.tointeger 2
-    sizeArg   <- Lua.tointeger 3
+    pageIdArg ← Lua.tostring 1
+    seedArg   ← Lua.tointeger 2
+    sizeArg   ← Lua.tointeger 3
     
     case pageIdArg of
-        Just pageIdBS -> Lua.liftIO $ do
+        Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
                 seed   = maybe 42 fromIntegral seedArg
                 size   = maybe 64 fromIntegral sizeArg
             Q.writeQueue (worldQueue env) (WorldInit pageId seed size)
-        Nothing -> pure ()
+        Nothing → pure ()
     
     return 0
 
 -- | world.show(pageId)
-worldShowFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+worldShowFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldShowFn env = do
-    pageIdArg <- Lua.tostring 1
+    pageIdArg ← Lua.tostring 1
     
     case pageIdArg of
-        Just pageIdBS -> Lua.liftIO $ do
+        Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
             Q.writeQueue (worldQueue env) (WorldShow pageId)
-        Nothing -> pure ()
+        Nothing → pure ()
     
     return 0
 
 -- | world.hide(pageId)
-worldHideFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+worldHideFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldHideFn env = do
-    pageIdArg <- Lua.tostring 1
+    pageIdArg ← Lua.tostring 1
     
     case pageIdArg of
-        Just pageIdBS -> Lua.liftIO $ do
+        Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
             Q.writeQueue (worldQueue env) (WorldHide pageId)
-        Nothing -> pure ()
+        Nothing → pure ()
     
     return 0
 
 -- | world.setTexture(pageId, textureType, textureHandle)
-worldSetTextureFn :: EngineEnv -> Lua.LuaE Lua.Exception Lua.NumResults
+worldSetTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetTextureFn env = do
-    pageIdArg <- Lua.tostring 1
-    textureTypeArg <- Lua.tostring 2
-    textureHandleArg <- Lua.tointeger 3
+    pageIdArg ← Lua.tostring 1
+    textureTypeArg ← Lua.tostring 2
+    textureHandleArg ← Lua.tointeger 3
     
     case (pageIdArg, textureTypeArg, textureHandleArg) of
-        (Just pageIdBS, Just typeBS, Just handle) -> Lua.liftIO $ do
+        (Just pageIdBS, Just typeBS, Just handle) → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
                 texType = parseTextureType (TE.decodeUtf8 typeBS)
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) (WorldSetTexture pageId texType texHandle)
-        _ -> pure ()
+        _ → pure ()
     
     return 0
 
@@ -104,7 +104,7 @@ worldSetSunAngleFn env = do
 
     case angleArg of
         Just (Lua.Number angle) → Lua.liftIO $ do
-            atomicModifyIORef' (sunAngleRef env) $ \_ -> (realToFrac angle, ())
+            atomicModifyIORef' (sunAngleRef env) $ \_ → (realToFrac angle, ())
         _ → pure ()
 
     return 0
@@ -161,7 +161,7 @@ worldSetTimeScaleFn env = do
 
     return 0
 
-parseTextureType :: Text -> WorldTextureType
+parseTextureType ∷ Text → WorldTextureType
 parseTextureType "granite"        = GraniteTexture
 parseTextureType "diorite"        = DioriteTexture
 parseTextureType "gabbro"         = GabbroTexture

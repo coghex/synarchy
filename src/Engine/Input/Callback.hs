@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Input.Callback where
 
 import UPrelude
@@ -80,7 +80,7 @@ resizeCallback queue _win w h =
     writeQueue queue $ InputWindowEvent $ WindowResize w h
 
 -- | Framebuffer size callback
-framebufferSizeCallback :: Queue InputEvent -> GLFW.Window -> Int -> Int -> IO ()
+framebufferSizeCallback ∷ Queue InputEvent → GLFW.Window → Int → Int → IO ()
 framebufferSizeCallback queue _win w h =
     writeQueue queue $ InputWindowEvent $ FramebufferResize w h
 

@@ -75,21 +75,21 @@ handleLuaMessage msg = do
                 [("enabled", if enabled then "true" else "false")]
             handleSetPixelSnap enabled
 
-        LuaSetTextureFilter tf -> do
+        LuaSetTextureFilter tf → do
             logInfoM CatTexture $ "Texture filter changed to: " <> textureFilterToText tf
-            env <- ask
+            env ← ask
             liftIO $ writeIORef (textureFilterRef env) tf
             -- Live-update all existing texture samplers
-            gs <- gets graphicsState
+            gs ← gets graphicsState
             case (vulkanDevice gs, vulkanPDevice gs, textureSystem gs) of
-                (Just dev, Just pdev, Just bindless) -> do
+                (Just dev, Just pdev, Just bindless) → do
                     let vkFilter = textureFilterToVulkan tf
                     -- Create one new sampler with the desired filter
-                    newSampler <- createTextureSampler dev pdev vkFilter
+                    newSampler ← createTextureSampler dev pdev vkFilter
                     -- Rewrite every bindless slot to use it
                     rewriteAllSamplers dev newSampler bindless
                     logInfoM CatTexture "All texture samplers updated live"
-                _ -> pure ()
+                _ → pure ()
 
         LuaLoadFontRequest handle path size → do
             logDebugSM CatLua "Loading font"
@@ -153,21 +153,21 @@ handleLuaMessage msg = do
             logDebugM CatLua $ "Destroying object " <> T.pack (show objId)
             handleDestroy objId
 
-handleSetResolution :: Int -> Int -> EngineM ε σ ()
+handleSetResolution ∷ Int → Int → EngineM ε σ ()
 handleSetResolution w h = do
-    state <- gets graphicsState
+    state ← gets graphicsState
     case glfwWindow state of
-        Nothing -> logWarnM CatGraphics "Cannot set resolution: no window"
-        Just (Window win) -> do
+        Nothing → logWarnM CatGraphics "Cannot set resolution: no window"
+        Just (Window win) → do
             -- w, h are logical window dimensions (screen coordinates)
             -- On HiDPI displays, GLFW.setWindowSize expects logical pixels (screen coordinates)
             -- The framebuffer will automatically be scaled by the OS content scale
             liftIO $ GLFW.setWindowSize win w h
             -- Update our refs with the actual sizes after resize
-            env <- ask
+            env ← ask
             liftIO $ do
-                (winW, winH) <- GLFW.getWindowSize win
-                (fbW, fbH) <- GLFW.getFramebufferSize win
+                (winW, winH) ← GLFW.getWindowSize win
+                (fbW, fbH) ← GLFW.getFramebufferSize win
                 writeIORef (windowSizeRef env) (winW, winH)
                 writeIORef (framebufferSizeRef env) (fbW, fbH)
                 
@@ -307,17 +307,17 @@ handleSetPixelSnap enabled = do
     liftIO $ writeIORef (pixelSnapRef env) enabled
     logDebugM CatGraphics $ "Pixel snap " <> if enabled then "enabled" else "disabled"
 
-handleSetTextureFilter :: TextureFilter -> EngineM ε σ ()
+handleSetTextureFilter ∷ TextureFilter → EngineM ε σ ()
 handleSetTextureFilter tf = do
-    env <- ask
+    env ← ask
     liftIO $ writeIORef (textureFilterRef env) tf
-    state <- gets graphicsState
+    state ← gets graphicsState
     case (vulkanDevice state, vulkanPDevice state, textureSystem state) of
-        (Just dev, Just pdev, Just bindless) -> do
+        (Just dev, Just pdev, Just bindless) → do
             logInfoM CatTexture $ "Texture filter set to: " 
                 <> textureFilterToText tf
                 <> " (takes effect on next texture load or restart)"
-        _ -> pure ()
+        _ → pure ()
 
 -- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()

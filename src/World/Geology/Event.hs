@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Event
     ( applyGeoEvent
     , applyEvolution
@@ -16,7 +16,7 @@ import World.Geology.Volcano (applyVolcanicFeature)
 -----------------------------------------------------------
 
 -- | Apply any geo event to a position.
-applyGeoEvent :: GeoEvent -> Int -> Int -> Int -> Int -> GeoModification
+applyGeoEvent ∷ GeoEvent → Int → Int → Int → Int → GeoModification
 applyGeoEvent (CraterEvent params)  worldSize gx gy baseElev =
     applyCrater params worldSize gx gy baseElev
 applyGeoEvent (VolcanicEvent feature) worldSize gx gy baseElev =
@@ -31,7 +31,7 @@ applyGeoEvent (FloodEvent _)        _ _ _ _ = noModification
 -- Feature Evolution Application
 -----------------------------------------------------------
 
-applyEvolution :: FeatureEvolution -> Int -> Int -> Int -> Int -> GeoModification
+applyEvolution ∷ FeatureEvolution → Int → Int → Int → Int → GeoModification
 applyEvolution (Reactivate heightGain _lavaExt) _ws _gx _gy _e =
     GeoModification heightGain Nothing
 applyEvolution GoDormant _ _ _ _ = noModification
