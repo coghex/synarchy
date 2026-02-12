@@ -215,6 +215,7 @@ handleWorldCommand env logger cmd = do
             
             -- Log crater locations so you can find them!
             let craterEvents = concatMap gpEvents (gtPeriods timeline)
+
             forM_ craterEvents $ \event -> case event of
                 CraterEvent cp -> do
                     let GeoCoord cx cy = cpCenter cp
@@ -225,8 +226,17 @@ handleWorldCommand env logger cmd = do
                         <> case cpMeteorite cp of
                             Just m  -> " meteorite=" <> T.pack (show m)
                             Nothing -> ""
+                VolcanicEvent feature -> do
+                    let (name, coord, size) = describeFeature feature
+                        GeoCoord fx fy = coord
+                    logInfo logger CatWorld $ name <> " at global ("
+                        <> T.pack (show fx) <> ", " <> T.pack (show fy)
+                        <> ") " <> size
+                VolcanicModify (GeoFeatureId fid) evolution -> do
+                    logInfo logger CatWorld $ "Feature #" <> T.pack (show fid)
+                        <> " " <> describeEvolution evolution
                 _ -> return ()
-            
+           
             -- Store gen params for on-demand chunk loading
             writeIORef (wsGenParamsRef worldState) (Just params)
             -- Build zoom map cache (one-time computation)
@@ -304,6 +314,7 @@ handleWorldCommand env logger cmd = do
                           DioriteTexture      -> wt { wtDioriteTexture   = texHandle }
                           GabbroTexture       -> wt { wtGabbroTexture    = texHandle }
                           GlacierTexture      -> wt { wtGlacierTexture   = texHandle }
+                          LavaTexture         -> wt { wtLavaTexture      = texHandle }
                           BlankTexture        -> wt { wtBlankTexture     = texHandle }
                           NoTexture           -> wt { wtNoTexture        = texHandle }
                           IsoFaceMap          -> wt { wtIsoFaceMap       = texHandle }
@@ -313,11 +324,13 @@ handleWorldCommand env logger cmd = do
                           ZoomGabbroTexture   -> wt { wtZoomGabbro       = texHandle }
                           ZoomOceanTexture    -> wt { wtZoomOcean        = texHandle }
                           ZoomGlacierTexture  -> wt { wtZoomGlacier      = texHandle }
+                          ZoomLavaTexture      -> wt { wtZoomLava         = texHandle }
                           BgGraniteTexture    -> wt { wtBgGranite        = texHandle }
                           BgGabbroTexture     -> wt { wtBgGabbro         = texHandle }
                           BgDioriteTexture    -> wt { wtBgDiorite        = texHandle }
                           BgOceanTexture      -> wt { wtBgOcean          = texHandle }
                           BgGlacierTexture    -> wt { wtBgGlacier        = texHandle }
+                          BgLavaTexture       -> wt { wtBgLava           = texHandle }
                           BasaltTexture       -> wt { wtBasaltTexture    = texHandle }
                           ObsidianTexture     -> wt { wtObsidianTexture  = texHandle }
                           SandstoneTexture    -> wt { wtSandstoneTexture = texHandle }
@@ -394,3 +407,51 @@ handleWorldCommand env logger cmd = do
 
 unWorldPageId :: WorldPageId -> Text
 unWorldPageId (WorldPageId t) = t
+
+-- | Describe a volcanic feature for logging.
+describeFeature :: VolcanicFeature -> (Text, GeoCoord, Text)
+describeFeature (ShieldVolcano p) =
+    ("Shield volcano", shCenter p,
+     "baseR=" <> T.pack (show (shBaseRadius p))
+     <> " height=" <> T.pack (show (shPeakHeight p)))
+describeFeature (CinderCone p) =
+    ("Cinder cone", ccCenter p,
+     "baseR=" <> T.pack (show (ccBaseRadius p))
+     <> " height=" <> T.pack (show (ccPeakHeight p)))
+describeFeature (LavaDome p) =
+    ("Lava dome", ldCenter p,
+     "baseR=" <> T.pack (show (ldBaseRadius p))
+     <> " height=" <> T.pack (show (ldHeight p)))
+describeFeature (Caldera p) =
+    ("Caldera", caCenter p,
+     "outerR=" <> T.pack (show (caOuterRadius p))
+     <> " rimH=" <> T.pack (show (caRimHeight p)))
+describeFeature (FissureVolcano p) =
+    ("Fissure", fpStart p,
+     "width=" <> T.pack (show (fpWidth p))
+     <> " ridgeH=" <> T.pack (show (fpRidgeHeight p)))
+describeFeature (LavaTube p) =
+    ("Lava tube", ltStart p,
+     "width=" <> T.pack (show (ltWidth p))
+     <> " collapses=" <> T.pack (show (ltCollapses p)))
+describeFeature (SuperVolcano p) =
+    ("SUPERVOLCANO", svCenter p,
+     "calderaR=" <> T.pack (show (svCalderaRadius p))
+     <> " ejectaR=" <> T.pack (show (svEjectaRadius p)))
+describeFeature (HydrothermalVent p) =
+    ("Hydrothermal vent", htCenter p,
+     "radius=" <> T.pack (show (htRadius p))
+     <> " chimneyH=" <> T.pack (show (htChimneyHeight p)))
+
+describeEvolution :: FeatureEvolution -> Text
+describeEvolution (Reactivate h l) =
+    "reactivated (+" <> T.pack (show h) <> "m, +" <> T.pack (show l) <> " lava)"
+describeEvolution GoDormant = "went dormant"
+describeEvolution GoExtinct = "went extinct"
+describeEvolution (CollapseToCaldera d r) =
+    "collapsed to caldera (depth=" <> T.pack (show d)
+    <> " ratio=" <> T.pack (show r) <> ")"
+describeEvolution (ParasiticEruption _ (GeoFeatureId cid)) =
+    "parasitic eruption -> feature #" <> T.pack (show cid)
+describeEvolution (FlankCollapse angle _ _) =
+    "flank collapse at angle=" <> T.pack (show angle)

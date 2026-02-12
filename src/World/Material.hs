@@ -16,6 +16,7 @@ module World.Material
     , matOlivine
     , matPyroxene
     , matFeldspar
+    , matMagma
       -- * Material Properties
     , MaterialProps(..)
     , getMaterialProps
@@ -78,6 +79,9 @@ matFeldspar = MaterialId 33
 matGlacier :: MaterialId
 matGlacier = MaterialId 250
 
+matMagma :: MaterialId
+matMagma = MaterialId 100
+
 -----------------------------------------------------------
 -- Material Properties
 -----------------------------------------------------------
@@ -103,5 +107,6 @@ getMaterialProps (MaterialId mid) = case mid of
     31  -> MaterialProps "olivine"    0.7  3.3
     32  -> MaterialProps "pyroxene"   0.65 3.2
     33  -> MaterialProps "feldspar"   0.6  2.6
+    100 -> MaterialProps "lava"       0.5  3.0
     250 -> MaterialProps "glacier"    1.0  0.9
     _   -> MaterialProps "unknown"    0.5  2.5

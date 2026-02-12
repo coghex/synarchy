@@ -32,6 +32,9 @@ function worldManager.createWorld(params)
     if params.glacierTexture then
         world.setTexture(worldId, "glacier", params.glacierTexture)
     end
+    if params.lavaTexture then
+        world.setTexture(worldId, "lava", params.lavaTexture)
+    end
     if params.blankTexture then
         world.setTexture(worldId, "blank", params.blankTexture)
     end
@@ -58,6 +61,9 @@ function worldManager.createWorld(params)
     end
     if params.zoomGlacier then
         world.setTexture(worldId, "zoom_glacier", params.zoomGlacier)
+    end
+    if params.zoomLava then
+        world.setTexture(worldId, "zoom_lava", params.zoomLava)
     end
     if params.bgGranite then
         world.setTexture(worldId, "bg_granite", params.bgGranite)
@@ -118,6 +124,9 @@ function worldManager.createWorld(params)
     end
     if params.bgImpactite then
         world.setTexture(worldId, "bg_impactite", params.bgImpactite)
+    end
+    if params.bgLava then
+        world.setTexture(worldId, "bg_lava", params.bgLava)
     end
     
     worldManager.currentWorld = worldId

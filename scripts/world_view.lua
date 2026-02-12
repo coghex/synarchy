@@ -14,6 +14,7 @@ worldView.textures = {
     diorite = nil,
     gabbro = nil,
     glacier = nil,
+    lava = nil,
     noTexture = nil,
     blankTexture = nil,
     isoFaceMap = nil,
@@ -23,11 +24,13 @@ worldView.textures = {
     zoomGabbro = nil,
     zoomOcean = nil,
     zoomGlacier = nil,
+    zoomLava = nil,
     bgGranite = nil,
     bgDiorite = nil,
     bgGabbro = nil,
     bgOcean = nil,
     bgGlacier = nil,
+    bgLava = nil,
     -- New materials
     basalt = nil,
     obsidian = nil,
@@ -65,6 +68,7 @@ function worldView.init(width, height)
     worldView.textures.diorite    = engine.loadTexture("assets/textures/world/diorite/diorite.png")
     worldView.textures.gabbro     = engine.loadTexture("assets/textures/world/gabbro/gabbro.png")
     worldView.textures.glacier    = engine.loadTexture("assets/textures/world/glacier/glacier.png")
+    worldView.textures.lava       = engine.loadTexture("assets/textures/world/lava/lava.png")
     worldView.textures.blankTexture = engine.loadTexture("assets/textures/world/blanktexture.png")
     worldView.textures.noTexture  = engine.loadTexture("assets/textures/world/notexture.png")
     worldView.textures.isoFaceMap = engine.loadTexture("assets/textures/world/facemap/isoface.png")
@@ -74,11 +78,13 @@ function worldView.init(width, height)
     worldView.textures.zoomGabbro   = engine.loadTexture("assets/textures/world/zoommap/gabbro_chunk.png")
     worldView.textures.zoomOcean    = engine.loadTexture("assets/textures/world/zoommap/ocean_chunk.png")
     worldView.textures.zoomGlacier  = engine.loadTexture("assets/textures/world/zoommap/glacier_chunk.png")
+    worldView.textures.zoomLava     = engine.loadTexture("assets/textures/world/zoommap/lava_chunk.png")
     worldView.textures.bgGranite    = engine.loadTexture("assets/textures/world/zoommap/granite_chunk_background.png")
     worldView.textures.bgDiorite    = engine.loadTexture("assets/textures/world/zoommap/diorite_chunk_background.png")
     worldView.textures.bgGabbro     = engine.loadTexture("assets/textures/world/zoommap/gabbro_chunk_background.png")
     worldView.textures.bgOcean      = engine.loadTexture("assets/textures/world/zoommap/ocean_chunk_background.png")
     worldView.textures.bgGlacier    = engine.loadTexture("assets/textures/world/zoommap/glacier_chunk_background.png")
+    worldView.textures.bgLava       = engine.loadTexture("assets/textures/world/zoommap/lava_chunk_background.png")
     worldView.textures.basalt       = engine.loadTexture("assets/textures/world/basalt/basalt.png")
     worldView.textures.obsidian     = engine.loadTexture("assets/textures/world/obsidian/obsidian.png")
     worldView.textures.sandstone    = engine.loadTexture("assets/textures/world/sandstone/sandstone.png")
@@ -151,6 +157,7 @@ function worldView.createWorld()
         dioriteTexture = worldView.textures.diorite,
         gabbroTexture  = worldView.textures.gabbro,
         glacierTexture = worldView.textures.glacier,
+        volcanicTexture = worldView.textures.lava,
         blankTexture   = worldView.textures.blankTexture,
         noTexture      = worldView.textures.noTexture,
         isoFaceMap     = worldView.textures.isoFaceMap,
@@ -159,6 +166,7 @@ function worldView.createWorld()
         zoomGabbro     = worldView.textures.zoomGabbro,
         zoomOcean      = worldView.textures.zoomOcean,
         zoomGlacier    = worldView.textures.zoomGlacier,
+        zoomLava       = worldView.textures.zoomLava,
         bgGranite      = worldView.textures.bgGranite,
         bgDiorite      = worldView.textures.bgDiorite,
         bgGabbro       = worldView.textures.bgGabbro,
@@ -179,6 +187,7 @@ function worldView.createWorld()
         zoomImpactite    = worldView.textures.zoomImpactite,
         bgBasalt         = worldView.textures.bgBasalt,
         bgImpactite      = worldView.textures.bgImpactite,
+        bgLava           = worldView.textures.bgLava
     })
     worldManager.showWorld()
 end

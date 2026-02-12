@@ -65,13 +65,6 @@ defaultWorldGenParams = WorldGenParams
     , wgpGeoTimeline = emptyTimeline
     }
 
-emptyTimeline :: GeoTimeline
-emptyTimeline = GeoTimeline
-    { gtSeed      = 0
-    , gtWorldSize = 128
-    , gtPeriods   = []
-    }
-
 -----------------------------------------------------------
 -- World Tile Data
 -----------------------------------------------------------
@@ -155,7 +148,9 @@ data WorldTextures = WorldTextures
     , wtZoomGabbro      :: TextureHandle
     , wtZoomDiorite     :: TextureHandle
     , wtZoomOcean       :: TextureHandle
+    , wtZoomLava         :: TextureHandle
     , wtGlacierTexture  :: TextureHandle
+    , wtLavaTexture     :: TextureHandle
     , wtZoomGlacier     :: TextureHandle
     , wtBlankTexture    :: TextureHandle
     , wtBgGranite       :: TextureHandle
@@ -163,6 +158,8 @@ data WorldTextures = WorldTextures
     , wtBgDiorite       :: TextureHandle
     , wtBgOcean         :: TextureHandle
     , wtBgGlacier       :: TextureHandle
+    , wtBgLava       :: TextureHandle
+    , wtBgLavaTexture    :: TextureHandle
     , wtBasaltTexture   :: TextureHandle
     , wtObsidianTexture :: TextureHandle
     , wtSandstoneTexture :: TextureHandle
@@ -193,13 +190,16 @@ defaultWorldTextures = WorldTextures
     , wtZoomDiorite     = TextureHandle 0
     , wtZoomOcean       = TextureHandle 0
     , wtGlacierTexture  = TextureHandle 0
+    , wtLavaTexture     = TextureHandle 0
     , wtZoomGlacier     = TextureHandle 0
+    , wtZoomLava         = TextureHandle 0
     , wtBlankTexture    = TextureHandle 0
     , wtBgGranite       = TextureHandle 0
     , wtBgGabbro        = TextureHandle 0
     , wtBgDiorite       = TextureHandle 0
     , wtBgOcean         = TextureHandle 0
     , wtBgGlacier       = TextureHandle 0
+    , wtBgLava         = TextureHandle 0
     , wtBasaltTexture    = TextureHandle 0
     , wtObsidianTexture  = TextureHandle 0
     , wtSandstoneTexture = TextureHandle 0
@@ -213,6 +213,7 @@ defaultWorldTextures = WorldTextures
     , wtZoomBasalt       = TextureHandle 0
     , wtZoomObsidian     = TextureHandle 0
     , wtZoomImpactite    = TextureHandle 0
+    , wtBgLavaTexture     = TextureHandle 0
     , wtBgBasalt         = TextureHandle 0
     , wtBgImpactite      = TextureHandle 0
     }
@@ -345,7 +346,16 @@ data GeoTimeline = GeoTimeline
     { gtSeed       :: !Word64
     , gtWorldSize  :: !Int
     , gtPeriods    :: ![GeoPeriod]
+    , gtFeatures   :: ![PersistentFeature]
     } deriving (Show, Eq)
+
+emptyTimeline :: GeoTimeline
+emptyTimeline = GeoTimeline
+    { gtSeed = 0
+    , gtWorldSize = 128
+    , gtPeriods = []
+    , gtFeatures = []
+    }
 
 -----------------------------------------------------------
 -- Geologic Events
@@ -355,10 +365,34 @@ data GeoTimeline = GeoTimeline
 --   function of position — no simulation state needed.
 data GeoEvent
     = CraterEvent !CraterParams
-    | VolcanoEvent !VolcanoParams
+    | VolcanicEvent !VolcanicFeature
+    | VolcanicModify !GeoFeatureId !FeatureEvolution
     | LandslideEvent !LandslideParams
     | GlaciationEvent !GlaciationParams
     | FloodEvent !FloodParams
+    deriving (Show, Eq)
+
+-- | How an existing feature evolves in a new period.
+data FeatureEvolution
+    = Reactivate          -- ^ Dormant → Active, grows taller, new material
+        { feHeightGain    :: !Int       -- ^ Additional height from new eruption
+        , feLavaExtension :: !Int       -- ^ Additional lava flow radius
+        }
+    | GoDormant           -- ^ Active → Dormant, no shape change
+    | GoExtinct           -- ^ Active/Dormant → Extinct
+    | CollapseToCaldera   -- ^ Structure collapses
+        { feCollapseDepth :: !Int       -- ^ How deep the collapse goes
+        , feCollapseRatio :: !Float     -- ^ What fraction of the cone collapses (0.3-0.8)
+        }
+    | ParasiticEruption   -- ^ New feature spawns on the flank
+        { feChildFeature  :: !VolcanicFeature  -- ^ The new cinder cone / dome
+        , feChildId       :: !GeoFeatureId     -- ^ ID for the child
+        }
+    | FlankCollapse       -- ^ One side of the volcano collapses (Mt St Helens)
+        { feCollapseAngle :: !Float     -- ^ Direction of collapse (radians)
+        , feCollapseWidth :: !Float     -- ^ Angular width of the collapse sector
+        , feDebrisRadius  :: !Int       -- ^ How far the debris field extends
+        }
     deriving (Show, Eq)
 
 -- | Global tile coordinate for event placement.
@@ -375,13 +409,92 @@ data CraterParams = CraterParams
     } deriving (Show, Eq)
 
 data VolcanoParams = VolcanoParams
-    { vpCenter     :: !GeoCoord
-    , vpBaseRadius :: !Int        -- ^ Base radius of the cone
-    , vpPeakHeight :: !Int        -- ^ Height above surroundings
-    , vpCraterRadius :: !Int      -- ^ Caldera radius at top
-    , vpCraterDepth  :: !Int      -- ^ Caldera depth from peak
-    , vpMaterial   :: !Word8      -- ^ Volcanic rock material ID
-    , vpHasErupted :: !Bool       -- ^ Controls lava flow deposits
+    { vpCenter       :: !GeoCoord
+    , vpBaseRadius   :: !Int        -- ^ Base radius of the cone
+    , vpPeakHeight   :: !Int        -- ^ Height above surroundings
+    , vpCraterRadius :: !Int        -- ^ Caldera radius at top (0 = no caldera)
+    , vpCraterDepth  :: !Int        -- ^ Caldera depth from peak
+    , vpMaterial     :: !Word8      -- ^ Flank material (basalt)
+    , vpPeakMaterial :: !Word8      -- ^ Peak/caldera material (obsidian)
+    , vpHasErupted   :: !Bool       -- ^ Whether caldera has formed
+    , vpLavaRadius   :: !Int        -- ^ How far lava flows extend beyond base
+    , vpLavaMaterial :: !Word8      -- ^ Lava flow material
+    } deriving (Show, Eq)
+
+-- | Replace the single VolcanoParams with specific feature types
+data VolcanicFeature
+    = ShieldVolcano    !ShieldParams
+    | CinderCone       !CinderConeParams
+    | LavaDome         !LavaDomeParams
+    | Caldera          !CalderaParams
+    | FissureVolcano   !FissureParams
+    | LavaTube         !LavaTubeParams
+    | SuperVolcano     !SuperVolcanoParams
+    | HydrothermalVent !HydrothermalParams
+    deriving (Show, Eq)
+
+data ShieldParams = ShieldParams
+    { shCenter     :: !GeoCoord
+    , shBaseRadius :: !Int       -- ^ Very wide (60-120)
+    , shPeakHeight :: !Int       -- ^ Low relative to width (100-400)
+    , shSummitPit  :: !Bool      -- ^ Small summit crater?
+    , shPitRadius  :: !Int
+    , shPitDepth   :: !Int
+    } deriving (Show, Eq)
+
+data CinderConeParams = CinderConeParams
+    { ccCenter     :: !GeoCoord
+    , ccBaseRadius :: !Int       -- ^ Small (5-15)
+    , ccPeakHeight :: !Int       -- ^ Moderate (50-200)
+    , ccCraterRadius :: !Int     -- ^ Always has a crater
+    , ccCraterDepth  :: !Int
+    } deriving (Show, Eq)
+
+data LavaDomeParams = LavaDomeParams
+    { ldCenter     :: !GeoCoord
+    , ldBaseRadius :: !Int       -- ^ Small-medium (10-25)
+    , ldHeight     :: !Int       -- ^ Squat (50-150)
+    } deriving (Show, Eq)
+
+data CalderaParams = CalderaParams
+    { caCenter     :: !GeoCoord
+    , caOuterRadius :: !Int      -- ^ Rim outer edge (30-80)
+    , caInnerRadius :: !Int      -- ^ Rim inner edge (floor)
+    , caRimHeight   :: !Int      -- ^ Rim above surroundings
+    , caFloorDepth  :: !Int      -- ^ Floor below surroundings
+    , caHasLake     :: !Bool     -- ^ Future: water fill
+    } deriving (Show, Eq)
+
+data FissureParams = FissureParams
+    { fpStart      :: !GeoCoord  -- ^ One end of the fissure
+    , fpEnd        :: !GeoCoord  -- ^ Other end
+    , fpWidth      :: !Int       -- ^ Half-width perpendicular to line (5-10)
+    , fpRidgeHeight :: !Int      -- ^ Height of the ridge (20-80)
+    , fpHasMagma   :: !Bool      -- ^ Active fissure with magma at center
+    } deriving (Show, Eq)
+
+data LavaTubeParams = LavaTubeParams
+    { ltStart      :: !GeoCoord
+    , ltEnd        :: !GeoCoord
+    , ltWidth      :: !Int       -- ^ Tube width (3-6)
+    , ltRidgeHeight :: !Int      -- ^ Subtle surface bulge (5-15)
+    , ltCollapses  :: !Int       -- ^ Number of ceiling collapse pits
+    , ltCollapseSeed :: !Word64  -- ^ Seed for collapse placement
+    } deriving (Show, Eq)
+
+data SuperVolcanoParams = SuperVolcanoParams
+    { svCenter      :: !GeoCoord
+    , svCalderaRadius :: !Int    -- ^ Enormous (100-200)
+    , svRimHeight    :: !Int     -- ^ Low rim relative to size
+    , svFloorDepth   :: !Int     -- ^ Deep caldera
+    , svEjectaRadius :: !Int     -- ^ Ash/debris field (300+)
+    , svEjectaDepth  :: !Int     -- ^ Ash deposit thickness
+    } deriving (Show, Eq)
+
+data HydrothermalParams = HydrothermalParams
+    { htCenter     :: !GeoCoord
+    , htRadius     :: !Int       -- ^ Tiny (3-8)
+    , htChimneyHeight :: !Int    -- ^ Small mound (10-30)
     } deriving (Show, Eq)
 
 data LandslideParams = LandslideParams
@@ -429,6 +542,36 @@ defaultErosionParams = ErosionParams
     , epChemical   = 0.2
     , epSeed       = 0
     }
+
+-----------------------------------------------------------
+-- Persistent Geological Features
+-----------------------------------------------------------
+
+-- | Unique identifier for a geological feature that persists
+--   across geological periods.
+newtype GeoFeatureId = GeoFeatureId Int
+    deriving (Show, Eq, Ord)
+
+-- | Activity state of a volcanic feature.
+data VolcanicActivity
+    = Active           -- ^ Currently erupting / building
+    | Dormant          -- ^ Quiet but structurally intact, could reactivate
+    | Extinct          -- ^ Dead, will only erode from here
+    | Collapsed        -- ^ Has collapsed into a caldera
+    deriving (Show, Eq)
+
+-- | A persistent feature that evolves across geological time.
+--   Tracks the feature's identity, current state, and history
+--   of modifications applied to it.
+data PersistentFeature = PersistentFeature
+    { pfId            :: !GeoFeatureId
+    , pfFeature       :: !VolcanicFeature   -- ^ Current shape
+    , pfActivity      :: !VolcanicActivity
+    , pfFormationPeriod :: !Int              -- ^ Index of period when created
+    , pfLastActivePeriod :: !Int             -- ^ Index of period last active
+    , pfEruptionCount :: !Int               -- ^ How many times it has erupted
+    , pfParentId      :: !(Maybe GeoFeatureId) -- ^ If parasitic (cinder cone on shield flank)
+    } deriving (Show, Eq)
 
 -----------------------------------------------------------
 -- World State
@@ -504,13 +647,16 @@ data WorldTextureType
     | ZoomGabbroTexture
     | ZoomOceanTexture
     | GlacierTexture
+    | LavaTexture
     | ZoomGlacierTexture
+    | ZoomLavaTexture
     | BlankTexture
     | BgGraniteTexture
     | BgGabbroTexture
     | BgDioriteTexture
     | BgOceanTexture
     | BgGlacierTexture
+    | BgLavaTexture
     | BasaltTexture
     | ObsidianTexture
     | SandstoneTexture

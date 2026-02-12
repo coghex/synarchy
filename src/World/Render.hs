@@ -351,6 +351,7 @@ getTileTexture textures 30  = wtIronTexture textures
 getTileTexture textures 31  = wtOlivineTexture textures
 getTileTexture textures 32  = wtPyroxeneTexture textures
 getTileTexture textures 33  = wtFeldsparTexture textures
+getTileTexture textures 100 = wtLavaTexture textures
 getTileTexture textures 250 = wtGlacierTexture textures
 getTileTexture textures 255 = wtBlankTexture textures
 getTileTexture textures _   = wtNoTexture textures
@@ -361,5 +362,6 @@ getTileFaceMapTexture textures mat
     | mat >= 10 && mat <= 12 = wtIsoFaceMap textures  -- sedimentary
     | mat == 20              = wtIsoFaceMap textures  -- impactite
     | mat >= 30 && mat <= 33 = wtIsoFaceMap textures  -- meteorite
+    | mat == 100             = wtIsoFaceMap textures  -- lava
     | mat == 250             = wtIsoFaceMap textures  -- glacier
     | otherwise              = wtNoFaceMap textures
