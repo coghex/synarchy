@@ -29,15 +29,23 @@ import qualified Data.Text as T
 import qualified Data.Set as Set
 import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
 
--- | Handle to a UI page
+-----------------------------------------------------------
+-- Handles
+-----------------------------------------------------------
+
 newtype PageHandle = PageHandle { unPageHandle ∷ Word32 }
   deriving (Eq, Ord, Show)
 
--- | Handle to a UI element
 newtype ElementHandle = ElementHandle { unElementHandle ∷ Word32 }
   deriving (Eq, Ord, Show)
 
--- | UI layers (rendered bottom to top)
+newtype BoxTextureHandle = BoxTextureHandle { unBoxTextureHandle ∷ Word32 }
+  deriving (Eq, Ord, Show)
+
+-----------------------------------------------------------
+-- Layers and UI Types
+-----------------------------------------------------------
+
 data UILayer
   = LayerHUD
   | LayerMenu
@@ -46,7 +54,21 @@ data UILayer
   | LayerDebug
   deriving (Eq, Ord, Enum, Bounded, Show)
 
--- | A UI page
+data TextBuffer = TextBuffer
+  { tbContent ∷ T.Text  -- ^ The actual text
+  , tbCursor  ∷ Int     -- ^ Cursor position (character index)
+  } deriving (Show, Eq)
+
+emptyBuffer ∷ TextBuffer
+emptyBuffer = TextBuffer
+  { tbContent = T.empty
+  , tbCursor  = 0
+  }
+
+-----------------------------------------------------------
+-- Page and Element Types
+-----------------------------------------------------------
+
 data UIPage = UIPage
   { upHandle       ∷ PageHandle
   , upName         ∷ Text
@@ -57,7 +79,6 @@ data UIPage = UIPage
   , upFocusedElement ∷ Maybe ElementHandle
   } deriving (Show)
 
--- | A UI element
 data UIElement = UIElement
   { ueHandle     ∷ ElementHandle
   , uePage       ∷ PageHandle
@@ -74,7 +95,10 @@ data UIElement = UIElement
   , ueTextBuffer  ∷ Maybe TextBuffer
   } deriving (Show)
 
--- | What an element renders as
+-----------------------------------------------------------
+-- Render Data
+-----------------------------------------------------------
+
 data UIRenderData
   = RenderNone
   | RenderBox UIBoxStyle
@@ -82,24 +106,10 @@ data UIRenderData
   | RenderSprite UISpriteStyle
   deriving (Show)
 
--- | Text buffer with cursor state (for text input elements)
-data TextBuffer = TextBuffer
-  { tbContent ∷ T.Text  -- ^ The actual text
-  , tbCursor  ∷ Int     -- ^ Cursor position (character index)
-  } deriving (Show, Eq)
+-----------------------------------------------------------
+-- Box Textures
+-----------------------------------------------------------
 
--- | Empty text buffer
-emptyBuffer ∷ TextBuffer
-emptyBuffer = TextBuffer
-  { tbContent = T.empty
-  , tbCursor  = 0
-  }
-
--- A handle to a group of 9 textures
-newtype BoxTextureHandle = BoxTextureHandle { unBoxTextureHandle ∷ Word32 }
-  deriving (Eq, Ord, Show)
-
--- The 9 textures for a box
 data BoxTextureSet = BoxTextureSet
   { btsCenter ∷ TextureHandle
   , btsN      ∷ TextureHandle
@@ -131,7 +141,10 @@ data UISpriteStyle = UISpriteStyle
   , ussColor   ∷ (Float, Float, Float, Float)
   } deriving (Show)
 
--- | Manager for all UI pages and elements
+-----------------------------------------------------------
+-- UI Manager
+-----------------------------------------------------------
+
 data UIPageManager = UIPageManager
   { upmPages         ∷ Map.Map PageHandle UIPage
   , upmElements      ∷ Map.Map ElementHandle UIElement

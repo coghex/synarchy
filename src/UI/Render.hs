@@ -25,15 +25,16 @@ import Engine.Scene.Types.Batch (RenderBatch(..), RenderItem(..), TextRenderBatc
 import UI.Types
 import UI.Manager (getVisiblePages, getElementAbsolutePosition, getBoxTextureSet)
 
--- | Base layer offset for UI (world uses 0-9)
+-----------------------------------------------------------
+-- Layer Management
+-----------------------------------------------------------
+
 uiLayerBase ∷ Int
 uiLayerBase = 10
 
--- Helper to unwrap LayerId
 unLayerId ∷ LayerId → Word32
 unLayerId (LayerId i) = fromIntegral i
 
--- | Convert UI layer to render LayerId
 uiLayerToLayerId ∷ UILayer → Int → LayerId
 uiLayerToLayerId layer zIndex = LayerId $ fromIntegral $ case layer of
     LayerHUD     → uiLayerBase + 0
@@ -42,12 +43,19 @@ uiLayerToLayerId layer zIndex = LayerId $ fromIntegral $ case layer of
     LayerTooltip → uiLayerBase + 100 + zIndex
     LayerDebug   → uiLayerBase + 200 + zIndex
 
--- | Look up the bindless slot index for a texture handle
+-----------------------------------------------------------
+-- Texture Lookup
+-----------------------------------------------------------
+
 lookupTextureSlot ∷ BindlessTextureSystem → TextureHandle → Float
 lookupTextureSlot bindless texHandle =
     case Map.lookup texHandle (btsHandleMap bindless) of
         Just bth → fromIntegral $ fromBindlessHandle bth
         Nothing  → 0.0
+
+-----------------------------------------------------------
+-- Text Batch Merging
+-----------------------------------------------------------
 
 mergeLayeredTextItems ∷ Map.Map LayerId (V.Vector RenderItem)
                       → Map.Map LayerId (V.Vector RenderItem)
@@ -81,7 +89,10 @@ mergeLayeredTextItems = Map.map mergeInLayer
            | (font, insts) ← grouped
            ]
 
--- | Render all visible UI pages
+-----------------------------------------------------------
+-- Page Rendering
+-----------------------------------------------------------
+
 renderUIPages ∷ EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderUIPages = do
     env ← ask
@@ -107,10 +118,9 @@ renderUIPages = do
                 allLayered = foldr (Map.unionWith (<>)) Map.empty (map snd results)
                 -- Merge text batches that share a font within each layer
                 mergedLayered = mergeLayeredTextItems allLayered
-            
+
             pure (allBatches, mergedLayered)
 
--- | Render a single page
 renderPage ∷ UIPageManager → BindlessTextureSystem → FontCache → UIPage 
            → EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
 renderPage mgr bindless fontCache page = do
@@ -122,10 +132,13 @@ renderPage mgr bindless fontCache page = do
     
     let allBatches = V.concat $ map fst results
         allLayered = foldr (Map.unionWith (<>)) Map.empty (map snd results)
-    
+
     pure (allBatches, allLayered)
 
--- Replace renderElement function:
+-----------------------------------------------------------
+-- Element Rendering
+-----------------------------------------------------------
+
 renderElement ∷ UIPageManager → BindlessTextureSystem → FontCache
               → LayerId → ElementHandle 
               → EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
@@ -157,17 +170,15 @@ renderElement mgr bindless fontCache baseLayerId handle = do
                                  else Map.unionWith (<>) 
                                         (Map.singleton elemLayerId selfItems) 
                                         childLayered
-                
+
                 pure (allBatches, allLayered)
 
--- | Get z-index for sorting
 getChildZIndex ∷ UIPageManager → ElementHandle → Int
 getChildZIndex mgr handle = 
     case Map.lookup handle (upmElements mgr) of
         Nothing → 0
         Just elem → ueZIndex elem
 
--- | Render element's visual data
 renderElementData ∷ UIPageManager → BindlessTextureSystem → FontCache 
                   → LayerId → UIElement → Float → Float 
                   → EngineM ε σ (V.Vector RenderBatch, V.Vector RenderItem)
@@ -237,6 +248,10 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
                     }
             pure (V.singleton batch, V.singleton (SpriteItem batch))
 
+-----------------------------------------------------------
+-- Box Rendering
+-----------------------------------------------------------
+
 makeBoxBatches ∷ BindlessTextureSystem → BoxTextureSet 
                → Float → Float → Float → Float → Float 
                → (Float, Float, Float, Float) → LayerId
@@ -298,9 +313,10 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
         , makeBatch (btsSE texSet) seX seY ts ts
         ]
 
--- | Generate quad vertices for a UI element
--- faceMapId = 0 → default face map (UI uses the UI pipeline which
--- ignores face-map lighting entirely, so this value is just padding)
+-----------------------------------------------------------
+-- Vertex Generation
+-----------------------------------------------------------
+
 makeQuadVertices ∷ Float → Float → Float → Float 
                  → (Float, Float, Float, Float) 
                  → Float
@@ -312,7 +328,7 @@ makeQuadVertices x y w h (cr, cg, cb, ca) atlasId =
         y1 = y + h
         
         col = Vec4 cr cg cb ca
-        fmId = 0  -- default face map for UI
+        fmId = 0
         
         v1' = Vertex (Vec2 x0 y0) (Vec2 0 0) col atlasId fmId
         v2' = Vertex (Vec2 x1 y0) (Vec2 1 0) col atlasId fmId

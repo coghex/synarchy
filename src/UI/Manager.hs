@@ -249,7 +249,6 @@ removeElement handle mgr =
 -- Focus Operations
 -----------------------------------------------------------
 
--- | Set focus to an element (also updates page's remembered focus)
 setElementFocus ∷ ElementHandle → UIPageManager → UIPageManager
 setElementFocus handle mgr =
     case Map.lookup handle (upmElements mgr) of
@@ -260,22 +259,18 @@ setElementFocus handle mgr =
             in modifyPage pageHandle mgr' $ \page →
                 page { upFocusedElement = Just handle }
 
--- | Clear global focus (page still remembers its last focused element)
 clearElementFocus ∷ UIPageManager → UIPageManager
 clearElementFocus mgr = mgr { upmGlobalFocus = Nothing }
 
--- | Get currently focused element globally
 getElementFocus ∷ UIPageManager → Maybe ElementHandle
 getElementFocus = upmGlobalFocus
 
--- | Get a page's remembered focused element
 getPageFocus ∷ PageHandle → UIPageManager → Maybe ElementHandle
 getPageFocus handle mgr = 
     case Map.lookup handle (upmPages mgr) of
         Nothing → Nothing
         Just page → upFocusedElement page
 
--- | Clear a page's remembered focus
 clearPageFocus ∷ PageHandle → UIPageManager → UIPageManager
 clearPageFocus handle = modifyPage handle `flip` \page →
     page { upFocusedElement = Nothing }
@@ -379,7 +374,6 @@ getElementChildren handle mgr =
 -- Click Detection
 -----------------------------------------------------------
 
--- | Check if a point is inside an element's bounds (in screen coordinates)
 isPointInElement ∷ (Float, Float) → UIElement → UIPageManager → Bool
 isPointInElement (px, py) element mgr =
     if not (ueVisible element) then False
@@ -454,7 +448,6 @@ findClickableElementAt pos mgr =
                     childClickables = concatMap (findClickableInTree point) (ueChildren elem)
                 in thisClickable ++ childClickables
 
--- | Find the nearest ancestor (or self) that has an onClick callback
 findClickableAncestor ∷ ElementHandle → UIPageManager → Maybe (ElementHandle, Text)
 findClickableAncestor handle mgr = go handle
   where
@@ -466,7 +459,6 @@ findClickableAncestor handle mgr = go handle
                 Just parentHandle → go parentHandle
                 Nothing → Nothing
 
--- | Find the topmost visible element at a point (deepest child wins)
 findElementAt ∷ (Float, Float) → UIPageManager → Maybe ElementHandle
 findElementAt pos mgr =
     let visiblePages = Set.toList (upmVisiblePages mgr)
@@ -513,28 +505,24 @@ findElementAt pos mgr =
 -- Text Buffer Operations
 -----------------------------------------------------------
 
--- | Enable text input on an element (initializes empty buffer)
 enableTextInput ∷ ElementHandle → UIPageManager → UIPageManager
 enableTextInput handle = modifyElement handle `flip` \elem →
     elem { ueTextBuffer = Just emptyBuffer }
 
--- | Get an element's text buffer
 getTextBuffer ∷ ElementHandle → UIPageManager → Maybe TextBuffer
 getTextBuffer handle mgr =
     case Map.lookup handle (upmElements mgr) of
         Nothing → Nothing
         Just elem → ueTextBuffer elem
 
--- | Set an element's text buffer
 setTextBuffer ∷ ElementHandle → TextBuffer → UIPageManager → UIPageManager
 setTextBuffer handle buffer = modifyElement handle `flip` \elem →
     elem { ueTextBuffer = Just buffer }
 
--- | Modify an element's text buffer with a function
 modifyTextBuffer ∷ ElementHandle → (TextBuffer → TextBuffer) → UIPageManager → UIPageManager
 modifyTextBuffer handle f = modifyElement handle `flip` \elem →
     case ueTextBuffer elem of
-        Nothing → elem  -- No buffer, do nothing
+        Nothing → elem
         Just buf → elem { ueTextBuffer = Just (f buf) }
 
 -----------------------------------------------------------
