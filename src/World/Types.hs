@@ -408,20 +408,7 @@ data CraterParams = CraterParams
     , cpMeteorite  ∷ !(Maybe Word8) -- ^ Optional meteorite material ID at crater center
     } deriving (Show, Eq)
 
-data VolcanoParams = VolcanoParams
-    { vpCenter       :: !GeoCoord
-    , vpBaseRadius   :: !Int        -- ^ Base radius of the cone
-    , vpPeakHeight   :: !Int        -- ^ Height above surroundings
-    , vpCraterRadius :: !Int        -- ^ Caldera radius at top (0 = no caldera)
-    , vpCraterDepth  :: !Int        -- ^ Caldera depth from peak
-    , vpMaterial     :: !Word8      -- ^ Flank material (basalt)
-    , vpPeakMaterial :: !Word8      -- ^ Peak/caldera material (obsidian)
-    , vpHasErupted   :: !Bool       -- ^ Whether caldera has formed
-    , vpLavaRadius   :: !Int        -- ^ How far lava flows extend beyond base
-    , vpLavaMaterial :: !Word8      -- ^ Lava flow material
-    } deriving (Show, Eq)
-
--- | Replace the single VolcanoParams with specific feature types
+-- | Specific feature types for different volcanic structures
 data VolcanicFeature
     = ShieldVolcano    !ShieldParams
     | CinderCone       !CinderConeParams

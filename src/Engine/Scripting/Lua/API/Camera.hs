@@ -18,8 +18,7 @@ import World.Grid (gridToWorld)
 import World.Types
 import World.Material (MaterialId(..))
 import World.Plate (generatePlates, elevationAtGlobal)
-import World.Generate (globalToChunk)
-import World.Geology (applyGeoEvent, applyErosion, GeoModification(..))
+import World.Generate (globalToChunk, applyTimeline)
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 
@@ -143,26 +142,3 @@ cameraGotoTileFn env = do
 
         _ -> pure ()
     return 0
-
--- | Walk the geological timeline, applying each period's events
---   and erosion to get the final elevation and material.
-applyTimeline :: GeoTimeline -> Int -> Int -> Int -> (Int, MaterialId) -> (Int, MaterialId)
-applyTimeline timeline worldSize gx gy (baseElev, baseMat) =
-    foldl' applyPeriod (baseElev, baseMat) (gtPeriods timeline)
-  where
-    applyPeriod (elev, mat) period =
-        let (elev', mat') = foldl' applyOneEvent (elev, mat) (gpEvents period)
-            erosionMod = applyErosion (gpErosion period) worldSize gx gy elev'
-            elev'' = elev' + gmElevDelta erosionMod
-            mat'' = case gmMaterialOverride erosionMod of
-                Just m  -> MaterialId m
-                Nothing -> mat'
-        in (elev'', mat'')
-
-    applyOneEvent (elev, mat) event =
-        let mod' = applyGeoEvent event worldSize gx gy elev
-            elev' = elev + gmElevDelta mod'
-            mat'  = case gmMaterialOverride mod' of
-                Just m  -> MaterialId m
-                Nothing -> mat
-        in (elev', mat')

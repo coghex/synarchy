@@ -256,6 +256,15 @@ library
                      World.Render
                      World.Generate
                      World.Geology
+                     World.Geology.Types
+                     World.Geology.Hash
+                     World.Geology.Crater
+                     World.Geology.Volcano
+                     World.Geology.Generate
+                     World.Geology.Evolution
+                     World.Geology.Timeline
+                     World.Geology.Erosion
+                     World.Geology.Event
                      World.Plate
                      World.Material
                      World.ZoomMap

@@ -11,6 +11,8 @@ module World.Generate
     , cameraChunkCoord
       -- * Constants
     , viewDepth
+      -- * Timeline application
+    , applyTimeline
       -- * Types re-export
     , ChunkCoord(..)
     ) where
