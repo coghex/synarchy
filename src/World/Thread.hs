@@ -16,6 +16,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import qualified Engine.Core.Queue as Q
+import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
 import World.Generate
 import World.Grid (zoomFadeEnd)
@@ -23,6 +24,13 @@ import World.Geology (buildTimeline, logTimeline)
 import World.Geology.Log (logTimeline)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.ZoomMap (buildZoomCache)
+
+-----------------------------------------------------------
+-- Helper: send a progress message to Lua
+-----------------------------------------------------------
+
+sendGenLog ∷ EngineEnv → Text → IO ()
+sendGenLog env msg = Q.writeQueue (luaQueue env) (LuaWorldGenLog msg)
 
 -----------------------------------------------------------
 -- Start World Thread
@@ -126,17 +134,11 @@ tickWorldTime env dt = do
 -----------------------------------------------------------
 
 -- | Check camera position and load/promote chunks as needed.
---   Runs every tick on the world thread.
---   ONLY generates chunks when zoomed in enough to see tiles.
---   When zoomed out past the fade threshold, the zoom map cache
---   (built once at init) handles rendering — no chunk gen needed.
 updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
 updateChunkLoading env logger = do
     camera ← readIORef (cameraRef env)
     let zoom = camZoom camera
 
-    -- update chunk a little bit before the fade threshold
-    -- so that new chunks are ready to go as you zoom in
     when (zoom < (zoomFadeEnd + 0.5)) $ do
         manager ← readIORef (worldManagerRef env)
 
@@ -214,8 +216,12 @@ handleWorldCommand env logger cmd = do
                 <> ", size=" <> T.pack (show worldSize)
                 <> ", places=" <> T.pack (show placeCount) <> ")"
             
+            sendGenLog env "Initializing world state..."
+            
             worldState ← emptyWorldState
             
+            -- Build geological timeline
+            sendGenLog env "Building geological timeline..."
             let timeline = buildTimeline seed worldSize placeCount
                 params = defaultWorldGenParams
                     { wgpSeed        = seed
@@ -224,14 +230,30 @@ handleWorldCommand env logger cmd = do
                     , wgpGeoTimeline = timeline
                     }
             
-            -- log the geological timeline
+            -- Log the geological timeline
             logTimeline (logInfo logger CatWorld) timeline
+
+            -- Report timeline summary to Lua
+            let periodCount = length (gtPeriods timeline)
+                featureCount = length (gtFeatures timeline)
+            sendGenLog env $ "Timeline: " <> T.pack (show periodCount)
+                <> " periods, " <> T.pack (show featureCount) <> " features"
+
+            -- Report each period name
+            forM_ (gtPeriods timeline) $ \gp →
+                sendGenLog env $ "  " <> gpName gp <> " ("
+                    <> T.pack (show (length (gpEvents gp))) <> " events)"
+
             -- Store gen params for on-demand chunk loading
             writeIORef (wsGenParamsRef worldState) (Just params)
+
             -- Build zoom map cache (one-time computation)
+            sendGenLog env "Generating tectonic plates..."
             camera ← readIORef (cameraRef env)
             let facing = camFacing camera
-                zoomCache = buildZoomCache facing params
+
+            sendGenLog env "Building zoom cache..."
+            let zoomCache = buildZoomCache facing params
             writeIORef (wsZoomCacheRef worldState) zoomCache
             
             -- Generate the initial 5×5 chunk grid around (0,0)
@@ -239,7 +261,12 @@ handleWorldCommand env logger cmd = do
                                 | cx ← [-chunkLoadRadius .. chunkLoadRadius]
                                 , cy ← [-chunkLoadRadius .. chunkLoadRadius]
                                 ]
-                initialChunks = map (\coord →
+                totalInitialChunks = length initialCoords
+
+            sendGenLog env $ "Generating initial chunks ("
+                <> T.pack (show totalInitialChunks) <> ")..."
+
+            let initialChunks = map (\coord →
                     let (chunkTiles, surfMap) = generateChunk params coord
                     in LoadedChunk
                         { lcCoord      = coord
@@ -256,6 +283,7 @@ handleWorldCommand env logger cmd = do
                 (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
             
             -- Set the camera z-slice to just above the surface at (0,0)
+            sendGenLog env "Calculating surface elevation..."
             let plates = generatePlates seed worldSize (wgpPlateCount params)
                 (surfaceElev, _mat) = elevationAtGlobal seed plates worldSize 0 0
                 startZSlice = surfaceElev + 3
@@ -263,6 +291,10 @@ handleWorldCommand env logger cmd = do
                 (cam { camZSlice = startZSlice }, ())
             
             let totalTiles = sum $ map (HM.size . lcTiles) initialChunks
+            let summaryMsg = T.pack (show $ length initialChunks) <> " chunks, "
+                          <> T.pack (show totalTiles) <> " tiles"
+            sendGenLog env $ "World initialized: " <> summaryMsg
+
             logInfo logger CatWorld $ "World initialized: " 
                 <> T.pack (show $ length initialChunks) <> " chunks, "
                 <> T.pack (show totalTiles) <> " tiles, "

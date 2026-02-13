@@ -888,6 +888,16 @@ function createWorldMenu.update(dt)
 end
 
 -----------------------------------------------------------
+-- World Generation Log Receiver (from Haskell world thread)
+-----------------------------------------------------------
+
+function createWorldMenu.onWorldGenLog(text)
+    if createWorldMenu.genState == GEN_RUNNING or createWorldMenu.genState == GEN_DONE then
+        createWorldMenu.addLogLine(text)
+    end
+end
+
+-----------------------------------------------------------
 -- Show / Hide / Resize
 -----------------------------------------------------------
 

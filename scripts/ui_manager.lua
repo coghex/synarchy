@@ -633,6 +633,16 @@ function uiManager.onUIFocusLost()
 end
 
 -----------------------------------------------------------
+-- World Generation Log (forwarded from world thread)
+-----------------------------------------------------------
+
+function uiManager.onWorldGenLog(text)
+    if createWorldMenu then
+        createWorldMenu.onWorldGenLog(text)
+    end
+end
+
+-----------------------------------------------------------
 -- Key Input Forwarding
 -----------------------------------------------------------
 
