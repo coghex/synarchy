@@ -12,6 +12,7 @@ local dropdown       = require("scripts.ui.dropdown")
 local textbox        = require("scripts.ui.textbox")
 local settingsTab    = require("scripts.create_world.settings_tab")
 local advancedTab    = require("scripts.create_world.advanced_tab")
+local worldManager   = require("scripts.world_manager")
 
 local createWorldMenu = {}
 
@@ -27,14 +28,22 @@ local Z_TAB_BUTTONS = 5
 local Z_CONTENT     = 6
 local Z_WIDGETS     = 7
 local Z_PREVIEW     = 7
+local Z_LOG_TEXT    = 8
 local Z_BUTTONS     = 8
+
+-----------------------------------------------------------
+-- Generation states
+-----------------------------------------------------------
+local GEN_IDLE       = "idle"        -- not started
+local GEN_RUNNING    = "running"     -- world.init queued, waiting
+local GEN_DONE       = "done"        -- world is active
 
 -----------------------------------------------------------
 -- Base sizes (unscaled)
 -----------------------------------------------------------
 createWorldMenu.baseSizes = {
     fontSize       = 24,
-    btnWidth       = 200,
+    btnWidth       = 270,
     btnHeight      = 52,
     generateBtnWidth = 360,
     btnSpacing     = 16,
@@ -47,6 +56,7 @@ createWorldMenu.baseSizes = {
     dropdownHeight = 40,
     textboxWidth   = 100,
     textboxHeight  = 40,
+    logFontSize    = 16,
 }
 
 -----------------------------------------------------------
@@ -75,10 +85,21 @@ createWorldMenu.pending = {
     plateCount = "7",
 }
 
+-- Generation state
+createWorldMenu.genState     = GEN_IDLE
+createWorldMenu.genElapsed   = 0
+
 -- Button IDs
-createWorldMenu.backButtonId     = nil
-createWorldMenu.defaultsButtonId = nil
-createWorldMenu.generateButtonId = nil
+createWorldMenu.backButtonId      = nil
+createWorldMenu.defaultsButtonId  = nil
+createWorldMenu.generateButtonId  = nil
+createWorldMenu.regenerateButtonId = nil
+createWorldMenu.continueButtonId   = nil
+
+-- Log output
+createWorldMenu.logLines      = {}
+createWorldMenu.logLabelIds   = {}
+createWorldMenu.statusLabelId = nil
 
 -- Per-tab element handles for show/hide
 createWorldMenu.tabElements = {}
@@ -92,6 +113,9 @@ createWorldMenu.ownedSprites    = {}
 createWorldMenu.ownedRandBoxes  = {}
 createWorldMenu.ownedDropdowns  = {}
 createWorldMenu.ownedTextBoxes  = {}
+
+-- Layout cache for button rebuilds
+createWorldMenu.btnLayout = nil
 
 -----------------------------------------------------------
 -- Tab registry
@@ -190,14 +214,19 @@ end
 function createWorldMenu.createUI()
     createWorldMenu.destroyOwned()
 
-    createWorldMenu.backButtonId     = nil
-    createWorldMenu.defaultsButtonId = nil
-    createWorldMenu.generateButtonId = nil
-    createWorldMenu.panelId          = nil
-    createWorldMenu.leftPanelId      = nil
-    createWorldMenu.rightPanelId     = nil
-    createWorldMenu.tabBarId         = nil
-    createWorldMenu.tabElements      = {}
+    createWorldMenu.backButtonId       = nil
+    createWorldMenu.defaultsButtonId   = nil
+    createWorldMenu.generateButtonId   = nil
+    createWorldMenu.regenerateButtonId = nil
+    createWorldMenu.continueButtonId   = nil
+    createWorldMenu.panelId            = nil
+    createWorldMenu.leftPanelId        = nil
+    createWorldMenu.rightPanelId       = nil
+    createWorldMenu.tabBarId           = nil
+    createWorldMenu.tabElements        = {}
+    createWorldMenu.logLabelIds        = {}
+    createWorldMenu.statusLabelId      = nil
+    createWorldMenu.btnLayout          = nil
 
     if createWorldMenu.uiCreated and createWorldMenu.page then
         UI.deletePage(createWorldMenu.page)
@@ -242,11 +271,11 @@ function createWorldMenu.createUI()
     createWorldMenu.createLeftPanel(panelX, panelY, bounds, contentStartY, 
                                      leftWidth, contentHeight, s, uiscale)
 
-    -- Right panel (world preview)
+    -- Right panel (world preview + log output)
     createWorldMenu.createRightPanel(panelX, panelY, bounds, contentStartY,
                                       leftWidth, rightWidth, contentHeight, s, uiscale)
 
-    -- Bottom buttons
+    -- Bottom buttons (saves layout for later swaps)
     createWorldMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
                                    bounds, s, uiscale)
 
@@ -380,7 +409,7 @@ function createWorldMenu.showTab(key)
 end
 
 -----------------------------------------------------------
--- Right Panel (World Preview)
+-- Right Panel (World Preview + Generation Log)
 -----------------------------------------------------------
 
 function createWorldMenu.createRightPanel(panelX, panelY, bounds, contentStartY,
@@ -403,10 +432,11 @@ function createWorldMenu.createRightPanel(panelX, panelY, bounds, contentStartY,
     }))
     
     local rightBounds = panel.getContentBounds(createWorldMenu.rightPanelId)
-    
-    local previewSize = math.min(rightBounds.width, rightBounds.height) * 0.7
+
+    -- World preview image (upper portion)
+    local previewSize = math.min(rightBounds.width, rightBounds.height * 0.5) * 0.7
     local previewX = rightX + rightBounds.x + (rightBounds.width - previewSize) / 2
-    local previewY = contentStartY + rightBounds.y + (rightBounds.height - previewSize) / 2
+    local previewY = contentStartY + rightBounds.y + math.floor(20 * uiscale)
     
     if createWorldMenu.worldPreviewTexture then
         createWorldMenu.trackSprite(sprite.new({
@@ -422,6 +452,83 @@ function createWorldMenu.createRightPanel(panelX, panelY, bounds, contentStartY,
             uiscale = uiscale,
         }))
     end
+
+    -- Status label (below preview)
+    local logStartY = previewY + previewSize + math.floor(20 * uiscale)
+    local logX = rightX + rightBounds.x + math.floor(10 * uiscale)
+
+    createWorldMenu.statusLabelId = createWorldMenu.trackLabel(label.new({
+        name     = "gen_status",
+        text     = "",
+        font     = createWorldMenu.menuFont,
+        fontSize = createWorldMenu.baseSizes.logFontSize,
+        color    = {0.7, 0.9, 0.7, 1.0},
+        page     = createWorldMenu.page,
+        uiscale  = uiscale,
+    }))
+    local statusHandle = label.getElementHandle(createWorldMenu.statusLabelId)
+    UI.addToPage(createWorldMenu.page, statusHandle, logX, logStartY + s.logFontSize)
+    UI.setZIndex(statusHandle, Z_LOG_TEXT)
+
+    -- Log lines (below status)
+    local logLineStartY = logStartY + s.logFontSize + math.floor(10 * uiscale)
+    local logLineHeight = math.floor(createWorldMenu.baseSizes.logFontSize * 1.4 * uiscale)
+    local availableHeight = contentStartY + contentHeight - logLineStartY - math.floor(10 * uiscale)
+    local maxLogLines = math.max(1, math.floor(availableHeight / logLineHeight))
+
+    createWorldMenu.logLabelIds = {}
+    for i = 1, maxLogLines do
+        local lid = createWorldMenu.trackLabel(label.new({
+            name     = "gen_log_" .. i,
+            text     = "",
+            font     = createWorldMenu.menuFont,
+            fontSize = createWorldMenu.baseSizes.logFontSize,
+            color    = {0.6, 0.6, 0.6, 1.0},
+            page     = createWorldMenu.page,
+            uiscale  = uiscale,
+        }))
+        local lh = label.getElementHandle(lid)
+        UI.addToPage(createWorldMenu.page, lh,
+                     logX, logLineStartY + (i - 1) * logLineHeight + s.logFontSize)
+        UI.setZIndex(lh, Z_LOG_TEXT)
+        table.insert(createWorldMenu.logLabelIds, lid)
+    end
+end
+
+-----------------------------------------------------------
+-- Log Output Helpers
+-----------------------------------------------------------
+
+function createWorldMenu.addLogLine(text)
+    table.insert(createWorldMenu.logLines, text)
+    -- Trim to max visible
+    local maxLines = #createWorldMenu.logLabelIds
+    while #createWorldMenu.logLines > maxLines do
+        table.remove(createWorldMenu.logLines, 1)
+    end
+    createWorldMenu.refreshLogDisplay()
+end
+
+function createWorldMenu.clearLog()
+    createWorldMenu.logLines = {}
+    createWorldMenu.refreshLogDisplay()
+end
+
+function createWorldMenu.refreshLogDisplay()
+    local maxLines = #createWorldMenu.logLabelIds
+    for i = 1, maxLines do
+        local lid = createWorldMenu.logLabelIds[i]
+        local text = createWorldMenu.logLines[i] or ""
+        local lh = label.getElementHandle(lid)
+        UI.setText(lh, text)
+    end
+end
+
+function createWorldMenu.setStatus(text)
+    if createWorldMenu.statusLabelId then
+        local sh = label.getElementHandle(createWorldMenu.statusLabelId)
+        UI.setText(sh, text)
+    end
 end
 
 -----------------------------------------------------------
@@ -430,6 +537,24 @@ end
 
 function createWorldMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
                                         bounds, s, uiscale)
+    -- Save layout params for rebuilding buttons later
+    createWorldMenu.btnLayout = {
+        panelX = panelX, panelY = panelY,
+        panelWidth = panelWidth, panelHeight = panelHeight,
+        bounds = bounds, s = s, uiscale = uiscale,
+    }
+
+    createWorldMenu.buildButtons_idle()
+end
+
+-- Build the "idle" button set: [Back] [Defaults]     [Generate World]
+function createWorldMenu.buildButtons_idle()
+    createWorldMenu.destroyDynamicButtons()
+
+    local L = createWorldMenu.btnLayout
+    local uiscale = L.uiscale
+    local s = L.s
+
     createWorldMenu.backButtonId = createWorldMenu.trackButton(button.new({
         name       = "back_btn",
         text       = "Back",
@@ -444,9 +569,7 @@ function createWorldMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         textColor  = {0.0, 0.0, 0.0, 1.0},
         zIndex     = Z_BUTTONS,
         onClick = function(id, name)
-            if createWorldMenu.showMenuCallback then
-                createWorldMenu.showMenuCallback("main")
-            end
+            createWorldMenu.onBack()
         end,
     }))
 
@@ -486,33 +609,179 @@ function createWorldMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         end,
     }))
 
+    -- Layout: [Back] [Defaults]     [Generate World]
     local backW, backH = button.getSize(createWorldMenu.backButtonId)
     local defaultsW, _ = button.getSize(createWorldMenu.defaultsButtonId)
     local generateW, _ = button.getSize(createWorldMenu.generateButtonId)
     
     local bottomPad = math.floor(100 * uiscale)
-    local btnY = panelY + panelHeight - bottomPad + (bottomPad - backH) / 2
+    local btnY = L.panelY + L.panelHeight - bottomPad + (bottomPad - backH) / 2
     
-    local backX = panelX + bounds.x
+    local backX = L.panelX + L.bounds.x
     local defaultsX = backX + backW + s.btnSpacing
-    local generateX = panelX + bounds.x + bounds.width - generateW
+    local generateX = L.panelX + L.bounds.x + L.bounds.width - generateW
 
-    local backH_     = button.getElementHandle(createWorldMenu.backButtonId)
-    local defaultsH_ = button.getElementHandle(createWorldMenu.defaultsButtonId)
-    local generateH_ = button.getElementHandle(createWorldMenu.generateButtonId)
-
-    UI.setPosition(backH_,     backX, btnY)
-    UI.setPosition(defaultsH_, defaultsX, btnY)
-    UI.setPosition(generateH_, generateX, btnY)
+    UI.setPosition(button.getElementHandle(createWorldMenu.backButtonId), backX, btnY)
+    UI.setPosition(button.getElementHandle(createWorldMenu.defaultsButtonId), defaultsX, btnY)
+    UI.setPosition(button.getElementHandle(createWorldMenu.generateButtonId), generateX, btnY)
     
-    UI.setZIndex(backH_,     Z_BUTTONS)
-    UI.setZIndex(defaultsH_, Z_BUTTONS)
-    UI.setZIndex(generateH_, Z_BUTTONS)
+    UI.setZIndex(button.getElementHandle(createWorldMenu.backButtonId), Z_BUTTONS)
+    UI.setZIndex(button.getElementHandle(createWorldMenu.defaultsButtonId), Z_BUTTONS)
+    UI.setZIndex(button.getElementHandle(createWorldMenu.generateButtonId), Z_BUTTONS)
+end
+
+-- Build the "done" button set: [Back] [Defaults] [Regenerate]     [Continue]
+function createWorldMenu.buildButtons_done()
+    createWorldMenu.destroyDynamicButtons()
+
+    local L = createWorldMenu.btnLayout
+    local uiscale = L.uiscale
+    local s = L.s
+
+    createWorldMenu.backButtonId = createWorldMenu.trackButton(button.new({
+        name       = "back_btn",
+        text       = "Back",
+        width      = createWorldMenu.baseSizes.btnWidth,
+        height     = createWorldMenu.baseSizes.btnHeight,
+        fontSize   = createWorldMenu.baseSizes.fontSize,
+        uiscale    = uiscale,
+        page       = createWorldMenu.page,
+        font       = createWorldMenu.menuFont,
+        textureSet = createWorldMenu.buttonTexSet,
+        bgColor    = {1.0, 1.0, 1.0, 1.0},
+        textColor  = {0.0, 0.0, 0.0, 1.0},
+        zIndex     = Z_BUTTONS,
+        onClick = function(id, name)
+            createWorldMenu.onBack()
+        end,
+    }))
+
+    createWorldMenu.defaultsButtonId = createWorldMenu.trackButton(button.new({
+        name       = "defaults_btn",
+        text       = "Defaults",
+        width      = createWorldMenu.baseSizes.btnWidth,
+        height     = createWorldMenu.baseSizes.btnHeight,
+        fontSize   = createWorldMenu.baseSizes.fontSize,
+        uiscale    = uiscale,
+        page       = createWorldMenu.page,
+        font       = createWorldMenu.menuFont,
+        textureSet = createWorldMenu.buttonTexSet,
+        bgColor    = {1.0, 1.0, 1.0, 1.0},
+        textColor  = {0.0, 0.0, 0.0, 1.0},
+        zIndex     = Z_BUTTONS,
+        onClick = function(id, name)
+            createWorldMenu.onDefaults()
+        end,
+    }))
+
+    createWorldMenu.regenerateButtonId = createWorldMenu.trackButton(button.new({
+        name       = "regenerate_btn",
+        text       = "Regenerate",
+        width      = createWorldMenu.baseSizes.btnWidth,
+        height     = createWorldMenu.baseSizes.btnHeight,
+        fontSize   = createWorldMenu.baseSizes.fontSize,
+        uiscale    = uiscale,
+        page       = createWorldMenu.page,
+        font       = createWorldMenu.menuFont,
+        textureSet = createWorldMenu.buttonTexSet,
+        bgColor    = {0.8, 0.6, 0.1, 1.0},
+        textColor  = {1.0, 1.0, 1.0, 1.0},
+        zIndex     = Z_BUTTONS,
+        onClick = function(id, name)
+            createWorldMenu.onRegenerate()
+        end,
+    }))
+
+    createWorldMenu.continueButtonId = createWorldMenu.trackButton(button.new({
+        name       = "continue_btn",
+        text       = "Continue",
+        width      = createWorldMenu.baseSizes.generateBtnWidth,
+        height     = createWorldMenu.baseSizes.btnHeight,
+        fontSize   = createWorldMenu.baseSizes.fontSize,
+        uiscale    = uiscale,
+        page       = createWorldMenu.page,
+        font       = createWorldMenu.menuFont,
+        textureSet = createWorldMenu.buttonTexSet,
+        bgColor    = {0.2, 0.8, 0.2, 1.0},
+        textColor  = {1.0, 1.0, 1.0, 1.0},
+        zIndex     = Z_BUTTONS,
+        onClick = function(id, name)
+            createWorldMenu.onContinue()
+        end,
+    }))
+
+    -- Layout: [Back] [Defaults] [Regenerate]     [Continue]
+    local backW, backH = button.getSize(createWorldMenu.backButtonId)
+    local defaultsW, _ = button.getSize(createWorldMenu.defaultsButtonId)
+    local regenW, _ = button.getSize(createWorldMenu.regenerateButtonId)
+    local contW, _ = button.getSize(createWorldMenu.continueButtonId)
+    
+    local bottomPad = math.floor(100 * uiscale)
+    local btnY = L.panelY + L.panelHeight - bottomPad + (bottomPad - backH) / 2
+    
+    local backX = L.panelX + L.bounds.x
+    local defaultsX = backX + backW + s.btnSpacing
+    local regenX = defaultsX + defaultsW + s.btnSpacing
+    local contX = L.panelX + L.bounds.x + L.bounds.width - contW
+
+    UI.setPosition(button.getElementHandle(createWorldMenu.backButtonId), backX, btnY)
+    UI.setPosition(button.getElementHandle(createWorldMenu.defaultsButtonId), defaultsX, btnY)
+    UI.setPosition(button.getElementHandle(createWorldMenu.regenerateButtonId), regenX, btnY)
+    UI.setPosition(button.getElementHandle(createWorldMenu.continueButtonId), contX, btnY)
+    
+    UI.setZIndex(button.getElementHandle(createWorldMenu.backButtonId), Z_BUTTONS)
+    UI.setZIndex(button.getElementHandle(createWorldMenu.defaultsButtonId), Z_BUTTONS)
+    UI.setZIndex(button.getElementHandle(createWorldMenu.regenerateButtonId), Z_BUTTONS)
+    UI.setZIndex(button.getElementHandle(createWorldMenu.continueButtonId), Z_BUTTONS)
+end
+
+-- Destroy only the dynamic bottom buttons (not the whole UI)
+function createWorldMenu.destroyDynamicButtons()
+    local function destroyAndUntrack(id)
+        if not id then return end
+        -- Delete the UI element from the scene so it actually disappears
+        local handle = button.getElementHandle(id)
+        if handle then
+            UI.deleteElement(handle)
+        end
+        button.destroy(id)
+        -- Remove from ownedButtons
+        for i = #createWorldMenu.ownedButtons, 1, -1 do
+            if createWorldMenu.ownedButtons[i] == id then
+                table.remove(createWorldMenu.ownedButtons, i)
+                break
+            end
+        end
+    end
+
+    destroyAndUntrack(createWorldMenu.backButtonId)
+    destroyAndUntrack(createWorldMenu.defaultsButtonId)
+    destroyAndUntrack(createWorldMenu.generateButtonId)
+    destroyAndUntrack(createWorldMenu.regenerateButtonId)
+    destroyAndUntrack(createWorldMenu.continueButtonId)
+
+    createWorldMenu.backButtonId       = nil
+    createWorldMenu.defaultsButtonId   = nil
+    createWorldMenu.generateButtonId   = nil
+    createWorldMenu.regenerateButtonId = nil
+    createWorldMenu.continueButtonId   = nil
 end
 
 -----------------------------------------------------------
 -- Button handlers
 -----------------------------------------------------------
+
+function createWorldMenu.onBack()
+    -- If a world was generated but user goes back, destroy it
+    if worldManager.isActive() then
+        worldManager.destroyWorld()
+    end
+    createWorldMenu.genState = GEN_IDLE
+    createWorldMenu.clearLog()
+    if createWorldMenu.showMenuCallback then
+        createWorldMenu.showMenuCallback("main")
+    end
+end
 
 function createWorldMenu.onDefaults()
     engine.logInfo("Loading create world defaults...")
@@ -522,6 +791,8 @@ function createWorldMenu.onDefaults()
         worldSize  = "128",
         plateCount = "7",
     }
+    createWorldMenu.genState = GEN_IDLE
+    createWorldMenu.clearLog()
     createWorldMenu.createUI()
     if createWorldMenu.page then UI.showPage(createWorldMenu.page) end
 end
@@ -547,7 +818,12 @@ function createWorldMenu.onGenerateWorld()
         .. " size=" .. tostring(sizeNum)
         .. " plates=" .. tostring(plateNum))
 
-    -- Store params on worldView so it uses them when creating the world
+    -- Destroy any previous world
+    if worldManager.isActive() then
+        worldManager.destroyWorld()
+    end
+
+    -- Store params on worldView so textures get wired up
     local worldView = require("scripts.world_view")
     worldView.worldParams = {
         seed = seedNum,
@@ -556,8 +832,58 @@ function createWorldMenu.onGenerateWorld()
         worldName = p.worldName,
     }
 
+    -- Kick off generation (async on world thread)
+    createWorldMenu.genState = GEN_RUNNING
+    createWorldMenu.genElapsed = 0
+    createWorldMenu.clearLog()
+    createWorldMenu.setStatus("Generating world...")
+    createWorldMenu.addLogLine("Seed: 0x" .. (p.seed ~= "" and p.seed or "0"))
+    createWorldMenu.addLogLine("Size: " .. tostring(sizeNum))
+    createWorldMenu.addLogLine("Plates: " .. tostring(plateNum))
+    createWorldMenu.addLogLine("")
+
+    -- Actually trigger world creation via worldView
+    -- (worldView handles texture loading + worldManager.createWorld)
+    worldView.startGeneration()
+end
+
+function createWorldMenu.onRegenerate()
+    -- Reset and generate again with current (possibly edited) params
+    createWorldMenu.onGenerateWorld()
+end
+
+function createWorldMenu.onContinue()
+    -- Transition to world view
     if createWorldMenu.showMenuCallback then
         createWorldMenu.showMenuCallback("world_view")
+    end
+end
+
+-----------------------------------------------------------
+-- Update (called every frame from ui_manager)
+-----------------------------------------------------------
+
+function createWorldMenu.update(dt)
+    if createWorldMenu.genState == GEN_RUNNING then
+        createWorldMenu.genElapsed = createWorldMenu.genElapsed + dt
+
+        -- Poll for completion: worldManager.isActive() becomes true
+        -- once the world thread finishes WorldInit + WorldShow
+        if worldManager.isActive() then
+            createWorldMenu.genState = GEN_DONE
+            local elapsed = string.format("%.1f", createWorldMenu.genElapsed)
+            createWorldMenu.setStatus("World generated! (" .. elapsed .. "s)")
+            createWorldMenu.addLogLine("Generation complete.")
+
+            -- Swap buttons: Generate → Regenerate + Continue
+            createWorldMenu.buildButtons_done()
+
+            engine.logInfo("World generation complete in " .. elapsed .. "s")
+        else
+            -- Animate status dots
+            local dots = string.rep(".", (math.floor(createWorldMenu.genElapsed * 3) % 4))
+            createWorldMenu.setStatus("Generating world" .. dots)
+        end
     end
 end
 

@@ -207,9 +207,6 @@ function uiManager.update(dt)
     if dropdown then
         dropdown.update(dt)
     end
-    if randbox then
-        randbox.update(dt)
-    end
     
     if worldManager then
         worldManager.update(dt)
@@ -217,6 +214,11 @@ function uiManager.update(dt)
     
     if worldView then
         worldView.update(dt)
+    end
+
+    -- Create world menu update (generation polling)
+    if createWorldMenu then
+        createWorldMenu.update(dt)
     end
 
     -- slider drag detection

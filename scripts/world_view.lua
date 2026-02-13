@@ -54,6 +54,10 @@ worldView.textures = {
 worldView.texturesNeeded = 0
 worldView.texturesLoadedCount = 0
 
+-- Whether we've been asked to generate (from create_world_menu)
+-- but are still waiting for textures to load
+worldView.pendingGeneration = false
+
 -----------------------------------------------------------
 -- Init
 -----------------------------------------------------------
@@ -137,12 +141,40 @@ function worldView.onAssetLoaded(assetType, handle, path)
     engine.logInfo("World textures: " .. worldView.texturesLoadedCount 
         .. "/" .. worldView.texturesNeeded .. " loaded")
     
-    -- Only create world once ALL textures are loaded
+    -- Check if all textures are now loaded
     if worldView.texturesLoadedCount >= worldView.texturesNeeded then
+        -- If showing world view directly, create the world
         if worldView.visible then
             engine.logInfo("All world textures loaded, creating world...")
             worldView.createWorld()
         end
+        -- If create_world_menu asked us to generate while textures
+        -- were still loading, do it now
+        if worldView.pendingGeneration then
+            worldView.pendingGeneration = false
+            engine.logInfo("Pending generation triggered, creating world...")
+            worldView.createWorld()
+        end
+    end
+end
+
+-----------------------------------------------------------
+-- Start Generation (called from create_world_menu)
+--
+-- Kicks off world creation without switching screens.
+-- The create_world_menu polls worldManager.isActive()
+-- to know when it's done.
+-----------------------------------------------------------
+
+function worldView.startGeneration()
+    if worldView.texturesLoadedCount >= worldView.texturesNeeded then
+        -- Textures ready — generate immediately
+        worldView.createWorld()
+    else
+        -- Textures still loading — defer
+        worldView.pendingGeneration = true
+        engine.logInfo("World generation deferred, waiting for textures... ("
+            .. worldView.texturesLoadedCount .. "/" .. worldView.texturesNeeded .. ")")
     end
 end
 
@@ -239,7 +271,11 @@ function worldView.show()
     worldView.visible = true
     UI.showPage(worldView.page)
     
-    if worldView.texturesLoadedCount >= worldView.texturesNeeded then
+    -- If world is already active (generated from create_world_menu),
+    -- just show it. Otherwise create it.
+    if worldManager.isActive() then
+        worldManager.showWorld()
+    elseif worldView.texturesLoadedCount >= worldView.texturesNeeded then
         worldView.createWorld()
     else
         engine.logInfo("World view shown, waiting for textures... ("
