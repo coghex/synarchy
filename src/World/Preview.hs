@@ -28,50 +28,29 @@ data PreviewImage = PreviewImage
 --
 -- The zoom cache is in grid-space chunk coordinates (ccx, ccy).
 -- The isometric world's screen axes are rotated 45° from grid axes:
---   screen-X (east-west)   ∝ (ccx - ccy)
---   screen-Y (north-south) ∝ (ccx + ccy)
+--   screen-X (east-west)   ∝ (ccx - ccy)  — wraps cylindrically
+--   screen-Y (north-south) ∝ (ccx + ccy)  — bounded by glacier
 --
--- We rotate into screen-aligned coordinates so the preview
--- looks like the zoomed-out map the player sees in-game,
--- rather than a 45°-tilted diamond.
+-- Image dimensions = worldSize × worldSize
+-- Background is transparent black (areas beyond the map).
 -----------------------------------------------------------
 
 buildPreviewImage ∷ WorldGenParams → V.Vector ZoomChunkEntry → PreviewImage
 buildPreviewImage params cache =
     let worldSize = wgpWorldSize params
-        halfSize  = worldSize `div` 2
-
-        -- Screen-aligned coordinates:
-        --   u = ccx - ccy  (east-west, wraps with period worldSize)
-        --   v = ccx + ccy  (north-south, bounded by glacier)
-        --
-        -- The world wraps cylindrically in X (grid-space ccx).
-        -- In screen-aligned space, this means u wraps with period worldSize.
-        -- Image width = worldSize (one full wrap around the cylinder).
-        --
-        -- The north-south range v = ccx + ccy spans [-2*halfSize+1 .. 2*halfSize-1]
-        -- but isBeyondGlacier clips to |v*chunkSize| <= halfTiles,
-        -- so the actual populated range is roughly [-worldSize .. worldSize].
-        -- We use worldSize for height too (matching the playable area).
         imgW      = worldSize
         imgH      = worldSize
         totalBytes = imgW * imgH * 4
 
-        -- v offset: v ranges from roughly -worldSize to +worldSize
-        -- but the playable area (after glacier clipping) fits in worldSize rows.
-        -- Center it: py = (v + worldSize) / 2, clamped to [0, imgH)
-        vOffset   = worldSize `div` 2
-
         pixelData = unsafePerformIO $ do
             fptr ← BSI.mallocByteString totalBytes
-            -- Fill with ocean blue default
             withForeignPtr fptr $ \ptr → do
+                -- Fill with transparent black (beyond-the-map areas)
                 forM_ [0 .. imgW * imgH - 1] $ \i → do
-                    let (r, g, b, a) = oceanColor (-5)
-                    pokeByteOff ptr (i * 4 + 0) r
-                    pokeByteOff ptr (i * 4 + 1) g
-                    pokeByteOff ptr (i * 4 + 2) b
-                    pokeByteOff ptr (i * 4 + 3) a
+                    pokeByteOff ptr (i * 4 + 0) (0 ∷ Word8)
+                    pokeByteOff ptr (i * 4 + 1) (0 ∷ Word8)
+                    pokeByteOff ptr (i * 4 + 2) (0 ∷ Word8)
+                    pokeByteOff ptr (i * 4 + 3) (255 ∷ Word8)
 
                 -- Paint each cache entry
                 V.forM_ cache $ \entry → do
@@ -92,7 +71,7 @@ buildPreviewImage params cache =
                     when (px >= 0 ∧ px < imgW ∧ py >= 0 ∧ py < imgH) $ do
                         let matId = zceTexIndex entry
                             elev  = zceElev entry
-                            (r, g, b, a) = materialColor matId elev
+                            (r, g, b, a) = tileColor matId elev
                             idx = (py * imgW + px) * 4
                         pokeByteOff ptr (idx + 0) r
                         pokeByteOff ptr (idx + 1) g
@@ -104,70 +83,92 @@ buildPreviewImage params cache =
     in PreviewImage imgW imgH pixelData
 
 -----------------------------------------------------------
--- Material → Color Mapping
+-- Tile Color
+--
+-- Ocean detection: the zoom cache stores material + elevation.
+-- Ocean tiles keep their plate material (granite/diorite/gabbro)
+-- but have deeply negative elevation from the ocean plate's
+-- baseElev (-6000 to -3000) plus boundary effects.
+-- We treat any non-special material with elev < 0 as ocean.
 -----------------------------------------------------------
 
-materialColor ∷ Word8 → Int → (Word8, Word8, Word8, Word8)
-materialColor matId elev
-    -- Ocean: elevation below sea level
-    | elev < 0  = oceanColor elev
-    | otherwise = case matId of
-        -- Igneous intrusive
-        1   → elevTint ( 160, 140, 130 ) elev   -- granite: grey-brown
-        2   → elevTint ( 180, 180, 175 ) elev   -- diorite: light grey
-        3   → elevTint (  90,  90,  95 ) elev   -- gabbro: dark grey
-
-        -- Igneous extrusive
-        4   → elevTint (  60,  60,  65 ) elev   -- basalt: very dark
-        5   → elevTint (  30,  25,  35 ) elev   -- obsidian: near black
-
-        -- Sedimentary
-        10  → elevTint ( 210, 190, 140 ) elev   -- sandstone: sandy
-        11  → elevTint ( 200, 200, 180 ) elev   -- limestone: pale
-        12  → elevTint ( 130, 120, 110 ) elev   -- shale: dark brown
-
-        -- Impact
-        20  → elevTint ( 100, 110, 100 ) elev   -- impactite: dark green-grey
-
-        -- Meteorite minerals
-        30  → elevTint ( 140, 120, 100 ) elev   -- iron: rusty
-        31  → elevTint ( 120, 150,  80 ) elev   -- olivine: olive green
-        32  → elevTint (  80, 100,  70 ) elev   -- pyroxene: dark green
-        33  → elevTint ( 180, 170, 155 ) elev   -- feldspar: pale tan
-
-        -- Special
-        100 → ( 220, 100,  30, 255 )            -- lava: orange-red
-        250 → glacierColor elev                  -- glacier: white-blue
-
-        -- Unknown
-        _   → elevTint ( 150, 140, 130 ) elev
-
--- | Tint a base color by elevation (higher = brighter, capped)
-elevTint ∷ (Int, Int, Int) → Int → (Word8, Word8, Word8, Word8)
-elevTint (br, bg, bb) elev =
-    let shift = clamp (-40) 60 (elev * 2)
-        r = clamp 0 255 (br + shift)
-        g = clamp 0 255 (bg + shift)
-        b = clamp 0 255 (bb + shift)
-    in (fromIntegral r, fromIntegral g, fromIntegral b, 255)
+tileColor ∷ Word8 → Int → (Word8, Word8, Word8, Word8)
+tileColor matId elev
+    -- Glacier: always render as ice regardless of elevation
+    | matId ≡ 250 = glacierColor elev
+    -- Lava: always orange-red
+    | matId ≡ 100 = (220, 100, 30, 255)
+    -- Ocean: negative elevation with a normal rock material
+    | elev < 0    = oceanColor elev
+    -- Land: positive elevation, color by material
+    | otherwise   = landColor matId elev
 
 -- | Ocean color: deeper = darker blue
 oceanColor ∷ Int → (Word8, Word8, Word8, Word8)
 oceanColor elev =
-    let depth = abs elev
-        r = clamp 0 255 (40  - depth * 2)
-        g = clamp 0 255 (80  - depth * 2)
-        b = clamp 0 255 (180 - depth * 1)
-    in (fromIntegral r, fromIntegral g, fromIntegral b, 255)
+    let depth = min 6000 (abs elev)  -- clamp for very deep trenches
+        -- Normalize depth to 0.0-1.0 range (6000 = max expected depth)
+        t = fromIntegral depth / 6000.0 ∷ Float
+        r = clampByte $ round (70.0  - 50.0 * t)
+        g = clampByte $ round (110.0 - 70.0 * t)
+        b = clampByte $ round (200.0 - 40.0 * t)
+    in (r, g, b, 255)
 
--- | Glacier: white with slight blue tint at higher elevations
+-- | Glacier: white with slight blue tint
 glacierColor ∷ Int → (Word8, Word8, Word8, Word8)
 glacierColor elev =
     let shift = clamp 0 40 (elev `div` 2)
-        r = clamp 180 255 (230 + shift `div` 2)
-        g = clamp 180 255 (235 + shift `div` 2)
-        b = 255
-    in (fromIntegral r, fromIntegral g, fromIntegral b, 255)
+        r = clampByte (220 + shift `div` 2)
+        g = clampByte (225 + shift `div` 2)
+        b = 245
+    in (r, g, b, 255)
+
+-- | Land color by material ID and elevation
+landColor ∷ Word8 → Int → (Word8, Word8, Word8, Word8)
+landColor matId elev = case matId of
+    -- Igneous intrusive
+    1   → elevTint (160, 140, 130) elev   -- granite: grey-brown
+    2   → elevTint (180, 180, 175) elev   -- diorite: light grey
+    3   → elevTint ( 90,  90,  95) elev   -- gabbro: dark grey
+
+    -- Igneous extrusive
+    4   → elevTint ( 60,  60,  65) elev   -- basalt: very dark
+    5   → elevTint ( 30,  25,  35) elev   -- obsidian: near black
+
+    -- Sedimentary
+    10  → elevTint (210, 190, 140) elev   -- sandstone: sandy
+    11  → elevTint (200, 200, 180) elev   -- limestone: pale
+    12  → elevTint (130, 120, 110) elev   -- shale: dark brown
+
+    -- Impact
+    20  → elevTint (100, 110, 100) elev   -- impactite: dark green-grey
+
+    -- Meteorite minerals
+    30  → elevTint (140, 120, 100) elev   -- iron: rusty
+    31  → elevTint (120, 150,  80) elev   -- olivine: olive green
+    32  → elevTint ( 80, 100,  70) elev   -- pyroxene: dark green
+    33  → elevTint (180, 170, 155) elev   -- feldspar: pale tan
+
+    -- Unknown material
+    _   → elevTint (150, 140, 130) elev
+
+-- | Tint a base color by elevation (higher = brighter, capped)
+elevTint ∷ (Int, Int, Int) → Int → (Word8, Word8, Word8, Word8)
+elevTint (br, bg, bb) elev =
+    let -- Scale elevation to a brightness shift
+        -- Low land (~0-100) gets slight darkening, high (1000+) gets brightening
+        shift = clamp (-30) 60 (elev `div` 20)
+        r = clampByte (br + shift)
+        g = clampByte (bg + shift)
+        b = clampByte (bb + shift)
+    in (r, g, b, 255)
+
+-- | Clamp an Int to valid byte range
+clampByte ∷ Int → Word8
+clampByte x
+    | x < 0     = 0
+    | x > 255   = 255
+    | otherwise  = fromIntegral x
 
 -- | Clamp a value to [lo, hi]
 clamp ∷ Int → Int → Int → Int
