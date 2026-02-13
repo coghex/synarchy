@@ -21,7 +21,7 @@ import World.Types
 import World.Generate
 import World.Grid (zoomFadeEnd)
 import World.Geology (buildTimeline, logTimeline)
-import World.Geology.Log (logTimeline)
+import World.Geology.Log (formatTimeline, formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Preview (buildPreviewImage, PreviewImage(..))
 import World.ZoomMap (buildZoomCache)
@@ -221,7 +221,7 @@ handleWorldCommand env logger cmd = do
             
             worldState ← emptyWorldState
             
-            -- Build geological timeline
+            -- Log the geological timeline to both stdout and Lua panel
             sendGenLog env "Building geological timeline..."
             let timeline = buildTimeline seed worldSize placeCount
                 params = defaultWorldGenParams
@@ -230,20 +230,18 @@ handleWorldCommand env logger cmd = do
                     , wgpPlateCount  = placeCount
                     , wgpGeoTimeline = timeline
                     }
-            
-            -- Log the geological timeline
-            logTimeline (logInfo logger CatWorld) timeline
 
-            -- Report timeline summary to Lua
-            let periodCount = length (gtPeriods timeline)
-                featureCount = length (gtFeatures timeline)
-            sendGenLog env $ "Timeline: " <> T.pack (show periodCount)
-                <> " periods, " <> T.pack (show featureCount) <> " features"
+            -- Log plates first (not stored in timeline, computed from seed)
+            let plateLines = formatPlatesSummary seed worldSize placeCount
+            forM_ plateLines $ \line → do
+                logInfo logger CatWorld line
+                sendGenLog env line
 
-            -- Report each period name
-            forM_ (gtPeriods timeline) $ \gp →
-                sendGenLog env $ "  " <> gpName gp <> " ("
-                    <> T.pack (show (length (gpEvents gp))) <> " events)"
+            -- Log the full chronological timeline
+            let timelineLines = formatTimeline timeline
+            forM_ timelineLines $ \line → do
+                logInfo logger CatWorld line
+                sendGenLog env line
 
             -- Store gen params for on-demand chunk loading
             writeIORef (wsGenParamsRef worldState) (Just params)

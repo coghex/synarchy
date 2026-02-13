@@ -67,11 +67,13 @@ buildPrimordialBombardment seed worldSize plates tbs =
     let craterSeed = seed `xor` 0xDEADBEEF
         craters = generateCraters craterSeed worldSize plates CraterEra_Primordial
         gs = tbsGeoState tbs
+        currentDate = gdMillionYears (gsDate gs)
         gs' = gs { gsDate = advanceGeoDate 500.0 (gsDate gs) }
         period = GeoPeriod
             { gpName     = "Primordial Bombardment"
             , gpScale    = Eon
             , gpDuration = 500
+            , gpDate     = currentDate
             , gpEvents   = map CraterEvent craters
             , gpErosion  = ErosionParams 0.8 0.3 0.6 0.4 0.1 (seed + 1000)
             }
@@ -81,8 +83,6 @@ buildPrimordialBombardment seed worldSize plates tbs =
 -- Eon
 -----------------------------------------------------------
 
--- | The single eon of geological development.
---   Calls buildEra recursively, min 2, max 4.
 buildEon ∷ Word64 → Int → [TectonicPlate]
          → TimelineBuildState → TimelineBuildState
 buildEon seed worldSize plates tbs =
@@ -97,7 +97,6 @@ buildEraLoop seed worldSize plates eraIdx minEras maxEras tbs
         let eraSeed = seed `xor` (fromIntegral eraIdx * 0xA1B2C3D4)
             s1 = buildEra eraSeed worldSize plates eraIdx tbs
 
-            -- Roll for continuation after meeting minimum
             roll = hashToFloatGeo (hashGeo eraSeed eraIdx 300)
             continue = eraIdx < (minEras - 1) ∨ roll < 0.5
         in if continue
@@ -108,33 +107,26 @@ buildEraLoop seed worldSize plates eraIdx minEras maxEras tbs
 -- Era
 -----------------------------------------------------------
 
--- | An era of geological history.
---   Era-level events: flood basalts, massive impacts,
---   continental-scale changes.
---   Then recurses into periods.
 buildEra ∷ Word64 → Int → [TectonicPlate] → Int
          → TimelineBuildState → TimelineBuildState
 buildEra seed worldSize plates eraIdx tbs =
     let eraSeed = seed `xor` (fromIntegral eraIdx * 0xE1A2)
         gs = tbsGeoState tbs
+        currentDate = gdMillionYears (gsDate gs)
 
-        -- Era-level events
-        -- TODO: flood basalts, massive impacts, LIPs
-        -- For now, placeholder: just advance date and modify state
         eraEvents = []
 
-        -- Era events get their own GeoPeriod
         gs' = gs { gsDate = advanceGeoDate 100.0 (gsDate gs) }
         eraPeriod = GeoPeriod
             { gpName     = "Era " <> T.pack (show eraIdx) <> " Events"
             , gpScale    = Era
             , gpDuration = 100
+            , gpDate     = currentDate
             , gpEvents   = eraEvents
             , gpErosion  = ErosionParams 0.7 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx)
             }
         s1 = addPeriod eraPeriod (tbs { tbsGeoState = gs' })
 
-        -- Recurse into periods
         s2 = buildPeriodLoop eraSeed worldSize plates 0 2 4 s1
 
     in s2
@@ -158,25 +150,16 @@ buildPeriodLoop seed worldSize plates periodIdx minPeriods maxPeriods tbs
            then buildPeriodLoop seed worldSize plates (periodIdx + 1) minPeriods maxPeriods s1
            else s1
 
--- | A period of geological history.
---   Period-level events: volcanism, tectonic changes,
---   volcanic evolution.
---   Then recurses into epochs.
 buildPeriod ∷ Word64 → Int → [TectonicPlate] → Int
             → TimelineBuildState → TimelineBuildState
 buildPeriod seed worldSize plates periodIdx tbs =
     let periodSeed = seed `xor` (fromIntegral periodIdx * 0xF1E2)
         gs = tbsGeoState tbs
 
-        -- Period-level events: volcanism
-        -- Which volcanic features to generate depends on the period
-        -- and GeoState (e.g., high CO2 = more volcanic activity)
         s1 = applyPeriodVolcanism periodSeed worldSize plates periodIdx tbs
 
-        -- Volcanic evolution of existing features
         s2 = applyVolcanicEvolution periodSeed s1
 
-        -- Recurse into epochs
         s3 = buildEpochLoop periodSeed worldSize plates 0 2 6 s2
 
     in s3
@@ -188,31 +171,25 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs =
         volcSeed = seed `xor` 0xB45A1F1C
         pIdx = tbsPeriodIdx tbs
         activityLevel = gsCO2 gs
+        currentDate = gdMillionYears (gsDate gs)
 
-        -- Shield volcanoes: rare, only when activity is high
         (shields, tbs1) = generateAndRegisterN 8 2 volcSeed worldSize plates
                               VolcanoEra_Hotspot generateShieldVolcano pIdx tbs
 
-        -- Fissures: 1-2 per period
         (fissures, tbs2) = generateAndRegisterN 6 2 (volcSeed + 1) worldSize plates
                                VolcanoEra_Boundary generateFissure pIdx tbs1
 
-        -- Cinder cones: 2-3 per period
         (cinders, tbs3) = generateAndRegisterN 10 3 (volcSeed + 2) worldSize plates
                               VolcanoEra_Boundary generateCinderCone pIdx tbs2
 
-        -- Hydrothermal vents: 1-2 per period
         (vents, tbs4) = generateAndRegisterN 6 2 (volcSeed + 3) worldSize plates
                             VolcanoEra_Boundary generateHydrothermalVent pIdx tbs3
 
-        -- Supervolcano: only attempt on the first period,
-        -- guarantee at least one
         hasSuperVolcano = any isSuperVolcano (tbsFeatures tbs4)
         (supers, tbs5) = if periodIdx ≡ 0 ∨ (periodIdx ≡ 1 ∧ not hasSuperVolcano)
             then let (s, t) = generateAndRegisterN 12 1 (volcSeed + 4) worldSize plates
                                   VolcanoEra_Hotspot generateSuperVolcano pIdx tbs4
                  in if null s ∧ not hasSuperVolcano
-                    -- Force one: just pick a random land position and make it work
                     then forceOneSuperVolcano (volcSeed + 5) worldSize plates pIdx t
                     else (s, t)
             else ([], tbs4)
@@ -228,25 +205,24 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs =
             { gpName     = "Volcanism " <> T.pack (show periodIdx)
             , gpScale    = Period
             , gpDuration = 50
+            , gpDate     = currentDate
             , gpEvents   = events
             , gpErosion  = ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 4000)
             }
     in addPeriod period (tbs5 { tbsGeoState = gs' })
 
--- | Check if a feature is a supervolcano.
 isSuperVolcano ∷ PersistentFeature → Bool
 isSuperVolcano pf = case pfFeature pf of
     SuperVolcano _ → True
     _              → False
 
--- | Force-place a supervolcano by trying many positions.
 forceOneSuperVolcano ∷ Word64 → Int → [TectonicPlate] → Int
                      → TimelineBuildState
                      → ([PersistentFeature], TimelineBuildState)
 forceOneSuperVolcano seed worldSize plates periodIdx tbs =
     let halfTiles = (worldSize * 16) `div` 2
         go attempt
-            | attempt ≥ 100 = ([], tbs)  -- give up after 100 attempts
+            | attempt ≥ 100 = ([], tbs)
             | otherwise =
                 let h1 = hashGeo seed attempt 170
                     h2 = hashGeo seed attempt 171
@@ -269,11 +245,11 @@ forceOneSuperVolcano seed worldSize plates periodIdx tbs =
                         in ([pf], tbs'')
     in go 0
 
--- | Evolve existing volcanic features.
 applyVolcanicEvolution ∷ Word64 → TimelineBuildState → TimelineBuildState
 applyVolcanicEvolution seed tbs =
     let periodIdx = tbsPeriodIdx tbs
         evolSeed = seed `xor` 0xEF01F100
+        currentDate = gdMillionYears (gsDate (tbsGeoState tbs))
 
         (events, tbs1) = foldl' (evolveOneFeature evolSeed periodIdx)
                                 ([], tbs) (tbsFeatures tbs)
@@ -282,6 +258,7 @@ applyVolcanicEvolution seed tbs =
             { gpName     = "Volcanic Evolution"
             , gpScale    = Period
             , gpDuration = 30
+            , gpDate     = currentDate
             , gpEvents   = events
             , gpErosion  = ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 5000)
             }
@@ -307,35 +284,28 @@ buildEpochLoop seed worldSize plates epochIdx minEpochs maxEpochs tbs
            then buildEpochLoop seed worldSize plates (epochIdx + 1) minEpochs maxEpochs s1
            else s1
 
--- | An epoch of geological history.
---   Epoch-level events: glaciation, major river erosion,
---   sea level changes.
---   Then recurses into ages.
 buildEpoch ∷ Word64 → Int → [TectonicPlate] → Int
            → TimelineBuildState → TimelineBuildState
 buildEpoch seed worldSize plates epochIdx tbs =
     let epochSeed = seed `xor` (fromIntegral epochIdx * 0xA1A2)
         gs = tbsGeoState tbs
+        currentDate = gdMillionYears (gsDate gs)
 
-        -- Epoch-level events: glaciation if temperature is low enough
-        -- TODO: glaciation events based on regional temperature
-        -- TODO: river system establishment
         epochEvents = []
 
         gs' = gs { gsDate = advanceGeoDate 20.0 (gsDate gs) }
 
-        -- Only emit a period if there are epoch-level events
         s1 = if null epochEvents then tbs { tbsGeoState = gs' }
              else let period = GeoPeriod
                           { gpName     = "Epoch " <> T.pack (show epochIdx)
                           , gpScale    = Epoch
                           , gpDuration = 20
+                          , gpDate     = currentDate
                           , gpEvents   = epochEvents
                           , gpErosion  = ErosionParams 0.6 0.7 0.3 0.2 0.4 (seed + 6000)
                           }
                   in addPeriod period (tbs { tbsGeoState = gs' })
 
-        -- Recurse into ages
         s2 = buildAgeLoop epochSeed worldSize plates 0 1 8 s1
 
     in s2
@@ -359,77 +329,58 @@ buildAgeLoop seed worldSize plates ageIdx minAges maxAges tbs
            then buildAgeLoop seed worldSize plates (ageIdx + 1) minAges maxAges s1
            else s1
 
--- | A single age — the finest granularity of the timeline.
---   Always has erosion. May have small discrete events.
---   Duration varies, which affects event probability.
 buildAge ∷ Word64 → Int → [TectonicPlate] → Int
          → TimelineBuildState → TimelineBuildState
 buildAge seed worldSize plates ageIdx tbs =
     let ageSeed = seed `xor` (fromIntegral ageIdx * 0xF0F1)
         gs = tbsGeoState tbs
+        currentDate = gdMillionYears (gsDate gs)
 
-        -- Determine age duration (millions of years)
-        -- Varies from 1 to 15 MY
         durationHash = hashGeo ageSeed ageIdx 610
         duration = 1.0 + hashToFloatGeo durationHash * 14.0 ∷ Float
 
-        -- Advance the date
         gs1 = gs { gsDate = advanceGeoDate duration (gsDate gs) }
 
-        -- Event generation, probability scaled by duration
-        -- Longer ages = more likely to have events
-
-        -- Meteorite impacts
-        -- Base rate: roughly 1 per 20 MY for the whole world
         meteoriteRoll = hashToFloatGeo (hashGeo ageSeed ageIdx 620)
         meteoriteChance = min 0.8 (duration / 20.0)
         meteorites = if meteoriteRoll < meteoriteChance
             then let craterSeed = ageSeed `xor` 0xBEEF
                      craters = generateCraters craterSeed worldSize plates CraterEra_Late
-                 -- Take just 1-2 craters for a single age impact
                  in take (hashToRangeGeo (hashGeo ageSeed ageIdx 621) 1 3)
                          (map CraterEvent craters)
             else []
 
-        -- Landslides
-        -- TODO: generate based on steep terrain + precipitation
         landslideRoll = hashToFloatGeo (hashGeo ageSeed ageIdx 630)
         landslideChance = duration / 10.0
         landslides = if landslideRoll < landslideChance
-            then []  -- TODO: generateLandslides
+            then []
             else []
 
-        -- Floods
         floodRoll = hashToFloatGeo (hashGeo ageSeed ageIdx 640)
         floodChance = duration / 20.0
         floods = if floodRoll < floodChance
-            then []  -- TODO: generateFloods
+            then []
             else []
 
         allEvents = meteorites <> landslides <> floods
 
-        -- CO2 slowly decays toward baseline through weathering
         gs2 = gs1 { gsCO2 = max 0.5 (gsCO2 gs1 - duration * 0.005) }
 
-        -- Erosion params derived from current GeoState
         erosion = erosionFromGeoState gs2 seed ageIdx
 
         period = GeoPeriod
             { gpName     = "Age " <> T.pack (show (tbsPeriodIdx tbs))
             , gpScale    = Age
             , gpDuration = round duration
+            , gpDate     = currentDate
             , gpEvents   = allEvents
             , gpErosion  = erosion
             }
     in addPeriod period (tbs { tbsGeoState = gs2 })
 
--- | Derive erosion parameters from current GeoState.
---   Higher CO2 = more chemical weathering.
---   This is where GeoState feeds into the per-tile application.
 erosionFromGeoState ∷ GeoState → Word64 → Int → ErosionParams
 erosionFromGeoState gs seed ageIdx =
     let co2 = gsCO2 gs
-        -- Higher CO2 increases chemical weathering
         chemical = min 1.0 (0.2 + (co2 - 1.0) * 0.3)
     in ErosionParams
         { epIntensity = 0.5

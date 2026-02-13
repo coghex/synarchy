@@ -361,6 +361,7 @@ data GeoPeriod = GeoPeriod
     { gpName       ∷ !Text
     , gpScale      ∷ !GeoScale
     , gpDuration   ∷ !Int          -- ^ Relative duration (arbitrary units)
+    , gpDate       ∷ !Float        -- ^ Date of period start
     , gpEvents     ∷ ![GeoEvent]
     , gpErosion    ∷ !ErosionParams
     } deriving (Show, Eq)
