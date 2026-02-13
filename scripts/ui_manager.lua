@@ -435,6 +435,12 @@ function uiManager.onScrollDown(elemHandle)
     return false
 end
 
+function uiManager.onLogPanelScroll(elemHandle)
+    -- This callback exists so the right panel is clickable and receives
+    -- scroll events. The actual scrolling is handled by onUIScroll.
+    return false
+end
+
 -------------------------------------------------------------
 --- Slider Clicks
 -------------------------------------------------------------

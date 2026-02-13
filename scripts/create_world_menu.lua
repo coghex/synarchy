@@ -451,6 +451,11 @@ function createWorldMenu.createRightPanel(panelX, panelY, bounds, contentStartY,
         uiscale    = uiscale,
     }))
     
+    -- Make the right panel clickable so it receives scroll events
+    local rightPanelHandle = panel.getBoxHandle(createWorldMenu.rightPanelId)
+    UI.setClickable(rightPanelHandle, true)
+    UI.setOnClick(rightPanelHandle, "onLogPanelScroll")
+    
     local rightBounds = panel.getContentBounds(createWorldMenu.rightPanelId)
 
     -- World preview image (upper portion)
@@ -523,7 +528,6 @@ function createWorldMenu.createRightPanel(panelX, panelY, bounds, contentStartY,
     end
 
     -- Create scrollbar for the log (hidden until needed)
-    -- Reserve width for the scrollbar on the right side of the log area
     local sbBtnSize = math.floor(24 * uiscale)
     local sbCapH    = math.floor(4 * uiscale)
     local sbTrackH  = math.max(math.floor(20 * uiscale),
@@ -658,30 +662,10 @@ function createWorldMenu.onScroll(elemHandle, dx, dy)
         return true
     end
 
-    -- Check if the element is one of the log labels
-    for _, lid in ipairs(createWorldMenu.logLabelIds) do
-        local lh = label.getElementHandle(lid)
-        if lh == elemHandle then return doScroll() end
-    end
-
-    -- Check status label
-    if createWorldMenu.statusLabelId then
-        local sh = label.getElementHandle(createWorldMenu.statusLabelId)
-        if sh == elemHandle then return doScroll() end
-    end
-
-    -- Check the right panel box itself
+    -- Check the right panel box itself (this is the clickable surface)
     if createWorldMenu.rightPanelId then
         local rh = panel.getBoxHandle(createWorldMenu.rightPanelId)
         if rh == elemHandle then return doScroll() end
-    end
-
-    -- Check all elements placed inside the right panel (preview sprite, etc.)
-    if createWorldMenu.rightPanelId then
-        local elems = panel.getElements(createWorldMenu.rightPanelId)
-        for _, eh in ipairs(elems) do
-            if eh == elemHandle then return doScroll() end
-        end
     end
 
     -- Check scrollbar elements
