@@ -108,7 +108,9 @@ generateAndRegisterN baseMaxAttempts baseMaxFeatures seed worldSize plates
 -- Feature Constructors (called by generateAndRegister)
 -----------------------------------------------------------
 
--- | Try to place a shield volcano. Requires land.
+-- | Shield volcanos should be large but not world-dominating.
+--   At worldSize=128 (2048 tiles), baseRadius 30-60 means
+--   a shield covers at most ~6% of world width.
 generateShieldVolcano ∷ Word64 → Int → [TectonicPlate]
                       → Int → Int → Maybe VolcanicFeature
 generateShieldVolcano seed worldSize plates gx gy =
@@ -118,11 +120,11 @@ generateShieldVolcano seed worldSize plates gx gy =
        else let h1 = hashGeo seed gx 80
                 h2 = hashGeo seed gy 81
                 h3 = hashGeo seed (gx + gy) 82
-                baseR  = hashToRangeGeo h1 60 120
-                peakH  = hashToRangeGeo h2 100 400
+                baseR  = hashToRangeGeo h1 30 60
+                peakH  = hashToRangeGeo h2 80 300
                 hasPit = hashToFloatGeo h3 > 0.5
-                pitR   = if hasPit then hashToRangeGeo (hashGeo seed gx 83) 3 8 else 0
-                pitD   = if hasPit then hashToRangeGeo (hashGeo seed gy 84) 20 60 else 0
+                pitR   = if hasPit then hashToRangeGeo (hashGeo seed gx 83) 2 5 else 0
+                pitD   = if hasPit then hashToRangeGeo (hashGeo seed gy 84) 15 40 else 0
             in Just $ ShieldVolcano ShieldParams
                 { shCenter     = GeoCoord gx gy
                 , shBaseRadius = baseR
@@ -132,7 +134,7 @@ generateShieldVolcano seed worldSize plates gx gy =
                 , shPitDepth   = pitD
                 }
 
--- | Try to place a cinder cone. Requires land.
+-- | Cinder cones are small. Keep these tight.
 generateCinderCone ∷ Word64 → Int → [TectonicPlate]
                    → Int → Int → Maybe VolcanicFeature
 generateCinderCone seed worldSize plates gx gy =
@@ -143,10 +145,10 @@ generateCinderCone seed worldSize plates gx gy =
                 h2 = hashGeo seed gy 91
                 h3 = hashGeo seed (gx + gy) 92
                 h4 = hashGeo seed (gx * gy) 93
-                baseR   = hashToRangeGeo h1 5 15
-                peakH   = hashToRangeGeo h2 50 200
-                craterR = hashToRangeGeo h3 2 (max 3 (baseR `div` 3))
-                craterD = hashToRangeGeo h4 10 (max 15 (peakH `div` 3))
+                baseR   = hashToRangeGeo h1 4 10
+                peakH   = hashToRangeGeo h2 30 120
+                craterR = hashToRangeGeo h3 1 (max 2 (baseR `div` 3))
+                craterD = hashToRangeGeo h4 8 (max 12 (peakH `div` 3))
             in Just $ CinderCone CinderConeParams
                 { ccCenter      = GeoCoord gx gy
                 , ccBaseRadius  = baseR
@@ -155,7 +157,7 @@ generateCinderCone seed worldSize plates gx gy =
                 , ccCraterDepth  = craterD
                 }
 
--- | Try to place a lava dome. Requires land, prefers convergent boundaries.
+-- | Lava domes: small-medium, steep.
 generateLavaDome ∷ Word64 → Int → [TectonicPlate]
                  → Int → Int → Maybe VolcanicFeature
 generateLavaDome seed worldSize plates gx gy =
@@ -164,15 +166,15 @@ generateLavaDome seed worldSize plates gx gy =
        then Nothing
        else let h1 = hashGeo seed gx 100
                 h2 = hashGeo seed gy 101
-                baseR = hashToRangeGeo h1 10 25
-                height = hashToRangeGeo h2 50 150
+                baseR = hashToRangeGeo h1 6 15
+                height = hashToRangeGeo h2 30 100
             in Just $ LavaDome LavaDomeParams
                 { ldCenter     = GeoCoord gx gy
                 , ldBaseRadius = baseR
                 , ldHeight     = height
                 }
 
--- | Try to place a caldera. Requires land.
+-- | Calderas: medium features.
 generateCaldera ∷ Word64 → Int → [TectonicPlate]
                 → Int → Int → Maybe VolcanicFeature
 generateCaldera seed worldSize plates gx gy =
@@ -184,10 +186,10 @@ generateCaldera seed worldSize plates gx gy =
                 h3 = hashGeo seed (gx + gy) 112
                 h4 = hashGeo seed (gx * gy) 113
                 h5 = hashGeo seed (abs gx + abs gy) 114
-                outerR  = hashToRangeGeo h1 30 80
+                outerR  = hashToRangeGeo h1 15 40
                 innerR  = hashToRangeGeo h2 (outerR `div` 2) (outerR * 3 `div` 4)
-                rimH    = hashToRangeGeo h3 30 120
-                floorD  = hashToRangeGeo h4 40 150
+                rimH    = hashToRangeGeo h3 20 80
+                floorD  = hashToRangeGeo h4 30 100
                 hasLake = hashToFloatGeo h5 > 0.6
             in Just $ Caldera CalderaParams
                 { caCenter      = GeoCoord gx gy
@@ -198,7 +200,7 @@ generateCaldera seed worldSize plates gx gy =
                 , caHasLake     = hasLake
                 }
 
--- | Try to place a fissure. Works on land or ocean divergent boundaries.
+-- | Fissures: shorter.
 generateFissure ∷ Word64 → Int → [TectonicPlate]
                 → Int → Int → Maybe VolcanicFeature
 generateFissure seed worldSize plates gx gy =
@@ -209,16 +211,15 @@ generateFissure seed worldSize plates gx gy =
              h3 = hashGeo seed (gx + gy) 122
              h4 = hashGeo seed (gx * gy) 123
              h5 = hashGeo seed (abs gx) 124
-             -- Fissure direction: random angle
              angle = hashToFloatGeo h1 * 2.0 * π
-             fissureLen = hashToRangeGeo h2 80 200
+             fissureLen = hashToRangeGeo h2 40 100
              halfLen = fromIntegral fissureLen / 2.0 ∷ Float
              ex = gx + round (halfLen * cos angle)
              ey = gy + round (halfLen * sin angle)
              sxCoord = gx - round (halfLen * cos angle)
              syCoord = gy - round (halfLen * sin angle)
-             width   = hashToRangeGeo h3 5 10
-             ridgeH  = hashToRangeGeo h4 20 80
+             width   = hashToRangeGeo h3 3 6
+             ridgeH  = hashToRangeGeo h4 15 50
              hasMagma = hashToFloatGeo h5 > 0.5
          in Just $ FissureVolcano FissureParams
              { fpStart       = GeoCoord sxCoord syCoord
@@ -228,8 +229,7 @@ generateFissure seed worldSize plates gx gy =
              , fpHasMagma    = hasMagma
              }
 
--- | Try to place a lava tube. Should be on the flank of an existing
---   shield volcano, but can also be standalone on basaltic terrain.
+-- | Lava tubes: shorter, subtler.
 generateLavaTube ∷ Word64 → Int → [TectonicPlate]
                  → Int → Int → Maybe VolcanicFeature
 generateLavaTube seed worldSize plates gx gy =
@@ -242,15 +242,15 @@ generateLavaTube seed worldSize plates gx gy =
                 h4 = hashGeo seed (gx * gy) 133
                 h5 = hashGeo seed (abs gx) 134
                 angle = hashToFloatGeo h1 * 2.0 * π
-                tubeLen = hashToRangeGeo h2 40 120
+                tubeLen = hashToRangeGeo h2 20 60
                 halfLen = fromIntegral tubeLen / 2.0 ∷ Float
                 ex = gx + round (halfLen * cos angle)
                 ey = gy + round (halfLen * sin angle)
                 sxCoord = gx - round (halfLen * cos angle)
                 syCoord = gy - round (halfLen * sin angle)
-                width = hashToRangeGeo h3 3 6
-                ridgeH = hashToRangeGeo h4 5 15
-                collapses = hashToRangeGeo h5 2 6
+                width = hashToRangeGeo h3 2 4
+                ridgeH = hashToRangeGeo h4 3 10
+                collapses = hashToRangeGeo h5 1 4
             in Just $ LavaTube LavaTubeParams
                 { ltStart        = GeoCoord sxCoord syCoord
                 , ltEnd          = GeoCoord ex ey
@@ -260,7 +260,8 @@ generateLavaTube seed worldSize plates gx gy =
                 , ltCollapseSeed = fromIntegral (gx * 31 + gy * 17) `xor` seed
                 }
 
--- | Try to place a supervolcano. Very rare. Requires land.
+-- | Super volcano: large but not absurd.
+--   Caldera 50-100, ejecta 120-250.
 generateSuperVolcano ∷ Word64 → Int → [TectonicPlate]
                      → Int → Int → Maybe VolcanicFeature
 generateSuperVolcano seed worldSize plates gx gy =
@@ -272,11 +273,11 @@ generateSuperVolcano seed worldSize plates gx gy =
                 h3 = hashGeo seed (gx + gy) 142
                 h4 = hashGeo seed (gx * gy) 143
                 h5 = hashGeo seed (abs gx) 144
-                calderaR = hashToRangeGeo h1 100 200
-                rimH     = hashToRangeGeo h2 20 60
-                floorD   = hashToRangeGeo h3 80 250
-                ejectaR  = hashToRangeGeo h4 250 500
-                ejectaD  = hashToRangeGeo h5 5 30
+                calderaR = hashToRangeGeo h1 50 100
+                rimH     = hashToRangeGeo h2 15 40
+                floorD   = hashToRangeGeo h3 60 180
+                ejectaR  = hashToRangeGeo h4 120 250
+                ejectaD  = hashToRangeGeo h5 3 20
             in Just $ SuperVolcano SuperVolcanoParams
                 { svCenter        = GeoCoord gx gy
                 , svCalderaRadius = calderaR
@@ -286,13 +287,13 @@ generateSuperVolcano seed worldSize plates gx gy =
                 , svEjectaDepth   = ejectaD
                 }
 
--- | Try to place a hydrothermal vent. Requires ocean floor.
+-- | Hydrothermal vents: unchanged, already tiny.
 generateHydrothermalVent ∷ Word64 → Int → [TectonicPlate]
                          → Int → Int → Maybe VolcanicFeature
 generateHydrothermalVent seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
     in if elev ≥ -100 ∨ isBeyondGlacier worldSize gx gy
-       then Nothing  -- Must be in deep ocean
+       then Nothing
        else let h1 = hashGeo seed gx 150
                 h2 = hashGeo seed gy 151
                 radius   = hashToRangeGeo h1 3 8

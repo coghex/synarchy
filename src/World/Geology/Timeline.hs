@@ -181,43 +181,49 @@ buildPeriod seed worldSize plates periodIdx tbs =
 
     in s3
 
--- | Generate volcanic features for a period.
---   Reads GeoState to influence what gets placed.
 applyPeriodVolcanism ∷ Word64 → Int → [TectonicPlate] → Int
                      → TimelineBuildState → TimelineBuildState
 applyPeriodVolcanism seed worldSize plates periodIdx tbs =
     let gs = tbsGeoState tbs
         volcSeed = seed `xor` 0xB45A1F1C
         pIdx = tbsPeriodIdx tbs
-
-        -- Decide what to generate based on GeoState
-        -- High CO2 correlates with high volcanic activity
         activityLevel = gsCO2 gs
 
-        -- Shield volcanoes (large, if activity is high enough)
+        -- Shield volcanoes: rare, only when activity is high
         (shields, tbs1) = if activityLevel > 0.8
-            then generateAndRegister volcSeed worldSize plates
+            then generateAndRegisterN 8 2 volcSeed worldSize plates
                      VolcanoEra_Hotspot generateShieldVolcano pIdx tbs
             else ([], tbs)
 
-        -- Fissures
-        (fissures, tbs2) = generateAndRegister (volcSeed + 1) worldSize plates
+        -- Fissures: 1-2 per period
+        (fissures, tbs2) = generateAndRegisterN 6 2 (volcSeed + 1) worldSize plates
                                VolcanoEra_Boundary generateFissure pIdx tbs1
 
-        -- Cinder cones (common, small)
-        (cinders, tbs3) = generateAndRegister (volcSeed + 2) worldSize plates
+        -- Cinder cones: 2-3 per period
+        (cinders, tbs3) = generateAndRegisterN 10 3 (volcSeed + 2) worldSize plates
                               VolcanoEra_Boundary generateCinderCone pIdx tbs2
 
-        -- Hydrothermal vents
-        (vents, tbs4) = generateAndRegister (volcSeed + 3) worldSize plates
+        -- Hydrothermal vents: 1-2 per period
+        (vents, tbs4) = generateAndRegisterN 6 2 (volcSeed + 3) worldSize plates
                             VolcanoEra_Boundary generateHydrothermalVent pIdx tbs3
 
-        allNew = shields <> fissures <> cinders <> vents
+        -- Supervolcano: only attempt on the first period,
+        -- guarantee at least one
+        hasSuperVolcano = any isSuperVolcano (tbsFeatures tbs4)
+        (supers, tbs5) = if periodIdx ≡ 0 ∨ (periodIdx ≡ 1 ∧ not hasSuperVolcano)
+            then let (s, t) = generateAndRegisterN 12 1 (volcSeed + 4) worldSize plates
+                                  VolcanoEra_Hotspot generateSuperVolcano pIdx tbs4
+                 in if null s ∧ not hasSuperVolcano
+                    -- Force one: just pick a random land position and make it work
+                    then forceOneSuperVolcano (volcSeed + 5) worldSize plates pIdx t
+                    else (s, t)
+            else ([], tbs4)
+
+        allNew = shields <> fissures <> cinders <> vents <> supers
         events = map (\pf → VolcanicEvent (pfFeature pf)) allNew
 
-        -- Volcanism raises CO2 slightly
-        gs' = (tbsGeoState tbs4)
-            { gsCO2 = gsCO2 (tbsGeoState tbs4) + fromIntegral (length allNew) * 0.01
+        gs' = (tbsGeoState tbs5)
+            { gsCO2 = gsCO2 (tbsGeoState tbs5) + fromIntegral (length allNew) * 0.01
             }
 
         period = GeoPeriod
@@ -227,7 +233,43 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs =
             , gpEvents   = events
             , gpErosion  = ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 4000)
             }
-    in addPeriod period (tbs4 { tbsGeoState = gs' })
+    in addPeriod period (tbs5 { tbsGeoState = gs' })
+
+-- | Check if a feature is a supervolcano.
+isSuperVolcano ∷ PersistentFeature → Bool
+isSuperVolcano pf = case pfFeature pf of
+    SuperVolcano _ → True
+    _              → False
+
+-- | Force-place a supervolcano by trying many positions.
+forceOneSuperVolcano ∷ Word64 → Int → [TectonicPlate] → Int
+                     → TimelineBuildState
+                     → ([PersistentFeature], TimelineBuildState)
+forceOneSuperVolcano seed worldSize plates periodIdx tbs =
+    let halfTiles = (worldSize * 16) `div` 2
+        go attempt
+            | attempt ≥ 100 = ([], tbs)  -- give up after 100 attempts
+            | otherwise =
+                let h1 = hashGeo seed attempt 170
+                    h2 = hashGeo seed attempt 171
+                    gx = hashToRangeGeo h1 (-halfTiles) (halfTiles - 1)
+                    gy = hashToRangeGeo h2 (-halfTiles) (halfTiles - 1)
+                in case generateSuperVolcano seed worldSize plates gx gy of
+                    Nothing → go (attempt + 1)
+                    Just feature →
+                        let (fid, tbs') = allocFeatureId tbs
+                            pf = PersistentFeature
+                                { pfId               = fid
+                                , pfFeature          = feature
+                                , pfActivity         = Active
+                                , pfFormationPeriod   = periodIdx
+                                , pfLastActivePeriod  = periodIdx
+                                , pfEruptionCount     = 1
+                                , pfParentId          = Nothing
+                                }
+                            tbs'' = registerFeature pf tbs'
+                        in ([pf], tbs'')
+    in go 0
 
 -- | Evolve existing volcanic features.
 applyVolcanicEvolution ∷ Word64 → TimelineBuildState → TimelineBuildState
@@ -340,15 +382,14 @@ buildAge seed worldSize plates ageIdx tbs =
         -- Longer ages = more likely to have events
 
         -- Meteorite impacts
-        -- Base rate: roughly 1 per 50 MY for the whole world
-        -- So per age: duration/50 chance
+        -- Base rate: roughly 1 per 20 MY for the whole world
         meteoriteRoll = hashToFloatGeo (hashGeo ageSeed ageIdx 620)
-        meteoriteChance = duration / 50.0
+        meteoriteChance = min 0.8 (duration / 20.0)
         meteorites = if meteoriteRoll < meteoriteChance
             then let craterSeed = ageSeed `xor` 0xBEEF
                      craters = generateCraters craterSeed worldSize plates CraterEra_Late
                  -- Take just 1-2 craters for a single age impact
-                 in take (hashToRangeGeo (hashGeo ageSeed ageIdx 621) 1 2)
+                 in take (hashToRangeGeo (hashGeo ageSeed ageIdx 621) 1 3)
                          (map CraterEvent craters)
             else []
 
