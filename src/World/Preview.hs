@@ -41,19 +41,26 @@ buildPreviewImage params cache =
     let worldSize = wgpWorldSize params
         halfSize  = worldSize `div` 2
 
-        -- Screen-aligned range:
-        --   u = ccx - ccy  ranges over [-2*halfSize+1 .. 2*halfSize-1]
-        --   v = ccx + ccy  ranges over [-2*halfSize+1 .. 2*halfSize-1]
-        -- Image dimensions: 2*worldSize - 1  (since worldSize = 2*halfSize)
-        imgW      = 2 * worldSize - 1
-        imgH      = 2 * worldSize - 1
+        -- Screen-aligned coordinates:
+        --   u = ccx - ccy  (east-west, wraps with period worldSize)
+        --   v = ccx + ccy  (north-south, bounded by glacier)
+        --
+        -- The world wraps cylindrically in X (grid-space ccx).
+        -- In screen-aligned space, this means u wraps with period worldSize.
+        -- Image width = worldSize (one full wrap around the cylinder).
+        --
+        -- The north-south range v = ccx + ccy spans [-2*halfSize+1 .. 2*halfSize-1]
+        -- but isBeyondGlacier clips to |v*chunkSize| <= halfTiles,
+        -- so the actual populated range is roughly [-worldSize .. worldSize].
+        -- We use worldSize for height too (matching the playable area).
+        imgW      = worldSize
+        imgH      = worldSize
         totalBytes = imgW * imgH * 4
 
-        -- Map screen-aligned (u,v) to pixel (px,py)
-        -- u ranges from -(worldSize-1) to (worldSize-1)
-        -- px = u + (worldSize - 1)
-        -- py = v + (worldSize - 1)
-        offset = worldSize - 1
+        -- v offset: v ranges from roughly -worldSize to +worldSize
+        -- but the playable area (after glacier clipping) fits in worldSize rows.
+        -- Center it: py = (v + worldSize) / 2, clamped to [0, imgH)
+        vOffset   = worldSize `div` 2
 
         pixelData = unsafePerformIO $ do
             fptr ← BSI.mallocByteString totalBytes
@@ -71,10 +78,17 @@ buildPreviewImage params cache =
                     let cx = zceChunkX entry
                         cy = zceChunkY entry
                         -- Rotate from grid space to screen-aligned space
-                        u = cx - cy   -- east-west
-                        v = cx + cy   -- north-south
-                        px = u + offset
-                        py = v + offset
+                        u = cx - cy   -- east-west (wraps)
+                        v = cx + cy   -- north-south (bounded)
+
+                        -- Wrap u into [0, worldSize) for cylindrical wrapping
+                        px = ((u `mod` imgW) + imgW) `mod` imgW
+
+                        -- Map v to pixel row, centered
+                        -- v ranges from roughly -worldSize to +worldSize
+                        -- Scale down by 2 to fit in imgH pixels
+                        py = (v + worldSize) `div` 2
+
                     when (px >= 0 ∧ px < imgW ∧ py >= 0 ∧ py < imgH) $ do
                         let matId = zceTexIndex entry
                             elev  = zceElev entry

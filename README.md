@@ -12,7 +12,7 @@ for regular use, `cabal build synarchy`, for development use `cabal build -f dev
 
 ## Usage
 
-to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev test`, or you can of course run the binary directly. user "ENGINE_DEBUG=Vulkan,Graphics,etc..." do get debug output from those modules.
+to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev test`, or you can of course run the binary directly. use "ENGINE_DEBUG=Vulkan,Graphics,etc..." to get debug output from those modules.
 
 ## Development
 
@@ -37,9 +37,11 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
                 - main loop and timing
         - UI
             - code for the ui system
+        - World
+            - code for the world
     - app (here Main.hs controls the draw loop)
     - assets (images and other data)
-    - cbits (c code for text rasterization library)
+    - cbits (c code for text rasterization library and lua debug info)
     - config (yaml config files)
     - scripts (lua scripts)
     - test (unit tests are really just for the base engine and most of the functionality is tested in the app)
@@ -51,6 +53,8 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
 - [x] multiple shader support through asset manager
 - [x] sprite manager for batch processing
 - [x] scene creation and switching
+- [x] UI
+- [x] basic world generation
 - [ ] animation
 - [ ] hotloading
 - [ ] game (working title: "Ecce Homo")
