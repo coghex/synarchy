@@ -1,4 +1,6 @@
 -- Create World Menu Module
+-- Orchestrates the create world page: panel, title, tab bar, buttons,
+-- and preview. Delegates tab content to tab modules.
 local scale          = require("scripts.ui.scale")
 local panel          = require("scripts.ui.panel")
 local label          = require("scripts.ui.label")
@@ -8,6 +10,8 @@ local sprite         = require("scripts.ui.sprite")
 local randbox        = require("scripts.ui.randbox")
 local dropdown       = require("scripts.ui.dropdown")
 local textbox        = require("scripts.ui.textbox")
+local settingsTab    = require("scripts.create_world.settings_tab")
+local advancedTab    = require("scripts.create_world.advanced_tab")
 
 local createWorldMenu = {}
 
@@ -46,18 +50,6 @@ createWorldMenu.baseSizes = {
 }
 
 -----------------------------------------------------------
--- World Size Options
------------------------------------------------------------
-local worldSizeOptions = {
-    { text = "Tiny (32)",       value = "32" },
-    { text = "Small (64)",      value = "64" },
-    { text = "Medium (128)",    value = "128" },
-    { text = "Large (256)",     value = "256" },
-    { text = "Huge (512)",      value = "512" },
-    { text = "Massive (1024)",  value = "1024" },
-}
-
------------------------------------------------------------
 -- Module state
 -----------------------------------------------------------
 createWorldMenu.page         = nil
@@ -87,14 +79,6 @@ createWorldMenu.pending = {
 createWorldMenu.backButtonId     = nil
 createWorldMenu.defaultsButtonId = nil
 createWorldMenu.generateButtonId = nil
-
--- Settings tab widget IDs
-createWorldMenu.nameRandBoxId    = nil
-createWorldMenu.seedRandBoxId    = nil
-createWorldMenu.sizeDropdownId   = nil
-
--- Advanced tab widget IDs
-createWorldMenu.plateCountTextBoxId = nil
 
 -- Per-tab element handles for show/hide
 createWorldMenu.tabElements = {}
@@ -176,30 +160,6 @@ function createWorldMenu.trackTextBox(id)
 end
 
 -----------------------------------------------------------
--- World Size Validators
------------------------------------------------------------
-
-function createWorldMenu.sizeValidator(char)
-    return char:match("^%d$") ~= nil
-end
-
-function createWorldMenu.sizeMatcher(inputText, options)
-    if not inputText or inputText == "" then return nil end
-    for i, opt in ipairs(options) do
-        if opt.value == inputText then
-            return i
-        end
-    end
-    local lower = inputText:lower()
-    for i, opt in ipairs(options) do
-        if opt.text:lower():sub(1, #lower) == lower then
-            return i
-        end
-    end
-    return nil
-end
-
------------------------------------------------------------
 -- Callbacks
 -----------------------------------------------------------
 
@@ -230,18 +190,14 @@ end
 function createWorldMenu.createUI()
     createWorldMenu.destroyOwned()
 
-    createWorldMenu.backButtonId        = nil
-    createWorldMenu.defaultsButtonId    = nil
-    createWorldMenu.generateButtonId    = nil
-    createWorldMenu.panelId             = nil
-    createWorldMenu.leftPanelId         = nil
-    createWorldMenu.rightPanelId        = nil
-    createWorldMenu.tabBarId            = nil
-    createWorldMenu.nameRandBoxId       = nil
-    createWorldMenu.seedRandBoxId       = nil
-    createWorldMenu.sizeDropdownId      = nil
-    createWorldMenu.plateCountTextBoxId = nil
-    createWorldMenu.tabElements         = {}
+    createWorldMenu.backButtonId     = nil
+    createWorldMenu.defaultsButtonId = nil
+    createWorldMenu.generateButtonId = nil
+    createWorldMenu.panelId          = nil
+    createWorldMenu.leftPanelId      = nil
+    createWorldMenu.rightPanelId     = nil
+    createWorldMenu.tabBarId         = nil
+    createWorldMenu.tabElements      = {}
 
     if createWorldMenu.uiCreated and createWorldMenu.page then
         UI.deletePage(createWorldMenu.page)
@@ -375,9 +331,28 @@ function createWorldMenu.createLeftPanel(panelX, panelY, bounds, contentStartY,
     
     -- Create ALL tab contents up front
     local frameX, frameY, frameW, frameH = tabbar.getFrameBounds(createWorldMenu.tabBarId)
-    
-    createWorldMenu.createSettingsContent(frameX, frameY, frameW, frameH, s, uiscale)
-    createWorldMenu.createAdvancedContent(frameX, frameY, frameW, frameH, s, uiscale)
+    local pad = math.floor(20 * uiscale)
+
+    local tabParams = {
+        page       = createWorldMenu.page,
+        font       = createWorldMenu.menuFont,
+        baseSizes  = createWorldMenu.baseSizes,
+        uiscale    = uiscale,
+        s          = s,
+        contentX   = frameX + pad,
+        contentY   = frameY + pad,
+        contentW   = frameW - pad * 2,
+        zContent   = Z_CONTENT,
+        zWidgets   = Z_WIDGETS,
+        pending    = createWorldMenu.pending,
+        trackLabel    = createWorldMenu.trackLabel,
+        trackRandBox  = createWorldMenu.trackRandBox,
+        trackDropdown = createWorldMenu.trackDropdown,
+        trackTextBox  = createWorldMenu.trackTextBox,
+    }
+
+    createWorldMenu.tabElements["settings"] = settingsTab.create(tabParams)
+    createWorldMenu.tabElements["advanced"]  = advancedTab.create(tabParams)
 
     -- Show only the active tab
     createWorldMenu.showTab(createWorldMenu.activeTab)
@@ -402,210 +377,6 @@ function createWorldMenu.showTab(key)
             end
         end
     end
-end
-
------------------------------------------------------------
--- Settings Tab Content
------------------------------------------------------------
-
-function createWorldMenu.createSettingsContent(frameX, frameY, frameW, frameH, s, uiscale)
-    local cx = frameX + math.floor(20 * uiscale)
-    local cy = frameY + math.floor(20 * uiscale)
-    local cw = frameW - math.floor(40 * uiscale)
-    local rowIndex = 0
-    local elements = {}
-
-    local function rowY(n)
-        return cy + s.rowSpacing * n
-    end
-
-    ---------------------------------------------------------
-    -- Row 1: World Name (randbox - wide)
-    ---------------------------------------------------------
-    local nameLabelId = createWorldMenu.trackLabel(label.new({
-        name     = "world_name_label",
-        text     = "Name",
-        font     = createWorldMenu.menuFont,
-        fontSize = createWorldMenu.baseSizes.fontSize,
-        color    = {1.0, 1.0, 1.0, 1.0},
-        page     = createWorldMenu.page,
-        uiscale  = uiscale,
-    }))
-    local nameLabelHandle = label.getElementHandle(nameLabelId)
-    UI.addToPage(createWorldMenu.page, nameLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
-    UI.setZIndex(nameLabelHandle, Z_CONTENT)
-    table.insert(elements, { type = "label", handle = nameLabelHandle })
-
-    local nameW = math.floor(createWorldMenu.baseSizes.nameBoxWidth * uiscale)
-    local nameBtnSize = math.floor(createWorldMenu.baseSizes.randboxHeight * uiscale)
-    local nameTotalW = nameW + nameBtnSize
-
-    createWorldMenu.nameRandBoxId = createWorldMenu.trackRandBox(randbox.new({
-        name     = "world_name",
-        width    = createWorldMenu.baseSizes.nameBoxWidth,
-        height   = createWorldMenu.baseSizes.randboxHeight,
-        page     = createWorldMenu.page,
-        font     = createWorldMenu.menuFont,
-        fontSize = 24,
-        uiscale  = uiscale,
-        zIndex   = Z_WIDGETS,
-        randType = randbox.Type.NAME,
-        default  = createWorldMenu.pending.worldName ~= ""
-                       and createWorldMenu.pending.worldName or nil,
-        onChange  = function(value, id, name)
-            createWorldMenu.pending.worldName = value
-        end,
-    }))
-
-    randbox.setPosition(createWorldMenu.nameRandBoxId,
-                        cx + cw - nameTotalW, rowY(rowIndex))
-    table.insert(elements, { type = "randbox", id = createWorldMenu.nameRandBoxId })
-
-    rowIndex = rowIndex + 1
-
-    ---------------------------------------------------------
-    -- Row 2: Seed (randbox)
-    ---------------------------------------------------------
-    local seedLabelId = createWorldMenu.trackLabel(label.new({
-        name     = "world_seed_label",
-        text     = "Seed",
-        font     = createWorldMenu.menuFont,
-        fontSize = createWorldMenu.baseSizes.fontSize,
-        color    = {1.0, 1.0, 1.0, 1.0},
-        page     = createWorldMenu.page,
-        uiscale  = uiscale,
-    }))
-    local seedLabelHandle = label.getElementHandle(seedLabelId)
-    UI.addToPage(createWorldMenu.page, seedLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
-    UI.setZIndex(seedLabelHandle, Z_CONTENT)
-    table.insert(elements, { type = "label", handle = seedLabelHandle })
-
-    local rbW = math.floor(createWorldMenu.baseSizes.randboxWidth * uiscale)
-    local rbBtnSize = math.floor(createWorldMenu.baseSizes.randboxHeight * uiscale)
-    local rbTotalW = rbW + rbBtnSize
-
-    createWorldMenu.seedRandBoxId = createWorldMenu.trackRandBox(randbox.new({
-        name     = "world_seed",
-        width    = createWorldMenu.baseSizes.randboxWidth,
-        height   = createWorldMenu.baseSizes.randboxHeight,
-        page     = createWorldMenu.page,
-        font     = createWorldMenu.menuFont,
-        fontSize = 24,
-        uiscale  = uiscale,
-        zIndex   = Z_WIDGETS,
-        randType = randbox.Type.HEX_SEED,
-        default  = createWorldMenu.pending.seed ~= ""
-                       and createWorldMenu.pending.seed or nil,
-        onChange  = function(value, id, name)
-            createWorldMenu.pending.seed = value
-        end,
-    }))
-
-    randbox.setPosition(createWorldMenu.seedRandBoxId,
-                        cx + cw - rbTotalW, rowY(rowIndex))
-    table.insert(elements, { type = "randbox", id = createWorldMenu.seedRandBoxId })
-
-    rowIndex = rowIndex + 1
-
-    ---------------------------------------------------------
-    -- Row 3: World Size (dropdown)
-    ---------------------------------------------------------
-    local sizeLabelId = createWorldMenu.trackLabel(label.new({
-        name     = "world_size_label",
-        text     = "Size",
-        font     = createWorldMenu.menuFont,
-        fontSize = createWorldMenu.baseSizes.fontSize,
-        color    = {1.0, 1.0, 1.0, 1.0},
-        page     = createWorldMenu.page,
-        uiscale  = uiscale,
-    }))
-    local sizeLabelHandle = label.getElementHandle(sizeLabelId)
-    UI.addToPage(createWorldMenu.page, sizeLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
-    UI.setZIndex(sizeLabelHandle, Z_CONTENT)
-    table.insert(elements, { type = "label", handle = sizeLabelHandle })
-
-    createWorldMenu.sizeDropdownId = createWorldMenu.trackDropdown(dropdown.new({
-        name              = "world_size",
-        options           = worldSizeOptions,
-        default           = createWorldMenu.pending.worldSize,
-        font              = createWorldMenu.menuFont,
-        fontSize          = 24,
-        height            = createWorldMenu.baseSizes.dropdownHeight,
-        page              = createWorldMenu.page,
-        x = 0, y = 0,
-        uiscale           = uiscale,
-        zIndex            = Z_WIDGETS,
-        validateChar      = createWorldMenu.sizeValidator,
-        matchFn           = createWorldMenu.sizeMatcher,
-        maxVisibleOptions = 6,
-        onChange = function(value, text, id, name)
-            createWorldMenu.pending.worldSize = value
-            engine.logInfo("World size pending: " .. text)
-        end,
-    }))
-
-    local ddSizeId = createWorldMenu.sizeDropdownId
-    local ddSizeW, _ = dropdown.getSize(ddSizeId)
-    dropdown.setPosition(ddSizeId, cx + cw - ddSizeW, rowY(rowIndex))
-    table.insert(elements, { type = "dropdown", id = ddSizeId })
-
-    createWorldMenu.tabElements["settings"] = elements
-end
-
------------------------------------------------------------
--- Advanced Tab Content
------------------------------------------------------------
-
-function createWorldMenu.createAdvancedContent(frameX, frameY, frameW, frameH, s, uiscale)
-    local cx = frameX + math.floor(20 * uiscale)
-    local cy = frameY + math.floor(20 * uiscale)
-    local cw = frameW - math.floor(40 * uiscale)
-    local rowIndex = 0
-    local elements = {}
-
-    local function rowY(n)
-        return cy + s.rowSpacing * n
-    end
-
-    ---------------------------------------------------------
-    -- Row 1: Plate Count (textbox)
-    ---------------------------------------------------------
-    local plateLabelId = createWorldMenu.trackLabel(label.new({
-        name     = "plate_count_label",
-        text     = "Plate Count",
-        font     = createWorldMenu.menuFont,
-        fontSize = createWorldMenu.baseSizes.fontSize,
-        color    = {1.0, 1.0, 1.0, 1.0},
-        page     = createWorldMenu.page,
-        uiscale  = uiscale,
-    }))
-    local plateLabelHandle = label.getElementHandle(plateLabelId)
-    UI.addToPage(createWorldMenu.page, plateLabelHandle,
-                 cx, rowY(rowIndex) + s.fontSize)
-    UI.setZIndex(plateLabelHandle, Z_CONTENT)
-    table.insert(elements, { type = "label", handle = plateLabelHandle })
-
-    local tbW = math.floor(createWorldMenu.baseSizes.textboxWidth * uiscale)
-    createWorldMenu.plateCountTextBoxId = createWorldMenu.trackTextBox(textbox.new({
-        name     = "plate_count_input",
-        width    = createWorldMenu.baseSizes.textboxWidth,
-        height   = createWorldMenu.baseSizes.textboxHeight,
-        page     = createWorldMenu.page,
-        x        = cx + cw - tbW,
-        y        = rowY(rowIndex),
-        uiscale  = uiscale,
-        font     = createWorldMenu.menuFont,
-        fontSize = 24,
-        default  = createWorldMenu.pending.plateCount,
-        textType = textbox.Type.NUMBER,
-        zIndex   = Z_WIDGETS,
-    }))
-    table.insert(elements, { type = "textbox", id = createWorldMenu.plateCountTextBoxId })
-
-    createWorldMenu.tabElements["advanced"] = elements
 end
 
 -----------------------------------------------------------
@@ -756,9 +527,10 @@ function createWorldMenu.onDefaults()
 end
 
 function createWorldMenu.onGenerateWorld()
-    -- Read plate count from textbox before generating
-    if createWorldMenu.plateCountTextBoxId then
-        createWorldMenu.pending.plateCount = textbox.getValue(createWorldMenu.plateCountTextBoxId)
+    -- Read values from tab modules
+    local advVals = advancedTab.getWidgetValues()
+    if advVals.plateCount then
+        createWorldMenu.pending.plateCount = advVals.plateCount
     end
 
     local p = createWorldMenu.pending
