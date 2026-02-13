@@ -10,6 +10,7 @@ local sprite         = require("scripts.ui.sprite")
 local randbox        = require("scripts.ui.randbox")
 local dropdown       = require("scripts.ui.dropdown")
 local textbox        = require("scripts.ui.textbox")
+local scrollbar      = require("scripts.ui.scrollbar")
 local settingsTab    = require("scripts.create_world.settings_tab")
 local advancedTab    = require("scripts.create_world.advanced_tab")
 local worldManager   = require("scripts.world_manager")
@@ -29,7 +30,10 @@ local Z_CONTENT     = 6
 local Z_WIDGETS     = 7
 local Z_PREVIEW     = 7
 local Z_LOG_TEXT    = 8
-local Z_BUTTONS     = 8
+local Z_LOG_SB_TRACK  = 9
+local Z_LOG_SB_BUTTON = 10
+local Z_LOG_SB_TAB    = 11
+local Z_BUTTONS     = 12
 
 -----------------------------------------------------------
 -- Generation states
@@ -97,9 +101,17 @@ createWorldMenu.regenerateButtonId = nil
 createWorldMenu.continueButtonId   = nil
 
 -- Log output
-createWorldMenu.logLines      = {}
-createWorldMenu.logLabelIds   = {}
+createWorldMenu.logLines      = {}    -- ALL lines (unbounded during generation)
+createWorldMenu.logLabelIds   = {}    -- fixed-size label slots for visible window
 createWorldMenu.statusLabelId = nil
+
+-- Log scroll state
+createWorldMenu.logScrollbarId  = nil
+createWorldMenu.logScrollOffset = 0
+createWorldMenu.logMaxVisible   = 0
+createWorldMenu.logLineHeight   = 0
+createWorldMenu.logX            = 0
+createWorldMenu.logStartY       = 0
 
 -- Per-tab element handles for show/hide
 createWorldMenu.tabElements = {}
@@ -130,6 +142,12 @@ local tabDefs = {
 -----------------------------------------------------------
 
 function createWorldMenu.destroyOwned()
+    -- Destroy log scrollbar first (not tracked in ownedLabels etc.)
+    if createWorldMenu.logScrollbarId then
+        scrollbar.destroy(createWorldMenu.logScrollbarId)
+        createWorldMenu.logScrollbarId = nil
+    end
+
     for _, id in ipairs(createWorldMenu.ownedLabels)    do label.destroy(id) end
     for _, id in ipairs(createWorldMenu.ownedButtons)   do button.destroy(id) end
     for _, id in ipairs(createWorldMenu.ownedPanels)    do panel.destroy(id) end
@@ -227,6 +245,8 @@ function createWorldMenu.createUI()
     createWorldMenu.logLabelIds        = {}
     createWorldMenu.statusLabelId      = nil
     createWorldMenu.btnLayout          = nil
+    createWorldMenu.logScrollbarId     = nil
+    createWorldMenu.logScrollOffset    = 0
 
     if createWorldMenu.uiCreated and createWorldMenu.page then
         UI.deletePage(createWorldMenu.page)
@@ -454,7 +474,7 @@ function createWorldMenu.createRightPanel(panelX, panelY, bounds, contentStartY,
     end
 
     -- Status label (below preview)
-    local logStartY = previewY + previewSize + math.floor(20 * uiscale)
+    local logTopY = previewY + previewSize + math.floor(20 * uiscale)
     local logX = rightX + rightBounds.x + math.floor(10 * uiscale)
 
     createWorldMenu.statusLabelId = createWorldMenu.trackLabel(label.new({
@@ -467,15 +487,23 @@ function createWorldMenu.createRightPanel(panelX, panelY, bounds, contentStartY,
         uiscale  = uiscale,
     }))
     local statusHandle = label.getElementHandle(createWorldMenu.statusLabelId)
-    UI.addToPage(createWorldMenu.page, statusHandle, logX, logStartY + s.logFontSize)
+    UI.addToPage(createWorldMenu.page, statusHandle, logX, logTopY + s.logFontSize)
     UI.setZIndex(statusHandle, Z_LOG_TEXT)
 
-    -- Log lines (below status)
-    local logLineStartY = logStartY + s.logFontSize + math.floor(10 * uiscale)
+    -- Log lines (below status) — fixed label slots, virtual scrolling
+    local logLineStartY = logTopY + s.logFontSize + math.floor(10 * uiscale)
     local logLineHeight = math.floor(createWorldMenu.baseSizes.logFontSize * 1.4 * uiscale)
     local availableHeight = contentStartY + contentHeight - logLineStartY - math.floor(10 * uiscale)
     local maxLogLines = math.max(1, math.floor(availableHeight / logLineHeight))
 
+    -- Save layout for scroll calculations
+    createWorldMenu.logX           = logX
+    createWorldMenu.logStartY      = logLineStartY
+    createWorldMenu.logLineHeight  = logLineHeight
+    createWorldMenu.logMaxVisible  = maxLogLines
+    createWorldMenu.logScrollOffset = 0
+
+    -- Create the fixed label slots
     createWorldMenu.logLabelIds = {}
     for i = 1, maxLogLines do
         local lid = createWorldMenu.trackLabel(label.new({
@@ -493,6 +521,49 @@ function createWorldMenu.createRightPanel(panelX, panelY, bounds, contentStartY,
         UI.setZIndex(lh, Z_LOG_TEXT)
         table.insert(createWorldMenu.logLabelIds, lid)
     end
+
+    -- Create scrollbar for the log (hidden until needed)
+    -- Reserve width for the scrollbar on the right side of the log area
+    local sbBtnSize = math.floor(24 * uiscale)
+    local sbCapH    = math.floor(4 * uiscale)
+    local sbTrackH  = math.max(math.floor(20 * uiscale),
+                               availableHeight - sbBtnSize * 2 - sbCapH * 2)
+    local sbX       = rightX + rightBounds.x + rightBounds.width - sbBtnSize
+
+    createWorldMenu.logScrollbarId = scrollbar.new({
+        name         = "log_scrollbar",
+        page         = createWorldMenu.page,
+        x            = sbX,
+        y            = logLineStartY,
+        buttonSize   = sbBtnSize,
+        trackHeight  = sbTrackH,
+        capHeight    = sbCapH,
+        tileSize     = math.floor(8 * uiscale),
+        totalItems   = 0,
+        visibleItems = maxLogLines,
+        uiscale      = uiscale,
+        zIndex       = { track  = Z_LOG_SB_TRACK,
+                         button = Z_LOG_SB_BUTTON,
+                         tab    = Z_LOG_SB_TAB },
+        onScroll = function(offset, sbId, sbName)
+            createWorldMenu.onLogScroll(offset)
+        end,
+    })
+
+    -- Hide until we actually have content that overflows
+    scrollbar.setVisible(createWorldMenu.logScrollbarId, false)
+
+    engine.logDebug("Log panel created: maxVisible=" .. maxLogLines
+        .. " lineHeight=" .. logLineHeight)
+end
+
+-----------------------------------------------------------
+-- Log Scroll
+-----------------------------------------------------------
+
+function createWorldMenu.onLogScroll(offset)
+    createWorldMenu.logScrollOffset = offset
+    createWorldMenu.refreshLogDisplay()
 end
 
 -----------------------------------------------------------
@@ -501,25 +572,54 @@ end
 
 function createWorldMenu.addLogLine(text)
     table.insert(createWorldMenu.logLines, text)
-    -- Trim to max visible
-    local maxLines = #createWorldMenu.logLabelIds
-    while #createWorldMenu.logLines > maxLines do
-        table.remove(createWorldMenu.logLines, 1)
+
+    local totalLines  = #createWorldMenu.logLines
+    local maxVisible  = createWorldMenu.logMaxVisible
+    local needsScroll = totalLines > maxVisible
+
+    -- Update scrollbar content size
+    if createWorldMenu.logScrollbarId then
+        scrollbar.setContentSize(createWorldMenu.logScrollbarId,
+                                 totalLines, maxVisible)
+        scrollbar.setVisible(createWorldMenu.logScrollbarId, needsScroll)
     end
+
+    -- Auto-scroll to bottom
+    if needsScroll then
+        local maxOffset = totalLines - maxVisible
+        createWorldMenu.logScrollOffset = maxOffset
+        if createWorldMenu.logScrollbarId then
+            scrollbar.setScrollOffset(createWorldMenu.logScrollbarId, maxOffset)
+        end
+    else
+        createWorldMenu.logScrollOffset = 0
+    end
+
     createWorldMenu.refreshLogDisplay()
 end
 
 function createWorldMenu.clearLog()
     createWorldMenu.logLines = {}
+    createWorldMenu.logScrollOffset = 0
+
+    if createWorldMenu.logScrollbarId then
+        scrollbar.setContentSize(createWorldMenu.logScrollbarId, 0,
+                                 createWorldMenu.logMaxVisible)
+        scrollbar.setVisible(createWorldMenu.logScrollbarId, false)
+    end
+
     createWorldMenu.refreshLogDisplay()
 end
 
 function createWorldMenu.refreshLogDisplay()
-    local maxLines = #createWorldMenu.logLabelIds
-    for i = 1, maxLines do
-        local lid = createWorldMenu.logLabelIds[i]
-        local text = createWorldMenu.logLines[i] or ""
-        local lh = label.getElementHandle(lid)
+    local maxVisible = #createWorldMenu.logLabelIds
+    local offset     = createWorldMenu.logScrollOffset
+
+    for i = 1, maxVisible do
+        local lid       = createWorldMenu.logLabelIds[i]
+        local dataIndex = offset + i
+        local text      = createWorldMenu.logLines[dataIndex] or ""
+        local lh        = label.getElementHandle(lid)
         UI.setText(lh, text)
     end
 end
@@ -529,6 +629,85 @@ function createWorldMenu.setStatus(text)
         local sh = label.getElementHandle(createWorldMenu.statusLabelId)
         UI.setText(sh, text)
     end
+end
+
+-----------------------------------------------------------
+-- World Generation Log Receiver (from Haskell world thread)
+-----------------------------------------------------------
+
+function createWorldMenu.onWorldGenLog(text)
+    if createWorldMenu.genState == GEN_RUNNING or createWorldMenu.genState == GEN_DONE then
+        createWorldMenu.addLogLine(text)
+    end
+end
+
+-----------------------------------------------------------
+-- Scroll events (called from ui_manager)
+-----------------------------------------------------------
+
+function createWorldMenu.onScroll(elemHandle, dx, dy)
+    if not createWorldMenu.logScrollbarId then return false end
+
+    local totalLines = #createWorldMenu.logLines
+    if totalLines <= createWorldMenu.logMaxVisible then return false end
+
+    local function doScroll()
+        if     dy > 0 then scrollbar.scrollUp(createWorldMenu.logScrollbarId)
+        elseif dy < 0 then scrollbar.scrollDown(createWorldMenu.logScrollbarId)
+        end
+        return true
+    end
+
+    -- Check if the element is one of the log labels
+    for _, lid in ipairs(createWorldMenu.logLabelIds) do
+        local lh = label.getElementHandle(lid)
+        if lh == elemHandle then return doScroll() end
+    end
+
+    -- Check status label
+    if createWorldMenu.statusLabelId then
+        local sh = label.getElementHandle(createWorldMenu.statusLabelId)
+        if sh == elemHandle then return doScroll() end
+    end
+
+    -- Check the right panel box itself
+    if createWorldMenu.rightPanelId then
+        local rh = panel.getBoxHandle(createWorldMenu.rightPanelId)
+        if rh == elemHandle then return doScroll() end
+    end
+
+    -- Check all elements placed inside the right panel (preview sprite, etc.)
+    if createWorldMenu.rightPanelId then
+        local elems = panel.getElements(createWorldMenu.rightPanelId)
+        for _, eh in ipairs(elems) do
+            if eh == elemHandle then return doScroll() end
+        end
+    end
+
+    -- Check scrollbar elements
+    local sbId, _ = scrollbar.findByElementHandle(elemHandle)
+    if sbId and sbId == createWorldMenu.logScrollbarId then
+        return doScroll()
+    end
+
+    return false
+end
+
+function createWorldMenu.handleScrollCallback(callbackName, elemHandle)
+    if not createWorldMenu.logScrollbarId then return false end
+
+    local sbId, _ = scrollbar.findByElementHandle(elemHandle)
+    if sbId and sbId == createWorldMenu.logScrollbarId then
+        if callbackName == "onScrollUp" then
+            scrollbar.scrollUp(sbId)
+            return true
+        elseif callbackName == "onScrollDown" then
+            scrollbar.scrollDown(sbId)
+            return true
+        end
+    end
+
+    return false
 end
 
 -----------------------------------------------------------
@@ -739,13 +918,11 @@ end
 function createWorldMenu.destroyDynamicButtons()
     local function destroyAndUntrack(id)
         if not id then return end
-        -- Delete the UI element from the scene so it actually disappears
         local handle = button.getElementHandle(id)
         if handle then
             UI.deleteElement(handle)
         end
         button.destroy(id)
-        -- Remove from ownedButtons
         for i = #createWorldMenu.ownedButtons, 1, -1 do
             if createWorldMenu.ownedButtons[i] == id then
                 table.remove(createWorldMenu.ownedButtons, i)
@@ -772,7 +949,6 @@ end
 -----------------------------------------------------------
 
 function createWorldMenu.onBack()
-    -- If a world was generated but user goes back, destroy it
     if worldManager.isActive() then
         worldManager.destroyWorld()
     end
@@ -842,18 +1018,14 @@ function createWorldMenu.onGenerateWorld()
     createWorldMenu.addLogLine("Plates: " .. tostring(plateNum))
     createWorldMenu.addLogLine("")
 
-    -- Actually trigger world creation via worldView
-    -- (worldView handles texture loading + worldManager.createWorld)
     worldView.startGeneration()
 end
 
 function createWorldMenu.onRegenerate()
-    -- Reset and generate again with current (possibly edited) params
     createWorldMenu.onGenerateWorld()
 end
 
 function createWorldMenu.onContinue()
-    -- Transition to world view
     if createWorldMenu.showMenuCallback then
         createWorldMenu.showMenuCallback("world_view")
     end
@@ -867,33 +1039,19 @@ function createWorldMenu.update(dt)
     if createWorldMenu.genState == GEN_RUNNING then
         createWorldMenu.genElapsed = createWorldMenu.genElapsed + dt
 
-        -- Poll for completion: worldManager.isActive() becomes true
-        -- once the world thread finishes WorldInit + WorldShow
         if worldManager.isActive() then
             createWorldMenu.genState = GEN_DONE
             local elapsed = string.format("%.1f", createWorldMenu.genElapsed)
             createWorldMenu.setStatus("World generated! (" .. elapsed .. "s)")
             createWorldMenu.addLogLine("Generation complete.")
 
-            -- Swap buttons: Generate → Regenerate + Continue
             createWorldMenu.buildButtons_done()
 
             engine.logInfo("World generation complete in " .. elapsed .. "s")
         else
-            -- Animate status dots
             local dots = string.rep(".", (math.floor(createWorldMenu.genElapsed * 3) % 4))
             createWorldMenu.setStatus("Generating world" .. dots)
         end
-    end
-end
-
------------------------------------------------------------
--- World Generation Log Receiver (from Haskell world thread)
------------------------------------------------------------
-
-function createWorldMenu.onWorldGenLog(text)
-    if createWorldMenu.genState == GEN_RUNNING or createWorldMenu.genState == GEN_DONE then
-        createWorldMenu.addLogLine(text)
     end
 end
 

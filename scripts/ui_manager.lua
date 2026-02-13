@@ -403,6 +403,13 @@ function uiManager.onScrollUp(elemHandle)
             end
         end
     end
+    if createWorldMenu and currentMenu == "create_world" then
+        if createWorldMenu.handleScrollCallback then
+            if createWorldMenu.handleScrollCallback("onScrollUp", elemHandle) then
+                return true
+            end
+        end
+    end
     return false
 end
 
@@ -414,6 +421,13 @@ function uiManager.onScrollDown(elemHandle)
     if settingsMenu and currentMenu == "settings" then
         if settingsMenu.handleScrollCallback then
             if settingsMenu.handleScrollCallback("onScrollDown", elemHandle) then
+                return true
+            end
+        end
+    end
+    if createWorldMenu and currentMenu == "create_world" then
+        if createWorldMenu.handleScrollCallback then
+            if createWorldMenu.handleScrollCallback("onScrollDown", elemHandle) then
                 return true
             end
         end
@@ -452,6 +466,11 @@ function uiManager.onUIScroll(elemHandle, dx, dy)
     end
     if settingsMenu and currentMenu == "settings" then
         if settingsMenu.onScroll(elemHandle, dx, dy) then
+            return
+        end
+    end
+    if createWorldMenu and currentMenu == "create_world" then
+        if createWorldMenu.onScroll(elemHandle, dx, dy) then
             return
         end
     end
