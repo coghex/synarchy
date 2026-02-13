@@ -43,7 +43,12 @@ applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy _e =
        else let t = dist / r
                 profile = 1.0 - smoothstepGeo t
                 elevDelta = round (fromIntegral heightGain * profile)
-            in GeoModification elevDelta Nothing
+                -- Reactivation: new lava deposition on top,
+                -- inner 40% is new material, rest is uplift
+                intrusion = if t < 0.4
+                    then abs elevDelta
+                    else 0
+            in GeoModification elevDelta Nothing intrusion
 
 applyEvolution (GoDormant _center _radius) _ _ _ _ = noModification
 applyEvolution (GoExtinct _center _radius) _ _ _ _ = noModification
@@ -57,16 +62,16 @@ applyEvolution (CollapseToCaldera depth _ratio center radius) ws gx gy _e =
     in if dist > r
        then noModification
        else let t = dist / r
-                -- Collapse is deepest at center, rim stays up
                 rimZone = t > 0.8
                 bowlT = smoothstepGeo (t / 0.8)
                 elevDelta = if rimZone
-                    then 0  -- rim stays
+                    then 0
                     else round (negate (fromIntegral depth) * (1.0 - bowlT))
                 mat = if rimZone
                     then Nothing
                     else Just (unMaterialId matObsidian)
-            in GeoModification elevDelta mat
+                -- Collapse is depression/rearrangement, not deposition
+            in GeoModification elevDelta mat 0
 
 applyEvolution (ParasiticEruption childFeature _childId _center _radius) ws gx gy e =
     applyVolcanicFeature childFeature ws gx gy e

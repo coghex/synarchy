@@ -35,13 +35,32 @@ import World.Plate (TectonicPlate(..), twoNearestPlates, isBeyondGlacier)
 -- GeoModification
 -----------------------------------------------------------
 
+-- | Describes how a geological event modifies a single column.
+--
+--   gmElevDelta: total change to surface elevation.
+--   gmMaterialOverride: the material deposited by this event (Nothing = no new material).
+--   gmIntrusionDepth: how many z-levels of the elevation change are NEW material.
+--     The rest is uplift/subsidence of existing strata.
+--
+--   Examples:
+--     Shield volcano flank: elevDelta=+200, mat=Nothing, intrusion=0
+--       → pure uplift, no new material, existing strata pushed up 200
+--     Shield volcano summit: elevDelta=+200, mat=basalt, intrusion=60
+--       → top 60 tiles are basalt, bottom 140 is uplifted existing strata
+--     Cinder cone: elevDelta=+150, mat=obsidian, intrusion=150
+--       → fully volcanic, all 150 tiles are obsidian (pile of scoria)
+--     Crater bowl: elevDelta=-30, mat=impactite, intrusion=0
+--       → depression, material override at the new surface only
+--     Ejecta blanket: elevDelta=+5, mat=Nothing, intrusion=0
+--       → thin uplift, existing strata pushed up 5, no new material
 data GeoModification = GeoModification
-    { gmElevDelta   ∷ !Int
+    { gmElevDelta        ∷ !Int
     , gmMaterialOverride ∷ !(Maybe Word8)
+    , gmIntrusionDepth   ∷ !Int
     } deriving (Show)
 
 noModification ∷ GeoModification
-noModification = GeoModification 0 Nothing
+noModification = GeoModification 0 Nothing 0
 
 -----------------------------------------------------------
 -- Volcano Era

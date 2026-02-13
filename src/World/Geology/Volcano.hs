@@ -36,16 +36,15 @@ applyVolcanicFeature (HydrothermalVent p) ws gx gy e = applyHydrothermal p ws gx
 -----------------------------------------------------------
 
 -- | Shield Volcano: wide, gently sloping.
---   Material only at the summit and pit — the broad flanks
---   keep the underlying plate material (granite/diorite/gabbro)
---   since in reality a shield volcano is just a gentle bulge
---   in the landscape, not a field of exposed basalt.
+--   The broad flanks are pure UPLIFT — magma intrusion pushes
+--   existing strata upward without depositing new material.
+--   Only the upper 30% of the cone has actual basalt deposition.
 --
 --   Profile:
 --       ___
---      /   \       <- summit pit (basalt here)
---    ./     \.     <- upper flanks (basalt here)
---   /.........\    <- lower flanks (no material override)
+--      /   \       <- summit pit (basalt, full intrusion)
+--    ./     \.     <- upper flanks (basalt cap over uplifted strata)
+--   /.........\    <- lower flanks (pure uplift, no new material)
 --
 applyShieldVolcano ∷ ShieldParams → Int → Int → Int → Int → GeoModification
 applyShieldVolcano params worldSize gx gy _baseElev =
@@ -68,18 +67,25 @@ applyShieldVolcano params worldSize gx gy _baseElev =
                 floorElev = peakH - pitD
                 bowlT = smoothstepGeo t
                 elevDelta = round (floorElev + (rimElev - floorElev) * bowlT)
-            in GeoModification elevDelta (Just (unMaterialId matBasalt))
+                -- Summit pit: fully volcanic, all deposited material
+            in GeoModification elevDelta (Just (unMaterialId matBasalt)) (abs elevDelta)
 
        else
        let t = dist / baseR
            profile = cos (t * π / 2.0)
            elevDelta = round (peakH * profile)
-           -- Only override material in the upper 30% of the volcano
-           -- The lower flanks keep their continental material
-           mat = if t < 0.3
-                 then Just (unMaterialId matBasalt)
-                 else Nothing
-       in GeoModification elevDelta mat
+       in if t < 0.3
+          then
+            -- Upper flanks: basalt cap on top of uplifted strata.
+            -- The top 30% of the elevation gain is basalt intrusion,
+            -- the rest is uplift of existing rock.
+            let intrusionFrac = 0.3 ∷ Float
+                intrusion = max 1 (round (fromIntegral elevDelta * intrusionFrac))
+            in GeoModification elevDelta (Just (unMaterialId matBasalt)) intrusion
+          else
+            -- Lower flanks: pure uplift from magma pressure below.
+            -- No new material — existing strata pushed upward.
+            GeoModification elevDelta Nothing 0
 
 -----------------------------------------------------------
 -- Cinder Cone
@@ -87,13 +93,7 @@ applyShieldVolcano params worldSize gx gy _baseElev =
 
 -- | Cinder Cone: small, steep, always has a crater.
 --   These ARE fully volcanic rock — they're piles of scoria.
---   Keep full material override since they're small features.
---
---   Profile:
---      /\
---     /  \      <- steep slopes (obsidian/basalt)
---    / __ \     <- crater
---   /|    |\
+--   Full intrusion: the entire elevation change is new volcanic material.
 --
 applyCinderCone ∷ CinderConeParams → Int → Int → Int → Int → GeoModification
 applyCinderCone params worldSize gx gy _baseElev =
@@ -116,7 +116,8 @@ applyCinderCone params worldSize gx gy _baseElev =
                 floorElev = peakH - craterD
                 bowlT = smoothstepGeo t
                 elevDelta = round (floorElev + (rimElev - floorElev) * bowlT)
-            in GeoModification elevDelta (Just (unMaterialId matObsidian))
+                -- Crater interior: fully volcanic
+            in GeoModification elevDelta (Just (unMaterialId matObsidian)) (abs elevDelta)
 
        else
        let t = (dist - craterR) / (baseR - craterR)
@@ -124,21 +125,15 @@ applyCinderCone params worldSize gx gy _baseElev =
            mat = if t < 0.3
                  then unMaterialId matObsidian
                  else unMaterialId matBasalt
-       in GeoModification elevDelta (Just mat)
+           -- Cinder cones are piles of scoria — fully deposited material
+       in GeoModification elevDelta (Just mat) (abs elevDelta)
 
 -----------------------------------------------------------
 -- Lava Dome
 -----------------------------------------------------------
 
--- | Lava Dome: steep-sided mound.
---   These are fully volcanic — viscous lava piled up.
---   Small enough to keep full material override.
---
---   Profile:
---      ____
---     /    \     <- flat-ish top (obsidian)
---    |      |    <- steep sides (feldspar)
---   _/      \_
+-- | Lava Dome: steep-sided mound of viscous lava.
+--   Fully volcanic — the entire structure is deposited material.
 --
 applyLavaDome ∷ LavaDomeParams → Int → Int → Int → Int → GeoModification
 applyLavaDome params worldSize gx gy _baseElev =
@@ -160,21 +155,17 @@ applyLavaDome params worldSize gx gy _baseElev =
            mat = if t < 0.5
                  then unMaterialId matObsidian
                  else unMaterialId matFeldspar
-       in GeoModification elevDelta (Just mat)
+           -- Fully deposited volcanic material
+       in GeoModification elevDelta (Just mat) (abs elevDelta)
 
 -----------------------------------------------------------
 -- Caldera
 -----------------------------------------------------------
 
 -- | Caldera: collapsed structure with rim and depressed floor.
---   Material only at the rim and floor — the outer slope
---   keeps underlying material.
---
---   Profile:
---          __          __
---         /  \        /  \      <- rim (obsidian)
---        /    \______/    \     <- floor (magma center, obsidian)
---   ____/                  \____  <- outer slope (no override)
+--   Outer slope: pure uplift (no material override).
+--   Rim: volcanic material (obsidian), full intrusion.
+--   Floor: depression — erosion/collapse, no intrusion.
 --
 applyCaldera ∷ CalderaParams → Int → Int → Int → Int → GeoModification
 applyCaldera params worldSize gx gy _baseElev =
@@ -194,44 +185,38 @@ applyCaldera params worldSize gx gy _baseElev =
        then noModification
 
        else if dist > outerR
-       -- Outer slope: gentle rise, NO material override
+       -- Outer slope: pure uplift, no new material
        then let t = (dist - outerR) / (ejectaR - outerR)
                 t' = 1.0 - smoothstepGeo t
                 elevDelta = round (rimH * 0.3 * t')
-            in GeoModification elevDelta Nothing
+            in GeoModification elevDelta Nothing 0
 
        else if dist > innerR
-       -- Rim zone: raised ring, obsidian
+       -- Rim zone: volcanic material, full intrusion
        then let rimMid = (innerR + outerR) / 2.0
                 distFromMid = abs (dist - rimMid) / ((outerR - innerR) / 2.0)
                 t' = 1.0 - smoothstepGeo (min 1.0 distFromMid)
                 elevDelta = round (rimH * t')
-            in GeoModification elevDelta (Just (unMaterialId matObsidian))
+            in GeoModification elevDelta (Just (unMaterialId matObsidian)) (abs elevDelta)
 
        else
-       -- Caldera floor: depression
+       -- Caldera floor: depression, no intrusion
        let t = dist / innerR
            bowlT = smoothstepGeo t
-           -- Clamp so the floor doesn't go absurdly deep
            elevDelta = round (negate (min floorD 60.0) * (1.0 - bowlT * 0.5))
            mat = if t < 0.3
                  then unMaterialId matMagma
                  else unMaterialId matObsidian
-       in GeoModification elevDelta (Just mat)
+       in GeoModification elevDelta (Just mat) 0
 
 -----------------------------------------------------------
 -- Fissure
 -----------------------------------------------------------
 
 -- | Fissure: linear ridge.
---   Material only at the central channel — the ridge flanks
---   keep underlying material.
---
---   Profile (cross-section):
---      ____
---     / || \     <- central channel (magma if active)
---    /  ||  \    <- flanks (no material override)
---   /   ||   \
+--   Central channel: volcanic material, full intrusion.
+--   Inner flanks: basalt cap over uplift.
+--   Outer flanks: pure uplift from magma pressure.
 --
 applyFissure ∷ FissureParams → Int → Int → Int → Int → GeoModification
 applyFissure params worldSize gx gy _baseElev =
@@ -271,27 +256,23 @@ applyFissure params worldSize gx gy _baseElev =
               profile = cos (crossT * π / 2.0) * endTaper
               elevDelta = round (ridgeH * profile)
 
-              -- Only override material at the very center
-              mat = if fpHasMagma params ∧ crossT < 0.15
-                    then Just (unMaterialId matMagma)
-                    else if crossT < 0.3
-                    then Just (unMaterialId matBasalt)
-                    else Nothing
-          in GeoModification elevDelta mat
+          in if fpHasMagma params ∧ crossT < 0.15
+             then -- Central magma channel: full intrusion
+                  GeoModification elevDelta (Just (unMaterialId matMagma)) (abs elevDelta)
+             else if crossT < 0.3
+             then -- Inner flanks: basalt cap over uplift
+                  let intrusion = max 1 (round (fromIntegral elevDelta * (0.3 ∷ Float)))
+                  in GeoModification elevDelta (Just (unMaterialId matBasalt)) intrusion
+             else -- Outer flanks: pure uplift
+                  GeoModification elevDelta Nothing 0
 
 -----------------------------------------------------------
 -- Lava Tube
 -----------------------------------------------------------
 
 -- | Lava Tube: subtle surface ridge with collapse pits.
---   Material only at collapse pits — the rest is just a
---   gentle surface bulge.
---
---   Profile:
---      __          ___         __
---     /  \        /   \       /  \     <- subtle ridge (no override)
---    /    \__  __/     \__  _/    \
---             \/                       <- collapse pit (basalt)
+--   Ridge: pure uplift (no material override).
+--   Collapse pits: depression with basalt exposure, no intrusion.
 --
 applyLavaTube ∷ LavaTubeParams → Int → Int → Int → Int → GeoModification
 applyLavaTube params worldSize gx gy _baseElev =
@@ -342,28 +323,21 @@ applyLavaTube params worldSize gx gy _baseElev =
           in if nearCollapse
              then let pitDepth = ridgeH * 2.0
                       elevDelta = round (negate pitDepth * (1.0 - crossT))
-                  in GeoModification elevDelta (Just (unMaterialId matBasalt))
+                      -- Collapse pit: depression exposes basalt, no intrusion
+                  in GeoModification elevDelta (Just (unMaterialId matBasalt)) 0
              else
-             -- Normal tube: subtle ridge, NO material override
+             -- Normal tube: pure uplift, no new material
              let elevDelta = round (ridgeH * ridgeProfile)
-             in GeoModification elevDelta Nothing
+             in GeoModification elevDelta Nothing 0
 
 -----------------------------------------------------------
 -- Super Volcano
 -----------------------------------------------------------
 
 -- | Super Volcano: enormous caldera with ejecta field.
---   Material at rim and floor only. Ejecta blanket is thin
---   enough that underlying material shows through.
---   Floor depth is clamped to prevent going below sea level.
---
---   Profile:
---                ____________________
---     __________/                    \__________  <- ejecta (no override)
---    /     _____                      _____     \
---   /     /     \____________________/     \     \ <- rim (obsidian)
---  /     /                                  \     \
--- /     /        caldera floor (magma)       \     \
+--   Ejecta: pure uplift (thin ash, no material override).
+--   Rim: volcanic material, full intrusion.
+--   Floor: depression with magma/obsidian/basalt, no intrusion.
 --
 applySuperVolcano ∷ SuperVolcanoParams → Int → Int → Int → Int → GeoModification
 applySuperVolcano params worldSize gx gy baseElev =
@@ -382,8 +356,6 @@ applySuperVolcano params worldSize gx gy baseElev =
         rimOuterR = calderaR + rimWidth
         rimInnerR = calderaR - rimWidth
 
-        -- Clamp floor depth so the caldera doesn't go below sea level
-        -- baseElev is the accumulated elevation at this point
         maxFloorDrop = max 10.0 (fromIntegral baseElev + 50.0)
         clampedFloorD = min floorD maxFloorDrop
 
@@ -391,22 +363,22 @@ applySuperVolcano params worldSize gx gy baseElev =
        then noModification
 
        else if dist > rimOuterR
-       -- Ejecta blanket: thin ash deposit, NO material override
+       -- Ejecta blanket: pure uplift, no new material
        then let t = (dist - rimOuterR) / (ejectaR - rimOuterR)
                 t' = (1.0 - t) ** 2.0
                 elevDelta = round (ejectaD * t')
-            in GeoModification elevDelta Nothing
+            in GeoModification elevDelta Nothing 0
 
        else if dist > rimInnerR
-       -- Rim zone: obsidian
+       -- Rim zone: volcanic material, full intrusion
        then let rimMid = (rimInnerR + rimOuterR) / 2.0
                 distFromMid = abs (dist - rimMid) / rimWidth
                 t' = 1.0 - smoothstepGeo (min 1.0 distFromMid)
                 elevDelta = round (rimH * t')
-            in GeoModification elevDelta (Just (unMaterialId matObsidian))
+            in GeoModification elevDelta (Just (unMaterialId matObsidian)) (abs elevDelta)
 
        else
-       -- Caldera floor: use clamped depth, magma at center
+       -- Caldera floor: depression, no intrusion
        let t = dist / rimInnerR
            bowlT = smoothstepGeo t
            elevDelta = round (negate clampedFloorD * (1.0 - bowlT * 0.7))
@@ -415,21 +387,14 @@ applySuperVolcano params worldSize gx gy baseElev =
                  else if t < 0.4
                  then unMaterialId matObsidian
                  else unMaterialId matBasalt
-       in GeoModification elevDelta (Just mat)
+       in GeoModification elevDelta (Just mat) 0
 
 -----------------------------------------------------------
 -- Hydrothermal Vent
 -----------------------------------------------------------
 
 -- | Hydrothermal Vent: small mound on ocean floor.
---   Fully volcanic — these are tiny features, full override is fine.
---
---   Profile:
---       |
---      /|\       <- chimney (magma)
---     / | \
---    / _|_ \     <- mound (obsidian)
---   /       \
+--   Fully volcanic — tiny features, full intrusion throughout.
 --
 applyHydrothermal ∷ HydrothermalParams → Int → Int → Int → Int → GeoModification
 applyHydrothermal params worldSize gx gy _baseElev =
@@ -452,7 +417,7 @@ applyHydrothermal params worldSize gx gy _baseElev =
           then let chimneyT = t / chimneyR
                    profile = 1.0 - chimneyT * 0.3
                    elevDelta = round (chimneyH * profile)
-               in GeoModification elevDelta (Just (unMaterialId matMagma))
+               in GeoModification elevDelta (Just (unMaterialId matMagma)) (abs elevDelta)
           else
           let moundT = (t - chimneyR) / (1.0 - chimneyR)
               moundH = chimneyH * 0.3
@@ -461,4 +426,4 @@ applyHydrothermal params worldSize gx gy _baseElev =
               mat = if moundT < 0.3
                     then unMaterialId matMagma
                     else unMaterialId matObsidian
-          in GeoModification elevDelta (Just mat)
+          in GeoModification elevDelta (Just mat) (abs elevDelta)

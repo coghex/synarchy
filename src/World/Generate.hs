@@ -216,14 +216,22 @@ applyTimeline timeline worldSize gx gy (baseElev, baseMat) =
 --   Replays the geological timeline for (gx, gy), tracking how each
 --   event deposits or erodes material at different elevation bands.
 --
---   The idea: each event that raises the surface by +delta deposits
---   its material in the range [oldElev+1 .. oldElev+delta]. Each
---   event that lowers the surface erodes from the top down. By
---   replaying in order, the last event whose deposited range
---   includes queryZ determines the material there.
+--   Each event returns (elevDelta, materialOverride, intrusionDepth):
+--     - intrusionDepth tells us how much of the elevDelta is NEW material.
+--     - The remainder is uplift: existing strata pushed upward.
 --
---   If queryZ is below all deposited layers, the plate's base
---   material is returned (the bedrock).
+--   Example: elevDelta=+200, mat=basalt, intrusion=60
+--     Before: surface at Z=500
+--     After:  surface at Z=700
+--       Z=641..700: basalt (60 tiles of new intrusion)
+--       Z=501..640: whatever was at Z=361..500 before (uplifted 140 tiles)
+--       Z≤500: unchanged
+--
+--   This means to query "what's at Z=600?", we need to know
+--   it was uplifted from Z=600-140=460, and recursively ask
+--   what was there before. We track this as a cumulative
+--   "uplift offset" — how much the material at queryZ has
+--   been shifted upward by prior events.
 --
 --   Pure and deterministic — called once per exposed tile.
 materialAtDepth ∷ GeoTimeline → Int → Int → Int
@@ -231,92 +239,97 @@ materialAtDepth ∷ GeoTimeline → Int → Int → Int
                 → Int                 -- ^ Z-level to query
                 → MaterialId
 materialAtDepth timeline worldSize gx gy (baseElev, baseMat) queryZ =
-    let (_, _, result) = foldl' applyPeriodStrata
-                                (baseElev, baseMat, baseMat)
-                                (gtPeriods timeline)
+    let (_, _, _, result) = foldl' applyPeriodStrata
+                                   (baseElev, baseMat, 0, baseMat)
+                                   (gtPeriods timeline)
     in result
   where
-    -- Accumulator: (currentElev, currentSurfaceMat, materialAtQueryZ)
+    -- Accumulator: (currentElev, currentSurfaceMat, upliftAccum, materialAtQueryZ)
     --
-    -- currentElev: tracks the running surface elevation as events
-    --   deposit and erode material.
-    -- currentSurfaceMat: the material at the current surface
-    --   (used when an event has no material override).
-    -- materialAtQueryZ: the answer we're building — updated whenever
-    --   an event deposits material over queryZ or erosion reveals
-    --   what's underneath.
+    -- currentElev: running surface elevation
+    -- currentSurfaceMat: material at the current surface
+    -- upliftAccum: how much queryZ has been pushed upward by
+    --   uplift events. When we check if queryZ is "in the base
+    --   strata", we compare against (baseElev + upliftAccum).
+    -- materialAtQueryZ: the answer we're building
 
-    applyPeriodStrata (elev, surfMat, zMat) period =
-        let -- Apply each event in this period
-            (elev', surfMat', zMat') =
-                foldl' applyOneEventStrata (elev, surfMat, zMat) (gpEvents period)
-            -- Apply erosion for this period
+    applyPeriodStrata (elev, surfMat, uplift, zMat) period =
+        let (elev', surfMat', uplift', zMat') =
+                foldl' applyOneEventStrata (elev, surfMat, uplift, zMat)
+                       (gpEvents period)
             erosionMod = applyErosion (gpErosion period) worldSize gx gy elev'
             erosionDelta = gmElevDelta erosionMod
             erosionMatId = case gmMaterialOverride erosionMod of
                 Just m  → MaterialId m
                 Nothing → surfMat'
-            (surfMat'', zMat'') =
-                applyDelta elev' erosionDelta erosionMatId surfMat' zMat'
+            -- Erosion: no intrusion, treat as delta with 0 intrusion
+            (surfMat'', uplift'', zMat'') =
+                applyDelta elev' erosionDelta erosionMatId 0 surfMat' uplift' zMat'
             elev'' = elev' + erosionDelta
-        in (elev'', surfMat'', zMat'')
+        in (elev'', surfMat'', uplift'', zMat'')
 
-    applyOneEventStrata (elev, surfMat, zMat) event =
+    applyOneEventStrata (elev, surfMat, uplift, zMat) event =
         let mod' = applyGeoEvent event worldSize gx gy elev
             delta = gmElevDelta mod'
-            -- If the event specifies a material, use it for the deposited
-            -- range. Otherwise, the deposit inherits the current surface
-            -- material (same as the old applyTimeline behavior).
+            intrusion = gmIntrusionDepth mod'
             eventMat = case gmMaterialOverride mod' of
                 Just m  → MaterialId m
                 Nothing → surfMat
-            (surfMat', zMat') = applyDelta elev delta eventMat surfMat zMat
+            (surfMat', uplift', zMat') =
+                applyDelta elev delta eventMat intrusion surfMat uplift zMat
             elev' = elev + delta
-        in (elev', surfMat', zMat')
+        in (elev', surfMat', uplift', zMat')
 
-    -- | Given the elevation BEFORE this event, the delta (+deposit/-erode),
-    --   and the material being deposited, update the surface material and
-    --   the material at queryZ.
+    -- | Core stratigraphy logic.
     --
-    --   Deposition (delta > 0):
-    --     The event deposits eventMat in [elevBefore+1 .. elevBefore+delta].
-    --     If queryZ falls in that range, materialAtQueryZ becomes eventMat.
-    --     The surface material becomes eventMat.
+    --   Given elevation before the event, the delta, the material,
+    --   the intrusion depth, update everything.
     --
-    --   Erosion (delta < 0):
-    --     The event removes [elevBefore+delta+1 .. elevBefore].
-    --     If queryZ is now above the new surface, it doesn't matter
-    --     (the tile won't be generated). The surface material is tricky:
-    --     after erosion, the surface exposes whatever was deposited at the
-    --     new (lower) elevation. But since we track materialAtQueryZ and
-    --     the surface mat independently, erosion just keeps surfMat as-is.
-    --     (When we query a z-level that was already deposited by a prior
-    --     event, that prior event already set zMat correctly.)
+    --   For delta > 0:
+    --     upliftAmount = delta - intrusion  (how much existing strata shift up)
+    --     intrusionBottom = elevBefore + upliftAmount + 1
+    --     intrusionTop    = elevBefore + delta
+    --     If queryZ is in [intrusionBottom..intrusionTop]: material is eventMat
+    --     If queryZ is in the uplifted zone: it was pushed up by upliftAmount,
+    --       so accumulate that into upliftAccum for future base-strata checks.
     --
-    --   No change (delta == 0):
-    --     The event may still override the surface material (e.g., a
-    --     material-only change). If queryZ == elevBefore (the surface),
-    --     and the event overrides the material, update zMat too.
-    applyDelta ∷ Int → Int → MaterialId → MaterialId → MaterialId
-               → (MaterialId, MaterialId)
-    applyDelta elevBefore delta eventMat surfMat zMat
+    --   For delta < 0 (erosion/depression):
+    --     No new material deposited. Intrusion is 0.
+    --     Surface material may change (override at new surface).
+    --
+    --   For delta == 0:
+    --     Surface material override only.
+    applyDelta ∷ Int → Int → MaterialId → Int → MaterialId → Int → MaterialId
+               → (MaterialId, Int, MaterialId)
+    applyDelta elevBefore delta eventMat intrusion surfMat uplift zMat
         | delta > 0 =
-            -- Deposition: eventMat fills [elevBefore+1 .. elevBefore+delta]
-            let newZMat = if queryZ > elevBefore ∧ queryZ ≤ elevBefore + delta
-                          then eventMat
-                          else zMat
-            in (eventMat, newZMat)
+            let -- How much of the elevation gain is uplift vs intrusion
+                clampedIntrusion = min intrusion delta
+                upliftAmount = delta - clampedIntrusion
+                intrusionBottom = elevBefore + upliftAmount + 1
+                intrusionTop = elevBefore + delta
+                -- Is queryZ in the newly intruded (deposited) range?
+                inIntrusion = clampedIntrusion > 0
+                            ∧ queryZ ≥ intrusionBottom
+                            ∧ queryZ ≤ intrusionTop
+                -- Is queryZ in the uplifted zone?
+                -- The uplifted zone is [elevBefore+1 .. elevBefore+upliftAmount]
+                -- These tiles contain whatever was at [elevBefore+1-upliftAmount .. elevBefore]
+                -- before this event. We accumulate the uplift offset.
+                inUplift = upliftAmount > 0
+                         ∧ queryZ > elevBefore
+                         ∧ queryZ ≤ elevBefore + upliftAmount
+                newUplift = if inUplift then uplift + upliftAmount else uplift
+                newZMat = if inIntrusion then eventMat else zMat
+                newSurf = eventMat
+            in (newSurf, newUplift, newZMat)
         | delta < 0 =
-            -- Erosion: removes from the top. The material at queryZ is
-            -- unchanged (it was set by a prior depositional event).
-            -- Surface material stays as-is — the actual surface material
-            -- after erosion depends on what was deposited at the new top,
-            -- but we've already tracked that via prior applyDelta calls.
-            (surfMat, zMat)
+            -- Erosion: no deposition. The material at queryZ is unchanged
+            -- (it was set by a prior event). Surface material stays.
+            (surfMat, uplift, zMat)
         | otherwise =
-            -- No elevation change, but may override surface material.
-            -- If queryZ is exactly at the current surface, update it.
+            -- No elevation change, possible surface material override.
             let newZMat = if queryZ ≡ elevBefore ∧ eventMat ≠ surfMat
                           then eventMat
                           else zMat
-            in (eventMat, newZMat)
+            in (eventMat, uplift, newZMat)

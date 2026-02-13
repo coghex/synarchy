@@ -75,7 +75,7 @@ applyAllEvents events worldSize gx gy baseElev baseMat =
     foldl' applyOne (baseElev, baseMat) events
   where
     applyOne (elev, mat) event =
-        let GeoModification deltaE mMat = applyGeoEvent event worldSize gx gy elev
+        let GeoModification deltaE mMat _ = applyGeoEvent event worldSize gx gy elev
             newElev = elev + deltaE
             newMat  = case mMat of
                         Just m  → m

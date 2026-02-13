@@ -111,11 +111,6 @@ determineMeteoriteType seed attemptIdx radius =
 -- Crater Application
 -----------------------------------------------------------
 
--- | Apply a crater's effect to a single tile position.
---   The crater is a bowl shape: rim at the outer edge,
---   sloping down to the center. Ejecta blanket beyond the rim
---   tapers off with distance.
---
 --   Profile (cross section):
 --
 --     ejecta      rim
@@ -126,6 +121,11 @@ determineMeteoriteType seed attemptIdx radius =
 --                       \
 --                        \____  <- bowl floor
 --
+-- | Apply a crater's effect to a single tile position.
+--   Ejecta blanket: pure uplift (no new material, strata pushed up).
+--   Rim: impactite, full intrusion (impact-melted rock).
+--   Bowl: depression (erosion), impactite at the surface.
+--   Center: meteorite material if present.
 applyCrater ∷ CraterParams → Int → Int → Int → Int → GeoModification
 applyCrater params worldSize gx gy _baseElev =
     let GeoCoord cx cy = cpCenter params
@@ -142,32 +142,31 @@ applyCrater params worldSize gx gy _baseElev =
        then noModification
 
        else if dist > radius
-       -- Ejecta blanket: elevation change but NO material override
-       -- Ejecta is a thin layer over existing terrain
+       -- Ejecta blanket: pure uplift, no new material
        then let t = (dist - radius) / (ejectaR - radius)
                 t' = 1.0 - smoothstepGeo t
                 elevDelta = round (rimHeight * t' * 0.5)
-            in GeoModification elevDelta Nothing
+            in GeoModification elevDelta Nothing 0
 
        else if dist > radius * 0.9
-       -- Rim zone: impactite
+       -- Rim zone: impactite, full intrusion (impact melt)
        then let t = (dist - radius * 0.9) / (radius * 0.1)
                 t' = smoothstepGeo t
                 elevDelta = round (rimHeight * t')
-            in GeoModification elevDelta (Just (unMaterialId matImpactite))
+            in GeoModification elevDelta (Just (unMaterialId matImpactite)) (abs elevDelta)
 
        else if dist > radius * 0.15
-       -- Bowl zone: impactite
+       -- Bowl zone: depression, impactite surface, no intrusion
        then let t = (dist - radius * 0.15) / (radius * 0.75)
                 t' = smoothstepGeo t
                 elevDelta = round (negate depth * (1.0 - t'))
-            in GeoModification elevDelta (Just (unMaterialId matImpactite))
+            in GeoModification elevDelta (Just (unMaterialId matImpactite)) 0
 
        else
-       -- Central floor: meteorite or impactite
+       -- Central floor: depression, meteorite or impactite
        let elevDelta = round (negate depth)
            centerDist = dist / (radius * 0.15)
            mat = case cpMeteorite params of
                Just meteoriteMat | centerDist < 0.5 → Just meteoriteMat
                _ → Just (unMaterialId matImpactite)
-       in GeoModification elevDelta mat
+       in GeoModification elevDelta mat 0
