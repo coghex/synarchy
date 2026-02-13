@@ -217,7 +217,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
         chunks = HM.elems (wtdChunks tileData)
         (camX, _camY) = camPosition camera
 
-        effectiveDepth = min viewDepth (max 8 (round (zoom * 10.0 ∷ Float)))
+        effectiveDepth = min viewDepth (max 8 (round (zoom * 40.0 ∷ Float)))
 
         vb = computeViewBounds camera fbW fbH effectiveDepth
 
