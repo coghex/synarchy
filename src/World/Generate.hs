@@ -303,19 +303,13 @@ materialAtDepth timeline worldSize gx gy (baseElev, baseMat) queryZ =
                → (MaterialId, Int, MaterialId)
     applyDelta elevBefore delta eventMat intrusion surfMat uplift zMat
         | delta > 0 =
-            let -- How much of the elevation gain is uplift vs intrusion
-                clampedIntrusion = min intrusion delta
+            let clampedIntrusion = min intrusion delta
                 upliftAmount = delta - clampedIntrusion
                 intrusionBottom = elevBefore + upliftAmount + 1
                 intrusionTop = elevBefore + delta
-                -- Is queryZ in the newly intruded (deposited) range?
                 inIntrusion = clampedIntrusion > 0
                             ∧ queryZ ≥ intrusionBottom
                             ∧ queryZ ≤ intrusionTop
-                -- Is queryZ in the uplifted zone?
-                -- The uplifted zone is [elevBefore+1 .. elevBefore+upliftAmount]
-                -- These tiles contain whatever was at [elevBefore+1-upliftAmount .. elevBefore]
-                -- before this event. We accumulate the uplift offset.
                 inUplift = upliftAmount > 0
                          ∧ queryZ > elevBefore
                          ∧ queryZ ≤ elevBefore + upliftAmount
@@ -324,11 +318,24 @@ materialAtDepth timeline worldSize gx gy (baseElev, baseMat) queryZ =
                 newSurf = eventMat
             in (newSurf, newUplift, newZMat)
         | delta < 0 =
-            -- Erosion: no deposition. The material at queryZ is unchanged
-            -- (it was set by a prior event). Surface material stays.
-            (surfMat, uplift, zMat)
+            -- Depression with possible surface material override.
+            -- The event carves downward, exposing existing strata in the
+            -- cliff walls. The NEW surface (at elevBefore + delta) gets
+            -- the event's material if there's an override.
+            -- This handles crater bowls (impactite), crater centers
+            -- (meteorite), caldera floors (magma), collapse pits (basalt).
+            let newSurfZ = elevBefore + delta
+                newSurf = eventMat
+                -- queryZ at the new surface gets the override material.
+                -- queryZ above the new surface but below the old surface
+                -- is now "inside the cliff" of this depression — those
+                -- tiles belong to neighboring columns and will be handled
+                -- by their own materialAtDepth call.
+                newZMat = if queryZ ≡ newSurfZ
+                          then eventMat
+                          else zMat
+            in (newSurf, uplift, newZMat)
         | otherwise =
-            -- No elevation change, possible surface material override.
             let newZMat = if queryZ ≡ elevBefore ∧ eventMat ≠ surfMat
                           then eventMat
                           else zMat
