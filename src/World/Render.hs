@@ -101,9 +101,7 @@ updateWorldTiles = do
     -- partially visible. When fully zoomed in this saves iterating
     -- ~12,000 baked entries × 3 wrap offsets = 36,000 visibility
     -- tests per frame for zero visible output.
-    bgQuads ← if zoomAlpha ≤ 0.001
-        then return V.empty
-        else generateBackgroundQuads
+    bgQuads ← generateBackgroundQuads
 
     -- Auto-adjust zSlice during zoom crossfade so tiles track the
     -- surface under the camera
