@@ -190,10 +190,8 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs =
         activityLevel = gsCO2 gs
 
         -- Shield volcanoes: rare, only when activity is high
-        (shields, tbs1) = if activityLevel > 0.8
-            then generateAndRegisterN 8 2 volcSeed worldSize plates
-                     VolcanoEra_Hotspot generateShieldVolcano pIdx tbs
-            else ([], tbs)
+        (shields, tbs1) = generateAndRegisterN 8 2 volcSeed worldSize plates
+                              VolcanoEra_Hotspot generateShieldVolcano pIdx tbs
 
         -- Fissures: 1-2 per period
         (fissures, tbs2) = generateAndRegisterN 6 2 (volcSeed + 1) worldSize plates

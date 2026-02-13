@@ -28,6 +28,7 @@ local checkbox = nil
 local button = nil
 local dropdown = nil
 local slider = nil
+local randbox = nil
 
 local hoveredElement = nil
 local hoveredCallback = nil
@@ -37,6 +38,9 @@ local currentMenu = "main"
 local function handleNonTextBoxClick()
     if textbox then
         textbox.unfocusAll()
+    end
+    if randbox then
+        randbox.unfocusAll()
     end
 end
 
@@ -50,11 +54,13 @@ function uiManager.init(scriptId)
     scrollbar = require("scripts.ui.scrollbar")
     tabbar = require("scripts.ui.tabbar")
     slider = require("scripts.ui.slider")
+    randbox = require("scripts.ui.randbox")
 
     button.init()
     scrollbar.init()
     tabbar.init()
     slider.init()
+    randbox.init()
     uiscale = engine.getUIScale()
     
     menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)
@@ -201,6 +207,9 @@ function uiManager.update(dt)
     if dropdown then
         dropdown.update(dt)
     end
+    if randbox then
+        randbox.update(dt)
+    end
     
     if worldManager then
         worldManager.update(dt)
@@ -258,6 +267,9 @@ function uiManager.onMouseDown(button_num, x, y)
     if dropdown then
         dropdown.onClickOutside(sx, sy)
     end
+    if randbox then
+        randbox.onClickOutside(sx, sy)
+    end
 end
 
 function uiManager.onHoverEnter(elemHandle, callbackName)
@@ -271,6 +283,8 @@ function uiManager.onHoverEnter(elemHandle, callbackName)
         dropdown.onHoverEnter(elemHandle)
     elseif slider and slider.isSliderCallback(callbackName) then
         slider.onHoverEnter(elemHandle)
+    elseif randbox and randbox.isRandBoxCallback(callbackName) then
+        randbox.onHoverEnter(elemHandle)
     end
 end
 
@@ -285,6 +299,8 @@ function uiManager.onHoverLeave(elemHandle, callbackName)
         dropdown.onHoverLeave(elemHandle)
     elseif slider and slider.isSliderCallback(callbackName) then
         slider.onHoverLeave(elemHandle)
+    elseif randbox and randbox.isRandBoxCallback(callbackName) then
+        randbox.onHoverLeave(elemHandle)
     end
 end
 
@@ -336,6 +352,22 @@ function uiManager.onDropdownOptionClick(elemHandle)
     handleNonTextBoxClick()
     if dropdown then
         return dropdown.handleCallback("onDropdownOptionClick", elemHandle)
+    end
+    return false
+end
+
+function uiManager.onRandBoxClick(elemHandle)
+    handleNonTextBoxClick()
+    if randbox then
+        return randbox.handleCallback("onRandBoxClick", elemHandle)
+    end
+    return false
+end
+
+function uiManager.onRandomizeClick(elemHandle)
+    handleNonTextBoxClick()
+    if randbox then
+        return randbox.handleCallback("onRandomizeClick", elemHandle)
     end
     return false
 end
@@ -459,6 +491,9 @@ function uiManager.onUICharInput(char)
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onCharInput(char)
     end
+    if randbox and randbox.getFocusedId() then
+        return randbox.onCharInput(char)
+    end
     if textbox then
         return textbox.onCharInput(char)
     end
@@ -468,6 +503,9 @@ end
 function uiManager.onUIBackspace()
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onBackspace()
+    end
+    if randbox and randbox.getFocusedId() then
+        return randbox.onBackspace()
     end
     if textbox then
         return textbox.onBackspace()
@@ -479,6 +517,9 @@ function uiManager.onUIDelete()
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onDelete()
     end
+    if randbox and randbox.getFocusedId() then
+        return randbox.onDelete()
+    end
     if textbox then
         return textbox.onDelete()
     end
@@ -488,6 +529,9 @@ end
 function uiManager.onUICursorLeft()
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onCursorLeft()
+    end
+    if randbox and randbox.getFocusedId() then
+        return randbox.onCursorLeft()
     end
     if textbox then
         return textbox.onCursorLeft()
@@ -499,6 +543,9 @@ function uiManager.onUICursorRight()
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onCursorRight()
     end
+    if randbox and randbox.getFocusedId() then
+        return randbox.onCursorRight()
+    end
     if textbox then
         return textbox.onCursorRight()
     end
@@ -508,6 +555,9 @@ end
 function uiManager.onUIHome()
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onHome()
+    end
+    if randbox and randbox.getFocusedId() then
+        return randbox.onHome()
     end
     if textbox then
         return textbox.onHome()
@@ -519,6 +569,9 @@ function uiManager.onUIEnd()
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onEnd()
     end
+    if randbox and randbox.getFocusedId() then
+        return randbox.onEnd()
+    end
     if textbox then
         return textbox.onEnd()
     end
@@ -528,6 +581,9 @@ end
 function uiManager.onUISubmit()
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onSubmit()
+    end
+    if randbox and randbox.getFocusedId() then
+        return randbox.onSubmit()
     end
     if textbox then
         local handled, value, id, name = textbox.onSubmit()
@@ -543,6 +599,9 @@ end
 function uiManager.onUIEscape()
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onEscape()
+    end
+    if randbox and randbox.getFocusedId() then
+        return randbox.onEscape()
     end
     if textbox then
         local handled = textbox.onEscape()
@@ -562,6 +621,9 @@ end
 function uiManager.onUIFocusLost()
     if dropdown then
         dropdown.unfocusAll()
+    end
+    if randbox then
+        randbox.unfocusAll()
     end
     if textbox then
         textbox.unfocusAll()

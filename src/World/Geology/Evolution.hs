@@ -151,23 +151,39 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
 -----------------------------------------------------------
 
 -- | Get center coordinates from any volcanic feature.
-getFeatureCenter ∷ VolcanicFeature → GeoCoord
-getFeatureCenter (ShieldVolcano p)    = shCenter p
-getFeatureCenter (CinderCone p)       = ccCenter p
-getFeatureCenter (LavaDome p)         = ldCenter p
-getFeatureCenter (Caldera p)          = caCenter p
-getFeatureCenter (FissureVolcano p)   = fpStart p
-getFeatureCenter (LavaTube p)         = ltStart p
-getFeatureCenter (SuperVolcano p)     = svCenter p
-getFeatureCenter (HydrothermalVent p) = htCenter p
-
--- | Get approximate radius from any volcanic feature.
 getFeatureRadius ∷ VolcanicFeature → Int
 getFeatureRadius (ShieldVolcano p)    = shBaseRadius p
 getFeatureRadius (CinderCone p)       = ccBaseRadius p
 getFeatureRadius (LavaDome p)         = ldBaseRadius p
 getFeatureRadius (Caldera p)          = caOuterRadius p
-getFeatureRadius (FissureVolcano _)   = 50
-getFeatureRadius (LavaTube _)         = 30
-getFeatureRadius (SuperVolcano p)     = svCalderaRadius p
+getFeatureRadius (SuperVolcano p)     = svEjectaRadius p
 getFeatureRadius (HydrothermalVent p) = htRadius p
+getFeatureRadius (FissureVolcano p)   =
+    let GeoCoord sx sy = fpStart p
+        GeoCoord ex ey = fpEnd p
+        dx = fromIntegral (ex - sx) ∷ Float
+        dy = fromIntegral (ey - sy) ∷ Float
+    in round (sqrt (dx * dx + dy * dy) / 2.0) + fpWidth p
+getFeatureRadius (LavaTube p)         =
+    let GeoCoord sx sy = ltStart p
+        GeoCoord ex ey = ltEnd p
+        dx = fromIntegral (ex - sx) ∷ Float
+        dy = fromIntegral (ey - sy) ∷ Float
+    in round (sqrt (dx * dx + dy * dy) / 2.0) + ltWidth p
+
+-- | Get approximate radius from any volcanic feature.
+getFeatureCenter ∷ VolcanicFeature → GeoCoord
+getFeatureCenter (ShieldVolcano p)    = shCenter p
+getFeatureCenter (CinderCone p)       = ccCenter p
+getFeatureCenter (LavaDome p)         = ldCenter p
+getFeatureCenter (Caldera p)          = caCenter p
+getFeatureCenter (SuperVolcano p)     = svCenter p
+getFeatureCenter (HydrothermalVent p) = htCenter p
+getFeatureCenter (FissureVolcano p)   =
+    let GeoCoord sx sy = fpStart p
+        GeoCoord ex ey = fpEnd p
+    in GeoCoord ((sx + ex) `div` 2) ((sy + ey) `div` 2)
+getFeatureCenter (LavaTube p)         =
+    let GeoCoord sx sy = ltStart p
+        GeoCoord ex ey = ltEnd p
+    in GeoCoord ((sx + ex) `div` 2) ((sy + ey) `div` 2)

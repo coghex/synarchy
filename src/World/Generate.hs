@@ -25,7 +25,8 @@ import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalX)
 import World.Grid (worldToGrid)
-import World.Geology (applyGeoEvent, applyErosion, GeoModification(..))
+import World.Geology (applyGeoEvent, GeoModification(..))
+import World.Geology.Erosion (applyErosion)
 import Engine.Graphics.Camera (CameraFacing(..))
 
 -----------------------------------------------------------
