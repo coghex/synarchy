@@ -401,21 +401,35 @@ data FeatureEvolution
     = Reactivate          -- ^ Dormant → Active, grows taller, new material
         { feHeightGain    ∷ !Int       -- ^ Additional height from new eruption
         , feLavaExtension ∷ !Int       -- ^ Additional lava flow radius
+        , feCenter        ∷ !GeoCoord   -- ^ New eruption center (can shift on the cone)
+        , feRadius        ∷ !Int       -- ^ New eruption radius (for cinder cones)
         }
     | GoDormant           -- ^ Active → Dormant, no shape change
+        { feCenter        ∷ !GeoCoord   -- ^ Shift in center if dormant eruption is off-center
+        , feRadius        ∷ !Int       -- ^ Shift in radius if dormant eruption is off-center
+        }
     | GoExtinct           -- ^ Active/Dormant → Extinct
+        { feCenter        ∷ !GeoCoord   -- ^ Shift in center if extinction is off-center
+        , feRadius        ∷ !Int       -- ^ Shift in radius if extinction is off-center
+        }
     | CollapseToCaldera   -- ^ Structure collapses
         { feCollapseDepth ∷ !Int       -- ^ How deep the collapse goes
         , feCollapseRatio ∷ !Float     -- ^ What fraction of the cone collapses (0.3-0.8)
+        , feCenter        ∷ !GeoCoord   -- ^ Shift in center if collapse is off-center
+        , feRadius        ∷ !Int       -- ^ Shift in radius if collapse is off-center
         }
     | ParasiticEruption   -- ^ New feature spawns on the flank
         { feChildFeature  ∷ !VolcanicFeature  -- ^ The new cinder cone / dome
         , feChildId       ∷ !GeoFeatureId     -- ^ ID for the child
+        , feCenter        ∷ !GeoCoord         -- ^ Center of the new eruption on the flank
+        , feRadius        ∷ !Int               -- ^ Radius of the new eruption (for cinder cones)
         }
     | FlankCollapse       -- ^ One side of the volcano collapses (Mt St Helens)
         { feCollapseAngle ∷ !Float     -- ^ Direction of collapse (radians)
         , feCollapseWidth ∷ !Float     -- ^ Angular width of the collapse sector
         , feDebrisRadius  ∷ !Int       -- ^ How far the debris field extends
+        , feCenter        ∷ !GeoCoord   -- ^ Shift in center if collapse is off-center
+        , feRadius        ∷ !Int       -- ^ Shift in radius if collapse is off-center
         }
     deriving (Show, Eq)
 

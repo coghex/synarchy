@@ -52,7 +52,9 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                      h3 = hashGeo seed fidInt 42
                      depth = hashToRangeGeo h2 50 200
                      ratio = 0.3 + hashToFloatGeo h3 * 0.5
-                     evt = VolcanicModify fid (CollapseToCaldera depth ratio)
+                     evt = VolcanicModify fid (CollapseToCaldera depth ratio
+                             (getFeatureCenter (pfFeature pf))
+                             (getFeatureRadius (pfFeature pf)))
                      tbs' = updateFeature fid
                          (\p → p { pfActivity = Collapsed
                                   , pfLastActivePeriod = periodIdx }) tbs
@@ -60,7 +62,9 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
 
             else if roll < 0.45
             -- 30%: go dormant
-            then let evt = VolcanicModify fid GoDormant
+            then let evt = VolcanicModify fid (GoDormant
+                               (getFeatureCenter (pfFeature pf))
+                               (getFeatureRadius (pfFeature pf)))
                      tbs' = updateFeature fid
                          (\p → p { pfActivity = Dormant
                                   , pfLastActivePeriod = periodIdx }) tbs
@@ -94,7 +98,9 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                          , pfEruptionCount     = 1
                          , pfParentId          = Just fid
                          }
-                     evt = VolcanicModify fid (ParasiticEruption childFeature childId)
+                     evt = VolcanicModify fid (ParasiticEruption childFeature childId
+                             (getFeatureCenter (pfFeature pf))
+                             (getFeatureRadius (pfFeature pf)))
                      tbs'' = registerFeature childPf tbs'
                      tbs''' = updateFeature fid
                          (\p → p { pfEruptionCount = pfEruptionCount p + 1 }) tbs''
@@ -104,7 +110,9 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
             -- 35%: stays active, grows
             let h5 = hashGeo seed fidInt 49
                 heightGain = hashToRangeGeo h5 20 100
-                evt = VolcanicModify fid (Reactivate heightGain 0)
+                evt = VolcanicModify fid (Reactivate heightGain 0
+                        (getFeatureCenter (pfFeature pf))
+                        (getFeatureRadius (pfFeature pf)))
                 tbs' = updateFeature fid
                     (\p → p { pfEruptionCount = pfEruptionCount p + 1
                              , pfLastActivePeriod = periodIdx }) tbs
@@ -116,7 +124,9 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                      h6 = hashGeo seed fidInt 51
                      heightGain = hashToRangeGeo h5 30 150
                      lavaExt = hashToRangeGeo h6 5 20
-                     evt = VolcanicModify fid (Reactivate heightGain lavaExt)
+                     evt = VolcanicModify fid (Reactivate heightGain lavaExt
+                                (getFeatureCenter (pfFeature pf))
+                                (getFeatureRadius (pfFeature pf)))
                      tbs' = updateFeature fid
                          (\p → p { pfActivity = Active
                                   , pfEruptionCount = pfEruptionCount p + 1
@@ -124,7 +134,9 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                  in (evt : events, tbs')
 
             else if roll < 0.5
-            then let evt = VolcanicModify fid GoExtinct
+            then let evt = VolcanicModify fid (GoExtinct
+                               (getFeatureCenter (pfFeature pf))
+                               (getFeatureRadius (pfFeature pf)))
                      tbs' = updateFeature fid
                          (\p → p { pfActivity = Extinct }) tbs
                  in (evt : events, tbs')

@@ -10,12 +10,12 @@ import World.Material
 import World.Geology.Types
 import World.Geology.Crater (applyCrater)
 import World.Geology.Volcano (applyVolcanicFeature)
+import World.Geology.Hash (wrappedDeltaXGeo, smoothstepGeo)
 
 -----------------------------------------------------------
 -- Event Application
 -----------------------------------------------------------
 
--- | Apply any geo event to a position.
 applyGeoEvent ∷ GeoEvent → Int → Int → Int → Int → GeoModification
 applyGeoEvent (CraterEvent params)  worldSize gx gy baseElev =
     applyCrater params worldSize gx gy baseElev
@@ -32,12 +32,43 @@ applyGeoEvent (FloodEvent _)        _ _ _ _ = noModification
 -----------------------------------------------------------
 
 applyEvolution ∷ FeatureEvolution → Int → Int → Int → Int → GeoModification
-applyEvolution (Reactivate heightGain _lavaExt) _ws _gx _gy _e =
-    GeoModification heightGain Nothing
-applyEvolution GoDormant _ _ _ _ = noModification
-applyEvolution GoExtinct _ _ _ _ = noModification
-applyEvolution (CollapseToCaldera depth _ratio) _ws _gx _gy _e =
-    GeoModification (negate depth) (Just (unMaterialId matObsidian))
-applyEvolution (ParasiticEruption childFeature _childId) ws gx gy e =
+applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy _e =
+    let GeoCoord cx cy = center
+        dx = fromIntegral (wrappedDeltaXGeo ws gx cx) ∷ Float
+        dy = fromIntegral (gy - cy) ∷ Float
+        dist = sqrt (dx * dx + dy * dy)
+        r = fromIntegral radius ∷ Float
+    in if dist > r
+       then noModification
+       else let t = dist / r
+                profile = 1.0 - smoothstepGeo t
+                elevDelta = round (fromIntegral heightGain * profile)
+            in GeoModification elevDelta Nothing
+
+applyEvolution (GoDormant _center _radius) _ _ _ _ = noModification
+applyEvolution (GoExtinct _center _radius) _ _ _ _ = noModification
+
+applyEvolution (CollapseToCaldera depth _ratio center radius) ws gx gy _e =
+    let GeoCoord cx cy = center
+        dx = fromIntegral (wrappedDeltaXGeo ws gx cx) ∷ Float
+        dy = fromIntegral (gy - cy) ∷ Float
+        dist = sqrt (dx * dx + dy * dy)
+        r = fromIntegral radius ∷ Float
+    in if dist > r
+       then noModification
+       else let t = dist / r
+                -- Collapse is deepest at center, rim stays up
+                rimZone = t > 0.8
+                bowlT = smoothstepGeo (t / 0.8)
+                elevDelta = if rimZone
+                    then 0  -- rim stays
+                    else round (negate (fromIntegral depth) * (1.0 - bowlT))
+                mat = if rimZone
+                    then Nothing
+                    else Just (unMaterialId matObsidian)
+            in GeoModification elevDelta mat
+
+applyEvolution (ParasiticEruption childFeature _childId _center _radius) ws gx gy e =
     applyVolcanicFeature childFeature ws gx gy e
-applyEvolution (FlankCollapse _ _ _) _ _ _ _ = noModification
+
+applyEvolution (FlankCollapse _ _ _ _center _radius) _ _ _ _ = noModification

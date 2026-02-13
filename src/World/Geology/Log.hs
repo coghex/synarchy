@@ -74,12 +74,12 @@ featureTypeName (SuperVolcano _)     = "Super Volcanoes"
 featureTypeName (HydrothermalVent _) = "Hydrothermal Vents"
 
 evolutionName ∷ FeatureEvolution → Text
-evolutionName (Reactivate _ _)        = "Reactivations"
-evolutionName GoDormant               = "Went Dormant"
-evolutionName GoExtinct               = "Went Extinct"
-evolutionName (CollapseToCaldera _ _) = "Caldera Collapses"
-evolutionName (ParasiticEruption _ _) = "Parasitic Eruptions"
-evolutionName (FlankCollapse _ _ _)   = "Flank Collapses"
+evolutionName (Reactivate _ _ _ _)        = "Reactivations"
+evolutionName (GoDormant _ _)             = "Went Dormant"
+evolutionName (GoExtinct _ _)             = "Went Extinct"
+evolutionName (CollapseToCaldera _ _ _ _) = "Caldera Collapses"
+evolutionName (ParasiticEruption _ _ _ _) = "Parasitic Eruptions"
+evolutionName (FlankCollapse _ _ _ _ _)   = "Flank Collapses"
 
 countActivity ∷ (Int, Int, Int) → PersistentFeature → (Int, Int, Int)
 countActivity (a, d, e) pf = case pfActivity pf of

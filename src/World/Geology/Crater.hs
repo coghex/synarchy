@@ -23,8 +23,8 @@ import World.Geology.Hash
 generateCraters ∷ Word64 → Int → [TectonicPlate] → CraterEra → [CraterParams]
 generateCraters seed worldSize plates era =
     let (baseCount, minRadius, maxRadius, minDepth, maxDepth, rimMin, rimMax) = case era of
-            CraterEra_Primordial → (6,  40, 120, 30, 80, 10, 30)
-            CraterEra_Late       → (12, 10, 50,  8,  40, 3,  15)
+            CraterEra_Primordial → (4, 20, 60, 15, 50, 5, 20)
+            CraterEra_Late       → (8,  5, 25,  4, 20, 2, 10)
 
         count = scaleCount worldSize baseCount
         halfTiles = (worldSize * 16) `div` 2
@@ -67,8 +67,8 @@ generateCraterAttempt seed worldSize plates halfTiles
         rimHeight   = hashToRangeGeo h5 rimMin rimMax
         ejectaScale = hashToFloatGeo h6
 
-        -- Ejecta extends 1.5-2.5x the crater radius
-        ejectaRadius = radius + round (fromIntegral radius * (0.5 + ejectaScale))
+        -- Ejecta extends 1.2-1.6x the crater radius
+        ejectaRadius = radius + round (fromIntegral radius * (0.2 + ejectaScale))
 
         -- Meteorite survives in larger impacts
         meteoriteType = determineMeteoriteType seed attemptIdx radius
@@ -129,7 +129,6 @@ determineMeteoriteType seed attemptIdx radius =
 applyCrater ∷ CraterParams → Int → Int → Int → Int → GeoModification
 applyCrater params worldSize gx gy _baseElev =
     let GeoCoord cx cy = cpCenter params
-        -- Wrapped distance in X for cylindrical world
         dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) ∷ Float
         dy = fromIntegral (gy - cy) ∷ Float
         dist = sqrt (dx * dx + dy * dy)
@@ -140,37 +139,32 @@ applyCrater params worldSize gx gy _baseElev =
         ejectaR     = fromIntegral (cpEjectaRadius params) ∷ Float
 
     in if dist > ejectaR
-       -- Outside ejecta radius — no effect
        then noModification
 
        else if dist > radius
-       -- Ejecta blanket zone: rim to ejecta edge
-       -- Tapers from rimHeight at the rim to 0 at ejecta edge
+       -- Ejecta blanket: elevation change but NO material override
+       -- Ejecta is a thin layer over existing terrain
        then let t = (dist - radius) / (ejectaR - radius)
-                t' = 1.0 - smoothstepGeo t  -- 1.0 at rim, 0.0 at edge
+                t' = 1.0 - smoothstepGeo t
                 elevDelta = round (rimHeight * t' * 0.5)
-            in GeoModification elevDelta (Just (unMaterialId matImpactite))
+            in GeoModification elevDelta Nothing
 
        else if dist > radius * 0.9
-       -- Rim zone: the raised lip of the crater
-       -- Peaks at the rim edge, drops off slightly inward
+       -- Rim zone: impactite
        then let t = (dist - radius * 0.9) / (radius * 0.1)
-                t' = smoothstepGeo t  -- 0.0 at inner rim, 1.0 at rim edge
+                t' = smoothstepGeo t
                 elevDelta = round (rimHeight * t')
             in GeoModification elevDelta (Just (unMaterialId matImpactite))
 
        else if dist > radius * 0.15
-       -- Bowl zone: slopes from rim down to floor
-       -- Smooth curve from 0 at inner rim to -depth at center region
+       -- Bowl zone: impactite
        then let t = (dist - radius * 0.15) / (radius * 0.75)
-                -- t: 0.0 at the flat floor edge, 1.0 at inner rim
                 t' = smoothstepGeo t
                 elevDelta = round (negate depth * (1.0 - t'))
             in GeoModification elevDelta (Just (unMaterialId matImpactite))
 
        else
-       -- Central floor: flat depression, possible meteorite
-       -- Check for meteorite deposit at the very center
+       -- Central floor: meteorite or impactite
        let elevDelta = round (negate depth)
            centerDist = dist / (radius * 0.15)
            mat = case cpMeteorite params of
