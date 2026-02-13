@@ -29,14 +29,9 @@ import qualified Data.Vector as V
 -- Camera Change Detection
 -----------------------------------------------------------
 
--- | Epsilon for float comparison.
---   At tileWidth=0.15 / 96px, one pixel ≈ 0.0016 world units.
---   A few-pixel tolerance prevents cache thrashing during
---   momentum-based camera deceleration.
 camEpsilon ∷ Float
 camEpsilon = 0.005
 
--- | Check whether camera state has changed enough to require re-generating quads
 cameraChanged ∷ WorldCameraSnapshot → WorldCameraSnapshot → Bool
 cameraChanged old new =
     let (ox, oy) = wcsPosition old
@@ -64,7 +59,6 @@ updateWorldTiles = do
 
     worldManager ← liftIO $ readIORef (worldManagerRef env)
 
-    -- Tile quads: skip entirely when zoom map has fully taken over
     tileQuads ← if tileAlpha ≤ 0.001
         then return V.empty
         else do
@@ -75,17 +69,14 @@ updateWorldTiles = do
                     , wcsFbSize   = (fbW, fbH)
                     , wcsFacing   = camFacing camera
                     }
-            -- Check per-world caches
             quads ← forM (wmVisible worldManager) $ \pageId →
                 case lookup pageId (wmWorlds worldManager) of
                     Just worldState → do
                         cached ← liftIO $ readIORef (wsQuadCacheRef worldState)
                         case cached of
                             Just wqc | not (cameraChanged (wqcCamera wqc) currentSnap) →
-                                -- Cache hit — reuse last frame's quads
                                 return (wqcQuads wqc)
                             _ → do
-                                -- Cache miss — regenerate
                                 result ← renderWorldQuads env worldState tileAlpha currentSnap
                                 liftIO $ writeIORef (wsQuadCacheRef worldState) $
                                     Just (WorldQuadCache currentSnap result)
@@ -93,18 +84,10 @@ updateWorldTiles = do
                     Nothing → return V.empty
             return $ V.concat quads
 
-    -- Zoom map quads: generateZoomMapQuads already checks zoomAlpha
-    -- internally and returns V.empty when fully zoomed in
     zoomQuads ← generateZoomMapQuads
-
-    -- Background quads: only generate when zoom map is at least
-    -- partially visible. When fully zoomed in this saves iterating
-    -- ~12,000 baked entries × 3 wrap offsets = 36,000 visibility
-    -- tests per frame for zero visible output.
     bgQuads ← generateBackgroundQuads
 
-    -- Auto-adjust zSlice during zoom crossfade so tiles track the
-    -- surface under the camera
+    -- Auto-adjust zSlice during zoom crossfade
     when (tileAlpha > 0.001 ∧ tileAlpha < 0.999) $ do
         worldManager' ← liftIO $ readIORef (worldManagerRef env)
         forM_ (wmVisible worldManager') $ \pageId →
@@ -125,11 +108,10 @@ updateWorldTiles = do
                 Nothing → return ()
 
     let allQuads = bgQuads <> tileQuads <> zoomQuads
-
     return allQuads
 
 -----------------------------------------------------------
--- View Bounds (for culling)
+-- View Bounds
 -----------------------------------------------------------
 
 data ViewBounds = ViewBounds
@@ -139,11 +121,6 @@ data ViewBounds = ViewBounds
     , vbBottom ∷ !Float
     } deriving (Show)
 
--- | Compute the screen-space AABB for view culling.
---   The vertical padding accounts for tiles stacked below the
---   z-slice (their side faces extend downward on screen).
---   We use effectiveDepth here instead of the full viewDepth
---   so the pad shrinks at close zoom, tightening the cull.
 computeViewBounds ∷ Camera2D → Int → Int → Int → ViewBounds
 computeViewBounds camera fbW fbH effDepth =
     let (cx, cy) = camPosition camera
@@ -162,7 +139,7 @@ computeViewBounds camera fbW fbH effDepth =
         }
 
 -----------------------------------------------------------
--- Chunk-Level Culling (wrap-aware)
+-- Chunk-Level Culling
 -----------------------------------------------------------
 
 bestWrapOffset ∷ Int → Float → Float → Float
@@ -170,16 +147,15 @@ bestWrapOffset worldSize camX chunkScreenX =
     let wsw = worldScreenWidth worldSize
         candidates = [0, wsw, -wsw]
         dist offset = abs (chunkScreenX + offset - camX)
-    in minimumBy (\a b → compare (dist a) (dist b)) candidates
+    in minimumBy (\ac bc → compare (dist ac) (dist bc)) candidates
   where
-    minimumBy f (x:xs) = foldl' (\best c → if f c best ≡ LT then c else best) x xs
-    minimumBy _ []      = 0
+    minimumBy f (hd:tl) = foldl' (\best c → if f c best ≡ LT then c else best) hd tl
+    minimumBy _ []       = 0
 
 isChunkVisibleWrapped ∷ CameraFacing → Int → ViewBounds → Float
   → ChunkCoord → Maybe Float
 isChunkVisibleWrapped facing worldSize vb camX coord =
     let ((minGX, minGY), (maxGX, maxGY)) = chunkWorldBounds coord
-        -- Project all four grid-space corners into screen space
         corners = [ gridToScreen facing gx gy
                   | gx ← [minGX, maxGX]
                   , gy ← [minGY, maxGY]
@@ -224,7 +200,6 @@ renderWorldQuads env worldState zoomAlpha snap = do
     let (fbW, fbH) = wcsFbSize snap
         facing = camFacing camera
 
-    -- Look up graphics state ONCE for the whole frame
     gs ← gets graphicsState
     let lookupSlot texHandle = fromIntegral $ case textureSystem gs of
             Just bindless → getTextureSlotIndex texHandle bindless
@@ -242,16 +217,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
         chunks = HM.elems (wtdChunks tileData)
         (camX, _camY) = camPosition camera
 
-        -- Scale effective view depth with zoom level.
-        -- At close zoom (0.5) you see maybe 8 z-levels of cliff face.
-        -- At zoom 2.0 (crossfade) maybe 20. This caps how many tiles
-        -- pass the z-filter in the HashMap fold, so tiles buried far
-        -- below the surface are skipped without computing screen pos.
-        -- The full viewDepth (100) is the upper bound.
         effectiveDepth = min viewDepth (max 8 (round (zoom * 10.0 ∷ Float)))
 
-        -- Use effectiveDepth for the view bounds padding too,
-        -- so the vertical cull window matches the z-range we accept.
         vb = computeViewBounds camera fbW fbH effectiveDepth
 
         visibleChunksWithOffset =
@@ -261,16 +228,11 @@ renderWorldQuads env worldState zoomAlpha snap = do
             , Just offset ← [isChunkVisibleWrapped facing worldSize vb camX (lcCoord lc)]
             ]
 
-    -- Build per-chunk vectors directly, then concat once
     let chunkVectors = map (\(lc, xOffset) →
             let coord  = lcCoord lc
                 tileMap = lcTiles lc
                 surfMap = lcSurfaceMap lc
 
-                -- Real tiles: fold the HashMap directly into a list
-                -- of quads. The z-filter uses effectiveDepth so at
-                -- close zoom most deep tiles are rejected immediately
-                -- without computing their screen position.
                 !realQuads = HM.foldlWithKey'
                     (\acc (lx, ly, z) tile →
                         if z ≤ zSlice ∧ z ≥ (zSlice - effectiveDepth)
@@ -282,12 +244,11 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                  drawY = rawY - heightOffset
                              in if isTileVisible vb drawX drawY
                                 then tileToQuad lookupSlot lookupFmSlot textures facing
-                                       gx gy z tile zSlice zoomAlpha xOffset : acc
+                                       gx gy z tile zSlice effectiveDepth zoomAlpha xOffset : acc
                                 else acc
                         else acc
                     ) [] tileMap
 
-                -- Blank tiles: iterate grid coords directly
                 !blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures facing
                         gx gy zSlice zSlice zoomAlpha xOffset
@@ -323,24 +284,41 @@ renderWorldQuads env worldState zoomAlpha snap = do
 
 tileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
            → WorldTextures → CameraFacing
-           → Int → Int → Int → Tile → Int → Float → Float
+           → Int → Int → Int → Tile → Int → Int → Float → Float
            → SortableQuad
-tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice tileAlpha xOffset =
+tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice effDepth tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
-        (a, b) = applyFacing facing worldX worldY
+        (fa, fb) = applyFacing facing worldX worldY
         relativeZ = worldZ - zSlice
         heightOffset = fromIntegral relativeZ * tileSideHeight
         drawX = rawX + xOffset
         drawY = rawY - heightOffset
-        sortKey = fromIntegral (a + b)
+        sortKey = fromIntegral (fa + fb)
                 + fromIntegral relativeZ * 0.001
         texHandle = getTileTexture textures (tileType tile)
         actualSlot = lookupSlot texHandle
         fmHandle = getTileFaceMapTexture textures (tileType tile)
         fmSlot = lookupFmSlot fmHandle
+
+        -- Depth fade: tiles dissolve into the background layer
         depth = zSlice - worldZ
-        brightness = clamp01 (1.0 - fromIntegral depth * 0.12)
-        tint = Vec4 brightness brightness brightness tileAlpha
+        fadeRange = max 1 effDepth
+
+        -- Brightness: gentle shadow, bottoms out at 0.6
+        -- so cliff material colors remain identifiable
+        brightnessT = fromIntegral depth / fromIntegral fadeRange
+        brightness = clamp01 (1.0 - brightnessT * 0.4)
+
+        -- Alpha: quadratic curve — stays opaque for the top ~50%
+        -- of the cliff, then accelerates into transparency.
+        -- The background layer (always full brightness, correct
+        -- material color) shows through at the bottom.
+        fadeT = fromIntegral depth / fromIntegral fadeRange
+        depthAlpha = clamp01 (1.0 - fadeT * fadeT)
+
+        finalAlpha = tileAlpha * depthAlpha
+        tint = Vec4 brightness brightness brightness finalAlpha
+
         v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
         v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
@@ -354,7 +332,7 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
         }
 
 -----------------------------------------------------------
--- Blank Tile Quad (fills gaps in solid interior)
+-- Blank Tile Quad
 -----------------------------------------------------------
 
 blankTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
@@ -363,12 +341,12 @@ blankTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
                → SortableQuad
 blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSlice tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
-        (a, b) = applyFacing facing worldX worldY
+        (fa, fb) = applyFacing facing worldX worldY
         relativeZ = worldZ - zSlice
         heightOffset = fromIntegral relativeZ * tileSideHeight
         drawX = rawX + xOffset
         drawY = rawY - heightOffset
-        sortKey = fromIntegral (a + b)
+        sortKey = fromIntegral (fa + fb)
                 + fromIntegral relativeZ * 0.001
         texHandle = wtBlankTexture textures
         actualSlot = lookupSlot texHandle
