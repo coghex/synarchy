@@ -9,6 +9,7 @@ import UPrelude
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
 import Data.IORef (readIORef, writeIORef, IORef)
+import qualified Data.Map.Strict as Map
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -22,12 +23,33 @@ import World.Types
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
                    , isBeyondGlacier)
-import World.Geology (applyGeoEvent, GeoModification(..))
+import World.Generate (applyTimeline)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
                    backgroundMapLayer, zoomFadeStart, zoomFadeEnd,
                    worldScreenWidth)
 import qualified Data.Vector as V
+
+-----------------------------------------------------------
+-- Sampling Configuration
+-----------------------------------------------------------
+
+-- | Number of sample points per axis within a chunk.
+--   5×5 = 25 samples gives good coverage without being expensive.
+--   Samples are evenly spaced within the chunk.
+sampleGridSize ∷ Int
+sampleGridSize = 5
+
+-- | Generate the sample offsets within a chunk.
+--   For a 16-tile chunk with 5 samples, positions are at
+--   tiles 1, 4, 7, 10, 13 — evenly spaced, avoiding edges.
+sampleOffsets ∷ [(Int, Int)]
+sampleOffsets =
+    let step = max 1 (chunkSize `div` (sampleGridSize + 1))
+    in [ (sx * step, sy * step)
+       | sx ← [1 .. sampleGridSize]
+       , sy ← [1 .. sampleGridSize]
+       ]
 
 -----------------------------------------------------------
 -- Build Zoom Cache (called once at world init)
@@ -40,7 +62,6 @@ buildZoomCache facing params =
         plates = generatePlates seed worldSize (wgpPlateCount params)
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
-        allEvents = concatMap gpEvents (gtPeriods timeline)
 
         entries =
             [ ZoomChunkEntry
@@ -48,20 +69,37 @@ buildZoomCache facing params =
                 , zceChunkY   = ccy
                 , zceDrawX    = drawX
                 , zceDrawY    = drawY
-                , zceTexIndex = finalMat
-                , zceElev     = finalElev
+                , zceTexIndex = winnerMat
+                , zceElev     = avgElev
                 }
             | ccx ← [-halfSize .. halfSize - 1]
             , ccy ← [-halfSize .. halfSize - 1]
-            , let midGX = ccx * chunkSize + chunkSize `div` 2
-                  midGY = ccy * chunkSize + chunkSize `div` 2
+            , let baseGX = ccx * chunkSize
+                  baseGY = ccy * chunkSize
+                  midGX  = baseGX + chunkSize `div` 2
+                  midGY  = baseGY + chunkSize `div` 2
             , not (isBeyondGlacier worldSize midGX midGY)
-            , let (baseElev, baseMat) = elevationAtGlobal seed plates worldSize midGX midGY
-                  (finalElev, finalMat) =
-                      if baseMat ≡ matGlacier
-                      then (baseElev, unMaterialId baseMat)
-                      else applyAllEvents allEvents worldSize
-                               midGX midGY baseElev (unMaterialId baseMat)
+            , let -- Sample multiple points in this chunk
+                  samples = [ let gx = baseGX + ox
+                                  gy = baseGY + oy
+                                  (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
+                              in if baseMat ≡ matGlacier
+                                 then (baseElev, unMaterialId baseMat)
+                                 else if baseElev < -100 then (baseElev, 0)
+                                 else let (e, m) = applyTimeline timeline worldSize gx gy
+                                                       (baseElev, baseMat)
+                                      in (e, unMaterialId m)
+                            | (ox, oy) ← sampleOffsets
+                            ]
+
+                  -- Majority vote on material
+                  winnerMat = majorityMaterial samples
+
+                  -- Average elevation for texture selection (ocean check)
+                  avgElev = let s = sum (map fst samples)
+                            in s `div` length samples
+
+                  -- Draw position from chunk center
                   (wcx, wcy) = gridToWorld facing midGX midGY
                   drawX = wcx - chunkWorldWidth / 2.0
                   drawY = wcy
@@ -69,18 +107,21 @@ buildZoomCache facing params =
 
     in V.fromList entries
 
-applyAllEvents ∷ [GeoEvent] → Int → Int → Int → Int → Word8
-               → (Int, Word8)
-applyAllEvents events worldSize gx gy baseElev baseMat =
-    foldl' applyOne (baseElev, baseMat) events
-  where
-    applyOne (elev, mat) event =
-        let GeoModification deltaE mMat _ = applyGeoEvent event worldSize gx gy elev
-            newElev = elev + deltaE
-            newMat  = case mMat of
-                        Just m  → m
-                        Nothing → mat
-        in (newElev, newMat)
+-- | Pick the material that appears most often in the samples.
+--   On ties, prefers the material with higher material ID
+--   (volcanic/impact materials tend to be more visually interesting
+--   and have higher IDs than base plate rock).
+majorityMaterial ∷ [(Int, Word8)] → Word8
+majorityMaterial samples =
+    let counts = foldl' (\m (_, mat) → Map.insertWith (+) mat (1 ∷ Int) m)
+                        Map.empty samples
+        -- Find max count, break ties with higher material ID
+        (winner, _) = Map.foldlWithKey' (\(bestMat, bestCount) mat count →
+            if count > bestCount ∨ (count ≡ bestCount ∧ mat > bestMat)
+            then (mat, count)
+            else (bestMat, bestCount)
+            ) (0, 0) counts
+    in winner
 
 -----------------------------------------------------------
 -- Bake Zoom Vertices (internal, called lazily on render thread)
@@ -290,31 +331,43 @@ emitQuad entry dx alpha layer =
         }
 
 -----------------------------------------------------------
--- Helpers
+-- Texture Pickers (complete for all materials)
 -----------------------------------------------------------
 
 getZoomTexture ∷ WorldTextures → Word8 → Int → TextureHandle
-getZoomTexture textures 250 _ = wtZoomGlacier textures
-getZoomTexture textures _mat elev
-    | elev < -100 = wtZoomOcean textures
-getZoomTexture textures 1   _ = wtZoomGranite textures
-getZoomTexture textures 2   _ = wtZoomDiorite textures
-getZoomTexture textures 3   _ = wtZoomGabbro textures
-getZoomTexture textures 4   _ = wtZoomBasalt textures
-getZoomTexture textures 5   _ = wtZoomObsidian textures
-getZoomTexture textures 20  _ = wtZoomImpactite textures
-getZoomTexture textures 100 _ = wtZoomLava textures
-getZoomTexture textures _   _ = wtZoomGranite textures
+getZoomTexture textures 250 _  = wtZoomGlacier textures
+getZoomTexture textures 0   _  = wtZoomOcean textures
+getZoomTexture textures 1   _  = wtZoomGranite textures
+getZoomTexture textures 2   _  = wtZoomDiorite textures
+getZoomTexture textures 3   _  = wtZoomGabbro textures
+getZoomTexture textures 4   _  = wtZoomBasalt textures
+getZoomTexture textures 5   _  = wtZoomObsidian textures
+getZoomTexture textures 10  _  = wtZoomSandstone textures
+getZoomTexture textures 11  _  = wtZoomLimestone textures
+getZoomTexture textures 12  _  = wtZoomShale textures
+getZoomTexture textures 20  _  = wtZoomImpactite textures
+getZoomTexture textures 30  _  = wtZoomIron textures
+getZoomTexture textures 31  _  = wtZoomOlivine textures
+getZoomTexture textures 32  _  = wtZoomPyroxene textures
+getZoomTexture textures 33  _  = wtZoomFeldspar textures
+getZoomTexture textures 100 _  = wtZoomLava textures
+getZoomTexture textures _   _  = wtZoomGranite textures
 
 getBgTexture ∷ WorldTextures → Word8 → Int → TextureHandle
-getBgTexture textures 250 _ = wtBgGlacier textures
-getBgTexture textures _mat elev
-    | elev < -100 = wtBgOcean textures
-getBgTexture textures 1   _ = wtBgGranite textures
-getBgTexture textures 2   _ = wtBgDiorite textures
-getBgTexture textures 3   _ = wtBgGabbro textures
-getBgTexture textures 4   _ = wtBgBasalt textures
-getBgTexture textures 5   _ = wtBgObsidian textures
-getBgTexture textures 20  _ = wtBgImpactite textures
-getBgTexture textures 100 _ = wtBgLava textures
-getBgTexture textures _   _ = wtBgGranite textures
+getBgTexture textures 250 _  = wtBgGlacier textures
+getBgTexture textures 0   _  = wtBgOcean textures
+getBgTexture textures 1   _  = wtBgGranite textures
+getBgTexture textures 2   _  = wtBgDiorite textures
+getBgTexture textures 3   _  = wtBgGabbro textures
+getBgTexture textures 4   _  = wtBgBasalt textures
+getBgTexture textures 5   _  = wtBgObsidian textures
+getBgTexture textures 10  _  = wtBgSandstone textures
+getBgTexture textures 11  _  = wtBgLimestone textures
+getBgTexture textures 12  _  = wtBgShale textures
+getBgTexture textures 20  _  = wtBgImpactite textures
+getBgTexture textures 30  _  = wtBgIron textures
+getBgTexture textures 31  _  = wtBgOlivine textures
+getBgTexture textures 32  _  = wtBgPyroxene textures
+getBgTexture textures 33  _  = wtBgFeldspar textures
+getBgTexture textures 100 _  = wtBgLava textures
+getBgTexture textures _   _  = wtBgGranite textures

@@ -376,6 +376,20 @@ handleWorldCommand env logger cmd = do
                           BgBasaltTexture     → wt { wtBgBasalt         = texHandle }
                           BgImpactiteTexture  → wt { wtBgImpactite      = texHandle }
                           BgObsidianTexture    → wt { wtBgObsidian       = texHandle }
+                          ZoomSandstoneTexture  → wt { wtZoomSandstone  = texHandle }
+                          ZoomLimestoneTexture  → wt { wtZoomLimestone  = texHandle }
+                          ZoomShaleTexture      → wt { wtZoomShale      = texHandle }
+                          ZoomIronTexture       → wt { wtZoomIron       = texHandle }
+                          ZoomOlivineTexture    → wt { wtZoomOlivine    = texHandle }
+                          ZoomPyroxeneTexture   → wt { wtZoomPyroxene   = texHandle }
+                          ZoomFeldsparTexture   → wt { wtZoomFeldspar   = texHandle }
+                          BgSandstoneTexture    → wt { wtBgSandstone    = texHandle }
+                          BgLimestoneTexture    → wt { wtBgLimestone    = texHandle }
+                          BgShaleTexture        → wt { wtBgShale        = texHandle }
+                          BgIronTexture         → wt { wtBgIron         = texHandle }
+                          BgOlivineTexture      → wt { wtBgOlivine      = texHandle }
+                          BgPyroxeneTexture     → wt { wtBgPyroxene     = texHandle }
+                          BgFeldsparTexture     → wt { wtBgFeldspar     = texHandle }
                     atomicModifyIORef' (wsTexturesRef worldState) 
                         (\wt → (updateTextures wt, ()))
                     logDebug logger CatWorld $ 

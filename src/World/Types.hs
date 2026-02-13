@@ -199,6 +199,20 @@ data WorldTextures = WorldTextures
     , wtBgBasalt         ∷ TextureHandle
     , wtBgImpactite      ∷ TextureHandle
     , wtBgObsidian       ∷ TextureHandle
+    , wtZoomSandstone    ∷ TextureHandle
+    , wtZoomLimestone    ∷ TextureHandle
+    , wtZoomShale        ∷ TextureHandle
+    , wtZoomIron         ∷ TextureHandle
+    , wtZoomOlivine      ∷ TextureHandle
+    , wtZoomPyroxene     ∷ TextureHandle
+    , wtZoomFeldspar     ∷ TextureHandle
+    , wtBgSandstone      ∷ TextureHandle
+    , wtBgLimestone      ∷ TextureHandle
+    , wtBgShale          ∷ TextureHandle
+    , wtBgIron           ∷ TextureHandle
+    , wtBgOlivine        ∷ TextureHandle
+    , wtBgPyroxene       ∷ TextureHandle
+    , wtBgFeldspar       ∷ TextureHandle
     } deriving (Show, Eq)
 
 defaultWorldTextures ∷ WorldTextures
@@ -240,6 +254,20 @@ defaultWorldTextures = WorldTextures
     , wtBgBasalt         = TextureHandle 0
     , wtBgImpactite      = TextureHandle 0
     , wtBgObsidian       = TextureHandle 0
+    , wtZoomSandstone    = TextureHandle 0
+    , wtZoomLimestone    = TextureHandle 0
+    , wtZoomShale        = TextureHandle 0
+    , wtZoomIron         = TextureHandle 0
+    , wtZoomOlivine      = TextureHandle 0
+    , wtZoomPyroxene     = TextureHandle 0
+    , wtZoomFeldspar     = TextureHandle 0
+    , wtBgSandstone      = TextureHandle 0
+    , wtBgLimestone      = TextureHandle 0
+    , wtBgShale          = TextureHandle 0
+    , wtBgIron           = TextureHandle 0
+    , wtBgOlivine        = TextureHandle 0
+    , wtBgPyroxene       = TextureHandle 0
+    , wtBgFeldspar       = TextureHandle 0
     }
 
 -----------------------------------------------------------
@@ -749,6 +777,20 @@ data WorldTextureType
     | BgBasaltTexture
     | BgImpactiteTexture
     | BgObsidianTexture
+    | ZoomSandstoneTexture
+    | ZoomLimestoneTexture
+    | ZoomShaleTexture
+    | ZoomIronTexture
+    | ZoomOlivineTexture
+    | ZoomPyroxeneTexture
+    | ZoomFeldsparTexture
+    | BgSandstoneTexture
+    | BgLimestoneTexture
+    | BgShaleTexture
+    | BgIronTexture
+    | BgOlivineTexture
+    | BgPyroxeneTexture
+    | BgFeldsparTexture
     deriving (Show, Eq)
 
 data WorldCommand

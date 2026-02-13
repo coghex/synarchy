@@ -31,7 +31,6 @@ worldView.textures = {
     bgOcean = -1,
     bgGlacier = -1,
     bgLava = -1,
-    -- New materials
     basalt = -1,
     obsidian = -1,
     sandstone = -1,
@@ -42,14 +41,26 @@ worldView.textures = {
     olivine = -1,
     pyroxene = -1,
     feldspar = -1,
-    -- Zoom variants
     zoomBasalt = -1,
     zoomObsidian = -1,
     zoomImpactite = -1,
-    -- Background variants
     bgBasalt = -1,
     bgImpactite = -1,
     bgObsidian = -1,
+    zoomSandstone = -1,
+    zoomLimestone = -1,
+    zoomShale = -1,
+    zoomIron = -1,
+    zoomOlivine = -1,
+    zoomPyroxene = -1,
+    zoomFeldspar = -1,
+    bgSandstone = -1,
+    bgLimestone = -1,
+    bgShale = -1,
+    bgIron = -1,
+    bgOlivine = -1,
+    bgPyroxene = -1,
+    bgFeldspar = -1,
 }
 worldView.texturesNeeded = 0
 worldView.texturesLoadedCount = 0
@@ -115,6 +126,20 @@ function worldView.init(width, height)
     worldView.textures.bgBasalt       = engine.loadTexture("assets/textures/world/zoommap/basalt_chunk_background.png")
     worldView.textures.bgImpactite    = engine.loadTexture("assets/textures/world/zoommap/impactite_chunk_background.png")
     worldView.textures.bgObsidian     = engine.loadTexture("assets/textures/world/zoommap/obsidian_chunk_background.png")
+    worldView.textures.zoomSandstone   = engine.loadTexture("assets/textures/world/zoommap/sandstone_chunk.png")
+    worldView.textures.zoomLimestone   = engine.loadTexture("assets/textures/world/zoommap/limestone_chunk.png")
+    worldView.textures.zoomShale       = engine.loadTexture("assets/textures/world/zoommap/shale_chunk.png")
+    worldView.textures.zoomIron        = engine.loadTexture("assets/textures/world/zoommap/iron_chunk.png")
+    worldView.textures.zoomOlivine     = engine.loadTexture("assets/textures/world/zoommap/olivine_chunk.png")
+    worldView.textures.zoomPyroxene    = engine.loadTexture("assets/textures/world/zoommap/pyroxene_chunk.png")
+    worldView.textures.zoomFeldspar    = engine.loadTexture("assets/textures/world/zoommap/feldspar_chunk.png")
+    worldView.textures.bgSandstone     = engine.loadTexture("assets/textures/world/zoommap/sandstone_chunk_background.png")
+    worldView.textures.bgLimestone     = engine.loadTexture("assets/textures/world/zoommap/limestone_chunk_background.png")
+    worldView.textures.bgShale         = engine.loadTexture("assets/textures/world/zoommap/shale_chunk_background.png")
+    worldView.textures.bgIron          = engine.loadTexture("assets/textures/world/zoommap/iron_chunk_background.png")
+    worldView.textures.bgOlivine       = engine.loadTexture("assets/textures/world/zoommap/olivine_chunk_background.png")
+    worldView.textures.bgPyroxene      = engine.loadTexture("assets/textures/world/zoommap/pyroxene_chunk_background.png")
+    worldView.textures.bgFeldspar      = engine.loadTexture("assets/textures/world/zoommap/feldspar_chunk_background.png")
     
     engine.logInfo("World view initialized, loading " .. worldView.texturesNeeded .. " textures")
 end

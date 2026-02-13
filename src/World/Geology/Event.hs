@@ -48,7 +48,9 @@ applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy _e =
                 intrusion = if t < 0.4
                     then abs elevDelta
                     else 0
-            in GeoModification elevDelta Nothing intrusion
+            in GeoModification elevDelta
+                    (if t < 0.4 then Just (unMaterialId matBasalt) else Nothing)
+                    intrusion
 
 applyEvolution (GoDormant _center _radius) _ _ _ _ = noModification
 applyEvolution (GoExtinct _center _radius) _ _ _ _ = noModification
