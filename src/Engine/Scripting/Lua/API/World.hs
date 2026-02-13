@@ -26,13 +26,15 @@ worldInitFn env = do
     pageIdArg ← Lua.tostring 1
     seedArg   ← Lua.tointeger 2
     sizeArg   ← Lua.tointeger 3
+    platesArg ← Lua.tointeger 4
     
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
                 seed   = maybe 42 fromIntegral seedArg
                 size   = maybe 64 fromIntegral sizeArg
-            Q.writeQueue (worldQueue env) (WorldInit pageId seed size)
+                plates = maybe 10 fromIntegral platesArg
+            Q.writeQueue (worldQueue env) (WorldInit pageId seed size plates)
         Nothing → pure ()
     
     return 0

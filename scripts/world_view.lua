@@ -161,9 +161,17 @@ function worldView.createWorld()
         engine.logWarn("World already active, skipping creation")
         return
     end
+
+    local wp = worldView.worldParams or {}
+    local seed = wp.seed or 42
+    local worldSize = wp.worldSize or 128
+    local plateCount = wp.plateCount or 10
     
     worldManager.createWorld({ 
         worldId = "main_world",
+        seed = seed,
+        woeldSize = worldSize,
+        plateCount = plateCount,
         graniteTexture = worldView.textures.granite,
         dioriteTexture = worldView.textures.diorite,
         gabbroTexture  = worldView.textures.gabbro,

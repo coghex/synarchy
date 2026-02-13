@@ -12,12 +12,13 @@ function worldManager.createWorld(params)
     local worldId = params.worldId or "main_world"
     local seed = params.seed or 42
     local worldSize = params.worldSize or 128
+    local plateCount = params.plateCount or 10
     
     engine.logInfo("Creating world: " .. worldId 
         .. " (seed=" .. seed .. ", size=" .. worldSize .. " chunks)")
     
     -- Send init command with seed and world size
-    world.init(worldId, seed, worldSize)
+    world.init(worldId, seed, worldSize, plateCount)
     
     -- Set all material textures
     if params.graniteTexture then

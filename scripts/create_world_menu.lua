@@ -775,6 +775,15 @@ function createWorldMenu.onGenerateWorld()
         .. " size=" .. tostring(sizeNum)
         .. " plates=" .. tostring(plateNum))
 
+    -- Store params on worldView so it uses them when creating the world
+    local worldView = require("scripts.world_view")
+    worldView.worldParams = {
+        seed = seedNum,
+        worldSize = sizeNum,
+        plateCount = plateNum,
+        worldName = p.worldName,
+    }
+
     if createWorldMenu.showMenuCallback then
         createWorldMenu.showMenuCallback("world_view")
     end

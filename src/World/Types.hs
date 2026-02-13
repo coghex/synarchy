@@ -751,7 +751,7 @@ data WorldTextureType
     deriving (Show, Eq)
 
 data WorldCommand
-    = WorldInit WorldPageId Word64 Int
+    = WorldInit WorldPageId Word64 Int Int
     | WorldShow WorldPageId
     | WorldHide WorldPageId
     | WorldTick Double

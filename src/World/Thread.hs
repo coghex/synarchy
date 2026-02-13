@@ -208,17 +208,19 @@ handleWorldCommand env logger cmd = do
     logDebug logger CatWorld $ "Processing world command: " <> T.pack (show cmd)
     
     case cmd of
-        WorldInit pageId seed worldSize → do
+        WorldInit pageId seed worldSize placeCount → do
             logDebug logger CatWorld $ "Initializing world: " <> unWorldPageId pageId
                 <> " (seed=" <> T.pack (show seed)
-                <> ", size=" <> T.pack (show worldSize) <> " chunks)"
+                <> ", size=" <> T.pack (show worldSize)
+                <> ", places=" <> T.pack (show placeCount) <> ")"
             
             worldState ← emptyWorldState
             
-            let timeline = buildTimeline seed worldSize 10
+            let timeline = buildTimeline seed worldSize placeCount
                 params = defaultWorldGenParams
                     { wgpSeed        = seed
                     , wgpWorldSize   = worldSize
+                    , wgpPlateCount  = placeCount
                     , wgpGeoTimeline = timeline
                     }
             
