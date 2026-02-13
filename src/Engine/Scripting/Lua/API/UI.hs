@@ -40,6 +40,7 @@ module Engine.Scripting.Lua.API.UI
   , uiSetPositionFn
   , uiSetSizeFn
   , uiSetVisibleFn
+  , uiIsPageVisibleFn
   , uiSetClickableFn
   , uiSetOnClickFn
   , uiSetZIndexFn
@@ -563,6 +564,19 @@ uiSetVisibleFn env = do
         Nothing → pure ()
     
     return 0
+
+-- | UI.isPageVisible(pageHandle) -> boolean
+uiIsPageVisibleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiIsPageVisibleFn env = do
+    handleArg ← Lua.tointeger 1
+    case handleArg of
+        Just n → do
+            mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+            case getPage (PageHandle $ fromIntegral n) mgr of
+                Just page → Lua.pushboolean (upVisible page)
+                Nothing   → Lua.pushboolean False
+        Nothing → Lua.pushboolean False
+    return 1
 
 -- | UI.setClickable(elementHandle, clickable)
 uiSetClickableFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

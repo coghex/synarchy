@@ -487,6 +487,22 @@ function createWorldMenu.onWorldGenLog(text)
     logPanelMod.addLine(createWorldMenu, text)
 end
 
+function createWorldMenu.onWorldPreviewReady(textureHandle)
+    engine.logInfo("Updating world preview with texture handle: "
+        .. tostring(textureHandle))
+    createWorldMenu.worldPreviewTexture = textureHandle
+    -- Only rebuild if the create world page is currently visible
+    if createWorldMenu.page and UI.isPageVisible(createWorldMenu.page) then
+        local savedGenState = createWorldMenu.genState
+        createWorldMenu.createUI()
+        createWorldMenu.genState = savedGenState
+        if savedGenState == generation.DONE then
+            createWorldMenu.buildButtonsDone()
+        end
+        UI.showPage(createWorldMenu.page)
+    end
+end
+
 -----------------------------------------------------------
 -- Scroll events (called from ui_manager)
 -----------------------------------------------------------

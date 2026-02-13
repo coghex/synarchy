@@ -3,6 +3,7 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Map as Map
+import qualified Data.ByteString as BS
 import Data.IORef (IORef)
 import Engine.Asset.Base
 import Engine.Asset.Types
@@ -63,6 +64,7 @@ data EngineEnv = EngineEnv
   , worldManagerRef     ∷ IORef WorldManager
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
+  , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))
   } deriving (Eq)
 
 -- | Engine state (mutable)

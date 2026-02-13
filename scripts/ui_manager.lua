@@ -667,6 +667,13 @@ function uiManager.onWorldGenLog(text)
     end
 end
 
+function uiManager.onWorldPreviewReady(textureHandle)
+    engine.logDebug("World preview texture ready: " .. tostring(textureHandle))
+    if createWorldMenu and createWorldMenu.onWorldPreviewReady then
+        createWorldMenu.onWorldPreviewReady(textureHandle)
+    end
+end
+
 -----------------------------------------------------------
 -- Key Input Forwarding
 -----------------------------------------------------------

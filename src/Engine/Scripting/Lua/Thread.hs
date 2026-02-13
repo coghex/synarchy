@@ -364,4 +364,7 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onInterrupt" [ScriptNumber (fromIntegral fid)]
   LuaWorldGenLog text →
     broadcastToModules ls "onWorldGenLog" [ScriptString text]
+  LuaWorldPreviewReady handleInt →
+    broadcastToModules ls "onWorldPreviewReady"
+      [ScriptNumber (fromIntegral handleInt)]
   _ → return ()

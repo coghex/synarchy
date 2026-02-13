@@ -87,6 +87,8 @@ initializeEngine = do
   fontCache ← newIORef defaultFontCache
   -- start time at noon
   sunAngleRef ← newIORef 0.25
+  -- preview
+  worldPreviewRef ← newIORef Nothing
 
   -- Build environment
   let env = EngineEnv
@@ -118,6 +120,7 @@ initializeEngine = do
         , worldQueue         = worldQueue
         , focusManagerRef    = focusMgrRef
         , sunAngleRef        = sunAngleRef
+        , worldPreviewRef    = worldPreviewRef
         }
   
   envVar   ← atomically $ newVar env

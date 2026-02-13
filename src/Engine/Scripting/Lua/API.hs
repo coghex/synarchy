@@ -172,6 +172,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setPosition"  (uiSetPositionFn env)
   registerLuaFunction "setSize"      (uiSetSizeFn env)
   registerLuaFunction "setVisible"   (uiSetVisibleFn env)
+  registerLuaFunction "isPageVisible" (uiIsPageVisibleFn env)
   registerLuaFunction "setClickable" (uiSetClickableFn env)
   registerLuaFunction "setZIndex"    (uiSetZIndexFn env)
   registerLuaFunction "setColor"     (uiSetColorFn env)

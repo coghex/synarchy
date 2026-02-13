@@ -23,6 +23,7 @@ import World.Grid (zoomFadeEnd)
 import World.Geology (buildTimeline, logTimeline)
 import World.Geology.Log (logTimeline)
 import World.Plate (generatePlates, elevationAtGlobal)
+import World.Preview (buildPreviewImage, PreviewImage(..))
 import World.ZoomMap (buildZoomCache)
 
 -----------------------------------------------------------
@@ -255,6 +256,13 @@ handleWorldCommand env logger cmd = do
             sendGenLog env "Building zoom cache..."
             let zoomCache = buildZoomCache facing params
             writeIORef (wsZoomCacheRef worldState) zoomCache
+
+            -- Build world preview image for the create-world UI
+            sendGenLog env "Rendering world preview..."
+            let preview = buildPreviewImage params zoomCache
+            writeIORef (worldPreviewRef env) $
+                Just (piWidth preview, piHeight preview, piData preview)
+            sendGenLog env "World preview ready."
             
             -- Generate the initial 5×5 chunk grid around (0,0)
             let initialCoords = [ ChunkCoord cx cy

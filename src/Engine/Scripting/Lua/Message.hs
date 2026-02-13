@@ -5,8 +5,11 @@ module Engine.Scripting.Lua.Message
 import UPrelude
 import qualified Data.Map as Map
 import qualified Data.Text as T
+import qualified Data.ByteString as BS
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Data.Time.Clock (getCurrentTime)
+import Foreign.Ptr (castPtr)
+import Foreign.Marshal.Utils (copyBytes)
 import System.FilePath (takeBaseName)
 import Engine.Asset.Handle
 import Engine.Asset.Manager
@@ -15,14 +18,22 @@ import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM, logWarnSM)
 import Engine.Core.Monad
 import Engine.Core.State
+import Engine.Core.Resource (locally)
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Config (WindowMode(..), VideoConfig(..), TextureFilter(..)
                               , textureFilterToText, textureFilterToVulkan)
 import Engine.Graphics.Font.Load (loadSDFFont)
+import Engine.Graphics.Types (DevQueues(..))
+import Engine.Graphics.Vulkan.Image (createVulkanImage, createVulkanImageView
+                                    , copyBufferToImage, VulkanImage(..))
+import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
+import Engine.Graphics.Vulkan.Command (runCommandsOnce)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Graphics.Vulkan.Recreate (recreateSwapchain)
-import Engine.Graphics.Vulkan.Texture (createTextureSampler)
-import Engine.Graphics.Vulkan.Texture.Bindless (rewriteAllSamplers)
+import Engine.Graphics.Vulkan.Texture (createTextureSampler, transitionImageLayout
+                                      , ImageLayoutTransition(..))
+import Engine.Graphics.Vulkan.Texture.Bindless (rewriteAllSamplers, registerTexture)
+import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scene.Base
 import Engine.Scene.Graph (modifySceneNode, deleteSceneNode)
@@ -30,6 +41,8 @@ import Engine.Scene.Manager (addObjectToScene)
 import Engine.Scene.Types
 import Engine.Scripting.Lua.Types
 import qualified Graphics.UI.GLFW as GLFW
+import Vulkan.Core10
+import Vulkan.Zero (zero)
 
 processLuaMessages ∷ EngineM ε σ ()
 processLuaMessages = do
@@ -41,6 +54,8 @@ processLuaMessages = do
             [("count", T.pack $ show $ length messages)]
     
     forM_ messages handleLuaMessage
+    -- poll for world preview image
+    handleWorldPreview
 
 handleLuaMessage ∷ LuaToEngineMsg → EngineM ε σ ()
 handleLuaMessage msg = do
@@ -420,3 +435,81 @@ handleSetVisible objId visible =
 
 handleDestroy ∷ ObjectId → EngineM ε σ ()
 handleDestroy objId = void $ deleteSceneNode objId
+
+-- Add this new function:
+handleWorldPreview ∷ EngineM ε σ ()
+handleWorldPreview = do
+    env ← ask
+    mPreview ← liftIO $ atomicModifyIORef' (worldPreviewRef env) $ \v → (Nothing, v)
+    case mPreview of
+        Nothing → pure ()
+        Just (w, h, rgbaData) → do
+            logInfoM CatWorld $ "Creating world preview texture: "
+                <> T.pack (show w) <> "×" <> T.pack (show h)
+
+            gs ← gets graphicsState
+            case ( vulkanDevice gs
+                 , vulkanPDevice gs
+                 , vulkanCmdPool gs
+                 , deviceQueues gs
+                 , textureSystem gs ) of
+                (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless) → do
+                    -- Generate a texture handle
+                    poolRef ← asks assetPoolRef
+                    pool ← liftIO $ readIORef poolRef
+                    texHandle ← liftIO $ generateTextureHandle pool
+
+                    let width  = fromIntegral w ∷ Word32
+                        height = fromIntegral h ∷ Word32
+                        bufSize = fromIntegral (BS.length rgbaData)
+                        queue  = graphicsQueue queues
+
+                    -- Create GPU image
+                    image ← createVulkanImage dev pdev
+                        (width, height)
+                        FORMAT_R8G8B8A8_UNORM
+                        IMAGE_TILING_OPTIMAL
+                        (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
+                        MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+
+                    -- Upload via staging buffer
+                    locally $ do
+                        (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
+                            BUFFER_USAGE_TRANSFER_SRC_BIT
+                            (MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                             .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+
+                        stagingPtr ← mapMemory dev stagingMem 0 bufSize zero
+                        liftIO $ BS.useAsCStringLen rgbaData $ \(srcPtr, len) →
+                            copyBytes (castPtr stagingPtr) srcPtr len
+                        unmapMemory dev stagingMem
+
+                        runCommandsOnce dev cmdPool queue $ \cmdBuf → do
+                            transitionImageLayout image FORMAT_R8G8B8A8_UNORM
+                                Undef_TransDst 1 cmdBuf
+                            copyBufferToImage cmdBuf stagingBuf image width height
+                            transitionImageLayout image FORMAT_R8G8B8A8_UNORM
+                                TransDst_ShaderRO 1 cmdBuf
+
+                    -- Create image view and sampler
+                    imageView ← createVulkanImageView dev image
+                        FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
+
+                    sampler ← createTextureSampler dev pdev FILTER_NEAREST
+
+                    -- Register in bindless system
+                    (_, newBindless) ← registerTexture dev texHandle
+                        imageView sampler bindless
+                    modify $ \s → s { graphicsState = (graphicsState s) {
+                        textureSystem = Just newBindless } }
+
+                    -- Notify Lua
+                    let (TextureHandle h) = texHandle
+                    liftIO $ Q.writeQueue (luaQueue env)
+                        (LuaWorldPreviewReady (fromIntegral h))
+
+                    logInfoM CatWorld $ "World preview texture created: handle="
+                        <> T.pack (show h)
+
+                _ → logWarnM CatWorld
+                        "Cannot create preview texture: Vulkan not ready"
