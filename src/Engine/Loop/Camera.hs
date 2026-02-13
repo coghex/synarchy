@@ -15,13 +15,15 @@ import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateC
 import Engine.Input.Types (InputState(..), KeyState(..))
 import World.Grid (cameraPanSpeed, cameraPanAccel, cameraPanFriction,
                    tileHalfDiamondHeight, tileHalfWidth)
-import World.Types (chunkSize, WorldState(..), WorldManager(..))
+import World.Types (chunkSize, WorldState(..), WorldManager(..), WorldGenParams(..))
 import Control.Monad.State.Class (gets)
 
-cameraYLimit ∷ Float
-cameraYLimit =
-    let worldSizeChunks = 128
-        halfTiles = (worldSizeChunks * chunkSize) `div` 2
+-- | Compute the camera Y limit from the actual world size.
+--   Glaciers sit at the top/bottom edges; we stop the camera
+--   two chunks inward so you can't pan past the ice.
+cameraYLimit ∷ Int → Float
+cameraYLimit worldSizeChunks =
+    let halfTiles = (worldSizeChunks * chunkSize) `div` 2
         glacierBuffer = chunkSize * 2
         maxRow = halfTiles - glacierBuffer
     in fromIntegral maxRow * tileHalfDiamondHeight
@@ -30,15 +32,28 @@ cameraYLimit =
 --   Wrapping grid-X by worldSize chunks (= worldSize * chunkSize tiles)
 --   shifts screen-X by (worldSize * chunkSize * tileHalfWidth),
 --   because screenX = (gx - gy) * tileHalfWidth and only gx changes.
-cameraXWrap ∷ Float
-cameraXWrap =
-    let worldSizeChunks = 128
-        worldTiles = worldSizeChunks * chunkSize
+cameraXWrap ∷ Int → Float
+cameraXWrap worldSizeChunks =
+    let worldTiles = worldSizeChunks * chunkSize
     in fromIntegral worldTiles * tileHalfWidth
 
-wrapCameraAxis ∷ CameraFacing → Float → Float → (Float, Float)
-wrapCameraAxis facing cx cy =
-    let w = cameraXWrap
+-- | Read the world size from the active world, defaulting to 128.
+getWorldSize ∷ EngineEnv → IO Int
+getWorldSize env = do
+    manager ← readIORef (worldManagerRef env)
+    case wmVisible manager of
+        (pageId:_) → case lookup pageId (wmWorlds manager) of
+            Just ws → do
+                mParams ← readIORef (wsGenParamsRef ws)
+                return $ case mParams of
+                    Just p  → wgpWorldSize p
+                    Nothing → 128
+            Nothing → return 128
+        [] → return 128
+
+wrapCameraAxis ∷ Int → CameraFacing → Float → Float → (Float, Float)
+wrapCameraAxis worldSize facing cx cy =
+    let w = cameraXWrap worldSize
     in case facing of
         FaceSouth → (wrapCoord w cx, cy)
         FaceNorth → (wrapCoord w cx, cy)
@@ -52,11 +67,23 @@ wrapCoord w x =
         wrapped = shifted - w * fromIntegral (floor (shifted / w) ∷ Int)
     in wrapped - halfW
 
+-- | When facing South/North: X wraps, Y is clamped (glaciers at top/bottom)
+--   When facing West/East:   Y wraps, X is clamped (glaciers at left/right)
+applyLimits ∷ Int → CameraFacing → Float → Float → (Float, Float)
+applyLimits worldSize facing cx cy =
+    let yLim = cameraYLimit worldSize
+    in case facing of
+        FaceSouth → (cx, clampF (-yLim) yLim cy)
+        FaceNorth → (cx, clampF (-yLim) yLim cy)
+        FaceWest  → (clampF (-yLim) yLim cx, cy)
+        FaceEast  → (clampF (-yLim) yLim cx, cy)
+
 updateCameraPanning ∷ EngineM ε σ ()
 updateCameraPanning = do
     env ← ask
     inpSt ← liftIO $ readIORef (inputStateRef env)
     dt ← gets (deltaTime . timingState)
+    worldSize ← liftIO $ getWorldSize env
 
     let held k = case Map.lookup k (inpKeyStates inpSt) of
                      Just ks → keyPressed ks
@@ -83,8 +110,8 @@ updateCameraPanning = do
             (cx, cy) = camPosition cam
             rawCx = cx + vx' * dtF
             rawCy = cy + vy' * dtF
-            (wrappedCx, wrappedCy) = wrapCameraAxis facing rawCx rawCy
-            (cx', cy') = applyLimits facing wrappedCx wrappedCy
+            (wrappedCx, wrappedCy) = wrapCameraAxis worldSize facing rawCx rawCy
+            (cx', cy') = applyLimits worldSize facing wrappedCx wrappedCy
 
             -- Kill velocity on the clamped axis when hitting the wall
             vx'' = if cx' ≢ wrappedCx then 0 else vx'
@@ -93,20 +120,12 @@ updateCameraPanning = do
         in (cam { camPosition = (cx', cy')
                 , camVelocity = (vx'', vy'') }, ())
 
--- When facing South/North: X wraps, Y is clamped (glaciers at top/bottom)
--- When facing West/East:   Y wraps, X is clamped (glaciers at left/right)
-applyLimits ∷ CameraFacing → Float → Float → (Float, Float)
-applyLimits facing cx cy = case facing of
-    FaceSouth → (cx, clampF (-cameraYLimit) cameraYLimit cy)
-    FaceNorth → (cx, clampF (-cameraYLimit) cameraYLimit cy)
-    FaceWest  → (clampF (-cameraYLimit) cameraYLimit cx, cy)
-    FaceEast  → (clampF (-cameraYLimit) cameraYLimit cx, cy)
-
 updateCameraMouseDrag ∷ EngineM ε σ ()
 updateCameraMouseDrag = do
     env ← ask
     inpSt ← liftIO $ readIORef (inputStateRef env)
     (winW, winH) ← liftIO $ readIORef (windowSizeRef env)
+    worldSize ← liftIO $ getWorldSize env
 
     let middleDown = case Map.lookup GLFW.MouseButton'3 (inpMouseBtns inpSt) of
                          Just True → True
@@ -137,10 +156,8 @@ updateCameraMouseDrag = do
                     dx = -(mx - ox) * realToFrac pixToWorldX
                     dy = -(my - oy) * realToFrac pixToWorldY
 
-                    newY = clampF (-cameraYLimit) cameraYLimit (cy + realToFrac dy)
-
-                    (wrappedX, wrappedY) = wrapCameraAxis facing (cx + realToFrac dx) (cy + realToFrac dy)
-                    (finalX, finalY) = applyLimits facing wrappedX wrappedY
+                    (wrappedX, wrappedY) = wrapCameraAxis worldSize facing (cx + realToFrac dx) (cy + realToFrac dy)
+                    (finalX, finalY) = applyLimits worldSize facing wrappedX wrappedY
                 in ( cam { camPosition = (finalX, finalY)
                          , camDragOrigin = mousePos
                          , camVelocity   = (0, 0)

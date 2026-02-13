@@ -170,7 +170,7 @@ function worldView.createWorld()
     worldManager.createWorld({ 
         worldId = "main_world",
         seed = seed,
-        woeldSize = worldSize,
+        worldSize = worldSize,
         plateCount = plateCount,
         graniteTexture = worldView.textures.granite,
         dioriteTexture = worldView.textures.diorite,
