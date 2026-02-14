@@ -110,20 +110,89 @@ isOceanChunk = flip HS.member
 -----------------------------------------------------------
 
 -- | Compute the fluid map for a loaded chunk.
---   For each column in an ocean chunk where the terrain surface
---   is below sea level, creates a FluidCell with Ocean type.
+--   
+--   Three cases produce ocean tiles:
+--   1. The chunk itself is in the ocean map → any column below sea level gets water
+--   2. A neighbor chunk is ocean → edge tiles below sea level on that side get water,
+--      then BFS inward to fill connected below-sea-level tiles
+--   3. Neither → no ocean (inland basin, correctly unflooded)
 --
---   Called during chunk generation.
+--   This gives seamless coastlines: land chunks whose terrain slopes
+--   below sea level at the ocean boundary get water up to the cliff face.
 computeChunkFluid ∷ OceanMap → ChunkCoord
-                  → HM.HashMap (Int, Int) Int   -- ^ surfaceMap
+                  → HM.HashMap (Int, Int) Int   -- ^ surfaceMap (terrain elevation)
                   → HM.HashMap (Int, Int) FluidCell
 computeChunkFluid oceanMap coord surfaceMap
-    | not (isOceanChunk oceanMap coord) = HM.empty
-    | otherwise = HM.foldlWithKey' (\acc (lx, ly) surfZ →
+    -- Case 1: full ocean chunk — every below-sea-level column gets water
+    | isOceanChunk oceanMap coord = HM.foldlWithKey' (\acc (lx, ly) surfZ →
         if surfZ < seaLevel
         then HM.insert (lx, ly) (FluidCell Ocean seaLevel) acc
         else acc
         ) HM.empty surfaceMap
+
+    -- Case 2: land chunk — check if any neighbor is ocean, flood from edges
+    | otherwise =
+        let ChunkCoord cx cy = coord
+            -- Which edges border an ocean chunk?
+            oceanN = isOceanChunk oceanMap (ChunkCoord cx (cy - 1))
+            oceanS = isOceanChunk oceanMap (ChunkCoord cx (cy + 1))
+            oceanE = isOceanChunk oceanMap (ChunkCoord (cx + 1) cy)
+            oceanW = isOceanChunk oceanMap (ChunkCoord (cx - 1) cy)
+            -- Also check diagonal neighbors for corner coverage
+            oceanNE = isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy - 1))
+            oceanNW = isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy - 1))
+            oceanSE = isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy + 1))
+            oceanSW = isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy + 1))
+        in if not (oceanN ∨ oceanS ∨ oceanE ∨ oceanW
+                 ∨ oceanNE ∨ oceanNW ∨ oceanSE ∨ oceanSW)
+           -- No ocean neighbors at all → definitely no coastal water
+           then HM.empty
+           -- Seed BFS from edge tiles that face an ocean neighbor
+           else let maxIdx = chunkSize - 1
+                    -- Seed tiles: edge tiles adjacent to an ocean chunk
+                    -- AND below sea level
+                    seeds = filter belowSea $
+                        (if oceanN then [(lx, 0)  | lx ← [0..maxIdx]] else [])
+                     ++ (if oceanS then [(lx, maxIdx) | lx ← [0..maxIdx]] else [])
+                     ++ (if oceanE then [(maxIdx, ly) | ly ← [0..maxIdx]] else [])
+                     ++ (if oceanW then [(0, ly)  | ly ← [0..maxIdx]] else [])
+                     -- Corner seeds for diagonal ocean neighbors
+                     ++ (if oceanNE then [(maxIdx, 0)] else [])
+                     ++ (if oceanNW then [(0, 0)] else [])
+                     ++ (if oceanSE then [(maxIdx, maxIdx)] else [])
+                     ++ (if oceanSW then [(0, maxIdx)] else [])
+
+                    belowSea (lx, ly) = case HM.lookup (lx, ly) surfaceMap of
+                        Just z  → z < seaLevel
+                        Nothing → False
+
+                    -- BFS inward: flood connected below-sea-level tiles
+                    bfs ∷ Seq (Int, Int) → HS.HashSet (Int, Int)
+                        → HM.HashMap (Int, Int) FluidCell
+                        → HM.HashMap (Int, Int) FluidCell
+                    bfs Empty _ acc = acc
+                    bfs (cur :<| queue) visited acc =
+                        let (lx, ly) = cur
+                            nbrs = filter (\(nx, ny) →
+                                       nx ≥ 0 ∧ nx ≤ maxIdx
+                                     ∧ ny ≥ 0 ∧ ny ≤ maxIdx
+                                     ∧ not (HS.member (nx, ny) visited)
+                                     ∧ belowSea (nx, ny)
+                                   )
+                                   [(lx-1,ly), (lx+1,ly), (lx,ly-1), (lx,ly+1)]
+                            visited' = foldl' (flip HS.insert) visited nbrs
+                            queue'   = foldl' (:|>) queue nbrs
+                            acc'     = foldl' (\a (nx,ny) →
+                                           HM.insert (nx,ny) (FluidCell Ocean seaLevel) a
+                                       ) acc nbrs
+                        in bfs queue' visited' acc'
+
+                    seedSet = HS.fromList seeds
+                    seedAcc = HM.fromList
+                        [(s, FluidCell Ocean seaLevel) | s ← seeds]
+                    seedQueue = Seq.fromList seeds
+
+                in bfs seedQueue seedSet seedAcc
 
 -----------------------------------------------------------
 -- Helpers
