@@ -343,23 +343,6 @@ function worldView.onFramebufferResize(width, height)
 end
 
 -----------------------------------------------------------
--- Z-Slice Control (shift+scroll)
------------------------------------------------------------
-
-function worldView.onZSliceScroll(dx, dy)
-    if not worldView.visible then return end
-    
-    local current = camera.getZSlice()
-    if dy > 0 then
-        camera.setZSlice(current + 1)
-        engine.logDebug("Z-slice: " .. tostring(current + 1))
-    elseif dy < 0 then
-        camera.setZSlice(current - 1)
-        engine.logDebug("Z-slice: " .. tostring(current - 1))
-    end
-end
-
------------------------------------------------------------
 -- Camera Zoom (normal scroll, no shift, no UI focus)
 -----------------------------------------------------------
 
@@ -376,6 +359,25 @@ function worldView.onScroll(dx, dy)
 end
 
 -----------------------------------------------------------
+-- Z-Slice Control (shift+scroll)
+-- Disables surface tracking and manually adjusts z-slice.
+-----------------------------------------------------------
+
+function worldView.onZSliceScroll(dx, dy)
+    if not worldView.visible then return end
+    
+    -- Enter locked mode
+    camera.setZTracking(false)
+    
+    local current = camera.getZSlice()
+    if dy > 0 then
+        camera.setZSlice(current + 1)
+    elseif dy < 0 then
+        camera.setZSlice(current - 1)
+    end
+end
+
+-----------------------------------------------------------
 -- Key Input
 -----------------------------------------------------------
 
@@ -388,6 +390,10 @@ function worldView.onKeyDown(key)
     elseif key == "E" then
         camera.rotateCW()
         engine.logDebug("Camera rotated CW, facing=" .. tostring(camera.getFacing()))
+    elseif key == "Home" then
+        -- Return to surface tracking mode
+        camera.setZTracking(true)
+        engine.logDebug("Z-slice tracking re-enabled")
     end
 end
 

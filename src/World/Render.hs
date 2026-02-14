@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Render
     ( updateWorldTiles
+    , surfaceHeadroom
     ) where
 
 import UPrelude
@@ -42,6 +43,15 @@ cameraChanged old new =
      ∨ wcsZSlice old ≢ wcsZSlice new
      ∨ wcsFbSize old ≢ wcsFbSize new
      ∨ wcsFacing old ≢ wcsFacing new
+
+-----------------------------------------------------------
+-- Surface Headroom
+-----------------------------------------------------------
+
+-- | the amount of z headroom above the surface 
+-- to keep the camera at, in grid units
+surfaceHeadroom ∷ Int
+surfaceHeadroom = 3
 
 -----------------------------------------------------------
 -- Top-Level Entry Point
@@ -87,8 +97,11 @@ updateWorldTiles = do
     zoomQuads ← generateZoomMapQuads
     bgQuads ← generateBackgroundQuads
 
-    -- Auto-adjust zSlice during zoom crossfade
-    when (tileAlpha > 0.001 ∧ tileAlpha < 0.999) $ do
+    -- Auto-adjust zSlice: always track surface when camZTracking is True,
+    -- or during zoom crossfade (so zooming in always lands correctly).
+    let shouldTrack = camZTracking camera
+                    ∨ (tileAlpha > 0.001 ∧ tileAlpha < 0.999)
+    when shouldTrack $ do
         worldManager' ← liftIO $ readIORef (worldManagerRef env)
         forM_ (wmVisible worldManager') $ \pageId →
             case lookup pageId (wmWorlds worldManager') of

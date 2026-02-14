@@ -11,6 +11,8 @@ module Engine.Scripting.Lua.API.Camera
     , cameraRotateCWFn
     , cameraRotateCCWFn
     , cameraGetFacingFn
+    , cameraGetZTrackingFn
+    , cameraSetZTrackingFn
     ) where
 
 import UPrelude
@@ -143,7 +145,7 @@ cameraGotoTileFn env = do
                                     (finalElev, _) = applyTimeline timeline worldSize gx gy (baseElev, baseMat)
                                     targetZ = finalElev + 3
                                 atomicModifyIORef' (cameraRef env) $ \cam →
-                                    (cam { camZSlice = targetZ }, ())
+                                    (cam { camZSlice = targetZ, camZTracking = True }, ())
                             Nothing → return ()
                     Nothing → return ()
 
@@ -195,3 +197,18 @@ invalidateWorldCaches env = do
         case mParams of
             Just params → writeIORef (wsZoomCacheRef ws) (buildZoomCache facing params)
             Nothing → return ()
+
+-- | camera.getZTracking() -> bool
+cameraGetZTrackingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+cameraGetZTrackingFn env = do
+    cam ← Lua.liftIO $ readIORef (cameraRef env)
+    Lua.pushboolean (camZTracking cam)
+    return 1
+
+-- | camera.setZTracking(bool)
+cameraSetZTrackingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+cameraSetZTrackingFn env = do
+    bArg ← Lua.toboolean 1
+    Lua.liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
+        (cam { camZTracking = bArg }, ())
+    return 0

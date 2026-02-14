@@ -24,6 +24,7 @@ import World.Geology (buildTimeline, logTimeline)
 import World.Geology.Log (formatTimeline, formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Preview (buildPreviewImage, PreviewImage(..))
+import World.Render (surfaceHeadroom)
 import World.ZoomMap (buildZoomCache)
 
 -----------------------------------------------------------
@@ -292,9 +293,9 @@ handleWorldCommand env logger cmd = do
             sendGenLog env "Calculating surface elevation..."
             let plates = generatePlates seed worldSize (wgpPlateCount params)
                 (surfaceElev, _mat) = elevationAtGlobal seed plates worldSize 0 0
-                startZSlice = surfaceElev + 3
+                startZSlice = surfaceElev + surfaceHeadroom
             atomicModifyIORef' (cameraRef env) $ \cam →
-                (cam { camZSlice = startZSlice }, ())
+                (cam { camZSlice = startZSlice, camZTracking = True }, ())
             
             let totalTiles = sum $ map (HM.size . lcTiles) initialChunks
             let summaryMsg = T.pack (show $ length initialChunks) <> " chunks, "
@@ -305,7 +306,6 @@ handleWorldCommand env logger cmd = do
                 <> T.pack (show $ length initialChunks) <> " chunks, "
                 <> T.pack (show totalTiles) <> " tiles, "
                 <> "surface at z=" <> T.pack (show surfaceElev)
-                <> ", zSlice set to " <> T.pack (show startZSlice)
                 <> ": " <> unWorldPageId pageId
         
         WorldShow pageId → do

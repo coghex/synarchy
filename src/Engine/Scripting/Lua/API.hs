@@ -13,8 +13,8 @@ import Engine.Scripting.Lua.API.Camera (cameraMoveFn, cameraSetPositionFn,
                                          cameraGetZoomFn, cameraSetZSliceFn
                                          , cameraGetZSliceFn, cameraGotoTileFn
                                          , cameraRotateCWFn, cameraRotateCCWFn
-                                         , cameraGetFacingFn)
-
+                                         , cameraGetFacingFn, cameraGetZTrackingFn
+                                         , cameraSetZTrackingFn)
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , saveVideoConfigFn, setUIScaleFn
@@ -214,4 +214,6 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "rotateCW" (cameraRotateCWFn env)
   registerLuaFunction "rotateCCW" (cameraRotateCCWFn env)
   registerLuaFunction "getFacing" (cameraGetFacingFn env)
+  registerLuaFunction "getZTracking" (cameraGetZTrackingFn env)
+  registerLuaFunction "setZTracking" (cameraSetZTrackingFn env)
   Lua.setglobal (Lua.Name "camera")

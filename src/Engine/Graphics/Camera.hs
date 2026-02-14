@@ -47,6 +47,7 @@ data Camera2D = Camera2D
     , camDragging   ∷ Bool
     , camDragOrigin ∷ (Double, Double)
     , camZSlice     ∷ Int
+    , camZTracking  ∷ Bool
     } deriving (Show, Eq)
 
 defaultCamera ∷ Camera2D
@@ -58,7 +59,8 @@ defaultCamera = Camera2D
     , camFacing   = FaceSouth
     , camDragging = False
     , camDragOrigin = (0, 0)
-    , camZSlice = 6
+    , camZSlice = 0
+    , camZTracking = False
     }
 
 data UICamera = UICamera
