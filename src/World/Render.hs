@@ -409,10 +409,6 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
 -- Ocean Surface Tile Quad
 -----------------------------------------------------------
 
-oceanTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
-               → WorldTextures → CameraFacing
-               → Int → Int → Int → Int → Int → Float → Float
-               → SortableQuad
 oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSlice effDepth tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
@@ -420,26 +416,23 @@ oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSl
         heightOffset = fromIntegral relativeZ * tileSideHeight
         drawX = rawX + xOffset
         drawY = rawY - heightOffset
-        -- Ocean renders slightly above terrain at same z for sort order
         sortKey = fromIntegral (fa + fb)
                 + fromIntegral relativeZ * 0.001
-                + 0.0005  -- sort above terrain at same z
+                + 0.0005
 
         texHandle = wtOceanTexture textures
         actualSlot = lookupSlot texHandle
-        fmSlot = lookupFmSlot (wtNoFaceMap textures)
+        -- Use the default face map directly (1×1 green = pure top-facing)
+        -- This bypasses lookupFmSlot which might resolve wtNoFaceMap
+        -- to a wrong slot. Ocean is flat — it should always be top-lit.
+        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
 
-        -- Depth fade same as terrain tiles
-        depth = zSlice - fluidZ
-        fadeRange = max 1 effDepth
-        brightnessT = fromIntegral depth / fromIntegral fadeRange
-        brightness = clamp01 (1.0 - brightnessT * 0.4)
-        fadeT = fromIntegral depth / fromIntegral fadeRange
-        depthAlpha = clamp01 (1.0 - fadeT * fadeT)
-        finalAlpha = tileAlpha * depthAlpha
+        -- No depth fade for ocean surface — it should be fully bright
+        -- at its surface level, not dimmed by cliff shading
+        finalAlpha = tileAlpha
 
-        -- Slight blue tint for ocean
-        tint = Vec4 (brightness * 0.7) (brightness * 0.8) brightness finalAlpha
+        -- Blue tint for ocean, full brightness (shader handles sun lighting)
+        tint = Vec4 0.7 0.8 1.0 finalAlpha
 
         v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
