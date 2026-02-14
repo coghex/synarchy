@@ -16,9 +16,11 @@ module Engine.Scene.Types.Batch
 
 import UPrelude
 import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as VM
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.List as List
+import Control.Monad.ST (runST)
 import Engine.Scene.Base (ObjectId, LayerId)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex)
@@ -64,11 +66,21 @@ drawableToQuad dobj = SortableQuad
 --   a sorted vector. No intermediate list-of-vectors allocation.
 mergeQuadsToBatch ∷ LayerId → [SortableQuad] → RenderBatch
 mergeQuadsToBatch layer quads =
-    let !sortedVec = V.fromList $ List.sortOn sqSortKey quads
-        !allVerts  = V.concatMap sqVertices sortedVec
-        tex = if V.null sortedVec
-              then TextureHandle 0
-              else sqTexture (V.unsafeHead sortedVec)
+    let !sortedList = List.sortOn sqSortKey quads
+        !totalVerts = length sortedList * 6
+        !allVerts = V.create $ do
+            mv ← VM.new totalVerts
+            let go _ [] = return ()
+                go i (q:qs) = do
+                    let vs = sqVertices q
+                    V.forM_ (V.indexed vs) $ \(j, v) →
+                        VM.write mv (i + j) v
+                    go (i + V.length vs) qs
+            go 0 sortedList
+            return mv
+        tex = case sortedList of
+            []    → TextureHandle 0
+            (q:_) → sqTexture q
     in RenderBatch
         { rbTexture  = tex
         , rbLayer    = layer
