@@ -158,15 +158,13 @@ generateChunk params coord =
         -- Compute fluid map from terrain surface
         fluidMap = computeChunkFluid oceanMap coord terrainSurfaceMap
 
-        -- Build the surface elevation map for this chunk's own columns
-        surfaceMap = HM.fromList
-            [ ((lx, ly), surfZ)
-            | lx ← [0 .. chunkSize - 1]
-            , ly ← [0 .. chunkSize - 1]
-            , let (gx, gy) = chunkToGlobal coord lx ly
-            , not (isBeyondGlacier worldSize (wrapGX gx) gy)
-            , let surfZ = lookupElev lx ly
-            ]
+        -- Camera-facing surface map: ocean columns report sea level
+        -- so camera tracking hovers above water, not at the ocean floor
+        surfaceMap = HM.mapWithKey (\(lx, ly) surfZ →
+            case HM.lookup (lx, ly) fluidMap of
+                Just fc → max surfZ (fcSurface fc)
+                Nothing → surfZ
+            ) terrainSurfaceMap
 
         tiles = [ tile
                 | lx ← [0 .. chunkSize - 1]
