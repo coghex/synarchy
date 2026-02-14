@@ -200,14 +200,15 @@ applyCaldera params worldSize gx gy _baseElev =
             in GeoModification elevDelta (Just (unMaterialId matObsidian)) (abs elevDelta)
 
        else
-       -- Caldera floor: depression, no intrusion
+       -- Caldera floor: depression with volcanic fill
        let t = dist / innerR
            bowlT = smoothstepGeo t
            elevDelta = round (negate (min floorD 60.0) * (1.0 - bowlT * 0.5))
            mat = if t < 0.3
                  then unMaterialId matMagma
                  else unMaterialId matObsidian
-       in GeoModification elevDelta (Just mat) 0
+           fillDepth = max 3 (abs elevDelta `div` 3)
+       in GeoModification elevDelta (Just mat) fillDepth
 
 -----------------------------------------------------------
 -- Fissure
@@ -378,7 +379,7 @@ applySuperVolcano params worldSize gx gy baseElev =
             in GeoModification elevDelta (Just (unMaterialId matObsidian)) (abs elevDelta)
 
        else
-       -- Caldera floor: depression, no intrusion
+       -- Caldera floor: depression with thick volcanic fill
        let t = dist / rimInnerR
            bowlT = smoothstepGeo t
            elevDelta = round (negate clampedFloorD * (1.0 - bowlT * 0.7))
@@ -387,7 +388,10 @@ applySuperVolcano params worldSize gx gy baseElev =
                  else if t < 0.4
                  then unMaterialId matObsidian
                  else unMaterialId matBasalt
-       in GeoModification elevDelta (Just mat) 0
+           -- Fill the bowl floor with volcanic material.
+           -- Deeper at center, thinner at edges.
+           fillDepth = max 3 (abs elevDelta `div` 3)
+       in GeoModification elevDelta (Just mat) fillDepth
 
 -----------------------------------------------------------
 -- Hydrothermal Vent

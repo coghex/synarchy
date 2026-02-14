@@ -318,20 +318,23 @@ materialAtDepth timeline worldSize gx gy (baseElev, baseMat) queryZ =
                 newSurf = eventMat
             in (newSurf, newUplift, newZMat)
         | delta < 0 =
-            -- Depression with possible surface material override.
-            -- The event carves downward, exposing existing strata in the
-            -- cliff walls. The NEW surface (at elevBefore + delta) gets
-            -- the event's material if there's an override.
-            -- This handles crater bowls (impactite), crater centers
-            -- (meteorite), caldera floors (magma), collapse pits (basalt).
+            -- Depression: the event carves downward.
+            -- If intrusion > 0, the bottom of the depression is
+            -- LINED with the event material (e.g., caldera floor
+            -- filled with obsidian/magma). The lining extends
+            -- 'intrusion' tiles up from the new surface.
             let newSurfZ = elevBefore + delta
                 newSurf = eventMat
-                -- queryZ at the new surface gets the override material.
-                -- queryZ above the new surface but below the old surface
-                -- is now "inside the cliff" of this depression — those
-                -- tiles belong to neighboring columns and will be handled
-                -- by their own materialAtDepth call.
-                newZMat = if queryZ ≡ newSurfZ
+                -- Fill zone: [newSurfZ .. newSurfZ + intrusion - 1]
+                -- These tiles are volcanic fill at the bottom of
+                -- the depression.
+                inFill = intrusion > 0
+                       ∧ queryZ ≥ newSurfZ
+                       ∧ queryZ < newSurfZ + intrusion
+                -- Single-tile surface override (backwards compat
+                -- for craters where intrusion = 0)
+                atSurface = queryZ ≡ newSurfZ
+                newZMat = if inFill ∨ atSurface
                           then eventMat
                           else zMat
             in (newSurf, uplift, newZMat)

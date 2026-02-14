@@ -20,6 +20,7 @@ import Data.Word (Word32, Word64)
 import Data.List (sortBy)
 import Data.Ord (comparing)
 import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro, matGlacier)
+import World.Scale (WorldScale(..), computeWorldScale, scaleElev, scaleDist)
 import World.Types (chunkSize)
 
 -----------------------------------------------------------
@@ -32,7 +33,7 @@ data TectonicPlate = TectonicPlate
     , plateIsLand   ∷ !Bool
     , plateBaseElev ∷ !Int
     , plateMaterial ∷ !MaterialId
-    , plateDensity  ∷ !Float     -- ^ Crust density, determines subduction
+    , plateDensity  ∷ !Float
     , plateDriftX   ∷ !Float
     , plateDriftY   ∷ !Float
     } deriving (Show)
@@ -42,12 +43,11 @@ data TectonicPlate = TectonicPlate
 -----------------------------------------------------------
 
 data BoundaryType
-    = Convergent !Float    -- ^ approach speed (positive = converging faster)
-    | Divergent  !Float    -- ^ separation speed
-    | Transform  !Float    -- ^ shear magnitude
+    = Convergent !Float
+    | Divergent  !Float
+    | Transform  !Float
     deriving (Show)
 
--- | Which side of the boundary this column is on.
 data BoundarySide = SidePlateA | SidePlateB
     deriving (Show, Eq)
 
@@ -61,7 +61,8 @@ generatePlates seed worldSize plateCount =
 
 generateOnePlate ∷ Word64 → Int → Int → TectonicPlate
 generateOnePlate seed worldSize plateIndex =
-    let halfTiles = (worldSize * chunkSize) `div` 2
+    let wsc = computeWorldScale worldSize
+        halfTiles = (worldSize * chunkSize) `div` 2
         h1 = plateHash seed plateIndex 1
         h2 = plateHash seed plateIndex 2
         h3 = plateHash seed plateIndex 3
@@ -74,13 +75,14 @@ generateOnePlate seed worldSize plateIndex =
         cx = hashToRange h1 (-halfTiles) halfTiles
         cy = hashToRange h2 (-halfTiles) halfTiles
 
-        -- ~40% oceanic, 60% continental
         isLand = hashToFloat' h3 > 0.4
 
-        -- Land: 0 to 1000m, Ocean: -6000 to -3000m
+        -- Reference values (at worldSize=512):
+        --   Land: 0 to 1000m    Ocean: -6000 to -3000m
+        -- Scaled by worldSize/512.
         baseElev = if isLand
-                   then hashToRange h4 0 1000
-                   else hashToRange h4 (-6000) (-3000)
+                   then round (scaleElev wsc (fromIntegral (hashToRange h4 0 1000)))
+                   else round (scaleElev wsc (fromIntegral (hashToRange h4 (-6000) (-3000))))
 
         matChoice = hashToRange h5 0 2
         material = case matChoice of
@@ -88,12 +90,10 @@ generateOnePlate seed worldSize plateIndex =
             1 → matDiorite
             _ → matGabbro
 
-        -- Crust density: ocean crust is denser than continental
         density = if isLand
-                  then 2.7 + hashToFloat' h8 * 0.2    -- 2.7 - 2.9
-                  else 3.0 + hashToFloat' h8 * 0.3    -- 3.0 - 3.3
+                  then 2.7 + hashToFloat' h8 * 0.2
+                  else 3.0 + hashToFloat' h8 * 0.3
 
-        -- Drift direction (not normalized — magnitude implies speed)
         driftX = hashToFloat' h6 * 2.0 - 1.0
         driftY = hashToFloat' h7 * 2.0 - 1.0
 
@@ -139,8 +139,6 @@ rankPlates seed worldSize plates gx gy =
 -- Boundary Classification
 -----------------------------------------------------------
 
--- | Classify the boundary between two plates.
---   Uses the relative drift vectors projected onto the boundary normal.
 classifyBoundary ∷ Int → TectonicPlate → TectonicPlate → BoundaryType
 classifyBoundary worldSize plateA plateB =
     let nxRaw = fromIntegral (wrappedDeltaX worldSize
@@ -174,24 +172,15 @@ classifyBoundary worldSize plateA plateB =
 -- Glacier Border
 -----------------------------------------------------------
 
--- | How many tile-rows wide the glacier zone is at each pole.
 glacierWidthRows ∷ Int
 glacierWidthRows = chunkSize
 
--- | Check if a global tile position is in the glacier zone.
---   The glacier border runs horizontally on screen (constant screenY).
---   In grid space, screenY is proportional to (gx + gy).
---   The world extends from roughly -(worldSize*16) to +(worldSize*16)
---   in the (gx+gy) axis, so we place the glacier at the extremes.
 isGlacierZone ∷ Int → Int → Int → Bool
 isGlacierZone worldSize gx gy =
     let halfTiles = (worldSize * chunkSize) `div` 2
         glacierEdge = halfTiles - glacierWidthRows
         screenRow = gx + gy
     in abs screenRow ≥ glacierEdge
-
--- | True if this tile is completely outside the playable world
---   (past the glacier border). These tiles should not be generated.
 
 isBeyondGlacier ∷ Int → Int → Int → Bool
 isBeyondGlacier worldSize gx gy =
@@ -203,32 +192,24 @@ isBeyondGlacier worldSize gx gy =
 -- Cylindrical Wrapping
 -----------------------------------------------------------
 
--- | Total width of the world in tiles (for X-axis wrapping).
 worldWidthTiles ∷ Int → Int
 worldWidthTiles worldSize = worldSize * chunkSize
 
--- | Wrap a global X coordinate into the valid range [-halfTiles, halfTiles).
 wrapGlobalX ∷ Int → Int → Int
 wrapGlobalX worldSize gx =
     let w = worldWidthTiles worldSize
         halfW = w `div` 2
-        -- Shift into [0, w) then back to [-halfW, halfW)
         wrapped = ((gx + halfW) `mod` w + w) `mod` w - halfW
     in wrapped
 
--- | Compute the shortest wrapped distance in X between two points.
 wrappedDeltaX ∷ Int → Int → Int → Int
 wrappedDeltaX worldSize x1 x2 =
     let w = worldWidthTiles worldSize
         raw = x2 - x1
-        -- Shift into [-w/2, w/2)
         halfW = w `div` 2
         wrapped = ((raw + halfW) `mod` w + w) `mod` w - halfW
     in wrapped
 
--- | Value noise that tiles seamlessly in X with period = worldWidthTiles.
---   Works by wrapping the noise grid cell X index so that cells at the
---   seam boundary reference the same hash values.
 wrappedValueNoise2D ∷ Word64 → Int → Int → Int → Int → Float
 wrappedValueNoise2D seed worldSize x y scale =
     let w = worldWidthTiles worldSize
@@ -240,8 +221,7 @@ wrappedValueNoise2D seed worldSize x y scale =
         ty = fy - fromIntegral iy
         sx = smoothstep tx
         sy = smoothstep ty
-        -- Wrap the noise cell X coordinates so they tile
-        cellsInX = w `div` scale  -- how many noise cells span the world
+        cellsInX = w `div` scale
         wrapIx i = ((i `mod` cellsInX) + cellsInX) `mod` cellsInX
         ix0 = wrapIx ix
         ix1 = wrapIx (ix + 1)
@@ -257,12 +237,10 @@ wrappedValueNoise2D seed worldSize x y scale =
 -- Global Elevation Query
 -----------------------------------------------------------
 
--- | Pure elevation query for any global tile position.
---   Returns (surfaceZ, materialId).
---   Glacier zones at north/south edges override normal plate generation.
 elevationAtGlobal ∷ Word64 → [TectonicPlate] → Int → Int → Int → (Int, MaterialId)
 elevationAtGlobal seed plates worldSize gx gy =
     let gx' = wrapGlobalX worldSize gx
+        wsc = computeWorldScale worldSize
     in if isBeyondGlacier worldSize gx' gy then (0, matGlacier)
     else if isGlacierZone worldSize gx' gy then
         let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy
@@ -271,9 +249,11 @@ elevationAtGlobal seed plates worldSize gx gy =
             boundaryDist = (distB - distA) / 2.0
             boundary = classifyBoundary worldSize plateA plateB
             side = SidePlateA
-            boundaryEffect = boundaryElevation boundary side plateA plateB boundaryDist
+            boundaryEffect = boundaryElevation wsc boundary side plateA plateB boundaryDist
             localNoise = elevationNoise seed worldSize gx' gy
-            noiseScale = if plateIsLand myPlate then 50 else 20
+            noiseScale = if plateIsLand myPlate
+                         then round (scaleElev wsc 50.0)
+                         else round (scaleElev wsc 20.0)
             terrainElev = baseElev + boundaryEffect + localNoise * noiseScale
         in (terrainElev + 3, matGlacier)
     else
@@ -289,11 +269,13 @@ elevationAtGlobal seed plates worldSize gx gy =
 
         side = SidePlateA
 
-        boundaryEffect = boundaryElevation boundary side
+        boundaryEffect = boundaryElevation wsc boundary side
                            plateA plateB boundaryDist
 
         localNoise = elevationNoise seed worldSize gx' gy
-        noiseScale = if plateIsLand myPlate then 50 else 20
+        noiseScale = if plateIsLand myPlate
+                     then round (scaleElev wsc 50.0)
+                     else round (scaleElev wsc 20.0)
 
         finalElev = baseElev + boundaryEffect + localNoise * noiseScale
 
@@ -303,110 +285,101 @@ elevationAtGlobal seed plates worldSize gx gy =
 -- Boundary Elevation Profiles
 -----------------------------------------------------------
 
--- | Compute the elevation modification from a plate boundary.
---   boundaryDist: distance from the boundary (0 = at boundary, positive = inside plateA)
-boundaryElevation ∷ BoundaryType → BoundarySide
+boundaryElevation ∷ WorldScale → BoundaryType → BoundarySide
                   → TectonicPlate → TectonicPlate
                   → Float → Int
-boundaryElevation boundary _side plateA plateB boundaryDist =
+boundaryElevation wsc boundary _side plateA plateB boundaryDist =
     let bothLand  = plateIsLand plateA ∧ plateIsLand plateB
         bothOcean = not (plateIsLand plateA) ∧ not (plateIsLand plateB)
-        -- oceanMeetsLand: plateA is always the one we're on
         aIsLand   = plateIsLand plateA
         bIsLand   = plateIsLand plateB
     in case boundary of
-
-        -- CONVERGENT: plates pushing together
-        Convergent strength → convergentEffect
+        Convergent strength → convergentEffect wsc
             aIsLand bIsLand bothLand bothOcean
             (plateDensity plateA) (plateDensity plateB)
             strength boundaryDist
-
-        -- DIVERGENT: plates pulling apart
-        Divergent strength → divergentEffect
+        Divergent strength → divergentEffect wsc
             aIsLand bothOcean strength boundaryDist
-
-        -- TRANSFORM: plates sliding past each other
-        Transform _shear → transformEffect boundaryDist
+        Transform _shear → transformEffect wsc boundaryDist
 
 -- | Convergent boundary elevation effect.
-convergentEffect ∷ Bool → Bool → Bool → Bool
+--   All reference values are for worldSize=512.
+--   The WorldScale factor handles smaller/larger planets.
+--
+--   BUG FIX: previously t' was applied twice (once inside
+--   peakElev, once as the multiplier). Now t' is only the
+--   spatial falloff, and strength only scales the peak magnitude.
+convergentEffect ∷ WorldScale → Bool → Bool → Bool → Bool
                  → Float → Float → Float → Float → Int
-convergentEffect aIsLand bIsLand bothLand bothOcean
+convergentEffect wsc aIsLand bIsLand bothLand bothOcean
                  densityA densityB strength boundaryDist =
-    let -- Smooth falloff: 1.0 at boundary, 0.0 at fadeRange
-        fadeRange = 200.0  -- tiles over which the effect fades
-        peakRange = 30.0   -- tiles of peak elevation near boundary
+    let -- Scale horizontal distances with world size
+        fadeRange = scaleDist wsc 200.0
+        peakRange = scaleDist wsc 30.0
         t = max 0.0 (1.0 - max 0.0 (abs boundaryDist - peakRange) / fadeRange)
-        -- Smooth the falloff
         t' = t * t * (3.0 - 2.0 * t)
+        -- Clamp strength to prevent runaway values
+        s = min 2.0 (abs strength)
 
     in if bothLand then
-        -- Land-land convergent: mountain range on both sides
-        -- Neither subducts easily, both push up
-        -- Peak: 3000 - 8000m depending on strength
-        let peakElev = 3000 + round (5000.0 * strength * t')
-        in round (fromIntegral peakElev * t')
+        -- Land-land convergent: mountain range (Himalayas)
+        -- Reference: 3000 + 5000*s = 3000-13000m peaks
+        let peakElev = scaleElev wsc (3000.0 + 5000.0 * s)
+        in round (peakElev * t')
 
     else if bothOcean then
-        -- Ocean-ocean: denser plate subducts
-        -- Trench on the subducting side, island arc on the other
         let isSubducting = densityA > densityB
         in if isSubducting
-           -- We're the denser plate: trench
-           then let trenchDepth = -2000 - round (3000.0 * strength)
-                in round (fromIntegral trenchDepth * t')
-           -- We're the overriding plate: slight uplift (island arc)
-           else round (500.0 * strength * t')
+           -- Trench: reference -2000 to -8000m
+           then let trenchDepth = scaleElev wsc (2000.0 + 3000.0 * s)
+                in round (negate trenchDepth * t')
+           -- Island arc: reference 500*s uplift
+           else round (scaleElev wsc (500.0 * s) * t')
 
     else if aIsLand ∧ not bIsLand then
-        -- We're on the land plate, ocean is subducting under us
-        -- Mountain range on land side (Andes-style)
-        let peakElev = 2000 + round (4000.0 * strength)
-        in round (fromIntegral peakElev * t')
+        -- Andes-style: reference 2000 + 4000*s
+        let peakElev = scaleElev wsc (2000.0 + 4000.0 * s)
+        in round (peakElev * t')
 
     else
-        -- We're on the ocean plate, land is the other
-        -- Deep trench on ocean side (Mariana-style)
-        let trenchDepth = -3000 - round (5000.0 * strength)
-        in round (fromIntegral trenchDepth * t')
+        -- Mariana-style trench: reference -3000 to -13000m
+        let trenchDepth = scaleElev wsc (3000.0 + 5000.0 * s)
+        in round (negate trenchDepth * t')
 
 -- | Divergent boundary elevation effect.
---   Rift valley / mid-ocean ridge.
-divergentEffect ∷ Bool → Bool → Float → Float → Int
-divergentEffect aIsLand bothOcean strength boundaryDist =
-    let fadeRange = 150.0
-        peakRange = 20.0
+divergentEffect ∷ WorldScale → Bool → Bool → Float → Float → Int
+divergentEffect wsc aIsLand bothOcean strength boundaryDist =
+    let fadeRange = scaleDist wsc 150.0
+        peakRange = scaleDist wsc 20.0
         t = max 0.0 (1.0 - max 0.0 (abs boundaryDist - peakRange) / fadeRange)
         t' = t * t * (3.0 - 2.0 * t)
+        s = min 2.0 (abs strength)
     in if bothOcean then
-        -- Mid-ocean ridge: slight uplift at boundary
-        let ridgeHeight = 500 + round (1000.0 * strength)
-        in round (fromIntegral ridgeHeight * t')
+        -- Mid-ocean ridge: reference 500 + 1000*s
+        let ridgeHeight = scaleElev wsc (500.0 + 1000.0 * s)
+        in round (ridgeHeight * t')
     else if aIsLand then
-        -- Continental rift valley: depression
-        let riftDepth = -500 - round (2000.0 * strength)
-        in round (fromIntegral riftDepth * t')
+        -- Continental rift: reference -500 to -2500m
+        let riftDepth = scaleElev wsc (500.0 + 2000.0 * s)
+        in round (negate riftDepth * t')
     else
-        -- Ocean side of a rift: gentle slope down
-        let depth = -200 - round (800.0 * strength)
-        in round (fromIntegral depth * t')
+        -- Ocean side of rift: reference -200 to -1000m
+        let depth = scaleElev wsc (200.0 + 800.0 * s)
+        in round (negate depth * t')
 
 -- | Transform boundary: minimal elevation effect.
---   Slight disruption near the fault line.
-transformEffect ∷ Float → Int
-transformEffect boundaryDist =
-    let fadeRange = 50.0
+transformEffect ∷ WorldScale → Float → Int
+transformEffect wsc boundaryDist =
+    let fadeRange = scaleDist wsc 50.0
         t = max 0.0 (1.0 - abs boundaryDist / fadeRange)
         t' = t * t * (3.0 - 2.0 * t)
-        -- Minor ridges/valleys: +/- 100m
-    in round (100.0 * t' * (if boundaryDist > 0 then 1.0 else -1.0))
+        -- Reference: ±100m ridges/valleys
+    in round (scaleElev wsc 100.0 * t' * (if boundaryDist > 0 then 1.0 else -1.0))
 
 -----------------------------------------------------------
 -- Local Noise
 -----------------------------------------------------------
 
--- | Local elevation noise, wrapping in X.
 elevationNoise ∷ Word64 → Int → Int → Int → Int
 elevationNoise seed worldSize gx gy =
     let e1 = wrappedValueNoise2D (seed + 10) worldSize gx gy 12

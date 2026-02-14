@@ -267,6 +267,7 @@ library
                      World.Geology.Erosion
                      World.Geology.Event
                      World.Plate
+                     World.Scale
                      World.Material
                      World.Preview
                      World.ZoomMap

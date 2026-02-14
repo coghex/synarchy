@@ -72,10 +72,8 @@ applyEvolution (CollapseToCaldera depth _ratio center radius) ws gx gy _e =
                     else Just (unMaterialId matObsidian)
                 -- Collapse is depression/rearrangement, not deposition
             in GeoModification elevDelta mat 0
-
 applyEvolution (ParasiticEruption childFeature _childId _center _radius) ws gx gy e =
     applyVolcanicFeature childFeature ws gx gy e
-
 applyEvolution (FlankCollapse collapseAngle collapseWidth debrisRadius center _radius) ws gx gy _e =
     let GeoCoord cx cy = center
         dx = fromIntegral (wrappedDeltaXGeo ws gx cx) ∷ Float
@@ -86,63 +84,45 @@ applyEvolution (FlankCollapse collapseAngle collapseWidth debrisRadius center _r
     in if dist > debrisR
        then noModification
        else
-       let -- Angle from center to this tile
-           tileAngle = atan2 dy dx
-           -- Angular distance from collapse direction
+       let tileAngle = atan2 dy dx
            angleDiff = abs (wrapAngle (tileAngle - collapseAngle))
            halfWidth = collapseWidth / 2.0
 
        in if angleDiff > halfWidth
-          -- Outside the collapse sector — check if in the debris fan
           then let debrisFanHalf = halfWidth * 1.5
                in if angleDiff > debrisFanHalf ∨ dist < debrisR * 0.3
                   then noModification
-                  else -- Thin debris fringe: small uplift from scattered rubble
-                       let radialT = dist / debrisR
+                  else let radialT = dist / debrisR
                            angularT = (angleDiff - halfWidth) / (debrisFanHalf - halfWidth)
-                           elevDelta = round (15.0 * (1.0 - radialT) * (1.0 - angularT))
+                           elevDelta = round (8.0 * (1.0 - radialT) * (1.0 - angularT))
                        in if elevDelta ≤ 0
                           then noModification
                           else GeoModification elevDelta Nothing 0
           else
-          -- Inside the collapse sector
           let radialT = dist / debrisR
-              -- Angular fade: strongest at the center of the sector,
-              -- weaker at the edges
               angularFade = 1.0 - (angleDiff / halfWidth) ** 2.0
 
-              -- Three zones along the radial axis:
-              --   Inner (< 0.3): the scar — deep depression, exposed rock
-              --   Middle (0.3-0.7): the hummocky debris field
-              --   Outer (> 0.7): thinning debris apron
-
           in if radialT < 0.3
-             then -- Scar zone: deep gouge into the volcanic edifice
+             then -- Scar zone: moderate gouge
                   let scarT = radialT / 0.3
-                      -- Deepest at the center, shallower at the rim of the scar
-                      scarDepth = debrisR * 0.4 * angularFade
+                      scarDepth = min 40.0 (debrisR * 0.15) * angularFade
                       elevDelta = round (negate scarDepth * (1.0 - scarT * 0.5))
-                      -- Exposed interior rock — basalt from the volcano's guts
                   in GeoModification elevDelta (Just (unMaterialId matBasalt)) 0
 
              else if radialT < 0.7
-             then -- Debris field: hummocky mounds of collapsed material
-                  -- Elevation is slightly positive (debris piled up)
-                  -- but less than the original volcano height
+             then -- Debris field: low hummocky mounds
                   let debrisT = (radialT - 0.3) / 0.4
-                      peakDebris = debrisR * 0.15 * angularFade
-                      -- Hump profile: rises then falls
+                      peakDebris = min 15.0 (debrisR * 0.05) * angularFade
                       humpProfile = sin (debrisT * π) * (1.0 - debrisT * 0.3)
                       elevDelta = round (peakDebris * humpProfile)
-                      -- Mix of basalt rubble and obsidian fragments
                       mat = if debrisT < 0.5
                             then unMaterialId matBasalt
                             else unMaterialId matObsidian
                   in GeoModification elevDelta (Just mat) (abs elevDelta)
 
-             else -- Debris apron: thinning blanket of rubble
+             else -- Debris apron: thin rubble
                   let apronT = (radialT - 0.7) / 0.3
-                      apronHeight = debrisR * 0.05 * angularFade
+                      apronHeight = min 5.0 (debrisR * 0.02) * angularFade
                       elevDelta = round (apronHeight * (1.0 - apronT))
                   in if elevDelta ≤ 0
                      then noModification
