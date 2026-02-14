@@ -269,22 +269,25 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                  heightOffset = fromIntegral relativeZ * tileSideHeight
                                  drawX = rawX + xOffset
                                  drawY = rawY - heightOffset
+                                 -- Look up fluid at this column
+                                 mFluid = HM.lookup (lx, ly) fluidMap
                              in if isTileVisible vb drawX drawY
                                 then tileToQuad lookupSlot lookupFmSlot textures facing
-                                       gx gy z tile zSlice effectiveDepth zoomAlpha xOffset : acc
+                                       gx gy z tile zSlice effectiveDepth zoomAlpha xOffset mFluid : acc
                                 else acc
                         else acc
                     ) [] tileMap
 
                 !blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures facing
-                        gx gy zSlice zSlice zoomAlpha xOffset
+                        gx gy zSlice zSlice zoomAlpha xOffset mFluid
                     | lx ← [0 .. chunkSize - 1]
                     , ly ← [0 .. chunkSize - 1]
                     , let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
                     , surfZ > zSlice
                     , not (HM.member (lx, ly, zSlice) tileMap)
-                    , case HM.lookup (lx, ly) fluidMap of
+                    , let mFluid = HM.lookup (lx, ly) fluidMap
+                    , case mFluid of
                         Just fc → fcSurface fc ≤ zSlice
                         Nothing → True
                     , let (gx, gy) = chunkToGlobal coord lx ly
@@ -331,8 +334,9 @@ renderWorldQuads env worldState zoomAlpha snap = do
 tileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
            → WorldTextures → CameraFacing
            → Int → Int → Int → Tile → Int → Int → Float → Float
+           → Maybe FluidCell   -- new parameter
            → SortableQuad
-tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice effDepth tileAlpha xOffset =
+tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice effDepth tileAlpha xOffset mFluid =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = worldZ - zSlice
@@ -346,24 +350,33 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
         fmHandle = getTileFaceMapTexture textures (tileType tile)
         fmSlot = lookupFmSlot fmHandle
 
-        -- Depth fade: tiles dissolve into the background layer
+        -- Depth fade (existing logic)
         depth = zSlice - worldZ
         fadeRange = max 1 effDepth
-
-        -- Brightness: gentle shadow, bottoms out at 0.6
-        -- so cliff material colors remain identifiable
         brightnessT = fromIntegral depth / fromIntegral fadeRange
         brightness = clamp01 (1.0 - brightnessT * 0.4)
-
-        -- Alpha: quadratic curve — stays opaque for the top ~50%
-        -- of the cliff, then accelerates into transparency.
-        -- The background layer (always full brightness, correct
-        -- material color) shows through at the bottom.
         fadeT = fromIntegral depth / fromIntegral fadeRange
         depthAlpha = clamp01 (1.0 - fadeT * fadeT)
-
         finalAlpha = tileAlpha * depthAlpha
-        tint = Vec4 brightness brightness brightness finalAlpha
+
+        -- Underwater tinting: if this tile is below a fluid surface,
+        -- shift color toward blue and darken based on water depth
+        (tintR, tintG, tintB) = case mFluid of
+            Just fc
+                | worldZ < fcSurface fc →
+                    let waterDepth = fcSurface fc - worldZ
+                        -- Normalize: 10 z-levels of water = maximum darkening
+                        t = clamp01 (fromIntegral waterDepth / 10.0)
+                        -- Lerp from normal brightness toward deep ocean blue
+                        -- At surface: slight blue tint (0.7, 0.8, 1.0)
+                        -- At depth:   deep dark blue  (0.2, 0.3, 0.6)
+                        r = brightness * (1.0 - t * 0.7)
+                        g = brightness * (1.0 - t * 0.5)
+                        b = brightness * (1.0 - t * 0.1)
+                    in (r, g, b)
+            _ → (brightness, brightness, brightness)
+
+        tint = Vec4 tintR tintG tintB finalAlpha
 
         v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
@@ -384,8 +397,9 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
 blankTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
                → WorldTextures → CameraFacing
                → Int → Int → Int → Int → Float → Float
+               → Maybe FluidCell
                → SortableQuad
-blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSlice tileAlpha xOffset =
+blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSlice tileAlpha xOffset mFluid =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = worldZ - zSlice
@@ -397,7 +411,14 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
         texHandle = wtBlankTexture textures
         actualSlot = lookupSlot texHandle
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
-        tint = Vec4 1.0 1.0 1.0 tileAlpha
+        (tintR, tintG, tintB) = case mFluid of
+            Just fc
+                | worldZ < fcSurface fc →
+                    let waterDepth = fcSurface fc - worldZ
+                        t = clamp01 (fromIntegral waterDepth / 10.0)
+                    in (1.0 - t * 0.7, 1.0 - t * 0.5, 1.0 - t * 0.1)
+            _ → (1.0, 1.0, 1.0)
+        tint = Vec4 tintR tintG tintB tileAlpha
         vertices = V.fromListN 6
             [ Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
             , Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
