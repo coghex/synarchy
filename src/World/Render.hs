@@ -259,6 +259,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 tileMap = lcTiles lc
                 surfMap = lcSurfaceMap lc
                 fluidMap = lcFluidMap lc
+                chunkHasFluid = not (HM.null fluidMap)
 
                 !realQuads = HM.foldlWithKey'
                     (\acc (lx, ly, z) tile →
@@ -269,18 +270,16 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                  heightOffset = fromIntegral relativeZ * tileSideHeight
                                  drawX = rawX + xOffset
                                  drawY = rawY - heightOffset
-                                 -- Look up fluid at this column
                                  mFluid = HM.lookup (lx, ly) fluidMap
                              in if isTileVisible vb drawX drawY
                                 then tileToQuad lookupSlot lookupFmSlot textures facing
-                                       gx gy z tile zSlice effectiveDepth zoomAlpha xOffset mFluid : acc
+                                       gx gy z tile zSlice effectiveDepth zoomAlpha xOffset mFluid chunkHasFluid : acc
                                 else acc
                         else acc
                     ) [] tileMap
-
                 !blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures facing
-                        gx gy zSlice zSlice zoomAlpha xOffset mFluid
+                        gx gy zSlice zSlice zoomAlpha xOffset mFluid chunkHasFluid
                     | lx ← [0 .. chunkSize - 1]
                     , ly ← [0 .. chunkSize - 1]
                     , let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
@@ -334,9 +333,10 @@ renderWorldQuads env worldState zoomAlpha snap = do
 tileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
            → WorldTextures → CameraFacing
            → Int → Int → Int → Tile → Int → Int → Float → Float
-           → Maybe FluidCell   -- new parameter
+           → Maybe FluidCell   -- fluid in this column (if any)
+           → Bool              -- whether this chunk has ANY fluid
            → SortableQuad
-tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice effDepth tileAlpha xOffset mFluid =
+tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice effDepth tileAlpha xOffset mFluid chunkHasFluid =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = worldZ - zSlice
@@ -350,31 +350,42 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
         fmHandle = getTileFaceMapTexture textures (tileType tile)
         fmSlot = lookupFmSlot fmHandle
 
-        -- Depth fade (existing logic)
+        -- Depth fade (existing)
         depth = zSlice - worldZ
         fadeRange = max 1 effDepth
         brightnessT = fromIntegral depth / fromIntegral fadeRange
         brightness = clamp01 (1.0 - brightnessT * 0.4)
         fadeT = fromIntegral depth / fromIntegral fadeRange
         depthAlpha = clamp01 (1.0 - fadeT * fadeT)
-        finalAlpha = tileAlpha * depthAlpha
 
-        -- Underwater tinting: if this tile is below a fluid surface,
-        -- shift color toward blue and darken based on water depth
-        (tintR, tintG, tintB) = case mFluid of
+        -- Determine if this tile is underwater.
+        -- Two cases:
+        --   1. This column has fluid and the tile is below the fluid surface
+        --   2. This column has no fluid (it's a cliff/land column) but the
+        --      tile is below sea level AND the chunk contains fluid elsewhere.
+        --      This catches cliff faces that extend below the waterline.
+        underwaterDepth = case mFluid of
             Just fc
-                | worldZ < fcSurface fc →
-                    let waterDepth = fcSurface fc - worldZ
-                        -- Normalize: 10 z-levels of water = maximum darkening
-                        t = clamp01 (fromIntegral waterDepth / 10.0)
-                        -- Lerp from normal brightness toward deep ocean blue
-                        -- At surface: slight blue tint (0.7, 0.8, 1.0)
-                        -- At depth:   deep dark blue  (0.2, 0.3, 0.6)
-                        r = brightness * (1.0 - t * 0.7)
-                        g = brightness * (1.0 - t * 0.5)
-                        b = brightness * (1.0 - t * 0.1)
-                    in (r, g, b)
-            _ → (brightness, brightness, brightness)
+                | worldZ < fcSurface fc → fcSurface fc - worldZ
+            _ | chunkHasFluid ∧ worldZ < seaLevel → seaLevel - worldZ
+            _ → 0
+
+        -- Underwater tinting
+        (tintR, tintG, tintB) = if underwaterDepth > 0
+            then let t = clamp01 (fromIntegral underwaterDepth / 10.0)
+                     r = brightness * (1.0 - t * 0.7)
+                     g = brightness * (1.0 - t * 0.5)
+                     b = brightness * (1.0 - t * 0.1)
+                 in (r, g, b)
+            else (brightness, brightness, brightness)
+
+        -- For underwater tiles, slow down the alpha fade so the seabed
+        -- remains visible deeper.  The ocean surface quad already
+        -- provides the "lid" — we want to see through it, not fade
+        -- tiles to nothing underneath.
+        finalAlpha = if underwaterDepth > 0
+            then tileAlpha  -- no depth fade underwater; blue tint handles depth cue
+            else tileAlpha * depthAlpha
 
         tint = Vec4 tintR tintG tintB finalAlpha
 
@@ -397,9 +408,9 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
 blankTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
                → WorldTextures → CameraFacing
                → Int → Int → Int → Int → Float → Float
-               → Maybe FluidCell
+               → Maybe FluidCell → Bool
                → SortableQuad
-blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSlice tileAlpha xOffset mFluid =
+blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSlice tileAlpha xOffset mFluid chunkHasFluid =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = worldZ - zSlice
@@ -411,13 +422,18 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
         texHandle = wtBlankTexture textures
         actualSlot = lookupSlot texHandle
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
-        (tintR, tintG, tintB) = case mFluid of
+
+        underwaterDepth = case mFluid of
             Just fc
-                | worldZ < fcSurface fc →
-                    let waterDepth = fcSurface fc - worldZ
-                        t = clamp01 (fromIntegral waterDepth / 10.0)
-                    in (1.0 - t * 0.7, 1.0 - t * 0.5, 1.0 - t * 0.1)
-            _ → (1.0, 1.0, 1.0)
+                | worldZ < fcSurface fc → fcSurface fc - worldZ
+            _ | chunkHasFluid ∧ worldZ < seaLevel → seaLevel - worldZ
+            _ → 0
+
+        (tintR, tintG, tintB) = if underwaterDepth > 0
+            then let t = clamp01 (fromIntegral underwaterDepth / 10.0)
+                 in (1.0 - t * 0.7, 1.0 - t * 0.5, 1.0 - t * 0.1)
+            else (1.0, 1.0, 1.0)
+
         tint = Vec4 tintR tintG tintB tileAlpha
         vertices = V.fromListN 6
             [ Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
