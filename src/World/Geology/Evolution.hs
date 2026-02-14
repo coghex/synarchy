@@ -16,16 +16,11 @@ import World.Geology.Hash
 -- Volcanic Evolution
 -----------------------------------------------------------
 
--- | Evolve a single persistent feature between geological periods.
---   Decides whether it stays active, goes dormant, collapses,
---   spawns parasitic cones, etc.
 evolveOneFeature ∷ Word64 → Int
                  → ([GeoEvent], TimelineBuildState)
                  → PersistentFeature
                  → ([GeoEvent], TimelineBuildState)
 evolveOneFeature seed periodIdx (events, tbs) pf =
-    -- Only evolve point features (shields, cinder cones, lava domes)
-    -- Fissures, tubes, vents, and supervolcanoes don't evolve this way
     case pfFeature pf of
         FissureVolcano _   → (events, tbs)
         LavaTube _         → (events, tbs)
@@ -34,7 +29,6 @@ evolveOneFeature seed periodIdx (events, tbs) pf =
         Caldera _          → (events, tbs)
         _ → evolvePointFeature seed periodIdx (events, tbs) pf
 
--- | Evolution logic for point volcanic features only.
 evolvePointFeature ∷ Word64 → Int
                    → ([GeoEvent], TimelineBuildState)
                    → PersistentFeature
@@ -46,8 +40,8 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
         roll = hashToFloatGeo h1
     in case pfActivity pf of
         Active →
-            if roll < 0.15
-            -- 15%: collapse into caldera
+            if roll < 0.10
+            -- 10%: collapse into caldera
             then let h2 = hashGeo seed fidInt 41
                      h3 = hashGeo seed fidInt 42
                      depth = hashToRangeGeo h2 50 200
@@ -60,8 +54,31 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                                   , pfLastActivePeriod = periodIdx }) tbs
                  in (evt : events, tbs')
 
-            else if roll < 0.45
-            -- 30%: go dormant
+            else if roll < 0.15
+            -- 5%: flank collapse (Mt. St. Helens style)
+            then let h2 = hashGeo seed fidInt 52
+                     h3 = hashGeo seed fidInt 53
+                     h4 = hashGeo seed fidInt 54
+                     collapseAngle = hashToFloatGeo h2 * 2.0 * π
+                     collapseWidth = 0.6 + hashToFloatGeo h3 * 0.8
+                         -- 0.6 to 1.4 radians (34° to 80°)
+                     featureR = getFeatureRadius (pfFeature pf)
+                     debrisR = featureR + hashToRangeGeo h4
+                                 (featureR `div` 2) (featureR * 2)
+                     evt = VolcanicModify fid (FlankCollapse
+                             collapseAngle collapseWidth debrisR
+                             (getFeatureCenter (pfFeature pf))
+                             (getFeatureRadius (pfFeature pf)))
+                     -- Flank collapse doesn't kill the volcano — it can
+                     -- keep erupting (like Mt. St. Helens did). But mark
+                     -- that it erupted.
+                     tbs' = updateFeature fid
+                         (\p → p { pfEruptionCount = pfEruptionCount p + 1
+                                  , pfLastActivePeriod = periodIdx }) tbs
+                 in (evt : events, tbs')
+
+            else if roll < 0.40
+            -- 25%: go dormant
             then let evt = VolcanicModify fid (GoDormant
                                (getFeatureCenter (pfFeature pf))
                                (getFeatureRadius (pfFeature pf)))
@@ -70,7 +87,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                                   , pfLastActivePeriod = periodIdx }) tbs
                  in (evt : events, tbs')
 
-            else if roll < 0.65
+            else if roll < 0.60
             -- 20%: parasitic eruption
             then let (childId, tbs') = allocFeatureId tbs
                      h3 = hashGeo seed fidInt 43
@@ -107,7 +124,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                  in (evt : events, tbs''')
 
             else
-            -- 35%: stays active, grows
+            -- 40%: stays active, grows
             let h5 = hashGeo seed fidInt 49
                 heightGain = hashToRangeGeo h5 20 100
                 evt = VolcanicModify fid (Reactivate heightGain 0
@@ -150,7 +167,6 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
 -- Feature Query Helpers
 -----------------------------------------------------------
 
--- | Get center coordinates from any volcanic feature.
 getFeatureRadius ∷ VolcanicFeature → Int
 getFeatureRadius (ShieldVolcano p)    = shBaseRadius p
 getFeatureRadius (CinderCone p)       = ccBaseRadius p
@@ -171,7 +187,6 @@ getFeatureRadius (LavaTube p)         =
         dy = fromIntegral (ey - sy) ∷ Float
     in round (sqrt (dx * dx + dy * dy) / 2.0) + ltWidth p
 
--- | Get approximate radius from any volcanic feature.
 getFeatureCenter ∷ VolcanicFeature → GeoCoord
 getFeatureCenter (ShieldVolcano p)    = shCenter p
 getFeatureCenter (CinderCone p)       = ccCenter p
