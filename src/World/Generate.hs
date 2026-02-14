@@ -23,7 +23,8 @@ import qualified Data.HashMap.Strict as HM
 import World.Types (Tile(..), ChunkCoord(..), Chunk, WorldGenParams(..)
                    , GeoTimeline(..), GeoPeriod(..), GeoEvent(..)
                    , ErosionParams(..), chunkSize)
-import World.Material (MaterialId(..), matGlacier, getMaterialProps, MaterialProps(..))
+import World.Material (MaterialId(..), matGlacier, getMaterialProps, MaterialProps(..)
+                      , matAir)
 import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalX)
 import World.Grid (worldToGrid)
@@ -189,11 +190,14 @@ generateChunk params coord =
     in (HM.fromList tiles, surfaceMap)
 
 -- | Generate only the exposed tiles for a column.
+--   Skips air tiles (MaterialId 0) to create caves and overhangs.
 generateExposedColumn ∷ Int → Int → Int → Int → (Int → MaterialId)
                       → [((Int, Int, Int), Tile)]
 generateExposedColumn lx ly surfaceZ exposeFrom lookupMat =
-    [ ((lx, ly, z), Tile (unMaterialId (lookupMat z)) 0)
+    [ ((lx, ly, z), Tile (unMaterialId mat) 0)
     | z ← [exposeFrom .. surfaceZ]
+    , let mat = lookupMat z
+    , mat ≠ matAir
     ]
 
 -----------------------------------------------------------

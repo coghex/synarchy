@@ -2,6 +2,7 @@
 module World.Material
     ( -- * Material IDs
       MaterialId(..)
+    , matAir
     , matGranite
     , matDiorite
     , matGabbro
@@ -30,6 +31,10 @@ import UPrelude
 
 newtype MaterialId = MaterialId { unMaterialId ∷ Word8 }
     deriving (Show, Eq, Ord)
+
+-- | Air is the default material for empty space.
+matAir ∷ MaterialId
+matAir = MaterialId 0
 
 -- Igneous intrusive
 matGranite ∷ MaterialId
