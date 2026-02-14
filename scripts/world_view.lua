@@ -298,7 +298,7 @@ function worldView.show()
     
     -- If world is already active (generated from create_world_menu),
     -- just show it. Otherwise create it.
-    if worldManager.isActive() then
+    if worldManager.getCurrentWorld() then
         worldManager.showWorld()
     elseif worldView.texturesLoadedCount >= worldView.texturesNeeded then
         worldView.createWorld()

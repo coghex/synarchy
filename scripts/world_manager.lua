@@ -161,7 +161,6 @@ function worldManager.hideWorld(worldId)
     
     engine.logInfo("Hiding world: " .. worldId)
     world.hide(worldId)
-    worldManager.active = false
 end
 
 function worldManager.destroyWorld(worldId)
