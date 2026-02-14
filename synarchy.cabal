@@ -339,6 +339,7 @@ library
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
+                       -rtsopts
                        -haddock
                        -fno-full-laziness
                        -fno-cse
@@ -436,6 +437,8 @@ executable synarchy
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
+                       -rtsopts
+                       "-with-rtsopts=-N"
                        -haddock
       else
           cpp-options: -DDEVELOPMENT
