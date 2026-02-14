@@ -134,6 +134,14 @@ generateChunk params coord =
             Just (z, _) → z
             Nothing     → 0
 
+        -- | Neighbor elevation lookup with a fallback.
+        --   Missing neighbors use the fallback (the tile's own elevation)
+        --   instead of 0, preventing phantom cliffs at chunk edges
+        --   and glacier boundaries.
+        lookupElevOr lx ly fallback = case HM.lookup (lx, ly) finalColumns of
+            Just (z, _) → z
+            Nothing     → fallback
+
         -- Build the surface elevation map for this chunk's own columns
         surfaceMap = HM.fromList
             [ ((lx, ly), surfZ)
@@ -159,18 +167,15 @@ generateChunk params coord =
                       baseS = fst (lookupBase lx (ly + 1))
                       baseE = fst (lookupBase (lx + 1) ly)
                       baseW = fst (lookupBase (lx - 1) ly)
+                      -- Use surfZ as fallback so missing neighbors
+                      -- don't drag neighborMinZ to 0
                       neighborMinZ = minimum
-                          [ lookupElev (lx - 1) ly
-                          , lookupElev (lx + 1) ly
-                          , lookupElev lx (ly - 1)
-                          , lookupElev lx (ly + 1)
+                          [ lookupElevOr (lx - 1) ly surfZ
+                          , lookupElevOr (lx + 1) ly surfZ
+                          , lookupElevOr lx (ly - 1) surfZ
+                          , lookupElevOr lx (ly + 1) surfZ
                           ]
                       exposeFrom = min surfZ neighborMinZ
-                      -- Surface tile uses surfMat from finalColumns
-                      -- (which includes erosion material from chunk-level
-                      -- computation with real neighbor data).
-                      -- Sub-surface tiles use materialAtDepth with
-                      -- neighbor base elevations for stratigraphy.
                       lookupMat z
                           | surfMat ≡ matGlacier = matGlacier
                           | z ≡ surfZ            = surfMat
@@ -219,18 +224,18 @@ applyTimelineChunk timeline worldSize wsc coord baseColumns =
                 ) elevMap
 
             -- Step 2: Apply erosion using neighbor lookups from postEvents
-            lookupPostEvent lx ly = case HM.lookup (lx, ly) postEvents of
+            lookupPostEvent lx ly fallback = case HM.lookup (lx, ly) postEvents of
                 Just (z, _) → z
-                Nothing     → 0
+                Nothing     → fallback
 
             postErosion = HM.mapWithKey (\(lx, ly) (elev, mat) →
                 if mat ≡ matGlacier
                 then (elev, mat)
-                else let neighbors = ( lookupPostEvent lx (ly - 1)  -- N
-                                      , lookupPostEvent lx (ly + 1)  -- S
-                                      , lookupPostEvent (lx + 1) ly  -- E
-                                      , lookupPostEvent (lx - 1) ly  -- W
-                                      )
+                else let neighbors = ( lookupPostEvent lx (ly - 1) elev -- N
+                                     , lookupPostEvent lx (ly + 1) elev -- S
+                                     , lookupPostEvent (lx + 1) ly elev -- E
+                                     , lookupPostEvent (lx - 1) ly elev -- W
+                                     )
                          erosionMod = applyErosion
                              (gpErosion period)
                              worldSize

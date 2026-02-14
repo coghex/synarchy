@@ -60,7 +60,7 @@ defaultCamera = Camera2D
     , camDragging = False
     , camDragOrigin = (0, 0)
     , camZSlice = 0
-    , camZTracking = False
+    , camZTracking = True
     }
 
 data UICamera = UICamera

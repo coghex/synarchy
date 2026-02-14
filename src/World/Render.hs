@@ -102,6 +102,10 @@ updateWorldTiles = do
     let shouldTrack = camZTracking camera
                     ∨ (tileAlpha > 0.001 ∧ tileAlpha < 0.999)
     when shouldTrack $ do
+        -- re-enable tracking if we are in a crossfade
+        when (not (camZTracking camera)) $
+            liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
+                (cam { camZTracking = True }, ())
         worldManager' ← liftIO $ readIORef (worldManagerRef env)
         forM_ (wmVisible worldManager') $ \pageId →
             case lookup pageId (wmWorlds worldManager') of

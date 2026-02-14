@@ -23,6 +23,7 @@ import World.Grid (gridToWorld)
 import World.Types
 import World.Material (MaterialId(..))
 import World.Plate (generatePlates, elevationAtGlobal)
+import World.Render (surfaceHeadroom)
 import World.Generate (globalToChunk, applyTimeline)
 import World.ZoomMap (buildZoomCache)
 import qualified Data.HashMap.Strict as HM
@@ -143,7 +144,7 @@ cameraGotoTileFn env = do
                                     plates    = generatePlates seed worldSize (wgpPlateCount params)
                                     (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
                                     (finalElev, _) = applyTimeline timeline worldSize gx gy (baseElev, baseMat)
-                                    targetZ = finalElev + 3
+                                    targetZ = finalElev + surfaceHeadroom
                                 atomicModifyIORef' (cameraRef env) $ \cam →
                                     (cam { camZSlice = targetZ, camZTracking = True }, ())
                             Nothing → return ()
