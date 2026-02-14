@@ -23,6 +23,7 @@ import World.Types
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
                    , isBeyondGlacier)
+import World.Fluids (seaLevel, isOceanChunk)
 import World.Generate (applyTimeline)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
@@ -62,6 +63,7 @@ buildZoomCache facing params =
         plates = generatePlates seed worldSize (wgpPlateCount params)
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
+        oceanMap = wgpOceanMap params
 
         entries =
             [ ZoomChunkEntry
@@ -69,8 +71,11 @@ buildZoomCache facing params =
                 , zceChunkY   = ccy
                 , zceDrawX    = drawX
                 , zceDrawY    = drawY
-                , zceTexIndex = winnerMat
-                , zceElev     = avgElev
+                , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
+                                then 0 else winnerMat
+                , zceElev     = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
+                                then seaLevel else avgElev
+                , zceIsOcean  = isOceanChunk oceanMap (ChunkCoord ccx ccy)
                 }
             | ccx ← [-halfSize .. halfSize - 1]
             , ccy ← [-halfSize .. halfSize - 1]

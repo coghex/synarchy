@@ -19,6 +19,7 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
+import World.Fluids (FluidCell(..), FluidType(..), seaLevel)
 import World.Generate (chunkToGlobal, chunkWorldBounds, viewDepth, globalToChunk)
 import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer,
                    tileHalfWidth, tileHalfDiamondHeight, zoomFadeStart, zoomFadeEnd
@@ -249,6 +250,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
             let coord  = lcCoord lc
                 tileMap = lcTiles lc
                 surfMap = lcSurfaceMap lc
+                fluidMap = lcFluidMap lc
 
                 !realQuads = HM.foldlWithKey'
                     (\acc (lx, ly, z) tile →
@@ -280,8 +282,24 @@ renderWorldQuads env worldState zoomAlpha snap = do
                           drawY = rawY
                     , isTileVisible vb drawX drawY
                     ]
+                !oceanQuads =
+                    [ oceanTileToQuad lookupSlot lookupFmSlot textures facing
+                        gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
+                    | (lx, ly) ← HM.keys fluidMap
+                    , let fc = fluidMap HM.! (lx, ly)
+                    -- Only render if fluid surface is within the visible z range
+                    , fcSurface fc ≤ zSlice
+                    , fcSurface fc ≥ (zSlice - effectiveDepth)
+                    , let (gx, gy) = chunkToGlobal coord lx ly
+                          (rawX, rawY) = gridToScreen facing gx gy
+                          relativeZ = fcSurface fc - zSlice
+                          heightOffset = fromIntegral relativeZ * tileSideHeight
+                          drawX = rawX + xOffset
+                          drawY = rawY - heightOffset
+                    , isTileVisible vb drawX drawY
+                    ]
 
-            in V.fromList (realQuads <> blankQuads)
+            in V.fromList (realQuads <> blankQuads <> oceanQuads)
             ) visibleChunksWithOffset
 
     return $! V.concat chunkVectors
@@ -377,6 +395,54 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
             , Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
             , Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
             ]
+    in SortableQuad
+        { sqSortKey  = sortKey
+        , sqVertices = vertices
+        , sqTexture  = texHandle
+        , sqLayer    = worldLayer
+        }
+
+-----------------------------------------------------------
+-- Ocean Surface Tile Quad
+-----------------------------------------------------------
+
+oceanTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+               → WorldTextures → CameraFacing
+               → Int → Int → Int → Int → Int → Float → Float
+               → SortableQuad
+oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSlice effDepth tileAlpha xOffset =
+    let (rawX, rawY) = gridToScreen facing worldX worldY
+        (fa, fb) = applyFacing facing worldX worldY
+        relativeZ = fluidZ - zSlice
+        heightOffset = fromIntegral relativeZ * tileSideHeight
+        drawX = rawX + xOffset
+        drawY = rawY - heightOffset
+        -- Ocean renders slightly above terrain at same z for sort order
+        sortKey = fromIntegral (fa + fb)
+                + fromIntegral relativeZ * 0.001
+                + 0.0005  -- sort above terrain at same z
+
+        texHandle = wtOceanTexture textures
+        actualSlot = lookupSlot texHandle
+        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+
+        -- Depth fade same as terrain tiles
+        depth = zSlice - fluidZ
+        fadeRange = max 1 effDepth
+        brightnessT = fromIntegral depth / fromIntegral fadeRange
+        brightness = clamp01 (1.0 - brightnessT * 0.4)
+        fadeT = fromIntegral depth / fromIntegral fadeRange
+        depthAlpha = clamp01 (1.0 - fadeT * fadeT)
+        finalAlpha = tileAlpha * depthAlpha
+
+        -- Slight blue tint for ocean
+        tint = Vec4 (brightness * 0.7) (brightness * 0.8) brightness finalAlpha
+
+        v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+        vertices = V.fromListN 6 [v0, v1, v2, v0, v2, v3]
     in SortableQuad
         { sqSortKey  = sortKey
         , sqVertices = vertices

@@ -13,6 +13,7 @@ worldView.textures = {
     granite = -1,
     diorite = -1,
     gabbro = -1,
+    ocean = -1,
     glacier = -1,
     lava = -1,
     noTexture = -1,
@@ -92,6 +93,7 @@ function worldView.init(width, height)
     worldView.textures.granite    = engine.loadTexture("assets/textures/world/granite/granite.png")
     worldView.textures.diorite    = engine.loadTexture("assets/textures/world/diorite/diorite.png")
     worldView.textures.gabbro     = engine.loadTexture("assets/textures/world/gabbro/gabbro.png")
+    worldView.textures.ocean      = engine.loadTexture("assets/textures/world/ocean/ocean.png")
     worldView.textures.glacier    = engine.loadTexture("assets/textures/world/glacier/glacier.png")
     worldView.textures.lava       = engine.loadTexture("assets/textures/world/lava/lava.png")
     worldView.textures.blankTexture = engine.loadTexture("assets/textures/world/blanktexture.png")
@@ -232,6 +234,7 @@ function worldView.createWorld()
         graniteTexture = worldView.textures.granite,
         dioriteTexture = worldView.textures.diorite,
         gabbroTexture  = worldView.textures.gabbro,
+        oceanTexture   = worldView.textures.ocean,
         glacierTexture = worldView.textures.glacier,
         lavaTexture = worldView.textures.lava,
         blankTexture   = worldView.textures.blankTexture,

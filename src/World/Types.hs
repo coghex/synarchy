@@ -6,6 +6,7 @@ import Data.List (find, partition, sortOn)
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import Data.Hashable (Hashable(..))
 import Data.IORef (IORef, newIORef)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -37,6 +38,7 @@ data LoadedChunk = LoadedChunk
     { lcCoord      ∷ !ChunkCoord
     , lcTiles      ∷ !Chunk
     , lcSurfaceMap ∷ !(HM.HashMap (Int, Int) Int)
+    , lcFluidMap   ∷ !(HM.HashMap (Int, Int) FluidCell)
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
 
@@ -57,6 +59,7 @@ data WorldGenParams = WorldGenParams
     , wgpSunConfig   ∷ !SunConfig       -- ^ Sun configuration for time-of-day lighting
     , wgpMoonConfig  ∷ !MoonConfig      -- ^ Moon configuration for lunar phases
     , wgpGeoTimeline ∷ !GeoTimeline      -- ^ Geological timeline for terrain evolution
+    , wgpOceanMap   ∷ !OceanMap         -- ^ Pre-generated ocean map for worldgen
     } deriving (Show, Eq)
 
 defaultWorldGenParams ∷ WorldGenParams
@@ -68,6 +71,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpSunConfig = defaultSunConfig
     , wgpMoonConfig = defaultMoonConfig
     , wgpGeoTimeline = emptyTimeline
+    , wgpOceanMap = HS.empty
     }
 
 -----------------------------------------------------------
@@ -130,6 +134,76 @@ evictDistantChunks (ChunkCoord camCX camCY) keepRadius wtd =
          in wtd { wtdChunks = HM.union keep keptMap }
 
 -----------------------------------------------------------
+-- Constants
+-----------------------------------------------------------
+
+-- | Global sea level. Tiles at or below this elevation
+--   in ocean-connected regions are submerged.
+seaLevel ∷ Int
+seaLevel = 0
+
+-----------------------------------------------------------
+-- Fluid Types
+-----------------------------------------------------------
+
+data FluidType = Ocean | Lake | River | Lava
+    deriving (Show, Eq)
+
+-- | Per-column fluid info, stored in LoadedChunk.
+--   Only present for tiles that have fluid above them.
+data FluidCell = FluidCell
+    { fcType    ∷ !FluidType   -- ^ What kind of fluid
+    , fcSurface ∷ !Int         -- ^ Z-level of the fluid surface
+    } deriving (Show, Eq)
+
+-----------------------------------------------------------
+-- Ocean Map (chunk-resolution)
+-----------------------------------------------------------
+
+-- | Set of all chunk coordinates that are ocean-connected.
+--   Computed once at world init via BFS from ocean plate centers.
+type OceanMap = HS.HashSet ChunkCoord
+
+-----------------------------------------------------------
+-- Regional Data
+-----------------------------------------------------------
+
+-- | Coarse spatial grid coordinate.
+--   Each region covers regionSize x regionSize chunks.
+data RegionCoord = RegionCoord !Int !Int
+    deriving (Show, Eq, Ord)
+
+instance Hashable RegionCoord where
+    hashWithSalt s (RegionCoord x y) = s `hashWithSalt` x `hashWithSalt` y
+
+-- | How many chunks per region side.
+regionSize ∷ Int
+regionSize = 8
+
+-- | Regional climate and geological data.
+data RegionalData = RegionalData
+    { rdTemperature ∷ !(HM.HashMap RegionCoord Float)
+    } deriving (Show, Eq)
+
+emptyRegionalData ∷ RegionalData
+emptyRegionalData = RegionalData
+    { rdTemperature = HM.empty
+    }
+
+data Region = Region
+    { regCoord    ∷ !RegionCoord
+    , regOcean    ∷ !Bool         -- ^ Does this region contain any ocean chunks?
+    , regSeaLevel ∷ !Int          -- ^ Base sea level (for future tidal variation)
+    , regAvgElev  ∷ !Int          -- ^ Average elevation across region
+    } deriving (Show, Eq)
+
+chunkToRegion ∷ ChunkCoord → RegionCoord
+chunkToRegion (ChunkCoord cx cy) =
+    RegionCoord (floorDiv' cx regionSize) (floorDiv' cy regionSize)
+  where
+    floorDiv' a b = floor (fromIntegral a / fromIntegral b ∷ Double)
+
+-----------------------------------------------------------
 -- World Tile Quad Cache
 -----------------------------------------------------------
 
@@ -165,6 +239,7 @@ data WorldTextures = WorldTextures
     { wtGraniteTexture   ∷ TextureHandle
     , wtGabbroTexture    ∷ TextureHandle
     , wtDioriteTexture   ∷ TextureHandle
+    , wtOceanTexture     ∷ TextureHandle
     , wtIsoFaceMap       ∷ TextureHandle
     , wtNoTexture        ∷ TextureHandle
     , wtNoFaceMap        ∷ TextureHandle
@@ -220,6 +295,7 @@ defaultWorldTextures = WorldTextures
     { wtGraniteTexture  = TextureHandle 0
     , wtGabbroTexture   = TextureHandle 0
     , wtDioriteTexture  = TextureHandle 0
+    , wtOceanTexture    = TextureHandle 0
     , wtNoTexture       = TextureHandle 0
     , wtIsoFaceMap      = TextureHandle 0
     , wtNoFaceMap       = TextureHandle 0
@@ -695,6 +771,7 @@ data ZoomChunkEntry = ZoomChunkEntry
     , zceDrawY    ∷ !Float     -- ^ Screen-space draw Y
     , zceTexIndex ∷ !Word8     -- ^ Material ID (used to pick texture at render time)
     , zceElev     ∷ !Int       -- ^ Elevation (used to pick texture at render time)
+    , zceIsOcean  ∷ !Bool      -- ^ Whether this chunk is ocean
     } deriving (Show, Eq)
 
 -----------------------------------------------------------
@@ -744,6 +821,7 @@ data WorldTextureType
     | DioriteTexture
     | GabbroTexture
     | NoTexture
+    | OceanTexture
     | IsoFaceMap
     | NoFaceMap
     | ZoomGraniteTexture

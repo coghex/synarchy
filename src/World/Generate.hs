@@ -20,9 +20,7 @@ module World.Generate
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
-import World.Types (Tile(..), ChunkCoord(..), Chunk, WorldGenParams(..)
-                   , GeoTimeline(..), GeoPeriod(..), GeoEvent(..)
-                   , ErosionParams(..), chunkSize)
+import World.Types
 import World.Material (MaterialId(..), matGlacier, getMaterialProps, MaterialProps(..)
                       , matAir)
 import World.Plate (TectonicPlate(..), generatePlates
@@ -31,6 +29,7 @@ import World.Grid (worldToGrid)
 import World.Geology (applyGeoEvent, GeoModification(..))
 import World.Geology.Erosion (applyErosion)
 import World.Scale (computeWorldScale, WorldScale(..))
+import World.Fluids (isOceanChunk, computeChunkFluid)
 import Engine.Graphics.Camera (CameraFacing(..))
 
 -----------------------------------------------------------
@@ -101,13 +100,16 @@ floorMod a b = a - floorDiv a b * b
 --
 --   The border is expanded to chunkBorder tiles so erosion at
 --   chunk edges has valid neighbor data.
-generateChunk ∷ WorldGenParams → ChunkCoord → (Chunk, HM.HashMap (Int, Int) Int)
+generateChunk ∷ WorldGenParams → ChunkCoord
+  → (Chunk, HM.HashMap (Int, Int) Int, HM.HashMap (Int, Int) FluidCell)
 generateChunk params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
         timeline = wgpGeoTimeline params
         plates = generatePlates seed worldSize (wgpPlateCount params)
         wsc = computeWorldScale worldSize
+        oceanMap = wgpOceanMap params
+        isOcean = isOceanChunk oceanMap coord
 
         -- Wrap global X for border tiles that may cross the seam
         wrapGX gx = wrapGlobalX worldSize gx
@@ -142,6 +144,19 @@ generateChunk params coord =
         lookupElevOr lx ly fallback = case HM.lookup (lx, ly) finalColumns of
             Just (z, _) → z
             Nothing     → fallback
+
+        -- Build the terrain surface map (raw elevation, used for fluid depth)
+        terrainSurfaceMap = HM.fromList
+            [ ((lx, ly), surfZ)
+            | lx ← [0 .. chunkSize - 1]
+            , ly ← [0 .. chunkSize - 1]
+            , let (gx, gy) = chunkToGlobal coord lx ly
+            , not (isBeyondGlacier worldSize (wrapGX gx) gy)
+            , let surfZ = lookupElev lx ly
+            ]
+
+        -- Compute fluid map from terrain surface
+        fluidMap = computeChunkFluid oceanMap coord terrainSurfaceMap
 
         -- Build the surface elevation map for this chunk's own columns
         surfaceMap = HM.fromList
@@ -187,7 +202,7 @@ generateChunk params coord =
                                                        z
                 , tile ← generateExposedColumn lx ly surfZ exposeFrom lookupMat
                 ]
-    in (HM.fromList tiles, surfaceMap)
+    in (HM.fromList tiles, surfaceMap, fluidMap)
 
 -- | Generate only the exposed tiles for a column.
 --   Skips air tiles (MaterialId 0) to create caves and overhangs.

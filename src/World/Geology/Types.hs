@@ -100,32 +100,6 @@ advanceGeoDate my (GeoDate current) = GeoDate (current + my)
 geoDateYears ∷ GeoDate → Float
 geoDateYears (GeoDate my) = my
 
------------------------------------------------------------
--- Regional Data
------------------------------------------------------------
-
--- | Coarse spatial grid coordinate.
---   Each region covers regionSize x regionSize chunks.
-data RegionCoord = RegionCoord !Int !Int
-    deriving (Show, Eq, Ord)
-
-instance Hashable RegionCoord where
-    hashWithSalt s (RegionCoord x y) = s `hashWithSalt` x `hashWithSalt` y
-
--- | How many chunks per region side.
-regionSize ∷ Int
-regionSize = 8
-
--- | Regional climate and geological data.
-data RegionalData = RegionalData
-    { rdTemperature ∷ !(HM.HashMap RegionCoord Float)
-    } deriving (Show, Eq)
-
-emptyRegionalData ∷ RegionalData
-emptyRegionalData = RegionalData
-    { rdTemperature = HM.empty
-    }
-
 -- | Convert global tile coords to region coords.
 globalToRegion ∷ Int → Int → Int → RegionCoord
 globalToRegion worldSize gx gy =

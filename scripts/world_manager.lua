@@ -30,6 +30,9 @@ function worldManager.createWorld(params)
     if params.gabbroTexture then
         world.setTexture(worldId, "gabbro", params.gabbroTexture)
     end
+    if params.oceanTexture then
+        world.setTexture(worldId, "ocean", params.oceanTexture)
+    end
     if params.glacierTexture then
         world.setTexture(worldId, "glacier", params.glacierTexture)
     end

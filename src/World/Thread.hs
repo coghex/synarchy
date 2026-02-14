@@ -5,6 +5,7 @@ module World.Thread
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import Data.List (partition)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef', newIORef)
@@ -22,6 +23,7 @@ import World.Generate
 import World.Grid (zoomFadeEnd)
 import World.Geology (buildTimeline, logTimeline)
 import World.Geology.Log (formatTimeline, formatPlatesSummary)
+import World.Fluids (computeOceanMap, computeChunkFluid)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Preview (buildPreviewImage, PreviewImage(..))
 import World.Render (surfaceHeadroom)
@@ -178,11 +180,12 @@ updateChunkLoading env logger = do
 
                             when (not $ null toGenerate) $ do
                                 let newChunks = map (\coord →
-                                        let (chunkTiles, surfMap) = generateChunk params coord
+                                        let (chunkTiles, surfMap, fluidMap) = generateChunk params coord
                                         in LoadedChunk
                                             { lcCoord      = coord
                                             , lcTiles      = chunkTiles
                                             , lcSurfaceMap = surfMap
+                                            , lcFluidMap   = fluidMap
                                             , lcModified   = False
                                             }) toGenerate
 
@@ -247,6 +250,21 @@ handleWorldCommand env logger cmd = do
             -- Store gen params for on-demand chunk loading
             writeIORef (wsGenParamsRef worldState) (Just params)
 
+            sendGenLog env "Computing ocean map..."
+            let plates = generatePlates seed worldSize placeCount
+                oceanMap = computeOceanMap seed worldSize placeCount plates
+            
+            sendGenLog env $ "Ocean flood fill complete: "
+                <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
+
+            let params = defaultWorldGenParams
+                    { wgpSeed        = seed
+                    , wgpWorldSize   = worldSize
+                    , wgpPlateCount  = placeCount
+                    , wgpGeoTimeline = timeline
+                    , wgpOceanMap    = oceanMap
+                    }
+
             -- Build zoom map cache (one-time computation)
             sendGenLog env "Generating tectonic plates..."
             camera ← readIORef (cameraRef env)
@@ -274,11 +292,12 @@ handleWorldCommand env logger cmd = do
                 <> T.pack (show totalInitialChunks) <> ")..."
 
             let initialChunks = map (\coord →
-                    let (chunkTiles, surfMap) = generateChunk params coord
+                    let (chunkTiles, surfMap, fluidMap) = generateChunk params coord
                     in LoadedChunk
                         { lcCoord      = coord
                         , lcTiles      = chunkTiles
                         , lcSurfaceMap = surfMap
+                        , lcFluidMap   = fluidMap
                         , lcModified   = False
                         }) initialCoords
             
@@ -342,6 +361,7 @@ handleWorldCommand env logger cmd = do
                           GraniteTexture      → wt { wtGraniteTexture   = texHandle }
                           DioriteTexture      → wt { wtDioriteTexture   = texHandle }
                           GabbroTexture       → wt { wtGabbroTexture    = texHandle }
+                          OceanTexture        → wt { wtOceanTexture     = texHandle }
                           GlacierTexture      → wt { wtGlacierTexture   = texHandle }
                           LavaTexture         → wt { wtLavaTexture      = texHandle }
                           BlankTexture        → wt { wtBlankTexture     = texHandle }
