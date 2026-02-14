@@ -269,6 +269,20 @@ function worldView.createWorld()
         bgImpactite      = worldView.textures.bgImpactite,
         bgLava           = worldView.textures.bgLava,
         bgObsidian       = worldView.textures.bgObsidian,
+        zoomSandstone    = worldView.textures.zoomSandstone,
+        zoomLimestone    = worldView.textures.zoomLimestone,
+        zoomShale        = worldView.textures.zoomShale,
+        zoomIron         = worldView.textures.zoomIron,
+        zoomOlivine      = worldView.textures.zoomOlivine,
+        zoomPyroxene     = worldView.textures.zoomPyroxene,
+        zoomFeldspar     = worldView.textures.zoomFeldspar,
+        bgSandstone      = worldView.textures.bgSandstone,
+        bgLimestone      = worldView.textures.bgLimestone,
+        bgShale          = worldView.textures.bgShale,
+        bgIron           = worldView.textures.bgIron,
+        bgOlivine        = worldView.textures.bgOlivine,
+        bgPyroxene       = worldView.textures.bgPyroxene,
+        bgFeldspar       = worldView.textures.bgFeldspar,
     })
     worldManager.showWorld()
 end

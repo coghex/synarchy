@@ -135,6 +135,49 @@ function worldManager.createWorld(params)
     if params.bgLava then
         world.setTexture(worldId, "bg_lava", params.bgLava)
     end
+    -- Sedimentary + mineral zoom/bg textures
+    if params.zoomSandstone then
+        world.setTexture(worldId, "zoom_sandstone", params.zoomSandstone)
+    end
+    if params.zoomLimestone then
+        world.setTexture(worldId, "zoom_limestone", params.zoomLimestone)
+    end
+    if params.zoomShale then
+        world.setTexture(worldId, "zoom_shale", params.zoomShale)
+    end
+    if params.zoomIron then
+        world.setTexture(worldId, "zoom_iron", params.zoomIron)
+    end
+    if params.zoomOlivine then
+        world.setTexture(worldId, "zoom_olivine", params.zoomOlivine)
+    end
+    if params.zoomPyroxene then
+        world.setTexture(worldId, "zoom_pyroxene", params.zoomPyroxene)
+    end
+    if params.zoomFeldspar then
+        world.setTexture(worldId, "zoom_feldspar", params.zoomFeldspar)
+    end
+    if params.bgSandstone then
+        world.setTexture(worldId, "bg_sandstone", params.bgSandstone)
+    end
+    if params.bgLimestone then
+        world.setTexture(worldId, "bg_limestone", params.bgLimestone)
+    end
+    if params.bgShale then
+        world.setTexture(worldId, "bg_shale", params.bgShale)
+    end
+    if params.bgIron then
+        world.setTexture(worldId, "bg_iron", params.bgIron)
+    end
+    if params.bgOlivine then
+        world.setTexture(worldId, "bg_olivine", params.bgOlivine)
+    end
+    if params.bgPyroxene then
+        world.setTexture(worldId, "bg_pyroxene", params.bgPyroxene)
+    end
+    if params.bgFeldspar then
+        world.setTexture(worldId, "bg_feldspar", params.bgFeldspar)
+    end
     
     worldManager.currentWorld = worldId
     
