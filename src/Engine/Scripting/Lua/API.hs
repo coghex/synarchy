@@ -8,13 +8,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState)
 import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn, 
                                       setTickIntervalFn, pauseScriptFn, 
                                       resumeScriptFn, quitFn, getFPSFn)
-import Engine.Scripting.Lua.API.Camera (cameraMoveFn, cameraSetPositionFn,
-                                         cameraGetPositionFn, cameraSetZoomFn,
-                                         cameraGetZoomFn, cameraSetZSliceFn
-                                         , cameraGetZSliceFn, cameraGotoTileFn
-                                         , cameraRotateCWFn, cameraRotateCCWFn
-                                         , cameraGetFacingFn, cameraGetZTrackingFn
-                                         , cameraSetZTrackingFn)
+import Engine.Scripting.Lua.API.Camera
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , saveVideoConfigFn, setUIScaleFn
@@ -209,6 +203,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getPosition" (cameraGetPositionFn env)
   registerLuaFunction "setZoom" (cameraSetZoomFn env)
   registerLuaFunction "getZoom" (cameraGetZoomFn env)
+  registerLuaFunction "setZoomVelocity" (cameraSetZoomVelocityFn env)
+  registerLuaFunction "getZoomVelocity" (cameraGetZoomVelocityFn env)
   registerLuaFunction "setZSlice" (cameraSetZSliceFn env)
   registerLuaFunction "getZSlice" (cameraGetZSliceFn env)
   registerLuaFunction "rotateCW" (cameraRotateCWFn env)

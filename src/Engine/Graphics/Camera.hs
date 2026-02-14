@@ -42,6 +42,7 @@ data Camera2D = Camera2D
     { camPosition   ∷ (Float, Float)
     , camVelocity   ∷ (Float, Float)
     , camZoom       ∷ Float
+    , camZoomVelocity ∷ Float
     , camRotation   ∷ Float
     , camFacing     ∷ CameraFacing
     , camDragging   ∷ Bool
@@ -55,6 +56,7 @@ defaultCamera = Camera2D
     { camPosition = (0, 0)
     , camVelocity = (0, 0)
     , camZoom     = 1.0
+    , camZoomVelocity = 0.0
     , camRotation = 0.0
     , camFacing   = FaceSouth
     , camDragging = False

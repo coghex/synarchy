@@ -5,6 +5,8 @@ module Engine.Scripting.Lua.API.Camera
     , cameraSetPositionFn
     , cameraGetZoomFn
     , cameraSetZoomFn
+    , cameraGetZoomVelocityFn
+    , cameraSetZoomVelocityFn
     , cameraGetZSliceFn
     , cameraSetZSliceFn
     , cameraGotoTileFn
@@ -83,6 +85,24 @@ cameraSetZoomFn env = do
         Just (Lua.Number z) → Lua.liftIO $
             atomicModifyIORef' (cameraRef env) $ \cam →
                 (cam { camZoom = max 0.1 (realToFrac z) }, ())
+        _ → pure ()
+    return 0
+
+-- | camera.getZoomVelocity() -> number
+cameraGetZoomVelocityFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+cameraGetZoomVelocityFn env = do
+    cam ← Lua.liftIO $ readIORef (cameraRef env)
+    Lua.pushnumber (Lua.Number (realToFrac (camZoomVelocity cam)))
+    return 1
+
+-- | camera.setZoomVelocity(v)
+cameraSetZoomVelocityFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+cameraSetZoomVelocityFn env = do
+    vArg ← Lua.tonumber 1
+    case vArg of
+        Just (Lua.Number v) → Lua.liftIO $
+            atomicModifyIORef' (cameraRef env) $ \cam →
+                (cam { camZoomVelocity = realToFrac v }, ())
         _ → pure ()
     return 0
 

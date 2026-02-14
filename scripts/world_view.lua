@@ -346,15 +346,21 @@ end
 -- Camera Zoom (normal scroll, no shift, no UI focus)
 -----------------------------------------------------------
 
+-- Zoom impulse per scroll tick (world-space units/sec added)
+local zoomImpulseScale = 0.4
+
 function worldView.onScroll(dx, dy)
     if not worldView.visible then return end
     
-    local current = camera.getZoom()
-    local zoomSpeed = 0.1
+    local current = camera.getZoomVelocity()
+    local zoom = camera.getZoom()
+    local impulse = zoomImpulseScale * zoom
     if dy > 0 then
-        camera.setZoom(math.max(0.1, current - zoomSpeed))
+        -- Zoom in: negative velocity (zoom value decreases)
+        camera.setZoomVelocity(current - impulse)
     elseif dy < 0 then
-        camera.setZoom(current + zoomSpeed)
+        -- Zoom out: positive velocity (zoom value increases)
+        camera.setZoomVelocity(current + impulse)
     end
 end
 

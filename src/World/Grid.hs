@@ -142,11 +142,11 @@ chunkWorldDiamondHeight = fromIntegral chunkSize * tileDiamondHeight
 
 -- | Zoom level where the map starts fading in (alpha = 0 here)
 zoomFadeStart ∷ Float
-zoomFadeStart = 2.0
+zoomFadeStart = 1.2
 
 -- | Zoom level where the map is fully opaque (tiles fully hidden)
 zoomFadeEnd ∷ Float
-zoomFadeEnd = 2.5
+zoomFadeEnd = 1.6
 
 -----------------------------------------------------------
 -- World Screen Width (wrapping period in screen-space X)

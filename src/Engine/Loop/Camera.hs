@@ -2,6 +2,7 @@
 module Engine.Loop.Camera
     ( updateCameraPanning
     , updateCameraMouseDrag
+    , updateCameraZoom
     ) where
 
 import UPrelude
@@ -170,6 +171,35 @@ updateCameraMouseDrag = do
 
             (False, False) →
                 (cam, ())
+
+-- | Zoom constants
+zoomFriction ∷ Float
+zoomFriction = 20.0    -- how fast zoom velocity decays
+
+zoomMinSpeed ∷ Float
+zoomMinSpeed = 0.02   -- velocity below this snaps to zero
+
+zoomMin ∷ Float
+zoomMin = 0.1         -- closest zoom
+
+-- | Apply zoom velocity each frame with friction.
+--   Scroll ticks add impulse to camZoomVelocity in Lua,
+--   this drains it smoothly.
+updateCameraZoom ∷ EngineM ε σ ()
+updateCameraZoom = do
+    env ← ask
+    dt ← gets (deltaTime . timingState)
+    let dtF = realToFrac dt ∷ Float
+    liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
+        let zv  = camZoomVelocity cam
+            z   = camZoom cam
+            -- Apply velocity
+            z'  = max zoomMin (z + zv * dtF)
+            -- Apply friction to velocity
+            zv' = applyFriction zv (zoomFriction * z * dtF)
+            -- Snap to zero when slow enough
+            zv'' = if abs zv' < zoomMinSpeed then 0 else zv'
+        in (cam { camZoom = z', camZoomVelocity = zv'' }, ())
 
 stepAxis ∷ Float → Float → Float → Float → Float → Float → Float
 stepAxis input vel accel friction maxSpd dt
