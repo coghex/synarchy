@@ -112,7 +112,6 @@ generateChunk params coord =
         wrapGX gx = wrapGlobalX worldSize gx
 
         -- Build base elevation map for all columns including border.
-        -- Layout: ((lx, ly), ((baseElev, baseMat), globalX, globalY))
         baseColumns = HM.fromList
             [ ( (lx, ly)
               , elevationAtGlobal seed plates worldSize (wrapGX gx) gy
@@ -155,6 +154,11 @@ generateChunk params coord =
                               Just v  → v
                               Nothing → (0, MaterialId 1)
                       base = lookupBase lx ly
+                      -- Neighbor base elevations for materialAtDepth erosion
+                      baseN = fst (lookupBase lx (ly - 1))
+                      baseS = fst (lookupBase lx (ly + 1))
+                      baseE = fst (lookupBase (lx + 1) ly)
+                      baseW = fst (lookupBase (lx - 1) ly)
                       neighborMinZ = minimum
                           [ lookupElev (lx - 1) ly
                           , lookupElev (lx + 1) ly
@@ -162,11 +166,19 @@ generateChunk params coord =
                           , lookupElev lx (ly + 1)
                           ]
                       exposeFrom = min surfZ neighborMinZ
+                      -- Surface tile uses surfMat from finalColumns
+                      -- (which includes erosion material from chunk-level
+                      -- computation with real neighbor data).
+                      -- Sub-surface tiles use materialAtDepth with
+                      -- neighbor base elevations for stratigraphy.
                       lookupMat z
                           | surfMat ≡ matGlacier = matGlacier
+                          | z ≡ surfZ            = surfMat
                           | otherwise            = materialAtDepth timeline
                                                        worldSize (wrapGX gx)
-                                                       gy base z
+                                                       gy base
+                                                       (baseN, baseS, baseE, baseW)
+                                                       z
                 , tile ← generateExposedColumn lx ly surfZ exposeFrom lookupMat
                 ]
     in (HM.fromList tiles, surfaceMap)
@@ -257,10 +269,6 @@ applyTimelineChunk timeline worldSize wsc coord baseColumns =
 applyTimeline ∷ GeoTimeline → Int → Int → Int → (Int, MaterialId) → (Int, MaterialId)
 applyTimeline timeline worldSize gx gy (baseElev, baseMat) =
     let wsc = computeWorldScale worldSize
-        -- Pre-compute base elevations for the 4 neighbors (from plates only)
-        -- These don't include geological events or erosion, which is the
-        -- approximation: we use uneroded plate-level neighbor elevations.
-        -- For the single-column path this is acceptable.
     in foldl' (applyPeriodSingle worldSize wsc gx gy)
               (baseElev, baseMat) (gtPeriods timeline)
 
@@ -303,31 +311,27 @@ applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
 --   event deposits or erodes material at different elevation bands.
 --
 --   For erosion, maintains 5 running elevations: self + 4 neighbors.
---   Neighbor elevations are computed by replaying events only (no
---   erosion on neighbors — the cascade approximation). This gives
---   correct erosion deltas for stratigraphy with at most a few tiles
---   of error on extreme gradients of soft material.
+--   Neighbor elevations start from their actual plate-level base
+--   elevations and advance through events each period (no erosion
+--   on neighbors — the cascade approximation). This gives correct
+--   erosion deltas for stratigraphy because the neighbor elevation
+--   differences are real, not zeroed out.
 --
 --   Pure and deterministic — called once per exposed tile.
 materialAtDepth ∷ GeoTimeline → Int → Int → Int
-                → (Int, MaterialId)   -- ^ (baseElev, baseMat) from plates
-                → Int                 -- ^ Z-level to query
+                → (Int, MaterialId)       -- ^ (baseElev, baseMat) from plates
+                → (Int, Int, Int, Int)    -- ^ neighbor base elevations (N,S,E,W)
+                → Int                     -- ^ Z-level to query
                 → MaterialId
-materialAtDepth timeline worldSize gx gy (baseElev, baseMat) queryZ =
+materialAtDepth timeline worldSize gx gy (baseElev, baseMat) (nBaseN, nBaseS, nBaseE, nBaseW) queryZ =
     let wsc = computeWorldScale worldSize
-        wrapGX x = wrapGlobalX worldSize x
 
-        -- Neighbor base elevations (from plates, no events)
-        -- We don't have access to plates here, so we thread neighbor
-        -- elevations through the fold starting from the same base.
-        -- This is the approximation: neighbors start at the same
-        -- base elevation as self. The error is bounded and acceptable.
         initState = StrataState
             { ssElev     = baseElev
             , ssSurfMat  = baseMat
             , ssUplift   = 0
             , ssZMat     = baseMat
-            , ssNeighbors = (baseElev, baseElev, baseElev, baseElev)
+            , ssNeighbors = (nBaseN, nBaseS, nBaseE, nBaseW)
             }
 
         finalState = foldl' (applyPeriodStrata worldSize wsc gx gy queryZ)
