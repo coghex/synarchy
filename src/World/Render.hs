@@ -31,8 +31,13 @@ import qualified Data.Vector as V
 -- Camera Change Detection
 -----------------------------------------------------------
 
+-- | Threshold for quad cache invalidation.
+--   Must be smaller than the view bounds padding (padX = tileWidth = 0.15)
+--   but large enough to skip most per-frame rebuilds during panning.
+--   Half a tile width means we regenerate ~every 8 frames at typical pan speed,
+--   instead of every frame.
 camEpsilon ∷ Float
-camEpsilon = 0.005
+camEpsilon = tileHalfWidth
 
 cameraChanged ∷ WorldCameraSnapshot → WorldCameraSnapshot → Bool
 cameraChanged old new =
@@ -147,8 +152,11 @@ computeViewBounds camera fbW fbH effDepth =
         halfW    = zoom * aspect
         halfH    = zoom
         maxHeightPad = fromIntegral effDepth * tileSideHeight
-        padX     = tileWidth
-        padY     = tileHeight + maxHeightPad
+        -- Extra padding: enough to cover camera movement between cache rebuilds.
+        -- camEpsilon = tileHalfWidth, so tiles within one full tile width
+        -- outside the viewport are pre-generated.
+        padX     = tileWidth + camEpsilon
+        padY     = tileHeight + maxHeightPad + camEpsilon
     in ViewBounds
         { vbLeft   = cx - halfW - padX
         , vbRight  = cx + halfW + padX

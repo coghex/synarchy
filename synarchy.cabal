@@ -120,8 +120,6 @@ test-suite synarchy-test
                        -feager-blackholing
     if flag(profile)
           ghc-options: -fprof-auto
-                       -rtsopts
-                       -with-rtsopts=-N
 
 
 library
@@ -339,7 +337,6 @@ library
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
-                       -rtsopts
                        -haddock
                        -fno-full-laziness
                        -fno-cse
@@ -438,7 +435,7 @@ executable synarchy
                        -Wincomplete-uni-patterns
                        -threaded
                        -rtsopts
-                       "-with-rtsopts=-N"
+                       "-with-rtsopts=-N -A128M"
                        -haddock
       else
           cpp-options: -DDEVELOPMENT
@@ -467,5 +464,3 @@ executable synarchy
 
     if flag(profile)
           ghc-options: -fprof-auto
-                       -rtsopts
-                       -with-rtsopts=-N
