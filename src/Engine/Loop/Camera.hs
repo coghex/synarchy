@@ -182,9 +182,6 @@ zoomMinSpeed = 0.02   -- velocity below this snaps to zero
 zoomMin ∷ Float
 zoomMin = 0.1         -- closest zoom
 
--- | Apply zoom velocity each frame with friction.
---   Scroll ticks add impulse to camZoomVelocity in Lua,
---   this drains it smoothly.
 updateCameraZoom ∷ EngineM ε σ ()
 updateCameraZoom = do
     env ← ask
@@ -195,8 +192,10 @@ updateCameraZoom = do
             z   = camZoom cam
             -- Apply velocity
             z'  = max zoomMin (z + zv * dtF)
+            -- Kill velocity when we hit the zoom floor
+            hitMin = z' ≤ zoomMin ∧ zv < 0
             -- Apply friction to velocity
-            zv' = applyFriction zv (zoomFriction * z * dtF)
+            zv' = if hitMin then 0 else applyFriction zv (zoomFriction * z * dtF)
             -- Snap to zero when slow enough
             zv'' = if abs zv' < zoomMinSpeed then 0 else zv'
         in (cam { camZoom = z', camZoomVelocity = zv'' }, ())
