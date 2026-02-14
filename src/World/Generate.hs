@@ -109,7 +109,6 @@ generateChunk params coord =
         plates = generatePlates seed worldSize (wgpPlateCount params)
         wsc = computeWorldScale worldSize
         oceanMap = wgpOceanMap params
-        isOcean = isOceanChunk oceanMap coord
 
         -- Wrap global X for border tiles that may cross the seam
         wrapGX gx = wrapGlobalX worldSize gx

@@ -228,12 +228,6 @@ handleWorldCommand env logger cmd = do
             -- Log the geological timeline to both stdout and Lua panel
             sendGenLog env "Building geological timeline..."
             let timeline = buildTimeline seed worldSize placeCount
-                params = defaultWorldGenParams
-                    { wgpSeed        = seed
-                    , wgpWorldSize   = worldSize
-                    , wgpPlateCount  = placeCount
-                    , wgpGeoTimeline = timeline
-                    }
 
             -- Log plates first (not stored in timeline, computed from seed)
             let plateLines = formatPlatesSummary seed worldSize placeCount
@@ -247,12 +241,10 @@ handleWorldCommand env logger cmd = do
                 logInfo logger CatWorld line
                 sendGenLog env line
 
-            -- Store gen params for on-demand chunk loading
-            writeIORef (wsGenParamsRef worldState) (Just params)
-
             sendGenLog env "Computing ocean map..."
             let plates = generatePlates seed worldSize placeCount
-                oceanMap = computeOceanMap seed worldSize placeCount plates
+                applyTL gx gy base = applyTimeline timeline worldSize gx gy base
+                oceanMap = computeOceanMap seed worldSize placeCount plates applyTL
             
             sendGenLog env $ "Ocean flood fill complete: "
                 <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
@@ -264,6 +256,9 @@ handleWorldCommand env logger cmd = do
                     , wgpGeoTimeline = timeline
                     , wgpOceanMap    = oceanMap
                     }
+
+            -- Store gen params for on-demand chunk loading
+            writeIORef (wsGenParamsRef worldState) (Just params)
 
             -- Build zoom map cache (one-time computation)
             sendGenLog env "Generating tectonic plates..."

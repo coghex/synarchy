@@ -276,6 +276,9 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     , let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
                     , surfZ > zSlice
                     , not (HM.member (lx, ly, zSlice) tileMap)
+                    , case HM.lookup (lx, ly) fluidMap of
+                        Just fc → fcSurface fc ≤ zSlice
+                        Nothing → True
                     , let (gx, gy) = chunkToGlobal coord lx ly
                           (rawX, rawY) = gridToScreen facing gx gy
                           drawX = rawX + xOffset
@@ -424,7 +427,7 @@ oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSl
 
         texHandle = wtOceanTexture textures
         actualSlot = lookupSlot texHandle
-        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+        fmSlot = lookupFmSlot (wtNoFaceMap textures)
 
         -- Depth fade same as terrain tiles
         depth = zSlice - fluidZ

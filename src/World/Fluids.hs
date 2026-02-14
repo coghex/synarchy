@@ -38,20 +38,23 @@ import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
 --      crossing chunks above sea level
 --
 --   This correctly leaves inland basins unflooded.
-computeOceanMap ∷ Word64 → Int → Int → [TectonicPlate] → OceanMap
-computeOceanMap seed worldSize plateCount plates =
+computeOceanMap ∷ Word64 → Int → Int → [TectonicPlate]
+               → (Int → Int → (Int, MaterialId) → (Int, MaterialId))
+               → OceanMap
+computeOceanMap seed worldSize plateCount plates applyTL =
     let halfSize = worldSize `div` 2
 
-        -- Build elevation lookup at chunk resolution
-        -- Sample the center tile of each chunk
         chunkElev ∷ ChunkCoord → Int
         chunkElev (ChunkCoord cx cy) =
             let midGX = cx * chunkSize + chunkSize `div` 2
                 midGY = cy * chunkSize + chunkSize `div` 2
                 gx' = wrapGlobalX worldSize midGX
             in if isBeyondGlacier worldSize gx' midGY
-               then seaLevel + 100  -- glaciers are above sea level
-               else fst (elevationAtGlobal seed plates worldSize gx' midGY)
+               then seaLevel + 100
+               else let (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' midGY
+                    in if baseMat ≡ matGlacier
+                       then seaLevel + 100
+                       else fst (applyTL gx' midGY (baseElev, baseMat))
 
         -- Find seed chunks: for each ocean plate, find the chunk
         -- containing its center, verify it's below sea level
