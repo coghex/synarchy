@@ -261,22 +261,31 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 fluidMap = lcFluidMap lc
                 chunkHasFluid = not (HM.null fluidMap)
 
+                -- Iterate by column, not by individual tile.
+                -- For each (lx,ly) column, look up fluid ONCE, then
+                -- iterate only the z-levels that have tiles.
                 !realQuads = HM.foldlWithKey'
-                    (\acc (lx, ly, z) tile →
-                        if z ≤ zSlice ∧ z ≥ (zSlice - effectiveDepth)
-                        then let (gx, gy) = chunkToGlobal coord lx ly
-                                 (rawX, rawY) = gridToScreen facing gx gy
-                                 relativeZ = z - zSlice
-                                 heightOffset = fromIntegral relativeZ * tileSideHeight
-                                 drawX = rawX + xOffset
-                                 drawY = rawY - heightOffset
-                                 mFluid = HM.lookup (lx, ly) fluidMap
-                             in if isTileVisible vb drawX drawY
-                                then tileToQuad lookupSlot lookupFmSlot textures facing
-                                       gx gy z tile zSlice effectiveDepth zoomAlpha xOffset mFluid chunkHasFluid : acc
-                                else acc
-                        else acc
-                    ) [] tileMap
+                    (\acc (lx, ly) _surfZ →
+                        let mFluid = HM.lookup (lx, ly) fluidMap
+                            (gx, gy) = chunkToGlobal coord lx ly
+                            (rawX, rawY) = gridToScreen facing gx gy
+                            -- Also compute gridToScreen once per column
+                            -- instead of once per tile
+                        in foldl' (\acc2 z →
+                            case HM.lookup (lx, ly, z) tileMap of
+                                Nothing → acc2
+                                Just tile →
+                                    let relativeZ = z - zSlice
+                                        heightOffset = fromIntegral relativeZ * tileSideHeight
+                                        drawX = rawX + xOffset
+                                        drawY = rawY - heightOffset
+                                    in if isTileVisible vb drawX drawY
+                                       then tileToQuad lookupSlot lookupFmSlot textures facing
+                                              gx gy z tile zSlice effectiveDepth zoomAlpha xOffset
+                                              mFluid chunkHasFluid : acc2
+                                       else acc2
+                           ) acc [(zSlice - effectiveDepth) .. zSlice]
+                    ) [] surfMap
                 !blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures facing
                         gx gy zSlice zSlice zoomAlpha xOffset
