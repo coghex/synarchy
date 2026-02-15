@@ -3,8 +3,6 @@ module World.ZoomMap
     ( generateZoomMapQuads
     , generateBackgroundQuads
     , buildZoomCache
-    , generateZoomMapQuadsIO
-    , generateBackgroundQuadsIO
     ) where
 
 import UPrelude
@@ -169,36 +167,16 @@ bakeEntries cache texPicker lookupSlot defFmSlot =
             , bzeElev    = zceElev entry
             }
 
--- | Ensure the baked cache is populated, baking on first call.
---   Returns the baked vector. Subsequent calls just read the IORef.
-ensureBaked ∷ IORef (V.Vector BakedZoomEntry)
-            → V.Vector ZoomChunkEntry
-            → WorldTextures
-            → (WorldTextures → Word8 → Int → TextureHandle)
-            → (TextureHandle → Int)
-            → Float
-            → EngineM ε σ (V.Vector BakedZoomEntry)
-ensureBaked bakedRef rawCache textures texPicker lookupSlot defFmSlot = do
-    existing ← liftIO $ readIORef bakedRef
-    if V.null existing ∧ not (V.null rawCache)
-        then do
-            let baked = bakeEntries rawCache
-                            (\mat elev → texPicker textures mat elev)
-                            lookupSlot defFmSlot
-            liftIO $ writeIORef bakedRef baked
-            return baked
-        else return existing
-
 -----------------------------------------------------------
 -- Generate Zoom Map Quads
 -----------------------------------------------------------
 
-generateZoomMapQuads ∷ EngineM ε σ (V.Vector SortableQuad)
-generateZoomMapQuads = do
-    env ← ask
-    camera ← liftIO $ readIORef (cameraRef env)
-    (fbW, fbH) ← liftIO $ readIORef (framebufferSizeRef env)
-    worldManager ← liftIO $ readIORef (worldManagerRef env)
+-- | IO version — called from world thread
+generateZoomMapQuads ∷ EngineEnv → IO (V.Vector SortableQuad)
+generateZoomMapQuads env = do
+    camera ← readIORef (cameraRef env)
+    (fbW, fbH) ← readIORef (framebufferSizeRef env)
+    worldManager ← readIORef (worldManagerRef env)
 
     let zoom = camZoom camera
         zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
@@ -215,36 +193,14 @@ generateZoomMapQuads = do
                     Nothing → return V.empty
             return $ V.concat quads
 
--- | IO version — called from world thread
-generateZoomMapQuadsIO ∷ EngineEnv → IO (V.Vector SortableQuad)
-generateZoomMapQuadsIO env = do
-    camera ← readIORef (cameraRef env)
-    (fbW, fbH) ← readIORef (framebufferSizeRef env)
-    worldManager ← readIORef (worldManagerRef env)
-
-    let zoom = camZoom camera
-        zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
-
-    if zoomAlpha ≤ 0.001
-        then return V.empty
-        else do
-            quads ← forM (wmVisible worldManager) $ \pageId →
-                case lookup pageId (wmWorlds worldManager) of
-                    Just worldState →
-                        renderFromBakedIO env worldState camera
-                            fbW fbH zoomAlpha getZoomTexture
-                            (wsBakedZoomRef worldState) zoomMapLayer
-                    Nothing → return V.empty
-            return $ V.concat quads
-
 -- | IO version of renderFromBaked
-renderFromBakedIO ∷ EngineEnv → WorldState → Camera2D
+renderFromBaked ∷ EngineEnv → WorldState → Camera2D
                → Int → Int → Float
                → (WorldTextures → Word8 → Int → TextureHandle)
                → IORef (V.Vector BakedZoomEntry)
                → LayerId
                → IO (V.Vector SortableQuad)
-renderFromBakedIO env worldState camera fbW fbH alpha texturePicker bakedRef layer = do
+renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer = do
     mParams  ← readIORef (wsGenParamsRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
     rawCache ← readIORef (wsZoomCacheRef worldState)
@@ -260,7 +216,7 @@ renderFromBakedIO env worldState camera fbW fbH alpha texturePicker bakedRef lay
     case mParams of
         Nothing → return V.empty
         Just params → do
-            baked ← ensureBakedIO bakedRef rawCache textures
+            baked ← ensureBaked bakedRef rawCache textures
                         texturePicker lookupSlot defFmSlot
             let vb = computeZoomViewBounds camera fbW fbH
                 wsw = worldScreenWidth (wgpWorldSize params)
@@ -280,13 +236,12 @@ renderFromBakedIO env worldState camera fbW fbH alpha texturePicker bakedRef lay
 
             return $! V.fromList visibleQuads
 
--- | IO version of ensureBaked
-ensureBakedIO ∷ IORef (V.Vector BakedZoomEntry)
+ensureBaked ∷ IORef (V.Vector BakedZoomEntry)
               → V.Vector ZoomChunkEntry → WorldTextures
               → (WorldTextures → Word8 → Int → TextureHandle)
               → (TextureHandle → Int) → Float
               → IO (V.Vector BakedZoomEntry)
-ensureBakedIO bakedRef rawCache textures texPicker lookupSlot defFmSlot = do
+ensureBaked bakedRef rawCache textures texPicker lookupSlot defFmSlot = do
     existing ← readIORef bakedRef
     if V.null existing ∧ not (V.null rawCache)
         then do
@@ -298,15 +253,14 @@ ensureBakedIO bakedRef rawCache textures texPicker lookupSlot defFmSlot = do
         else return existing
 
 -----------------------------------------------------------
--- Generate Background Quads
+-- Generate Background Quads (IO version for world thread)
 -----------------------------------------------------------
 
-generateBackgroundQuads ∷ EngineM ε σ (V.Vector SortableQuad)
-generateBackgroundQuads = do
-    env ← ask
-    camera ← liftIO $ readIORef (cameraRef env)
-    (fbW, fbH) ← liftIO $ readIORef (framebufferSizeRef env)
-    worldManager ← liftIO $ readIORef (worldManagerRef env)
+generateBackgroundQuads ∷ EngineEnv → IO (V.Vector SortableQuad)
+generateBackgroundQuads env = do
+    camera ← readIORef (cameraRef env)
+    (fbW, fbH) ← readIORef (framebufferSizeRef env)
+    worldManager ← readIORef (worldManagerRef env)
 
     let zSlice = camZSlice camera
 
@@ -320,37 +274,16 @@ generateBackgroundQuads = do
     return $ V.concat quads
 
 -----------------------------------------------------------
--- Generate Background Quads (IO version for world thread)
------------------------------------------------------------
-
-generateBackgroundQuadsIO ∷ EngineEnv → IO (V.Vector SortableQuad)
-generateBackgroundQuadsIO env = do
-    camera ← readIORef (cameraRef env)
-    (fbW, fbH) ← readIORef (framebufferSizeRef env)
-    worldManager ← readIORef (worldManagerRef env)
-
-    let zSlice = camZSlice camera
-
-    quads ← forM (wmVisible worldManager) $ \pageId →
-        case lookup pageId (wmWorlds worldManager) of
-            Just worldState →
-                renderFromBakedBgIO env worldState camera
-                    fbW fbH 1.0 getBgTexture
-                    (wsBakedBgRef worldState) backgroundMapLayer zSlice
-            Nothing → return V.empty
-    return $ V.concat quads
-
------------------------------------------------------------
 -- Background Render From Baked (IO version for world thread)
 -----------------------------------------------------------
 
-renderFromBakedBgIO ∷ EngineEnv → WorldState → Camera2D
+renderFromBakedBg ∷ EngineEnv → WorldState → Camera2D
                     → Int → Int → Float
                     → (WorldTextures → Word8 → Int → TextureHandle)
                     → IORef (V.Vector BakedZoomEntry)
                     → LayerId → Int
                     → IO (V.Vector SortableQuad)
-renderFromBakedBgIO env worldState camera fbW fbH alpha texturePicker bakedRef layer zSlice = do
+renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef layer zSlice = do
     mParams  ← readIORef (wsGenParamsRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
     rawCache ← readIORef (wsZoomCacheRef worldState)
@@ -366,7 +299,7 @@ renderFromBakedBgIO env worldState camera fbW fbH alpha texturePicker bakedRef l
     case mParams of
         Nothing → return V.empty
         Just params → do
-            baked ← ensureBakedIO bakedRef rawCache textures
+            baked ← ensureBaked bakedRef rawCache textures
                         texturePicker lookupSlot defFmSlot
 
             let vb = computeZoomViewBounds camera fbW fbH
@@ -457,54 +390,6 @@ isChunkInView vb drawX drawY =
          ∨ bottom < zvTop vb
          ∨ drawY  > zvBottom vb)
 
------------------------------------------------------------
--- Render From Baked Cache (hot path)
------------------------------------------------------------
-
--- | The hot render path. Lazily bakes on first call, then
---   every subsequent frame just does view-cull + alpha stamp.
-renderFromBaked ∷ EngineEnv → WorldState → Camera2D
-               → Int → Int → Float
-               → (WorldTextures → Word8 → Int → TextureHandle)
-               → IORef (V.Vector BakedZoomEntry)
-               → LayerId
-               → EngineM ε σ (V.Vector SortableQuad)
-renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer = do
-    mParams  ← liftIO $ readIORef (wsGenParamsRef worldState)
-    textures ← liftIO $ readIORef (wsTexturesRef worldState)
-    rawCache ← liftIO $ readIORef (wsZoomCacheRef worldState)
-
-    gs ← gets graphicsState
-    let lookupSlot texHandle = fromIntegral $ case textureSystem gs of
-            Just bindless → getTextureSlotIndex texHandle bindless
-            Nothing       → 0
-        defFmSlot = fromIntegral (defaultFaceMapSlot gs)
-
-    case mParams of
-        Nothing → return V.empty
-        Just params → do
-            -- Lazy bake: only runs once, when bakedRef is empty
-            baked ← ensureBaked bakedRef rawCache textures
-                        texturePicker lookupSlot defFmSlot
-
-            let vb = computeZoomViewBounds camera fbW fbH
-                wsw = worldScreenWidth (wgpWorldSize params)
-
-                -- Hot fold: only visibility + emit. No texture lookups.
-                !visibleQuads = V.foldl' (\acc entry →
-                    let baseX = bzeDrawX entry
-                        baseY = bzeDrawY entry
-                        tryOffset dx acc'
-                            | isChunkInView vb dx baseY =
-                                emitQuad entry dx alpha layer : acc'
-                            | otherwise = acc'
-                    in tryOffset (baseX - wsw)
-                     $ tryOffset  baseX
-                     $ tryOffset (baseX + wsw) acc
-                    ) [] baked
-
-            return $! V.fromList visibleQuads
-
 -- | Emit a SortableQuad from a baked entry.
 --   Shifts X position for wrap offset, patches alpha channel.
 emitQuad ∷ BakedZoomEntry → Float → Float → LayerId → SortableQuad
@@ -526,47 +411,6 @@ emitQuad entry dx alpha layer =
         , sqTexture  = bzeTexture entry
         , sqLayer    = layer
         }
-
--- | Background-specific render path that applies underwater tinting.
-renderFromBakedBg ∷ EngineEnv → WorldState → Camera2D
-                  → Int → Int → Float
-                  → (WorldTextures → Word8 → Int → TextureHandle)
-                  → IORef (V.Vector BakedZoomEntry)
-                  → LayerId → Int
-                  → EngineM ε σ (V.Vector SortableQuad)
-renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef layer zSlice = do
-    mParams  ← liftIO $ readIORef (wsGenParamsRef worldState)
-    textures ← liftIO $ readIORef (wsTexturesRef worldState)
-    rawCache ← liftIO $ readIORef (wsZoomCacheRef worldState)
-
-    gs ← gets graphicsState
-    let lookupSlot texHandle = fromIntegral $ case textureSystem gs of
-            Just bindless → getTextureSlotIndex texHandle bindless
-            Nothing       → 0
-        defFmSlot = fromIntegral (defaultFaceMapSlot gs)
-
-    case mParams of
-        Nothing → return V.empty
-        Just params → do
-            baked ← ensureBaked bakedRef rawCache textures
-                        texturePicker lookupSlot defFmSlot
-
-            let vb = computeZoomViewBounds camera fbW fbH
-                wsw = worldScreenWidth (wgpWorldSize params)
-
-                !visibleQuads = V.foldl' (\acc entry →
-                    let baseX = bzeDrawX entry
-                        baseY = bzeDrawY entry
-                        tryOffset dx acc'
-                            | isChunkInView vb dx baseY =
-                                emitQuadBg entry dx alpha layer zSlice : acc'
-                            | otherwise = acc'
-                    in tryOffset (baseX - wsw)
-                     $ tryOffset  baseX
-                     $ tryOffset (baseX + wsw) acc
-                    ) [] baked
-
-            return $! V.fromList visibleQuads
 
 -----------------------------------------------------------
 -- Texture Pickers (complete for all materials)

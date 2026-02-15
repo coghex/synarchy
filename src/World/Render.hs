@@ -1,7 +1,6 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Render
     ( updateWorldTiles
-    , updateWorldTilesIO
     , surfaceHeadroom
     ) where
 
@@ -25,8 +24,7 @@ import World.Generate (chunkToGlobal, chunkWorldBounds, viewDepth, globalToChunk
 import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer,
                    tileHalfWidth, tileHalfDiamondHeight, zoomFadeStart, zoomFadeEnd
                    , worldToGrid, worldScreenWidth, applyFacing)
-import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads
-                     , generateZoomMapQuadsIO, generateBackgroundQuadsIO)
+import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
 import qualified Data.Vector as V
 
 -----------------------------------------------------------
@@ -65,80 +63,10 @@ surfaceHeadroom = 3
 -- Top-Level Entry Point
 -----------------------------------------------------------
 
-updateWorldTiles ∷ EngineM ε σ (V.Vector SortableQuad)
-updateWorldTiles = do
-    env ← ask
-    camera ← liftIO $ readIORef (cameraRef env)
-    (fbW, fbH) ← liftIO $ readIORef (framebufferSizeRef env)
-
-    let zoom = camZoom camera
-        tileAlpha = clamp01 (1.0 - (zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
-        zoomAlpha = clamp01 ((zoom - zoomFadeStart) / (zoomFadeEnd - zoomFadeStart))
-
-    worldManager ← liftIO $ readIORef (worldManagerRef env)
-
-    tileQuads ← if tileAlpha ≤ 0.001
-        then return V.empty
-        else do
-            let currentSnap = WorldCameraSnapshot
-                    { wcsPosition = camPosition camera
-                    , wcsZoom     = zoom
-                    , wcsZSlice   = camZSlice camera
-                    , wcsFbSize   = (fbW, fbH)
-                    , wcsFacing   = camFacing camera
-                    }
-            quads ← forM (wmVisible worldManager) $ \pageId →
-                case lookup pageId (wmWorlds worldManager) of
-                    Just worldState → do
-                        cached ← liftIO $ readIORef (wsQuadCacheRef worldState)
-                        case cached of
-                            Just wqc | not (cameraChanged (wqcCamera wqc) currentSnap) →
-                                return (wqcQuads wqc)
-                            _ → do
-                                result ← renderWorldQuads env worldState tileAlpha currentSnap
-                                liftIO $ writeIORef (wsQuadCacheRef worldState) $
-                                    Just (WorldQuadCache currentSnap result)
-                                return result
-                    Nothing → return V.empty
-            return $ V.concat quads
-
-    zoomQuads ← generateZoomMapQuads
-    bgQuads ← generateBackgroundQuads
-
-    -- Auto-adjust zSlice: always track surface when camZTracking is True,
-    -- or during zoom crossfade (so zooming in always lands correctly).
-    let shouldTrack = camZTracking camera
-                    ∨ (tileAlpha > 0.001 ∧ tileAlpha < 0.999)
-    when shouldTrack $ do
-        -- re-enable tracking if we are in a crossfade
-        when (not (camZTracking camera)) $
-            liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
-                (cam { camZTracking = True }, ())
-        worldManager' ← liftIO $ readIORef (worldManagerRef env)
-        forM_ (wmVisible worldManager') $ \pageId →
-            case lookup pageId (wmWorlds worldManager') of
-                Just worldState → do
-                    tileData ← liftIO $ readIORef (wsTilesRef worldState)
-                    let (camX, camY) = camPosition camera
-                        facing = camFacing camera
-                        (gx, gy) = worldToGrid facing camX camY
-                        (chunkCoord, (lx, ly)) = globalToChunk gx gy
-                    case lookupChunk chunkCoord tileData of
-                        Just lc → do
-                            let surfElev = HM.lookupDefault 0 (lx, ly) (lcSurfaceMap lc)
-                                targetZ = surfElev + 3
-                            liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
-                                (cam { camZSlice = targetZ }, ())
-                        Nothing → return ()
-                Nothing → return ()
-
-    let allQuads = bgQuads <> tileQuads <> zoomQuads
-    return allQuads
-
 -- | IO version of world quad generation, called from the world thread.
 --   Reads texture system from shared IORefs instead of GraphicsState.
-updateWorldTilesIO ∷ EngineEnv → IO (V.Vector SortableQuad)
-updateWorldTilesIO env = do
+updateWorldTiles ∷ EngineEnv → IO (V.Vector SortableQuad)
+updateWorldTiles env = do
     camera ← readIORef (cameraRef env)
     (fbW, fbH) ← readIORef (framebufferSizeRef env)
 
@@ -166,15 +94,15 @@ updateWorldTilesIO env = do
                             Just wqc | not (cameraChanged (wqcCamera wqc) currentSnap) →
                                 return (wqcQuads wqc)
                             _ → do
-                                result ← renderWorldQuadsIO env worldState tileAlpha currentSnap
+                                result ← renderWorldQuads env worldState tileAlpha currentSnap
                                 writeIORef (wsQuadCacheRef worldState) $
                                     Just (WorldQuadCache currentSnap result)
                                 return result
                     Nothing → return V.empty
             return $ V.concat quads
 
-    zoomQuads ← generateZoomMapQuadsIO env
-    bgQuads ← generateBackgroundQuadsIO env
+    zoomQuads ← generateZoomMapQuads env
+    bgQuads ← generateBackgroundQuads env
 
     -- Auto-adjust zSlice (same logic as before)
     let shouldTrack = camZTracking camera
@@ -287,127 +215,8 @@ isChunkRelevantForSlice _zSlice lc =
 -----------------------------------------------------------
 
 renderWorldQuads ∷ EngineEnv → WorldState → Float → WorldCameraSnapshot
-  → EngineM ε σ (V.Vector SortableQuad)
-renderWorldQuads env worldState zoomAlpha snap = do
-    tileData ← liftIO $ readIORef (wsTilesRef worldState)
-    textures ← liftIO $ readIORef (wsTexturesRef worldState)
-    paramsM ← liftIO $ readIORef (wsGenParamsRef worldState)
-    camera ← liftIO $ readIORef (cameraRef env)
-
-    let (fbW, fbH) = wcsFbSize snap
-        facing = camFacing camera
-
-    gs ← gets graphicsState
-    let lookupSlot texHandle = fromIntegral $ case textureSystem gs of
-            Just bindless → getTextureSlotIndex texHandle bindless
-            Nothing       → 0
-        defFmSlot = fromIntegral (defaultFaceMapSlot gs)
-        lookupFmSlot texHandle =
-            let s = lookupSlot texHandle
-            in if s ≡ 0 then defFmSlot else fromIntegral s
-        worldSize = case paramsM of
-                      Nothing → 128
-                      Just params → wgpWorldSize params
-
-    let zSlice = camZSlice camera
-        zoom   = camZoom camera
-        chunks = HM.elems (wtdChunks tileData)
-        (camX, _camY) = camPosition camera
-
-        effectiveDepth = min viewDepth (max 8 (round (zoom * 40.0 ∷ Float)))
-
-        vb = computeViewBounds camera fbW fbH effectiveDepth
-
-        visibleChunksWithOffset =
-            [ (lc, offset)
-            | lc ← chunks
-            , isChunkRelevantForSlice zSlice lc
-            , Just offset ← [isChunkVisibleWrapped facing worldSize vb camX (lcCoord lc)]
-            ]
-
-    let chunkVectors = map (\(lc, xOffset) →
-            let coord  = lcCoord lc
-                tileMap = lcTiles lc
-                surfMap = lcSurfaceMap lc
-                fluidMap = lcFluidMap lc
-                chunkHasFluid = not (HM.null fluidMap)
-
-                -- Iterate by column, not by individual tile.
-                -- For each (lx,ly) column, look up fluid ONCE, then
-                -- iterate only the z-levels that have tiles.
-                !realQuads = HM.foldlWithKey'
-                    (\acc (lx, ly) _surfZ →
-                        let mFluid = HM.lookup (lx, ly) fluidMap
-                            (gx, gy) = chunkToGlobal coord lx ly
-                            (rawX, rawY) = gridToScreen facing gx gy
-                            -- Also compute gridToScreen once per column
-                            -- instead of once per tile
-                        in foldl' (\acc2 z →
-                            case HM.lookup (lx, ly, z) tileMap of
-                                Nothing → acc2
-                                Just tile →
-                                    let relativeZ = z - zSlice
-                                        heightOffset = fromIntegral relativeZ * tileSideHeight
-                                        drawX = rawX + xOffset
-                                        drawY = rawY - heightOffset
-                                    in if isTileVisible vb drawX drawY
-                                       then tileToQuad lookupSlot lookupFmSlot textures facing
-                                              gx gy z tile zSlice effectiveDepth zoomAlpha xOffset
-                                              mFluid chunkHasFluid : acc2
-                                       else acc2
-                           ) acc [(zSlice - effectiveDepth) .. zSlice]
-                    ) [] surfMap
-                !blankQuads =
-                    [ blankTileToQuad lookupSlot lookupFmSlot textures facing
-                        gx gy zSlice zSlice zoomAlpha xOffset
-                    | lx ← [0 .. chunkSize - 1]
-                    , ly ← [0 .. chunkSize - 1]
-                    , let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
-                    , surfZ > zSlice
-                    , not (HM.member (lx, ly, zSlice) tileMap)
-                    , case HM.lookup (lx, ly) fluidMap of
-                        Just fc → fcSurface fc ≤ zSlice
-                        Nothing → True
-                    , let (gx, gy) = chunkToGlobal coord lx ly
-                          (rawX, rawY) = gridToScreen facing gx gy
-                          drawX = rawX + xOffset
-                          drawY = rawY
-                    , isTileVisible vb drawX drawY
-                    ]
-                !oceanQuads =
-                    [ oceanTileToQuad lookupSlot lookupFmSlot textures facing
-                        gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
-                    | (lx, ly) ← HM.keys fluidMap
-                    , let fc = fluidMap HM.! (lx, ly)
-                    -- Only render if fluid surface is within the visible z range
-                    , fcSurface fc ≤ zSlice
-                    , fcSurface fc ≥ (zSlice - effectiveDepth)
-                    , let (gx, gy) = chunkToGlobal coord lx ly
-                          (rawX, rawY) = gridToScreen facing gx gy
-                          relativeZ = fcSurface fc - zSlice
-                          heightOffset = fromIntegral relativeZ * tileSideHeight
-                          drawX = rawX + xOffset
-                          drawY = rawY - heightOffset
-                    , isTileVisible vb drawX drawY
-                    ]
-
-            in V.fromList (realQuads <> blankQuads <> oceanQuads)
-            ) visibleChunksWithOffset
-
-    return $! V.concat chunkVectors
-  where
-    isTileVisible ∷ ViewBounds → Float → Float → Bool
-    isTileVisible vb drawX drawY =
-        let tileRight  = drawX + tileWidth
-            tileBottom = drawY + tileHeight
-        in not (tileRight  < vbLeft vb
-             ∨ drawX      > vbRight vb
-             ∨ tileBottom < vbTop vb
-             ∨ drawY      > vbBottom vb)
-
-renderWorldQuadsIO ∷ EngineEnv → WorldState → Float → WorldCameraSnapshot
   → IO (V.Vector SortableQuad)
-renderWorldQuadsIO env worldState zoomAlpha snap = do
+renderWorldQuads env worldState zoomAlpha snap = do
     tileData ← readIORef (wsTilesRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
     paramsM ← readIORef (wsGenParamsRef worldState)

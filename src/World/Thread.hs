@@ -26,7 +26,7 @@ import World.Geology.Log (formatTimeline, formatPlatesSummary)
 import World.Fluids (computeOceanMap, computeChunkFluid)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Preview (buildPreviewImage, PreviewImage(..))
-import World.Render (surfaceHeadroom, updateWorldTilesIO)
+import World.Render (surfaceHeadroom, updateWorldTiles)
 import World.ZoomMap (buildZoomCache)
 
 -----------------------------------------------------------
@@ -91,7 +91,7 @@ worldLoop env stateRef lastTimeRef = do
             -- Check chunk loading for all visible worlds
             updateChunkLoading env logger
             
-            allQuads ← updateWorldTilesIO env
+            allQuads ← updateWorldTiles env
             writeIORef (worldQuadsRef env) allQuads
             threadDelay 16666
             worldLoop env stateRef lastTimeRef
