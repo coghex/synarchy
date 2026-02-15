@@ -163,6 +163,8 @@ bakeEntries cache texPicker lookupSlot defFmSlot =
             , bzeV2      = Vertex (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) white actualSlot defFmSlot
             , bzeV3      = Vertex (Vec2 drawX (drawY + h))       (Vec2 0 1) white actualSlot defFmSlot
             , bzeTexture = texHandle
+            , bzeIsOcean = zceIsOcean entry
+            , bzeElev    = zceElev entry
             }
 
 -- | Ensure the baked cache is populated, baking on first call.
@@ -222,14 +224,46 @@ generateBackgroundQuads = do
     (fbW, fbH) ← liftIO $ readIORef (framebufferSizeRef env)
     worldManager ← liftIO $ readIORef (worldManagerRef env)
 
+    let zSlice = camZSlice camera
+
     quads ← forM (wmVisible worldManager) $ \pageId →
         case lookup pageId (wmWorlds worldManager) of
             Just worldState →
-                renderFromBaked env worldState camera
+                renderFromBakedBg env worldState camera
                     fbW fbH 1.0 getBgTexture
-                    (wsBakedBgRef worldState) backgroundMapLayer
+                    (wsBakedBgRef worldState) backgroundMapLayer zSlice
             Nothing → return V.empty
     return $ V.concat quads
+
+-- | Emit a background quad with underwater tinting.
+--   When the z-slice is below sea level over an ocean chunk,
+--   darken and blue-shift the background to match the underwater feel.
+emitQuadBg ∷ BakedZoomEntry → Float → Float → LayerId → Int → SortableQuad
+emitQuadBg entry dx alpha layer zSlice =
+    let !baseX = bzeDrawX entry
+        !xShift = dx - baseX
+
+        -- Compute underwater tint for this background chunk
+        (tintR, tintG, tintB) =
+            if bzeIsOcean entry ∧ zSlice < seaLevel
+            then let waterDepth = seaLevel - zSlice
+                     t = clamp01 (fromIntegral waterDepth / 10.0)
+                 in (1.0 - t * 0.7, 1.0 - t * 0.5, 1.0 - t * 0.1)
+            else (1.0, 1.0, 1.0)
+
+        shiftV (Vertex (Vec2 px py) uv (Vec4 _ _ _ _) aid fid) =
+            Vertex (Vec2 (px + xShift) py) uv (Vec4 tintR tintG tintB alpha) aid fid
+        v0 = shiftV (bzeV0 entry)
+        v1 = shiftV (bzeV1 entry)
+        v2 = shiftV (bzeV2 entry)
+        v3 = shiftV (bzeV3 entry)
+        vertices = V.fromListN 6 [v0, v1, v2, v0, v2, v3]
+    in SortableQuad
+        { sqSortKey  = bzeSortKey entry
+        , sqVertices = vertices
+        , sqTexture  = bzeTexture entry
+        , sqLayer    = layer
+        }
 
 -----------------------------------------------------------
 -- Screen-Space View Bounds
@@ -334,6 +368,47 @@ emitQuad entry dx alpha layer =
         , sqTexture  = bzeTexture entry
         , sqLayer    = layer
         }
+
+-- | Background-specific render path that applies underwater tinting.
+renderFromBakedBg ∷ EngineEnv → WorldState → Camera2D
+                  → Int → Int → Float
+                  → (WorldTextures → Word8 → Int → TextureHandle)
+                  → IORef (V.Vector BakedZoomEntry)
+                  → LayerId → Int
+                  → EngineM ε σ (V.Vector SortableQuad)
+renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef layer zSlice = do
+    mParams  ← liftIO $ readIORef (wsGenParamsRef worldState)
+    textures ← liftIO $ readIORef (wsTexturesRef worldState)
+    rawCache ← liftIO $ readIORef (wsZoomCacheRef worldState)
+
+    gs ← gets graphicsState
+    let lookupSlot texHandle = fromIntegral $ case textureSystem gs of
+            Just bindless → getTextureSlotIndex texHandle bindless
+            Nothing       → 0
+        defFmSlot = fromIntegral (defaultFaceMapSlot gs)
+
+    case mParams of
+        Nothing → return V.empty
+        Just params → do
+            baked ← ensureBaked bakedRef rawCache textures
+                        texturePicker lookupSlot defFmSlot
+
+            let vb = computeZoomViewBounds camera fbW fbH
+                wsw = worldScreenWidth (wgpWorldSize params)
+
+                !visibleQuads = V.foldl' (\acc entry →
+                    let baseX = bzeDrawX entry
+                        baseY = bzeDrawY entry
+                        tryOffset dx acc'
+                            | isChunkInView vb dx baseY =
+                                emitQuadBg entry dx alpha layer zSlice : acc'
+                            | otherwise = acc'
+                    in tryOffset (baseX - wsw)
+                     $ tryOffset  baseX
+                     $ tryOffset (baseX + wsw) acc
+                    ) [] baked
+
+            return $! V.fromList visibleQuads
 
 -----------------------------------------------------------
 -- Texture Pickers (complete for all materials)

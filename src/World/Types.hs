@@ -810,6 +810,8 @@ data BakedZoomEntry = BakedZoomEntry
     , bzeV2      ∷ !Vertex      -- ^ Bottom-right
     , bzeV3      ∷ !Vertex      -- ^ Bottom-left
     , bzeTexture ∷ !TextureHandle
+    , bzeIsOcean ∷ !Bool
+    , bzeElev    ∷ !Int
     } deriving (Show)
 
 -----------------------------------------------------------
