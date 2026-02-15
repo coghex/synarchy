@@ -66,17 +66,6 @@ buildZoomCache params =
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
 
-        -- Wrap (ccx, ccy) in u-space for data lookup
-        wrapChunkU cx cy =
-            let w = halfSize * 2
-                u = cx - cy
-                v = cx + cy
-                halfW = w `div` 2
-                wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
-                cx' = (wrappedU + v) `div` 2
-                cy' = (v - wrappedU) `div` 2
-            in (cx', cy')
-
         entries =
             [ ZoomChunkEntry
                 { zceChunkX   = wrappedCcx
@@ -90,14 +79,14 @@ buildZoomCache params =
                 , zceIsOcean  = isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
                 }
             | ccy ← [-halfSize .. halfSize - 1]
-            , ccx ← [ccy - halfSize .. ccy + halfSize - 1]
+            , ccx ← [-halfSize .. halfSize - 1]
             , let baseGX = ccx * chunkSize
                   baseGY = ccy * chunkSize
                   halfTiles = halfSize * chunkSize
                   vMin = baseGX + baseGY
                   vMax = baseGX + baseGY + 2 * (chunkSize - 1)
             , vMax >= -halfTiles ∧ vMin <= halfTiles
-            , let (wrappedCcx, wrappedCcy) = wrapChunkU ccx ccy
+            , let (wrappedCcx, wrappedCcy) = (ccx, ccy)  -- canonical range, no wrapping needed
                   wrappedBaseGX = wrappedCcx * chunkSize
                   wrappedBaseGY = wrappedCcy * chunkSize
                   samples = [ let gx = wrappedBaseGX + ox
@@ -237,8 +226,9 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
             baked ← ensureBaked bakedRef rawCache textures facing
                         texturePicker lookupSlot defFmSlot
             let vb = computeZoomViewBounds camera fbW fbH
-                wsw = worldScreenWidth (wgpWorldSize params)
-                (camX, _) = camPosition camera
+                (camX, camY) = camPosition camera
+                facing = camFacing camera
+                ws = wgpWorldSize params
 
                 !visibleQuads = V.foldl' (\acc entry →
                     let baseX = bzeDrawX entry
@@ -246,22 +236,34 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                         w = bzeWidth entry
                         h = bzeHeight entry
                         centerX = baseX + w / 2.0
-                        offset = bestZoomWrapOffset wsw camX centerX
-                        wrappedX = baseX + offset
-                    in if isChunkInView vb wrappedX baseY w h
-                       then emitQuad entry wrappedX alpha layer : acc
+                        centerY = baseY + h / 2.0
+                        (offX, offY) = bestZoomWrapOffset facing ws camX camY centerX centerY
+                        wrappedX = baseX + offX
+                        wrappedY = baseY + offY
+                    in if isChunkInView vb wrappedX wrappedY w h
+                       then emitQuad entry wrappedX wrappedY alpha layer : acc
                        else acc
                     ) [] baked
 
             return $! V.fromList visibleQuads
 
-bestZoomWrapOffset ∷ Float → Float → Float → Float
-bestZoomWrapOffset wsw camX centerX =
-    let d0 = abs (centerX - camX)
-        d1 = abs (centerX + wsw - camX)
-        d2 = abs (centerX - wsw - camX)
-    in if d1 < d0 then (if d2 < d1 then -wsw else wsw)
-       else (if d2 < d0 then -wsw else 0)
+bestZoomWrapOffset ∷ CameraFacing → Int → Float → Float → Float → Float → (Float, Float)
+bestZoomWrapOffset facing worldSize camX camY centerX centerY =
+    let worldTiles = worldSize * chunkSize
+        wswX = fromIntegral worldTiles * tileHalfWidth
+        wswY = fromIntegral worldTiles * tileHalfDiamondHeight
+    in case facing of
+        FaceSouth → (pickBest wswX camX centerX, 0)
+        FaceNorth → (pickBest wswX camX centerX, 0)
+        FaceWest  → (0, pickBest wswY camY centerY)
+        FaceEast  → (0, pickBest wswY camY centerY)
+  where
+    pickBest w cam center =
+        let d0 = abs (center - cam)
+            d1 = abs (center + w - cam)
+            d2 = abs (center - w - cam)
+        in if d1 < d0 then (if d2 < d1 then -w else w)
+           else (if d2 < d0 then -w else 0)
 
 ensureBaked ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
               → V.Vector ZoomChunkEntry → WorldTextures
@@ -324,10 +326,10 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
         Just params → do
             baked ← ensureBaked bakedRef rawCache textures facing
                         texturePicker lookupSlot defFmSlot
-
             let vb = computeZoomViewBounds camera fbW fbH
-                wsw = worldScreenWidth (wgpWorldSize params)
-                (camX, _) = camPosition camera
+                (camX, camY) = camPosition camera
+                facing = camFacing camera
+                ws = wgpWorldSize params
 
                 !visibleQuads = V.foldl' (\acc entry →
                     let baseX = bzeDrawX entry
@@ -335,49 +337,16 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
                         w = bzeWidth entry
                         h = bzeHeight entry
                         centerX = baseX + w / 2.0
-                        offset = bestZoomWrapOffset wsw camX centerX
-                        wrappedX = baseX + offset
-                    in if isChunkInView vb wrappedX baseY w h
-                       then emitQuadBg entry wrappedX alpha layer zSlice : acc
+                        centerY = baseY + h / 2.0
+                        (offX, offY) = bestZoomWrapOffset facing ws camX camY centerX centerY
+                        wrappedX = baseX + offX
+                        wrappedY = baseY + offY
+                    in if isChunkInView vb wrappedX wrappedY w h
+                       then emitQuadBg entry wrappedX wrappedY alpha layer zSlice : acc
                        else acc
                     ) [] baked
 
             return $! V.fromList visibleQuads
-
--- | Emit a background quad with underwater tinting.
---   Ocean backgrounds progressively darken and blue-shift
---   the deeper below sea level the z-slice goes.
-
-emitQuadBg ∷ BakedZoomEntry → Float → Float → LayerId → Int → SortableQuad
-emitQuadBg entry dx alpha layer zSlice =
-    let !baseX = bzeDrawX entry
-        !xShift = dx - baseX
-
-        (tintR, tintG, tintB) =
-            if bzeIsOcean entry ∧ zSlice < seaLevel
-            then let waterDepth = seaLevel - zSlice
-                     t = clamp01 (fromIntegral waterDepth / 30.0)
-                     r = 0.6 - t * 0.4
-                     g = 0.7 - t * 0.4
-                     b = 0.9 - t * 0.3
-                 in (r, g, b)
-            else (1.0, 1.0, 1.0)
-
-        shiftV (Vertex (Vec2 px py) uv (Vec4 _ _ _ _) aid fid) =
-            Vertex (Vec2 (px + xShift) py) uv (Vec4 tintR tintG tintB alpha) aid fid
-        v0 = shiftV (bzeV0 entry)
-        v1 = shiftV (bzeV1 entry)
-        v2 = shiftV (bzeV2 entry)
-        v3 = shiftV (bzeV3 entry)
-    in SortableQuad
-        { sqSortKey  = bzeSortKey entry
-        , sqV0       = v0
-        , sqV1       = v1
-        , sqV2       = v2
-        , sqV3       = v3
-        , sqTexture  = bzeTexture entry
-        , sqLayer    = layer
-        }
 
 -----------------------------------------------------------
 -- Screen-Space View Bounds
@@ -416,13 +385,48 @@ isChunkInView vb drawX drawY w h =
          ∨ drawY  > zvBottom vb)
 
 -- | Emit a SortableQuad from a baked entry.
---   Shifts X position for wrap offset, patches alpha channel.
-emitQuad ∷ BakedZoomEntry → Float → Float → LayerId → SortableQuad
-emitQuad entry dx alpha layer =
+--   Shifts X and Y position for wrap offset, patches alpha channel.
+emitQuad ∷ BakedZoomEntry → Float → Float → Float → LayerId → SortableQuad
+emitQuad entry dx dy alpha layer =
     let !baseX = bzeDrawX entry
+        !baseY = bzeDrawY entry
         !xShift = dx - baseX
+        !yShift = dy - baseY
         shiftV (Vertex (Vec2 px py) uv (Vec4 cr cg cb _) aid fid) =
-            Vertex (Vec2 (px + xShift) py) uv (Vec4 cr cg cb alpha) aid fid
+            Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 cr cg cb alpha) aid fid
+        v0 = shiftV (bzeV0 entry)
+        v1 = shiftV (bzeV1 entry)
+        v2 = shiftV (bzeV2 entry)
+        v3 = shiftV (bzeV3 entry)
+    in SortableQuad
+        { sqSortKey  = bzeSortKey entry
+        , sqV0       = v0
+        , sqV1       = v1
+        , sqV2       = v2
+        , sqV3       = v3
+        , sqTexture  = bzeTexture entry
+        , sqLayer    = layer
+        }
+
+emitQuadBg ∷ BakedZoomEntry → Float → Float → Float → LayerId → Int → SortableQuad
+emitQuadBg entry dx dy alpha layer zSlice =
+    let !baseX = bzeDrawX entry
+        !baseY = bzeDrawY entry
+        !xShift = dx - baseX
+        !yShift = dy - baseY
+
+        (tintR, tintG, tintB) =
+            if bzeIsOcean entry ∧ zSlice < seaLevel
+            then let waterDepth = seaLevel - zSlice
+                     t = clamp01 (fromIntegral waterDepth / 30.0)
+                     r = 0.6 - t * 0.4
+                     g = 0.7 - t * 0.4
+                     b = 0.9 - t * 0.3
+                 in (r, g, b)
+            else (1.0, 1.0, 1.0)
+
+        shiftV (Vertex (Vec2 px py) uv (Vec4 _ _ _ _) aid fid) =
+            Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 tintR tintG tintB alpha) aid fid
         v0 = shiftV (bzeV0 entry)
         v1 = shiftV (bzeV1 entry)
         v2 = shiftV (bzeV2 entry)
