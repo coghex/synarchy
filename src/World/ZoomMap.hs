@@ -65,13 +65,13 @@ buildZoomCache params =
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
-        worldTiles = worldSize * chunkSize
+        halfTiles = halfSize * chunkSize
 
         entries =
             [ ZoomChunkEntry
                 { zceChunkX   = wrappedCcx
                 , zceChunkY   = wrappedCcy
-                , zceBaseGX   = baseGX    -- unwrapped for screen position
+                , zceBaseGX   = baseGX
                 , zceBaseGY   = baseGY
                 , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
                                 then 0 else winnerMat
@@ -79,26 +79,26 @@ buildZoomCache params =
                                 then seaLevel else avgElev
                 , zceIsOcean  = isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
                 }
-            -- Iterate over isometric axes (u, v) instead of (gx, gy).
-            -- u = ccx - ccy controls screen X, one wrap period wide.
-            -- v = ccx + ccy controls screen Y, bounded by glaciers.
-            | u ← [-worldSize .. worldSize - 1]    -- screen X: one full wrap period
-            , v ← [-halfSize .. halfSize - 1]       -- screen Y: glacier bounded
-            , (u + v) `mod` 2 ≡ 0                   -- only valid integer (gx,gy) pairs
+            -- Iterate in isometric (u, v) space directly.
+            -- v = ccx + ccy → screen Y (glacier bounded)
+            -- u = ccx - ccy → screen X (one wrap period)
+            | v ← [-halfSize .. halfSize - 1]
+            , u ← [-halfSize .. halfSize - 1]
             , let ccx = (u + v) `div` 2
                   ccy = (v - u) `div` 2
-                  baseGX = ccx * chunkSize
+                  -- Skip if u+v is odd (no integer ccx/ccy)
+            , (u + v) `mod` 2 ≡ 0
+            , let baseGX = ccx * chunkSize
                   baseGY = ccy * chunkSize
                   midGX  = baseGX + chunkSize `div` 2
                   midGY  = baseGY + chunkSize `div` 2
-            -- Glacier check on v axis (screen Y) only
             , not (isBeyondGlacier worldSize midGX midGY)
-            -- Wrap chunk coords for terrain data lookup
             , let wrappedCcx = wrapChunkX halfSize ccx
-                  wrappedCcy = ccy  -- gy doesn't wrap
+                  wrappedCcy = wrapChunkY halfSize ccy
                   wrappedBaseGX = wrappedCcx * chunkSize
+                  wrappedBaseGY = wrappedCcy * chunkSize
                   samples = [ let gx = wrappedBaseGX + ox
-                                  gy = baseGY + oy
+                                  gy = wrappedBaseGY + oy
                                   gx' = wrapGlobalX worldSize gx
                                   (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy
                               in if baseMat ≡ matGlacier
@@ -120,6 +120,9 @@ wrapChunkX ∷ Int → Int → Int
 wrapChunkX halfSize cx =
     let w = halfSize * 2
     in ((cx + halfSize) `mod` w + w) `mod` w - halfSize
+
+wrapChunkY ∷ Int → Int → Int
+wrapChunkY halfSize cy = max (-halfSize) (min (halfSize - 1) cy)
 
 -- | Pick the material that appears most often in the samples.
 --   On ties, prefers the material with higher material ID
@@ -239,12 +242,8 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                         baseY = bzeDrawY entry
                         w = bzeWidth entry
                         h = bzeHeight entry
-                        -- Pick the best wrap offset, same as world tiles
-                        centerX = baseX + w / 2.0
-                        offset = bestZoomWrapOffset wsw camX centerX
-                        wrappedX = baseX + offset
-                    in if isChunkInView vb wrappedX baseY w h
-                       then emitQuad entry wrappedX alpha layer : acc
+                    in if isChunkInView vb baseX baseY w h
+                       then emitQuad entry baseX alpha layer : acc
                        else acc
                     ) [] baked
 
