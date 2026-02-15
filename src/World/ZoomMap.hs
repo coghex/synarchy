@@ -431,7 +431,7 @@ emitQuadBg entry dx dy alpha layer zSlice =
 
         (tintR, tintG, tintB) =
             if bzeIsOcean entry ∧ zSlice < seaLevel
-            then let waterDepth = seaLevel - zSlice
+            then let waterDepth = max 0 (seaLevel - zSlice)
                      t = clamp01 (fromIntegral waterDepth / 30.0)
                      r = 0.6 - t * 0.4
                      g = 0.7 - t * 0.4

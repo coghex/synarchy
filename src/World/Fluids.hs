@@ -49,9 +49,9 @@ computeOceanMap seed worldSize plateCount plates applyTL =
             let midGX = cx * chunkSize + chunkSize `div` 2
                 midGY = cy * chunkSize + chunkSize `div` 2
                 (gx', gy') = wrapGlobalU worldSize midGX midGY
-            in if isBeyondGlacier worldSize gx' midGY
+            in if isBeyondGlacier worldSize gx' gy'
                then seaLevel + 100
-               else let (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' midGY
+               else let (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy'
                     in if baseMat ≡ matGlacier
                        then seaLevel + 100
                        else fst (applyTL gx' gy' (baseElev, baseMat))
