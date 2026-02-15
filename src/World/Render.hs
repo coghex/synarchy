@@ -279,14 +279,13 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     ) [] tileMap
                 !blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures facing
-                        gx gy zSlice zSlice zoomAlpha xOffset mFluid chunkHasFluid
+                        gx gy zSlice zSlice zoomAlpha xOffset
                     | lx ← [0 .. chunkSize - 1]
                     , ly ← [0 .. chunkSize - 1]
                     , let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
                     , surfZ > zSlice
                     , not (HM.member (lx, ly, zSlice) tileMap)
-                    , let mFluid = HM.lookup (lx, ly) fluidMap
-                    , case mFluid of
+                    , case HM.lookup (lx, ly) fluidMap of
                         Just fc → fcSurface fc ≤ zSlice
                         Nothing → True
                     , let (gx, gy) = chunkToGlobal coord lx ly
@@ -408,9 +407,8 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
 blankTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
                → WorldTextures → CameraFacing
                → Int → Int → Int → Int → Float → Float
-               → Maybe FluidCell → Bool
                → SortableQuad
-blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSlice tileAlpha xOffset mFluid chunkHasFluid =
+blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSlice tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = worldZ - zSlice
@@ -422,19 +420,9 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
         texHandle = wtBlankTexture textures
         actualSlot = lookupSlot texHandle
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
-
-        underwaterDepth = case mFluid of
-            Just fc
-                | worldZ < fcSurface fc → fcSurface fc - worldZ
-            _ | chunkHasFluid ∧ worldZ < seaLevel → seaLevel - worldZ
-            _ → 0
-
-        (tintR, tintG, tintB) = if underwaterDepth > 0
-            then let t = clamp01 (fromIntegral underwaterDepth / 10.0)
-                 in (1.0 - t * 0.7, 1.0 - t * 0.5, 1.0 - t * 0.1)
-            else (1.0, 1.0, 1.0)
-
-        tint = Vec4 tintR tintG tintB tileAlpha
+        -- Blank tiles are always neutral grey — they represent
+        -- unexposed solid ground, never underwater surfaces.
+        tint = Vec4 1.0 1.0 1.0 tileAlpha
         vertices = V.fromListN 6
             [ Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
             , Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
