@@ -332,8 +332,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
 tileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
            → WorldTextures → CameraFacing
            → Int → Int → Int → Tile → Int → Int → Float → Float
-           → Maybe FluidCell   -- fluid in this column (if any)
-           → Bool              -- whether this chunk has ANY fluid
+           → Maybe FluidCell → Bool
            → SortableQuad
 tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice effDepth tileAlpha xOffset mFluid chunkHasFluid =
     let (rawX, rawY) = gridToScreen facing worldX worldY
@@ -349,42 +348,36 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
         fmHandle = getTileFaceMapTexture textures (tileType tile)
         fmSlot = lookupFmSlot fmHandle
 
-        -- Depth fade (existing)
+        -- Depth fade (cliff shading for above-water tiles)
         depth = zSlice - worldZ
         fadeRange = max 1 effDepth
         brightnessT = fromIntegral depth / fromIntegral fadeRange
         brightness = clamp01 (1.0 - brightnessT * 0.4)
         fadeT = fromIntegral depth / fromIntegral fadeRange
         depthAlpha = clamp01 (1.0 - fadeT * fadeT)
-
-        -- Determine if this tile is underwater.
+        -- Determine if this tile is underwater and by how much.
         -- Two cases:
         --   1. This column has fluid and the tile is below the fluid surface
-        --   2. This column has no fluid (it's a cliff/land column) but the
-        --      tile is below sea level AND the chunk contains fluid elsewhere.
-        --      This catches cliff faces that extend below the waterline.
+        --   2. This column has no fluid (cliff/land column) but the tile
+        --      is below sea level AND the chunk contains fluid elsewhere
         underwaterDepth = case mFluid of
             Just fc
                 | worldZ < fcSurface fc → fcSurface fc - worldZ
             _ | chunkHasFluid ∧ worldZ < seaLevel → seaLevel - worldZ
             _ → 0
 
-        -- Underwater tinting
-        (tintR, tintG, tintB) = if underwaterDepth > 0
-            then let t = clamp01 (fromIntegral underwaterDepth / 10.0)
-                     r = brightness * (1.0 - t * 0.7)
-                     g = brightness * (1.0 - t * 0.5)
-                     b = brightness * (1.0 - t * 0.1)
-                 in (r, g, b)
-            else (brightness, brightness, brightness)
-
-        -- For underwater tiles, slow down the alpha fade so the seabed
-        -- remains visible deeper.  The ocean surface quad already
-        -- provides the "lid" — we want to see through it, not fade
-        -- tiles to nothing underneath.
-        finalAlpha = if underwaterDepth > 0
-            then tileAlpha  -- no depth fade underwater; blue tint handles depth cue
-            else tileAlpha * depthAlpha
+        -- Underwater vs above-water tinting
+        (tintR, tintG, tintB, finalAlpha) = if underwaterDepth > 0
+            then
+                -- Underwater: tint by water depth only.
+                -- Ignore cliff depth shading — water depth is the visual cue.
+                let t = clamp01 (fromIntegral underwaterDepth / 30.0)
+                    r = 0.6 - t * 0.4       -- 0.6 → 0.2
+                    g = 0.7 - t * 0.4        -- 0.7 → 0.3
+                    b = 0.9 - t * 0.3        -- 0.9 → 0.6
+                in (r, g, b, tileAlpha)
+            else
+                (brightness, brightness, brightness, tileAlpha * depthAlpha)
 
         tint = Vec4 tintR tintG tintB finalAlpha
 

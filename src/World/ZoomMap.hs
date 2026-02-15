@@ -236,19 +236,22 @@ generateBackgroundQuads = do
     return $ V.concat quads
 
 -- | Emit a background quad with underwater tinting.
---   When the z-slice is below sea level over an ocean chunk,
---   darken and blue-shift the background to match the underwater feel.
+--   Ocean backgrounds progressively darken and blue-shift
+--   the deeper below sea level the z-slice goes.
+
 emitQuadBg ∷ BakedZoomEntry → Float → Float → LayerId → Int → SortableQuad
 emitQuadBg entry dx alpha layer zSlice =
     let !baseX = bzeDrawX entry
         !xShift = dx - baseX
 
-        -- Compute underwater tint for this background chunk
         (tintR, tintG, tintB) =
             if bzeIsOcean entry ∧ zSlice < seaLevel
             then let waterDepth = seaLevel - zSlice
-                     t = clamp01 (fromIntegral waterDepth / 10.0)
-                 in (1.0 - t * 0.7, 1.0 - t * 0.5, 1.0 - t * 0.1)
+                     t = clamp01 (fromIntegral waterDepth / 30.0)
+                     r = 0.6 - t * 0.4       -- 0.6 → 0.2
+                     g = 0.7 - t * 0.4        -- 0.7 → 0.3
+                     b = 0.9 - t * 0.3        -- 0.9 → 0.6
+                 in (r, g, b)
             else (1.0, 1.0, 1.0)
 
         shiftV (Vertex (Vec2 px py) uv (Vec4 _ _ _ _) aid fid) =
