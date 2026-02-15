@@ -66,42 +66,26 @@ buildZoomCache params =
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
 
-        -- To fill a screen-space rectangle, we need chunks covering:
-        --   |v| = |gx + gy| ≤ halfTiles      (glacier)
-        --   u = gx - gy spans one full wrap period (worldTiles)
-        --
-        -- With ccy fixed, we need ccx to range wide enough that
-        -- for every valid v = gx+gy, the u = gx-gy range covers
-        -- worldTiles. Since u = (ccx - ccy) * chunkSize, and ccy
-        -- ranges [-halfSize, halfSize-1], ccx must range 
-        -- [-halfSize*2, halfSize*2-1] to cover the full rectangle.
-        -- We then wrap ccx back to canonical coords for data lookup.
-
         entries =
             [ ZoomChunkEntry
-                { zceChunkX   = wrappedCcx
+                { zceChunkX   = ccx
                 , zceChunkY   = ccy
-                , zceBaseGX   = baseGX  -- unwrapped, for screen position
+                , zceBaseGX   = baseGX
                 , zceBaseGY   = baseGY
-                , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord wrappedCcx ccy)
+                , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
                                 then 0 else winnerMat
-                , zceElev     = if isOceanChunk oceanMap (ChunkCoord wrappedCcx ccy)
+                , zceElev     = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
                                 then seaLevel else avgElev
-                , zceIsOcean  = isOceanChunk oceanMap (ChunkCoord wrappedCcx ccy)
+                , zceIsOcean  = isOceanChunk oceanMap (ChunkCoord ccx ccy)
                 }
-            | ccx ← [-halfSize * 2 .. halfSize * 2 - 1]
+            | ccx ← [-halfSize .. halfSize - 1]
             , ccy ← [-halfSize .. halfSize - 1]
             , let baseGX = ccx * chunkSize
                   baseGY = ccy * chunkSize
                   midGX  = baseGX + chunkSize `div` 2
                   midGY  = baseGY + chunkSize `div` 2
-                  -- Glacier check uses raw (unwrapped) coords
-                  -- because v = gx + gy must be in range
-            , abs (midGX + midGY) ≤ halfSize * chunkSize
-            , let -- Wrap ccx for data lookup
-                  wrappedCcx = wrapChunkX halfSize ccx
-                  wrappedBaseGX = wrappedCcx * chunkSize
-                  samples = [ let gx = wrappedBaseGX + ox
+            , not (isBeyondGlacier worldSize midGX midGY)
+            , let samples = [ let gx = baseGX + ox
                                   gy = baseGY + oy
                                   gx' = wrapGlobalX worldSize gx
                                   (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy
@@ -236,35 +220,32 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
             baked ← ensureBaked bakedRef rawCache textures facing
                         texturePicker lookupSlot defFmSlot
             let vb = computeZoomViewBounds camera fbW fbH
+                wsw = worldScreenWidth (wgpWorldSize params)
+                (camX, _) = camPosition camera
 
-                -- No wrapping — just render each chunk at its baked position.
-                -- Camera X is wrapped by the input handler, so it always
-                -- sees the correct part of the map.
                 !visibleQuads = V.foldl' (\acc entry →
                     let baseX = bzeDrawX entry
                         baseY = bzeDrawY entry
                         w = bzeWidth entry
                         h = bzeHeight entry
-                    in if isChunkInView vb baseX baseY w h
-                       then emitQuad entry baseX alpha layer : acc
+                        -- Pick the best wrap offset, same as world tiles
+                        centerX = baseX + w / 2.0
+                        offset = bestZoomWrapOffset wsw camX centerX
+                        wrappedX = baseX + offset
+                    in if isChunkInView vb wrappedX baseY w h
+                       then emitQuad entry wrappedX alpha layer : acc
                        else acc
                     ) [] baked
 
             return $! V.fromList visibleQuads
 
--- | Pick the wrap offset that puts the chunk closest to the camera.
---   Same logic as bestWrapOffset in Render.hs.
 bestZoomWrapOffset ∷ Float → Float → Float → Float
-bestZoomWrapOffset wsw camX chunkCenterX =
-    let candidates = [0, wsw, -wsw]
-        dist offset = abs (chunkCenterX + offset - camX)
-    in pickMin candidates
-  where
-    pickMin [c] = c
-    pickMin (c:cs) = let best = pickMin cs
-                     in if abs (chunkCenterX + c - camX) ≤ abs (chunkCenterX + best - camX)
-                        then c else best
-    pickMin []  = 0
+bestZoomWrapOffset wsw camX centerX =
+    let d0 = abs (centerX - camX)
+        d1 = abs (centerX + wsw - camX)
+        d2 = abs (centerX - wsw - camX)
+    in if d1 < d0 then (if d2 < d1 then -wsw else wsw)
+       else (if d2 < d0 then -wsw else 0)
 
 ensureBaked ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
               → V.Vector ZoomChunkEntry → WorldTextures
@@ -329,14 +310,19 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
                         texturePicker lookupSlot defFmSlot
 
             let vb = computeZoomViewBounds camera fbW fbH
+                wsw = worldScreenWidth (wgpWorldSize params)
+                (camX, _) = camPosition camera
 
                 !visibleQuads = V.foldl' (\acc entry →
                     let baseX = bzeDrawX entry
                         baseY = bzeDrawY entry
                         w = bzeWidth entry
                         h = bzeHeight entry
-                    in if isChunkInView vb baseX baseY w h
-                       then emitQuad entry baseX alpha layer : acc
+                        centerX = baseX + w / 2.0
+                        offset = bestZoomWrapOffset wsw camX centerX
+                        wrappedX = baseX + offset
+                    in if isChunkInView vb wrappedX baseY w h
+                       then emitQuadBg entry wrappedX alpha layer zSlice : acc
                        else acc
                     ) [] baked
 

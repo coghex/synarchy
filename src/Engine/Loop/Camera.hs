@@ -36,7 +36,7 @@ cameraYLimit worldSizeChunks =
 cameraXWrap ∷ Int → Float
 cameraXWrap worldSizeChunks =
     let worldTiles = worldSizeChunks * chunkSize
-    in fromIntegral worldTiles * tileHalfWidth * 2.0
+    in fromIntegral worldTiles * tileHalfWidth
 
 -- | Read the world size from the active world, defaulting to 128.
 getWorldSize ∷ EngineEnv → IO Int

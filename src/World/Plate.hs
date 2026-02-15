@@ -179,12 +179,14 @@ isGlacierZone ∷ Int → Int → Int → Bool
 isGlacierZone worldSize gx gy =
     let halfTiles = (worldSize * chunkSize) `div` 2
         glacierEdge = halfTiles - glacierWidthRows
-    in abs gy > glacierEdge
+        screenRow = gx + gy
+    in abs screenRow ≥ glacierEdge
 
 isBeyondGlacier ∷ Int → Int → Int → Bool
 isBeyondGlacier worldSize gx gy =
     let halfTiles = (worldSize * chunkSize) `div` 2
-    in abs gy > halfTiles
+        screenRow = gx + gy
+    in abs screenRow > halfTiles
 
 -----------------------------------------------------------
 -- Cylindrical Wrapping
