@@ -6,6 +6,7 @@ module World.ZoomMap
     ) where
 
 import UPrelude
+import Debug.Trace (trace)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
 import Data.IORef (readIORef, writeIORef, IORef)
@@ -164,7 +165,7 @@ bakeEntries cache texPicker lookupSlot defFmSlot =
             , bzeDrawY   = drawY
             , bzeWidth   = w
             , bzeHeight  = h
-            , bzeSortKey = fromIntegral (zceChunkX entry + zceChunkY entry)
+            , bzeSortKey = fromIntegral (zceChunkY entry) + fromIntegral (zceChunkX entry) * 0.0001
             , bzeV0      = Vertex (Vec2 drawX drawY)            (Vec2 0 0) white actualSlot defFmSlot
             , bzeV1      = Vertex (Vec2 (drawX + w) drawY)       (Vec2 1 0) white actualSlot defFmSlot
             , bzeV2      = Vertex (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) white actualSlot defFmSlot
@@ -245,17 +246,15 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
 
             return $! V.fromList visibleQuads
 
+
 ensureBaked bakedRef rawCache textures texPicker lookupSlot defFmSlot = do
     (existing, bakedWith) ← readIORef bakedRef
     let texturesChanged = bakedWith ≢ textures
-        slotsStale = case V.null existing of
-            True  → False
-            False → let entry = V.head existing
-                        currentSlot = fromIntegral (lookupSlot (bzeTexture entry))
-                        Vertex _ _ _ bakedSlot _ = bzeV0 entry
-                    in currentSlot ≢ bakedSlot
         needsBake = not (V.null rawCache)
-                  ∧ (V.null existing ∨ texturesChanged ∨ slotsStale)
+                  ∧ (V.null existing ∨ texturesChanged)
+    when needsBake $
+        trace ("REBAKE: empty=" ++ show (V.null existing)
+              ++ " texChanged=" ++ show texturesChanged) (return ())
     if needsBake
         then do
             let baked = bakeEntries rawCache
