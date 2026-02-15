@@ -127,13 +127,13 @@ twoNearestPlates seed worldSize plates gx gy =
         [a]     → (a, a)
         _       → error "no plates"
 
-rankPlates ∷ Word64 → Int → [TectonicPlate] → Int → Int → [(TectonicPlate, Float)]
 rankPlates seed worldSize plates gx gy =
     let jitter = jitterAmount seed worldSize gx gy
         withDist plate =
-            let dx = fromIntegral (wrappedDeltaX worldSize gx (plateCenterX plate)) ∷ Float
-                dy = fromIntegral (gy - plateCenterY plate) ∷ Float
-            in (plate, sqrt (dx * dx + dy * dy) + jitter)
+            let du = fromIntegral (wrappedDeltaU worldSize gx gy
+                        (plateCenterX plate) (plateCenterY plate)) ∷ Float
+                dv = fromIntegral ((gx + gy) - (plateCenterX plate + plateCenterY plate)) ∷ Float
+            in (plate, sqrt (du * du + dv * dv) + jitter)
     in sortBy (comparing snd) (map withDist plates)
 
 -----------------------------------------------------------
@@ -142,12 +142,14 @@ rankPlates seed worldSize plates gx gy =
 
 classifyBoundary ∷ Int → TectonicPlate → TectonicPlate → BoundaryType
 classifyBoundary worldSize plateA plateB =
-    let nxRaw = fromIntegral (wrappedDeltaX worldSize
-                    (plateCenterX plateA) (plateCenterX plateB)) ∷ Float
-        nyRaw = fromIntegral (plateCenterY plateB - plateCenterY plateA) ∷ Float
-        nLen  = sqrt (nxRaw * nxRaw + nyRaw * nyRaw)
+    let duRaw = fromIntegral (wrappedDeltaU worldSize 
+                    (plateCenterX plateA) (plateCenterY plateA)
+                    (plateCenterX plateB) (plateCenterY plateB)) ∷ Float
+        dvRaw = fromIntegral ((plateCenterX plateB + plateCenterY plateB) 
+                            - (plateCenterX plateA + plateCenterY plateA)) ∷ Float
+        nLen  = sqrt (duRaw * duRaw + dvRaw * dvRaw)
         (nx, ny) = if nLen > 0.001
-                   then (nxRaw / nLen, nyRaw / nLen)
+                   then (duRaw / nLen, dvRaw / nLen)
                    else (1.0, 0.0)
 
         (tx, ty) = (-ny, nx)
@@ -177,15 +179,17 @@ glacierWidthRows ∷ Int
 glacierWidthRows = chunkSize
 
 isGlacierZone ∷ Int → Int → Int → Bool
-isGlacierZone worldSize _gx gy =
+isGlacierZone worldSize gx gy =
     let halfTiles = (worldSize * chunkSize) `div` 2
         glacierEdge = halfTiles - glacierWidthRows
-    in abs gy ≥ glacierEdge
+        screenRow = gx + gy
+    in abs screenRow ≥ glacierEdge
 
 isBeyondGlacier ∷ Int → Int → Int → Bool
-isBeyondGlacier worldSize _gx gy =
+isBeyondGlacier worldSize gx gy =
     let halfTiles = (worldSize * chunkSize) `div` 2
-    in abs gy > halfTiles
+        screenRow = gx + gy
+    in abs screenRow > halfTiles
 
 -----------------------------------------------------------
 -- Cylindrical Wrapping
@@ -221,36 +225,41 @@ wrapGlobalX worldSize gx =
         wrapped = ((gx + halfW) `mod` w + w) `mod` w - halfW
     in wrapped
 
-wrappedDeltaX ∷ Int → Int → Int → Int
-wrappedDeltaX worldSize x1 x2 =
+-- | Wrapped distance in the u-axis between two points
+wrappedDeltaU ∷ Int → Int → Int → Int → Int → Int
+wrappedDeltaU worldSize gx1 gy1 gx2 gy2 =
     let w = worldWidthTiles worldSize
-        raw = x2 - x1
+        u1 = gx1 - gy1
+        u2 = gx2 - gy2
+        raw = u2 - u1
         halfW = w `div` 2
-        wrapped = ((raw + halfW) `mod` w + w) `mod` w - halfW
-    in wrapped
+    in ((raw + halfW) `mod` w + w) `mod` w - halfW
 
 wrappedValueNoise2D ∷ Word64 → Int → Int → Int → Int → Float
-wrappedValueNoise2D seed worldSize x y scale =
+wrappedValueNoise2D seed worldSize gx gy scale =
     let w = worldWidthTiles worldSize
-        fx = fromIntegral x / fromIntegral scale ∷ Float
-        fy = fromIntegral y / fromIntegral scale ∷ Float
-        ix = floor fx ∷ Int
-        iy = floor fy ∷ Int
-        tx = fx - fromIntegral ix
-        ty = fy - fromIntegral iy
-        sx = smoothstep tx
-        sy = smoothstep ty
-        cellsInX = w `div` scale
-        wrapIx i = ((i `mod` cellsInX) + cellsInX) `mod` cellsInX
-        ix0 = wrapIx ix
-        ix1 = wrapIx (ix + 1)
-        v00 = hashToFloat' (hashCoord seed ix0     iy)
-        v10 = hashToFloat' (hashCoord seed ix1     iy)
-        v01 = hashToFloat' (hashCoord seed ix0     (iy + 1))
-        v11 = hashToFloat' (hashCoord seed ix1     (iy + 1))
-        top    = lerp sx v00 v10
-        bottom = lerp sx v01 v11
-    in lerp sy top bottom
+        -- Work in u-space for wrapping
+        u = gx - gy
+        v = gx + gy
+        fu = fromIntegral u / fromIntegral scale ∷ Float
+        fv = fromIntegral v / fromIntegral scale ∷ Float
+        iu = floor fu ∷ Int
+        iv = floor fv ∷ Int
+        tu = fu - fromIntegral iu
+        tv = fv - fromIntegral iv
+        su = smoothstep tu
+        sv = smoothstep tv
+        cellsInU = w `div` scale
+        wrapIu i = ((i `mod` cellsInU) + cellsInU) `mod` cellsInU
+        iu0 = wrapIu iu
+        iu1 = wrapIu (iu + 1)
+        v00 = hashToFloat' (hashCoord seed iu0     iv)
+        v10 = hashToFloat' (hashCoord seed iu1     iv)
+        v01 = hashToFloat' (hashCoord seed iu0     (iv + 1))
+        v11 = hashToFloat' (hashCoord seed iu1     (iv + 1))
+        top    = lerp su v00 v10
+        bottom = lerp su v01 v11
+    in lerp sv top bottom
 
 -----------------------------------------------------------
 -- Global Elevation Query
@@ -262,21 +271,21 @@ elevationAtGlobal seed plates worldSize gx gy =
         wsc = computeWorldScale worldSize
     in if isBeyondGlacier worldSize gx' gy' then (0, matGlacier)
     else if isGlacierZone worldSize gx' gy' then
-        let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy
+        let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy'
             myPlate = plateA
             baseElev = plateBaseElev myPlate
             boundaryDist = (distB - distA) / 2.0
             boundary = classifyBoundary worldSize plateA plateB
             side = SidePlateA
             boundaryEffect = boundaryElevation wsc boundary side plateA plateB boundaryDist
-            localNoise = elevationNoise seed worldSize gx' gy
+            localNoise = elevationNoise seed worldSize gx' gy'
             noiseScale = if plateIsLand myPlate
                          then round (scaleElev wsc 50.0)
                          else round (scaleElev wsc 20.0)
             terrainElev = baseElev + boundaryEffect + localNoise * noiseScale
         in (terrainElev + 3, matGlacier)
     else
-    let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy
+    let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy'
 
         myPlate = plateA
         material = plateMaterial myPlate
@@ -291,7 +300,7 @@ elevationAtGlobal seed plates worldSize gx gy =
         boundaryEffect = boundaryElevation wsc boundary side
                            plateA plateB boundaryDist
 
-        localNoise = elevationNoise seed worldSize gx' gy
+        localNoise = elevationNoise seed worldSize gx' gy'
         noiseScale = if plateIsLand myPlate
                      then round (scaleElev wsc 50.0)
                      else round (scaleElev wsc 20.0)
