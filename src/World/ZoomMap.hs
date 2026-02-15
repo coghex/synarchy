@@ -66,6 +66,20 @@ buildZoomCache params =
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
 
+        -- | Does this chunk have ocean water?
+        -- Mirrors computeChunkFluid: in the ocean map OR borders an ocean chunk.
+        hasOcean ∷ Int → Int → Bool
+        hasOcean cx cy =
+            isOceanChunk oceanMap (ChunkCoord cx cy)
+          ∨ isOceanChunk oceanMap (ChunkCoord cx (cy - 1))
+          ∨ isOceanChunk oceanMap (ChunkCoord cx (cy + 1))
+          ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) cy)
+          ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) cy)
+          ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy - 1))
+          ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy - 1))
+          ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy + 1))
+          ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy + 1))
+
         entries =
             [ ZoomChunkEntry
                 { zceChunkX   = wrappedCcx
@@ -76,7 +90,7 @@ buildZoomCache params =
                                 then 0 else winnerMat
                 , zceElev     = if isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
                                 then seaLevel else avgElev
-                , zceIsOcean  = isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
+                , zceIsOcean  = hasOcean wrappedCcx wrappedCcy    -- ← only this line changes
                 }
             | ccy ← [-halfSize .. halfSize - 1]
             , ccx ← [-halfSize .. halfSize - 1]
@@ -86,7 +100,7 @@ buildZoomCache params =
                   vMin = baseGX + baseGY
                   vMax = baseGX + baseGY + 2 * (chunkSize - 1)
             , vMax >= -halfTiles ∧ vMin <= halfTiles
-            , let (wrappedCcx, wrappedCcy) = (ccx, ccy)  -- canonical range, no wrapping needed
+            , let (wrappedCcx, wrappedCcy) = (ccx, ccy)
                   wrappedBaseGX = wrappedCcx * chunkSize
                   wrappedBaseGY = wrappedCcy * chunkSize
                   samples = [ let gx = wrappedBaseGX + ox
