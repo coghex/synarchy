@@ -65,27 +65,39 @@ buildZoomCache params =
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
+        worldTiles = worldSize * chunkSize
 
         entries =
             [ ZoomChunkEntry
-                { zceChunkX   = ccx
-                , zceChunkY   = ccy
-                , zceBaseGX   = baseGX
+                { zceChunkX   = wrappedCcx
+                , zceChunkY   = wrappedCcy
+                , zceBaseGX   = baseGX    -- unwrapped for screen position
                 , zceBaseGY   = baseGY
-                , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
+                , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
                                 then 0 else winnerMat
-                , zceElev     = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
+                , zceElev     = if isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
                                 then seaLevel else avgElev
-                , zceIsOcean  = isOceanChunk oceanMap (ChunkCoord ccx ccy)
+                , zceIsOcean  = isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
                 }
-            | ccx ← [-halfSize .. halfSize - 1]
-            , ccy ← [-halfSize .. halfSize - 1]
-            , let baseGX = ccx * chunkSize
+            -- Iterate over isometric axes (u, v) instead of (gx, gy).
+            -- u = ccx - ccy controls screen X, one wrap period wide.
+            -- v = ccx + ccy controls screen Y, bounded by glaciers.
+            | u ← [-worldSize .. worldSize - 1]    -- screen X: one full wrap period
+            , v ← [-halfSize .. halfSize - 1]       -- screen Y: glacier bounded
+            , (u + v) `mod` 2 ≡ 0                   -- only valid integer (gx,gy) pairs
+            , let ccx = (u + v) `div` 2
+                  ccy = (v - u) `div` 2
+                  baseGX = ccx * chunkSize
                   baseGY = ccy * chunkSize
                   midGX  = baseGX + chunkSize `div` 2
                   midGY  = baseGY + chunkSize `div` 2
+            -- Glacier check on v axis (screen Y) only
             , not (isBeyondGlacier worldSize midGX midGY)
-            , let samples = [ let gx = baseGX + ox
+            -- Wrap chunk coords for terrain data lookup
+            , let wrappedCcx = wrapChunkX halfSize ccx
+                  wrappedCcy = ccy  -- gy doesn't wrap
+                  wrappedBaseGX = wrappedCcx * chunkSize
+                  samples = [ let gx = wrappedBaseGX + ox
                                   gy = baseGY + oy
                                   gx' = wrapGlobalX worldSize gx
                                   (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy
@@ -104,7 +116,6 @@ buildZoomCache params =
 
     in V.fromList entries
 
--- | Wrap chunk X coordinate into [-halfSize, halfSize)
 wrapChunkX ∷ Int → Int → Int
 wrapChunkX halfSize cx =
     let w = halfSize * 2
