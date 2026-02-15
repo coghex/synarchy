@@ -70,6 +70,7 @@ test-suite synarchy-test
                 , stm
                 , mtl
                 , vector
+                , vector-algorithms
                 , yaml
                 , aeson
                 , unordered-containers
@@ -308,6 +309,7 @@ library
                  , time
                  , array
                  , vector
+                 , vector-algorithms
                  , yaml
                  , aeson
                  , unordered-containers
@@ -411,6 +413,7 @@ executable synarchy
                  , text
                  , time
                  , vector
+                 , vector-algorithms
                  , yaml
                  , aeson
                  , unordered-containers

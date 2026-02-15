@@ -122,14 +122,11 @@ drawFrame = do
             --    Accumulate with (:) — O(1) per quad. Order doesn't matter
             --    because mergeQuadsToBatch sorts by sqSortKey anyway.
             let allWorldQuads = worldTileQuads <> sceneQuads
-                groupedByLayer = V.foldl' (\acc q →
-                    Map.insertWith (\new old → head new : old)
-                        (sqLayer q) [q] acc)
-                    Map.empty allWorldQuads
-                -- One RenderBatch per layer
-                perLayerBatches = Map.mapWithKey
-                    (\layer qs → mergeQuadsToBatch layer qs)
-                    groupedByLayer
+                groupedByLayer = Map.map V.fromList $
+                    V.foldl' (\acc q →
+                        Map.insertWith (++) (sqLayer q) [q] acc)
+                        Map.empty allWorldQuads
+                perLayerBatches = Map.mapWithKey mergeQuadsToBatch groupedByLayer
                 -- For vertex upload (flat list of batches)
                 worldBatches = V.fromList $ Map.elems perLayerBatches
                 -- For draw ordering (layered map of render items)

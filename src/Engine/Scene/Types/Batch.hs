@@ -17,9 +17,11 @@ module Engine.Scene.Types.Batch
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
+import qualified Data.Vector.Algorithms.Intro as VA
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.List as List
+import Data.Ord (comparing)
 import Control.Monad.ST (runST)
 import Engine.Scene.Base (ObjectId, LayerId)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle)
@@ -67,40 +69,31 @@ drawableToQuad dobj = SortableQuad
     }
 
 -- | Sort quads by painter's algorithm and merge into a single RenderBatch.
---   All quads MUST share the same layer. The texture field uses the first
---   quad's texture (irrelevant for bindless — the per-vertex atlasId drives
---   texture selection in the shader).
---
---   Sorts once, then builds the final vertex vector with V.concatMap over
---   a sorted vector. No intermediate list-of-vectors allocation.
-mergeQuadsToBatch ∷ LayerId → [SortableQuad] → RenderBatch
+mergeQuadsToBatch ∷ LayerId → V.Vector SortableQuad → RenderBatch
 mergeQuadsToBatch layer quads =
-    let !sortedList = List.sortOn sqSortKey quads
-        !totalVerts = length sortedList * 6
-        -- Since it's already sorted, average of first and last is a
-        -- cheap representative value. Or just use 0 — world tiles
-        -- are sorted per-layer anyway, not across layers.
-        !avgZ = case sortedList of
-            []    → 0.0
-            [q]   → sqSortKey q
-            (q:_) → let last' = sqSortKey (List.last sortedList)
-                     in (sqSortKey q + last') / 2.0
+    let !sorted = V.modify (VA.sortBy (comparing sqSortKey)) quads
+        !totalVerts = V.length sorted * 6
+        !avgZ = if V.null sorted
+               then 0
+               else let last' = sqSortKey (V.last sorted)
+                        first' = sqSortKey (V.head sorted)
+                    in if last' == first'
+                       then last'
+                       else (last' + first') / 2
         !allVerts = V.create $ do
             mv ← VM.new totalVerts
-            let go _ [] = return ()
-                go i (q:qs) = do
-                    VM.write mv  i      (sqV0 q)
-                    VM.write mv (i+1)   (sqV1 q)
-                    VM.write mv (i+2)   (sqV2 q)
-                    VM.write mv (i+3)   (sqV0 q)
-                    VM.write mv (i+4)   (sqV2 q)
-                    VM.write mv (i+5)   (sqV3 q)
-                    go (i + 6) qs
-            go 0 sortedList
+            V.iforM_ sorted $ \idx q → do
+                let i = idx * 6
+                VM.write mv  i      (sqV0 q)
+                VM.write mv (i+1)   (sqV1 q)
+                VM.write mv (i+2)   (sqV2 q)
+                VM.write mv (i+3)   (sqV0 q)
+                VM.write mv (i+4)   (sqV2 q)
+                VM.write mv (i+5)   (sqV3 q)
             return mv
-        tex = case sortedList of
-            []    → TextureHandle 0
-            (q:_) → sqTexture q
+        tex = if V.null sorted
+              then TextureHandle 0
+              else sqTexture (V.head sorted)
     in RenderBatch
         { rbTexture  = tex
         , rbLayer    = layer
