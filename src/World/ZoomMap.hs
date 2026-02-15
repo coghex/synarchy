@@ -93,9 +93,10 @@ buildZoomCache params =
             , ccx ← [ccy - halfSize .. ccy + halfSize - 1]
             , let baseGX = ccx * chunkSize
                   baseGY = ccy * chunkSize
-                  midGX  = baseGX + chunkSize `div` 2
-                  midGY  = baseGY + chunkSize `div` 2
-            , not (isBeyondGlacier worldSize midGX midGY)
+                  halfTiles = halfSize * chunkSize
+                  vMin = baseGX + baseGY
+                  vMax = baseGX + baseGY + 2 * (chunkSize - 1)
+            , vMax >= -halfTiles ∧ vMin <= halfTiles
             , let (wrappedCcx, wrappedCcy) = wrapChunkU ccx ccy
                   wrappedBaseGX = wrappedCcx * chunkSize
                   wrappedBaseGY = wrappedCcy * chunkSize
@@ -244,8 +245,11 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                         baseY = bzeDrawY entry
                         w = bzeWidth entry
                         h = bzeHeight entry
-                    in if isChunkInView vb baseX baseY w h
-                       then emitQuad entry baseX alpha layer : acc
+                        centerX = baseX + w / 2.0
+                        offset = bestZoomWrapOffset wsw camX centerX
+                        wrappedX = baseX + offset
+                    in if isChunkInView vb wrappedX baseY w h
+                       then emitQuad entry wrappedX alpha layer : acc
                        else acc
                     ) [] baked
 
