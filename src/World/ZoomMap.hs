@@ -241,7 +241,6 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                         texturePicker lookupSlot defFmSlot
             let vb = computeZoomViewBounds camera fbW fbH
                 (camX, camY) = camPosition camera
-                facing = camFacing camera
                 ws = wgpWorldSize params
 
                 !visibleQuads = V.foldl' (\acc entry →
@@ -342,7 +341,6 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
                         texturePicker lookupSlot defFmSlot
             let vb = computeZoomViewBounds camera fbW fbH
                 (camX, camY) = camPosition camera
-                facing = camFacing camera
                 ws = wgpWorldSize params
 
                 !visibleQuads = V.foldl' (\acc entry →

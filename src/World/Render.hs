@@ -183,10 +183,6 @@ tileWrapWidth worldSizeChunks =
     let worldTiles = worldSizeChunks * chunkSize
     in fromIntegral worldTiles * tileHalfWidth
 
--- | Full camera wrap period: equatorial width of the isometric map
-worldScreenWidth ∷ Int → Float
-worldScreenWidth worldSizeChunks = tileWrapWidth worldSizeChunks * 2.0
-
 isChunkVisibleWrapped ∷ CameraFacing → Int → ViewBounds → Float
   → ChunkCoord → Maybe Float
 isChunkVisibleWrapped facing worldSize vb camX coord =
