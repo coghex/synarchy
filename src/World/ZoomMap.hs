@@ -65,44 +65,75 @@ buildZoomCache params =
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
+        worldTiles = worldSize * chunkSize
 
-        entries =
-            [ ZoomChunkEntry
-                { zceChunkX   = ccx
-                , zceChunkY   = ccy
-                , zceBaseGX   = baseGX
-                , zceBaseGY   = baseGY
-                , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
-                                then 0 else winnerMat
-                , zceElev     = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
-                                then seaLevel else avgElev
-                , zceIsOcean  = isOceanChunk oceanMap (ChunkCoord ccx ccy)
-                }
+        -- How many chunks of padding to duplicate at the seam.
+        -- Needs to be wide enough to cover the screen at max zoom-out.
+        seamPad = 4
+
+        -- Build one entry for a given chunk coord and grid-space base position.
+        -- The baseGX may be shifted by worldTiles for seam duplicates.
+        mkEntry ccx ccy baseGX baseGY =
+            let midGX  = baseGX + chunkSize `div` 2
+                midGY  = baseGY + chunkSize `div` 2
+            in if isBeyondGlacier worldSize midGX midGY
+               then Nothing
+               else let samples = [ let gx = baseGX + ox
+                                        gy = baseGY + oy
+                                        gx' = wrapGlobalX worldSize gx
+                                        (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy
+                                    in if baseMat ≡ matGlacier
+                                       then (baseElev, unMaterialId baseMat)
+                                       else if baseElev < -100 then (baseElev, 0)
+                                       else let (e, m) = applyTimeline timeline worldSize gx' gy
+                                                             (baseElev, baseMat)
+                                            in (e, unMaterialId m)
+                                  | (ox, oy) ← sampleOffsets
+                                  ]
+                        winnerMat = majorityMaterial samples
+                        avgElev = let s = sum (map fst samples)
+                                  in s `div` length samples
+                        isOcean = isOceanChunk oceanMap (ChunkCoord ccx ccy)
+                    in Just $ ZoomChunkEntry
+                        { zceChunkX   = ccx
+                        , zceChunkY   = ccy
+                        , zceBaseGX   = baseGX
+                        , zceBaseGY   = baseGY
+                        , zceTexIndex = if isOcean then 0 else winnerMat
+                        , zceElev     = if isOcean then seaLevel else avgElev
+                        , zceIsOcean  = isOcean
+                        }
+
+        -- Primary entries: all chunks in the world
+        primaryEntries =
+            [ entry
             | ccx ← [-halfSize .. halfSize - 1]
             , ccy ← [-halfSize .. halfSize - 1]
             , let baseGX = ccx * chunkSize
                   baseGY = ccy * chunkSize
-                  midGX  = baseGX + chunkSize `div` 2
-                  midGY  = baseGY + chunkSize `div` 2
-            , not (isBeyondGlacier worldSize midGX midGY)
-            , let samples = [ let gx = baseGX + ox
-                                  gy = baseGY + oy
-                                  gx' = wrapGlobalX worldSize gx
-                                  (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy
-                              in if baseMat ≡ matGlacier
-                                 then (baseElev, unMaterialId baseMat)
-                                 else if baseElev < -100 then (baseElev, 0)
-                                 else let (e, m) = applyTimeline timeline worldSize gx' gy
-                                                       (baseElev, baseMat)
-                                      in (e, unMaterialId m)
-                            | (ox, oy) ← sampleOffsets
-                            ]
-                  winnerMat = majorityMaterial samples
-                  avgElev = let s = sum (map fst samples)
-                            in s `div` length samples
+            , Just entry ← [mkEntry ccx ccy baseGX baseGY]
             ]
 
-    in V.fromList entries
+        -- Seam duplicates: chunks near the left edge duplicated
+        -- with baseGX shifted by +worldTiles (appear to the right),
+        -- and chunks near the right edge duplicated with baseGX
+        -- shifted by -worldTiles (appear to the left).
+        seamEntries =
+            [ entry
+            | ccx ← [-halfSize .. halfSize - 1]
+            , ccy ← [-halfSize .. halfSize - 1]
+            , let baseGX = ccx * chunkSize
+                  baseGY = ccy * chunkSize
+            -- Left-edge chunks: duplicate them shifted right
+            , (shiftedGX, keep) ←
+                [ (baseGX + worldTiles, ccx < -halfSize + seamPad)
+                , (baseGX - worldTiles, ccx >= halfSize - seamPad)
+                ]
+            , keep
+            , Just entry ← [mkEntry ccx ccy shiftedGX baseGY]
+            ]
+
+    in V.fromList (primaryEntries <> seamEntries)
 
 -- | Pick the material that appears most often in the samples.
 --   On ties, prefers the material with higher material ID
