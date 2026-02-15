@@ -8,6 +8,7 @@ import UPrelude
 import qualified Control.Monad.Logger.CallStack as Logger
 import Data.IORef (newIORef)
 import qualified Data.Map as Map
+import qualified Data.Vector as V
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
@@ -89,6 +90,12 @@ initializeEngine = do
   sunAngleRef ← newIORef 0.25
   -- preview
   worldPreviewRef ← newIORef Nothing
+  -- world quads
+  worldQuadsRef ← newIORef V.empty
+  -- texture system
+  textureSystemRef ← newIORef Nothing
+  -- default face map slot
+  defaultFaceMapSlotRef ← newIORef 0
 
   -- Build environment
   let env = EngineEnv
@@ -121,6 +128,9 @@ initializeEngine = do
         , focusManagerRef    = focusMgrRef
         , sunAngleRef        = sunAngleRef
         , worldPreviewRef    = worldPreviewRef
+        , worldQuadsRef      = worldQuadsRef
+        , textureSystemRef   = textureSystemRef
+        , defaultFaceMapSlotRef = defaultFaceMapSlotRef
         }
   
   envVar   ← atomically $ newVar env

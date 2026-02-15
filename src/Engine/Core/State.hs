@@ -65,6 +65,9 @@ data EngineEnv = EngineEnv
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))
+  , worldQuadsRef       ∷ IORef (V.Vector SortableQuad)
+  , textureSystemRef    ∷ IORef (Maybe BindlessTextureSystem)
+  , defaultFaceMapSlotRef  ∷ IORef Word32
   } deriving (Eq)
 
 -- | Engine state (mutable)

@@ -215,6 +215,8 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
           Nothing → s
       
       currentState ← gets graphicsState
+      env ← ask
+      liftIO $ writeIORef (textureSystemRef env) (textureSystem currentState)
       case textureSystem currentState of
         Just bs →
           case Map.lookup texHandle (btsHandleMap bs) of
@@ -278,6 +280,7 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
           modify $ \s → s { graphicsState = (graphicsState s) {
             textureSystem = Just newBindless
             } }
+          liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
           case mbHandle of
             Just bHandle → do
               let slot = tsIndex $ bthSlot bHandle

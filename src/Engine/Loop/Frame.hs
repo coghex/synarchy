@@ -105,7 +105,8 @@ drawFrame = do
             liftIO $ resetFences device (V.singleton (frInFlight resources))
 
             -- 1. Collect world tile quads
-            worldTileQuads ← updateWorldTiles
+            env ← ask
+            worldTileQuads ← liftIO $ readIORef (worldQuadsRef env)
             
             -- 2. Update scene (populates BatchManager with DrawableObjects)
             updateSceneForRender

@@ -180,6 +180,8 @@ initializeVulkan window = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                         textureSystem = Just texSystemWithFaceMap
                       , defaultFaceMapSlot = dfmSlot defaultFaceMap } }
+  liftIO $ writeIORef (textureSystemRef env) (Just texSystemWithFaceMap)
+  liftIO $ writeIORef (defaultFaceMapSlotRef env) (dfmSlot defaultFaceMap)
   
   -- Create default scene
   let defaultSceneId = "default"
