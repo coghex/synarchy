@@ -106,7 +106,7 @@ buildZoomCache params =
                   samples = [ let gx = wrappedBaseGX + ox
                                   gy = wrappedBaseGY + oy
                                   (gx', gy') = wrapGlobalU worldSize gx gy
-                                  (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy'
+                                  (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
                               in if baseMat ≡ matGlacier
                                  then (baseElev, unMaterialId baseMat)
                                  else if baseElev < -100 then (baseElev, 0)
