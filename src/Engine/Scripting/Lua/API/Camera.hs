@@ -212,8 +212,8 @@ invalidateWorldCaches env = do
         writeIORef (wsQuadCacheRef ws)     Nothing
         writeIORef (wsZoomQuadCacheRef ws) Nothing
         writeIORef (wsBgQuadCacheRef ws)   Nothing
-        writeIORef (wsBakedZoomRef ws)     V.empty
-        writeIORef (wsBakedBgRef ws)       V.empty
+        writeIORef (wsBakedZoomRef ws)     (V.empty, defaultWorldTextures)
+        writeIORef (wsBakedBgRef ws)       (V.empty, defaultWorldTextures)
         mParams ← readIORef (wsGenParamsRef ws)
         case mParams of
             Just params → writeIORef (wsZoomCacheRef ws) (buildZoomCache facing params)

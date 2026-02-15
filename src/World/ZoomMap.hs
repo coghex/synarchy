@@ -22,7 +22,7 @@ import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
-                   , isBeyondGlacier)
+                   , isBeyondGlacier, wrapGlobalX)
 import World.Fluids (seaLevel, isOceanChunk)
 import World.Generate (applyTimeline)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
@@ -71,6 +71,8 @@ buildZoomCache facing params =
                 , zceChunkY   = ccy
                 , zceDrawX    = drawX
                 , zceDrawY    = drawY
+                , zceWidth    = maximum cxs - minimum cxs
+                , zceHeight   = maximum cys - minimum cys
                 , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
                                 then 0 else winnerMat
                 , zceElev     = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
@@ -87,11 +89,12 @@ buildZoomCache facing params =
             , let -- Sample multiple points in this chunk
                   samples = [ let gx = baseGX + ox
                                   gy = baseGY + oy
-                                  (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
+                                  gx' = wrapGlobalX worldSize gx
+                                  (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy
                               in if baseMat ≡ matGlacier
                                  then (baseElev, unMaterialId baseMat)
                                  else if baseElev < -100 then (baseElev, 0)
-                                 else let (e, m) = applyTimeline timeline worldSize gx gy
+                                 else let (e, m) = applyTimeline timeline worldSize gx' gy
                                                        (baseElev, baseMat)
                                       in (e, unMaterialId m)
                             | (ox, oy) ← sampleOffsets
@@ -104,10 +107,17 @@ buildZoomCache facing params =
                   avgElev = let s = sum (map fst samples)
                             in s `div` length samples
 
-                  -- Draw position from chunk center
-                  (wcx, wcy) = gridToWorld facing midGX midGY
-                  drawX = wcx - chunkWorldWidth / 2.0
-                  drawY = wcy
+                  -- Compute draw position from chunk's grid-space corners.
+                  -- Convert all 4 corners through gridToWorld, then take
+                  -- the axis-aligned bounding box. This works for any facing.
+                  corners = [ gridToWorld facing gx gy
+                            | gx ← [baseGX, baseGX + chunkSize]
+                            , gy ← [baseGY, baseGY + chunkSize]
+                            ]
+                  cxs = map fst corners
+                  cys = map snd corners
+                  drawX = minimum cxs
+                  drawY = minimum cys
             ]
 
     in V.fromList entries
@@ -136,11 +146,6 @@ majorityMaterial samples =
 --   the first time we try to render and the baked cache is empty.
 --   All expensive work (texture picker, slot lookup, vertex construction)
 --   happens here and is never repeated.
-bakeEntries ∷ V.Vector ZoomChunkEntry
-            → (Word8 → Int → TextureHandle)
-            → (TextureHandle → Int)
-            → Float
-            → V.Vector BakedZoomEntry
 bakeEntries cache texPicker lookupSlot defFmSlot =
     V.map bakeOne cache
   where
@@ -149,14 +154,16 @@ bakeEntries cache texPicker lookupSlot defFmSlot =
             actualSlot = fromIntegral (lookupSlot texHandle)
             drawX = zceDrawX entry
             drawY = zceDrawY entry
-            w = chunkWorldWidth
-            h = chunkWorldDiamondHeight
+            w = zceWidth entry
+            h = zceHeight entry
             white = Vec4 1.0 1.0 1.0 1.0
         in BakedZoomEntry
             { bzeChunkX  = zceChunkX entry
             , bzeChunkY  = zceChunkY entry
             , bzeDrawX   = drawX
             , bzeDrawY   = drawY
+            , bzeWidth   = w
+            , bzeHeight  = h
             , bzeSortKey = fromIntegral (zceChunkX entry + zceChunkY entry)
             , bzeV0      = Vertex (Vec2 drawX drawY)            (Vec2 0 0) white actualSlot defFmSlot
             , bzeV1      = Vertex (Vec2 (drawX + w) drawY)       (Vec2 1 0) white actualSlot defFmSlot
@@ -197,7 +204,7 @@ generateZoomMapQuads env = do
 renderFromBaked ∷ EngineEnv → WorldState → Camera2D
                → Int → Int → Float
                → (WorldTextures → Word8 → Int → TextureHandle)
-               → IORef (V.Vector BakedZoomEntry)
+               → IORef (V.Vector BakedZoomEntry, WorldTextures)
                → LayerId
                → IO (V.Vector SortableQuad)
 renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer = do
@@ -225,8 +232,10 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                 !visibleQuads = V.foldl' (\acc entry →
                     let baseX = bzeDrawX entry
                         baseY = bzeDrawY entry
+                        w = bzeWidth entry
+                        h = bzeHeight entry
                         tryOffset dx acc'
-                            | isChunkInView vb dx baseY =
+                            | isChunkInView vb dx baseY w h =
                                 emitQuad entry dx alpha layer : acc'
                             | otherwise = acc'
                     in tryOffset (baseX - wsw)
@@ -236,19 +245,21 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
 
             return $! V.fromList visibleQuads
 
-ensureBaked ∷ IORef (V.Vector BakedZoomEntry)
+ensureBaked ∷ IORef (V.Vector BakedZoomEntry, WorldTextures)
               → V.Vector ZoomChunkEntry → WorldTextures
               → (WorldTextures → Word8 → Int → TextureHandle)
               → (TextureHandle → Int) → Float
               → IO (V.Vector BakedZoomEntry)
 ensureBaked bakedRef rawCache textures texPicker lookupSlot defFmSlot = do
-    existing ← readIORef bakedRef
-    if V.null existing ∧ not (V.null rawCache)
+    (existing, bakedWith) ← readIORef bakedRef
+    let needsBake = (V.null existing ∧ not (V.null rawCache))
+                  ∨ (not (V.null rawCache) ∧ bakedWith ≢ textures)
+    if needsBake
         then do
             let baked = bakeEntries rawCache
                             (\mat elev → texPicker textures mat elev)
                             lookupSlot defFmSlot
-            writeIORef bakedRef baked
+            writeIORef bakedRef (baked, textures)
             return baked
         else return existing
 
@@ -280,7 +291,7 @@ generateBackgroundQuads env = do
 renderFromBakedBg ∷ EngineEnv → WorldState → Camera2D
                     → Int → Int → Float
                     → (WorldTextures → Word8 → Int → TextureHandle)
-                    → IORef (V.Vector BakedZoomEntry)
+                    → IORef (V.Vector BakedZoomEntry, WorldTextures)
                     → LayerId → Int
                     → IO (V.Vector SortableQuad)
 renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef layer zSlice = do
@@ -308,8 +319,10 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
                 !visibleQuads = V.foldl' (\acc entry →
                     let baseX = bzeDrawX entry
                         baseY = bzeDrawY entry
+                        w = bzeWidth entry
+                        h = bzeHeight entry
                         tryOffset dx acc'
-                            | isChunkInView vb dx baseY =
+                            | isChunkInView vb dx baseY w h =
                                 emitQuadBg entry dx alpha layer zSlice : acc'
                             | otherwise = acc'
                     in tryOffset (baseX - wsw)
@@ -381,10 +394,10 @@ computeZoomViewBounds camera fbW fbH =
         , zvBottom = cy + halfH + padY
         }
 
-isChunkInView ∷ ZoomViewBounds → Float → Float → Bool
-isChunkInView vb drawX drawY =
-    let right  = drawX + chunkWorldWidth
-        bottom = drawY + chunkWorldDiamondHeight
+isChunkInView ∷ ZoomViewBounds → Float → Float → Float → Float → Bool
+isChunkInView vb drawX drawY w h =
+    let right  = drawX + w
+        bottom = drawY + h
     in not (right  < zvLeft vb
          ∨ drawX  > zvRight vb
          ∨ bottom < zvTop vb
