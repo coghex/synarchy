@@ -196,18 +196,11 @@ generateZoomMapQuads env camera fbW fbH = do
             return $ V.concat quads
 
 -- | IO version of renderFromBaked
-renderFromBaked ∷ EngineEnv → WorldState → Camera2D
-               → Int → Int → Float
-               → (WorldTextures → Word8 → Int → TextureHandle)
-               → IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
-               → LayerId
-               → IO (V.Vector SortableQuad)
 renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer = do
     mParams  ← readIORef (wsGenParamsRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
     rawCache ← readIORef (wsZoomCacheRef worldState)
 
-    -- Shared IORefs instead of gets graphicsState
     mBindless ← readIORef (textureSystemRef env)
     defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
     let lookupSlot texHandle = fromIntegral $ case mBindless of
@@ -221,24 +214,35 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
             baked ← ensureBaked bakedRef rawCache textures facing
                         texturePicker lookupSlot defFmSlot
             let vb = computeZoomViewBounds camera fbW fbH
-                wsw = worldScreenWidth (wgpWorldSize params)
 
-                -- Hot fold: only visibility + emit. No texture lookups.
+                -- No wrapping — just render each chunk at its baked position.
+                -- Camera X is wrapped by the input handler, so it always
+                -- sees the correct part of the map.
                 !visibleQuads = V.foldl' (\acc entry →
                     let baseX = bzeDrawX entry
                         baseY = bzeDrawY entry
                         w = bzeWidth entry
                         h = bzeHeight entry
-                        tryOffset dx acc'
-                            | isChunkInView vb dx baseY w h =
-                                emitQuad entry dx alpha layer : acc'
-                            | otherwise = acc'
-                    in tryOffset (baseX - wsw)
-                     $ tryOffset  baseX
-                     $ tryOffset (baseX + wsw) acc
+                    in if isChunkInView vb baseX baseY w h
+                       then emitQuad entry baseX alpha layer : acc
+                       else acc
                     ) [] baked
 
             return $! V.fromList visibleQuads
+
+-- | Pick the wrap offset that puts the chunk closest to the camera.
+--   Same logic as bestWrapOffset in Render.hs.
+bestZoomWrapOffset ∷ Float → Float → Float → Float
+bestZoomWrapOffset wsw camX chunkCenterX =
+    let candidates = [0, wsw, -wsw]
+        dist offset = abs (chunkCenterX + offset - camX)
+    in pickMin candidates
+  where
+    pickMin [c] = c
+    pickMin (c:cs) = let best = pickMin cs
+                     in if abs (chunkCenterX + c - camX) ≤ abs (chunkCenterX + best - camX)
+                        then c else best
+    pickMin []  = 0
 
 ensureBaked ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
               → V.Vector ZoomChunkEntry → WorldTextures
@@ -284,18 +288,11 @@ generateBackgroundQuads env camera fbW fbH = do
 -- Background Render From Baked (IO version for world thread)
 -----------------------------------------------------------
 
-renderFromBakedBg ∷ EngineEnv → WorldState → Camera2D
-                    → Int → Int → Float
-                    → (WorldTextures → Word8 → Int → TextureHandle)
-                    → IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
-                    → LayerId → Int
-                    → IO (V.Vector SortableQuad)
 renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef layer zSlice = do
     mParams  ← readIORef (wsGenParamsRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
     rawCache ← readIORef (wsZoomCacheRef worldState)
 
-    -- Read from shared IORefs instead of gets graphicsState
     mBindless ← readIORef (textureSystemRef env)
     defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
     let lookupSlot texHandle = fromIntegral $ case mBindless of
@@ -310,20 +307,15 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
                         texturePicker lookupSlot defFmSlot
 
             let vb = computeZoomViewBounds camera fbW fbH
-                wsw = worldScreenWidth (wgpWorldSize params)
 
                 !visibleQuads = V.foldl' (\acc entry →
                     let baseX = bzeDrawX entry
                         baseY = bzeDrawY entry
                         w = bzeWidth entry
                         h = bzeHeight entry
-                        tryOffset dx acc'
-                            | isChunkInView vb dx baseY w h =
-                                emitQuadBg entry dx alpha layer zSlice : acc'
-                            | otherwise = acc'
-                    in tryOffset (baseX - wsw)
-                     $ tryOffset  baseX
-                     $ tryOffset (baseX + wsw) acc
+                    in if isChunkInView vb baseX baseY w h
+                       then emitQuadBg entry baseX alpha layer zSlice : acc
+                       else acc
                     ) [] baked
 
             return $! V.fromList visibleQuads
@@ -341,9 +333,9 @@ emitQuadBg entry dx alpha layer zSlice =
             if bzeIsOcean entry ∧ zSlice < seaLevel
             then let waterDepth = seaLevel - zSlice
                      t = clamp01 (fromIntegral waterDepth / 30.0)
-                     r = 0.6 - t * 0.4       -- 0.6 → 0.2
-                     g = 0.7 - t * 0.4        -- 0.7 → 0.3
-                     b = 0.9 - t * 0.3        -- 0.9 → 0.6
+                     r = 0.6 - t * 0.4
+                     g = 0.7 - t * 0.4
+                     b = 0.9 - t * 0.3
                  in (r, g, b)
             else (1.0, 1.0, 1.0)
 
