@@ -71,12 +71,15 @@ nodeToDrawable graph bts fmSlot node = do
                     Just bts' → fromIntegral $ getTextureSlotIndex textureHandle bts'
                     Nothing   → 0
     
-    let vertices = generateQuadVertices node worldTrans atlasId fmSlot
+    let (v0,v1,v2,v3) = generateQuadVertices node worldTrans atlasId fmSlot
         
     return DrawableObject
         { doId = nodeId node
         , doTexture = textureHandle
-        , doVertices = vertices
+        , doV0 = v0
+        , doV1 = v1
+        , doV2 = v2
+        , doV3 = v3
         , doZIndex = wtZIndex worldTrans
         , doLayer = nodeLayer node
         }

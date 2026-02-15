@@ -11,7 +11,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
 -- | Generate quad vertices for a scene node
 -- faceMapSlot = the bindless slot for this sprite's face map
 -- (use defaultFaceMapSlot for sprites without a custom face map)
-generateQuadVertices ∷ SceneNode → WorldTransform → Float → Float → V.Vector Vertex
+generateQuadVertices ∷ SceneNode → WorldTransform → Float → Float → (Vertex, Vertex, Vertex, Vertex)
 generateQuadVertices node worldTrans atlasId faceMapSlot =
     let (sizeX, sizeY) = nodeSize node
         (posX, posY) = wtPosition worldTrans
@@ -29,4 +29,4 @@ generateQuadVertices node worldTrans atlasId faceMapSlot =
         v3 = Vertex (Vec2 (posX + halfX) (posY + halfY)) (Vec2 (x uvMax) (y uvMax)) color atlasId faceMapSlot
         v4 = Vertex (Vec2 (posX - halfX) (posY + halfY)) (Vec2 (x uvMin) (y uvMax)) color atlasId faceMapSlot
         
-    in V.fromList [v1, v2, v3, v1, v3, v4]
+    in (v1, v2, v3, v4)

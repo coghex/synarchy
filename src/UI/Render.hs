@@ -234,6 +234,7 @@ renderElementData mgr bindless fontCache layerId elem absX absY =
                     , rbVertices = vertices
                     , rbObjects  = V.empty
                     , rbDirty    = True
+                    , rbAvgZ     = 0.0
                     }
             pure (V.singleton batch, V.singleton (SpriteItem batch))
 
@@ -284,6 +285,7 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
                 , rbVertices = vertices
                 , rbObjects  = V.empty
                 , rbDirty    = True
+                , rbAvgZ     = 0.0
                 }
         
     in V.fromList

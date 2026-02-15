@@ -260,10 +260,12 @@ emitQuadBg entry dx alpha layer zSlice =
         v1 = shiftV (bzeV1 entry)
         v2 = shiftV (bzeV2 entry)
         v3 = shiftV (bzeV3 entry)
-        vertices = V.fromListN 6 [v0, v1, v2, v0, v2, v3]
     in SortableQuad
         { sqSortKey  = bzeSortKey entry
-        , sqVertices = vertices
+        , sqV0       = v0
+        , sqV1       = v1
+        , sqV2       = v2
+        , sqV3       = v3
         , sqTexture  = bzeTexture entry
         , sqLayer    = layer
         }
@@ -364,10 +366,12 @@ emitQuad entry dx alpha layer =
         v1 = shiftV (bzeV1 entry)
         v2 = shiftV (bzeV2 entry)
         v3 = shiftV (bzeV3 entry)
-        vertices = V.fromListN 6 [v0, v1, v2, v0, v2, v3]
     in SortableQuad
         { sqSortKey  = bzeSortKey entry
-        , sqVertices = vertices
+        , sqV0       = v0
+        , sqV1       = v1
+        , sqV2       = v2
+        , sqV3       = v3
         , sqTexture  = bzeTexture entry
         , sqLayer    = layer
         }

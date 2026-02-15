@@ -33,16 +33,22 @@ import qualified Vulkan.Core10 as Vk
 -- in order to get correct back-to-front rendering.
 data SortableQuad = SortableQuad
     { sqSortKey  ∷ !Float       -- ^ Painter's algorithm depth (higher = drawn later = in front)
-    , sqVertices ∷ V.Vector Vertex
-    , sqTexture  ∷ TextureHandle  -- ^ Needed for potential future per-texture batching
-    , sqLayer    ∷ LayerId
+    , sqV0       ∷ !Vertex      -- ^ top left
+    , sqV1       ∷ !Vertex      -- ^ top right
+    , sqV2       ∷ !Vertex      -- ^ bottom right
+    , sqV3       ∷ !Vertex      -- ^ bottom left
+    , sqTexture  ∷ !TextureHandle  -- ^ Needed for potential future per-texture batching
+    , sqLayer    ∷ !LayerId
     } deriving (Show)
 
 -- | Drawable object ready for rendering
 data DrawableObject = DrawableObject
     { doId         ∷ ObjectId
     , doTexture    ∷ TextureHandle
-    , doVertices   ∷ V.Vector Vertex
+    , doV0         ∷ Vertex
+    , doV1         ∷ Vertex
+    , doV2         ∷ Vertex
+    , doV3         ∷ Vertex
     , doZIndex     ∷ Float
     , doLayer      ∷ LayerId
     } deriving (Show)
@@ -52,7 +58,10 @@ data DrawableObject = DrawableObject
 drawableToQuad ∷ DrawableObject → SortableQuad
 drawableToQuad dobj = SortableQuad
     { sqSortKey  = doZIndex dobj
-    , sqVertices = doVertices dobj
+    , sqV0       = doV0 dobj
+    , sqV1       = doV1 dobj
+    , sqV2       = doV2 dobj
+    , sqV3       = doV3 dobj
     , sqTexture  = doTexture dobj
     , sqLayer    = doLayer dobj
     }
@@ -68,14 +77,25 @@ mergeQuadsToBatch ∷ LayerId → [SortableQuad] → RenderBatch
 mergeQuadsToBatch layer quads =
     let !sortedList = List.sortOn sqSortKey quads
         !totalVerts = length sortedList * 6
+        -- Since it's already sorted, average of first and last is a
+        -- cheap representative value. Or just use 0 — world tiles
+        -- are sorted per-layer anyway, not across layers.
+        !avgZ = case sortedList of
+            []    → 0.0
+            [q]   → sqSortKey q
+            (q:_) → let last' = sqSortKey (List.last sortedList)
+                     in (sqSortKey q + last') / 2.0
         !allVerts = V.create $ do
             mv ← VM.new totalVerts
             let go _ [] = return ()
                 go i (q:qs) = do
-                    let vs = sqVertices q
-                    V.forM_ (V.indexed vs) $ \(j, v) →
-                        VM.write mv (i + j) v
-                    go (i + V.length vs) qs
+                    VM.write mv  i      (sqV0 q)
+                    VM.write mv (i+1)   (sqV1 q)
+                    VM.write mv (i+2)   (sqV2 q)
+                    VM.write mv (i+3)   (sqV0 q)
+                    VM.write mv (i+4)   (sqV2 q)
+                    VM.write mv (i+5)   (sqV3 q)
+                    go (i + 6) qs
             go 0 sortedList
             return mv
         tex = case sortedList of
@@ -87,6 +107,7 @@ mergeQuadsToBatch layer quads =
         , rbVertices = allVerts
         , rbObjects  = V.empty
         , rbDirty    = True
+        , rbAvgZ     = avgZ
         }
 
 -- | Render batch grouped by texture and layer
@@ -96,6 +117,7 @@ data RenderBatch = RenderBatch
     , rbVertices   ∷ V.Vector Vertex
     , rbObjects    ∷ V.Vector ObjectId
     , rbDirty      ∷ Bool
+    , rbAvgZ       ∷ Float
     } deriving (Show)
 
 -- | Text render batch grouped by font and layer

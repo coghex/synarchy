@@ -10,6 +10,7 @@ module Engine.Scene.Batch.Update
 
 import UPrelude
 import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as VM
 import qualified Data.Map as Map
 import qualified Data.List as List
 import qualified Data.Set as Set
@@ -51,30 +52,37 @@ groupByTextureAndLayer objects =
 -- | Create a render batch from grouped objects
 createBatch ∷ ((TextureHandle, LayerId), V.Vector DrawableObject) → ((TextureHandle, LayerId), RenderBatch)
 createBatch ((textureId, layerId), objects) =
-    let allVertices = V.concatMap doVertices objects
+    let !numObjs = V.length objects
+        !totalVerts = numObjs * 6
         objectIds = V.map doId objects
+        -- Compute average z-index while we have the objects
+        !avgZ = V.sum (V.map doZIndex objects) / fromIntegral numObjs
+        allVertices = V.create $ do
+            mv ← VM.new totalVerts
+            V.iforM_ objects $ \idx obj → do
+                let !i = idx * 6
+                VM.write mv  i      (doV0 obj)
+                VM.write mv (i+1)   (doV1 obj)
+                VM.write mv (i+2)   (doV2 obj)
+                VM.write mv (i+3)   (doV0 obj)
+                VM.write mv (i+4)   (doV2 obj)
+                VM.write mv (i+5)   (doV3 obj)
+            return mv
         batch = RenderBatch
-            { rbTexture = textureId
-            , rbLayer = layerId
+            { rbTexture  = textureId
+            , rbLayer    = layerId
             , rbVertices = allVertices
-            , rbObjects = objectIds
-            , rbDirty = True
+            , rbObjects  = objectIds
+            , rbDirty    = True
+            , rbAvgZ     = avgZ
             }
     in ((textureId, layerId), batch)
 
--- | Get render batches sorted by layer and z-index
 getSortedBatches ∷ BatchManager → V.Vector RenderBatch
 getSortedBatches manager =
     let batches = Map.elems (bmBatches manager)
-        sorted = List.sortOn (\batch → (rbLayer batch, averageZIndex batch)) batches
+        sorted = List.sortOn (\batch → (rbLayer batch, rbAvgZ batch)) batches
     in V.fromList sorted
-  where
-    averageZIndex batch =
-        let objects = V.mapMaybe (\objId → 
-                V.find (\obj → doId obj ≡ objId) (bmVisibleObjs manager)) 
-                (rbObjects batch)
-            zIndices = V.map doZIndex objects
-        in if V.null zIndices then 0.0 else V.sum zIndices / fromIntegral (V.length zIndices)
 
 -- | Build layered batches from sprite and text batches.
 --   Accumulates into lists (O(1) cons) then converts to vectors once,
