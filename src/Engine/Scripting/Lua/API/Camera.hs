@@ -206,17 +206,16 @@ cameraGetFacingFn env = do
 invalidateWorldCaches ∷ EngineEnv → IO ()
 invalidateWorldCaches env = do
     camera <- readIORef (cameraRef env)
-    let facing = camFacing camera
     manager ← readIORef (worldManagerRef env)
     forM_ (wmWorlds manager) $ \(_, ws) → do
         writeIORef (wsQuadCacheRef ws)     Nothing
         writeIORef (wsZoomQuadCacheRef ws) Nothing
         writeIORef (wsBgQuadCacheRef ws)   Nothing
-        writeIORef (wsBakedZoomRef ws)     (V.empty, defaultWorldTextures)
-        writeIORef (wsBakedBgRef ws)       (V.empty, defaultWorldTextures)
+        writeIORef (wsBakedZoomRef ws)     (V.empty, defaultWorldTextures, FaceSouth)
+        writeIORef (wsBakedBgRef ws)       (V.empty, defaultWorldTextures, FaceSouth)
         mParams ← readIORef (wsGenParamsRef ws)
         case mParams of
-            Just params → writeIORef (wsZoomCacheRef ws) (buildZoomCache facing params)
+            Just params → writeIORef (wsZoomCacheRef ws) (buildZoomCache params)
             Nothing → return ()
 
 -- | camera.getZTracking() -> bool

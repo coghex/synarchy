@@ -57,8 +57,8 @@ sampleOffsets =
 -- Build Zoom Cache (called once at world init)
 -----------------------------------------------------------
 
-buildZoomCache ∷ CameraFacing → WorldGenParams → V.Vector ZoomChunkEntry
-buildZoomCache facing params =
+buildZoomCache ∷ WorldGenParams → V.Vector ZoomChunkEntry
+buildZoomCache params =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
         plates = generatePlates seed worldSize (wgpPlateCount params)
@@ -70,10 +70,8 @@ buildZoomCache facing params =
             [ ZoomChunkEntry
                 { zceChunkX   = ccx
                 , zceChunkY   = ccy
-                , zceDrawX    = drawX
-                , zceDrawY    = drawY
-                , zceWidth    = maximum cxs - minimum cxs
-                , zceHeight   = maximum cys - minimum cys
+                , zceBaseGX   = baseGX
+                , zceBaseGY   = baseGY
                 , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
                                 then 0 else winnerMat
                 , zceElev     = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
@@ -87,8 +85,7 @@ buildZoomCache facing params =
                   midGX  = baseGX + chunkSize `div` 2
                   midGY  = baseGY + chunkSize `div` 2
             , not (isBeyondGlacier worldSize midGX midGY)
-            , let -- Sample multiple points in this chunk
-                  samples = [ let gx = baseGX + ox
+            , let samples = [ let gx = baseGX + ox
                                   gy = baseGY + oy
                                   gx' = wrapGlobalX worldSize gx
                                   (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy
@@ -100,25 +97,9 @@ buildZoomCache facing params =
                                       in (e, unMaterialId m)
                             | (ox, oy) ← sampleOffsets
                             ]
-
-                  -- Majority vote on material
                   winnerMat = majorityMaterial samples
-
-                  -- Average elevation for texture selection (ocean check)
                   avgElev = let s = sum (map fst samples)
                             in s `div` length samples
-
-                  -- Compute draw position from chunk's grid-space corners.
-                  -- Convert all 4 corners through gridToWorld, then take
-                  -- the axis-aligned bounding box. This works for any facing.
-                  corners = [ gridToWorld facing gx gy
-                            | gx ← [baseGX, baseGX + chunkSize]
-                            , gy ← [baseGY, baseGY + chunkSize]
-                            ]
-                  cxs = map fst corners
-                  cys = map snd corners
-                  drawX = minimum cxs
-                  drawY = minimum cys
             ]
 
     in V.fromList entries
@@ -147,16 +128,30 @@ majorityMaterial samples =
 --   the first time we try to render and the baked cache is empty.
 --   All expensive work (texture picker, slot lookup, vertex construction)
 --   happens here and is never repeated.
-bakeEntries cache texPicker lookupSlot defFmSlot =
+bakeEntries ∷ CameraFacing → V.Vector ZoomChunkEntry
+            → (Word8 → Int → TextureHandle)
+            → (TextureHandle → Int)
+            → Float
+            → V.Vector BakedZoomEntry
+bakeEntries facing cache texPicker lookupSlot defFmSlot =
     V.map bakeOne cache
   where
     bakeOne entry =
         let texHandle = texPicker (zceTexIndex entry) (zceElev entry)
             actualSlot = fromIntegral (lookupSlot texHandle)
-            drawX = zceDrawX entry
-            drawY = zceDrawY entry
-            w = zceWidth entry
-            h = zceHeight entry
+            baseGX = zceBaseGX entry
+            baseGY = zceBaseGY entry
+            -- Compute bounding box from grid corners using CURRENT facing
+            corners = [ gridToWorld facing gx gy
+                      | gx ← [baseGX, baseGX + chunkSize]
+                      , gy ← [baseGY, baseGY + chunkSize]
+                      ]
+            cxs = map fst corners
+            cys = map snd corners
+            drawX = minimum cxs
+            drawY = minimum cys
+            w = maximum cxs - minimum cxs
+            h = maximum cys - minimum cys
             white = Vec4 1.0 1.0 1.0 1.0
         in BakedZoomEntry
             { bzeChunkX  = zceChunkX entry
@@ -165,7 +160,8 @@ bakeEntries cache texPicker lookupSlot defFmSlot =
             , bzeDrawY   = drawY
             , bzeWidth   = w
             , bzeHeight  = h
-            , bzeSortKey = fromIntegral (zceChunkY entry) + fromIntegral (zceChunkX entry) * 0.0001
+            , bzeSortKey = fromIntegral (zceChunkY entry)
+                         + fromIntegral (zceChunkX entry) * 0.0001
             , bzeV0      = Vertex (Vec2 drawX drawY)            (Vec2 0 0) white actualSlot defFmSlot
             , bzeV1      = Vertex (Vec2 (drawX + w) drawY)       (Vec2 1 0) white actualSlot defFmSlot
             , bzeV2      = Vertex (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) white actualSlot defFmSlot
@@ -180,10 +176,8 @@ bakeEntries cache texPicker lookupSlot defFmSlot =
 -----------------------------------------------------------
 
 -- | IO version — called from world thread
-generateZoomMapQuads ∷ EngineEnv → IO (V.Vector SortableQuad)
-generateZoomMapQuads env = do
-    camera ← readIORef (cameraRef env)
-    (fbW, fbH) ← readIORef (framebufferSizeRef env)
+generateZoomMapQuads ∷ EngineEnv → Camera2D → Int → Int → IO (V.Vector SortableQuad)
+generateZoomMapQuads env camera fbW fbH = do
     worldManager ← readIORef (worldManagerRef env)
 
     let zoom = camZoom camera
@@ -205,7 +199,7 @@ generateZoomMapQuads env = do
 renderFromBaked ∷ EngineEnv → WorldState → Camera2D
                → Int → Int → Float
                → (WorldTextures → Word8 → Int → TextureHandle)
-               → IORef (V.Vector BakedZoomEntry, WorldTextures)
+               → IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
                → LayerId
                → IO (V.Vector SortableQuad)
 renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer = do
@@ -220,11 +214,11 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
             Just bindless → getTextureSlotIndex texHandle bindless
             Nothing       → 0
         defFmSlot = fromIntegral defFmSlotWord
-
+        facing = camFacing camera
     case mParams of
         Nothing → return V.empty
         Just params → do
-            baked ← ensureBaked bakedRef rawCache textures
+            baked ← ensureBaked bakedRef rawCache textures facing
                         texturePicker lookupSlot defFmSlot
             let vb = computeZoomViewBounds camera fbW fbH
                 wsw = worldScreenWidth (wgpWorldSize params)
@@ -246,21 +240,24 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
 
             return $! V.fromList visibleQuads
 
-
-ensureBaked bakedRef rawCache textures texPicker lookupSlot defFmSlot = do
-    (existing, bakedWith) ← readIORef bakedRef
+ensureBaked ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
+              → V.Vector ZoomChunkEntry → WorldTextures
+              → CameraFacing
+              → (WorldTextures → Word8 → Int → TextureHandle)
+              → (TextureHandle → Int) → Float
+              → IO (V.Vector BakedZoomEntry)
+ensureBaked bakedRef rawCache textures facing texPicker lookupSlot defFmSlot = do
+    (existing, bakedWith, bakedFacing) ← readIORef bakedRef
     let texturesChanged = bakedWith ≢ textures
+        facingChanged   = bakedFacing ≢ facing
         needsBake = not (V.null rawCache)
-                  ∧ (V.null existing ∨ texturesChanged)
-    when needsBake $
-        trace ("REBAKE: empty=" ++ show (V.null existing)
-              ++ " texChanged=" ++ show texturesChanged) (return ())
+                  ∧ (V.null existing ∨ texturesChanged ∨ facingChanged)
     if needsBake
         then do
-            let baked = bakeEntries rawCache
+            let baked = bakeEntries facing rawCache
                             (\mat elev → texPicker textures mat elev)
                             lookupSlot defFmSlot
-            writeIORef bakedRef (baked, textures)
+            writeIORef bakedRef (baked, textures, facing)
             return baked
         else return existing
 
@@ -268,10 +265,8 @@ ensureBaked bakedRef rawCache textures texPicker lookupSlot defFmSlot = do
 -- Generate Background Quads (IO version for world thread)
 -----------------------------------------------------------
 
-generateBackgroundQuads ∷ EngineEnv → IO (V.Vector SortableQuad)
-generateBackgroundQuads env = do
-    camera ← readIORef (cameraRef env)
-    (fbW, fbH) ← readIORef (framebufferSizeRef env)
+generateBackgroundQuads ∷ EngineEnv → Camera2D → Int → Int → IO (V.Vector SortableQuad)
+generateBackgroundQuads env camera fbW fbH = do
     worldManager ← readIORef (worldManagerRef env)
 
     let zSlice = camZSlice camera
@@ -292,7 +287,7 @@ generateBackgroundQuads env = do
 renderFromBakedBg ∷ EngineEnv → WorldState → Camera2D
                     → Int → Int → Float
                     → (WorldTextures → Word8 → Int → TextureHandle)
-                    → IORef (V.Vector BakedZoomEntry, WorldTextures)
+                    → IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
                     → LayerId → Int
                     → IO (V.Vector SortableQuad)
 renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef layer zSlice = do
@@ -307,11 +302,11 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
             Just bindless → getTextureSlotIndex texHandle bindless
             Nothing       → 0
         defFmSlot = fromIntegral defFmSlotWord
-
+        facing = camFacing camera
     case mParams of
         Nothing → return V.empty
         Just params → do
-            baked ← ensureBaked bakedRef rawCache textures
+            baked ← ensureBaked bakedRef rawCache textures facing
                         texturePicker lookupSlot defFmSlot
 
             let vb = computeZoomViewBounds camera fbW fbH

@@ -719,8 +719,8 @@ data WorldState = WorldState
     , wsQuadCacheRef  ∷ IORef (Maybe WorldQuadCache)  -- ^ Cached quads for current camera state
     , wsZoomQuadCacheRef ∷ IORef (Maybe ZoomQuadCache)  -- ^ Cached quads for zoomed-out view
     , wsBgQuadCacheRef ∷ IORef (Maybe ZoomQuadCache)    -- ^ Cached quads for background layer
-    , wsBakedZoomRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures)  -- ^ Pre-baked
-    , wsBakedBgRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures)    -- ^ Pre-baked background entries with resolved textures and vertices
+    , wsBakedZoomRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)  -- ^ Pre-baked
+    , wsBakedBgRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)    -- ^ Pre-baked background entries with resolved textures and vertices
     }
 
 emptyWorldState ∷ IO WorldState
@@ -736,8 +736,8 @@ emptyWorldState = do
     quadCacheRef  ← newIORef Nothing
     zoomQCRef   ← newIORef Nothing
     bgQCRef     ← newIORef Nothing
-    bakedZoomRef ← newIORef (V.empty, defaultWorldTextures)
-    bakedBgRef   ← newIORef (V.empty, defaultWorldTextures)
+    bakedZoomRef ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
+    bakedBgRef   ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
@@ -767,10 +767,8 @@ emptyWorldManager = WorldManager
 data ZoomChunkEntry = ZoomChunkEntry
     { zceChunkX   ∷ !Int       -- ^ Canonical chunk X
     , zceChunkY   ∷ !Int       -- ^ Canonical chunk Y
-    , zceDrawX    ∷ !Float     -- ^ Screen-space draw X
-    , zceDrawY    ∷ !Float     -- ^ Screen-space draw Y
-    , zceWidth    ∷ !Float     -- ^ Quad width (for wrap-around rendering)
-    , zceHeight   ∷ !Float     -- ^ Quad height
+    , zceBaseGX   ∷ !Int
+    , zceBaseGY   ∷ !Int
     , zceTexIndex ∷ !Word8     -- ^ Material ID (used to pick texture at render time)
     , zceElev     ∷ !Int       -- ^ Elevation (used to pick texture at render time)
     , zceIsOcean  ∷ !Bool      -- ^ Whether this chunk is ocean

@@ -101,8 +101,8 @@ updateWorldTiles env = do
                     Nothing → return V.empty
             return $ V.concat quads
 
-    zoomQuads ← generateZoomMapQuads env
-    bgQuads ← generateBackgroundQuads env
+    zoomQuads ← generateZoomMapQuads env camera fbW fbH
+    bgQuads ← generateBackgroundQuads env camera fbW fbH
 
     -- Auto-adjust zSlice (same logic as before)
     let shouldTrack = camZTracking camera

@@ -269,7 +269,7 @@ handleWorldCommand env logger cmd = do
             let facing = camFacing camera
 
             sendGenLog env "Building zoom cache..."
-            let zoomCache = buildZoomCache facing params
+            let zoomCache = buildZoomCache params
             writeIORef (wsZoomCacheRef worldState) zoomCache
 
             -- Build world preview image for the create-world UI
