@@ -155,7 +155,7 @@ zoomFadeEnd = 1.6
 worldScreenWidth ∷ Int → Float
 worldScreenWidth worldSizeChunks =
     let worldTiles = worldSizeChunks * chunkSize
-    in fromIntegral worldTiles * tileHalfWidth
+    in fromIntegral worldTiles * tileHalfWidth * 2.0
 
 -----------------------------------------------------------
 -- Facing Transforms
