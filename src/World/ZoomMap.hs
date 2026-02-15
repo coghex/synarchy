@@ -245,15 +245,17 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
 
             return $! V.fromList visibleQuads
 
-ensureBaked ∷ IORef (V.Vector BakedZoomEntry, WorldTextures)
-              → V.Vector ZoomChunkEntry → WorldTextures
-              → (WorldTextures → Word8 → Int → TextureHandle)
-              → (TextureHandle → Int) → Float
-              → IO (V.Vector BakedZoomEntry)
 ensureBaked bakedRef rawCache textures texPicker lookupSlot defFmSlot = do
     (existing, bakedWith) ← readIORef bakedRef
-    let needsBake = (V.null existing ∧ not (V.null rawCache))
-                  ∨ (not (V.null rawCache) ∧ bakedWith ≢ textures)
+    let texturesChanged = bakedWith ≢ textures
+        slotsStale = case V.null existing of
+            True  → False
+            False → let entry = V.head existing
+                        currentSlot = fromIntegral (lookupSlot (bzeTexture entry))
+                        Vertex _ _ _ bakedSlot _ = bzeV0 entry
+                    in currentSlot ≢ bakedSlot
+        needsBake = not (V.null rawCache)
+                  ∧ (V.null existing ∨ texturesChanged ∨ slotsStale)
     if needsBake
         then do
             let baked = bakeEntries rawCache

@@ -91,8 +91,9 @@ worldLoop env stateRef lastTimeRef = do
             -- Check chunk loading for all visible worlds
             updateChunkLoading env logger
             
+            camera ← readIORef (cameraRef env)
             allQuads ← updateWorldTiles env
-            writeIORef (worldQuadsRef env) allQuads
+            writeIORef (worldQuadsRef env) (allQuads, camera)
             threadDelay 16666
             worldLoop env stateRef lastTimeRef
 

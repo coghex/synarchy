@@ -106,7 +106,7 @@ drawFrame = do
 
             -- 1. Collect world tile quads
             env ← ask
-            worldTileQuads ← liftIO $ readIORef (worldQuadsRef env)
+            (worldTileQuads, worldCamera) ← liftIO $ readIORef (worldQuadsRef env)
             
             -- 2. Update scene (populates BatchManager with DrawableObjects)
             updateSceneForRender
@@ -144,7 +144,7 @@ drawFrame = do
                     [worldLayeredBatches, uiLayeredBatches]
 
             -- Update uniform buffer
-            updateUniformBufferForFrame win frameIdx
+            updateUniformBufferForFrame win frameIdx worldCamera
             
             -- Prepare dynamic vertex buffer
             let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
@@ -197,8 +197,8 @@ drawFrame = do
                 currentFrame = nextFrame } }
             
 -- | Update uniform buffer for current frame
-updateUniformBufferForFrame ∷ GLFW.Window → Word32 → EngineM ε σ ()
-updateUniformBufferForFrame win frameIdx = do
+updateUniformBufferForFrame ∷ GLFW.Window → Word32 → Camera2D → EngineM ε σ ()
+updateUniformBufferForFrame win frameIdx camera = do
     state ← gets graphicsState
     case (vulkanDevice state, uniformBuffers state) of
         (Just device, Just buffers) → do
@@ -206,20 +206,13 @@ updateUniformBufferForFrame win frameIdx = do
             (fbWidth, fbHeight) ← GLFW.getFramebufferSize win
             (winWidth, winHeight) ← GLFW.getWindowSize win
 
-            -- Before writing
             env ← ask
-            old ← liftIO $ readIORef (framebufferSizeRef env)
-            
-            camera ← liftIO $ readIORef (cameraRef env)
             brightness ← liftIO $ readIORef (brightnessRef env)
             pixelSnap ← liftIO $ readIORef (pixelSnapRef env)
             sunAngle ← liftIO $ readIORef (sunAngleRef env)
             
             let ambientLight = computeAmbientLight sunAngle
-            
-            -- Update UI camera to use framebuffer dimensions
             let uiCamera = UICamera (fromIntegral fbWidth) (fromIntegral fbHeight)
-            -- camera rotation
             let facingFloat = case camFacing camera of
                     FaceSouth → 0.0
                     FaceWest → 1.0
