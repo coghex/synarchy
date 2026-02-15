@@ -101,7 +101,7 @@ floorMod a b = a - floorDiv a b * b
 --   The border is expanded to chunkBorder tiles so erosion at
 --   chunk edges has valid neighbor data.
 generateChunk ∷ WorldGenParams → ChunkCoord
-  → (Chunk, HM.HashMap (Int, Int) Int, HM.HashMap (Int, Int) FluidCell)
+  → (Chunk, HM.HashMap (Int, Int) Int, HM.HashMap (Int, Int) Int, HM.HashMap (Int, Int) FluidCell)
 generateChunk params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -199,7 +199,7 @@ generateChunk params coord =
                                                        z
                 , tile ← generateExposedColumn lx ly surfZ exposeFrom lookupMat
                 ]
-    in (HM.fromList tiles, surfaceMap, fluidMap)
+    in (HM.fromList tiles, surfaceMap, terrainSurfaceMap, fluidMap)
 
 -- | Generate only the exposed tiles for a column.
 --   Skips air tiles (MaterialId 0) to create caves and overhangs.

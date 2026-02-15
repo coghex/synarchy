@@ -191,11 +191,12 @@ updateChunkLoading env logger = do
 
                             when (not $ null toGenerate) $ do
                                 let newChunks = map (\coord →
-                                        let (chunkTiles, surfMap, fluidMap) = generateChunk params coord
+                                        let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
                                         in LoadedChunk
                                             { lcCoord      = coord
                                             , lcTiles      = chunkTiles
                                             , lcSurfaceMap = surfMap
+                                            , lcTerrainSurfaceMap = tMap
                                             , lcFluidMap   = fluidMap
                                             , lcModified   = False
                                             }) toGenerate
@@ -298,11 +299,12 @@ handleWorldCommand env logger cmd = do
                 <> T.pack (show totalInitialChunks) <> ")..."
 
             let initialChunks = map (\coord →
-                    let (chunkTiles, surfMap, fluidMap) = generateChunk params coord
+                    let (chunkTiles, surfMap, terrainMap, fluidMap) = generateChunk params coord
                     in LoadedChunk
                         { lcCoord      = coord
                         , lcTiles      = chunkTiles
                         , lcSurfaceMap = surfMap
+                        , lcTerrainSurfaceMap = terrainMap
                         , lcFluidMap   = fluidMap
                         , lcModified   = False
                         }) initialCoords

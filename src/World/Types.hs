@@ -38,6 +38,7 @@ data LoadedChunk = LoadedChunk
     { lcCoord      ∷ !ChunkCoord
     , lcTiles      ∷ !Chunk
     , lcSurfaceMap ∷ !(HM.HashMap (Int, Int) Int)
+    , lcTerrainSurfaceMap ∷ !(HM.HashMap (Int, Int) Int)
     , lcFluidMap   ∷ !(HM.HashMap (Int, Int) FluidCell)
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)

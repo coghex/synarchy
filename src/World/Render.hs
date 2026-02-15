@@ -270,6 +270,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 surfMap = lcSurfaceMap lc
                 fluidMap = lcFluidMap lc
                 chunkHasFluid = not (HM.null fluidMap)
+                terrainSurfMap = lcTerrainSurfaceMap lc
 
                 -- Iterate by column, not by individual tile.
                 -- For each (lx,ly) column, look up fluid ONCE, then
@@ -302,11 +303,9 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     | lx ← [0 .. chunkSize - 1]
                     , ly ← [0 .. chunkSize - 1]
                     , let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
-                    , surfZ > zSlice
+                          terrainZ = HM.lookupDefault minBound (lx, ly) terrainSurfMap
+                    , terrainZ > zSlice
                     , not (HM.member (lx, ly, zSlice) tileMap)
-                    , case HM.lookup (lx, ly) fluidMap of
-                        Just fc → fcSurface fc ≤ zSlice
-                        Nothing → True
                     , let (gx, gy) = chunkToGlobal coord lx ly
                           (rawX, rawY) = gridToScreen facing gx gy
                           drawX = rawX + xOffset
