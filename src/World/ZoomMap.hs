@@ -90,7 +90,7 @@ buildZoomCache params =
                 , zceIsOcean  = isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
                 }
             | ccy ← [-halfSize .. halfSize - 1]
-            , ccx ← [ccy .. ccy + worldSize - 1]
+            , ccx ← [ccy - halfSize .. ccy + halfSize - 1]
             , let baseGX = ccx * chunkSize
                   baseGY = ccy * chunkSize
                   midGX  = baseGX + chunkSize `div` 2
