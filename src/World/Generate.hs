@@ -24,7 +24,7 @@ import World.Types
 import World.Material (MaterialId(..), matGlacier, getMaterialProps, MaterialProps(..)
                       , matAir)
 import World.Plate (TectonicPlate(..), generatePlates
-                   , elevationAtGlobal, isBeyondGlacier, wrapGlobalX)
+                   , elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Grid (worldToGrid)
 import World.Geology (applyGeoEvent, GeoModification(..))
 import World.Geology.Erosion (applyErosion)
@@ -110,18 +110,16 @@ generateChunk params coord =
         wsc = computeWorldScale worldSize
         oceanMap = wgpOceanMap params
 
-        -- Wrap global X for border tiles that may cross the seam
-        wrapGX gx = wrapGlobalX worldSize gx
-
         -- Build base elevation map for all columns including border.
         baseColumns = HM.fromList
             [ ( (lx, ly)
-              , elevationAtGlobal seed plates worldSize (wrapGX gx) gy
+              , elevationAtGlobal seed plates worldSize gx' gy'
               )
             | lx ← [negate chunkBorder .. chunkSize + chunkBorder - 1]
             , ly ← [negate chunkBorder .. chunkSize + chunkBorder - 1]
             , let (gx, gy) = chunkToGlobal coord lx ly
-            , not (isBeyondGlacier worldSize (wrapGX gx) gy)
+                  (gx', gy') = wrapGlobalU worldSize gx gy
+            , not (isBeyondGlacier worldSize gx' gy')
             ]
 
         lookupBase lx ly = case HM.lookup (lx, ly) baseColumns of
@@ -150,7 +148,8 @@ generateChunk params coord =
             | lx ← [0 .. chunkSize - 1]
             , ly ← [0 .. chunkSize - 1]
             , let (gx, gy) = chunkToGlobal coord lx ly
-            , not (isBeyondGlacier worldSize (wrapGX gx) gy)
+                  (gx', gy') = wrapGlobalU worldSize gx gy
+            , not (isBeyondGlacier worldSize gx' gy')
             , let surfZ = lookupElev lx ly
             ]
 
@@ -169,7 +168,8 @@ generateChunk params coord =
                 | lx ← [0 .. chunkSize - 1]
                 , ly ← [0 .. chunkSize - 1]
                 , let (gx, gy) = chunkToGlobal coord lx ly
-                , not (isBeyondGlacier worldSize (wrapGX gx) gy)
+                      (gx', gy') = wrapGlobalU worldSize gx gy
+                , not (isBeyondGlacier worldSize gx' gy')
                 , let (surfZ, surfMat) =
                           case HM.lookup (lx, ly) finalColumns of
                               Just v  → v
@@ -193,8 +193,8 @@ generateChunk params coord =
                           | surfMat ≡ matGlacier = matGlacier
                           | z ≡ surfZ            = surfMat
                           | otherwise            = materialAtDepth timeline
-                                                       worldSize (wrapGX gx)
-                                                       gy base
+                                                       worldSize gx'
+                                                       gy' base
                                                        (baseN, baseS, baseE, baseW)
                                                        z
                 , tile ← generateExposedColumn lx ly surfZ exposeFrom lookupMat
@@ -227,15 +227,14 @@ applyTimelineChunk ∷ GeoTimeline → Int → WorldScale → ChunkCoord
 applyTimelineChunk timeline worldSize wsc coord baseColumns =
     foldl' applyOnePeriod baseColumns (gtPeriods timeline)
   where
-    wrapGX gx = wrapGlobalX worldSize gx
-
     applyOnePeriod elevMap period =
         let -- Step 1: Apply all events to each column independently
             postEvents = HM.mapWithKey (\(lx, ly) (elev, mat) →
                 let (gx, gy) = chunkToGlobal coord lx ly
+                    (gx', gy') = wrapGlobalU worldSize gx gy
                 in if mat ≡ matGlacier
                    then (elev, mat)
-                   else foldl' (applyOneEvent worldSize (wrapGX gx) gy)
+                   else foldl' (applyOneEvent worldSize gx' gy')
                                (elev, mat) (gpEvents period)
                 ) elevMap
 

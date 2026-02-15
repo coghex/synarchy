@@ -170,14 +170,22 @@ updateChunkLoading env logger = do
                             tileData ← readIORef (wsTilesRef worldState)
 
                             let halfSize = wgpWorldSize params `div` 2
-                                wrapChunkX cx =
-                                    let wrapped = ((cx + halfSize) `mod` (halfSize * 2) + (halfSize * 2))
-                                                  `mod` (halfSize * 2) - halfSize
-                                    in wrapped
-                                inBoundsY (ChunkCoord _ cy) =
-                                    cy ≥ -halfSize ∧ cy < halfSize
-                                wrapCoord (ChunkCoord cx cy) = ChunkCoord (wrapChunkX cx) cy
-                                validCoords = map wrapCoord $ filter inBoundsY neededCoords
+                                -- Wrap chunk coords in u-space (ccx - ccy),
+                                -- not just ccx alone
+                                wrapChunkU (ChunkCoord cx cy) =
+                                    let w = halfSize * 2
+                                        u = cx - cy
+                                        v = cx + cy
+                                        halfW = w `div` 2
+                                        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+                                        cx' = (wrappedU + v) `div` 2
+                                        cy' = (v - wrappedU) `div` 2
+                                    in ChunkCoord cx' cy'
+                                inBoundsV (ChunkCoord cx cy) =
+                                    let v = cx + cy
+                                        halfTiles = halfSize * chunkSize
+                                    in abs (v * chunkSize) ≤ halfTiles
+                                validCoords = map wrapChunkU $ filter inBoundsV neededCoords
 
                             let (toPromote, toGenerate) = partitionChunks validCoords tileData
 

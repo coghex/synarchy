@@ -23,7 +23,7 @@ import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
-                   , isBeyondGlacier, wrapGlobalX)
+                   , isBeyondGlacier, wrapGlobalU)
 import World.Fluids (seaLevel, isOceanChunk)
 import World.Generate (applyTimeline)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
@@ -65,7 +65,17 @@ buildZoomCache params =
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
-        halfTiles = halfSize * chunkSize
+
+        -- Wrap (ccx, ccy) in u-space for data lookup
+        wrapChunkU cx cy =
+            let w = halfSize * 2
+                u = cx - cy
+                v = cx + cy
+                halfW = w `div` 2
+                wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+                cx' = (wrappedU + v) `div` 2
+                cy' = (v - wrappedU) `div` 2
+            in (cx', cy')
 
         entries =
             [ ZoomChunkEntry
@@ -79,32 +89,24 @@ buildZoomCache params =
                                 then seaLevel else avgElev
                 , zceIsOcean  = isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
                 }
-            -- Iterate in isometric (u, v) space directly.
-            -- v = ccx + ccy → screen Y (glacier bounded)
-            -- u = ccx - ccy → screen X (one wrap period)
-            | v ← [-halfSize .. halfSize - 1]
-            , u ← [-halfSize .. halfSize - 1]
-            , let ccx = (u + v) `div` 2
-                  ccy = (v - u) `div` 2
-                  -- Skip if u+v is odd (no integer ccx/ccy)
-            , (u + v) `mod` 2 ≡ 0
+            | ccy ← [-halfSize .. halfSize - 1]
+            , ccx ← [ccy .. ccy + worldSize - 1]
             , let baseGX = ccx * chunkSize
                   baseGY = ccy * chunkSize
                   midGX  = baseGX + chunkSize `div` 2
                   midGY  = baseGY + chunkSize `div` 2
             , not (isBeyondGlacier worldSize midGX midGY)
-            , let wrappedCcx = wrapChunkX halfSize ccx
-                  wrappedCcy = wrapChunkY halfSize ccy
+            , let (wrappedCcx, wrappedCcy) = wrapChunkU ccx ccy
                   wrappedBaseGX = wrappedCcx * chunkSize
                   wrappedBaseGY = wrappedCcy * chunkSize
                   samples = [ let gx = wrappedBaseGX + ox
                                   gy = wrappedBaseGY + oy
-                                  gx' = wrapGlobalX worldSize gx
-                                  (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy
+                                  (gx', gy') = wrapGlobalU worldSize gx gy
+                                  (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy'
                               in if baseMat ≡ matGlacier
                                  then (baseElev, unMaterialId baseMat)
                                  else if baseElev < -100 then (baseElev, 0)
-                                 else let (e, m) = applyTimeline timeline worldSize gx' gy
+                                 else let (e, m) = applyTimeline timeline worldSize gx' gy'
                                                        (baseElev, baseMat)
                                       in (e, unMaterialId m)
                             | (ox, oy) ← sampleOffsets

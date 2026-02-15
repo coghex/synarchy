@@ -29,7 +29,7 @@ import qualified Data.Sequence as Seq
 import World.Types
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
-                   , isBeyondGlacier, wrapGlobalX)
+                   , isBeyondGlacier, wrapGlobalU)
 
 -- | Compute which chunks are ocean by flood-filling from
 --   ocean plate centers. A chunk is ocean if:
@@ -48,13 +48,13 @@ computeOceanMap seed worldSize plateCount plates applyTL =
         chunkElev (ChunkCoord cx cy) =
             let midGX = cx * chunkSize + chunkSize `div` 2
                 midGY = cy * chunkSize + chunkSize `div` 2
-                gx' = wrapGlobalX worldSize midGX
+                (gx', gy') = wrapGlobalU worldSize midGX midGY
             in if isBeyondGlacier worldSize gx' midGY
                then seaLevel + 100
                else let (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' midGY
                     in if baseMat ≡ matGlacier
                        then seaLevel + 100
-                       else fst (applyTL gx' midGY (baseElev, baseMat))
+                       else fst (applyTL gx' gy' (baseElev, baseMat))
 
         -- Find seed chunks: for each ocean plate, find the chunk
         -- containing its center, verify it's below sea level

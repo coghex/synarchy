@@ -12,6 +12,7 @@ module World.Plate
     , isBeyondGlacier
       -- * wrapping
     , wrapGlobalX
+    , wrapGlobalU
     ) where
 
 import UPrelude
@@ -193,6 +194,26 @@ isBeyondGlacier worldSize _gx gy =
 worldWidthTiles ∷ Int → Int
 worldWidthTiles worldSize = worldSize * chunkSize
 
+-- | Wrap a global coordinate pair so that the isometric u-axis
+--   (gx - gy, which maps to screen X) wraps by worldTiles,
+--   while the v-axis (gx + gy, which maps to screen Y) stays fixed.
+--
+--   This produces a vertical seam on screen instead of a diagonal one.
+wrapGlobalU ∷ Int → Int → Int → (Int, Int)
+wrapGlobalU worldSize gx gy =
+    let w = worldWidthTiles worldSize    -- worldTiles
+        halfW = w `div` 2
+        u = gx - gy
+        v = gx + gy
+        -- Wrap u into [-halfW, halfW)
+        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+        -- Recover gx, gy from (wrappedU, v)
+        gx' = (wrappedU + v) `div` 2
+        gy' = (v - wrappedU) `div` 2
+    in (gx', gy')
+
+-- | Old wrap: wraps gx only. Produces diagonal seam.
+--   Use wrapGlobalU instead for screen-aligned wrapping.
 wrapGlobalX ∷ Int → Int → Int
 wrapGlobalX worldSize gx =
     let w = worldWidthTiles worldSize
@@ -237,10 +258,10 @@ wrappedValueNoise2D seed worldSize x y scale =
 
 elevationAtGlobal ∷ Word64 → [TectonicPlate] → Int → Int → Int → (Int, MaterialId)
 elevationAtGlobal seed plates worldSize gx gy =
-    let gx' = wrapGlobalX worldSize gx
+    let (gx', gy') = wrapGlobalU worldSize gx gy
         wsc = computeWorldScale worldSize
-    in if isBeyondGlacier worldSize gx' gy then (0, matGlacier)
-    else if isGlacierZone worldSize gx' gy then
+    in if isBeyondGlacier worldSize gx' gy' then (0, matGlacier)
+    else if isGlacierZone worldSize gx' gy' then
         let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy
             myPlate = plateA
             baseElev = plateBaseElev myPlate
