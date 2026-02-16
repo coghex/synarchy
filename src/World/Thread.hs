@@ -209,12 +209,16 @@ updateChunkLoading env logger = do
                                             , lcFluidMap   = fluidMap
                                             , lcModified   = False
                                             }) batch
-
                                 atomicModifyIORef' (wsTilesRef worldState) $ \td →
                                     let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
                                         td'' = evictDistantChunks camChunk chunkLoadRadius td'
                                     in (td'', ())
-                        
+
+                                -- Invalidate render caches so new chunks appear
+                                writeIORef (wsQuadCacheRef worldState) Nothing
+                                writeIORef (wsZoomQuadCacheRef worldState) Nothing
+                                writeIORef (wsBgQuadCacheRef worldState) Nothing
+
 -- | Partition needed chunk coords into those already loaded (promote)
 --   and those that need generation.
 partitionChunks ∷ [ChunkCoord] → WorldTileData → ([ChunkCoord], [ChunkCoord])
@@ -536,6 +540,11 @@ drainInitQueues env logger = do
                         atomicModifyIORef' (wsTilesRef worldState) $ \td →
                             let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
                             in (td', ())
+                        
+                        -- Invalidate all render caches so new chunks appear immediately
+                        writeIORef (wsQuadCacheRef worldState) Nothing
+                        writeIORef (wsZoomQuadCacheRef worldState) Nothing
+                        writeIORef (wsBgQuadCacheRef worldState) Nothing
                         
                         writeIORef (wsInitQueueRef worldState) rest
                         
