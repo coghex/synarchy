@@ -91,7 +91,7 @@ worldLoop env stateRef lastTimeRef = do
             
             camera ← readIORef (cameraRef env)
             allQuads ← updateWorldTiles env
-            writeIORef (worldQuadsRef env) (allQuads, camera)
+            writeIORef (worldQuadsRef env) allQuads
             threadDelay 16666
             worldLoop env stateRef lastTimeRef
 
@@ -198,8 +198,9 @@ updateChunkLoading env logger = do
                                     abs (cx - ccx) + abs (cy - ccy)) toGenerate
                                 batch = take maxChunksPerTick toGenerateSorted
 
+                            -- force chunk eval here
                             when (not $ null batch) $ do
-                                let newChunks = map (\coord →
+                                let !newChunks = map (\coord →
                                         let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
                                         in LoadedChunk
                                             { lcCoord      = coord

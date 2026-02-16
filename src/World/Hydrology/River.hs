@@ -604,27 +604,37 @@ buildTributarySegments seed fidInt srcX srcY bx by numSegs =
 --   The carve produces NEGATIVE gmElevDelta.
 --   Channel floor gets sandstone (river sediment / alluvium).
 --   Valley walls get no material override (exposed bedrock).
+-----------------------------------------------------------
+-- River Carving (pure GeoModification)
+-----------------------------------------------------------
 applyRiverCarve ∷ RiverParams → Int → Int → Int → Int → GeoModification
-applyRiverCarve river worldSize gx gy _baseElev =
-    -- Find the closest segment and its perpendicular distance
-    let results = map (carveFromSegment worldSize gx gy (rpMeanderSeed river))
-                      (rpSegments river)
-        -- Pick the deepest carve (most negative delta) across all segments
-        bestMod = foldl' pickDeepest noModification results
-    in bestMod
+applyRiverCarve river worldSize gx gy baseElev =
+    let segments = rpSegments river
+        -- Valley carving pass
+        carveResults = map (carveFromSegment worldSize gx gy (rpMeanderSeed river))
+                           segments
+        bestCarve = foldl' pickDeepest noModification carveResults
+
+        -- Delta deposit pass (at the river mouth)
+        deltaDeposit = computeDeltaDeposit river worldSize gx gy
+
+    in if gmElevDelta bestCarve < 0
+       then bestCarve  -- carving wins — we're in the valley
+       else deltaDeposit  -- outside the valley, check for delta deposit
 
 -- | Compute the carving modification from a single river segment.
---   This mirrors applyFissure's line-projection exactly.
+--   FIXED: Channel floor now gets sandstone with intrusion depth
+--   proportional to the alluvial fill. A 10-tile deep channel
+--   has ~3-5 tiles of alluvium at the bottom, not just 1 surface tile.
+--   This creates visible sedimentary layers when you dig down.
 carveFromSegment ∷ Int → Int → Int → Word64 → RiverSegment → GeoModification
 carveFromSegment worldSize gx gy meanderSeed seg =
     let GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
 
-        -- Vector from segment start to query point
         px = fromIntegral (wrappedDeltaXGeo worldSize gx sx) ∷ Float
         py = fromIntegral (gy - sy) ∷ Float
 
-        -- Segment direction vector (same wrapping as fissure)
         fdx = fromIntegral (wrappedDeltaXGeo worldSize ex sx) ∷ Float
         fdy = fromIntegral (ey - sy) ∷ Float
         segLen = sqrt (fdx * fdx + fdy * fdy)
@@ -632,73 +642,144 @@ carveFromSegment worldSize gx gy meanderSeed seg =
     in if segLen < 0.001
        then noModification
        else
-       let -- Normalize segment direction
-           nx = fdx / segLen
+       let nx = fdx / segLen
            ny = fdy / segLen
 
-           -- Project point onto segment line
            dot = px * nx + py * ny
            alongT = dot / segLen
 
-           -- Perpendicular distance
            perpX = px - dot * nx
            perpY = py - dot * ny
            perpDist = sqrt (perpX * perpX + perpY * perpY)
 
-           -- Segment parameters
            channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
            valleyHalfW  = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
            depth        = fromIntegral (rsDepth seg) ∷ Float
            flow         = rsFlowRate seg
 
-           -- End taper: carving fades near segment endpoints
-           -- Overlap zone (0.05) for smooth transitions between segments
            endTaper = min 1.0 (min ((alongT + 0.05) * 8.0)
                                    ((1.05 - alongT) * 8.0))
 
-           -- Meander wobble: sinusoidal offset along the segment
-           -- makes the channel snake within the valley
            meanderFreq = 2.0 * π / segLen * 1.5
            meanderPhase = fromIntegral (fromIntegral meanderSeed `mod` (1000 ∷ Int)) * 0.001 * 2.0 * π
            meanderOffset = sin (alongT * segLen * meanderFreq / segLen * 2.0 * π + meanderPhase)
                          * valleyHalfW * 0.2 * min 1.0 flow
-           -- Shift the center of the channel by meander
            effectivePerpDist = abs (perpDist - meanderOffset)
 
        in if alongT < -0.05 ∨ alongT > 1.05 ∨ effectivePerpDist > valleyHalfW
           then noModification
 
-          -- Channel floor: flat bottom, full depth, sediment deposit
+          -- Channel floor: alluvial sediment fill
           else if effectivePerpDist < channelHalfW
-          then let -- Channel floor has a slight concavity
-                   channelT = effectivePerpDist / channelHalfW
-                   channelProfile = 1.0 - channelT * 0.1  -- nearly flat, slight dip
+          then let channelT = effectivePerpDist / channelHalfW
+                   channelProfile = 1.0 - channelT * 0.1
                    carve = round (depth * channelProfile * endTaper)
+                   -- Alluvial fill: 30-50% of channel depth is sediment
+                   -- Deeper channels accumulate more alluvium
+                   -- This creates 3-5 tiles of sandstone at the bottom
+                   -- of a 10-tile deep channel
+                   alluviumDepth = max 1 (round (depth * 0.4 * endTaper))
                in if carve ≤ 0
                   then noModification
-                  -- Negative delta = carving down
-                  -- Sandstone sediment on the channel floor
-                  else GeoModification (negate carve)
-                           (Just (unMaterialId matSandstone))
-                           0  -- no intrusion, this is erosion
+                  else GeoModification
+                      { gmElevDelta        = negate carve
+                      , gmMaterialOverride = Just (unMaterialId matSandstone)
+                      , gmIntrusionDepth   = alluviumDepth
+                      }
 
-          -- Valley walls: V-shaped linear slope
+          -- Valley walls: V-shaped, exposed bedrock (no change here)
           else let wallT = (effectivePerpDist - channelHalfW)
                          / (valleyHalfW - channelHalfW)
-                   -- Linear taper from full depth at channel edge to 0 at valley rim
                    wallProfile = max 0.0 (1.0 - wallT)
                    carve = round (depth * wallProfile * endTaper * 0.7)
-                       -- 0.7: walls are shallower than channel
                in if carve ≤ 0
                   then noModification
-                  -- Valley walls: no material override (exposed bedrock)
                   else GeoModification (negate carve) Nothing 0
 
+-- | Compute sediment deposit at the river mouth (delta fan).
+--   Creates a fan-shaped deposit of sandstone/shale downstream
+--   of where the river meets the ocean or terminal basin.
+--
+--   The delta is a semicircular mound centered on the mouth,
+--   with thickness proportional to total flow. Larger rivers
+--   produce bigger, thicker deltas.
+--
+--   Profile: thickest at the mouth, thinning radially outward.
+--   Shape: semicircle opening in the downstream direction.
+computeDeltaDeposit ∷ RiverParams → Int → Int → Int → GeoModification
+computeDeltaDeposit river worldSize gx gy =
+    let segs = rpSegments river
+    in if null segs then noModification
+    else
+    let -- Get the last segment to determine delta direction
+        lastSeg = last segs
+        GeoCoord mx my = rsEnd lastSeg  -- mouth position
+        GeoCoord px py = rsStart lastSeg  -- second-to-last waypoint
+
+        -- Delta direction: continuation of the last segment's flow
+        flowDX = fromIntegral (wrappedDeltaXGeo worldSize mx px) ∷ Float
+        flowDY = fromIntegral (my - py) ∷ Float
+        flowLen = sqrt (flowDX * flowDX + flowDY * flowDY)
+
+    in if flowLen < 0.001 then noModification
+    else
+    let flowNX = flowDX / flowLen
+        flowNY = flowDY / flowLen
+
+        -- Vector from mouth to query point
+        dx = fromIntegral (wrappedDeltaXGeo worldSize gx mx) ∷ Float
+        dy = fromIntegral (gy - my) ∷ Float
+        dist = sqrt (dx * dx + dy * dy)
+
+        -- Delta radius scales with total flow
+        totalFlow = rpFlowRate river
+        deltaRadius = totalFlow * 25.0 + 8.0  -- 8-33 tiles depending on flow
+        -- Max deposit height scales with flow
+        maxDeposit = max 2.0 (totalFlow * 6.0)  -- 2-10 tiles
+
+    in if dist > deltaRadius
+       then noModification
+       else
+       let -- Check that we're in the downstream semicircle
+           -- Dot product of (mouth→point) with flow direction
+           dotFlow = dx * flowNX + dy * flowNY
+
+           -- Allow slight upstream spread (alluvial backfill)
+           -- but mainly downstream
+           spreadAngle = if dotFlow > -deltaRadius * 0.2
+                         then 1.0  -- downstream or near mouth
+                         else 0.0  -- too far upstream
+
+       in if spreadAngle < 0.5
+          then noModification
+          else
+          let -- Radial falloff: thickest at mouth, thins to edge
+              t = dist / deltaRadius
+              -- Fan shape: wider perpendicular to flow direction
+              perpDist = abs (dx * flowNY - dy * flowNX)  -- cross product magnitude
+              perpT = perpDist / (deltaRadius * 1.2)  -- allow slight widening
+
+              -- Combined profile: radial × perpendicular fade
+              profile = max 0.0 ((1.0 - t) * (1.0 - min 1.0 perpT))
+              deposit = round (maxDeposit * profile)
+
+          in if deposit ≤ 0
+             then noModification
+             else GeoModification
+                 { gmElevDelta        = deposit
+                 -- Downstream deltas: mixed sediment
+                 -- Inner delta: shale (fine river silt)
+                 -- Outer delta: sandstone (coarser material settles first)
+                 , gmMaterialOverride = Just (if t < 0.4
+                     then unMaterialId matShale
+                     else unMaterialId matSandstone)
+                 , gmIntrusionDepth   = deposit  -- full intrusion, all new sediment
+                 }
+
 -- | Pick the deeper carving between two GeoModifications.
---   More negative gmElevDelta = deeper carve = wins.
 pickDeepest ∷ GeoModification → GeoModification → GeoModification
 pickDeepest a b
-    | gmElevDelta b < gmElevDelta a = b  -- b carves deeper (more negative)
+    | gmElevDelta b < gmElevDelta a = b
     | otherwise                     = a
 
 -----------------------------------------------------------

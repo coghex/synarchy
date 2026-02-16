@@ -439,7 +439,15 @@ applyEventStrata worldSize gx gy queryZ state event =
         , ssZMat    = zMat'
         }
 
--- | Core stratigraphy logic — unchanged from original.
+-- | Core stratigraphy logic.
+--   FIXED: erosion (delta < 0) with intrusion > 0 now properly fills
+--   the deposited band. This matters for river channel alluvium where
+--   the carve is negative but intrusion represents sediment fill at
+--   the bottom of the carved channel.
+--
+--   The intrusion band for negative delta sits at the NEW surface:
+--     newSurfZ to newSurfZ + intrusion - 1
+--   These tiles are the alluvial/sedimentary fill at the bottom.
 applyDelta ∷ Int → Int → Int → MaterialId → Int → MaterialId → Int → MaterialId
            → (MaterialId, Int, MaterialId)
 applyDelta queryZ elevBefore delta eventMat intrusion surfMat uplift zMat
@@ -459,11 +467,17 @@ applyDelta queryZ elevBefore delta eventMat intrusion surfMat uplift zMat
             newSurf = eventMat
         in (newSurf, newUplift, newZMat)
     | delta < 0 =
-        let newSurfZ = elevBefore + delta
+        let newSurfZ = elevBefore + delta  -- new (lower) surface
             newSurf = eventMat
+            -- Fill band: for river channels, intrusion > 0 means
+            -- alluvial sediment deposited at the bottom of the carve.
+            -- The fill occupies z-levels [newSurfZ .. newSurfZ + intrusion - 1]
+            -- sitting right at the new carved floor.
             inFill = intrusion > 0
                    ∧ queryZ ≥ newSurfZ
                    ∧ queryZ < newSurfZ + intrusion
+            -- Surface weathering: even without fill, the exposed
+            -- surface gets the erosion product material
             atSurface = queryZ ≡ newSurfZ
             newZMat = if inFill ∨ atSurface
                       then eventMat

@@ -91,7 +91,7 @@ initializeEngine = do
   -- preview
   worldPreviewRef ← newIORef Nothing
   -- world quads
-  worldQuadsRef ← newIORef (V.empty, defaultCamera)
+  worldQuadsRef ← newIORef (V.empty)
   -- texture system
   textureSystemRef ← newIORef Nothing
   -- default face map slot
