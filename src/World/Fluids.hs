@@ -170,12 +170,15 @@ computeChunkLava features seed plates worldSize coord surfaceMap =
 isNearbyActive ∷ Int → Int → Int → PersistentFeature → Bool
 isNearbyActive worldSize chunkGX chunkGY pf =
     case pfActivity pf of
-        Active → let maxR = featureMaxRadius (pfFeature pf)
+        Active    → checkRange
+        Collapsed → checkRange  -- calderas still have lava
+        _         → False
+  where
+    checkRange = let maxR = featureMaxRadius (pfFeature pf)
                      (fx, fy) = featureCenter' (pfFeature pf)
                      dx = abs (wrappedDeltaForFluid worldSize chunkGX fx)
                      dy = abs (chunkGY - fy)
                  in dx < maxR + chunkSize ∧ dy < maxR + chunkSize
-        _      → False
 
 -- | Get the maximum radius of influence for a feature's lava pool.
 featureMaxRadius ∷ VolcanicFeature → Int
@@ -232,7 +235,7 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
                 -- Lava fills the caldera bowl, up near the rim
                 lavaSurface = baseElev + svRimHeight p - 5
-            in fillPool worldSize chunkGX chunkGY fx fy
+            in fillPool seed plates worldSize chunkGX chunkGY fx fy
                    poolRadius lavaSurface surfaceMap acc
 
         Caldera p →
@@ -240,7 +243,7 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
                 poolRadius = caInnerRadius p
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
                 lavaSurface = baseElev + caRimHeight p - 3
-            in fillPool worldSize chunkGX chunkGY fx fy
+            in fillPool seed plates worldSize chunkGX chunkGY fx fy
                    poolRadius lavaSurface surfaceMap acc
 
         ShieldVolcano p | shSummitPit p →
@@ -248,7 +251,7 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
                 poolRadius = shPitRadius p
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
                 lavaSurface = baseElev + shPeakHeight p - shPitDepth p + 2
-            in fillPool worldSize chunkGX chunkGY fx fy
+            in fillPool seed plates worldSize chunkGX chunkGY fx fy
                    poolRadius lavaSurface surfaceMap acc
 
         CinderCone p →
@@ -256,7 +259,7 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
                 poolRadius = ccCraterRadius p
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
                 lavaSurface = baseElev + ccPeakHeight p - ccCraterDepth p + 2
-            in fillPool worldSize chunkGX chunkGY fx fy
+            in fillPool seed plates worldSize chunkGX chunkGY fx fy
                    poolRadius lavaSurface surfaceMap acc
 
         FissureVolcano p | fpHasMagma p →
@@ -267,7 +270,7 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
                 (baseElev, _) = elevationAtGlobal seed plates worldSize midX midY
                 poolWidth = fpWidth p `div` 2
                 lavaSurface = baseElev + fpRidgeHeight p - 3
-            in fillFissurePool worldSize chunkGX chunkGY
+            in fillFissurePool seed plates worldSize chunkGX chunkGY
                    sx sy ex ey poolWidth lavaSurface surfaceMap acc
 
         -- Hydrothermal vents: small magma pool at the chimney
@@ -276,55 +279,112 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
                 poolRadius = max 2 (htRadius p `div` 3)
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
                 lavaSurface = baseElev + htChimneyHeight p - 2
-            in fillPool worldSize chunkGX chunkGY fx fy
+            in fillPool seed plates worldSize chunkGX chunkGY fx fy
                    poolRadius lavaSurface surfaceMap acc
 
         _ → acc
 
 -- | Fill a circular lava pool into the fluid map.
-fillPool ∷ Int → Int → Int → Int → Int → Int → Int
+--   First finds the spillway — the lowest point on the pool's
+--   perimeter — and clamps the lava surface to that level.
+--   Lava can't be higher than its lowest escape point.
+fillPool ∷ Word64 → [TectonicPlate] → Int → Int → Int → Int → Int → Int → Int
          → HM.HashMap (Int, Int) Int
          → HM.HashMap (Int, Int) FluidCell
          → HM.HashMap (Int, Int) FluidCell
-fillPool worldSize chunkGX chunkGY fx fy poolRadius lavaSurface surfaceMap acc =
-    HM.foldlWithKey' (\acc' (lx, ly) surfZ →
-        let gx = chunkGX + lx
-            gy = chunkGY + ly
-            dx = fromIntegral (wrappedDeltaForFluid worldSize gx fx) ∷ Float
-            dy = fromIntegral (gy - fy) ∷ Float
-            dist = sqrt (dx * dx + dy * dy)
-            pr = fromIntegral poolRadius ∷ Float
-        in if dist < pr ∧ surfZ < lavaSurface
-           then HM.insert (lx, ly) (FluidCell Lava lavaSurface) acc'
-           else acc'
-        ) acc surfaceMap
+fillPool seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface surfaceMap acc =
+    let pr = fromIntegral poolRadius ∷ Float
+        rimSamples = 32 ∷ Int
+
+        -- Sample the rim at poolRadius distance, using the surface map
+        -- for in-chunk points and elevationAtGlobal for out-of-chunk points.
+        spillway = foldl' (\minElev i →
+            let angle = fromIntegral i * 2.0 * π / fromIntegral rimSamples
+                rimGX = fx + round (pr * cos angle)
+                rimGY = fy + round (pr * sin angle)
+                rimLX = rimGX - chunkGX
+                rimLY = rimGY - chunkGY
+                rimElev = case HM.lookup (rimLX, rimLY) surfaceMap of
+                    Just e  → e
+                    Nothing →
+                        -- Outside this chunk — use base plate elevation
+                        let (e, _) = elevationAtGlobal seed plates worldSize rimGX rimGY
+                        in e
+            in min minElev rimElev
+            ) lavaSurface [0 .. rimSamples - 1]
+
+        clampedSurface = min lavaSurface spillway
+
+    in if clampedSurface ≤ 0
+       then acc
+       else HM.foldlWithKey' (\acc' (lx, ly) surfZ →
+            let gx = chunkGX + lx
+                gy = chunkGY + ly
+                dx = fromIntegral (wrappedDeltaForFluid worldSize gx fx) ∷ Float
+                dy = fromIntegral (gy - fy) ∷ Float
+                dist = sqrt (dx * dx + dy * dy)
+            in if dist < pr ∧ surfZ < clampedSurface
+               then HM.insert (lx, ly) (FluidCell Lava clampedSurface) acc'
+               else acc'
+            ) acc surfaceMap
 
 -- | Fill lava along a fissure line.
-fillFissurePool ∷ Int → Int → Int → Int → Int → Int → Int
+fillFissurePool ∷ Word64 → [TectonicPlate] → Int → Int → Int
+                → Int → Int → Int → Int
                 → Int → Int
                 → HM.HashMap (Int, Int) Int
                 → HM.HashMap (Int, Int) FluidCell
                 → HM.HashMap (Int, Int) FluidCell
-fillFissurePool worldSize chunkGX chunkGY sx sy ex ey halfWidth lavaSurface surfaceMap acc =
+fillFissurePool seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth lavaSurface surfaceMap acc =
     let lineLen = sqrt (fromIntegral ((ex-sx)*(ex-sx) + (ey-sy)*(ey-sy))) ∷ Float
     in if lineLen < 0.001 then acc
-    else HM.foldlWithKey' (\acc' (lx, ly) surfZ →
-        let gx = chunkGX + lx
-            gy = chunkGY + ly
-            -- Distance from point to line segment
-            dx = fromIntegral (wrappedDeltaForFluid worldSize gx sx) ∷ Float
-            dy = fromIntegral (gy - sy) ∷ Float
-            lx' = fromIntegral (ex - sx) ∷ Float
-            ly' = fromIntegral (ey - sy) ∷ Float
-            t = max 0 (min 1 ((dx * lx' + dy * ly') / (lineLen * lineLen)))
-            projX = t * lx'
-            projY = t * ly'
-            perpDist = sqrt ((dx - projX) * (dx - projX) + (dy - projY) * (dy - projY))
-            hw = fromIntegral halfWidth ∷ Float
-        in if perpDist < hw ∧ surfZ < lavaSurface
-           then HM.insert (lx, ly) (FluidCell Lava lavaSurface) acc'
-           else acc'
-        ) acc surfaceMap
+    else
+    let -- Sample perpendicular to the fissure at intervals along it
+        -- to find the spillway
+        edgeSamples = 16 ∷ Int
+        hw = fromIntegral halfWidth ∷ Float
+        -- Perpendicular direction
+        perpX = negate (fromIntegral (ey - sy)) / lineLen ∷ Float
+        perpY = fromIntegral (ex - sx) / lineLen ∷ Float
+
+        spillway = foldl' (\minElev i →
+            let t = fromIntegral i / fromIntegral (edgeSamples - 1) ∷ Float
+                -- Point along fissure
+                mx = fromIntegral sx + t * fromIntegral (ex - sx)
+                my = fromIntegral sy + t * fromIntegral (ey - sy)
+                -- Sample both edges
+                e1gx = round (mx + perpX * hw) ∷ Int
+                e1gy = round (my + perpY * hw) ∷ Int
+                e2gx = round (mx - perpX * hw) ∷ Int
+                e2gy = round (my - perpY * hw) ∷ Int
+                elev1 = case HM.lookup (e1gx - chunkGX, e1gy - chunkGY) surfaceMap of
+                    Just e  → e
+                    Nothing → fst (elevationAtGlobal seed plates worldSize e1gx e1gy)
+                elev2 = case HM.lookup (e2gx - chunkGX, e2gy - chunkGY) surfaceMap of
+                    Just e  → e
+                    Nothing → fst (elevationAtGlobal seed plates worldSize e2gx e2gy)
+            in min minElev (min elev1 elev2)
+            ) lavaSurface [0 .. edgeSamples - 1]
+
+        clampedSurface = min lavaSurface spillway
+
+    in if clampedSurface ≤ 0
+       then acc
+       else HM.foldlWithKey' (\acc' (lx, ly) surfZ →
+            let gx = chunkGX + lx
+                gy = chunkGY + ly
+                dx = fromIntegral (wrappedDeltaForFluid worldSize gx sx) ∷ Float
+                dy = fromIntegral (gy - sy) ∷ Float
+                lx' = fromIntegral (ex - sx) ∷ Float
+                ly' = fromIntegral (ey - sy) ∷ Float
+                t = max 0 (min 1 ((dx * lx' + dy * ly') / (lineLen * lineLen)))
+                projX = t * lx'
+                projY = t * ly'
+                perpDist = sqrt ((dx - projX) * (dx - projX) + (dy - projY) * (dy - projY))
+            in if perpDist < hw ∧ surfZ < clampedSurface
+               then HM.insert (lx, ly) (FluidCell Lava clampedSurface) acc'
+               else acc'
+            ) acc surfaceMap
 
 -----------------------------------------------------------
 -- Helpers

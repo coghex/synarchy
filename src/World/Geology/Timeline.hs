@@ -427,7 +427,7 @@ generateEruption seed worldSize ageIdx plates pf =
             Nothing → Nothing
             Just profile →
                 let GeoFeatureId fidInt = pfId pf
-                    h1 = hashGeo seed (fidInt + ageIdx) 700
+                    h1 = hashGeo seed fidInt (700 + ageIdx)
                     roll = hashToFloatGeo h1
                 in if roll < epEruptChance profile
                    then Just (buildEruptionEvent seed worldSize ageIdx plates pf profile)
@@ -438,8 +438,8 @@ buildEruptionEvent ∷ Word64 → Int → Int → [TectonicPlate]
                    → PersistentFeature → EruptionProfile → GeoEvent
 buildEruptionEvent seed worldSize ageIdx plates pf profile =
     let GeoFeatureId fidInt = pfId pf
-        h2 = hashGeo seed (fidInt + ageIdx) 710
-        h3 = hashGeo seed (fidInt + ageIdx) 711
+        h2 = hashGeo seed fidInt (710 + ageIdx)
+        h3 = hashGeo seed fidInt (711 + ageIdx)
 
         radius = hashToRangeGeo h2 (epMinRadius profile) (epMaxRadius profile)
         volume = hashToRangeGeo h3 (epMinVolume profile) (epMaxVolume profile)
