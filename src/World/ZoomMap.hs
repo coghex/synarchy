@@ -69,6 +69,18 @@ buildZoomCache params =
         oceanMap = wgpOceanMap params
         features = gtFeatures timeline
 
+        -- Sample a single point at the chunk center for fluid checks
+        buildChunkSurfaceFast ∷ Int → Int → HM.HashMap (Int, Int) Int
+        buildChunkSurfaceFast cx cy =
+            let gx = cx * chunkSize + chunkSize `div` 2
+                gy = cy * chunkSize + chunkSize `div` 2
+                (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
+                (gx', gy') = wrapGlobalU worldSize gx gy
+                elev = if baseMat ≡ matGlacier then baseElev
+                       else if baseElev < -100 then baseElev
+                       else fst (applyTimeline timeline worldSize gx' gy'
+                                    (baseElev, baseMat))
+            in HM.singleton (chunkSize `div` 2, chunkSize `div` 2) elev
         -- Compute full surface map for a chunk: elevation and material per tile
         buildChunkSurface ∷ Int → Int → HM.HashMap (Int, Int) (Int, Word8)
         buildChunkSurface cx cy =
@@ -112,30 +124,36 @@ buildZoomCache params =
                   vMin = baseGX + baseGY
                   vMax = baseGX + baseGY + 2 * (chunkSize - 1)
             , vMax >= -halfTiles ∧ vMin <= halfTiles
-            , let -- Compute full surface once, reuse for everything
-                  fullSurface = buildChunkSurface ccx ccy
+            , let -- Fast single-sample surface for fluid checks
+                  fastSurface = buildChunkSurfaceFast ccx ccy
 
-                  -- Extract elevation-only map for fluid checks
-                  elevMap = HM.map fst fullSurface
-
-                  oceanFluidMap = computeChunkFluid oceanMap (ChunkCoord ccx ccy) elevMap
-                  chunkOcean = not (HM.null oceanFluidMap)
-
-                  -- Sample materials from the full surface (use sampleOffsets)
-                  samples = [ case HM.lookup (ox, oy) fullSurface of
-                                Just (e, m) → (e, m)
-                                Nothing     → (0, 0)
+                  -- Material samples (keep using sampleOffsets for accuracy)
+                  wrappedBaseGX = ccx * chunkSize
+                  wrappedBaseGY = ccy * chunkSize
+                  samples = [ let gx = wrappedBaseGX + ox
+                                  gy = wrappedBaseGY + oy
+                                  (gx', gy') = wrapGlobalU worldSize gx gy
+                                  (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
+                              in if baseMat ≡ matGlacier
+                                 then (baseElev, unMaterialId baseMat)
+                                 else if baseElev < -100 then (baseElev, 0)
+                                 else let (e, m) = applyTimeline timeline worldSize gx' gy'
+                                                       (baseElev, baseMat)
+                                      in (e, unMaterialId m)
                             | (ox, oy) ← sampleOffsets
                             ]
                   winnerMat = majorityMaterial samples
                   avgElev = let s = sum (map fst samples)
                             in s `div` length samples
 
-                  -- Lava check using the real surface map
+                  -- Fluid checks using single center sample
                   lavaMap = computeChunkLava features seed plates worldSize
-                                (ChunkCoord ccx ccy) elevMap
+                                (ChunkCoord ccx ccy) fastSurface
                   chunkLava = not (HM.null lavaMap)
-            ]
+
+                  oceanFluidMap = computeChunkFluid oceanMap (ChunkCoord ccx ccy) fastSurface
+                  chunkOcean = not (HM.null oceanFluidMap)
+                ]
 
     in V.fromList entries
 
