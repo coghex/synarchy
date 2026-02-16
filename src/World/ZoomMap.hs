@@ -11,6 +11,7 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
 import Data.IORef (readIORef, writeIORef, IORef)
 import qualified Data.Map.Strict as Map
+import qualified Data.HashMap.Strict as HM
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -24,7 +25,7 @@ import World.Types
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
                    , isBeyondGlacier, wrapGlobalU)
-import World.Fluids (seaLevel, isOceanChunk)
+import World.Fluids (seaLevel, isOceanChunk, computeChunkLava)
 import World.Generate (applyTimeline)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
@@ -65,9 +66,8 @@ buildZoomCache params =
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
+        features = gtFeatures timeline
 
-        -- | Does this chunk have ocean water?
-        -- Mirrors computeChunkFluid: in the ocean map OR borders an ocean chunk.
         hasOcean ∷ Int → Int → Bool
         hasOcean cx cy =
             isOceanChunk oceanMap (ChunkCoord cx cy)
@@ -80,6 +80,12 @@ buildZoomCache params =
           ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy + 1))
           ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy + 1))
 
+        -- Check if a chunk has lava by running computeChunkLava
+        -- with a dummy surface map (just the center point)
+        hasLava ∷ Int → Int → Bool
+        hasLava cx cy =
+            any (chunkHasLavaFrom worldSize cx cy) features
+
         entries =
             [ ZoomChunkEntry
                 { zceChunkX   = wrappedCcx
@@ -87,10 +93,13 @@ buildZoomCache params =
                 , zceBaseGX   = baseGX
                 , zceBaseGY   = baseGY
                 , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
-                                then 0 else winnerMat
+                                then 0
+                                else if chunkLava then 100
+                                else winnerMat
                 , zceElev     = if isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
                                 then seaLevel else avgElev
-                , zceIsOcean  = hasOcean wrappedCcx wrappedCcy    -- ← only this line changes
+                , zceIsOcean  = hasOcean wrappedCcx wrappedCcy
+                , zceHasLava  = chunkLava
                 }
             | ccy ← [-halfSize .. halfSize - 1]
             , ccx ← [-halfSize .. halfSize - 1]
@@ -103,6 +112,7 @@ buildZoomCache params =
             , let (wrappedCcx, wrappedCcy) = (ccx, ccy)
                   wrappedBaseGX = wrappedCcx * chunkSize
                   wrappedBaseGY = wrappedCcy * chunkSize
+                  chunkLava = hasLava wrappedCcx wrappedCcy
                   samples = [ let gx = wrappedBaseGX + ox
                                   gy = wrappedBaseGY + oy
                                   (gx', gy') = wrapGlobalU worldSize gx gy
@@ -129,6 +139,35 @@ wrapChunkX halfSize cx =
 
 wrapChunkY ∷ Int → Int → Int
 wrapChunkY halfSize cy = max (-halfSize) (min (halfSize - 1) cy)
+
+-- | Does this feature produce a lava pool that overlaps this chunk?
+--   Must exactly mirror the cases in Fluids.fillLavaFromFeature.
+chunkHasLavaFrom ∷ Int → Int → Int → PersistentFeature → Bool
+chunkHasLavaFrom worldSize cx cy pf =
+    case pfActivity pf of
+        Active → checkFeature (pfFeature pf)
+        Collapsed → case pfFeature pf of
+            Caldera p → inRange (caCenter p) (caInnerRadius p)
+            _ → False
+        _ → False
+  where
+    chunkCenterGX = cx * chunkSize + chunkSize `div` 2
+    chunkCenterGY = cy * chunkSize + chunkSize `div` 2
+    inRange (GeoCoord fx fy) poolRadius =
+        let dx = abs (chunkCenterGX - fx)
+            dy = abs (chunkCenterGY - fy)
+        in dx < poolRadius + chunkSize ∧ dy < poolRadius + chunkSize
+
+    checkFeature (SuperVolcano p)               = inRange (svCenter p) (svCalderaRadius p)
+    checkFeature (Caldera p)                    = inRange (caCenter p) (caInnerRadius p)
+    checkFeature (ShieldVolcano p) | shSummitPit p = inRange (shCenter p) (shPitRadius p)
+    checkFeature (CinderCone p)                 = inRange (ccCenter p) (ccCraterRadius p)
+    checkFeature (FissureVolcano p) | fpHasMagma p =
+        let GeoCoord sx sy = fpStart p
+            GeoCoord ex ey = fpEnd p
+        in inRange (GeoCoord ((sx+ex)`div`2) ((sy+ey)`div`2)) (fpWidth p `div` 2)
+    checkFeature (HydrothermalVent p)           = inRange (htCenter p) (max 2 (htRadius p `div` 3))
+    checkFeature _                              = False
 
 -- | Pick the material that appears most often in the samples.
 --   On ties, prefers the material with higher material ID
@@ -194,6 +233,7 @@ bakeEntries facing cache texPicker lookupSlot defFmSlot =
             , bzeV3      = Vertex (Vec2 drawX (drawY + h))       (Vec2 0 1) white actualSlot defFmSlot
             , bzeTexture = texHandle
             , bzeIsOcean = zceIsOcean entry
+            , bzeHasLava = zceHasLava entry
             , bzeElev    = zceElev entry
             }
 

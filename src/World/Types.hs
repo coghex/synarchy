@@ -795,6 +795,7 @@ data ZoomChunkEntry = ZoomChunkEntry
     , zceTexIndex ∷ !Word8     -- ^ Material ID (used to pick texture at render time)
     , zceElev     ∷ !Int       -- ^ Elevation (used to pick texture at render time)
     , zceIsOcean  ∷ !Bool      -- ^ Whether this chunk is ocean
+    , zceHasLava  ∷ !Bool      -- ^ Whether this chunk has lava (for zoom rendering)
     } deriving (Show, Eq)
 
 -----------------------------------------------------------
@@ -836,6 +837,7 @@ data BakedZoomEntry = BakedZoomEntry
     , bzeV3      ∷ !Vertex      -- ^ Bottom-left
     , bzeTexture ∷ !TextureHandle
     , bzeIsOcean ∷ !Bool
+    , bzeHasLava ∷ !Bool
     , bzeElev    ∷ !Int
     } deriving (Show)
 

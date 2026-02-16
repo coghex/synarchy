@@ -270,12 +270,18 @@ renderWorldQuads env worldState zoomAlpha snap = do
                         let mFluid = HM.lookup (lx, ly) fluidMap
                             (gx, gy) = chunkToGlobal coord lx ly
                             (rawX, rawY) = gridToScreen facing gx gy
-                            -- Also compute gridToScreen once per column
-                            -- instead of once per tile
+                            -- Skip tiles under lava entirely
+                            isUnderLava = case mFluid of
+                                Just fc → fcType fc ≡ Lava ∧ fcSurface fc > zSlice - effectiveDepth
+                                Nothing → False
                         in foldl' (\acc2 z →
                             case HM.lookup (lx, ly, z) tileMap of
                                 Nothing → acc2
                                 Just tile →
+                                    -- If this column has lava and tile is below lava surface, skip it
+                                    if isUnderLava ∧ z < maybe 0 fcSurface mFluid
+                                    then acc2
+                                    else
                                     let relativeZ = z - zSlice
                                         heightOffset = fromIntegral relativeZ * tileSideHeight
                                         drawX = rawX + xOffset
@@ -387,24 +393,10 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
         underwaterDepth = case mFluid of
             Just fc
                 | fcType fc ≡ Ocean ∧ worldZ < fcSurface fc → fcSurface fc - worldZ
-                | fcType fc ≡ Lava  ∧ worldZ < fcSurface fc → 0  -- handled by lavaDepth
             _ | chunkHasFluid ∧ worldZ < seaLevel → seaLevel - worldZ
             _ → 0
 
-        lavaDepth = case mFluid of
-            Just fc
-                | fcType fc ≡ Lava ∧ worldZ < fcSurface fc → fcSurface fc - worldZ
-            _ → 0
-
-        (tintR, tintG, tintB, finalAlpha) = if lavaDepth > 0
-            then
-                -- Under lava: orange-red glow, brighter near surface
-                let t = clamp01 (fromIntegral lavaDepth / 15.0)
-                    r = 1.0 - t * 0.3        -- 1.0 → 0.7
-                    g = 0.6 - t * 0.4         -- 0.6 → 0.2
-                    b = 0.1 - t * 0.05        -- 0.1 → 0.05
-                in (r, g, b, tileAlpha)
-            else if underwaterDepth > 0
+        (tintR, tintG, tintB, finalAlpha) = if underwaterDepth > 0
             then
                 let t = clamp01 (fromIntegral underwaterDepth / 30.0)
                     r = 0.6 - t * 0.4
