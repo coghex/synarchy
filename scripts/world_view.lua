@@ -19,6 +19,7 @@ worldView.textures = {
     noTexture = -1,
     blankTexture = -1,
     isoFaceMap = -1,
+    isoSlopeFaceMapNW = -1,
     noFaceMap = -1,
     zoomGranite = -1,
     zoomDiorite = -1,
@@ -99,6 +100,7 @@ function worldView.init(width, height)
     worldView.textures.blankTexture = engine.loadTexture("assets/textures/world/blanktexture.png")
     worldView.textures.noTexture  = engine.loadTexture("assets/textures/world/notexture.png")
     worldView.textures.isoFaceMap = engine.loadTexture("assets/textures/world/facemap/isoface.png")
+    worldView.textures.isoSlopeFaceMapNW = engine.loadTexture("assets/textures/world/facemap/isoface_slope_nw.png")
     worldView.textures.noFaceMap  = engine.loadTexture("assets/textures/world/facemap/noface.png")
     worldView.textures.zoomGranite  = engine.loadTexture("assets/textures/world/zoommap/granite_chunk.png")
     worldView.textures.zoomDiorite  = engine.loadTexture("assets/textures/world/zoommap/diorite_chunk.png")
@@ -240,6 +242,7 @@ function worldView.createWorld()
         blankTexture   = worldView.textures.blankTexture,
         noTexture      = worldView.textures.noTexture,
         isoFaceMap     = worldView.textures.isoFaceMap,
+        isoSlopeFaceMapNW = worldView.textures.isoSlopeFaceMapNW,
         noFaceMap      = worldView.textures.noFaceMap,
         zoomGranite    = worldView.textures.zoomGranite,
         zoomDiorite    = worldView.textures.zoomDiorite,

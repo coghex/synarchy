@@ -633,8 +633,10 @@ getTileFaceMapTexture ∷ WorldTextures → Word8 → Word8 → TextureHandle
 getTileFaceMapTexture textures _mat slopeId =
     case slopeToFaceMapIndex slopeId of
         0 → wtIsoFaceMap textures       -- flat
-        1 → wtSlopeFaceMapN textures    -- north ramp
-        2 → wtSlopeFaceMapE textures    -- east ramp
-        3 → wtSlopeFaceMapS textures    -- south ramp
-        4 → wtSlopeFaceMapW textures    -- west ramp
+        1 → wtSlopeFaceMapNW textures   -- northwest ramp
+        2 → wtSlopeFaceMapN textures    -- north ramp
+        3 → wtSlopeFaceMapNE textures   -- northeast ramp
+        4 → wtSlopeFaceMapE textures    -- east ramp
+        5 → wtSlopeFaceMapS textures    -- south ramp
+        6 → wtSlopeFaceMapW textures    -- west ramp
         _ → wtIsoFaceMap textures       -- fallback

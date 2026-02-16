@@ -48,6 +48,9 @@ function worldManager.createWorld(params)
     if params.isoFaceMap then
         world.setTexture(worldId, "iso_facemap", params.isoFaceMap)
     end
+    if params.isoSlopeFaceMapNW then
+        world.setTexture(worldId, "iso_slope_facemask_nw", params.isoSlopeFaceMapNW)
+    end
     if params.noFaceMap then
         world.setTexture(worldId, "nofacemap", params.noFaceMap)
     end

@@ -67,7 +67,7 @@ generateIceSheetTongues seed worldSize plates gs periodIdx tbs =
     let halfTiles = (worldSize * 16) `div` 2
         temp = gsCO2 gs
         -- More candidates: base 8 instead of 4
-        baseCount = scaleCount worldSize 8
+        baseCount = scaleCount worldSize 4
         maxGlaciers = if temp < 0.8 then baseCount
                       else if temp ≤ 1.2 then baseCount `div` 2
                       else baseCount `div` 4
@@ -183,8 +183,8 @@ generateAlpineGlaciers seed worldSize plates gs periodIdx tbs =
     let halfTiles = (worldSize * 16) `div` 2
         temp = gsCO2 gs
         -- More alpine glaciers: base 8 instead of 4
-        maxGlaciers = if temp < 0.8 then scaleCount worldSize 8
-                      else if temp ≤ 1.2 then scaleCount worldSize 4
+        maxGlaciers = if temp < 0.8 then scaleCount worldSize 4
+                      else if temp ≤ 1.2 then scaleCount worldSize 2
                       else scaleCount worldSize 1  -- even warm worlds get a few high-altitude ones
         maxAttempts = maxGlaciers * 6
         -- Lower threshold: 80 above sea level (was 150)

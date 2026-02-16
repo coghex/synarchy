@@ -170,7 +170,10 @@ bindlessFragmentShaderCode = [frag|
     void main() {
         vec4 texColor = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord);
         
-        vec3 faceRaw = texture(textures[nonuniformEXT(fragFaceMapIndex)], fragTexCoord).rgb;
+        vec4 faceMapSample = texture(textures[nonuniformEXT(fragFaceMapIndex)], fragTexCoord);
+        vec3 faceRaw = faceMapSample.rgb;
+        float faceAlpha = faceMapSample.a;
+
         float total = faceRaw.r + faceRaw.g + faceRaw.b;
         
         vec3 weights;
@@ -216,7 +219,7 @@ bindlessFragmentShaderCode = [frag|
         
         vec4 color = texColor * fragColor;
         color.rgb *= brightness * fragBrightness;
-        outColor = color;
+        outColor = vec4(color.rgb, color.a * faceAlpha);
     }
 |]
 

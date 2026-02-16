@@ -239,23 +239,23 @@ tileHash seed cx cy lx ly =
 slopeToFaceMapIndex ∷ Word8 → Int
 slopeToFaceMapIndex 0  = 0  -- flat
 slopeToFaceMapIndex 1  = 1  -- N only
-slopeToFaceMapIndex 2  = 2  -- E only
-slopeToFaceMapIndex 4  = 3  -- S only
-slopeToFaceMapIndex 8  = 4  -- W only
+slopeToFaceMapIndex 2  = 1  -- E only
+slopeToFaceMapIndex 4  = 1  -- S only
+slopeToFaceMapIndex 8  = 1  -- W only
 -- Two-bit corners: pick the first cardinal in N→E→S→W priority
 slopeToFaceMapIndex 3  = 1  -- N+E → N dominates
 slopeToFaceMapIndex 5  = 1  -- N+S → N dominates (rare, saddle)
 slopeToFaceMapIndex 9  = 1  -- N+W → N dominates
-slopeToFaceMapIndex 6  = 2  -- E+S → E dominates
-slopeToFaceMapIndex 10 = 2  -- E+W → E dominates (rare, saddle)
-slopeToFaceMapIndex 12 = 3  -- S+W → S dominates
+slopeToFaceMapIndex 6  = 1  -- E+S → E dominates
+slopeToFaceMapIndex 10 = 1  -- E+W → E dominates (rare, saddle)
+slopeToFaceMapIndex 12 = 1  -- S+W → S dominates
 -- Three-bit cases
 slopeToFaceMapIndex 7  = 1  -- N+E+S → N
 slopeToFaceMapIndex 11 = 1  -- N+E+W → N
-slopeToFaceMapIndex 13 = 3  -- N+S+W → S (N and S cancel, W wins... but use S for visual)
-slopeToFaceMapIndex 14 = 2  -- E+S+W → E
+slopeToFaceMapIndex 13 = 1  -- N+S+W → S (N and S cancel, W wins... but use S for visual)
+slopeToFaceMapIndex 14 = 1  -- E+S+W → E
 -- All four: flat (surrounded by lower terrain = plateau)
-slopeToFaceMapIndex 15 = 0
+slopeToFaceMapIndex 15 = 1
 slopeToFaceMapIndex _  = 0  -- fallback
 
 -----------------------------------------------------------

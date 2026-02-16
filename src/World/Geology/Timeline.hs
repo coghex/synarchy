@@ -416,13 +416,13 @@ buildAge seed worldSize plates ageIdx tbs =
                 in case pfFeature pf of
                     HydroShape (RiverFeature _)
                         | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
-                        , evolRoll < 0.10 + durationBonus →
+                        , evolRoll < 0.01 + durationBonus →
                             evolveRiver hydroSeed (tbsPeriodIdx st) (evts, st) pf
                         | otherwise → (evts, st)
 
                     HydroShape (GlacierFeature _)
                         | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
-                        , evolRoll < 0.05 + durationBonus →
+                        , evolRoll < 0.005 + durationBonus →
                             evolveGlacier hydroSeed (tbsPeriodIdx st) gs1 (evts, st) pf
                         | otherwise → (evts, st)
 

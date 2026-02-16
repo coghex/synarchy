@@ -45,7 +45,7 @@ generateRivers ∷ Word64 → Int → [TectonicPlate]
 generateRivers seed worldSize plates periodIdx tbs =
     let halfTiles = (worldSize * 16) `div` 2
         -- More rivers: base 12 instead of 6, scales with area
-        maxRivers = scaleCount worldSize 12
+        maxRivers = scaleCount worldSize 6
         maxAttempts = maxRivers * 8
 
         go attemptIdx count tbs' acc
