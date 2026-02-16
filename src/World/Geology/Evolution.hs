@@ -29,6 +29,7 @@ evolveOneFeature seed periodIdx (events, tbs) pf =
         (VolcanicShape (HydrothermalVent _)) → (events, tbs)
         (VolcanicShape (SuperVolcano _))     → (events, tbs)
         (VolcanicShape (Caldera _))          → (events, tbs)
+        (HydroShape _)                       → (events, tbs)
         _ → evolvePointFeature seed periodIdx (events, tbs) pf
 
 evolvePointFeature ∷ Word64 → Int

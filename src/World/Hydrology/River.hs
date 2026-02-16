@@ -12,7 +12,7 @@ import qualified Data.HashMap.Strict as HM
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Material (matSandstone, matShale, matLimestone, unMaterialId)
-import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier)
+import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Hydrology.Types
 import World.Geology.Types
 import World.Geology.Hash
@@ -131,7 +131,7 @@ walkDownhill seed worldSize plates startGX startGY startElev =
                     -- Hash-based "wobble": the lowest 2 candidates are
                     -- eligible, and the hash picks between them.
                     sorted = sortByElev neighbors
-                    (bestX, bestY, bestElev) = case sorted of
+                    (bestX', bestY', bestElev) = case sorted of
                         [] → (curGX, curGY, curElev)
                         [(x, y, e)] → (x, y, e)
                         ((x1, y1, e1) : (x2, y2, e2) : _) →
@@ -142,6 +142,7 @@ walkDownhill seed worldSize plates startGX startGY startElev =
                             in if wobble < 0.7 ∨ e2 ≥ curElev
                                then (x1, y1, e1)
                                else (x2, y2, e2)
+                    (bestX, bestY) = wrapGlobalU worldSize bestX' bestY'
 
                 in if bestElev ≥ curElev
                    then reverse acc  -- no downhill path, we're in a basin
@@ -397,8 +398,8 @@ evolveRiver seed periodIdx (events, tbs) pf =
                          , rpFlowRate     = rpFlowRate river + 0.1
                          }
 
+                     -- TODO: capture other river
                      evt = HydroModify fid (RiverCapture fid (GeoCoord newSrcX newSrcY))
-
                      tbs' = updateFeature fid
                          (\p → p { pfFeature = HydroShape $ RiverFeature newRiver
                                   , pfEruptionCount = pfEruptionCount p + 1

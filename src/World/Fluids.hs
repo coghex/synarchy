@@ -306,10 +306,12 @@ fillLakePool seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurface 
 -- | Is this feature active and close enough to affect this chunk?
 isNearbyActive ∷ Int → Int → Int → PersistentFeature → Bool
 isNearbyActive worldSize chunkGX chunkGY pf =
-    case pfActivity pf of
-        FActive    → checkRange
-        FCollapsed → checkRange  -- calderas still have lava
-        _          → False
+    case pfFeature pf of
+        HydroShape _ → False
+        VolcanicShape _ → case pfActivity pf of
+            FActive    → checkRange
+            FCollapsed → checkRange  -- calderas still have lava
+            _          → False
   where
     checkRange = let maxR = getFeatureRadius (pfFeature pf)
                      GeoCoord fx fy = getFeatureCenter (pfFeature pf)
