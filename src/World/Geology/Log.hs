@@ -10,10 +10,12 @@ import UPrelude
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
+import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
 import World.Plate (TectonicPlate(..), generatePlates)
 import World.Geology.Types
+import World.Hydrology.Types
 
 -----------------------------------------------------------
 -- Timeline Summary
@@ -68,16 +70,19 @@ countEvent m (EruptionEvent _ _)     = Map.insertWith (+) "Eruptions" 1 m
 countEvent m (LandslideEvent _)      = Map.insertWith (+) "Landslides" 1 m
 countEvent m (GlaciationEvent _)     = Map.insertWith (+) "Glaciations" 1 m
 countEvent m (FloodEvent _)          = Map.insertWith (+) "Floods" 1 m
+countEvent m (HydroEvent _)          = Map.insertWith (+) "Hydro Events" 1 m
+countEvent m (HydroModify _ _)       = Map.insertWith (+) "Hydro Modifications" 1 m
 
-featureTypeName ∷ VolcanicFeature → Text
-featureTypeName (ShieldVolcano _)    = "Shield Volcanoes"
-featureTypeName (CinderCone _)       = "Cinder Cones"
-featureTypeName (LavaDome _)         = "Lava Domes"
-featureTypeName (Caldera _)          = "Calderas"
-featureTypeName (FissureVolcano _)   = "Fissures"
-featureTypeName (LavaTube _)         = "Lava Tubes"
-featureTypeName (SuperVolcano _)     = "Super Volcanoes"
-featureTypeName (HydrothermalVent _) = "Hydrothermal Vents"
+featureTypeName ∷ FeatureShape → Text
+featureTypeName (VolcanicShape (ShieldVolcano _))    = "Shield Volcanoes"
+featureTypeName (VolcanicShape (CinderCone _))       = "Cinder Cones"
+featureTypeName (VolcanicShape (LavaDome _))         = "Lava Domes"
+featureTypeName (VolcanicShape (Caldera _))          = "Calderas"
+featureTypeName (VolcanicShape (FissureVolcano _))   = "Fissures"
+featureTypeName (VolcanicShape (LavaTube _))         = "Lava Tubes"
+featureTypeName (VolcanicShape (SuperVolcano _))     = "Super Volcanoes"
+featureTypeName (VolcanicShape (HydrothermalVent _)) = "Hydrothermal Vents"
+featureTypeName _                     = "Other Features"
 
 evolutionName ∷ FeatureEvolution → Text
 evolutionName (Reactivate _ _ _ _)        = "Reactivations"
@@ -89,10 +94,10 @@ evolutionName (FlankCollapse _ _ _ _ _)   = "Flank Collapses"
 
 countActivity ∷ (Int, Int, Int) → PersistentFeature → (Int, Int, Int)
 countActivity (a, d, e) pf = case pfActivity pf of
-    Active    → (a + 1, d, e)
-    Dormant   → (a, d + 1, e)
-    Extinct   → (a, d, e + 1)
-    Collapsed → (a, d, e + 1)
+    FActive    → (a + 1, d, e)
+    FDormant   → (a, d + 1, e)
+    FExtinct   → (a, d, e + 1)
+    FCollapsed → (a, d, e + 1)
 
 -----------------------------------------------------------
 -- Scale Display
@@ -239,34 +244,37 @@ formatEventDetailed (EruptionEvent (GeoFeatureId fid) strength) =
 formatEventDetailed (LandslideEvent _) = "Landslide"
 formatEventDetailed (GlaciationEvent _) = "Glaciation"
 formatEventDetailed (FloodEvent _) = "Flood"
+formatEventDetailed (HydroEvent _) = "Hydro Event"
+formatEventDetailed (HydroModify (GeoFeatureId fid) desc) =
+    "Hydro modification at Feature #" <> T.pack (show fid) <> ": " <> T.pack (show desc)
 
 -- | Format a volcanic feature event with type and coordinates.
-formatFeatureEvent ∷ VolcanicFeature → Text
-formatFeatureEvent (ShieldVolcano p) =
+formatFeatureEvent ∷ FeatureShape → Text
+formatFeatureEvent (VolcanicShape (ShieldVolcano p)) =
     let GeoCoord cx cy = shCenter p
     in "Shield Volcano baseR=" <> T.pack (show (shBaseRadius p))
        <> " height=" <> T.pack (show (shPeakHeight p))
        <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
 
-formatFeatureEvent (CinderCone p) =
+formatFeatureEvent (VolcanicShape (CinderCone p)) =
     let GeoCoord cx cy = ccCenter p
     in "Cinder Cone baseR=" <> T.pack (show (ccBaseRadius p))
        <> " height=" <> T.pack (show (ccPeakHeight p))
        <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
 
-formatFeatureEvent (LavaDome p) =
+formatFeatureEvent (VolcanicShape (LavaDome p)) =
     let GeoCoord cx cy = ldCenter p
     in "Lava Dome baseR=" <> T.pack (show (ldBaseRadius p))
        <> " height=" <> T.pack (show (ldHeight p))
        <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
 
-formatFeatureEvent (Caldera p) =
+formatFeatureEvent (VolcanicShape (Caldera p)) =
     let GeoCoord cx cy = caCenter p
     in "Caldera outerR=" <> T.pack (show (caOuterRadius p))
        <> " rimH=" <> T.pack (show (caRimHeight p))
        <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
 
-formatFeatureEvent (FissureVolcano p) =
+formatFeatureEvent (VolcanicShape (FissureVolcano p)) =
     let GeoCoord sx sy = fpStart p
         GeoCoord ex ey = fpEnd p
     in "Fissure width=" <> T.pack (show (fpWidth p))
@@ -274,7 +282,7 @@ formatFeatureEvent (FissureVolcano p) =
        <> " (" <> T.pack (show sx) <> ", " <> T.pack (show sy) <> ")"
        <> "→(" <> T.pack (show ex) <> ", " <> T.pack (show ey) <> ")"
 
-formatFeatureEvent (LavaTube p) =
+formatFeatureEvent (VolcanicShape (LavaTube p)) =
     let GeoCoord sx sy = ltStart p
         GeoCoord ex ey = ltEnd p
     in "Lava Tube width=" <> T.pack (show (ltWidth p))
@@ -282,13 +290,13 @@ formatFeatureEvent (LavaTube p) =
        <> " (" <> T.pack (show sx) <> ", " <> T.pack (show sy) <> ")"
        <> "→(" <> T.pack (show ex) <> ", " <> T.pack (show ey) <> ")"
 
-formatFeatureEvent (SuperVolcano p) =
+formatFeatureEvent (VolcanicShape (SuperVolcano p)) =
     let GeoCoord cx cy = svCenter p
     in "★ SUPERVOLCANO calderaR=" <> T.pack (show (svCalderaRadius p))
        <> " ejectaR=" <> T.pack (show (svEjectaRadius p))
        <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
 
-formatFeatureEvent (HydrothermalVent p) =
+formatFeatureEvent (VolcanicShape (HydrothermalVent p)) =
     let GeoCoord cx cy = htCenter p
     in "Hydrothermal Vent r=" <> T.pack (show (htRadius p))
        <> " chimneyH=" <> T.pack (show (htChimneyHeight p))
@@ -327,10 +335,10 @@ formatOneFeature pf =
         (name, coord, details) = describeFeature' (pfFeature pf)
         GeoCoord fx fy = coord
         activity = case pfActivity pf of
-            Active    → "[ACTIVE]  "
-            Dormant   → "[DORMANT] "
-            Extinct   → "[EXTINCT] "
-            Collapsed → "[COLLAPS] "
+            FActive    → "[ACTIVE]  "
+            FDormant   → "[DORMANT] "
+            FExtinct   → "[EXTINCT] "
+            FCollapsed → "[COLLAPS] "
         parent = case pfParentId pf of
             Just (GeoFeatureId pid) → " parent=#" <> T.pack (show pid)
             Nothing → ""
@@ -342,39 +350,53 @@ formatOneFeature pf =
        <> " (" <> T.pack (show fx) <> ", " <> T.pack (show fy) <> ") "
        <> details <> parent <> eruptions
 
-describeFeature' ∷ VolcanicFeature → (Text, GeoCoord, Text)
-describeFeature' (ShieldVolcano p) =
+describeFeature' ∷ FeatureShape → (Text, GeoCoord, Text)
+describeFeature' (VolcanicShape (ShieldVolcano p)) =
     ("Shield Volcano", shCenter p,
      "baseR=" <> T.pack (show (shBaseRadius p))
      <> " height=" <> T.pack (show (shPeakHeight p)))
-describeFeature' (CinderCone p) =
+describeFeature' (VolcanicShape (CinderCone p)) =
     ("Cinder Cone", ccCenter p,
      "baseR=" <> T.pack (show (ccBaseRadius p))
      <> " height=" <> T.pack (show (ccPeakHeight p)))
-describeFeature' (LavaDome p) =
+describeFeature' (VolcanicShape (LavaDome p)) =
     ("Lava Dome", ldCenter p,
      "baseR=" <> T.pack (show (ldBaseRadius p))
      <> " height=" <> T.pack (show (ldHeight p)))
-describeFeature' (Caldera p) =
+describeFeature' (VolcanicShape (Caldera p)) =
     ("Caldera", caCenter p,
      "outerR=" <> T.pack (show (caOuterRadius p))
      <> " rimH=" <> T.pack (show (caRimHeight p)))
-describeFeature' (FissureVolcano p) =
+describeFeature' (VolcanicShape (FissureVolcano p)) =
     ("Fissure", fpStart p,
      "width=" <> T.pack (show (fpWidth p))
      <> " ridgeH=" <> T.pack (show (fpRidgeHeight p)))
-describeFeature' (LavaTube p) =
+describeFeature' (VolcanicShape (LavaTube p)) =
     ("Lava Tube", ltStart p,
      "width=" <> T.pack (show (ltWidth p))
      <> " collapses=" <> T.pack (show (ltCollapses p)))
-describeFeature' (SuperVolcano p) =
+describeFeature' (VolcanicShape (SuperVolcano p)) =
     ("SUPERVOLCANO", svCenter p,
      "calderaR=" <> T.pack (show (svCalderaRadius p))
      <> " ejectaR=" <> T.pack (show (svEjectaRadius p)))
-describeFeature' (HydrothermalVent p) =
+describeFeature' (VolcanicShape (HydrothermalVent p)) =
     ("Hydrothermal Vent", htCenter p,
      "radius=" <> T.pack (show (htRadius p))
      <> " chimneyH=" <> T.pack (show (htChimneyHeight p)))
+describeFeature' (HydroShape (RiverFeature p)) =
+    ("River", rpSourceRegion p,
+     "mouth=" <> T.pack (show (rpMouthRegion p))
+     <> " flow=" <> T.pack (show (rpFlowRate p)))
+describeFeature' (HydroShape (GlacierFeature p)) =
+    ("Glacier", glCenter p,
+     "length=" <> T.pack (show (glLength p))
+     <> " width=" <> T.pack (show (glWidth p))
+     <> " thickness=" <> T.pack (show (glThickness p)))
+describeFeature' (HydroShape (LakeFeature p)) =
+    ("Lake", lkCenter p,
+     "radius=" <> T.pack (show (lkRadius p))
+     <> " surface=" <> T.pack (show (lkSurface p))
+     <> " depth=" <> T.pack (show (lkDepth p)))
 
 -----------------------------------------------------------
 -- IO Logging Functions

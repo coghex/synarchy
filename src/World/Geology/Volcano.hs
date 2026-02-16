@@ -12,6 +12,7 @@ module World.Geology.Volcano
     ) where
 
 import UPrelude
+import World.Base (GeoCoord(..))
 import World.Types
 import World.Material
 import World.Geology.Types

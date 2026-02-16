@@ -5,12 +5,17 @@ module World.Geology.Event
     ) where
 
 import UPrelude
+import World.Base (GeoCoord(..))
 import World.Types
 import World.Material
 import World.Geology.Types
 import World.Geology.Crater (applyCrater)
 import World.Geology.Volcano (applyVolcanicFeature)
 import World.Geology.Hash (wrappedDeltaXGeo, smoothstepGeo)
+import World.Hydrology.Types (HydroFeature(..))
+import World.Hydrology.Event (applyHydroEvolution, applyHydroFeature)
+import World.Hydrology.River (applyRiverCarve)
+import World.Hydrology.Glacier (applyGlacierCarve)
 
 -----------------------------------------------------------
 -- Event Application
@@ -19,12 +24,18 @@ import World.Geology.Hash (wrappedDeltaXGeo, smoothstepGeo)
 applyGeoEvent ∷ GeoEvent → Int → Int → Int → Int → GeoModification
 applyGeoEvent (CraterEvent params)  worldSize gx gy baseElev =
     applyCrater params worldSize gx gy baseElev
-applyGeoEvent (VolcanicEvent feature) worldSize gx gy baseElev =
+applyGeoEvent (VolcanicEvent (VolcanicShape feature)) worldSize gx gy baseElev =
     applyVolcanicFeature feature worldSize gx gy baseElev
+applyGeoEvent (VolcanicEvent _) worldSize gx gy baseElev =
+    noModification
 applyGeoEvent (VolcanicModify _fid evolution) worldSize gx gy baseElev =
     applyEvolution evolution worldSize gx gy baseElev
 applyGeoEvent (EruptionEvent _fid flow) worldSize gx gy baseElev =
     applyLavaFlow flow worldSize gx gy baseElev
+applyGeoEvent (HydroEvent feature) worldSize gx gy baseElev =
+    applyHydroFeature feature worldSize gx gy baseElev
+applyGeoEvent (HydroModify _fid evolution) worldSize gx gy baseElev =
+    applyHydroEvolution evolution worldSize gx gy baseElev
 applyGeoEvent (LandslideEvent _)    _ _ _ _ = noModification
 applyGeoEvent (GlaciationEvent _)   _ _ _ _ = noModification
 applyGeoEvent (FloodEvent _)        _ _ _ _ = noModification

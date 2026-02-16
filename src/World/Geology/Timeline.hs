@@ -8,6 +8,7 @@ import Data.Bits (xor)
 import Data.Word (Word64)
 import Data.List (foldl')
 import qualified Data.Text as T
+import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Plate (generatePlates, TectonicPlate, elevationAtGlobal)
 import World.Geology.Types
@@ -26,6 +27,11 @@ import World.Geology.Generate
     , generateAndRegisterN
     )
 import World.Geology.Evolution (evolveOneFeature)
+import World.Hydrology.River (generateRivers, evolveRiver)
+import World.Hydrology.Glacier (generateGlaciers, evolveGlacier)
+import World.Hydrology.Climate (computeRegionalClimate)
+import World.Hydrology.Types (HydroFeature(..), GlacierParams(..)
+                             , RiverParams(..), LakeParams(..))
 
 -----------------------------------------------------------
 -- Top Level
@@ -212,8 +218,8 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs =
 
 isSuperVolcano ∷ PersistentFeature → Bool
 isSuperVolcano pf = case pfFeature pf of
-    SuperVolcano _ → True
-    _              → False
+    (VolcanicShape (SuperVolcano _)) → True
+    _                                → False
 
 forceOneSuperVolcano ∷ Word64 → Int → [TectonicPlate] → Int
                      → TimelineBuildState
@@ -234,7 +240,7 @@ forceOneSuperVolcano seed worldSize plates periodIdx tbs =
                             pf = PersistentFeature
                                 { pfId               = fid
                                 , pfFeature          = feature
-                                , pfActivity         = Active
+                                , pfActivity         = FActive
                                 , pfFormationPeriod   = periodIdx
                                 , pfLastActivePeriod  = periodIdx
                                 , pfEruptionCount     = 1
@@ -373,32 +379,67 @@ buildAge seed worldSize plates ageIdx tbs =
             then []
             else []
 
-        -- Age-level eruptions: roll for each active feature
-        -- that has epTimelineScale == Age
+        -- Age-level eruptions: roll for each active volcanic feature
         eruptSeed = ageSeed `xor` 0x1A7A
         eruptions = catMaybes
             [ generateEruption eruptSeed worldSize ageIdx plates pf
             | pf ← tbsFeatures tbs
-            , case eruptionProfile (pfFeature pf) of
-                Just ep → epTimelineScale ep ≡ Age
-                Nothing → False
+            , case (eruptionProfile (pfFeature pf)) of
+                    Just ep → epTimelineScale ep ≡ Age
+                    Nothing → False
             ]
 
+        -- === Hydrology ===
+
+        hydroSeed = ageSeed `xor` 0xA0FA71C
+
+        -- Generate new rivers (only in early ages)
+        (newRivers, tbs_r) = if ageIdx < 3
+            then generateRivers hydroSeed worldSize plates
+                     (tbsPeriodIdx tbs) tbs
+            else ([], tbs)
+
+        -- Generate/evolve glaciers based on global temperature
+        (newGlaciers, tbs_g) = generateGlaciers hydroSeed worldSize plates
+                                   (tbsGeoState tbs_r)
+                                   (tbsPeriodIdx tbs_r) tbs_r
+
+        -- Evolve existing hydro features
+        (hydroEvolvEvents, tbs_h) = foldl'
+            (\(evts, st) pf → case pfFeature pf of
+                HydroShape (RiverFeature _) →
+                    evolveRiver hydroSeed (tbsPeriodIdx st) (evts, st) pf
+                HydroShape (GlacierFeature _) →
+                    evolveGlacier hydroSeed (tbsPeriodIdx st) (tbsGeoState st)
+                                 (evts, st) pf
+                HydroShape (LakeFeature _) →
+                    (evts, st)  -- lakes are passive
+                VolcanicShape _ →
+                    (evts, st)  -- handled by applyVolcanicEvolution at Period level
+            ) ([], tbs_g) (tbsFeatures tbs_g)
+
+        -- Creation events for new hydro features
+        hydroCreationEvents = map (\pf → case pfFeature pf of
+                HydroShape hf → HydroEvent hf
+                _             → error "buildAge: non-hydro feature in hydro list"
+            ) (newRivers <> newGlaciers)
+
         allEvents = meteorites <> landslides <> floods <> eruptions
+                 <> hydroCreationEvents <> hydroEvolvEvents
 
         gs2 = gs1 { gsCO2 = max 0.5 (gsCO2 gs1 - duration * 0.005) }
 
         erosion = erosionFromGeoState gs2 seed ageIdx
 
         period = GeoPeriod
-            { gpName     = "Age " <> T.pack (show (tbsPeriodIdx tbs))
+            { gpName     = "Age " <> T.pack (show (tbsPeriodIdx tbs_h))
             , gpScale    = Age
             , gpDuration = round duration
             , gpDate     = currentDate
             , gpEvents   = allEvents
             , gpErosion  = erosion
             }
-    in addPeriod period (tbs { tbsGeoState = gs2 })
+    in addPeriod period (tbs_h { tbsGeoState = gs2 })
 
 erosionFromGeoState ∷ GeoState → Word64 → Int → ErosionParams
 erosionFromGeoState gs seed ageIdx =
@@ -423,7 +464,7 @@ generateEruption ∷ Word64 → Int → Int → [TectonicPlate]
                  → PersistentFeature → Maybe GeoEvent
 generateEruption seed worldSize ageIdx plates pf =
     case pfActivity pf of
-        Active → case eruptionProfile (pfFeature pf) of
+        FActive → case eruptionProfile (pfFeature pf) of
             Nothing → Nothing
             Just profile →
                 let GeoFeatureId fidInt = pfId pf
@@ -466,16 +507,30 @@ buildEruptionEvent seed worldSize ageIdx plates pf profile =
     in EruptionEvent (pfId pf) flow
 
 -- | Extract the center coordinates from any volcanic feature.
-featureCenter ∷ VolcanicFeature → (Int, Int)
-featureCenter (ShieldVolcano p)    = let GeoCoord x y = shCenter p in (x, y)
-featureCenter (CinderCone p)       = let GeoCoord x y = ccCenter p in (x, y)
-featureCenter (LavaDome p)         = let GeoCoord x y = ldCenter p in (x, y)
-featureCenter (Caldera p)          = let GeoCoord x y = caCenter p in (x, y)
-featureCenter (FissureVolcano p)   = let GeoCoord sx sy = fpStart p
-                                         GeoCoord ex ey = fpEnd p
-                                     in ((sx + ex) `div` 2, (sy + ey) `div` 2)
-featureCenter (LavaTube p)         = let GeoCoord sx sy = ltStart p
-                                         GeoCoord ex ey = ltEnd p
-                                     in ((sx + ex) `div` 2, (sy + ey) `div` 2)
-featureCenter (SuperVolcano p)     = let GeoCoord x y = svCenter p in (x, y)
-featureCenter (HydrothermalVent p) = let GeoCoord x y = htCenter p in (x, y)
+featureCenter ∷ FeatureShape → (Int, Int)
+featureCenter (VolcanicShape (ShieldVolcano p))
+    = let GeoCoord x y = shCenter p in (x, y)
+featureCenter (VolcanicShape (CinderCone p))
+    = let GeoCoord x y = ccCenter p in (x, y)
+featureCenter (VolcanicShape (LavaDome p))
+    = let GeoCoord x y = ldCenter p in (x, y)
+featureCenter (VolcanicShape (Caldera p))
+    = let GeoCoord x y = caCenter p in (x, y)
+featureCenter (VolcanicShape (FissureVolcano p))
+    = let GeoCoord sx sy = fpStart p
+          GeoCoord ex ey = fpEnd p
+      in ((sx + ex) `div` 2, (sy + ey) `div` 2)
+featureCenter (VolcanicShape (LavaTube p))
+    = let GeoCoord sx sy = ltStart p
+          GeoCoord ex ey = ltEnd p
+      in ((sx + ex) `div` 2, (sy + ey) `div` 2)
+featureCenter (VolcanicShape (SuperVolcano p))
+    = let GeoCoord x y = svCenter p in (x, y)
+featureCenter (VolcanicShape (HydrothermalVent p))
+    = let GeoCoord x y = htCenter p in (x, y)
+featureCenter (HydroShape (RiverFeature r))
+    = let GeoCoord x y = rpSourceRegion r in (x, y)
+featureCenter (HydroShape (GlacierFeature g))
+    = let GeoCoord x y = glCenter g in (x, y)
+featureCenter (HydroShape (LakeFeature l))
+    = let GeoCoord x y = lkCenter l in (x, y)

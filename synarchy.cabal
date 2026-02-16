@@ -249,6 +249,7 @@ library
                      UI.Manager
                      UI.Render
                      UI.TextBuffer
+                     World.Base
                      World.Types
                      World.Thread
                      World.Grid
@@ -265,6 +266,11 @@ library
                      World.Geology.Timeline
                      World.Geology.Erosion
                      World.Geology.Event
+                     World.Hydrology.Types
+                     World.Hydrology.Climate
+                     World.Hydrology.Event
+                     World.Hydrology.River
+                     World.Hydrology.Glacier
                      World.Plate
                      World.Scale
                      World.Fluids

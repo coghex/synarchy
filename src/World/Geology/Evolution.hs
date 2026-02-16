@@ -8,9 +8,11 @@ module World.Geology.Evolution
 
 import UPrelude
 import Data.Word (Word64)
+import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Geology.Types
 import World.Geology.Hash
+import World.Hydrology.Types
 
 -----------------------------------------------------------
 -- Volcanic Evolution
@@ -22,11 +24,11 @@ evolveOneFeature ∷ Word64 → Int
                  → ([GeoEvent], TimelineBuildState)
 evolveOneFeature seed periodIdx (events, tbs) pf =
     case pfFeature pf of
-        FissureVolcano _   → (events, tbs)
-        LavaTube _         → (events, tbs)
-        HydrothermalVent _ → (events, tbs)
-        SuperVolcano _     → (events, tbs)
-        Caldera _          → (events, tbs)
+        (VolcanicShape (FissureVolcano _))   → (events, tbs)
+        (VolcanicShape (LavaTube _))         → (events, tbs)
+        (VolcanicShape (HydrothermalVent _)) → (events, tbs)
+        (VolcanicShape (SuperVolcano _))     → (events, tbs)
+        (VolcanicShape (Caldera _))          → (events, tbs)
         _ → evolvePointFeature seed periodIdx (events, tbs) pf
 
 evolvePointFeature ∷ Word64 → Int
@@ -39,7 +41,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
         h1 = hashGeo seed fidInt 40
         roll = hashToFloatGeo h1
     in case pfActivity pf of
-        Active →
+        FActive →
             if roll < 0.10
             -- 10%: collapse into caldera
             then let h2 = hashGeo seed fidInt 41
@@ -50,7 +52,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                              (getFeatureCenter (pfFeature pf))
                              (getFeatureRadius (pfFeature pf)))
                      tbs' = updateFeature fid
-                         (\p → p { pfActivity = Collapsed
+                         (\p → p { pfActivity = FCollapsed
                                   , pfLastActivePeriod = periodIdx }) tbs
                  in (evt : events, tbs')
 
@@ -83,7 +85,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                                (getFeatureCenter (pfFeature pf))
                                (getFeatureRadius (pfFeature pf)))
                      tbs' = updateFeature fid
-                         (\p → p { pfActivity = Dormant
+                         (\p → p { pfActivity = FDormant
                                   , pfLastActivePeriod = periodIdx }) tbs
                  in (evt : events, tbs')
 
@@ -108,8 +110,8 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                          }
                      childPf = PersistentFeature
                          { pfId               = childId
-                         , pfFeature          = childFeature
-                         , pfActivity         = Active
+                         , pfFeature          = VolcanicShape childFeature
+                         , pfActivity         = FActive
                          , pfFormationPeriod   = periodIdx
                          , pfLastActivePeriod  = periodIdx
                          , pfEruptionCount     = 1
@@ -135,7 +137,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                              , pfLastActivePeriod = periodIdx }) tbs
             in (evt : events, tbs')
 
-        Dormant →
+        FDormant →
             if roll < 0.3
             then let h5 = hashGeo seed fidInt 50
                      h6 = hashGeo seed fidInt 51
@@ -145,7 +147,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                                 (getFeatureCenter (pfFeature pf))
                                 (getFeatureRadius (pfFeature pf)))
                      tbs' = updateFeature fid
-                         (\p → p { pfActivity = Active
+                         (\p → p { pfActivity = FActive
                                   , pfEruptionCount = pfEruptionCount p + 1
                                   , pfLastActivePeriod = periodIdx }) tbs
                  in (evt : events, tbs')
@@ -155,50 +157,79 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                                (getFeatureCenter (pfFeature pf))
                                (getFeatureRadius (pfFeature pf)))
                      tbs' = updateFeature fid
-                         (\p → p { pfActivity = Extinct }) tbs
+                         (\p → p { pfActivity = FExtinct }) tbs
                  in (evt : events, tbs')
 
             else (events, tbs)
 
-        Extinct   → (events, tbs)
-        Collapsed → (events, tbs)
+        FExtinct   → (events, tbs)
+        FCollapsed → (events, tbs)
 
 -----------------------------------------------------------
 -- Feature Query Helpers
 -----------------------------------------------------------
 
-getFeatureRadius ∷ VolcanicFeature → Int
-getFeatureRadius (ShieldVolcano p)    = shBaseRadius p
-getFeatureRadius (CinderCone p)       = ccBaseRadius p
-getFeatureRadius (LavaDome p)         = ldBaseRadius p
-getFeatureRadius (Caldera p)          = caOuterRadius p
-getFeatureRadius (SuperVolcano p)     = svEjectaRadius p
-getFeatureRadius (HydrothermalVent p) = htRadius p
-getFeatureRadius (FissureVolcano p)   =
+getFeatureRadius ∷ FeatureShape → Int
+getFeatureRadius (VolcanicShape (ShieldVolcano p))    = shBaseRadius p
+getFeatureRadius (VolcanicShape (CinderCone p))       = ccBaseRadius p
+getFeatureRadius (VolcanicShape (LavaDome p))         = ldBaseRadius p
+getFeatureRadius (VolcanicShape (Caldera p))          = caOuterRadius p
+getFeatureRadius (VolcanicShape (SuperVolcano p))     = svEjectaRadius p
+getFeatureRadius (VolcanicShape (HydrothermalVent p)) = htRadius p
+getFeatureRadius (VolcanicShape (FissureVolcano p))   =
     let GeoCoord sx sy = fpStart p
         GeoCoord ex ey = fpEnd p
         dx = fromIntegral (ex - sx) ∷ Float
         dy = fromIntegral (ey - sy) ∷ Float
     in round (sqrt (dx * dx + dy * dy) / 2.0) + fpWidth p
-getFeatureRadius (LavaTube p)         =
+getFeatureRadius (VolcanicShape (LavaTube p))         =
     let GeoCoord sx sy = ltStart p
         GeoCoord ex ey = ltEnd p
         dx = fromIntegral (ex - sx) ∷ Float
         dy = fromIntegral (ey - sy) ∷ Float
     in round (sqrt (dx * dx + dy * dy) / 2.0) + ltWidth p
+getFeatureRadius (HydroShape (RiverFeature r)) =
+    -- Half the distance from source to mouth, plus the widest
+    -- valley width. This gives a bounding radius for proximity
+    -- checks (same role as shBaseRadius for shield volcanoes).
+    let GeoCoord sx sy = rpSourceRegion r
+        GeoCoord mx my = rpMouthRegion r
+        dx = fromIntegral (mx - sx) ∷ Float
+        dy = fromIntegral (my - sy) ∷ Float
+        maxValley = case rpSegments r of
+            [] → 0
+            segs → maximum (map rsValleyWidth segs)
+    in round (sqrt (dx * dx + dy * dy) / 2.0) + maxValley
+getFeatureRadius (HydroShape (GlacierFeature g)) =
+    -- Glacier extends glLength tiles along its flow direction
+    -- and glWidth tiles across. The bounding radius is half the
+    -- diagonal of that box, plus moraine overshoot.
+    let len = fromIntegral (glLength g) ∷ Float
+        wid = fromIntegral (glWidth g) ∷ Float
+    in round (sqrt (len * len + wid * wid) / 2.0) + glMoraineSize g
+getFeatureRadius (HydroShape (LakeFeature l)) = lkRadius l
 
-getFeatureCenter ∷ VolcanicFeature → GeoCoord
-getFeatureCenter (ShieldVolcano p)    = shCenter p
-getFeatureCenter (CinderCone p)       = ccCenter p
-getFeatureCenter (LavaDome p)         = ldCenter p
-getFeatureCenter (Caldera p)          = caCenter p
-getFeatureCenter (SuperVolcano p)     = svCenter p
-getFeatureCenter (HydrothermalVent p) = htCenter p
-getFeatureCenter (FissureVolcano p)   =
+getFeatureCenter ∷ FeatureShape → GeoCoord
+getFeatureCenter (VolcanicShape (ShieldVolcano p))    = shCenter p
+getFeatureCenter (VolcanicShape (CinderCone p))       = ccCenter p
+getFeatureCenter (VolcanicShape (LavaDome p))         = ldCenter p
+getFeatureCenter (VolcanicShape (Caldera p))          = caCenter p
+getFeatureCenter (VolcanicShape (SuperVolcano p))     = svCenter p
+getFeatureCenter (VolcanicShape (HydrothermalVent p)) = htCenter p
+getFeatureCenter (VolcanicShape (FissureVolcano p))   =
     let GeoCoord sx sy = fpStart p
         GeoCoord ex ey = fpEnd p
     in GeoCoord ((sx + ex) `div` 2) ((sy + ey) `div` 2)
-getFeatureCenter (LavaTube p)         =
+getFeatureCenter (VolcanicShape (LavaTube p))         =
     let GeoCoord sx sy = ltStart p
         GeoCoord ex ey = ltEnd p
     in GeoCoord ((sx + ex) `div` 2) ((sy + ey) `div` 2)
+getFeatureCenter (HydroShape (RiverFeature r)) =
+    -- Midpoint between source and mouth, same logic as fissure.
+    -- Proximity checks use this + getFeatureRadius to decide if
+    -- this feature can affect a given chunk.
+    let GeoCoord sx sy = rpSourceRegion r
+        GeoCoord mx my = rpMouthRegion r
+    in GeoCoord ((sx + mx) `div` 2) ((sy + my) `div` 2)
+getFeatureCenter (HydroShape (GlacierFeature g)) = glCenter g
+getFeatureCenter (HydroShape (LakeFeature l)) = lkCenter l

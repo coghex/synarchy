@@ -30,6 +30,7 @@ module World.Geology.Types
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.Hashable (Hashable(..))
+import World.Base (GeoFeatureId(..))
 import World.Types
 import World.Plate (TectonicPlate(..), twoNearestPlates, isBeyondGlacier)
 import World.Material (matBasalt, matObsidian)
@@ -146,8 +147,8 @@ data EruptionProfile = EruptionProfile
 -- | Get the eruption profile for a volcanic feature.
 --   Returns Nothing for features that don't independently erupt
 --   (lava tubes, hydrothermal vents).
-eruptionProfile ∷ VolcanicFeature → Maybe EruptionProfile
-eruptionProfile (ShieldVolcano p) = Just EruptionProfile
+eruptionProfile ∷ FeatureShape → Maybe EruptionProfile
+eruptionProfile (VolcanicShape (ShieldVolcano p)) = Just EruptionProfile
     { epEruptChance   = 0.7        -- erupts most ages
     , epMinRadius     = 15
     , epMaxRadius     = fromIntegral (shBaseRadius p)
@@ -157,7 +158,7 @@ eruptionProfile (ShieldVolcano p) = Just EruptionProfile
     , epMaterial      = 4          -- matBasalt
     , epTimelineScale = Age
     }
-eruptionProfile (CinderCone _) = Just EruptionProfile
+eruptionProfile (VolcanicShape (CinderCone _)) = Just EruptionProfile
     { epEruptChance   = 0.3        -- erupts occasionally
     , epMinRadius     = 3
     , epMaxRadius     = 8
@@ -167,7 +168,7 @@ eruptionProfile (CinderCone _) = Just EruptionProfile
     , epMaterial      = 5          -- matObsidian
     , epTimelineScale = Age
     }
-eruptionProfile (FissureVolcano p) = Just EruptionProfile
+eruptionProfile (VolcanicShape (FissureVolcano p)) = Just EruptionProfile
     { epEruptChance   = 0.6        -- erupts frequently along the line
     , epMinRadius     = 10
     , epMaxRadius     = fromIntegral (fpWidth p) * 5
@@ -177,7 +178,7 @@ eruptionProfile (FissureVolcano p) = Just EruptionProfile
     , epMaterial      = 4          -- matBasalt
     , epTimelineScale = Age
     }
-eruptionProfile (LavaDome p) = Just EruptionProfile
+eruptionProfile (VolcanicShape (LavaDome p)) = Just EruptionProfile
     { epEruptChance   = 0.4        -- slow extrusion
     , epMinRadius     = 2
     , epMaxRadius     = fromIntegral (ldBaseRadius p)
@@ -187,7 +188,7 @@ eruptionProfile (LavaDome p) = Just EruptionProfile
     , epMaterial      = 5          -- matObsidian
     , epTimelineScale = Age
     }
-eruptionProfile (SuperVolcano p) = Just EruptionProfile
+eruptionProfile (VolcanicShape (SuperVolcano p)) = Just EruptionProfile
     { epEruptChance   = 0.15       -- rare but catastrophic
     , epMinRadius     = fromIntegral (svCalderaRadius p)
     , epMaxRadius     = fromIntegral (svEjectaRadius p)
@@ -197,9 +198,10 @@ eruptionProfile (SuperVolcano p) = Just EruptionProfile
     , epMaterial      = 4          -- matBasalt
     , epTimelineScale = Period
     }
-eruptionProfile (Caldera _)          = Nothing  -- collapsed, no eruption
-eruptionProfile (HydrothermalVent _) = Nothing  -- no lava
-eruptionProfile (LavaTube _)         = Nothing  -- passive conduit
+eruptionProfile (VolcanicShape (Caldera _))          = Nothing  -- collapsed, no eruption
+eruptionProfile (VolcanicShape (HydrothermalVent _)) = Nothing  -- no lava
+eruptionProfile (VolcanicShape (LavaTube _))         = Nothing  -- passive conduit
+eruptionProfile _ = Nothing  -- non-volcanic features don't erupt
 
 -----------------------------------------------------------
 -- GeoState

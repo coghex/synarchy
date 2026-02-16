@@ -16,6 +16,7 @@ module World.Fluids
       -- * Chunk-level fluid
     , computeChunkFluid
     , computeChunkLava
+    , computeChunkLakes
       -- * Query
     , isOceanChunk
     ) where
@@ -27,10 +28,13 @@ import qualified Data.HashMap.Strict as HM
 import Data.Hashable (Hashable(..))
 import Data.Sequence (Seq(..))
 import qualified Data.Sequence as Seq
+import World.Base
 import World.Types
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
                    , isBeyondGlacier, wrapGlobalU)
+import World.Geology.Evolution (getFeatureCenter, getFeatureRadius)
+import World.Hydrology.Types (HydroFeature(..), LakeParams(..))
 
 -- | Compute which chunks are ocean by flood-filling from
 --   ocean plate centers. A chunk is ocean if:
@@ -166,46 +170,152 @@ computeChunkLava features seed plates worldSize coord surfaceMap =
         fillLavaFromFeature pf seed plates worldSize chunkMinGX chunkMinGY surfaceMap acc
         ) HM.empty nearbyActive
 
+-- | Compute lake fluid cells for a chunk.
+--   For each active lake feature near this chunk,
+--   fills columns where the lake surface is above the
+--   terrain surface and the column is within the lake basin.
+--
+--   Lakes come from two sources during world gen:
+--     1. Moraine-dammed glacial lakes (spawnMoraineLake)
+--     2. River-dammed lakes (evolveRiver → RiverDam)
+--
+--   A lake's fluid surface = base terrain elevation at center + lkSurface.
+--   A lake's basin extends lkRadius tiles from center.
+--   Columns within the basin that are below the lake surface get fluid.
+--
+--   Lake fluid does NOT overwrite existing ocean fluid —
+--   ocean takes priority (a lake at the coast would just
+--   be part of the ocean). Lava also takes priority over
+--   lakes (lava boils the lake = steam, handled later).
+--
+--   The spillway mechanic from fillPool is reused: the lake
+--   surface is clamped to the lowest point on the basin rim
+--   so water can't be higher than its escape point. This
+--   naturally handles oddly-shaped terrain — the lake fills
+--   to the rim and no higher.
+computeChunkLakes ∷ [PersistentFeature] → Word64 → [TectonicPlate]
+                  → Int → ChunkCoord
+                  → HM.HashMap (Int, Int) Int
+                  → HM.HashMap (Int, Int) FluidCell
+computeChunkLakes features seed plates worldSize coord surfaceMap =
+    let ChunkCoord cx cy = coord
+        chunkMinGX = cx * chunkSize
+        chunkMinGY = cy * chunkSize
+        nearbyLakes = filter (isNearbyLake worldSize chunkMinGX chunkMinGY) features
+    in foldl' (\acc pf →
+        fillLakeFromFeature pf seed plates worldSize chunkMinGX chunkMinGY surfaceMap acc
+        ) HM.empty nearbyLakes
+
+-- | Is this feature an active lake and close enough to affect this chunk?
+isNearbyLake ∷ Int → Int → Int → PersistentFeature → Bool
+isNearbyLake worldSize chunkGX chunkGY pf =
+    case pfFeature pf of
+        HydroShape (LakeFeature lk) →
+            case pfActivity pf of
+                FActive  → checkLakeRange worldSize chunkGX chunkGY lk
+                FDormant → checkLakeRange worldSize chunkGX chunkGY lk
+                _        → False
+        _ → False
+
+checkLakeRange ∷ Int → Int → Int → LakeParams → Bool
+checkLakeRange worldSize chunkGX chunkGY lk =
+    let GeoCoord fx fy = lkCenter lk
+        maxR = lkRadius lk
+        dx = abs (wrappedDeltaForFluid worldSize chunkGX fx)
+        dy = abs (chunkGY - fy)
+    in dx < maxR + chunkSize ∧ dy < maxR + chunkSize
+
+-- | Fill a lake basin into the fluid map.
+--   Uses the same spillway approach as fillPool (lava):
+--   sample the rim at lkRadius distance, find the lowest
+--   point, clamp the lake surface to that level.
+--
+--   Lake surface elevation = base terrain at center + lkSurface.
+--   lkSurface is relative (set by moraine height or dam height
+--   during world gen). We add it to the actual terrain elevation
+--   at the lake center to get the absolute water level.
+fillLakeFromFeature ∷ PersistentFeature → Word64 → [TectonicPlate]
+                    → Int → Int → Int
+                    → HM.HashMap (Int, Int) Int
+                    → HM.HashMap (Int, Int) FluidCell
+                    → HM.HashMap (Int, Int) FluidCell
+fillLakeFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
+    case pfFeature pf of
+        HydroShape (LakeFeature lk) →
+            let GeoCoord fx fy = lkCenter lk
+                poolRadius = lkRadius lk
+                -- Base terrain elevation at the lake center
+                (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
+                -- Lake surface is relative to the terrain at center
+                -- (e.g., moraine height above the glacial valley floor)
+                lakeSurface = baseElev + lkSurface lk
+            in fillLakePool seed plates worldSize chunkGX chunkGY
+                   fx fy poolRadius lakeSurface surfaceMap acc
+        _ → acc
+
+-- | Fill a circular lake basin into the fluid map.
+--   Nearly identical to fillPool for lava, but produces
+--   FluidCell Lake instead of FluidCell Lava.
+--
+--   The spillway clamp ensures physically correct behavior:
+--   water finds its own level and can't be higher than the
+--   lowest escape point on the basin rim.
+fillLakePool ∷ Word64 → [TectonicPlate] → Int → Int → Int
+             → Int → Int → Int → Int
+             → HM.HashMap (Int, Int) Int
+             → HM.HashMap (Int, Int) FluidCell
+             → HM.HashMap (Int, Int) FluidCell
+fillLakePool seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurface surfaceMap acc =
+    let pr = fromIntegral poolRadius ∷ Float
+        rimSamples = 32 ∷ Int
+
+        -- Sample the rim at poolRadius distance to find the spillway.
+        -- Uses surfaceMap for in-chunk points, elevationAtGlobal for
+        -- out-of-chunk points — same fallback pattern as fillPool.
+        spillway = foldl' (\minElev i →
+            let angle = fromIntegral i * 2.0 * π / fromIntegral rimSamples
+                rimGX = fx + round (pr * cos angle)
+                rimGY = fy + round (pr * sin angle)
+                rimLX = rimGX - chunkGX
+                rimLY = rimGY - chunkGY
+                rimElev = case HM.lookup (rimLX, rimLY) surfaceMap of
+                    Just e  → e
+                    Nothing →
+                        let (e, _) = elevationAtGlobal seed plates worldSize rimGX rimGY
+                        in e
+            in min minElev rimElev
+            ) lakeSurface [0 .. rimSamples - 1]
+
+        clampedSurface = min lakeSurface spillway
+
+    in if clampedSurface ≤ seaLevel
+       -- If the lake would be at or below sea level, it's just ocean.
+       -- Don't create lake fluid here — let computeChunkFluid handle it.
+       then acc
+       else HM.foldlWithKey' (\acc' (lx, ly) surfZ →
+            let gx = chunkGX + lx
+                gy = chunkGY + ly
+                dx = fromIntegral (wrappedDeltaForFluid worldSize gx fx) ∷ Float
+                dy = fromIntegral (gy - fy) ∷ Float
+                dist = sqrt (dx * dx + dy * dy)
+            in if dist < pr ∧ surfZ < clampedSurface
+               then HM.insert (lx, ly) (FluidCell Lake clampedSurface) acc'
+               else acc'
+            ) acc surfaceMap
+
 -- | Is this feature active and close enough to affect this chunk?
 isNearbyActive ∷ Int → Int → Int → PersistentFeature → Bool
 isNearbyActive worldSize chunkGX chunkGY pf =
     case pfActivity pf of
-        Active    → checkRange
-        Collapsed → checkRange  -- calderas still have lava
-        _         → False
+        FActive    → checkRange
+        FCollapsed → checkRange  -- calderas still have lava
+        _          → False
   where
-    checkRange = let maxR = featureMaxRadius (pfFeature pf)
-                     (fx, fy) = featureCenter' (pfFeature pf)
+    checkRange = let maxR = getFeatureRadius (pfFeature pf)
+                     GeoCoord fx fy = getFeatureCenter (pfFeature pf)
                      dx = abs (wrappedDeltaForFluid worldSize chunkGX fx)
                      dy = abs (chunkGY - fy)
                  in dx < maxR + chunkSize ∧ dy < maxR + chunkSize
-
--- | Get the maximum radius of influence for a feature's lava pool.
-featureMaxRadius ∷ VolcanicFeature → Int
-featureMaxRadius (ShieldVolcano p)    = shBaseRadius p
-featureMaxRadius (CinderCone p)       = ccBaseRadius p
-featureMaxRadius (LavaDome p)         = ldBaseRadius p
-featureMaxRadius (Caldera p)          = caOuterRadius p
-featureMaxRadius (SuperVolcano p)     = svCalderaRadius p
-featureMaxRadius (FissureVolcano p)   = fpWidth p * 2
-featureMaxRadius (HydrothermalVent _) = 0
-featureMaxRadius (LavaTube _)         = 0
-
--- | Extract center from a feature (same as Timeline.featureCenter
---   but local to Fluids to avoid circular imports).
-featureCenter' ∷ VolcanicFeature → (Int, Int)
-featureCenter' (ShieldVolcano p)    = let GeoCoord x y = shCenter p in (x, y)
-featureCenter' (CinderCone p)       = let GeoCoord x y = ccCenter p in (x, y)
-featureCenter' (LavaDome p)         = let GeoCoord x y = ldCenter p in (x, y)
-featureCenter' (Caldera p)          = let GeoCoord x y = caCenter p in (x, y)
-featureCenter' (SuperVolcano p)     = let GeoCoord x y = svCenter p in (x, y)
-featureCenter' (FissureVolcano p)   = let GeoCoord sx sy = fpStart p
-                                          GeoCoord ex ey = fpEnd p
-                                      in ((sx + ex) `div` 2, (sy + ey) `div` 2)
-featureCenter' (HydrothermalVent p) = let GeoCoord x y = htCenter p in (x, y)
-featureCenter' (LavaTube p)         = let GeoCoord sx sy = ltStart p
-                                          GeoCoord ex ey = ltEnd p
-                                      in ((sx + ex) `div` 2, (sy + ey) `div` 2)
 
 -- | Wrapped delta for fluid proximity check.
 wrappedDeltaForFluid ∷ Int → Int → Int → Int
@@ -228,8 +338,8 @@ fillLavaFromFeature ∷ PersistentFeature → Word64 → [TectonicPlate]
                     → HM.HashMap (Int, Int) FluidCell
                     → HM.HashMap (Int, Int) FluidCell
 fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
-    case pfFeature pf of
-        SuperVolcano p →
+    case (pfFeature pf) of
+        VolcanicShape (SuperVolcano p) →
             let (fx, fy) = let GeoCoord x y = svCenter p in (x, y)
                 poolRadius = svCalderaRadius p
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
@@ -238,7 +348,7 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
             in fillPool seed plates worldSize chunkGX chunkGY fx fy
                    poolRadius lavaSurface surfaceMap acc
 
-        Caldera p →
+        VolcanicShape (Caldera p) →
             let (fx, fy) = let GeoCoord x y = caCenter p in (x, y)
                 poolRadius = caInnerRadius p
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
@@ -246,7 +356,7 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
             in fillPool seed plates worldSize chunkGX chunkGY fx fy
                    poolRadius lavaSurface surfaceMap acc
 
-        ShieldVolcano p | shSummitPit p →
+        VolcanicShape (ShieldVolcano p) | shSummitPit p →
             let (fx, fy) = let GeoCoord x y = shCenter p in (x, y)
                 poolRadius = shPitRadius p
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
@@ -254,7 +364,7 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
             in fillPool seed plates worldSize chunkGX chunkGY fx fy
                    poolRadius lavaSurface surfaceMap acc
 
-        CinderCone p →
+        VolcanicShape (CinderCone p) →
             let (fx, fy) = let GeoCoord x y = ccCenter p in (x, y)
                 poolRadius = ccCraterRadius p
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
@@ -262,7 +372,7 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
             in fillPool seed plates worldSize chunkGX chunkGY fx fy
                    poolRadius lavaSurface surfaceMap acc
 
-        FissureVolcano p | fpHasMagma p →
+        VolcanicShape (FissureVolcano p) | fpHasMagma p →
             let GeoCoord sx sy = fpStart p
                 GeoCoord ex ey = fpEnd p
                 midX = (sx + ex) `div` 2
@@ -274,14 +384,13 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
                    sx sy ex ey poolWidth lavaSurface surfaceMap acc
 
         -- Hydrothermal vents: small magma pool at the chimney
-        HydrothermalVent p →
+        VolcanicShape (HydrothermalVent p) →
             let (fx, fy) = let GeoCoord x y = htCenter p in (x, y)
                 poolRadius = max 2 (htRadius p `div` 3)
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
                 lavaSurface = baseElev + htChimneyHeight p - 2
             in fillPool seed plates worldSize chunkGX chunkGY fx fy
                    poolRadius lavaSurface surfaceMap acc
-
         _ → acc
 
 -- | Fill a circular lava pool into the fluid map.

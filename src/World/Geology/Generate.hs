@@ -16,6 +16,7 @@ module World.Geology.Generate
 import UPrelude
 import Data.Bits (xor)
 import Data.Word (Word64)
+import World.Base (GeoCoord(..))
 import World.Types
 import World.Plate (isBeyondGlacier, elevationAtGlobal, TectonicPlate)
 import World.Geology.Types
@@ -30,7 +31,7 @@ import World.Geology.Hash (hashGeo, hashToFloatGeo, hashToRangeGeo, scaleCount)
 generateAndRegister ∷ Word64 → Int → [TectonicPlate]
                     → VolcanoEra
                     → (Word64 → Int → [TectonicPlate] → Int → Int
-                        → Maybe VolcanicFeature)
+                        → Maybe FeatureShape)
                     → Int  -- ^ period index
                     → TimelineBuildState
                     → ([PersistentFeature], TimelineBuildState)
@@ -54,7 +55,7 @@ generateAndRegister seed worldSize plates _era mkFeature periodIdx tbs0 =
                             pf = PersistentFeature
                                 { pfId               = fid
                                 , pfFeature          = feature
-                                , pfActivity         = Active
+                                , pfActivity         = FActive
                                 , pfFormationPeriod   = periodIdx
                                 , pfLastActivePeriod  = periodIdx
                                 , pfEruptionCount     = 1
@@ -69,7 +70,7 @@ generateAndRegister seed worldSize plates _era mkFeature periodIdx tbs0 =
 generateAndRegisterN ∷ Int → Int → Word64 → Int → [TectonicPlate]
                      → VolcanoEra
                      → (Word64 → Int → [TectonicPlate] → Int → Int
-                         → Maybe VolcanicFeature)
+                         → Maybe FeatureShape)
                      → Int → TimelineBuildState
                      → ([PersistentFeature], TimelineBuildState)
 generateAndRegisterN baseMaxAttempts baseMaxFeatures seed worldSize plates
@@ -93,7 +94,7 @@ generateAndRegisterN baseMaxAttempts baseMaxFeatures seed worldSize plates
                             pf = PersistentFeature
                                 { pfId               = fid
                                 , pfFeature          = feature
-                                , pfActivity         = Active
+                                , pfActivity         = FActive
                                 , pfFormationPeriod   = periodIdx
                                 , pfLastActivePeriod  = periodIdx
                                 , pfEruptionCount     = 1
@@ -112,7 +113,7 @@ generateAndRegisterN baseMaxAttempts baseMaxFeatures seed worldSize plates
 --   At worldSize=128 (2048 tiles), baseRadius 30-60 means
 --   a shield covers at most ~6% of world width.
 generateShieldVolcano ∷ Word64 → Int → [TectonicPlate]
-                      → Int → Int → Maybe VolcanicFeature
+                      → Int → Int → Maybe FeatureShape
 generateShieldVolcano seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
     in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
@@ -125,7 +126,7 @@ generateShieldVolcano seed worldSize plates gx gy =
                 hasPit = hashToFloatGeo h3 > 0.5
                 pitR   = if hasPit then hashToRangeGeo (hashGeo seed gx 83) 2 5 else 0
                 pitD   = if hasPit then hashToRangeGeo (hashGeo seed gy 84) 15 40 else 0
-            in Just $ ShieldVolcano ShieldParams
+            in Just $ VolcanicShape $ ShieldVolcano ShieldParams
                 { shCenter     = GeoCoord gx gy
                 , shBaseRadius = baseR
                 , shPeakHeight = peakH
@@ -136,7 +137,7 @@ generateShieldVolcano seed worldSize plates gx gy =
 
 -- | Cinder cones are small. Keep these tight.
 generateCinderCone ∷ Word64 → Int → [TectonicPlate]
-                   → Int → Int → Maybe VolcanicFeature
+                   → Int → Int → Maybe FeatureShape
 generateCinderCone seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
     in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
@@ -149,7 +150,7 @@ generateCinderCone seed worldSize plates gx gy =
                 peakH   = hashToRangeGeo h2 30 120
                 craterR = hashToRangeGeo h3 1 (max 2 (baseR `div` 3))
                 craterD = hashToRangeGeo h4 8 (max 12 (peakH `div` 3))
-            in Just $ CinderCone CinderConeParams
+            in Just $ VolcanicShape $ CinderCone CinderConeParams
                 { ccCenter      = GeoCoord gx gy
                 , ccBaseRadius  = baseR
                 , ccPeakHeight  = peakH
@@ -159,7 +160,7 @@ generateCinderCone seed worldSize plates gx gy =
 
 -- | Lava domes: small-medium, steep.
 generateLavaDome ∷ Word64 → Int → [TectonicPlate]
-                 → Int → Int → Maybe VolcanicFeature
+                 → Int → Int → Maybe FeatureShape
 generateLavaDome seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
     in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
@@ -168,7 +169,7 @@ generateLavaDome seed worldSize plates gx gy =
                 h2 = hashGeo seed gy 101
                 baseR = hashToRangeGeo h1 6 15
                 height = hashToRangeGeo h2 30 100
-            in Just $ LavaDome LavaDomeParams
+            in Just $ VolcanicShape $ LavaDome LavaDomeParams
                 { ldCenter     = GeoCoord gx gy
                 , ldBaseRadius = baseR
                 , ldHeight     = height
@@ -202,7 +203,7 @@ generateCaldera seed worldSize plates gx gy =
 
 -- | Fissures: shorter.
 generateFissure ∷ Word64 → Int → [TectonicPlate]
-                → Int → Int → Maybe VolcanicFeature
+                → Int → Int → Maybe FeatureShape
 generateFissure seed worldSize plates gx gy =
     if isBeyondGlacier worldSize gx gy
     then Nothing
@@ -221,7 +222,7 @@ generateFissure seed worldSize plates gx gy =
              width   = hashToRangeGeo h3 3 6
              ridgeH  = hashToRangeGeo h4 15 50
              hasMagma = hashToFloatGeo h5 > 0.5
-         in Just $ FissureVolcano FissureParams
+         in Just $ VolcanicShape $ FissureVolcano FissureParams
              { fpStart       = GeoCoord sxCoord syCoord
              , fpEnd         = GeoCoord ex ey
              , fpWidth       = width
@@ -263,7 +264,7 @@ generateLavaTube seed worldSize plates gx gy =
 -- | Super volcano: large but not absurd.
 --   Caldera 50-100, ejecta 120-250.
 generateSuperVolcano ∷ Word64 → Int → [TectonicPlate]
-                     → Int → Int → Maybe VolcanicFeature
+                     → Int → Int → Maybe FeatureShape
 generateSuperVolcano seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
     in if elev < -100 ∨ isBeyondGlacier worldSize gx gy
@@ -278,7 +279,7 @@ generateSuperVolcano seed worldSize plates gx gy =
                 floorD   = hashToRangeGeo h3 40 120
                 ejectaR  = hashToRangeGeo h4 80 150
                 ejectaD  = hashToRangeGeo h5 2 12
-            in Just $ SuperVolcano SuperVolcanoParams
+            in Just $ VolcanicShape $ SuperVolcano SuperVolcanoParams
                 { svCenter        = GeoCoord gx gy
                 , svCalderaRadius = calderaR
                 , svRimHeight     = rimH
@@ -289,7 +290,7 @@ generateSuperVolcano seed worldSize plates gx gy =
 
 -- | Hydrothermal vents: unchanged, already tiny.
 generateHydrothermalVent ∷ Word64 → Int → [TectonicPlate]
-                         → Int → Int → Maybe VolcanicFeature
+                         → Int → Int → Maybe FeatureShape
 generateHydrothermalVent seed worldSize plates gx gy =
     let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
     in if elev ≥ -100 ∨ isBeyondGlacier worldSize gx gy
@@ -298,7 +299,7 @@ generateHydrothermalVent seed worldSize plates gx gy =
                 h2 = hashGeo seed gy 151
                 radius   = hashToRangeGeo h1 3 8
                 chimneyH = hashToRangeGeo h2 10 30
-            in Just $ HydrothermalVent HydrothermalParams
+            in Just $ VolcanicShape $ HydrothermalVent HydrothermalParams
                 { htCenter        = GeoCoord gx gy
                 , htRadius        = radius
                 , htChimneyHeight = chimneyH

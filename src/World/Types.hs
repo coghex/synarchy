@@ -14,7 +14,10 @@ import Engine.Scene.Types.Batch (SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import qualified Engine.Core.Queue as Q
+import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Material (MaterialId(..))
+import World.Hydrology.Types (HydroFeature, HydroEvolution, RegionalClimate(..)
+                             , GlacierParams(..))
 
 
 -----------------------------------------------------------
@@ -514,12 +517,28 @@ emptyTimeline = GeoTimeline
 --   function of position — no simulation state needed.
 data GeoEvent
     = CraterEvent !CraterParams
-    | VolcanicEvent !VolcanicFeature
+    | VolcanicEvent !FeatureShape
     | VolcanicModify !GeoFeatureId !FeatureEvolution
     | EruptionEvent !GeoFeatureId !LavaFlow
     | LandslideEvent !LandslideParams
-    | GlaciationEvent !GlaciationParams
+    | GlaciationEvent !GlacierParams
     | FloodEvent !FloodParams
+    | HydroEvent !HydroFeature
+    | HydroModify !GeoFeatureId !HydroEvolution
+    deriving (Show, Eq)
+
+-- Generalize PersistentFeature to hold either volcanic or hydro:
+data FeatureShape
+    = VolcanicShape !VolcanicFeature
+    | HydroShape   !HydroFeature
+    deriving (Show, Eq)
+
+-- Generalized activity:
+data FeatureActivity
+    = FActive       -- ^ Volcano erupting, river flowing, glacier advancing
+    | FDormant      -- ^ Volcano dormant, river seasonal, glacier stable
+    | FExtinct      -- ^ Volcano dead, river dry, glacier melted
+    | FCollapsed    -- ^ Volcano collapsed
     deriving (Show, Eq)
 
 -- | How an existing feature evolves in a new period.
@@ -557,10 +576,6 @@ data FeatureEvolution
         , feCenter        ∷ !GeoCoord   -- ^ Shift in center if collapse is off-center
         , feRadius        ∷ !Int       -- ^ Shift in radius if collapse is off-center
         }
-    deriving (Show, Eq)
-
--- | Global tile coordinate for event placement.
-data GeoCoord = GeoCoord !Int !Int
     deriving (Show, Eq)
 
 data CraterParams = CraterParams
@@ -655,13 +670,6 @@ data LandslideParams = LandslideParams
     , lsVolume     ∷ !Int        -- ^ Amount of material displaced
     } deriving (Show, Eq)
 
-data GlaciationParams = GlaciationParams
-    { glLatitudeStart ∷ !Int     -- ^ How far from poles glaciers extend
-    , glThickness     ∷ !Int     -- ^ Ice sheet thickness
-    , glCarveDepth    ∷ !Int     -- ^ How deep glacial valleys are carved
-    , glSeed          ∷ !Word64  -- ^ Sub-seed for glacier flow noise
-    } deriving (Show, Eq)
-
 data FloodParams = FloodParams
     { fpCenter     ∷ !GeoCoord
     , fpRadius     ∷ !Int
@@ -698,11 +706,6 @@ defaultErosionParams = ErosionParams
 -- Persistent Geological Features
 -----------------------------------------------------------
 
--- | Unique identifier for a geological feature that persists
---   across geological periods.
-newtype GeoFeatureId = GeoFeatureId Int
-    deriving (Show, Eq, Ord)
-
 -- | Activity state of a volcanic feature.
 data VolcanicActivity
     = Active           -- ^ Currently erupting / building
@@ -716,8 +719,8 @@ data VolcanicActivity
 --   of modifications applied to it.
 data PersistentFeature = PersistentFeature
     { pfId            ∷ !GeoFeatureId
-    , pfFeature       ∷ !VolcanicFeature   -- ^ Current shape
-    , pfActivity      ∷ !VolcanicActivity
+    , pfFeature       ∷ !FeatureShape
+    , pfActivity      ∷ !FeatureActivity
     , pfFormationPeriod ∷ !Int              -- ^ Index of period when created
     , pfLastActivePeriod ∷ !Int             -- ^ Index of period last active
     , pfEruptionCount ∷ !Int               -- ^ How many times it has erupted
@@ -764,6 +767,8 @@ data WorldState = WorldState
     , wsBakedZoomRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)  -- ^ Pre-baked
     , wsBakedBgRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)    -- ^ Pre-baked background entries with resolved textures and vertices
     , wsInitQueueRef ∷ IORef [ChunkCoord]  -- ^ Queue of chunks to generate at world init (for progress tracking)
+    , wsClimateRef ∷ IORef (HM.HashMap RegionCoord RegionalClimate)  -- ^ Regional climate data (temperature, humidity)
+    , wsRiverFlowRef ∷ IORef (HM.HashMap GeoFeatureId Float)
     }
 
 emptyWorldState ∷ IO WorldState
@@ -782,10 +787,13 @@ emptyWorldState = do
     bakedZoomRef ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
     bakedBgRef   ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
     wsInitQueueRef ← newIORef []
+    wsClimateRef ← newIORef HM.empty
+    wsRiverFlowRef ← newIORef HM.empty
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
+                        wsClimateRef wsRiverFlowRef
 
 -----------------------------------------------------------
 -- World Manager
