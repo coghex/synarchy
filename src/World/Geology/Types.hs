@@ -11,6 +11,9 @@ module World.Geology.Types
     , addPeriod
     , registerFeature
     , updateFeature
+    , EventBBox(..)
+    , eventBBox
+    , bboxOverlapsChunk
     -- * GeoState
     , GeoState(..)
     , RegionCoord(..)
@@ -30,7 +33,7 @@ module World.Geology.Types
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.Hashable (Hashable(..))
-import World.Base (GeoFeatureId(..))
+import World.Base (GeoFeatureId(..), GeoCoord(..))
 import World.Types
 import World.Plate (TectonicPlate(..), twoNearestPlates, isBeyondGlacier)
 import World.Material (matBasalt, matObsidian)
@@ -65,6 +68,41 @@ data GeoModification = GeoModification
 
 noModification ∷ GeoModification
 noModification = GeoModification 0 Nothing 0
+
+-- | Axis-aligned bounding box in global tile coords.
+--   Used for early culling during chunk generation.
+data EventBBox = EventBBox
+    { bbMinX ∷ !Int
+    , bbMinY ∷ !Int
+    , bbMaxX ∷ !Int
+    , bbMaxY ∷ !Int
+    } deriving (Show, Eq)
+
+-- | No bounds — event applies everywhere (e.g. glaciation).
+noBBox ∷ EventBBox
+noBBox = EventBBox minBound minBound maxBound maxBound
+
+eventBBox ∷ GeoEvent → Int → EventBBox
+eventBBox (CraterEvent cp) _ws =
+    let GeoCoord cx cy = cpCenter cp
+        r = cpRadius cp + cpEjectaRadius cp
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+eventBBox (VolcanicEvent (VolcanicShape (ShieldVolcano p))) _ws =
+    let GeoCoord cx cy = shCenter p
+        r = shBaseRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+-- ... similar for each event type
+eventBBox (EruptionEvent _ flow) _ws =
+    let r = lfRadius flow
+    in EventBBox (lfSourceX flow - r) (lfSourceY flow - r)
+                 (lfSourceX flow + r) (lfSourceY flow + r)
+eventBBox _ _ = noBBox  -- fallback for global events
+
+bboxOverlapsChunk ∷ Int → EventBBox → Int → Int → Int → Int → Bool
+bboxOverlapsChunk _worldSize bb cMinX cMinY cMaxX cMaxY =
+    not (bbMaxX bb < cMinX ∨ bbMinX bb > cMaxX
+       ∨ bbMaxY bb < cMinY ∨ bbMinY bb > cMaxY)
+    -- TODO: handle X-wrapping for chunks near the world edge
 
 -----------------------------------------------------------
 -- Volcano Era

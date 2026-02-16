@@ -27,6 +27,7 @@ import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Grid (worldToGrid)
 import World.Geology (applyGeoEvent, GeoModification(..))
+import World.Geology.Types (eventBBox, bboxOverlapsChunk)
 import World.Geology.Erosion (applyErosion)
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava
@@ -232,18 +233,33 @@ applyTimelineChunk ∷ GeoTimeline → Int → WorldScale → ChunkCoord
                    → HM.HashMap (Int, Int) (Int, MaterialId)
                    → HM.HashMap (Int, Int) (Int, MaterialId)
 applyTimelineChunk timeline worldSize wsc coord baseColumns =
-    foldl' applyOnePeriod baseColumns (gtPeriods timeline)
+    let -- Pre-compute chunk bounds (with border) in global coords
+        ChunkCoord cx cy = coord
+        chunkMinGX = cx * chunkSize - chunkBorder
+        chunkMinGY = cy * chunkSize - chunkBorder
+        chunkMaxGX = cx * chunkSize + chunkSize + chunkBorder - 1
+        chunkMaxGY = cy * chunkSize + chunkSize + chunkBorder - 1
+    in foldl' (applyOnePeriod chunkMinGX chunkMinGY chunkMaxGX chunkMaxGY)
+              baseColumns (gtPeriods timeline)
   where
-    applyOnePeriod elevMap period =
-        let -- Step 1: Apply all events to each column independently
-            postEvents = HM.mapWithKey (\(lx, ly) (elev, mat) →
-                let (gx, gy) = chunkToGlobal coord lx ly
-                    (gx', gy') = wrapGlobalU worldSize gx gy
-                in if mat ≡ matGlacier
-                   then (elev, mat)
-                   else foldl' (applyOneEvent worldSize gx' gy')
-                               (elev, mat) (gpEvents period)
-                ) elevMap
+    applyOnePeriod cMinGX cMinGY cMaxGX cMaxGY elevMap period =
+        let -- Filter to only events whose bounding box overlaps this chunk
+            relevantEvents = filter (\evt →
+                let bb = eventBBox evt worldSize
+                in bboxOverlapsChunk worldSize bb cMinGX cMinGY cMaxGX cMaxGY
+                ) (gpEvents period)
+
+            -- Step 1: Apply relevant events only
+            postEvents = if null relevantEvents
+                then elevMap  -- skip the entire mapWithKey!
+                else HM.mapWithKey (\(lx, ly) (elev, mat) →
+                    let (gx, gy) = chunkToGlobal coord lx ly
+                        (gx', gy') = wrapGlobalU worldSize gx gy
+                    in if mat ≡ matGlacier
+                       then (elev, mat)
+                       else foldl' (applyOneEvent worldSize gx' gy')
+                                   (elev, mat) relevantEvents
+                    ) elevMap
 
             -- Step 2: Apply erosion using neighbor lookups from postEvents
             lookupPostEvent lx ly fallback = case HM.lookup (lx, ly) postEvents of
