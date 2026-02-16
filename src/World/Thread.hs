@@ -29,6 +29,7 @@ import World.Plate (generatePlates, elevationAtGlobal)
 import World.Preview (buildPreviewImage, PreviewImage(..))
 import World.Render (surfaceHeadroom, updateWorldTiles)
 import World.ZoomMap (buildZoomCache)
+import World.Slope (recomputeNeighborSlopes)  -- NEW
 
 -----------------------------------------------------------
 -- Helper: send a progress message to Lua
@@ -201,6 +202,7 @@ updateChunkLoading env logger = do
 
                             -- force chunk eval here
                             when (not $ null batch) $ do
+                                let seed = wgpSeed params
                                 let !newChunks = map (\coord →
                                         let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
                                         in LoadedChunk
@@ -211,10 +213,14 @@ updateChunkLoading env logger = do
                                             , lcFluidMap   = fluidMap
                                             , lcModified   = False
                                             }) batch
+                                -- Insert new chunks, then recompute slopes
+                                -- for the new chunks + their existing neighbors
                                 atomicModifyIORef' (wsTilesRef worldState) $ \td →
                                     let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
                                         td'' = evictDistantChunks camChunk chunkLoadRadius td'
-                                    in (td'', ())
+                                        td''' = recomputeNeighborSlopes seed
+                                                  (map lcCoord newChunks) td''
+                                    in (td''', ())
 
                                 -- Invalidate render caches so new chunks appear
                                 writeIORef (wsQuadCacheRef worldState) Nothing
@@ -331,6 +337,9 @@ handleWorldCommand env logger cmd = do
                     , lcModified   = False
                     }
 
+            -- Site 1: center chunk inserted alone — no neighbors yet,
+            -- so slopes are intra-chunk only (from generateChunk).
+            -- Neighbor slopes get patched when drainInitQueues runs.
             atomicModifyIORef' (wsTilesRef worldState) $ \_ →
                 (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
                                , wtdMaxChunks = 200 }, ())
@@ -406,6 +415,10 @@ handleWorldCommand env logger cmd = do
                           BlankTexture        → wt { wtBlankTexture     = texHandle }
                           NoTexture           → wt { wtNoTexture        = texHandle }
                           IsoFaceMap          → wt { wtIsoFaceMap       = texHandle }
+                          SlopeFaceMapN       → wt { wtSlopeFaceMapN    = texHandle }
+                          SlopeFaceMapE       → wt { wtSlopeFaceMapE    = texHandle }
+                          SlopeFaceMapS       → wt { wtSlopeFaceMapS    = texHandle }
+                          SlopeFaceMapW       → wt { wtSlopeFaceMapW    = texHandle }
                           NoFaceMap           → wt { wtNoFaceMap        = texHandle }
                           ZoomGraniteTexture  → wt { wtZoomGranite      = texHandle }
                           ZoomDioriteTexture  → wt { wtZoomDiorite      = texHandle }
@@ -527,6 +540,7 @@ drainInitQueues env logger = do
                     Just params → do
                         let batch = take maxChunksPerTick remaining
                             rest  = drop maxChunksPerTick remaining
+                            seed  = wgpSeed params
                         
                         let newChunks = parMap rdeepseq (\coord →
                                 let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
@@ -539,9 +553,13 @@ drainInitQueues env logger = do
                                     , lcModified   = False
                                     }) batch
                         
+                        -- Insert new chunks, then recompute slopes
+                        -- for the new chunks + their existing neighbors
                         atomicModifyIORef' (wsTilesRef worldState) $ \td →
                             let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
-                            in (td', ())
+                                td'' = recomputeNeighborSlopes seed
+                                         (map lcCoord newChunks) td'
+                            in (td'', ())
                         
                         -- Invalidate all render caches so new chunks appear immediately
                         writeIORef (wsQuadCacheRef worldState) Nothing

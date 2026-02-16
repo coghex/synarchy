@@ -279,8 +279,12 @@ data WorldTextures = WorldTextures
     , wtGabbroTexture    ∷ TextureHandle
     , wtDioriteTexture   ∷ TextureHandle
     , wtOceanTexture     ∷ TextureHandle
-    , wtIsoFaceMap       ∷ TextureHandle
     , wtNoTexture        ∷ TextureHandle
+    , wtIsoFaceMap       ∷ TextureHandle
+    , wtSlopeFaceMapN    ∷ TextureHandle
+    , wtSlopeFaceMapE    ∷ TextureHandle
+    , wtSlopeFaceMapS    ∷ TextureHandle
+    , wtSlopeFaceMapW    ∷ TextureHandle
     , wtNoFaceMap        ∷ TextureHandle
     , wtZoomGranite      ∷ TextureHandle
     , wtZoomGabbro       ∷ TextureHandle
@@ -337,6 +341,10 @@ defaultWorldTextures = WorldTextures
     , wtOceanTexture    = TextureHandle 0
     , wtNoTexture       = TextureHandle 0
     , wtIsoFaceMap      = TextureHandle 0
+    , wtSlopeFaceMapN   = TextureHandle 0
+    , wtSlopeFaceMapE   = TextureHandle 0
+    , wtSlopeFaceMapS   = TextureHandle 0
+    , wtSlopeFaceMapW   = TextureHandle 0
     , wtNoFaceMap       = TextureHandle 0
     , wtZoomGranite     = TextureHandle 0
     , wtZoomGabbro      = TextureHandle 0
@@ -901,6 +909,10 @@ data WorldTextureType
     | NoTexture
     | OceanTexture
     | IsoFaceMap
+    | SlopeFaceMapN
+    | SlopeFaceMapE
+    | SlopeFaceMapS
+    | SlopeFaceMapW
     | NoFaceMap
     | ZoomGraniteTexture
     | ZoomDioriteTexture

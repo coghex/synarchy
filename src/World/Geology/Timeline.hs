@@ -402,8 +402,8 @@ buildAge seed worldSize plates ageIdx tbs =
         -- while keeping interesting evolution over long timelines.
         --
         -- Base evolution chance:
-        --   Rivers:   40% per age (they're dynamic, change often)
-        --   Glaciers: 30% per age (slower processes)
+        --   Rivers:   10% per age (they're dynamic, change often)
+        --   Glaciers:  5% per age (slower processes)
         --   Lakes:    0%  (passive, only change via river/glacier events)
         --
         -- Longer ages increase the chance (more time = more happens)
@@ -416,13 +416,13 @@ buildAge seed worldSize plates ageIdx tbs =
                 in case pfFeature pf of
                     HydroShape (RiverFeature _)
                         | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
-                        , evolRoll < 0.40 + durationBonus →
+                        , evolRoll < 0.10 + durationBonus →
                             evolveRiver hydroSeed (tbsPeriodIdx st) (evts, st) pf
                         | otherwise → (evts, st)
 
                     HydroShape (GlacierFeature _)
                         | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
-                        , evolRoll < 0.30 + durationBonus →
+                        , evolRoll < 0.05 + durationBonus →
                             evolveGlacier hydroSeed (tbsPeriodIdx st) gs1 (evts, st) pf
                         | otherwise → (evts, st)
 

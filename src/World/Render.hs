@@ -19,6 +19,7 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
+import World.Slope (slopeToFaceMapIndex)
 import World.Fluids (FluidCell(..), FluidType(..), seaLevel)
 import World.Generate (chunkToGlobal, chunkWorldBounds, viewDepth, globalToChunk)
 import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer,
@@ -387,7 +388,7 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
                 + fromIntegral relativeZ * 0.001
         texHandle = getTileTexture textures (tileType tile)
         actualSlot = lookupSlot texHandle
-        fmHandle = getTileFaceMapTexture textures (tileType tile)
+        fmHandle = getTileFaceMapTexture textures (tileType tile) (tileSlopeId tile)
         fmSlot = lookupFmSlot fmHandle
 
         -- Depth-based atmospheric perspective
@@ -628,12 +629,12 @@ getTileTexture textures 250 = wtGlacierTexture textures
 getTileTexture textures 255 = wtBlankTexture textures
 getTileTexture textures _   = wtNoTexture textures
 
-getTileFaceMapTexture ∷ WorldTextures → Word8 → TextureHandle
-getTileFaceMapTexture textures mat
-    | mat ≥ 1 ∧ mat ≤ 5   = wtIsoFaceMap textures
-    | mat ≥ 10 ∧ mat ≤ 12 = wtIsoFaceMap textures
-    | mat ≡ 20              = wtIsoFaceMap textures
-    | mat ≥ 30 ∧ mat ≤ 33 = wtIsoFaceMap textures
-    | mat ≡ 100             = wtIsoFaceMap textures
-    | mat ≡ 250             = wtIsoFaceMap textures
-    | otherwise              = wtNoFaceMap textures
+getTileFaceMapTexture ∷ WorldTextures → Word8 → Word8 → TextureHandle
+getTileFaceMapTexture textures _mat slopeId =
+    case slopeToFaceMapIndex slopeId of
+        0 → wtIsoFaceMap textures       -- flat
+        1 → wtSlopeFaceMapN textures    -- north ramp
+        2 → wtSlopeFaceMapE textures    -- east ramp
+        3 → wtSlopeFaceMapS textures    -- south ramp
+        4 → wtSlopeFaceMapW textures    -- west ramp
+        _ → wtIsoFaceMap textures       -- fallback

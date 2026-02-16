@@ -279,6 +279,7 @@ library
                      World.Hydrology.Glacier
                      World.Plate
                      World.Scale
+                     World.Slope
                      World.Fluids
                      World.Material
                      World.Preview

@@ -30,6 +30,7 @@ import World.Geology (applyGeoEvent, GeoModification(..))
 import World.Geology.Types (eventBBox, bboxOverlapsChunk)
 import World.Geology.Erosion (applyErosion)
 import World.Scale (computeWorldScale, WorldScale(..))
+import World.Slope (computeChunkSlopes)
 import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava
                     , computeChunkLakes, computeChunkRivers)
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -211,7 +212,12 @@ generateChunk params coord =
                                                        z
                 , tile ← generateExposedColumn lx ly surfZ exposeFrom lookupMat
                 ]
-    in (HM.fromList tiles, surfaceMap, terrainSurfaceMap, fluidMap)
+        rawTiles = HM.fromList tiles
+        noNeighborLookup ∷ ChunkCoord → Maybe (HM.HashMap (Int, Int) Int)
+        noNeighborLookup _ = Nothing
+        slopedTiles = computeChunkSlopes seed coord terrainSurfaceMap
+                                         fluidMap rawTiles noNeighborLookup
+    in (slopedTiles, surfaceMap, terrainSurfaceMap, fluidMap)
 
 -- | Generate only the exposed tiles for a column.
 --   Skips air tiles (MaterialId 0) to create caves and overhangs.

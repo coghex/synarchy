@@ -102,19 +102,19 @@ data MaterialProps = MaterialProps
 
 getMaterialProps ∷ MaterialId → MaterialProps
 getMaterialProps (MaterialId mid) = case mid of
-    1   → MaterialProps "granite"    0.9  2.7
-    2   → MaterialProps "diorite"    0.85 2.8
-    3   → MaterialProps "gabbro"     0.8  3.0
-    4   → MaterialProps "basalt"     0.75 2.9
-    5   → MaterialProps "obsidian"   0.95 2.4
-    10  → MaterialProps "sandstone"  0.4  2.3
-    11  → MaterialProps "limestone"  0.35 2.5
-    12  → MaterialProps "shale"      0.25 2.4
-    20  → MaterialProps "impactite"  0.7  2.6
-    30  → MaterialProps "iron"       0.6  7.8
-    31  → MaterialProps "olivine"    0.7  3.3
-    32  → MaterialProps "pyroxene"   0.65 3.2
-    33  → MaterialProps "feldspar"   0.6  2.6
-    100 → MaterialProps "lava"       0.5  3.0
-    250 → MaterialProps "glacier"    1.0  0.9
+    1   → MaterialProps "granite"    0.9  2.7    -- hard: no slopes (0.9 > 0.7)
+    2   → MaterialProps "diorite"    0.85 2.8    -- hard: no slopes
+    3   → MaterialProps "gabbro"     0.8  3.0    -- hard: no slopes
+    4   → MaterialProps "basalt"     0.75 2.9    -- hard: no slopes (barely)
+    5   → MaterialProps "obsidian"   0.95 2.4    -- hard: no slopes
+    10  → MaterialProps "sandstone"  0.4  2.3    -- soft: slopes
+    11  → MaterialProps "limestone"  0.35 2.5    -- soft: slopes
+    12  → MaterialProps "shale"      0.25 2.4    -- soft: slopes
+    20  → MaterialProps "impactite"  0.7  2.6    -- borderline: no slopes (= threshold)
+    30  → MaterialProps "iron"       0.6  7.8    -- medium: slopes
+    31  → MaterialProps "olivine"    0.7  3.3    -- borderline: no slopes
+    32  → MaterialProps "pyroxene"   0.65 3.2    -- medium: slopes
+    33  → MaterialProps "feldspar"   0.6  2.6    -- medium: slopes
+    100 → MaterialProps "lava"       0.5  3.0    -- medium: slopes
+    250 → MaterialProps "glacier"    1.0  0.9    -- special: no slopes (ice cliff)
     _   → MaterialProps "unknown"    0.5  2.5
