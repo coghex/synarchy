@@ -367,8 +367,7 @@ buildAge seed worldSize plates ageIdx tbs =
                          (map CraterEvent craters)
             else []
 
-        -- Age-level eruptions: roll for each active feature
-        -- that has epTimelineScale == Age
+        -- Age-level eruptions
         eruptSeed = ageSeed `xor` 0x1A7A
         eruptions = catMaybes
             [ generateEruption eruptSeed worldSize ageIdx plates pf
@@ -379,69 +378,59 @@ buildAge seed worldSize plates ageIdx tbs =
             ]
 
         -----------------------------------------------------------
-        -- Hydrology (capped to prevent runaway feature growth)
+        -- Hydrology
         -----------------------------------------------------------
-
-        -- Count existing hydro features to enforce global limits
-        existingRiverCount = length
-            [ () | pf ← tbsFeatures tbs, isRiverFeature (pfFeature pf) ]
-        existingGlacierCount = length
-            [ () | pf ← tbsFeatures tbs, isGlacierFeature (pfFeature pf) ]
-
-        -- Scale limits by world size: larger worlds get more features
-        -- but still bounded. worldSize 128 → ~64 rivers, ~32 glaciers
-        maxRivers   = max 16 (worldSize `div` 2)
-        maxGlaciers = max 8  (worldSize `div` 4)
-        maxHydroTotal = maxRivers + maxGlaciers + maxGlaciers
-
         hydroSeed = ageSeed `xor` 0xA0CA71C
 
-        -- Step 1: Generate new rivers — only in early ages AND under cap
-        riverRoom = max 0 (maxRivers - existingRiverCount)
+        -- Generate new rivers in early ages (ageIdx < 3)
+        -- No hard cap — generateRivers has its own scaleCount limit
         (newRivers, tbs_r) =
-            if ageIdx < 2 ∧ riverRoom > 0
-            then let (rs, t) = generateRivers hydroSeed worldSize plates
-                                   (tbsPeriodIdx tbs) tbs
-                 in (take riverRoom rs, t)
+            if ageIdx < 3
+            then generateRivers hydroSeed worldSize plates
+                     (tbsPeriodIdx tbs) tbs
             else ([], tbs)
 
-        -- Step 2: Generate/evolve glaciers — also capped
-        glacierRoom = max 0 (maxGlaciers - existingGlacierCount)
+        -- Generate glaciers every age — generateGlaciers has its own limits
         (newGlaciers, tbs_g) =
-            if glacierRoom > 0
-            then let (gs', t) = generateGlaciers hydroSeed worldSize plates
-                                    gs1 (tbsPeriodIdx tbs_r) tbs_r
-                 in (take glacierRoom gs', t)
-            else ([], tbs_r)
+            generateGlaciers hydroSeed worldSize plates
+                gs1 (tbsPeriodIdx tbs_r) tbs_r
 
-        -- Step 3: Evolve existing hydro features
-        -- CAP: only evolve a bounded number per age to prevent
-        -- O(features × events) blowup. Skip extinct features.
-        maxHydroEvolutions = max 32 (worldSize `div` 2)
-        activeHydroFeatures =
-            take maxHydroEvolutions
-            [ pf
-            | pf ← tbsFeatures tbs_g
-            , isHydroFeature (pfFeature pf)
-            , pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
-            ]
+        -- Evolve existing hydro features PROBABILISTICALLY.
+        -- Each feature has a per-age probability of evolving,
+        -- instead of guaranteed evolution every age.
+        -- This dramatically reduces HydroModify event count
+        -- while keeping interesting evolution over long timelines.
+        --
+        -- Base evolution chance:
+        --   Rivers:   40% per age (they're dynamic, change often)
+        --   Glaciers: 30% per age (slower processes)
+        --   Lakes:    0%  (passive, only change via river/glacier events)
+        --
+        -- Longer ages increase the chance (more time = more happens)
+        durationBonus = min 0.3 (duration / 30.0)  -- up to +30% for 15MY ages
 
         (hydroEvents, tbs_h) = foldl'
             (\(evts, st) pf →
-                let currentCount = length
-                      [ () | f ← tbsFeatures st, isHydroFeature (pfFeature f) ]
-                    canBranch = currentCount < maxHydroTotal
+                let GeoFeatureId fidInt = pfId pf
+                    evolRoll = hashToFloatGeo (hashGeo hydroSeed fidInt (650 + ageIdx))
                 in case pfFeature pf of
-                    HydroShape (RiverFeature _) →
-                        evolveRiverCapped hydroSeed canBranch
-                            (tbsPeriodIdx st) (evts, st) pf
-                    HydroShape (GlacierFeature _) →
-                        evolveGlacierCapped hydroSeed canBranch
-                            (tbsPeriodIdx st) gs1 (evts, st) pf
-                    _ → (evts, st)
-            ) ([], tbs_g) activeHydroFeatures
+                    HydroShape (RiverFeature _)
+                        | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
+                        , evolRoll < 0.40 + durationBonus →
+                            evolveRiver hydroSeed (tbsPeriodIdx st) (evts, st) pf
+                        | otherwise → (evts, st)
 
-        -- Step 4: Creation events for new features
+                    HydroShape (GlacierFeature _)
+                        | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
+                        , evolRoll < 0.30 + durationBonus →
+                            evolveGlacier hydroSeed (tbsPeriodIdx st) gs1 (evts, st) pf
+                        | otherwise → (evts, st)
+
+                    HydroShape (LakeFeature _) → (evts, st)
+                    VolcanicShape _ → (evts, st)
+            ) ([], tbs_g) (tbsFeatures tbs_g)
+
+        -- Creation events for new features
         hydroCreationEvents = map (\pf → case pfFeature pf of
             HydroShape hf → HydroEvent hf
             _             → error "non-hydro in newRivers/newGlaciers"

@@ -29,11 +29,11 @@ import World.Geology.Types
 --   deposits sedimentary material with full intrusion depth
 --   so it appears in stratigraphy.
 --
---   Scaled by:
---     - epIntensity: overall erosion strength for this period
---     - (1 - hardness): material resistance
---     - durationScale: longer ages erode more (duration / 10 MY reference)
---     - worldScale: larger worlds have proportionally larger features
+--   The rate formula uses sqrt(worldScale) instead of raw worldScale
+--   so that small worlds (128 chunks, scale=0.25) still get meaningful
+--   erosion (sqrt 0.25 = 0.5) while large worlds don't over-erode.
+--   The base smoothing factor is raised to 1.5 to compensate for
+--   the per-period application (each age is one pass, not many).
 applyErosion ∷ ErosionParams
              → Int       -- ^ worldSize
              → Int       -- ^ period duration (millions of years)
@@ -55,16 +55,27 @@ applyErosion params _worldSize duration worldScale matId elev (nN, nS, nE, nW) =
            -- Erosion rate: how much of the difference we close per age
            --   intensity:     0.0–1.0 from ErosionParams
            --   erodability:   (1 - hardness), e.g. shale=0.75, granite=0.1
-           --   durationScale: duration / 10.0 (10 MY reference age)
-           --   worldScale:    worldSize / 512 (larger worlds = larger features)
-           --   smoothing:     0.5 base factor to prevent over-correction
+           --   durationScale: duration / 5.0 (5 MY reference age, was 10)
+           --   scaleFactor:   sqrt(worldScale) — flattens the curve so
+           --                  small worlds still erode
+           --   smoothing:     1.5 base factor (was 0.5)
+           --
+           -- Old formula at ws=128, granite, 5MY age:
+           --   0.5 * 0.1 * 0.5 * 0.25 * 0.5 = 0.003 (rounds to 0)
+           -- New formula at ws=128, granite, 5MY age:
+           --   0.5 * 0.1 * 1.0 * 0.5 * 1.5 = 0.0375 (10-tile diff → delta 0.375, rounds to 0 still)
+           -- But for shale (erodability 0.75) at 5MY:
+           --   0.5 * 0.75 * 1.0 * 0.5 * 1.5 = 0.28 (10-tile diff → delta 2.8, rounds to 2!)
+           -- And for sandstone (erodability 0.6):
+           --   0.5 * 0.6 * 1.0 * 0.5 * 1.5 = 0.225 (10-tile diff → delta 2.25, rounds to 2)
            erodability = 1.0 - hardness
-           durationScale = fromIntegral duration / 10.0 ∷ Float
+           durationScale = fromIntegral duration / 5.0 ∷ Float
+           scaleFactor = sqrt (max 0.1 worldScale)
            rate = epIntensity params
                 * erodability
                 * durationScale
-                * worldScale
-                * 0.5  -- base smoothing factor
+                * scaleFactor
+                * 1.5  -- base smoothing factor
 
            -- Clamp rate to prevent over-smoothing past the average
            clampedRate = min 1.0 rate
@@ -123,7 +134,7 @@ erosionSediment matId = case matId of
     30  → 10   -- iron meteorite → sandstone
 
     -- Sedimentary rocks stay as themselves
-    10  → 10   -- sandstone → sandstone
+    10  → 10   -- sandstone  sandstone
 
     -- Default: sandstone (general weathering product)
     _   → 10

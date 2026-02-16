@@ -66,19 +66,14 @@ generateIceSheetTongues ∷ Word64 → Int → [TectonicPlate] → GeoState → 
 generateIceSheetTongues seed worldSize plates gs periodIdx tbs =
     let halfTiles = (worldSize * 16) `div` 2
         temp = gsCO2 gs
-        -- How many candidates to try along each polar edge
-        baseCount = scaleCount worldSize 4
+        -- More candidates: base 8 instead of 4
+        baseCount = scaleCount worldSize 8
         maxGlaciers = if temp < 0.8 then baseCount
                       else if temp ≤ 1.2 then baseCount `div` 2
                       else baseCount `div` 4
         maxAttempts = maxGlaciers * 4
 
-        -- The glacier zone starts at glacierEdge (screenRow = |gx+gy|)
-        -- We place glacier sources just inside the glacier zone,
-        -- flowing inward (toward smaller |gx+gy|).
-        -- North pole: gx + gy ≈ -halfTiles → flow direction increases gx+gy
-        -- South pole: gx + gy ≈ +halfTiles → flow direction decreases gx+gy
-        glacierEdge = halfTiles - 16  -- chunkSize tiles inside boundary
+        glacierEdge = halfTiles - 16
 
         go attemptIdx count tbs' acc
             | attemptIdx ≥ maxAttempts = (acc, tbs')
@@ -86,14 +81,9 @@ generateIceSheetTongues seed worldSize plates gs periodIdx tbs =
             | otherwise =
                 let h1 = hashGeo seed attemptIdx 1300
                     h2 = hashGeo seed attemptIdx 1301
-                    h3 = hashGeo seed attemptIdx 1302
-                    -- Pick a u-coordinate (gx - gy) along the edge
                     u = hashToRangeGeo h1 (-halfTiles) (halfTiles - 1)
-                    -- Pick north or south pole
                     isNorth = hashToFloatGeo h2 < 0.5
-                    -- The v-coordinate (gx + gy) at the glacier edge
                     v = if isNorth then -glacierEdge else glacierEdge
-                    -- Convert (u, v) to (gx, gy)
                     gx = (u + v) `div` 2
                     gy = (v - u) `div` 2
                 in case tryIceSheetGlacier seed worldSize plates temp
@@ -115,21 +105,18 @@ generateIceSheetTongues seed worldSize plates gs periodIdx tbs =
 
     in go 0 0 tbs []
 
--- | Try to place an ice sheet tongue at (gx, gy).
---   Fails if the source is ocean, below sea level, or
---   too far from the glacier zone.
+-- | Ice sheet glaciers — longer, wider, deeper carve.
 tryIceSheetGlacier ∷ Word64 → Int → [TectonicPlate] → Float
                    → Int → Int → Bool → Int → Maybe GlacierParams
 tryIceSheetGlacier seed worldSize plates temp gx gy isNorth attemptIdx =
-    -- Must be on land near the glacier boundary
     if isBeyondGlacier worldSize gx gy
-    then Nothing  -- too far out, in the impassable zone
+    then Nothing
     else if not (isGlacierZone worldSize gx gy)
          ∧ not (nearGlacierZone worldSize gx gy)
-    then Nothing  -- too far from poles
+    then Nothing
     else let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
          in if elev < seaLevel
-            then Nothing  -- can't start a glacier in the ocean
+            then Nothing
             else
             let h1 = hashGeo seed attemptIdx 1310
                 h2 = hashGeo seed attemptIdx 1311
@@ -138,25 +125,23 @@ tryIceSheetGlacier seed worldSize plates temp gx gy isNorth attemptIdx =
                 h5 = hashGeo seed attemptIdx 1314
                 h6 = hashGeo seed attemptIdx 1315
 
-                -- Flow direction: toward the equator
-                -- North pole (v < 0): flow in +v direction → angle ≈ π/4
-                -- South pole (v > 0): flow in -v direction → angle ≈ -3π/4
-                -- Plus some hash-based spread for variety
                 baseAngle = if isNorth then π / 4.0 else -(3.0 * π / 4.0)
-                angleSpread = (hashToFloatGeo h1 - 0.5) * 1.2  -- ±0.6 radians
+                angleSpread = (hashToFloatGeo h1 - 0.5) * 1.2
                 flowDir = baseAngle + angleSpread
 
-                -- Length scales with temperature (cold = longer reach)
+                -- Longer glaciers: cold worlds get 60-180 (was 40-100)
                 baseLength = if temp < 0.8
-                             then hashToRangeGeo h2 40 100
+                             then hashToRangeGeo h2 60 180
                              else if temp ≤ 1.2
-                             then hashToRangeGeo h2 20 50
-                             else hashToRangeGeo h2 10 25
+                             then hashToRangeGeo h2 30 80
+                             else hashToRangeGeo h2 15 40
 
-                width     = hashToRangeGeo h3 8 20
-                thickness = hashToRangeGeo h4 5 15
-                carveD    = hashToRangeGeo h5 10 30
-                moraine   = hashToRangeGeo h6 5 15
+                -- Wider: 12-30 (was 8-20)
+                width     = hashToRangeGeo h3 12 30
+                thickness = hashToRangeGeo h4 8 20
+                -- Deeper carve: 15-50 (was 10-30)
+                carveD    = hashToRangeGeo h5 15 50
+                moraine   = hashToRangeGeo h6 8 20
 
             in Just GlacierParams
                 { glCenter      = GeoCoord gx gy
@@ -197,12 +182,14 @@ generateAlpineGlaciers ∷ Word64 → Int → [TectonicPlate] → GeoState → I
 generateAlpineGlaciers seed worldSize plates gs periodIdx tbs =
     let halfTiles = (worldSize * 16) `div` 2
         temp = gsCO2 gs
-        -- Alpine glaciers only form in cold-ish worlds
-        maxGlaciers = if temp < 0.8 then scaleCount worldSize 4
-                      else if temp ≤ 1.2 then scaleCount worldSize 2
-                      else 0  -- too warm for alpine glaciers
+        -- More alpine glaciers: base 8 instead of 4
+        maxGlaciers = if temp < 0.8 then scaleCount worldSize 8
+                      else if temp ≤ 1.2 then scaleCount worldSize 4
+                      else scaleCount worldSize 1  -- even warm worlds get a few high-altitude ones
         maxAttempts = maxGlaciers * 6
-        alpineThreshold = seaLevel + 150  -- need significant elevation
+        -- Lower threshold: 80 above sea level (was 150)
+        -- This lets glaciers form on moderate highlands, not just extreme peaks
+        alpineThreshold = seaLevel + 80
 
         go attemptIdx count tbs' acc
             | attemptIdx ≥ maxAttempts = (acc, tbs')
@@ -213,32 +200,32 @@ generateAlpineGlaciers seed worldSize plates gs periodIdx tbs =
                     gx = hashToRangeGeo h1 (-halfTiles) (halfTiles - 1)
                     gy = hashToRangeGeo h2 (-halfTiles) (halfTiles - 1)
                 in if isBeyondGlacier worldSize gx gy
-                      ∨ isGlacierZone worldSize gx gy  -- ice sheets handle polar zones
+                      ∨ isGlacierZone worldSize gx gy
                    then go (attemptIdx + 1) count tbs' acc
                    else let (elev, _) = elevationAtGlobal seed plates worldSize gx gy
                         in if elev < alpineThreshold
                            then go (attemptIdx + 1) count tbs' acc
                            else
-                           let -- Check regional temperature
-                               rc = globalToRegion worldSize gx gy
+                           let rc = globalToRegion worldSize gx gy
                                regionTemp = lookupRegionTemp rc (gsRegional gs)
-                           in if regionTemp > 5.0  -- too warm for glacier
+                           -- Higher temp threshold: 10°C (was 5°C)
+                           -- Cold highland + moderate latitude can still glacier
+                           in if regionTemp > 10.0
                               then go (attemptIdx + 1) count tbs' acc
                               else
-                              let -- Find steepest descent direction
-                                  flowDir = findSteepestDescent seed worldSize plates gx gy
+                              let flowDir = findSteepestDescent seed worldSize plates gx gy
                                   h3 = hashGeo seed attemptIdx 1410
                                   h4 = hashGeo seed attemptIdx 1411
                                   h5 = hashGeo seed attemptIdx 1412
                                   h6 = hashGeo seed attemptIdx 1413
                                   h7 = hashGeo seed attemptIdx 1414
 
-                                  -- Alpine glaciers are shorter and narrower than ice sheets
-                                  glacierLen = hashToRangeGeo h3 15 40
-                                  width      = hashToRangeGeo h4 4 10
-                                  thickness  = hashToRangeGeo h5 3 8
-                                  carveD     = hashToRangeGeo h6 8 20
-                                  moraine    = hashToRangeGeo h7 3 10
+                                  -- Bigger alpine glaciers: 20-60 length (was 15-40)
+                                  glacierLen = hashToRangeGeo h3 20 60
+                                  width      = hashToRangeGeo h4 6 16   -- was 4-10
+                                  thickness  = hashToRangeGeo h5 4 12   -- was 3-8
+                                  carveD     = hashToRangeGeo h6 12 30  -- was 8-20
+                                  moraine    = hashToRangeGeo h7 5 15   -- was 3-10
 
                                   glacier = GlacierParams
                                       { glCenter      = GeoCoord gx gy

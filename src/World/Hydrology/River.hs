@@ -44,7 +44,8 @@ generateRivers ∷ Word64 → Int → [TectonicPlate]
                → ([PersistentFeature], TimelineBuildState)
 generateRivers seed worldSize plates periodIdx tbs =
     let halfTiles = (worldSize * 16) `div` 2
-        maxRivers = scaleCount worldSize 6
+        -- More rivers: base 12 instead of 6, scales with area
+        maxRivers = scaleCount worldSize 12
         maxAttempts = maxRivers * 8
 
         go attemptIdx count tbs' acc
@@ -74,36 +75,42 @@ generateRivers seed worldSize plates periodIdx tbs =
     in go 0 0 tbs []
 
 -- | Try to generate a river starting near (gx, gy).
---   Fails (returns Nothing) if:
---     - Source is below sea level or in glacier
---     - Source elevation is too low (rivers start on highlands)
---     - Downhill walk doesn't reach ocean or a reasonable length
---     - Path is too short to be interesting
+--   Lower elevation threshold: rivers start from any meaningful
+--   highland, not just mountain peaks.
 tryGenerateRiver ∷ Word64 → Int → [TectonicPlate] → Int
                  → Int → Int → Maybe RiverParams
 tryGenerateRiver seed worldSize plates gx gy attemptIdx =
     if isBeyondGlacier worldSize gx gy
     then Nothing
     else let (srcElev, _) = elevationAtGlobal seed plates worldSize gx gy
-         in if srcElev < seaLevel + 30  -- rivers need meaningful elevation
+         in if srcElev < seaLevel + 15  -- was +30, now rivers start from lower hills
             then Nothing
-            else let path = walkDownhill seed worldSize plates gx gy srcElev
+            else let path = walkDownhill seed worldSize plates gx gy srcElev attemptIdx
                  in if length path < 3  -- too short
                     then Nothing
                     else Just (pathToRiver seed attemptIdx path)
 
 -- | Walk downhill from a starting point using steepest descent.
---   At each step, sample 8 directions at a fixed step size and
---   pick the lowest elevation. Stop at ocean, glacier, or max steps.
---
---   Step size scales with world size so rivers have proportional
---   length. Each waypoint becomes a segment endpoint.
+--   Variable step size and max steps based on hash, so rivers
+--   have natural length variation. Longer walks = bigger rivers.
 walkDownhill ∷ Word64 → Int → [TectonicPlate]
-             → Int → Int → Int → [(Int, Int, Int)]
+             → Int → Int → Int → Int → [(Int, Int, Int)]
              -- ^ Returns [(gx, gy, elevation)] waypoints
-walkDownhill seed worldSize plates startGX startGY startElev =
-    let stepSize = max 8 (worldSize `div` 16)  -- ~8 tiles per step at ws=128
-        maxSteps = 40
+walkDownhill seed worldSize plates startGX startGY startElev attemptIdx =
+    let -- Variable step size: 6-12 tiles per step
+        stepHash = hashGeo seed attemptIdx 1180
+        stepSize = 6 + hashToRangeGeo stepHash 0 6
+
+        -- Variable max steps: 30-120, so some rivers are streams
+        -- and others are continent-spanning. Weighted toward longer.
+        stepsHash = hashGeo seed attemptIdx 1181
+        stepsRoll = hashToFloatGeo stepsHash
+        -- 30% chance short (30-50), 40% medium (50-80), 30% long (80-120)
+        maxSteps = if stepsRoll < 0.3
+                   then hashToRangeGeo (hashGeo seed attemptIdx 1182) 30 50
+                   else if stepsRoll < 0.7
+                   then hashToRangeGeo (hashGeo seed attemptIdx 1182) 50 80
+                   else hashToRangeGeo (hashGeo seed attemptIdx 1182) 80 120
 
         -- 8-directional offsets scaled by stepSize
         dirs = [ (stepSize, 0), (-stepSize, 0), (0, stepSize), (0, -stepSize)
@@ -126,10 +133,6 @@ walkDownhill seed worldSize plates startGX startGY startElev =
                                 in (nx, ny, e)
                         ) dirs
 
-                    -- Add some randomness to direction choice so rivers
-                    -- don't all take identical steepest-descent paths.
-                    -- Hash-based "wobble": the lowest 2 candidates are
-                    -- eligible, and the hash picks between them.
                     sorted = sortByElev neighbors
                     (bestX', bestY', bestElev) = case sorted of
                         [] → (curGX, curGY, curElev)
@@ -137,8 +140,6 @@ walkDownhill seed worldSize plates startGX startGY startElev =
                         ((x1, y1, e1) : (x2, y2, e2) : _) →
                             let h = hashGeo seed step (1200 + curGX + curGY)
                                 wobble = hashToFloatGeo h
-                                -- 70% chance to take steepest, 30% second-steepest
-                                -- This creates natural-looking meanders
                             in if wobble < 0.7 ∨ e2 ≥ curElev
                                then (x1, y1, e1)
                                else (x2, y2, e2)
@@ -151,21 +152,9 @@ walkDownhill seed worldSize plates startGX startGY startElev =
 
     in go 0 startGX startGY startElev [(startGX, startGY, startElev)]
 
--- | Sort neighbor candidates by elevation (lowest first)
-sortByElev ∷ [(Int, Int, Int)] → [(Int, Int, Int)]
-sortByElev [] = []
-sortByElev [x] = [x]
-sortByElev xs = foldr insertSorted [] xs
-  where
-    insertSorted x [] = [x]
-    insertSorted x@(_, _, e1) (y@(_, _, e2) : ys)
-        | e1 ≤ e2   = x : y : ys
-        | otherwise  = y : insertSorted x ys
-
 -- | Convert a walked path of waypoints into RiverParams.
---   Flow rate increases along the path (accumulation).
---   Width and valley width scale with flow rate.
---   Depth scales with flow rate and slope.
+--   Wider valleys and deeper channels than before.
+--   Flow accumulates faster so downstream segments are bigger.
 pathToRiver ∷ Word64 → Int → [(Int, Int, Int)] → RiverParams
 pathToRiver seed attemptIdx path =
     let waypoints = path
@@ -185,28 +174,29 @@ pathToRiver seed attemptIdx path =
         }
 
 -- | Make a single river segment between two waypoints.
---   Flow, width, depth all increase downstream (segIdx / total).
+--   Bigger flow, wider channels, deeper valleys than before.
 makeSegment ∷ Word64 → Int → Int
             → ((Int, Int, Int), (Int, Int, Int))
             → RiverSegment
 makeSegment seed totalSegs segIdx ((sx, sy, se), (ex, ey, ee)) =
-    let -- Flow accumulates: each segment adds 0.05 + hash wobble
+    let -- Flow accumulates faster: 0.08 base + hash wobble
         h1 = hashGeo seed segIdx 1160
-        flowAdd = 0.05 + hashToFloatGeo h1 * 0.05
-        flow = fromIntegral (segIdx + 1) * flowAdd + 0.1
+        flowAdd = 0.08 + hashToFloatGeo h1 * 0.07
+        flow = fromIntegral (segIdx + 1) * flowAdd + 0.15
 
-        -- Width grows with flow: 2 tiles at headwaters, up to 6 at mouth
-        rawWidth = max 2 (round (flow * 8.0))
-        width = min 8 rawWidth
+        -- Width grows with flow: 2 tiles at headwaters, up to 10 at mouth
+        rawWidth = max 2 (round (flow * 10.0))
+        width = min 12 rawWidth
 
-        -- Valley is 3-5x the channel width
-        valleyMult = 3.0 + hashToFloatGeo (hashGeo seed segIdx 1161) * 2.0
-        valleyW = max (width * 2) (round (fromIntegral width * valleyMult))
+        -- Valley is 4-8x the channel width (was 3-5x)
+        valleyMult = 4.0 + hashToFloatGeo (hashGeo seed segIdx 1161) * 4.0
+        valleyW = max (width * 3) (round (fromIntegral width * valleyMult))
 
         -- Depth: steeper slope = deeper cut, plus flow contribution
+        -- Increased base depth and flow contribution
         slopeDelta = abs (se - ee)
-        baseDepth = max 3 (slopeDelta `div` 2 + round (flow * 5.0))
-        depth = min 25 baseDepth
+        baseDepth = max 4 (slopeDelta `div` 2 + round (flow * 8.0))
+        depth = min 35 baseDepth
 
     in RiverSegment
         { rsStart       = GeoCoord sx sy
@@ -216,6 +206,17 @@ makeSegment seed totalSegs segIdx ((sx, sy, se), (ex, ey, ee)) =
         , rsDepth       = depth
         , rsFlowRate    = flow
         }
+
+-- | Sort neighbor candidates by elevation (lowest first)
+sortByElev ∷ [(Int, Int, Int)] → [(Int, Int, Int)]
+sortByElev [] = []
+sortByElev [x] = [x]
+sortByElev xs = foldr insertSorted [] xs
+  where
+    insertSorted x [] = [x]
+    insertSorted x@(_, _, e1) (y@(_, _, e2) : ys)
+        | e1 ≤ e2   = x : y : ys
+        | otherwise  = y : insertSorted x ys
 
 -----------------------------------------------------------
 -- River Evolution
