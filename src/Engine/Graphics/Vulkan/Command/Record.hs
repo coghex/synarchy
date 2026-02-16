@@ -98,7 +98,7 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
     
     logDebugM CatRender "Beginning render pass"
     
-    let clearColor = Color ( Float32 0.0 0.0 0.4 1.0 )
+    let clearColor = Color ( Float32 0.0 0.0 0.0 1.0 )
         renderPassInfo = zero
           { renderPass = renderPass
           , framebuffer = framebuffer

@@ -57,7 +57,7 @@ cameraChanged old new =
 -- | the amount of z headroom above the surface 
 -- to keep the camera at, in grid units
 surfaceHeadroom ∷ Int
-surfaceHeadroom = 3
+surfaceHeadroom = 10
 
 -----------------------------------------------------------
 -- Top-Level Entry Point
@@ -102,7 +102,6 @@ updateWorldTiles env = do
             return $ V.concat quads
 
     zoomQuads ← generateZoomMapQuads env camera fbW fbH
-    bgQuads ← generateBackgroundQuads env camera fbW fbH
 
     -- Auto-adjust zSlice (same logic as before)
     let shouldTrack = camZTracking camera
@@ -123,13 +122,13 @@ updateWorldTiles env = do
                     case lookupChunk chunkCoord tileData of
                         Just lc → do
                             let surfElev = HM.lookupDefault 0 (lx, ly) (lcSurfaceMap lc)
-                                targetZ = surfElev + 3
+                                targetZ = surfElev + surfaceHeadroom
                             atomicModifyIORef' (cameraRef env) $ \cam →
                                 (cam { camZSlice = targetZ }, ())
                         Nothing → return ()
                 Nothing → return ()
 
-    let allQuads = bgQuads <> tileQuads <> zoomQuads
+    let allQuads = tileQuads <> zoomQuads
     return allQuads
 
 -----------------------------------------------------------
@@ -377,11 +376,6 @@ renderWorldQuads env worldState zoomAlpha snap = do
 -- Convert Tile to Quad
 -----------------------------------------------------------
 
-tileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
-           → WorldTextures → CameraFacing
-           → Int → Int → Int → Tile → Int → Int → Float → Float
-           → Maybe FluidCell → Bool
-           → SortableQuad
 tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice effDepth tileAlpha xOffset mFluid chunkHasFluid =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
@@ -396,22 +390,26 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
         fmHandle = getTileFaceMapTexture textures (tileType tile)
         fmSlot = lookupFmSlot fmHandle
 
-        -- Depth fade (cliff shading for above-water tiles)
+        -- Depth-based atmospheric perspective
         depth = zSlice - worldZ
         fadeRange = max 1 effDepth
-        brightnessT = fromIntegral depth / fromIntegral fadeRange
-        brightness = clamp01 (1.0 - brightnessT * 0.4)
-        fadeT = fromIntegral depth / fromIntegral fadeRange
-        depthAlpha = clamp01 (1.0 - fadeT * fadeT)
-        -- Determine if this tile is underwater and by how much.
-        -- Two cases:
-        --   1. This column has fluid and the tile is below the fluid surface
-        --   2. This column has no fluid (cliff/land column) but the tile
-        --      is below sea level AND the chunk contains fluid elsewhere
+        fadeT = clamp01 (fromIntegral depth / fromIntegral fadeRange)
+
+        -- Subtle darkening for cliff shading
+        brightness = clamp01 (1.0 - fadeT * 0.15)
+
+        -- Atmospheric haze: blend toward sky blue at depth.
+        -- Quadratic ramp so top tiles are untouched, bottom
+        -- tiles pick up a blue-grey tint like distant haze.
+        hazeT = fadeT * fadeT * 0.6
+        hazeR = 0.72 ∷ Float
+        hazeG = 0.85 ∷ Float
+        hazeB = 0.95 ∷ Float
+
+        -- Underwater tinting
         underwaterDepth = case mFluid of
             Just fc
-                | (fcType fc ≡ Ocean ∨ fcType fc ≡ Lake ∨ fcType fc ≡ River)
-                  ∧ worldZ < fcSurface fc → fcSurface fc - worldZ
+                | fcType fc ≡ Ocean ∧ worldZ < fcSurface fc → fcSurface fc - worldZ
             _ | chunkHasFluid ∧ worldZ < seaLevel → seaLevel - worldZ
             _ → 0
 
@@ -423,7 +421,11 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
                     b = 0.9 - t * 0.3
                 in (r, g, b, tileAlpha)
             else
-                (brightness, brightness, brightness, tileAlpha * depthAlpha)
+                -- Mix brightness with atmospheric haze
+                let r = brightness * (1.0 - hazeT) + hazeR * hazeT
+                    g = brightness * (1.0 - hazeT) + hazeG * hazeT
+                    b = brightness * (1.0 - hazeT) + hazeB * hazeT
+                in (r, g, b, tileAlpha)
 
         tint = Vec4 tintR tintG tintB finalAlpha
 
@@ -445,10 +447,6 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
 -- Blank Tile Quad
 -----------------------------------------------------------
 
-blankTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
-               → WorldTextures → CameraFacing
-               → Int → Int → Int → Int → Float → Float
-               → SortableQuad
 blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSlice tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
@@ -461,9 +459,16 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
         texHandle = wtBlankTexture textures
         actualSlot = lookupSlot texHandle
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
-        -- Blank tiles are always neutral grey — they represent
-        -- unexposed solid ground, never underwater surfaces.
-        tint = Vec4 1.0 1.0 1.0 tileAlpha
+
+        -- Atmospheric haze matching tileToQuad
+        depth = zSlice - worldZ
+        fadeT = clamp01 (fromIntegral depth / 50.0)
+        hazeT = fadeT * fadeT * 0.6
+        r = 1.0 * (1.0 - hazeT) + 0.72 * hazeT
+        g = 1.0 * (1.0 - hazeT) + 0.85 * hazeT
+        b = 1.0 * (1.0 - hazeT) + 0.95 * hazeT
+
+        tint = Vec4 r g b tileAlpha
         v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
         v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
