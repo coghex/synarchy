@@ -90,6 +90,7 @@ test-suite synarchy-test
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
+                       "-with-rtsopts=-N -A128M"
                        -haddock
                        -fno-full-laziness
                        -fno-cse
@@ -105,6 +106,7 @@ test-suite synarchy-test
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
+                       "-with-rtsopts=-N -A128M"
                        -haddock
     else
       if os(darwin)
@@ -114,12 +116,14 @@ test-suite synarchy-test
                        -optc-O3
                        -fexcess-precision
                        -threaded
+                       "-with-rtsopts=-N -A128M"
                        -feager-blackholing
       else
           ghc-options: -O2
                        -optc-O3
                        -fexcess-precision
                        -threaded
+                       "-with-rtsopts=-N -A128M"
                        -feager-blackholing
     if flag(profile)
           ghc-options: -fprof-auto
@@ -460,6 +464,7 @@ executable synarchy
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
                        -threaded
+                       "-with-rtsopts=-N -A128M"
                        -haddock
     else
       if os(darwin)
@@ -469,12 +474,14 @@ executable synarchy
                        -optc-O3
                        -fexcess-precision
                        -threaded
+                       "-with-rtsopts=-N -A128M"
                        -feager-blackholing
       else
           ghc-options: -O2
                        -optc-O3
                        -fexcess-precision
                        -threaded
+                       "-with-rtsopts=-N -A128M"
                        -feager-blackholing
 
     if flag(profile)

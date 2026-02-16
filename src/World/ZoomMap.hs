@@ -7,6 +7,8 @@ module World.ZoomMap
 
 import UPrelude
 import Debug.Trace (trace)
+import Control.Parallel.Strategies (parMap, rdeepseq, parListChunk, using, rseq)
+import Control.DeepSeq (NFData)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
 import Data.IORef (readIORef, writeIORef, IORef)
@@ -69,93 +71,84 @@ buildZoomCache params =
         oceanMap = wgpOceanMap params
         features = gtFeatures timeline
 
-        -- Sample a single point at the chunk center for fluid checks
-        buildChunkSurfaceFast ∷ Int → Int → HM.HashMap (Int, Int) Int
-        buildChunkSurfaceFast cx cy =
-            let gx = cx * chunkSize + chunkSize `div` 2
-                gy = cy * chunkSize + chunkSize `div` 2
-                (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
-                (gx', gy') = wrapGlobalU worldSize gx gy
-                elev = if baseMat ≡ matGlacier then baseElev
-                       else if baseElev < -100 then baseElev
-                       else fst (applyTimeline timeline worldSize gx' gy'
-                                    (baseElev, baseMat))
-            in HM.singleton (chunkSize `div` 2, chunkSize `div` 2) elev
-        -- Compute full surface map for a chunk: elevation and material per tile
-        buildChunkSurface ∷ Int → Int → HM.HashMap (Int, Int) (Int, Word8)
-        buildChunkSurface cx cy =
-            HM.fromList
-                [ ((lx, ly), (elev, mat))
-                | lx ← [0 .. chunkSize - 1]
-                , ly ← [0 .. chunkSize - 1]
-                , let gx = cx * chunkSize + lx
-                      gy = cy * chunkSize + ly
-                      (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
-                      (gx', gy') = wrapGlobalU worldSize gx gy
-                      (elev, mat) = if baseMat ≡ matGlacier
-                                    then (baseElev, unMaterialId baseMat)
-                                    else if baseElev < -100
-                                    then (baseElev, 0)
-                                    else let (e, m) = applyTimeline timeline worldSize gx' gy'
-                                                          (baseElev, baseMat)
-                                         in (e, unMaterialId m)
-                ]
+        -- Pure function: compute one chunk entry.
+        -- All inputs are closed over, no shared mutable state.
+        buildOne ∷ (Int, Int) → Maybe ZoomChunkEntry
+        buildOne (ccx, ccy) =
+            let baseGX = ccx * chunkSize
+                baseGY = ccy * chunkSize
+                halfTiles = halfSize * chunkSize
+                vMin = baseGX + baseGY
+                vMax = baseGX + baseGY + 2 * (chunkSize - 1)
+            in if vMax < -halfTiles ∨ vMin > halfTiles
+               then Nothing
+               else
+               let -- Fast single-sample surface for fluid checks
+                   fastSurface =
+                       let gx = ccx * chunkSize + chunkSize `div` 2
+                           gy = ccy * chunkSize + chunkSize `div` 2
+                           (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
+                           (gx', gy') = wrapGlobalU worldSize gx gy
+                           elev = if baseMat ≡ matGlacier then baseElev
+                                  else if baseElev < -100 then baseElev
+                                  else fst (applyTimeline timeline worldSize gx' gy'
+                                               (baseElev, baseMat))
+                       in HM.singleton (chunkSize `div` 2, chunkSize `div` 2) elev
 
-        entries =
-            [ ZoomChunkEntry
-                { zceChunkX   = ccx
-                , zceChunkY   = ccy
-                , zceBaseGX   = baseGX
-                , zceBaseGY   = baseGY
-                , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
-                                then 0
-                                else if chunkLava then 100
-                                else winnerMat
-                , zceElev     = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
-                                then seaLevel else avgElev
-                , zceIsOcean  = chunkOcean
-                , zceHasLava  = chunkLava
-                }
-            | ccy ← [-halfSize .. halfSize - 1]
-            , ccx ← [-halfSize .. halfSize - 1]
-            , let baseGX = ccx * chunkSize
-                  baseGY = ccy * chunkSize
-                  halfTiles = halfSize * chunkSize
-                  vMin = baseGX + baseGY
-                  vMax = baseGX + baseGY + 2 * (chunkSize - 1)
-            , vMax >= -halfTiles ∧ vMin <= halfTiles
-            , let -- Fast single-sample surface for fluid checks
-                  fastSurface = buildChunkSurfaceFast ccx ccy
+                   -- Material samples
+                   wrappedBaseGX = ccx * chunkSize
+                   wrappedBaseGY = ccy * chunkSize
+                   samples = [ let gx = wrappedBaseGX + ox
+                                   gy = wrappedBaseGY + oy
+                                   (gx', gy') = wrapGlobalU worldSize gx gy
+                                   (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
+                               in if baseMat ≡ matGlacier
+                                  then (baseElev, unMaterialId baseMat)
+                                  else if baseElev < -100 then (baseElev, 0)
+                                  else let (e, m) = applyTimeline timeline worldSize gx' gy'
+                                                        (baseElev, baseMat)
+                                       in (e, unMaterialId m)
+                             | (ox, oy) ← sampleOffsets
+                             ]
+                   winnerMat = majorityMaterial samples
+                   avgElev = let s = sum (map fst samples)
+                             in s `div` length samples
 
-                  -- Material samples (keep using sampleOffsets for accuracy)
-                  wrappedBaseGX = ccx * chunkSize
-                  wrappedBaseGY = ccy * chunkSize
-                  samples = [ let gx = wrappedBaseGX + ox
-                                  gy = wrappedBaseGY + oy
-                                  (gx', gy') = wrapGlobalU worldSize gx gy
-                                  (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
-                              in if baseMat ≡ matGlacier
-                                 then (baseElev, unMaterialId baseMat)
-                                 else if baseElev < -100 then (baseElev, 0)
-                                 else let (e, m) = applyTimeline timeline worldSize gx' gy'
-                                                       (baseElev, baseMat)
-                                      in (e, unMaterialId m)
-                            | (ox, oy) ← sampleOffsets
-                            ]
-                  winnerMat = majorityMaterial samples
-                  avgElev = let s = sum (map fst samples)
-                            in s `div` length samples
+                   lavaMap = computeChunkLava features seed plates worldSize
+                                 (ChunkCoord ccx ccy) fastSurface
+                   chunkLava = not (HM.null lavaMap)
 
-                  -- Fluid checks using single center sample
-                  lavaMap = computeChunkLava features seed plates worldSize
-                                (ChunkCoord ccx ccy) fastSurface
-                  chunkLava = not (HM.null lavaMap)
+                   oceanFluidMap = computeChunkFluid oceanMap (ChunkCoord ccx ccy) fastSurface
+                   chunkOcean = not (HM.null oceanFluidMap)
 
-                  oceanFluidMap = computeChunkFluid oceanMap (ChunkCoord ccx ccy) fastSurface
-                  chunkOcean = not (HM.null oceanFluidMap)
-                ]
+               in Just ZoomChunkEntry
+                   { zceChunkX   = ccx
+                   , zceChunkY   = ccy
+                   , zceBaseGX   = baseGX
+                   , zceBaseGY   = baseGY
+                   , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
+                                   then 0
+                                   else if chunkLava then 100
+                                   else winnerMat
+                   , zceElev     = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
+                                   then seaLevel else avgElev
+                   , zceIsOcean  = chunkOcean
+                   , zceHasLava  = chunkLava
+                   }
 
-    in V.fromList entries
+        -- All chunk coordinates
+        allCoords = [ (ccx, ccy)
+                    | ccy ← [-halfSize .. halfSize - 1]
+                    , ccx ← [-halfSize .. halfSize - 1]
+                    ]
+
+        -- Evaluate in parallel, ~64 chunks per spark.
+        -- parListChunk groups the list into batches so the scheduler
+        -- isn't overwhelmed by thousands of tiny sparks.
+        chunkBatchSize = max 1 (length allCoords `div` 128)
+        results = parMap rdeepseq buildOne allCoords
+
+    in V.fromList (catMaybes results)
 
 wrapChunkX ∷ Int → Int → Int
 wrapChunkX halfSize cx =

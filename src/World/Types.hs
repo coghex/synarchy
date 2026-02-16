@@ -842,6 +842,10 @@ data ZoomChunkEntry = ZoomChunkEntry
     , zceIsOcean  ∷ !Bool      -- ^ Whether this chunk is ocean
     , zceHasLava  ∷ !Bool      -- ^ Whether this chunk has lava (for zoom rendering)
     } deriving (Show, Eq)
+instance NFData ZoomChunkEntry where
+    rnf (ZoomChunkEntry x y bgX bgY tex elev ocean lava) =
+        rnf x `seq` rnf y `seq` rnf bgX `seq` rnf bgY `seq`
+        rnf tex `seq` rnf elev `seq` rnf ocean `seq` rnf lava
 
 -----------------------------------------------------------
 -- Zoom/Background Quad Cache
