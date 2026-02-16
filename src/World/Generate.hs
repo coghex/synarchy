@@ -106,7 +106,7 @@ generateChunk params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
         timeline = wgpGeoTimeline params
-        plates = generatePlates seed worldSize (wgpPlateCount params)
+        plates = wgpPlates params
         wsc = computeWorldScale worldSize
         oceanMap = wgpOceanMap params
 

@@ -140,7 +140,12 @@ tickWorldTime env dt = do
 -- Chunk Loading
 -----------------------------------------------------------
 
--- | Check camera position and load/promote chunks as needed.
+-- | Maximum chunks to generate per world loop iteration.
+--   Keeps the world thread responsive so quad rendering
+--   isn't starved during camera panning.
+maxChunksPerTick ∷ Int
+maxChunksPerTick = 2
+
 updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
 updateChunkLoading env logger = do
     camera ← readIORef (cameraRef env)
@@ -168,6 +173,7 @@ updateChunkLoading env logger = do
                         Nothing → return ()
                         Just params → do
                             tileData ← readIORef (wsTilesRef worldState)
+                            
 
                             let halfSize = wgpWorldSize params `div` 2
                                 -- Wrap chunk coords in u-space (ccx - ccy),
@@ -187,9 +193,12 @@ updateChunkLoading env logger = do
                                     in abs (v * chunkSize) ≤ halfTiles
                                 validCoords = map wrapChunkU $ filter inBoundsV neededCoords
 
-                            let (toPromote, toGenerate) = partitionChunks validCoords tileData
+                            let (_toPromote, toGenerate) = partitionChunks validCoords tileData
+                            
+                            -- Only generate a limited batch per tick
+                            let batch = take maxChunksPerTick toGenerate
 
-                            when (not $ null toGenerate) $ do
+                            when (not $ null batch) $ do
                                 let newChunks = map (\coord →
                                         let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
                                         in LoadedChunk
@@ -199,18 +208,12 @@ updateChunkLoading env logger = do
                                             , lcTerrainSurfaceMap = tMap
                                             , lcFluidMap   = fluidMap
                                             , lcModified   = False
-                                            }) toGenerate
+                                            }) batch
 
                                 atomicModifyIORef' (wsTilesRef worldState) $ \td →
                                     let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
                                         td'' = evictDistantChunks camChunk chunkLoadRadius td'
                                     in (td'', ())
-
-                                logDebug logger CatWorld $
-                                    "Loaded " <> T.pack (show $ length toGenerate)
-                                    <> " new chunks around " <> T.pack (show camChunk)
-                                    <> " (" <> T.pack (show $ chunkCount tileData + length toGenerate)
-                                    <> " total)"
                         
 -- | Partition needed chunk coords into those already loaded (promote)
 --   and those that need generation.
@@ -265,6 +268,7 @@ handleWorldCommand env logger cmd = do
                     { wgpSeed        = seed
                     , wgpWorldSize   = worldSize
                     , wgpPlateCount  = placeCount
+                    , wgpPlates      = plates
                     , wgpGeoTimeline = timeline
                     , wgpOceanMap    = oceanMap
                     }

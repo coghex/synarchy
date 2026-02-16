@@ -22,22 +22,7 @@ import Data.List (sortBy)
 import Data.Ord (comparing)
 import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro, matGlacier)
 import World.Scale (WorldScale(..), computeWorldScale, scaleElev, scaleDist)
-import World.Types (chunkSize)
-
------------------------------------------------------------
--- Tectonic Plate
------------------------------------------------------------
-
-data TectonicPlate = TectonicPlate
-    { plateCenterX  ∷ !Int
-    , plateCenterY  ∷ !Int
-    , plateIsLand   ∷ !Bool
-    , plateBaseElev ∷ !Int
-    , plateMaterial ∷ !MaterialId
-    , plateDensity  ∷ !Float
-    , plateDriftX   ∷ !Float
-    , plateDriftY   ∷ !Float
-    } deriving (Show)
+import World.Types (chunkSize, TectonicPlate(..))
 
 -----------------------------------------------------------
 -- Boundary Classification

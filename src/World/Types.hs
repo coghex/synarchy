@@ -14,6 +14,23 @@ import Engine.Scene.Types.Batch (SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import qualified Engine.Core.Queue as Q
+import World.Material (MaterialId(..))
+
+
+-----------------------------------------------------------
+-- Tectonic Plate
+-----------------------------------------------------------
+
+data TectonicPlate = TectonicPlate
+    { plateCenterX  ∷ !Int
+    , plateCenterY  ∷ !Int
+    , plateIsLand   ∷ !Bool
+    , plateBaseElev ∷ !Int
+    , plateMaterial ∷ !MaterialId
+    , plateDensity  ∷ !Float
+    , plateDriftX   ∷ !Float
+    , plateDriftY   ∷ !Float
+    } deriving (Show, Eq)
 
 -----------------------------------------------------------
 -- World Page ID
@@ -56,6 +73,7 @@ data WorldGenParams = WorldGenParams
     { wgpSeed       ∷ !Word64
     , wgpWorldSize  ∷ !Int     -- ^ World size in chunks (e.g. 64 → 64×64 chunks)
     , wgpPlateCount ∷ !Int     -- ^ Number of tectonic plates (for worldgen)
+    , wgpPlates     ∷ ![TectonicPlate] -- ^ Pre-generated plate data for deterministic worldgen
     , wgpCalender   ∷ !CalendarConfig  -- ^ Calendar configuration for time/date calculations
     , wgpSunConfig   ∷ !SunConfig       -- ^ Sun configuration for time-of-day lighting
     , wgpMoonConfig  ∷ !MoonConfig      -- ^ Moon configuration for lunar phases
@@ -68,6 +86,7 @@ defaultWorldGenParams = WorldGenParams
     { wgpSeed      = 42
     , wgpWorldSize = 128
     , wgpPlateCount = 10
+    , wgpPlates = []
     , wgpCalender = defaultCalendarConfig
     , wgpSunConfig = defaultSunConfig
     , wgpMoonConfig = defaultMoonConfig
