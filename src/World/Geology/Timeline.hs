@@ -367,72 +367,95 @@ buildAge seed worldSize plates ageIdx tbs =
                          (map CraterEvent craters)
             else []
 
-        landslideRoll = hashToFloatGeo (hashGeo ageSeed ageIdx 630)
-        landslideChance = duration / 10.0
-        landslides = if landslideRoll < landslideChance
-            then []
-            else []
-
-        floodRoll = hashToFloatGeo (hashGeo ageSeed ageIdx 640)
-        floodChance = duration / 20.0
-        floods = if floodRoll < floodChance
-            then []
-            else []
-
-        -- Age-level eruptions: roll for each active volcanic feature
+        -- Age-level eruptions: roll for each active feature
+        -- that has epTimelineScale == Age
         eruptSeed = ageSeed `xor` 0x1A7A
         eruptions = catMaybes
             [ generateEruption eruptSeed worldSize ageIdx plates pf
             | pf ← tbsFeatures tbs
-            , case (eruptionProfile (pfFeature pf)) of
-                    Just ep → epTimelineScale ep ≡ Age
-                    Nothing → False
+            , case eruptionProfile (pfFeature pf) of
+                Just ep → epTimelineScale ep ≡ Age
+                Nothing → False
             ]
 
-        -- === Hydrology ===
+        -----------------------------------------------------------
+        -- Hydrology (capped to prevent runaway feature growth)
+        -----------------------------------------------------------
 
-        hydroSeed = ageSeed `xor` 0xA0FA71C
+        -- Count existing hydro features to enforce global limits
+        existingRiverCount = length
+            [ () | pf ← tbsFeatures tbs, isRiverFeature (pfFeature pf) ]
+        existingGlacierCount = length
+            [ () | pf ← tbsFeatures tbs, isGlacierFeature (pfFeature pf) ]
 
-        -- Generate new rivers (only in early ages)
-        (newRivers, tbs_r) = if ageIdx < 3
-            then generateRivers hydroSeed worldSize plates
-                     (tbsPeriodIdx tbs) tbs
+        -- Scale limits by world size: larger worlds get more features
+        -- but still bounded. worldSize 128 → ~64 rivers, ~32 glaciers
+        maxRivers   = max 16 (worldSize `div` 2)
+        maxGlaciers = max 8  (worldSize `div` 4)
+        maxHydroTotal = maxRivers + maxGlaciers + maxGlaciers
+
+        hydroSeed = ageSeed `xor` 0xA0CA71C
+
+        -- Step 1: Generate new rivers — only in early ages AND under cap
+        riverRoom = max 0 (maxRivers - existingRiverCount)
+        (newRivers, tbs_r) =
+            if ageIdx < 2 ∧ riverRoom > 0
+            then let (rs, t) = generateRivers hydroSeed worldSize plates
+                                   (tbsPeriodIdx tbs) tbs
+                 in (take riverRoom rs, t)
             else ([], tbs)
 
-        -- Generate/evolve glaciers based on global temperature
-        (newGlaciers, tbs_g) = generateGlaciers hydroSeed worldSize plates
-                                   (tbsGeoState tbs_r)
-                                   (tbsPeriodIdx tbs_r) tbs_r
+        -- Step 2: Generate/evolve glaciers — also capped
+        glacierRoom = max 0 (maxGlaciers - existingGlacierCount)
+        (newGlaciers, tbs_g) =
+            if glacierRoom > 0
+            then let (gs', t) = generateGlaciers hydroSeed worldSize plates
+                                    gs1 (tbsPeriodIdx tbs_r) tbs_r
+                 in (take glacierRoom gs', t)
+            else ([], tbs_r)
 
-        -- Evolve existing hydro features
-        (hydroEvolvEvents, tbs_h) = foldl'
-            (\(evts, st) pf → case pfFeature pf of
-                HydroShape (RiverFeature _) →
-                    evolveRiver hydroSeed (tbsPeriodIdx st) (evts, st) pf
-                HydroShape (GlacierFeature _) →
-                    evolveGlacier hydroSeed (tbsPeriodIdx st) (tbsGeoState st)
-                                 (evts, st) pf
-                HydroShape (LakeFeature _) →
-                    (evts, st)  -- lakes are passive
-                VolcanicShape _ →
-                    (evts, st)  -- handled by applyVolcanicEvolution at Period level
-            ) ([], tbs_g) (tbsFeatures tbs_g)
+        -- Step 3: Evolve existing hydro features
+        -- CAP: only evolve a bounded number per age to prevent
+        -- O(features × events) blowup. Skip extinct features.
+        maxHydroEvolutions = max 32 (worldSize `div` 2)
+        activeHydroFeatures =
+            take maxHydroEvolutions
+            [ pf
+            | pf ← tbsFeatures tbs_g
+            , isHydroFeature (pfFeature pf)
+            , pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
+            ]
 
-        -- Creation events for new hydro features
+        (hydroEvents, tbs_h) = foldl'
+            (\(evts, st) pf →
+                let currentCount = length
+                      [ () | f ← tbsFeatures st, isHydroFeature (pfFeature f) ]
+                    canBranch = currentCount < maxHydroTotal
+                in case pfFeature pf of
+                    HydroShape (RiverFeature _) →
+                        evolveRiverCapped hydroSeed canBranch
+                            (tbsPeriodIdx st) (evts, st) pf
+                    HydroShape (GlacierFeature _) →
+                        evolveGlacierCapped hydroSeed canBranch
+                            (tbsPeriodIdx st) gs1 (evts, st) pf
+                    _ → (evts, st)
+            ) ([], tbs_g) activeHydroFeatures
+
+        -- Step 4: Creation events for new features
         hydroCreationEvents = map (\pf → case pfFeature pf of
-                HydroShape hf → HydroEvent hf
-                _             → error "buildAge: non-hydro feature in hydro list"
+            HydroShape hf → HydroEvent hf
+            _             → error "non-hydro in newRivers/newGlaciers"
             ) (newRivers <> newGlaciers)
 
-        allEvents = meteorites <> landslides <> floods <> eruptions
-                 <> hydroCreationEvents <> hydroEvolvEvents
+        allEvents = meteorites <> eruptions
+                 <> hydroCreationEvents <> hydroEvents
 
         gs2 = gs1 { gsCO2 = max 0.5 (gsCO2 gs1 - duration * 0.005) }
 
         erosion = erosionFromGeoState gs2 seed ageIdx
 
         period = GeoPeriod
-            { gpName     = "Age " <> T.pack (show (tbsPeriodIdx tbs_h))
+            { gpName     = "Age " <> T.pack (show (tbsPeriodIdx tbs))
             , gpScale    = Age
             , gpDuration = round duration
             , gpDate     = currentDate
@@ -440,6 +463,66 @@ buildAge seed worldSize plates ageIdx tbs =
             , gpErosion  = erosion
             }
     in addPeriod period (tbs_h { tbsGeoState = gs2 })
+
+-----------------------------------------------------------
+-- Capped evolution wrappers
+-----------------------------------------------------------
+
+-- | Wrapper around evolveRiver that suppresses branching
+--   when we've hit the feature cap.
+evolveRiverCapped ∷ Word64 → Bool → Int
+                  → ([GeoEvent], TimelineBuildState)
+                  → PersistentFeature
+                  → ([GeoEvent], TimelineBuildState)
+evolveRiverCapped seed canBranch periodIdx (events, tbs) pf =
+    if canBranch
+    then evolveRiver seed periodIdx (events, tbs) pf
+    else -- Run evolution but suppress branching by biasing the roll.
+         -- If roll < 0.15 (branch zone), skip and treat as "continue".
+         let fid = pfId pf
+             GeoFeatureId fidInt = fid
+             h1 = hashGeo seed fidInt 800
+             roll = hashToFloatGeo h1
+         in if roll < 0.15
+            then (events, tbs)  -- would have branched, suppress it
+            else evolveRiver seed periodIdx (events, tbs) pf
+
+-- | Wrapper around evolveGlacier that suppresses branching
+--   when we've hit the feature cap.
+evolveGlacierCapped ∷ Word64 → Bool → Int → GeoState
+                    → ([GeoEvent], TimelineBuildState)
+                    → PersistentFeature
+                    → ([GeoEvent], TimelineBuildState)
+evolveGlacierCapped seed canBranch periodIdx gs (events, tbs) pf =
+    if canBranch
+    then evolveGlacier seed periodIdx gs (events, tbs) pf
+    else let fid = pfId pf
+             GeoFeatureId fidInt = fid
+             h1 = hashGeo seed fidInt 900
+             roll = hashToFloatGeo h1
+             temp = gsCO2 gs
+         in -- Cold world branch zone is roll 0.50-0.65,
+            -- moderate is 0.20-0.30. Suppress those ranges.
+            if (temp < 0.8 ∧ roll ≥ 0.50 ∧ roll < 0.65)
+             ∨ (temp ≥ 0.8 ∧ temp ≤ 1.2 ∧ roll ≥ 0.20 ∧ roll < 0.30)
+            then (events, tbs)
+            else evolveGlacier seed periodIdx gs (events, tbs) pf
+
+-----------------------------------------------------------
+-- Hydro feature classification helpers
+-----------------------------------------------------------
+
+isHydroFeature ∷ FeatureShape → Bool
+isHydroFeature (HydroShape _) = True
+isHydroFeature _              = False
+
+isRiverFeature ∷ FeatureShape → Bool
+isRiverFeature (HydroShape (RiverFeature _)) = True
+isRiverFeature _                             = False
+
+isGlacierFeature ∷ FeatureShape → Bool
+isGlacierFeature (HydroShape (GlacierFeature _)) = True
+isGlacierFeature _                               = False
 
 erosionFromGeoState ∷ GeoState → Word64 → Int → ErosionParams
 erosionFromGeoState gs seed ageIdx =

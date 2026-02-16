@@ -190,25 +190,22 @@ getFeatureRadius (VolcanicShape (LavaTube p))         =
         dy = fromIntegral (ey - sy) ∷ Float
     in round (sqrt (dx * dx + dy * dy) / 2.0) + ltWidth p
 getFeatureRadius (HydroShape (RiverFeature r)) =
-    -- Half the distance from source to mouth, plus the widest
-    -- valley width. This gives a bounding radius for proximity
-    -- checks (same role as shBaseRadius for shield volcanoes).
+    -- Half the source-to-mouth distance + widest valley along path.
+    -- Used for proximity checks during evolution, not rendering.
     let GeoCoord sx sy = rpSourceRegion r
         GeoCoord mx my = rpMouthRegion r
         dx = fromIntegral (mx - sx) ∷ Float
         dy = fromIntegral (my - sy) ∷ Float
+        halfLen = round (sqrt (dx * dx + dy * dy) / 2.0)
         maxValley = case rpSegments r of
-            [] → 0
+            []   → 8
             segs → maximum (map rsValleyWidth segs)
-    in round (sqrt (dx * dx + dy * dy) / 2.0) + maxValley
+    in halfLen + maxValley
 getFeatureRadius (HydroShape (GlacierFeature g)) =
-    -- Glacier extends glLength tiles along its flow direction
-    -- and glWidth tiles across. The bounding radius is half the
-    -- diagonal of that box, plus moraine overshoot.
-    let len = fromIntegral (glLength g) ∷ Float
-        wid = fromIntegral (glWidth g) ∷ Float
-    in round (sqrt (len * len + wid * wid) / 2.0) + glMoraineSize g
-getFeatureRadius (HydroShape (LakeFeature l)) = lkRadius l
+    -- Half the glacier length plus full width gives the bounding radius
+    glLength g `div` 2 + glWidth g
+getFeatureRadius (HydroShape (LakeFeature l)) =
+    lkRadius l
 
 getFeatureCenter ∷ FeatureShape → GeoCoord
 getFeatureCenter (VolcanicShape (ShieldVolcano p))    = shCenter p
@@ -226,11 +223,11 @@ getFeatureCenter (VolcanicShape (LavaTube p))         =
         GeoCoord ex ey = ltEnd p
     in GeoCoord ((sx + ex) `div` 2) ((sy + ey) `div` 2)
 getFeatureCenter (HydroShape (RiverFeature r)) =
-    -- Midpoint between source and mouth, same logic as fissure.
-    -- Proximity checks use this + getFeatureRadius to decide if
-    -- this feature can affect a given chunk.
-    let GeoCoord sx sy = rpSourceRegion r
-        GeoCoord mx my = rpMouthRegion r
-    in GeoCoord ((sx + mx) `div` 2) ((sy + my) `div` 2)
-getFeatureCenter (HydroShape (GlacierFeature g)) = glCenter g
-getFeatureCenter (HydroShape (LakeFeature l)) = lkCenter l
+    -- Headwaters — the most meaningful single point for a river.
+    -- Rivers flow away from here, so proximity to center ≈
+    -- proximity to the upstream half of the system.
+    rpSourceRegion r
+getFeatureCenter (HydroShape (GlacierFeature g)) =
+    glCenter g
+getFeatureCenter (HydroShape (LakeFeature l)) =
+    lkCenter l
