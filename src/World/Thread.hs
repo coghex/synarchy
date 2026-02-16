@@ -76,19 +76,17 @@ worldLoop env stateRef lastTimeRef = do
             threadDelay 100000
             worldLoop env stateRef lastTimeRef
         ThreadRunning → do
-            -- Calculate delta time
             now ← realToFrac ⊚ getPOSIXTime
             lastTime ← readIORef lastTimeRef
             let dt = now - lastTime ∷ Double
             writeIORef lastTimeRef now
             
-            -- Process all pending commands
             processAllCommands env logger
             
-            -- Tick world time for all visible worlds and update sunAngleRef
-            tickWorldTime env (realToFrac dt)
+            -- Drain initial chunk queues (progressive loading)
+            drainInitQueues env logger
             
-            -- Check chunk loading for all visible worlds
+            tickWorldTime env (realToFrac dt)
             updateChunkLoading env logger
             
             camera ← readIORef (cameraRef env)
@@ -315,7 +313,7 @@ handleWorldCommand env logger cmd = do
                         , lcModified   = False
                         }) initialCoords
             
-            -- Generate ONLY the center chunk synchronously
+            -- Generate ONLY the center chunk synchronously for immediate display
             let centerCoord = ChunkCoord 0 0
                 (ct, cs, cterrain, cf) = generateChunk params centerCoord
                 centerChunk = LoadedChunk
@@ -331,7 +329,15 @@ handleWorldCommand env logger cmd = do
                 (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
                                , wtdMaxChunks = 200 }, ())
 
-            -- Register the world immediately — it's visible with 1 chunk
+            -- Store the remaining coords that still need generation
+            let initialCoords = [ ChunkCoord cx cy
+                                | cx ← [-chunkLoadRadius .. chunkLoadRadius]
+                                , cy ← [-chunkLoadRadius .. chunkLoadRadius]
+                                , not (cx ≡ 0 ∧ cy ≡ 0)  -- skip center, already done
+                                ]
+            writeIORef (wsInitQueueRef worldState) initialCoords
+
+            -- Register + show world immediately
             atomicModifyIORef' (worldManagerRef env) $ \mgr →
                 (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
             
@@ -498,3 +504,42 @@ handleWorldCommand env logger cmd = do
 
 unWorldPageId ∷ WorldPageId → Text
 unWorldPageId (WorldPageId t) = t
+
+-- | Generate a limited batch of chunks from each world's init queue.
+--   Runs every world tick until all initial chunks are loaded.
+drainInitQueues ∷ EngineEnv → LoggerState → IO ()
+drainInitQueues env logger = do
+    manager ← readIORef (worldManagerRef env)
+    forM_ (wmWorlds manager) $ \(pageId, worldState) → do
+        remaining ← readIORef (wsInitQueueRef worldState)
+        case remaining of
+            [] → return ()
+            _  → do
+                mParams ← readIORef (wsGenParamsRef worldState)
+                case mParams of
+                    Nothing → return ()
+                    Just params → do
+                        let batch = take maxChunksPerTick remaining
+                            rest  = drop maxChunksPerTick remaining
+                        
+                        let newChunks = map (\coord →
+                                let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
+                                in LoadedChunk
+                                    { lcCoord      = coord
+                                    , lcTiles      = chunkTiles
+                                    , lcSurfaceMap = surfMap
+                                    , lcTerrainSurfaceMap = tMap
+                                    , lcFluidMap   = fluidMap
+                                    , lcModified   = False
+                                    }) batch
+                        
+                        atomicModifyIORef' (wsTilesRef worldState) $ \td →
+                            let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
+                            in (td', ())
+                        
+                        writeIORef (wsInitQueueRef worldState) rest
+                        
+                        when (null rest) $
+                            logDebug logger CatWorld $
+                                "Initial chunk loading complete for: "
+                                <> unWorldPageId pageId

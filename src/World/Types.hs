@@ -763,6 +763,7 @@ data WorldState = WorldState
     , wsBgQuadCacheRef ∷ IORef (Maybe ZoomQuadCache)    -- ^ Cached quads for background layer
     , wsBakedZoomRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)  -- ^ Pre-baked
     , wsBakedBgRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)    -- ^ Pre-baked background entries with resolved textures and vertices
+    , wsInitQueueRef ∷ IORef [ChunkCoord]  -- ^ Queue of chunks to generate at world init (for progress tracking)
     }
 
 emptyWorldState ∷ IO WorldState
@@ -780,10 +781,11 @@ emptyWorldState = do
     bgQCRef     ← newIORef Nothing
     bakedZoomRef ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
     bakedBgRef   ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
+    wsInitQueueRef ← newIORef []
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
-                        bakedZoomRef bakedBgRef
+                        bakedZoomRef bakedBgRef wsInitQueueRef
 
 -----------------------------------------------------------
 -- World Manager
