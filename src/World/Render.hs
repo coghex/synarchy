@@ -169,19 +169,13 @@ computeViewBounds camera fbW fbH effDepth =
 
 bestWrapOffset ∷ Int → Float → Float → Float
 bestWrapOffset worldSize camX chunkScreenX =
-    let wsw = tileWrapWidth worldSize
+    let wsw = worldScreenWidth worldSize
         candidates = [0, wsw, -wsw]
         dist offset = abs (chunkScreenX + offset - camX)
     in minimumBy (\ac bc → compare (dist ac) (dist bc)) candidates
   where
     minimumBy f (hd:tl) = foldl' (\best c → if f c best ≡ LT then c else best) hd tl
     minimumBy _ []       = 0
-
--- | Per-row wrap period: screen-X shift when gx wraps by worldTiles
-tileWrapWidth ∷ Int → Float
-tileWrapWidth worldSizeChunks =
-    let worldTiles = worldSizeChunks * chunkSize
-    in fromIntegral worldTiles * tileHalfWidth
 
 isChunkVisibleWrapped ∷ CameraFacing → Int → ViewBounds → Float
   → ChunkCoord → Maybe Float

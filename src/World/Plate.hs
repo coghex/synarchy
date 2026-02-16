@@ -78,12 +78,14 @@ generateOnePlate seed worldSize plateIndex =
 
         isLand = hashToFloat' h3 > 0.4
 
-        -- Reference values (at worldSize=512):
-        --   Land: 0 to 1000m    Ocean: -6000 to -3000m
-        -- Scaled by worldSize/512.
+        -- Raw values are in meters. Convert to tiles at 10m/tile,
+        -- then apply world-size scaling.
+        --   Land:  0–1000m  → 0–100 tiles
+        --   Ocean: -6000– -3000m → -600– -300 tiles
+        metersPerTile = 10.0 ∷ Float
         baseElev = if isLand
-                   then round (scaleElev wsc (fromIntegral (hashToRange h4 0 1000)))
-                   else round (scaleElev wsc (fromIntegral (hashToRange h4 (-6000) (-3000))))
+                   then round (scaleElev wsc (fromIntegral (hashToRange h4 0 1000) / metersPerTile))
+                   else round (scaleElev wsc (fromIntegral (hashToRange h4 (-6000) (-3000)) / metersPerTile))
 
         matChoice = hashToRange h5 0 2
         material = case matChoice of
@@ -280,8 +282,8 @@ elevationAtGlobal seed plates worldSize gx gy =
             boundaryEffect = boundaryElevation wsc boundary side plateA plateB boundaryDist
             localNoise = elevationNoise seed worldSize gx' gy'
             noiseScale = if plateIsLand myPlate
-                         then round (scaleElev wsc 50.0)
-                         else round (scaleElev wsc 20.0)
+                         then round (scaleElev wsc 5.0)
+                         else round (scaleElev wsc 2.0)
             terrainElev = baseElev + boundaryEffect + localNoise * noiseScale
         in (terrainElev + 3, matGlacier)
     else
@@ -337,44 +339,43 @@ boundaryElevation wsc boundary _side plateA plateB boundaryDist =
 --   BUG FIX: previously t' was applied twice (once inside
 --   peakElev, once as the multiplier). Now t' is only the
 --   spatial falloff, and strength only scales the peak magnitude.
+
 convergentEffect ∷ WorldScale → Bool → Bool → Bool → Bool
                  → Float → Float → Float → Float → Int
 convergentEffect wsc aIsLand bIsLand bothLand bothOcean
                  densityA densityB strength boundaryDist =
-    let -- Scale horizontal distances with world size
-        fadeRange = scaleDist wsc 200.0
+    let fadeRange = scaleDist wsc 200.0
         peakRange = scaleDist wsc 30.0
         t = max 0.0 (1.0 - max 0.0 (abs boundaryDist - peakRange) / fadeRange)
         t' = t * t * (3.0 - 2.0 * t)
-        -- Clamp strength to prevent runaway values
         s = min 2.0 (abs strength)
+        metersPerTile = 10.0
 
     in if bothLand then
         -- Land-land convergent: mountain range (Himalayas)
-        -- Reference: 3000 + 5000*s = 3000-13000m peaks
-        let peakElev = scaleElev wsc (3000.0 + 5000.0 * s)
+        -- Reference: 3000–13000m → 300–1300 tiles at scale 1.0
+        let peakElev = scaleElev wsc ((3000.0 + 5000.0 * s) / metersPerTile)
         in round (peakElev * t')
 
     else if bothOcean then
         let isSubducting = densityA > densityB
         in if isSubducting
-           -- Trench: reference -2000 to -8000m
-           then let trenchDepth = scaleElev wsc (2000.0 + 3000.0 * s)
+           -- Trench: reference -2000 to -8000m → -200 to -800 tiles
+           then let trenchDepth = scaleElev wsc ((2000.0 + 3000.0 * s) / metersPerTile)
                 in round (negate trenchDepth * t')
-           -- Island arc: reference 500*s uplift
-           else round (scaleElev wsc (500.0 * s) * t')
+           -- Island arc: reference 500m → 50 tiles
+           else round (scaleElev wsc (500.0 * s / metersPerTile) * t')
 
     else if aIsLand ∧ not bIsLand then
-        -- Andes-style: reference 2000 + 4000*s
-        let peakElev = scaleElev wsc (2000.0 + 4000.0 * s)
+        -- Andes-style: reference 2000–10000m → 200–1000 tiles
+        let peakElev = scaleElev wsc ((2000.0 + 4000.0 * s) / metersPerTile)
         in round (peakElev * t')
 
     else
-        -- Mariana-style trench: reference -3000 to -13000m
-        let trenchDepth = scaleElev wsc (3000.0 + 5000.0 * s)
+        -- Mariana-style trench: reference -3000 to -13000m → -300 to -1300 tiles
+        let trenchDepth = scaleElev wsc ((3000.0 + 5000.0 * s) / metersPerTile)
         in round (negate trenchDepth * t')
 
--- | Divergent boundary elevation effect.
 divergentEffect ∷ WorldScale → Bool → Bool → Float → Float → Int
 divergentEffect wsc aIsLand bothOcean strength boundaryDist =
     let fadeRange = scaleDist wsc 150.0
@@ -382,27 +383,27 @@ divergentEffect wsc aIsLand bothOcean strength boundaryDist =
         t = max 0.0 (1.0 - max 0.0 (abs boundaryDist - peakRange) / fadeRange)
         t' = t * t * (3.0 - 2.0 * t)
         s = min 2.0 (abs strength)
+        metersPerTile = 10.0
     in if bothOcean then
-        -- Mid-ocean ridge: reference 500 + 1000*s
-        let ridgeHeight = scaleElev wsc (500.0 + 1000.0 * s)
+        -- Mid-ocean ridge: reference 500–2500m → 50–250 tiles
+        let ridgeHeight = scaleElev wsc ((500.0 + 1000.0 * s) / metersPerTile)
         in round (ridgeHeight * t')
     else if aIsLand then
-        -- Continental rift: reference -500 to -2500m
-        let riftDepth = scaleElev wsc (500.0 + 2000.0 * s)
+        -- Continental rift: reference -500 to -2500m → -50 to -250 tiles
+        let riftDepth = scaleElev wsc ((500.0 + 2000.0 * s) / metersPerTile)
         in round (negate riftDepth * t')
     else
-        -- Ocean side of rift: reference -200 to -1000m
-        let depth = scaleElev wsc (200.0 + 800.0 * s)
+        -- Ocean side of rift: reference -200 to -1000m → -20 to -100 tiles
+        let depth = scaleElev wsc ((200.0 + 800.0 * s) / metersPerTile)
         in round (negate depth * t')
 
--- | Transform boundary: minimal elevation effect.
 transformEffect ∷ WorldScale → Float → Int
 transformEffect wsc boundaryDist =
     let fadeRange = scaleDist wsc 50.0
         t = max 0.0 (1.0 - abs boundaryDist / fadeRange)
         t' = t * t * (3.0 - 2.0 * t)
-        -- Reference: ±100m ridges/valleys
-    in round (scaleElev wsc 100.0 * t' * (if boundaryDist > 0 then 1.0 else -1.0))
+        metersPerTile = 10.0
+    in round (scaleElev wsc (100.0 / metersPerTile) * t' * (if boundaryDist > 0 then 1.0 else -1.0))
 
 -----------------------------------------------------------
 -- Local Noise
