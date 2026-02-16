@@ -9,6 +9,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import Data.List (partition, sortOn)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef', newIORef)
+import Control.Parallel.Strategies (parMap, rdeepseq)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (SomeException, catch)
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -527,7 +528,7 @@ drainInitQueues env logger = do
                         let batch = take maxChunksPerTick remaining
                             rest  = drop maxChunksPerTick remaining
                         
-                        let newChunks = map (\coord →
+                        let newChunks = parMap rdeepseq (\coord →
                                 let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
                                 in LoadedChunk
                                     { lcCoord      = coord

@@ -2,6 +2,7 @@
 module World.Types where
 
 import UPrelude
+import Control.DeepSeq (NFData(..))
 import Data.List (find, partition, sortOn)
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
@@ -48,6 +49,8 @@ newtype WorldPageId = WorldPageId Text
 
 data ChunkCoord = ChunkCoord !Int !Int
     deriving (Show, Eq, Ord)
+instance NFData ChunkCoord where
+    rnf (ChunkCoord x y) = rnf x `seq` rnf y
 
 instance Hashable ChunkCoord where
     hashWithSalt s (ChunkCoord x y) = s `hashWithSalt` x `hashWithSalt` y
@@ -62,6 +65,10 @@ data LoadedChunk = LoadedChunk
     , lcFluidMap   ∷ !(HM.HashMap (Int, Int) FluidCell)
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
+instance NFData LoadedChunk where
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap modified) =
+        rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
+        rnf terrainMap `seq` rnf fluidMap `seq` rnf modified
 
 chunkSize ∷ Int
 chunkSize = 16
@@ -105,6 +112,8 @@ data Tile = Tile
     { tileType ∷ Word8
     , tileSlopeId ∷ Word8
     } deriving (Show, Eq)
+instance NFData Tile where
+    rnf (Tile t s) = rnf t `seq` rnf s
 
 data WorldTileData = WorldTileData
     { wtdChunks    ∷ !(HM.HashMap ChunkCoord LoadedChunk)
@@ -171,6 +180,11 @@ seaLevel = 0
 
 data FluidType = Ocean | Lake | River | Lava
     deriving (Show, Eq)
+instance NFData FluidType where
+    rnf Ocean = ()
+    rnf Lake  = ()
+    rnf River = ()
+    rnf Lava  = ()
 
 -- | Per-column fluid info, stored in LoadedChunk.
 --   Only present for tiles that have fluid above them.
@@ -178,6 +192,8 @@ data FluidCell = FluidCell
     { fcType    ∷ !FluidType   -- ^ What kind of fluid
     , fcSurface ∷ !Int         -- ^ Z-level of the fluid surface
     } deriving (Show, Eq)
+instance NFData FluidCell where
+    rnf (FluidCell t s) = rnf t `seq` rnf s
 
 -----------------------------------------------------------
 -- Ocean Map (chunk-resolution)

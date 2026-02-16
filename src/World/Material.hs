@@ -24,6 +24,7 @@ module World.Material
     ) where
 
 import UPrelude
+import Control.DeepSeq (NFData(..))
 
 -----------------------------------------------------------
 -- Material IDs
@@ -31,6 +32,8 @@ import UPrelude
 
 newtype MaterialId = MaterialId { unMaterialId ∷ Word8 }
     deriving (Show, Eq, Ord)
+instance NFData MaterialId where
+    rnf (MaterialId mid) = rnf mid
 
 -- | Air is the default material for empty space.
 matAir ∷ MaterialId

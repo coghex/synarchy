@@ -73,6 +73,8 @@ test-suite synarchy-test
                 , vector-algorithms
                 , yaml
                 , aeson
+                , deepseq
+                , parallel
                 , unordered-containers
                 , GLFW-b
                 , vulkan
@@ -318,6 +320,8 @@ library
                  , vector-algorithms
                  , yaml
                  , aeson
+                 , deepseq
+                 , parallel
                  , unordered-containers
                  , vulkan
                  , vulkan-utils
@@ -422,6 +426,8 @@ executable synarchy
                  , vector-algorithms
                  , yaml
                  , aeson
+                 , deepseq
+                 , parallel
                  , unordered-containers
                  , vulkan
                  , vulkan-utils
