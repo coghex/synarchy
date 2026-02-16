@@ -7,7 +7,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
-import Data.List (partition)
+import Data.List (partition, sortOn)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef', newIORef)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (SomeException, catch)
@@ -196,7 +196,9 @@ updateChunkLoading env logger = do
                             let (_toPromote, toGenerate) = partitionChunks validCoords tileData
                             
                             -- Only generate a limited batch per tick
-                            let batch = take maxChunksPerTick toGenerate
+                            let toGenerateSorted = sortOn (\(ChunkCoord cx cy) →
+                                    abs (cx - ccx) + abs (cy - ccy)) toGenerate
+                                batch = take maxChunksPerTick toGenerateSorted
 
                             when (not $ null batch) $ do
                                 let newChunks = map (\coord →
@@ -313,10 +315,23 @@ handleWorldCommand env logger cmd = do
                         , lcModified   = False
                         }) initialCoords
             
+            -- Generate ONLY the center chunk synchronously
+            let centerCoord = ChunkCoord 0 0
+                (ct, cs, cterrain, cf) = generateChunk params centerCoord
+                centerChunk = LoadedChunk
+                    { lcCoord      = centerCoord
+                    , lcTiles      = ct
+                    , lcSurfaceMap = cs
+                    , lcTerrainSurfaceMap = cterrain
+                    , lcFluidMap   = cf
+                    , lcModified   = False
+                    }
+
             atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-                (WorldTileData { wtdChunks = HM.fromList [(lcCoord lc, lc) | lc ← initialChunks]
+                (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
                                , wtdMaxChunks = 200 }, ())
-            
+
+            -- Register the world immediately — it's visible with 1 chunk
             atomicModifyIORef' (worldManagerRef env) $ \mgr →
                 (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
             
