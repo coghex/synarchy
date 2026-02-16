@@ -761,6 +761,8 @@ spawnMeltwaterRiver seed periodIdx parentFid pf (events, tbs) =
             , rsValleyWidth = hashToRangeGeo (hashGeo seed fidInt 973) 8 20
             , rsDepth      = hashToRangeGeo (hashGeo seed fidInt 974) 5 15
             , rsFlowRate   = 0.4  -- moderate meltwater
+            , rsStartElev  = 0
+            , rsEndElev    = 0
             }
 
         riverParams = RiverParams

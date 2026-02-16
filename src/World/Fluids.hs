@@ -322,12 +322,30 @@ pickBestFill (Just a) (Just b) =
     if fcSurface b > fcSurface a then Just b else Just a
 
 -- | Compute river fluid for a single tile from a single segment.
---   Uses the same line-projection math as carveFromSegment in River.hs:
---   project the tile onto the segment line, compute perpendicular distance,
---   check if within channel width.
 --
---   The water surface is interpolated between segment start and end
---   elevations, so water flows downhill naturally.
+--   KEY FIX: The water surface is derived from the segment's
+--   own endpoint elevations (which are monotonically decreasing
+--   from source to mouth), NOT from the local terrain.
+--
+--   The river was traced downhill on the base plate elevation.
+--   Then carveFromSegment applied a relative carve. But other
+--   timeline events (volcanism, erosion, later rivers) can
+--   alter the terrain after the carve, creating humps in the
+--   channel. If we derive water level from the local terrain,
+--   water follows those humps uphill.
+--
+--   Instead: interpolate the water surface between the segment
+--   start and end elevations (the original walkDownhill values),
+--   minus the channel depth (the carve). This gives a smooth,
+--   monotonically decreasing water surface that follows the
+--   river's intended path regardless of what happened to the
+--   terrain afterward.
+--
+--   If the terrain at a tile is ABOVE the interpolated water
+--   surface, that tile is dry (the river was blocked — a future
+--   RiverDam event could create a lake there). If the terrain
+--   is BELOW the water surface, we fill with water up to the
+--   interpolated level.
 riverFillFromSegment ∷ Int → Int → Int → Int → Word64 → RiverSegment
                      → Maybe FluidCell
 riverFillFromSegment worldSize gx gy surfZ _meanderSeed seg =
@@ -358,28 +376,38 @@ riverFillFromSegment worldSize gx gy surfZ _meanderSeed seg =
            perpY = py - closestY
            perpDist = sqrt (perpX * perpX + perpY * perpY)
 
-           -- Channel half-width (the actual water channel, not the full valley)
+           -- Channel half-width
            channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
 
        in if perpDist > channelHalfW
-          then Nothing  -- outside the channel, no water
+          then Nothing  -- outside the channel
           else
-          let -- Water depth from flow rate:
-              --   trickle (0.1) → 1 tile
-              --   stream  (0.3) → 1-2 tiles
-              --   river   (0.6) → 2-3 tiles
-              --   major   (1.0) → 4 tiles
+          let -- Water depth from flow rate
               flow = rsFlowRate seg
               waterDepth = 1 + floor (flow * 3.0) ∷ Int
 
-              -- Water surface = terrain + depth.
-              -- The terrain at the channel floor was carved by
-              -- applyRiverCarve, so surfZ already reflects the
-              -- carved elevation. We just add water on top.
-              waterSurface = surfZ + waterDepth
+              -- INTERPOLATED water surface from segment geometry.
+              -- The segment stores start/end elevations from the
+              -- original walkDownhill path. These are guaranteed
+              -- to be monotonically decreasing.
+              --
+              -- Water surface = interpolated base elevation
+              --               - channel depth (the carve)
+              --               + water depth (the fill)
+              --
+              -- This is the elevation the water SHOULD be at,
+              -- independent of what the terrain actually looks
+              -- like after all timeline events.
+              startElev = rsStartElev seg
+              endElev   = rsEndElev seg
+              interpElev = fromIntegral startElev
+                         + t * (fromIntegral endElev - fromIntegral startElev)
+              channelFloor = interpElev - fromIntegral (rsDepth seg)
+              waterSurface = round channelFloor + waterDepth
 
-          in if waterDepth ≤ 0
-             then Nothing
+          in if surfZ ≥ waterSurface
+             then Nothing  -- terrain is above water, tile is dry
+                           -- (volcanic deposit blocked the river)
              else Just (FluidCell River waterSurface)
 
 -- | Is this feature an active lake and close enough to affect this chunk?

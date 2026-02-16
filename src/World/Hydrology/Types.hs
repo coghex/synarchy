@@ -75,6 +75,8 @@ data RiverSegment = RiverSegment
     , rsValleyWidth ∷ !Int       -- ^ Total valley width (channel + slopes)
     , rsDepth      ∷ !Int        -- ^ Channel depth below surrounding terrain
     , rsFlowRate   ∷ !Float      -- ^ Flow at this segment (increases downstream)
+    , rsStartElev  ∷ !Int        -- ^ Elevation at start (for slope calculation)
+    , rsEndElev    ∷ !Int        -- ^ Elevation at end
     } deriving (Show, Eq)
 
 data RiverActivity

@@ -179,21 +179,16 @@ makeSegment ∷ Word64 → Int → Int
             → ((Int, Int, Int), (Int, Int, Int))
             → RiverSegment
 makeSegment seed totalSegs segIdx ((sx, sy, se), (ex, ey, ee)) =
-    let -- Flow accumulates faster: 0.08 base + hash wobble
-        h1 = hashGeo seed segIdx 1160
+    let h1 = hashGeo seed segIdx 1160
         flowAdd = 0.08 + hashToFloatGeo h1 * 0.07
         flow = fromIntegral (segIdx + 1) * flowAdd + 0.15
 
-        -- Width grows with flow: 2 tiles at headwaters, up to 10 at mouth
         rawWidth = max 2 (round (flow * 10.0))
         width = min 12 rawWidth
 
-        -- Valley is 4-8x the channel width (was 3-5x)
         valleyMult = 4.0 + hashToFloatGeo (hashGeo seed segIdx 1161) * 4.0
         valleyW = max (width * 3) (round (fromIntegral width * valleyMult))
 
-        -- Depth: steeper slope = deeper cut, plus flow contribution
-        -- Increased base depth and flow contribution
         slopeDelta = abs (se - ee)
         baseDepth = max 4 (slopeDelta `div` 2 + round (flow * 8.0))
         depth = min 35 baseDepth
@@ -205,6 +200,8 @@ makeSegment seed totalSegs segIdx ((sx, sy, se), (ex, ey, ee)) =
         , rsValleyWidth = valleyW
         , rsDepth       = depth
         , rsFlowRate    = flow
+        , rsStartElev   = se    -- elevation from walkDownhill
+        , rsEndElev     = ee    -- elevation from walkDownhill
         }
 
 -- | Sort neighbor candidates by elevation (lowest first)
@@ -391,6 +388,8 @@ evolveRiver seed periodIdx (events, tbs) pf =
                          , rsValleyWidth = hashToRangeGeo h4 6 12
                          , rsDepth       = 3
                          , rsFlowRate    = 0.1
+                         , rsStartElev   = 0
+                         , rsEndElev     = 0
                          }
 
                      newRiver = river
@@ -574,6 +573,8 @@ buildTributarySegments seed fidInt srcX srcY bx by numSegs =
             , rsValleyWidth = w * 3
             , rsDepth       = max 3 (round (flow * 8.0))
             , rsFlowRate    = flow
+            , rsStartElev   = 0
+            , rsEndElev     = 0
             }
         ) [0..] pairs
 
