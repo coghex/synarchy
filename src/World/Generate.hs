@@ -31,7 +31,7 @@ import World.Geology.Types (eventBBox, bboxOverlapsChunk)
 import World.Geology.Erosion (applyErosion)
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava
-                    , computeChunkLakes)
+                    , computeChunkLakes, computeChunkRivers)
 import Engine.Graphics.Camera (CameraFacing(..))
 
 -----------------------------------------------------------
@@ -162,7 +162,11 @@ generateChunk params coord =
                                         coord terrainSurfaceMap
         lakeFluidMap = computeChunkLakes features seed plates worldSize
                                          coord terrainSurfaceMap
-        fluidMap = HM.union oceanFluidMap (HM.union lavaFluidMap lakeFluidMap)
+        riverFluidMap = computeChunkRivers features seed plates worldSize
+                                           coord terrainSurfaceMap
+        fluidMap = HM.union oceanFluidMap
+                     (HM.union lavaFluidMap
+                       (HM.union lakeFluidMap riverFluidMap))
 
         -- Camera-facing surface map: ocean columns report sea level
         -- so camera tracking hovers above water, not at the ocean floor

@@ -340,8 +340,26 @@ renderWorldQuads env worldState zoomAlpha snap = do
                           drawY = rawY - heightOffset
                     , isTileVisible vb drawX drawY
                     ]
+                !freshwaterQuads =
+                    [ freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
+                        gx gy (fcSurface fc) (fcType fc) zSlice effectiveDepth
+                        zoomAlpha xOffset
+                    | (lx, ly) ← HM.keys fluidMap
+                    , let fc = fluidMap HM.! (lx, ly)
+                    , fcType fc ≡ Lake ∨ fcType fc ≡ River
+                    , fcSurface fc ≤ zSlice
+                    , fcSurface fc ≥ (zSlice - effectiveDepth)
+                    , let (gx, gy) = chunkToGlobal coord lx ly
+                          (rawX, rawY) = gridToScreen facing gx gy
+                          relativeZ = fcSurface fc - zSlice
+                          heightOffset = fromIntegral relativeZ * tileSideHeight
+                          drawX = rawX + xOffset
+                          drawY = rawY - heightOffset
+                    , isTileVisible vb drawX drawY
+                    ]
 
-            in V.fromList (realQuads <> blankQuads <> oceanQuads <> lavaQuads)
+            in V.fromList (realQuads <> blankQuads <> oceanQuads
+                                     <> lavaQuads <> freshwaterQuads)
             ) visibleChunksWithOffset
 
     return $! V.concat chunkVectors
@@ -392,7 +410,8 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
         --      is below sea level AND the chunk contains fluid elsewhere
         underwaterDepth = case mFluid of
             Just fc
-                | fcType fc ≡ Ocean ∧ worldZ < fcSurface fc → fcSurface fc - worldZ
+                | (fcType fc ≡ Ocean ∨ fcType fc ≡ Lake ∨ fcType fc ≡ River)
+                  ∧ worldZ < fcSurface fc → fcSurface fc - worldZ
             _ | chunkHasFluid ∧ worldZ < seaLevel → seaLevel - worldZ
             _ → 0
 
@@ -522,6 +541,55 @@ lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSli
         v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
         v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
         v3 = Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+    in SortableQuad
+        { sqSortKey  = sortKey
+        , sqV0       = v0
+        , sqV1       = v1
+        , sqV2       = v2
+        , sqV3       = v3
+        , sqTexture  = texHandle
+        , sqLayer    = worldLayer
+        }
+
+-----------------------------------------------------------
+-- Freshwater (River/Lake) Surface Tile Quad
+-----------------------------------------------------------
+
+freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
+                     fluidZ fluidType zSlice effDepth tileAlpha xOffset =
+    let (rawX, rawY) = gridToScreen facing worldX worldY
+        (fa, fb) = applyFacing facing worldX worldY
+        relativeZ = fluidZ - zSlice
+        heightOffset = fromIntegral relativeZ * tileSideHeight
+        drawX = rawX + xOffset
+        drawY = rawY - heightOffset
+        sortKey = fromIntegral (fa + fb)
+                + fromIntegral relativeZ * 0.001
+                + 0.0005
+
+        -- Reuse ocean texture for water surface
+        texHandle = wtOceanTexture textures
+        actualSlot = lookupSlot texHandle
+        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+
+        finalAlpha = tileAlpha
+
+        -- Freshwater tint: lighter, greener than ocean
+        -- Lakes: calm blue-green (still water)
+        -- Rivers: slightly brighter (flowing water, more reflective)
+        tint = case fluidType of
+            Lake  → Vec4 0.5 0.8 0.9 finalAlpha   -- blue-green, calm
+            River → Vec4 0.6 0.85 0.95 finalAlpha  -- lighter blue, lively
+            _     → Vec4 0.7 0.8 1.0 finalAlpha    -- fallback = ocean
+
+        v0 = Vertex (Vec2 drawX drawY)
+                     (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)
+                     (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
+                     (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = Vertex (Vec2 drawX (drawY + tileHeight))
+                     (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
     in SortableQuad
         { sqSortKey  = sortKey
         , sqV0       = v0

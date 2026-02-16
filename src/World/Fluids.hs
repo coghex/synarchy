@@ -17,6 +17,7 @@ module World.Fluids
     , computeChunkFluid
     , computeChunkLava
     , computeChunkLakes
+    , computeChunkRivers
       -- * Query
     , isOceanChunk
     ) where
@@ -34,7 +35,8 @@ import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
                    , isBeyondGlacier, wrapGlobalU)
 import World.Geology.Evolution (getFeatureCenter, getFeatureRadius)
-import World.Hydrology.Types (HydroFeature(..), LakeParams(..))
+import World.Hydrology.Types (HydroFeature(..), LakeParams(..)
+                             , RiverParams(..), RiverSegment(..))
 
 -- | Compute which chunks are ocean by flood-filling from
 --   ocean plate centers. A chunk is ocean if:
@@ -205,6 +207,180 @@ computeChunkLakes features seed plates worldSize coord surfaceMap =
     in foldl' (\acc pf →
         fillLakeFromFeature pf seed plates worldSize chunkMinGX chunkMinGY surfaceMap acc
         ) HM.empty nearbyLakes
+
+-----------------------------------------------------------
+-- River Fluid Fill
+-----------------------------------------------------------
+
+-- | Compute river fluid cells for a chunk.
+--   For each active river whose segments pass near this chunk,
+--   fills columns that are within the river channel (not the
+--   full valley — just the flat channel floor) with River fluid.
+--
+--   The water surface at each column is computed from the
+--   segment's endpoint elevations (interpolated along the
+--   segment) plus a shallow depth derived from flow rate.
+--   This gives rivers that follow their carved channel with
+--   a thin layer of water on top.
+--
+--   River fluid does NOT overwrite ocean or lake fluid —
+--   if a river reaches the ocean, the ocean fluid takes over.
+--   Lava also takes priority (river hitting lava = steam).
+computeChunkRivers ∷ [PersistentFeature] → Word64 → [TectonicPlate]
+                   → Int → ChunkCoord
+                   → HM.HashMap (Int, Int) Int
+                   → HM.HashMap (Int, Int) FluidCell
+computeChunkRivers features _seed _plates worldSize coord surfaceMap =
+    let ChunkCoord cx cy = coord
+        chunkMinGX = cx * chunkSize
+        chunkMinGY = cy * chunkSize
+        nearbyRivers = filter (isNearbyRiver worldSize chunkMinGX chunkMinGY) features
+    in foldl' (\acc pf →
+        fillRiverFromFeature pf worldSize chunkMinGX chunkMinGY surfaceMap acc
+        ) HM.empty nearbyRivers
+
+-- | Is this feature a flowing river close enough to affect this chunk?
+isNearbyRiver ∷ Int → Int → Int → PersistentFeature → Bool
+isNearbyRiver worldSize chunkGX chunkGY pf =
+    case pfFeature pf of
+        HydroShape (RiverFeature river) →
+            case pfActivity pf of
+                FActive  → anySegmentNearby worldSize chunkGX chunkGY river
+                FDormant → anySegmentNearby worldSize chunkGX chunkGY river
+                _        → False
+        _ → False
+
+-- | Check if any segment of a river passes within range of this chunk.
+--   We check each segment's bounding box (expanded by valley width)
+--   against the chunk's tile range.
+anySegmentNearby ∷ Int → Int → Int → RiverParams → Bool
+anySegmentNearby worldSize chunkGX chunkGY river =
+    any (segmentNearChunk worldSize chunkGX chunkGY) (rpSegments river)
+
+segmentNearChunk ∷ Int → Int → Int → RiverSegment → Bool
+segmentNearChunk worldSize chunkGX chunkGY seg =
+    let GeoCoord sx sy = rsStart seg
+        GeoCoord ex ey = rsEnd seg
+        margin = rsValleyWidth seg + chunkSize
+        -- Bounding box of this segment (with margin)
+        segMinX = min sx ex - margin
+        segMaxX = max sx ex + margin
+        segMinY = min sy ey - margin
+        segMaxY = max sy ey + margin
+        chunkMaxGX = chunkGX + chunkSize - 1
+        chunkMaxGY = chunkGY + chunkSize - 1
+        -- Simple AABB overlap (ignoring wrapping for now —
+        -- rivers don't usually span the world wrap boundary)
+        dx = abs (wrappedDeltaForFluid worldSize
+                  (chunkGX + chunkSize `div` 2)
+                  ((sx + ex) `div` 2))
+        maxDX = (segMaxX - segMinX) `div` 2 + chunkSize
+    in dx < maxDX ∧ segMaxY ≥ chunkGY ∧ segMinY ≤ chunkMaxGY
+
+-- | Fill river fluid from a single river feature into the fluid map.
+fillRiverFromFeature ∷ PersistentFeature → Int → Int → Int
+                     → HM.HashMap (Int, Int) Int
+                     → HM.HashMap (Int, Int) FluidCell
+                     → HM.HashMap (Int, Int) FluidCell
+fillRiverFromFeature pf worldSize chunkGX chunkGY surfaceMap acc =
+    case pfFeature pf of
+        HydroShape (RiverFeature river) →
+            let segments = rpSegments river
+                meanderSeed = rpMeanderSeed river
+            in HM.foldlWithKey' (\acc' (lx, ly) surfZ →
+                let gx = chunkGX + lx
+                    gy = chunkGY + ly
+                in case bestRiverFill worldSize gx gy surfZ meanderSeed segments of
+                    Nothing → acc'
+                    Just fc → HM.insert (lx, ly) fc acc'
+                ) acc surfaceMap
+        _ → acc
+
+-- | For a single tile, find the closest river segment and compute
+--   the fluid cell if this tile is within the channel.
+--
+--   Water surface = terrain surface + water depth.
+--   Water depth is derived from flow rate:
+--     depth = 1 + floor(flowRate * 3)
+--   So a trickle (flow 0.1) gives 1 tile of water,
+--   a major river (flow 1.0+) gives 4 tiles.
+--
+--   We only fill if the tile is within the channel width
+--   (not the full valley width — the valley walls are dry).
+bestRiverFill ∷ Int → Int → Int → Int → Word64 → [RiverSegment]
+              → Maybe FluidCell
+bestRiverFill worldSize gx gy surfZ meanderSeed segments =
+    let results = map (riverFillFromSegment worldSize gx gy surfZ meanderSeed) segments
+        -- Pick the segment that gives the deepest water (closest/widest)
+        best = foldl' pickBestFill Nothing results
+    in best
+
+pickBestFill ∷ Maybe FluidCell → Maybe FluidCell → Maybe FluidCell
+pickBestFill Nothing b = b
+pickBestFill a Nothing = a
+pickBestFill (Just a) (Just b) =
+    if fcSurface b > fcSurface a then Just b else Just a
+
+-- | Compute river fluid for a single tile from a single segment.
+--   Uses the same line-projection math as carveFromSegment in River.hs:
+--   project the tile onto the segment line, compute perpendicular distance,
+--   check if within channel width.
+--
+--   The water surface is interpolated between segment start and end
+--   elevations, so water flows downhill naturally.
+riverFillFromSegment ∷ Int → Int → Int → Int → Word64 → RiverSegment
+                     → Maybe FluidCell
+riverFillFromSegment worldSize gx gy surfZ _meanderSeed seg =
+    let GeoCoord sx sy = rsStart seg
+        GeoCoord ex ey = rsEnd seg
+
+        -- Vector from start to end
+        dx' = fromIntegral (wrappedDeltaForFluid worldSize ex sx) ∷ Float
+        dy' = fromIntegral (ey - sy) ∷ Float
+        segLen2 = dx' * dx' + dy' * dy'
+
+    in if segLen2 < 1.0
+       then Nothing  -- degenerate segment
+       else
+       let -- Vector from start to tile
+           px = fromIntegral (wrappedDeltaForFluid worldSize gx sx) ∷ Float
+           py = fromIntegral (gy - sy) ∷ Float
+
+           -- Project onto segment: t in [0,1]
+           t = max 0.0 (min 1.0 ((px * dx' + py * dy') / segLen2))
+
+           -- Closest point on segment
+           closestX = t * dx'
+           closestY = t * dy'
+
+           -- Perpendicular distance
+           perpX = px - closestX
+           perpY = py - closestY
+           perpDist = sqrt (perpX * perpX + perpY * perpY)
+
+           -- Channel half-width (the actual water channel, not the full valley)
+           channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
+
+       in if perpDist > channelHalfW
+          then Nothing  -- outside the channel, no water
+          else
+          let -- Water depth from flow rate:
+              --   trickle (0.1) → 1 tile
+              --   stream  (0.3) → 1-2 tiles
+              --   river   (0.6) → 2-3 tiles
+              --   major   (1.0) → 4 tiles
+              flow = rsFlowRate seg
+              waterDepth = 1 + floor (flow * 3.0) ∷ Int
+
+              -- Water surface = terrain + depth.
+              -- The terrain at the channel floor was carved by
+              -- applyRiverCarve, so surfZ already reflects the
+              -- carved elevation. We just add water on top.
+              waterSurface = surfZ + waterDepth
+
+          in if waterDepth ≤ 0
+             then Nothing
+             else Just (FluidCell River waterSurface)
 
 -- | Is this feature an active lake and close enough to affect this chunk?
 isNearbyLake ∷ Int → Int → Int → PersistentFeature → Bool
