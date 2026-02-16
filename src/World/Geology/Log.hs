@@ -64,6 +64,7 @@ countEvent ∷ Map.Map Text Int → GeoEvent → Map.Map Text Int
 countEvent m (CraterEvent _)         = Map.insertWith (+) "Craters" 1 m
 countEvent m (VolcanicEvent f)       = Map.insertWith (+) (featureTypeName f) 1 m
 countEvent m (VolcanicModify _ evo)  = Map.insertWith (+) (evolutionName evo) 1 m
+countEvent m (EruptionEvent _ _)     = Map.insertWith (+) "Eruptions" 1 m
 countEvent m (LandslideEvent _)      = Map.insertWith (+) "Landslides" 1 m
 countEvent m (GlaciationEvent _)     = Map.insertWith (+) "Glaciations" 1 m
 countEvent m (FloodEvent _)          = Map.insertWith (+) "Floods" 1 m
@@ -233,6 +234,8 @@ formatEventDetailed (VolcanicEvent feature) =
 formatEventDetailed (VolcanicModify (GeoFeatureId fid) evo) =
     "Feature #" <> T.pack (show fid) <> " " <> formatEvolution evo
 
+formatEventDetailed (EruptionEvent (GeoFeatureId fid) strength) =
+    "Eruption at Feature #" <> T.pack (show fid) <> " strength=" <> T.pack (show strength)
 formatEventDetailed (LandslideEvent _) = "Landslide"
 formatEventDetailed (GlaciationEvent _) = "Glaciation"
 formatEventDetailed (FloodEvent _) = "Flood"

@@ -23,9 +23,53 @@ applyGeoEvent (VolcanicEvent feature) worldSize gx gy baseElev =
     applyVolcanicFeature feature worldSize gx gy baseElev
 applyGeoEvent (VolcanicModify _fid evolution) worldSize gx gy baseElev =
     applyEvolution evolution worldSize gx gy baseElev
+applyGeoEvent (EruptionEvent _fid flow) worldSize gx gy baseElev =
+    applyLavaFlow flow worldSize gx gy baseElev
 applyGeoEvent (LandslideEvent _)    _ _ _ _ = noModification
 applyGeoEvent (GlaciationEvent _)   _ _ _ _ = noModification
 applyGeoEvent (FloodEvent _)        _ _ _ _ = noModification
+
+-----------------------------------------------------------
+-- Lava Flow Application
+-----------------------------------------------------------
+
+-- | Apply a lava flow to a single column.
+--   Lava flows radially from the source, losing elevation
+--   with distance based on viscosity. If the lava surface
+--   at this column is above the current terrain, material
+--   is deposited to fill the gap.
+--
+--   viscosity=1: runny basalt, loses 1 tile of height per tile distance
+--   viscosity=2: moderate, loses 2 per tile
+--   viscosity=3: viscous obsidian, loses 3 per tile (piles up near source)
+--
+--   The flow only deposits material where the lava surface
+--   is above the existing terrain — it fills valleys and
+--   pools in depressions rather than coating hilltops.
+applyLavaFlow ∷ LavaFlow → Int → Int → Int → Int → GeoModification
+applyLavaFlow flow worldSize gx gy baseElev =
+    let sx = lfSourceX flow
+        sy = lfSourceY flow
+        dx = fromIntegral (wrappedDeltaXGeo worldSize gx sx) ∷ Float
+        dy = fromIntegral (gy - sy) ∷ Float
+        dist = sqrt (dx * dx + dy * dy)
+        maxR = fromIntegral (lfRadius flow) ∷ Float
+
+    in if dist > maxR
+       then noModification
+       else
+       let -- Lava surface elevation at this distance from source
+           visc = fromIntegral (lfViscosity flow) ∷ Float
+           lavaSurface = lfElevation flow - round (dist * visc)
+
+           -- How much material to deposit: difference between
+           -- lava surface and current terrain
+           deposit = lavaSurface - baseElev
+
+       in if deposit ≤ 0
+          then noModification
+          else -- Deposit is entirely new volcanic material
+               GeoModification deposit (Just (lfMaterial flow)) deposit
 
 -----------------------------------------------------------
 -- Feature Evolution Application

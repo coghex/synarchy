@@ -307,7 +307,23 @@ renderWorldQuads env worldState zoomAlpha snap = do
                         gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
                     | (lx, ly) ← HM.keys fluidMap
                     , let fc = fluidMap HM.! (lx, ly)
-                    -- Only render if fluid surface is within the visible z range
+                    , fcType fc ≡ Ocean
+                    , fcSurface fc ≤ zSlice
+                    , fcSurface fc ≥ (zSlice - effectiveDepth)
+                    , let (gx, gy) = chunkToGlobal coord lx ly
+                          (rawX, rawY) = gridToScreen facing gx gy
+                          relativeZ = fcSurface fc - zSlice
+                          heightOffset = fromIntegral relativeZ * tileSideHeight
+                          drawX = rawX + xOffset
+                          drawY = rawY - heightOffset
+                    , isTileVisible vb drawX drawY
+                    ]
+                !lavaQuads =
+                    [ lavaTileToQuad lookupSlot lookupFmSlot textures facing
+                        gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
+                    | (lx, ly) ← HM.keys fluidMap
+                    , let fc = fluidMap HM.! (lx, ly)
+                    , fcType fc ≡ Lava
                     , fcSurface fc ≤ zSlice
                     , fcSurface fc ≥ (zSlice - effectiveDepth)
                     , let (gx, gy) = chunkToGlobal coord lx ly
@@ -319,7 +335,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     , isTileVisible vb drawX drawY
                     ]
 
-            in V.fromList (realQuads <> blankQuads <> oceanQuads)
+            in V.fromList (realQuads <> blankQuads <> oceanQuads <> lavaQuads)
             ) visibleChunksWithOffset
 
     return $! V.concat chunkVectors
@@ -370,19 +386,30 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
         --      is below sea level AND the chunk contains fluid elsewhere
         underwaterDepth = case mFluid of
             Just fc
-                | worldZ < fcSurface fc → fcSurface fc - worldZ
+                | fcType fc ≡ Ocean ∧ worldZ < fcSurface fc → fcSurface fc - worldZ
+                | fcType fc ≡ Lava  ∧ worldZ < fcSurface fc → 0  -- handled by lavaDepth
             _ | chunkHasFluid ∧ worldZ < seaLevel → seaLevel - worldZ
             _ → 0
 
-        -- Underwater vs above-water tinting
-        (tintR, tintG, tintB, finalAlpha) = if underwaterDepth > 0
+        lavaDepth = case mFluid of
+            Just fc
+                | fcType fc ≡ Lava ∧ worldZ < fcSurface fc → fcSurface fc - worldZ
+            _ → 0
+
+        (tintR, tintG, tintB, finalAlpha) = if lavaDepth > 0
             then
-                -- Underwater: tint by water depth only.
-                -- Ignore cliff depth shading — water depth is the visual cue.
+                -- Under lava: orange-red glow, brighter near surface
+                let t = clamp01 (fromIntegral lavaDepth / 15.0)
+                    r = 1.0 - t * 0.3        -- 1.0 → 0.7
+                    g = 0.6 - t * 0.4         -- 0.6 → 0.2
+                    b = 0.1 - t * 0.05        -- 0.1 → 0.05
+                in (r, g, b, tileAlpha)
+            else if underwaterDepth > 0
+            then
                 let t = clamp01 (fromIntegral underwaterDepth / 30.0)
-                    r = 0.6 - t * 0.4       -- 0.6 → 0.2
-                    g = 0.7 - t * 0.4        -- 0.7 → 0.3
-                    b = 0.9 - t * 0.3        -- 0.9 → 0.6
+                    r = 0.6 - t * 0.4
+                    g = 0.7 - t * 0.4
+                    b = 0.9 - t * 0.3
                 in (r, g, b, tileAlpha)
             else
                 (brightness, brightness, brightness, tileAlpha * depthAlpha)
@@ -469,6 +496,36 @@ oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSl
         -- Blue tint for ocean, full brightness (shader handles sun lighting)
         tint = Vec4 0.7 0.8 1.0 finalAlpha
 
+        v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+    in SortableQuad
+        { sqSortKey  = sortKey
+        , sqV0       = v0
+        , sqV1       = v1
+        , sqV2       = v2
+        , sqV3       = v3
+        , sqTexture  = texHandle
+        , sqLayer    = worldLayer
+        }
+
+lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSlice effDepth tileAlpha xOffset =
+    let (rawX, rawY) = gridToScreen facing worldX worldY
+        (fa, fb) = applyFacing facing worldX worldY
+        relativeZ = fluidZ - zSlice
+        heightOffset = fromIntegral relativeZ * tileSideHeight
+        drawX = rawX + xOffset
+        drawY = rawY - heightOffset
+        sortKey = fromIntegral (fa + fb)
+                + fromIntegral relativeZ * 0.001
+                + 0.0005
+        texHandle = wtLavaTexture textures
+        actualSlot = lookupSlot texHandle
+        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+        finalAlpha = tileAlpha
+        -- Orange-red molten tint
+        tint = Vec4 1.0 0.6 0.2 finalAlpha
         v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
         v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot

@@ -9,7 +9,7 @@ import Data.Word (Word64)
 import Data.List (foldl')
 import qualified Data.Text as T
 import World.Types
-import World.Plate (generatePlates, TectonicPlate)
+import World.Plate (generatePlates, TectonicPlate, elevationAtGlobal)
 import World.Geology.Types
 import World.Geology.Hash
 import World.Geology.Crater (generateCraters)
@@ -154,11 +154,10 @@ buildPeriod ∷ Word64 → Int → [TectonicPlate] → Int
             → TimelineBuildState → TimelineBuildState
 buildPeriod seed worldSize plates periodIdx tbs =
     let periodSeed = seed `xor` (fromIntegral periodIdx * 0xF1E2)
-        gs = tbsGeoState tbs
 
         s1 = applyPeriodVolcanism periodSeed worldSize plates periodIdx tbs
 
-        s2 = applyVolcanicEvolution periodSeed s1
+        s2 = applyVolcanicEvolution periodSeed worldSize plates s1
 
         s3 = buildEpochLoop periodSeed worldSize plates 0 2 6 s2
 
@@ -245,8 +244,9 @@ forceOneSuperVolcano seed worldSize plates periodIdx tbs =
                         in ([pf], tbs'')
     in go 0
 
-applyVolcanicEvolution ∷ Word64 → TimelineBuildState → TimelineBuildState
-applyVolcanicEvolution seed tbs =
+applyVolcanicEvolution ∷ Word64 → Int → [TectonicPlate]
+                       → TimelineBuildState → TimelineBuildState
+applyVolcanicEvolution seed worldSize plates tbs =
     let periodIdx = tbsPeriodIdx tbs
         evolSeed = seed `xor` 0xEF01F100
         currentDate = gdMillionYears (gsDate (tbsGeoState tbs))
@@ -254,15 +254,26 @@ applyVolcanicEvolution seed tbs =
         (events, tbs1) = foldl' (evolveOneFeature evolSeed periodIdx)
                                 ([], tbs) (tbsFeatures tbs)
 
+        eruptSeed = seed `xor` 0x5E7A
+        periodEruptions = catMaybes
+            [ generateEruption eruptSeed worldSize periodIdx plates pf
+            | pf ← tbsFeatures tbs1
+            , case eruptionProfile (pfFeature pf) of
+                Just ep → epTimelineScale ep ≡ Period
+                Nothing → False
+            ]
+
+        allEvents = events <> periodEruptions
+
         period = GeoPeriod
             { gpName     = "Volcanic Evolution"
             , gpScale    = Period
             , gpDuration = 30
             , gpDate     = currentDate
-            , gpEvents   = events
+            , gpEvents   = allEvents
             , gpErosion  = ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 5000)
             }
-    in if null events then tbs1
+    in if null allEvents then tbs1
        else addPeriod period tbs1
 
 -----------------------------------------------------------
@@ -362,7 +373,18 @@ buildAge seed worldSize plates ageIdx tbs =
             then []
             else []
 
-        allEvents = meteorites <> landslides <> floods
+        -- Age-level eruptions: roll for each active feature
+        -- that has epTimelineScale == Age
+        eruptSeed = ageSeed `xor` 0x1A7A
+        eruptions = catMaybes
+            [ generateEruption eruptSeed worldSize ageIdx plates pf
+            | pf ← tbsFeatures tbs
+            , case eruptionProfile (pfFeature pf) of
+                Just ep → epTimelineScale ep ≡ Age
+                Nothing → False
+            ]
+
+        allEvents = meteorites <> landslides <> floods <> eruptions
 
         gs2 = gs1 { gsCO2 = max 0.5 (gsCO2 gs1 - duration * 0.005) }
 
@@ -390,3 +412,70 @@ erosionFromGeoState gs seed ageIdx =
         , epChemical  = chemical
         , epSeed      = seed + fromIntegral ageIdx * 7
         }
+
+-----------------------------------------------------------
+-- Eruption Generation (per-feature)
+-----------------------------------------------------------
+
+-- | Roll for an eruption from a single active feature.
+--   Returns an EruptionEvent if the roll succeeds.
+generateEruption ∷ Word64 → Int → Int → [TectonicPlate]
+                 → PersistentFeature → Maybe GeoEvent
+generateEruption seed worldSize ageIdx plates pf =
+    case pfActivity pf of
+        Active → case eruptionProfile (pfFeature pf) of
+            Nothing → Nothing
+            Just profile →
+                let GeoFeatureId fidInt = pfId pf
+                    h1 = hashGeo seed (fidInt + ageIdx) 700
+                    roll = hashToFloatGeo h1
+                in if roll < epEruptChance profile
+                   then Just (buildEruptionEvent seed worldSize ageIdx plates pf profile)
+                   else Nothing
+        _ → Nothing
+
+buildEruptionEvent ∷ Word64 → Int → Int → [TectonicPlate]
+                   → PersistentFeature → EruptionProfile → GeoEvent
+buildEruptionEvent seed worldSize ageIdx plates pf profile =
+    let GeoFeatureId fidInt = pfId pf
+        h2 = hashGeo seed (fidInt + ageIdx) 710
+        h3 = hashGeo seed (fidInt + ageIdx) 711
+
+        radius = hashToRangeGeo h2 (epMinRadius profile) (epMaxRadius profile)
+        volume = hashToRangeGeo h3 (epMinVolume profile) (epMaxVolume profile)
+
+        (sx, sy) = featureCenter (pfFeature pf)
+
+        -- Look up actual terrain elevation at the source
+        (srcElev, _) = elevationAtGlobal seed plates worldSize sx sy
+
+        -- Lava erupts above the current surface
+        -- More eruptions = more buildup
+        eruptionBoost = pfEruptionCount pf * 5
+        lavaElev = srcElev + eruptionBoost + volume `div` 4
+
+        flow = LavaFlow
+            { lfSourceX   = sx
+            , lfSourceY   = sy
+            , lfRadius    = radius
+            , lfElevation = lavaElev
+            , lfVolume    = volume
+            , lfMaterial  = epMaterial profile
+            , lfViscosity = epViscosity profile
+            }
+    in EruptionEvent (pfId pf) flow
+
+-- | Extract the center coordinates from any volcanic feature.
+featureCenter ∷ VolcanicFeature → (Int, Int)
+featureCenter (ShieldVolcano p)    = let GeoCoord x y = shCenter p in (x, y)
+featureCenter (CinderCone p)       = let GeoCoord x y = ccCenter p in (x, y)
+featureCenter (LavaDome p)         = let GeoCoord x y = ldCenter p in (x, y)
+featureCenter (Caldera p)          = let GeoCoord x y = caCenter p in (x, y)
+featureCenter (FissureVolcano p)   = let GeoCoord sx sy = fpStart p
+                                         GeoCoord ex ey = fpEnd p
+                                     in ((sx + ex) `div` 2, (sy + ey) `div` 2)
+featureCenter (LavaTube p)         = let GeoCoord sx sy = ltStart p
+                                         GeoCoord ex ey = ltEnd p
+                                     in ((sx + ex) `div` 2, (sy + ey) `div` 2)
+featureCenter (SuperVolcano p)     = let GeoCoord x y = svCenter p in (x, y)
+featureCenter (HydrothermalVent p) = let GeoCoord x y = htCenter p in (x, y)

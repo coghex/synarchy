@@ -497,6 +497,7 @@ data GeoEvent
     = CraterEvent !CraterParams
     | VolcanicEvent !VolcanicFeature
     | VolcanicModify !GeoFeatureId !FeatureEvolution
+    | EruptionEvent !GeoFeatureId !LavaFlow
     | LandslideEvent !LandslideParams
     | GlaciationEvent !GlaciationParams
     | FloodEvent !FloodParams
@@ -702,6 +703,27 @@ data PersistentFeature = PersistentFeature
     , pfLastActivePeriod ∷ !Int             -- ^ Index of period last active
     , pfEruptionCount ∷ !Int               -- ^ How many times it has erupted
     , pfParentId      ∷ !(Maybe GeoFeatureId) -- ^ If parasitic (cinder cone on shield flank)
+    } deriving (Show, Eq)
+
+-----------------------------------------------------------
+-- Lava Flow (eruption deposit)
+-----------------------------------------------------------
+
+-- | Describes a single eruption's lava flow from a volcanic source.
+--   Generated at the Age level for frequently-erupting volcanoes
+--   (shield, fissure, cinder cone, lava dome) and at the Period
+--   level for supervolcanoes.
+--
+--   Applied during chunk generation to deposit solidified material
+--   downhill from the source, filling depressions and building strata.
+data LavaFlow = LavaFlow
+    { lfSourceX   ∷ !Int          -- ^ Eruption center gx
+    , lfSourceY   ∷ !Int          -- ^ Eruption center gy
+    , lfRadius    ∷ !Int          -- ^ Max flow radius in tiles
+    , lfElevation ∷ !Int          -- ^ Lava surface elevation at source
+    , lfVolume    ∷ !Int          -- ^ Total tiles of material to deposit
+    , lfMaterial  ∷ !Word8        -- ^ What it solidifies into
+    , lfViscosity ∷ !Int          -- ^ Elevation drop per tile of distance (1=runny, 3=viscous)
     } deriving (Show, Eq)
 
 -----------------------------------------------------------

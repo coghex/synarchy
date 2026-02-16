@@ -15,6 +15,7 @@ module World.Fluids
     , computeOceanMap
       -- * Chunk-level fluid
     , computeChunkFluid
+    , computeChunkLava
       -- * Query
     , isOceanChunk
     ) where
@@ -143,6 +144,187 @@ computeChunkFluid oceanMap coord surfaceMap
       ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy - 1))
       ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy + 1))
       ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy + 1))
+
+-- | Compute lava fluid cells for a chunk.
+--   For each active volcanic feature near this chunk,
+--   fills columns where the lava surface (from the feature's
+--   caldera floor or crater) is above the terrain surface.
+--
+--   Lava fluid does NOT overwrite existing ocean fluid —
+--   ocean takes priority (lava hitting ocean = obsidian crust,
+--   handled later).
+computeChunkLava ∷ [PersistentFeature] → Word64 → [TectonicPlate]
+                 → Int → ChunkCoord
+                 → HM.HashMap (Int, Int) Int
+                 → HM.HashMap (Int, Int) FluidCell
+computeChunkLava features seed plates worldSize coord surfaceMap =
+    let ChunkCoord cx cy = coord
+        chunkMinGX = cx * chunkSize
+        chunkMinGY = cy * chunkSize
+        nearbyActive = filter (isNearbyActive worldSize chunkMinGX chunkMinGY) features
+    in foldl' (\acc pf →
+        fillLavaFromFeature pf seed plates worldSize chunkMinGX chunkMinGY surfaceMap acc
+        ) HM.empty nearbyActive
+
+-- | Is this feature active and close enough to affect this chunk?
+isNearbyActive ∷ Int → Int → Int → PersistentFeature → Bool
+isNearbyActive worldSize chunkGX chunkGY pf =
+    case pfActivity pf of
+        Active → let maxR = featureMaxRadius (pfFeature pf)
+                     (fx, fy) = featureCenter' (pfFeature pf)
+                     dx = abs (wrappedDeltaForFluid worldSize chunkGX fx)
+                     dy = abs (chunkGY - fy)
+                 in dx < maxR + chunkSize ∧ dy < maxR + chunkSize
+        _      → False
+
+-- | Get the maximum radius of influence for a feature's lava pool.
+featureMaxRadius ∷ VolcanicFeature → Int
+featureMaxRadius (ShieldVolcano p)    = shBaseRadius p
+featureMaxRadius (CinderCone p)       = ccBaseRadius p
+featureMaxRadius (LavaDome p)         = ldBaseRadius p
+featureMaxRadius (Caldera p)          = caOuterRadius p
+featureMaxRadius (SuperVolcano p)     = svCalderaRadius p
+featureMaxRadius (FissureVolcano p)   = fpWidth p * 2
+featureMaxRadius (HydrothermalVent _) = 0
+featureMaxRadius (LavaTube _)         = 0
+
+-- | Extract center from a feature (same as Timeline.featureCenter
+--   but local to Fluids to avoid circular imports).
+featureCenter' ∷ VolcanicFeature → (Int, Int)
+featureCenter' (ShieldVolcano p)    = let GeoCoord x y = shCenter p in (x, y)
+featureCenter' (CinderCone p)       = let GeoCoord x y = ccCenter p in (x, y)
+featureCenter' (LavaDome p)         = let GeoCoord x y = ldCenter p in (x, y)
+featureCenter' (Caldera p)          = let GeoCoord x y = caCenter p in (x, y)
+featureCenter' (SuperVolcano p)     = let GeoCoord x y = svCenter p in (x, y)
+featureCenter' (FissureVolcano p)   = let GeoCoord sx sy = fpStart p
+                                          GeoCoord ex ey = fpEnd p
+                                      in ((sx + ex) `div` 2, (sy + ey) `div` 2)
+featureCenter' (HydrothermalVent p) = let GeoCoord x y = htCenter p in (x, y)
+featureCenter' (LavaTube p)         = let GeoCoord sx sy = ltStart p
+                                          GeoCoord ex ey = ltEnd p
+                                      in ((sx + ex) `div` 2, (sy + ey) `div` 2)
+
+-- | Wrapped delta for fluid proximity check.
+wrappedDeltaForFluid ∷ Int → Int → Int → Int
+wrappedDeltaForFluid worldSize a b =
+    let w = worldSize * chunkSize
+        raw = b - a
+        halfW = w `div` 2
+    in ((raw + halfW) `mod` w + w) `mod` w - halfW
+
+-- | Fill lava cells from a single active feature into a chunk.
+--   Each feature type defines a lava pool shape:
+--     - Caldera/SuperVolcano: fills the bowl up to rim height
+--     - ShieldVolcano with summit pit: fills the pit
+--     - CinderCone: fills the crater
+--     - FissureVolcano with magma: fills along the fissure
+--     - LavaDome: no pool (too viscous)
+fillLavaFromFeature ∷ PersistentFeature → Word64 → [TectonicPlate]
+                    → Int → Int → Int
+                    → HM.HashMap (Int, Int) Int
+                    → HM.HashMap (Int, Int) FluidCell
+                    → HM.HashMap (Int, Int) FluidCell
+fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
+    case pfFeature pf of
+        SuperVolcano p →
+            let (fx, fy) = let GeoCoord x y = svCenter p in (x, y)
+                poolRadius = svCalderaRadius p
+                (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
+                -- Lava fills the caldera bowl, up near the rim
+                lavaSurface = baseElev + svRimHeight p - 5
+            in fillPool worldSize chunkGX chunkGY fx fy
+                   poolRadius lavaSurface surfaceMap acc
+
+        Caldera p →
+            let (fx, fy) = let GeoCoord x y = caCenter p in (x, y)
+                poolRadius = caInnerRadius p
+                (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
+                lavaSurface = baseElev + caRimHeight p - 3
+            in fillPool worldSize chunkGX chunkGY fx fy
+                   poolRadius lavaSurface surfaceMap acc
+
+        ShieldVolcano p | shSummitPit p →
+            let (fx, fy) = let GeoCoord x y = shCenter p in (x, y)
+                poolRadius = shPitRadius p
+                (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
+                lavaSurface = baseElev + shPeakHeight p - shPitDepth p + 2
+            in fillPool worldSize chunkGX chunkGY fx fy
+                   poolRadius lavaSurface surfaceMap acc
+
+        CinderCone p →
+            let (fx, fy) = let GeoCoord x y = ccCenter p in (x, y)
+                poolRadius = ccCraterRadius p
+                (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
+                lavaSurface = baseElev + ccPeakHeight p - ccCraterDepth p + 2
+            in fillPool worldSize chunkGX chunkGY fx fy
+                   poolRadius lavaSurface surfaceMap acc
+
+        FissureVolcano p | fpHasMagma p →
+            let GeoCoord sx sy = fpStart p
+                GeoCoord ex ey = fpEnd p
+                midX = (sx + ex) `div` 2
+                midY = (sy + ey) `div` 2
+                (baseElev, _) = elevationAtGlobal seed plates worldSize midX midY
+                poolWidth = fpWidth p `div` 2
+                lavaSurface = baseElev + fpRidgeHeight p - 3
+            in fillFissurePool worldSize chunkGX chunkGY
+                   sx sy ex ey poolWidth lavaSurface surfaceMap acc
+
+        -- Hydrothermal vents: small magma pool at the chimney
+        HydrothermalVent p →
+            let (fx, fy) = let GeoCoord x y = htCenter p in (x, y)
+                poolRadius = max 2 (htRadius p `div` 3)
+                (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
+                lavaSurface = baseElev + htChimneyHeight p - 2
+            in fillPool worldSize chunkGX chunkGY fx fy
+                   poolRadius lavaSurface surfaceMap acc
+
+        _ → acc
+
+-- | Fill a circular lava pool into the fluid map.
+fillPool ∷ Int → Int → Int → Int → Int → Int → Int
+         → HM.HashMap (Int, Int) Int
+         → HM.HashMap (Int, Int) FluidCell
+         → HM.HashMap (Int, Int) FluidCell
+fillPool worldSize chunkGX chunkGY fx fy poolRadius lavaSurface surfaceMap acc =
+    HM.foldlWithKey' (\acc' (lx, ly) surfZ →
+        let gx = chunkGX + lx
+            gy = chunkGY + ly
+            dx = fromIntegral (wrappedDeltaForFluid worldSize gx fx) ∷ Float
+            dy = fromIntegral (gy - fy) ∷ Float
+            dist = sqrt (dx * dx + dy * dy)
+            pr = fromIntegral poolRadius ∷ Float
+        in if dist < pr ∧ surfZ < lavaSurface
+           then HM.insert (lx, ly) (FluidCell Lava lavaSurface) acc'
+           else acc'
+        ) acc surfaceMap
+
+-- | Fill lava along a fissure line.
+fillFissurePool ∷ Int → Int → Int → Int → Int → Int → Int
+                → Int → Int
+                → HM.HashMap (Int, Int) Int
+                → HM.HashMap (Int, Int) FluidCell
+                → HM.HashMap (Int, Int) FluidCell
+fillFissurePool worldSize chunkGX chunkGY sx sy ex ey halfWidth lavaSurface surfaceMap acc =
+    let lineLen = sqrt (fromIntegral ((ex-sx)*(ex-sx) + (ey-sy)*(ey-sy))) ∷ Float
+    in if lineLen < 0.001 then acc
+    else HM.foldlWithKey' (\acc' (lx, ly) surfZ →
+        let gx = chunkGX + lx
+            gy = chunkGY + ly
+            -- Distance from point to line segment
+            dx = fromIntegral (wrappedDeltaForFluid worldSize gx sx) ∷ Float
+            dy = fromIntegral (gy - sy) ∷ Float
+            lx' = fromIntegral (ex - sx) ∷ Float
+            ly' = fromIntegral (ey - sy) ∷ Float
+            t = max 0 (min 1 ((dx * lx' + dy * ly') / (lineLen * lineLen)))
+            projX = t * lx'
+            projY = t * ly'
+            perpDist = sqrt ((dx - projX) * (dx - projX) + (dy - projY) * (dy - projY))
+            hw = fromIntegral halfWidth ∷ Float
+        in if perpDist < hw ∧ surfZ < lavaSurface
+           then HM.insert (lx, ly) (FluidCell Lava lavaSurface) acc'
+           else acc'
+        ) acc surfaceMap
 
 -----------------------------------------------------------
 -- Helpers

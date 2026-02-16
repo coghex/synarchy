@@ -29,7 +29,7 @@ import World.Grid (worldToGrid)
 import World.Geology (applyGeoEvent, GeoModification(..))
 import World.Geology.Erosion (applyErosion)
 import World.Scale (computeWorldScale, WorldScale(..))
-import World.Fluids (isOceanChunk, computeChunkFluid)
+import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava)
 import Engine.Graphics.Camera (CameraFacing(..))
 
 -----------------------------------------------------------
@@ -154,7 +154,11 @@ generateChunk params coord =
             ]
 
         -- Compute fluid map from terrain surface
-        fluidMap = computeChunkFluid oceanMap coord terrainSurfaceMap
+        oceanFluidMap = computeChunkFluid oceanMap coord terrainSurfaceMap
+        features = gtFeatures (wgpGeoTimeline params)
+        lavaFluidMap = computeChunkLava features seed plates worldSize
+                                        coord terrainSurfaceMap
+        fluidMap = HM.union oceanFluidMap lavaFluidMap
 
         -- Camera-facing surface map: ocean columns report sea level
         -- so camera tracking hovers above water, not at the ocean floor

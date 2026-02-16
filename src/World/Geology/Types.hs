@@ -3,6 +3,8 @@ module World.Geology.Types
     ( GeoModification(..)
     , VolcanoEra(..)
     , noModification
+    , EruptionProfile(..)
+    , eruptionProfile
     , CraterEra(..)
     , TimelineBuildState(..)
     , allocFeatureId
@@ -30,6 +32,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.Hashable (Hashable(..))
 import World.Types
 import World.Plate (TectonicPlate(..), twoNearestPlates, isBeyondGlacier)
+import World.Material (matBasalt, matObsidian)
 
 -----------------------------------------------------------
 -- GeoModification
@@ -121,6 +124,82 @@ modifyRegionTemp rc f rd = rd
 modifyAllRegionTemp ∷ (Float → Float) → RegionalData → RegionalData
 modifyAllRegionTemp f rd = rd
     { rdTemperature = HM.map f (rdTemperature rd) }
+
+-----------------------------------------------------------
+-- Eruption Profile (per volcano type)
+-----------------------------------------------------------
+
+-- | Eruption characteristics that vary by volcano type.
+--   Used by the age-level eruption generator to determine
+--   flow parameters from a PersistentFeature.
+data EruptionProfile = EruptionProfile
+    { epEruptChance    ∷ !Float    -- ^ Probability of erupting per age (0.0–1.0)
+    , epMinRadius      ∷ !Int      -- ^ Minimum flow radius
+    , epMaxRadius      ∷ !Int      -- ^ Maximum flow radius
+    , epMinVolume      ∷ !Int      -- ^ Minimum tiles deposited
+    , epMaxVolume      ∷ !Int      -- ^ Maximum tiles deposited
+    , epViscosity      ∷ !Int      -- ^ Elevation drop per tile (1=runny basalt, 3=viscous obsidian)
+    , epMaterial       ∷ !Word8    -- ^ Solidified material (matBasalt, matObsidian, etc.)
+    , epTimelineScale  ∷ !GeoScale  -- ^ Scale at which eruptions occur (Age or Period)
+    } deriving (Show, Eq)
+
+-- | Get the eruption profile for a volcanic feature.
+--   Returns Nothing for features that don't independently erupt
+--   (lava tubes, hydrothermal vents).
+eruptionProfile ∷ VolcanicFeature → Maybe EruptionProfile
+eruptionProfile (ShieldVolcano p) = Just EruptionProfile
+    { epEruptChance   = 0.7        -- erupts most ages
+    , epMinRadius     = 15
+    , epMaxRadius     = fromIntegral (shBaseRadius p)
+    , epMinVolume     = 20
+    , epMaxVolume     = 80
+    , epViscosity     = 1          -- runny basalt, flows far
+    , epMaterial      = 4          -- matBasalt
+    , epTimelineScale = Age
+    }
+eruptionProfile (CinderCone _) = Just EruptionProfile
+    { epEruptChance   = 0.3        -- erupts occasionally
+    , epMinRadius     = 3
+    , epMaxRadius     = 8
+    , epMinVolume     = 5
+    , epMaxVolume     = 20
+    , epViscosity     = 2          -- moderate viscosity
+    , epMaterial      = 5          -- matObsidian
+    , epTimelineScale = Age
+    }
+eruptionProfile (FissureVolcano p) = Just EruptionProfile
+    { epEruptChance   = 0.6        -- erupts frequently along the line
+    , epMinRadius     = 10
+    , epMaxRadius     = fromIntegral (fpWidth p) * 5
+    , epMinVolume     = 30
+    , epMaxVolume     = 120
+    , epViscosity     = 1          -- flood basalt, very runny
+    , epMaterial      = 4          -- matBasalt
+    , epTimelineScale = Age
+    }
+eruptionProfile (LavaDome p) = Just EruptionProfile
+    { epEruptChance   = 0.4        -- slow extrusion
+    , epMinRadius     = 2
+    , epMaxRadius     = fromIntegral (ldBaseRadius p)
+    , epMinVolume     = 3
+    , epMaxVolume     = 10
+    , epViscosity     = 3          -- very viscous, piles up in place
+    , epMaterial      = 5          -- matObsidian
+    , epTimelineScale = Age
+    }
+eruptionProfile (SuperVolcano p) = Just EruptionProfile
+    { epEruptChance   = 0.15       -- rare but catastrophic
+    , epMinRadius     = fromIntegral (svCalderaRadius p)
+    , epMaxRadius     = fromIntegral (svEjectaRadius p)
+    , epMinVolume     = 200
+    , epMaxVolume     = 800
+    , epViscosity     = 1          -- massive flood
+    , epMaterial      = 4          -- matBasalt
+    , epTimelineScale = Period
+    }
+eruptionProfile (Caldera _)          = Nothing  -- collapsed, no eruption
+eruptionProfile (HydrothermalVent _) = Nothing  -- no lava
+eruptionProfile (LavaTube _)         = Nothing  -- passive conduit
 
 -----------------------------------------------------------
 -- GeoState
