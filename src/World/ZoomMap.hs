@@ -25,7 +25,8 @@ import World.Types
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
                    , isBeyondGlacier, wrapGlobalU)
-import World.Fluids (seaLevel, isOceanChunk, computeChunkLava)
+import World.Fluids (seaLevel, isOceanChunk, computeChunkLava
+                    , computeChunkFluid)
 import World.Generate (applyTimeline)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
@@ -68,37 +69,39 @@ buildZoomCache params =
         oceanMap = wgpOceanMap params
         features = gtFeatures timeline
 
-        hasOcean ∷ Int → Int → Bool
-        hasOcean cx cy =
-            isOceanChunk oceanMap (ChunkCoord cx cy)
-          ∨ isOceanChunk oceanMap (ChunkCoord cx (cy - 1))
-          ∨ isOceanChunk oceanMap (ChunkCoord cx (cy + 1))
-          ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) cy)
-          ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) cy)
-          ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy - 1))
-          ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy - 1))
-          ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy + 1))
-          ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy + 1))
-
-        -- Check if a chunk has lava by running computeChunkLava
-        -- with a dummy surface map (just the center point)
-        hasLava ∷ Int → Int → Bool
-        hasLava cx cy =
-            any (chunkHasLavaFrom worldSize cx cy) features
+        -- Compute full surface map for a chunk: elevation and material per tile
+        buildChunkSurface ∷ Int → Int → HM.HashMap (Int, Int) (Int, Word8)
+        buildChunkSurface cx cy =
+            HM.fromList
+                [ ((lx, ly), (elev, mat))
+                | lx ← [0 .. chunkSize - 1]
+                , ly ← [0 .. chunkSize - 1]
+                , let gx = cx * chunkSize + lx
+                      gy = cy * chunkSize + ly
+                      (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
+                      (gx', gy') = wrapGlobalU worldSize gx gy
+                      (elev, mat) = if baseMat ≡ matGlacier
+                                    then (baseElev, unMaterialId baseMat)
+                                    else if baseElev < -100
+                                    then (baseElev, 0)
+                                    else let (e, m) = applyTimeline timeline worldSize gx' gy'
+                                                          (baseElev, baseMat)
+                                         in (e, unMaterialId m)
+                ]
 
         entries =
             [ ZoomChunkEntry
-                { zceChunkX   = wrappedCcx
-                , zceChunkY   = wrappedCcy
+                { zceChunkX   = ccx
+                , zceChunkY   = ccy
                 , zceBaseGX   = baseGX
                 , zceBaseGY   = baseGY
-                , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
+                , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
                                 then 0
                                 else if chunkLava then 100
                                 else winnerMat
-                , zceElev     = if isOceanChunk oceanMap (ChunkCoord wrappedCcx wrappedCcy)
+                , zceElev     = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
                                 then seaLevel else avgElev
-                , zceIsOcean  = hasOcean wrappedCcx wrappedCcy
+                , zceIsOcean  = chunkOcean
                 , zceHasLava  = chunkLava
                 }
             | ccy ← [-halfSize .. halfSize - 1]
@@ -109,25 +112,29 @@ buildZoomCache params =
                   vMin = baseGX + baseGY
                   vMax = baseGX + baseGY + 2 * (chunkSize - 1)
             , vMax >= -halfTiles ∧ vMin <= halfTiles
-            , let (wrappedCcx, wrappedCcy) = (ccx, ccy)
-                  wrappedBaseGX = wrappedCcx * chunkSize
-                  wrappedBaseGY = wrappedCcy * chunkSize
-                  chunkLava = hasLava wrappedCcx wrappedCcy
-                  samples = [ let gx = wrappedBaseGX + ox
-                                  gy = wrappedBaseGY + oy
-                                  (gx', gy') = wrapGlobalU worldSize gx gy
-                                  (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
-                              in if baseMat ≡ matGlacier
-                                 then (baseElev, unMaterialId baseMat)
-                                 else if baseElev < -100 then (baseElev, 0)
-                                 else let (e, m) = applyTimeline timeline worldSize gx' gy'
-                                                       (baseElev, baseMat)
-                                      in (e, unMaterialId m)
+            , let -- Compute full surface once, reuse for everything
+                  fullSurface = buildChunkSurface ccx ccy
+
+                  -- Extract elevation-only map for fluid checks
+                  elevMap = HM.map fst fullSurface
+
+                  oceanFluidMap = computeChunkFluid oceanMap (ChunkCoord ccx ccy) elevMap
+                  chunkOcean = not (HM.null oceanFluidMap)
+
+                  -- Sample materials from the full surface (use sampleOffsets)
+                  samples = [ case HM.lookup (ox, oy) fullSurface of
+                                Just (e, m) → (e, m)
+                                Nothing     → (0, 0)
                             | (ox, oy) ← sampleOffsets
                             ]
                   winnerMat = majorityMaterial samples
                   avgElev = let s = sum (map fst samples)
                             in s `div` length samples
+
+                  -- Lava check using the real surface map
+                  lavaMap = computeChunkLava features seed plates worldSize
+                                (ChunkCoord ccx ccy) elevMap
+                  chunkLava = not (HM.null lavaMap)
             ]
 
     in V.fromList entries
@@ -139,35 +146,6 @@ wrapChunkX halfSize cx =
 
 wrapChunkY ∷ Int → Int → Int
 wrapChunkY halfSize cy = max (-halfSize) (min (halfSize - 1) cy)
-
--- | Does this feature produce a lava pool that overlaps this chunk?
---   Must exactly mirror the cases in Fluids.fillLavaFromFeature.
-chunkHasLavaFrom ∷ Int → Int → Int → PersistentFeature → Bool
-chunkHasLavaFrom worldSize cx cy pf =
-    case pfActivity pf of
-        Active → checkFeature (pfFeature pf)
-        Collapsed → case pfFeature pf of
-            Caldera p → inRange (caCenter p) (caInnerRadius p)
-            _ → False
-        _ → False
-  where
-    chunkCenterGX = cx * chunkSize + chunkSize `div` 2
-    chunkCenterGY = cy * chunkSize + chunkSize `div` 2
-    inRange (GeoCoord fx fy) poolRadius =
-        let dx = abs (chunkCenterGX - fx)
-            dy = abs (chunkCenterGY - fy)
-        in dx < poolRadius + chunkSize ∧ dy < poolRadius + chunkSize
-
-    checkFeature (SuperVolcano p)               = inRange (svCenter p) (svCalderaRadius p)
-    checkFeature (Caldera p)                    = inRange (caCenter p) (caInnerRadius p)
-    checkFeature (ShieldVolcano p) | shSummitPit p = inRange (shCenter p) (shPitRadius p)
-    checkFeature (CinderCone p)                 = inRange (ccCenter p) (ccCraterRadius p)
-    checkFeature (FissureVolcano p) | fpHasMagma p =
-        let GeoCoord sx sy = fpStart p
-            GeoCoord ex ey = fpEnd p
-        in inRange (GeoCoord ((sx+ex)`div`2) ((sy+ey)`div`2)) (fpWidth p `div` 2)
-    checkFeature (HydrothermalVent p)           = inRange (htCenter p) (max 2 (htRadius p `div` 3))
-    checkFeature _                              = False
 
 -- | Pick the material that appears most often in the samples.
 --   On ties, prefers the material with higher material ID
