@@ -48,8 +48,50 @@ function worldManager.createWorld(params)
     if params.isoFaceMap then
         world.setTexture(worldId, "iso_facemap", params.isoFaceMap)
     end
+    if params.isoSlopeFaceMapN then
+        world.setTexture(worldId, "iso_slope_facemap_n", params.isoSlopeFaceMapN)
+    end
+    if params.isoSlopeFaceMapE then
+        world.setTexture(worldId, "iso_slope_facemap_e", params.isoSlopeFaceMapE)
+    end
+    if params.isoSlopeFaceMapNE then
+        world.setTexture(worldId, "iso_slope_facemap_ne", params.isoSlopeFaceMapNE)
+    end
+    if params.isoSlopeFaceMapS then
+        world.setTexture(worldId, "iso_slope_facemap_s", params.isoSlopeFaceMapS)
+    end
+    if params.isoSlopeFaceMapNS then
+        world.setTexture(worldId, "iso_slope_facemap_ns", params.isoSlopeFaceMapNS)
+    end
+    if params.isoSlopeFaceMapES then
+        world.setTexture(worldId, "iso_slope_facemap_es", params.isoSlopeFaceMapES)
+    end
+    if params.isoSlopeFaceMapNES then
+        world.setTexture(worldId, "iso_slope_facemap_nes", params.isoSlopeFaceMapNES)
+    end
+    if params.isoSlopeFaceMapW then
+        world.setTexture(worldId, "iso_slope_facemap_w", params.isoSlopeFaceMapW)
+    end
     if params.isoSlopeFaceMapNW then
-        world.setTexture(worldId, "iso_slope_facemask_nw", params.isoSlopeFaceMapNW)
+        world.setTexture(worldId, "iso_slope_facemap_nw", params.isoSlopeFaceMapNW)
+    end
+    if params.isoSlopeFaceMapEW then
+        world.setTexture(worldId, "iso_slope_facemap_ew", params.isoSlopeFaceMapEW)
+    end
+    if params.isoSlopeFaceMapNEW then
+        world.setTexture(worldId, "iso_slope_facemap_new", params.isoSlopeFaceMapNEW)
+    end
+    if params.isoSlopeFaceMapSW then
+        world.setTexture(worldId, "iso_slope_facemap_sw", params.isoSlopeFaceMapSW)
+    end
+    if params.isoSlopeFaceMapNSW then
+        world.setTexture(worldId, "iso_slope_facemap_nsw", params.isoSlopeFaceMapNSW)
+    end
+    if params.isoSlopeFaceMapESW then
+        world.setTexture(worldId, "iso_slope_facemap_esw", params.isoSlopeFaceMapESW)
+    end
+    if params.isoSlopeFaceMapNESW then
+        world.setTexture(worldId, "iso_slope_facemap_nesw", params.isoSlopeFaceMapNESW)
     end
     if params.noFaceMap then
         world.setTexture(worldId, "nofacemap", params.noFaceMap)

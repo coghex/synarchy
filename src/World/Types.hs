@@ -281,12 +281,21 @@ data WorldTextures = WorldTextures
     , wtOceanTexture     ∷ TextureHandle
     , wtNoTexture        ∷ TextureHandle
     , wtIsoFaceMap       ∷ TextureHandle
-    , wtSlopeFaceMapNW   ∷ TextureHandle
-    , wtSlopeFaceMapN    ∷ TextureHandle
-    , wtSlopeFaceMapNE   ∷ TextureHandle
-    , wtSlopeFaceMapE    ∷ TextureHandle
-    , wtSlopeFaceMapS    ∷ TextureHandle
-    , wtSlopeFaceMapW    ∷ TextureHandle
+    , wtSlopeFaceMapN    ∷ TextureHandle   -- 1:  N
+    , wtSlopeFaceMapE    ∷ TextureHandle   -- 2:  E
+    , wtSlopeFaceMapNE   ∷ TextureHandle   -- 3:  N+E
+    , wtSlopeFaceMapS    ∷ TextureHandle   -- 4:  S
+    , wtSlopeFaceMapNS   ∷ TextureHandle   -- 5:  N+S
+    , wtSlopeFaceMapES   ∷ TextureHandle   -- 6:  E+S
+    , wtSlopeFaceMapNES  ∷ TextureHandle   -- 7:  N+E+S
+    , wtSlopeFaceMapW    ∷ TextureHandle   -- 8:  W
+    , wtSlopeFaceMapNW   ∷ TextureHandle   -- 9:  N+W
+    , wtSlopeFaceMapEW   ∷ TextureHandle   -- 10: E+W
+    , wtSlopeFaceMapNEW  ∷ TextureHandle   -- 11: N+E+W
+    , wtSlopeFaceMapSW   ∷ TextureHandle   -- 12: S+W
+    , wtSlopeFaceMapNSW  ∷ TextureHandle   -- 13: N+S+W
+    , wtSlopeFaceMapESW  ∷ TextureHandle   -- 14: E+S+W
+    , wtSlopeFaceMapNESW ∷ TextureHandle   -- 15: N+E+S+W
     , wtNoFaceMap        ∷ TextureHandle
     , wtZoomGranite      ∷ TextureHandle
     , wtZoomGabbro       ∷ TextureHandle
@@ -343,12 +352,21 @@ defaultWorldTextures = WorldTextures
     , wtOceanTexture    = TextureHandle 0
     , wtNoTexture       = TextureHandle 0
     , wtIsoFaceMap      = TextureHandle 0
-    , wtSlopeFaceMapNW   = TextureHandle 0
-    , wtSlopeFaceMapN   = TextureHandle 0
+    , wtSlopeFaceMapN    = TextureHandle 0
+    , wtSlopeFaceMapE    = TextureHandle 0
     , wtSlopeFaceMapNE   = TextureHandle 0
-    , wtSlopeFaceMapE   = TextureHandle 0
-    , wtSlopeFaceMapS   = TextureHandle 0
-    , wtSlopeFaceMapW   = TextureHandle 0
+    , wtSlopeFaceMapS    = TextureHandle 0
+    , wtSlopeFaceMapNS   = TextureHandle 0
+    , wtSlopeFaceMapES   = TextureHandle 0
+    , wtSlopeFaceMapNES  = TextureHandle 0
+    , wtSlopeFaceMapW    = TextureHandle 0
+    , wtSlopeFaceMapNW   = TextureHandle 0
+    , wtSlopeFaceMapEW   = TextureHandle 0
+    , wtSlopeFaceMapNEW  = TextureHandle 0
+    , wtSlopeFaceMapSW   = TextureHandle 0
+    , wtSlopeFaceMapNSW  = TextureHandle 0
+    , wtSlopeFaceMapESW  = TextureHandle 0
+    , wtSlopeFaceMapNESW = TextureHandle 0
     , wtNoFaceMap       = TextureHandle 0
     , wtZoomGranite     = TextureHandle 0
     , wtZoomGabbro      = TextureHandle 0
@@ -913,12 +931,21 @@ data WorldTextureType
     | NoTexture
     | OceanTexture
     | IsoFaceMap
-    | SlopeFaceMapNW
     | SlopeFaceMapN
-    | SlopeFaceMapNE
     | SlopeFaceMapE
+    | SlopeFaceMapNE
     | SlopeFaceMapS
+    | SlopeFaceMapNS
+    | SlopeFaceMapES
+    | SlopeFaceMapNES
     | SlopeFaceMapW
+    | SlopeFaceMapNW
+    | SlopeFaceMapEW
+    | SlopeFaceMapNEW
+    | SlopeFaceMapSW
+    | SlopeFaceMapNSW
+    | SlopeFaceMapESW
+    | SlopeFaceMapNESW
     | NoFaceMap
     | ZoomGraniteTexture
     | ZoomDioriteTexture
