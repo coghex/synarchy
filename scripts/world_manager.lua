@@ -48,6 +48,9 @@ function worldManager.createWorld(params)
     if params.isoFaceMap then
         world.setTexture(worldId, "iso_facemap", params.isoFaceMap)
     end
+    if params.noFaceMap then
+        world.setTexture(worldId, "nofacemap", params.noFaceMap)
+    end
     if params.isoSlopeFaceMapN then
         world.setTexture(worldId, "iso_slope_facemap_n", params.isoSlopeFaceMapN)
     end
@@ -92,9 +95,6 @@ function worldManager.createWorld(params)
     end
     if params.isoSlopeFaceMapNESW then
         world.setTexture(worldId, "iso_slope_facemap_nesw", params.isoSlopeFaceMapNESW)
-    end
-    if params.noFaceMap then
-        world.setTexture(worldId, "nofacemap", params.noFaceMap)
     end
     if params.zoomGranite then
         world.setTexture(worldId, "zoom_granite", params.zoomGranite)

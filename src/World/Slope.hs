@@ -227,36 +227,8 @@ tileHash seed cx cy lx ly =
 -- Slope → Face Map Index Mapping
 -----------------------------------------------------------
 
--- | Map a 4-bit marching-squares slope ID to one of 5 face maps:
---   0 = flat (default isoface)
---   1 = north ramp
---   2 = east ramp
---   3 = south ramp
---   4 = west ramp
---
---   For corner cases (2+ bits set), pick the dominant direction.
---   Single-bit cases map directly. Zero maps to flat.
 slopeToFaceMapIndex ∷ Word8 → Int
-slopeToFaceMapIndex 0  = 0  -- flat
-slopeToFaceMapIndex 1  = 1  -- N only
-slopeToFaceMapIndex 2  = 1  -- E only
-slopeToFaceMapIndex 4  = 1  -- S only
-slopeToFaceMapIndex 8  = 1  -- W only
--- Two-bit corners: pick the first cardinal in N→E→S→W priority
-slopeToFaceMapIndex 3  = 1  -- N+E → N dominates
-slopeToFaceMapIndex 5  = 1  -- N+S → N dominates (rare, saddle)
-slopeToFaceMapIndex 9  = 1  -- N+W → N dominates
-slopeToFaceMapIndex 6  = 1  -- E+S → E dominates
-slopeToFaceMapIndex 10 = 1  -- E+W → E dominates (rare, saddle)
-slopeToFaceMapIndex 12 = 1  -- S+W → S dominates
--- Three-bit cases
-slopeToFaceMapIndex 7  = 1  -- N+E+S → N
-slopeToFaceMapIndex 11 = 1  -- N+E+W → N
-slopeToFaceMapIndex 13 = 1  -- N+S+W → S (N and S cancel, W wins... but use S for visual)
-slopeToFaceMapIndex 14 = 1  -- E+S+W → E
--- All four: flat (surrounded by lower terrain = plateau)
-slopeToFaceMapIndex 15 = 1
-slopeToFaceMapIndex _  = 0  -- fallback
+slopeToFaceMapIndex  = fromIntegral
 
 -----------------------------------------------------------
 -- Procedural Face Map Generation
