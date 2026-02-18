@@ -9,6 +9,8 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
+import qualified Data.Vector as V
+import Data.Maybe (isJust)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
@@ -27,17 +29,11 @@ import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLay
                    tileHalfWidth, tileHalfDiamondHeight, zoomFadeStart, zoomFadeEnd
                    , worldToGrid, worldScreenWidth, applyFacing)
 import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
-import qualified Data.Vector as V
 
 -----------------------------------------------------------
 -- Camera Change Detection
 -----------------------------------------------------------
 
--- | Threshold for quad cache invalidation.
---   Must be smaller than the view bounds padding (padX = tileWidth = 0.15)
---   but large enough to skip most per-frame rebuilds during panning.
---   Half a tile width means we regenerate ~every 8 frames at typical pan speed,
---   instead of every frame.
 camEpsilon ∷ Float
 camEpsilon = tileHalfWidth
 
@@ -56,8 +52,6 @@ cameraChanged old new =
 -- Surface Headroom
 -----------------------------------------------------------
 
--- | the amount of z headroom above the surface 
--- to keep the camera at, in grid units
 surfaceHeadroom ∷ Int
 surfaceHeadroom = 10
 
@@ -65,8 +59,6 @@ surfaceHeadroom = 10
 -- Top-Level Entry Point
 -----------------------------------------------------------
 
--- | IO version of world quad generation, called from the world thread.
---   Reads texture system from shared IORefs instead of GraphicsState.
 updateWorldTiles ∷ EngineEnv → IO (V.Vector SortableQuad)
 updateWorldTiles env = do
     camera ← readIORef (cameraRef env)
@@ -105,7 +97,6 @@ updateWorldTiles env = do
 
     zoomQuads ← generateZoomMapQuads env camera fbW fbH
 
-    -- Auto-adjust zSlice (same logic as before)
     let shouldTrack = camZTracking camera
                     ∨ (tileAlpha > 0.001 ∧ tileAlpha < 0.999)
     when shouldTrack $ do
@@ -152,9 +143,6 @@ computeViewBounds camera fbW fbH effDepth =
         halfW    = zoom * aspect
         halfH    = zoom
         maxHeightPad = fromIntegral effDepth * tileSideHeight
-        -- Extra padding: enough to cover camera movement between cache rebuilds.
-        -- camEpsilon = tileHalfWidth, so tiles within one full tile width
-        -- outside the viewport are pre-generated.
         padX     = tileWidth + camEpsilon
         padY     = tileHeight + maxHeightPad + camEpsilon
     in ViewBounds
@@ -209,7 +197,7 @@ isChunkVisibleWrapped facing worldSize vb camX coord =
 
 isChunkRelevantForSlice ∷ Int → LoadedChunk → Bool
 isChunkRelevantForSlice _zSlice lc =
-    not (VU.null (lcSurfaceMap lc))
+    VU.any (/= minBound) (lcSurfaceMap lc)
 
 -----------------------------------------------------------
 -- Render World Quads
@@ -226,7 +214,6 @@ renderWorldQuads env worldState zoomAlpha snap = do
     let (fbW, fbH) = wcsFbSize snap
         facing = camFacing camera
 
-    -- Read from shared IORefs instead of GraphicsState
     mBindless ← readIORef (textureSystemRef env)
     defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
     let lookupSlot texHandle = fromIntegral $ case mBindless of
@@ -260,19 +247,15 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 tileMap = lcTiles lc
                 surfMap = lcSurfaceMap lc
                 fluidMap = lcFluidMap lc
-                chunkHasFluid = not (HM.null fluidMap)
+                chunkHasFluid = V.any isJust fluidMap
                 terrainSurfMap = lcTerrainSurfaceMap lc
 
-                -- Iterate by column, not by individual tile.
-                -- For each (lx,ly) column, look up fluid ONCE, then
-                -- iterate only the z-levels that have tiles.
                 !realQuads = VU.ifoldl' (\acc idx _surfZ ->
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
-                            mFluid = HM.lookup (lx, ly) fluidMap
+                            mFluid = fluidMap V.! idx
                             (gx, gy) = chunkToGlobal coord lx ly
                             (rawX, rawY) = gridToScreen facing gx gy
-                            -- Skip tiles under lava entirely
                             isUnderLava = case mFluid of
                                 Just fc → fcType fc ≡ Lava ∧ fcSurface fc > zSlice - effectiveDepth
                                 Nothing → False
@@ -280,7 +263,6 @@ renderWorldQuads env worldState zoomAlpha snap = do
                             case HM.lookup (lx, ly, z) tileMap of
                                 Nothing → acc2
                                 Just tile →
-                                    -- If this column has lava and tile is below lava surface, skip it
                                     if isUnderLava ∧ z < maybe 0 fcSurface mFluid
                                     then acc2
                                     else
@@ -295,6 +277,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                        else acc2
                            ) acc [(zSlice - effectiveDepth) .. zSlice]
                     ) [] surfMap
+
                 !blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures facing
                         gx gy zSlice zSlice zoomAlpha xOffset
@@ -310,58 +293,64 @@ renderWorldQuads env worldState zoomAlpha snap = do
                           drawY = rawY
                     , isTileVisible vb drawX drawY
                     ]
-                !oceanQuads =
-                    [ oceanTileToQuad lookupSlot lookupFmSlot textures facing
-                        gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
-                    | (lx, ly) ← HM.keys fluidMap
-                    , let fc = fluidMap HM.! (lx, ly)
-                    , fcType fc ≡ Ocean
-                    , fcSurface fc ≤ zSlice
-                    , fcSurface fc ≥ (zSlice - effectiveDepth)
-                    , let (gx, gy) = chunkToGlobal coord lx ly
-                          (rawX, rawY) = gridToScreen facing gx gy
-                          relativeZ = fcSurface fc - zSlice
-                          heightOffset = fromIntegral relativeZ * tileSideHeight
-                          drawX = rawX + xOffset
-                          drawY = rawY - heightOffset
-                    , isTileVisible vb drawX drawY
-                    ]
-                !lavaQuads =
-                    [ lavaTileToQuad lookupSlot lookupFmSlot textures facing
-                        gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
-                    | (lx, ly) ← HM.keys fluidMap
-                    , let fc = fluidMap HM.! (lx, ly)
-                    , fcType fc ≡ Lava
-                    , fcSurface fc ≤ zSlice
-                    , fcSurface fc ≥ (zSlice - effectiveDepth)
-                    , let (gx, gy) = chunkToGlobal coord lx ly
-                          (rawX, rawY) = gridToScreen facing gx gy
-                          relativeZ = fcSurface fc - zSlice
-                          heightOffset = fromIntegral relativeZ * tileSideHeight
-                          drawX = rawX + xOffset
-                          drawY = rawY - heightOffset
-                    , isTileVisible vb drawX drawY
-                    ]
-                !freshwaterQuads =
-                    [ freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
-                        gx gy (fcSurface fc) (fcType fc) zSlice effectiveDepth
-                        zoomAlpha xOffset
-                    | (lx, ly) ← HM.keys fluidMap
-                    , let fc = fluidMap HM.! (lx, ly)
-                    , fcType fc ≡ Lake ∨ fcType fc ≡ River
-                    , fcSurface fc ≤ zSlice
-                    , fcSurface fc ≥ (zSlice - effectiveDepth)
-                    , let (gx, gy) = chunkToGlobal coord lx ly
-                          (rawX, rawY) = gridToScreen facing gx gy
-                          relativeZ = fcSurface fc - zSlice
-                          heightOffset = fromIntegral relativeZ * tileSideHeight
-                          drawX = rawX + xOffset
-                          drawY = rawY - heightOffset
-                    , isTileVisible vb drawX drawY
-                    ]
 
-            in V.fromList (realQuads <> blankQuads <> oceanQuads
-                                     <> lavaQuads <> freshwaterQuads)
+                mkFreshwaterQuad gx gy ft fc =
+                        freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
+                            gx gy (fcSurface fc) ft zSlice effectiveDepth
+                            zoomAlpha xOffset
+
+                (!oceanQuads, !lavaQuads, !freshwaterQuads) =
+                    V.ifoldl' (\(!oAcc, !lAcc, !fAcc) idx mFluid ->
+                        case mFluid of
+                            Nothing -> (oAcc, lAcc, fAcc)
+                            Just fc ->
+                                if fcSurface fc > zSlice ∨ fcSurface fc < (zSlice - effectiveDepth)
+                                then (oAcc, lAcc, fAcc)
+                                else
+                                    let lx = idx `mod` chunkSize
+                                        ly = idx `div` chunkSize
+                                        (gx, gy) = chunkToGlobal coord lx ly
+                                        (rawX, rawY) = gridToScreen facing gx gy
+                                        relativeZ = fcSurface fc - zSlice
+                                        heightOffset = fromIntegral relativeZ * tileSideHeight
+                                        drawX = rawX + xOffset
+                                        drawY = rawY - heightOffset
+                                    in if not (isTileVisible vb drawX drawY)
+                                       then (oAcc, lAcc, fAcc)
+                                       else case fcType fc of
+                                            Ocean ->
+                                                ( oceanTileToQuad lookupSlot lookupFmSlot textures facing
+                                                    gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
+                                                  : oAcc
+                                                , lAcc
+                                                , fAcc
+                                                )
+                                            Lava  ->
+                                                ( oAcc
+                                                , lavaTileToQuad lookupSlot lookupFmSlot textures facing
+                                                    gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
+                                                  : lAcc
+                                                , fAcc
+                                                )
+                                            Lake  ->
+                                                ( oAcc
+                                                , lAcc
+                                                , freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
+                                                    gx gy (fcSurface fc) Lake zSlice effectiveDepth
+                                                    zoomAlpha xOffset
+                                                  : fAcc
+                                                )
+                                            River ->
+                                                ( oAcc
+                                                , lAcc
+                                                , freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
+                                                    gx gy (fcSurface fc) River zSlice effectiveDepth
+                                                    zoomAlpha xOffset
+                                                  : fAcc
+                                                )
+                    ) ([], [], []) fluidMap
+
+            in V.fromList (realQuads <> blankQuads <> oceanQuads <> lavaQuads <> freshwaterQuads)
             ) visibleChunksWithOffset
 
     return $! V.concat chunkVectors
@@ -393,23 +382,16 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
         fmHandle = getTileFaceMapTexture textures (tileType tile) (tileSlopeId tile)
         fmSlot = lookupFmSlot fmHandle
 
-        -- Depth-based atmospheric perspective
         depth = zSlice - worldZ
         fadeRange = max 1 effDepth
         fadeT = clamp01 (fromIntegral depth / fromIntegral fadeRange)
-
-        -- Subtle darkening for cliff shading
         brightness = clamp01 (1.0 - fadeT * 0.15)
 
-        -- Atmospheric haze: blend toward sky blue at depth.
-        -- Quadratic ramp so top tiles are untouched, bottom
-        -- tiles pick up a blue-grey tint like distant haze.
         hazeT = fadeT * fadeT * 0.6
         hazeR = 0.72 ∷ Float
         hazeG = 0.85 ∷ Float
         hazeB = 0.95 ∷ Float
 
-        -- Underwater tinting
         underwaterDepth = case mFluid of
             Just fc
                 | fcType fc ≡ Ocean ∧ worldZ < fcSurface fc → fcSurface fc - worldZ
@@ -424,7 +406,6 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
                     b = 0.9 - t * 0.3
                 in (r, g, b, tileAlpha)
             else
-                -- Mix brightness with atmospheric haze
                 let r = brightness * (1.0 - hazeT) + hazeR * hazeT
                     g = brightness * (1.0 - hazeT) + hazeG * hazeT
                     b = brightness * (1.0 - hazeT) + hazeB * hazeT
@@ -463,7 +444,6 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
         actualSlot = lookupSlot texHandle
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
 
-        -- Atmospheric haze matching tileToQuad
         depth = zSlice - worldZ
         fadeT = clamp01 (fromIntegral depth / 50.0)
         hazeT = fadeT * fadeT * 0.6
@@ -503,16 +483,9 @@ oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSl
 
         texHandle = wtOceanTexture textures
         actualSlot = lookupSlot texHandle
-        -- Use the default face map directly (1×1 green = pure top-facing)
-        -- This bypasses lookupFmSlot which might resolve wtNoFaceMap
-        -- to a wrong slot. Ocean is flat — it should always be top-lit.
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
 
-        -- No depth fade for ocean surface — it should be fully bright
-        -- at its surface level, not dimmed by cliff shading
         finalAlpha = tileAlpha
-
-        -- Blue tint for ocean, full brightness (shader handles sun lighting)
         tint = Vec4 0.7 0.8 1.0 finalAlpha
 
         v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
@@ -543,7 +516,6 @@ lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSli
         actualSlot = lookupSlot texHandle
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
         finalAlpha = tileAlpha
-        -- Orange-red molten tint
         tint = Vec4 1.0 0.6 0.2 finalAlpha
         v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
@@ -575,20 +547,16 @@ freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
                 + fromIntegral relativeZ * 0.001
                 + 0.0005
 
-        -- Reuse ocean texture for water surface
         texHandle = wtOceanTexture textures
         actualSlot = lookupSlot texHandle
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
 
         finalAlpha = tileAlpha
 
-        -- Freshwater tint: lighter, greener than ocean
-        -- Lakes: calm blue-green (still water)
-        -- Rivers: slightly brighter (flowing water, more reflective)
         tint = case fluidType of
-            Lake  → Vec4 0.5 0.8 0.9 finalAlpha   -- blue-green, calm
-            River → Vec4 0.6 0.85 0.95 finalAlpha  -- lighter blue, lively
-            _     → Vec4 0.7 0.8 1.0 finalAlpha    -- fallback = ocean
+            Lake  → Vec4 0.5 0.8 0.9 finalAlpha
+            River → Vec4 0.6 0.85 0.95 finalAlpha
+            _     → Vec4 0.7 0.8 1.0 finalAlpha
 
         v0 = Vertex (Vec2 drawX drawY)
                      (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
@@ -634,20 +602,20 @@ getTileTexture textures _   = wtNoTexture textures
 getTileFaceMapTexture ∷ WorldTextures → Word8 → Word8 → TextureHandle
 getTileFaceMapTexture textures _mat slopeId =
     case slopeToFaceMapIndex slopeId of
-        0  → wtIsoFaceMap textures        -- flat
-        1  → wtSlopeFaceMapN textures     -- N
-        2  → wtSlopeFaceMapE textures     -- E
-        3  → wtSlopeFaceMapNE textures    -- N+E
-        4  → wtSlopeFaceMapS textures     -- S
-        5  → wtSlopeFaceMapNS textures    -- N+S
-        6  → wtSlopeFaceMapES textures    -- E+S
-        7  → wtSlopeFaceMapNES textures   -- N+E+S
-        8  → wtSlopeFaceMapW textures     -- W
-        9  → wtSlopeFaceMapNW textures    -- N+W
-        10 → wtSlopeFaceMapEW textures    -- E+W
-        11 → wtSlopeFaceMapNEW textures   -- N+E+W
-        12 → wtSlopeFaceMapSW textures    -- S+W
-        13 → wtSlopeFaceMapNSW textures   -- N+S+W
-        14 → wtSlopeFaceMapESW textures   -- E+S+W
-        15 → wtSlopeFaceMapNESW textures  -- N+E+S+W
-        _  → wtIsoFaceMap textures        -- fallback
+        0  → wtIsoFaceMap textures
+        1  → wtSlopeFaceMapN textures
+        2  → wtSlopeFaceMapE textures
+        3  → wtSlopeFaceMapNE textures
+        4  → wtSlopeFaceMapS textures
+        5  → wtSlopeFaceMapNS textures
+        6  → wtSlopeFaceMapES textures
+        7  → wtSlopeFaceMapNES textures
+        8  → wtSlopeFaceMapW textures
+        9  → wtSlopeFaceMapNW textures
+        10 → wtSlopeFaceMapEW textures
+        11 → wtSlopeFaceMapNEW textures
+        12 → wtSlopeFaceMapSW textures
+        13 → wtSlopeFaceMapNSW textures
+        14 → wtSlopeFaceMapESW textures
+        15 → wtSlopeFaceMapNESW textures
+        _  → wtIsoFaceMap textures

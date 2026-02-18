@@ -21,6 +21,7 @@ module World.Generate
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
+import qualified Data.Vector as V
 import World.Types
 import World.Material (MaterialId(..), matGlacier, getMaterialProps, MaterialProps(..)
                       , matAir)
@@ -33,7 +34,7 @@ import World.Geology.Erosion (applyErosion)
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
 import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava
-                    , computeChunkLakes, computeChunkRivers)
+                    , computeChunkLakes, computeChunkRivers, unionFluidMap)
 import Engine.Graphics.Camera (CameraFacing(..))
 
 -----------------------------------------------------------
@@ -105,7 +106,7 @@ floorMod a b = a - floorDiv a b * b
 --   The border is expanded to chunkBorder tiles so erosion at
 --   chunk edges has valid neighbor data.
 generateChunk ∷ WorldGenParams → ChunkCoord
-  → (Chunk, VU.Vector Int, VU.Vector Int, HM.HashMap (Int, Int) FluidCell)
+  → (Chunk, VU.Vector Int, VU.Vector Int, V.Vector (Maybe FluidCell))
 generateChunk params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -155,7 +156,8 @@ generateChunk params coord =
             in if isBeyondGlacier worldSize gx' gy'
                then minBound   -- same default you used with lookupDefault
                else lookupElev lx ly
-        -- Compute fluid map from terrain surface
+
+        -- Compute fluid map from terrain surface (now vectors)
         oceanFluidMap = computeChunkFluid oceanMap coord terrainSurfaceMap
         features = gtFeatures (wgpGeoTimeline params)
         lavaFluidMap = computeChunkLava features seed plates worldSize
@@ -164,16 +166,15 @@ generateChunk params coord =
                                          coord terrainSurfaceMap
         riverFluidMap = computeChunkRivers features seed plates worldSize
                                            coord terrainSurfaceMap
-        fluidMap = HM.union oceanFluidMap
-                     (HM.union lavaFluidMap
-                       (HM.union lakeFluidMap riverFluidMap))
+
+        fluidMap = unionFluidMap oceanFluidMap
+                $ unionFluidMap lavaFluidMap
+                $ unionFluidMap lakeFluidMap riverFluidMap
 
         -- Camera-facing surface map: ocean columns report sea level
         -- so camera tracking hovers above water, not at the ocean floor
         surfaceMap = VU.imap (\idx surfZ ->
-            let lx = idx `mod` chunkSize
-                ly = idx `div` chunkSize
-            in case HM.lookup (lx, ly) fluidMap of
+            case fluidMap V.! idx of
                 Just fc → max surfZ (fcSurface fc)
                 Nothing → surfZ
           ) terrainSurfaceMap
@@ -313,13 +314,6 @@ applyTimelineChunk timeline worldSize wsc coord baseColumns =
 -- Legacy Timeline Application (single-column, for external callers)
 -----------------------------------------------------------
 
--- | Walk the geological timeline for a single column.
---   Uses uneroded neighbor elevations for erosion (acceptable
---   approximation — the cascade error is sub-tile for hard rock
---   and a few tiles for soft rock on extreme gradients).
---
---   This is used by ZoomMap and any other caller that needs
---   surface elevation without a full chunk context.
 applyTimeline ∷ GeoTimeline → Int → Int → Int → (Int, MaterialId) → (Int, MaterialId)
 applyTimeline timeline worldSize gx gy (baseElev, baseMat) =
     let wsc = computeWorldScale worldSize
@@ -329,11 +323,7 @@ applyTimeline timeline worldSize gx gy (baseElev, baseMat) =
 applyPeriodSingle ∷ Int → WorldScale → Int → Int
                   → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
 applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
-    let -- Apply events
-        (elev', mat') = foldl' applyOneEvent (elev, mat) (gpEvents period)
-        -- For single-column path, use self-elevation for all neighbors
-        -- This gives pure weathering (height reduction) without smoothing,
-        -- which is correct for the coarse zoom-out map
+    let (elev', mat') = foldl' applyOneEvent (elev, mat) (gpEvents period)
         erosionMod = applyErosion
             (gpErosion period)
             worldSize
@@ -341,7 +331,7 @@ applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
             (wsScale wsc)
             (unMaterialId mat')
             elev'
-            (elev', elev', elev', elev')  -- self as all neighbors = no smoothing
+            (elev', elev', elev', elev')
         elev'' = elev' + gmElevDelta erosionMod
         mat'' = case gmMaterialOverride erosionMod of
             Just m  → MaterialId m
@@ -360,22 +350,10 @@ applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
 -- Stratigraphy: per-Z material query
 -----------------------------------------------------------
 
--- | Determine what material exists at a specific Z-level in a column.
---   Replays the geological timeline for (gx, gy), tracking how each
---   event deposits or erodes material at different elevation bands.
---
---   For erosion, maintains 5 running elevations: self + 4 neighbors.
---   Neighbor elevations start from their actual plate-level base
---   elevations and advance through events each period (no erosion
---   on neighbors — the cascade approximation). This gives correct
---   erosion deltas for stratigraphy because the neighbor elevation
---   differences are real, not zeroed out.
---
---   Pure and deterministic — called once per exposed tile.
 materialAtDepth ∷ GeoTimeline → Int → Int → Int
-                → (Int, MaterialId)       -- ^ (baseElev, baseMat) from plates
-                → (Int, Int, Int, Int)    -- ^ neighbor base elevations (N,S,E,W)
-                → Int                     -- ^ Z-level to query
+                → (Int, MaterialId)
+                → (Int, Int, Int, Int)
+                → Int
                 → MaterialId
 materialAtDepth timeline worldSize gx gy (baseElev, baseMat) (nBaseN, nBaseS, nBaseE, nBaseW) queryZ =
     let wsc = computeWorldScale worldSize
@@ -393,22 +371,19 @@ materialAtDepth timeline worldSize gx gy (baseElev, baseMat) (nBaseN, nBaseS, nB
     in ssZMat finalState
 
 data StrataState = StrataState
-    { ssElev      ∷ !Int          -- ^ Current surface elevation
-    , ssSurfMat   ∷ !MaterialId   -- ^ Current surface material
-    , ssUplift    ∷ !Int          -- ^ Cumulative uplift at queryZ
-    , ssZMat      ∷ !MaterialId   -- ^ Material at queryZ (the answer)
-    , ssNeighbors ∷ !(Int, Int, Int, Int)  -- ^ Neighbor elevations (N,S,E,W)
+    { ssElev      ∷ !Int
+    , ssSurfMat   ∷ !MaterialId
+    , ssUplift    ∷ !Int
+    , ssZMat      ∷ !MaterialId
+    , ssNeighbors ∷ !(Int, Int, Int, Int)
     }
 
 applyPeriodStrata ∷ Int → WorldScale → Int → Int → Int
                   → StrataState → GeoPeriod → StrataState
 applyPeriodStrata worldSize wsc gx gy queryZ state period =
-    let -- Apply events to self
-        afterEvents = foldl' (applyEventStrata worldSize gx gy queryZ)
+    let afterEvents = foldl' (applyEventStrata worldSize gx gy queryZ)
                              state (gpEvents period)
 
-        -- Advance neighbor elevations through this period's events
-        -- (events only, no erosion — the cascade approximation)
         (nN, nS, nE, nW) = ssNeighbors afterEvents
         advanceNeighbor nElev ngx ngy =
             foldl' (\e ev → e + gmElevDelta (applyGeoEvent ev worldSize ngx ngy e))
@@ -418,7 +393,6 @@ applyPeriodStrata worldSize wsc gx gy queryZ state period =
         nE' = advanceNeighbor nE (gx + 1) gy
         nW' = advanceNeighbor nW (gx - 1) gy
 
-        -- Apply erosion with neighbor context
         elev' = ssElev afterEvents
         surfMat' = ssSurfMat afterEvents
         erosionMod = applyErosion
@@ -433,7 +407,6 @@ applyPeriodStrata worldSize wsc gx gy queryZ state period =
         erosionMatId = case gmMaterialOverride erosionMod of
             Just m  → MaterialId m
             Nothing → surfMat'
-        -- Apply erosion delta to stratigraphy tracking
         (surfMat'', uplift'', zMat'') =
             applyDelta queryZ elev' erosionDelta erosionMatId
                        (gmIntrusionDepth erosionMod)
@@ -466,15 +439,6 @@ applyEventStrata worldSize gx gy queryZ state event =
         , ssZMat    = zMat'
         }
 
--- | Core stratigraphy logic.
---   FIXED: erosion (delta < 0) with intrusion > 0 now properly fills
---   the deposited band. This matters for river channel alluvium where
---   the carve is negative but intrusion represents sediment fill at
---   the bottom of the carved channel.
---
---   The intrusion band for negative delta sits at the NEW surface:
---     newSurfZ to newSurfZ + intrusion - 1
---   These tiles are the alluvial/sedimentary fill at the bottom.
 applyDelta ∷ Int → Int → Int → MaterialId → Int → MaterialId → Int → MaterialId
            → (MaterialId, Int, MaterialId)
 applyDelta queryZ elevBefore delta eventMat intrusion surfMat uplift zMat
@@ -494,17 +458,11 @@ applyDelta queryZ elevBefore delta eventMat intrusion surfMat uplift zMat
             newSurf = eventMat
         in (newSurf, newUplift, newZMat)
     | delta < 0 =
-        let newSurfZ = elevBefore + delta  -- new (lower) surface
+        let newSurfZ = elevBefore + delta
             newSurf = eventMat
-            -- Fill band: for river channels, intrusion > 0 means
-            -- alluvial sediment deposited at the bottom of the carve.
-            -- The fill occupies z-levels [newSurfZ .. newSurfZ + intrusion - 1]
-            -- sitting right at the new carved floor.
             inFill = intrusion > 0
                    ∧ queryZ ≥ newSurfZ
                    ∧ queryZ < newSurfZ + intrusion
-            -- Surface weathering: even without fill, the exposed
-            -- surface gets the erosion product material
             atSurface = queryZ ≡ newSurfZ
             newZMat = if inFill ∨ atSurface
                       then eventMat

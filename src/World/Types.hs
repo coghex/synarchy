@@ -69,7 +69,7 @@ data LoadedChunk = LoadedChunk
     , lcTiles      ∷ !Chunk
     , lcSurfaceMap ∷ !(VU.Vector Int)
     , lcTerrainSurfaceMap ∷ !(VU.Vector Int)
-    , lcFluidMap   ∷ !(HM.HashMap (Int, Int) FluidCell)
+    , lcFluidMap   ∷ !(V.Vector (Maybe FluidCell))
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
 

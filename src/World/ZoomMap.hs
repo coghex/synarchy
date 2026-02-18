@@ -12,9 +12,10 @@ import Control.DeepSeq (NFData)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
 import Data.IORef (readIORef, writeIORef, IORef)
+import Data.Maybe (isJust)
 import qualified Data.Map.Strict as Map
-import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
+import qualified Data.Vector as V
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -35,21 +36,14 @@ import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
                    backgroundMapLayer, zoomFadeStart, zoomFadeEnd,
                    worldScreenWidth)
-import qualified Data.Vector as V
 
 -----------------------------------------------------------
 -- Sampling Configuration
 -----------------------------------------------------------
 
--- | Number of sample points per axis within a chunk.
---   5×5 = 25 samples gives good coverage without being expensive.
---   Samples are evenly spaced within the chunk.
 sampleGridSize ∷ Int
 sampleGridSize = 5
 
--- | Generate the sample offsets within a chunk.
---   For a 16-tile chunk with 5 samples, positions are at
---   tiles 1, 4, 7, 10, 13 — evenly spaced, avoiding edges.
 sampleOffsets ∷ [(Int, Int)]
 sampleOffsets =
     let step = max 1 (chunkSize `div` (sampleGridSize + 1))
@@ -72,8 +66,6 @@ buildZoomCache params =
         oceanMap = wgpOceanMap params
         features = gtFeatures timeline
 
-        -- Pure function: compute one chunk entry.
-        -- All inputs are closed over, no shared mutable state.
         buildOne ∷ (Int, Int) → Maybe ZoomChunkEntry
         buildOne (ccx, ccy) =
             let baseGX = ccx * chunkSize
@@ -97,7 +89,6 @@ buildZoomCache params =
                        in VU.generate (chunkSize * chunkSize) $ \idx ->
                            if idx ≡ centerIdx then elev else minBound
 
-                   -- Material samples
                    wrappedBaseGX = ccx * chunkSize
                    wrappedBaseGY = ccy * chunkSize
                    samples = [ let gx = wrappedBaseGX + ox
@@ -118,10 +109,10 @@ buildZoomCache params =
 
                    lavaMap = computeChunkLava features seed plates worldSize
                                  (ChunkCoord ccx ccy) fastSurface
-                   chunkLava = not (HM.null lavaMap)
+                   chunkLava = V.any isJust lavaMap
 
                    oceanFluidMap = computeChunkFluid oceanMap (ChunkCoord ccx ccy) fastSurface
-                   chunkOcean = not (HM.null oceanFluidMap)
+                   chunkOcean = V.any isJust oceanFluidMap
 
                in Just ZoomChunkEntry
                    { zceChunkX   = ccx
@@ -138,15 +129,11 @@ buildZoomCache params =
                    , zceHasLava  = chunkLava
                    }
 
-        -- All chunk coordinates
         allCoords = [ (ccx, ccy)
                     | ccy ← [-halfSize .. halfSize - 1]
                     , ccx ← [-halfSize .. halfSize - 1]
                     ]
 
-        -- Evaluate in parallel, ~64 chunks per spark.
-        -- parListChunk groups the list into batches so the scheduler
-        -- isn't overwhelmed by thousands of tiny sparks.
         chunkBatchSize = max 1 (length allCoords `div` 128)
         results = parMap rdeepseq buildOne allCoords
 
@@ -160,15 +147,10 @@ wrapChunkX halfSize cx =
 wrapChunkY ∷ Int → Int → Int
 wrapChunkY halfSize cy = max (-halfSize) (min (halfSize - 1) cy)
 
--- | Pick the material that appears most often in the samples.
---   On ties, prefers the material with higher material ID
---   (volcanic/impact materials tend to be more visually interesting
---   and have higher IDs than base plate rock).
 majorityMaterial ∷ [(Int, Word8)] → Word8
 majorityMaterial samples =
     let counts = foldl' (\m (_, mat) → Map.insertWith (+) mat (1 ∷ Int) m)
                         Map.empty samples
-        -- Find max count, break ties with higher material ID
         (winner, _) = Map.foldlWithKey' (\(bestMat, bestCount) mat count →
             if count > bestCount ∨ (count ≡ bestCount ∧ mat > bestMat)
             then (mat, count)
@@ -180,10 +162,6 @@ majorityMaterial samples =
 -- Bake Zoom Vertices (internal, called lazily on render thread)
 -----------------------------------------------------------
 
--- | Pre-bake per-entry vertex data. Called once on the render thread
---   the first time we try to render and the baked cache is empty.
---   All expensive work (texture picker, slot lookup, vertex construction)
---   happens here and is never repeated.
 bakeEntries ∷ CameraFacing → V.Vector ZoomChunkEntry
             → (Word8 → Int → TextureHandle)
             → (TextureHandle → Int)
@@ -197,7 +175,6 @@ bakeEntries facing cache texPicker lookupSlot defFmSlot =
             actualSlot = fromIntegral (lookupSlot texHandle)
             baseGX = zceBaseGX entry
             baseGY = zceBaseGY entry
-            -- Compute bounding box from grid corners using CURRENT facing
             corners = [ gridToWorld facing gx gy
                       | gx ← [baseGX, baseGX + chunkSize]
                       , gy ← [baseGY, baseGY + chunkSize]
@@ -232,7 +209,6 @@ bakeEntries facing cache texPicker lookupSlot defFmSlot =
 -- Generate Zoom Map Quads
 -----------------------------------------------------------
 
--- | IO version — called from world thread
 generateZoomMapQuads ∷ EngineEnv → Camera2D → Int → Int → IO (V.Vector SortableQuad)
 generateZoomMapQuads env camera fbW fbH = do
     worldManager ← readIORef (worldManagerRef env)
@@ -252,7 +228,6 @@ generateZoomMapQuads env camera fbW fbH = do
                     Nothing → return V.empty
             return $ V.concat quads
 
--- | IO version of renderFromBaked
 renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer = do
     mParams  ← readIORef (wsGenParamsRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
@@ -331,7 +306,7 @@ ensureBaked bakedRef rawCache textures facing texPicker lookupSlot defFmSlot = d
         else return existing
 
 -----------------------------------------------------------
--- Generate Background Quads (IO version for world thread)
+-- Generate Background Quads
 -----------------------------------------------------------
 
 generateBackgroundQuads ∷ EngineEnv → Camera2D → Int → Int → IO (V.Vector SortableQuad)
@@ -350,7 +325,7 @@ generateBackgroundQuads env camera fbW fbH = do
     return $ V.concat quads
 
 -----------------------------------------------------------
--- Background Render From Baked (IO version for world thread)
+-- Background Render From Baked
 -----------------------------------------------------------
 
 renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef layer zSlice = do
@@ -427,8 +402,6 @@ isChunkInView vb drawX drawY w h =
          ∨ bottom < zvTop vb
          ∨ drawY  > zvBottom vb)
 
--- | Emit a SortableQuad from a baked entry.
---   Shifts X and Y position for wrap offset, patches alpha channel.
 emitQuad ∷ BakedZoomEntry → Float → Float → Float → LayerId → SortableQuad
 emitQuad entry dx dy alpha layer =
     let !baseX = bzeDrawX entry
@@ -485,7 +458,7 @@ emitQuadBg entry dx dy alpha layer zSlice =
         }
 
 -----------------------------------------------------------
--- Texture Pickers (complete for all materials)
+-- Texture Pickers
 -----------------------------------------------------------
 
 getZoomTexture ∷ WorldTextures → Word8 → Int → TextureHandle
