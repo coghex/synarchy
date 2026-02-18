@@ -317,85 +317,70 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
                 in bboxOverlapsChunk worldSize bb cMinGX cMinGY cMaxGX cMaxGY
                 ) (gpEvents period)
 
+            borderArea = borderSize * borderSize
+
+            -- Phase 1: Apply geological events (single pass)
             (postElev, postMat) =
                 if null relevantEvents
                 then (elevVec, matVec)
-                else
-                    let elev' = VU.imap (\idx elev ->
-                            let (lx, ly) = fromIndex idx
-                                mat = matVec VU.! idx
-                                (gx, gy) = chunkToGlobal coord lx ly
-                                (gx', gy') = wrapGlobalU worldSize gx gy
-                                (elevOut, _) =
-                                    if mat ≡ matGlacier
-                                    then (elev, mat)
-                                    else foldl' (applyOneEvent worldSize gx' gy')
-                                                (elev, mat) relevantEvents
-                            in elevOut
-                          ) elevVec
-                        mat' = VU.imap (\idx elev ->
-                            let (lx, ly) = fromIndex idx
-                                mat = matVec VU.! idx
-                                (gx, gy) = chunkToGlobal coord lx ly
-                                (gx', gy') = wrapGlobalU worldSize gx gy
-                                (_, matOut) =
-                                    if mat ≡ matGlacier
-                                    then (elev, mat)
-                                    else foldl' (applyOneEvent worldSize gx' gy')
-                                                (elev, mat) relevantEvents
-                            in matOut
-                          ) elevVec
-                    in (elev', mat')
+                else runST $ do
+                    elevM ← VUM.new borderArea
+                    matM  ← VUM.new borderArea
+                    forM_ [0 .. borderArea - 1] $ \idx → do
+                        let (lx, ly) = fromIndex idx
+                            elev = elevVec VU.! idx
+                            mat  = matVec  VU.! idx
+                        if mat ≡ matGlacier
+                            then do
+                                VUM.write elevM idx elev
+                                VUM.write matM  idx mat
+                            else do
+                                let (gx, gy)   = chunkToGlobal coord lx ly
+                                    (gx', gy') = wrapGlobalU worldSize gx gy
+                                    (elevOut, matOut) =
+                                        foldl' (applyOneEvent worldSize gx' gy')
+                                               (elev, mat) relevantEvents
+                                VUM.write elevM idx elevOut
+                                VUM.write matM  idx matOut
+                    elevF ← VU.unsafeFreeze elevM
+                    matF  ← VU.unsafeFreeze matM
+                    pure (elevF, matF)
 
-            (finalElev, finalMat) =
-                let elev' = VU.imap (\idx elev ->
-                        let mat = postMat VU.! idx
-                        in if mat ≡ matGlacier
-                           then elev
-                           else
-                               let (lx, ly) = fromIndex idx
-                                   neighbors =
-                                       ( lookupElev postElev lx (ly - 1) elev
-                                       , lookupElev postElev lx (ly + 1) elev
-                                       , lookupElev postElev (lx + 1) ly elev
-                                       , lookupElev postElev (lx - 1) ly elev
-                                       )
-                                   erosionMod = applyErosion
-                                       (gpErosion period)
-                                       worldSize
-                                       (gpDuration period)
-                                       (wsScale wsc)
-                                       (unMaterialId mat)
-                                       elev
-                                       neighbors
-                               in elev + gmElevDelta erosionMod
-                      ) postElev
+            -- Phase 2: Apply erosion (single pass)
+            (finalElev, finalMat) = runST $ do
+                elevM ← VUM.new borderArea
+                matM  ← VUM.new borderArea
+                forM_ [0 .. borderArea - 1] $ \idx → do
+                    let elev = postElev VU.! idx
+                        mat  = postMat  VU.! idx
+                    if mat ≡ matGlacier
+                        then do
+                            VUM.write elevM idx elev
+                            VUM.write matM  idx mat
+                        else do
+                            let (lx, ly) = fromIndex idx
+                                neighbors =
+                                    ( lookupElev postElev lx (ly - 1) elev
+                                    , lookupElev postElev lx (ly + 1) elev
+                                    , lookupElev postElev (lx + 1) ly elev
+                                    , lookupElev postElev (lx - 1) ly elev
+                                    )
+                                erosionMod = applyErosion
+                                    (gpErosion period)
+                                    worldSize
+                                    (gpDuration period)
+                                    (wsScale wsc)
+                                    (unMaterialId mat)
+                                    elev
+                                    neighbors
+                            VUM.write elevM idx (elev + gmElevDelta erosionMod)
+                            VUM.write matM  idx (case gmMaterialOverride erosionMod of
+                                Just m  → MaterialId m
+                                Nothing → mat)
+                elevF ← VU.unsafeFreeze elevM
+                matF  ← VU.unsafeFreeze matM
+                pure (elevF, matF)
 
-                    mat' = VU.imap (\idx elev ->
-                        let mat = postMat VU.! idx
-                        in if mat ≡ matGlacier
-                           then mat
-                           else
-                               let (lx, ly) = fromIndex idx
-                                   neighbors =
-                                       ( lookupElev postElev lx (ly - 1) elev
-                                       , lookupElev postElev lx (ly + 1) elev
-                                       , lookupElev postElev (lx + 1) ly elev
-                                       , lookupElev postElev (lx - 1) ly elev
-                                       )
-                                   erosionMod = applyErosion
-                                       (gpErosion period)
-                                       worldSize
-                                       (gpDuration period)
-                                       (wsScale wsc)
-                                       (unMaterialId mat)
-                                       elev
-                                       neighbors
-                               in case gmMaterialOverride erosionMod of
-                                      Just m  → MaterialId m
-                                      Nothing → mat
-                      ) postElev
-                in (elev', mat')
         in (finalElev, finalMat)
 
     applyOneEvent ws gx gy (elev, mat) event =
