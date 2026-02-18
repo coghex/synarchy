@@ -220,31 +220,25 @@ generateChunk params coord =
             in if isBeyondGlacier worldSize gx' gy'
                then ColumnStrata 0 VU.empty
                else
-                   let (surfZ, surfMat) = lookupFinal lx ly
-                       base = lookupBase lx ly
-                       baseN = fst (lookupBase lx (ly - 1))
-                       baseS = fst (lookupBase lx (ly + 1))
-                       baseE = fst (lookupBase (lx + 1) ly)
-                       baseW = fst (lookupBase (lx - 1) ly)
-                       neighborMinZ = minimum
-                           [ lookupElevOr (lx - 1) ly surfZ
-                           , lookupElevOr (lx + 1) ly surfZ
-                           , lookupElevOr lx (ly - 1) surfZ
-                           , lookupElevOr lx (ly + 1) surfZ
-                           ]
-                       exposeFrom = min surfZ neighborMinZ
-                       lookupMat z
-                           | surfMat ≡ matGlacier = matGlacier
-                           | z ≡ surfZ            = surfMat
-                           | otherwise            = materialAtDepth timeline
-                                                        worldSize gx'
-                                                        gy' base
-                                                        (baseN, baseS, baseE, baseW)
-                                                        z
-                       depth = surfZ - exposeFrom + 1
-                       mats = if depth > 0
-                              then VU.generate depth (\i → lookupMat (exposeFrom + i))
-                              else VU.empty
+               let (surfZ, surfMat) = lookupFinal lx ly
+                   base = lookupBase lx ly
+                   baseN = fst (lookupBase lx (ly - 1))
+                   baseS = fst (lookupBase lx (ly + 1))
+                   baseE = fst (lookupBase (lx + 1) ly)
+                   baseW = fst (lookupBase (lx - 1) ly)
+                   neighborMinZ = minimum
+                       [ lookupElevOr (lx - 1) ly surfZ
+                       , lookupElevOr (lx + 1) ly surfZ
+                       , lookupElevOr lx (ly - 1) surfZ
+                       , lookupElevOr lx (ly + 1) surfZ
+                       ]
+                   exposeFrom = min surfZ neighborMinZ
+               
+                   strataCache =
+                       buildStrataCache timeline worldSize wsc gx' gy' base
+                                        (baseN, baseS, baseE, baseW)
+               
+                   mats = buildColumnStrata strataCache base exposeFrom surfZ
                    in ColumnStrata exposeFrom mats
 
         tiles = concat
@@ -483,6 +477,148 @@ data StrataState = StrataState
     , ssNeighbors ∷ !(Int, Int, Int, Int)
     }
 
+data EventDelta = EventDelta
+    { edDelta     ∷ !Int
+    , edIntrusion ∷ !Int
+    , edMat       ∷ !MaterialId
+    }
+
+data PeriodStrataCache = PeriodStrataCache
+    { pscEvents          ∷ !(V.Vector EventDelta)
+    , pscErosionDelta    ∷ !Int
+    , pscErosionMat      ∷ !MaterialId
+    , pscErosionIntrusion ∷ !Int
+    }
+
+data StrataZState = StrataZState
+    { szElev    ∷ !Int
+    , szSurfMat ∷ !MaterialId
+    , szUplift  ∷ !Int
+    , szZMat    ∷ !MaterialId
+    }
+
+buildStrataCache ∷ GeoTimeline → Int → WorldScale → Int → Int
+                 → (Int, MaterialId)
+                 → (Int, Int, Int, Int)
+                 → V.Vector PeriodStrataCache
+buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
+                 (nBaseN, nBaseS, nBaseE, nBaseW) =
+    let initState = (baseElev, baseMat, nBaseN, nBaseS, nBaseE, nBaseW)
+        caches = snd $ foldl' step (initState, []) (gtPeriods timeline)
+    in V.fromList (reverse caches)
+  where
+    step (st@(elev, surfMat, nN, nS, nE, nW), acc) period =
+        let (eventDeltas, elev', surfMat') =
+                foldl' (applyEvent elev surfMat) ([], elev, surfMat) (gpEvents period)
+
+            eventsVec = V.fromList (reverse eventDeltas)
+
+            advanceNeighbor nElev ngx ngy =
+                foldl' (\e ev → e + gmElevDelta (applyGeoEvent ev worldSize ngx ngy e))
+                       nElev (gpEvents period)
+
+            nN' = advanceNeighbor nN gx (gy - 1)
+            nS' = advanceNeighbor nS gx (gy + 1)
+            nE' = advanceNeighbor nE (gx + 1) gy
+            nW' = advanceNeighbor nW (gx - 1) gy
+
+            erosionMod = applyErosion
+                (gpErosion period)
+                worldSize
+                (gpDuration period)
+                (wsScale wsc)
+                (unMaterialId surfMat')
+                elev'
+                (nN', nS', nE', nW')
+
+            erosionDelta = gmElevDelta erosionMod
+            erosionMat = case gmMaterialOverride erosionMod of
+                Just m  → MaterialId m
+                Nothing → surfMat'
+            erosionIntrusion = gmIntrusionDepth erosionMod
+
+            elev'' = elev' + erosionDelta
+            st' = (elev'', erosionMat, nN', nS', nE', nW')
+
+            cache = PeriodStrataCache
+                { pscEvents           = eventsVec
+                , pscErosionDelta     = erosionDelta
+                , pscErosionMat       = erosionMat
+                , pscErosionIntrusion = erosionIntrusion
+                }
+        in (st', cache : acc)
+
+    applyEvent elev surfMat (deltas, e, sm) event =
+        let mod' = applyGeoEvent event worldSize gx gy e
+            delta = gmElevDelta mod'
+            intrusion = gmIntrusionDepth mod'
+            eventMat = case gmMaterialOverride mod' of
+                Just m  → MaterialId m
+                Nothing → sm
+            e' = e + delta
+        in (EventDelta delta intrusion eventMat : deltas, e', eventMat)
+
+buildColumnStrata ∷ V.Vector PeriodStrataCache
+                  → (Int, MaterialId)
+                  → Int → Int
+                  → VU.Vector MaterialId
+buildColumnStrata caches (baseElev, baseMat) startZ endZ =
+    let depth = endZ - startZ + 1
+    in if depth ≤ 0
+       then VU.empty
+       else VU.generate depth $ \i →
+            let queryZ = startZ + i
+                initState = StrataZState
+                    { szElev    = baseElev
+                    , szSurfMat = baseMat
+                    , szUplift  = 0
+                    , szZMat    = baseMat
+                    }
+                finalState = V.foldl' (applyCachedPeriod queryZ) initState caches
+            in szZMat finalState
+
+applyCachedPeriod ∷ Int → StrataZState → PeriodStrataCache → StrataZState
+applyCachedPeriod queryZ state cache =
+    let afterEvents = V.foldl' (applyEventDelta queryZ) state (pscEvents cache)
+
+        (surfMat', uplift', zMat') =
+            applyDelta queryZ
+                       (szElev afterEvents)
+                       (pscErosionDelta cache)
+                       (pscErosionMat cache)
+                       (pscErosionIntrusion cache)
+                       (szSurfMat afterEvents)
+                       (szUplift afterEvents)
+                       (szZMat afterEvents)
+
+        elev' = szElev afterEvents + pscErosionDelta cache
+    in StrataZState
+        { szElev    = elev'
+        , szSurfMat = pscErosionMat cache
+        , szUplift  = uplift'
+        , szZMat    = zMat'
+        }
+
+applyEventDelta ∷ Int → StrataZState → EventDelta → StrataZState
+applyEventDelta queryZ state ed =
+    let (surfMat', uplift', zMat') =
+            applyDelta queryZ
+                       (szElev state)
+                       (edDelta ed)
+                       (edMat ed)
+                       (edIntrusion ed)
+                       (szSurfMat state)
+                       (szUplift state)
+                       (szZMat state)
+
+        elev' = szElev state + edDelta ed
+    in StrataZState
+        { szElev    = elev'
+        , szSurfMat = surfMat'
+        , szUplift  = uplift'
+        , szZMat    = zMat'
+        }
+
 applyPeriodStrata ∷ Int → WorldScale → Int → Int → Int
                   → StrataState → GeoPeriod → StrataState
 applyPeriodStrata worldSize wsc gx gy queryZ state period =
@@ -578,3 +714,5 @@ applyDelta queryZ elevBefore delta eventMat intrusion surfMat uplift zMat
                       then eventMat
                       else zMat
         in (eventMat, uplift, newZMat)
+
+
