@@ -63,20 +63,28 @@ type ColumnIndex = Int
 columnIndex ∷ Int → Int → ColumnIndex
 columnIndex lx ly = ly * chunkSize + lx
 
--- change LoadedChunk fields only
+data ColumnStrata = ColumnStrata
+    { csStartZ ∷ !Int
+    , csMats   ∷ !(VU.Vector MaterialId)
+    } deriving (Show, Eq)
+instance NFData ColumnStrata where
+    rnf (ColumnStrata startZ mats) =
+        rnf startZ `seq` rnf mats
+
 data LoadedChunk = LoadedChunk
     { lcCoord      ∷ !ChunkCoord
     , lcTiles      ∷ !Chunk
     , lcSurfaceMap ∷ !(VU.Vector Int)
     , lcTerrainSurfaceMap ∷ !(VU.Vector Int)
     , lcFluidMap   ∷ !(V.Vector (Maybe FluidCell))
+    , lcStrata     ∷ !(V.Vector ColumnStrata)
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
 
 instance NFData LoadedChunk where
-    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap modified) =
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap strata modified) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
-        rnf terrainMap `seq` rnf fluidMap `seq` rnf modified
+        rnf terrainMap `seq` rnf fluidMap `seq` rnf strata `seq` rnf modified
 
 -----------------------------------------------------------
 -- World Generation Parameters

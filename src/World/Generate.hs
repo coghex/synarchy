@@ -108,7 +108,7 @@ floorMod a b = a - floorDiv a b * b
 --   The border is expanded to chunkBorder tiles so erosion at
 --   chunk edges has valid neighbor data.
 generateChunk ∷ WorldGenParams → ChunkCoord
-  → (Chunk, VU.Vector Int, VU.Vector Int, V.Vector (Maybe FluidCell))
+  → (Chunk, VU.Vector Int, VU.Vector Int, V.Vector (Maybe FluidCell), V.Vector ColumnStrata)
 generateChunk params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -181,7 +181,7 @@ generateChunk params coord =
             else fallback
 
         -- Terrain surface map (vector)
-        terrainSurfaceMap = VU.generate (chunkSize * chunkSize) $ \idx ->
+        terrainSurfaceMap = VU.generate (chunkSize * chunkSize) $ \idx →
             let lx = idx `mod` chunkSize
                 ly = idx `div` chunkSize
                 (gx, gy) = chunkToGlobal coord lx ly
@@ -205,41 +205,59 @@ generateChunk params coord =
                 $ unionFluidMap lakeFluidMap riverFluidMap
 
         -- Surface map with fluids
-        surfaceMap = VU.imap (\idx surfZ ->
+        surfaceMap = VU.imap (\idx surfZ →
             case fluidMap V.! idx of
                 Just fc → max surfZ (fcSurface fc)
                 Nothing → surfZ
           ) terrainSurfaceMap
 
-        tiles = [ tile
-                | lx ← [0 .. chunkSize - 1]
-                , ly ← [0 .. chunkSize - 1]
-                , let (gx, gy) = chunkToGlobal coord lx ly
-                      (gx', gy') = wrapGlobalU worldSize gx gy
-                , not (isBeyondGlacier worldSize gx' gy')
-                , let (surfZ, surfMat) = lookupFinal lx ly
-                      base = lookupBase lx ly
-                      baseN = fst (lookupBase lx (ly - 1))
-                      baseS = fst (lookupBase lx (ly + 1))
-                      baseE = fst (lookupBase (lx + 1) ly)
-                      baseW = fst (lookupBase (lx - 1) ly)
-                      neighborMinZ = minimum
-                          [ lookupElevOr (lx - 1) ly surfZ
-                          , lookupElevOr (lx + 1) ly surfZ
-                          , lookupElevOr lx (ly - 1) surfZ
-                          , lookupElevOr lx (ly + 1) surfZ
-                          ]
-                      exposeFrom = min surfZ neighborMinZ
-                      lookupMat z
-                          | surfMat ≡ matGlacier = matGlacier
-                          | z ≡ surfZ            = surfMat
-                          | otherwise            = materialAtDepth timeline
-                                                       worldSize gx'
-                                                       gy' base
-                                                       (baseN, baseS, baseE, baseW)
-                                                       z
-                , tile ← generateExposedColumn lx ly surfZ exposeFrom lookupMat
-                ]
+        -- Per-column stratigraphy cache
+        strataCache = V.generate (chunkSize * chunkSize) $ \idx →
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+                (gx, gy) = chunkToGlobal coord lx ly
+                (gx', gy') = wrapGlobalU worldSize gx gy
+            in if isBeyondGlacier worldSize gx' gy'
+               then ColumnStrata 0 VU.empty
+               else
+                   let (surfZ, surfMat) = lookupFinal lx ly
+                       base = lookupBase lx ly
+                       baseN = fst (lookupBase lx (ly - 1))
+                       baseS = fst (lookupBase lx (ly + 1))
+                       baseE = fst (lookupBase (lx + 1) ly)
+                       baseW = fst (lookupBase (lx - 1) ly)
+                       neighborMinZ = minimum
+                           [ lookupElevOr (lx - 1) ly surfZ
+                           , lookupElevOr (lx + 1) ly surfZ
+                           , lookupElevOr lx (ly - 1) surfZ
+                           , lookupElevOr lx (ly + 1) surfZ
+                           ]
+                       exposeFrom = min surfZ neighborMinZ
+                       lookupMat z
+                           | surfMat ≡ matGlacier = matGlacier
+                           | z ≡ surfZ            = surfMat
+                           | otherwise            = materialAtDepth timeline
+                                                        worldSize gx'
+                                                        gy' base
+                                                        (baseN, baseS, baseE, baseW)
+                                                        z
+                       depth = surfZ - exposeFrom + 1
+                       mats = if depth > 0
+                              then VU.generate depth (\i → lookupMat (exposeFrom + i))
+                              else VU.empty
+                   in ColumnStrata exposeFrom mats
+
+        tiles = concat
+            [ [ ((lx, ly, z), Tile (unMaterialId mat) 0)
+              | let ColumnStrata startZ mats = strataCache V.! columnIndex lx ly
+              , i ← [0 .. VU.length mats - 1]
+              , let z = startZ + i
+              , let mat = mats VU.! i
+              , mat ≠ matAir
+              ]
+            | lx ← [0 .. chunkSize - 1]
+            , ly ← [0 .. chunkSize - 1]
+            ]
 
         rawTiles = HM.fromList tiles
 
@@ -248,7 +266,7 @@ generateChunk params coord =
 
         slopedTiles = computeChunkSlopes seed coord terrainSurfaceMap
                                          fluidMap rawTiles noNeighborLookup
-    in (slopedTiles, surfaceMap, terrainSurfaceMap, fluidMap)
+    in (slopedTiles, surfaceMap, terrainSurfaceMap, fluidMap, strataCache)
 
 -- | Generate only the exposed tiles for a column.
 --   Skips air tiles (MaterialId 0) to create caves and overhangs.
