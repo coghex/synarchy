@@ -20,6 +20,7 @@ module World.Generate
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Material (MaterialId(..), matGlacier, getMaterialProps, MaterialProps(..)
                       , matAir)
@@ -104,7 +105,7 @@ floorMod a b = a - floorDiv a b * b
 --   The border is expanded to chunkBorder tiles so erosion at
 --   chunk edges has valid neighbor data.
 generateChunk ∷ WorldGenParams → ChunkCoord
-  → (Chunk, HM.HashMap (Int, Int) Int, HM.HashMap (Int, Int) Int, HM.HashMap (Int, Int) FluidCell)
+  → (Chunk, VU.Vector Int, VU.Vector Int, HM.HashMap (Int, Int) FluidCell)
 generateChunk params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -146,16 +147,14 @@ generateChunk params coord =
             Nothing     → fallback
 
         -- Build the terrain surface map (raw elevation, used for fluid depth)
-        terrainSurfaceMap = HM.fromList
-            [ ((lx, ly), surfZ)
-            | lx ← [0 .. chunkSize - 1]
-            , ly ← [0 .. chunkSize - 1]
-            , let (gx, gy) = chunkToGlobal coord lx ly
-                  (gx', gy') = wrapGlobalU worldSize gx gy
-            , not (isBeyondGlacier worldSize gx' gy')
-            , let surfZ = lookupElev lx ly
-            ]
-
+        terrainSurfaceMap = VU.generate (chunkSize * chunkSize) $ \idx ->
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+                (gx, gy) = chunkToGlobal coord lx ly
+                (gx', gy') = wrapGlobalU worldSize gx gy
+            in if isBeyondGlacier worldSize gx' gy'
+               then minBound   -- same default you used with lookupDefault
+               else lookupElev lx ly
         -- Compute fluid map from terrain surface
         oceanFluidMap = computeChunkFluid oceanMap coord terrainSurfaceMap
         features = gtFeatures (wgpGeoTimeline params)
@@ -171,11 +170,13 @@ generateChunk params coord =
 
         -- Camera-facing surface map: ocean columns report sea level
         -- so camera tracking hovers above water, not at the ocean floor
-        surfaceMap = HM.mapWithKey (\(lx, ly) surfZ →
-            case HM.lookup (lx, ly) fluidMap of
+        surfaceMap = VU.imap (\idx surfZ ->
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+            in case HM.lookup (lx, ly) fluidMap of
                 Just fc → max surfZ (fcSurface fc)
                 Nothing → surfZ
-            ) terrainSurfaceMap
+          ) terrainSurfaceMap
 
         tiles = [ tile
                 | lx ← [0 .. chunkSize - 1]
@@ -213,7 +214,7 @@ generateChunk params coord =
                 , tile ← generateExposedColumn lx ly surfZ exposeFrom lookupMat
                 ]
         rawTiles = HM.fromList tiles
-        noNeighborLookup ∷ ChunkCoord → Maybe (HM.HashMap (Int, Int) Int)
+        noNeighborLookup ∷ ChunkCoord → Maybe (VU.Vector Int)
         noNeighborLookup _ = Nothing
         slopedTiles = computeChunkSlopes seed coord terrainSurfaceMap
                                          fluidMap rawTiles noNeighborLookup

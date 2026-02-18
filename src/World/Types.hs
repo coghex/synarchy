@@ -57,21 +57,26 @@ instance Hashable ChunkCoord where
 
 type Chunk = HM.HashMap (Int, Int, Int) Tile
 
+chunkSize ∷ Int
+chunkSize = 16
+type ColumnIndex = Int
+columnIndex ∷ Int → Int → ColumnIndex
+columnIndex lx ly = ly * chunkSize + lx
+
+-- change LoadedChunk fields only
 data LoadedChunk = LoadedChunk
     { lcCoord      ∷ !ChunkCoord
     , lcTiles      ∷ !Chunk
-    , lcSurfaceMap ∷ !(HM.HashMap (Int, Int) Int)
-    , lcTerrainSurfaceMap ∷ !(HM.HashMap (Int, Int) Int)
+    , lcSurfaceMap ∷ !(VU.Vector Int)
+    , lcTerrainSurfaceMap ∷ !(VU.Vector Int)
     , lcFluidMap   ∷ !(HM.HashMap (Int, Int) FluidCell)
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
+
 instance NFData LoadedChunk where
     rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap modified) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
         rnf terrainMap `seq` rnf fluidMap `seq` rnf modified
-
-chunkSize ∷ Int
-chunkSize = 16
 
 -----------------------------------------------------------
 -- World Generation Parameters

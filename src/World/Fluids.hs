@@ -26,6 +26,7 @@ import UPrelude
 import Data.Word (Word64)
 import qualified Data.HashSet as HS
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector.Unboxed as VU
 import Data.Hashable (Hashable(..))
 import Data.Sequence (Seq(..))
 import qualified Data.Sequence as Seq
@@ -117,24 +118,30 @@ isOceanChunk = flip HS.member
 -----------------------------------------------------------
 
 computeChunkFluid ∷ OceanMap → ChunkCoord
-                  → HM.HashMap (Int, Int) Int   -- ^ surfaceMap (terrain elevation)
+                  → VU.Vector Int
                   → HM.HashMap (Int, Int) FluidCell
 computeChunkFluid oceanMap coord surfaceMap
     -- Case 1: full ocean chunk — every below-sea-level column gets water
-    | isOceanChunk oceanMap coord = HM.foldlWithKey' (\acc (lx, ly) surfZ →
-        if surfZ < seaLevel
-        then HM.insert (lx, ly) (FluidCell Ocean seaLevel) acc
-        else acc
+    | isOceanChunk oceanMap coord =
+        VU.ifoldl' (\acc idx surfZ ->
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+            in if surfZ < seaLevel
+               then HM.insert (lx, ly) (FluidCell Ocean seaLevel) acc
+               else acc
         ) HM.empty surfaceMap
 
     -- Case 2: land chunk bordering ocean — flood ALL below-sea-level columns.
     -- The chunk-level ocean map already prevents inland basins from being
     -- adjacent to ocean chunks, so any below-sea-level tile in a chunk
     -- bordering the ocean should have water.
-    | hasOceanNeighbor = HM.foldlWithKey' (\acc (lx, ly) surfZ →
-        if surfZ < seaLevel
-        then HM.insert (lx, ly) (FluidCell Ocean seaLevel) acc
-        else acc
+    | hasOceanNeighbor =
+        VU.ifoldl' (\acc idx surfZ ->
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+            in if surfZ < seaLevel
+               then HM.insert (lx, ly) (FluidCell Ocean seaLevel) acc
+               else acc
         ) HM.empty surfaceMap
 
     -- Case 3: no ocean neighbors — no ocean water
@@ -161,7 +168,7 @@ computeChunkFluid oceanMap coord surfaceMap
 --   handled later).
 computeChunkLava ∷ [PersistentFeature] → Word64 → [TectonicPlate]
                  → Int → ChunkCoord
-                 → HM.HashMap (Int, Int) Int
+                 → VU.Vector Int
                  → HM.HashMap (Int, Int) FluidCell
 computeChunkLava features seed plates worldSize coord surfaceMap =
     let ChunkCoord cx cy = coord
@@ -197,7 +204,7 @@ computeChunkLava features seed plates worldSize coord surfaceMap =
 --   to the rim and no higher.
 computeChunkLakes ∷ [PersistentFeature] → Word64 → [TectonicPlate]
                   → Int → ChunkCoord
-                  → HM.HashMap (Int, Int) Int
+                  → VU.Vector Int
                   → HM.HashMap (Int, Int) FluidCell
 computeChunkLakes features seed plates worldSize coord surfaceMap =
     let ChunkCoord cx cy = coord
@@ -205,7 +212,8 @@ computeChunkLakes features seed plates worldSize coord surfaceMap =
         chunkMinGY = cy * chunkSize
         nearbyLakes = filter (isNearbyLake worldSize chunkMinGX chunkMinGY) features
     in foldl' (\acc pf →
-        fillLakeFromFeature pf seed plates worldSize chunkMinGX chunkMinGY surfaceMap acc
+        fillLakeFromFeature pf seed plates worldSize chunkMinGX chunkMinGY
+                            surfaceMap acc
         ) HM.empty nearbyLakes
 
 -----------------------------------------------------------
@@ -228,7 +236,7 @@ computeChunkLakes features seed plates worldSize coord surfaceMap =
 --   Lava also takes priority (river hitting lava = steam).
 computeChunkRivers ∷ [PersistentFeature] → Word64 → [TectonicPlate]
                    → Int → ChunkCoord
-                   → HM.HashMap (Int, Int) Int
+                   → VU.Vector Int
                    → HM.HashMap (Int, Int) FluidCell
 computeChunkRivers features _seed _plates worldSize coord surfaceMap =
     let ChunkCoord cx cy = coord
@@ -279,7 +287,7 @@ segmentNearChunk worldSize chunkGX chunkGY seg =
 
 -- | Fill river fluid from a single river feature into the fluid map.
 fillRiverFromFeature ∷ PersistentFeature → Int → Int → Int
-                     → HM.HashMap (Int, Int) Int
+                     → VU.Vector Int
                      → HM.HashMap (Int, Int) FluidCell
                      → HM.HashMap (Int, Int) FluidCell
 fillRiverFromFeature pf worldSize chunkGX chunkGY surfaceMap acc =
@@ -287,13 +295,14 @@ fillRiverFromFeature pf worldSize chunkGX chunkGY surfaceMap acc =
         HydroShape (RiverFeature river) →
             let segments = rpSegments river
                 meanderSeed = rpMeanderSeed river
-            in HM.foldlWithKey' (\acc' (lx, ly) surfZ →
-                let gx = chunkGX + lx
-                    gy = chunkGY + ly
-                in case bestRiverFill worldSize gx gy surfZ meanderSeed segments of
-                    Nothing → acc'
-                    Just fc → HM.insert (lx, ly) fc acc'
-                ) acc surfaceMap
+            in VU.ifoldl' (\acc' idx surfZ →
+                 let lx = idx `mod` chunkSize
+                     ly = idx `div` chunkSize
+                 in case bestRiverFill worldSize (chunkGX + lx) (chunkGY + ly)
+                                    surfZ meanderSeed segments of
+                                      Nothing → acc'
+                                      Just fc → HM.insert (lx, ly) fc acc'
+                 ) acc surfaceMap
         _ → acc
 
 -- | For a single tile, find the closest river segment and compute
@@ -440,7 +449,7 @@ checkLakeRange worldSize chunkGX chunkGY lk =
 --   at the lake center to get the absolute water level.
 fillLakeFromFeature ∷ PersistentFeature → Word64 → [TectonicPlate]
                     → Int → Int → Int
-                    → HM.HashMap (Int, Int) Int
+                    → VU.Vector Int
                     → HM.HashMap (Int, Int) FluidCell
                     → HM.HashMap (Int, Int) FluidCell
 fillLakeFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
@@ -466,7 +475,7 @@ fillLakeFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
 --   lowest escape point on the basin rim.
 fillLakePool ∷ Word64 → [TectonicPlate] → Int → Int → Int
              → Int → Int → Int → Int
-             → HM.HashMap (Int, Int) Int
+             → VU.Vector Int
              → HM.HashMap (Int, Int) FluidCell
              → HM.HashMap (Int, Int) FluidCell
 fillLakePool seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurface surfaceMap acc =
@@ -482,9 +491,10 @@ fillLakePool seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurface 
                 rimGY = fy + round (pr * sin angle)
                 rimLX = rimGX - chunkGX
                 rimLY = rimGY - chunkGY
-                rimElev = case HM.lookup (rimLX, rimLY) surfaceMap of
-                    Just e  → e
-                    Nothing →
+                rimElev =
+                    if rimLX ≥ 0 ∧ rimLX < chunkSize ∧ rimLY ≥ 0 ∧ rimLY < chunkSize
+                    then surfaceMap VU.! columnIndex rimLX rimLY
+                    else
                         let (e, _) = elevationAtGlobal seed plates worldSize rimGX rimGY
                         in e
             in min minElev rimElev
@@ -496,8 +506,10 @@ fillLakePool seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurface 
        -- If the lake would be at or below sea level, it's just ocean.
        -- Don't create lake fluid here — let computeChunkFluid handle it.
        then acc
-       else HM.foldlWithKey' (\acc' (lx, ly) surfZ →
-            let gx = chunkGX + lx
+       else VU.ifoldl' (\acc' idx surfZ →
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+                gx = chunkGX + lx
                 gy = chunkGY + ly
                 dx = fromIntegral (wrappedDeltaForFluid worldSize gx fx) ∷ Float
                 dy = fromIntegral (gy - fy) ∷ Float
@@ -540,7 +552,7 @@ wrappedDeltaForFluid worldSize a b =
 --     - LavaDome: no pool (too viscous)
 fillLavaFromFeature ∷ PersistentFeature → Word64 → [TectonicPlate]
                     → Int → Int → Int
-                    → HM.HashMap (Int, Int) Int
+                    → VU.Vector Int
                     → HM.HashMap (Int, Int) FluidCell
                     → HM.HashMap (Int, Int) FluidCell
 fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
@@ -604,7 +616,7 @@ fillLavaFromFeature pf seed plates worldSize chunkGX chunkGY surfaceMap acc =
 --   perimeter — and clamps the lava surface to that level.
 --   Lava can't be higher than its lowest escape point.
 fillPool ∷ Word64 → [TectonicPlate] → Int → Int → Int → Int → Int → Int → Int
-         → HM.HashMap (Int, Int) Int
+         → VU.Vector Int
          → HM.HashMap (Int, Int) FluidCell
          → HM.HashMap (Int, Int) FluidCell
 fillPool seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface surfaceMap acc =
@@ -619,10 +631,10 @@ fillPool seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface surf
                 rimGY = fy + round (pr * sin angle)
                 rimLX = rimGX - chunkGX
                 rimLY = rimGY - chunkGY
-                rimElev = case HM.lookup (rimLX, rimLY) surfaceMap of
-                    Just e  → e
-                    Nothing →
-                        -- Outside this chunk — use base plate elevation
+                rimElev =
+                    if rimLX ≥ 0 ∧ rimLX < chunkSize ∧ rimLY ≥ 0 ∧ rimLY < chunkSize
+                    then surfaceMap VU.! columnIndex rimLX rimLY
+                    else
                         let (e, _) = elevationAtGlobal seed plates worldSize rimGX rimGY
                         in e
             in min minElev rimElev
@@ -632,8 +644,10 @@ fillPool seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface surf
 
     in if clampedSurface ≤ 0
        then acc
-       else HM.foldlWithKey' (\acc' (lx, ly) surfZ →
-            let gx = chunkGX + lx
+       else VU.ifoldl' (\acc' idx surfZ →
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+                gx = chunkGX + lx
                 gy = chunkGY + ly
                 dx = fromIntegral (wrappedDeltaForFluid worldSize gx fx) ∷ Float
                 dy = fromIntegral (gy - fy) ∷ Float
@@ -647,7 +661,7 @@ fillPool seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface surf
 fillFissurePool ∷ Word64 → [TectonicPlate] → Int → Int → Int
                 → Int → Int → Int → Int
                 → Int → Int
-                → HM.HashMap (Int, Int) Int
+                → VU.Vector Int
                 → HM.HashMap (Int, Int) FluidCell
                 → HM.HashMap (Int, Int) FluidCell
 fillFissurePool seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth lavaSurface surfaceMap acc =
@@ -672,12 +686,20 @@ fillFissurePool seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth lava
                 e1gy = round (my + perpY * hw) ∷ Int
                 e2gx = round (mx - perpX * hw) ∷ Int
                 e2gy = round (my - perpY * hw) ∷ Int
-                elev1 = case HM.lookup (e1gx - chunkGX, e1gy - chunkGY) surfaceMap of
-                    Just e  → e
-                    Nothing → fst (elevationAtGlobal seed plates worldSize e1gx e1gy)
-                elev2 = case HM.lookup (e2gx - chunkGX, e2gy - chunkGY) surfaceMap of
-                    Just e  → e
-                    Nothing → fst (elevationAtGlobal seed plates worldSize e2gx e2gy)
+
+                e1lx = e1gx - chunkGX
+                e1ly = e1gy - chunkGY
+                elev1 =
+                    if e1lx ≥ 0 ∧ e1lx < chunkSize ∧ e1ly ≥ 0 ∧ e1ly < chunkSize
+                    then surfaceMap VU.! columnIndex e1lx e1ly
+                    else fst (elevationAtGlobal seed plates worldSize e1gx e1gy)
+            
+                e2lx = e2gx - chunkGX
+                e2ly = e2gy - chunkGY
+                elev2 =
+                    if e2lx ≥ 0 ∧ e2lx < chunkSize ∧ e2ly ≥ 0 ∧ e2ly < chunkSize
+                    then surfaceMap VU.! columnIndex e2lx e2ly
+                    else fst (elevationAtGlobal seed plates worldSize e2gx e2gy)
             in min minElev (min elev1 elev2)
             ) lavaSurface [0 .. edgeSamples - 1]
 
@@ -685,22 +707,23 @@ fillFissurePool seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth lava
 
     in if clampedSurface ≤ 0
        then acc
-       else HM.foldlWithKey' (\acc' (lx, ly) surfZ →
-            let gx = chunkGX + lx
-                gy = chunkGY + ly
-                dx = fromIntegral (wrappedDeltaForFluid worldSize gx sx) ∷ Float
-                dy = fromIntegral (gy - sy) ∷ Float
-                lx' = fromIntegral (ex - sx) ∷ Float
-                ly' = fromIntegral (ey - sy) ∷ Float
-                t = max 0 (min 1 ((dx * lx' + dy * ly') / (lineLen * lineLen)))
-                projX = t * lx'
-                projY = t * ly'
-                perpDist = sqrt ((dx - projX) * (dx - projX) + (dy - projY) * (dy - projY))
-            in if perpDist < hw ∧ surfZ < clampedSurface
-               then HM.insert (lx, ly) (FluidCell Lava clampedSurface) acc'
-               else acc'
-            ) acc surfaceMap
-
+           else VU.ifoldl' (\acc' idx surfZ →
+               let lx = idx `mod` chunkSize
+                   ly = idx `div` chunkSize
+                   gx = chunkGX + lx
+                   gy = chunkGY + ly
+                   dx = fromIntegral (wrappedDeltaForFluid worldSize gx sx) ∷ Float
+                   dy = fromIntegral (gy - sy) ∷ Float
+                   lx' = fromIntegral (ex - sx) ∷ Float
+                   ly' = fromIntegral (ey - sy) ∷ Float
+                   t = max 0 (min 1 ((dx * lx' + dy * ly') / (lineLen * lineLen)))
+                   projX = t * lx'
+                   projY = t * ly'
+                   perpDist = sqrt ((dx - projX) * (dx - projX) + (dy - projY) * (dy - projY))
+               in if perpDist < hw ∧ surfZ < clampedSurface
+                  then HM.insert (lx, ly) (FluidCell Lava clampedSurface) acc'
+                  else acc'
+               ) acc surfaceMap
 -----------------------------------------------------------
 -- Helpers
 -----------------------------------------------------------

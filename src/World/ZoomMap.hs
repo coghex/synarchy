@@ -14,6 +14,7 @@ import Control.Monad.State.Class (gets)
 import Data.IORef (readIORef, writeIORef, IORef)
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
 import Engine.Asset.Handle (TextureHandle(..))
@@ -83,8 +84,7 @@ buildZoomCache params =
             in if vMax < -halfTiles ∨ vMin > halfTiles
                then Nothing
                else
-               let -- Fast single-sample surface for fluid checks
-                   fastSurface =
+               let fastSurface =
                        let gx = ccx * chunkSize + chunkSize `div` 2
                            gy = ccy * chunkSize + chunkSize `div` 2
                            (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
@@ -93,7 +93,9 @@ buildZoomCache params =
                                   else if baseElev < -100 then baseElev
                                   else fst (applyTimeline timeline worldSize gx' gy'
                                                (baseElev, baseMat))
-                       in HM.singleton (chunkSize `div` 2, chunkSize `div` 2) elev
+                           centerIdx = columnIndex (chunkSize `div` 2) (chunkSize `div` 2)
+                       in VU.generate (chunkSize * chunkSize) $ \idx ->
+                           if idx ≡ centerIdx then elev else minBound
 
                    -- Material samples
                    wrappedBaseGX = ccx * chunkSize

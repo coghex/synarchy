@@ -19,6 +19,7 @@ import Data.Word (Word8, Word32)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector.Storable as VS
+import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Material (getMaterialProps, MaterialProps(..), MaterialId(..))
 
@@ -60,15 +61,16 @@ diamondRows = 48
 --   Only surface tiles get slopes; sub-surface tiles keep slopeId 0.
 computeChunkSlopes ∷ Word64                          -- ^ World seed (for roughness hash)
                    → ChunkCoord                      -- ^ This chunk's coordinate
-                   → HM.HashMap (Int, Int) Int        -- ^ Surface map (lx,ly → surfZ)
+                   → VU.Vector Int
                    → HM.HashMap (Int, Int) FluidCell  -- ^ Fluid map
                    → Chunk                            -- ^ The chunk's tiles
-                   → (ChunkCoord → Maybe (HM.HashMap (Int, Int) Int))
+                   → (ChunkCoord → Maybe (VU.Vector Int))
                       -- ^ Neighbor chunk surface map lookup
                    → Chunk                            -- ^ Updated tiles with slope IDs
 computeChunkSlopes seed coord surfMap fluidMap tiles neighborLookup =
     HM.mapWithKey (\(lx, ly, z) tile →
-        let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
+        let idx = columnIndex lx ly
+            surfZ = surfMap VU.! idx
         in if z ≡ surfZ
            then tile { tileSlopeId = computeTileSlope
                          seed coord lx ly z surfMap fluidMap tiles neighborLookup }
@@ -78,10 +80,10 @@ computeChunkSlopes seed coord surfMap fluidMap tiles neighborLookup =
 -- | Compute the slope ID for a single surface tile.
 computeTileSlope ∷ Word64 → ChunkCoord
                 → Int → Int → Int
-                → HM.HashMap (Int, Int) Int
+                → VU.Vector Int
                 → HM.HashMap (Int, Int) FluidCell
                 → Chunk
-                → (ChunkCoord → Maybe (HM.HashMap (Int, Int) Int))
+                → (ChunkCoord → Maybe (VU.Vector Int))
                 → Word8
 computeTileSlope seed coord lx ly z surfMap fluidMap tiles neighborLookup =
     let -- Get this tile's material
@@ -122,7 +124,7 @@ computeTileSlope seed coord lx ly z surfMap fluidMap tiles neighborLookup =
 --   Returns False if the neighbor has fluid (no slopes at fluid boundaries).
 slopeBit ∷ Int → Int → Int → Int → ChunkCoord
          → HM.HashMap (Int, Int) FluidCell
-         → (ChunkCoord → Maybe (HM.HashMap (Int, Int) Int))
+         → (ChunkCoord → Maybe (VU.Vector Int))
          → Bool
 slopeBit myZ neighborZ nlx nly coord fluidMap neighborLookup =
     let diff = myZ - neighborZ
@@ -140,18 +142,17 @@ slopeBit myZ neighborZ nlx nly coord fluidMap neighborLookup =
 
 -- | Look up neighbor surface elevation, handling cross-chunk boundaries.
 neighborElev ∷ ChunkCoord → Int → Int
-             → HM.HashMap (Int, Int) Int
-             → (ChunkCoord → Maybe (HM.HashMap (Int, Int) Int))
+             → VU.Vector Int
+             → (ChunkCoord → Maybe (VU.Vector Int))
              → Int
 neighborElev coord lx ly surfMap neighborLookup
-    | lx ≥ 0 ∧ lx < chunkSize ∧ ly ≥ 0 ∧ ly < chunkSize =
-        -- Within this chunk
-        HM.lookupDefault minBound (lx, ly) surfMap
+    | lx ≥ 0 ∧ lx < chunkSize ∧ ly ≥ 0 ∧ ly < chunkSize
+                       = surfMap VU.! columnIndex lx ly
     | otherwise =
         -- Cross-chunk boundary
         let (neighborCoord, (nlx, nly)) = normalizeToChunk coord lx ly
         in case neighborLookup neighborCoord of
-            Just neighSurf → HM.lookupDefault minBound (nlx, nly) neighSurf
+            Just neighSurf → neighSurf VU.! columnIndex nlx nly
             Nothing        → minBound  -- Unloaded chunk: default to same
                                        -- elevation (no slope) — minBound
                                        -- ensures diff ≠ 1

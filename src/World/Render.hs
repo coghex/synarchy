@@ -8,6 +8,7 @@ import UPrelude
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Monad (EngineM)
@@ -122,7 +123,7 @@ updateWorldTiles env = do
                         (chunkCoord, (lx, ly)) = globalToChunk gx gy
                     case lookupChunk chunkCoord tileData of
                         Just lc → do
-                            let surfElev = HM.lookupDefault 0 (lx, ly) (lcSurfaceMap lc)
+                            let surfElev = (lcSurfaceMap lc) VU.! columnIndex lx ly
                                 targetZ = surfElev + surfaceHeadroom
                             atomicModifyIORef' (cameraRef env) $ \cam →
                                 (cam { camZSlice = targetZ }, ())
@@ -208,7 +209,7 @@ isChunkVisibleWrapped facing worldSize vb camX coord =
 
 isChunkRelevantForSlice ∷ Int → LoadedChunk → Bool
 isChunkRelevantForSlice _zSlice lc =
-    not (HM.null (lcSurfaceMap lc))
+    not (VU.null (lcSurfaceMap lc))
 
 -----------------------------------------------------------
 -- Render World Quads
@@ -265,9 +266,10 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 -- Iterate by column, not by individual tile.
                 -- For each (lx,ly) column, look up fluid ONCE, then
                 -- iterate only the z-levels that have tiles.
-                !realQuads = HM.foldlWithKey'
-                    (\acc (lx, ly) _surfZ →
-                        let mFluid = HM.lookup (lx, ly) fluidMap
+                !realQuads = VU.ifoldl' (\acc idx _surfZ ->
+                        let lx = idx `mod` chunkSize
+                            ly = idx `div` chunkSize
+                            mFluid = HM.lookup (lx, ly) fluidMap
                             (gx, gy) = chunkToGlobal coord lx ly
                             (rawX, rawY) = gridToScreen facing gx gy
                             -- Skip tiles under lava entirely
@@ -298,8 +300,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
                         gx gy zSlice zSlice zoomAlpha xOffset
                     | lx ← [0 .. chunkSize - 1]
                     , ly ← [0 .. chunkSize - 1]
-                    , let surfZ = HM.lookupDefault minBound (lx, ly) surfMap
-                          terrainZ = HM.lookupDefault minBound (lx, ly) terrainSurfMap
+                    , let surfZ = surfMap VU.! columnIndex lx ly
+                          terrainZ = terrainSurfMap VU.! columnIndex lx ly
                     , terrainZ > zSlice
                     , not (HM.member (lx, ly, zSlice) tileMap)
                     , let (gx, gy) = chunkToGlobal coord lx ly
