@@ -283,6 +283,11 @@ library
                      World.Hydrology.Event
                      World.Hydrology.River
                      World.Hydrology.Glacier
+                     World.Hydrology.Glacier.Common
+                     World.Hydrology.Glacier.Generation
+                     World.Hydrology.Glacier.Carving
+                     World.Hydrology.Glacier.Evolution
+                     World.Hydrology.Glacier.Spawn
                      World.Ocean.Types
                      World.Page.Types
                      World.Plate
