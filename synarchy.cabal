@@ -265,7 +265,12 @@ library
                      World.Grid
                      World.Render
                      World.Generate
-                     World.Generation.Types
+                     World.Generate.Constants
+                     World.Generate.Coordinates
+                     World.Generate.Chunk
+                     World.Generate.Timeline
+                     World.Generate.Strata
+                     World.Generate.Types
                      World.Geology
                      World.Geology.Types
                      World.Geology.Log

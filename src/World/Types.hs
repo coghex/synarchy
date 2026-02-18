@@ -9,7 +9,7 @@ module World.Types
     , module World.Fluid.Types
     , module World.Ocean.Types
     , module World.Region.Types
-    , module World.Generation.Types
+    , module World.Generate.Types
     , module World.Time.Types
     , module World.Geology.Timeline.Types
     , module World.Geology.Types
@@ -30,7 +30,7 @@ import World.Constants
 import World.Fluid.Types
 import World.Ocean.Types
 import World.Region.Types
-import World.Generation.Types
+import World.Generate.Types
 import World.Time.Types
 import World.Geology.Timeline.Types
 import World.Geology.Types

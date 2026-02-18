@@ -1,5 +1,5 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
-module World.Generation.Types
+module World.Generate.Types
     ( WorldGenParams(..)
     , defaultWorldGenParams
     ) where
