@@ -76,10 +76,21 @@ buildZoomCache params =
             in if vMax < -halfTiles ∨ vMin > halfTiles
                then Nothing
                else
-               let -- FIX #2: Use applyTimelineFast which has bbox filtering
-                   -- instead of the unfiltered applyTimeline
-                   wrappedBaseGX = ccx * chunkSize
+               let wrappedBaseGX = ccx * chunkSize
                    wrappedBaseGY = ccy * chunkSize
+                   fastSurface =
+                       let gx = ccx * chunkSize + chunkSize `div` 2
+                           gy = ccy * chunkSize + chunkSize `div` 2
+                           (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
+                           (gx', gy') = wrapGlobalU worldSize gx gy
+                           elev = if baseMat ≡ matGlacier then baseElev
+                                  else if baseElev < -100 then baseElev
+                                  else fst (applyTimelineFast timeline worldSize gx' gy'
+                                               (baseElev, baseMat))
+                           centerIdx = columnIndex (chunkSize `div` 2) (chunkSize `div` 2)
+                       in VU.generate (chunkSize * chunkSize) $ \idx ->
+                           if idx ≡ centerIdx then elev else minBound
+
                    samples = [ let gx = wrappedBaseGX + ox
                                    gy = wrappedBaseGY + oy
                                    (gx', gy') = wrapGlobalU worldSize gx gy

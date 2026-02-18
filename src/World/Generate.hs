@@ -426,50 +426,6 @@ applyTimeline timeline worldSize gx gy (baseElev, baseMat) =
     in foldl' (applyPeriodSingle worldSize wsc gx gy)
               (baseElev, baseMat) (gtPeriods timeline)
 
--- | Like applyTimeline but with bounding-box pre-filtering.
---   Skips events whose bbox doesn't contain (gx, gy).
---   This is the single biggest speedup for the zoom cache:
---   most events are spatially small, so most tiles skip most events.
-applyTimelineFast ∷ GeoTimeline → Int → Int → Int → (Int, MaterialId) → (Int, MaterialId)
-applyTimelineFast timeline worldSize gx gy (baseElev, baseMat) =
-    let wsc = computeWorldScale worldSize
-    in foldl' (applyPeriodFast worldSize wsc gx gy)
-              (baseElev, baseMat) (gtPeriods timeline)
-
-applyPeriodFast ∷ Int → WorldScale → Int → Int
-                → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
-applyPeriodFast worldSize wsc gx gy (elev, mat) period =
-    let -- Only apply events whose bbox contains this point
-        relevantEvents = filter (\evt →
-            let bb = eventBBox evt worldSize
-            in gx ≥ bbMinX bb ∧ gx ≤ bbMaxX bb
-             ∧ gy ≥ bbMinY bb ∧ gy ≤ bbMaxY bb
-            ) (gpEvents period)
-
-        (elev', mat') = foldl' applyOneEvent (elev, mat) relevantEvents
-
-        erosionMod = applyErosion
-            (gpErosion period)
-            worldSize
-            (gpDuration period)
-            (wsScale wsc)
-            (unMaterialId mat')
-            elev'
-            (elev', elev', elev', elev')
-        elev'' = elev' + gmElevDelta erosionMod
-        mat'' = case gmMaterialOverride erosionMod of
-            Just m  → MaterialId m
-            Nothing → mat'
-    in (elev'', mat'')
-  where
-    applyOneEvent (e, m) event =
-        let mod' = applyGeoEvent event worldSize gx gy e
-            e' = e + gmElevDelta mod'
-            m' = case gmMaterialOverride mod' of
-                Just mm → MaterialId mm
-                Nothing → m
-        in (e', m')
-
 applyPeriodSingle ∷ Int → WorldScale → Int → Int
                   → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
 applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
@@ -496,6 +452,66 @@ applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
                 Nothing → m
         in (e', m')
 
+-----------------------------------------------------------
+-- Bbox-Filtered Timeline Application (for zoom cache)
+-----------------------------------------------------------
+
+-- | Like applyTimeline but with bounding-box pre-filtering.
+--   Skips events whose bbox doesn't contain (gx, gy), avoiding
+--   the expensive distance/sqrt computation inside applyGeoEvent.
+--
+--   For a typical world with ~20 periods × ~10 events, a tile
+--   far from any feature evaluates ~0-5 events instead of ~200.
+--   This is safe because applyGeoEvent already returns noModification
+--   for out-of-range tiles — bbox filtering just short-circuits earlier.
+--
+--   Uses the same erosion logic as applyTimeline (single-column,
+--   no neighbor data). The only difference is the event filter.
+applyTimelineFast ∷ GeoTimeline → Int → Int → Int → (Int, MaterialId) → (Int, MaterialId)
+applyTimelineFast timeline worldSize gx gy (baseElev, baseMat) =
+    let wsc = computeWorldScale worldSize
+    in foldl' (applyPeriodFiltered worldSize wsc gx gy)
+              (baseElev, baseMat) (gtPeriods timeline)
+
+applyPeriodFiltered ∷ Int → WorldScale → Int → Int
+                    → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
+applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
+    let -- Pre-filter: only keep events whose bounding box contains (gx, gy).
+        -- This is the key optimization — most events are spatially small
+        -- (volcano radius 30-60, crater radius 10-40) relative to the
+        -- world (2048 tiles at worldSize=128), so the vast majority of
+        -- events are skipped for any given sample point.
+        relevantEvents = filter (\evt →
+            let bb = eventBBox evt worldSize
+            in gx ≥ bbMinX bb ∧ gx ≤ bbMaxX bb
+             ∧ gy ≥ bbMinY bb ∧ gy ≤ bbMaxY bb
+            ) (gpEvents period)
+
+        (elev', mat') = foldl' applyOneEvt (elev, mat) relevantEvents
+
+        -- Erosion is applied unconditionally (it's global, not spatial)
+        erosionMod = applyErosion
+            (gpErosion period)
+            worldSize
+            (gpDuration period)
+            (wsScale wsc)
+            (unMaterialId mat')
+            elev'
+            -- Single-column: no neighbor data, use self as all neighbors
+            (elev', elev', elev', elev')
+        elev'' = elev' + gmElevDelta erosionMod
+        mat'' = case gmMaterialOverride erosionMod of
+            Just m  → MaterialId m
+            Nothing → mat'
+    in (elev'', mat'')
+  where
+    applyOneEvt (e, m) event =
+        let mod' = applyGeoEvent event worldSize gx gy e
+            e' = e + gmElevDelta mod'
+            m' = case gmMaterialOverride mod' of
+                Just mm → MaterialId mm
+                Nothing → m
+        in (e', m')
 
 data StrataState = StrataState
     { ssElev      ∷ !Int
