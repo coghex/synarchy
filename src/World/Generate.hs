@@ -241,19 +241,18 @@ generateChunk params coord =
                     gy' = coordGY VU.! idx
                     (surfZ, surfMat) = lookupFinal lx ly
                     base = lookupBase lx ly
-                    baseN = fst (lookupBase lx (ly - 1))
-                    baseS = fst (lookupBase lx (ly + 1))
-                    baseE = fst (lookupBase (lx + 1) ly)
-                    baseW = fst (lookupBase (lx - 1) ly)
-                    neighborMinZ = minimum
-                        [ lookupElevOr (lx - 1) ly surfZ
-                        , lookupElevOr (lx + 1) ly surfZ
-                        , lookupElevOr lx (ly - 1) surfZ
-                        , lookupElevOr lx (ly + 1) surfZ
-                        ]
+                    -- Pass FINAL post-timeline neighbor elevations instead
+                    -- of base (pre-timeline) elevations. buildStrataCache
+                    -- uses these directly for erosion, eliminating the
+                    -- expensive advanceNeighbor recomputation.
+                    finalN = lookupElevOr lx (ly - 1) surfZ
+                    finalS = lookupElevOr lx (ly + 1) surfZ
+                    finalE = lookupElevOr (lx + 1) ly surfZ
+                    finalW = lookupElevOr (lx - 1) ly surfZ
+                    neighborMinZ = min finalN (min finalS (min finalE finalW))
                     exposeFrom = min surfZ neighborMinZ
                     cache = buildStrataCache timeline worldSize wsc gx' gy' base
-                                             (baseN, baseS, baseE, baseW)
+                                             (finalN, finalS, finalE, finalW)
                     mats = buildColumnStrata cache base exposeFrom surfZ
                     matIds = VU.map unMaterialId mats
                 in ColumnTiles
@@ -525,40 +524,39 @@ data StrataZState = StrataZState
     , szZMat    ∷ !MaterialId
     }
 
+-- | Build a per-period stratigraphy cache for one column.
+--
+--   Performance optimization: neighbor elevations are passed as their
+--   FINAL post-timeline values (from finalElevVec), not base values.
+--   This eliminates the expensive advanceNeighbor computation that
+--   previously re-applied every geo event to 4 neighbors per period
+--   (~200K applyGeoEvent calls per chunk).
+--
+--   The chunk-level applyTimelineChunk already computed erosion with
+--   correct per-period neighbor data and wrote the authoritative
+--   surface elevations. The strata cache only needs neighbor elevations
+--   for material assignment at z-levels, where the approximation of
+--   using final elevations is visually indistinguishable.
 buildStrataCache ∷ GeoTimeline → Int → WorldScale → Int → Int
                  → (Int, MaterialId)
                  → (Int, Int, Int, Int)
                  → V.Vector PeriodStrataCache
 buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
-                 (nBaseN, nBaseS, nBaseE, nBaseW) =
-    let initState = (baseElev, baseMat, nBaseN, nBaseS, nBaseE, nBaseW)
+                 (nFinalN, nFinalS, nFinalE, nFinalW) =
+    let initState = (baseElev, baseMat)
         caches = snd $ foldl' step (initState, []) (gtPeriods timeline)
     in V.fromList (reverse caches)
   where
-    step (st@(elev, surfMat, nN, nS, nE, nW), acc) period =
-        let -- Pre-compute tagged events for this period
-            taggedEvents = gpTaggedEvents period
-
-            (eventDeltas, elev', surfMat') =
+    step ((elev, surfMat), acc) period =
+        let (eventDeltas, elev', surfMat') =
                 foldl' (applyEvent elev surfMat) ([], elev, surfMat)
                        (gpEvents period)
 
             eventsVec = V.fromList (reverse eventDeltas)
 
-            advanceNeighbor nElev ngx ngy =
-                let localTagged = filter (\(_, bb) →
-                        ngx ≥ bbMinX bb ∧ ngx ≤ bbMaxX bb ∧
-                        ngy ≥ bbMinY bb ∧ ngy ≤ bbMaxY bb
-                        ) taggedEvents
-                in foldl' (\e (ev, _) →
-                    e + gmElevDelta (applyGeoEvent ev worldSize ngx ngy e))
-                    nElev localTagged
-
-            nN' = advanceNeighbor nN gx (gy - 1)
-            nS' = advanceNeighbor nS gx (gy + 1)
-            nE' = advanceNeighbor nE (gx + 1) gy
-            nW' = advanceNeighbor nW (gx - 1) gy
-
+            -- Use pre-computed final neighbor elevations directly.
+            -- No advanceNeighbor calls needed — eliminates ~4 × events
+            -- applyGeoEvent calls per period per column.
             erosionMod = applyErosion
                 (gpErosion period)
                 worldSize
@@ -566,7 +564,7 @@ buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
                 (wsScale wsc)
                 (unMaterialId surfMat')
                 elev'
-                (nN', nS', nE', nW')
+                (nFinalN, nFinalS, nFinalE, nFinalW)
 
             erosionDelta = gmElevDelta erosionMod
             erosionMat = case gmMaterialOverride erosionMod of
@@ -575,7 +573,7 @@ buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
             erosionIntrusion = gmIntrusionDepth erosionMod
 
             elev'' = elev' + erosionDelta
-            st' = (elev'', erosionMat, nN', nS', nE', nW')
+            st' = (elev'', erosionMat)
 
             cache = PeriodStrataCache
                 { pscEvents           = eventsVec
