@@ -24,8 +24,8 @@ import World.Geology.Hash
 generateCraters ∷ Word64 → Int → [TectonicPlate] → CraterEra → [CraterParams]
 generateCraters seed worldSize plates era =
     let (baseCount, minRadius, maxRadius, minDepth, maxDepth, rimMin, rimMax) = case era of
-            CraterEra_Primordial → (4, 20, 60, 15, 50, 5, 20)
-            CraterEra_Late       → (8,  5, 25,  4, 20, 2, 10)
+            CraterEra_Primordial → (6, 20, 60, 15, 50, 5, 20)
+            CraterEra_Late       → (10,  5, 25,  4, 20, 2, 10)
 
         count = scaleCount worldSize baseCount
         halfTiles = (worldSize * 16) `div` 2

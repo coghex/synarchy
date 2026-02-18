@@ -178,16 +178,31 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs =
         activityLevel = gsCO2 gs
         currentDate = gdMillionYears (gsDate gs)
 
-        (shields, tbs1) = generateAndRegisterN 8 2 volcSeed worldSize plates
+        -- Volcanism budget per period:
+        --
+        -- Feature type       | attempts | max | bbox radius | cost
+        -- -------------------|----------|-----|-------------|------
+        -- ShieldVolcano      |   12     |  3  |   30-60     | medium
+        -- Fissure            |   10     |  3  |   40-100    | medium
+        -- CinderCone         |   16     |  5  |    5-15     | cheap
+        -- HydrothermalVent   |   10     |  3  |     3       | cheap
+        -- SuperVolcano       |   12     |  1  |  120-250    | expensive
+        --
+        -- Total max features per period: 15 (was 10)
+        -- But most are small-radius, so bbox filter kills them
+        -- for distant chunks. The expensive SuperVolcano is still
+        -- capped at 1 and only generated in periods 0-1.
+
+        (shields, tbs1) = generateAndRegisterN 12 3 volcSeed worldSize plates
                               VolcanoEra_Hotspot generateShieldVolcano pIdx tbs
 
-        (fissures, tbs2) = generateAndRegisterN 6 2 (volcSeed + 1) worldSize plates
+        (fissures, tbs2) = generateAndRegisterN 10 3 (volcSeed + 1) worldSize plates
                                VolcanoEra_Boundary generateFissure pIdx tbs1
 
-        (cinders, tbs3) = generateAndRegisterN 10 3 (volcSeed + 2) worldSize plates
+        (cinders, tbs3) = generateAndRegisterN 16 5 (volcSeed + 2) worldSize plates
                               VolcanoEra_Boundary generateCinderCone pIdx tbs2
 
-        (vents, tbs4) = generateAndRegisterN 6 2 (volcSeed + 3) worldSize plates
+        (vents, tbs4) = generateAndRegisterN 10 3 (volcSeed + 3) worldSize plates
                             VolcanoEra_Boundary generateHydrothermalVent pIdx tbs3
 
         hasSuperVolcano = any isSuperVolcano (tbsFeatures tbs4)
@@ -359,11 +374,11 @@ buildAge seed worldSize plates ageIdx tbs =
         gs1 = gs { gsDate = advanceGeoDate duration (gsDate gs) }
 
         meteoriteRoll = hashToFloatGeo (hashGeo ageSeed ageIdx 620)
-        meteoriteChance = min 0.8 (duration / 20.0)
+        meteoriteChance = min 0.85 (duration / 15.0)
         meteorites = if meteoriteRoll < meteoriteChance
             then let craterSeed = ageSeed `xor` 0xBEEF
                      craters = generateCraters craterSeed worldSize plates CraterEra_Late
-                 in take (hashToRangeGeo (hashGeo ageSeed ageIdx 621) 1 3)
+                 in take (hashToRangeGeo (hashGeo ageSeed ageIdx 621) 1 5)
                          (map CraterEvent craters)
             else []
 
@@ -407,7 +422,7 @@ buildAge seed worldSize plates ageIdx tbs =
         --   Lakes:    0%  (passive, only change via river/glacier events)
         --
         -- Longer ages increase the chance (more time = more happens)
-        durationBonus = min 0.3 (duration / 30.0)  -- up to +30% for 15MY ages
+        durationBonus = min 0.3 (duration / 30.0)
 
         (hydroEvents, tbs_h) = foldl'
             (\(evts, st) pf →
@@ -416,13 +431,13 @@ buildAge seed worldSize plates ageIdx tbs =
                 in case pfFeature pf of
                     HydroShape (RiverFeature _)
                         | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
-                        , evolRoll < 0.01 + durationBonus →
+                        , evolRoll < 0.1 + durationBonus →
                             evolveRiver hydroSeed (tbsPeriodIdx st) (evts, st) pf
                         | otherwise → (evts, st)
 
                     HydroShape (GlacierFeature _)
                         | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
-                        , evolRoll < 0.005 + durationBonus →
+                        , evolRoll < 0.05 + durationBonus →
                             evolveGlacier hydroSeed (tbsPeriodIdx st) gs1 (evts, st) pf
                         | otherwise → (evts, st)
 
