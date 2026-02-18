@@ -17,7 +17,7 @@ module World.Generate
     ) where
 
 import UPrelude
-import Control.Monad.ST (runST)
+import Control.Monad.ST (runST, ST)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
@@ -516,16 +516,62 @@ buildColumnStrata caches (baseElev, baseMat) startZ endZ =
     let depth = endZ - startZ + 1
     in if depth ≤ 0
        then VU.empty
-       else VU.generate depth $ \i →
-            let queryZ = startZ + i
-                initState = StrataZState
-                    { szElev    = baseElev
-                    , szSurfMat = baseMat
-                    , szUplift  = 0
-                    , szZMat    = baseMat
-                    }
-                finalState = V.foldl' (applyCachedPeriod queryZ) initState caches
-            in szZMat finalState
+       else runST $ do
+            mats ← VUM.replicate depth baseMat
+
+            let applyCache (!elev, !surfMat) cache = do
+                    -- Apply each event's writes
+                    (elev', _surfMat') ← V.foldM'
+                        (\(!e, !sm) ed → do
+                            writeDelta mats startZ depth e
+                                       (edDelta ed) (edIntrusion ed) (edMat ed)
+                            pure (e + edDelta ed, edMat ed)
+                        ) (elev, surfMat) (pscEvents cache)
+
+                    -- Apply erosion writes
+                    writeDelta mats startZ depth
+                        elev'
+                        (pscErosionDelta cache)
+                        (pscErosionIntrusion cache)
+                        (pscErosionMat cache)
+
+                    let elev'' = elev' + pscErosionDelta cache
+                    pure (elev'', pscErosionMat cache)
+
+            V.foldM'_ applyCache (baseElev, baseMat) caches
+
+            VU.unsafeFreeze mats
+
+-- | Write the material effects of a single delta (event or erosion)
+--   into the mutable material vector. Only touches z-levels within
+--   [startZ .. startZ + depth - 1].
+writeDelta ∷ VUM.MVector s MaterialId
+           → Int → Int
+           → Int → Int → Int
+           → MaterialId
+           → ST s ()
+writeDelta mats startZ depth elevBefore delta intrusion eventMat
+    | delta > 0 =
+        let clampedIntrusion = min intrusion delta
+            upliftAmount = delta - clampedIntrusion
+            intrusionBottom = elevBefore + upliftAmount + 1
+            intrusionTop = elevBefore + delta
+        in when (clampedIntrusion > 0) $
+            forM_ [max intrusionBottom startZ .. min intrusionTop (startZ + depth - 1)] $ \z →
+                VUM.write mats (z - startZ) eventMat
+
+    | delta < 0 =
+        let newSurfZ = elevBefore + delta
+        in do
+            when (newSurfZ ≥ startZ ∧ newSurfZ < startZ + depth) $
+                VUM.write mats (newSurfZ - startZ) eventMat
+            when (intrusion > 0) $
+                forM_ [max newSurfZ startZ .. min (newSurfZ + intrusion - 1) (startZ + depth - 1)] $ \z →
+                    VUM.write mats (z - startZ) eventMat
+
+    | otherwise =
+        when (elevBefore ≥ startZ ∧ elevBefore < startZ + depth) $
+            VUM.write mats (elevBefore - startZ) eventMat
 
 applyCachedPeriod ∷ Int → StrataZState → PeriodStrataCache → StrataZState
 applyCachedPeriod queryZ state cache =
