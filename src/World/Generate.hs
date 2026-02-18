@@ -29,7 +29,7 @@ import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Grid (worldToGrid)
 import World.Geology (applyGeoEvent, GeoModification(..))
-import World.Geology.Types (eventBBox, bboxOverlapsChunk)
+import World.Geology.Types (eventBBox, bboxOverlapsChunk, EventBBox(..))
 import World.Geology.Erosion (applyErosion)
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
@@ -327,6 +327,14 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
 
             borderArea = borderSize * borderSize
 
+            -- Pre-compute bounding boxes for all relevant events.
+            -- Avoids recomputing eventBBox inside the per-cell loop,
+            -- and lets us skip events whose bbox doesn't contain
+            -- the current cell (much cheaper than the full
+            -- distance/sqrt computation inside applyGeoEvent).
+            taggedEvents = map (\evt → (evt, eventBBox evt worldSize))
+                               relevantEvents
+
             -- Phase 1: Apply geological events (single pass)
             (postElev, postMat) =
                 if null relevantEvents
@@ -345,9 +353,15 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
                             else do
                                 let (gx, gy)   = chunkToGlobal coord lx ly
                                     (gx', gy') = wrapGlobalU worldSize gx gy
+                                    -- Only apply events whose bbox contains this cell
+                                    cellEvents = filter (\(_, bb) →
+                                        gx' ≥ bbMinX bb ∧ gx' ≤ bbMaxX bb ∧
+                                        gy' ≥ bbMinY bb ∧ gy' ≤ bbMaxY bb
+                                        ) taggedEvents
                                     (elevOut, matOut) =
-                                        foldl' (applyOneEvent worldSize gx' gy')
-                                               (elev, mat) relevantEvents
+                                        foldl' (\(e, m) (evt, _) →
+                                            applyOneEvent worldSize gx' gy' (e, m) evt
+                                        ) (elev, mat) cellEvents
                                 VUM.write elevM idx elevOut
                                 VUM.write matM  idx matOut
                     elevF ← VU.unsafeFreeze elevM
@@ -475,14 +489,24 @@ buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
     in V.fromList (reverse caches)
   where
     step (st@(elev, surfMat, nN, nS, nE, nW), acc) period =
-        let (eventDeltas, elev', surfMat') =
-                foldl' (applyEvent elev surfMat) ([], elev, surfMat) (gpEvents period)
+        let -- Pre-compute tagged events for this period
+            taggedEvents = map (\evt → (evt, eventBBox evt worldSize))
+                               (gpEvents period)
+
+            (eventDeltas, elev', surfMat') =
+                foldl' (applyEvent elev surfMat) ([], elev, surfMat)
+                       (gpEvents period)
 
             eventsVec = V.fromList (reverse eventDeltas)
 
             advanceNeighbor nElev ngx ngy =
-                foldl' (\e ev → e + gmElevDelta (applyGeoEvent ev worldSize ngx ngy e))
-                       nElev (gpEvents period)
+                let localTagged = filter (\(_, bb) →
+                        ngx ≥ bbMinX bb ∧ ngx ≤ bbMaxX bb ∧
+                        ngy ≥ bbMinY bb ∧ ngy ≤ bbMaxY bb
+                        ) taggedEvents
+                in foldl' (\e (ev, _) →
+                    e + gmElevDelta (applyGeoEvent ev worldSize ngx ngy e))
+                    nElev localTagged
 
             nN' = advanceNeighbor nN gx (gy - 1)
             nS' = advanceNeighbor nS gx (gy + 1)
