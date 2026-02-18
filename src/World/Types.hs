@@ -568,6 +568,7 @@ data GeoPeriod = GeoPeriod
     , gpDate       ∷ !Float        -- ^ Date of period start
     , gpEvents     ∷ ![GeoEvent]
     , gpErosion    ∷ !ErosionParams
+    , gpTaggedEvents ∷ ![(GeoEvent, EventBBox)]
     } deriving (Show, Eq)
 
 -- | The full geological history, computed once at world init.
@@ -585,6 +586,47 @@ emptyTimeline = GeoTimeline
     , gtPeriods = []
     , gtFeatures = []
     }
+
+-- | Axis-aligned bounding box in global tile coords.
+--   Used for early culling during chunk generation.
+data EventBBox = EventBBox
+    { bbMinX ∷ !Int
+    , bbMinY ∷ !Int
+    , bbMaxX ∷ !Int
+    , bbMaxY ∷ !Int
+    } deriving (Show, Eq)
+
+-- | No bounds — event applies everywhere (e.g. glaciation).
+noBBox ∷ EventBBox
+noBBox = EventBBox minBound minBound maxBound maxBound
+
+eventBBox ∷ GeoEvent → Int → EventBBox
+eventBBox (CraterEvent cp) _ws =
+    let GeoCoord cx cy = cpCenter cp
+        r = cpRadius cp + cpEjectaRadius cp
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+eventBBox (VolcanicEvent (VolcanicShape (ShieldVolcano p))) _ws =
+    let GeoCoord cx cy = shCenter p
+        r = shBaseRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+-- ... similar for each event type
+eventBBox (EruptionEvent _ flow) _ws =
+    let r = lfRadius flow
+    in EventBBox (lfSourceX flow - r) (lfSourceY flow - r)
+                 (lfSourceX flow + r) (lfSourceY flow + r)
+eventBBox _ _ = noBBox  -- fallback for global events
+
+bboxOverlapsChunk ∷ Int → EventBBox → Int → Int → Int → Int → Bool
+bboxOverlapsChunk _worldSize bb cMinX cMinY cMaxX cMaxY =
+    not (bbMaxX bb < cMinX ∨ bbMinX bb > cMaxX
+       ∨ bbMaxY bb < cMinY ∨ bbMinY bb > cMaxY)
+    -- TODO: handle X-wrapping for chunks near the world edge
+
+-- | Pre-compute bounding boxes for a list of events.
+--   Called once at timeline build time for each GeoPeriod.
+tagEventsWithBBox ∷ Int → [GeoEvent] → [(GeoEvent, EventBBox)]
+tagEventsWithBBox worldSize events =
+    map (\evt → (evt, eventBBox evt worldSize)) events
 
 -----------------------------------------------------------
 -- Geologic Events

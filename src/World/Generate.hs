@@ -30,7 +30,6 @@ import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Grid (worldToGrid)
 import World.Geology (applyGeoEvent, GeoModification(..))
-import World.Geology.Types (eventBBox, bboxOverlapsChunk, EventBBox(..))
 import World.Geology.Erosion (applyErosion)
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
@@ -323,24 +322,16 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
         else fallback
 
     applyOnePeriod cMinGX cMinGY cMaxGX cMaxGY (elevVec, matVec) period =
-        let relevantEvents = filter (\evt →
-                let bb = eventBBox evt worldSize
-                in bboxOverlapsChunk worldSize bb cMinGX cMinGY cMaxGX cMaxGY
-                ) (gpEvents period)
+        let -- Use pre-computed tagged events, filter to chunk overlap
+            relevantTagged = filter (\(_, bb) →
+                bboxOverlapsChunk worldSize bb cMinGX cMinGY cMaxGX cMaxGY
+                ) (gpTaggedEvents period)
 
             borderArea = borderSize * borderSize
 
-            -- Pre-compute bounding boxes for all relevant events.
-            -- Avoids recomputing eventBBox inside the per-cell loop,
-            -- and lets us skip events whose bbox doesn't contain
-            -- the current cell (much cheaper than the full
-            -- distance/sqrt computation inside applyGeoEvent).
-            taggedEvents = map (\evt → (evt, eventBBox evt worldSize))
-                               relevantEvents
-
             -- Phase 1: Apply geological events (single pass)
             (postElev, postMat) =
-                if null relevantEvents
+                if null relevantTagged
                 then (elevVec, matVec)
                 else runST $ do
                     elevM ← VUM.new borderArea
@@ -356,11 +347,11 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
                             else do
                                 let (gx, gy)   = chunkToGlobal coord lx ly
                                     (gx', gy') = wrapGlobalU worldSize gx gy
-                                    -- Only apply events whose bbox contains this cell
+                                    -- Per-cell bbox filter using pre-computed bboxes
                                     cellEvents = filter (\(_, bb) →
                                         gx' ≥ bbMinX bb ∧ gx' ≤ bbMaxX bb ∧
                                         gy' ≥ bbMinY bb ∧ gy' ≤ bbMaxY bb
-                                        ) taggedEvents
+                                        ) relevantTagged
                                     (elevOut, matOut) =
                                         foldl' (\(e, m) (evt, _) →
                                             applyOneEvent worldSize gx' gy' (e, m) evt
@@ -476,20 +467,14 @@ applyTimelineFast timeline worldSize gx gy (baseElev, baseMat) =
 applyPeriodFiltered ∷ Int → WorldScale → Int → Int
                     → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
 applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
-    let -- Pre-filter: only keep events whose bounding box contains (gx, gy).
-        -- This is the key optimization — most events are spatially small
-        -- (volcano radius 30-60, crater radius 10-40) relative to the
-        -- world (2048 tiles at worldSize=128), so the vast majority of
-        -- events are skipped for any given sample point.
-        relevantEvents = filter (\evt →
-            let bb = eventBBox evt worldSize
-            in gx ≥ bbMinX bb ∧ gx ≤ bbMaxX bb
+    let -- Use pre-computed tagged events instead of calling eventBBox
+        relevantEvents = filter (\(_, bb) →
+            gx ≥ bbMinX bb ∧ gx ≤ bbMaxX bb
              ∧ gy ≥ bbMinY bb ∧ gy ≤ bbMaxY bb
-            ) (gpEvents period)
+            ) (gpTaggedEvents period)
 
         (elev', mat') = foldl' applyOneEvt (elev, mat) relevantEvents
 
-        -- Erosion is applied unconditionally (it's global, not spatial)
         erosionMod = applyErosion
             (gpErosion period)
             worldSize
@@ -497,7 +482,6 @@ applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
             (wsScale wsc)
             (unMaterialId mat')
             elev'
-            -- Single-column: no neighbor data, use self as all neighbors
             (elev', elev', elev', elev')
         elev'' = elev' + gmElevDelta erosionMod
         mat'' = case gmMaterialOverride erosionMod of
@@ -505,7 +489,7 @@ applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
             Nothing → mat'
     in (elev'', mat'')
   where
-    applyOneEvt (e, m) event =
+    applyOneEvt (e, m) (event, _bb) =
         let mod' = applyGeoEvent event worldSize gx gy e
             e' = e + gmElevDelta mod'
             m' = case gmMaterialOverride mod' of

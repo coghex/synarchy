@@ -67,22 +67,17 @@ buildTimeline seed worldSize plateCount =
 -- Primordial Bombardment (standalone, pre-eon)
 -----------------------------------------------------------
 
-buildPrimordialBombardment ∷ Word64 → Int → [TectonicPlate]
-                           → TimelineBuildState → TimelineBuildState
 buildPrimordialBombardment seed worldSize plates tbs =
     let craterSeed = seed `xor` 0xDEADBEEF
         craters = generateCraters craterSeed worldSize plates CraterEra_Primordial
         gs = tbsGeoState tbs
         currentDate = gdMillionYears (gsDate gs)
         gs' = gs { gsDate = advanceGeoDate 500.0 (gsDate gs) }
-        period = GeoPeriod
-            { gpName     = "Primordial Bombardment"
-            , gpScale    = Eon
-            , gpDuration = 500
-            , gpDate     = currentDate
-            , gpEvents   = map CraterEvent craters
-            , gpErosion  = ErosionParams 0.8 0.3 0.6 0.4 0.1 (seed + 1000)
-            }
+        events = map CraterEvent craters
+        period = mkGeoPeriod worldSize
+            "Primordial Bombardment" Eon 500 currentDate
+            events
+            (ErosionParams 0.8 0.3 0.6 0.4 0.1 (seed + 1000))
     in addPeriod period (tbs { tbsGeoState = gs' })
 
 -----------------------------------------------------------
@@ -123,14 +118,11 @@ buildEra seed worldSize plates eraIdx tbs =
         eraEvents = []
 
         gs' = gs { gsDate = advanceGeoDate 100.0 (gsDate gs) }
-        eraPeriod = GeoPeriod
-            { gpName     = "Era " <> T.pack (show eraIdx) <> " Events"
-            , gpScale    = Era
-            , gpDuration = 100
-            , gpDate     = currentDate
-            , gpEvents   = eraEvents
-            , gpErosion  = ErosionParams 0.7 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx)
-            }
+        eraPeriod = mkGeoPeriod worldSize
+            ("Era " <> T.pack (show eraIdx) <> " Events")
+            Era 100 currentDate
+            eraEvents
+            (ErosionParams 0.7 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx))
         s1 = addPeriod eraPeriod (tbs { tbsGeoState = gs' })
 
         s2 = buildPeriodLoop eraSeed worldSize plates 0 2 4 s1
@@ -221,14 +213,11 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs =
             { gsCO2 = gsCO2 (tbsGeoState tbs5) + fromIntegral (length allNew) * 0.01
             }
 
-        period = GeoPeriod
-            { gpName     = "Volcanism " <> T.pack (show periodIdx)
-            , gpScale    = Period
-            , gpDuration = 50
-            , gpDate     = currentDate
-            , gpEvents   = events
-            , gpErosion  = ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 4000)
-            }
+        period = mkGeoPeriod worldSize
+            ("Volcanism " <> T.pack (show periodIdx))
+            Period 50 currentDate
+            events
+            (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 4000))
     in addPeriod period (tbs5 { tbsGeoState = gs' })
 
 isSuperVolcano ∷ PersistentFeature → Bool
@@ -286,14 +275,11 @@ applyVolcanicEvolution seed worldSize plates tbs =
 
         allEvents = events <> periodEruptions
 
-        period = GeoPeriod
-            { gpName     = "Volcanic Evolution"
-            , gpScale    = Period
-            , gpDuration = 30
-            , gpDate     = currentDate
-            , gpEvents   = allEvents
-            , gpErosion  = ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 5000)
-            }
+        period = mkGeoPeriod worldSize
+            "Volcanic Evolution"
+            Period 30 currentDate
+            allEvents
+            (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 5000))
     in if null allEvents then tbs1
        else addPeriod period tbs1
 
@@ -328,14 +314,11 @@ buildEpoch seed worldSize plates epochIdx tbs =
         gs' = gs { gsDate = advanceGeoDate 20.0 (gsDate gs) }
 
         s1 = if null epochEvents then tbs { tbsGeoState = gs' }
-             else let period = GeoPeriod
-                          { gpName     = "Epoch " <> T.pack (show epochIdx)
-                          , gpScale    = Epoch
-                          , gpDuration = 20
-                          , gpDate     = currentDate
-                          , gpEvents   = epochEvents
-                          , gpErosion  = ErosionParams 0.6 0.7 0.3 0.2 0.4 (seed + 6000)
-                          }
+             else let period = mkGeoPeriod worldSize
+                          ("Epoch " <> T.pack (show epochIdx))
+                          Epoch 20 currentDate
+                          epochEvents
+                          (ErosionParams 0.6 0.7 0.3 0.2 0.4 (seed + 6000))
                   in addPeriod period (tbs { tbsGeoState = gs' })
 
         s2 = buildAgeLoop epochSeed worldSize plates 0 1 8 s1
@@ -458,14 +441,12 @@ buildAge seed worldSize plates ageIdx tbs =
 
         erosion = erosionFromGeoState gs2 seed ageIdx
 
-        period = GeoPeriod
-            { gpName     = "Age " <> T.pack (show (tbsPeriodIdx tbs))
-            , gpScale    = Age
-            , gpDuration = round duration
-            , gpDate     = currentDate
-            , gpEvents   = allEvents
-            , gpErosion  = erosion
-            }
+        period = mkGeoPeriod worldSize
+            ("Age " <> T.pack (show (tbsPeriodIdx tbs)))
+            Age (round duration) currentDate
+            allEvents
+            erosion
+
     in addPeriod period (tbs_h { tbsGeoState = gs2 })
 
 -----------------------------------------------------------
@@ -621,3 +602,17 @@ featureCenter (HydroShape (GlacierFeature g))
     = let GeoCoord x y = glCenter g in (x, y)
 featureCenter (HydroShape (LakeFeature l))
     = let GeoCoord x y = lkCenter l in (x, y)
+
+-- | Smart constructor for GeoPeriod that pre-computes tagged events.
+--   Use this instead of directly constructing GeoPeriod records.
+mkGeoPeriod ∷ Int → Text → GeoScale → Int → Float → [GeoEvent] → ErosionParams → GeoPeriod
+mkGeoPeriod worldSize name scale duration date events erosion =
+    GeoPeriod
+        { gpName         = name
+        , gpScale        = scale
+        , gpDuration     = duration
+        , gpDate         = date
+        , gpEvents       = events
+        , gpErosion      = erosion
+        , gpTaggedEvents = tagEventsWithBBox worldSize events
+        }
