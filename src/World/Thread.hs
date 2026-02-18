@@ -204,14 +204,13 @@ updateChunkLoading env logger = do
                             when (not $ null batch) $ do
                                 let seed = wgpSeed params
                                 let !newChunks = map (\coord →
-                                        let (chunkTiles, surfMap, tMap, fluidMap, strata) = generateChunk params coord
+                                        let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
                                         in LoadedChunk
                                             { lcCoord      = coord
                                             , lcTiles      = chunkTiles
                                             , lcSurfaceMap = surfMap
                                             , lcTerrainSurfaceMap = tMap
                                             , lcFluidMap   = fluidMap
-                                            , lcStrata     = strata
                                             , lcModified   = False
                                             }) batch
                                 -- Insert new chunks, then recompute slopes
@@ -316,27 +315,25 @@ handleWorldCommand env logger cmd = do
                 <> T.pack (show totalInitialChunks) <> ")..."
 
             let initialChunks = map (\coord →
-                    let (chunkTiles, surfMap, terrainMap, fluidMap, strata) = generateChunk params coord
+                    let (chunkTiles, surfMap, terrainMap, fluidMap) = generateChunk params coord
                     in LoadedChunk
                         { lcCoord      = coord
                         , lcTiles      = chunkTiles
                         , lcSurfaceMap = surfMap
                         , lcTerrainSurfaceMap = terrainMap
                         , lcFluidMap   = fluidMap
-                        , lcStrata     = strata
                         , lcModified   = False
                         }) initialCoords
             
             -- Generate ONLY the center chunk synchronously for immediate display
             let centerCoord = ChunkCoord 0 0
-                (ct, cs, cterrain, cf, strt) = generateChunk params centerCoord
+                (ct, cs, cterrain, cf) = generateChunk params centerCoord
                 centerChunk = LoadedChunk
                     { lcCoord      = centerCoord
                     , lcTiles      = ct
                     , lcSurfaceMap = cs
                     , lcTerrainSurfaceMap = cterrain
                     , lcFluidMap   = cf
-                    , lcStrata     = strt
                     , lcModified   = False
                     }
 
@@ -367,14 +364,11 @@ handleWorldCommand env logger cmd = do
             atomicModifyIORef' (cameraRef env) $ \cam →
                 (cam { camZSlice = startZSlice, camZTracking = True }, ())
             
-            let totalTiles = sum $ map (HM.size . lcTiles) initialChunks
             let summaryMsg = T.pack (show $ length initialChunks) <> " chunks, "
-                          <> T.pack (show totalTiles) <> " tiles"
             sendGenLog env $ "World initialized: " <> summaryMsg
 
             logInfo logger CatWorld $ "World initialized: " 
                 <> T.pack (show $ length initialChunks) <> " chunks, "
-                <> T.pack (show totalTiles) <> " tiles, "
                 <> "surface at z=" <> T.pack (show surfaceElev)
                 <> ": " <> unWorldPageId pageId
         
@@ -557,14 +551,13 @@ drainInitQueues env logger = do
                             seed  = wgpSeed params
                         
                         let newChunks = parMap rdeepseq (\coord →
-                                let (chunkTiles, surfMap, tMap, fluidMap, strata) = generateChunk params coord
+                                let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
                                 in LoadedChunk
                                     { lcCoord      = coord
                                     , lcTiles      = chunkTiles
                                     , lcSurfaceMap = surfMap
                                     , lcTerrainSurfaceMap = tMap
                                     , lcFluidMap   = fluidMap
-                                    , lcStrata     = strata
                                     , lcModified   = False
                                     }) batch
                         

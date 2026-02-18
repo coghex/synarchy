@@ -44,22 +44,22 @@ diamondRows = 48
 -- Slope Computation (Post-Processing Pass)
 -----------------------------------------------------------
 
-computeChunkSlopes ∷ Word64
-                   → ChunkCoord
-                   → VU.Vector Int
-                   → V.Vector (Maybe FluidCell)
-                   → Chunk
-                   → (ChunkCoord → Maybe (VU.Vector Int))
-                   → Chunk
-computeChunkSlopes seed coord surfMap fluidMap tiles neighborLookup =
-    HM.mapWithKey (\(lx, ly, z) tile →
-        let idx = columnIndex lx ly
+computeChunkSlopes ∷ Word64 → ChunkCoord → VU.Vector Int
+                   → V.Vector (Maybe FluidCell) → Chunk
+                   → (ChunkCoord → Maybe (VU.Vector Int)) → Chunk
+computeChunkSlopes seed coord surfMap fluidMap chunk neighborLookup =
+    V.imap (\idx col →
+        let lx = idx `mod` chunkSize
+            ly = idx `div` chunkSize
             surfZ = surfMap VU.! idx
-        in if z ≡ surfZ
-           then tile { tileSlopeId = computeTileSlope
-                         seed coord lx ly z surfMap fluidMap tiles neighborLookup }
-           else tile
-    ) tiles
+            i = surfZ - ctStartZ col
+        in if i ≥ 0 ∧ i < VU.length (ctSlopes col)
+           then let newSlope = computeTileSlope seed coord lx ly surfZ
+                                 surfMap fluidMap chunk neighborLookup
+                    slopes' = ctSlopes col VU.// [(i, newSlope)]
+                in col { ctSlopes = slopes' }
+           else col
+    ) chunk
 
 computeTileSlope ∷ Word64 → ChunkCoord
                 → Int → Int → Int
@@ -69,9 +69,11 @@ computeTileSlope ∷ Word64 → ChunkCoord
                 → (ChunkCoord → Maybe (VU.Vector Int))
                 → Word8
 computeTileSlope seed coord lx ly z surfMap fluidMap tiles neighborLookup =
-    let matId = case HM.lookup (lx, ly, z) tiles of
-            Just t  → tileType t
-            Nothing → 0
+    let col = tiles V.! columnIndex lx ly
+        i = z - ctStartZ col
+        matId = if i ≥ 0 ∧ i < VU.length (ctMats col)
+                then ctMats col VU.! i
+                else 0
         props = getMaterialProps (MaterialId matId)
         hardness = matHardness props
 

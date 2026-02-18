@@ -250,7 +250,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 chunkHasFluid = V.any isJust fluidMap
                 terrainSurfMap = lcTerrainSurfaceMap lc
 
-                !realQuads = VU.ifoldl' (\acc idx _surfZ ->
+                !realQuads = V.ifoldl' (\acc idx col →
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
                             mFluid = fluidMap V.! idx
@@ -259,34 +259,54 @@ renderWorldQuads env worldState zoomAlpha snap = do
                             isUnderLava = case mFluid of
                                 Just fc → fcType fc ≡ Lava ∧ fcSurface fc > zSlice - effectiveDepth
                                 Nothing → False
-                        in foldl' (\acc2 z →
-                            case HM.lookup (lx, ly, z) tileMap of
-                                Nothing → acc2
-                                Just tile →
-                                    if isUnderLava ∧ z < maybe 0 fcSurface mFluid
-                                    then acc2
-                                    else
-                                    let relativeZ = z - zSlice
-                                        heightOffset = fromIntegral relativeZ * tileSideHeight
-                                        drawX = rawX + xOffset
-                                        drawY = rawY - heightOffset
-                                    in if isTileVisible vb drawX drawY
-                                       then tileToQuad lookupSlot lookupFmSlot textures facing
-                                              gx gy z tile zSlice effectiveDepth zoomAlpha xOffset
-                                              mFluid chunkHasFluid : acc2
-                                       else acc2
-                           ) acc [(zSlice - effectiveDepth) .. zSlice]
-                    ) [] surfMap
+
+                            -- Clamp z iteration to the intersection of
+                            -- the render window and the column's actual range
+                            colLen  = VU.length (ctMats col)
+                            colMinZ = ctStartZ col
+                            colMaxZ = colMinZ + colLen - 1
+                            zLo = max (zSlice - effectiveDepth) colMinZ
+                            zHi = min zSlice colMaxZ
+
+                        in if colLen ≡ 0 ∨ zLo > zHi
+                           then acc
+                           else foldl' (\acc2 z →
+                                let i   = z - colMinZ
+                                    mat = ctMats col VU.! i
+                                in if mat ≡ 0  -- matAir
+                                   then acc2
+                                   else if isUnderLava ∧ z < maybe 0 fcSurface mFluid
+                                   then acc2
+                                   else
+                                   let relativeZ = z - zSlice
+                                       heightOffset = fromIntegral relativeZ * tileSideHeight
+                                       drawX = rawX + xOffset
+                                       drawY = rawY - heightOffset
+                                   in if isTileVisible vb drawX drawY
+                                      then let slopeId = ctSlopes col VU.! i
+                                               tile = Tile mat slopeId
+                                           in tileToQuad lookupSlot lookupFmSlot textures facing
+                                                gx gy z tile zSlice effectiveDepth zoomAlpha xOffset
+                                                mFluid chunkHasFluid : acc2
+                                      else acc2
+                                ) acc [zLo .. zHi]
+                    ) [] tileMap
 
                 !blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures facing
                         gx gy zSlice zSlice zoomAlpha xOffset
                     | lx ← [0 .. chunkSize - 1]
                     , ly ← [0 .. chunkSize - 1]
-                    , let surfZ = surfMap VU.! columnIndex lx ly
-                          terrainZ = terrainSurfMap VU.! columnIndex lx ly
+                    , let idx = columnIndex lx ly
+                          surfZ = surfMap VU.! idx
+                          terrainZ = terrainSurfMap VU.! idx
                     , terrainZ > zSlice
-                    , not (HM.member (lx, ly, zSlice) tileMap)
+                    , let col = tileMap V.! idx
+                          i = zSlice - ctStartZ col
+                          hasTile = i ≥ 0
+                                  ∧ i < VU.length (ctMats col)
+                                  ∧ ctMats col VU.! i ≠ 0
+                    , not hasTile
                     , let (gx, gy) = chunkToGlobal coord lx ly
                           (rawX, rawY) = gridToScreen facing gx gy
                           drawX = rawX + xOffset

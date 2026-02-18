@@ -55,7 +55,26 @@ instance NFData ChunkCoord where
 instance Hashable ChunkCoord where
     hashWithSalt s (ChunkCoord x y) = s `hashWithSalt` x `hashWithSalt` y
 
-type Chunk = HM.HashMap (Int, Int, Int) Tile
+-- | A single column's tile data: contiguous z-range of non-air tiles.
+--   Tiles from csStartZ to csStartZ + VU.length csMats - 1.
+--   Air gaps within the range ARE stored (as matAir / slopeId 0)
+--   so indexing is O(1). Only leading/trailing air is trimmed.
+data ColumnTiles = ColumnTiles
+    { ctStartZ  ∷ !Int
+    , ctMats    ∷ !(VU.Vector Word8)    -- material IDs (tileType)
+    , ctSlopes  ∷ !(VU.Vector Word8)    -- slope IDs (tileSlopeId)
+    } deriving (Show, Eq)
+
+instance NFData ColumnTiles where
+    rnf (ColumnTiles z ms ss) = rnf z `seq` rnf ms `seq` rnf ss
+
+-- | A chunk is a flat vector of 16×16 columns.
+--   Index with: columnIndex lx ly = ly * chunkSize + lx
+type Chunk = V.Vector ColumnTiles
+
+-- | Empty column (glacier, beyond-world, etc.)
+emptyColumn ∷ ColumnTiles
+emptyColumn = ColumnTiles 0 VU.empty VU.empty
 
 chunkSize ∷ Int
 chunkSize = 16
@@ -77,14 +96,13 @@ data LoadedChunk = LoadedChunk
     , lcSurfaceMap ∷ !(VU.Vector Int)
     , lcTerrainSurfaceMap ∷ !(VU.Vector Int)
     , lcFluidMap   ∷ !(V.Vector (Maybe FluidCell))
-    , lcStrata     ∷ !(V.Vector ColumnStrata)
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
 
 instance NFData LoadedChunk where
-    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap strata modified) =
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap modified) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
-        rnf terrainMap `seq` rnf fluidMap `seq` rnf strata `seq` rnf modified
+        rnf terrainMap `seq` rnf fluidMap `seq` rnf modified
 
 -----------------------------------------------------------
 -- World Generation Parameters
