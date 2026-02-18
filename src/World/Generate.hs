@@ -537,8 +537,7 @@ buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
   where
     step (st@(elev, surfMat, nN, nS, nE, nW), acc) period =
         let -- Pre-compute tagged events for this period
-            taggedEvents = map (\evt → (evt, eventBBox evt worldSize))
-                               (gpEvents period)
+            taggedEvents = gpTaggedEvents period
 
             (eventDeltas, elev', surfMat') =
                 foldl' (applyEvent elev surfMat) ([], elev, surfMat)

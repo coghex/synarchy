@@ -108,11 +108,26 @@ plateAt seed worldSize plates gx gy =
 twoNearestPlates ∷ Word64 → Int → [TectonicPlate] → Int → Int
                  → ((TectonicPlate, Float), (TectonicPlate, Float))
 twoNearestPlates seed worldSize plates gx gy =
-    let ranked = rankPlates seed worldSize plates gx gy
-    in case ranked of
-        (a:b:_) → (a, b)
-        [a]     → (a, a)
-        _       → error "no plates"
+    let jitter = jitterAmount seed worldSize gx gy
+        dist plate =
+            let du = fromIntegral (wrappedDeltaU worldSize gx gy
+                        (plateCenterX plate) (plateCenterY plate)) ∷ Float
+                dv = fromIntegral ((gx + gy) - (plateCenterX plate + plateCenterY plate)) ∷ Float
+            in sqrt (du * du + dv * dv) + jitter
+    in case plates of
+        (p:ps) →
+            let d0 = dist p
+                go !best1 !d1 !best2 !d2 [] = (best1, best2)
+                go !best1 !d1 !best2 !d2 (q:qs) =
+                    let dq = dist q
+                    in if dq < d1
+                       then go (q, dq) dq best1 d1 qs
+                       else if dq < d2
+                            then go best1 d1 (q, dq) dq qs
+                            else go best1 d1 best2 d2 qs
+                ((a, da), (b, db)) = go (p, d0) d0 (p, d0) (1/0) ps
+            in ((a, da), (b, db))
+        _ → error "no plates"
 
 rankPlates seed worldSize plates gx gy =
     let jitter = jitterAmount seed worldSize gx gy
