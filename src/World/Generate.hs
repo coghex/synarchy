@@ -61,8 +61,8 @@ chunkBorder = 4
 
 globalToChunk ∷ Int → Int → (ChunkCoord, (Int, Int))
 globalToChunk gx gy =
-    let cx = floorDiv gx chunkSize
-        cy = floorDiv gy chunkSize
+    let cx = div gx chunkSize
+        cy = div gy chunkSize
         lx = floorMod gx chunkSize
         ly = floorMod gy chunkSize
     in (ChunkCoord cx cy, (lx, ly))
@@ -85,11 +85,8 @@ cameraChunkCoord facing camX camY =
         (coord, _) = globalToChunk gx gy
     in coord
 
-floorDiv ∷ Int → Int → Int
-floorDiv a b = floor (fromIntegral a / fromIntegral b ∷ Double)
-
 floorMod ∷ Int → Int → Int
-floorMod a b = a - floorDiv a b * b
+floorMod a b = a - div a b * b
 
 -----------------------------------------------------------
 -- Chunk Generation
@@ -237,18 +234,6 @@ generateChunk params coord =
                                             (baseN, baseS, baseE, baseW)
                        mats = buildColumnStrata strataCache' base exposeFrom surfZ
                    in ColumnStrata exposeFrom mats
-
-        tiles = concat
-            [ [ ((lx, ly, z), Tile (unMaterialId mat) 0)
-              | let ColumnStrata startZ mats = strataCache V.! columnIndex lx ly
-              , i ← [0 .. VU.length mats - 1]
-              , let z = startZ + i
-              , let mat = mats VU.! i
-              , mat ≠ matAir
-              ]
-            | lx ← [0 .. chunkSize - 1]
-            , ly ← [0 .. chunkSize - 1]
-            ]
 
         rawChunk = V.generate (chunkSize * chunkSize) $ \idx →
             let ColumnStrata startZ mats = strataCache V.! idx
