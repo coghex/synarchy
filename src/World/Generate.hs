@@ -175,15 +175,33 @@ generateChunk params coord =
             then finalElevVec VU.! toIndex lx ly
             else fallback
 
+        -- Pre-compute wrapped coordinates for the 16×16 chunk interior.
+        -- Used by terrainSurfaceMap and strataCache to avoid redundant
+        -- chunkToGlobal + wrapGlobalU + isBeyondGlacier calls.
+        chunkArea = chunkSize * chunkSize
+
+        (coordGX, coordGY, coordBeyond) = runST $ do
+            gxM     ← VUM.new chunkArea
+            gyM     ← VUM.new chunkArea
+            beyondM ← VUM.new chunkArea
+            forM_ [0 .. chunkArea - 1] $ \idx → do
+                let lx = idx `mod` chunkSize
+                    ly = idx `div` chunkSize
+                    (gx, gy) = chunkToGlobal coord lx ly
+                    (gx', gy') = wrapGlobalU worldSize gx gy
+                VUM.write gxM     idx gx'
+                VUM.write gyM     idx gy'
+                VUM.write beyondM idx (isBeyondGlacier worldSize gx' gy')
+            gxF     ← VU.unsafeFreeze gxM
+            gyF     ← VU.unsafeFreeze gyM
+            beyondF ← VU.unsafeFreeze beyondM
+            pure (gxF, gyF, beyondF)
+
         -- Terrain surface map (vector)
-        terrainSurfaceMap = VU.generate (chunkSize * chunkSize) $ \idx →
-            let lx = idx `mod` chunkSize
-                ly = idx `div` chunkSize
-                (gx, gy) = chunkToGlobal coord lx ly
-                (gx', gy') = wrapGlobalU worldSize gx gy
-            in if isBeyondGlacier worldSize gx' gy'
-               then minBound
-               else lookupElev lx ly
+        terrainSurfaceMap = VU.generate chunkArea $ \idx →
+            if coordBeyond VU.! idx
+            then minBound
+            else lookupElev (idx `mod` chunkSize) (idx `div` chunkSize)
 
         -- Fluids
         oceanFluidMap = computeChunkFluid oceanMap coord terrainSurfaceMap
@@ -207,33 +225,32 @@ generateChunk params coord =
           ) terrainSurfaceMap
 
         -- Per-column stratigraphy cache
-        -- Per-column stratigraphy cache
-        strataCache = V.generate (chunkSize * chunkSize) $ \idx →
-            let lx = idx `mod` chunkSize
-                ly = idx `div` chunkSize
-                (gx, gy) = chunkToGlobal coord lx ly
-                (gx', gy') = wrapGlobalU worldSize gx gy
-            in if isBeyondGlacier worldSize gx' gy'
-               then ColumnStrata 0 VU.empty
-               else
-                   let (surfZ, surfMat) = lookupFinal lx ly
-                       base = lookupBase lx ly
-                       baseN = fst (lookupBase lx (ly - 1))
-                       baseS = fst (lookupBase lx (ly + 1))
-                       baseE = fst (lookupBase (lx + 1) ly)
-                       baseW = fst (lookupBase (lx - 1) ly)
-                       neighborMinZ = minimum
-                           [ lookupElevOr (lx - 1) ly surfZ
-                           , lookupElevOr (lx + 1) ly surfZ
-                           , lookupElevOr lx (ly - 1) surfZ
-                           , lookupElevOr lx (ly + 1) surfZ
-                           ]
-                       exposeFrom = min surfZ neighborMinZ
-                       strataCache' =
-                           buildStrataCache timeline worldSize wsc gx' gy' base
-                                            (baseN, baseS, baseE, baseW)
-                       mats = buildColumnStrata strataCache' base exposeFrom surfZ
-                   in ColumnStrata exposeFrom mats
+        strataCache = V.generate chunkArea $ \idx →
+            if coordBeyond VU.! idx
+            then ColumnStrata 0 VU.empty
+            else
+                let lx = idx `mod` chunkSize
+                    ly = idx `div` chunkSize
+                    gx' = coordGX VU.! idx
+                    gy' = coordGY VU.! idx
+                    (surfZ, surfMat) = lookupFinal lx ly
+                    base = lookupBase lx ly
+                    baseN = fst (lookupBase lx (ly - 1))
+                    baseS = fst (lookupBase lx (ly + 1))
+                    baseE = fst (lookupBase (lx + 1) ly)
+                    baseW = fst (lookupBase (lx - 1) ly)
+                    neighborMinZ = minimum
+                        [ lookupElevOr (lx - 1) ly surfZ
+                        , lookupElevOr (lx + 1) ly surfZ
+                        , lookupElevOr lx (ly - 1) surfZ
+                        , lookupElevOr lx (ly + 1) surfZ
+                        ]
+                    exposeFrom = min surfZ neighborMinZ
+                    strataCache' =
+                        buildStrataCache timeline worldSize wsc gx' gy' base
+                                         (baseN, baseS, baseE, baseW)
+                    mats = buildColumnStrata strataCache' base exposeFrom surfZ
+                in ColumnStrata exposeFrom mats
 
         rawChunk = V.generate (chunkSize * chunkSize) $ \idx →
             let ColumnStrata startZ mats = strataCache V.! idx
