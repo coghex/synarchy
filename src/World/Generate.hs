@@ -532,11 +532,10 @@ data StrataZState = StrataZState
 --   previously re-applied every geo event to 4 neighbors per period
 --   (~200K applyGeoEvent calls per chunk).
 --
---   The chunk-level applyTimelineChunk already computed erosion with
---   correct per-period neighbor data and wrote the authoritative
---   surface elevations. The strata cache only needs neighbor elevations
---   for material assignment at z-levels, where the approximation of
---   using final elevations is visually indistinguishable.
+--   Additionally, uses gpTaggedEvents with per-column bounding-box
+--   filtering to skip events that can't affect this column. This
+--   avoids the expensive distance/sqrt computation inside applyGeoEvent
+--   for events on the other side of the world.
 buildStrataCache ∷ GeoTimeline → Int → WorldScale → Int → Int
                  → (Int, MaterialId)
                  → (Int, Int, Int, Int)
@@ -548,9 +547,17 @@ buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
     in V.fromList (reverse caches)
   where
     step ((elev, surfMat), acc) period =
-        let (eventDeltas, elev', surfMat') =
+        let -- Filter to events whose bbox contains this column.
+            -- Most events are spatially local (volcanoes, craters, rivers),
+            -- so for a typical column this cuts ~200 events down to ~0-5.
+            relevantEvents = filter (\(_, bb) →
+                gx ≥ bbMinX bb ∧ gx ≤ bbMaxX bb ∧
+                gy ≥ bbMinY bb ∧ gy ≤ bbMaxY bb
+                ) (gpTaggedEvents period)
+
+            (eventDeltas, elev', surfMat') =
                 foldl' (applyEvent elev surfMat) ([], elev, surfMat)
-                       (gpEvents period)
+                       relevantEvents
 
             eventsVec = V.fromList (reverse eventDeltas)
 
@@ -583,7 +590,8 @@ buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
                 }
         in (st', cache : acc)
 
-    applyEvent elev surfMat (deltas, e, sm) event =
+    -- Now receives tagged (event, bbox) pairs instead of raw events
+    applyEvent elev surfMat (deltas, e, sm) (event, _bb) =
         let mod' = applyGeoEvent event worldSize gx gy e
             delta = gmElevDelta mod'
             intrusion = gmIntrusionDepth mod'
