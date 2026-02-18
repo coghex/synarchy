@@ -6,14 +6,14 @@ module World.ZoomMap
     ) where
 
 import UPrelude
-import Debug.Trace (trace)
-import Control.Parallel.Strategies (parMap, rdeepseq, parListChunk, using, rseq)
+import Control.Parallel.Strategies (parListChunk, using, rdeepseq)
 import Control.DeepSeq (NFData)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
 import Data.IORef (readIORef, writeIORef, IORef)
 import Data.Maybe (isJust)
 import qualified Data.Map.Strict as Map
+import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
@@ -27,11 +27,10 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Material (MaterialId(..), matGlacier)
-import World.Plate (TectonicPlate(..), generatePlates, elevationAtGlobal
+import World.Plate (TectonicPlate(..), elevationAtGlobal
                    , isBeyondGlacier, wrapGlobalU)
-import World.Fluids (seaLevel, isOceanChunk, computeChunkLava
-                    , computeChunkFluid)
-import World.Generate (applyTimeline)
+import World.Fluids (seaLevel, isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid)
+import World.Generate (applyTimelineFast)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
                    backgroundMapLayer, zoomFadeStart, zoomFadeEnd,
@@ -60,7 +59,8 @@ buildZoomCache ∷ WorldGenParams → V.Vector ZoomChunkEntry
 buildZoomCache params =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
-        plates = generatePlates seed worldSize (wgpPlateCount params)
+        -- FIX #1: Use pre-generated plates instead of regenerating
+        plates = wgpPlates params
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
@@ -76,19 +76,8 @@ buildZoomCache params =
             in if vMax < -halfTiles ∨ vMin > halfTiles
                then Nothing
                else
-               let fastSurface =
-                       let gx = ccx * chunkSize + chunkSize `div` 2
-                           gy = ccy * chunkSize + chunkSize `div` 2
-                           (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
-                           (gx', gy') = wrapGlobalU worldSize gx gy
-                           elev = if baseMat ≡ matGlacier then baseElev
-                                  else if baseElev < -100 then baseElev
-                                  else fst (applyTimeline timeline worldSize gx' gy'
-                                               (baseElev, baseMat))
-                           centerIdx = columnIndex (chunkSize `div` 2) (chunkSize `div` 2)
-                       in VU.generate (chunkSize * chunkSize) $ \idx ->
-                           if idx ≡ centerIdx then elev else minBound
-
+               let -- FIX #2: Use applyTimelineFast which has bbox filtering
+                   -- instead of the unfiltered applyTimeline
                    wrappedBaseGX = ccx * chunkSize
                    wrappedBaseGY = ccy * chunkSize
                    samples = [ let gx = wrappedBaseGX + ox
@@ -98,7 +87,7 @@ buildZoomCache params =
                                in if baseMat ≡ matGlacier
                                   then (baseElev, unMaterialId baseMat)
                                   else if baseElev < -100 then (baseElev, 0)
-                                  else let (e, m) = applyTimeline timeline worldSize gx' gy'
+                                  else let (e, m) = applyTimelineFast timeline worldSize gx' gy'
                                                         (baseElev, baseMat)
                                        in (e, unMaterialId m)
                              | (ox, oy) ← sampleOffsets
@@ -107,23 +96,23 @@ buildZoomCache params =
                    avgElev = let s = sum (map fst samples)
                              in s `div` length samples
 
-                   lavaMap = computeChunkLava features seed plates worldSize
-                                 (ChunkCoord ccx ccy) fastSurface
-                   chunkLava = V.any isJust lavaMap
-
-                   oceanFluidMap = computeChunkFluid oceanMap (ChunkCoord ccx ccy) fastSurface
-                   chunkOcean = V.any isJust oceanFluidMap
+                   -- FIX #3: Use cheap boolean checks instead of allocating
+                   -- full V.Vector just to check V.any isJust
+                   coord = ChunkCoord ccx ccy
+                   chunkLava = hasAnyLavaQuick features seed plates worldSize coord avgElev
+                   chunkOcean = isOceanChunk oceanMap coord
+                             ∨ hasAnyOceanFluid oceanMap coord
 
                in Just ZoomChunkEntry
                    { zceChunkX   = ccx
                    , zceChunkY   = ccy
                    , zceBaseGX   = baseGX
                    , zceBaseGY   = baseGY
-                   , zceTexIndex = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
+                   , zceTexIndex = if isOceanChunk oceanMap coord
                                    then 0
                                    else if chunkLava then 100
                                    else winnerMat
-                   , zceElev     = if isOceanChunk oceanMap (ChunkCoord ccx ccy)
+                   , zceElev     = if isOceanChunk oceanMap coord
                                    then seaLevel else avgElev
                    , zceIsOcean  = chunkOcean
                    , zceHasLava  = chunkLava
@@ -134,8 +123,9 @@ buildZoomCache params =
                     , ccx ← [-halfSize .. halfSize - 1]
                     ]
 
+        -- FIX #4: Use parListChunk for better parallel granularity
         chunkBatchSize = max 1 (length allCoords `div` 128)
-        results = parMap rdeepseq buildOne allCoords
+        results = map buildOne allCoords `using` parListChunk chunkBatchSize rdeepseq
 
     in V.fromList (catMaybes results)
 
@@ -175,16 +165,15 @@ bakeEntries facing cache texPicker lookupSlot defFmSlot =
             actualSlot = fromIntegral (lookupSlot texHandle)
             baseGX = zceBaseGX entry
             baseGY = zceBaseGY entry
-            corners = [ gridToWorld facing gx gy
-                      | gx ← [baseGX, baseGX + chunkSize]
-                      , gy ← [baseGY, baseGY + chunkSize]
-                      ]
-            cxs = map fst corners
-            cys = map snd corners
-            drawX = minimum cxs
-            drawY = minimum cys
-            w = maximum cxs - minimum cxs
-            h = maximum cys - minimum cys
+            -- FIX #5: Compute bounding box without intermediate lists
+            (x0,y0) = gridToWorld facing baseGX baseGY
+            (x1,y1) = gridToWorld facing (baseGX + chunkSize) baseGY
+            (x2,y2) = gridToWorld facing baseGX (baseGY + chunkSize)
+            (x3,y3) = gridToWorld facing (baseGX + chunkSize) (baseGY + chunkSize)
+            drawX = min x0 (min x1 (min x2 x3))
+            drawY = min y0 (min y1 (min y2 y3))
+            w = max x0 (max x1 (max x2 x3)) - drawX
+            h = max y0 (max y1 (max y2 y3)) - drawY
             white = Vec4 1.0 1.0 1.0 1.0
         in BakedZoomEntry
             { bzeChunkX  = zceChunkX entry
@@ -249,7 +238,8 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                 (camX, camY) = camPosition camera
                 ws = wgpWorldSize params
 
-                !visibleQuads = V.foldl' (\acc entry →
+                -- FIX #6: Use V.mapMaybe to stay in vector-land
+                !visibleQuads = V.mapMaybe (\entry →
                     let baseX = bzeDrawX entry
                         baseY = bzeDrawY entry
                         w = bzeWidth entry
@@ -260,11 +250,11 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                         wrappedX = baseX + offX
                         wrappedY = baseY + offY
                     in if isChunkInView vb wrappedX wrappedY w h
-                       then emitQuad entry wrappedX wrappedY alpha layer : acc
-                       else acc
-                    ) [] baked
+                       then Just (emitQuad entry wrappedX wrappedY alpha layer)
+                       else Nothing
+                    ) baked
 
-            return $! V.fromList visibleQuads
+            return visibleQuads
 
 bestZoomWrapOffset ∷ CameraFacing → Int → Float → Float → Float → Float → (Float, Float)
 bestZoomWrapOffset facing worldSize camX camY centerX centerY =
@@ -349,7 +339,8 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
                 (camX, camY) = camPosition camera
                 ws = wgpWorldSize params
 
-                !visibleQuads = V.foldl' (\acc entry →
+                -- FIX #6 (same pattern): Use V.mapMaybe
+                !visibleQuads = V.mapMaybe (\entry →
                     let baseX = bzeDrawX entry
                         baseY = bzeDrawY entry
                         w = bzeWidth entry
@@ -360,11 +351,11 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
                         wrappedX = baseX + offX
                         wrappedY = baseY + offY
                     in if isChunkInView vb wrappedX wrappedY w h
-                       then emitQuadBg entry wrappedX wrappedY alpha layer zSlice : acc
-                       else acc
-                    ) [] baked
+                       then Just (emitQuadBg entry wrappedX wrappedY alpha layer zSlice)
+                       else Nothing
+                    ) baked
 
-            return $! V.fromList visibleQuads
+            return visibleQuads
 
 -----------------------------------------------------------
 -- Screen-Space View Bounds

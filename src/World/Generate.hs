@@ -12,6 +12,7 @@ module World.Generate
     , viewDepth
       -- * Timeline application
     , applyTimeline
+    , applyTimelineFast
       -- * Types re-export
     , ChunkCoord(..)
     ) where
@@ -424,6 +425,50 @@ applyTimeline timeline worldSize gx gy (baseElev, baseMat) =
     let wsc = computeWorldScale worldSize
     in foldl' (applyPeriodSingle worldSize wsc gx gy)
               (baseElev, baseMat) (gtPeriods timeline)
+
+-- | Like applyTimeline but with bounding-box pre-filtering.
+--   Skips events whose bbox doesn't contain (gx, gy).
+--   This is the single biggest speedup for the zoom cache:
+--   most events are spatially small, so most tiles skip most events.
+applyTimelineFast ∷ GeoTimeline → Int → Int → Int → (Int, MaterialId) → (Int, MaterialId)
+applyTimelineFast timeline worldSize gx gy (baseElev, baseMat) =
+    let wsc = computeWorldScale worldSize
+    in foldl' (applyPeriodFast worldSize wsc gx gy)
+              (baseElev, baseMat) (gtPeriods timeline)
+
+applyPeriodFast ∷ Int → WorldScale → Int → Int
+                → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
+applyPeriodFast worldSize wsc gx gy (elev, mat) period =
+    let -- Only apply events whose bbox contains this point
+        relevantEvents = filter (\evt →
+            let bb = eventBBox evt worldSize
+            in gx ≥ bbMinX bb ∧ gx ≤ bbMaxX bb
+             ∧ gy ≥ bbMinY bb ∧ gy ≤ bbMaxY bb
+            ) (gpEvents period)
+
+        (elev', mat') = foldl' applyOneEvent (elev, mat) relevantEvents
+
+        erosionMod = applyErosion
+            (gpErosion period)
+            worldSize
+            (gpDuration period)
+            (wsScale wsc)
+            (unMaterialId mat')
+            elev'
+            (elev', elev', elev', elev')
+        elev'' = elev' + gmElevDelta erosionMod
+        mat'' = case gmMaterialOverride erosionMod of
+            Just m  → MaterialId m
+            Nothing → mat'
+    in (elev'', mat'')
+  where
+    applyOneEvent (e, m) event =
+        let mod' = applyGeoEvent event worldSize gx gy e
+            e' = e + gmElevDelta mod'
+            m' = case gmMaterialOverride mod' of
+                Just mm → MaterialId mm
+                Nothing → m
+        in (e', m')
 
 applyPeriodSingle ∷ Int → WorldScale → Int → Int
                   → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)

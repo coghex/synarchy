@@ -21,6 +21,8 @@ module World.Fluids
     , unionFluidMap
       -- * Query
     , isOceanChunk
+    , hasAnyLavaQuick
+    , hasAnyOceanFluid
     ) where
 
 import UPrelude
@@ -571,3 +573,29 @@ fillFissurePool mv seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth l
 
 floorDiv' ∷ Int → Int → Int
 floorDiv' a b = floor (fromIntegral a / fromIntegral b ∷ Double)
+
+-- | Quick boolean check: does this chunk have any lava?
+--   Avoids allocating a full FluidMap — just checks if any
+--   active volcanic feature is near enough to produce lava.
+hasAnyLavaQuick ∷ [PersistentFeature] → Word64 → [TectonicPlate]
+                → Int → ChunkCoord → Int → Bool
+hasAnyLavaQuick features seed plates worldSize coord _avgElev =
+    let ChunkCoord cx cy = coord
+        chunkMinGX = cx * chunkSize
+        chunkMinGY = cy * chunkSize
+    in any (isNearbyActive worldSize chunkMinGX chunkMinGY) features
+
+-- | Quick boolean check: does this chunk have any ocean fluid?
+--   Just checks the ocean map and neighbors — no vector allocation.
+hasAnyOceanFluid ∷ OceanMap → ChunkCoord → Bool
+hasAnyOceanFluid oceanMap coord =
+    let ChunkCoord cx cy = coord
+    in isOceanChunk oceanMap coord
+     ∨ isOceanChunk oceanMap (ChunkCoord cx (cy - 1))
+     ∨ isOceanChunk oceanMap (ChunkCoord cx (cy + 1))
+     ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) cy)
+     ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) cy)
+     ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy - 1))
+     ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy - 1))
+     ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy + 1))
+     ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy + 1))

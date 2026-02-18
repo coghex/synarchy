@@ -358,8 +358,8 @@ handleWorldCommand env logger cmd = do
             
             -- Set the camera z-slice to just above the surface at (0,0)
             sendGenLog env "Calculating surface elevation..."
-            let plates = generatePlates seed worldSize (wgpPlateCount params)
-                (surfaceElev, _mat) = elevationAtGlobal seed plates worldSize 0 0
+            let (surfaceElev, _mat) = elevationAtGlobal seed (wgpPlates params)
+                                                        worldSize 0 0
                 startZSlice = surfaceElev + surfaceHeadroom
             atomicModifyIORef' (cameraRef env) $ \cam →
                 (cam { camZSlice = startZSlice, camZTracking = True }, ())
