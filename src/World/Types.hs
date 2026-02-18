@@ -17,8 +17,7 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import qualified Engine.Core.Queue as Q
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Material (MaterialId(..))
-import World.Hydrology.Types (HydroFeature, HydroEvolution, RegionalClimate(..)
-                             , GlacierParams(..))
+import World.Hydrology.Types
 
 
 -----------------------------------------------------------
@@ -601,20 +600,197 @@ noBBox ∷ EventBBox
 noBBox = EventBBox minBound minBound maxBound maxBound
 
 eventBBox ∷ GeoEvent → Int → EventBBox
+
+-- Craters: center ± (radius + ejecta)
 eventBBox (CraterEvent cp) _ws =
     let GeoCoord cx cy = cpCenter cp
         r = cpRadius cp + cpEjectaRadius cp
     in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
-eventBBox (VolcanicEvent (VolcanicShape (ShieldVolcano p))) _ws =
-    let GeoCoord cx cy = shCenter p
-        r = shBaseRadius p
+
+-- Volcanic creation events: delegate to the feature shape's own geometry
+eventBBox (VolcanicEvent shape) ws = featureShapeBBox shape ws
+
+-- Volcanic evolution events: every FeatureEvolution constructor
+-- carries feCenter and feRadius, so we can always compute a bbox.
+-- FlankCollapse debris can extend beyond feRadius.
+eventBBox (VolcanicModify _fid evo) _ws =
+    let GeoCoord cx cy = feCenter evo
+        r = case evo of
+                FlankCollapse { feDebrisRadius = dr } → max (feRadius evo) dr
+                _                                     → feRadius evo
     in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
--- ... similar for each event type
+
+-- Eruption lava flows: center ± radius
 eventBBox (EruptionEvent _ flow) _ws =
     let r = lfRadius flow
     in EventBBox (lfSourceX flow - r) (lfSourceY flow - r)
                  (lfSourceX flow + r) (lfSourceY flow + r)
-eventBBox _ _ = noBBox  -- fallback for global events
+
+-- Landslides: center ± radius
+eventBBox (LandslideEvent ls) _ws =
+    let GeoCoord cx cy = lsCenter ls
+        r = lsRadius ls
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+
+-- Floods: center ± radius
+eventBBox (FloodEvent fp) _ws =
+    let GeoCoord cx cy = fpCenter fp
+        r = fpRadius fp
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+
+-- Glaciation: the GlacierParams has center + length + flow direction.
+-- Bbox is the oriented rectangle around the glacier's flow path,
+-- expanded by width and moraine overshoot.
+eventBBox (GlaciationEvent glacier) _ws =
+    glacierBBox glacier
+
+-- Hydro feature creation: delegate to the feature type
+eventBBox (HydroEvent hf) ws = hydroFeatureBBox hf ws
+
+-- Hydro evolution: most return noModification, but we still
+-- need spatial bounds so the bbox filter can skip them early.
+-- Derive from whichever fields the constructor carries.
+eventBBox (HydroModify _fid evo) _ws =
+    hydroEvolutionBBox evo
+
+-----------------------------------------------------------
+-- Bbox helpers for hydro/volcanic sub-types
+-----------------------------------------------------------
+
+-- | Bbox for a FeatureShape (used by VolcanicEvent and HydroEvent)
+featureShapeBBox ∷ FeatureShape → Int → EventBBox
+featureShapeBBox (VolcanicShape vf) ws = volcanicFeatureBBox vf ws
+featureShapeBBox (HydroShape hf) ws   = hydroFeatureBBox hf ws
+
+-- | Bbox for individual volcanic features
+volcanicFeatureBBox ∷ VolcanicFeature → Int → EventBBox
+volcanicFeatureBBox (ShieldVolcano p) _ws =
+    let GeoCoord cx cy = shCenter p
+        r = shBaseRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (CinderCone p) _ws =
+    let GeoCoord cx cy = ccCenter p
+        r = ccBaseRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (LavaDome p) _ws =
+    let GeoCoord cx cy = ldCenter p
+        r = ldBaseRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (Caldera p) _ws =
+    let GeoCoord cx cy = caCenter p
+        r = caOuterRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (SuperVolcano p) _ws =
+    let GeoCoord cx cy = svCenter p
+        r = svEjectaRadius p  -- ejecta is the outermost reach
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (HydrothermalVent p) _ws =
+    let GeoCoord cx cy = htCenter p
+        r = htRadius p
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+volcanicFeatureBBox (FissureVolcano p) _ws =
+    let GeoCoord sx sy = fpStart p
+        GeoCoord ex ey = fpEnd p
+        w = fpWidth p
+    in EventBBox (min sx ex - w) (min sy ey - w)
+                 (max sx ex + w) (max sy ey + w)
+volcanicFeatureBBox (LavaTube p) _ws =
+    let GeoCoord sx sy = ltStart p
+        GeoCoord ex ey = ltEnd p
+        w = ltWidth p
+    in EventBBox (min sx ex - w) (min sy ey - w)
+                 (max sx ex + w) (max sy ey + w)
+
+-- | Bbox for a glacier (used by both GlaciationEvent and HydroEvent GlacierFeature)
+glacierBBox ∷ GlacierParams → EventBBox
+glacierBBox glacier =
+    let GeoCoord cx cy = glCenter glacier
+        len = glLength glacier
+        w = glWidth glacier
+        moraine = glMoraineSize glacier
+        -- Glacier flows from center in flowDir for 'len' tiles.
+        -- The bbox must contain: center, the entire flow path,
+        -- and the terminal moraine overshoot (~15% beyond length).
+        -- Rather than doing trig, use len + moraine as a conservative
+        -- radius in all directions from center. This is slightly
+        -- oversized for diagonal glaciers but cheap and safe.
+        r = len + moraine + w
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+
+-- | Bbox for hydrological features
+hydroFeatureBBox ∷ HydroFeature → Int → EventBBox
+hydroFeatureBBox (RiverFeature river) _ws =
+    -- River spans from source to mouth. Take the bbox of all
+    -- segment endpoints, expanded by the widest valley.
+    let allCoords = rpSourceRegion river : rpMouthRegion river
+                  : concatMap (\seg → [rsStart seg, rsEnd seg]) (rpSegments river)
+        xs = map (\(GeoCoord x _) → x) allCoords
+        ys = map (\(GeoCoord _ y) → y) allCoords
+        maxValley = case rpSegments river of
+            []   → 8
+            segs → maximum (map rsValleyWidth segs)
+        pad = maxValley  -- valley extends this far from the center line
+    in EventBBox (minimum xs - pad) (minimum ys - pad)
+                 (maximum xs + pad) (maximum ys + pad)
+hydroFeatureBBox (GlacierFeature glacier) _ws =
+    glacierBBox glacier
+hydroFeatureBBox (LakeFeature lake) _ws =
+    -- Lakes don't carve terrain (noModification), but give them
+    -- a bbox anyway so the filter works uniformly.
+    let GeoCoord cx cy = lkCenter lake
+        r = lkRadius lake
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+
+-- | Bbox for hydrological evolution events.
+--   Most of these return noModification from applyHydroEvolution,
+--   but a tight bbox means the filter skips them for 99.9% of
+--   columns instead of calling through to the no-op.
+hydroEvolutionBBox ∷ HydroEvolution → EventBBox
+hydroEvolutionBBox (RiverBranch branchPt _angle len _childId) =
+    -- The branch extends 'len' tiles from the branch point.
+    -- Conservative: circle of radius len around the branch point.
+    let GeoCoord bx by = branchPt
+    in EventBBox (bx - len) (by - len) (bx + len) (by + len)
+hydroEvolutionBBox (RiverMeander _ _) =
+    -- Meander has no spatial data in the constructor — it modifies
+    -- the PersistentFeature's segments, not the terrain directly.
+    -- applyRiverEvolution for this returns noModification.
+    -- Use noBBox since we can't narrow it, but this is harmless
+    -- because the apply function is a no-op.
+    noBBox
+hydroEvolutionBBox (RiverCapture _capturedId capturePoint) =
+    -- Capture extends around the capture point. Use a generous radius.
+    let GeoCoord cx cy = capturePoint
+        r = 30  -- conservative: capture doesn't modify terrain directly
+    in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
+hydroEvolutionBBox (RiverDam damPt _lakeId damH) =
+    -- Dam creates a small debris ridge at the dam point.
+    -- This is the one river evolution that actually modifies terrain.
+    let GeoCoord dx dy = damPt
+        r = max 10 damH  -- small area around the dam
+    in EventBBox (dx - r) (dy - r) (dx + r) (dy + r)
+hydroEvolutionBBox RiverDryUp =
+    -- No spatial data, returns noModification. No-op.
+    noBBox
+hydroEvolutionBBox (GlacierAdvance _advLen _advWid) =
+    -- Returns noModification from applyGlacierEvolution.
+    noBBox
+hydroEvolutionBBox (GlacierRetreat _retreatLen _moraineDep) =
+    -- Returns noModification.
+    noBBox
+hydroEvolutionBBox (GlacierMelt _moraineDep) =
+    -- Returns noModification.
+    noBBox
+hydroEvolutionBBox (GlacierBranch branchPt _angle len _childId) =
+    -- Returns noModification, but has spatial data we can use.
+    let GeoCoord bx by = branchPt
+    in EventBBox (bx - len) (by - len) (bx + len) (by + len)
+hydroEvolutionBBox (LakeDrain _) =
+    -- Returns noModification.
+    noBBox
+hydroEvolutionBBox (LakeExpand newRadius _) =
+    -- Returns noModification. No center available in the constructor.
+    noBBox
 
 bboxOverlapsChunk ∷ Int → EventBBox → Int → Int → Int → Int → Bool
 bboxOverlapsChunk _worldSize bb cMinX cMinY cMaxX cMaxY =
