@@ -22,7 +22,8 @@ import Data.List (sortBy)
 import Data.Ord (comparing)
 import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro, matGlacier)
 import World.Scale (WorldScale(..), computeWorldScale, scaleElev, scaleDist)
-import World.Types (chunkSize, TectonicPlate(..))
+import World.Chunk.Types (chunkSize)
+import World.Plate.Types (TectonicPlate(..))
 
 -----------------------------------------------------------
 -- Boundary Classification

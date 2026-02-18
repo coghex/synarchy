@@ -257,11 +257,15 @@ library
                      UI.Render
                      UI.TextBuffer
                      World.Base
+                     World.Constants
+                     World.Command.Types
+                     World.Chunk.Types
                      World.Types
                      World.Thread
                      World.Grid
                      World.Render
                      World.Generate
+                     World.Generation.Types
                      World.Geology
                      World.Geology.Types
                      World.Geology.Log
@@ -271,6 +275,7 @@ library
                      World.Geology.Generate
                      World.Geology.Evolution
                      World.Geology.Timeline
+                     World.Geology.Timeline.Types
                      World.Geology.Erosion
                      World.Geology.Event
                      World.Hydrology.Types
@@ -278,10 +283,21 @@ library
                      World.Hydrology.Event
                      World.Hydrology.River
                      World.Hydrology.Glacier
+                     World.Ocean.Types
+                     World.Page.Types
                      World.Plate
+                     World.Plate.Types
+                     World.Region.Types
+                     World.Render.Camera.Types
+                     World.Render.Textures.Types
+                     World.Render.Zoom.Types
+                     World.State.Types
                      World.Scale
                      World.Slope
+                     World.Tile.Types
+                     World.Time.Types
                      World.Fluids
+                     World.Fluid.Types
                      World.Material
                      World.Preview
                      World.ZoomMap

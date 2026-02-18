@@ -31,7 +31,13 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.Hashable (Hashable(..))
 import World.Base (GeoFeatureId(..), GeoCoord(..))
-import World.Types
+import World.Region.Types (RegionCoord(..), RegionalData(..)
+                          , emptyRegionalData, regionSize)
+import World.Geology.Timeline.Types (PersistentFeature(..), GeoPeriod(..)
+                                    , GeoScale(..), FeatureShape(..)
+                                    , VolcanicFeature(..), SuperVolcanoParams(..)
+                                    , LavaDomeParams(..), FissureParams(..)
+                                    , ShieldParams(..))
 import World.Plate (TectonicPlate(..), twoNearestPlates, isBeyondGlacier)
 import World.Material (matBasalt, matObsidian)
 
