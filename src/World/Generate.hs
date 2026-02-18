@@ -224,10 +224,16 @@ generateChunk params coord =
                 Nothing → surfZ
           ) terrainSurfaceMap
 
-        -- Per-column stratigraphy cache
-        strataCache = V.generate chunkArea $ \idx →
+        -- Build per-column tile data directly, fusing stratigraphy
+        -- computation with ColumnTiles construction to avoid an
+        -- intermediate V.Vector ColumnStrata allocation.
+        rawChunk = V.generate chunkArea $ \idx →
             if coordBeyond VU.! idx
-            then ColumnStrata 0 VU.empty
+            then ColumnTiles
+                { ctStartZ = 0
+                , ctMats   = VU.empty
+                , ctSlopes = VU.empty
+                }
             else
                 let lx = idx `mod` chunkSize
                     ly = idx `div` chunkSize
@@ -246,19 +252,15 @@ generateChunk params coord =
                         , lookupElevOr lx (ly + 1) surfZ
                         ]
                     exposeFrom = min surfZ neighborMinZ
-                    strataCache' =
-                        buildStrataCache timeline worldSize wsc gx' gy' base
-                                         (baseN, baseS, baseE, baseW)
-                    mats = buildColumnStrata strataCache' base exposeFrom surfZ
-                in ColumnStrata exposeFrom mats
-
-        rawChunk = V.generate (chunkSize * chunkSize) $ \idx →
-            let ColumnStrata startZ mats = strataCache V.! idx
-            in ColumnTiles
-                { ctStartZ = startZ
-                , ctMats   = VU.map unMaterialId mats
-                , ctSlopes = VU.replicate (VU.length mats) 0
-                }
+                    cache = buildStrataCache timeline worldSize wsc gx' gy' base
+                                             (baseN, baseS, baseE, baseW)
+                    mats = buildColumnStrata cache base exposeFrom surfZ
+                    matIds = VU.map unMaterialId mats
+                in ColumnTiles
+                    { ctStartZ = exposeFrom
+                    , ctMats   = matIds
+                    , ctSlopes = VU.replicate (VU.length matIds) 0
+                    }
 
         noNeighborLookup ∷ ChunkCoord → Maybe (VU.Vector Int)
         noNeighborLookup _ = Nothing
