@@ -144,7 +144,7 @@ tickWorldTime env dt = do
 --   Keeps the world thread responsive so quad rendering
 --   isn't starved during camera panning.
 maxChunksPerTick ∷ Int
-maxChunksPerTick = 2
+maxChunksPerTick = 4
 
 updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
 updateChunkLoading env logger = do
@@ -203,7 +203,7 @@ updateChunkLoading env logger = do
                             -- force chunk eval here
                             when (not $ null batch) $ do
                                 let seed = wgpSeed params
-                                let !newChunks = map (\coord →
+                                let !newChunks = parMap rdeepseq (\coord →
                                         let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
                                         in LoadedChunk
                                             { lcCoord      = coord
