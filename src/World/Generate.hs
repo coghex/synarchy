@@ -115,51 +115,64 @@ generateChunk params coord =
         wsc = computeWorldScale worldSize
         oceanMap = wgpOceanMap params
 
-        -- Build base elevation map for all columns including border.
-        baseColumns = HM.fromList
-            [ ( (lx, ly)
-              , elevationAtGlobal seed plates worldSize gx' gy'
-              )
-            | lx ← [negate chunkBorder .. chunkSize + chunkBorder - 1]
-            , ly ← [negate chunkBorder .. chunkSize + chunkBorder - 1]
-            , let (gx, gy) = chunkToGlobal coord lx ly
-                  (gx', gy') = wrapGlobalU worldSize gx gy
-            , not (isBeyondGlacier worldSize gx' gy')
-            ]
+        borderSize = chunkSize + 2 * chunkBorder
+        borderArea = borderSize * borderSize
 
-        lookupBase lx ly = case HM.lookup (lx, ly) baseColumns of
-            Just v  → v
-            Nothing → (0, MaterialId 1)
+        toIndex lx ly =
+            let bx = lx + chunkBorder
+                by = ly + chunkBorder
+            in by * borderSize + bx
 
-        -- Apply timeline with erosion: fold per-period across all columns
-        -- Returns HashMap (lx,ly) → (finalElev, finalMat)
-        finalColumns = applyTimelineChunk timeline worldSize wsc coord baseColumns
+        fromIndex idx =
+            let (by, bx) = idx `divMod` borderSize
+            in (bx - chunkBorder, by - chunkBorder)
 
-        lookupElev lx ly = case HM.lookup (lx, ly) finalColumns of
-            Just (z, _) → z
-            Nothing     → 0
+        inBorder lx ly =
+            lx ≥ negate chunkBorder ∧ lx < chunkSize + chunkBorder ∧
+            ly ≥ negate chunkBorder ∧ ly < chunkSize + chunkBorder
 
-        -- | Neighbor elevation lookup with a fallback.
-        --   Missing neighbors use the fallback (the tile's own elevation)
-        --   instead of 0, preventing phantom cliffs at chunk edges
-        --   and glacier boundaries.
-        lookupElevOr lx ly fallback = case HM.lookup (lx, ly) finalColumns of
-            Just (z, _) → z
-            Nothing     → fallback
+        -- Base elevation/material grid (with border)
+        baseVec = V.generate borderArea $ \idx ->
+            let (lx, ly) = fromIndex idx
+                (gx, gy) = chunkToGlobal coord lx ly
+                (gx', gy') = wrapGlobalU worldSize gx gy
+            in if isBeyondGlacier worldSize gx' gy'
+               then (0, MaterialId 1)
+               else elevationAtGlobal seed plates worldSize gx' gy'
 
-        -- Build the terrain surface map (raw elevation, used for fluid depth)
+        lookupBase lx ly =
+            if inBorder lx ly
+            then baseVec V.! toIndex lx ly
+            else (0, MaterialId 1)
+
+        -- Apply timeline using vectors
+        finalVec = applyTimelineChunk timeline worldSize wsc coord baseVec
+
+        lookupFinal lx ly =
+            if inBorder lx ly
+            then finalVec V.! toIndex lx ly
+            else (0, MaterialId 1)
+
+        lookupElev lx ly = fst (lookupFinal lx ly)
+
+        lookupElevOr lx ly fallback =
+            if inBorder lx ly
+            then fst (finalVec V.! toIndex lx ly)
+            else fallback
+
+        -- Terrain surface map (vector)
         terrainSurfaceMap = VU.generate (chunkSize * chunkSize) $ \idx ->
             let lx = idx `mod` chunkSize
                 ly = idx `div` chunkSize
                 (gx, gy) = chunkToGlobal coord lx ly
                 (gx', gy') = wrapGlobalU worldSize gx gy
             in if isBeyondGlacier worldSize gx' gy'
-               then minBound   -- same default you used with lookupDefault
+               then minBound
                else lookupElev lx ly
 
-        -- Compute fluid map from terrain surface (now vectors)
+        -- Fluids
         oceanFluidMap = computeChunkFluid oceanMap coord terrainSurfaceMap
-        features = gtFeatures (wgpGeoTimeline params)
+        features = gtFeatures timeline
         lavaFluidMap = computeChunkLava features seed plates worldSize
                                         coord terrainSurfaceMap
         lakeFluidMap = computeChunkLakes features seed plates worldSize
@@ -171,8 +184,7 @@ generateChunk params coord =
                 $ unionFluidMap lavaFluidMap
                 $ unionFluidMap lakeFluidMap riverFluidMap
 
-        -- Camera-facing surface map: ocean columns report sea level
-        -- so camera tracking hovers above water, not at the ocean floor
+        -- Surface map with fluids
         surfaceMap = VU.imap (\idx surfZ ->
             case fluidMap V.! idx of
                 Just fc → max surfZ (fcSurface fc)
@@ -185,18 +197,12 @@ generateChunk params coord =
                 , let (gx, gy) = chunkToGlobal coord lx ly
                       (gx', gy') = wrapGlobalU worldSize gx gy
                 , not (isBeyondGlacier worldSize gx' gy')
-                , let (surfZ, surfMat) =
-                          case HM.lookup (lx, ly) finalColumns of
-                              Just v  → v
-                              Nothing → (0, MaterialId 1)
+                , let (surfZ, surfMat) = lookupFinal lx ly
                       base = lookupBase lx ly
-                      -- Neighbor base elevations for materialAtDepth erosion
                       baseN = fst (lookupBase lx (ly - 1))
                       baseS = fst (lookupBase lx (ly + 1))
                       baseE = fst (lookupBase (lx + 1) ly)
                       baseW = fst (lookupBase (lx - 1) ly)
-                      -- Use surfZ as fallback so missing neighbors
-                      -- don't drag neighborMinZ to 0
                       neighborMinZ = minimum
                           [ lookupElevOr (lx - 1) ly surfZ
                           , lookupElevOr (lx + 1) ly surfZ
@@ -214,9 +220,12 @@ generateChunk params coord =
                                                        z
                 , tile ← generateExposedColumn lx ly surfZ exposeFrom lookupMat
                 ]
+
         rawTiles = HM.fromList tiles
+
         noNeighborLookup ∷ ChunkCoord → Maybe (VU.Vector Int)
         noNeighborLookup _ = Nothing
+
         slopedTiles = computeChunkSlopes seed coord terrainSurfaceMap
                                          fluidMap rawTiles noNeighborLookup
     in (slopedTiles, surfaceMap, terrainSurfaceMap, fluidMap)
@@ -242,63 +251,84 @@ generateExposedColumn lx ly surfaceZ exposeFrom lookupMat =
 --   Erosion smooths each tile toward its neighbors' post-event elevations,
 --   using the shared elevation map for neighbor lookups.
 applyTimelineChunk ∷ GeoTimeline → Int → WorldScale → ChunkCoord
-                   → HM.HashMap (Int, Int) (Int, MaterialId)
-                   → HM.HashMap (Int, Int) (Int, MaterialId)
-applyTimelineChunk timeline worldSize wsc coord baseColumns =
-    let -- Pre-compute chunk bounds (with border) in global coords
-        ChunkCoord cx cy = coord
+                   → V.Vector (Int, MaterialId)
+                   → V.Vector (Int, MaterialId)
+applyTimelineChunk timeline worldSize wsc coord baseVec =
+        -- Pre-compute chunk bounds (with border)
+    let ChunkCoord cx cy = coord
         chunkMinGX = cx * chunkSize - chunkBorder
         chunkMinGY = cy * chunkSize - chunkBorder
         chunkMaxGX = cx * chunkSize + chunkSize + chunkBorder - 1
         chunkMaxGY = cy * chunkSize + chunkSize + chunkBorder - 1
+
     in foldl' (applyOnePeriod chunkMinGX chunkMinGY chunkMaxGX chunkMaxGY)
-              baseColumns (gtPeriods timeline)
+              baseVec (gtPeriods timeline)
   where
-    applyOnePeriod cMinGX cMinGY cMaxGX cMaxGY elevMap period =
-        let -- Filter to only events whose bounding box overlaps this chunk
+    applyOnePeriod cMinGX cMinGY cMaxGX cMaxGY elevVec period =
+        let borderSize = chunkSize + 2 * chunkBorder
+            borderArea = borderSize * borderSize
+            toIndex lx ly =
+                let bx = lx + chunkBorder
+                    by = ly + chunkBorder
+                in by * borderSize + bx
+
+            fromIndex idx =
+                let (by, bx) = idx `divMod` borderSize
+                in (bx - chunkBorder, by - chunkBorder)
+
+            inBorder lx ly =
+                lx ≥ negate chunkBorder ∧ lx < chunkSize + chunkBorder ∧
+                ly ≥ negate chunkBorder ∧ ly < chunkSize + chunkBorder
+
+            lookupVec vec lx ly fallback =
+                if inBorder lx ly
+                then fst (vec V.! toIndex lx ly)
+                else fallback
+
             relevantEvents = filter (\evt →
                 let bb = eventBBox evt worldSize
                 in bboxOverlapsChunk worldSize bb cMinGX cMinGY cMaxGX cMaxGY
                 ) (gpEvents period)
 
-            -- Step 1: Apply relevant events only
-            postEvents = if null relevantEvents
-                then elevMap  -- skip the entire mapWithKey!
-                else HM.mapWithKey (\(lx, ly) (elev, mat) →
-                    let (gx, gy) = chunkToGlobal coord lx ly
+            -- Step 1: apply events
+            postEvents =
+                if null relevantEvents
+                then elevVec
+                else V.imap (\idx (elev, mat) ->
+                    let (lx, ly) = fromIndex idx
+                        (gx, gy) = chunkToGlobal coord lx ly
                         (gx', gy') = wrapGlobalU worldSize gx gy
                     in if mat ≡ matGlacier
                        then (elev, mat)
                        else foldl' (applyOneEvent worldSize gx' gy')
                                    (elev, mat) relevantEvents
-                    ) elevMap
+                    ) elevVec
 
-            -- Step 2: Apply erosion using neighbor lookups from postEvents
-            lookupPostEvent lx ly fallback = case HM.lookup (lx, ly) postEvents of
-                Just (z, _) → z
-                Nothing     → fallback
-
-            postErosion = HM.mapWithKey (\(lx, ly) (elev, mat) →
+            -- Step 2: erosion
+            postErosion = V.imap (\idx (elev, mat) ->
                 if mat ≡ matGlacier
                 then (elev, mat)
-                else let neighbors = ( lookupPostEvent lx (ly - 1) elev -- N
-                                     , lookupPostEvent lx (ly + 1) elev -- S
-                                     , lookupPostEvent (lx + 1) ly elev -- E
-                                     , lookupPostEvent (lx - 1) ly elev -- W
-                                     )
-                         erosionMod = applyErosion
-                             (gpErosion period)
-                             worldSize
-                             (gpDuration period)
-                             (wsScale wsc)
-                             (unMaterialId mat)
-                             elev
-                             neighbors
-                         elev' = elev + gmElevDelta erosionMod
-                         mat'  = case gmMaterialOverride erosionMod of
-                             Just m  → MaterialId m
-                             Nothing → mat
-                     in (elev', mat')
+                else
+                    let (lx, ly) = fromIndex idx
+                        neighbors =
+                            ( lookupVec postEvents lx (ly - 1) elev
+                            , lookupVec postEvents lx (ly + 1) elev
+                            , lookupVec postEvents (lx + 1) ly elev
+                            , lookupVec postEvents (lx - 1) ly elev
+                            )
+                        erosionMod = applyErosion
+                            (gpErosion period)
+                            worldSize
+                            (gpDuration period)
+                            (wsScale wsc)
+                            (unMaterialId mat)
+                            elev
+                            neighbors
+                        elev' = elev + gmElevDelta erosionMod
+                        mat' = case gmMaterialOverride erosionMod of
+                            Just m  → MaterialId m
+                            Nothing → mat
+                    in (elev', mat')
                 ) postEvents
         in postErosion
 

@@ -71,6 +71,7 @@ test-suite synarchy-test
                 , mtl
                 , vector
                 , vector-algorithms
+                , vector-th-unbox
                 , yaml
                 , aeson
                 , deepseq
@@ -323,6 +324,7 @@ library
                  , array
                  , vector
                  , vector-algorithms
+                 , vector-th-unbox
                  , yaml
                  , aeson
                  , deepseq
@@ -429,6 +431,7 @@ executable synarchy
                  , time
                  , vector
                  , vector-algorithms
+                 , vector-th-unbox
                  , yaml
                  , aeson
                  , deepseq
