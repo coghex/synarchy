@@ -47,7 +47,7 @@ chunkLoadRadius = 2
 -- | How many z-levels below the z-slice are rendered.
 --   This is a RENDER window, not a generation limit.
 viewDepth ∷ Int
-viewDepth = 25
+viewDepth = 100
 
 -- | Border size around each chunk for neighbor lookups.
 --   Needs to be large enough for erosion neighbor access.
