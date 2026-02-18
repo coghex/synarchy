@@ -282,6 +282,12 @@ library
                      World.Hydrology.Climate
                      World.Hydrology.Event
                      World.Hydrology.River
+                     World.Hydrology.River.Generation
+                     World.Hydrology.River.Evolution
+                     World.Hydrology.River.Meander
+                     World.Hydrology.River.Tributary
+                     World.Hydrology.River.Carving
+                     World.Hydrology.River.Common
                      World.Hydrology.Glacier
                      World.Hydrology.Glacier.Common
                      World.Hydrology.Glacier.Generation
