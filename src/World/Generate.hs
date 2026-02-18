@@ -12,8 +12,6 @@ module World.Generate
     , viewDepth
       -- * Timeline application
     , applyTimeline
-      -- * Stratigraphy
-    , materialAtDepth
       -- * Types re-export
     , ChunkCoord(..)
     ) where
@@ -212,6 +210,7 @@ generateChunk params coord =
           ) terrainSurfaceMap
 
         -- Per-column stratigraphy cache
+        -- Per-column stratigraphy cache
         strataCache = V.generate (chunkSize * chunkSize) $ \idx →
             let lx = idx `mod` chunkSize
                 ly = idx `div` chunkSize
@@ -220,25 +219,23 @@ generateChunk params coord =
             in if isBeyondGlacier worldSize gx' gy'
                then ColumnStrata 0 VU.empty
                else
-               let (surfZ, surfMat) = lookupFinal lx ly
-                   base = lookupBase lx ly
-                   baseN = fst (lookupBase lx (ly - 1))
-                   baseS = fst (lookupBase lx (ly + 1))
-                   baseE = fst (lookupBase (lx + 1) ly)
-                   baseW = fst (lookupBase (lx - 1) ly)
-                   neighborMinZ = minimum
-                       [ lookupElevOr (lx - 1) ly surfZ
-                       , lookupElevOr (lx + 1) ly surfZ
-                       , lookupElevOr lx (ly - 1) surfZ
-                       , lookupElevOr lx (ly + 1) surfZ
-                       ]
-                   exposeFrom = min surfZ neighborMinZ
-               
-                   strataCache =
-                       buildStrataCache timeline worldSize wsc gx' gy' base
-                                        (baseN, baseS, baseE, baseW)
-               
-                   mats = buildColumnStrata strataCache base exposeFrom surfZ
+                   let (surfZ, surfMat) = lookupFinal lx ly
+                       base = lookupBase lx ly
+                       baseN = fst (lookupBase lx (ly - 1))
+                       baseS = fst (lookupBase lx (ly + 1))
+                       baseE = fst (lookupBase (lx + 1) ly)
+                       baseW = fst (lookupBase (lx - 1) ly)
+                       neighborMinZ = minimum
+                           [ lookupElevOr (lx - 1) ly surfZ
+                           , lookupElevOr (lx + 1) ly surfZ
+                           , lookupElevOr lx (ly - 1) surfZ
+                           , lookupElevOr lx (ly + 1) surfZ
+                           ]
+                       exposeFrom = min surfZ neighborMinZ
+                       strataCache' =
+                           buildStrataCache timeline worldSize wsc gx' gy' base
+                                            (baseN, baseS, baseE, baseW)
+                       mats = buildColumnStrata strataCache' base exposeFrom surfZ
                    in ColumnStrata exposeFrom mats
 
         tiles = concat
@@ -445,29 +442,6 @@ applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
                 Nothing → m
         in (e', m')
 
------------------------------------------------------------
--- Stratigraphy: per-Z material query
------------------------------------------------------------
-
-materialAtDepth ∷ GeoTimeline → Int → Int → Int
-                → (Int, MaterialId)
-                → (Int, Int, Int, Int)
-                → Int
-                → MaterialId
-materialAtDepth timeline worldSize gx gy (baseElev, baseMat) (nBaseN, nBaseS, nBaseE, nBaseW) queryZ =
-    let wsc = computeWorldScale worldSize
-
-        initState = StrataState
-            { ssElev     = baseElev
-            , ssSurfMat  = baseMat
-            , ssUplift   = 0
-            , ssZMat     = baseMat
-            , ssNeighbors = (nBaseN, nBaseS, nBaseE, nBaseW)
-            }
-
-        finalState = foldl' (applyPeriodStrata worldSize wsc gx gy queryZ)
-                            initState (gtPeriods timeline)
-    in ssZMat finalState
 
 data StrataState = StrataState
     { ssElev      ∷ !Int
