@@ -236,17 +236,24 @@ fillRiverFromFeature mv pf worldSize chunkGX chunkGY surfaceMap =
                     Just fc → MV.write mv idx (Just fc)
         _ → pure ()
 
-bestRiverFill ∷ Int → Int → Int → Int → Word64 → [RiverSegment]
-              → Maybe FluidCell
-bestRiverFill worldSize gx gy surfZ meanderSeed segments =
-    let results = map (riverFillFromSegment worldSize gx gy surfZ meanderSeed) segments
-    in foldl' pickBestFill Nothing results
-
 pickBestFill ∷ Maybe FluidCell → Maybe FluidCell → Maybe FluidCell
 pickBestFill Nothing b = b
 pickBestFill a Nothing = a
 pickBestFill (Just a) (Just b) =
     if fcSurface b > fcSurface a then Just b else Just a
+
+bestRiverFill ∷ Int → Int → Int → Int → Word64 → [RiverSegment]
+              → Maybe FluidCell
+bestRiverFill worldSize gx gy surfZ meanderSeed segments =
+    let -- Check each segment
+        segResults = map (riverFillFromSegment worldSize gx gy surfZ meanderSeed) segments
+        -- Check each waypoint (joint between segments)
+        -- Waypoint caps: check start of every segment + end of last
+        waypointResults = map (riverFillFromWaypoint worldSize gx gy surfZ) segments
+                       <> case segments of
+                              [] → []
+                              _  → [riverFillFromEndpoint worldSize gx gy surfZ (last segments)]
+    in foldl' pickBestFill Nothing (segResults <> waypointResults)
 
 riverFillFromSegment ∷ Int → Int → Int → Int → Word64 → RiverSegment
                      → Maybe FluidCell
@@ -259,41 +266,84 @@ riverFillFromSegment worldSize gx gy surfZ _meanderSeed seg =
     in if segLen2 < 1.0
        then Nothing
        else
-       let px = fromIntegral (wrappedDeltaForFluid worldSize gx sx) ∷ Float
+       let segLen = sqrt segLen2
+           px = fromIntegral (wrappedDeltaForFluid worldSize gx sx) ∷ Float
            py = fromIntegral (gy - sy) ∷ Float
 
-           -- Project onto segment, allow slight overshoot for continuity
+           -- Project onto segment line (unclamped)
            tRaw = (px * dx' + py * dy') / segLen2
-           t = max (-0.05) (min 1.05 tRaw)
 
-           closestX = t * dx'
-           closestY = t * dy'
-           perpX = px - closestX
-           perpY = py - closestY
-           perpDist = sqrt (perpX * perpX + perpY * perpY)
-
-           valleyHalfW = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
-
-       in if perpDist > valleyHalfW
+       -- Only fill the middle of the segment, not past endpoints.
+       -- The waypoint caps handle the endpoint regions.
+       in if tRaw < 0.0 ∨ tRaw > 1.0
           then Nothing
           else
-          let startElev = fromIntegral (rsStartElev seg) ∷ Float
-              endElev   = fromIntegral (rsEndElev seg) ∷ Float
-              -- Clamp t to [0,1] for elevation interpolation
-              tClamped = max 0.0 (min 1.0 t)
-              interpElev = startElev + tClamped * (endElev - startElev)
-
-              depth = fromIntegral (rsDepth seg) ∷ Float
-              channelFloor = interpElev - depth
-
-              flow = rsFlowRate seg
-              waterDepth = 1.0 + flow * 3.0
-
-              waterSurface = round (channelFloor + waterDepth) ∷ Int
-
-          in if surfZ ≥ waterSurface
+          let closestX = tRaw * dx'
+              closestY = tRaw * dy'
+              perpX = px - closestX
+              perpY = py - closestY
+              perpDist = sqrt (perpX * perpX + perpY * perpY)
+              valleyHalfW = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
+          in if perpDist > valleyHalfW
              then Nothing
-             else Just (FluidCell River waterSurface)
+             else
+             let startElev = fromIntegral (rsStartElev seg) ∷ Float
+                 endElev   = fromIntegral (rsEndElev seg) ∷ Float
+                 interpElev = startElev + tRaw * (endElev - startElev)
+                 depth = fromIntegral (rsDepth seg) ∷ Float
+                 channelFloor = interpElev - depth
+                 flow = rsFlowRate seg
+                 waterDepth = 1.0 + flow * 3.0
+                 waterSurface = round (channelFloor + waterDepth) ∷ Int
+             in if surfZ ≥ waterSurface
+                then Nothing
+                else Just (FluidCell River waterSurface)
+
+-- | Fill the circular cap around a segment's START waypoint.
+--   Any tile within valley width of the waypoint gets fluid.
+--   This closes the gaps where two segments meet at an angle.
+riverFillFromWaypoint ∷ Int → Int → Int → Int → RiverSegment
+                      → Maybe FluidCell
+riverFillFromWaypoint worldSize gx gy surfZ seg =
+    let GeoCoord wx wy = rsStart seg
+        dx = fromIntegral (wrappedDeltaForFluid worldSize gx wx) ∷ Float
+        dy = fromIntegral (gy - wy) ∷ Float
+        dist = sqrt (dx * dx + dy * dy)
+        valleyHalfW = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
+    in if dist > valleyHalfW
+       then Nothing
+       else
+       let elev = fromIntegral (rsStartElev seg) ∷ Float
+           depth = fromIntegral (rsDepth seg) ∷ Float
+           channelFloor = elev - depth
+           flow = rsFlowRate seg
+           waterDepth = 1.0 + flow * 3.0
+           waterSurface = round (channelFloor + waterDepth) ∷ Int
+       in if surfZ ≥ waterSurface
+          then Nothing
+          else Just (FluidCell River waterSurface)
+
+-- | Fill the circular cap around a segment's END waypoint.
+riverFillFromEndpoint ∷ Int → Int → Int → Int → RiverSegment
+                      → Maybe FluidCell
+riverFillFromEndpoint worldSize gx gy surfZ seg =
+    let GeoCoord wx wy = rsEnd seg
+        dx = fromIntegral (wrappedDeltaForFluid worldSize gx wx) ∷ Float
+        dy = fromIntegral (gy - wy) ∷ Float
+        dist = sqrt (dx * dx + dy * dy)
+        valleyHalfW = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
+    in if dist > valleyHalfW
+       then Nothing
+       else
+       let elev = fromIntegral (rsEndElev seg) ∷ Float
+           depth = fromIntegral (rsDepth seg) ∷ Float
+           channelFloor = elev - depth
+           flow = rsFlowRate seg
+           waterDepth = 1.0 + flow * 3.0
+           waterSurface = round (channelFloor + waterDepth) ∷ Int
+       in if surfZ ≥ waterSurface
+          then Nothing
+          else Just (FluidCell River waterSurface)
 
 -----------------------------------------------------------
 -- Lakes
