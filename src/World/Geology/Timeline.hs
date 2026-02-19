@@ -12,6 +12,7 @@ import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as VU
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
+import World.Fluids (fixupSegmentContinuity)
 import World.Plate (generatePlates, TectonicPlate, elevationAtGlobal, isBeyondGlacier
                    , wrapGlobalU)
 import World.Generate.Timeline (applyTimelineFast)
@@ -706,7 +707,8 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
     -- 25%: Meander (increased from 20%)
     then let h2 = hashGeo seed fidInt (910 + ageIdx)
              meanderAmt = 0.15 + hashToFloatGeo h2 * 0.4
-             newSegs = meanderSegments seed fidInt meanderAmt (rpSegments river)
+             newSegs = fixupSegmentContinuity $
+                           meanderSegments seed fidInt meanderAmt (rpSegments river)
              newRiver = river { rpSegments = newSegs }
              evt = HydroModify fid (RiverMeander
                      (fromIntegral (hashGeo seed fidInt (911 + ageIdx)))
@@ -943,7 +945,7 @@ evolveDeepen seed ageIdx periodIdx pf river tbs =
         h2 = hashGeo seed fidInt (930 + ageIdx)
         deepenAmt = hashToRangeGeo h2 1 3
         maxDepth = 20  -- 200m cap
-        newSegs = map (\seg → seg
+        newSegs = fixupSegmentContinuity $ map (\seg → seg
             { rsDepth = min maxDepth (rsDepth seg + deepenAmt)
             , rsValleyWidth = rsValleyWidth seg + 1
             }) (rpSegments river)
@@ -1098,8 +1100,9 @@ buildRiverFromPath seed riverIdx baseFlow path =
     let -- Enforce monotonic descent
         monoPath = enforceMonotonicPath path
         numWP = length monoPath
-        segments = zipWith (buildSegFromWaypoints seed numWP baseFlow)
-                           [0..] (zip monoPath (tail monoPath))
+        segments = fixupSegmentContinuity $
+                       zipWith (buildSegFromWaypoints seed numWP baseFlow)
+                               [0..] (zip monoPath (tail monoPath))
         (srcX, srcY, _) = head monoPath
         (mouthX, mouthY, _) = last monoPath
         totalFlow = case segments of
