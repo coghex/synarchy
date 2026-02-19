@@ -15,6 +15,8 @@ module World.Geology.Timeline.Types
     , bboxOverlapsChunk
     , tagEventsWithBBox
     , GeoEvent(..)
+    , RiverSegmentCarve(..)    -- NEW
+    , RiverDeltaParams(..)     -- NEW
     , FeatureShape(..)
     , FeatureActivity(..)
     , FeatureEvolution(..)
@@ -35,9 +37,11 @@ module World.Geology.Timeline.Types
     , VolcanicActivity(..)
     , PersistentFeature(..)
     , LavaFlow(..)
+    , explodeRiverEvent        -- NEW: helper to split river into segments
     ) where
 
 import UPrelude
+import qualified Data.Vector as V
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Hydrology.Types
     ( HydroFeature(..)
@@ -64,6 +68,8 @@ data GeoPeriod = GeoPeriod
     , gpEvents     ∷ ![GeoEvent]
     , gpErosion    ∷ !ErosionParams
     , gpTaggedEvents ∷ ![(GeoEvent, EventBBox)]
+    , gpExplodedEvents ∷ !(V.Vector (GeoEvent, EventBBox))
+    , gpPeriodBBox    ∷ !EventBBox      -- ^ Bounding box of all events in this period
     } deriving (Show, Eq)
 
 data GeoTimeline = GeoTimeline
@@ -90,6 +96,67 @@ data EventBBox = EventBBox
 
 noBBox ∷ EventBBox
 noBBox = EventBBox minBound minBound maxBound maxBound
+
+-----------------------------------------------------------
+-- NEW: Per-segment river carving event data
+-----------------------------------------------------------
+
+-- | A single river segment's carving parameters.
+--   Replaces the old whole-river HydroEvent (RiverFeature river)
+--   at the event level. Each segment gets its own tight bbox.
+data RiverSegmentCarve = RiverSegmentCarve
+    { rscSegment     ∷ !RiverSegment
+    , rscMeanderSeed ∷ !Word64
+    } deriving (Show, Eq)
+
+-- | Delta deposit at the river mouth. Extracted from the last
+--   segment so it gets its own small bbox around the mouth.
+data RiverDeltaParams = RiverDeltaParams
+    { rdpLastSegment ∷ !RiverSegment  -- ^ Last segment (for mouth position + direction)
+    , rdpFlowRate    ∷ !Float         -- ^ Total river flow (drives delta size)
+    } deriving (Show, Eq)
+
+-----------------------------------------------------------
+-- GeoEvent — now with per-segment river events
+-----------------------------------------------------------
+
+data GeoEvent
+    = CraterEvent !CraterParams
+    | VolcanicEvent !FeatureShape
+    | VolcanicModify !GeoFeatureId !FeatureEvolution
+    | EruptionEvent !GeoFeatureId !LavaFlow
+    | LandslideEvent !LandslideParams
+    | GlaciationEvent !GlacierParams
+    | FloodEvent !FloodParams
+    | HydroEvent !HydroFeature
+    | HydroModify !GeoFeatureId !HydroEvolution
+    | RiverSegmentEvent !RiverSegmentCarve    -- NEW
+    | RiverDeltaEvent   !RiverDeltaParams     -- NEW
+    deriving (Show, Eq)
+
+-----------------------------------------------------------
+-- Explode a river HydroEvent into per-segment events
+-----------------------------------------------------------
+
+-- | Split a single HydroEvent (RiverFeature river) into N+1 events:
+--   one RiverSegmentEvent per segment, plus one RiverDeltaEvent
+--   for the mouth deposit. Non-river HydroEvents pass through unchanged.
+explodeRiverEvent ∷ GeoEvent → [GeoEvent]
+explodeRiverEvent (HydroEvent (RiverFeature river)) =
+    let segs   = rpSegments river
+        mSeed  = rpMeanderSeed river
+        segEvts = map (\seg → RiverSegmentEvent
+                        (RiverSegmentCarve seg mSeed)) segs
+        deltaEvt = case segs of
+            [] → []
+            _  → [RiverDeltaEvent (RiverDeltaParams (last segs)
+                                                     (rpFlowRate river))]
+    in segEvts ++ deltaEvt
+explodeRiverEvent evt = [evt]
+
+-----------------------------------------------------------
+-- Bounding boxes
+-----------------------------------------------------------
 
 eventBBox ∷ GeoEvent → Int → EventBBox
 eventBBox (CraterEvent cp) _ws =
@@ -120,6 +187,24 @@ eventBBox (GlaciationEvent glacier) _ws =
 eventBBox (HydroEvent hf) ws = hydroFeatureBBox hf ws
 eventBBox (HydroModify _fid evo) _ws =
     hydroEvolutionBBox evo
+
+-- NEW: tight bbox around just this one segment
+eventBBox (RiverSegmentEvent rsc) _ws =
+    let seg = rscSegment rsc
+        GeoCoord sx sy = rsStart seg
+        GeoCoord ex ey = rsEnd seg
+        pad = rsValleyWidth seg
+    in EventBBox (min sx ex - pad) (min sy ey - pad)
+                 (max sx ex + pad) (max sy ey + pad)
+
+-- NEW: tight bbox around the river mouth delta
+eventBBox (RiverDeltaEvent rdp) _ws =
+    let seg = rdpLastSegment rdp
+        GeoCoord mx my = rsEnd seg
+        totalFlow = rdpFlowRate rdp
+        deltaRadius = round (totalFlow * 25.0 + 8.0) ∷ Int
+    in EventBBox (mx - deltaRadius) (my - deltaRadius)
+                 (mx + deltaRadius) (my + deltaRadius)
 
 featureShapeBBox ∷ FeatureShape → Int → EventBBox
 featureShapeBBox (VolcanicShape vf) ws = volcanicFeatureBBox vf ws
@@ -226,21 +311,12 @@ bboxOverlapsChunk _worldSize bb cMinX cMinY cMaxX cMaxY =
     not (bbMaxX bb < cMinX ∨ bbMinX bb > cMaxX
        ∨ bbMaxY bb < cMinY ∨ bbMinY bb > cMaxY)
 
+-- | Tag events with bounding boxes. River HydroEvents are exploded
+--   into per-segment events BEFORE tagging, so each segment gets
+--   its own tight bbox.
 tagEventsWithBBox ∷ Int → [GeoEvent] → [(GeoEvent, EventBBox)]
 tagEventsWithBBox worldSize events =
     map (\evt → (evt, eventBBox evt worldSize)) events
-
-data GeoEvent
-    = CraterEvent !CraterParams
-    | VolcanicEvent !FeatureShape
-    | VolcanicModify !GeoFeatureId !FeatureEvolution
-    | EruptionEvent !GeoFeatureId !LavaFlow
-    | LandslideEvent !LandslideParams
-    | GlaciationEvent !GlacierParams
-    | FloodEvent !FloodParams
-    | HydroEvent !HydroFeature
-    | HydroModify !GeoFeatureId !HydroEvolution
-    deriving (Show, Eq)
 
 data FeatureShape
     = VolcanicShape !VolcanicFeature

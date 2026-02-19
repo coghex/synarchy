@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Generate.Timeline
     ( applyTimelineChunk
@@ -7,6 +8,8 @@ module World.Generate.Timeline
 
 import UPrelude
 import Control.Monad.ST (runST)
+import qualified Data.Vector as V
+import qualified Data.Vector.Algorithms.Intro as VA
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Types
@@ -23,11 +26,6 @@ import World.Generate.Coordinates (chunkToGlobal)
 -- Per-Period Timeline Application (chunk-level with erosion)
 -----------------------------------------------------------
 
--- | Walk the geological timeline period by period, applying events
---   and erosion across all columns simultaneously.
---   Events are per-tile (no neighbor dependency).
---   Erosion smooths each tile toward its neighbors' post-event elevations,
---   using the shared elevation map for neighbor lookups.
 applyTimelineChunk ∷ GeoTimeline → Int → WorldScale → ChunkCoord
                    → (VU.Vector Int, VU.Vector MaterialId)
                    → (VU.Vector Int, VU.Vector MaterialId)
@@ -60,15 +58,15 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
         then vec VU.! toIndex lx ly
         else fallback
 
+    -- CHUNK PATH: uses gpExplodedEvents (per-segment bboxes)
+    -- Filtered once per chunk, then fine-filtered per tile inside the ST loop.
     applyOnePeriod cMinGX cMinGY cMaxGX cMaxGY (elevVec, matVec) period =
-        let -- Use pre-computed tagged events, filter to chunk overlap
-            relevantTagged = filter (\(_, bb) →
+        let relevantTagged = V.toList $ V.filter (\(_, bb) →
                 bboxOverlapsChunk worldSize bb cMinGX cMinGY cMaxGX cMaxGY
-                ) (gpTaggedEvents period)
+                ) (gpExplodedEvents period)
 
             borderArea = borderSize * borderSize
 
-            -- Phase 1: Apply geological events (single pass)
             (postElev, postMat) =
                 if null relevantTagged
                 then (elevVec, matVec)
@@ -86,7 +84,6 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
                             else do
                                 let (gx, gy)   = chunkToGlobal coord lx ly
                                     (gx', gy') = wrapGlobalU worldSize gx gy
-                                    -- Per-cell bbox filter using pre-computed bboxes
                                     cellEvents = filter (\(_, bb) →
                                         gx' ≥ bbMinX bb ∧ gx' ≤ bbMaxX bb ∧
                                         gy' ≥ bbMinY bb ∧ gy' ≤ bbMaxY bb
@@ -101,7 +98,6 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
                     matF  ← VU.unsafeFreeze matM
                     pure (elevF, matF)
 
-            -- Phase 2: Apply erosion (single pass)
             (finalElev, finalMat) = runST $ do
                 elevM ← VUM.new borderArea
                 matM  ← VUM.new borderArea
@@ -186,33 +182,27 @@ applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
 -- Bbox-Filtered Timeline Application (for zoom cache)
 -----------------------------------------------------------
 
--- | Like applyTimeline but with bounding-box pre-filtering.
---   Skips events whose bbox doesn't contain (gx, gy), avoiding
---   the expensive distance/sqrt computation inside applyGeoEvent.
---
---   For a typical world with ~20 periods × ~10 events, a tile
---   far from any feature evaluates ~0-5 events instead of ~200.
---   This is safe because applyGeoEvent already returns noModification
---   for out-of-range tiles — bbox filtering just short-circuits earlier.
---
---   Uses the same erosion logic as applyTimeline (single-column,
---   no neighbor data). The only difference is the event filter.
 applyTimelineFast ∷ GeoTimeline → Int → Int → Int → (Int, MaterialId) → (Int, MaterialId)
 applyTimelineFast timeline worldSize gx gy (baseElev, baseMat) =
     let wsc = computeWorldScale worldSize
     in foldl' (applyPeriodFiltered worldSize wsc gx gy)
               (baseElev, baseMat) (gtPeriods timeline)
 
+-- ZOOM CACHE PATH: uses gpTaggedEvents (compact, ~10 events)
+-- River events go through applyGeoEvent → applyRiverCarve which
+-- handles per-segment iteration internally. This is fine because
+-- most tiles miss the coarse bbox entirely (~10 cheap comparisons),
+-- and the rare tile that hits a river does one segment fold.
 applyPeriodFiltered ∷ Int → WorldScale → Int → Int
                     → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
 applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
-    let -- Use pre-computed tagged events instead of calling eventBBox
-        relevantEvents = filter (\(_, bb) →
-            gx ≥ bbMinX bb ∧ gx ≤ bbMaxX bb
-             ∧ gy ≥ bbMinY bb ∧ gy ≤ bbMaxY bb
-            ) (gpTaggedEvents period)
-
-        (elev', mat') = foldl' applyOneEvt (elev, mat) relevantEvents
+    let bb = gpPeriodBBox period
+        -- Early exit: tile outside all events in this period
+        (elev', mat') =
+            if gx < bbMinX bb ∨ gx > bbMaxX bb ∨ gy < bbMinY bb ∨ gy > bbMaxY bb
+            then (elev, mat)
+            else applyExplodedEvents worldSize gx gy elev mat
+                                     (gpExplodedEvents period)
 
         erosionMod = applyErosion
             (gpErosion period)
@@ -227,11 +217,46 @@ applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
             Just m  → MaterialId m
             Nothing → mat'
     in (elev'', mat'')
+
+-- | Tight loop over the exploded events vector.
+--   Uses two separate accumulators instead of a tuple to avoid
+--   boxing overhead. The INLINE lets GHC unbox the Int accumulator.
+{-# INLINE applyExplodedEvents #-}
+applyExplodedEvents ∷ Int → Int → Int → Int → MaterialId
+                    → V.Vector (GeoEvent, EventBBox)
+                    → (Int, MaterialId)
+applyExplodedEvents worldSize gx gy e0 m0 vec = go startIdx e0 m0
   where
-    applyOneEvt (e, m) (event, _bb) =
-        let mod' = applyGeoEvent event worldSize gx gy e
-            e' = e + gmElevDelta mod'
-            m' = case gmMaterialOverride mod' of
-                Just mm → MaterialId mm
-                Nothing → m
-        in (e', m')
+    len = V.length vec
+
+    -- Binary search: find first index where bbMinY > gy - maxPossiblePad
+    -- We want events whose bbMinY ≤ gy (since bbMaxY ≥ bbMinY, these could contain gy).
+    -- Events are sorted by bbMinY ascending.
+    -- Skip all events where bbMaxY < gy (they end before this tile's Y).
+    -- Stop when bbMinY > gy (they start after this tile's Y).
+    startIdx = lowerBound 0 len
+    lowerBound !lo !hi
+        | lo ≥ hi   = lo
+        | otherwise =
+            let mid = (lo + hi) `div` 2
+                (_, bb) = V.unsafeIndex vec mid
+            in if bbMaxY bb < gy
+               then lowerBound (mid + 1) hi
+               else lowerBound lo mid
+
+    go !i !e !m
+        | i ≥ len   = (e, m)
+        | otherwise =
+            let (evt, evtBB) = V.unsafeIndex vec i
+            in if bbMinY evtBB > gy
+               -- Sorted by bbMinY: all remaining events start below this tile. Done.
+               then (e, m)
+               else if bbMaxY evtBB < gy ∨
+                       gx < bbMinX evtBB ∨ gx > bbMaxX evtBB
+                    then go (i + 1) e m
+                    else let mod' = applyGeoEvent evt worldSize gx gy e
+                             e' = e + gmElevDelta mod'
+                             m' = case gmMaterialOverride mod' of
+                                 Just mm → MaterialId mm
+                                 Nothing → m
+                         in go (i + 1) e' m'

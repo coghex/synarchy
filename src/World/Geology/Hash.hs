@@ -43,6 +43,7 @@ smoothstepGeo ∷ Float → Float
 smoothstepGeo t = t * t * (3.0 - 2.0 * t)
 
 -- | Wrapped X distance for cylindrical world.
+{-# INLINE wrappedDeltaXGeo #-}
 wrappedDeltaXGeo ∷ Int → Int → Int → Int
 wrappedDeltaXGeo worldSize x1 x2 =
     let w = worldSize * 16

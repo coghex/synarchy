@@ -130,6 +130,7 @@ test-suite synarchy-test
           ghc-options: -fprof-auto
 
 
+
 library
     -- Expose the modules you want to test
     exposed-modules: UPrelude

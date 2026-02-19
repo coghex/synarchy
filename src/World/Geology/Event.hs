@@ -15,6 +15,7 @@ import World.Geology.Hash (wrappedDeltaXGeo, smoothstepGeo)
 import World.Hydrology.Types (HydroFeature(..))
 import World.Hydrology.Event (applyHydroEvolution, applyHydroFeature)
 import World.Hydrology.River (applyRiverCarve)
+import World.Hydrology.River.Carving (carveFromSegment, computeDeltaDeposit')
 import World.Hydrology.Glacier (applyGlacierCarve)
 
 -----------------------------------------------------------
@@ -36,6 +37,10 @@ applyGeoEvent (HydroEvent feature) worldSize gx gy baseElev =
     applyHydroFeature feature worldSize gx gy baseElev
 applyGeoEvent (HydroModify _fid evolution) worldSize gx gy baseElev =
     applyHydroEvolution evolution worldSize gx gy baseElev
+applyGeoEvent (RiverSegmentEvent rsc) worldSize gx gy _baseElev =
+    carveFromSegment worldSize gx gy (rscMeanderSeed rsc) (rscSegment rsc)
+applyGeoEvent (RiverDeltaEvent rdp) worldSize gx gy _baseElev =
+    computeDeltaDeposit' (rdpLastSegment rdp) (rdpFlowRate rdp) worldSize gx gy
 applyGeoEvent (LandslideEvent _)    _ _ _ _ = noModification
 applyGeoEvent (GlaciationEvent _)   _ _ _ _ = noModification
 applyGeoEvent (FloodEvent _)        _ _ _ _ = noModification
@@ -69,18 +74,13 @@ applyLavaFlow flow worldSize gx gy baseElev =
     in if dist > maxR
        then noModification
        else
-       let -- Lava surface elevation at this distance from source
-           visc = fromIntegral (lfViscosity flow) ∷ Float
+       let visc = fromIntegral (lfViscosity flow) ∷ Float
            lavaSurface = lfElevation flow - round (dist * visc)
-
-           -- How much material to deposit: difference between
-           -- lava surface and current terrain
            deposit = lavaSurface - baseElev
 
        in if deposit ≤ 0
           then noModification
-          else -- Deposit is entirely new volcanic material
-               GeoModification deposit (Just (lfMaterial flow)) deposit
+          else GeoModification deposit (Just (lfMaterial flow)) deposit
 
 -----------------------------------------------------------
 -- Feature Evolution Application
@@ -98,8 +98,6 @@ applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy _e =
        else let t = dist / rr
                 profile = 1.0 - smoothstepGeo t
                 elevDelta = round (fromIntegral heightGain * profile)
-                -- Inner 40%: fresh basalt deposition (full intrusion)
-                -- Outer 60%: pure uplift from magma pressure
                 (mat, intrusion) = if t < 0.4
                     then (Just (unMaterialId matBasalt), abs elevDelta)
                     else (Nothing, 0)
@@ -125,7 +123,6 @@ applyEvolution (CollapseToCaldera depth _ratio center radius) ws gx gy _e =
                 mat = if rimZone
                     then Nothing
                     else Just (unMaterialId matObsidian)
-                -- Collapse is depression/rearrangement, not deposition
             in GeoModification elevDelta mat 0
 applyEvolution (ParasiticEruption childFeature _childId _center _radius) ws gx gy e =
     applyVolcanicFeature childFeature ws gx gy e
@@ -158,15 +155,13 @@ applyEvolution (FlankCollapse collapseAngle collapseWidth debrisRadius center _r
               angularFade = 1.0 - (angleDiff / halfWidth) ** 2.0
 
           in if radialT < 0.3
-             then -- Scar zone: moderate gouge
-                  let scarT = radialT / 0.3
+             then let scarT = radialT / 0.3
                       scarDepth = min 40.0 (debrisR * 0.15) * angularFade
                       elevDelta = round (negate scarDepth * (1.0 - scarT * 0.5))
                   in GeoModification elevDelta (Just (unMaterialId matBasalt)) 0
 
              else if radialT < 0.7
-             then -- Debris field: low hummocky mounds
-                  let debrisT = (radialT - 0.3) / 0.4
+             then let debrisT = (radialT - 0.3) / 0.4
                       peakDebris = min 15.0 (debrisR * 0.05) * angularFade
                       humpProfile = sin (debrisT * π) * (1.0 - debrisT * 0.3)
                       elevDelta = round (peakDebris * humpProfile)
@@ -175,15 +170,13 @@ applyEvolution (FlankCollapse collapseAngle collapseWidth debrisRadius center _r
                             else unMaterialId matObsidian
                   in GeoModification elevDelta (Just mat) (abs elevDelta)
 
-             else -- Debris apron: thin rubble
-                  let apronT = (radialT - 0.7) / 0.3
+             else let apronT = (radialT - 0.7) / 0.3
                       apronHeight = min 5.0 (debrisR * 0.02) * angularFade
                       elevDelta = round (apronHeight * (1.0 - apronT))
                   in if elevDelta ≤ 0
                      then noModification
                      else GeoModification elevDelta Nothing 0
 
--- | Wrap an angle difference to [-π, π]
 wrapAngle ∷ Float → Float
 wrapAngle ang
     | ang > π    = ang - 2.0 * π

@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Timeline
     ( buildTimeline
@@ -8,7 +9,10 @@ import Control.DeepSeq (NFData(..), deepseq)
 import Data.Bits (xor)
 import Data.Word (Word64)
 import Data.List (foldl', minimumBy, sortBy)
+import Data.Ord (comparing)
 import qualified Data.Text as T
+import qualified Data.Vector as V
+import qualified Data.Vector.Algorithms.Intro as VA
 import qualified Data.Vector.Unboxed as VU
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
@@ -575,14 +579,29 @@ featureCenter (HydroShape (LakeFeature l))
 
 mkGeoPeriod ∷ Int → Text → GeoScale → Int → Float → [GeoEvent] → ErosionParams → GeoPeriod
 mkGeoPeriod worldSize name scale duration date events erosion =
-    GeoPeriod
-        { gpName         = name
-        , gpScale        = scale
-        , gpDuration     = duration
-        , gpDate         = date
-        , gpEvents       = events
-        , gpErosion      = erosion
-        , gpTaggedEvents = tagEventsWithBBox worldSize events
+    let tagged = tagEventsWithBBox worldSize events
+        exploded = concatMap (\(evt, _bb) →
+            let evts = explodeRiverEvent evt
+            in map (\e → (e, eventBBox e worldSize)) evts
+            ) tagged
+        -- Sort by bbMinY so we can binary search for relevant Y range
+        explodedVec = V.modify (VA.sortBy (comparing (bbMinY . snd)))
+                               (V.fromList exploded)
+        periodBB = if V.null explodedVec
+                   then EventBBox maxBound maxBound minBound minBound
+                   else V.foldl' (\(EventBBox ax ay bx by) (_, EventBBox cx cy dx dy) →
+                            EventBBox (min ax cx) (min ay cy) (max bx dx) (max by dy)
+                        ) (snd (V.head explodedVec)) (V.tail explodedVec)
+    in GeoPeriod
+        { gpName            = name
+        , gpScale           = scale
+        , gpDuration        = duration
+        , gpDate            = date
+        , gpEvents          = events
+        , gpErosion         = erosion
+        , gpTaggedEvents    = tagged
+        , gpExplodedEvents  = explodedVec
+        , gpPeriodBBox      = periodBB
         }
 
 -- | Reconcile flow simulation with existing features.

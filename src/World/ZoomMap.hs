@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fprof-auto #-}
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.ZoomMap
     ( generateZoomMapQuads
