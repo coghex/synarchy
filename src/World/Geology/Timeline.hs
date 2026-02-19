@@ -8,6 +8,7 @@ import Data.Bits (xor)
 import Data.Word (Word64)
 import Data.List (foldl')
 import qualified Data.Text as T
+import qualified Data.Vector.Unboxed as VU
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Plate (generatePlates, TectonicPlate, elevationAtGlobal)
@@ -27,11 +28,13 @@ import World.Geology.Generate
     , generateAndRegisterN
     )
 import World.Geology.Evolution (evolveOneFeature)
-import World.Hydrology.River (generateRivers, evolveRiver)
 import World.Hydrology.Glacier (generateGlaciers, evolveGlacier)
 import World.Hydrology.Climate (computeRegionalClimate)
 import World.Hydrology.Types (HydroFeature(..), GlacierParams(..)
                              , RiverParams(..), LakeParams(..))
+import World.Hydrology.Simulation (simulateHydrology, FlowResult(..)
+                                  , ElevGrid(..), buildInitialElevGrid
+                                  , updateElevGrid)
 
 -----------------------------------------------------------
 -- Top Level
@@ -50,11 +53,14 @@ buildTimeline seed worldSize plateCount =
             , tbsGeoState  = gs0
             }
 
+        -- Build elevation grid ONCE from base plates
+        grid0 = buildInitialElevGrid seed worldSize plates
+
         -- Primordial bombardment stands alone, before the eon
-        s1 = buildPrimordialBombardment seed worldSize plates tbs0
+        (s1, grid1) = buildPrimordialBombardment seed worldSize plates tbs0 grid0
 
         -- The single development eon
-        s2 = buildEon seed worldSize plates s1
+        (s2, _grid2) = buildEon seed worldSize plates s1 grid1
 
     in GeoTimeline
         { gtSeed      = seed
@@ -67,7 +73,7 @@ buildTimeline seed worldSize plateCount =
 -- Primordial Bombardment (standalone, pre-eon)
 -----------------------------------------------------------
 
-buildPrimordialBombardment seed worldSize plates tbs =
+buildPrimordialBombardment seed worldSize plates tbs grid =
     let craterSeed = seed `xor` 0xDEADBEEF
         craters = generateCraters craterSeed worldSize plates CraterEra_Primordial
         gs = tbsGeoState tbs
@@ -78,39 +84,44 @@ buildPrimordialBombardment seed worldSize plates tbs =
             "Primordial Bombardment" Eon 500 currentDate
             events
             (ErosionParams 0.8 0.3 0.6 0.4 0.1 (seed + 1000))
-    in addPeriod period (tbs { tbsGeoState = gs' })
+        tbs' = addPeriod period (tbs { tbsGeoState = gs' })
+        grid' = updateElevGrid worldSize grid period
+    in (tbs', grid')
 
 -----------------------------------------------------------
 -- Eon
 -----------------------------------------------------------
 
 buildEon ∷ Word64 → Int → [TectonicPlate]
-         → TimelineBuildState → TimelineBuildState
-buildEon seed worldSize plates tbs =
-    buildEraLoop seed worldSize plates 0 2 4 tbs
+         → TimelineBuildState → ElevGrid
+         → (TimelineBuildState, ElevGrid)
+buildEon seed worldSize plates tbs grid =
+    buildEraLoop seed worldSize plates 0 2 4 tbs grid
 
 buildEraLoop ∷ Word64 → Int → [TectonicPlate]
              → Int → Int → Int
-             → TimelineBuildState → TimelineBuildState
-buildEraLoop seed worldSize plates eraIdx minEras maxEras tbs
-    | eraIdx ≥ maxEras = tbs
+             → TimelineBuildState → ElevGrid
+             → (TimelineBuildState, ElevGrid)
+buildEraLoop seed worldSize plates eraIdx minEras maxEras tbs grid
+    | eraIdx ≥ maxEras = (tbs, grid)
     | otherwise =
         let eraSeed = seed `xor` (fromIntegral eraIdx * 0xA1B2C3D4)
-            s1 = buildEra eraSeed worldSize plates eraIdx tbs
+            (s1, grid1) = buildEra eraSeed worldSize plates eraIdx tbs grid
 
             roll = hashToFloatGeo (hashGeo eraSeed eraIdx 300)
             continue = eraIdx < (minEras - 1) ∨ roll < 0.5
         in if continue
-           then buildEraLoop seed worldSize plates (eraIdx + 1) minEras maxEras s1
-           else s1
+           then buildEraLoop seed worldSize plates (eraIdx + 1) minEras maxEras s1 grid1
+           else (s1, grid1)
 
 -----------------------------------------------------------
 -- Era
 -----------------------------------------------------------
 
 buildEra ∷ Word64 → Int → [TectonicPlate] → Int
-         → TimelineBuildState → TimelineBuildState
-buildEra seed worldSize plates eraIdx tbs =
+         → TimelineBuildState → ElevGrid
+         → (TimelineBuildState, ElevGrid)
+buildEra seed worldSize plates eraIdx tbs grid =
     let eraSeed = seed `xor` (fromIntegral eraIdx * 0xE1A2)
         gs = tbsGeoState tbs
         currentDate = gdMillionYears (gsDate gs)
@@ -124,10 +135,12 @@ buildEra seed worldSize plates eraIdx tbs =
             eraEvents
             (ErosionParams 0.7 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx))
         s1 = addPeriod eraPeriod (tbs { tbsGeoState = gs' })
+        -- No grid update needed — eraEvents is empty
+        grid1 = grid
 
-        s2 = buildPeriodLoop eraSeed worldSize plates 0 2 4 s1
+        (s2, grid2) = buildPeriodLoop eraSeed worldSize plates 0 2 4 s1 grid1
 
-    in s2
+    in (s2, grid2)
 
 -----------------------------------------------------------
 -- Period
@@ -135,55 +148,43 @@ buildEra seed worldSize plates eraIdx tbs =
 
 buildPeriodLoop ∷ Word64 → Int → [TectonicPlate]
                 → Int → Int → Int
-                → TimelineBuildState → TimelineBuildState
-buildPeriodLoop seed worldSize plates periodIdx minPeriods maxPeriods tbs
-    | periodIdx ≥ maxPeriods = tbs
+                → TimelineBuildState → ElevGrid
+                → (TimelineBuildState, ElevGrid)
+buildPeriodLoop seed worldSize plates periodIdx minPeriods maxPeriods tbs grid
+    | periodIdx ≥ maxPeriods = (tbs, grid)
     | otherwise =
         let periodSeed = seed `xor` (fromIntegral periodIdx * 0xB3C4D5E6)
-            s1 = buildPeriod periodSeed worldSize plates periodIdx tbs
+            (s1, grid1) = buildPeriod periodSeed worldSize plates periodIdx tbs grid
 
             roll = hashToFloatGeo (hashGeo periodSeed periodIdx 400)
             continue = periodIdx < (minPeriods - 1) ∨ roll < 0.5
         in if continue
-           then buildPeriodLoop seed worldSize plates (periodIdx + 1) minPeriods maxPeriods s1
-           else s1
+           then buildPeriodLoop seed worldSize plates (periodIdx + 1) minPeriods maxPeriods s1 grid1
+           else (s1, grid1)
 
 buildPeriod ∷ Word64 → Int → [TectonicPlate] → Int
-            → TimelineBuildState → TimelineBuildState
-buildPeriod seed worldSize plates periodIdx tbs =
+            → TimelineBuildState → ElevGrid
+            → (TimelineBuildState, ElevGrid)
+buildPeriod seed worldSize plates periodIdx tbs grid =
     let periodSeed = seed `xor` (fromIntegral periodIdx * 0xF1E2)
 
-        s1 = applyPeriodVolcanism periodSeed worldSize plates periodIdx tbs
+        (s1, grid1) = applyPeriodVolcanism periodSeed worldSize plates periodIdx tbs grid
 
-        s2 = applyVolcanicEvolution periodSeed worldSize plates s1
+        (s2, grid2) = applyVolcanicEvolution periodSeed worldSize plates s1 grid1
 
-        s3 = buildEpochLoop periodSeed worldSize plates 0 2 6 s2
+        (s3, grid3) = buildEpochLoop periodSeed worldSize plates 0 2 6 s2 grid2
 
-    in s3
+    in (s3, grid3)
 
 applyPeriodVolcanism ∷ Word64 → Int → [TectonicPlate] → Int
-                     → TimelineBuildState → TimelineBuildState
-applyPeriodVolcanism seed worldSize plates periodIdx tbs =
+                     → TimelineBuildState → ElevGrid
+                     → (TimelineBuildState, ElevGrid)
+applyPeriodVolcanism seed worldSize plates periodIdx tbs grid =
     let gs = tbsGeoState tbs
         volcSeed = seed `xor` 0xB45A1F1C
         pIdx = tbsPeriodIdx tbs
         activityLevel = gsCO2 gs
         currentDate = gdMillionYears (gsDate gs)
-
-        -- Volcanism budget per period:
-        --
-        -- Feature type       | attempts | max | bbox radius | cost
-        -- -------------------|----------|-----|-------------|------
-        -- ShieldVolcano      |   12     |  3  |   30-60     | medium
-        -- Fissure            |   10     |  3  |   40-100    | medium
-        -- CinderCone         |   16     |  5  |    5-15     | cheap
-        -- HydrothermalVent   |   10     |  3  |     3       | cheap
-        -- SuperVolcano       |   12     |  1  |  120-250    | expensive
-        --
-        -- Total max features per period: 15 (was 10)
-        -- But most are small-radius, so bbox filter kills them
-        -- for distant chunks. The expensive SuperVolcano is still
-        -- capped at 1 and only generated in periods 0-1.
 
         (shields, tbs1) = generateAndRegisterN 12 3 volcSeed worldSize plates
                               VolcanoEra_Hotspot generateShieldVolcano pIdx tbs
@@ -218,7 +219,9 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs =
             Period 50 currentDate
             events
             (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 4000))
-    in addPeriod period (tbs5 { tbsGeoState = gs' })
+        tbs6 = addPeriod period (tbs5 { tbsGeoState = gs' })
+        grid' = updateElevGrid worldSize grid period
+    in (tbs6, grid')
 
 isSuperVolcano ∷ PersistentFeature → Bool
 isSuperVolcano pf = case pfFeature pf of
@@ -255,8 +258,9 @@ forceOneSuperVolcano seed worldSize plates periodIdx tbs =
     in go 0
 
 applyVolcanicEvolution ∷ Word64 → Int → [TectonicPlate]
-                       → TimelineBuildState → TimelineBuildState
-applyVolcanicEvolution seed worldSize plates tbs =
+                       → TimelineBuildState → ElevGrid
+                       → (TimelineBuildState, ElevGrid)
+applyVolcanicEvolution seed worldSize plates tbs grid =
     let periodIdx = tbsPeriodIdx tbs
         evolSeed = seed `xor` 0xEF01F100
         currentDate = gdMillionYears (gsDate (tbsGeoState tbs))
@@ -280,8 +284,10 @@ applyVolcanicEvolution seed worldSize plates tbs =
             Period 30 currentDate
             allEvents
             (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 5000))
-    in if null allEvents then tbs1
-       else addPeriod period tbs1
+    in if null allEvents then (tbs1, grid)
+       else let tbs2 = addPeriod period tbs1
+                grid' = updateElevGrid worldSize grid period
+            in (tbs2, grid')
 
 -----------------------------------------------------------
 -- Epoch
@@ -289,41 +295,31 @@ applyVolcanicEvolution seed worldSize plates tbs =
 
 buildEpochLoop ∷ Word64 → Int → [TectonicPlate]
                → Int → Int → Int
-               → TimelineBuildState → TimelineBuildState
-buildEpochLoop seed worldSize plates epochIdx minEpochs maxEpochs tbs
-    | epochIdx ≥ maxEpochs = tbs
+               → TimelineBuildState → ElevGrid
+               → (TimelineBuildState, ElevGrid)
+buildEpochLoop seed worldSize plates epochIdx minEpochs maxEpochs tbs grid
+    | epochIdx ≥ maxEpochs = (tbs, grid)
     | otherwise =
         let epochSeed = seed `xor` (fromIntegral epochIdx * 0xC5D6E7F8)
-            s1 = buildEpoch epochSeed worldSize plates epochIdx tbs
+            (s1, grid1) = buildEpoch epochSeed worldSize plates epochIdx tbs grid
 
             roll = hashToFloatGeo (hashGeo epochSeed epochIdx 500)
             continue = epochIdx < (minEpochs - 1) ∨ roll < 0.5
         in if continue
-           then buildEpochLoop seed worldSize plates (epochIdx + 1) minEpochs maxEpochs s1
-           else s1
+           then buildEpochLoop seed worldSize plates (epochIdx + 1) minEpochs maxEpochs s1 grid1
+           else (s1, grid1)
 
 buildEpoch ∷ Word64 → Int → [TectonicPlate] → Int
-           → TimelineBuildState → TimelineBuildState
-buildEpoch seed worldSize plates epochIdx tbs =
+           → TimelineBuildState → ElevGrid
+           → (TimelineBuildState, ElevGrid)
+buildEpoch seed worldSize plates epochIdx tbs grid =
     let epochSeed = seed `xor` (fromIntegral epochIdx * 0xA1A2)
         gs = tbsGeoState tbs
-        currentDate = gdMillionYears (gsDate gs)
-
-        epochEvents = []
-
         gs' = gs { gsDate = advanceGeoDate 20.0 (gsDate gs) }
-
-        s1 = if null epochEvents then tbs { tbsGeoState = gs' }
-             else let period = mkGeoPeriod worldSize
-                          ("Epoch " <> T.pack (show epochIdx))
-                          Epoch 20 currentDate
-                          epochEvents
-                          (ErosionParams 0.6 0.7 0.3 0.2 0.4 (seed + 6000))
-                  in addPeriod period (tbs { tbsGeoState = gs' })
-
-        s2 = buildAgeLoop epochSeed worldSize plates 0 1 8 s1
-
-    in s2
+        s1 = tbs { tbsGeoState = gs' }
+        -- Grid is already up to date — just pass it through
+        (s2, grid') = buildAgeLoop epochSeed worldSize plates 0 1 8 s1 grid
+    in (s2, grid')
 
 -----------------------------------------------------------
 -- Age
@@ -331,22 +327,25 @@ buildEpoch seed worldSize plates epochIdx tbs =
 
 buildAgeLoop ∷ Word64 → Int → [TectonicPlate]
              → Int → Int → Int
-             → TimelineBuildState → TimelineBuildState
-buildAgeLoop seed worldSize plates ageIdx minAges maxAges tbs
-    | ageIdx ≥ maxAges = tbs
+             → TimelineBuildState → ElevGrid
+             → (TimelineBuildState, ElevGrid)
+buildAgeLoop seed worldSize plates ageIdx minAges maxAges tbs grid
+    | ageIdx ≥ maxAges = (tbs, grid)
     | otherwise =
         let ageSeed = seed `xor` (fromIntegral ageIdx * 0xD7E8F9A0)
-            s1 = buildAge ageSeed worldSize plates ageIdx tbs
+            (s1, grid1) = buildAge ageSeed worldSize plates ageIdx tbs grid
 
             roll = hashToFloatGeo (hashGeo ageSeed ageIdx 600)
             continue = ageIdx < (minAges - 1) ∨ roll < 0.4
         in if continue
-           then buildAgeLoop seed worldSize plates (ageIdx + 1) minAges maxAges s1
-           else s1
+           then buildAgeLoop seed worldSize plates (ageIdx + 1)
+                    minAges maxAges s1 grid1
+           else (s1, grid1)
 
 buildAge ∷ Word64 → Int → [TectonicPlate] → Int
-         → TimelineBuildState → TimelineBuildState
-buildAge seed worldSize plates ageIdx tbs =
+         → TimelineBuildState → ElevGrid
+         → (TimelineBuildState, ElevGrid)
+buildAge seed worldSize plates ageIdx tbs elevGrid =
     let ageSeed = seed `xor` (fromIntegral ageIdx * 0xF0F1)
         gs = tbsGeoState tbs
         currentDate = gdMillionYears (gsDate gs)
@@ -376,121 +375,51 @@ buildAge seed worldSize plates ageIdx tbs =
             ]
 
         -----------------------------------------------------------
-        -- Hydrology
+        -- Hydrology (flow simulation every age)
         -----------------------------------------------------------
         hydroSeed = ageSeed `xor` 0xA0CA71C
 
-        -- Generate new rivers in early ages (ageIdx < 3)
-        -- No hard cap — generateRivers has its own scaleCount limit
-        (newRivers, tbs_r) =
-            if ageIdx < 3
-            then generateRivers hydroSeed worldSize plates
-                     (tbsPeriodIdx tbs) tbs
-            else ([], tbs)
+        flowResult = simulateHydrology hydroSeed worldSize ageIdx elevGrid
 
-        -- Generate glaciers every age — generateGlaciers has its own limits
-        (newGlaciers, tbs_g) =
-            generateGlaciers hydroSeed worldSize plates
-                gs1 (tbsPeriodIdx tbs_r) tbs_r
+        (hydroFeatures, tbs_h) = registerFlowResults
+            hydroSeed ageIdx flowResult (tbsPeriodIdx tbs) tbs
 
-        -- Evolve existing hydro features PROBABILISTICALLY.
-        -- Each feature has a per-age probability of evolving,
-        -- instead of guaranteed evolution every age.
-        -- This dramatically reduces HydroModify event count
-        -- while keeping interesting evolution over long timelines.
-        --
-        -- Base evolution chance:
-        --   Rivers:   10% per age (they're dynamic, change often)
-        --   Glaciers:  5% per age (slower processes)
-        --   Lakes:    0%  (passive, only change via river/glacier events)
-        --
-        -- Longer ages increase the chance (more time = more happens)
-        durationBonus = min 0.3 (duration / 30.0)
-
-        -- Soft cap on hydro features, scaled to world area.
-        -- worldSize is in chunks per side, so worldSize² ∝ area.
-        -- Baseline: a 16×16 world gets ~50 hydro features max,
-        -- scaling linearly with area from there.
-        --   16×16 →  50
-        --   32×32 → 200
-        --   64×64 → 800
-        -- Clamped to [50, 1000] so tiny worlds still get rivers
-        -- and huge worlds don't degenerate.
-        maxHydroFeatures = clamp 50 1000
-            (worldSize * worldSize * 50 `div` (16 * 16))
-        hydroCount = length
-            (filter (isHydroFeature . pfFeature) (tbsFeatures tbs_g))
-        canBranch = hydroCount < maxHydroFeatures
-
-        (hydroEvents, tbs_h) = foldl'
-            (\(evts, st) pf →
-                let GeoFeatureId fidInt = pfId pf
-                    evolRoll = hashToFloatGeo (hashGeo hydroSeed fidInt (650 + ageIdx))
-                in case pfFeature pf of
-                    HydroShape (RiverFeature _)
-                        | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
-                        , evolRoll < 0.1 + durationBonus →
-                            evolveRiverCapped hydroSeed canBranch
-                                (tbsPeriodIdx st) (evts, st) pf
-                        | otherwise → (evts, st)
-
-                    HydroShape (GlacierFeature _)
-                        | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
-                        , evolRoll < 0.05 + durationBonus →
-                            evolveGlacierCapped hydroSeed canBranch
-                                (tbsPeriodIdx st) gs1 (evts, st) pf
-                        | otherwise → (evts, st)
-
-                    HydroShape (LakeFeature _) → (evts, st)
-                    VolcanicShape _ → (evts, st)
-            ) ([], tbs_g) (tbsFeatures tbs_g)
-
-        -- Creation events for new features
-        hydroCreationEvents = map (\pf → case pfFeature pf of
+        hydroEvents = map (\pf → case pfFeature pf of
             HydroShape hf → HydroEvent hf
-            _             → error "non-hydro in newRivers/newGlaciers"
-            ) (newRivers <> newGlaciers)
+            _             → error "non-hydro in flow results"
+            ) hydroFeatures
 
-        allEvents = meteorites <> eruptions
-                 <> hydroCreationEvents <> hydroEvents
+        -- DEBUG: trace flow results
+        -- Count land cells and max accumulation for debugging
+        _debugLandCount = VU.length (VU.filter id (egLand elevGrid))
+        _debugGridW = egGridW elevGrid
+        _debugRiverCount = length (frRivers flowResult)
+        _debugLakeCount = length (frLakes flowResult)
+
+        allEvents = meteorites <> eruptions <> hydroEvents
 
         gs2 = gs1 { gsCO2 = max 0.5 (gsCO2 gs1 - duration * 0.005) }
-
         erosion = erosionFromGeoState gs2 seed ageIdx
-
         period = mkGeoPeriod worldSize
-            ("Age " <> T.pack (show (tbsPeriodIdx tbs)))
+            ("Age " <> T.pack (show (tbsPeriodIdx tbs))
+             <> " [grid=" <> T.pack (show _debugGridW)
+             <> " land=" <> T.pack (show _debugLandCount)
+             <> " rivers=" <> T.pack (show _debugRiverCount)
+             <> " lakes=" <> T.pack (show _debugLakeCount) <> "]")
             Age (round duration) currentDate
-            allEvents
-            erosion
+            allEvents erosion
 
-    in addPeriod period (tbs_h { tbsGeoState = gs2 })
+        tbs_final = addPeriod period (tbs_h { tbsGeoState = gs2 })
+
+        -- Update the elevation grid with THIS age's new period
+        elevGrid' = updateElevGrid worldSize elevGrid period
+
+    in (tbs_final, elevGrid')
 
 -----------------------------------------------------------
 -- Capped evolution wrappers
 -----------------------------------------------------------
 
--- | Wrapper around evolveRiver that suppresses branching
---   when we've hit the feature cap.
-evolveRiverCapped ∷ Word64 → Bool → Int
-                  → ([GeoEvent], TimelineBuildState)
-                  → PersistentFeature
-                  → ([GeoEvent], TimelineBuildState)
-evolveRiverCapped seed canBranch periodIdx (events, tbs) pf =
-    if canBranch
-    then evolveRiver seed periodIdx (events, tbs) pf
-    else -- Run evolution but suppress branching by biasing the roll.
-         -- If roll < 0.15 (branch zone), skip and treat as "continue".
-         let fid = pfId pf
-             GeoFeatureId fidInt = fid
-             h1 = hashGeo seed fidInt 800
-             roll = hashToFloatGeo h1
-         in if roll < 0.15
-            then (events, tbs)  -- would have branched, suppress it
-            else evolveRiver seed periodIdx (events, tbs) pf
-
--- | Wrapper around evolveGlacier that suppresses branching
---   when we've hit the feature cap.
 evolveGlacierCapped ∷ Word64 → Bool → Int → GeoState
                     → ([GeoEvent], TimelineBuildState)
                     → PersistentFeature
@@ -503,9 +432,7 @@ evolveGlacierCapped seed canBranch periodIdx gs (events, tbs) pf =
              h1 = hashGeo seed fidInt 900
              roll = hashToFloatGeo h1
              temp = gsCO2 gs
-         in -- Cold world branch zone is roll 0.50-0.65,
-            -- moderate is 0.20-0.30. Suppress those ranges.
-            if (temp < 0.8 ∧ roll ≥ 0.50 ∧ roll < 0.65)
+         in if (temp < 0.8 ∧ roll ≥ 0.50 ∧ roll < 0.65)
              ∨ (temp ≥ 0.8 ∧ temp ≤ 1.2 ∧ roll ≥ 0.20 ∧ roll < 0.30)
             then (events, tbs)
             else evolveGlacier seed periodIdx gs (events, tbs) pf
@@ -543,8 +470,6 @@ erosionFromGeoState gs seed ageIdx =
 -- Eruption Generation (per-feature)
 -----------------------------------------------------------
 
--- | Roll for an eruption from a single active feature.
---   Returns an EruptionEvent if the roll succeeds.
 generateEruption ∷ Word64 → Int → Int → [TectonicPlate]
                  → PersistentFeature → Maybe GeoEvent
 generateEruption seed worldSize ageIdx plates pf =
@@ -572,11 +497,8 @@ buildEruptionEvent seed worldSize ageIdx plates pf profile =
 
         (sx, sy) = featureCenter (pfFeature pf)
 
-        -- Look up actual terrain elevation at the source
         (srcElev, _) = elevationAtGlobal seed plates worldSize sx sy
 
-        -- Lava erupts above the current surface
-        -- More eruptions = more buildup
         eruptionBoost = pfEruptionCount pf * 5
         lavaElev = srcElev + eruptionBoost + volume `div` 4
 
@@ -591,7 +513,6 @@ buildEruptionEvent seed worldSize ageIdx plates pf profile =
             }
     in EruptionEvent (pfId pf) flow
 
--- | Extract the center coordinates from any volcanic feature.
 featureCenter ∷ FeatureShape → (Int, Int)
 featureCenter (VolcanicShape (ShieldVolcano p))
     = let GeoCoord x y = shCenter p in (x, y)
@@ -620,8 +541,6 @@ featureCenter (HydroShape (GlacierFeature g))
 featureCenter (HydroShape (LakeFeature l))
     = let GeoCoord x y = lkCenter l in (x, y)
 
--- | Smart constructor for GeoPeriod that pre-computes tagged events.
---   Use this instead of directly constructing GeoPeriod records.
 mkGeoPeriod ∷ Int → Text → GeoScale → Int → Float → [GeoEvent] → ErosionParams → GeoPeriod
 mkGeoPeriod worldSize name scale duration date events erosion =
     GeoPeriod
@@ -633,3 +552,59 @@ mkGeoPeriod worldSize name scale duration date events erosion =
         , gpErosion      = erosion
         , gpTaggedEvents = tagEventsWithBBox worldSize events
         }
+
+-----------------------------------------------------------
+-- Flow Simulation Registration
+-----------------------------------------------------------
+
+registerFlowResults ∷ Word64 → Int → FlowResult → Int
+                    → TimelineBuildState
+                    → ([PersistentFeature], TimelineBuildState)
+registerFlowResults seed ageIdx flowResult periodIdx tbs =
+    let -- Remove old river/lake features entirely instead of marking extinct.
+        -- They get replaced by the simulation's output each age.
+        -- Glaciers and volcanic features are untouched.
+        keptFeatures = filter (not . isSimulatedHydro) (tbsFeatures tbs)
+        tbs0 = tbs { tbsFeatures = keptFeatures }
+
+        -- Register new rivers
+        (riverPfs, tbs1) = foldl' (\(acc, st) river →
+            let (fid, st') = allocFeatureId st
+                pf = PersistentFeature
+                    { pfId               = fid
+                    , pfFeature          = HydroShape $ RiverFeature river
+                    , pfActivity         = FActive
+                    , pfFormationPeriod   = periodIdx
+                    , pfLastActivePeriod  = periodIdx
+                    , pfEruptionCount     = 1
+                    , pfParentId          = Nothing
+                    }
+                st'' = registerFeature pf st'
+            in (pf : acc, st'')
+            ) ([], tbs0) (frRivers flowResult)
+
+        -- Register new lakes
+        (lakePfs, tbs2) = foldl' (\(acc, st) lake →
+            let (fid, st') = allocFeatureId st
+                pf = PersistentFeature
+                    { pfId               = fid
+                    , pfFeature          = HydroShape $ LakeFeature lake
+                    , pfActivity         = FActive
+                    , pfFormationPeriod   = periodIdx
+                    , pfLastActivePeriod  = periodIdx
+                    , pfEruptionCount     = 0
+                    , pfParentId          = Nothing
+                    }
+                st'' = registerFeature pf st'
+            in (pf : acc, st'')
+            ) ([], tbs1) (frLakes flowResult)
+
+    in (riverPfs <> lakePfs, tbs2)
+
+-- | Is this a river or lake from the flow simulation?
+--   Glaciers are NOT simulated — they keep their own evolution.
+isSimulatedHydro ∷ PersistentFeature → Bool
+isSimulatedHydro pf = case pfFeature pf of
+    HydroShape (RiverFeature _) → True
+    HydroShape (LakeFeature _)  → True
+    _                           → False

@@ -498,7 +498,7 @@ fillPool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface s
 
         clampedSurface = min lavaSurface spillway
 
-    in if clampedSurface ≤ 0
+    in if clampedSurface ≤ seaLevel
        then pure ()
        else forEachSurface surfaceMap $ \idx lx ly surfZ →
             let gx = chunkGX + lx
@@ -551,7 +551,7 @@ fillFissurePool mv seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth l
 
         clampedSurface = min lavaSurface spillway
 
-    in if clampedSurface ≤ 0
+    in if clampedSurface ≤ seaLevel
        then pure ()
        else forEachSurface surfaceMap $ \idx lx ly surfZ →
             let gx = chunkGX + lx

@@ -295,6 +295,7 @@ library
                      World.Hydrology.Types
                      World.Hydrology.Climate
                      World.Hydrology.Event
+                     World.Hydrology.Simulation
                      World.Hydrology.River
                      World.Hydrology.River.Generation
                      World.Hydrology.River.Evolution
