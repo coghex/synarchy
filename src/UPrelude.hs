@@ -83,6 +83,13 @@ clamp01 x
     | x > 1    = 1
     | otherwise = x
 
+-- | a polymorphic clamp
+clamp ∷ Ord a ⇒ a → a → a → a
+clamp minVal maxVal x
+    | x < minVal = minVal
+    | x > maxVal = maxVal
+    | otherwise  = x
+
 --------------------------------------------------------------------------------
 -- Bitwise Operators
 --------------------------------------------------------------------------------

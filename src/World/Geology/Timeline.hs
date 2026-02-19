@@ -407,6 +407,21 @@ buildAge seed worldSize plates ageIdx tbs =
         -- Longer ages increase the chance (more time = more happens)
         durationBonus = min 0.3 (duration / 30.0)
 
+        -- Soft cap on hydro features, scaled to world area.
+        -- worldSize is in chunks per side, so worldSize² ∝ area.
+        -- Baseline: a 16×16 world gets ~50 hydro features max,
+        -- scaling linearly with area from there.
+        --   16×16 →  50
+        --   32×32 → 200
+        --   64×64 → 800
+        -- Clamped to [50, 1000] so tiny worlds still get rivers
+        -- and huge worlds don't degenerate.
+        maxHydroFeatures = clamp 50 1000
+            (worldSize * worldSize * 50 `div` (16 * 16))
+        hydroCount = length
+            (filter (isHydroFeature . pfFeature) (tbsFeatures tbs_g))
+        canBranch = hydroCount < maxHydroFeatures
+
         (hydroEvents, tbs_h) = foldl'
             (\(evts, st) pf →
                 let GeoFeatureId fidInt = pfId pf
@@ -415,13 +430,15 @@ buildAge seed worldSize plates ageIdx tbs =
                     HydroShape (RiverFeature _)
                         | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
                         , evolRoll < 0.1 + durationBonus →
-                            evolveRiver hydroSeed (tbsPeriodIdx st) (evts, st) pf
+                            evolveRiverCapped hydroSeed canBranch
+                                (tbsPeriodIdx st) (evts, st) pf
                         | otherwise → (evts, st)
 
                     HydroShape (GlacierFeature _)
                         | pfActivity pf ≡ FActive ∨ pfActivity pf ≡ FDormant
                         , evolRoll < 0.05 + durationBonus →
-                            evolveGlacier hydroSeed (tbsPeriodIdx st) gs1 (evts, st) pf
+                            evolveGlacierCapped hydroSeed canBranch
+                                (tbsPeriodIdx st) gs1 (evts, st) pf
                         | otherwise → (evts, st)
 
                     HydroShape (LakeFeature _) → (evts, st)

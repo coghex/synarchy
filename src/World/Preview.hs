@@ -169,10 +169,3 @@ clampByte x
     | x < 0     = 0
     | x > 255   = 255
     | otherwise  = fromIntegral x
-
--- | Clamp a value to [lo, hi]
-clamp ∷ Int → Int → Int → Int
-clamp lo hi x
-    | x < lo    = lo
-    | x > hi    = hi
-    | otherwise = x
