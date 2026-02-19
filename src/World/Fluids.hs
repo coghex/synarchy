@@ -354,40 +354,109 @@ isNearbyRiver worldSize chunkGX chunkGY pf =
     case pfFeature pf of
         HydroShape (RiverFeature river) →
             case pfActivity pf of
-                FActive  → anySegmentNearby worldSize chunkGX chunkGY river
-                FDormant → anySegmentNearby worldSize chunkGX chunkGY river
+                FActive  → riverNearChunk worldSize chunkGX chunkGY river
+                FDormant → riverNearChunk worldSize chunkGX chunkGY river
                 _        → False
         _ → False
 
+-- | Check if ANY part of the river is near this chunk.
+--   Uses a generous per-segment check: for each segment,
+--   test all four chunk corners against the segment AND
+--   test both segment endpoints against the chunk bounds.
+--   If any test passes, the chunk is near.
+riverNearChunk ∷ Int → Int → Int → RiverParams → Bool
+riverNearChunk worldSize chunkGX chunkGY river =
+    let margin = chunkSize * 2  -- generous fixed margin
+        segs = rpSegments river
+    in any (segNear margin) segs
+  where
+    chunkMinX = chunkGX
+    chunkMinY = chunkGY
+    chunkMaxX = chunkGX + chunkSize
+    chunkMaxY = chunkGY + chunkSize
+
+    -- Check if a segment is near the chunk using multiple tests
+    segNear margin seg =
+        let GeoCoord sx sy = rsStart seg
+            GeoCoord ex ey = rsEnd seg
+            valleyW = rsValleyWidth seg
+            m = valleyW + margin
+
+            -- Test 1: Is either endpoint near the chunk?
+            startNear = pointNearChunk worldSize sx sy m
+            endNear   = pointNearChunk worldSize ex ey m
+
+            -- Test 2: Does the segment's Y range overlap the chunk's Y range?
+            -- AND does the segment's X range (wrapped) overlap?
+            segMinY = min sy ey - m
+            segMaxY = max sy ey + m
+            yOverlap = segMaxY ≥ chunkMinY ∧ segMinY ≤ chunkMaxY
+
+            -- X overlap with wrapping
+            segCenterX = sx + wrappedDeltaForFluid worldSize ex sx `div` 2
+            segHalfX = abs (wrappedDeltaForFluid worldSize ex sx) `div` 2 + m
+            chunkCenterX = chunkGX + chunkSize `div` 2
+            xDist = abs (wrappedDeltaForFluid worldSize chunkCenterX segCenterX)
+            xOverlap = xDist ≤ segHalfX + chunkSize `div` 2
+
+        in startNear ∨ endNear ∨ (xOverlap ∧ yOverlap)
+
+    pointNearChunk ws px py m =
+        let dx = abs (wrappedDeltaForFluid ws px (chunkGX + chunkSize `div` 2))
+            dy = abs (py - (chunkGY + chunkSize `div` 2))
+        in dx ≤ m + chunkSize `div` 2 ∧ dy ≤ m + chunkSize `div` 2
+
 anySegmentNearby ∷ Int → Int → Int → RiverParams → Bool
 anySegmentNearby worldSize chunkGX chunkGY river =
-    any (segmentNearChunk worldSize chunkGX chunkGY) (rpSegments river)
+    let segs = rpSegments river
+    in any (segmentNearChunk worldSize chunkGX chunkGY) segs
+    -- Also check: is the chunk near any waypoint?
+    -- This catches chunks at bends where no single segment
+    -- is close but a waypoint is.
+    ∨ any (waypointNearChunk worldSize chunkGX chunkGY) segs
 
 segmentNearChunk ∷ Int → Int → Int → RiverSegment → Bool
 segmentNearChunk worldSize chunkGX chunkGY seg =
     let GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
-
-        -- Margin: valley width + chunk size, generous buffer
         margin = rsValleyWidth seg + chunkSize
 
         -- Chunk center
-        chunkCX = chunkGX + chunkSize `div` 2
-        chunkCY = chunkGY + chunkSize `div` 2
+        cx = chunkGX + chunkSize `div` 2
+        cy = chunkGY + chunkSize `div` 2
 
-        -- Segment midpoint
-        segMidX = (sx + ex) `div` 2
-        segMidY = (sy + ey) `div` 2
+        -- Segment vector
+        fdx = fromIntegral (wrappedDeltaForFluid worldSize ex sx) ∷ Float
+        fdy = fromIntegral (ey - sy) ∷ Float
+        segLen2 = fdx * fdx + fdy * fdy
 
-        -- Half-length of segment bounding box + margin
-        halfExtentX = abs (wrappedDeltaForFluid worldSize ex sx) `div` 2 + margin
-        halfExtentY = abs (ey - sy) `div` 2 + margin
+        -- Vector from segment start to chunk center
+        px = fromIntegral (wrappedDeltaForFluid worldSize cx sx) ∷ Float
+        py = fromIntegral (cy - sy) ∷ Float
 
-        -- Distance from chunk center to segment midpoint
-        dx = abs (wrappedDeltaForFluid worldSize chunkCX segMidX)
-        dy = abs (chunkCY - segMidY)
+    in if segLen2 < 1.0
+       -- Degenerate segment: just check distance to start
+       then sqrt (px * px + py * py) < fromIntegral margin
+       else
+       -- Project chunk center onto segment line
+       let t = max 0.0 (min 1.0 ((px * fdx + py * fdy) / segLen2))
+           closestX = t * fdx
+           closestY = t * fdy
+           distX = px - closestX
+           distY = py - closestY
+           dist = sqrt (distX * distX + distY * distY)
+       in dist < fromIntegral margin
 
-    in dx ≤ halfExtentX ∧ dy ≤ halfExtentY
+waypointNearChunk ∷ Int → Int → Int → RiverSegment → Bool
+waypointNearChunk worldSize chunkGX chunkGY seg =
+    let GeoCoord wx wy = rsStart seg
+        margin = rsValleyWidth seg + chunkSize
+        cx = chunkGX + chunkSize `div` 2
+        cy = chunkGY + chunkSize `div` 2
+        dx = fromIntegral (wrappedDeltaForFluid worldSize cx wx) ∷ Float
+        dy = fromIntegral (cy - wy) ∷ Float
+        dist = sqrt (dx * dx + dy * dy)
+    in dist < fromIntegral margin
 
 isNearbyLake ∷ Int → Int → Int → PersistentFeature → Bool
 isNearbyLake worldSize chunkGX chunkGY pf =
