@@ -304,27 +304,14 @@ handleWorldCommand env logger cmd = do
                 Just (piWidth preview, piHeight preview, piData preview)
             sendGenLog env "World preview ready."
             
-            -- Generate the initial 5×5 chunk grid around (0,0)
-            let initialCoords = [ ChunkCoord cx cy
-                                | cx ← [-chunkLoadRadius .. chunkLoadRadius]
-                                , cy ← [-chunkLoadRadius .. chunkLoadRadius]
-                                ]
-                totalInitialChunks = length initialCoords
+            -- Compute total initial chunk count for the log message.
+            -- No need to build the coord list just for its length.
+            let radius = chunkLoadRadius
+                totalInitialChunks = (2 * radius + 1) * (2 * radius + 1)
 
             sendGenLog env $ "Generating initial chunks ("
                 <> T.pack (show totalInitialChunks) <> ")..."
 
-            let initialChunks = map (\coord →
-                    let (chunkTiles, surfMap, terrainMap, fluidMap) = generateChunk params coord
-                    in LoadedChunk
-                        { lcCoord      = coord
-                        , lcTiles      = chunkTiles
-                        , lcSurfaceMap = surfMap
-                        , lcTerrainSurfaceMap = terrainMap
-                        , lcFluidMap   = fluidMap
-                        , lcModified   = False
-                        }) initialCoords
-            
             -- Generate ONLY the center chunk synchronously for immediate display
             let centerCoord = ChunkCoord 0 0
                 (ct, cs, cterrain, cf) = generateChunk params centerCoord
@@ -344,13 +331,13 @@ handleWorldCommand env logger cmd = do
                 (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
                                , wtdMaxChunks = 200 }, ())
 
-            -- Store the remaining coords that still need generation
-            let initialCoords = [ ChunkCoord cx cy
-                                | cx ← [-chunkLoadRadius .. chunkLoadRadius]
-                                , cy ← [-chunkLoadRadius .. chunkLoadRadius]
-                                , not (cx ≡ 0 ∧ cy ≡ 0)  -- skip center, already done
-                                ]
-            writeIORef (wsInitQueueRef worldState) initialCoords
+            -- Queue the remaining coords for progressive loading
+            let remainingCoords = [ ChunkCoord cx cy
+                                  | cx ← [-chunkLoadRadius .. chunkLoadRadius]
+                                  , cy ← [-chunkLoadRadius .. chunkLoadRadius]
+                                  , not (cx ≡ 0 ∧ cy ≡ 0)  -- skip center, already done
+                                  ]
+            writeIORef (wsInitQueueRef worldState) remainingCoords
 
             -- Register + show world immediately
             atomicModifyIORef' (worldManagerRef env) $ \mgr →
@@ -364,11 +351,11 @@ handleWorldCommand env logger cmd = do
             atomicModifyIORef' (cameraRef env) $ \cam →
                 (cam { camZSlice = startZSlice, camZTracking = True }, ())
             
-            let summaryMsg = T.pack (show $ length initialChunks) <> " chunks, "
-            sendGenLog env $ "World initialized: " <> summaryMsg
+            sendGenLog env $ "World initialized: "
+                <> T.pack (show totalInitialChunks) <> " chunks queued"
 
             logInfo logger CatWorld $ "World initialized: " 
-                <> T.pack (show $ length initialChunks) <> " chunks, "
+                <> T.pack (show totalInitialChunks) <> " chunks, "
                 <> "surface at z=" <> T.pack (show surfaceElev)
                 <> ": " <> unWorldPageId pageId
         
