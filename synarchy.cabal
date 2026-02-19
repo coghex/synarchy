@@ -264,6 +264,15 @@ library
                      World.Thread
                      World.Grid
                      World.Render
+                     World.Render.Camera
+                     World.Render.Camera.Types
+                     World.Render.ViewBounds
+                     World.Render.ChunkCulling
+                     World.Render.Quads
+                     World.Render.TileQuads
+                     World.Render.Textures
+                     World.Render.Textures.Types
+                     World.Render.Zoom.Types
                      World.Generate
                      World.Generate.Constants
                      World.Generate.Coordinates
@@ -304,9 +313,6 @@ library
                      World.Plate
                      World.Plate.Types
                      World.Region.Types
-                     World.Render.Camera.Types
-                     World.Render.Textures.Types
-                     World.Render.Zoom.Types
                      World.State.Types
                      World.Scale
                      World.Slope
