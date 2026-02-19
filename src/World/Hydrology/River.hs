@@ -1,11 +1,9 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Hydrology.River
-    ( generateRivers
-    , evolveRiver
+    ( evolveRiver
     , applyRiverCarve
     , applyRiverEvolution
     ) where
 
-import World.Hydrology.River.Generation (generateRivers)
 import World.Hydrology.River.Evolution (evolveRiver)
 import World.Hydrology.River.Carving (applyRiverCarve, applyRiverEvolution)

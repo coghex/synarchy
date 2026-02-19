@@ -34,13 +34,13 @@ baseSampleSpacing = 8
 
 -- | Minimum flow accumulation to qualify as a river.
 minRiverTotalFlow ∷ Int
-minRiverTotalFlow = 3
+minRiverTotalFlow = 2
 
 minRiverLength ∷ Int
-minRiverLength = 2
+minRiverLength = 4
 
 maxGridDim ∷ Int
-maxGridDim = 64
+maxGridDim = 128
 
 minLakeDepth ∷ Int
 minLakeDepth = 5
@@ -49,9 +49,13 @@ minLakeDepth = 5
 -- Types
 -----------------------------------------------------------
 
+-- | Result of flow simulation. Instead of full RiverParams,
+--   we now export river SOURCES — high-flow land cells that
+--   should be traced at tile resolution.
 data FlowResult = FlowResult
-    { frRivers  ∷ ![RiverParams]
-    , frLakes   ∷ ![LakeParams]
+    { frRiverSources ∷ ![(Int, Int, Int, Float)]
+      -- ^ (gx, gy, elevation, flowStrength) — sorted by flow descending
+    , frLakes        ∷ ![LakeParams]
     } deriving (Show)
 
 data ElevGrid = ElevGrid
@@ -75,7 +79,6 @@ buildInitialElevGrid seed worldSize plates =
         halfGrid = gridW `div` 2
         totalSamples = gridW * gridW
         fromIdx idx = (idx `mod` gridW, idx `div` gridW)
-
         gxV = VU.generate totalSamples $ \idx →
             let (ix, _) = fromIdx idx
             in (ix - halfGrid) * spacing
@@ -146,7 +149,6 @@ fillDepressions grid =
         fromIdx idx = (idx `mod` gridW, idx `div` gridW)
         toIdx ix iy = iy * gridW + ix
         wrapIX ix = ((ix `mod` gridW) + gridW) `mod` gridW
-
         neighbors ∷ Int → [Int]
         neighbors idx =
             let (ix, iy) = fromIdx idx
@@ -243,26 +245,22 @@ simulateHydrology seed worldSize ageIdx grid =
         neighborOffsets = [(-1,0),(1,0),(0,-1),(0,1)
                           ,(-1,-1),(1,-1),(-1,1),(1,1)]
 
+        neighbors ∷ Int → [Int]
+        neighbors idx =
+            let (ix, iy) = fromIdx idx
+            in [ toIdx (wrapIX (ix + dx)) ny
+               | (dx, dy) ← neighborOffsets
+               , let ny = iy + dy
+               , ny ≥ 0 ∧ ny < gridW
+               ]
+
         ---------------------------------------------------
         -- Step 1: Fill depressions
         ---------------------------------------------------
         filledElev = fillDepressions grid
 
-        -- Debug: count how many cells got filled vs original
-        _debugFilledCount = VU.length $ VU.filter id $
-            VU.zipWith (\o f → f > o) origElev filledElev
-        _debugSinkCount = VU.length $ VU.filter id $
-            VU.imap (\idx _ →
-                landVec VU.! idx
-                ∧ filledElev VU.! idx ≡ maxBound
-                ) origElev
-
         ---------------------------------------------------
         -- Step 2: Flow direction on filled surface
-        -- Tie-breaking: when filled elevations are equal,
-        -- prefer the neighbor with lower ORIGINAL elevation.
-        -- This routes water through flat filled areas toward
-        -- the depression outlet.
         ---------------------------------------------------
         flowDirVec ∷ VU.Vector Int
         flowDirVec = VU.generate totalSamples $ \idx →
@@ -287,7 +285,7 @@ simulateHydrology seed worldSize ageIdx grid =
                      (lowestIdx, lowestElev, _) =
                          findLowest idx myElev myOrig neighborOffsets
                  in if lowestElev ≥ myElev
-                      ∧ lowestIdx ≡ idx  -- no better neighbor found
+                      ∧ lowestIdx ≡ idx
                     then -1
                     else lowestIdx
 
@@ -333,30 +331,16 @@ simulateHydrology seed worldSize ageIdx grid =
         dedupedLakes = dedupLakes spacing lakes
 
         ---------------------------------------------------
-        -- Step 5: Rivers
+        -- Step 5: River sources
+        -- A cell is a headwater if:
+        --   1. It's land
+        --   2. It has accumulation >= minRiverTotalFlow
+        --   3. No upstream neighbor has accumulation >= minRiverTotalFlow
+        --      (i.e., this is where significant flow begins)
         ---------------------------------------------------
-        -- Strategy: find ALL cells with sufficient flow that
-        -- are "headwaters" — land cells where accumulation
-        -- crosses the threshold. A cell is a headwater if:
-        --   1. It has accum >= minRiverTotalFlow
-        --   2. NONE of its upstream contributors (cells that
-        --      flow INTO it) have accum >= minRiverTotalFlow
-        --
-        -- PLUS: find confluence tributaries. A cell is a
-        -- tributary source if:
-        --   1. It has accum >= minRiverTotalFlow
-        --   2. At least TWO upstream cells flow into it with
-        --      accum >= minRiverTotalFlow (it's a confluence)
-        --   3. Each upstream branch becomes its own river
-        --
-        -- This gives us the main stem PLUS all major tributaries.
 
-        -- First: find all cells that have upstream flow into them
-        -- Build a count of how many qualifying upstream neighbors
-        -- each cell has.
-
-        -- For each cell, find upstream neighbors (cells whose
-        -- flowDir points to this cell) with sufficient accumulation
+        -- For a given cell, find upstream neighbors:
+        -- cells whose flowDir points TO this cell
         upstreamQualified ∷ Int → [Int]
         upstreamQualified idx =
             let (ix, iy) = fromIdx idx
@@ -369,52 +353,25 @@ simulateHydrology seed worldSize ageIdx grid =
                , accumVec VU.! nIdx ≥ minRiverTotalFlow
                ]
 
-        -- Headwaters: no qualifying upstream
         headwaters = filter (\idx →
             landVec VU.! idx
             ∧ accumVec VU.! idx ≥ minRiverTotalFlow
             ∧ null (upstreamQualified idx)
             ) [0 .. totalSamples - 1]
 
-        -- Confluences: 2+ qualifying upstream branches.
-        -- Each upstream branch tip becomes a river source,
-        -- traced from that tip (not the confluence itself).
-        confluenceBranches = concatMap (\idx →
-            let ups = upstreamQualified idx
-            in if length ups ≥ 2
-               then ups  -- each upstream branch is a separate source
-               else []
-            ) [0 .. totalSamples - 1]
+        -- Sort by accumulation descending — biggest rivers first
+        sortedSources = sortBy (comparing (Down . (accumVec VU.!))) headwaters
 
-        -- All river sources: headwaters + confluence branch tips
-        allSources = headwaters <> confluenceBranches
+        riverSources ∷ [(Int, Int, Int, Float)]
+        riverSources = map (\idx →
+            let gx = gxVec VU.! idx
+                gy = gyVec VU.! idx
+                elev = origElev VU.! idx
+                flow = fromIntegral (accumVec VU.! idx) * 0.05 + 0.1
+            in (gx, gy, elev, flow)
+            ) sortedSources
 
-        traceRiver ∷ Int → [(Int, Int, Int, Int)]
-        traceRiver srcIdx =
-            let maxSteps = min totalSamples 500
-                go ∷ Int → [(Int, Int, Int, Int)] → Int → [(Int, Int, Int, Int)]
-                go _ acc 0 = reverse acc
-                go idx acc stepsLeft
-                    | idx < 0 = reverse acc
-                    | otherwise =
-                        let gx     = gxVec VU.! idx
-                            gy     = gyVec VU.! idx
-                            elev   = origElev VU.! idx
-                            accum  = accumVec VU.! idx
-                            isLand' = landVec VU.! idx
-                            next   = flowDirVec VU.! idx
-                            wp     = (gx, gy, elev, accum)
-                        in if not isLand' ∧ not (null acc)
-                           then reverse (wp : acc)
-                           else go next (wp : acc) (stepsLeft - 1)
-            in go srcIdx [] maxSteps
-
-        rivers ∷ [RiverParams]
-        rivers = catMaybes $ zipWith
-            (\riverIdx path → pathToRiverParams seed ageIdx worldSize spacing riverIdx path)
-            [0..] (map traceRiver allSources)
-
-    in FlowResult { frRivers = rivers, frLakes = dedupedLakes }
+    in FlowResult { frRiverSources = riverSources, frLakes = dedupedLakes }
 
 -----------------------------------------------------------
 -- Lake Deduplication
@@ -589,8 +546,10 @@ makeSegment spacing _segIdx
         valleyW = min 96 (max (width * 3)
                               (round (fromIntegral width * valleyMult) ∷ Int))
 
-        baseDepth = max 3 (slopeDelta `div` 2 + round (flow * 4.0))
-        maxDepth = min 60 (slopeDelta + 20)
+        -- Depth capped at 20 tiles (200m) absolute max
+        -- Scale more gently with flow to avoid over-carving
+        baseDepth = max 2 (slopeDelta `div` 3 + round (flow * 2.0))
+        maxDepth = min 20 (slopeDelta + 10)
         depth = min maxDepth baseDepth
 
     in RiverSegment
@@ -603,3 +562,5 @@ makeSegment spacing _segIdx
         , rsStartElev   = se
         , rsEndElev     = ee
         }
+
+

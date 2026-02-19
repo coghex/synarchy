@@ -297,7 +297,6 @@ library
                      World.Hydrology.Event
                      World.Hydrology.Simulation
                      World.Hydrology.River
-                     World.Hydrology.River.Generation
                      World.Hydrology.River.Evolution
                      World.Hydrology.River.Meander
                      World.Hydrology.River.Tributary

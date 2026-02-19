@@ -12,7 +12,8 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Types
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (wrapGlobalU)
-import World.Geology (applyGeoEvent, GeoModification(..))
+import World.Geology.Types (GeoModification(..))
+import World.Geology.Event (applyGeoEvent)
 import World.Geology.Erosion (applyErosion)
 import World.Scale (WorldScale(..), computeWorldScale)
 import World.Generate.Constants (chunkBorder)
