@@ -34,7 +34,10 @@ baseSampleSpacing = 8
 
 -- | Minimum flow accumulation to qualify as a river.
 minRiverTotalFlow ∷ Int
-minRiverTotalFlow = 4
+minRiverTotalFlow = 3
+
+minRiverLength ∷ Int
+minRiverLength = 2
 
 maxGridDim ∷ Int
 maxGridDim = 64
@@ -332,24 +335,59 @@ simulateHydrology seed worldSize ageIdx grid =
         ---------------------------------------------------
         -- Step 5: Rivers
         ---------------------------------------------------
-        -- Find all cells where flow first crosses threshold.
-        -- A source = land cell with accum >= threshold AND
-        -- no upstream neighbor with accum >= threshold flowing INTO this cell.
-        riverSources ∷ [Int]
-        riverSources = filter isRiverSource [0 .. totalSamples - 1]
+        -- Strategy: find ALL cells with sufficient flow that
+        -- are "headwaters" — land cells where accumulation
+        -- crosses the threshold. A cell is a headwater if:
+        --   1. It has accum >= minRiverTotalFlow
+        --   2. NONE of its upstream contributors (cells that
+        --      flow INTO it) have accum >= minRiverTotalFlow
+        --
+        -- PLUS: find confluence tributaries. A cell is a
+        -- tributary source if:
+        --   1. It has accum >= minRiverTotalFlow
+        --   2. At least TWO upstream cells flow into it with
+        --      accum >= minRiverTotalFlow (it's a confluence)
+        --   3. Each upstream branch becomes its own river
+        --
+        -- This gives us the main stem PLUS all major tributaries.
 
-        isRiverSource ∷ Int → Bool
-        isRiverSource idx =
+        -- First: find all cells that have upstream flow into them
+        -- Build a count of how many qualifying upstream neighbors
+        -- each cell has.
+
+        -- For each cell, find upstream neighbors (cells whose
+        -- flowDir points to this cell) with sufficient accumulation
+        upstreamQualified ∷ Int → [Int]
+        upstreamQualified idx =
+            let (ix, iy) = fromIdx idx
+            in [ nIdx
+               | (dx, dy) ← neighborOffsets
+               , let ny = iy + dy
+               , ny ≥ 0 ∧ ny < gridW
+               , let nIdx = toIdx (wrapIX (ix + dx)) ny
+               , flowDirVec VU.! nIdx ≡ idx
+               , accumVec VU.! nIdx ≥ minRiverTotalFlow
+               ]
+
+        -- Headwaters: no qualifying upstream
+        headwaters = filter (\idx →
             landVec VU.! idx
             ∧ accumVec VU.! idx ≥ minRiverTotalFlow
-            ∧ let (ix, iy) = fromIdx idx
-              in not $ any (\(dx, dy) →
-                    let ny = iy + dy
-                    in ny ≥ 0 ∧ ny < gridW
-                     ∧ let nIdx = toIdx (wrapIX (ix + dx)) ny
-                       in flowDirVec VU.! nIdx ≡ idx
-                        ∧ accumVec VU.! nIdx ≥ minRiverTotalFlow
-                    ) neighborOffsets
+            ∧ null (upstreamQualified idx)
+            ) [0 .. totalSamples - 1]
+
+        -- Confluences: 2+ qualifying upstream branches.
+        -- Each upstream branch tip becomes a river source,
+        -- traced from that tip (not the confluence itself).
+        confluenceBranches = concatMap (\idx →
+            let ups = upstreamQualified idx
+            in if length ups ≥ 2
+               then ups  -- each upstream branch is a separate source
+               else []
+            ) [0 .. totalSamples - 1]
+
+        -- All river sources: headwaters + confluence branch tips
+        allSources = headwaters <> confluenceBranches
 
         traceRiver ∷ Int → [(Int, Int, Int, Int)]
         traceRiver srcIdx =
@@ -374,7 +412,7 @@ simulateHydrology seed worldSize ageIdx grid =
         rivers ∷ [RiverParams]
         rivers = catMaybes $ zipWith
             (\riverIdx path → pathToRiverParams seed ageIdx worldSize spacing riverIdx path)
-            [0..] (map traceRiver riverSources)
+            [0..] (map traceRiver allSources)
 
     in FlowResult { frRivers = rivers, frLakes = dedupedLakes }
 
@@ -513,7 +551,7 @@ wrappedDelta worldSize a b =
 pathToRiverParams ∷ Word64 → Int → Int → Int → Int
                   → [(Int, Int, Int, Int)] → Maybe RiverParams
 pathToRiverParams seed ageIdx worldSize spacing riverIdx path
-    | length path < 3 = Nothing
+    | length path < minRiverLength = Nothing
     | otherwise =
         let segments = zipWith (makeSegment spacing)
                                [0..] (zip path (tail path))
