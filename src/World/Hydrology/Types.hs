@@ -18,6 +18,7 @@ module World.Hydrology.Types
     ) where
 
 import UPrelude
+import Control.DeepSeq (NFData(..))
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 
 -----------------------------------------------------------
@@ -78,6 +79,15 @@ data RiverSegment = RiverSegment
     , rsStartElev  ∷ !Int        -- ^ Elevation at start (for slope calculation)
     , rsEndElev    ∷ !Int        -- ^ Elevation at end
     } deriving (Show, Eq)
+
+instance NFData RiverParams where
+    rnf (RiverParams s m segs f ms) =
+        rnf s `seq` rnf m `seq` rnf segs `seq` rnf f `seq` rnf ms `seq` ()
+
+instance NFData RiverSegment where
+    rnf (RiverSegment s e w vw d f se ee) =
+        rnf s `seq` rnf e `seq` rnf w `seq` rnf vw `seq`
+        rnf d `seq` rnf f `seq` rnf se `seq` rnf ee `seq` ()
 
 data RiverActivity
     = Flowing          -- ^ Active river

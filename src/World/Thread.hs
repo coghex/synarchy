@@ -270,7 +270,7 @@ handleWorldCommand env logger cmd = do
 
             sendGenLog env "Computing ocean map..."
             let plates = generatePlates seed worldSize placeCount
-                applyTL gx gy base = applyTimeline timeline worldSize gx gy base
+                applyTL gx gy base = applyTimelineFast timeline worldSize gx gy base
                 oceanMap = computeOceanMap seed worldSize placeCount plates applyTL
             
             sendGenLog env $ "Ocean flood fill complete: "

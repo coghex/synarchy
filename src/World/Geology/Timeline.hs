@@ -3,6 +3,8 @@ module World.Geology.Timeline
     ( buildTimeline
     ) where
 import UPrelude
+import Control.Parallel.Strategies (parMap, rdeepseq, parList, using)
+import Control.DeepSeq (NFData(..), deepseq)
 import Data.Bits (xor)
 import Data.Word (Word64)
 import Data.List (foldl', minimumBy, sortBy)
@@ -71,6 +73,24 @@ buildTimeline seed worldSize plateCount =
         , gtPeriods   = reverse (tbsPeriods s2)
         , gtFeatures  = tbsFeatures s2
         }
+
+-- | Look up elevation from the simulation's ElevGrid.
+--   Fast: just an array index. No timeline recomputation.
+elevFromGrid ∷ ElevGrid → Int → Int → Int → Int
+elevFromGrid grid worldSize gx gy =
+    let spacing = egSpacing grid
+        gridW = egGridW grid
+        halfGrid = gridW `div` 2
+        (gx', gy') = wrapGlobalU worldSize gx gy
+        -- Convert world coords to grid index
+        ix = (gx' `div` spacing) + halfGrid
+        iy = (gy' `div` spacing) + halfGrid
+        ix' = max 0 (min (gridW - 1) ix)
+        iy' = max 0 (min (gridW - 1) iy)
+        idx = iy' * gridW + ix'
+    in if idx ≥ 0 ∧ idx < VU.length (egElev grid)
+       then egElev grid VU.! idx
+       else seaLevel
 
 -----------------------------------------------------------
 -- Primordial Bombardment (standalone, pre-eon)
@@ -395,7 +415,7 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
 
         (hydroFeatures, hydroEvents, tbs_h0) = reconcileHydrology
             hydroSeed ageIdx flowResult (tbsPeriodIdx tbs) worldSize
-            plates partialTimeline tbs
+            elevGrid tbs
 
         tbs_h = mergeConvergingRivers worldSize (tbsPeriodIdx tbs) tbs_h0
         -- Collect the final hydro events from evolved features
@@ -570,10 +590,10 @@ mkGeoPeriod worldSize name scale duration date events erosion =
 --     (source region not near any existing river's path)
 --   - Lakes: add new ones only
 reconcileHydrology ∷ Word64 → Int → FlowResult → Int → Int
-                   → [TectonicPlate] → GeoTimeline
+                   → ElevGrid
                    → TimelineBuildState
                    → ([PersistentFeature], [GeoEvent], TimelineBuildState)
-reconcileHydrology seed ageIdx flowResult periodIdx worldSize plates timeline tbs =
+reconcileHydrology seed ageIdx flowResult periodIdx worldSize elevGrid tbs =
     let existingRivers = filter (isActiveRiver . pfFeature) (tbsFeatures tbs)
         existingLakes  = filter (isLakeFeature . pfFeature)  (tbsFeatures tbs)
         simSources = frRiverSources flowResult
@@ -599,10 +619,11 @@ reconcileHydrology seed ageIdx flowResult periodIdx worldSize plates timeline tb
             else take budget $ filter (isSourceNew worldSize existingRivers) simSources
 
         -- Trace each source at tile level
-        newRivers = catMaybes $ zipWith (\idx (gx, gy, elev, flow) →
-            traceRiverFromSource seed worldSize plates timeline
-                gx gy elev (ageIdx * 1000 + idx) flow
-            ) [0..] newSources
+        newRivers = catMaybes $
+            parMap rdeepseq (\(idx, (gx, gy, elev, flow)) →
+                traceRiverFromSource seed worldSize elevGrid
+                    gx gy elev (ageIdx * 1000 + idx) flow
+            ) (zip [0..] newSources)
 
         (newPfs, newEvents, tbs2) =
             foldl' (\(pfs, evts, st) river →
@@ -992,24 +1013,20 @@ isLakeFeature _                            = False
 --
 --   Step size varies: 4-8 tiles per step to keep segment count
 --   manageable while maintaining path detail.
-traceRiverFromSource ∷ Word64 → Int → [TectonicPlate] → GeoTimeline
+traceRiverFromSource ∷ Word64 → Int → ElevGrid
                      → Int → Int → Int → Int → Float
                      → Maybe RiverParams
-traceRiverFromSource seed worldSize plates timeline gx gy srcElev riverIdx flow =
+traceRiverFromSource seed worldSize elevGrid gx gy srcElev riverIdx flow =
     let stepSize = 6
-        maxSteps = 300  -- up to 1800 tiles long
+        maxSteps = 300
         halfTiles = (worldSize * 16) `div` 2
 
-        -- Get elevation at a tile using plates + full timeline
         getElev x y =
             let (x', y') = wrapGlobalU worldSize x y
             in if isBeyondGlacier worldSize x' y'
                then seaLevel + 500
-               else let (baseE, baseMat) = elevationAtGlobal seed plates worldSize x' y'
-                        (finalE, _) = applyTimelineFast timeline worldSize x' y' (baseE, baseMat)
-                    in finalE
+               else elevFromGrid elevGrid worldSize x' y'
 
-        -- 8-directional offsets
         dirs = [ (stepSize, 0), (-stepSize, 0), (0, stepSize), (0, -stepSize)
                , (stepSize, stepSize), (stepSize, -stepSize)
                , (-stepSize, stepSize), (-stepSize, -stepSize)
@@ -1029,8 +1046,6 @@ traceRiverFromSource seed worldSize plates timeline gx gy srcElev riverIdx flow 
                            else (nx', ny', getElev nx' ny')
                         ) dirs
 
-                    -- Pick lowest neighbor, with slight randomness
-                    -- to avoid perfectly straight paths
                     sorted = sortByElevTriple neighbors
                     (bestX, bestY, bestElev) = case sorted of
                         [] → (curX, curY, curElev)
@@ -1044,15 +1059,9 @@ traceRiverFromSource seed worldSize plates timeline gx gy srcElev riverIdx flow 
                                else (x2, y2, e2)
 
                 in if bestElev ≥ curElev
-                   -- No downhill path — we're in a basin.
-                   -- Try to push through: if we're above sea level,
-                   -- look for the lowest neighbor even if it's uphill,
-                   -- simulating the river cutting through a low ridge.
                    then let lowestNeighbor = case sorted of
                                 [] → Nothing
                                 ((x, y, e):_) →
-                                    -- Only push through if the ridge is
-                                    -- shallow (< 15 tiles above us)
                                     if e < curElev + 15
                                     then Just (x, y, e)
                                     else Nothing
@@ -1066,12 +1075,11 @@ traceRiverFromSource seed worldSize plates timeline gx gy srcElev riverIdx flow 
 
         finishPath acc =
             let path = reverse acc
-            in if length path < 6  -- minimum 6 waypoints
+            in if length path < 6
                then Nothing
                else Just (buildRiverFromPath seed riverIdx flow path)
 
-        waypoints = go 0 gx gy srcElev []
-    in waypoints
+    in go 0 gx gy srcElev []
 
 sortByElevTriple ∷ [(Int, Int, Int)] → [(Int, Int, Int)]
 sortByElevTriple [] = []
