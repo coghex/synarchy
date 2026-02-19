@@ -215,6 +215,7 @@ unionFluidMap = V.zipWith (\a b → case a of
     Nothing → b
   )
 
+
 -----------------------------------------------------------
 -- River Fluid Fill
 -----------------------------------------------------------
@@ -239,8 +240,7 @@ bestRiverFill ∷ Int → Int → Int → Int → Word64 → [RiverSegment]
               → Maybe FluidCell
 bestRiverFill worldSize gx gy surfZ meanderSeed segments =
     let results = map (riverFillFromSegment worldSize gx gy surfZ meanderSeed) segments
-        best = foldl' pickBestFill Nothing results
-    in best
+    in foldl' pickBestFill Nothing results
 
 pickBestFill ∷ Maybe FluidCell → Maybe FluidCell → Maybe FluidCell
 pickBestFill Nothing b = b
@@ -261,24 +261,36 @@ riverFillFromSegment worldSize gx gy surfZ _meanderSeed seg =
        else
        let px = fromIntegral (wrappedDeltaForFluid worldSize gx sx) ∷ Float
            py = fromIntegral (gy - sy) ∷ Float
-           t = max 0.0 (min 1.0 ((px * dx' + py * dy') / segLen2))
+
+           -- Project onto segment, allow slight overshoot for continuity
+           tRaw = (px * dx' + py * dy') / segLen2
+           t = max (-0.05) (min 1.05 tRaw)
+
            closestX = t * dx'
            closestY = t * dy'
            perpX = px - closestX
            perpY = py - closestY
            perpDist = sqrt (perpX * perpX + perpY * perpY)
-           channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
-       in if perpDist > channelHalfW
+
+           valleyHalfW = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
+
+       in if perpDist > valleyHalfW
           then Nothing
           else
-          let flow = rsFlowRate seg
-              waterDepth = 1 + floor (flow * 3.0) ∷ Int
-              startElev = rsStartElev seg
-              endElev   = rsEndElev seg
-              interpElev = fromIntegral startElev
-                         + t * (fromIntegral endElev - fromIntegral startElev)
-              channelFloor = interpElev - fromIntegral (rsDepth seg)
-              waterSurface = round channelFloor + waterDepth
+          let startElev = fromIntegral (rsStartElev seg) ∷ Float
+              endElev   = fromIntegral (rsEndElev seg) ∷ Float
+              -- Clamp t to [0,1] for elevation interpolation
+              tClamped = max 0.0 (min 1.0 t)
+              interpElev = startElev + tClamped * (endElev - startElev)
+
+              depth = fromIntegral (rsDepth seg) ∷ Float
+              channelFloor = interpElev - depth
+
+              flow = rsFlowRate seg
+              waterDepth = 1.0 + flow * 3.0
+
+              waterSurface = round (channelFloor + waterDepth) ∷ Int
+
           in if surfZ ≥ waterSurface
              then Nothing
              else Just (FluidCell River waterSurface)
@@ -305,18 +317,27 @@ segmentNearChunk ∷ Int → Int → Int → RiverSegment → Bool
 segmentNearChunk worldSize chunkGX chunkGY seg =
     let GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
+
+        -- Margin: valley width + chunk size, generous buffer
         margin = rsValleyWidth seg + chunkSize
-        segMinX = min sx ex - margin
-        segMaxX = max sx ex + margin
-        segMinY = min sy ey - margin
-        segMaxY = max sy ey + margin
-        chunkMaxGX = chunkGX + chunkSize - 1
-        chunkMaxGY = chunkGY + chunkSize - 1
-        dx = abs (wrappedDeltaForFluid worldSize
-                  (chunkGX + chunkSize `div` 2)
-                  ((sx + ex) `div` 2))
-        maxDX = (segMaxX - segMinX) `div` 2 + chunkSize
-    in dx < maxDX ∧ segMaxY ≥ chunkGY ∧ segMinY ≤ chunkMaxGY
+
+        -- Chunk center
+        chunkCX = chunkGX + chunkSize `div` 2
+        chunkCY = chunkGY + chunkSize `div` 2
+
+        -- Segment midpoint
+        segMidX = (sx + ex) `div` 2
+        segMidY = (sy + ey) `div` 2
+
+        -- Half-length of segment bounding box + margin
+        halfExtentX = abs (wrappedDeltaForFluid worldSize ex sx) `div` 2 + margin
+        halfExtentY = abs (ey - sy) `div` 2 + margin
+
+        -- Distance from chunk center to segment midpoint
+        dx = abs (wrappedDeltaForFluid worldSize chunkCX segMidX)
+        dy = abs (chunkCY - segMidY)
+
+    in dx ≤ halfExtentX ∧ dy ≤ halfExtentY
 
 isNearbyLake ∷ Int → Int → Int → PersistentFeature → Bool
 isNearbyLake worldSize chunkGX chunkGY pf =
