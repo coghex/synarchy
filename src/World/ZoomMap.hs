@@ -13,6 +13,7 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State.Class (gets)
 import Data.IORef (readIORef, writeIORef, IORef)
 import Data.Maybe (isJust)
+import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
@@ -60,16 +61,27 @@ buildZoomCache ∷ WorldGenParams → V.Vector ZoomChunkEntry
 buildZoomCache params =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
-        -- FIX #1: Use pre-generated plates instead of regenerating
         plates = wgpPlates params
         halfSize = worldSize `div` 2
         timeline = wgpGeoTimeline params
         oceanMap = wgpOceanMap params
         features = gtFeatures timeline
 
-        buildOne ∷ (Int, Int) → Maybe ZoomChunkEntry
-        buildOne (ccx, ccy) =
-            let baseGX = ccx * chunkSize
+        -- Wrap chunk coords in u-space so each chunk has a canonical
+        -- grid position, preventing overlap at the seam.
+        wrapChunkU (ccx, ccy) =
+            let w = halfSize * 2
+                u = ccx - ccy
+                v = ccx + ccy
+                halfW = w `div` 2
+                wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+                cx' = (wrappedU + v) `div` 2
+                cy' = (v - wrappedU) `div` 2
+            in (cx', cy')
+
+        buildOne (ccx0, ccy0) =
+            let (ccx, ccy) = wrapChunkU (ccx0, ccy0)
+                baseGX = ccx * chunkSize
                 baseGY = ccy * chunkSize
                 halfTiles = halfSize * chunkSize
                 vMin = baseGX + baseGY
@@ -77,13 +89,10 @@ buildZoomCache params =
             in if vMax < -halfTiles ∨ vMin > halfTiles
                then Nothing
                else
-               let wrappedBaseGX = ccx * chunkSize
-                   wrappedBaseGY = ccy * chunkSize
-
-                   samples = [ let gx = wrappedBaseGX + ox
-                                   gy = wrappedBaseGY + oy
+               let samples = [ let gx = baseGX + ox
+                                   gy = baseGY + oy
                                    (gx', gy') = wrapGlobalU worldSize gx gy
-                                   (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
+                                   (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy'
                                in if baseMat ≡ matGlacier
                                   then (baseElev, unMaterialId baseMat)
                                   else if baseElev < -100 then (baseElev, 0)
@@ -100,12 +109,11 @@ buildZoomCache params =
                    chunkLava = hasAnyLavaQuick features seed plates worldSize coord avgElev
                    chunkOcean = isOceanChunk oceanMap coord
                              ∨ hasAnyOceanFluid oceanMap coord
-
                in Just ZoomChunkEntry
-                   { zceChunkX   = ccx
-                   , zceChunkY   = ccy
-                   , zceBaseGX   = baseGX
-                   , zceBaseGY   = baseGY
+                   { zceChunkX = ccx
+                   , zceChunkY = ccy
+                   , zceBaseGX = baseGX
+                   , zceBaseGY = baseGY
                    , zceTexIndex = if isOceanChunk oceanMap coord
                                    then 0
                                    else if chunkLava then 100
@@ -116,15 +124,15 @@ buildZoomCache params =
                    , zceHasLava  = chunkLava
                    }
 
-        allCoords = [ (ccx, ccy)
-                    | ccy ← [-halfSize .. halfSize - 1]
-                    , ccx ← [-halfSize .. halfSize - 1]
+        allCoords = [ let ccx = (u + v) `div` 2
+                          ccy = (v - u) `div` 2
+                      in (ccx, ccy)
+                    | v ← [-halfSize .. halfSize - 1]
+                    , u ← [-halfSize .. halfSize - 1]
+                    , even (u + v)  -- ccx and ccy must be integers
                     ]
-
-        -- FIX #4: Use parListChunk for better parallel granularity
         chunkBatchSize = max 1 (length allCoords `div` 128)
         results = map buildOne allCoords `using` parListChunk chunkBatchSize rdeepseq
-
     in V.fromList (catMaybes results)
 
 wrapChunkX ∷ Int → Int → Int
