@@ -210,11 +210,11 @@ evolveGlacierCapped seed canBranch periodIdx gs (events, tbs) pf =
 -- Lake reconciliation
 -----------------------------------------------------------
 
-reconcileLakes ∷ Word64 → Int → Int
+reconcileLakes ∷ Word64 → Int → Int → Int
               → [PersistentFeature] → [LakeParams]
               → TimelineBuildState
               → ([PersistentFeature], [GeoEvent], TimelineBuildState)
-reconcileLakes _seed _ageIdx periodIdx existingLakes simLakes tbs =
+reconcileLakes _seed _ageIdx periodIdx worldSize existingLakes simLakes tbs =
     let lakeMatchRadius = 60
 
         isNearExisting lk =
@@ -222,8 +222,9 @@ reconcileLakes _seed _ageIdx periodIdx existingLakes simLakes tbs =
             in any (\epf → case pfFeature epf of
                 HydroShape (LakeFeature elk) →
                     let GeoCoord ex ey = lkCenter elk
-                    in abs (lx - ex) < lakeMatchRadius
-                     ∧ abs (ly - ey) < lakeMatchRadius
+                        (dxi, dyi) = wrappedDeltaUV worldSize lx ly ex ey
+                    in abs dxi < lakeMatchRadius
+                     ∧ abs dyi < lakeMatchRadius
                 _ → False
                 ) existingLakes
 

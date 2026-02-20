@@ -329,7 +329,7 @@ simulateHydrology seed worldSize ageIdx grid =
             | idx ← [0 .. totalSamples - 1]
             ]
 
-        dedupedLakes = dedupLakes spacing lakes
+        dedupedLakes = dedupLakes worldSize spacing lakes
 
         ---------------------------------------------------
         -- Step 5: River sources
@@ -378,17 +378,16 @@ simulateHydrology seed worldSize ageIdx grid =
 -- Lake Deduplication
 -----------------------------------------------------------
 
-dedupLakes ∷ Int → [LakeParams] → [LakeParams]
-dedupLakes spacing = go []
+dedupLakes ∷ Int → Int → [LakeParams] → [LakeParams]
+dedupLakes worldSize spacing = go []
   where
     go acc [] = acc
     go acc (lk:rest) =
         let dominated = any (\existing →
                 let GeoCoord ex ey = lkCenter existing
                     GeoCoord lx ly = lkCenter lk
-                    dx = abs (ex - lx)
-                    dy = abs (ey - ly)
-                in dx < spacing * 3 ∧ dy < spacing * 3
+                    (dxi, dyi) = wrappedDeltaUV worldSize lx ly ex ey
+                in abs dxi < spacing * 3 ∧ abs dyi < spacing * 3
                 ) acc
         in if dominated
            then go acc rest

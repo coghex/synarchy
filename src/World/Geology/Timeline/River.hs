@@ -91,7 +91,7 @@ reconcileHydrology seed ageIdx flowResult periodIdx worldSize elevGrid tbs =
             ) ([], [], tbs1) newRivers
 
         (lakePfs, lakeEvents, tbs3) = reconcileLakes seed ageIdx periodIdx
-                                          existingLakes simLakes tbs2
+                                          worldSize existingLakes simLakes tbs2
 
         allNewPfs = evolvedPfs ++ newPfs ++ lakePfs
         allEvents = evolveEvents ++ newEvents ++ lakeEvents
