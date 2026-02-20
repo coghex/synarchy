@@ -9,6 +9,7 @@ module World.Hydrology.River.Carving
 
 import UPrelude
 import Data.Word (Word64)
+import qualified Data.Vector as V
 import World.Base (GeoCoord(..))
 import World.Geology.Hash (wrappedDeltaXGeo)
 import World.Material (matSandstone, matShale, unMaterialId)
@@ -34,8 +35,8 @@ applyRiverCarve river worldSize gx gy baseElev =
 --   This avoids the foldl' closure overhead and lets GHC
 --   compile it as a tight loop with unboxed accumulator fields.
 {-# INLINE findDeepestCarve #-}
-findDeepestCarve ∷ Int → Int → Int → Word64 → [RiverSegment] → GeoModification
-findDeepestCarve worldSize gx gy mSeed = go noModification
+findDeepestCarve ∷ Int → Int → Int → Word64 → V.Vector RiverSegment → GeoModification
+findDeepestCarve worldSize gx gy mSeed segs = go noModification (V.toList segs)
   where
     go !acc [] = acc
     go !acc (seg : rest)
@@ -128,9 +129,9 @@ carveFromSegment worldSize gx gy meanderSeed seg =
 
 computeDeltaDeposit ∷ RiverParams → Int → Int → Int → GeoModification
 computeDeltaDeposit river worldSize gx gy =
-    case rpSegments river of
-      [] → noModification
-      segs → computeDeltaDeposit' (last segs) (rpFlowRate river) worldSize gx gy
+    if V.null (rpSegments river)
+    then noModification
+    else computeDeltaDeposit' (V.last (rpSegments river)) (rpFlowRate river) worldSize gx gy
 
 -----------------------------------------------------------
 --   Takes the last segment and flow rate directly,

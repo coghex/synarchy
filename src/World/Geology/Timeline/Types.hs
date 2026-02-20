@@ -15,8 +15,8 @@ module World.Geology.Timeline.Types
     , bboxOverlapsChunk
     , tagEventsWithBBox
     , GeoEvent(..)
-    , RiverSegmentCarve(..)    -- NEW
-    , RiverDeltaParams(..)     -- NEW
+    , RiverSegmentCarve(..)
+    , RiverDeltaParams(..)
     , FeatureShape(..)
     , FeatureActivity(..)
     , FeatureEvolution(..)
@@ -37,7 +37,7 @@ module World.Geology.Timeline.Types
     , VolcanicActivity(..)
     , PersistentFeature(..)
     , LavaFlow(..)
-    , explodeRiverEvent        -- NEW: helper to split river into segments
+    , explodeRiverEvent
     ) where
 
 import UPrelude
@@ -98,7 +98,7 @@ noBBox ∷ EventBBox
 noBBox = EventBBox minBound minBound maxBound maxBound
 
 -----------------------------------------------------------
--- NEW: Per-segment river carving event data
+-- Per-segment river carving event data
 -----------------------------------------------------------
 
 -- | A single river segment's carving parameters.
@@ -130,8 +130,8 @@ data GeoEvent
     | FloodEvent !FloodParams
     | HydroEvent !HydroFeature
     | HydroModify !GeoFeatureId !HydroEvolution
-    | RiverSegmentEvent !RiverSegmentCarve    -- NEW
-    | RiverDeltaEvent   !RiverDeltaParams     -- NEW
+    | RiverSegmentEvent !RiverSegmentCarve
+    | RiverDeltaEvent   !RiverDeltaParams
     deriving (Show, Eq)
 
 -----------------------------------------------------------
@@ -145,11 +145,11 @@ explodeRiverEvent ∷ GeoEvent → [GeoEvent]
 explodeRiverEvent (HydroEvent (RiverFeature river)) =
     let segs   = rpSegments river
         mSeed  = rpMeanderSeed river
-        segEvts = map (\seg → RiverSegmentEvent
+        segEvts = V.toList $ V.map (\seg → RiverSegmentEvent
                         (RiverSegmentCarve seg mSeed)) segs
-        deltaEvt = case segs of
-            [] → []
-            _  → [RiverDeltaEvent (RiverDeltaParams (last segs)
+        deltaEvt = if V.null segs
+            then []
+            else [RiverDeltaEvent (RiverDeltaParams (V.last segs)
                                                      (rpFlowRate river))]
     in segEvts ++ deltaEvt
 explodeRiverEvent evt = [evt]
@@ -188,7 +188,7 @@ eventBBox (HydroEvent hf) ws = hydroFeatureBBox hf ws
 eventBBox (HydroModify _fid evo) _ws =
     hydroEvolutionBBox evo
 
--- NEW: tight bbox around just this one segment
+-- tight bbox around just this one segment
 eventBBox (RiverSegmentEvent rsc) _ws =
     let seg = rscSegment rsc
         GeoCoord sx sy = rsStart seg
@@ -197,7 +197,7 @@ eventBBox (RiverSegmentEvent rsc) _ws =
     in EventBBox (min sx ex - pad) (min sy ey - pad)
                  (max sx ex + pad) (max sy ey + pad)
 
--- NEW: tight bbox around the river mouth delta
+-- tight bbox around the river mouth delta
 eventBBox (RiverDeltaEvent rdp) _ws =
     let seg = rdpLastSegment rdp
         GeoCoord mx my = rsEnd seg
@@ -260,15 +260,15 @@ glacierBBox glacier =
 hydroFeatureBBox ∷ HydroFeature → Int → EventBBox
 hydroFeatureBBox (RiverFeature river) _ws =
     let allCoords = rpSourceRegion river : rpMouthRegion river
-                  : concatMap (\seg → [rsStart seg, rsEnd seg]) (rpSegments river)
+                  : concatMap (\seg → [rsStart seg, rsEnd seg])
+                              (V.toList (rpSegments river))
         xs = map (\(GeoCoord x _) → x) allCoords
         ys = map (\(GeoCoord _ y) → y) allCoords
-        maxValley = case rpSegments river of
-            []   → 8
-            segs → maximum (map rsValleyWidth segs)
-        pad = maxValley
-    in EventBBox (minimum xs - pad) (minimum ys - pad)
-                 (maximum xs + pad) (maximum ys + pad)
+        maxValley = if V.null (rpSegments river)
+                    then 8
+                    else V.maximum (V.map rsValleyWidth (rpSegments river))
+    in EventBBox (minimum xs - maxValley) (minimum ys - maxValley)
+                 (maximum xs + maxValley) (maximum ys + maxValley)
 hydroFeatureBBox (GlacierFeature glacier) _ws =
     glacierBBox glacier
 hydroFeatureBBox (LakeFeature lake) _ws =

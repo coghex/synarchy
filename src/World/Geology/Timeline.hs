@@ -762,7 +762,7 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
 
     else if roll < 0.30 ∧ canBranch
     -- 5%: Branch (reduced from 15%, and only when under cap)
-    then let numSegs = length (rpSegments river)
+    then let numSegs = V.length (rpSegments river)
          in if numSegs < 3
             then evolveDeepen seed ageIdx periodIdx pf river tbs
             else
@@ -774,7 +774,7 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
                 h6 = hashGeo seed fidInt (924 + ageIdx)
 
                 branchSegIdx = hashToRangeGeo h2 1 (numSegs - 1)
-                branchSeg = rpSegments river !! min branchSegIdx (numSegs - 1)
+                branchSeg = rpSegments river V.! min branchSegIdx (numSegs - 1)
                 GeoCoord bx by = rsStart branchSeg
                 GeoCoord bex bey = rsEnd branchSeg
 
@@ -838,7 +838,7 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
 
     else if roll < 0.60
     -- 10%: Widen
-    then let newSegs = map (\seg → seg
+    then let newSegs = V.map (\seg → seg
                  { rsWidth = min 12 (rsWidth seg + 1)
                  , rsValleyWidth = rsValleyWidth seg + 3
                  }) (rpSegments river)
@@ -863,25 +863,39 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
 --   - Increase B's downstream flow
 mergeConvergingRivers ∷ Int → Int → TimelineBuildState → TimelineBuildState
 mergeConvergingRivers worldSize periodIdx tbs =
-    let activeRivers = filter (\pf → isActiveRiver (pfFeature pf)
-                                   ∧ pfActivity pf ≡ FActive)
-                              (tbsFeatures tbs)
+    let activeRiverIds = map pfId
+            $ filter (\pf → isActiveRiver (pfFeature pf)
+                          ∧ pfActivity pf ≡ FActive)
+                     (tbsFeatures tbs)
         mergeThreshold = 24  -- tiles
 
-        -- For each pair, check if they should merge
+        -- For each river, re-fetch from current state and check
+        -- against all OTHER active rivers in the current state.
         go [] st = st
-        go (pf : rest) st =
-            let river = getRiverParamsFromPf pf
-                -- Check against all other rivers (not self)
-                others = filter (\other → pfId other ≠ pfId pf) rest
-            in case findMergeTarget worldSize mergeThreshold pf others of
+        go (fid : rest) st =
+            case lookupFeature fid st of
                 Nothing → go rest st
-                Just (targetPf, junctionCoord, segIdx) →
-                    let st' = performMerge worldSize periodIdx
-                                  pf targetPf junctionCoord segIdx st
-                    in go rest st'
+                Just pf →
+                    -- Skip if no longer an active river
+                    -- (a prior merge may have changed it)
+                    if not (isActiveRiver (pfFeature pf))
+                       ∨ pfActivity pf ≠ FActive
+                    then go rest st
+                    else
+                    -- Re-fetch others from current state, excluding self
+                    let others = filter (\other →
+                            pfId other ≠ fid
+                            ∧ isActiveRiver (pfFeature other)
+                            ∧ pfActivity other ≡ FActive
+                            ) (tbsFeatures st)
+                    in case findMergeTarget worldSize mergeThreshold pf others of
+                        Nothing → go rest st
+                        Just (targetPf, junctionCoord, segIdx) →
+                            let st' = performMerge worldSize periodIdx
+                                          pf targetPf junctionCoord segIdx st
+                            in go rest st'
 
-    in go activeRivers tbs
+    in go activeRiverIds tbs
 
 findMergeTarget ∷ Int → Int → PersistentFeature → [PersistentFeature]
                → Maybe (PersistentFeature, GeoCoord, Int)
@@ -900,17 +914,15 @@ checkRiverProximity ∷ Int → Int → Int → Int → PersistentFeature
 checkRiverProximity worldSize threshold mx my targetPf =
     let targetRiver = getRiverParamsFromPf targetPf
         segs = rpSegments targetRiver
-        -- Find closest segment
-        dists = zipWith (\idx seg →
+        dists = V.toList $ V.imap (\idx seg →
             let GeoCoord sx sy = rsStart seg
                 GeoCoord ex ey = rsEnd seg
-                -- Distance to segment midpoint (rough but fast)
                 midX = sx + wrappedDeltaXGeo worldSize ex sx `div` 2
                 midY = (sy + ey) `div` 2
                 dx = abs (wrappedDeltaXGeo worldSize mx midX)
                 dy = abs (my - midY)
             in (dx + dy, idx, GeoCoord midX midY)
-            ) [0..] segs
+            ) segs
         close = filter (\(d, _, _) → d < threshold) dists
     in case close of
         [] → Nothing
@@ -932,26 +944,26 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
         GeoCoord jx jy = junctionCoord
 
         -- For each segment, compute distance from its END to the junction
-        segDists = zipWith (\idx seg →
+        segDists = V.imap (\idx seg →
             let GeoCoord ex ey = rsEnd seg
                 dx = abs (wrappedDeltaXGeo worldSize ex jx)
                 dy = abs (ey - jy)
             in (dx + dy, idx)
-            ) [0 ∷ Int ..] tribSegs
+            ) tribSegs
 
         -- The segment whose end is closest to the junction
-        cutIdx = case segDists of
-            [] → 0
-            _  → snd (minimumBy (comparing fst) segDists)
+        cutIdx = case V.null segDists of
+            True  → 0
+            False → snd (V.minimumBy (comparing fst) segDists)
 
         -- Keep segments [0..cutIdx-1] unchanged, then add a final
         -- segment that routes from the cut segment's START to the junction
-        keptSegs = take cutIdx tribSegs
-        cutSeg   = if cutIdx < length tribSegs
-                   then tribSegs !! cutIdx
-                   else if null tribSegs
+        keptSegs = V.take cutIdx tribSegs
+        cutSeg   = if cutIdx < V.length tribSegs
+                   then tribSegs V.! cutIdx
+                   else if V.null tribSegs
                         then error "performMerge: empty tributary"
-                        else last tribSegs
+                        else V.last tribSegs
 
         -- Final segment: from the cut segment's start to the junction
         junctionSeg = cutSeg
@@ -959,7 +971,7 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
             , rsEndElev = rsStartElev cutSeg  -- approximate: use start elev
             }
 
-        truncatedSegs = keptSegs ++ [junctionSeg]
+        truncatedSegs = V.snoc keptSegs junctionSeg
 
         newTribRiver = tribRiver
             { rpMouthRegion = junctionCoord
@@ -967,13 +979,13 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
             }
 
         -- Increase main river's flow downstream of junction
-        newMainSegs = zipWith (\idx seg →
+        newMainSegs = V.imap (\idx seg →
             if idx ≥ segIdx
             then seg { rsFlowRate = rsFlowRate seg + rpFlowRate tribRiver * 0.6
                      , rsWidth = min 12 (rsWidth seg + 1)
                      }
             else seg
-            ) [0..] (rpSegments mainRiver)
+            ) (rpSegments mainRiver)
         newMainRiver = mainRiver
             { rpSegments = newMainSegs
             , rpFlowRate = rpFlowRate mainRiver + rpFlowRate tribRiver * 0.5
@@ -1002,7 +1014,7 @@ evolveDeepen seed ageIdx periodIdx pf river tbs =
         h2 = hashGeo seed fidInt (930 + ageIdx)
         deepenAmt = hashToRangeGeo h2 1 3
         maxDepth = 20  -- 200m cap
-        newSegs = fixupSegmentContinuity $ map (\seg → seg
+        newSegs = fixupSegmentContinuity $ V.map (\seg → seg
             { rsDepth = min maxDepth (rsDepth seg + deepenAmt)
             , rsValleyWidth = rsValleyWidth seg + 1
             }) (rpSegments river)
@@ -1157,14 +1169,14 @@ buildRiverFromPath seed riverIdx baseFlow path =
     let -- Enforce monotonic descent
         monoPath = enforceMonotonicPath path
         numWP = length monoPath
-        segments = fixupSegmentContinuity $
+        segments = fixupSegmentContinuity $ V.fromList $
                        zipWith (buildSegFromWaypoints seed numWP baseFlow)
                                [0..] (zip monoPath (tail monoPath))
         (srcX, srcY, _) = head monoPath
         (mouthX, mouthY, _) = last monoPath
-        totalFlow = case segments of
-            [] → baseFlow
-            _  → rsFlowRate (last segments)
+        totalFlow = case V.null segments of
+            True  → baseFlow
+            False → rsFlowRate (V.last segments)
     in RiverParams
         { rpSourceRegion = GeoCoord srcX srcY
         , rpMouthRegion  = GeoCoord mouthX mouthY
@@ -1236,7 +1248,7 @@ evolveMatchedRiver seed ageIdx periodIdx existPf simRiver tbs =
         
         -- Use simulation's path (it reflects current terrain) but
         -- carry forward accumulated depth from the old river
-        mergedSegs = zipWithDefault mergeSegment
+        mergedSegs = zipWithDefaultV mergeSegment
             (rpSegments oldRiver) (rpSegments simRiver)
 
         mergeSegment oldSeg newSeg = newSeg
@@ -1271,10 +1283,14 @@ evolveMatchedRiver seed ageIdx periodIdx existPf simRiver tbs =
 -- | Zip two lists, using only the shorter length.
 --   When simulation changes the number of segments, we take
 --   the simulation's count as authoritative.
-zipWithDefault ∷ (a → b → b) → [a] → [b] → [b]
-zipWithDefault _ [] bs     = bs  -- new segments from sim, no old data
-zipWithDefault _ _  []     = []  -- river got shorter
-zipWithDefault f (a:as) (b:bs) = f a b : zipWithDefault f as bs
+zipWithDefaultV ∷ (RiverSegment → RiverSegment → RiverSegment)
+                → V.Vector RiverSegment → V.Vector RiverSegment
+                → V.Vector RiverSegment
+zipWithDefaultV f old new =
+    let minLen = min (V.length old) (V.length new)
+        merged = V.izipWith (\_ a b → f a b) (V.take minLen old) (V.take minLen new)
+        extra  = V.drop minLen new  -- new segments from sim
+    in merged V.++ extra
 
 -- | Reconcile simulation lakes with existing lake features.
 --   Much simpler than rivers: lakes that are near existing ones

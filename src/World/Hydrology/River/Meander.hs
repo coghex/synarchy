@@ -5,6 +5,7 @@ module World.Hydrology.River.Meander
 
 import UPrelude
 import Data.Word (Word64)
+import qualified Data.Vector as V
 import World.Base (GeoCoord(..))
 import World.Hydrology.Types
 import World.Geology.Hash
@@ -17,9 +18,9 @@ import World.Geology.Hash
 --   Creates natural-looking bends in the river over time.
 --   Each segment shifts independently using hash-based randomness
 --   so the result is deterministic.
-meanderSegments ∷ Word64 → Int → Float → [RiverSegment] → [RiverSegment]
+meanderSegments ∷ Word64 → Int → Float → V.Vector RiverSegment → V.Vector RiverSegment
 meanderSegments seed fidInt amount segs =
-    zipWith (meanderOne seed fidInt amount) [0..] segs
+    V.imap (\segIdx seg → meanderOne seed fidInt amount segIdx seg) segs
 
 meanderOne ∷ Word64 → Int → Float → Int → RiverSegment → RiverSegment
 meanderOne seed fidInt amount segIdx seg =

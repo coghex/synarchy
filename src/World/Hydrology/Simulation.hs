@@ -12,6 +12,7 @@ import Data.Bits (xor)
 import Data.Word (Word64)
 import Data.List (sortBy)
 import Data.Ord (comparing, Down(..))
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Set as Set
@@ -510,13 +511,13 @@ pathToRiverParams ∷ Word64 → Int → Int → Int → Int
 pathToRiverParams seed ageIdx worldSize spacing riverIdx path
     | length path < minRiverLength = Nothing
     | otherwise =
-        let segments = zipWith (makeSegment spacing)
+        let segments = V.fromList $ zipWith (makeSegment spacing)
                                [0..] (zip path (tail path))
             (srcX, srcY, _, _) = head path
             (mouthX, mouthY, _, _) = last path
-            totalFlow = case segments of
-                [] → 0.1
-                _  → rsFlowRate (last segments)
+            totalFlow = if V.null segments
+                then 0.1
+                else rsFlowRate (V.last segments)
         in Just RiverParams
             { rpSourceRegion = GeoCoord srcX srcY
             , rpMouthRegion  = GeoCoord mouthX mouthY

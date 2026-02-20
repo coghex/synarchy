@@ -246,17 +246,15 @@ pickBestFill a Nothing = a
 pickBestFill (Just a) (Just b) =
     if fcSurface b > fcSurface a then Just b else Just a
 
-bestRiverFill ∷ Int → Int → Int → Int → Word64 → [RiverSegment]
+bestRiverFill ∷ Int → Int → Int → Int → Word64 → V.Vector RiverSegment
               → Maybe FluidCell
 bestRiverFill worldSize gx gy surfZ meanderSeed segments =
     let -- Check each segment
-        segResults = map (riverFillFromSegment worldSize gx gy surfZ meanderSeed) segments
+        segResults = V.toList $ V.map (riverFillFromSegment worldSize gx gy surfZ meanderSeed) segments
         -- Check each waypoint (joint between segments)
-        -- Waypoint caps: check start of every segment + end of last
-        waypointResults = map (riverFillFromWaypoint worldSize gx gy surfZ) segments
-                       <> case segments of
-                              [] → []
-                              _  → [riverFillFromEndpoint worldSize gx gy surfZ (last segments)]
+        waypointResults = V.toList (V.map (riverFillFromWaypoint worldSize gx gy surfZ) segments)
+                       <> if V.null segments then []
+                          else [riverFillFromEndpoint worldSize gx gy surfZ (V.last segments)]
     in foldl' pickBestFill Nothing (segResults <> waypointResults)
 
 -- | Water depth in tiles above the channel floor, based on flow rate.
@@ -334,19 +332,15 @@ riverFillFromEndpoint worldSize gx gy surfZ seg =
 --   After any modification (meander, deepen, etc.), the end of
 --   segment N must equal the start of segment N+1.
 --   Also enforces monotonic descent on water surface.
-fixupSegmentContinuity ∷ [RiverSegment] → [RiverSegment]
-fixupSegmentContinuity [] = []
-fixupSegmentContinuity [s] = [s]
-fixupSegmentContinuity (s : rest) = s : go s rest
+fixupSegmentContinuity ∷ V.Vector RiverSegment → V.Vector RiverSegment
+fixupSegmentContinuity v
+    | V.length v ≤ 1 = v
+    | otherwise = V.fromList (go (V.head v) (V.toList (V.tail v)))
   where
     go _ [] = []
     go prev (cur : xs) =
-        let -- Force this segment's start to match previous segment's end
-            fixed = cur
-                { rsStartElev = rsEndElev prev
-                , rsStart     = rsEnd prev  -- coordinates must match too
-                }
-            -- Ensure end elevation doesn't go UP
+        let fixed = cur { rsStartElev = rsEndElev prev
+                        , rsStart     = rsEnd prev }
             fixed' = if rsEndElev fixed > rsStartElev fixed
                      then fixed { rsEndElev = rsStartElev fixed }
                      else fixed
@@ -372,7 +366,7 @@ isNearbyRiver worldSize chunkGX chunkGY pf =
 --   Generous margin ensures we never miss a chunk.
 riverNearChunk ∷ Int → Int → Int → RiverParams → Bool
 riverNearChunk worldSize chunkGX chunkGY river =
-    any (segOrWaypointNear worldSize chunkGX chunkGY) (rpSegments river)
+    V.any (segOrWaypointNear worldSize chunkGX chunkGY) (rpSegments river)
   where
     segOrWaypointNear ws cgx cgy seg =
         let margin = rsValleyWidth seg + chunkSize + chunkSize

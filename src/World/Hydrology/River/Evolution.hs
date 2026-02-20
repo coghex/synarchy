@@ -5,6 +5,7 @@ module World.Hydrology.River.Evolution
 
 import UPrelude
 import Data.Word (Word64)
+import qualified Data.Vector as V
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Hydrology.Types
@@ -67,7 +68,7 @@ evolveRiver seed periodIdx (events, tbs) pf =
                         h7 = hashGeo seed fidInt 806
                         h8 = hashGeo seed fidInt 807
                         branchSegIdx = hashToRangeGeo h2 1 (numSegs - 1)
-                        branchSeg = rpSegments river !! min branchSegIdx (numSegs - 1)
+                        branchSeg = rpSegments river V.! min branchSegIdx (numSegs - 1)
                         GeoCoord bx by = rsStart branchSeg
 
                         -- Tributary comes from a different direction
@@ -132,7 +133,7 @@ evolveRiver seed periodIdx (events, tbs) pf =
                         h5 = hashGeo seed fidInt 813
                         -- Dam forms at a random segment
                         damSegIdx = hashToRangeGeo h2 0 (numSegs - 2)
-                        damSeg = rpSegments river !! min damSegIdx (numSegs - 1)
+                        damSeg = rpSegments river V.! min damSegIdx (numSegs - 1)
                         GeoCoord dx' dy' = rsEnd damSeg
                         damHeight = hashToRangeGeo h3 5 20
 
@@ -193,7 +194,7 @@ evolveRiver seed periodIdx (events, tbs) pf =
 
                      newRiver = river
                          { rpSourceRegion = GeoCoord newSrcX newSrcY
-                         , rpSegments     = newSeg : rpSegments river
+                         , rpSegments     = V.cons newSeg (rpSegments river)
                          , rpFlowRate     = rpFlowRate river + 0.1
                          }
 
@@ -236,7 +237,7 @@ evolveRiver seed periodIdx (events, tbs) pf =
             then let h2 = hashGeo seed fidInt 835
                      deepenAmount = hashToRangeGeo h2 2 8
                      river = getRiverParams pf
-                     newSegs = map (\seg → seg
+                     newSegs = V.map (\seg → seg
                          { rsDepth = rsDepth seg + deepenAmount
                          , rsWidth = min (rsWidth seg + 1) 10
                          , rsValleyWidth = rsValleyWidth seg + 2
@@ -265,7 +266,7 @@ evolveRiver seed periodIdx (events, tbs) pf =
                      h2 = hashGeo seed fidInt 840
                      -- Slightly deeper from the reactivation surge
                      deepenAmt = hashToRangeGeo h2 1 4
-                     newSegs = map (\seg → seg { rsDepth = rsDepth seg + deepenAmt })
+                     newSegs = V.map (\seg → seg { rsDepth = rsDepth seg + deepenAmt })
                                    (rpSegments river)
                      newRiver = river { rpSegments = newSegs }
 

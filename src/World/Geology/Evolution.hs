@@ -8,6 +8,7 @@ module World.Geology.Evolution
 
 import UPrelude
 import Data.Word (Word64)
+import qualified Data.Vector as V
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Geology.Types
@@ -197,9 +198,9 @@ getFeatureRadius (HydroShape (RiverFeature r)) =
         dx = fromIntegral (mx - sx) ∷ Float
         dy = fromIntegral (my - sy) ∷ Float
         halfLen = round (sqrt (dx * dx + dy * dy) / 2.0)
-        maxValley = case rpSegments r of
-            []   → 8
-            segs → maximum (map rsValleyWidth segs)
+        maxValley = if V.null (rpSegments r)
+            then 8
+            else V.maximum (V.map rsValleyWidth (rpSegments r))
     in halfLen + maxValley
 getFeatureRadius (HydroShape (GlacierFeature g)) =
     -- Half the glacier length plus full width gives the bounding radius

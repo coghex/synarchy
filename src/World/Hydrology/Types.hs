@@ -19,6 +19,7 @@ module World.Hydrology.Types
 
 import UPrelude
 import Control.DeepSeq (NFData(..))
+import qualified Data.Vector as V
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 
 -----------------------------------------------------------
@@ -61,10 +62,14 @@ data WindBand
 data RiverParams = RiverParams
     { rpSourceRegion  ∷ !GeoCoord       -- ^ Headwaters (high elevation)
     , rpMouthRegion   ∷ !GeoCoord       -- ^ Where it reaches ocean/lake/basin
-    , rpSegments      ∷ ![RiverSegment] -- ^ Ordered list of path segments
+    , rpSegments      ∷ !(V.Vector RiverSegment) -- ^ Ordered list of path segments
     , rpFlowRate      ∷ !Float          -- ^ Accumulated precipitation along path
     , rpMeanderSeed   ∷ !Word64         -- ^ Sub-seed for meander noise
     } deriving (Show, Eq)
+
+instance NFData RiverParams where
+    rnf (RiverParams s m segs f ms) =
+        rnf s `seq` rnf m `seq` rnf segs `seq` rnf f `seq` rnf ms `seq` ()
 
 -- | A single segment of a river between two waypoints.
 --   At chunk generation time, each segment applies a
@@ -79,10 +84,6 @@ data RiverSegment = RiverSegment
     , rsStartElev  ∷ !Int        -- ^ Elevation at start (for slope calculation)
     , rsEndElev    ∷ !Int        -- ^ Elevation at end
     } deriving (Show, Eq)
-
-instance NFData RiverParams where
-    rnf (RiverParams s m segs f ms) =
-        rnf s `seq` rnf m `seq` rnf segs `seq` rnf f `seq` rnf ms `seq` ()
 
 instance NFData RiverSegment where
     rnf (RiverSegment s e w vw d f se ee) =

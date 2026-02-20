@@ -6,6 +6,7 @@ module World.Hydrology.Glacier.Spawn
 
 import UPrelude
 import Data.Word (Word64)
+import qualified Data.Vector as V
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Hydrology.Types
@@ -64,7 +65,7 @@ spawnMeltwaterRiver seed periodIdx parentFid pf (events, tbs) =
         riverParams = RiverParams
             { rpSourceRegion = GeoCoord termX termY
             , rpMouthRegion  = GeoCoord endX endY
-            , rpSegments     = [seg]
+            , rpSegments     = V.singleton seg
             , rpFlowRate     = 0.4
             , rpMeanderSeed  = fromIntegral (hashGeo seed fidInt 975)
             }
