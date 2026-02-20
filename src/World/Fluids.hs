@@ -104,16 +104,23 @@ computeOceanMap seed worldSize plateCount plates applyTL =
                     else []
             ) plates
 
-        wrapChunkX cx =
-            let wrapped = ((cx + halfSize) `mod` (halfSize * 2) + (halfSize * 2))
-                          `mod` (halfSize * 2) - halfSize
-            in wrapped
+        -- Wrap chunk coords in u-space (consistent with the isometric world)
+        wrapChunkU (ccx, ccy) =
+            let w = halfSize * 2
+                u = ccx - ccy
+                v = ccx + ccy
+                halfW = w `div` 2
+                wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+                cx' = (wrappedU + v) `div` 2
+                cy' = (v - wrappedU) `div` 2
+            in (cx', cy')
 
         neighbors (ChunkCoord cx cy) =
-            [ ChunkCoord (wrapChunkX (cx + dx)) (cy + dy)
+            [ let (cx', cy') = wrapChunkU (cx + dx, cy + dy)
+              in ChunkCoord cx' cy'
             | (dx, dy) ← [(-1,0), (1,0), (0,-1), (0,1)]
-            , let ny = cy + dy
-            , ny ≥ -halfSize ∧ ny < halfSize
+            , let (_, cy') = wrapChunkU (cx + dx, cy + dy)
+            , cy' ≥ -halfSize ∧ cy' < halfSize
             ]
 
         bfs ∷ Seq ChunkCoord → HS.HashSet ChunkCoord → HS.HashSet ChunkCoord
@@ -138,11 +145,21 @@ isOceanChunk = flip HS.member
 -----------------------------------------------------------
 -- Chunk-Level Fluid Computation
 -----------------------------------------------------------
+-- helper
+wrapChunkCoordU ∷ Int → ChunkCoord → ChunkCoord
+wrapChunkCoordU worldSize (ChunkCoord cx cy) =
+    let halfSize = worldSize `div` 2
+        w = halfSize * 2
+        u = cx - cy
+        v = cx + cy
+        halfW = w `div` 2
+        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+    in ChunkCoord ((wrappedU + v) `div` 2) ((v - wrappedU) `div` 2)
 
-computeChunkFluid ∷ OceanMap → ChunkCoord
+computeChunkFluid ∷ Int → OceanMap → ChunkCoord
                   → VU.Vector Int
                   → FluidMap
-computeChunkFluid oceanMap coord surfaceMap
+computeChunkFluid worldSize oceanMap coord surfaceMap
     | isOceanChunk oceanMap coord =
         buildOceanSurface surfaceMap
     | hasOceanNeighbor =
@@ -150,15 +167,16 @@ computeChunkFluid oceanMap coord surfaceMap
     | otherwise = emptyFluidMap
   where
     ChunkCoord cx cy = coord
+    wrap = wrapChunkCoordU worldSize
     hasOceanNeighbor =
-        isOceanChunk oceanMap (ChunkCoord cx (cy - 1))
-      ∨ isOceanChunk oceanMap (ChunkCoord cx (cy + 1))
-      ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) cy)
-      ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) cy)
-      ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy - 1))
-      ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy - 1))
-      ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy + 1))
-      ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy + 1))
+        isOceanChunk oceanMap (wrap (ChunkCoord cx (cy - 1)))
+      ∨ isOceanChunk oceanMap (wrap (ChunkCoord cx (cy + 1)))
+      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx + 1) cy))
+      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx - 1) cy))
+      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx + 1) (cy - 1)))
+      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx - 1) (cy - 1)))
+      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx + 1) (cy + 1)))
+      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx - 1) (cy + 1)))
 
     buildOceanSurface surf =
         withFluidMap $ \mv →
@@ -268,15 +286,17 @@ riverFillFromSegment ∷ Int → Int → Int → Int → Word64 → RiverSegment
 riverFillFromSegment worldSize gx gy surfZ _meanderSeed seg =
     let GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
-        dx' = fromIntegral (wrappedDeltaForFluid worldSize ex sx) ∷ Float
-        dy' = fromIntegral (ey - sy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUVFluid worldSize sx sy ex ey
+        dx' = fromIntegral dxi ∷ Float
+        dy' = fromIntegral dyi ∷ Float
         segLen2 = dx' * dx' + dy' * dy'
     in if segLen2 < 1.0
        then Nothing
        else
        let segLen = sqrt segLen2
-           px = fromIntegral (wrappedDeltaForFluid worldSize gx sx) ∷ Float
-           py = fromIntegral (gy - sy) ∷ Float
+           (pxi, pyi) = wrappedDeltaUVFluid worldSize sx sy gx gy
+           px = fromIntegral pxi ∷ Float
+           py = fromIntegral pyi ∷ Float
            tRaw = (px * dx' + py * dy') / segLen2
        in if tRaw < 0.0 ∨ tRaw > 1.0
           then Nothing
@@ -302,8 +322,9 @@ riverFillFromWaypoint ∷ Int → Int → Int → Int → RiverSegment
                       → Maybe FluidCell
 riverFillFromWaypoint worldSize gx gy surfZ seg =
     let GeoCoord wx wy = rsStart seg
-        dx = fromIntegral (wrappedDeltaForFluid worldSize gx wx) ∷ Float
-        dy = fromIntegral (gy - wy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUVFluid worldSize wx wy gx gy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
         channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
     in if dist > channelHalfW
@@ -317,8 +338,9 @@ riverFillFromEndpoint ∷ Int → Int → Int → Int → RiverSegment
                       → Maybe FluidCell
 riverFillFromEndpoint worldSize gx gy surfZ seg =
     let GeoCoord wx wy = rsEnd seg
-        dx = fromIntegral (wrappedDeltaForFluid worldSize gx wx) ∷ Float
-        dy = fromIntegral (gy - wy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUVFluid worldSize wx wy gx gy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
         channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
     in if dist > channelHalfW
@@ -376,24 +398,28 @@ riverNearChunk worldSize chunkGX chunkGY river =
 
             -- Segment start proximity
             GeoCoord sx sy = rsStart seg
-            dxs = abs (wrappedDeltaForFluid ws cx sx)
-            dys = abs (cy - sy)
+            (dxsi, dysi) = wrappedDeltaUVFluid ws sx sy cx cy
+            dxs = abs dxsi
+            dys = abs dysi
             startNear = dxs < margin ∧ dys < margin
 
             -- Segment end proximity
             GeoCoord ex ey = rsEnd seg
-            dxe = abs (wrappedDeltaForFluid ws cx ex)
-            dye = abs (cy - ey)
+            (dxei, dyei) = wrappedDeltaUVFluid ws ex ey cx cy
+            dxe = abs dxei
+            dye = abs dyei
             endNear = dxe < margin ∧ dye < margin
 
             -- Closest point on segment to chunk center
-            fdx = fromIntegral (wrappedDeltaForFluid ws ex sx) ∷ Float
-            fdy = fromIntegral (ey - sy) ∷ Float
+            (fdxi, fdyi) = wrappedDeltaUVFluid ws sx sy ex ey
+            fdx = fromIntegral fdxi ∷ Float
+            fdy = fromIntegral fdyi ∷ Float
             segLen2 = fdx * fdx + fdy * fdy
             midNear = if segLen2 < 1.0
                 then startNear
-                else let px = fromIntegral (wrappedDeltaForFluid ws cx sx) ∷ Float
-                         py = fromIntegral (cy - sy) ∷ Float
+                else let (pxi, pyi) = wrappedDeltaUVFluid ws sx sy cx cy
+                         px = fromIntegral pxi ∷ Float
+                         py = fromIntegral pyi ∷ Float
                          t = max 0.0 (min 1.0 ((px * fdx + py * fdy) / segLen2))
                          closestX = t * fdx
                          closestY = t * fdy
@@ -418,8 +444,9 @@ checkLakeRange ∷ Int → Int → Int → LakeParams → Bool
 checkLakeRange worldSize chunkGX chunkGY lk =
     let GeoCoord fx fy = lkCenter lk
         maxR = lkRadius lk
-        dx = abs (wrappedDeltaForFluid worldSize chunkGX fx)
-        dy = abs (chunkGY - fy)
+        (dxi, dyi) = wrappedDeltaUVFluid worldSize chunkGX chunkGY fx fy
+        dx = abs dxi
+        dy = abs dyi
     in dx < maxR + chunkSize ∧ dy < maxR + chunkSize
 
 fillLakeFromFeature ∷ MV.MVector s (Maybe FluidCell)
@@ -469,8 +496,9 @@ fillLakePool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurfa
        else forEachSurface surfaceMap $ \idx lx ly surfZ →
             let gx = chunkGX + lx
                 gy = chunkGY + ly
-                dx = fromIntegral (wrappedDeltaForFluid worldSize gx fx) ∷ Float
-                dy = fromIntegral (gy - fy) ∷ Float
+                (dxi, dyi) = wrappedDeltaUVFluid worldSize gx gy fx fy
+                dx = fromIntegral dxi ∷ Float
+                dy = fromIntegral dyi ∷ Float
                 dist = sqrt (dx * dx + dy * dy)
             in when (dist < pr ∧ surfZ < clampedSurface) $
                 MV.write mv idx (Just (FluidCell Lake clampedSurface))
@@ -490,16 +518,24 @@ isNearbyActive worldSize chunkGX chunkGY pf =
   where
     checkRange = let maxR = getFeatureRadius (pfFeature pf)
                      GeoCoord fx fy = getFeatureCenter (pfFeature pf)
-                     dx = abs (wrappedDeltaForFluid worldSize chunkGX fx)
-                     dy = abs (chunkGY - fy)
+                     (dxi, dyi) = wrappedDeltaUVFluid worldSize chunkGX chunkGY fx fy
+                     dx = abs dxi
+                     dy = abs dyi
                  in dx < maxR + chunkSize ∧ dy < maxR + chunkSize
 
-wrappedDeltaForFluid ∷ Int → Int → Int → Int
-wrappedDeltaForFluid worldSize a b =
+-- | Wrapped distance in u-space for fluid computations.
+--   Returns (dx, dy) accounting for cylindrical wrapping along u-axis.
+{-# INLINE wrappedDeltaUVFluid #-}
+wrappedDeltaUVFluid ∷ Int → Int → Int → Int → Int → (Int, Int)
+wrappedDeltaUVFluid worldSize gx1 gy1 gx2 gy2 =
     let w = worldSize * chunkSize
-        raw = b - a
         halfW = w `div` 2
-    in ((raw + halfW) `mod` w + w) `mod` w - halfW
+        du = (gx1 - gy1) - (gx2 - gy2)
+        dv = (gx1 + gy1) - (gx2 + gy2)
+        wrappedDU = ((du + halfW) `mod` w + w) `mod` w - halfW
+        dx = (wrappedDU + dv) `div` 2
+        dy = (dv - wrappedDU) `div` 2
+    in (dx, dy)
 
 fillLavaFromFeature ∷ MV.MVector s (Maybe FluidCell)
                     → PersistentFeature → Word64 → [TectonicPlate]
@@ -589,8 +625,9 @@ fillPool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface s
        else forEachSurface surfaceMap $ \idx lx ly surfZ →
             let gx = chunkGX + lx
                 gy = chunkGY + ly
-                dx = fromIntegral (wrappedDeltaForFluid worldSize gx fx) ∷ Float
-                dy = fromIntegral (gy - fy) ∷ Float
+                (dxi, dyi) = wrappedDeltaUVFluid worldSize gx gy fx fy
+                dx = fromIntegral dxi ∷ Float
+                dy = fromIntegral dyi ∷ Float
                 dist = sqrt (dx * dx + dy * dy)
             in when (dist < pr ∧ surfZ < clampedSurface) $
                 MV.write mv idx (Just (FluidCell Lava clampedSurface))
@@ -642,8 +679,9 @@ fillFissurePool mv seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth l
        else forEachSurface surfaceMap $ \idx lx ly surfZ →
             let gx = chunkGX + lx
                 gy = chunkGY + ly
-                dx = fromIntegral (wrappedDeltaForFluid worldSize gx sx) ∷ Float
-                dy = fromIntegral (gy - sy) ∷ Float
+                (dxi, dyi) = wrappedDeltaUVFluid worldSize gx gy sx sy
+                dx = fromIntegral dxi ∷ Float
+                dy = fromIntegral dyi ∷ Float
                 lx' = fromIntegral (ex - sx) ∷ Float
                 ly' = fromIntegral (ey - sy) ∷ Float
                 t = max 0 (min 1 ((dx * lx' + dy * ly') / (lineLen * lineLen)))

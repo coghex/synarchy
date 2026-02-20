@@ -145,7 +145,7 @@ generateChunk params coord =
             else lookupElev (idx `mod` chunkSize) (idx `div` chunkSize)
 
         -- Fluids
-        oceanFluidMap = computeChunkFluid oceanMap coord terrainSurfaceMap
+        oceanFluidMap = computeChunkFluid worldSize oceanMap coord terrainSurfaceMap
         features = gtFeatures timeline
         lavaFluidMap = computeChunkLava features seed plates worldSize
                                         coord terrainSurfaceMap
