@@ -208,30 +208,32 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
                 Nothing → False
             ]
 
-        hydroSeed = ageSeed `xor` 0xA0CA71C
-        flowResult = simulateHydrology hydroSeed worldSize ageIdx elevGrid
+        --hydroSeed = ageSeed `xor` 0xA0CA71C
+        --flowResult = simulateHydrology hydroSeed worldSize ageIdx elevGrid
 
-        (hydroFeatures, hydroEvents, tbs_h0) = reconcileHydrology
-            hydroSeed ageIdx flowResult (tbsPeriodIdx tbs) worldSize
-            elevGrid tbs
+        --(hydroFeatures, hydroEvents, tbs_h0) = reconcileHydrology
+        --    hydroSeed ageIdx flowResult (tbsPeriodIdx tbs) worldSize
+        --    elevGrid tbs
 
-        tbs_h = mergeConvergingRivers worldSize (tbsPeriodIdx tbs) tbs_h0
+        --tbs_h = mergeConvergingRivers worldSize (tbsPeriodIdx tbs) tbs_h0
 
-        allEvents = meteorites <> eruptions <> hydroEvents
+        --allEvents = meteorites <> eruptions <> hydroEvents
+        tbs_h = tbs
+        allEvents = meteorites <> eruptions
 
         gs2 = gs1 { gsCO2 = max 0.5 (gsCO2 gs1 - duration * 0.005) }
         erosion = erosionFromGeoState gs2 seed ageIdx
         _debugLandCount = VU.length (VU.filter id (egLand elevGrid))
         _debugGridW = egGridW elevGrid
-        _debugRiverCount = length (frRiverSources flowResult)
-        _debugLakeCount = length (frLakes flowResult)
+  --      _debugRiverCount = length (frRiverSources flowResult)
+  --      _debugLakeCount = length (frLakes flowResult)
 
         period = mkGeoPeriod worldSize
             ("Age " <> T.pack (show (tbsPeriodIdx tbs))
              <> " [grid=" <> T.pack (show _debugGridW)
-             <> " land=" <> T.pack (show _debugLandCount)
-             <> " rivers=" <> T.pack (show _debugRiverCount)
-             <> " lakes=" <> T.pack (show _debugLakeCount) <> "]")
+             <> " land=" <> T.pack (show _debugLandCount) <> "]")
+  --           <> " rivers=" <> T.pack (show _debugRiverCount)
+  --           <> " lakes=" <> T.pack (show _debugLakeCount) <> "]")
             Age (round duration) currentDate
             allEvents erosion
 

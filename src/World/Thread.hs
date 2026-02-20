@@ -264,10 +264,10 @@ handleWorldCommand env logger cmd = do
                 sendGenLog env line
 
             -- Log the full chronological timeline
-            let timelineLines = formatTimeline timeline
-            forM_ timelineLines $ \line → do
-                logInfo logger CatWorld line
-                sendGenLog env line
+--            let timelineLines = formatTimeline timeline
+--            forM_ timelineLines $ \line → do
+--                logInfo logger CatWorld line
+--                sendGenLog env line
 
             sendGenLog env "Computing ocean map..."
             let plates = generatePlates seed worldSize placeCount

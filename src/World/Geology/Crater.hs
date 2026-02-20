@@ -10,7 +10,8 @@ import UPrelude
 import World.Base (GeoCoord(..))
 import World.Types
 import World.Material
-import World.Plate (isBeyondGlacier, elevationAtGlobal, TectonicPlate)
+import World.Plate (isBeyondGlacier, elevationAtGlobal, TectonicPlate
+                   , wrapGlobalU)
 import World.Geology.Types
 import World.Geology.Hash
 
@@ -53,8 +54,9 @@ generateCraterAttempt seed worldSize plates halfTiles
         h5 = hashGeo seed attemptIdx 5
         h6 = hashGeo seed attemptIdx 6
 
-        gx = hashToRangeGeo h1 (-halfTiles) (halfTiles - 1)
-        gy = hashToRangeGeo h2 (-halfTiles) (halfTiles - 1)
+        gx' = hashToRangeGeo h1 (-halfTiles) (halfTiles - 1)
+        gy' = hashToRangeGeo h2 (-halfTiles) (halfTiles - 1)
+        (gx, gy) = wrapGlobalU worldSize gx' gy'
 
         -- Check that we're on land
         (elev, _mat) = elevationAtGlobal seed plates worldSize gx gy

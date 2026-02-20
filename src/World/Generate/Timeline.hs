@@ -196,12 +196,13 @@ applyTimelineFast timeline worldSize gx gy (baseElev, baseMat) =
 applyPeriodFiltered ∷ Int → WorldScale → Int → Int
                     → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
 applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
-    let bb = gpPeriodBBox period
+    let (gx', gy') = wrapGlobalU worldSize gx gy  -- ADD THIS
+        bb = gpPeriodBBox period
         -- Early exit: tile outside all events in this period
         (elev', mat') =
-            if gx < bbMinX bb ∨ gx > bbMaxX bb ∨ gy < bbMinY bb ∨ gy > bbMaxY bb
+            if gx' < bbMinX bb ∨ gx' > bbMaxX bb ∨ gy' < bbMinY bb ∨ gy' > bbMaxY bb
             then (elev, mat)
-            else applyExplodedEvents worldSize gx gy elev mat
+            else applyExplodedEvents worldSize gx' gy' elev mat
                                      (gpExplodedEvents period)
 
         erosionMod = applyErosion

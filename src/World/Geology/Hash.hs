@@ -5,6 +5,7 @@ module World.Geology.Hash
     , hashToRangeGeo
     , smoothstepGeo
     , wrappedDeltaXGeo
+    , wrappedDeltaUV
     , scaleCount
     ) where
 
@@ -16,7 +17,6 @@ import Data.Word (Word32, Word64)
 -- Hash Utilities
 -----------------------------------------------------------
 
--- | Hash for geology — takes seed, index, and property.
 hashGeo ∷ Word64 → Int → Int → Word32
 hashGeo seed idx prop =
     let h0 = fromIntegral seed ∷ Word64
@@ -42,7 +42,8 @@ hashToRangeGeo h lo hi =
 smoothstepGeo ∷ Float → Float
 smoothstepGeo t = t * t * (3.0 - 2.0 * t)
 
--- | Wrapped X distance for cylindrical world.
+-- | Wrapped X distance for cylindrical world (OLD — wraps gx only).
+--   Produces diagonal seam. Use wrappedDeltaUV for correct u-axis wrapping.
 {-# INLINE wrappedDeltaXGeo #-}
 wrappedDeltaXGeo ∷ Int → Int → Int → Int
 wrappedDeltaXGeo worldSize x1 x2 =
@@ -51,13 +52,25 @@ wrappedDeltaXGeo worldSize x1 x2 =
         halfW = w `div` 2
     in ((raw + halfW) `mod` w + w) `mod` w - halfW
 
+-- | Wrapped distance between two points in the isometric u-wrapped world.
+--   Returns (dx, dy) where dx and dy are the shortest-path deltas
+--   accounting for cylindrical wrapping along the u-axis (gx - gy).
+{-# INLINE wrappedDeltaUV #-}
+wrappedDeltaUV ∷ Int → Int → Int → Int → Int → (Int, Int)
+wrappedDeltaUV worldSize gx1 gy1 gx2 gy2 =
+    let w = worldSize * 16
+        halfW = w `div` 2
+        du = (gx1 - gy1) - (gx2 - gy2)
+        dv = (gx1 + gy1) - (gx2 + gy2)
+        wrappedDU = ((du + halfW) `mod` w + w) `mod` w - halfW
+        dx = (wrappedDU + dv) `div` 2
+        dy = (dv - wrappedDU) `div` 2
+    in (dx, dy)
+
 -----------------------------------------------------------
 -- Feature Scaling
 -----------------------------------------------------------
 
--- | Scale a feature count by world area relative to a 128-chunk baseline.
---   At worldSize=128 returns the base count unchanged.
---   At worldSize=256 returns 4× the base count, etc.
 scaleCount ∷ Int → Int → Int
 scaleCount worldSize baseCount =
     let areaRatio = (worldSize * worldSize) `div` (128 * 128)

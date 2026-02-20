@@ -67,72 +67,68 @@ buildZoomCache params =
         oceanMap = wgpOceanMap params
         features = gtFeatures timeline
 
-        -- Wrap chunk coords in u-space so each chunk has a canonical
-        -- grid position, preventing overlap at the seam.
-        wrapChunkU (ccx, ccy) =
-            let w = halfSize * 2
-                u = ccx - ccy
-                v = ccx + ccy
-                halfW = w `div` 2
-                wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
-                cx' = (wrappedU + v) `div` 2
-                cy' = (v - wrappedU) `div` 2
-            in (cx', cy')
+        -- World width in chunks (u-axis wraps at this period)
+        w = halfSize * 2
 
-        buildOne (ccx0, ccy0) =
-            let (ccx, ccy) = wrapChunkU (ccx0, ccy0)
-                baseGX = ccx * chunkSize
+        buildOne (ccx, ccy) =
+            let baseGX = ccx * chunkSize
                 baseGY = ccy * chunkSize
-                halfTiles = halfSize * chunkSize
-                vMin = baseGX + baseGY
-                vMax = baseGX + baseGY + 2 * (chunkSize - 1)
-            in if vMax < -halfTiles ∨ vMin > halfTiles
-               then Nothing
-               else
-               let samples = [ let gx = baseGX + ox
-                                   gy = baseGY + oy
-                                   (gx', gy') = wrapGlobalU worldSize gx gy
-                                   (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy'
-                               in if baseMat ≡ matGlacier
-                                  then (baseElev, unMaterialId baseMat)
-                                  else if baseElev < -100 then (baseElev, 0)
-                                  else let (e, m) = applyTimelineFast timeline worldSize gx' gy'
-                                                        (baseElev, baseMat)
-                                       in (e, unMaterialId m)
-                             | (ox, oy) ← sampleOffsets
-                             ]
-                   winnerMat = majorityMaterial samples
-                   avgElev = let s = sum (map fst samples)
-                             in s `div` length samples
 
-                   coord = ChunkCoord ccx ccy
-                   chunkLava = hasAnyLavaQuick features seed plates worldSize coord avgElev
-                   chunkOcean = isOceanChunk oceanMap coord
-                             ∨ hasAnyOceanFluid oceanMap coord
-               in Just ZoomChunkEntry
-                   { zceChunkX = ccx
-                   , zceChunkY = ccy
-                   , zceBaseGX = baseGX
-                   , zceBaseGY = baseGY
-                   , zceTexIndex = if isOceanChunk oceanMap coord
-                                   then 0
-                                   else winnerMat
-                   , zceElev     = if isOceanChunk oceanMap coord
-                                   then seaLevel else avgElev
-                   , zceIsOcean  = chunkOcean
-                   , zceHasLava  = chunkLava
-                   }
+                samples = [ let gx = baseGX + ox
+                                gy = baseGY + oy
+                                (gx', gy') = wrapGlobalU worldSize gx gy
+                                (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy'
+                            in if baseMat ≡ matGlacier
+                               then (baseElev, unMaterialId baseMat)
+                               else if baseElev < -100 then (baseElev, 0)
+                               else let (e, m) = applyTimelineFast timeline worldSize gx' gy'
+                                                     (baseElev, baseMat)
+                                    in (e, unMaterialId m)
+                          | (ox, oy) ← sampleOffsets
+                          ]
+                winnerMat = majorityMaterial samples
+                avgElev = let s = sum (map fst samples)
+                          in s `div` length samples
 
-        allCoords = [ let ccx = (u + v) `div` 2
-                          ccy = (v - u) `div` 2
+                coord = ChunkCoord ccx ccy
+                chunkLava = hasAnyLavaQuick features seed plates worldSize coord avgElev
+                chunkOcean = isOceanChunk oceanMap coord
+                          ∨ hasAnyOceanFluid oceanMap coord
+            in ZoomChunkEntry
+                { zceChunkX = ccx
+                , zceChunkY = ccy
+                , zceBaseGX = baseGX
+                , zceBaseGY = baseGY
+                , zceTexIndex = if isOceanChunk oceanMap coord
+                                then 0
+                                else winnerMat
+                , zceElev     = if isOceanChunk oceanMap coord
+                                then seaLevel else avgElev
+                , zceIsOcean  = chunkOcean
+                , zceHasLava  = chunkLava
+                }
+
+        -- Iterate in (u, v) space.
+        -- u wraps: [-halfSize, halfSize)
+        -- v does NOT wrap (it's the diagonal axis, clamped by the world bounds)
+        -- ccx = (u + v) / 2, ccy = (v - u) / 2
+        -- We need (u + v) to be even so ccx/ccy are integers.
+        allCoords = [ let wrappedU = ((u + halfSize) `mod` w + w) `mod` w - halfSize
+                          ccx = (wrappedU + v) `div` 2
+                          ccy = (v - wrappedU) `div` 2
                       in (ccx, ccy)
                     | v ← [-halfSize .. halfSize - 1]
                     , u ← [-halfSize .. halfSize - 1]
-                    , even (u + v)  -- ccx and ccy must be integers
+                    , even (u + v)
                     ]
-        chunkBatchSize = max 1 (length allCoords `div` 128)
-        results = map buildOne allCoords `using` parListChunk chunkBatchSize rdeepseq
-    in V.fromList (catMaybes results)
+
+        -- Deduplicate: wrapping u can map two different (u,v) pairs
+        -- to the same (ccx, ccy). Use a Set to keep only unique chunks.
+        uniqueCoords = Set.toList $ Set.fromList allCoords
+
+        chunkBatchSize = max 1 (length uniqueCoords `div` 128)
+        results = map buildOne uniqueCoords `using` parListChunk chunkBatchSize rdeepseq
+    in V.fromList results
 
 wrapChunkX ∷ Int → Int → Int
 wrapChunkX halfSize cx =
