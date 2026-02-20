@@ -11,6 +11,7 @@ module World.Geology.Types
     , addPeriod
     , registerFeature
     , updateFeature
+    , lookupFeature
     -- * GeoState
     , GeoState(..)
     , RegionCoord(..)
@@ -28,6 +29,7 @@ module World.Geology.Types
     ) where
 
 import UPrelude
+import Data.List (find)
 import qualified Data.HashMap.Strict as HM
 import Data.Hashable (Hashable(..))
 import World.Base (GeoFeatureId(..), GeoCoord(..))
@@ -290,3 +292,7 @@ updateFeature fid f tbs = tbs
     { tbsFeatures = map (\pf → if pfId pf ≡ fid then f pf else pf)
                         (tbsFeatures tbs)
     }
+
+lookupFeature ∷ GeoFeatureId → TimelineBuildState → Maybe PersistentFeature
+lookupFeature fid tbs =
+    find (\pf → pfId pf ≡ fid) (tbsFeatures tbs)

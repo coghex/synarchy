@@ -293,8 +293,16 @@ applyVolcanicEvolution seed worldSize plates tbs grid =
         evolSeed = seed `xor` 0xEF01F100
         currentDate = gdMillionYears (gsDate (tbsGeoState tbs))
 
-        (events, tbs1) = foldl' (evolveOneFeature evolSeed periodIdx)
-                                ([], tbs) (tbsFeatures tbs)
+        -- Capture the feature IDs, NOT the features themselves.
+        -- This way each fold iteration re-fetches the current
+        -- version from the (possibly updated) state.
+        featureIds = map pfId (tbsFeatures tbs)
+
+        (events, tbs1) = foldl' (\(evts, st) fid →
+            case lookupFeature fid st of
+                Nothing → (evts, st)  -- feature was removed (shouldn't happen, but safe)
+                Just pf → evolveOneFeature evolSeed periodIdx (evts, st) pf
+            ) ([], tbs) featureIds
 
         eruptSeed = seed `xor` 0x5E7A
         periodEruptions = catMaybes
@@ -622,21 +630,34 @@ reconcileHydrology seed ageIdx flowResult periodIdx worldSize elevGrid tbs =
         maxTotalRivers = 30  -- fewer, longer rivers
         currentRiverCount = length existingRivers
 
-        -- Evolve existing rivers
+        -- Capture IDs of existing rivers, NOT the feature values.
+        existingRiverIds = map pfId existingRivers
+
+        -- Evolve existing rivers by ID — re-fetch from state each iteration
         (evolvedPfs, evolveEvents, tbs1) =
-            foldl' (\(pfs, evts, st) existPf →
-                let (pf', evt, st') = evolveExistingRiver seed ageIdx periodIdx
-                                          existPf st
-                in (pf' : pfs, evt ++ evts, st')
-            ) ([], [], tbs) existingRivers
+            foldl' (\(pfs, evts, st) fid →
+                case lookupFeature fid st of
+                    Nothing → (pfs, evts, st)
+                    Just existPf →
+                        -- Skip if it's no longer an active river
+                        -- (a prior iteration may have changed it)
+                        if not (isActiveRiver (pfFeature existPf))
+                        then (pfs, evts, st)
+                        else let (pf', evt, st') = evolveExistingRiver seed ageIdx periodIdx
+                                                       existPf st
+                             in (pf' : pfs, evt ++ evts, st')
+            ) ([], [], tbs) existingRiverIds
 
         -- Create new rivers from simulation sources
         budget = maxTotalRivers - currentRiverCount
 
+        -- For filtering, use the CURRENT state's rivers (after evolution)
+        currentExistingRivers = filter (isActiveRiver . pfFeature) (tbsFeatures tbs1)
+
         -- Filter sources: must be far from existing rivers
         newSources = if budget ≤ 0
             then []
-            else take budget $ filter (isSourceNew worldSize existingRivers) simSources
+            else take budget $ filter (isSourceNew worldSize currentExistingRivers) simSources
 
         -- Trace each source at tile level
         newRivers = catMaybes $
