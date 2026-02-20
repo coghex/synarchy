@@ -49,13 +49,17 @@ elevFromGrid grid worldSize gx gy =
     let spacing = egSpacing grid
         gridW = egGridW grid
         halfGrid = gridW `div` 2
-        (gx', gy') = wrapGlobalU worldSize gx gy
-        -- Round to nearest grid cell (not floor toward -∞)
-        ix = ((gx' + spacing `div` 2) `div` spacing) + halfGrid
-        iy = ((gy' + spacing `div` 2) `div` spacing) + halfGrid
-        ix' = max 0 (min (gridW - 1) ix)
-        iy' = max 0 (min (gridW - 1) iy)
-        idx = iy' * gridW + ix'
+        -- Convert (gx, gy) to (u, v) space
+        u = gx - gy
+        v = gx + gy
+        -- Invert the grid formula: u = (ix - halfGrid) * spacing
+        -- => ix = u / spacing + halfGrid
+        iu = ((u + spacing `div` 2) `div` spacing) + halfGrid
+        iv = ((v + spacing `div` 2) `div` spacing) + halfGrid
+        -- Wrap iu (u-axis wraps), clamp iv (v-axis bounded)
+        iu' = ((iu `mod` gridW) + gridW) `mod` gridW
+        iv' = max 0 (min (gridW - 1) iv)
+        idx = iv' * gridW + iu'
     in if idx ≥ 0 ∧ idx < VU.length (egElev grid)
        then egElev grid VU.! idx
        else seaLevel

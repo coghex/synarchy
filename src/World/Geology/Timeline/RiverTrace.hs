@@ -27,11 +27,19 @@ traceRiverFromSource seed worldSize elevGrid gx gy srcElev riverIdx flow =
         maxSteps = 300
         halfTiles = (worldSize * 16) `div` 2
 
+        -- Elevation lookup always wraps for correct sampling
         getElev x y =
             let (x', y') = wrapGlobalU worldSize x y
             in if isBeyondGlacier worldSize x' y'
                then seaLevel + 500
-               else elevFromGrid elevGrid worldSize x' y'
+               else elevFromGrid elevGrid worldSize x y
+               -- NOTE: elevFromGrid now handles u/v wrapping internally,
+               -- so we pass the raw (x, y) here, not (x', y').
+
+        -- Glacier check needs wrapped coords
+        isGlacier x y =
+            let (x', y') = wrapGlobalU worldSize x y
+            in isBeyondGlacier worldSize x' y'
 
         dirs = [ (stepSize, 0), (-stepSize, 0), (0, stepSize), (0, -stepSize)
                , (stepSize, stepSize), (stepSize, -stepSize)
@@ -41,16 +49,17 @@ traceRiverFromSource seed worldSize elevGrid gx gy srcElev riverIdx flow =
         go step curX curY curElev acc
             | step ≥ maxSteps = finishPath acc
             | curElev ≤ seaLevel = finishPath ((curX, curY, curElev) : acc)
-            | isBeyondGlacier worldSize curX curY = finishPath acc
+            | isGlacier curX curY = finishPath acc
             | otherwise =
                 let neighbors = map (\(dx, dy) →
-                        let nx = curX + dx
-                            ny = curY + dy
-                            (nx', ny') = wrapGlobalU worldSize nx ny
-                        in if isBeyondGlacier worldSize nx' ny'
-                           then (nx', ny', curElev + 1000)
-                           else (nx', ny', getElev nx' ny')
+                        let nx = curX + dx  -- UNWRAPPED
+                            ny = curY + dy  -- UNWRAPPED
+                        in if isGlacier nx ny
+                           then (nx, ny, curElev + 1000)
+                           else (nx, ny, getElev nx ny)
                         ) dirs
+                    -- FIX: neighbors now store UNWRAPPED (nx, ny).
+                    -- wrappedDeltaUV in the carver will handle wrapping.
 
                     sorted = sortByElevTriple neighbors
                     (bestX, bestY, bestElev) = case sorted of
@@ -139,8 +148,10 @@ buildSegFromWaypoints seed totalSegs baseFlow segIdx ((sx, sy, se), (ex, ey, ee)
         width = min 12 rawWidth
 
         h1 = hashGeo seed segIdx 1161
-        valleyMult = 3.0 + hashToFloatGeo h1 * 3.0
-        valleyW = max (width * 3) (round (fromIntegral width * valleyMult))
+        -- FIX 4: Cap valley multiplier to reduce cliff severity
+        valleyMult = 3.0 + hashToFloatGeo h1 * 2.0   -- was * 3.0
+        valleyW = min 48 $ max (width * 3) (round (fromIntegral width * valleyMult))
+        -- was min 72 (unbounded above), now capped at 48
 
         slopeDelta = abs (se - ee)
         baseDepth = max 2 (slopeDelta `div` 3 + round (flow * 2.0))

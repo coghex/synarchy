@@ -80,13 +80,22 @@ buildInitialElevGrid seed worldSize plates =
         halfGrid = gridW `div` 2
         totalSamples = gridW * gridW
         fromIdx idx = (idx `mod` gridW, idx `div` gridW)
+
+        -- ix maps to u-axis, iy maps to v-axis
+        -- u = (ix - halfGrid) * spacing
+        -- v = (iy - halfGrid) * spacing
+        -- gx = (u + v) / 2, gy = (v - u) / 2
         gxV = VU.generate totalSamples $ \idx →
-            let (ix, _) = fromIdx idx
-            in (ix - halfGrid) * spacing
+            let (ix, iy) = fromIdx idx
+                u = (ix - halfGrid) * spacing
+                v = (iy - halfGrid) * spacing
+            in (u + v) `div` 2
 
         gyV = VU.generate totalSamples $ \idx →
-            let (_, iy) = fromIdx idx
-            in (iy - halfGrid) * spacing
+            let (ix, iy) = fromIdx idx
+                u = (ix - halfGrid) * spacing
+                v = (iy - halfGrid) * spacing
+            in (v - u) `div` 2
 
         elevV = VU.generate totalSamples $ \idx →
             let gx = gxV VU.! idx
@@ -538,12 +547,13 @@ makeSegment spacing _segIdx
 
         valleyMult ∷ Float
         valleyMult = if slopePerTile > 0.5 then 3.0
-                     else 3.0 + (1.0 - min 1.0 (slopePerTile * 2.0)) * 5.0
-        valleyW = min 96 (max (width * 3)
-                              (round (fromIntegral width * valleyMult) ∷ Int))
+                     else 3.0 + (1.0 - min 1.0 (slopePerTile * 2.0)) * 3.0
+                     -- was * 5.0, reduced to * 3.0
+        valleyW = min 48 (max (width * 3)
+                               (round (fromIntegral width * valleyMult) ∷ Int))
+        -- was min 96, now min 48
 
         -- Depth capped at 20 tiles (200m) absolute max
-        -- Scale more gently with flow to avoid over-carving
         baseDepth = max 2 (slopeDelta `div` 3 + round (flow * 2.0))
         maxDepth = min 20 (slopeDelta + 10)
         depth = min maxDepth baseDepth
@@ -558,5 +568,3 @@ makeSegment spacing _segIdx
         , rsStartElev   = se
         , rsEndElev     = ee
         }
-
-
