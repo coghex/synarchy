@@ -12,6 +12,7 @@ module World.Geology.Timeline.Types
     , glacierBBox
     , hydroFeatureBBox
     , hydroEvolutionBBox
+    , tileInBBoxWrapped
     , bboxOverlapsChunk
     , tagEventsWithBBox
     , GeoEvent(..)
@@ -381,29 +382,47 @@ hydroEvolutionBBox (GlacierBranch branchPt _angle len _childId) =
 hydroEvolutionBBox (LakeDrain _) = noBBox
 hydroEvolutionBBox (LakeExpand _ _) = noBBox
 
+-- | Check if a wrapped tile coordinate falls within an event bbox,
+--   accounting for u-axis wrapping.
+{-# INLINE tileInBBoxWrapped #-}
+tileInBBoxWrapped ∷ Int → Int → Int → EventBBox → Bool
+tileInBBoxWrapped worldSize gx gy bb =
+    let w = worldSize * 16
+        halfW = w `div` 2
+        -- Bbox center and half-extents
+        bMidX = (bbMinX bb + bbMaxX bb) `div` 2
+        bMidY = (bbMinY bb + bbMaxY bb) `div` 2
+        bHalfX = (bbMaxX bb - bbMinX bb) `div` 2
+        bHalfY = (bbMaxY bb - bbMinY bb) `div` 2
+        -- Wrapped delta between tile and bbox center in u-space
+        du = (gx - gy) - (bMidX - bMidY)
+        dv = (gx + gy) - (bMidX + bMidY)
+        wdu = ((du + halfW) `mod` w + w) `mod` w - halfW
+        dxi = (wdu + dv) `div` 2
+        dyi = (dv - wdu) `div` 2
+    in abs dxi ≤ bHalfX ∧ abs dyi ≤ bHalfY
+
 bboxOverlapsChunk ∷ Int → EventBBox → Int → Int → Int → Int → Bool
 bboxOverlapsChunk worldSize bb cMinX cMinY cMaxX cMaxY =
-    let w = worldSize * 16  -- worldWidthTiles
+    let w = worldSize * 16
         halfW = w `div` 2
-        -- Wrap the chunk center into u-space, then check from there
+        -- Chunk center and half-extents
         cMidX = (cMinX + cMaxX) `div` 2
         cMidY = (cMinY + cMaxY) `div` 2
-        cHalfW = (cMaxX - cMinX) `div` 2
-        cHalfH = (cMaxY - cMinY) `div` 2
-
-        -- Wrapped chunk center
-        u = cMidX - cMidY
-        v = cMidX + cMidY
-        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
-        wcx = (wrappedU + v) `div` 2
-        wcy = (v - wrappedU) `div` 2
-
-        wMinX = wcx - cHalfW
-        wMaxX = wcx + cHalfW
-        wMinY = wcy - cHalfH
-        wMaxY = wcy + cHalfH
-    in not (bbMaxX bb < wMinX ∨ bbMinX bb > wMaxX
-          ∨ bbMaxY bb < wMinY ∨ bbMinY bb > wMaxY)
+        cHalfX = (cMaxX - cMinX) `div` 2
+        cHalfY = (cMaxY - cMinY) `div` 2
+        -- Bbox center and half-extents
+        bMidX = (bbMinX bb + bbMaxX bb) `div` 2
+        bMidY = (bbMinY bb + bbMaxY bb) `div` 2
+        bHalfX = (bbMaxX bb - bbMinX bb) `div` 2
+        bHalfY = (bbMaxY bb - bbMinY bb) `div` 2
+        -- Wrapped distance between centers in u-space
+        du = (cMidX - cMidY) - (bMidX - bMidY)
+        dv = (cMidX + cMidY) - (bMidX + bMidY)
+        wdu = ((du + halfW) `mod` w + w) `mod` w - halfW
+        dxi = (wdu + dv) `div` 2
+        dyi = (dv - wdu) `div` 2
+    in abs dxi ≤ (cHalfX + bHalfX) ∧ abs dyi ≤ (cHalfY + bHalfY)
 
 -- | Tag events with bounding boxes. River HydroEvents are exploded
 --   into per-segment events BEFORE tagging, so each segment gets

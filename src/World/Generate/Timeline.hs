@@ -88,8 +88,7 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
                                 let (gx, gy)   = chunkToGlobal coord lx ly
                                     (gx', gy') = wrapGlobalU worldSize gx gy
                                     cellEvents = filter (\(_, bb) →
-                                        gx' ≥ bbMinX bb ∧ gx' ≤ bbMaxX bb ∧
-                                        gy' ≥ bbMinY bb ∧ gy' ≤ bbMaxY bb
+                                        tileInBBoxWrapped worldSize gx' gy' bb
                                         ) relevantTagged
                                     (elevOut, matOut) =
                                         foldl' (\(e, m) (evt, _) →
@@ -247,16 +246,14 @@ applyExplodedEvents worldSize gx gy e0 m0 vec = go startIdx e0 m0
             in if bbMaxY bb < gy
                then lowerBound (mid + 1) hi
                else lowerBound lo mid
-
     go !i !e !m
         | i ≥ len   = (e, m)
         | otherwise =
             let (evt, evtBB) = V.unsafeIndex vec i
             in if bbMinY evtBB > gy
-               -- Sorted by bbMinY: all remaining events start below this tile. Done.
                then (e, m)
-               else if bbMaxY evtBB < gy ∨
-                       gx < bbMinX evtBB ∨ gx > bbMaxX evtBB
+               -- Replace the simple check with wrapped version:
+               else if not (tileInBBoxWrapped worldSize gx gy evtBB)
                     then go (i + 1) e m
                     else let mod' = applyGeoEvent evt worldSize gx gy e
                              e' = e + gmElevDelta mod'
