@@ -198,15 +198,14 @@ applyTimelineFast timeline worldSize gx gy (baseElev, baseMat) =
 applyPeriodFiltered ∷ Int → WorldScale → Int → Int
                     → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
 applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
-    let (gx', gy') = wrapGlobalU worldSize gx gy  -- ADD THIS
+    let (gx', gy') = wrapGlobalU worldSize gx gy
         bb = gpPeriodBBox period
         -- Early exit: tile outside all events in this period
         (elev', mat') =
-            if gx' < bbMinX bb ∨ gx' > bbMaxX bb ∨ gy' < bbMinY bb ∨ gy' > bbMaxY bb
+            if not (tileInBBoxWrapped worldSize gx' gy' bb)
             then (elev, mat)
             else applyExplodedEvents worldSize gx' gy' elev mat
                                      (gpExplodedEvents period)
-
         erosionMod = applyErosion
             (gpErosion period)
             worldSize
@@ -228,32 +227,14 @@ applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
 applyExplodedEvents ∷ Int → Int → Int → Int → MaterialId
                     → V.Vector (GeoEvent, EventBBox)
                     → (Int, MaterialId)
-applyExplodedEvents worldSize gx gy e0 m0 vec = go startIdx e0 m0
+applyExplodedEvents worldSize gx gy e0 m0 vec = go 0 e0 m0
   where
     len = V.length vec
-
-    -- Binary search: find first index where bbMinY > gy - maxPossiblePad
-    -- We want events whose bbMinY ≤ gy (since bbMaxY ≥ bbMinY, these could contain gy).
-    -- Events are sorted by bbMinY ascending.
-    -- Skip all events where bbMaxY < gy (they end before this tile's Y).
-    -- Stop when bbMinY > gy (they start after this tile's Y).
-    startIdx = lowerBound 0 len
-    lowerBound !lo !hi
-        | lo ≥ hi   = lo
-        | otherwise =
-            let mid = (lo + hi) `div` 2
-                (_, bb) = V.unsafeIndex vec mid
-            in if bbMaxY bb < gy
-               then lowerBound (mid + 1) hi
-               else lowerBound lo mid
     go !i !e !m
         | i ≥ len   = (e, m)
         | otherwise =
             let (evt, evtBB) = V.unsafeIndex vec i
-            in if bbMinY evtBB > gy
-               then (e, m)
-               -- Replace the simple check with wrapped version:
-               else if not (tileInBBoxWrapped worldSize gx gy evtBB)
+            in if not (tileInBBoxWrapped worldSize gx gy evtBB)
                     then go (i + 1) e m
                     else let mod' = applyGeoEvent evt worldSize gx gy e
                              e' = e + gmElevDelta mod'
