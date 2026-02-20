@@ -50,8 +50,9 @@ elevFromGrid grid worldSize gx gy =
         gridW = egGridW grid
         halfGrid = gridW `div` 2
         (gx', gy') = wrapGlobalU worldSize gx gy
-        ix = (gx' `div` spacing) + halfGrid
-        iy = (gy' `div` spacing) + halfGrid
+        -- Round to nearest grid cell (not floor toward -∞)
+        ix = ((gx' + spacing `div` 2) `div` spacing) + halfGrid
+        iy = ((gy' + spacing `div` 2) `div` spacing) + halfGrid
         ix' = max 0 (min (gridW - 1) ix)
         iy' = max 0 (min (gridW - 1) iy)
         idx = iy' * gridW + ix'

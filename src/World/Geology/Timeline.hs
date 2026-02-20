@@ -215,9 +215,8 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
             hydroSeed ageIdx flowResult (tbsPeriodIdx tbs) worldSize
             elevGrid tbs
 
-        --tbs_h = mergeConvergingRivers worldSize (tbsPeriodIdx tbs) tbs_h0
-        tbs_h = tbs
-        allEvents = meteorites <> eruptions-- <> hydroEvents
+        tbs_h = mergeConvergingRivers worldSize (tbsPeriodIdx tbs) tbs_h0
+        allEvents = meteorites <> eruptions <> hydroEvents
 
         gs2 = gs1 { gsCO2 = max 0.5 (gsCO2 gs1 - duration * 0.005) }
         erosion = erosionFromGeoState gs2 seed ageIdx

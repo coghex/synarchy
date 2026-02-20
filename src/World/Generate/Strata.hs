@@ -22,6 +22,7 @@ import qualified Data.Vector as V
 import World.Types
 import World.Geology (applyGeoEvent, GeoModification(..))
 import World.Geology.Erosion (applyErosion)
+import World.Geology.Timeline.Types (tileInBBoxWrapped)
 import World.Scale (WorldScale(..))
 import World.Material (MaterialId(..))
 
@@ -80,10 +81,8 @@ buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
             -- Most events are spatially local (volcanoes, craters, rivers),
             -- so for a typical column this cuts ~200 events down to ~0-5.
             relevantEvents = filter (\(_, bb) →
-                gx ≥ bbMinX bb ∧ gx ≤ bbMaxX bb ∧
-                gy ≥ bbMinY bb ∧ gy ≤ bbMaxY bb
+                tileInBBoxWrapped worldSize gx gy bb
                 ) (gpTaggedEvents period)
-
             (eventDeltas, elev', surfMat') =
                 foldl' (applyEvent elev surfMat) ([], elev, surfMat)
                        relevantEvents
