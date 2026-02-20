@@ -42,13 +42,11 @@ reconcileHydrology seed ageIdx flowResult periodIdx worldSize elevGrid tbs =
         simSources = frRiverSources flowResult
         simLakes   = frLakes flowResult
 
-        maxTotalRivers = 30  -- fewer, longer rivers
+        maxTotalRivers = 30
         currentRiverCount = length existingRivers
 
-        -- Capture IDs of existing rivers, NOT the feature values.
         existingRiverIds = map pfId existingRivers
 
-        -- Evolve existing rivers by ID — re-fetch from state each iteration
         (evolvedPfs, evolveEvents, tbs1) =
             foldl' (\(pfs, evts, st) fid →
                 case lookupFeature fid st of
@@ -62,18 +60,14 @@ reconcileHydrology seed ageIdx flowResult periodIdx worldSize elevGrid tbs =
                              in (pf' : pfs, evt ++ evts, st')
             ) ([], [], tbs) existingRiverIds
 
-        -- Create new rivers from simulation sources
         budget = maxTotalRivers - currentRiverCount
 
-        -- For filtering, use the CURRENT state's rivers (after evolution)
         currentExistingRivers = filter (isActiveRiver . pfFeature) (tbsFeatures tbs1)
 
-        -- Filter sources: must be far from existing rivers
         newSources = if budget ≤ 0
             then []
             else take budget $ filter (isSourceNew worldSize currentExistingRivers) simSources
 
-        -- Trace each source at tile level
         newRivers = catMaybes $
             parMap rdeepseq (\(idx, (gx, gy, elev, flow)) →
                 traceRiverFromSource seed worldSize elevGrid
@@ -96,7 +90,6 @@ reconcileHydrology seed ageIdx flowResult periodIdx worldSize elevGrid tbs =
                 in (pf : pfs, HydroEvent (RiverFeature river) : evts, st'')
             ) ([], [], tbs1) newRivers
 
-        -- Lakes
         (lakePfs, lakeEvents, tbs3) = reconcileLakes seed ageIdx periodIdx
                                           existingLakes simLakes tbs2
 
@@ -120,12 +113,11 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
         h1 = hashGeo seed fidInt (900 + ageIdx)
         roll = hashToFloatGeo h1
 
-        -- Count existing rivers to suppress branching when near cap
         currentRiverCount = length $ filter (isActiveRiver . pfFeature) (tbsFeatures tbs)
         canBranch = currentRiverCount < 25
     in
     if roll < 0.25
-    -- 25%: Meander
+    -- 25%: Meander — path changes, so emit HydroEvent
     then let h2 = hashGeo seed fidInt (910 + ageIdx)
              meanderAmt = 0.15 + hashToFloatGeo h2 * 0.4
              newSegs = fixupSegmentContinuity $
@@ -142,7 +134,7 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
          in (updatedPf, [evt, HydroEvent (RiverFeature newRiver)], tbs')
 
     else if roll < 0.30 ∧ canBranch
-    -- 5%: Branch
+    -- 5%: Branch — new tributary, emit HydroEvent only for the NEW tributary
     then let numSegs = V.length (rpSegments river)
          in if numSegs < 3
             then evolveDeepen seed ageIdx periodIdx pf river tbs
@@ -193,7 +185,6 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
                 evt = HydroModify fid (RiverBranch
                         (GeoCoord bx by) branchAngle branchLen childId)
 
-                -- Increase parent flow downstream of branch
                 newRiver = river
                     { rpFlowRate = rpFlowRate river + rpFlowRate tributaryParams * 0.5
                     }
@@ -208,17 +199,18 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
 
             in ( updatedPf
                , [ evt
-                 , HydroEvent (RiverFeature newRiver)
                  , HydroEvent (RiverFeature tributaryParams)
+                 -- NOTE: no HydroEvent for the parent river — only flow changed,
+                 -- path is the same, so re-emitting would double-deposit the delta
                  ]
                , tbs''' )
 
     else if roll < 0.50
-    -- 15%: Deepen
+    -- 15%: Deepen — NO HydroEvent, only state update
     then evolveDeepen seed ageIdx periodIdx pf river tbs
 
     else if roll < 0.60
-    -- 10%: Widen
+    -- 10%: Widen — NO HydroEvent, only state update
     then let newSegs = V.map (\seg → seg
                  { rsWidth = min 12 (rsWidth seg + 1)
                  , rsValleyWidth = rsValleyWidth seg + 3
@@ -229,12 +221,15 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
                  , pfLastActivePeriod = periodIdx
                  }
              tbs' = updateFeature fid (const updatedPf) tbs
-         in (updatedPf, [HydroEvent (RiverFeature newRiver)], tbs')
+         in (updatedPf, [], tbs')
 
     else
     -- 40%: Continue unchanged
     (pf, [], tbs)
 
+-- | Deepen — updates persistent state but emits NO events.
+--   The deeper channel will be reflected next time the river
+--   is emitted (meander or new creation).
 evolveDeepen ∷ Word64 → Int → Int
              → PersistentFeature → RiverParams
              → TimelineBuildState
@@ -244,7 +239,7 @@ evolveDeepen seed ageIdx periodIdx pf river tbs =
         GeoFeatureId fidInt = fid
         h2 = hashGeo seed fidInt (930 + ageIdx)
         deepenAmt = hashToRangeGeo h2 1 3
-        maxDepth = 20  -- 200m cap
+        maxDepth = 20
         newSegs = fixupSegmentContinuity $ V.map (\seg → seg
             { rsDepth = min maxDepth (rsDepth seg + deepenAmt)
             , rsValleyWidth = rsValleyWidth seg + 1
@@ -256,7 +251,7 @@ evolveDeepen seed ageIdx periodIdx pf river tbs =
             , pfEruptionCount    = pfEruptionCount pf + 1
             }
         tbs' = updateFeature fid (const updatedPf) tbs
-    in (updatedPf, [HydroEvent (RiverFeature newRiver)], tbs')
+    in (updatedPf, [], tbs')
 
 -----------------------------------------------------------
 -- River merging
@@ -268,7 +263,7 @@ mergeConvergingRivers worldSize periodIdx tbs =
             $ filter (\pf → isActiveRiver (pfFeature pf)
                           ∧ pfActivity pf ≡ FActive)
                      (tbsFeatures tbs)
-        mergeThreshold = 24  -- tiles
+        mergeThreshold = 24
 
         go [] st = st
         go (fid : rest) st =
