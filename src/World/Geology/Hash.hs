@@ -4,7 +4,7 @@ module World.Geology.Hash
     , hashToFloatGeo
     , hashToRangeGeo
     , smoothstepGeo
-    , wrappedDeltaXGeo
+--    , wrappedDeltaXGeo
     , wrappedDeltaUV
     , scaleCount
     ) where

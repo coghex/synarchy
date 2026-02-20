@@ -11,7 +11,7 @@ import World.Material
 import World.Geology.Types
 import World.Geology.Crater (applyCrater)
 import World.Geology.Volcano (applyVolcanicFeature)
-import World.Geology.Hash (wrappedDeltaXGeo, smoothstepGeo)
+import World.Geology.Hash (smoothstepGeo, wrappedDeltaUV)
 import World.Hydrology.Types (HydroFeature(..))
 import World.Hydrology.Event (applyHydroEvolution, applyHydroFeature)
 import World.Hydrology.River (applyRiverCarve)
@@ -66,8 +66,9 @@ applyLavaFlow ∷ LavaFlow → Int → Int → Int → Int → GeoModification
 applyLavaFlow flow worldSize gx gy baseElev =
     let sx = lfSourceX flow
         sy = lfSourceY flow
-        dx = fromIntegral (wrappedDeltaXGeo worldSize gx sx) ∷ Float
-        dy = fromIntegral (gy - sy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV worldSize gx gy sx sy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
         maxR = fromIntegral (lfRadius flow) ∷ Float
 
@@ -89,8 +90,9 @@ applyLavaFlow flow worldSize gx gy baseElev =
 applyEvolution ∷ FeatureEvolution → Int → Int → Int → Int → GeoModification
 applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy _e =
     let GeoCoord cx cy = center
-        dx = fromIntegral (wrappedDeltaXGeo ws gx cx) ∷ Float
-        dy = fromIntegral (gy - cy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
         rr = fromIntegral radius ∷ Float
     in if dist > rr
@@ -108,8 +110,9 @@ applyEvolution (GoExtinct _center _radius) _ _ _ _ = noModification
 
 applyEvolution (CollapseToCaldera depth _ratio center radius) ws gx gy _e =
     let GeoCoord cx cy = center
-        dx = fromIntegral (wrappedDeltaXGeo ws gx cx) ∷ Float
-        dy = fromIntegral (gy - cy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
         rr = fromIntegral radius ∷ Float
     in if dist > rr
@@ -128,8 +131,9 @@ applyEvolution (ParasiticEruption childFeature _childId _center _radius) ws gx g
     applyVolcanicFeature childFeature ws gx gy e
 applyEvolution (FlankCollapse collapseAngle collapseWidth debrisRadius center _radius) ws gx gy _e =
     let GeoCoord cx cy = center
-        dx = fromIntegral (wrappedDeltaXGeo ws gx cx) ∷ Float
-        dy = fromIntegral (gy - cy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
         debrisR = fromIntegral debrisRadius ∷ Float
 

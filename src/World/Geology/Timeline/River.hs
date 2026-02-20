@@ -307,10 +307,14 @@ checkRiverProximity worldSize threshold mx my targetPf =
         dists = V.toList $ V.imap (\idx seg →
             let GeoCoord sx sy = rsStart seg
                 GeoCoord ex ey = rsEnd seg
-                midX = sx + wrappedDeltaXGeo worldSize ex sx `div` 2
-                midY = (sy + ey) `div` 2
-                dx = abs (wrappedDeltaXGeo worldSize mx midX)
-                dy = abs (my - midY)
+                -- Wrapped midpoint: start + half the wrapped delta
+                (dex, dey) = wrappedDeltaUV worldSize ex ey sx sy
+                midX = sx + dex `div` 2
+                midY = sy + dey `div` 2
+                -- Wrapped distance from mouth to midpoint
+                (dmx, dmy) = wrappedDeltaUV worldSize mx my midX midY
+                dx = abs dmx
+                dy = abs dmy
             in (dx + dy, idx, GeoCoord midX midY)
             ) segs
         close = filter (\(d, _, _) → d < threshold) dists
@@ -332,8 +336,9 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
 
         segDists = V.imap (\idx seg →
             let GeoCoord ex ey = rsEnd seg
-                dx = abs (wrappedDeltaXGeo worldSize ex jx)
-                dy = abs (ey - jy)
+                (dxi, dyi) = wrappedDeltaUV worldSize ex ey jx jy
+                dx = abs dxi
+                dy = abs dyi
             in (dx + dy, idx)
             ) tribSegs
 
@@ -483,7 +488,8 @@ isGenuinelyNew worldSize existingRivers simRiver =
     in not $ any (\pf →
         let river = getRiverParamsFromPf pf
             GeoCoord ex ey = rpSourceRegion river
-            dx = abs (wrappedDeltaXGeo worldSize sx ex)
-            dy = abs (sy - ey)
+            (dxi, dyi) = wrappedDeltaUV worldSize sx sy ex ey
+            dx = abs dxi
+            dy = abs dyi
         in dx < threshold ∧ dy < threshold
         ) existingRivers

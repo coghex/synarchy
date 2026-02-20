@@ -99,8 +99,9 @@ isSourceNew worldSize existingRivers (sx, sy, _, _) =
     in not $ any (\pf →
         let river = getRiverParamsFromPf pf
             GeoCoord ex ey = rpSourceRegion river
-            dx = abs (wrappedDeltaXGeo worldSize sx ex)
-            dy = abs (sy - ey)
+            (dxi, dyi) = wrappedDeltaUV worldSize sx sy ex ey
+            dx = abs dxi
+            dy = abs dyi
         in dx < threshold ∧ dy < threshold
         ) existingRivers
 

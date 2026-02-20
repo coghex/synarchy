@@ -6,7 +6,7 @@ module World.Hydrology.Glacier.Carving
 
 import UPrelude
 import World.Base (GeoCoord(..))
-import World.Geology.Hash (wrappedDeltaXGeo)
+import World.Geology.Hash (wrappedDeltaUV)
 import World.Material (matSandstone, unMaterialId)
 import World.Hydrology.Types
 import World.Geology.Types
@@ -26,8 +26,9 @@ applyGlacierCarve glacier worldSize gx gy _baseElev =
         carveD = fromIntegral (glCarveDepth glacier) ∷ Float
         moraineH = fromIntegral (glMoraineSize glacier) ∷ Float
 
-        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) ∷ Float
-        dy = fromIntegral (gy - cy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
 
         flowX = cos flowDir
         flowY = sin flowDir

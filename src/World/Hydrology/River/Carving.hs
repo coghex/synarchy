@@ -11,7 +11,7 @@ import UPrelude
 import Data.Word (Word64)
 import qualified Data.Vector as V
 import World.Base (GeoCoord(..))
-import World.Geology.Hash (wrappedDeltaXGeo)
+import World.Geology.Hash (wrappedDeltaUV)
 import World.Material (matSandstone, matShale, unMaterialId)
 import World.Hydrology.Types
 import World.Geology.Types
@@ -48,12 +48,14 @@ findDeepestCarve worldSize gx gy mSeed segs = go noModification 0
           in gy < min sy ey - pad ∨ gy > max sy ey + pad
         = go acc (i + 1)
         | let seg = V.unsafeIndex segs i
-              GeoCoord sx _ = rsStart seg
-              GeoCoord ex _ = rsEnd seg
+              GeoCoord sx sy = rsStart seg
+              GeoCoord ex ey = rsEnd seg
               pad = rsValleyWidth seg
               midX = (sx + ex) `div` 2
+              midY = (sy + ey) `div` 2
+              (dxi, _) = wrappedDeltaUV worldSize gx gy midX midY
               halfSpanX = abs (sx - ex) `div` 2 + pad + 1
-          in abs (wrappedDeltaXGeo worldSize gx midX) > halfSpanX
+          in abs dxi > halfSpanX
         = go acc (i + 1)
         | otherwise
         = let seg = V.unsafeIndex segs i
@@ -66,11 +68,13 @@ carveFromSegment worldSize gx gy meanderSeed seg =
     let GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
 
-        px = fromIntegral (wrappedDeltaXGeo worldSize gx sx) ∷ Float
-        py = fromIntegral (gy - sy) ∷ Float
+        (pxi, pyi) = wrappedDeltaUV worldSize gx gy sx sy
+        px = fromIntegral pxi ∷ Float
+        py = fromIntegral pyi ∷ Float
 
-        fdx = fromIntegral (wrappedDeltaXGeo worldSize ex sx) ∷ Float
-        fdy = fromIntegral (ey - sy) ∷ Float
+        (fxi, fyi) = wrappedDeltaUV worldSize ex ey sx sy
+        fdx = fromIntegral fxi ∷ Float
+        fdy = fromIntegral fyi ∷ Float
         segLen = sqrt (fdx * fdx + fdy * fdy)
 
     in if segLen < 0.001
@@ -144,8 +148,9 @@ computeDeltaDeposit' lastSeg totalFlow worldSize gx gy =
     let GeoCoord mx my = rsEnd lastSeg
         GeoCoord px py = rsStart lastSeg
 
-        flowDX = fromIntegral (wrappedDeltaXGeo worldSize mx px) ∷ Float
-        flowDY = fromIntegral (my - py) ∷ Float
+        (fxi, fyi) = wrappedDeltaUV worldSize mx my px py
+        flowDX = fromIntegral fxi ∷ Float
+        flowDY = fromIntegral fyi ∷ Float
         flowLen = sqrt (flowDX * flowDX + flowDY * flowDY)
 
     in if flowLen < 0.001 then noModification
@@ -153,8 +158,9 @@ computeDeltaDeposit' lastSeg totalFlow worldSize gx gy =
     let flowNX = flowDX / flowLen
         flowNY = flowDY / flowLen
 
-        dx = fromIntegral (wrappedDeltaXGeo worldSize gx mx) ∷ Float
-        dy = fromIntegral (gy - my) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV worldSize gx gy mx my
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
 
         deltaRadius = totalFlow * 25.0 + 8.0
@@ -205,8 +211,9 @@ pickDeepest a b
 applyRiverEvolution ∷ HydroEvolution → Int → Int → Int → Int → GeoModification
 applyRiverEvolution (RiverDam damPoint _lakeId damHeight) ws gx gy _e =
     let GeoCoord dx' dy' = damPoint
-        ddx = fromIntegral (wrappedDeltaXGeo ws gx dx') ∷ Float
-        ddy = fromIntegral (gy - dy') ∷ Float
+        (dxi, dyi) = wrappedDeltaUV ws gx gy dx' dy'
+        ddx = fromIntegral dxi ∷ Float
+        ddy = fromIntegral dyi ∷ Float
         dist = sqrt (ddx * ddx + ddy * ddy)
         damRadius = fromIntegral damHeight * 1.5 ∷ Float
     in if dist > damRadius

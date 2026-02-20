@@ -132,8 +132,9 @@ determineMeteoriteType seed attemptIdx radius =
 applyCrater ∷ CraterParams → Int → Int → Int → Int → GeoModification
 applyCrater params worldSize gx gy _baseElev =
     let GeoCoord cx cy = cpCenter params
-        dx = fromIntegral (wrappedDeltaXGeo worldSize gx cx) ∷ Float
-        dy = fromIntegral (gy - cy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
 
         radius      = fromIntegral (cpRadius params) ∷ Float
