@@ -208,18 +208,16 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
                 Nothing → False
             ]
 
-        --hydroSeed = ageSeed `xor` 0xA0CA71C
-        --flowResult = simulateHydrology hydroSeed worldSize ageIdx elevGrid
+        hydroSeed = ageSeed `xor` 0xA0CA71C
+        flowResult = simulateHydrology hydroSeed worldSize ageIdx elevGrid
 
-        --(hydroFeatures, hydroEvents, tbs_h0) = reconcileHydrology
-        --    hydroSeed ageIdx flowResult (tbsPeriodIdx tbs) worldSize
-        --    elevGrid tbs
+        (hydroFeatures, hydroEvents, tbs_h0) = reconcileHydrology
+            hydroSeed ageIdx flowResult (tbsPeriodIdx tbs) worldSize
+            elevGrid tbs
 
         --tbs_h = mergeConvergingRivers worldSize (tbsPeriodIdx tbs) tbs_h0
-
-        --allEvents = meteorites <> eruptions <> hydroEvents
         tbs_h = tbs
-        allEvents = meteorites <> eruptions
+        allEvents = meteorites <> eruptions-- <> hydroEvents
 
         gs2 = gs1 { gsCO2 = max 0.5 (gsCO2 gs1 - duration * 0.005) }
         erosion = erosionFromGeoState gs2 seed ageIdx

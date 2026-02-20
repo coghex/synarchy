@@ -42,20 +42,15 @@ findDeepestCarve worldSize gx gy mSeed segs = go noModification 0
     go !acc !i
         | i ≥ len = acc
         | let seg = V.unsafeIndex segs i
-              GeoCoord _ sy = rsStart seg
-              GeoCoord _ ey = rsEnd seg
-              pad = rsValleyWidth seg
-          in gy < min sy ey - pad ∨ gy > max sy ey + pad
-        = go acc (i + 1)
-        | let seg = V.unsafeIndex segs i
               GeoCoord sx sy = rsStart seg
               GeoCoord ex ey = rsEnd seg
               pad = rsValleyWidth seg
               midX = (sx + ex) `div` 2
               midY = (sy + ey) `div` 2
-              (dxi, _) = wrappedDeltaUV worldSize gx gy midX midY
+              (dxi, dyi) = wrappedDeltaUV worldSize gx gy midX midY
               halfSpanX = abs (sx - ex) `div` 2 + pad + 1
-          in abs dxi > halfSpanX
+              halfSpanY = abs (sy - ey) `div` 2 + pad + 1
+          in abs dxi > halfSpanX ∨ abs dyi > halfSpanY
         = go acc (i + 1)
         | otherwise
         = let seg = V.unsafeIndex segs i

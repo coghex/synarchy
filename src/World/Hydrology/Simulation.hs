@@ -22,7 +22,7 @@ import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Geology.Types
-import World.Geology.Hash (hashGeo)
+import World.Geology.Hash (hashGeo, wrappedDeltaUV)
 import World.Hydrology.Types
 import World.Fluids (seaLevel)
 
@@ -401,8 +401,9 @@ dedupLakes spacing = go []
 applyGeoEventSimple ∷ GeoEvent → Int → Int → Int → Int → GeoModification
 applyGeoEventSimple (CraterEvent params) ws gx gy _e =
     let GeoCoord cx cy = cpCenter params
-        dx = fromIntegral (wrappedDelta ws gx cx) ∷ Float
-        dy = fromIntegral (gy - cy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
         r = fromIntegral (cpRadius params) ∷ Float
     in if dist > r * 1.5
@@ -415,8 +416,9 @@ applyGeoEventSimple (CraterEvent params) ws gx gy _e =
 applyGeoEventSimple (EruptionEvent _ flow) ws gx gy e =
     let sx = lfSourceX flow
         sy = lfSourceY flow
-        dx = fromIntegral (wrappedDelta ws gx sx) ∷ Float
-        dy = fromIntegral (gy - sy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV ws gx gy sx sy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
         maxR = fromIntegral (lfRadius flow) ∷ Float
     in if dist > maxR
@@ -434,8 +436,9 @@ applyGeoEventSimple _ _ _ _ _ = noModification
 applyVolcanicSimple ∷ FeatureShape → Int → Int → Int → GeoModification
 applyVolcanicSimple (VolcanicShape (ShieldVolcano p)) ws gx gy =
     let GeoCoord cx cy = shCenter p
-        dx = fromIntegral (wrappedDelta ws gx cx) ∷ Float
-        dy = fromIntegral (gy - cy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
         r = fromIntegral (shBaseRadius p) ∷ Float
     in if dist > r then noModification
@@ -443,8 +446,9 @@ applyVolcanicSimple (VolcanicShape (ShieldVolcano p)) ws gx gy =
             in GeoModification (round (fromIntegral (shPeakHeight p) * t * t)) Nothing 0
 applyVolcanicSimple (VolcanicShape (SuperVolcano p)) ws gx gy =
     let GeoCoord cx cy = svCenter p
-        dx = fromIntegral (wrappedDelta ws gx cx) ∷ Float
-        dy = fromIntegral (gy - cy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
         outerR = fromIntegral (svEjectaRadius p) ∷ Float
         calderaR = fromIntegral (svCalderaRadius p) ∷ Float
@@ -455,8 +459,9 @@ applyVolcanicSimple (VolcanicShape (SuperVolcano p)) ws gx gy =
                  in GeoModification (round (fromIntegral (svRimHeight p) * t)) Nothing 0
 applyVolcanicSimple (VolcanicShape (CinderCone p)) ws gx gy =
     let GeoCoord cx cy = ccCenter p
-        dx = fromIntegral (wrappedDelta ws gx cx) ∷ Float
-        dy = fromIntegral (gy - cy) ∷ Float
+        (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
         r = fromIntegral (ccBaseRadius p) ∷ Float
     in if dist > r then noModification
@@ -468,10 +473,12 @@ carveSimple ∷ Int → Int → Int → RiverSegment → GeoModification
 carveSimple ws gx gy seg =
     let GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
-        px = fromIntegral (wrappedDelta ws gx sx) ∷ Float
-        py = fromIntegral (gy - sy) ∷ Float
-        fdx = fromIntegral (wrappedDelta ws ex sx) ∷ Float
-        fdy = fromIntegral (ey - sy) ∷ Float
+        (pxi, pyi) = wrappedDeltaUV ws gx gy sx sy
+        px = fromIntegral pxi ∷ Float
+        py = fromIntegral pyi ∷ Float
+        (fdxi, fdyi) = wrappedDeltaUV ws ex ey sx sy
+        fdx = fromIntegral fdxi ∷ Float
+        fdy = fromIntegral fdyi ∷ Float
         segLen = sqrt (fdx * fdx + fdy * fdy)
     in if segLen < 0.001
        then noModification
@@ -490,17 +497,6 @@ carveSimple ws gx gy seg =
                         carve = round (depth * max 0.0 (1.0 - t) * 0.7)
                     in if carve ≤ 0 then noModification
                        else GeoModification (negate carve) Nothing 0
-
------------------------------------------------------------
--- Wrapped Delta
------------------------------------------------------------
-
-wrappedDelta ∷ Int → Int → Int → Int
-wrappedDelta worldSize a b =
-    let w = worldSize * 16
-        raw = b - a
-        halfW = w `div` 2
-    in ((raw + halfW) `mod` w + w) `mod` w - halfW
 
 -----------------------------------------------------------
 -- River Path Conversion
