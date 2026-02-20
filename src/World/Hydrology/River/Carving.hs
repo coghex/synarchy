@@ -36,28 +36,29 @@ applyRiverCarve river worldSize gx gy baseElev =
 --   compile it as a tight loop with unboxed accumulator fields.
 {-# INLINE findDeepestCarve #-}
 findDeepestCarve ∷ Int → Int → Int → Word64 → V.Vector RiverSegment → GeoModification
-findDeepestCarve worldSize gx gy mSeed segs = go noModification (V.toList segs)
+findDeepestCarve worldSize gx gy mSeed segs = go noModification 0
   where
-    go !acc [] = acc
-    go !acc (seg : rest)
-        -- Cheap Y check first (no wrapping needed)
-        | let GeoCoord _ sy = rsStart seg
+    !len = V.length segs
+    go !acc !i
+        | i ≥ len = acc
+        | let seg = V.unsafeIndex segs i
+              GeoCoord _ sy = rsStart seg
               GeoCoord _ ey = rsEnd seg
               pad = rsValleyWidth seg
           in gy < min sy ey - pad ∨ gy > max sy ey + pad
-        = go acc rest
-        -- Cheap X check (one wrappedDeltaXGeo)
-        | let GeoCoord sx _ = rsStart seg
+        = go acc (i + 1)
+        | let seg = V.unsafeIndex segs i
+              GeoCoord sx _ = rsStart seg
               GeoCoord ex _ = rsEnd seg
               pad = rsValleyWidth seg
               midX = (sx + ex) `div` 2
               halfSpanX = abs (sx - ex) `div` 2 + pad + 1
           in abs (wrappedDeltaXGeo worldSize gx midX) > halfSpanX
-        = go acc rest
-        -- Segment could affect this tile — do full carve
+        = go acc (i + 1)
         | otherwise
-        = let carve = carveFromSegment worldSize gx gy mSeed seg
-          in go (pickDeepest acc carve) rest
+        = let seg = V.unsafeIndex segs i
+              carve = carveFromSegment worldSize gx gy mSeed seg
+          in go (pickDeepest acc carve) (i + 1)
 
 -- | Compute the carving modification from a single river segment.
 carveFromSegment ∷ Int → Int → Int → Word64 → RiverSegment → GeoModification
