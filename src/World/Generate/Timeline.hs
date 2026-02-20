@@ -31,10 +31,13 @@ applyTimelineChunk ∷ GeoTimeline → Int → WorldScale → ChunkCoord
                    → (VU.Vector Int, VU.Vector MaterialId)
 applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
     let ChunkCoord cx cy = coord
-        chunkMinGX = cx * chunkSize - chunkBorder
-        chunkMinGY = cy * chunkSize - chunkBorder
-        chunkMaxGX = cx * chunkSize + chunkSize + chunkBorder - 1
-        chunkMaxGY = cy * chunkSize + chunkSize + chunkBorder - 1
+        chunkMinGX0 = cx * chunkSize - chunkBorder
+        chunkMinGY0 = cy * chunkSize - chunkBorder
+        chunkMaxGX0 = cx * chunkSize + chunkSize + chunkBorder - 1
+        chunkMaxGY0 = cy * chunkSize + chunkSize + chunkBorder - 1
+        -- Wrap chunk bounds into canonical u-space
+        (chunkMinGX, chunkMinGY) = wrapGlobalU worldSize chunkMinGX0 chunkMinGY0
+        (chunkMaxGX, chunkMaxGY) = wrapGlobalU worldSize chunkMaxGX0 chunkMaxGY0
     in foldl' (applyOnePeriod chunkMinGX chunkMinGY chunkMaxGX chunkMaxGY)
               (baseElevVec, baseMatVec) (gtPeriods timeline)
   where

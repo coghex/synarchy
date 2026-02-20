@@ -382,9 +382,28 @@ hydroEvolutionBBox (LakeDrain _) = noBBox
 hydroEvolutionBBox (LakeExpand _ _) = noBBox
 
 bboxOverlapsChunk ∷ Int → EventBBox → Int → Int → Int → Int → Bool
-bboxOverlapsChunk _worldSize bb cMinX cMinY cMaxX cMaxY =
-    not (bbMaxX bb < cMinX ∨ bbMinX bb > cMaxX
-       ∨ bbMaxY bb < cMinY ∨ bbMinY bb > cMaxY)
+bboxOverlapsChunk worldSize bb cMinX cMinY cMaxX cMaxY =
+    let w = worldSize * 16  -- worldWidthTiles
+        halfW = w `div` 2
+        -- Wrap the chunk center into u-space, then check from there
+        cMidX = (cMinX + cMaxX) `div` 2
+        cMidY = (cMinY + cMaxY) `div` 2
+        cHalfW = (cMaxX - cMinX) `div` 2
+        cHalfH = (cMaxY - cMinY) `div` 2
+
+        -- Wrapped chunk center
+        u = cMidX - cMidY
+        v = cMidX + cMidY
+        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+        wcx = (wrappedU + v) `div` 2
+        wcy = (v - wrappedU) `div` 2
+
+        wMinX = wcx - cHalfW
+        wMaxX = wcx + cHalfW
+        wMinY = wcy - cHalfH
+        wMaxY = wcy + cHalfH
+    in not (bbMaxX bb < wMinX ∨ bbMinX bb > wMaxX
+          ∨ bbMaxY bb < wMinY ∨ bbMinY bb > wMaxY)
 
 -- | Tag events with bounding boxes. River HydroEvents are exploded
 --   into per-segment events BEFORE tagging, so each segment gets
