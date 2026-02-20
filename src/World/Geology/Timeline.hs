@@ -925,24 +925,41 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
         tribRiver = getRiverParamsFromPf tributaryPf
         mainRiver = getRiverParamsFromPf mainPf
 
-        -- Truncate tributary: keep segments up to where it meets the main river
-        -- Add a final segment from current last endpoint to the junction
+        -- Find the tributary segment whose endpoint is nearest the junction.
+        -- We keep segments [0..cutIdx] and reroute the last one to end
+        -- at the junction, discarding everything downstream.
         tribSegs = rpSegments tribRiver
-        lastTribSeg = if null tribSegs then Nothing else Just (last tribSegs)
-        truncatedSegs = case lastTribSeg of
-            Nothing → tribSegs
-            Just ls → tribSegs ++
-                [ RiverSegment
-                    { rsStart       = rsEnd ls
-                    , rsEnd         = junctionCoord
-                    , rsWidth       = rsWidth ls
-                    , rsValleyWidth = rsValleyWidth ls
-                    , rsDepth       = rsDepth ls
-                    , rsFlowRate    = rsFlowRate ls
-                    , rsStartElev   = rsEndElev ls
-                    , rsEndElev     = rsEndElev ls  -- approximate
-                    }
-                ]
+        GeoCoord jx jy = junctionCoord
+
+        -- For each segment, compute distance from its END to the junction
+        segDists = zipWith (\idx seg →
+            let GeoCoord ex ey = rsEnd seg
+                dx = abs (wrappedDeltaXGeo worldSize ex jx)
+                dy = abs (ey - jy)
+            in (dx + dy, idx)
+            ) [0 ∷ Int ..] tribSegs
+
+        -- The segment whose end is closest to the junction
+        cutIdx = case segDists of
+            [] → 0
+            _  → snd (minimumBy (comparing fst) segDists)
+
+        -- Keep segments [0..cutIdx-1] unchanged, then add a final
+        -- segment that routes from the cut segment's START to the junction
+        keptSegs = take cutIdx tribSegs
+        cutSeg   = if cutIdx < length tribSegs
+                   then tribSegs !! cutIdx
+                   else if null tribSegs
+                        then error "performMerge: empty tributary"
+                        else last tribSegs
+
+        -- Final segment: from the cut segment's start to the junction
+        junctionSeg = cutSeg
+            { rsEnd     = junctionCoord
+            , rsEndElev = rsStartElev cutSeg  -- approximate: use start elev
+            }
+
+        truncatedSegs = keptSegs ++ [junctionSeg]
 
         newTribRiver = tribRiver
             { rpMouthRegion = junctionCoord
