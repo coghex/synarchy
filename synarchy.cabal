@@ -291,6 +291,10 @@ library
                      World.Geology.Evolution
                      World.Geology.Timeline
                      World.Geology.Timeline.Types
+                     World.Geology.Timeline.Helpers
+                     World.Geology.Timeline.Volcanism
+                     World.Geology.Timeline.River
+                     World.Geology.Timeline.RiverTrace
                      World.Geology.Erosion
                      World.Geology.Event
                      World.Hydrology.Types
