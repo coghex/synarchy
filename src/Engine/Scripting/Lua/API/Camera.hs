@@ -21,7 +21,7 @@ import UPrelude
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
-import World.Grid (gridToWorld)
+import World.Grid (gridToWorld, worldToGrid)
 import World.Types
 import World.Material (MaterialId(..))
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -178,8 +178,17 @@ cameraGotoTileFn env = do
 cameraRotateCWFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraRotateCWFn env = do
     Lua.liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
-        (cam { camFacing = rotateCW (camFacing cam) }, ())
-    -- Invalidate caches here too (same as step 5)
+        let oldFacing = camFacing cam
+            newFacing = rotateCW oldFacing
+            (cx, cy)  = camPosition cam
+            -- Convert screen position → grid coords using old facing
+            (gx, gy)  = worldToGrid oldFacing cx cy
+            -- Convert grid coords → screen position using new facing
+            (cx', cy') = gridToWorld newFacing gx gy
+        in (cam { camFacing  = newFacing
+                , camPosition = (cx', cy')
+                , camVelocity = (0, 0)
+                }, ())
     Lua.liftIO $ invalidateWorldCaches env
     return 0
 
@@ -187,7 +196,15 @@ cameraRotateCWFn env = do
 cameraRotateCCWFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraRotateCCWFn env = do
     Lua.liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
-        (cam { camFacing = rotateCCW (camFacing cam) }, ())
+        let oldFacing = camFacing cam
+            newFacing = rotateCCW oldFacing
+            (cx, cy)  = camPosition cam
+            (gx, gy)  = worldToGrid oldFacing cx cy
+            (cx', cy') = gridToWorld newFacing gx gy
+        in (cam { camFacing  = newFacing
+                , camPosition = (cx', cy')
+                , camVelocity = (0, 0)
+                }, ())
     Lua.liftIO $ invalidateWorldCaches env
     return 0
 
@@ -213,10 +230,6 @@ invalidateWorldCaches env = do
         writeIORef (wsBgQuadCacheRef ws)   Nothing
         writeIORef (wsBakedZoomRef ws)     (V.empty, defaultWorldTextures, FaceSouth)
         writeIORef (wsBakedBgRef ws)       (V.empty, defaultWorldTextures, FaceSouth)
-        mParams ← readIORef (wsGenParamsRef ws)
-        case mParams of
-            Just params → writeIORef (wsZoomCacheRef ws) (buildZoomCache params)
-            Nothing → return ()
 
 -- | camera.getZTracking() -> bool
 cameraGetZTrackingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

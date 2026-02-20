@@ -116,7 +116,6 @@ buildZoomCache params =
                    , zceBaseGY = baseGY
                    , zceTexIndex = if isOceanChunk oceanMap coord
                                    then 0
-                                   else if chunkLava then 100
                                    else winnerMat
                    , zceElev     = if isOceanChunk oceanMap coord
                                    then seaLevel else avgElev
