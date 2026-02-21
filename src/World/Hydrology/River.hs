@@ -7,4 +7,5 @@ module World.Hydrology.River
     ) where
 
 import World.Hydrology.River.Carving (applyRiverCarve, applyRiverEvolution
-                                     , carveFromSegment, computeDeltaDeposit')
+                                     , carveFromSegment, computeDeltaDeposit'
+                                     , applyRiverCarve)

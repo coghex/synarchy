@@ -131,7 +131,8 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
                  , pfLastActivePeriod = periodIdx
                  }
              tbs' = updateFeature fid (const updatedPf) tbs
-         in (updatedPf, [evt, HydroEvent (RiverFeature newRiver)], tbs')
+         in (updatedPf, [evt], tbs')
+--         in (updatedPf, [evt, HydroEvent (RiverFeature newRiver)], tbs')
 
     else if roll < 0.30 ∧ canBranch
     -- 5%: Branch — new tributary, emit HydroEvent only for the NEW tributary
@@ -388,89 +389,6 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
             }) tbs'
 
     in tbs''
-
------------------------------------------------------------
--- River matching + evolution of matched rivers
------------------------------------------------------------
-
-matchRivers ∷ [PersistentFeature] → [RiverParams]
-            → ([(PersistentFeature, RiverParams)], [PersistentFeature], [RiverParams])
-matchRivers existing simulated =
-    let matchRadius = 1000
-
-        go [] remainingSim matched unmatched =
-            (matched, unmatched, remainingSim)
-        go (ep:eps) remainingSim matched unmatched =
-            case findBestMatch ep remainingSim of
-                Nothing →
-                    go eps remainingSim matched (ep : unmatched)
-                Just (simR, restSim) →
-                    go eps restSim ((ep, simR) : matched) unmatched
-
-        findBestMatch ep sims =
-            let river = getRiverParamsFromPf ep
-                GeoCoord sx sy = rpSourceRegion river
-                candidates = filter (\sr →
-                    let GeoCoord sx2 sy2 = rpSourceRegion sr
-                        dx = abs (sx - sx2)
-                        dy = abs (sy - sy2)
-                    in dx < matchRadius ∧ dy < matchRadius
-                    ) sims
-            in case candidates of
-                [] → Nothing
-                _  → let best = minimumBy (\a b →
-                             compare (srcDist a river) (srcDist b river)) candidates
-                         restSim = filter (/= best) sims
-                     in Just (best, restSim)
-
-        srcDist sr existing =
-            let GeoCoord x1 y1 = rpSourceRegion sr
-                GeoCoord x2 y2 = rpSourceRegion existing
-            in abs (x1 - x2) + abs (y1 - y2)
-
-    in go existing simulated [] []
-
-evolveMatchedRiver ∷ Word64 → Int → Int
-                   → PersistentFeature → RiverParams
-                   → TimelineBuildState
-                   → (PersistentFeature, [GeoEvent], TimelineBuildState)
-evolveMatchedRiver seed ageIdx periodIdx existPf simRiver tbs =
-    let fid = pfId existPf
-        oldRiver = getRiverParamsFromPf existPf
-        GeoFeatureId fidInt = fid
-
-        h1 = hashGeo seed fidInt (900 + ageIdx)
-        deepenAmt = max 1 (round (rpFlowRate simRiver * 2.0))
-        maxTotalDepth = 40
-        
-        mergedSegs = zipWithDefaultV mergeSegment
-            (rpSegments oldRiver) (rpSegments simRiver)
-
-        mergeSegment oldSeg newSeg = newSeg
-            { rsDepth = min maxTotalDepth
-                (rsDepth oldSeg + deepenAmt)
-            , rsWidth = min 12 (max (rsWidth oldSeg) (rsWidth newSeg))
-            , rsValleyWidth = max (rsValleyWidth oldSeg) (rsValleyWidth newSeg)
-            }
-
-        newRiver = simRiver
-            { rpSegments    = mergedSegs
-            , rpFlowRate    = rpFlowRate simRiver
-            , rpMeanderSeed = rpMeanderSeed oldRiver
-            }
-
-        updatedPf = existPf
-            { pfFeature          = HydroShape $ RiverFeature newRiver
-            , pfActivity         = FActive
-            , pfLastActivePeriod = periodIdx
-            , pfEruptionCount    = pfEruptionCount existPf + 1
-            }
-
-        evt = HydroEvent (RiverFeature newRiver)
-
-        tbs' = updateFeature fid (const updatedPf) tbs
-
-    in (updatedPf, [evt], tbs')
 
 zipWithDefaultV ∷ (RiverSegment → RiverSegment → RiverSegment)
                 → V.Vector RiverSegment → V.Vector RiverSegment

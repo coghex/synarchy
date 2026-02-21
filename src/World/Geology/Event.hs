@@ -37,10 +37,12 @@ applyGeoEvent (HydroEvent feature) worldSize gx gy baseElev =
     applyHydroFeature feature worldSize gx gy baseElev
 applyGeoEvent (HydroModify _fid evolution) worldSize gx gy baseElev =
     applyHydroEvolution evolution worldSize gx gy baseElev
-applyGeoEvent (RiverSegmentEvent rsc) worldSize gx gy _baseElev =
-    carveFromSegment worldSize gx gy (rscMeanderSeed rsc) (rscSegment rsc)
-applyGeoEvent (RiverDeltaEvent rdp) worldSize gx gy _baseElev =
-    computeDeltaDeposit' (rdpLastSegment rdp) (rdpFlowRate rdp) worldSize gx gy
+applyGeoEvent (RiverSegmentEvent rsc) worldSize gx gy baseElev =
+    carveFromSegment worldSize gx gy
+                            (rscMeanderSeed rsc) (rscSegment rsc) baseElev
+applyGeoEvent (RiverDeltaEvent rdp) worldSize gx gy baseElev =
+    computeDeltaDeposit' (rdpLastSegment rdp) (rdpFlowRate rdp)
+                         worldSize gx gy baseElev
 applyGeoEvent (LandslideEvent _)    _ _ _ _ = noModification
 applyGeoEvent (GlaciationEvent _)   _ _ _ _ = noModification
 applyGeoEvent (FloodEvent _)        _ _ _ _ = noModification
