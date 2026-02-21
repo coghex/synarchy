@@ -18,6 +18,8 @@ hud.texMapDefault         = nil
 hud.texMapDefaultSelected = nil
 hud.texMapTemp            = nil
 hud.texMapTempSelected    = nil
+hud.texMapPressure        = nil
+hud.texMapPressureSelected = nil
 
 -- Base sizes (unscaled)
 hud.baseSizes = {
@@ -39,6 +41,8 @@ function hud.init(width, height)
     hud.texMapDefaultSelected = engine.loadTexture("assets/textures/hud/map_default_selected.png")
     hud.texMapTemp            = engine.loadTexture("assets/textures/hud/map_temp.png")
     hud.texMapTempSelected    = engine.loadTexture("assets/textures/hud/map_temp_selected.png")
+    hud.texMapPressure        = engine.loadTexture("assets/textures/hud/map_pressure.png")
+    hud.texMapPressureSelected = engine.loadTexture("assets/textures/hud/map_pressure_selected.png")
 
     engine.logDebug("HUD initialized")
 end
@@ -80,12 +84,17 @@ function hud.createUI()
                 texSelected = hud.texMapTempSelected,
             },
             {
+                name        = "map_pressure",
+                texDefault  = hud.texMapPressure,
+                texSelected = hud.texMapPressureSelected,
+            },
+            {
                 name        = "map_default",
                 texDefault  = hud.texMapDefault,
                 texSelected = hud.texMapDefaultSelected,
             },
         },
-        selectedIndex = 2,   -- mapDefault selected by default
+        selectedIndex = 3,   -- mapDefault selected by default
         size    = hud.baseSizes.buttonSize,
         padding = hud.baseSizes.padding,
         x       = anchorX,

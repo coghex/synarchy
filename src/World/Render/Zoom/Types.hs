@@ -15,11 +15,12 @@ import Engine.Scene.Types.Batch (SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
 import Engine.Asset.Handle (TextureHandle(..))
 
-data ZoomMapMode = ZMDefault | ZMTemp
+data ZoomMapMode = ZMDefault | ZMTemp | ZMPressure
     deriving (Show, Eq)
 
 textToMapMode ∷ Text → ZoomMapMode
 textToMapMode "map_temp" = ZMTemp
+textToMapMode "map_pressure" = ZMPressure
 textToMapMode _          = ZMDefault
 
 data ZoomChunkEntry = ZoomChunkEntry

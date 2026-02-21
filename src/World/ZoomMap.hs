@@ -261,7 +261,7 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                            then Just (emitQuad entry color wrappedX wrappedY layer)
                            else Nothing
                         ) baked
-                    ZMDefault → V.mapMaybe (\entry →
+                    _ → V.mapMaybe (\entry →
                         let baseX = bzeDrawX entry
                             baseY = bzeDrawY entry
                             w = bzeWidth entry
