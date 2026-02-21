@@ -14,12 +14,16 @@ import World.Ocean.Types (OceanMap)
 -- | Initialize climate state with early-Earth-like conditions.
 --   Called after tectonic plates and primordial bombardment are done.
 --
---   Ocean cells: uniform 4°C, 35 ppt salinity, no currents.
---   Land regions: uniform 20°C, moderate humidity.
---   No wind/moisture/surface budgets yet — those come from simulation.
+--   Climate regions are indexed in (u, v) space where:
+--     u = cx - cy   (east-west, wraps cylindrically)
+--     v = cx + cy   (north-south, bounded by glacier)
 --
---   The OceanMap tells us which 4×4-chunk climate regions contain ocean.
---   We classify a climate region as ocean if ANY of its chunks are in the OceanMap.
+--   This ensures latitude bands run horizontally on screen
+--   instead of diagonally along the cx or cy axis.
+--
+--   ClimateCoord (ru, rv) covers chunk-u in
+--     [ru * climateRegionSize - halfChunks .. (ru+1)*climateRegionSize - 1 - halfChunks]
+--   and chunk-v in the same range for rv.
 initEarlyClimate ∷ Int          -- ^ worldSize (in chunks)
                  → OceanMap     -- ^ which chunks are ocean
                  → ClimateState
@@ -27,22 +31,29 @@ initEarlyClimate worldSize oceanMap =
     let regionsPerSide = worldSize `div` climateRegionSize
         halfRegions    = regionsPerSide `div` 2
 
-        allCoords = [ ClimateCoord rx ry
-                    | rx ← [0 .. regionsPerSide - 1]
-                    , ry ← [0 .. regionsPerSide - 1]
+        allCoords = [ ClimateCoord ru rv
+                    | ru ← [0 .. regionsPerSide - 1]
+                    , rv ← [0 .. regionsPerSide - 1]
                     ]
 
         -- Check if a climate region overlaps any ocean chunk.
-        -- A climate region at (rx, ry) covers chunks:
-        --   cx ∈ [rx * climateRegionSize - halfChunks .. (rx+1) * climateRegionSize - 1 - halfChunks]
-        --   cy ∈ [ry * climateRegionSize - halfChunks .. (ry+1) * climateRegionSize - 1 - halfChunks]
+        -- We check a sample of chunk coords that fall inside this
+        -- region's (u, v) bounding box.
         halfChunks = worldSize `div` 2
-        isOceanRegion (ClimateCoord rx ry) =
-            let cx0 = rx * climateRegionSize - halfChunks
-                cy0 = ry * climateRegionSize - halfChunks
-            in any (\(dx, dy) → HS.member (ChunkCoord (cx0 + dx) (cy0 + dy)) oceanMap)
-                   [ (dx, dy) | dx ← [0 .. climateRegionSize - 1]
-                               , dy ← [0 .. climateRegionSize - 1] ]
+        isOceanRegion (ClimateCoord ru rv) =
+            let u0 = ru * climateRegionSize - halfChunks
+                v0 = rv * climateRegionSize - halfChunks
+            in any (\(du, dv) →
+                    let u = u0 + du
+                        v = v0 + dv
+                    in if even (u + v)
+                       then let cx = (u + v) `div` 2
+                                cy = (v - u) `div` 2
+                            in HS.member (ChunkCoord cx cy) oceanMap
+                       else False
+                   )
+                   [ (du, dv) | du ← [0 .. climateRegionSize - 1]
+                               , dv ← [0 .. climateRegionSize - 1] ]
 
         -- Build ocean cells for ocean regions
         oceanEntries = [ (coord, mkOceanCell coord)
@@ -56,17 +67,13 @@ initEarlyClimate worldSize oceanMap =
                          ]
 
         mkOceanCell ∷ ClimateCoord → OceanCell
-        mkOceanCell (ClimateCoord _rx ry) =
-            let -- Latitude: ry=0 is one pole, ry=regionsPerSide-1 is the other
-                latRatio = abs (fromIntegral (ry - halfRegions))
+        mkOceanCell (ClimateCoord _ru rv) =
+            let -- Latitude: rv=0 is one pole, rv=regionsPerSide-1 is the other
+                latRatio = abs (fromIntegral (rv - halfRegions))
                          / max 1 (fromIntegral halfRegions) ∷ Float
-                -- Polar oceans are colder, tropical are slightly warmer
-                -- But early Earth: uniform ~4°C deep, surface varies slightly
-                baseSSTSummer = 4.0 + (1.0 - latRatio) * 2.0   -- 4-6°C
-                baseSSTWinter = 4.0 + (1.0 - latRatio) * 1.0   -- 4-5°C
-                -- Higher salinity in subtropics (evaporation), lower at poles (ice melt)
+                baseSSTSummer = 4.0 + (1.0 - latRatio) * 2.0
+                baseSSTWinter = 4.0 + (1.0 - latRatio) * 1.0
                 baseSalinity = 35.0
-                -- Ice cover at high latitudes
                 iceThreshold = 0.75 ∷ Float
                 iceCover = if latRatio > iceThreshold
                            then (latRatio - iceThreshold) / (1.0 - iceThreshold)
@@ -74,29 +81,24 @@ initEarlyClimate worldSize oceanMap =
             in OceanCell
                 { ocTemperature = SeasonalClimate baseSSTSummer baseSSTWinter
                 , ocSalinity    = baseSalinity
-                , ocDepth       = 200          -- generic deep ocean
-                , ocCurrentDir  = 0.0          -- no currents yet
+                , ocDepth       = 200
+                , ocCurrentDir  = 0.0
                 , ocCurrentSpd  = 0.0
                 , ocUpwelling   = 0.0
                 , ocIceCover    = iceCover
                 }
 
         mkRegionClimate ∷ ClimateCoord → Bool → RegionClimate
-        mkRegionClimate (ClimateCoord _rx ry) isOcean =
-            let latRatio = abs (fromIntegral (ry - halfRegions))
+        mkRegionClimate (ClimateCoord _ru rv) isOcean =
+            let latRatio = abs (fromIntegral (rv - halfRegions))
                          / max 1 (fromIntegral halfRegions) ∷ Float
-                -- Simple latitude-based temperature: 20°C baseline
-                -- Hot at equator (~30°C), cold at poles (~-10°C)
                 baseTempSummer = 20.0 + (1.0 - latRatio) * 15.0 - latRatio * 25.0
-                baseTempWinter = baseTempSummer - 10.0 * latRatio  -- bigger swing at poles
-                -- Ocean regions are more humid
+                baseTempWinter = baseTempSummer - 10.0 * latRatio
                 baseHumidity = if isOcean then 0.8 else 0.4
-                -- Precipitation: higher in tropics and mid-latitudes
-                basePrecip = if latRatio < 0.2 then 0.7       -- tropical
-                             else if latRatio < 0.5 then 0.4  -- temperate
-                             else if latRatio < 0.8 then 0.5  -- mid-lat storm belt
-                             else 0.2                          -- polar desert
-                -- Snow fraction: based on temperature
+                basePrecip = if latRatio < 0.2 then 0.7
+                             else if latRatio < 0.5 then 0.4
+                             else if latRatio < 0.8 then 0.5
+                             else 0.2
                 avgTemp = (baseTempSummer + baseTempWinter) / 2.0
                 snowFrac = clamp01 ((5.0 - avgTemp) / 15.0)
             in RegionClimate
@@ -107,12 +109,12 @@ initEarlyClimate worldSize oceanMap =
                 , rcEvaporation    = if isOcean then 0.6 else 0.3
                 , rcCloudCover     = baseHumidity * 0.6
                 , rcPressure       = 1.0
-                , rcWindDir        = 0.0   -- no wind yet
+                , rcWindDir        = 0.0
                 , rcWindSpeed      = 0.0
-                , rcOrographicLift = 0.0   -- needs terrain data
+                , rcOrographicLift = 0.0
                 , rcContinentality = if isOcean then 0.0 else 0.5
                 , rcAlbedo         = if isOcean then 0.06 else 0.25
-                , rcElevAvg        = 0     -- needs terrain data
+                , rcElevAvg        = 0
                 }
 
     in ClimateState

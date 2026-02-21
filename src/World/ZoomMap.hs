@@ -37,7 +37,7 @@ import World.Generate (applyTimelineFast)
 import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
                    backgroundMapLayer, zoomFadeStart, zoomFadeEnd,
-                   worldScreenWidth)
+                   worldScreenWidth, worldToGrid)
 import World.Weather.Types (ClimateCoord(..), ClimateGrid(..), ClimateState(..)
                            , climateRegionSize, RegionClimate(..), SeasonalClimate(..))
 
@@ -254,7 +254,8 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                             (offX, offY) = bestZoomWrapOffset facing ws camX camY centerX centerY
                             wrappedX = baseX + offX
                             wrappedY = baseY + offY
-                            (cr, cb, cg) = tempToColorAt wrappedX wrappedY cgrid
+                            (cr, cb, cg) = tempToColorAt facing ws wrappedX
+                                                         wrappedY cgrid
                             color = Vec4 cr cb cg alpha
                         in if isChunkInView vb wrappedX wrappedY w h
                            then Just (emitQuad entry color wrappedX wrappedY layer)
@@ -278,16 +279,39 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
 
             return visibleQuads
 
-tempToColorAt ∷ Float → Float → HM.HashMap ClimateCoord RegionClimate
-  → (Float, Float, Float)
-tempToColorAt x y cg =
-    let coord = ClimateCoord (floor (x / (fromIntegral climateRegionSize)) + 16)
-                             (floor (y / (fromIntegral climateRegionSize)) + 16)
+tempToColorAt ∷ CameraFacing → Int → Float → Float
+              → HM.HashMap ClimateCoord RegionClimate
+              → (Float, Float, Float)
+tempToColorAt facing worldSize x y cg =
+    let -- 1. Screen-space → grid-tile (gx, gy)
+        (gx, gy) = worldToGrid facing x y
+
+        -- 2. Convert to (u, v) and wrap u
+        u = gx - gy
+        v = gx + gy
+        w = worldSize * chunkSize
+        halfW = w `div` 2
+        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+
+        -- 3. (u, v) in tiles → (u, v) in chunks → climate region (ru, rv)
+        --    Chunk-u = u / chunkSize, then same offset as initEarlyClimate:
+        --    ru = (chunkU + halfChunks) / climateRegionSize
+        halfChunks = worldSize `div` 2
+        chunkU = floorDiv wrappedU chunkSize
+        chunkV = floorDiv v chunkSize
+        ru = (chunkU + halfChunks) `div` climateRegionSize
+        rv = (chunkV + halfChunks) `div` climateRegionSize
+
+        coord = ClimateCoord ru rv
     in case HM.lookup coord cg of
         Just region → let t = clamp01 $
                                 (scWinter (rcAirTemp region)) / 30.0
-                       in (t, 0, 1-t)
+                       in (t, 0, 1 - t)
         Nothing     → (1.0, 1.0, 1.0)
+  where
+    floorDiv a b
+      | b > 0     = if a >= 0 then a `div` b else -(((-a) + b - 1) `div` b)
+      | otherwise = error "floorDiv: non-positive divisor"
 
 bestZoomWrapOffset ∷ CameraFacing → Int → Float → Float → Float → Float → (Float, Float)
 bestZoomWrapOffset facing worldSize camX camY centerX centerY =
