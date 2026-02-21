@@ -42,6 +42,7 @@ import World.Geology.Timeline.Types (PersistentFeature(..), GeoPeriod(..)
                                     , ShieldParams(..))
 import World.Plate (TectonicPlate(..), twoNearestPlates, isBeyondGlacier)
 import World.Material (matBasalt, matObsidian)
+import World.Weather.Types (ClimateState)
 
 -----------------------------------------------------------
 -- GeoModification
@@ -268,6 +269,7 @@ data TimelineBuildState = TimelineBuildState
     , tbsPeriods    ∷ ![GeoPeriod]
     , tbsPeriodIdx  ∷ !Int
     , tbsGeoState   ∷ !GeoState
+    , tbsClimateState ∷ !ClimateState
     }
 
 allocFeatureId ∷ TimelineBuildState → (GeoFeatureId, TimelineBuildState)

@@ -17,6 +17,8 @@ import World.Time.Types
     )
 import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
 import World.Ocean.Types (OceanMap)
+import World.Weather.Types (ClimateParams, ClimateState
+                           , defaultClimateParams, initClimateState)
 
 -- | Pure, serializable world generation parameters.
 --   Same params + same ChunkCoord = same Chunk, always.
@@ -30,6 +32,8 @@ data WorldGenParams = WorldGenParams
     , wgpMoonConfig  ∷ !MoonConfig      -- ^ Moon configuration for lunar phases
     , wgpGeoTimeline ∷ !GeoTimeline      -- ^ Geological timeline for terrain evolution
     , wgpOceanMap   ∷ !OceanMap         -- ^ Pre-generated ocean map for worldgen
+    , wgpClimateParams ∷ !ClimateParams   -- ^ Climate parameters
+    , wgpClimateState ∷ !ClimateState     -- ^ Initial climate state
     } deriving (Show, Eq)
 
 defaultWorldGenParams ∷ WorldGenParams
@@ -43,4 +47,6 @@ defaultWorldGenParams = WorldGenParams
     , wgpMoonConfig = defaultMoonConfig
     , wgpGeoTimeline = emptyTimeline
     , wgpOceanMap = HS.empty
+    , wgpClimateParams = defaultClimateParams
+    , wgpClimateState = initClimateState 128
     }

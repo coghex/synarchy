@@ -24,6 +24,7 @@ import World.Geology.Timeline.Volcanism
     ( applyPeriodVolcanism, applyVolcanicEvolution, generateEruption )
 import World.Geology.Timeline.River
     ( reconcileHydrology, mergeConvergingRivers )
+import World.Weather.Types (ClimateState, initClimateState)
 
 -----------------------------------------------------------
 -- Top Level
@@ -40,6 +41,7 @@ buildTimeline seed worldSize plateCount =
             , tbsPeriods   = []
             , tbsPeriodIdx = 0
             , tbsGeoState  = gs0
+            , tbsClimateState = initClimateState worldSize
             }
 
         grid0 = buildInitialElevGrid seed worldSize plates
