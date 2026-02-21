@@ -7,6 +7,7 @@ module World.Command.Types
 import UPrelude
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Page.Types (WorldPageId(..))
+import World.Render.Zoom.Types (ZoomMapMode(..))
 
 data WorldTextureType
     = GraniteTexture
@@ -88,4 +89,5 @@ data WorldCommand
     | WorldSetTime WorldPageId Int Int         -- ^ hour minute
     | WorldSetDate WorldPageId Int Int Int     -- ^ year month day
     | WorldSetTimeScale WorldPageId Float      -- ^ game-minutes per real-second
+    | WorldSetMapMode WorldPageId ZoomMapMode      -- ^ map mode
     deriving (Show, Eq)

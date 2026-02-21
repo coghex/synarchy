@@ -29,9 +29,12 @@ local button = nil
 local dropdown = nil
 local slider = nil
 local randbox = nil
+local toggle = nil
 
 local hoveredElement = nil
 local hoveredCallback = nil
+
+local hud = nuil
 
 local currentMenu = "main"
 
@@ -55,12 +58,14 @@ function uiManager.init(scriptId)
     tabbar = require("scripts.ui.tabbar")
     slider = require("scripts.ui.slider")
     randbox = require("scripts.ui.randbox")
+    toggle = require("scripts.ui.toggle")
 
     button.init()
     scrollbar.init()
     tabbar.init()
     slider.init()
     randbox.init()
+    toggle.init()
     uiscale = engine.getUIScale()
     
     menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)
@@ -76,6 +81,7 @@ function uiManager.init(scriptId)
     createWorldMenu = require("scripts.create_world_menu")
     worldManager = require("scripts.world_manager")
     worldView = require("scripts.world_view")
+    hud = require("scripts.hud")
     
     settingsMenu.setShowMenuCallback(function(menuName)
         uiManager.showMenu(menuName)
@@ -113,6 +119,7 @@ function uiManager.checkReady()
             settingsMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             createWorldMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             worldView.init(fbW, fbH)
+            hud.init(fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -134,6 +141,7 @@ function uiManager.onFramebufferResize(width, height)
     if settingsMenu then settingsMenu.onFramebufferResize(width, height) end
     if createWorldMenu then createWorldMenu.onFramebufferResize(width, height) end
     if worldView then worldView.onFramebufferResize(width, height) end
+    if hud then hud.onFramebufferResize(width, height) end
     
     if currentMenu == "main" then
         if mainMenu and mainMenu.page then UI.showPage(mainMenu.page) end
@@ -143,6 +151,7 @@ function uiManager.onFramebufferResize(width, height)
         if createWorldMenu and createWorldMenu.page then UI.showPage(createWorldMenu.page) end
     elseif currentMenu == "world_view" then
         if worldView and worldView.page then UI.showPage(worldView.page) end
+        if hud and hud.page then UI.showPage(hud.page) end
     end
 end
 
@@ -153,6 +162,7 @@ function uiManager.showMenu(menuName)
     settingsMenu.hide()
     createWorldMenu.hide()
     worldView.hide()
+    hud.hide()
     
     if menuName == "main" then
         mainMenu.show()
@@ -162,6 +172,7 @@ function uiManager.showMenu(menuName)
         createWorldMenu.show()
     elseif menuName == "world_view" then
         worldView.show()
+        hud.show()
     end
 end
 
@@ -285,6 +296,8 @@ function uiManager.onHoverEnter(elemHandle, callbackName)
         dropdown.onHoverEnter(elemHandle)
     elseif slider and slider.isSliderCallback(callbackName) then
         slider.onHoverEnter(elemHandle)
+    elseif toggle and toggle.isToggleCallback(callbackName) then
+        toggle.onHoverEnter(elemHandle)
     elseif randbox and randbox.isRandBoxCallback(callbackName) then
         randbox.onHoverEnter(elemHandle)
     end
@@ -301,6 +314,8 @@ function uiManager.onHoverLeave(elemHandle, callbackName)
         dropdown.onHoverLeave(elemHandle)
     elseif slider and slider.isSliderCallback(callbackName) then
         slider.onHoverLeave(elemHandle)
+    elseif toggle and toggle.isToggleCallback(callbackName) then
+        toggle.onHoverLeave(elemHandle)
     elseif randbox and randbox.isRandBoxCallback(callbackName) then
         randbox.onHoverLeave(elemHandle)
     end
@@ -311,6 +326,7 @@ function uiManager.shutdown()
     if settingsMenu then settingsMenu.shutdown() end
     if createWorldMenu then createWorldMenu.shutdown() end
     if worldView then worldView.shutdown() end
+    if hud then hud.shutdown() end
 end
 
 function uiManager.onTextBoxClick(elemHandle)
@@ -370,6 +386,13 @@ function uiManager.onRandomizeClick(elemHandle)
     handleNonTextBoxClick()
     if randbox then
         return randbox.handleCallback("onRandomizeClick", elemHandle)
+    end
+    return false
+end
+
+function uiManager.onToggleClick(elemHandle)
+    if toggle then
+        return toggle.handleClickByElement(elemHandle)
     end
     return false
 end

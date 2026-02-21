@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.World
     , worldSetTimeFn
     , worldSetDateFn
     , worldSetTimeScaleFn
+    , worldSetMapMode
     ) where
 
 import UPrelude
@@ -18,6 +19,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types (WorldCommand(..), WorldPageId(..), WorldTextureType(..))
+import World.Render.Zoom.Types (ZoomMapMode(..), textToMapMode)
 import Data.IORef (atomicModifyIORef')
 
 -- | world.init(pageId, seed, worldSizeInChunks)
@@ -159,6 +161,22 @@ worldSetTimeScaleFn env = do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
             Q.writeQueue (worldQueue env)
                 (WorldSetTimeScale pageId (realToFrac s))
+        _ → pure ()
+
+    return 0
+
+-- | world.setMapMode(pageId, mode)
+worldSetMapMode ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetMapMode env = do
+    pageIdArg ← Lua.tostring 1
+    modeArg   ← Lua.tostring 2
+
+    case (pageIdArg, modeArg) of
+        (Just pageIdBS, Just modeBS) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                mode = textToMapMode (TE.decodeUtf8 modeBS)
+            Q.writeQueue (worldQueue env)
+                (WorldSetMapMode pageId mode)
         _ → pure ()
 
     return 0

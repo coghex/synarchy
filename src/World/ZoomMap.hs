@@ -16,6 +16,7 @@ import Data.Maybe (isJust)
 import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import qualified Data.HashSet as HS
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
@@ -37,6 +38,8 @@ import World.Grid (tileHalfWidth, tileHalfDiamondHeight, gridToWorld,
                    chunkWorldWidth, chunkWorldDiamondHeight, zoomMapLayer,
                    backgroundMapLayer, zoomFadeStart, zoomFadeEnd,
                    worldScreenWidth)
+import World.Weather.Types (ClimateCoord(..), ClimateGrid(..), ClimateState(..)
+                           , climateRegionSize, RegionClimate(..), SeasonalClimate(..))
 
 -----------------------------------------------------------
 -- Sampling Configuration
@@ -166,7 +169,6 @@ bakeEntries facing cache texPicker lookupSlot defFmSlot =
             actualSlot = fromIntegral (lookupSlot texHandle)
             baseGX = zceBaseGX entry
             baseGY = zceBaseGY entry
-            -- FIX #5: Compute bounding box without intermediate lists
             (x0,y0) = gridToWorld facing baseGX baseGY
             (x1,y1) = gridToWorld facing (baseGX + chunkSize) baseGY
             (x2,y2) = gridToWorld facing baseGX (baseGY + chunkSize)
@@ -225,6 +227,7 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
 
     mBindless ← readIORef (textureSystemRef env)
     defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
+    mapMode ← readIORef (wsMapModeRef worldState)
     let lookupSlot texHandle = fromIntegral $ case mBindless of
             Just bindless → getTextureSlotIndex texHandle bindless
             Nothing       → 0
@@ -238,24 +241,53 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
             let vb = computeZoomViewBounds camera fbW fbH
                 (camX, camY) = camPosition camera
                 ws = wgpWorldSize params
+                cgrid = cgRegions (csClimate (wgpClimateState params))
 
-                -- FIX #6: Use V.mapMaybe to stay in vector-land
-                !visibleQuads = V.mapMaybe (\entry →
-                    let baseX = bzeDrawX entry
-                        baseY = bzeDrawY entry
-                        w = bzeWidth entry
-                        h = bzeHeight entry
-                        centerX = baseX + w / 2.0
-                        centerY = baseY + h / 2.0
-                        (offX, offY) = bestZoomWrapOffset facing ws camX camY centerX centerY
-                        wrappedX = baseX + offX
-                        wrappedY = baseY + offY
-                    in if isChunkInView vb wrappedX wrappedY w h
-                       then Just (emitQuad entry wrappedX wrappedY alpha layer)
-                       else Nothing
-                    ) baked
+                !visibleQuads = case mapMode of
+                    ZMTemp → V.mapMaybe (\entry →
+                        let baseX = bzeDrawX entry
+                            baseY = bzeDrawY entry
+                            w = bzeWidth entry
+                            h = bzeHeight entry
+                            centerX = baseX + w / 2.0
+                            centerY = baseY + h / 2.0
+                            (offX, offY) = bestZoomWrapOffset facing ws camX camY centerX centerY
+                            wrappedX = baseX + offX
+                            wrappedY = baseY + offY
+                            (cr, cb, cg) = tempToColorAt wrappedX wrappedY cgrid
+                            color = Vec4 cr cb cg alpha
+                        in if isChunkInView vb wrappedX wrappedY w h
+                           then Just (emitQuad entry color wrappedX wrappedY layer)
+                           else Nothing
+                        ) baked
+                    ZMDefault → V.mapMaybe (\entry →
+                        let baseX = bzeDrawX entry
+                            baseY = bzeDrawY entry
+                            w = bzeWidth entry
+                            h = bzeHeight entry
+                            centerX = baseX + w / 2.0
+                            centerY = baseY + h / 2.0
+                            (offX, offY) = bestZoomWrapOffset facing ws camX camY centerX centerY
+                            wrappedX = baseX + offX
+                            wrappedY = baseY + offY
+                            color = Vec4 1.0 1.0 1.0 alpha
+                        in if isChunkInView vb wrappedX wrappedY w h
+                           then Just (emitQuad entry color wrappedX wrappedY layer)
+                           else Nothing
+                        ) baked
 
             return visibleQuads
+
+tempToColorAt ∷ Float → Float → HM.HashMap ClimateCoord RegionClimate
+  → (Float, Float, Float)
+tempToColorAt x y cg =
+    let coord = ClimateCoord (floor (x / (fromIntegral climateRegionSize)) + 16)
+                             (floor (y / (fromIntegral climateRegionSize)) + 16)
+    in case HM.lookup coord cg of
+        Just region → let t = clamp01 $
+                                (scWinter (rcAirTemp region)) / 30.0
+                       in (t, 0, 1-t)
+        Nothing     → (1.0, 1.0, 1.0)
 
 bestZoomWrapOffset ∷ CameraFacing → Int → Float → Float → Float → Float → (Float, Float)
 bestZoomWrapOffset facing worldSize camX camY centerX centerY =
@@ -340,7 +372,6 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
                 (camX, camY) = camPosition camera
                 ws = wgpWorldSize params
 
-                -- FIX #6 (same pattern): Use V.mapMaybe
                 !visibleQuads = V.mapMaybe (\entry →
                     let baseX = bzeDrawX entry
                         baseY = bzeDrawY entry
@@ -394,13 +425,13 @@ isChunkInView vb drawX drawY w h =
          ∨ bottom < zvTop vb
          ∨ drawY  > zvBottom vb)
 
-emitQuad ∷ BakedZoomEntry → Float → Float → Float → LayerId → SortableQuad
-emitQuad entry dx dy alpha layer =
+emitQuad ∷ BakedZoomEntry → Vec4 → Float → Float → LayerId → SortableQuad
+emitQuad entry (Vec4 cr cg cb alpha) dx dy layer =
     let !baseX = bzeDrawX entry
         !baseY = bzeDrawY entry
         !xShift = dx - baseX
         !yShift = dy - baseY
-        shiftV (Vertex (Vec2 px py) uv (Vec4 cr cg cb _) aid fid) =
+        shiftV (Vertex (Vec2 px py) uv _ aid fid) =
             Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 cr cg cb alpha) aid fid
         v0 = shiftV (bzeV0 entry)
         v1 = shiftV (bzeV1 entry)

@@ -4,6 +4,8 @@ module World.Render.Zoom.Types
     , ZoomCameraSnapshot(..)
     , ZoomQuadCache(..)
     , BakedZoomEntry(..)
+    , ZoomMapMode(..)
+    , textToMapMode
     ) where
 
 import UPrelude
@@ -12,6 +14,13 @@ import qualified Data.Vector as V
 import Engine.Scene.Types.Batch (SortableQuad(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
 import Engine.Asset.Handle (TextureHandle(..))
+
+data ZoomMapMode = ZMDefault | ZMTemp
+    deriving (Show, Eq)
+
+textToMapMode ∷ Text → ZoomMapMode
+textToMapMode "map_temp" = ZMTemp
+textToMapMode _          = ZMDefault
 
 data ZoomChunkEntry = ZoomChunkEntry
     { zceChunkX   ∷ !Int       -- ^ Canonical chunk X

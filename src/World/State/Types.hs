@@ -17,11 +17,11 @@ import World.Chunk.Types (ChunkCoord(..))
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
 import World.Render.Camera.Types (WorldCamera(..), WorldQuadCache(..))
 import World.Render.Textures.Types (WorldTextures(..), defaultWorldTextures)
-import World.Render.Zoom.Types (ZoomChunkEntry(..), ZoomQuadCache(..), BakedZoomEntry(..))
+import World.Render.Zoom.Types (ZoomChunkEntry(..), ZoomQuadCache(..), BakedZoomEntry(..), ZoomMapMode(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, defaultWorldDate)
 import World.Region.Types (RegionCoord(..))
-import World.Hydrology.Types (RegionalClimate(..))
+import World.Weather.Types (RegionClimate(..))
 
 data WorldState = WorldState
     { wsTilesRef     ∷ IORef WorldTileData
@@ -38,8 +38,9 @@ data WorldState = WorldState
     , wsBakedZoomRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)  -- ^ Pre-baked
     , wsBakedBgRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)    -- ^ Pre-baked background entries with resolved textures and vertices
     , wsInitQueueRef ∷ IORef [ChunkCoord]  -- ^ Queue of chunks to generate at world init (for progress tracking)
-    , wsClimateRef ∷ IORef (HM.HashMap RegionCoord RegionalClimate)  -- ^ Regional climate data (temperature, humidity)
+    , wsClimateRef ∷ IORef (HM.HashMap RegionCoord RegionClimate)  -- ^ Regional climate data (temperature, humidity)
     , wsRiverFlowRef ∷ IORef (HM.HashMap GeoFeatureId Float)
+    , wsMapModeRef ∷ IORef ZoomMapMode
     }
 
 emptyWorldState ∷ IO WorldState
@@ -60,11 +61,12 @@ emptyWorldState = do
     wsInitQueueRef ← newIORef []
     wsClimateRef ← newIORef HM.empty
     wsRiverFlowRef ← newIORef HM.empty
+    wsMapModeRef ← newIORef ZMDefault
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
-                        wsClimateRef wsRiverFlowRef
+                        wsClimateRef wsRiverFlowRef wsMapModeRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]

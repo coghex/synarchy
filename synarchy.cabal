@@ -298,7 +298,6 @@ library
                      World.Geology.Erosion
                      World.Geology.Event
                      World.Hydrology.Types
-                     World.Hydrology.Climate
                      World.Hydrology.Event
                      World.Hydrology.Simulation
                      World.Hydrology.River

@@ -125,7 +125,7 @@ function debugOverlay.shutdown()
 end
 
 function debugOverlay.onKeyDown(key)
-    if key == "F3" then
+    if key == "F8" then
         debugOverlay.toggle()
     end
 end

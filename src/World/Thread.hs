@@ -528,6 +528,20 @@ handleWorldCommand env logger cmd = do
                 Nothing →
                     logDebug logger CatWorld $
                         "World not found for time scale update: " <> unWorldPageId pageId
+        WorldSetMapMode pageId mode → do
+            logDebug logger CatWorld $
+                "Setting map mode for world: " <> unWorldPageId pageId
+                <> " to " <> T.pack (show mode)
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState → do
+                    writeIORef (wsMapModeRef worldState) mode
+                    logInfo logger CatWorld $
+                        "Map mode updated for world: " <> unWorldPageId pageId
+                        <> ", new mode: " <> T.pack (show mode)
+                Nothing →
+                    logDebug logger CatWorld $
+                        "World not found for map mode update: " <> unWorldPageId pageId
 
 unWorldPageId ∷ WorldPageId → Text
 unWorldPageId (WorldPageId t) = t

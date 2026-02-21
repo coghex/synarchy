@@ -12,40 +12,12 @@ module World.Hydrology.Types
     , GlacierActivity(..)
       -- * Evolution events
     , HydroEvolution(..)
-      -- * Regional climate
-    , RegionalClimate(..)
-    , WindBand(..)
     ) where
 
 import UPrelude
 import Control.DeepSeq (NFData(..))
 import qualified Data.Vector as V
 import World.Base (GeoCoord(..), GeoFeatureId(..))
-
------------------------------------------------------------
--- Regional Climate (computed per-region during timeline)
------------------------------------------------------------
-
--- | Climate data for a single region (8×8 chunks = 128×128 tiles).
---   Computed from latitude, elevation, ocean proximity, and
---   continental position. Drives precipitation → rivers/glaciers.
-data RegionalClimate = RegionalClimate
-    { rcTemperature   ∷ !Float    -- ^ Mean annual temp (°C), from latitude + elevation
-    , rcHumidity      ∷ !Float    -- ^ 0.0-1.0, moisture availability
-    , rcPrecipitation ∷ !Float    -- ^ Annual precipitation (arbitrary units, 0.0-1.0)
-    , rcWindDir       ∷ !Float    -- ^ Prevailing wind direction (radians)
-    , rcWindSpeed     ∷ !Float    -- ^ Wind strength (0.0-1.0)
-    , rcElevAvg       ∷ !Int      -- ^ Average elevation across region
-    , rcOceanDist     ∷ !Int      -- ^ Distance to nearest ocean region (in regions)
-    } deriving (Show, Eq)
-
--- | Latitude-based wind bands (Hadley cells).
---   Determines prevailing wind direction for moisture transport.
-data WindBand
-    = TradeWinds       -- ^ 0°-30° latitude: blow E→W
-    | Westerlies       -- ^ 30°-60° latitude: blow W→E
-    | PolarEasterlies  -- ^ 60°-90° latitude: blow E→W
-    deriving (Show, Eq)
 
 -----------------------------------------------------------
 -- River System
