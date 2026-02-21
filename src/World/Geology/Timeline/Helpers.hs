@@ -100,7 +100,7 @@ getRiverParamsFromPf pf = case pfFeature pf of
 
 isSourceNew ∷ Int → [PersistentFeature] → (Int, Int, Int, Float) → Bool
 isSourceNew worldSize existingRivers (sx, sy, _, _) =
-    let threshold = 150  -- tiles
+    let threshold = 60  -- was 150 — allow rivers closer together
     in not $ any (\pf →
         let river = getRiverParamsFromPf pf
             GeoCoord ex ey = rpSourceRegion river

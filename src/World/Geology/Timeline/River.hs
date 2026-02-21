@@ -42,7 +42,9 @@ reconcileHydrology seed ageIdx flowResult periodIdx worldSize elevGrid tbs =
         simSources = frRiverSources flowResult
         simLakes   = frLakes flowResult
 
-        maxTotalRivers = 30
+        -- Raised from 30 — with target-based carving, more rivers
+        -- don't cause terrain corruption. Scale with world area.
+        maxTotalRivers = max 40 (scaleCount worldSize 80)
         currentRiverCount = length existingRivers
 
         existingRiverIds = map pfId existingRivers
@@ -114,10 +116,13 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
         roll = hashToFloatGeo h1
 
         currentRiverCount = length $ filter (isActiveRiver . pfFeature) (tbsFeatures tbs)
-        canBranch = currentRiverCount < 25
+        canBranch = currentRiverCount < 60
     in
     if roll < 0.25
-    -- 25%: Meander — path changes, so emit HydroEvent
+    -- 25%: Meander — path changes in persistent state.
+    --   Do NOT re-emit HydroEvent for the whole river.
+    --   The valley already exists from when the river was first created.
+    --   With target-based carving, re-emitting is harmless but wasteful.
     then let h2 = hashGeo seed fidInt (910 + ageIdx)
              meanderAmt = 0.15 + hashToFloatGeo h2 * 0.4
              newSegs = fixupSegmentContinuity $
@@ -131,8 +136,7 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
                  , pfLastActivePeriod = periodIdx
                  }
              tbs' = updateFeature fid (const updatedPf) tbs
-         in (updatedPf, [evt], tbs')
---         in (updatedPf, [evt, HydroEvent (RiverFeature newRiver)], tbs')
+         in (updatedPf, [evt], tbs')  -- FIXED: was [evt, HydroEvent (RiverFeature newRiver)]
 
     else if roll < 0.30 ∧ canBranch
     -- 5%: Branch — new tributary, emit HydroEvent only for the NEW tributary
@@ -201,13 +205,11 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
             in ( updatedPf
                , [ evt
                  , HydroEvent (RiverFeature tributaryParams)
-                 -- NOTE: no HydroEvent for the parent river — only flow changed,
-                 -- path is the same, so re-emitting would double-deposit the delta
                  ]
                , tbs''' )
 
     else if roll < 0.50
-    -- 15%: Deepen — NO HydroEvent, only state update
+    -- 20%: Deepen — NO HydroEvent, only state update
     then evolveDeepen seed ageIdx periodIdx pf river tbs
 
     else if roll < 0.60
@@ -308,11 +310,9 @@ checkRiverProximity worldSize threshold mx my targetPf =
         dists = V.toList $ V.imap (\idx seg →
             let GeoCoord sx sy = rsStart seg
                 GeoCoord ex ey = rsEnd seg
-                -- Wrapped midpoint: start + half the wrapped delta
                 (dex, dey) = wrappedDeltaUV worldSize ex ey sx sy
                 midX = sx + dex `div` 2
                 midY = sy + dey `div` 2
-                -- Wrapped distance from mouth to midpoint
                 (dmx, dmy) = wrappedDeltaUV worldSize mx my midX midY
                 dx = abs dmx
                 dy = abs dmy
@@ -389,25 +389,3 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
             }) tbs'
 
     in tbs''
-
-zipWithDefaultV ∷ (RiverSegment → RiverSegment → RiverSegment)
-                → V.Vector RiverSegment → V.Vector RiverSegment
-                → V.Vector RiverSegment
-zipWithDefaultV f old new =
-    let minLen = min (V.length old) (V.length new)
-        merged = V.izipWith (\_ a b → f a b) (V.take minLen old) (V.take minLen new)
-        extra  = V.drop minLen new
-    in merged V.++ extra
-
-isGenuinelyNew ∷ Int → [PersistentFeature] → RiverParams → Bool
-isGenuinelyNew worldSize existingRivers simRiver =
-    let GeoCoord sx sy = rpSourceRegion simRiver
-        threshold = 120
-    in not $ any (\pf →
-        let river = getRiverParamsFromPf pf
-            GeoCoord ex ey = rpSourceRegion river
-            (dxi, dyi) = wrappedDeltaUV worldSize sx sy ex ey
-            dx = abs dxi
-            dy = abs dyi
-        in dx < threshold ∧ dy < threshold
-        ) existingRivers
