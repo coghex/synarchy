@@ -30,7 +30,8 @@ import World.Plate (generatePlates, elevationAtGlobal)
 import World.Preview (buildPreviewImage, PreviewImage(..))
 import World.Render (surfaceHeadroom, updateWorldTiles)
 import World.ZoomMap (buildZoomCache)
-import World.Slope (recomputeNeighborSlopes)  -- NEW
+import World.Slope (recomputeNeighborSlopes)
+import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
 
 -----------------------------------------------------------
 -- Helper: send a progress message to Lua
@@ -277,6 +278,15 @@ handleWorldCommand env logger cmd = do
             sendGenLog env $ "Ocean flood fill complete: "
                 <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
 
+            sendGenLog env "Initializing early climate state..."
+            let climateState = initEarlyClimate worldSize oceanMap
+
+            -- Log the climate state
+            let weatherLines = formatWeather climateState
+            forM_ weatherLines $ \line → do
+                logInfo logger CatWorld line
+                sendGenLog env line
+
             let params = defaultWorldGenParams
                     { wgpSeed        = seed
                     , wgpWorldSize   = worldSize
@@ -284,6 +294,8 @@ handleWorldCommand env logger cmd = do
                     , wgpPlates      = plates
                     , wgpGeoTimeline = timeline
                     , wgpOceanMap    = oceanMap
+                    , wgpClimateState = climateState
+                    , wgpClimateParams = defaultClimateParams
                     }
 
             -- Store gen params for on-demand chunk loading

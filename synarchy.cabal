@@ -324,7 +324,10 @@ library
                      World.Time.Types
                      World.Fluids
                      World.Fluid.Types
+                     World.Weather
                      World.Weather.Types
+                     World.Weather.Log
+                     World.Weather.Generate
                      World.Material
                      World.Preview
                      World.ZoomMap
