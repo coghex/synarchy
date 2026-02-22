@@ -18,6 +18,8 @@ hud.texMapDefault         = nil
 hud.texMapDefaultSelected = nil
 hud.texMapTemp            = nil
 hud.texMapTempSelected    = nil
+hud.texMapSeaTemp         = nil
+hud.texMapSeaTempSelected = nil
 hud.texMapPressure        = nil
 hud.texMapPressureSelected = nil
 hud.texToolDefault         = nil
@@ -45,6 +47,8 @@ function hud.init(width, height)
     hud.texMapDefaultSelected = engine.loadTexture("assets/textures/hud/map_default_selected.png")
     hud.texMapTemp            = engine.loadTexture("assets/textures/hud/map_temp.png")
     hud.texMapTempSelected    = engine.loadTexture("assets/textures/hud/map_temp_selected.png")
+    hud.texMapSeaTemp         = engine.loadTexture("assets/textures/hud/map_seatemp.png")
+    hud.texMapSeaTempSelected = engine.loadTexture("assets/textures/hud/map_seatemp_selected.png")
     hud.texMapPressure        = engine.loadTexture("assets/textures/hud/map_pressure.png")
     hud.texMapPressureSelected = engine.loadTexture("assets/textures/hud/map_pressure_selected.png")
     hud.texToolDefault         = engine.loadTexture("assets/textures/hud/tool_default.png")
@@ -92,6 +96,11 @@ function hud.createUI()
                 texSelected = hud.texMapTempSelected,
             },
             {
+                name        = "map_seatemp",
+                texDefault  = hud.texMapSeaTemp,
+                texSelected = hud.texMapSeaTempSelected,
+            },
+            {
                 name        = "map_pressure",
                 texDefault  = hud.texMapPressure,
                 texSelected = hud.texMapPressureSelected,
@@ -102,7 +111,7 @@ function hud.createUI()
                 texSelected = hud.texMapDefaultSelected,
             },
         },
-        selectedIndex = 3,   -- mapDefault selected by default
+        selectedIndex = 4,   -- mapDefault selected by default
         direction = "left",
         size    = hud.baseSizes.buttonSize,
         padding = hud.baseSizes.padding,
