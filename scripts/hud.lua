@@ -5,11 +5,13 @@ local scale = require("scripts.ui.scale")
 local toggle = require("scripts.ui.toggle")
 local hud = {}
 
-hud.page = nil
+hud.world_page = nil
+hud.zoom_page = nil
 hud.visible = false
 hud.uiCreated = false
 hud.fbW = 0
 hud.fbH = 0
+hud.currentView = "none"  -- "zoomed_in", "zoomed_out", or "none"
 
 hud.mapToggleId = nil
 
@@ -22,10 +24,14 @@ hud.texMapSeaTemp         = nil
 hud.texMapSeaTempSelected = nil
 hud.texMapPressure        = nil
 hud.texMapPressureSelected = nil
+
 hud.texToolDefault         = nil
 hud.texToolDefaultSelected = nil
 hud.texToolMine            = nil
 hud.texToolMineSelected    = nil
+
+hud.texZoomSelect = nil
+hud.texZoomHover  = nil
 
 -- Base sizes (unscaled)
 hud.baseSizes = {
@@ -55,6 +61,8 @@ function hud.init(width, height)
     hud.texToolDefaultSelected = engine.loadTexture("assets/textures/hud/tool_default_selected.png")
     hud.texToolMine            = engine.loadTexture("assets/textures/hud/tool_mine.png")
     hud.texToolMineSelected    = engine.loadTexture("assets/textures/hud/tool_mine_selected.png")
+    hud.texZoomSelect          = engine.loadTexture("assets/textures/hud/utility/zoom_select.png")
+    hud.texZoomHover           = engine.loadTexture("assets/textures/hud/utility/zoom_hover.png")
 
     engine.logDebug("HUD initialized")
 end
@@ -65,8 +73,9 @@ end
 
 function hud.createUI()
     -- Tear down previous page if resizing
-    if hud.uiCreated and hud.page then
-        UI.deletePage(hud.page)
+    if hud.uiCreated and hud.world_page and hud.zoom_page then
+        UI.deletePage(hud.world_page)
+        UI.deletePage(hud.zoom_page)
         if hud.mapToggleId then
             toggle.destroy(hud.mapToggleId)
             hud.mapToggleId = nil
@@ -76,7 +85,8 @@ function hud.createUI()
     local uiscale = scale.get()
     local s = scale.applyAll(hud.baseSizes)
 
-    hud.page = UI.newPage("hud_overlay", "overlay")
+    hud.world_page = UI.newPage("world_hud_overlay", "overlay")
+    hud.zoom_page = UI.newPage("zoom_hud_overlay", "overlay")
 
     -- Position: bottom-right, anchored so the right edge of the last
     -- button is (fbW - margin) and the bottom edge is (fbH - margin).
@@ -88,7 +98,7 @@ function hud.createUI()
     -- second (right).
     hud.mapToggleId = toggle.new({
         name = "map_mode_toggle",
-        page = hud.page,
+        page = hud.zoom_page,
         items = {
             {
                 name        = "map_temp",
@@ -130,7 +140,7 @@ function hud.createUI()
 
     hud.mapToggleId = toggle.new({
         name = "tool_mode_toggle",
-        page = hud.page,
+        page = hud.world_page,
         items = {
             {
                 name        = "tool_mine",
@@ -157,6 +167,19 @@ function hud.createUI()
         end,
     })
 
+    local zoom = camera.getZoom()
+    local zoomFadeStart = camera.getZoomFadeStart()
+    local zoomFadeEnd = camera.getZoomFadeEnd()
+    if zoom > zoomFadeEnd then
+        UI.showPage(hud.zoom_page)
+        hud.currentView = "zoomed_out"
+    elseif zoom < zoomFadeStart then
+        UI.showPage(hud.world_page)
+        hud.currentView = "zoomed_in"
+    else
+        hud.currentView = "none"
+    end
+
     hud.uiCreated = true
     engine.logDebug("HUD UI created")
 end
@@ -172,8 +195,10 @@ function hud.show()
 
     hud.visible = true
 
-    if hud.page then
-        UI.showPage(hud.page)
+    if hud.currentView == "zoomed_in" and hud.world_page then
+        UI.showPage(hud.world_page)
+    elseif hud.currentView == "zoomed_out" and hud.zoom_page then
+        UI.showPage(hud.zoom_page)
     end
 
     engine.logDebug("HUD shown")
@@ -182,12 +207,47 @@ end
 function hud.hide()
     hud.visible = false
 
-    if hud.page then
-        UI.hidePage(hud.page)
+    if hud.world_page then
+        UI.hidePage(hud.world_page)
+    end
+    if hud.zoom_page then
+        UI.hidePage(hud.zoom_page)
     end
 
     engine.logDebug("HUD hidden")
 end
+
+-----------------------------------------------------------
+-- manage hud
+-----------------------------------------------------------
+
+function hud.onScroll(dx, dy)
+    local zoom = camera.getZoom()
+    local zoomFadeStart = camera.getZoomFadeStart()
+    local zoomFadeEnd = camera.getZoomFadeEnd()
+    local oldView = hud.currentView
+    if zoom > zoomFadeEnd then
+        if oldView ~= "zoomed_out" and hud.zoom_page and hud.world_page then
+            UI.showPage(hud.zoom_page)
+            UI.hidePage(hud.world_page)
+            hud.currentView = "zoomed_out"
+        end
+    elseif zoom < zoomFadeStart then
+        if oldView ~= "zoomed_in" and hud.zoom_page and hud.world_page then
+            UI.showPage(hud.world_page)
+            UI.hidePage(hud.zoom_page)
+            hud.currentView = "zoomed_in"
+        end
+    else
+        if oldView == "zoomed_in" and hud.world_page then
+            UI.hidePage(hud.world_page)
+        elseif oldView == "zoomed_out" and hud.zoom_page then
+            UI.hidePage(hud.zoom_page)
+        end
+        hud.currentView = "none"
+    end
+end
+
 
 -----------------------------------------------------------
 -- Resize
@@ -200,7 +260,11 @@ function hud.onFramebufferResize(width, height)
     if hud.uiCreated then
         hud.createUI()
         if hud.visible then
-            UI.showPage(hud.page)
+            if hud.currentView == "zoomed_in" and hud.world_page then
+                UI.showPage(hud.world_page)
+            elseif hud.currentView == "zoomed_out" and hud.zoom_page then
+                UI.showPage(hud.zoom_page)
+            end
         end
     end
 end
@@ -214,10 +278,15 @@ function hud.shutdown()
         toggle.destroy(hud.mapToggleId)
         hud.mapToggleId = nil
     end
-    if hud.page then
-        UI.hidePage(hud.page)
-        UI.deletePage(hud.page)
-        hud.page = nil
+    if hud.zoom_page then
+        UI.hidePage(hud.zoom_page)
+        UI.deletePage(hud.zoom_page)
+        hud.zoom_page = nil
+    end
+    if hud.world_page then
+        UI.hidePage(hud.world_page)
+        UI.deletePage(hud.world_page)
+        hud.world_page = nil
     end
 end
 

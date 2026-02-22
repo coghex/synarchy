@@ -71,8 +71,8 @@ initEarlyClimate worldSize oceanMap =
             let -- Latitude: rv=0 is one pole, rv=regionsPerSide-1 is the other
                 latRatio = abs (fromIntegral (rv - halfRegions))
                          / max 1 (fromIntegral halfRegions) ∷ Float
-                baseSSTSummer = 4.0 + (1.0 - latRatio) * 2.0
-                baseSSTWinter = 4.0 + (1.0 - latRatio) * 1.0
+                baseSSTSummer = 18.0 + (1.0 - latRatio) * 15.0
+                baseSSTWinter = baseSSTSummer - 5.0 * latRatio
                 baseSalinity = 35.0
                 iceThreshold = 0.75 ∷ Float
                 iceCover = if latRatio > iceThreshold

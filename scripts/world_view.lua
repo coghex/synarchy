@@ -416,6 +416,8 @@ function worldView.onScroll(dx, dy)
     
     local current = camera.getZoomVelocity()
     local zoom = camera.getZoom()
+    local zoomFadeStart = camera.getZoomFadeStart()
+    local zoomFadeEnd = camera.getZoomFadeEnd()
     local impulse = zoomImpulseScale * zoom
     if dy > 0 then
         -- Zoom in: negative velocity (zoom value decreases)

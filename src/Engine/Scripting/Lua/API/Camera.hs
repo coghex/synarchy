@@ -5,6 +5,8 @@ module Engine.Scripting.Lua.API.Camera
     , cameraSetPositionFn
     , cameraGetZoomFn
     , cameraSetZoomFn
+    , cameraGetZoomFadeStartFn
+    , cameraGetZoomFadeEndFn
     , cameraGetZoomVelocityFn
     , cameraSetZoomVelocityFn
     , cameraGetZSliceFn
@@ -21,7 +23,7 @@ import UPrelude
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
-import World.Grid (gridToWorld, worldToGrid)
+import World.Grid (gridToWorld, worldToGrid, zoomFadeStart, zoomFadeEnd)
 import World.Types
 import World.Material (MaterialId(..))
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -87,6 +89,18 @@ cameraSetZoomFn env = do
                 (cam { camZoom = max 0.1 (realToFrac z) }, ())
         _ → pure ()
     return 0
+
+-- | camera.getZoomFadeStart() -> number
+cameraGetZoomFadeStartFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
+cameraGetZoomFadeStartFn = do
+    Lua.pushnumber (Lua.Number (realToFrac zoomFadeStart))
+    return 1
+
+-- | camera.getZoomFadeEnd() -> number
+cameraGetZoomFadeEndFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
+cameraGetZoomFadeEndFn = do
+    Lua.pushnumber (Lua.Number (realToFrac zoomFadeEnd))
+    return 1
 
 -- | camera.getZoomVelocity() -> number
 cameraGetZoomVelocityFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

@@ -205,6 +205,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getPosition" (cameraGetPositionFn env)
   registerLuaFunction "setZoom" (cameraSetZoomFn env)
   registerLuaFunction "getZoom" (cameraGetZoomFn env)
+  registerLuaFunction "getZoomFadeStart" cameraGetZoomFadeStartFn
+  registerLuaFunction "getZoomFadeEnd" cameraGetZoomFadeEndFn
   registerLuaFunction "setZoomVelocity" (cameraSetZoomVelocityFn env)
   registerLuaFunction "getZoomVelocity" (cameraGetZoomVelocityFn env)
   registerLuaFunction "setZSlice" (cameraSetZSliceFn env)

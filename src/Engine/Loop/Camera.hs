@@ -180,7 +180,10 @@ zoomMinSpeed ∷ Float
 zoomMinSpeed = 0.02   -- velocity below this snaps to zero
 
 zoomMin ∷ Float
-zoomMin = 0.1         -- closest zoom
+zoomMin = 0.25         -- closest zoom
+
+zoomMax ∷ Float
+zoomMax = 100
 
 updateCameraZoom ∷ EngineM ε σ ()
 updateCameraZoom = do
@@ -191,11 +194,12 @@ updateCameraZoom = do
         let zv  = camZoomVelocity cam
             z   = camZoom cam
             -- Apply velocity
-            z'  = max zoomMin (z + zv * dtF)
+            z'  = min zoomMax (max zoomMin (z + zv * dtF))
             -- Kill velocity when we hit the zoom floor
             hitMin = z' ≤ zoomMin ∧ zv < 0
+            hitMax = z' ≥ zoomMax ∧ zv > 0
             -- Apply friction to velocity
-            zv' = if hitMin then 0 else applyFriction zv (zoomFriction * z * dtF)
+            zv' = if hitMin ∨ hitMax then 0 else applyFriction zv (zoomFriction * z * dtF)
             -- Snap to zero when slow enough
             zv'' = if abs zv' < zoomMinSpeed then 0 else zv'
         in (cam { camZoom = z', camZoomVelocity = zv'' }, ())

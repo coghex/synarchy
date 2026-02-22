@@ -55,7 +55,7 @@ defaultCamera ∷ Camera2D
 defaultCamera = Camera2D
     { camPosition = (0, 0)
     , camVelocity = (0, 0)
-    , camZoom     = 1.0
+    , camZoom     = 64.0
     , camZoomVelocity = 0.0
     , camRotation = 0.0
     , camFacing   = FaceSouth

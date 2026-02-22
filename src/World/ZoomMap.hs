@@ -221,6 +221,11 @@ generateZoomMapQuads env camera fbW fbH = do
                     Nothing → return V.empty
             return $ V.concat quads
 
+renderFromBaked ∷ EngineEnv → WorldState → Camera2D → Int → Int → Float
+              → (WorldTextures → Word8 → Int → TextureHandle)
+              → IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
+              → LayerId
+              → IO (V.Vector SortableQuad)
 renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer = do
     mParams  ← readIORef (wsGenParamsRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
@@ -241,66 +246,76 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                         texturePicker lookupSlot defFmSlot
             let vb = computeZoomViewBounds camera fbW fbH
                 (camX, camY) = camPosition camera
-                ws = wgpWorldSize params
-                climateState = wgpClimateState params
-                cgrid = cgRegions (csClimate climateState)
-                seagrid = ogCells (csOcean climateState)
 
-                !visibleQuads = case mapMode of
-                    ZMTemp → V.mapMaybe (\entry →
-                        let baseX = bzeDrawX entry
-                            baseY = bzeDrawY entry
-                            w = bzeWidth entry
-                            h = bzeHeight entry
-                            centerX = baseX + w / 2.0
-                            centerY = baseY + h / 2.0
-                            (offX, offY) = bestZoomWrapOffset facing ws camX camY centerX centerY
-                            wrappedX = baseX + offX
-                            wrappedY = baseY + offY
-                            (cr, cb, cg) = tempToColorAt facing ws wrappedX
-                                                         wrappedY cgrid
-                            color = Vec4 cr cb cg alpha
-                        in if isChunkInView vb wrappedX wrappedY w h
-                           then Just (emitQuad entry color wrappedX wrappedY layer)
-                           else Nothing
-                        ) baked
-                    ZMSeaTemp → V.mapMaybe (\entry →
-                        let baseX = bzeDrawX entry
-                            baseY = bzeDrawY entry
-                            w = bzeWidth entry
-                            h = bzeHeight entry
-                            centerX = baseX + w / 2.0
-                            centerY = baseY + h / 2.0
-                            (offX, offY) = bestZoomWrapOffset facing ws camX camY centerX centerY
-                            wrappedX = baseX + offX
-                            wrappedY = baseY + offY
-                            color = if bzeIsOcean entry
-                                    then let (cr, cg, cb)
-                                                = seaTempToColorAt facing ws wrappedX 
-                                                                   wrappedY seagrid
-                                         in Vec4 cr cg cb alpha
-                                    else Vec4 0.4 0.4 0.4 alpha
-                        in if isChunkInView vb wrappedX wrappedY w h
-                           then Just (emitQuad entry color wrappedX wrappedY layer)
-                           else Nothing
-                        ) baked
-                    _ → V.mapMaybe (\entry →
-                        let baseX = bzeDrawX entry
-                            baseY = bzeDrawY entry
-                            w = bzeWidth entry
-                            h = bzeHeight entry
-                            centerX = baseX + w / 2.0
-                            centerY = baseY + h / 2.0
-                            (offX, offY) = bestZoomWrapOffset facing ws camX camY centerX centerY
-                            wrappedX = baseX + offX
-                            wrappedY = baseY + offY
-                            color = Vec4 1.0 1.0 1.0 alpha
-                        in if isChunkInView vb wrappedX wrappedY w h
-                           then Just (emitQuad entry color wrappedX wrappedY layer)
-                           else Nothing
-                        ) baked
-
+                !visibleQuads = makeMapQuads params mapMode baked facing 
+                                             vb camX camY alpha layer
             return visibleQuads
+
+makeMapQuads ∷ WorldGenParams → ZoomMapMode → V.Vector BakedZoomEntry
+  → CameraFacing → ZoomViewBounds → Float → Float → Float
+  → LayerId → V.Vector SortableQuad
+makeMapQuads params mapMode baked facing vb camX camY alpha layer =
+  let ws = wgpWorldSize params
+      climateState = wgpClimateState params
+      cgrid = cgRegions (csClimate climateState)
+      seagrid = ogCells (csOcean climateState)
+  in case mapMode of
+    ZMTemp → V.mapMaybe (\entry →
+                 let baseX = bzeDrawX entry
+                     baseY = bzeDrawY entry
+                     w = bzeWidth entry
+                     h = bzeHeight entry
+                     centerX = baseX + w / 2.0
+                     centerY = baseY + h / 2.0
+                     (offX, offY) = bestZoomWrapOffset facing ws camX camY 
+                                                       centerX centerY
+                     wrappedX = baseX + offX
+                     wrappedY = baseY + offY
+                     (cr, cb, cg) = tempToColorAt facing ws wrappedX
+                                                  wrappedY cgrid
+                     color = Vec4 cr cb cg alpha
+                 in if isChunkInView vb wrappedX wrappedY w h
+                    then Just (emitQuad entry color wrappedX wrappedY layer)
+                    else Nothing
+                 ) baked
+    ZMSeaTemp → V.mapMaybe (\entry →
+                 let baseX = bzeDrawX entry
+                     baseY = bzeDrawY entry
+                     w = bzeWidth entry
+                     h = bzeHeight entry
+                     centerX = baseX + w / 2.0
+                     centerY = baseY + h / 2.0
+                     (offX, offY) = bestZoomWrapOffset facing ws camX camY
+                                                       centerX centerY
+                     wrappedX = baseX + offX
+                     wrappedY = baseY + offY
+                     color = if bzeIsOcean entry
+                             then let (cr, cg, cb)
+                                         = seaTempToColorAt facing ws wrappedX 
+                                                            wrappedY seagrid
+                                  in Vec4 cr cg cb alpha
+                             else Vec4 0.4 0.4 0.4 alpha
+                 in if isChunkInView vb wrappedX wrappedY w h
+                    then Just (emitQuad entry color wrappedX wrappedY layer)
+                    else Nothing
+                 ) baked
+    _ → V.mapMaybe (\entry →
+                 let baseX = bzeDrawX entry
+                     baseY = bzeDrawY entry
+                     w = bzeWidth entry
+                     h = bzeHeight entry
+                     centerX = baseX + w / 2.0
+                     centerY = baseY + h / 2.0
+                     (offX, offY) = bestZoomWrapOffset facing ws camX camY
+                                                       centerX centerY
+                     wrappedX = baseX + offX
+                     wrappedY = baseY + offY
+                     color = Vec4 1.0 1.0 1.0 alpha
+                 in if isChunkInView vb wrappedX wrappedY w h
+                    then Just (emitQuad entry color wrappedX wrappedY layer)
+                    else Nothing
+                 ) baked
+
 
 tempToColorAt ∷ CameraFacing → Int → Float → Float
               → HM.HashMap ClimateCoord RegionClimate

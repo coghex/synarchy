@@ -512,6 +512,7 @@ end
 function uiManager.onScroll(dx, dy)
     if currentMenu == "world_view" and worldView then
         worldView.onScroll(dx, dy)
+        hud.onScroll(dx, dy)
     end
 end
 
