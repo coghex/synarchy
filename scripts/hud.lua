@@ -20,6 +20,10 @@ hud.texMapTemp            = nil
 hud.texMapTempSelected    = nil
 hud.texMapPressure        = nil
 hud.texMapPressureSelected = nil
+hud.texToolDefault         = nil
+hud.texToolDefaultSelected = nil
+hud.texToolMine            = nil
+hud.texToolMineSelected    = nil
 
 -- Base sizes (unscaled)
 hud.baseSizes = {
@@ -43,6 +47,10 @@ function hud.init(width, height)
     hud.texMapTempSelected    = engine.loadTexture("assets/textures/hud/map_temp_selected.png")
     hud.texMapPressure        = engine.loadTexture("assets/textures/hud/map_pressure.png")
     hud.texMapPressureSelected = engine.loadTexture("assets/textures/hud/map_pressure_selected.png")
+    hud.texToolDefault         = engine.loadTexture("assets/textures/hud/tool_default.png")
+    hud.texToolDefaultSelected = engine.loadTexture("assets/textures/hud/tool_default_selected.png")
+    hud.texToolMine            = engine.loadTexture("assets/textures/hud/tool_mine.png")
+    hud.texToolMineSelected    = engine.loadTexture("assets/textures/hud/tool_mine_selected.png")
 
     engine.logDebug("HUD initialized")
 end
@@ -95,6 +103,7 @@ function hud.createUI()
             },
         },
         selectedIndex = 3,   -- mapDefault selected by default
+        direction = "left",
         size    = hud.baseSizes.buttonSize,
         padding = hud.baseSizes.padding,
         x       = anchorX,
@@ -104,6 +113,38 @@ function hud.createUI()
         onChange = function(index, itemName)
             world.setMapMode("main_world", itemName)
             engine.logDebug("Map mode changed to: " .. tostring(itemName))
+        end,
+    })
+
+    local toolAnchorX = s.margin
+    local toolAnchorY = hud.fbH - s.margin - s.buttonSize
+
+    hud.mapToggleId = toggle.new({
+        name = "tool_mode_toggle",
+        page = hud.page,
+        items = {
+            {
+                name        = "tool_mine",
+                texDefault  = hud.texToolMine,
+                texSelected = hud.texToolMineSelected,
+            },
+            {
+                name        = "tool_default",
+                texDefault  = hud.texToolDefault,
+                texSelected = hud.texToolDefaultSelected,
+            },
+        },
+        selectedIndex = 2,   -- toolDefault selected by default
+        direction = "up",
+        size    = hud.baseSizes.buttonSize,
+        padding = hud.baseSizes.padding,
+        x       = toolAnchorX,
+        y       = toolAnchorY,
+        zIndex  = 100,
+        uiscale = uiscale,
+        onChange = function(index, itemName)
+--            world.setToolMode("main_world", itemName)
+            engine.logDebug("Tool mode changed to: " .. tostring(itemName))
         end,
     })
 

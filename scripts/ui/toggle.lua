@@ -37,6 +37,7 @@ end
 --         texDefault  = <handle>,   -- texture when unselected
 --         texSelected = <handle> }  -- texture when selected
 --   selectedIndex (int)   1-based index of the initially selected item (default 1)
+--   direction   (string) "left" or "right" (default "left") - which way the items grow
 --   size        (number)  base (unscaled) width & height of each button sprite
 --   padding     (number)  base (unscaled) gap between buttons
 --   x           (number)  screen x of the *right* edge of the rightmost button
@@ -55,6 +56,7 @@ function toggle.new(params)
     local items   = params.items or {}
     local selIdx  = params.selectedIndex or 1
     local zIndex  = params.zIndex or 100
+    local direction = params.direction or "left"
 
     local grp = {
         id            = id,
@@ -66,6 +68,7 @@ function toggle.new(params)
         anchorY       = params.y or 0,
         zIndex        = zIndex,
         selectedIndex = selIdx,
+        direction     = direction,
         onChange       = params.onChange,
         buttons       = {},   -- array of { name, spriteId, texDefault, texSelected }
     }
@@ -73,35 +76,92 @@ function toggle.new(params)
     -- Layout: rightmost item is items[#items], placed so its right edge = anchorX.
     -- Items go left from there.
     local count = #items
-    for i = count, 1, -1 do
-        local item = items[i]
-        -- Distance from right edge: (count - i) * (size + pad)
-        local offsetFromRight = (count - i) * (size + pad)
-        local spriteX = grp.anchorX - size - offsetFromRight
-        local spriteY = grp.anchorY
+    if direction == "left" then
+        for i = count, 1, -1 do
+            local item = items[i]
+            -- Distance from right edge: (count - i) * (size + pad)
+            local offsetFromRight = (count - i) * (size + pad)
+            local spriteX = grp.anchorX - size - offsetFromRight
+            local spriteY = grp.anchorY
 
-        local tex = (i == selIdx) and item.texSelected or item.texDefault
+            local tex = (i == selIdx) and item.texSelected or item.texDefault
 
-        local spriteId = UI.newSprite(
-            grp.name .. "_" .. (item.name or tostring(i)) .. "_sprite",
-            size,
-            size,
-            tex,
-            1.0, 1.0, 1.0, 1.0,
-            grp.page
-        )
+            local spriteId = UI.newSprite(
+                grp.name .. "_" .. (item.name or tostring(i)) .. "_sprite",
+                size,
+                size,
+                tex,
+                1.0, 1.0, 1.0, 1.0,
+                grp.page
+            )
 
-        UI.addToPage(grp.page, spriteId, spriteX, spriteY)
-        UI.setClickable(spriteId, true)
-        UI.setOnClick(spriteId, TOGGLE_CALLBACK)
-        UI.setZIndex(spriteId, zIndex)
+            UI.addToPage(grp.page, spriteId, spriteX, spriteY)
+            UI.setClickable(spriteId, true)
+            UI.setOnClick(spriteId, TOGGLE_CALLBACK)
+            UI.setZIndex(spriteId, zIndex)
 
-        grp.buttons[i] = {
-            name       = item.name or ("item_" .. i),
-            spriteId   = spriteId,
-            texDefault = item.texDefault,
-            texSelected = item.texSelected,
-        }
+            grp.buttons[i] = {
+                name       = item.name or ("item_" .. i),
+                spriteId   = spriteId,
+                texDefault = item.texDefault,
+                texSelected = item.texSelected,
+            }
+        end
+    elseif direction == "up" then
+        for i = 1, count do
+            local item = items[i]
+            local offsetFromBottom = (count - i) * (size + pad)
+            local spriteX = grp.anchorX
+            local spriteY = grp.anchorY - offsetFromBottom
+            local tex = (i == selIdx) and item.texSelected or item.texDefault
+            local spriteId = UI.newSprite(
+                grp.name .. "_" .. (item.name or tostring(i)) .. "_sprite",
+                size,
+                size,
+                tex,
+                1.0, 1.0, 1.0, 1.0,
+                grp.page
+            )
+            UI.addToPage(grp.page, spriteId, spriteX, spriteY)
+            UI.setClickable(spriteId, true)
+            UI.setOnClick(spriteId, TOGGLE_CALLBACK)
+            UI.setZIndex(spriteId, zIndex)
+            grp.buttons[i] = {
+                name       = item.name or ("item_" .. i),
+                spriteId   = spriteId,
+                texDefault = item.texDefault,
+                texSelected = item.texSelected,
+            }
+        end
+    elseif direction == "down" then
+        for i = 1, count do
+            local item = items[i]
+            local offsetFromTop = (i - 1) * (size + pad)
+            local spriteX = grp.anchorX
+            local spriteY = grp.anchorY + offsetFromTop
+            local tex = (i == selIdx) and item.texSelected or item.texDefault
+
+            local spriteId = UI.newSprite(
+                grp.name .. "_" .. (item.name or tostring(i)) .. "_sprite",
+                size,
+                size,
+                tex,
+                1.0, 1.0, 1.0, 1.0,
+                grp.page
+            )
+
+            UI.addToPage(grp.page, spriteId, spriteX, spriteY)
+            UI.setClickable(spriteId, true)
+            UI.setOnClick(spriteId, TOGGLE_CALLBACK)
+            UI.setZIndex(spriteId, zIndex)
+
+            grp.buttons[i] = {
+                name       = item.name or ("item_" .. i),
+                spriteId   = spriteId,
+                texDefault = item.texDefault,
+                texSelected = item.texSelected,
+            }
+        end
     end
 
     groups[id] = grp
