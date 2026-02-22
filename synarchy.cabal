@@ -201,6 +201,7 @@ library
                      Engine.Scripting.Lua.Backend
                      Engine.Scripting.Lua.Debug
                      Engine.Scripting.Lua.Types
+                     Engine.Scripting.Lua.Material
                      Engine.Scripting.Lua.Message
                      Engine.Scripting.Lua.Thread
                      Engine.Scripting.Lua.Script
@@ -261,6 +262,7 @@ library
                      World.Constants
                      World.Command.Types
                      World.Chunk.Types
+                     World.Cursor.Types
                      World.Types
                      World.Thread
                      World.Grid

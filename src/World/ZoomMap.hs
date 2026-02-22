@@ -230,6 +230,7 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
     mParams  ← readIORef (wsGenParamsRef worldState)
     textures ← readIORef (wsTexturesRef worldState)
     rawCache ← readIORef (wsZoomCacheRef worldState)
+    cursor ← readIORef (wsCursorRef worldState)
 
     mBindless ← readIORef (textureSystemRef env)
     defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
@@ -249,7 +250,24 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
 
                 !visibleQuads = makeMapQuads params mapMode baked facing 
                                              vb camX camY alpha layer
-            return visibleQuads
+                !cursorQuad = makeCursorQuad cursor lookupSlot defFmSlot
+            return $ visibleQuads <> cursorQuad
+
+makeCursorQuad cs lookupSlot defFmSlot = case (zoomCursorPos cs) of
+    Nothing → V.empty
+    Just (cx', cy') → case zoomHoverTexture cs of
+        Nothing → V.empty
+        Just hoverTexture → V.singleton $ SortableQuad
+            { sqSortKey = 100  -- Always on top
+            , sqV0 = Vertex (Vec2 (cx - 16) (cy - 16)) (Vec2 0 0) (Vec4 1 1 1 1) slot defFmSlot
+            , sqV1 = Vertex (Vec2 (cx + 16) (cy - 16)) (Vec2 1 0) (Vec4 1 1 1 1) slot defFmSlot
+            , sqV2 = Vertex (Vec2 (cx + 16) (cy + 16)) (Vec2 1 1) (Vec4 1 1 1 1) slot defFmSlot
+            , sqV3 = Vertex (Vec2 (cx - 16) (cy + 16)) (Vec2 0 1) (Vec4 1 1 1 1) slot defFmSlot
+            , sqTexture = hoverTexture
+            , sqLayer = zoomMapLayer
+            } 
+            where slot = fromIntegral $ lookupSlot hoverTexture
+                  (cx, cy) = (fromIntegral cx', fromIntegral cy')
 
 makeMapQuads ∷ WorldGenParams → ZoomMapMode → V.Vector BakedZoomEntry
   → CameraFacing → ZoomViewBounds → Float → Float → Float
@@ -386,7 +404,6 @@ seaTempToColorAt facing worldSize x y oc =
       | otherwise = error "floorDiv: non-positive divisor"
 
 
-
 bestZoomWrapOffset ∷ CameraFacing → Int → Float → Float → Float → Float → (Float, Float)
 bestZoomWrapOffset facing worldSize camX camY centerX centerY =
     let worldTiles = worldSize * chunkSize
@@ -484,7 +501,6 @@ renderFromBakedBg env worldState camera fbW fbH alpha texturePicker bakedRef lay
                        then Just (emitQuadBg entry wrappedX wrappedY alpha layer zSlice)
                        else Nothing
                     ) baked
-
             return visibleQuads
 
 -----------------------------------------------------------

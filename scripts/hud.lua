@@ -63,7 +63,6 @@ function hud.init(width, height)
     hud.texToolMineSelected    = engine.loadTexture("assets/textures/hud/tool_mine_selected.png")
     hud.texZoomSelect          = engine.loadTexture("assets/textures/hud/utility/zoom_select.png")
     hud.texZoomHover           = engine.loadTexture("assets/textures/hud/utility/zoom_hover.png")
-
     engine.logDebug("HUD initialized")
 end
 
@@ -87,6 +86,10 @@ function hud.createUI()
 
     hud.world_page = UI.newPage("world_hud_overlay", "overlay")
     hud.zoom_page = UI.newPage("zoom_hud_overlay", "overlay")
+    if hud.texZoomSelect and hud.texZoomHover then
+        world.setZoomCursorSelectTexture("main_world", hud.texZoomSelect)
+        world.setZoomCursorHoverTexture("main_world", hud.texZoomHover)
+    end
 
     -- Position: bottom-right, anchored so the right edge of the last
     -- button is (fbW - margin) and the bottom edge is (fbH - margin).
@@ -248,6 +251,18 @@ function hud.onScroll(dx, dy)
     end
 end
 
+-----------------------------------------------------------
+-- manage mouse hover
+-----------------------------------------------------------
+
+function hud.update(dt)
+    local mx, my = engine.getMousePosition()
+    if mx and my then
+        if hud.currentView == "zoomed_out" then
+            world.setZoomCursorHover("main_world", mx, my)
+        end
+    end
+end
 
 -----------------------------------------------------------
 -- Resize

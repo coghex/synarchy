@@ -4,6 +4,7 @@ module World.Types
     , module World.Page.Types
     , module World.Plate.Types
     , module World.Chunk.Types
+    , module World.Cursor.Types
     , module World.Tile.Types
     , module World.Constants
     , module World.Fluid.Types
@@ -25,6 +26,7 @@ import World.Base
 import World.Page.Types
 import World.Plate.Types
 import World.Chunk.Types
+import World.Cursor.Types
 import World.Tile.Types
 import World.Constants
 import World.Fluid.Types

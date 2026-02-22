@@ -16,7 +16,8 @@ import Control.Exception (SomeException, catch)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
+import Engine.Core.Log (logInfo, logDebug, logError, logWarn
+                       , LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.Types (LuaMsg(..))
@@ -542,6 +543,33 @@ handleWorldCommand env logger cmd = do
                 Nothing →
                     logDebug logger CatWorld $
                         "World not found for map mode update: " <> unWorldPageId pageId
+        WorldSetZoomCursorHover pageId x y → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState →
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                      (cs { zoomCursorPos = Just (x, y) }, ())
+                Nothing → 
+                    logWarn logger CatWorld $ 
+                        "World not found for cursor hover update: " <> unWorldPageId pageId
+        WorldSetZoomCursorSelectTexture pageId tid → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState →
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                      (cs { zoomCursorTexture = Just tid }, ())
+                Nothing → 
+                    logWarn logger CatWorld $ 
+                        "World not found for cursor texture update: " <> unWorldPageId pageId
+        WorldSetZoomCursorHoverTexture pageId tid → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState → do
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                      (cs { zoomHoverTexture = Just tid }, ())
+                Nothing → 
+                    logWarn logger CatWorld $ 
+                        "World not found for cursor hover texture update: " <> unWorldPageId pageId
 
 unWorldPageId ∷ WorldPageId → Text
 unWorldPageId (WorldPageId t) = t

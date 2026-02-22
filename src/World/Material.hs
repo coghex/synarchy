@@ -29,6 +29,7 @@ module World.Material
 
 import UPrelude
 import Control.DeepSeq (NFData(..))
+import World.Command.Types (WorldTextureType(..))
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.Vector.Unboxed.Deriving (derivingUnbox)
@@ -140,3 +141,4 @@ materialPropsTable =
 getMaterialProps ∷ MaterialId → MaterialProps
 getMaterialProps (MaterialId mid) =
     materialPropsTable V.! fromIntegral mid
+

@@ -90,4 +90,7 @@ data WorldCommand
     | WorldSetDate WorldPageId Int Int Int     -- ^ year month day
     | WorldSetTimeScale WorldPageId Float      -- ^ game-minutes per real-second
     | WorldSetMapMode WorldPageId ZoomMapMode      -- ^ map mode
+    | WorldSetZoomCursorHover WorldPageId Int Int
+    | WorldSetZoomCursorSelectTexture WorldPageId TextureHandle
+    | WorldSetZoomCursorHoverTexture WorldPageId TextureHandle
     deriving (Show, Eq)

@@ -12,6 +12,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Engine.Graphics.Camera (CameraFacing(..))
 import World.Base (GeoFeatureId(..))
+import World.Cursor.Types (CursorState(..), emptyCursorState)
 import World.Page.Types (WorldPageId(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
@@ -41,6 +42,7 @@ data WorldState = WorldState
     , wsClimateRef ∷ IORef (HM.HashMap RegionCoord RegionClimate)  -- ^ Regional climate data (temperature, humidity)
     , wsRiverFlowRef ∷ IORef (HM.HashMap GeoFeatureId Float)
     , wsMapModeRef ∷ IORef ZoomMapMode
+    , wsCursorRef ∷ IORef CursorState
     }
 
 emptyWorldState ∷ IO WorldState
@@ -62,11 +64,13 @@ emptyWorldState = do
     wsClimateRef ← newIORef HM.empty
     wsRiverFlowRef ← newIORef HM.empty
     wsMapModeRef ← newIORef ZMDefault
+    wsCursorRef ← newIORef emptyCursorState
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
                         wsClimateRef wsRiverFlowRef wsMapModeRef
+                        wsCursorRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]

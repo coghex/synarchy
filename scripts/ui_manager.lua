@@ -232,6 +232,10 @@ function uiManager.update(dt)
         createWorldMenu.update(dt)
     end
 
+    if hud then
+        hud.update(dt)
+    end
+
     -- slider drag detection
     if slider and slider.getDraggingId() then
         local mx, my = engine.getMousePosition()

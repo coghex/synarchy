@@ -30,11 +30,7 @@ import Engine.Scripting.Lua.API.Text (loadFontFn, spawnTextFn, setTextFn,
 import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn, 
                                         releaseFocusFn, getFocusIdFn)
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
-import Engine.Scripting.Lua.API.World (worldInitFn, worldShowFn, worldHideFn
-                                      , worldSetTextureFn, worldSetCameraFn
-                                      , worldSetSunAngleFn, worldSetTimeFn
-                                      , worldSetDateFn, worldSetTimeScaleFn
-                                      , worldSetMapMode)
+import Engine.Scripting.Lua.API.World
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
@@ -193,7 +189,12 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setTime" (worldSetTimeFn env)
   registerLuaFunction "setDate" (worldSetDateFn env)
   registerLuaFunction "setTimeScale" (worldSetTimeScaleFn env)
-  registerLuaFunction "setMapMode" (worldSetMapMode env)
+  registerLuaFunction "setMapMode" (worldSetMapModeFn env)
+  registerLuaFunction "setZoomCursorHover" (worldSetZoomCursorHoverFn env)
+  registerLuaFunction "setZoomCursorSelectTexture"
+    (worldSetZoomCursorSelectTextureFn env)
+  registerLuaFunction "setZoomCursorHoverTexture"
+    (worldSetZoomCursorHoverTextureFn env)
   Lua.setglobal (Lua.Name "world")
 
   -- Camera table
