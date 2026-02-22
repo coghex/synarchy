@@ -235,6 +235,7 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
     mBindless ← readIORef (textureSystemRef env)
     defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
     mapMode ← readIORef (wsMapModeRef worldState)
+    (winW, winH) ← readIORef (windowSizeRef env)
     let lookupSlot texHandle = fromIntegral $ case mBindless of
             Just bindless → getTextureSlotIndex texHandle bindless
             Nothing       → 0
@@ -250,24 +251,68 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
 
                 !visibleQuads = makeMapQuads params mapMode baked facing 
                                              vb camX camY alpha layer
-                !cursorQuad = makeCursorQuad cursor lookupSlot defFmSlot
+                !cursorQuad = makeCursorQuad facing camera winW winH
+                                             fbW fbH cursor lookupSlot defFmSlot
             return $ visibleQuads <> cursorQuad
 
-makeCursorQuad cs lookupSlot defFmSlot = case (zoomCursorPos cs) of
-    Nothing → V.empty
-    Just (cx', cy') → case zoomHoverTexture cs of
+makeCursorQuad ∷ CameraFacing → Camera2D → Int → Int → Int → Int
+              → CursorState → (TextureHandle → Int) → Float
+              → V.Vector SortableQuad
+makeCursorQuad facing camera winW winH fbW fbH cs lookupSlot defFmSlot =
+    case zoomCursorPos cs of
         Nothing → V.empty
-        Just hoverTexture → V.singleton $ SortableQuad
-            { sqSortKey = 100  -- Always on top
-            , sqV0 = Vertex (Vec2 (cx - 16) (cy - 16)) (Vec2 0 0) (Vec4 1 1 1 1) slot defFmSlot
-            , sqV1 = Vertex (Vec2 (cx + 16) (cy - 16)) (Vec2 1 0) (Vec4 1 1 1 1) slot defFmSlot
-            , sqV2 = Vertex (Vec2 (cx + 16) (cy + 16)) (Vec2 1 1) (Vec4 1 1 1 1) slot defFmSlot
-            , sqV3 = Vertex (Vec2 (cx - 16) (cy + 16)) (Vec2 0 1) (Vec4 1 1 1 1) slot defFmSlot
-            , sqTexture = hoverTexture
-            , sqLayer = zoomMapLayer
-            } 
-            where slot = fromIntegral $ lookupSlot hoverTexture
-                  (cx, cy) = (fromIntegral cx', fromIntegral cy')
+        Just (pixX, pixY) → case zoomHoverTexture cs of
+            Nothing → V.empty
+            Just hoverTexture →
+                let -- 1. Convert raw window-pixel coords → world-space
+                    --    (same formula as getWorldCoordFn in Input.hs)
+                    aspect = fromIntegral fbW / fromIntegral fbH
+                    zoom   = camZoom camera
+                    viewW  = zoom * aspect
+                    viewH  = zoom
+                    normX  = fromIntegral pixX / fromIntegral winW
+                    normY  = fromIntegral pixY / fromIntegral winH
+                    viewX  = (normX * 2.0 - 1.0) * viewW
+                    viewY  = (normY * 2.0 - 1.0) * viewH
+                    (camX, camY) = camPosition camera
+                    worldX = viewX + camX
+                    worldY = viewY + camY
+
+                    -- 2. World-space → grid tile
+                    (gx, gy) = worldToGrid facing worldX worldY
+
+                    -- 3. Snap to chunk origin
+                    chunkX = if gx >= 0 then gx `div` chunkSize
+                             else -(((-gx) + chunkSize - 1) `div` chunkSize)
+                    chunkY = if gy >= 0 then gy `div` chunkSize
+                             else -(((-gy) + chunkSize - 1) `div` chunkSize)
+                    baseGX = chunkX * chunkSize
+                    baseGY = chunkY * chunkSize
+
+                    -- 4. Get the four corners of this chunk in world-space
+                    (x0, y0) = gridToWorld facing baseGX baseGY
+                    (x1, y1) = gridToWorld facing (baseGX + chunkSize) baseGY
+                    (x2, y2) = gridToWorld facing baseGX (baseGY + chunkSize)
+                    (x3, y3) = gridToWorld facing (baseGX + chunkSize) (baseGY + chunkSize)
+
+                    -- 5. Compute the AABB of the chunk diamond
+                    drawX = min x0 (min x1 (min x2 x3))
+                    drawY = min y0 (min y1 (min y2 y3))
+                    w     = max x0 (max x1 (max x2 x3)) - drawX
+                    h     = max y0 (max y1 (max y2 y3)) - drawY
+
+                    slot = fromIntegral (lookupSlot hoverTexture)
+                    white = Vec4 1.0 1.0 1.0 0.6  -- semi-transparent hover
+
+                in V.singleton $ SortableQuad
+                    { sqSortKey = 100  -- Always on top
+                    , sqV0 = Vertex (Vec2 drawX drawY)            (Vec2 0 0) white slot defFmSlot
+                    , sqV1 = Vertex (Vec2 (drawX + w) drawY)      (Vec2 1 0) white slot defFmSlot
+                    , sqV2 = Vertex (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) white slot defFmSlot
+                    , sqV3 = Vertex (Vec2 drawX (drawY + h))       (Vec2 0 1) white slot defFmSlot
+                    , sqTexture = hoverTexture
+                    , sqLayer   = zoomMapLayer
+                    }
 
 makeMapQuads ∷ WorldGenParams → ZoomMapMode → V.Vector BakedZoomEntry
   → CameraFacing → ZoomViewBounds → Float → Float → Float
