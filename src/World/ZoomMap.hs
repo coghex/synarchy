@@ -247,25 +247,25 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
             baked ← ensureBaked bakedRef rawCache textures facing
                         texturePicker lookupSlot defFmSlot
             let vb = computeZoomViewBounds camera fbW fbH
+                ws = wgpWorldSize params
                 (camX, camY) = camPosition camera
 
                 !visibleQuads = makeMapQuads params mapMode baked facing 
                                              vb camX camY alpha layer
                 !cursorQuad = makeCursorQuad facing camera winW winH
-                                             fbW fbH cursor lookupSlot defFmSlot
+                                             fbW fbH ws cursor lookupSlot defFmSlot
             return $ visibleQuads <> cursorQuad
 
-makeCursorQuad ∷ CameraFacing → Camera2D → Int → Int → Int → Int
+makeCursorQuad ∷ CameraFacing → Camera2D → Int → Int → Int → Int → Int
               → CursorState → (TextureHandle → Int) → Float
               → V.Vector SortableQuad
-makeCursorQuad facing camera winW winH fbW fbH cs lookupSlot defFmSlot =
+makeCursorQuad facing camera winW winH fbW fbH worldSize cs lookupSlot defFmSlot =
     case zoomCursorPos cs of
         Nothing → V.empty
         Just (pixX, pixY) → case zoomHoverTexture cs of
             Nothing → V.empty
             Just hoverTexture →
                 let -- 1. Convert raw window-pixel coords → world-space
-                    --    (same formula as getWorldCoordFn in Input.hs)
                     aspect = fromIntegral fbW / fromIntegral fbH
                     zoom   = camZoom camera
                     viewW  = zoom * aspect
@@ -281,7 +281,14 @@ makeCursorQuad facing camera winW winH fbW fbH cs lookupSlot defFmSlot =
                     -- 2. World-space → grid tile
                     (gx, gy) = worldToGrid facing worldX worldY
 
-                    -- 3. Snap to chunk origin
+                    -- 3. Check if the tile is beyond the map boundary
+                    halfTiles = (worldSize * chunkSize) `div` 2
+                    v = gx + gy
+                    offMap = abs v > halfTiles
+
+                in if offMap then V.empty
+                else let
+                    -- 4. Snap to chunk origin
                     chunkX = if gx >= 0 then gx `div` chunkSize
                              else -(((-gx) + chunkSize - 1) `div` chunkSize)
                     chunkY = if gy >= 0 then gy `div` chunkSize
@@ -289,23 +296,23 @@ makeCursorQuad facing camera winW winH fbW fbH cs lookupSlot defFmSlot =
                     baseGX = chunkX * chunkSize
                     baseGY = chunkY * chunkSize
 
-                    -- 4. Get the four corners of this chunk in world-space
+                    -- 5. Get the four corners of this chunk in world-space
                     (x0, y0) = gridToWorld facing baseGX baseGY
                     (x1, y1) = gridToWorld facing (baseGX + chunkSize) baseGY
                     (x2, y2) = gridToWorld facing baseGX (baseGY + chunkSize)
                     (x3, y3) = gridToWorld facing (baseGX + chunkSize) (baseGY + chunkSize)
 
-                    -- 5. Compute the AABB of the chunk diamond
+                    -- 6. Compute the AABB of the chunk diamond
                     drawX = min x0 (min x1 (min x2 x3))
                     drawY = min y0 (min y1 (min y2 y3))
                     w     = max x0 (max x1 (max x2 x3)) - drawX
                     h     = max y0 (max y1 (max y2 y3)) - drawY
 
                     slot = fromIntegral (lookupSlot hoverTexture)
-                    white = Vec4 1.0 1.0 1.0 0.6  -- semi-transparent hover
+                    white = Vec4 1.0 1.0 1.0 0.6
 
                 in V.singleton $ SortableQuad
-                    { sqSortKey = 100  -- Always on top
+                    { sqSortKey = 100
                     , sqV0 = Vertex (Vec2 drawX drawY)            (Vec2 0 0) white slot defFmSlot
                     , sqV1 = Vertex (Vec2 (drawX + w) drawY)      (Vec2 1 0) white slot defFmSlot
                     , sqV2 = Vertex (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) white slot defFmSlot
