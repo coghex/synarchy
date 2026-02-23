@@ -237,8 +237,10 @@ renderWorldCursorQuads env worldState tileAlpha = do
         effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
         vb = computeViewBounds camera fbW fbH effectiveDepth
 
-    -- Pixel → grid tile (same camera as everything else this frame)
-    let pixelToTile pixX pixY =
+    -- Hit-test: unproject screen pixel considering elevation.
+    -- For each Z from zSlice down, compute which (gx,gy) would place
+    -- a tile at that Z under the mouse, then check if that tile is solid.
+    let hitTest pixX pixY =
             let aspect = fromIntegral fbW / fromIntegral fbH
                 vw     = zoom * aspect
                 vh     = zoom
@@ -246,30 +248,46 @@ renderWorldCursorQuads env worldState tileAlpha = do
                 normY  = fromIntegral pixY / fromIntegral winH
                 viewX  = (normX * 2.0 - 1.0) * vw
                 viewY  = (normY * 2.0 - 1.0) * vh
-            in worldToGrid facing (viewX + camX) (viewY + camY)
+                worldX = viewX + camX
+                worldY = viewY + camY
 
-    -- Look up the surface elevation and wrapping offset for a grid tile
-    let tileInfo gx gy =
-            let (chunkCoord, (lx, ly)) = globalToChunk gx gy
-            in case HM.lookup chunkCoord (wtdChunks tileData) of
-                Just lc →
-                    let surfZ = lcSurfaceMap lc VU.! columnIndex lx ly
-                        -- Clamp to zSlice: the cursor should sit on the
-                        -- topmost visible surface, not above the slice plane
-                        cursorZ = min surfZ zSlice
-                    in case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
-                        Just xOff → Just (cursorZ, xOff)
-                        Nothing   → Nothing
-                Nothing → Nothing
+                -- For a tile at elevation z, its screen Y is offset by
+                -- (z - zSlice) * tileSideHeight upward.  So the world-space
+                -- Y that would produce that screen position is:
+                --   worldY = tileWorldY - (z - zSlice) * tileSideHeight
+                --   tileWorldY = worldY + (z - zSlice) * tileSideHeight
+                zMin = zSlice - effectiveDepth
+
+                tryZ z
+                  | z < zMin  = Nothing
+                  | otherwise =
+                    let relZ = z - zSlice
+                        adjustedWorldY = worldY + fromIntegral relZ * tileSideHeight
+                                       - tileHeight * 0.5
+                        (gx, gy) = worldToGrid facing worldX adjustedWorldY
+                        (chunkCoord, (lx, ly)) = globalToChunk gx gy
+                    in case HM.lookup chunkCoord (wtdChunks tileData) of
+                        Nothing → tryZ (z - 1)
+                        Just lc →
+                            let idx = columnIndex lx ly
+                                col = lcTiles lc V.! idx
+                                colLen  = VU.length (ctMats col)
+                                colMinZ = ctStartZ col
+                                i = z - colMinZ
+                            in if i < 0 ∨ i >= colLen
+                               then tryZ (z - 1)
+                               else if ctMats col VU.! i ≠ 0
+                                    then case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
+                                           Just xOff → Just (gx, gy, z, xOff)
+                                           Nothing   → tryZ (z - 1)
+                                    else tryZ (z - 1)
+
+            in tryZ zSlice
 
     -- Compute hover tile
     let hoverResult = case worldCursorPos cs of
-            Nothing         → Nothing
-            Just (pixX, pixY) →
-                let (gx, gy) = pixelToTile pixX pixY
-                in case tileInfo gx gy of
-                    Just (cursorZ, xOff) → Just (gx, gy, cursorZ, xOff)
-                    Nothing              → Nothing
+            Nothing           → Nothing
+            Just (pixX, pixY) → hitTest pixX pixY
 
     -- If select flag is set, snapshot hover → selected
     cs' ← if worldSelectNow cs
@@ -290,10 +308,35 @@ renderWorldCursorQuads env worldState tileAlpha = do
                     gx gy cursorZ zSlice effectiveDepth tileAlpha xOff tex
             _ → V.empty
 
+    -- Look up the visible Z for a known grid tile (for persistent selection)
+    let selectedTileInfo sgx sgy =
+            let (chunkCoord, (lx, ly)) = globalToChunk sgx sgy
+            in case HM.lookup chunkCoord (wtdChunks tileData) of
+                Nothing → Nothing
+                Just lc →
+                    let idx = columnIndex lx ly
+                        col = lcTiles lc V.! idx
+                        colLen  = VU.length (ctMats col)
+                        colMinZ = ctStartZ col
+
+                        searchFrom z
+                          | z < max colMinZ (zSlice - effectiveDepth) = Nothing
+                          | otherwise =
+                              let i = z - colMinZ
+                              in if i >= 0 ∧ i < colLen ∧ ctMats col VU.! i ≠ 0
+                                 then Just z
+                                 else searchFrom (z - 1)
+                    in case searchFrom zSlice of
+                        Nothing  → Nothing
+                        Just visZ →
+                            case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
+                                Just xOff → Just (visZ, xOff)
+                                Nothing   → Nothing
+
     -- Build select quad
     let selectQuads = case (worldSelectedTile cs', worldCursorTexture cs') of
             (Just (sgx, sgy), Just tex) →
-                case tileInfo sgx sgy of
+                case selectedTileInfo sgx sgy of
                     Just (cursorZ, xOff) →
                         V.singleton $ worldCursorToQuad lookupSlot lookupFmSlot textures facing
                             sgx sgy cursorZ zSlice effectiveDepth tileAlpha xOff tex
