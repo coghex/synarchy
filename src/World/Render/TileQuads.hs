@@ -6,6 +6,7 @@ module World.Render.TileQuads
     , lavaTileToQuad
     , freshwaterTileToQuad
     , worldCursorToQuad
+    , worldCursorBgToQuad
     ) where
 
 import UPrelude
@@ -277,5 +278,51 @@ worldCursorToQuad lookupSlot lookupFmSlot textures facing
         , sqV2       = v2
         , sqV3       = v3
         , sqTexture  = cursorTex
+        , sqLayer    = worldLayer
+        }
+
+-- | Cursor background quad — renders BEHIND the tile at (gx, gy, z).
+-- Sort key is nudged -0.0004 so it draws before the terrain tile.
+worldCursorBgToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+                    → WorldTextures → CameraFacing
+                    → Int → Int → Int
+                    → Int → Int
+                    → Float
+                    → Float
+                    → TextureHandle
+                    → SortableQuad
+worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
+                    gx gy surfZ zSlice effDepth tileAlpha xOffset cursorBgTex =
+    let (rawX, rawY) = gridToScreen facing gx gy
+        (fa, fb) = applyFacing facing gx gy
+        relativeZ = surfZ - zSlice
+        heightOffset = fromIntegral relativeZ * tileSideHeight
+        drawX = rawX + xOffset
+        drawY = rawY - heightOffset
+
+        sortKey = fromIntegral (fa + fb)
+                + fromIntegral relativeZ * 0.001
+                - 0.0004  -- behind terrain
+
+        actualSlot = lookupSlot cursorBgTex
+        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+
+        tint = Vec4 1.0 1.0 1.0 (tileAlpha * 0.7)
+
+        v0 = Vertex (Vec2 drawX drawY)
+                     (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)
+                     (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
+                     (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = Vertex (Vec2 drawX (drawY + tileHeight))
+                     (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+    in SortableQuad
+        { sqSortKey  = sortKey
+        , sqV0       = v0
+        , sqV1       = v1
+        , sqV2       = v2
+        , sqV3       = v3
+        , sqTexture  = cursorBgTex
         , sqLayer    = worldLayer
         }

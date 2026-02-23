@@ -629,6 +629,26 @@ handleWorldCommand env logger cmd = do
                     logWarn logger CatWorld $ 
                         "World not found for cursor hover texture update: "
                             <> unWorldPageId pageId
+        WorldSetWorldCursorSelectBgTexture pageId tid → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState →
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                      (cs { worldCursorBgTexture = Just tid }, ())
+                Nothing → 
+                    logWarn logger CatWorld $ 
+                        "World not found for cursor texture update: "
+                            <> unWorldPageId pageId
+        WorldSetWorldCursorHoverBgTexture pageId tid → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState → do
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                      (cs { worldHoverBgTexture = Just tid }, ())
+                Nothing → 
+                    logWarn logger CatWorld $ 
+                        "World not found for cursor hover texture update: "
+                            <> unWorldPageId pageId
 
 unWorldPageId ∷ WorldPageId → Text
 unWorldPageId (WorldPageId t) = t

@@ -24,7 +24,8 @@ import World.Render.ViewBounds (computeViewBounds, isTileVisible)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
 import World.Render.TileQuads
     ( tileToQuad, blankTileToQuad, oceanTileToQuad, lavaTileToQuad
-    , freshwaterTileToQuad, worldCursorToQuad)
+    , freshwaterTileToQuad, worldCursorToQuad, worldCursorBgToQuad
+    )
 
 -----------------------------------------------------------
 -- Render World Quads
@@ -302,46 +303,42 @@ renderWorldCursorQuads env worldState tileAlpha = do
                return newCs
            else return cs
 
-    -- Build hover quad
-    let hoverQuads = case (hoverResult, worldHoverTexture cs') of
-            (Just (gx, gy, cursorZ, xOff), Just tex) →
-                V.singleton $ worldCursorToQuad lookupSlot lookupFmSlot textures facing
-                    gx gy cursorZ zSlice effectiveDepth tileAlpha xOff tex
+    -- Build hover quads (bg + fg)
+    let hoverQuads = case hoverResult of
+            Just (gx, gy, hz, xOff) →
+                let fgQuad = case worldHoverTexture cs' of
+                        Just tex → V.singleton $
+                            worldCursorToQuad lookupSlot lookupFmSlot
+                              textures facing gx gy hz zSlice effectiveDepth
+                              tileAlpha xOff tex
+                        Nothing → V.empty
+                    bgQuad = case worldHoverBgTexture cs' of
+                        Just tex → V.singleton $
+                            worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
+                                gx gy hz zSlice effectiveDepth tileAlpha xOff tex
+                        Nothing → V.empty
+                in bgQuad <> fgQuad
             _ → V.empty
 
-    -- Look up the visible Z for a known grid tile (for persistent selection)
-    let selectedTileInfo sgx sgy =
-            let (chunkCoord, (lx, ly)) = globalToChunk sgx sgy
-            in case HM.lookup chunkCoord (wtdChunks tileData) of
-                Nothing → Nothing
-                Just lc →
-                    let idx = columnIndex lx ly
-                        col = lcTiles lc V.! idx
-                        colLen  = VU.length (ctMats col)
-                        colMinZ = ctStartZ col
-
-                        searchFrom z
-                          | z < max colMinZ (zSlice - effectiveDepth) = Nothing
-                          | otherwise =
-                              let i = z - colMinZ
-                              in if i >= 0 ∧ i < colLen ∧ ctMats col VU.! i ≠ 0
-                                 then Just z
-                                 else searchFrom (z - 1)
-                    in case searchFrom zSlice of
-                        Nothing  → Nothing
-                        Just visZ →
-                            case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
-                                Just xOff → Just (visZ, xOff)
-                                Nothing   → Nothing
-
-    -- Build select quad — use the exact Z that was stored at click time
-    let selectQuads = case (worldSelectedTile cs', worldCursorTexture cs') of
-            (Just (sgx, sgy, sz), Just tex) →
+    -- Build select quads (bg + fg)
+    let selectQuads = case (worldSelectedTile cs', worldCursorTexture cs', worldCursorBgTexture cs') of
+            (Just (sgx, sgy, sz), _, _) →
                 let (chunkCoord, _) = globalToChunk sgx sgy
                 in case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
                     Just xOff →
-                        V.singleton $ worldCursorToQuad lookupSlot lookupFmSlot textures facing
-                            sgx sgy sz zSlice effectiveDepth tileAlpha xOff tex
+                        let fgQuad = case worldCursorTexture cs' of
+                                Just tex → V.singleton $
+                                    worldCursorToQuad lookupSlot lookupFmSlot
+                                                      textures facing sgx sgy sz
+                                                      zSlice effectiveDepth
+                                                      tileAlpha xOff tex
+                                Nothing → V.empty
+                            bgQuad = case worldCursorBgTexture cs' of
+                                Just tex → V.singleton $
+                                    worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
+                                        sgx sgy sz zSlice effectiveDepth tileAlpha xOff tex
+                                Nothing → V.empty
+                        in bgQuad <> fgQuad
                     Nothing → V.empty
             _ → V.empty
 

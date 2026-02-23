@@ -14,7 +14,9 @@ data CursorState = CursorState
     , zoomSelectNow   ∷ Bool
     , worldCursorPos ∷ Maybe (Int, Int)
     , worldCursorTexture ∷ Maybe TextureHandle
+    , worldCursorBgTexture ∷ Maybe TextureHandle
     , worldHoverTexture ∷ Maybe TextureHandle
+    , worldHoverBgTexture ∷ Maybe TextureHandle
     , worldSelectedTile ∷ Maybe (Int, Int, Int)
     , worldSelectNow ∷ Bool
     }

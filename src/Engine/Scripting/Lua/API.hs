@@ -201,6 +201,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
     (worldSetWorldCursorSelectTextureFn env)
   registerLuaFunction "setWorldCursorHoverTexture"
     (worldSetWorldCursorHoverTextureFn env)
+  registerLuaFunction "setWorldCursorSelectBgTexture"
+    (worldSetWorldCursorSelectBgTextureFn env)
+  registerLuaFunction "setWorldCursorHoverBgTexture"
+    (worldSetWorldCursorHoverBgTextureFn env)
   registerLuaFunction "setWorldCursorHover" (worldSetWorldCursorHoverFn env)
   registerLuaFunction "setWorldCursorSelect" (worldSetWorldCursorSelectFn env)
   registerLuaFunction "clearWorldCursorSelect" (worldClearWorldCursorSelectFn env)

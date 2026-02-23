@@ -97,6 +97,8 @@ data WorldCommand
     | WorldSetZoomCursorHoverTexture WorldPageId TextureHandle
     | WorldSetWorldCursorSelectTexture WorldPageId TextureHandle
     | WorldSetWorldCursorHoverTexture WorldPageId TextureHandle
+    | WorldSetWorldCursorSelectBgTexture WorldPageId TextureHandle
+    | WorldSetWorldCursorHoverBgTexture WorldPageId TextureHandle
     | WorldSetWorldCursorHover WorldPageId Int Int
     | WorldSetWorldCursorSelect WorldPageId
     | WorldSetWorldCursorDeselect WorldPageId

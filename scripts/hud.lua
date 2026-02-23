@@ -30,10 +30,12 @@ hud.texToolDefaultSelected = nil
 hud.texToolMine            = nil
 hud.texToolMineSelected    = nil
 
-hud.texZoomSelect  = nil
-hud.texZoomHover   = nil
-hud.texWorldSelect = nil
-hud.texWorldHover  = nil
+hud.texZoomSelect    = nil
+hud.texZoomHover     = nil
+hud.texWorldSelect   = nil
+hud.texWorldSelectBg = nil
+hud.texWorldHover    = nil
+hud.texWorldHoverBg  = nil
 
 -- Base sizes (unscaled)
 hud.baseSizes = {
@@ -66,7 +68,9 @@ function hud.init(width, height)
     hud.texZoomSelect          = engine.loadTexture("assets/textures/hud/utility/zoom_select.png")
     hud.texZoomHover           = engine.loadTexture("assets/textures/hud/utility/zoom_hover.png")
     hud.texWorldSelect         = engine.loadTexture("assets/textures/hud/utility/world_select.png")
+    hud.texWorldSelectBg       = engine.loadTexture("assets/textures/hud/utility/world_select_bg.png")
     hud.texWorldHover          = engine.loadTexture("assets/textures/hud/utility/world_hover.png")
+    hud.texWorldHoverBg        = engine.loadTexture("assets/textures/hud/utility/world_hover_bg.png")
     engine.logDebug("HUD initialized")
 end
 
@@ -94,9 +98,12 @@ function hud.createUI()
         world.setZoomCursorSelectTexture("main_world", hud.texZoomSelect)
         world.setZoomCursorHoverTexture("main_world", hud.texZoomHover)
     end
-    if hud.texWorldSelect and hud.texWorldHover then
+    if hud.texWorldSelect and hud.texWorldHover
+            and hud.texWorldSelectBg and hud.texWorldHoverBg then
         world.setWorldCursorSelectTexture("main_world", hud.texWorldSelect)
         world.setWorldCursorHoverTexture("main_world", hud.texWorldHover)
+        world.setWorldCursorSelectBgTexture("main_world", hud.texWorldSelectBg)
+        world.setWorldCursorHoverBgTexture("main_world", hud.texWorldHoverBg)
     end
 
     -- Position: bottom-right, anchored so the right edge of the last

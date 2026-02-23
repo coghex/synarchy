@@ -20,6 +20,8 @@ module Engine.Scripting.Lua.API.World
     , worldSetWorldCursorHoverFn
     , worldSetWorldCursorSelectFn
     , worldClearWorldCursorSelectFn
+    , worldSetWorldCursorSelectBgTextureFn
+    , worldSetWorldCursorHoverBgTextureFn
     ) where
 
 import UPrelude
@@ -316,5 +318,31 @@ worldSetWorldCursorHoverTextureFn env = do
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetWorldCursorHoverTexture pageId texHandle
+        _ → pure ()
+    return 0
+
+worldSetWorldCursorHoverBgTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetWorldCursorHoverBgTextureFn env = do
+    pageIdArg ← Lua.tostring 1
+    textureHandleArg ← Lua.tointeger 2
+    case (pageIdArg, textureHandleArg) of
+        (Just pageIdBS, Just handle) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                texHandle = TextureHandle (fromIntegral handle)
+            Q.writeQueue (worldQueue env) $
+                WorldSetWorldCursorHoverBgTexture pageId texHandle
+        _ → pure ()
+    return 0
+
+worldSetWorldCursorSelectBgTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetWorldCursorSelectBgTextureFn env = do
+    pageIdArg ← Lua.tostring 1
+    textureHandleArg ← Lua.tointeger 2
+    case (pageIdArg, textureHandleArg) of
+        (Just pageIdBS, Just handle) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                texHandle = TextureHandle (fromIntegral handle)
+            Q.writeQueue (worldQueue env) $
+                WorldSetWorldCursorSelectBgTexture pageId texHandle
         _ → pure ()
     return 0
