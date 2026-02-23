@@ -27,6 +27,8 @@ hud.texMapPressureSelected = nil
 
 hud.texToolDefault         = nil
 hud.texToolDefaultSelected = nil
+hud.texToolInfo            = nil
+hud.texToolInfoSelected    = nil
 hud.texToolMine            = nil
 hud.texToolMineSelected    = nil
 
@@ -63,6 +65,8 @@ function hud.init(width, height)
     hud.texMapPressureSelected = engine.loadTexture("assets/textures/hud/map_pressure_selected.png")
     hud.texToolDefault         = engine.loadTexture("assets/textures/hud/tool_default.png")
     hud.texToolDefaultSelected = engine.loadTexture("assets/textures/hud/tool_default_selected.png")
+    hud.texToolInfo            = engine.loadTexture("assets/textures/hud/tool_info.png")
+    hud.texToolInfoSelected    = engine.loadTexture("assets/textures/hud/tool_info_selected.png")
     hud.texToolMine            = engine.loadTexture("assets/textures/hud/tool_mine.png")
     hud.texToolMineSelected    = engine.loadTexture("assets/textures/hud/tool_mine_selected.png")
     hud.texZoomSelect          = engine.loadTexture("assets/textures/hud/utility/zoom_select.png")
@@ -168,10 +172,16 @@ function hud.createUI()
                 name        = "tool_default",
                 texDefault  = hud.texToolDefault,
                 texSelected = hud.texToolDefaultSelected,
+                options = {
+                    { name = "tool_info",
+                      texDefault = hud.texToolInfo,
+                      texSelected = hud.texToolInfoSelected },
+                },
             },
         },
         selectedIndex = 2,   -- toolDefault selected by default
         direction = "up",
+        optionsDirection = "right",
         size    = hud.baseSizes.buttonSize,
         padding = hud.baseSizes.padding,
         x       = toolAnchorX,
@@ -179,7 +189,7 @@ function hud.createUI()
         zIndex  = 100,
         uiscale = uiscale,
         onChange = function(index, itemName)
---            world.setToolMode("main_world", itemName)
+            world.setToolMode("main_world", itemName)
             engine.logDebug("Tool mode changed to: " .. tostring(itemName))
         end,
     })

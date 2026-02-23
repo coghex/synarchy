@@ -649,6 +649,17 @@ handleWorldCommand env logger cmd = do
                     logWarn logger CatWorld $ 
                         "World not found for cursor hover texture update: "
                             <> unWorldPageId pageId
+        WorldSetToolMode pagedId mode → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pagedId (wmWorlds mgr) of
+                Just worldState → do
+                    writeIORef (wsToolModeRef worldState) mode
+                    logInfo logger CatWorld $
+                        "Tool mode updated for world: " <> unWorldPageId pagedId
+                        <> ", new mode: " <> T.pack (show mode)
+                Nothing →
+                    logDebug logger CatWorld $
+                        "World not found for tool mode update: " <> unWorldPageId pagedId
 
 unWorldPageId ∷ WorldPageId → Text
 unWorldPageId (WorldPageId t) = t

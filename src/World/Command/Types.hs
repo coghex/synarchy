@@ -8,6 +8,7 @@ import UPrelude
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Page.Types (WorldPageId(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
+import World.Tool.Types (ToolMode(..))
 
 data WorldTextureType
     = GraniteTexture
@@ -102,4 +103,5 @@ data WorldCommand
     | WorldSetWorldCursorHover WorldPageId Int Int
     | WorldSetWorldCursorSelect WorldPageId
     | WorldSetWorldCursorDeselect WorldPageId
+    | WorldSetToolMode WorldPageId ToolMode
     deriving (Show, Eq)

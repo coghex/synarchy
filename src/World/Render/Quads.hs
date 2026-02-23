@@ -214,6 +214,7 @@ renderWorldCursorQuads env worldState tileAlpha = do
     textures ← readIORef (wsTexturesRef worldState)
     paramsM  ← readIORef (wsGenParamsRef worldState)
     cs       ← readIORef (wsCursorRef worldState)
+    toolMode ← readIORef (wsToolModeRef worldState)
 
     (winW, winH) ← readIORef (windowSizeRef env)
     (fbW, fbH)   ← readIORef (framebufferSizeRef env)
@@ -221,125 +222,128 @@ renderWorldCursorQuads env worldState tileAlpha = do
     mBindless    ← readIORef (textureSystemRef env)
     defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
 
-    let lookupSlot texHandle = fromIntegral $ case mBindless of
-            Just bindless → getTextureSlotIndex texHandle bindless
-            Nothing       → 0
-        defFmSlot = fromIntegral defFmSlotWord
-        lookupFmSlot texHandle =
-            let s = lookupSlot texHandle
-            in if s ≡ 0 then defFmSlot else fromIntegral s
-        facing    = camFacing camera
-        zoom      = camZoom camera
-        zSlice    = camZSlice camera
-        (camX, camY) = camPosition camera
-        worldSize = case paramsM of
-                      Nothing     → 128
-                      Just params → wgpWorldSize params
-        effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
-        vb = computeViewBounds camera fbW fbH effectiveDepth
+    if toolMode ≠ InfoTool
+    then return V.empty
+    else do
+        let lookupSlot texHandle = fromIntegral $ case mBindless of
+                Just bindless → getTextureSlotIndex texHandle bindless
+                Nothing       → 0
+            defFmSlot = fromIntegral defFmSlotWord
+            lookupFmSlot texHandle =
+                let s = lookupSlot texHandle
+                in if s ≡ 0 then defFmSlot else fromIntegral s
+            facing    = camFacing camera
+            zoom      = camZoom camera
+            zSlice    = camZSlice camera
+            (camX, camY) = camPosition camera
+            worldSize = case paramsM of
+                          Nothing     → 128
+                          Just params → wgpWorldSize params
+            effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
+            vb = computeViewBounds camera fbW fbH effectiveDepth
 
-    -- Hit-test: unproject screen pixel considering elevation.
-    -- For each Z from zSlice down, compute which (gx,gy) would place
-    -- a tile at that Z under the mouse, then check if that tile is solid.
-    let hitTest pixX pixY =
-            let aspect = fromIntegral fbW / fromIntegral fbH
-                vw     = zoom * aspect
-                vh     = zoom
-                normX  = fromIntegral pixX / fromIntegral winW
-                normY  = fromIntegral pixY / fromIntegral winH
-                viewX  = (normX * 2.0 - 1.0) * vw
-                viewY  = (normY * 2.0 - 1.0) * vh
-                worldX = viewX + camX
-                worldY = viewY + camY
+        -- Hit-test: unproject screen pixel considering elevation.
+        -- For each Z from zSlice down, compute which (gx,gy) would place
+        -- a tile at that Z under the mouse, then check if that tile is solid.
+        let hitTest pixX pixY =
+                let aspect = fromIntegral fbW / fromIntegral fbH
+                    vw     = zoom * aspect
+                    vh     = zoom
+                    normX  = fromIntegral pixX / fromIntegral winW
+                    normY  = fromIntegral pixY / fromIntegral winH
+                    viewX  = (normX * 2.0 - 1.0) * vw
+                    viewY  = (normY * 2.0 - 1.0) * vh
+                    worldX = viewX + camX
+                    worldY = viewY + camY
 
-                -- For a tile at elevation z, its screen Y is offset by
-                -- (z - zSlice) * tileSideHeight upward.  So the world-space
-                -- Y that would produce that screen position is:
-                --   worldY = tileWorldY - (z - zSlice) * tileSideHeight
-                --   tileWorldY = worldY + (z - zSlice) * tileSideHeight
-                zMin = zSlice - effectiveDepth
+                    -- For a tile at elevation z, its screen Y is offset by
+                    -- (z - zSlice) * tileSideHeight upward.  So the world-space
+                    -- Y that would produce that screen position is:
+                    --   worldY = tileWorldY - (z - zSlice) * tileSideHeight
+                    --   tileWorldY = worldY + (z - zSlice) * tileSideHeight
+                    zMin = zSlice - effectiveDepth
 
-                tryZ z
-                  | z < zMin  = Nothing
-                  | otherwise =
-                    let relZ = z - zSlice
-                        adjustedWorldY = worldY + fromIntegral relZ * tileSideHeight
-                                       - tileHeight * 0.5
-                        (gx, gy) = worldToGrid facing worldX adjustedWorldY
-                        (chunkCoord, (lx, ly)) = globalToChunk gx gy
-                    in case HM.lookup chunkCoord (wtdChunks tileData) of
-                        Nothing → tryZ (z - 1)
-                        Just lc →
-                            let idx = columnIndex lx ly
-                                col = lcTiles lc V.! idx
-                                colLen  = VU.length (ctMats col)
-                                colMinZ = ctStartZ col
-                                i = z - colMinZ
-                            in if i < 0 ∨ i >= colLen
-                               then tryZ (z - 1)
-                               else if ctMats col VU.! i ≠ 0
-                                    then case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
-                                           Just xOff → Just (gx, gy, z, xOff)
-                                           Nothing   → tryZ (z - 1)
-                                    else tryZ (z - 1)
+                    tryZ z
+                      | z < zMin  = Nothing
+                      | otherwise =
+                        let relZ = z - zSlice
+                            adjustedWorldY = worldY + fromIntegral relZ * tileSideHeight
+                                           - tileHeight * 0.5
+                            (gx, gy) = worldToGrid facing worldX adjustedWorldY
+                            (chunkCoord, (lx, ly)) = globalToChunk gx gy
+                        in case HM.lookup chunkCoord (wtdChunks tileData) of
+                            Nothing → tryZ (z - 1)
+                            Just lc →
+                                let idx = columnIndex lx ly
+                                    col = lcTiles lc V.! idx
+                                    colLen  = VU.length (ctMats col)
+                                    colMinZ = ctStartZ col
+                                    i = z - colMinZ
+                                in if i < 0 ∨ i >= colLen
+                                   then tryZ (z - 1)
+                                   else if ctMats col VU.! i ≠ 0
+                                        then case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
+                                               Just xOff → Just (gx, gy, z, xOff)
+                                               Nothing   → tryZ (z - 1)
+                                        else tryZ (z - 1)
 
-            in tryZ zSlice
+                in tryZ zSlice
 
-    -- Compute hover tile
-    let hoverResult = case worldCursorPos cs of
-            Nothing           → Nothing
-            Just (pixX, pixY) → hitTest pixX pixY
+        -- Compute hover tile
+        let hoverResult = case worldCursorPos cs of
+                Nothing           → Nothing
+                Just (pixX, pixY) → hitTest pixX pixY
 
-    -- If select flag is set, snapshot hover → selected
-    -- If select flag is set, snapshot hover → selected (including Z)
-    cs' ← if worldSelectNow cs
-           then do
-               let newCs = cs { worldSelectNow = False
-                              , worldSelectedTile = case hoverResult of
-                                    Just (gx, gy, z, _) → Just (gx, gy, z)
-                                    Nothing             → worldSelectedTile cs
-                              }
-               writeIORef (wsCursorRef worldState) newCs
-               return newCs
-           else return cs
+        -- If select flag is set, snapshot hover → selected
+        -- If select flag is set, snapshot hover → selected (including Z)
+        cs' ← if worldSelectNow cs
+               then do
+                   let newCs = cs { worldSelectNow = False
+                                  , worldSelectedTile = case hoverResult of
+                                        Just (gx, gy, z, _) → Just (gx, gy, z)
+                                        Nothing             → worldSelectedTile cs
+                                  }
+                   writeIORef (wsCursorRef worldState) newCs
+                   return newCs
+               else return cs
 
-    -- Build hover quads (bg + fg)
-    let hoverQuads = case hoverResult of
-            Just (gx, gy, hz, xOff) →
-                let fgQuad = case worldHoverTexture cs' of
-                        Just tex → V.singleton $
-                            worldCursorToQuad lookupSlot lookupFmSlot
-                              textures facing gx gy hz zSlice effectiveDepth
-                              tileAlpha xOff tex
+        -- Build hover quads (bg + fg)
+        let hoverQuads = case hoverResult of
+                Just (gx, gy, hz, xOff) →
+                    let fgQuad = case worldHoverTexture cs' of
+                            Just tex → V.singleton $
+                                worldCursorToQuad lookupSlot lookupFmSlot
+                                  textures facing gx gy hz zSlice effectiveDepth
+                                  tileAlpha xOff tex
+                            Nothing → V.empty
+                        bgQuad = case worldHoverBgTexture cs' of
+                            Just tex → V.singleton $
+                                worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
+                                    gx gy hz zSlice effectiveDepth tileAlpha xOff tex
+                            Nothing → V.empty
+                    in bgQuad <> fgQuad
+                _ → V.empty
+
+        -- Build select quads (bg + fg)
+        let selectQuads = case (worldSelectedTile cs', worldCursorTexture cs', worldCursorBgTexture cs') of
+                (Just (sgx, sgy, sz), _, _) →
+                    let (chunkCoord, _) = globalToChunk sgx sgy
+                    in case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
+                        Just xOff →
+                            let fgQuad = case worldCursorTexture cs' of
+                                    Just tex → V.singleton $
+                                        worldCursorToQuad lookupSlot lookupFmSlot
+                                                          textures facing sgx sgy sz
+                                                          zSlice effectiveDepth
+                                                          tileAlpha xOff tex
+                                    Nothing → V.empty
+                                bgQuad = case worldCursorBgTexture cs' of
+                                    Just tex → V.singleton $
+                                        worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
+                                            sgx sgy sz zSlice effectiveDepth tileAlpha xOff tex
+                                    Nothing → V.empty
+                            in bgQuad <> fgQuad
                         Nothing → V.empty
-                    bgQuad = case worldHoverBgTexture cs' of
-                        Just tex → V.singleton $
-                            worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
-                                gx gy hz zSlice effectiveDepth tileAlpha xOff tex
-                        Nothing → V.empty
-                in bgQuad <> fgQuad
-            _ → V.empty
+                _ → V.empty
 
-    -- Build select quads (bg + fg)
-    let selectQuads = case (worldSelectedTile cs', worldCursorTexture cs', worldCursorBgTexture cs') of
-            (Just (sgx, sgy, sz), _, _) →
-                let (chunkCoord, _) = globalToChunk sgx sgy
-                in case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
-                    Just xOff →
-                        let fgQuad = case worldCursorTexture cs' of
-                                Just tex → V.singleton $
-                                    worldCursorToQuad lookupSlot lookupFmSlot
-                                                      textures facing sgx sgy sz
-                                                      zSlice effectiveDepth
-                                                      tileAlpha xOff tex
-                                Nothing → V.empty
-                            bgQuad = case worldCursorBgTexture cs' of
-                                Just tex → V.singleton $
-                                    worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
-                                        sgx sgy sz zSlice effectiveDepth tileAlpha xOff tex
-                                Nothing → V.empty
-                        in bgQuad <> fgQuad
-                    Nothing → V.empty
-            _ → V.empty
-
-    return $ hoverQuads <> selectQuads
+        return $ hoverQuads <> selectQuads

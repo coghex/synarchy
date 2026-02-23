@@ -19,6 +19,7 @@ import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
 import World.Render.Camera.Types (WorldCamera(..), WorldQuadCache(..))
 import World.Render.Textures.Types (WorldTextures(..), defaultWorldTextures)
 import World.Render.Zoom.Types (ZoomChunkEntry(..), ZoomQuadCache(..), BakedZoomEntry(..), ZoomMapMode(..))
+import World.Tool.Types (ToolMode(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, defaultWorldDate)
 import World.Region.Types (RegionCoord(..))
@@ -43,6 +44,7 @@ data WorldState = WorldState
     , wsRiverFlowRef ∷ IORef (HM.HashMap GeoFeatureId Float)
     , wsMapModeRef ∷ IORef ZoomMapMode
     , wsCursorRef ∷ IORef CursorState
+    , wsToolModeRef ∷ IORef ToolMode
     }
 
 emptyWorldState ∷ IO WorldState
@@ -65,12 +67,13 @@ emptyWorldState = do
     wsRiverFlowRef ← newIORef HM.empty
     wsMapModeRef ← newIORef ZMDefault
     wsCursorRef ← newIORef emptyCursorState
+    wsToolModeRef ← newIORef DefaultTool
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
                         wsClimateRef wsRiverFlowRef wsMapModeRef
-                        wsCursorRef
+                        wsCursorRef wsToolModeRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]

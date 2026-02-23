@@ -321,6 +321,7 @@ library
                      World.State.Types
                      World.Scale
                      World.Slope
+                     World.Tool.Types
                      World.Tile.Types
                      World.Time.Types
                      World.Fluids

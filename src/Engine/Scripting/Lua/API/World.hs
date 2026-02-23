@@ -22,6 +22,7 @@ module Engine.Scripting.Lua.API.World
     , worldClearWorldCursorSelectFn
     , worldSetWorldCursorSelectBgTextureFn
     , worldSetWorldCursorHoverBgTextureFn
+    , worldSetToolModeFn
     ) where
 
 import UPrelude
@@ -33,6 +34,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
 import World.Types (WorldCommand(..), WorldPageId(..), WorldTextureType(..))
+import World.Tool.Types (ToolMode(..), textToToolMode)
 import World.Render.Zoom.Types (ZoomMapMode(..), textToMapMode)
 import Data.IORef (atomicModifyIORef')
 
@@ -344,5 +346,18 @@ worldSetWorldCursorSelectBgTextureFn env = do
                 texHandle = TextureHandle (fromIntegral handle)
             Q.writeQueue (worldQueue env) $
                 WorldSetWorldCursorSelectBgTexture pageId texHandle
+        _ → pure ()
+    return 0
+
+worldSetToolModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetToolModeFn env = do
+    pageIdArg ← Lua.tostring 1
+    toolModeArg ← Lua.tostring 2
+    case (pageIdArg, toolModeArg) of
+        (Just pageIdBS, Just toolModeBS) → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                toolMode = TE.decodeUtf8 toolModeBS
+            Q.writeQueue (worldQueue env) $
+                WorldSetToolMode pageId $ textToToolMode toolMode
         _ → pure ()
     return 0
