@@ -191,6 +191,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setTimeScale" (worldSetTimeScaleFn env)
   registerLuaFunction "setMapMode" (worldSetMapModeFn env)
   registerLuaFunction "setZoomCursorHover" (worldSetZoomCursorHoverFn env)
+  registerLuaFunction "setZoomCursorSelect" (worldSetZoomCursorSelectFn env)
+  registerLuaFunction "clearZoomCursorSelect" (worldClearZoomCursorSelectFn env)
   registerLuaFunction "setZoomCursorSelectTexture"
     (worldSetZoomCursorSelectTextureFn env)
   registerLuaFunction "setZoomCursorHoverTexture"

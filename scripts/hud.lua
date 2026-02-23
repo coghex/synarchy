@@ -220,6 +220,17 @@ function hud.hide()
     engine.logDebug("HUD hidden")
 end
 
+-- Add to the same onMouseDown, or a separate check:
+function hud.onMouseDown(button_num, mx, my)
+    if hud.currentView == "zoomed_out" then
+        if button_num == 1 then
+            world.setZoomCursorSelect("main_world")
+        elseif button_num == 2 then
+            world.clearZoomCursorSelect("main_world")
+        end
+    end
+end
+
 -----------------------------------------------------------
 -- manage hud
 -----------------------------------------------------------

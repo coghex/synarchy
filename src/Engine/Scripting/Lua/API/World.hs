@@ -11,6 +11,8 @@ module Engine.Scripting.Lua.API.World
     , worldSetTimeScaleFn
     , worldSetMapModeFn
     , worldSetZoomCursorHoverFn
+    , worldSetZoomCursorSelectFn
+    , worldClearZoomCursorSelectFn
     , worldSetZoomCursorSelectTextureFn
     , worldSetZoomCursorHoverTextureFn
     ) where
@@ -198,6 +200,30 @@ worldSetZoomCursorHoverFn env = do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
             Q.writeQueue (worldQueue env) $
                 WorldSetZoomCursorHover pageId (round x) (round y)
+        _ → pure ()
+    return 0
+
+-- | world.setZoomCursorSelect(pageId, x, y)
+worldSetZoomCursorSelectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetZoomCursorSelectFn env = do
+    pageIdArg ← Lua.tostring 1
+    case pageIdArg of
+        Just pageIdBS → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env) $ WorldSetZoomCursorSelect pageId
+        _ → pure ()
+    return 0
+
+-- | world.clearZoomCursorDeselect(pageId)
+worldClearZoomCursorSelectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldClearZoomCursorSelectFn env = do
+    pageIdArg ← Lua.tostring 1
+
+    case pageIdArg of
+        Just pageIdBS → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env) $
+                WorldSetZoomCursorDeselect pageId
         _ → pure ()
     return 0
 

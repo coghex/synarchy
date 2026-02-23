@@ -287,6 +287,9 @@ function uiManager.onMouseDown(button_num, x, y)
     if randbox then
         randbox.onClickOutside(sx, sy)
     end
+    if hud then
+        hud.onMouseDown(button_num, sx, sy)
+    end
 end
 
 function uiManager.onHoverEnter(elemHandle, callbackName)

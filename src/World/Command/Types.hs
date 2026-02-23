@@ -91,6 +91,8 @@ data WorldCommand
     | WorldSetTimeScale WorldPageId Float      -- ^ game-minutes per real-second
     | WorldSetMapMode WorldPageId ZoomMapMode      -- ^ map mode
     | WorldSetZoomCursorHover WorldPageId Int Int
+    | WorldSetZoomCursorSelect WorldPageId
+    | WorldSetZoomCursorDeselect WorldPageId
     | WorldSetZoomCursorSelectTexture WorldPageId TextureHandle
     | WorldSetZoomCursorHoverTexture WorldPageId TextureHandle
     deriving (Show, Eq)

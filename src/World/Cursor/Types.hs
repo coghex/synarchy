@@ -11,6 +11,8 @@ data CursorState = CursorState
     , worldCursorPos ∷ Maybe (Int, Int)
     , zoomCursorTexture ∷ Maybe TextureHandle
     , zoomHoverTexture ∷ Maybe TextureHandle
+    , zoomSelectedPos ∷ Maybe (Int, Int)
+    , zoomSelectNow   ∷ Bool
     }
 
 emptyCursorState ∷ CursorState
@@ -20,4 +22,6 @@ emptyCursorState =
         , worldCursorPos = Nothing
         , zoomCursorTexture = Nothing
         , zoomHoverTexture = Nothing
+        , zoomSelectedPos = Nothing
+        , zoomSelectNow = False
         }

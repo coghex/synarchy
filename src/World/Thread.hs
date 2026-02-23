@@ -23,7 +23,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
 import World.Generate
-import World.Grid (zoomFadeEnd)
+import World.Grid (zoomFadeEnd, worldToGrid)
 import World.Geology (buildTimeline, logTimeline)
 import World.Geology.Log (formatTimeline, formatPlatesSummary)
 import World.Fluids (computeOceanMap, computeChunkFluid)
@@ -552,6 +552,20 @@ handleWorldCommand env logger cmd = do
                 Nothing → 
                     logWarn logger CatWorld $ 
                         "World not found for cursor hover update: " <> unWorldPageId pageId
+        WorldSetZoomCursorSelect pageId → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState →
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                        (cs { zoomSelectNow = True }, ())
+                Nothing → pure ()
+        WorldSetZoomCursorDeselect pageId → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState →
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                        (cs { zoomSelectedPos = Nothing, zoomSelectNow = False }, ())
+                Nothing → pure ()
         WorldSetZoomCursorSelectTexture pageId tid → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
