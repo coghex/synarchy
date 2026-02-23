@@ -31,7 +31,7 @@ import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLay
 import World.ZoomMap (generateZoomMapQuads, generateBackgroundQuads)
 
 import World.Render.Camera (cameraChanged, camEpsilon)
-import World.Render.Quads (renderWorldQuads)
+import World.Render.Quads (renderWorldQuads, renderWorldCursorQuads)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Render.ChunkCulling (isChunkRelevantForSlice)
 import World.Render.Textures ()
@@ -84,6 +84,18 @@ updateWorldTiles env = do
                     Nothing → return V.empty
             return $ V.concat quads
 
+    -- Cursor quads are generated every frame (cheap: just 1-2 quads)
+    -- so they respond instantly to mouse movement
+    worldCursorQuads ← if tileAlpha ≤ 0.001
+        then return V.empty
+        else do
+            cursorResults ← forM (wmVisible worldManager) $ \pageId →
+                case lookup pageId (wmWorlds worldManager) of
+                    Just worldState →
+                        renderWorldCursorQuads env worldState tileAlpha
+                    Nothing → return V.empty
+            return $ V.concat cursorResults
+
     zoomQuads ← generateZoomMapQuads env camera fbW fbH
 
     let shouldTrack = camZTracking camera
@@ -110,5 +122,5 @@ updateWorldTiles env = do
                         Nothing → return ()
                 Nothing → return ()
 
-    let allQuads = tileQuads <> zoomQuads
+    let allQuads = tileQuads <> worldCursorQuads <> zoomQuads
     return allQuads

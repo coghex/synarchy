@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Render.Quads
     ( renderWorldQuads
+    , renderWorldCursorQuads
     ) where
 
 import UPrelude
@@ -8,7 +9,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.Maybe (isJust)
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..), Camera2D(..))
@@ -17,16 +18,13 @@ import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Fluids (FluidCell(..), FluidType(..), seaLevel)
 import World.Generate (chunkToGlobal, viewDepth)
-import World.Grid (gridToScreen, tileSideHeight, tileWidth, tileHeight)
+import World.Generate.Coordinates (globalToChunk)
+import World.Grid (gridToScreen, tileSideHeight, tileWidth, tileHeight, worldToGrid)
 import World.Render.ViewBounds (computeViewBounds, isTileVisible)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
 import World.Render.TileQuads
-    ( tileToQuad
-    , blankTileToQuad
-    , oceanTileToQuad
-    , lavaTileToQuad
-    , freshwaterTileToQuad
-    )
+    ( tileToQuad, blankTileToQuad, oceanTileToQuad, lavaTileToQuad
+    , freshwaterTileToQuad, worldCursorToQuad)
 
 -----------------------------------------------------------
 -- Render World Quads
@@ -203,3 +201,103 @@ renderWorldQuads env worldState zoomAlpha snap = do
             ) visibleChunksWithOffset
 
     return $! V.concat chunkVectors
+
+-----------------------------------------------------------
+-- World Cursor Quads (generated every frame, not cached)
+-----------------------------------------------------------
+
+renderWorldCursorQuads ∷ EngineEnv → WorldState → Float → IO (V.Vector SortableQuad)
+renderWorldCursorQuads env worldState tileAlpha = do
+    camera   ← readIORef (cameraRef env)
+    tileData ← readIORef (wsTilesRef worldState)
+    textures ← readIORef (wsTexturesRef worldState)
+    paramsM  ← readIORef (wsGenParamsRef worldState)
+    cs       ← readIORef (wsCursorRef worldState)
+
+    (winW, winH) ← readIORef (windowSizeRef env)
+    (fbW, fbH)   ← readIORef (framebufferSizeRef env)
+
+    mBindless    ← readIORef (textureSystemRef env)
+    defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
+
+    let lookupSlot texHandle = fromIntegral $ case mBindless of
+            Just bindless → getTextureSlotIndex texHandle bindless
+            Nothing       → 0
+        defFmSlot = fromIntegral defFmSlotWord
+        lookupFmSlot texHandle =
+            let s = lookupSlot texHandle
+            in if s ≡ 0 then defFmSlot else fromIntegral s
+        facing    = camFacing camera
+        zoom      = camZoom camera
+        zSlice    = camZSlice camera
+        (camX, camY) = camPosition camera
+        worldSize = case paramsM of
+                      Nothing     → 128
+                      Just params → wgpWorldSize params
+        effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
+        vb = computeViewBounds camera fbW fbH effectiveDepth
+
+    -- Pixel → grid tile (same camera as everything else this frame)
+    let pixelToTile pixX pixY =
+            let aspect = fromIntegral fbW / fromIntegral fbH
+                vw     = zoom * aspect
+                vh     = zoom
+                normX  = fromIntegral pixX / fromIntegral winW
+                normY  = fromIntegral pixY / fromIntegral winH
+                viewX  = (normX * 2.0 - 1.0) * vw
+                viewY  = (normY * 2.0 - 1.0) * vh
+            in worldToGrid facing (viewX + camX) (viewY + camY)
+
+    -- Look up the surface elevation and wrapping offset for a grid tile
+    let tileInfo gx gy =
+            let (chunkCoord, (lx, ly)) = globalToChunk gx gy
+            in case HM.lookup chunkCoord (wtdChunks tileData) of
+                Just lc →
+                    let surfZ = lcSurfaceMap lc VU.! columnIndex lx ly
+                        -- Clamp to zSlice: the cursor should sit on the
+                        -- topmost visible surface, not above the slice plane
+                        cursorZ = min surfZ zSlice
+                    in case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
+                        Just xOff → Just (cursorZ, xOff)
+                        Nothing   → Nothing
+                Nothing → Nothing
+
+    -- Compute hover tile
+    let hoverResult = case worldCursorPos cs of
+            Nothing         → Nothing
+            Just (pixX, pixY) →
+                let (gx, gy) = pixelToTile pixX pixY
+                in case tileInfo gx gy of
+                    Just (cursorZ, xOff) → Just (gx, gy, cursorZ, xOff)
+                    Nothing              → Nothing
+
+    -- If select flag is set, snapshot hover → selected
+    cs' ← if worldSelectNow cs
+           then do
+               let newCs = cs { worldSelectNow = False
+                              , worldSelectedTile = case hoverResult of
+                                    Just (gx, gy, _, _) → Just (gx, gy)
+                                    Nothing             → worldSelectedTile cs
+                              }
+               writeIORef (wsCursorRef worldState) newCs
+               return newCs
+           else return cs
+
+    -- Build hover quad
+    let hoverQuads = case (hoverResult, worldHoverTexture cs') of
+            (Just (gx, gy, cursorZ, xOff), Just tex) →
+                V.singleton $ worldCursorToQuad lookupSlot lookupFmSlot textures facing
+                    gx gy cursorZ zSlice effectiveDepth tileAlpha xOff tex
+            _ → V.empty
+
+    -- Build select quad
+    let selectQuads = case (worldSelectedTile cs', worldCursorTexture cs') of
+            (Just (sgx, sgy), Just tex) →
+                case tileInfo sgx sgy of
+                    Just (cursorZ, xOff) →
+                        V.singleton $ worldCursorToQuad lookupSlot lookupFmSlot textures facing
+                            sgx sgy cursorZ zSlice effectiveDepth tileAlpha xOff tex
+                    Nothing → V.empty
+            _ → V.empty
+
+    return $ hoverQuads <> selectQuads

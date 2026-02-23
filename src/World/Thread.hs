@@ -574,7 +574,8 @@ handleWorldCommand env logger cmd = do
                       (cs { zoomCursorTexture = Just tid }, ())
                 Nothing → 
                     logWarn logger CatWorld $ 
-                        "World not found for cursor texture update: " <> unWorldPageId pageId
+                        "World not found for zoom cursor texture update: "
+                            <> unWorldPageId pageId
         WorldSetZoomCursorHoverTexture pageId tid → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
@@ -583,7 +584,51 @@ handleWorldCommand env logger cmd = do
                       (cs { zoomHoverTexture = Just tid }, ())
                 Nothing → 
                     logWarn logger CatWorld $ 
-                        "World not found for cursor hover texture update: " <> unWorldPageId pageId
+                        "World not found for zoom cursor hover texture update: "
+                            <> unWorldPageId pageId
+        WorldSetWorldCursorHover pageId x y → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState →
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                      (cs { worldCursorPos = Just (x, y) }, ())
+                Nothing → 
+                    logWarn logger CatWorld $ 
+                        "World not found for cursor hover update: " <> unWorldPageId pageId
+        WorldSetWorldCursorSelect pageId → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState →
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                        (cs { worldSelectNow = True }, ())
+                Nothing → pure ()
+        WorldSetWorldCursorDeselect pageId → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState →
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                        (cs { worldSelectedTile = Nothing, worldSelectNow = False }, ())
+                Nothing → pure ()
+        WorldSetWorldCursorSelectTexture pageId tid → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState →
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                      (cs { worldCursorTexture = Just tid }, ())
+                Nothing → 
+                    logWarn logger CatWorld $ 
+                        "World not found for cursor texture update: "
+                            <> unWorldPageId pageId
+        WorldSetWorldCursorHoverTexture pageId tid → do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState → do
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                      (cs { worldHoverTexture = Just tid }, ())
+                Nothing → 
+                    logWarn logger CatWorld $ 
+                        "World not found for cursor hover texture update: "
+                            <> unWorldPageId pageId
 
 unWorldPageId ∷ WorldPageId → Text
 unWorldPageId (WorldPageId t) = t

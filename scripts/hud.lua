@@ -16,13 +16,13 @@ hud.currentView = "none"  -- "zoomed_in", "zoomed_out", or "none"
 hud.mapToggleId = nil
 
 -- Texture handles (loaded once)
-hud.texMapDefault         = nil
-hud.texMapDefaultSelected = nil
-hud.texMapTemp            = nil
-hud.texMapTempSelected    = nil
-hud.texMapSeaTemp         = nil
-hud.texMapSeaTempSelected = nil
-hud.texMapPressure        = nil
+hud.texMapDefault          = nil
+hud.texMapDefaultSelected  = nil
+hud.texMapTemp             = nil
+hud.texMapTempSelected     = nil
+hud.texMapSeaTemp          = nil
+hud.texMapSeaTempSelected  = nil
+hud.texMapPressure         = nil
 hud.texMapPressureSelected = nil
 
 hud.texToolDefault         = nil
@@ -30,8 +30,10 @@ hud.texToolDefaultSelected = nil
 hud.texToolMine            = nil
 hud.texToolMineSelected    = nil
 
-hud.texZoomSelect = nil
-hud.texZoomHover  = nil
+hud.texZoomSelect  = nil
+hud.texZoomHover   = nil
+hud.texWorldSelect = nil
+hud.texWorldHover  = nil
 
 -- Base sizes (unscaled)
 hud.baseSizes = {
@@ -63,6 +65,8 @@ function hud.init(width, height)
     hud.texToolMineSelected    = engine.loadTexture("assets/textures/hud/tool_mine_selected.png")
     hud.texZoomSelect          = engine.loadTexture("assets/textures/hud/utility/zoom_select.png")
     hud.texZoomHover           = engine.loadTexture("assets/textures/hud/utility/zoom_hover.png")
+    hud.texWorldSelect         = engine.loadTexture("assets/textures/hud/utility/world_select.png")
+    hud.texWorldHover          = engine.loadTexture("assets/textures/hud/utility/world_hover.png")
     engine.logDebug("HUD initialized")
 end
 
@@ -89,6 +93,10 @@ function hud.createUI()
     if hud.texZoomSelect and hud.texZoomHover then
         world.setZoomCursorSelectTexture("main_world", hud.texZoomSelect)
         world.setZoomCursorHoverTexture("main_world", hud.texZoomHover)
+    end
+    if hud.texWorldSelect and hud.texWorldHover then
+        world.setWorldCursorSelectTexture("main_world", hud.texWorldSelect)
+        world.setWorldCursorHoverTexture("main_world", hud.texWorldHover)
     end
 
     -- Position: bottom-right, anchored so the right edge of the last
@@ -228,6 +236,12 @@ function hud.onMouseDown(button_num, mx, my)
         elseif button_num == 2 then
             world.clearZoomCursorSelect("main_world")
         end
+    elseif hud.currentView == "zoomed_in" then
+        if button_num == 1 then
+            world.setWorldCursorSelect("main_world")
+        elseif button_num == 2 then
+            world.clearWorldCursorSelect("main_world")
+        end
     end
 end
 
@@ -271,6 +285,8 @@ function hud.update(dt)
     if mx and my then
         if hud.currentView == "zoomed_out" then
             world.setZoomCursorHover("main_world", mx, my)
+        elseif hud.currentView == "zoomed_in" then
+            world.setWorldCursorHover("main_world", mx, my)
         end
     end
 end

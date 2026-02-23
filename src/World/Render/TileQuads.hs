@@ -5,10 +5,13 @@ module World.Render.TileQuads
     , oceanTileToQuad
     , lavaTileToQuad
     , freshwaterTileToQuad
+    , worldCursorToQuad
     ) where
 
 import UPrelude
+import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
+import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import World.Fluids (FluidCell(..), FluidType(..), seaLevel)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight, worldLayer, applyFacing)
@@ -224,5 +227,55 @@ freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
         , sqV2       = v2
         , sqV3       = v3
         , sqTexture  = texHandle
+        , sqLayer    = worldLayer
+        }
+
+-- | Generate a cursor quad that participates in isometric sort order.
+-- The cursor sits at the surface elevation of the target tile,
+-- with a tiny sort-key nudge (+0.0004) so it draws just above
+-- the surface tile but below tiles that are in front.
+worldCursorToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+                  → WorldTextures → CameraFacing
+                  → Int → Int → Int    -- ^ gx, gy, surfaceZ
+                  → Int → Int          -- ^ zSlice, effectiveDepth
+                  → Float              -- ^ tileAlpha
+                  → Float              -- ^ xOffset (wrapping)
+                  → TextureHandle      -- ^ cursor texture
+                  → SortableQuad
+worldCursorToQuad lookupSlot lookupFmSlot textures facing
+                  gx gy surfZ zSlice effDepth tileAlpha xOffset cursorTex =
+    let (rawX, rawY) = gridToScreen facing gx gy
+        (fa, fb) = applyFacing facing gx gy
+        relativeZ = surfZ - zSlice
+        heightOffset = fromIntegral relativeZ * tileSideHeight
+        drawX = rawX + xOffset
+        drawY = rawY - heightOffset
+
+        -- Same sort key as a tile at this position, plus a small nudge
+        -- so the cursor draws just above the surface tile
+        sortKey = fromIntegral (fa + fb)
+                + fromIntegral relativeZ * 0.001
+                + 0.0004  -- after terrain (0.0), before fluid (0.0005)
+
+        actualSlot = lookupSlot cursorTex
+        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+
+        tint = Vec4 1.0 1.0 1.0 (tileAlpha * 0.7)
+
+        v0 = Vertex (Vec2 drawX drawY)
+                     (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)
+                     (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
+                     (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = Vertex (Vec2 drawX (drawY + tileHeight))
+                     (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+    in SortableQuad
+        { sqSortKey  = sortKey
+        , sqV0       = v0
+        , sqV1       = v1
+        , sqV2       = v2
+        , sqV3       = v3
+        , sqTexture  = cursorTex
         , sqLayer    = worldLayer
         }

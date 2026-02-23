@@ -95,4 +95,9 @@ data WorldCommand
     | WorldSetZoomCursorDeselect WorldPageId
     | WorldSetZoomCursorSelectTexture WorldPageId TextureHandle
     | WorldSetZoomCursorHoverTexture WorldPageId TextureHandle
+    | WorldSetWorldCursorSelectTexture WorldPageId TextureHandle
+    | WorldSetWorldCursorHoverTexture WorldPageId TextureHandle
+    | WorldSetWorldCursorHover WorldPageId Int Int
+    | WorldSetWorldCursorSelect WorldPageId
+    | WorldSetWorldCursorDeselect WorldPageId
     deriving (Show, Eq)

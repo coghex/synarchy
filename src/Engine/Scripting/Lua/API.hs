@@ -197,6 +197,13 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
     (worldSetZoomCursorSelectTextureFn env)
   registerLuaFunction "setZoomCursorHoverTexture"
     (worldSetZoomCursorHoverTextureFn env)
+  registerLuaFunction "setWorldCursorSelectTexture"
+    (worldSetWorldCursorSelectTextureFn env)
+  registerLuaFunction "setWorldCursorHoverTexture"
+    (worldSetWorldCursorHoverTextureFn env)
+  registerLuaFunction "setWorldCursorHover" (worldSetWorldCursorHoverFn env)
+  registerLuaFunction "setWorldCursorSelect" (worldSetWorldCursorSelectFn env)
+  registerLuaFunction "clearWorldCursorSelect" (worldClearWorldCursorSelectFn env)
   Lua.setglobal (Lua.Name "world")
 
   -- Camera table

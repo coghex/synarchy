@@ -8,20 +8,28 @@ import Engine.Asset.Handle (TextureHandle)
 
 data CursorState = CursorState
     { zoomCursorPos  ∷ Maybe (Int, Int)
-    , worldCursorPos ∷ Maybe (Int, Int)
     , zoomCursorTexture ∷ Maybe TextureHandle
     , zoomHoverTexture ∷ Maybe TextureHandle
     , zoomSelectedPos ∷ Maybe (Int, Int)
     , zoomSelectNow   ∷ Bool
+    , worldCursorPos ∷ Maybe (Int, Int)
+    , worldCursorTexture ∷ Maybe TextureHandle
+    , worldHoverTexture ∷ Maybe TextureHandle
+    , worldSelectedTile ∷ Maybe (Int, Int)
+    , worldSelectNow ∷ Bool
     }
 
 emptyCursorState ∷ CursorState
 emptyCursorState =
     CursorState
         { zoomCursorPos  = Nothing
-        , worldCursorPos = Nothing
         , zoomCursorTexture = Nothing
         , zoomHoverTexture = Nothing
         , zoomSelectedPos = Nothing
         , zoomSelectNow = False
+        , worldCursorPos = Nothing
+        , worldCursorTexture = Nothing
+        , worldHoverTexture = Nothing
+        , worldSelectedTile = Nothing
+        , worldSelectNow = False
         }
