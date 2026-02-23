@@ -290,11 +290,12 @@ renderWorldCursorQuads env worldState tileAlpha = do
             Just (pixX, pixY) → hitTest pixX pixY
 
     -- If select flag is set, snapshot hover → selected
+    -- If select flag is set, snapshot hover → selected (including Z)
     cs' ← if worldSelectNow cs
            then do
                let newCs = cs { worldSelectNow = False
                               , worldSelectedTile = case hoverResult of
-                                    Just (gx, gy, _, _) → Just (gx, gy)
+                                    Just (gx, gy, z, _) → Just (gx, gy, z)
                                     Nothing             → worldSelectedTile cs
                               }
                writeIORef (wsCursorRef worldState) newCs
@@ -333,13 +334,14 @@ renderWorldCursorQuads env worldState tileAlpha = do
                                 Just xOff → Just (visZ, xOff)
                                 Nothing   → Nothing
 
-    -- Build select quad
+    -- Build select quad — use the exact Z that was stored at click time
     let selectQuads = case (worldSelectedTile cs', worldCursorTexture cs') of
-            (Just (sgx, sgy), Just tex) →
-                case selectedTileInfo sgx sgy of
-                    Just (cursorZ, xOff) →
+            (Just (sgx, sgy, sz), Just tex) →
+                let (chunkCoord, _) = globalToChunk sgx sgy
+                in case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
+                    Just xOff →
                         V.singleton $ worldCursorToQuad lookupSlot lookupFmSlot textures facing
-                            sgx sgy cursorZ zSlice effectiveDepth tileAlpha xOff tex
+                            sgx sgy sz zSlice effectiveDepth tileAlpha xOff tex
                     Nothing → V.empty
             _ → V.empty
 

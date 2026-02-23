@@ -15,7 +15,7 @@ data CursorState = CursorState
     , worldCursorPos ∷ Maybe (Int, Int)
     , worldCursorTexture ∷ Maybe TextureHandle
     , worldHoverTexture ∷ Maybe TextureHandle
-    , worldSelectedTile ∷ Maybe (Int, Int)
+    , worldSelectedTile ∷ Maybe (Int, Int, Int)
     , worldSelectNow ∷ Bool
     }
 
