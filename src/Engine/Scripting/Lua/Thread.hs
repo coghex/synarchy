@@ -245,6 +245,9 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaUIClickEvent elemHandle callbackName → do
     let (ElementHandle h) = elemHandle
     broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
+  LuaUIRightClickEvent elemHandle callbackName → do
+    let (ElementHandle h) = elemHandle
+    broadcastToModules ls callbackName [ScriptNumber (fromIntegral h)]
   LuaUIScrollEvent elemHandle dx dy → do
     let (ElementHandle h) = elemHandle
     broadcastToModules ls "onUIScroll"

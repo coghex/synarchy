@@ -404,6 +404,20 @@ function uiManager.onToggleClick(elemHandle)
     return false
 end
 
+function uiManager.onToggleRightClick(elemHandle)
+    if toggle then
+        return toggle.handleRightClickByElement(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onToggleOptionClick(elemHandle)
+    if toggle then
+        return toggle.handleClickByElement(elemHandle)
+    end
+    return false
+end
+
 function uiManager.onMouseUp(button_num, x, y)
     if slider then
         slider.onMouseUp()

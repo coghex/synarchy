@@ -20,7 +20,7 @@ import Engine.Input.Bindings
 import Engine.Scripting.Lua.Types
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Core.Queue as Q
-import UI.Manager (findClickableElementAt)
+import UI.Manager (findClickableElementAt, findRightClickableElementAt)
 import UI.Types (ElementHandle(..), UIPageManager(..), upmGlobalFocus)
 import UI.Focus (FocusManager, getInputMode, InputMode(..), clearFocus
                 , FocusId(..), fmCurrentFocus)
@@ -209,32 +209,42 @@ processInput env inpSt event = case event of
             logDebug logger CatInput $ "Mouse button pressed: button=" <> T.pack (show btn)
                                     <> ", pos=(" <> T.pack (show x) <> "," <> T.pack (show y) <> ")"
             
-            -- Get window and framebuffer sizes from InputState
             (winW, winH) ← readIORef (windowSizeRef env)
             (fbW, fbH) ← readIORef (framebufferSizeRef env)
             
-            -- Calculate scale factors
             let scaleX = fromIntegral fbW / fromIntegral winW
                 scaleY = fromIntegral fbH / fromIntegral winH
                 mouseX = realToFrac x * scaleX
                 mouseY = realToFrac y * scaleY
             
             logDebug logger CatUI $ "Click at (" <> T.pack (show mouseX) <> ", " <> T.pack (show mouseY) <> ")"
-            logDebug logger CatInput $ "Converted mouse pos: (" <> T.pack (show mouseX) 
-                                    <> ", " <> T.pack (show mouseY) <> ")"
-            logDebug logger CatInput $ "Window: " <> T.pack (show winW) <> "x" <> T.pack (show winH)
-                                    <> ", Framebuffer: " <> T.pack (show fbW) <> "x" <> T.pack (show fbH)
             
-            -- Check for UI element clicks with converted coordinates
             uiMgr ← readIORef (uiManagerRef env)
-            case findClickableElementAt (mouseX, mouseY) uiMgr of
-                Just (elemHandle, callback) → do
-                    Q.writeQueue lq (LuaUIClickEvent elemHandle callback)
-                    logDebug logger CatUI $ "UI element clicked: " <> callback
-                Nothing → do
-                    -- Clicked outside UI - clear UI focus
-                    Q.writeQueue lq LuaUIFocusLost
-                    Q.writeQueue lq (LuaMouseDownEvent btn x y)
+            
+            case btn of
+              -- LEFT CLICK: use onClick callbacks (existing behavior)
+              GLFW.MouseButton'1 →
+                case findClickableElementAt (mouseX, mouseY) uiMgr of
+                    Just (elemHandle, callback) → do
+                        Q.writeQueue lq (LuaUIClickEvent elemHandle callback)
+                        logDebug logger CatUI $ "UI element left-clicked: " <> callback
+                    Nothing → do
+                        Q.writeQueue lq LuaUIFocusLost
+                        Q.writeQueue lq (LuaMouseDownEvent btn x y)
+              
+              -- RIGHT CLICK: use onRightClick callbacks
+              GLFW.MouseButton'2 →
+                case findRightClickableElementAt (mouseX, mouseY) uiMgr of
+                    Just (elemHandle, callback) → do
+                        Q.writeQueue lq (LuaUIRightClickEvent elemHandle callback)
+                        logDebug logger CatUI $ "UI element right-clicked: " <> callback
+                    Nothing → do
+                        -- No right-clickable UI element; fall through to left-click check
+                        -- or send as a generic mouse down
+                        Q.writeQueue lq (LuaMouseDownEvent btn x y)
+              
+              -- OTHER BUTTONS: existing passthrough
+              _ → Q.writeQueue lq (LuaMouseDownEvent btn x y)
         
         when (state ≡ GLFW.MouseButtonState'Released) $ do
             logDebug logger CatInput $ "Mouse button released: button=" <> T.pack (show btn)

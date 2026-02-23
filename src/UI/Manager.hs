@@ -36,8 +36,10 @@ module UI.Manager
   , setElementClickable
   , setElementZIndex
   , setElementOnClick
+  , setElementOnRightClick
   , isPointInElement
   , findClickableElementAt
+  , findRightClickableElementAt
   , findClickableAncestor
   , setBoxColor
   , setText
@@ -47,6 +49,7 @@ module UI.Manager
     -- Queries
   , getElementAbsolutePosition
   , getPageElements
+  , removeFromPage
   , getElementChildren
   , findElementAt
     -- Box textures
@@ -172,6 +175,7 @@ createElementInternal name width height pageHandle renderData mgr =
           , ueChildren   = []
           , ueRenderData = renderData
           , ueOnClick    = Nothing
+          , ueOnRightClick = Nothing
           , ueTextBuffer  = Nothing
           }
     in (handle, mgr
@@ -508,6 +512,81 @@ findElementAt pos mgr =
                         childHits = concatMap (findInTree point) sortedChildren
                         thisHit = if inBounds then [handle] else []
                     in childHits ++ thisHit
+
+-- | Set the right-click callback on an element
+setElementOnRightClick ∷ ElementHandle → Text → UIPageManager → UIPageManager
+setElementOnRightClick handle callbackName = modifyElement handle `flip` 
+    (\elem → elem { ueOnRightClick = Just callbackName })
+
+-- | Remove an element from its page's root list (without deleting it).
+-- This detaches the element so its sprites disappear, but the handle
+-- remains valid for potential re-use or deferred GC.
+removeFromPage ∷ PageHandle → ElementHandle → UIPageManager → UIPageManager
+removeFromPage pageHandle elemHandle mgr =
+    let mgr' = modifyPage pageHandle mgr $ \page →
+            page { upRootElements = filter (/= elemHandle) (upRootElements page) }
+    in modifyElement elemHandle mgr' $ \elem →
+            elem { ueParent = Nothing }
+
+-- | Like findClickableElementAt but looks at ueOnRightClick instead.
+findRightClickableElementAt ∷ (Float, Float) → UIPageManager → Maybe (ElementHandle, Text)
+findRightClickableElementAt pos mgr =
+    let visiblePages = Set.toList (upmVisiblePages mgr)
+        allRootHandles = concatMap (\ph → 
+            case Map.lookup ph (upmPages mgr) of
+                Just page → upRootElements page
+                Nothing → []
+            ) visiblePages
+        
+        clickableElements = concatMap (findRightClickInTree pos) allRootHandles
+        
+        sorted = sortOn (\eh → 
+            case Map.lookup eh (upmElements mgr) of
+                Just elem → 
+                    let page = Map.lookup (uePage elem) (upmPages mgr)
+                        pageLayerVal = case page of
+                            Just p → fromEnum (upLayer p) * 1000000
+                            Nothing → 0
+                        pageZVal = case page of
+                            Just p → upZIndex p * 1000
+                            Nothing → 0
+                        elemZVal = accumulatedZIndex eh
+                        totalVal = pageLayerVal + pageZVal + elemZVal
+                    in negate totalVal
+                Nothing → 0
+            ) clickableElements
+    in case sorted of
+        (eh:_) → case Map.lookup eh (upmElements mgr) of
+            Just elem → case ueOnRightClick elem of
+                Just cb → Just (eh, cb)
+                Nothing → Nothing
+            Nothing → Nothing
+        [] → Nothing
+  where
+    accumulatedZIndex ∷ ElementHandle → Int
+    accumulatedZIndex handle =
+        case Map.lookup handle (upmElements mgr) of
+            Nothing → 0
+            Just elem →
+                let parentZ = case ueParent elem of
+                        Nothing → 0
+                        Just parentHandle → accumulatedZIndex parentHandle
+                in parentZ + ueZIndex elem
+
+    findRightClickInTree ∷ (Float, Float) → ElementHandle → [ElementHandle]
+    findRightClickInTree point handle =
+        case Map.lookup handle (upmElements mgr) of
+            Nothing → []
+            Just elem →
+                let thisClickable = 
+                        if ueClickable elem ∧ 
+                           ueVisible elem ∧ 
+                           isJust (ueOnRightClick elem) &&
+                           isPointInElement point elem mgr
+                        then [handle]
+                        else []
+                    childClickables = concatMap (findRightClickInTree point) (ueChildren elem)
+                in thisClickable ++ childClickables
 
 -----------------------------------------------------------
 -- Text Buffer Operations

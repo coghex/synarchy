@@ -15,6 +15,7 @@ module Engine.Scripting.Lua.API.UI
   , uiAddChildFn
   , uiRemoveElementFn
   , uiDeleteElementFn
+  , uiRemoveFromPageFn
   , uiFindElementAtFn
   , uiGetElementOnClickFn
   , uiFindHoverTargetFn
@@ -43,6 +44,7 @@ module Engine.Scripting.Lua.API.UI
   , uiIsPageVisibleFn
   , uiSetClickableFn
   , uiSetOnClickFn
+  , uiSetOnRightClickFn
   , uiSetZIndexFn
   , uiSetColorFn
   , uiSetTextFn
@@ -602,6 +604,34 @@ uiSetOnClickFn env = do
             let callback = TE.decodeUtf8 cbBS
             Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
                 (setElementOnClick (ElementHandle $ fromIntegral e) callback mgr, ())
+        _ → pure ()
+    
+    return 0
+
+-- | UI.setOnRightClick(elementHandle, callbackName)
+uiSetOnRightClickFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiSetOnRightClickFn env = do
+    elemArg ← Lua.tointeger 1
+    callbackArg ← Lua.tostring 2
+    
+    case (elemArg, callbackArg) of
+        (Just e, Just cbBS) → do
+            let callback = TE.decodeUtf8 cbBS
+            Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+                (setElementOnRightClick (ElementHandle $ fromIntegral e) callback mgr, ())
+        _ → pure ()
+    
+    return 0
+
+-- | UI.removeFromPage(pageHandle, elementHandle)
+uiRemoveFromPageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiRemoveFromPageFn env = do
+    pageArg ← Lua.tointeger 1
+    elemArg ← Lua.tointeger 2
+    
+    case (pageArg, elemArg) of
+        (Just p, Just e) → Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            (removeFromPage (PageHandle $ fromIntegral p) (ElementHandle $ fromIntegral e) mgr, ())
         _ → pure ()
     
     return 0

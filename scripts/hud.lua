@@ -122,16 +122,14 @@ function hud.createUI()
                 name        = "map_temp",
                 texDefault  = hud.texMapTemp,
                 texSelected = hud.texMapTempSelected,
-            },
-            {
-                name        = "map_seatemp",
-                texDefault  = hud.texMapSeaTemp,
-                texSelected = hud.texMapSeaTempSelected,
-            },
-            {
-                name        = "map_pressure",
-                texDefault  = hud.texMapPressure,
-                texSelected = hud.texMapPressureSelected,
+                options = {
+                    { name = "map_pressure",
+                      texDefault = hud.texMapPressure,
+                      texSelected = hud.texMapPressureSelected },
+                    { name = "map_seatemp",
+                      texDefault = hud.texMapSeaTemp,
+                      texSelected = hud.texMapSeaTempSelected },
+                },
             },
             {
                 name        = "map_default",
@@ -139,8 +137,9 @@ function hud.createUI()
                 texSelected = hud.texMapDefaultSelected,
             },
         },
-        selectedIndex = 4,   -- mapDefault selected by default
+        selectedIndex = 2,   -- mapDefault selected by default
         direction = "left",
+        optionsDirection = "up",
         size    = hud.baseSizes.buttonSize,
         padding = hud.baseSizes.padding,
         x       = anchorX,

@@ -170,6 +170,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setText"      (uiSetTextFn env)
   registerLuaFunction "setSpriteTexture" (uiSetSpriteTextureFn env)
   registerLuaFunction "setOnClick"   (uiSetOnClickFn env)
+  registerLuaFunction "setOnRightClick" (uiSetOnRightClickFn env)
+  registerLuaFunction "removeFromPage" (uiRemoveFromPageFn env)
   
   -- UI textures
   registerLuaFunction "setBoxTextures" (uiSetBoxTexturesFn env)

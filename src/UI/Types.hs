@@ -71,6 +71,7 @@ data UIElement = UIElement
   , ueChildren   ∷ [ElementHandle]
   , ueRenderData ∷ UIRenderData
   , ueOnClick    ∷ Maybe Text
+  , ueOnRightClick ∷ Maybe Text
   , ueTextBuffer  ∷ Maybe TextBuffer
   } deriving (Show)
 
