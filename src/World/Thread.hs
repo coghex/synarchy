@@ -213,7 +213,7 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
 -----------------------------------------------------------
 
 -- | Format and send HUD info for a selected tile (zoomed-in view).
---   gx/gy are global grid coords, z is the surface elevation at that tile.
+--   gx/gy are global grid coords, z is the z-level the cursor hit.
 sendTileInfo ∷ EngineEnv → WorldState → Maybe WorldGenParams
              → Int → Int → Int → IO ()
 sendTileInfo env worldState _mParams gx gy z = do
@@ -223,18 +223,18 @@ sendTileInfo env worldState _mParams gx gy z = do
         mChunk = lookupChunk coord tileData
         colIdx = columnIndex lx ly
 
-    let (matText, elevText, fluidText) = case mChunk of
+    let (matText, surfText, fluidText) = case mChunk of
             Nothing → ("(unloaded)", "", "")
             Just lc →
-                let col = (lcTiles lc) V.! colIdx
+                let col  = (lcTiles lc) V.! colIdx
                     surfZ = (lcSurfaceMap lc) VU.! colIdx
-                    -- Surface material: the material at the surface z-level
-                    surfMat = if VU.null (ctMats col) then 0
-                              else let relZ = surfZ - ctStartZ col
-                                   in if relZ >= 0 && relZ < VU.length (ctMats col)
-                                      then ctMats col VU.! relZ
-                                      else 0
-                    props = getMaterialProps (MaterialId surfMat)
+                    -- Material at the SELECTED z-level, not the surface
+                    relZ = z - ctStartZ col
+                    selectedMat =
+                        if relZ >= 0 && relZ < VU.length (ctMats col)
+                        then ctMats col VU.! relZ
+                        else 0
+                    props = getMaterialProps (MaterialId selectedMat)
                     -- Fluid info
                     mFluid = (lcFluidMap lc) V.! colIdx
                     fluidStr = case mFluid of
@@ -249,7 +249,8 @@ sendTileInfo env worldState _mParams gx gy z = do
     let basicLines = T.unlines $ filter (not . T.null)
             [ "Tile (" <> T.pack (show gx) <> ", " <> T.pack (show gy) <> ")"
             , "Material: " <> matText
-            , "Elevation: " <> elevText
+            , "Surface: " <> surfText
+            , "Z: " <> T.pack (show z)
             , fluidText
             ]
 
@@ -257,7 +258,10 @@ sendTileInfo env worldState _mParams gx gy z = do
         advLines = T.unlines $ filter (not . T.null)
             [ "Chunk: (" <> T.pack (show ccx) <> ", " <> T.pack (show ccy) <> ")"
             , "Local: (" <> T.pack (show lx) <> ", " <> T.pack (show ly) <> ")"
-            , "Z-slice: " <> T.pack (show z)
+            , "Column start Z: " <> case mChunk of
+                  Nothing → "?"
+                  Just lc → let col = (lcTiles lc) V.! colIdx
+                             in T.pack (show (ctStartZ col))
             ]
 
     sendHudInfo env basicLines advLines
