@@ -157,6 +157,16 @@ function textbox.destroy(id)
         UI.clearFocus()
     end
     
+    if tb.cursorId then
+        UI.deleteElement(tb.cursorId)
+    end
+    if tb.textId then
+        UI.deleteElement(tb.textId)
+    end
+    if tb.boxId then
+        UI.deleteElement(tb.boxId)
+    end
+    
     textboxes[id] = nil
     engine.logDebug("TextBox destroyed: " .. tb.name)
 end

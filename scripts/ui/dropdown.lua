@@ -332,6 +332,20 @@ function dropdown.destroy(id)
     
     dropdown.closeList(id)
     dropdown.unfocus(id)
+    
+    if dd.cursorId then
+        UI.deleteElement(dd.cursorId)
+    end
+    if dd.displayTextId then
+        UI.deleteElement(dd.displayTextId)
+    end
+    if dd.arrowSpriteId then
+        UI.deleteElement(dd.arrowSpriteId)
+    end
+    if dd.displayBoxId then
+        UI.deleteElement(dd.displayBoxId)
+    end
+    
     dropdowns[id] = nil
     engine.logDebug("Dropdown destroyed: " .. dd.name)
 end

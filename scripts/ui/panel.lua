@@ -158,6 +158,10 @@ function panel.destroy(id)
     local p = panels[id]
     if not p then return end
     
+    if p.boxId then
+        UI.deleteElement(p.boxId)
+    end
+    
     panels[id] = nil
     engine.logDebug("Panel destroyed: " .. p.name)
 end

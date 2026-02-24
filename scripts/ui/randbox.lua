@@ -304,6 +304,19 @@ function randbox.destroy(id)
         randbox.unfocus(id)
     end
 
+    if rb.cursorId then
+        UI.deleteElement(rb.cursorId)
+    end
+    if rb.textId then
+        UI.deleteElement(rb.textId)
+    end
+    if rb.btnSpriteId then
+        UI.deleteElement(rb.btnSpriteId)
+    end
+    if rb.boxId then
+        UI.deleteElement(rb.boxId)
+    end
+
     randboxes[id] = nil
     engine.logDebug("RandBox destroyed: " .. rb.name)
 end

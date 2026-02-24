@@ -91,6 +91,10 @@ function checkbox.destroy(id)
     local cb = checkboxes[id]
     if not cb then return end
     
+    if cb.spriteId then
+        UI.deleteElement(cb.spriteId)
+    end
+    
     checkboxes[id] = nil
     engine.logDebug("Checkbox destroyed: " .. cb.name)
 end

@@ -127,6 +127,14 @@ end
 function button.destroy(id)
     local btn = buttons[id]
     if not btn then return end
+    
+    if btn.labelId then
+        UI.deleteElement(btn.labelId)
+    end
+    if btn.boxId then
+        UI.deleteElement(btn.boxId)
+    end
+    
     buttons[id] = nil
 end
 

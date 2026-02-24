@@ -260,6 +260,13 @@ function toggle.destroy(id)
     local grp = groups[id]
     if not grp then return end
     closeOptions(grp)
+    
+    for _, btn in ipairs(grp.buttons) do
+        if btn.spriteId then
+            UI.deleteElement(btn.spriteId)
+        end
+    end
+    
     groups[id] = nil
     engine.logDebug("Toggle group destroyed: " .. grp.name)
 end
