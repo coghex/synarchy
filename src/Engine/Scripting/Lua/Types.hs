@@ -128,6 +128,7 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaDebugHide
             | LuaDebugToggle
             | LuaWorldGenLog Text
+            | LuaHudLogInfo Text Text
             | LuaWorldPreviewReady Int
             deriving (Eq, Show)
 

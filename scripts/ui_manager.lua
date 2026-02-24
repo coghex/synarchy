@@ -119,7 +119,7 @@ function uiManager.checkReady()
             settingsMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             createWorldMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             worldView.init(fbW, fbH)
-            hud.init(fbW, fbH)
+            hud.init(boxTexSet, menuFont, fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -717,6 +717,26 @@ function uiManager.onWorldPreviewReady(textureHandle)
     if createWorldMenu and createWorldMenu.onWorldPreviewReady then
         createWorldMenu.onWorldPreviewReady(textureHandle)
     end
+end
+
+-----------------------------------------------------------
+-- Tile/Chunk Info Panel (forwarded to HUD)
+-----------------------------------------------------------
+
+function uiManager.onSetInfoBasic(text)
+    if hud then hud.setInfoBasic(text) end
+end
+
+function uiManager.onSetInfoAdvanced(text)
+    if hud then hud.setInfoAdvanced(text) end
+end
+
+function uiManager.onSetInfoText(basicText, advancedText)
+    if hud then hud.setInfoText(basicText, advancedText) end
+end
+
+function uiManager.onClearInfo()
+    if hud then hud.clearInfo() end
 end
 
 -----------------------------------------------------------

@@ -41,6 +41,11 @@ import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
 sendGenLog ∷ EngineEnv → Text → IO ()
 sendGenLog env msg = Q.writeQueue (luaQueue env) (LuaWorldGenLog msg)
 
+-- | info message to lua's hud
+sendHudInfo ∷ EngineEnv → Text → Text → IO ()
+sendHudInfo env msgbas msgadv = Q.writeQueue (luaQueue env)
+                                  (LuaHudLogInfo msgbas msgadv)
+
 -----------------------------------------------------------
 -- Start World Thread
 -----------------------------------------------------------
@@ -367,6 +372,9 @@ handleWorldCommand env logger cmd = do
             
             sendGenLog env $ "World initialized: "
                 <> T.pack (show totalInitialChunks) <> " chunks queued"
+
+            sendHudInfo env "HUD INFO STR1" "HUD INFO STR2"
+            sendHudInfo env "HUD INFO STR3" "HUD INFO STR4"
 
             logInfo logger CatWorld $ "World initialized: " 
                 <> T.pack (show totalInitialChunks) <> " chunks, "
