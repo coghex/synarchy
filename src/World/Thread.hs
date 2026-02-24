@@ -35,6 +35,10 @@ import World.Render (surfaceHeadroom, updateWorldTiles)
 import World.ZoomMap (buildZoomCache)
 import World.Slope (recomputeNeighborSlopes)
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
+import World.Weather.Types (ClimateCoord(..), ClimateState(..), ClimateGrid(..)
+                           , RegionClimate(..), SeasonalClimate(..)
+                           , OceanGrid(..), OceanCell(..)
+                           , climateRegionSize)
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
 
 -----------------------------------------------------------
@@ -211,11 +215,69 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
                 Nothing → ""
             ]
         weatherInfo = case mParams of
-            Just params → "weather"--formatWeather (wgpClimateState params)
+            Just params → chunkWeatherInfo params cx cy
             Nothing → ""
 
     sendHudInfo env basicLines advLines
     sendHudWeatherInfo env weatherInfo
+
+-----------------------------------------------------------
+-- chunkWeatherInfo: format weather for a chunk's climate region
+-----------------------------------------------------------
+
+-- | Given a chunk's (cx, cy) and the world gen params, look up the
+--   climate region that contains this chunk and format it as a
+--   multi-line Text for the HUD weather tab.
+chunkWeatherInfo ∷ WorldGenParams → Int → Int → Text
+chunkWeatherInfo params cx cy =
+    let worldSize  = wgpWorldSize params
+        halfChunks = worldSize `div` 2
+
+        -- Convert (cx, cy) → (u, v) chunk space
+        chunkU = cx - cy
+        chunkV = cx + cy
+
+        -- Climate region indices (same formula as ZoomMap / initEarlyClimate)
+        ru = (chunkU + halfChunks) `div` climateRegionSize
+        rv = (chunkV + halfChunks) `div` climateRegionSize
+        coord = ClimateCoord ru rv
+
+        climateGrid = cgRegions (csClimate (wgpClimateState params))
+        oceanGrid   = ogCells   (csOcean   (wgpClimateState params))
+
+    in case HM.lookup coord climateGrid of
+        Nothing → "No climate data"
+        Just rc →
+            let showF1 f =
+                    let whole = floor f ∷ Int
+                        frac  = abs (round ((f - fromIntegral whole) * 10.0) ∷ Int)
+                    in T.pack (show whole) <> "." <> T.pack (show frac)
+                showSeas (SeasonalClimate s w) =
+                    showF1 s <> " / " <> showF1 w
+
+                -- Ocean cell info (if this region is ocean)
+                oceanLine = case HM.lookup coord oceanGrid of
+                    Nothing → ""
+                    Just oc →
+                        "SST: " <> showSeas (ocTemperature oc)
+                        <> "\nSalinity: " <> showF1 (ocSalinity oc)
+                        <> "\nIce cover: " <> showF1 (ocIceCover oc)
+                        <> "\nUpwelling: " <> showF1 (ocUpwelling oc)
+
+            in T.unlines $ filter (not . T.null)
+                [ "Region (" <> T.pack (show ru) <> ", " <> T.pack (show rv) <> ")"
+                , "Air temp (S/W): " <> showSeas (rcAirTemp rc) <> " C"
+                , "Humidity: " <> showF1 (rcHumidity rc)
+                , "Precip (S/W): " <> showSeas (rcPrecipitation rc)
+                , "Cloud cover: " <> showF1 (rcCloudCover rc)
+                , "Pressure: " <> showF1 (rcPressure rc)
+                , "Wind: " <> showF1 (rcWindSpeed rc)
+                  <> " @ " <> showF1 (rcWindDir rc) <> " rad"
+                , "Continentality: " <> showF1 (rcContinentality rc)
+                , "Albedo: " <> showF1 (rcAlbedo rc)
+                , "Elev avg: " <> T.pack (show (rcElevAvg rc))
+                , oceanLine
+                ]
 
 -----------------------------------------------------------
 -- sendTileInfo: world-level (tile) selection
