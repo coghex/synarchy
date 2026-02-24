@@ -31,7 +31,9 @@ emptyCursorState =
         , zoomSelectNow = False
         , worldCursorPos = Nothing
         , worldCursorTexture = Nothing
+        , worldCursorBgTexture = Nothing
         , worldHoverTexture = Nothing
+        , worldHoverBgTexture = Nothing
         , worldSelectedTile = Nothing
         , worldSelectNow = False
         }

@@ -4,6 +4,7 @@ module World.State.Types
     , emptyWorldState
     , WorldManager(..)
     , emptyWorldManager
+    , CursorSnapshot(..)
     ) where
 
 import UPrelude
@@ -45,6 +46,7 @@ data WorldState = WorldState
     , wsMapModeRef ∷ IORef ZoomMapMode
     , wsCursorRef ∷ IORef CursorState
     , wsToolModeRef ∷ IORef ToolMode
+    , wsCursorSnapshotRef ∷ IORef CursorSnapshot
     }
 
 emptyWorldState ∷ IO WorldState
@@ -68,12 +70,13 @@ emptyWorldState = do
     wsMapModeRef ← newIORef ZMDefault
     wsCursorRef ← newIORef emptyCursorState
     wsToolModeRef ← newIORef DefaultTool
+    wsCursorSnapshotRef ← newIORef emptyCursorSnapshot
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
                         wsClimateRef wsRiverFlowRef wsMapModeRef
-                        wsCursorRef wsToolModeRef
+                        wsCursorRef wsToolModeRef wsCursorSnapshotRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]
@@ -85,3 +88,13 @@ emptyWorldManager = WorldManager
     { wmWorlds  = []
     , wmVisible = []
     }
+
+-- | Snapshot of the cursor selection state, used to detect changes
+--   and avoid re-sending HUD info every frame.
+data CursorSnapshot = CursorSnapshot
+    { csZoomSel  ∷ !(Maybe (Int, Int))      -- ^ zoomSelectedPos last sent
+    , csWorldSel ∷ !(Maybe (Int, Int, Int))  -- ^ worldSelectedTile last sent
+    } deriving (Eq, Show)
+
+emptyCursorSnapshot ∷ CursorSnapshot
+emptyCursorSnapshot = CursorSnapshot Nothing Nothing

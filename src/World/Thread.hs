@@ -7,6 +7,8 @@ module World.Thread
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import Data.List (partition, sortOn)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef', newIORef)
@@ -26,13 +28,14 @@ import World.Generate
 import World.Grid (zoomFadeEnd, worldToGrid)
 import World.Geology (buildTimeline, logTimeline)
 import World.Geology.Log (formatTimeline, formatPlatesSummary)
-import World.Fluids (computeOceanMap, computeChunkFluid)
+import World.Fluids (computeOceanMap, computeChunkFluid, isOceanChunk, seaLevel)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Preview (buildPreviewImage, PreviewImage(..))
 import World.Render (surfaceHeadroom, updateWorldTiles)
 import World.ZoomMap (buildZoomCache)
 import World.Slope (recomputeNeighborSlopes)
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
+import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
 
 -----------------------------------------------------------
 -- Helper: send a progress message to Lua
@@ -98,7 +101,8 @@ worldLoop env stateRef lastTimeRef = do
             
             tickWorldTime env (realToFrac dt)
             updateChunkLoading env logger
-            
+            pollCursorInfo env
+
             camera ← readIORef (cameraRef env)
             allQuads ← updateWorldTiles env
             writeIORef (worldQuadsRef env) allQuads
@@ -114,6 +118,149 @@ processAllCommands env logger = do
             handleWorldCommand env logger cmd
             processAllCommands env logger  -- drain all pending
         Nothing → return ()
+
+-----------------------------------------------------------
+-- Cursor Info Polling
+-----------------------------------------------------------
+
+-- | Poll cursor state for all visible worlds. When the selected
+--   tile/chunk changes (or is deselected), send the appropriate
+--   info text to the HUD. Runs every world-loop tick.
+pollCursorInfo ∷ EngineEnv → IO ()
+pollCursorInfo env = do
+    manager ← readIORef (worldManagerRef env)
+    forM_ (wmVisible manager) $ \pageId →
+        case lookup pageId (wmWorlds manager) of
+            Nothing → return ()
+            Just worldState → do
+                cs   ← readIORef (wsCursorRef worldState)
+                snap ← readIORef (wsCursorSnapshotRef worldState)
+                mParams ← readIORef (wsGenParamsRef worldState)
+
+                let curZoom  = zoomSelectedPos cs
+                    curWorld = worldSelectedTile cs
+                    oldZoom  = csZoomSel snap
+                    oldWorld = csWorldSel snap
+
+                -- Zoom-level chunk selection changed
+                when (curZoom ≢ oldZoom) $ do
+                    case curZoom of
+                        Nothing → sendHudInfo env "" ""
+                        Just (baseGX, baseGY) →
+                            sendChunkInfo env worldState mParams baseGX baseGY
+
+                -- World-level tile selection changed
+                when (curWorld ≢ oldWorld) $ do
+                    case curWorld of
+                        Nothing → sendHudInfo env "" ""
+                        Just (gx, gy, z) →
+                            sendTileInfo env worldState mParams gx gy z
+
+                -- Update snapshot
+                let newSnap = CursorSnapshot curZoom curWorld
+                when (newSnap ≢ snap) $
+                    writeIORef (wsCursorSnapshotRef worldState) newSnap
+
+-----------------------------------------------------------
+-- sendChunkInfo: zoom-level (chunk) selection
+-----------------------------------------------------------
+
+-- | Format and send HUD info for a selected chunk (zoomed-out view).
+--   baseGX/baseGY are the chunk's global grid origin (i.e. chunkX * chunkSize).
+sendChunkInfo ∷ EngineEnv → WorldState → Maybe WorldGenParams
+              → Int → Int → IO ()
+sendChunkInfo env worldState mParams baseGX baseGY = do
+    let cx = if baseGX >= 0 then baseGX `div` chunkSize
+             else -(((-baseGX) + chunkSize - 1) `div` chunkSize)
+        cy = if baseGY >= 0 then baseGY `div` chunkSize
+             else -(((-baseGY) + chunkSize - 1) `div` chunkSize)
+        coord = ChunkCoord cx cy
+
+    -- Try to find this chunk's zoom cache entry for material/elevation
+    zoomCache ← readIORef (wsZoomCacheRef worldState)
+    let mEntry = V.find (\e → zceChunkX e ≡ cx ∧ zceChunkY e ≡ cy) zoomCache
+
+    let basicLines = T.unlines $ filter (not . T.null)
+            [ "Chunk (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+            , case mEntry of
+                Just entry →
+                    let props = getMaterialProps (MaterialId (zceTexIndex entry))
+                    in "Material: " <> matName props
+                     <> "\nElevation: " <> T.pack (show (zceElev entry))
+                     <> (if zceIsOcean entry then "\nOcean" else "")
+                     <> (if zceHasLava entry then "\nLava" else "")
+                Nothing → ""
+            ]
+
+    let advLines = T.unlines $ filter (not . T.null)
+            [ "Grid origin: (" <> T.pack (show baseGX)
+              <> ", " <> T.pack (show baseGY) <> ")"
+            , case mEntry of
+                Just entry →
+                    "MatID: " <> T.pack (show (zceTexIndex entry))
+                Nothing → ""
+            , case mParams of
+                Just params →
+                    let ocean = isOceanChunk (wgpOceanMap params) coord
+                    in "Ocean map: " <> T.pack (show ocean)
+                Nothing → ""
+            ]
+
+    sendHudInfo env basicLines advLines
+
+-----------------------------------------------------------
+-- sendTileInfo: world-level (tile) selection
+-----------------------------------------------------------
+
+-- | Format and send HUD info for a selected tile (zoomed-in view).
+--   gx/gy are global grid coords, z is the surface elevation at that tile.
+sendTileInfo ∷ EngineEnv → WorldState → Maybe WorldGenParams
+             → Int → Int → Int → IO ()
+sendTileInfo env worldState _mParams gx gy z = do
+    tileData ← readIORef (wsTilesRef worldState)
+
+    let (coord, (lx, ly)) = globalToChunk gx gy
+        mChunk = lookupChunk coord tileData
+        colIdx = columnIndex lx ly
+
+    let (matText, elevText, fluidText) = case mChunk of
+            Nothing → ("(unloaded)", "", "")
+            Just lc →
+                let col = (lcTiles lc) V.! colIdx
+                    surfZ = (lcSurfaceMap lc) VU.! colIdx
+                    -- Surface material: the material at the surface z-level
+                    surfMat = if VU.null (ctMats col) then 0
+                              else let relZ = surfZ - ctStartZ col
+                                   in if relZ >= 0 && relZ < VU.length (ctMats col)
+                                      then ctMats col VU.! relZ
+                                      else 0
+                    props = getMaterialProps (MaterialId surfMat)
+                    -- Fluid info
+                    mFluid = (lcFluidMap lc) V.! colIdx
+                    fluidStr = case mFluid of
+                        Nothing → ""
+                        Just fc → "Fluid: " <> T.pack (show (fcType fc))
+                                <> " (surface z=" <> T.pack (show (fcSurface fc)) <> ")"
+                in ( matName props
+                   , T.pack (show surfZ)
+                   , fluidStr
+                   )
+
+    let basicLines = T.unlines $ filter (not . T.null)
+            [ "Tile (" <> T.pack (show gx) <> ", " <> T.pack (show gy) <> ")"
+            , "Material: " <> matText
+            , "Elevation: " <> elevText
+            , fluidText
+            ]
+
+    let ChunkCoord ccx ccy = coord
+        advLines = T.unlines $ filter (not . T.null)
+            [ "Chunk: (" <> T.pack (show ccx) <> ", " <> T.pack (show ccy) <> ")"
+            , "Local: (" <> T.pack (show lx) <> ", " <> T.pack (show ly) <> ")"
+            , "Z-slice: " <> T.pack (show z)
+            ]
+
+    sendHudInfo env basicLines advLines
 
 -----------------------------------------------------------
 -- World Time Tick
@@ -560,16 +707,14 @@ handleWorldCommand env logger cmd = do
         WorldSetZoomCursorSelect pageId → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
-                Just worldState → do
-                    sendHudInfo env "Zoom tile" "zone tile advanced info"
+                Just worldState →
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                         (cs { zoomSelectNow = True }, ())
                 Nothing → pure ()
         WorldSetZoomCursorDeselect pageId → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
-                Just worldState → do
-                    sendHudInfo env "" ""
+                Just worldState →
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                         (cs { zoomSelectedPos = Nothing, zoomSelectNow = False }, ())
                 Nothing → pure ()
@@ -586,7 +731,7 @@ handleWorldCommand env logger cmd = do
         WorldSetZoomCursorHoverTexture pageId tid → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
-                Just worldState → do
+                Just worldState →
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                       (cs { zoomHoverTexture = Just tid }, ())
                 Nothing → 
@@ -605,16 +750,14 @@ handleWorldCommand env logger cmd = do
         WorldSetWorldCursorSelect pageId → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
-                Just worldState → do
-                    sendHudInfo env "Tile" "world tile advanced info"
+                Just worldState →
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                         (cs { worldSelectNow = True }, ())
                 Nothing → pure ()
         WorldSetWorldCursorDeselect pageId → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
-                Just worldState → do
-                    sendHudInfo env "" ""
+                Just worldState →
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                         (cs { worldSelectedTile = Nothing, worldSelectNow = False }, ())
                 Nothing → pure ()
