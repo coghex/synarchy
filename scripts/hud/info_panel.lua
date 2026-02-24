@@ -96,6 +96,26 @@ local function hasContent()
         or (infoPanel.tabText.advanced ~= "")
 end
 
+-- Hide/show all tab button boxes in the tabbar.
+-- The tabbar module does not expose a setVisible, so we
+-- reach into it via getFrameHandle and the internal tab
+-- data.  We hide the frame plus each tab box individually.
+local function setTabBarVisible(vis)
+    if not infoPanel.tabBarId then return end
+    -- Hide/show the content frame
+    local fh = tabbar.getFrameHandle(infoPanel.tabBarId)
+    if fh then UI.setVisible(fh, vis) end
+    -- Hide/show each individual tab button box.
+    -- tabbar stores tabs internally; we can access them
+    -- through the tabbar's selected-index query to confirm
+    -- the tabbar exists, then iterate using findByElementHandle
+    -- approach.  But the simplest fix is to query the tab count
+    -- and toggle each one.
+    --
+    -- Since tabbar doesn't expose tab handles directly, we need
+    -- to track them ourselves at creation time.
+end
+
 -----------------------------------------------------------
 -- Create / Rebuild
 -----------------------------------------------------------
@@ -114,6 +134,9 @@ function infoPanel.create(params)
     local uiscale   = scale.get()
     local base      = infoPanel.baseSizes
     local s         = scale.applyAllWith(base, uiscale)
+
+    -- Store page reference for later visibility toggling
+    infoPanel.page = page
 
     -- Panel dimensions
     local panelWidth  = math.floor(fbW * base.widthFrac)
@@ -174,6 +197,34 @@ function infoPanel.create(params)
         end,
     }))
 
+    -- Collect the tab button box handles so we can hide/show them.
+    -- The tabbar module creates tab boxes as root page elements.
+    -- We discover them by probing findByElementHandle, but that
+    -- requires an element handle we don't have.  Instead, we use
+    -- the tabbar's internal structure: after creation the tab
+    -- boxes are the last N elements added to the page.  The most
+    -- robust approach is to record them via a small helper:
+    infoPanel.tabBoxHandles = {}
+    for i = 1, #tabList do
+        -- The tabbar creates boxes named "hud_info_tabs_tab_N"
+        -- We can find them by trying selectByKey and then
+        -- using findByElementHandle... but the simplest is to
+        -- note that tabbar stores them in its internal state.
+        -- Since we can't access that directly, let's use a
+        -- different approach: probe every element index.
+        -- Actually, let's just query them via the module.
+        -- tabbar.findByElementHandle won't help without a handle.
+        --
+        -- The cleanest solution: iterate a range of plausible
+        -- element handles.  But that's fragile.
+        --
+        -- Best approach: we know each tab is an addToPage root
+        -- element. The tabbar.getFrameHandle gives us the frame.
+        -- The tab boxes are siblings.  Let's just keep them
+        -- always visible/hidden via the page visibility itself,
+        -- by using a SEPARATE page for the info panel.
+    end
+
     tabbar.selectByKey(infoPanel.tabBarId, infoPanel.activeTab)
 
     ---------------------------------------------------------
@@ -204,14 +255,14 @@ function infoPanel.create(params)
     -- Show only the active tab's label
     infoPanel.showTab(infoPanel.activeTab)
 
-    -- Start hidden; will auto-show when content arrives
+    -- Start hidden via page visibility
     infoPanel.visible = false
-    infoPanel.setAllVisible(false)
+    UI.hidePage(page)
 
     -- If we already have content (e.g. rebuild after resize), show it
     if hasContent() then
         infoPanel.visible = true
-        infoPanel.setAllVisible(true)
+        UI.showPage(page)
         infoPanel.showTab(infoPanel.activeTab)
     end
 
@@ -231,34 +282,15 @@ function infoPanel.showTab(key)
 end
 
 -----------------------------------------------------------
--- Show / hide the entire panel (all elements)
+-- Show / hide the entire panel via its dedicated page
 -----------------------------------------------------------
 function infoPanel.setAllVisible(vis)
-    if infoPanel.panelId then
-        local bh = panel.getBoxHandle(infoPanel.panelId)
-        if bh then UI.setVisible(bh, vis) end
-    end
-    if infoPanel.tabBarId then
-        local fh = tabbar.getFrameHandle(infoPanel.tabBarId)
-        if fh then UI.setVisible(fh, vis) end
-        -- Tab buttons are children; the tabbar module manages them
-        -- through the frame, but we need to toggle them too.
-        -- We'll iterate by hiding/showing each tab box.
-        -- Since tabbar doesn't expose a setVisible, we toggle the
-        -- frame box; child elements inherit visibility from the page
-        -- visibility.  Instead, we rely on the page show/hide plus
-        -- this panel box toggle.
-    end
-    for _, def in ipairs(tabDefs) do
-        local lid = infoPanel.tabLabelIds[def.key]
-        if lid then
-            if vis then
-                -- Only show the active tab's label
-                label.setVisible(lid, def.key == infoPanel.activeTab)
-            else
-                label.setVisible(lid, false)
-            end
-        end
+    if not infoPanel.page then return end
+    if vis then
+        UI.showPage(infoPanel.page)
+        infoPanel.showTab(infoPanel.activeTab)
+    else
+        UI.hidePage(infoPanel.page)
     end
 end
 

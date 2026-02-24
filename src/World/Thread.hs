@@ -373,9 +373,6 @@ handleWorldCommand env logger cmd = do
             sendGenLog env $ "World initialized: "
                 <> T.pack (show totalInitialChunks) <> " chunks queued"
 
-            sendHudInfo env "HUD INFO STR1" "HUD INFO STR2"
-            sendHudInfo env "HUD INFO STR3" "HUD INFO STR4"
-
             logInfo logger CatWorld $ "World initialized: " 
                 <> T.pack (show totalInitialChunks) <> " chunks, "
                 <> "surface at z=" <> T.pack (show surfaceElev)
@@ -563,14 +560,16 @@ handleWorldCommand env logger cmd = do
         WorldSetZoomCursorSelect pageId → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
-                Just worldState →
+                Just worldState → do
+                    sendHudInfo env "Zoom tile" "zone tile advanced info"
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                         (cs { zoomSelectNow = True }, ())
                 Nothing → pure ()
         WorldSetZoomCursorDeselect pageId → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
-                Just worldState →
+                Just worldState → do
+                    sendHudInfo env "" ""
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                         (cs { zoomSelectedPos = Nothing, zoomSelectNow = False }, ())
                 Nothing → pure ()
@@ -606,14 +605,16 @@ handleWorldCommand env logger cmd = do
         WorldSetWorldCursorSelect pageId → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
-                Just worldState →
+                Just worldState → do
+                    sendHudInfo env "Tile" "world tile advanced info"
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                         (cs { worldSelectNow = True }, ())
                 Nothing → pure ()
         WorldSetWorldCursorDeselect pageId → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
-                Just worldState →
+                Just worldState → do
+                    sendHudInfo env "" ""
                     atomicModifyIORef' (wsCursorRef worldState) $ \cs →
                         (cs { worldSelectedTile = Nothing, worldSelectNow = False }, ())
                 Nothing → pure ()

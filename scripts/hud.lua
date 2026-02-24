@@ -9,6 +9,7 @@ local hud = {}
 
 hud.world_page = nil
 hud.zoom_page = nil
+hud.info_page = nil   -- dedicated page for the info panel
 hud.visible = false
 hud.uiCreated = false
 hud.fbW = 0
@@ -91,7 +92,7 @@ end
 -----------------------------------------------------------
 
 function hud.createUI()
-    -- Tear down previous page if resizing
+    -- Tear down previous pages if resizing
     if hud.uiCreated and hud.world_page and hud.zoom_page then
         UI.deletePage(hud.world_page)
         UI.deletePage(hud.zoom_page)
@@ -99,8 +100,11 @@ function hud.createUI()
             toggle.destroy(hud.mapToggleId)
             hud.mapToggleId = nil
         end
-        -- Info panels are destroyed with their pages; clean up module state
+    end
+    if hud.uiCreated and hud.info_page then
+        -- info panel elements live on this page; destroy module state
         infoPanel.destroyOwned()
+        UI.deletePage(hud.info_page)
     end
 
     local uiscale = scale.get()
@@ -108,6 +112,8 @@ function hud.createUI()
 
     hud.world_page = UI.newPage("world_hud_overlay", "overlay")
     hud.zoom_page = UI.newPage("zoom_hud_overlay", "overlay")
+    hud.info_page = UI.newPage("hud_info_overlay", "overlay")
+
     if hud.texZoomSelect and hud.texZoomHover then
         world.setZoomCursorSelectTexture("main_world", hud.texZoomSelect)
         world.setZoomCursorHoverTexture("main_world", hud.texZoomHover)
@@ -125,9 +131,6 @@ function hud.createUI()
     local anchorX = hud.fbW - s.margin
     local anchorY = hud.fbH - s.margin - s.buttonSize
 
-    -- Items are laid out left-to-right; the *last* item sits at the
-    -- rightmost position.  So mapTemp is first (left), mapDefault is
-    -- second (right).
     hud.mapToggleId = toggle.new({
         name = "map_mode_toggle",
         page = hud.zoom_page,
@@ -151,7 +154,7 @@ function hud.createUI()
                 texSelected = hud.texMapDefaultSelected,
             },
         },
-        selectedIndex = 2,   -- mapDefault selected by default
+        selectedIndex = 2,
         direction = "left",
         optionsDirection = "up",
         size    = hud.baseSizes.buttonSize,
@@ -189,7 +192,7 @@ function hud.createUI()
                 },
             },
         },
-        selectedIndex = 2,   -- toolDefault selected by default
+        selectedIndex = 2,
         direction = "up",
         optionsDirection = "right",
         size    = hud.baseSizes.buttonSize,
@@ -205,17 +208,14 @@ function hud.createUI()
     })
 
     ---------------------------------------------------------
-    -- Info panels (one instance per page)
-    -- We create the info panel on the world_page; on zoom
-    -- transitions we hide/show it as needed.
-    -- Both pages share the same infoPanel module state, but
-    -- the panel elements live on world_page.  We recreate
-    -- onto whichever page is active, but for simplicity we
-    -- create it on the world_page and manually manage
-    -- visibility during zoom transitions.
+    -- Info panel on its own dedicated page.
+    -- This page is shown/hidden independently so we can
+    -- cleanly toggle ALL its elements (panel box, tab bar
+    -- boxes, frame, labels) without fighting the tabbar
+    -- module's internal structure.
     ---------------------------------------------------------
     infoPanel.create({
-        page      = hud.world_page,
+        page      = hud.info_page,
         boxTexSet = hud.boxTexSet,
         menuFont  = hud.menuFont,
         fbW       = hud.fbW,
@@ -234,6 +234,8 @@ function hud.createUI()
     else
         hud.currentView = "none"
     end
+    -- info_page starts hidden (infoPanel.create hides it);
+    -- it will show when content is sent via setInfoText.
 
     hud.uiCreated = true
     engine.logDebug("HUD UI created")
@@ -255,6 +257,8 @@ function hud.show()
     elseif hud.currentView == "zoomed_out" and hud.zoom_page then
         UI.showPage(hud.zoom_page)
     end
+    -- info_page visibility is managed by infoPanel itself;
+    -- if it has content it will already be shown.
 
     engine.logDebug("HUD shown")
 end
@@ -268,11 +272,13 @@ function hud.hide()
     if hud.zoom_page then
         UI.hidePage(hud.zoom_page)
     end
+    if hud.info_page then
+        UI.hidePage(hud.info_page)
+    end
 
     engine.logDebug("HUD hidden")
 end
 
--- Add to the same onMouseDown, or a separate check:
 function hud.onMouseDown(button_num, mx, my)
     if hud.currentView == "zoomed_out" then
         if button_num == 1 then
@@ -303,8 +309,7 @@ function hud.onScroll(dx, dy)
             UI.showPage(hud.zoom_page)
             UI.hidePage(hud.world_page)
             hud.currentView = "zoomed_out"
-            -- Hide the info panel during zoom transition;
-            -- it will re-appear when new info is sent.
+            -- Clear info panel on zoom transition
             infoPanel.clear()
         end
     elseif zoom < zoomFadeStart then
@@ -312,8 +317,7 @@ function hud.onScroll(dx, dy)
             UI.showPage(hud.world_page)
             UI.hidePage(hud.zoom_page)
             hud.currentView = "zoomed_in"
-            -- Hide the info panel during zoom transition;
-            -- it will re-appear when new info is sent.
+            -- Clear info panel on zoom transition
             infoPanel.clear()
         end
     else
@@ -323,7 +327,7 @@ function hud.onScroll(dx, dy)
             UI.hidePage(hud.zoom_page)
         end
         hud.currentView = "none"
-        -- In the fade zone, hide the info panel
+        -- In the fade zone, clear the info panel
         infoPanel.clear()
     end
 end
@@ -345,26 +349,20 @@ end
 
 -----------------------------------------------------------
 -- Info Panel Public API
--- Call these from Haskell (via ui_manager) to populate
--- the tile/chunk info panel.
 -----------------------------------------------------------
 
--- Set text for the "basic" tab
 function hud.setInfoBasic(text)
     infoPanel.setText("basic", text)
 end
 
--- Set text for the "advanced" tab
 function hud.setInfoAdvanced(text)
     infoPanel.setText("advanced", text)
 end
 
--- Set both tabs at once
 function hud.setInfoText(basicText, advancedText)
     infoPanel.setInfo(basicText, advancedText)
 end
 
--- Clear all info (hides the panel)
 function hud.clearInfo()
     infoPanel.clear()
 end
@@ -398,6 +396,11 @@ function hud.shutdown()
     if hud.mapToggleId then
         toggle.destroy(hud.mapToggleId)
         hud.mapToggleId = nil
+    end
+    if hud.info_page then
+        UI.hidePage(hud.info_page)
+        UI.deletePage(hud.info_page)
+        hud.info_page = nil
     end
     if hud.zoom_page then
         UI.hidePage(hud.zoom_page)
