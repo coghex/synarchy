@@ -72,6 +72,10 @@ function label.destroy(id)
     local lbl = labels[id]
     if not lbl then return end
     
+    if lbl.textId then
+        UI.deleteElement(lbl.textId)
+    end
+    
     labels[id] = nil
 end
 

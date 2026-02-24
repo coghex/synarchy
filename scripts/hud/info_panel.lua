@@ -3,6 +3,9 @@
 -- of the screen.  Each tab holds a single block of pre-formatted text.
 -- The panel auto-hides when both tabs have empty text and auto-shows
 -- when either tab receives content.
+--
+-- An optional third tab ("Weather") appears only when weather text
+-- is set, and disappears when it is cleared.
 local scale   = require("scripts.ui.scale")
 local panel   = require("scripts.ui.panel")
 local label   = require("scripts.ui.label")
@@ -35,10 +38,11 @@ infoPanel.baseSizes = {
 -----------------------------------------------------------
 -- Tab definitions
 -----------------------------------------------------------
-local tabDefs = {
+local coreTabDefs = {
     { key = "basic",    name = "Basic" },
     { key = "advanced", name = "Advanced" },
 }
+local weatherTabDef = { key = "weather", name = "Weather" }
 
 -----------------------------------------------------------
 -- Module state
@@ -48,15 +52,21 @@ infoPanel.tabBarId   = nil
 infoPanel.activeTab  = "basic"
 infoPanel.visible    = false
 
--- Per-tab text content and label IDs
+-- Per-tab text content (stored, not displayed directly)
 infoPanel.tabText = {
     basic    = "",
+    weather  = "",
     advanced = "",
 }
-infoPanel.tabLabelIds = {
-    basic    = nil,
-    advanced = nil,
-}
+
+-- Single content label shared across all tabs
+infoPanel.contentLabelId = nil
+
+-- Whether the weather tab is currently built into the UI
+infoPanel.weatherTabBuilt = false
+
+-- Cached create params so we can rebuild on the fly
+infoPanel.createParams = nil
 
 -- Owned IDs for cleanup
 infoPanel.ownedPanels  = {}
@@ -85,35 +95,34 @@ function infoPanel.destroyOwned()
     infoPanel.ownedPanels  = {}
     infoPanel.panelId      = nil
     infoPanel.tabBarId     = nil
-    infoPanel.tabLabelIds  = { basic = nil, advanced = nil }
+    infoPanel.contentLabelId = nil
 end
 
 -----------------------------------------------------------
--- Visibility helpers
+-- Helpers
 -----------------------------------------------------------
+
 local function hasContent()
     return (infoPanel.tabText.basic    ~= "")
+        or (infoPanel.tabText.weather  ~= "")
         or (infoPanel.tabText.advanced ~= "")
 end
 
--- Hide/show all tab button boxes in the tabbar.
--- The tabbar module does not expose a setVisible, so we
--- reach into it via getFrameHandle and the internal tab
--- data.  We hide the frame plus each tab box individually.
-local function setTabBarVisible(vis)
-    if not infoPanel.tabBarId then return end
-    -- Hide/show the content frame
-    local fh = tabbar.getFrameHandle(infoPanel.tabBarId)
-    if fh then UI.setVisible(fh, vis) end
-    -- Hide/show each individual tab button box.
-    -- tabbar stores tabs internally; we can access them
-    -- through the tabbar's selected-index query to confirm
-    -- the tabbar exists, then iterate using findByElementHandle
-    -- approach.  But the simplest fix is to query the tab count
-    -- and toggle each one.
-    --
-    -- Since tabbar doesn't expose tab handles directly, we need
-    -- to track them ourselves at creation time.
+local function weatherHasContent()
+    return infoPanel.tabText.weather ~= ""
+end
+
+-- Build the list of tab defs that should currently exist
+local function buildTabList()
+    local tabs = {}
+    for _, def in ipairs(coreTabDefs) do
+        table.insert(tabs, { name = def.name, key = def.key })
+    end
+    if weatherHasContent() then
+        table.insert(tabs, { name = weatherTabDef.name,
+                             key  = weatherTabDef.key })
+    end
+    return tabs
 end
 
 -----------------------------------------------------------
@@ -125,6 +134,9 @@ end
 -- }
 function infoPanel.create(params)
     infoPanel.destroyOwned()
+
+    -- Cache params for later rebuilds
+    infoPanel.createParams = params
 
     local page      = params.page
     local boxTexSet = params.boxTexSet
@@ -163,12 +175,10 @@ function infoPanel.create(params)
     local bounds = panel.getContentBounds(infoPanel.panelId)
 
     ---------------------------------------------------------
-    -- Tab bar
+    -- Tab bar (tabs chosen dynamically)
     ---------------------------------------------------------
-    local tabList = {}
-    for _, def in ipairs(tabDefs) do
-        table.insert(tabList, { name = def.name, key = def.key })
-    end
+    local tabList = buildTabList()
+    infoPanel.weatherTabBuilt = weatherHasContent()
 
     local tabX = panelX + bounds.x
     local tabY = panelY + bounds.y
@@ -193,67 +203,43 @@ function infoPanel.create(params)
         tabs              = tabList,
         onChange = function(key, index, tbId)
             infoPanel.activeTab = key
-            infoPanel.showTab(key)
+            infoPanel.refreshContent()
         end,
     }))
 
-    -- Collect the tab button box handles so we can hide/show them.
-    -- The tabbar module creates tab boxes as root page elements.
-    -- We discover them by probing findByElementHandle, but that
-    -- requires an element handle we don't have.  Instead, we use
-    -- the tabbar's internal structure: after creation the tab
-    -- boxes are the last N elements added to the page.  The most
-    -- robust approach is to record them via a small helper:
-    infoPanel.tabBoxHandles = {}
-    for i = 1, #tabList do
-        -- The tabbar creates boxes named "hud_info_tabs_tab_N"
-        -- We can find them by trying selectByKey and then
-        -- using findByElementHandle... but the simplest is to
-        -- note that tabbar stores them in its internal state.
-        -- Since we can't access that directly, let's use a
-        -- different approach: probe every element index.
-        -- Actually, let's just query them via the module.
-        -- tabbar.findByElementHandle won't help without a handle.
-        --
-        -- The cleanest solution: iterate a range of plausible
-        -- element handles.  But that's fragile.
-        --
-        -- Best approach: we know each tab is an addToPage root
-        -- element. The tabbar.getFrameHandle gives us the frame.
-        -- The tab boxes are siblings.  Let's just keep them
-        -- always visible/hidden via the page visibility itself,
-        -- by using a SEPARATE page for the info panel.
+    -- If the saved activeTab no longer exists (e.g. weather was removed),
+    -- fall back to "basic"
+    local activeValid = false
+    for _, t in ipairs(tabList) do
+        if t.key == infoPanel.activeTab then activeValid = true; break end
+    end
+    if not activeValid then
+        infoPanel.activeTab = "basic"
     end
 
     tabbar.selectByKey(infoPanel.tabBarId, infoPanel.activeTab)
 
     ---------------------------------------------------------
-    -- Content labels (one per tab, inside the tab frame)
+    -- Single content label (shared across all tabs)
     ---------------------------------------------------------
     local frameX, frameY, frameW, frameH =
         tabbar.getFrameBounds(infoPanel.tabBarId)
     local contentPad = math.floor(8 * uiscale)
 
-    for _, def in ipairs(tabDefs) do
-        local lid = trackLabel(label.new({
-            name     = "hud_info_" .. def.key,
-            text     = infoPanel.tabText[def.key],
-            font     = menuFont,
-            fontSize = base.fontSize,
-            color    = {0.9, 0.9, 0.9, 1.0},
-            page     = page,
-            uiscale  = uiscale,
-        }))
-        local lh = label.getElementHandle(lid)
-        UI.addToPage(page, lh,
-            frameX + contentPad,
-            frameY + contentPad + s.fontSize)
-        UI.setZIndex(lh, Z_CONTENT)
-        infoPanel.tabLabelIds[def.key] = lid
-    end
-
-    -- Show only the active tab's label
-    infoPanel.showTab(infoPanel.activeTab)
+    infoPanel.contentLabelId = trackLabel(label.new({
+        name     = "hud_info_content",
+        text     = infoPanel.tabText[infoPanel.activeTab] or "",
+        font     = menuFont,
+        fontSize = base.fontSize,
+        color    = {0.9, 0.9, 0.9, 1.0},
+        page     = page,
+        uiscale  = uiscale,
+    }))
+    local lh = label.getElementHandle(infoPanel.contentLabelId)
+    UI.addToPage(page, lh,
+        frameX + contentPad,
+        frameY + contentPad + s.fontSize)
+    UI.setZIndex(lh, Z_CONTENT)
 
     -- Start hidden via page visibility
     infoPanel.visible = false
@@ -263,22 +249,30 @@ function infoPanel.create(params)
     if hasContent() then
         infoPanel.visible = true
         UI.showPage(page)
-        infoPanel.showTab(infoPanel.activeTab)
     end
 
-    engine.logDebug("HUD info panel created")
+    engine.logDebug("HUD info panel created (weather tab: "
+        .. tostring(infoPanel.weatherTabBuilt) .. ")")
 end
 
 -----------------------------------------------------------
--- Show / hide individual tab labels
+-- Rebuild (preserving text and active tab)
 -----------------------------------------------------------
-function infoPanel.showTab(key)
-    for _, def in ipairs(tabDefs) do
-        local lid = infoPanel.tabLabelIds[def.key]
-        if lid then
-            label.setVisible(lid, def.key == key)
-        end
-    end
+
+local function rebuild()
+    if not infoPanel.createParams then return end
+    infoPanel.create(infoPanel.createParams)
+end
+
+-----------------------------------------------------------
+-- Refresh the single content label with the active tab's text
+-----------------------------------------------------------
+
+function infoPanel.refreshContent()
+    if not infoPanel.contentLabelId then return end
+    local text = infoPanel.tabText[infoPanel.activeTab] or ""
+    local lh = label.getElementHandle(infoPanel.contentLabelId)
+    UI.setText(lh, text)
 end
 
 -----------------------------------------------------------
@@ -288,7 +282,6 @@ function infoPanel.setAllVisible(vis)
     if not infoPanel.page then return end
     if vis then
         UI.showPage(infoPanel.page)
-        infoPanel.showTab(infoPanel.activeTab)
     else
         UI.hidePage(infoPanel.page)
     end
@@ -298,16 +291,26 @@ end
 -- Public API: set text for a tab
 -----------------------------------------------------------
 
--- Sets the text for the given tab ("basic" or "advanced").
--- If both tabs become empty, the panel hides itself.
--- If either tab has content, the panel shows itself.
 function infoPanel.setText(tabKey, text)
     text = text or ""
     infoPanel.tabText[tabKey] = text
 
-    local lid = infoPanel.tabLabelIds[tabKey]
-    if lid then
-        label.setText(lid, text)
+    -- Check whether the weather tab needs to appear or disappear
+    if tabKey == "weather" then
+        local needsWeatherTab = (text ~= "")
+        if needsWeatherTab ~= infoPanel.weatherTabBuilt then
+            if not needsWeatherTab
+               and infoPanel.activeTab == "weather" then
+                infoPanel.activeTab = "basic"
+            end
+            rebuild()
+            return
+        end
+    end
+
+    -- If this is the active tab, update the displayed text immediately
+    if tabKey == infoPanel.activeTab then
+        infoPanel.refreshContent()
     end
 
     -- Auto-show / auto-hide
@@ -324,16 +327,25 @@ function infoPanel.setText(tabKey, text)
     end
 end
 
--- Convenience: set both tabs at once
+-- Convenience: set both core tabs at once
 function infoPanel.setInfo(basicText, advancedText)
     infoPanel.setText("basic",    basicText    or "")
     infoPanel.setText("advanced", advancedText or "")
 end
 
--- Clear all text (hides the panel)
+-- Convenience: set the optional weather tab
+function infoPanel.setWeatherInfo(weatherText)
+    infoPanel.setText("weather", weatherText or "")
+end
+
+-- Clear all text (hides the panel, removes weather tab)
 function infoPanel.clear()
-    infoPanel.setText("basic",    "")
-    infoPanel.setText("advanced", "")
+    infoPanel.tabText.weather  = ""
+    infoPanel.tabText.basic    = ""
+    infoPanel.tabText.advanced = ""
+    infoPanel.weatherTabBuilt  = false
+    infoPanel.activeTab = "basic"
+    rebuild()
 end
 
 -----------------------------------------------------------

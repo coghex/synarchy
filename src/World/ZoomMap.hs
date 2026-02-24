@@ -535,7 +535,7 @@ tempToColorAt facing worldSize x y cg =
         coord = ClimateCoord ru rv
     in case HM.lookup coord cg of
         Just region → let t = clamp01 $
-                                (scWinter (rcAirTemp region)) / 10.0
+                                (scWinter (rcAirTemp region)) / 40.0
                        in (t, 0, 1 - t)
         Nothing     → (1.0, 1.0, 1.0)
   where
@@ -568,8 +568,7 @@ pressureToColorAt facing worldSize x y cg =
 
         coord = ClimateCoord ru rv
     in case HM.lookup coord cg of
-        Just region → let t = clamp01 $
-                                (rcPressure region) / 10.0
+        Just region → let t = clamp01 $ (rcPressure region)
                        in (t, 0, 1 - t)
         Nothing     → (1.0, 1.0, 1.0)
   where

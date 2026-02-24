@@ -735,6 +735,10 @@ function uiManager.onSetInfoText(basicText, advancedText)
     if hud then hud.setInfoText(basicText, advancedText) end
 end
 
+function uiManager.onSetWeatherInfo(text)
+    if hud then hud.setWeatherInfo(text) end
+end
+
 function uiManager.onClearInfo()
     if hud then hud.clearInfo() end
 end

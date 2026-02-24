@@ -49,6 +49,11 @@ sendHudInfo ∷ EngineEnv → Text → Text → IO ()
 sendHudInfo env msgbas msgadv = Q.writeQueue (luaQueue env)
                                   (LuaHudLogInfo msgbas msgadv)
 
+-- | send weather info to lua's hud
+sendHudWeatherInfo ∷ EngineEnv → Text → IO ()
+sendHudWeatherInfo env weatherText = Q.writeQueue (luaQueue env)
+                                            (LuaHudLogWeatherInfo weatherText)
+
 -----------------------------------------------------------
 -- Start World Thread
 -----------------------------------------------------------
@@ -205,8 +210,12 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
                     in "Ocean map: " <> T.pack (show ocean)
                 Nothing → ""
             ]
+        weatherInfo = case mParams of
+            Just params → "weather"--formatWeather (wgpClimateState params)
+            Nothing → ""
 
     sendHudInfo env basicLines advLines
+    sendHudWeatherInfo env weatherInfo
 
 -----------------------------------------------------------
 -- sendTileInfo: world-level (tile) selection

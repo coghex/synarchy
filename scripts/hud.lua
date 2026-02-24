@@ -363,6 +363,10 @@ function hud.setInfoText(basicText, advancedText)
     infoPanel.setInfo(basicText, advancedText)
 end
 
+function hud.setWeatherInfo(text)
+    infoPanel.setWeatherInfo(text)
+end
+
 function hud.clearInfo()
     infoPanel.clear()
 end
