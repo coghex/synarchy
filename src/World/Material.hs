@@ -110,31 +110,32 @@ data MaterialProps = MaterialProps
     { matName       ∷ !Text
     , matHardness   ∷ !Float
     , matDensity    ∷ !Float
+    , matAlbedo     ∷ !Float
     } deriving (Show)
 
 defaultMaterialProps ∷ MaterialProps
-defaultMaterialProps = MaterialProps "unknown" 0.5 2.5
+defaultMaterialProps = MaterialProps "unknown" 0.5 2.5 0.5
 
 materialPropsTable ∷ V.Vector MaterialProps
 materialPropsTable =
     let size = 256
         base = V.replicate size defaultMaterialProps
         updates =
-            [ (1,   MaterialProps "granite"    0.9  2.7)
-            , (2,   MaterialProps "diorite"    0.85 2.8)
-            , (3,   MaterialProps "gabbro"     0.8  3.0)
-            , (4,   MaterialProps "basalt"     0.75 2.9)
-            , (5,   MaterialProps "obsidian"   0.95 2.4)
-            , (10,  MaterialProps "sandstone"  0.4  2.3)
-            , (11,  MaterialProps "limestone"  0.35 2.5)
-            , (12,  MaterialProps "shale"      0.25 2.4)
-            , (20,  MaterialProps "impactite"  0.7  2.6)
-            , (30,  MaterialProps "iron"       0.6  7.8)
-            , (31,  MaterialProps "olivine"    0.7  3.3)
-            , (32,  MaterialProps "pyroxene"   0.65 3.2)
-            , (33,  MaterialProps "feldspar"   0.6  2.6)
-            , (100, MaterialProps "lava"       0.5  3.0)
-            , (250, MaterialProps "glacier"    1.0  0.9)
+            [ (1,   MaterialProps "granite"    0.9  2.7 0.5)
+            , (2,   MaterialProps "diorite"    0.85 2.8 0.5)
+            , (3,   MaterialProps "gabbro"     0.8  3.0 0.5)
+            , (4,   MaterialProps "basalt"     0.75 2.9 0.2)
+            , (5,   MaterialProps "obsidian"   0.95 2.4 0.1)
+            , (10,  MaterialProps "sandstone"  0.4  2.3 0.5)
+            , (11,  MaterialProps "limestone"  0.35 2.5 0.5)
+            , (12,  MaterialProps "shale"      0.25 2.4 0.5)
+            , (20,  MaterialProps "impactite"  0.7  2.6 0.1)
+            , (30,  MaterialProps "iron"       0.6  7.8 0.1)
+            , (31,  MaterialProps "olivine"    0.7  3.3 0.5)
+            , (32,  MaterialProps "pyroxene"   0.65 3.2 0.1)
+            , (33,  MaterialProps "feldspar"   0.6  2.6 0.1)
+            , (100, MaterialProps "lava"       0.5  3.0 0.5)
+            , (250, MaterialProps "glacier"    1.0  0.9 0.9)
             ]
     in base V.// updates
 
