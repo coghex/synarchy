@@ -1,11 +1,8 @@
 -- Info Panel for HUD
--- Creates a tabbed panel (Basic / Advanced) in the top-right corner
--- of the screen.  Each tab holds a single block of pre-formatted text.
--- The panel auto-hides when both tabs have empty text and auto-shows
--- when either tab receives content.
---
--- An optional third tab ("Weather") appears only when weather text
--- is set, and disappears when it is cleared.
+-- Creates a tabbed panel (Basic / Advanced / Weather) in the top-right
+-- corner of the screen.  Each tab holds multiple lines of pre-formatted
+-- text.  The panel auto-hides when all tabs are empty and auto-shows
+-- when any tab receives content.
 local scale   = require("scripts.ui.scale")
 local panel   = require("scripts.ui.panel")
 local label   = require("scripts.ui.label")
@@ -30,6 +27,7 @@ infoPanel.baseSizes = {
     tabFontSize = 16,
     padding     = 10,
     margin      = 16,
+    lineSpacing = 1.4,   -- multiplier on fontSize for line height
     -- Fraction of framebuffer
     widthFrac   = 0.20,
     heightFrac  = 0.33,
@@ -38,7 +36,7 @@ infoPanel.baseSizes = {
 -----------------------------------------------------------
 -- Tab definitions
 -----------------------------------------------------------
-local coreTabDefs = {
+local tabDefs = {
     { key = "basic",    name = "Basic" },
     { key = "advanced", name = "Advanced" },
 }
@@ -51,22 +49,25 @@ infoPanel.panelId    = nil
 infoPanel.tabBarId   = nil
 infoPanel.activeTab  = "basic"
 infoPanel.visible    = false
+infoPanel.page       = nil
+infoPanel.weatherTabActive = false  -- whether the weather tab exists
 
--- Per-tab text content (stored, not displayed directly)
+-- Per-tab text content (raw multi-line string)
 infoPanel.tabText = {
     basic    = "",
     weather  = "",
     advanced = "",
 }
 
--- Single content label shared across all tabs
-infoPanel.contentLabelId = nil
+-- Per-tab line label IDs (arrays of label ids, one per visible line slot)
+infoPanel.tabLineIds = {
+    basic    = {},
+    weather  = {},
+    advanced = {},
+}
 
--- Whether the weather tab is currently built into the UI
-infoPanel.weatherTabBuilt = false
-
--- Cached create params so we can rebuild on the fly
-infoPanel.createParams = nil
+-- Max visible lines (computed at create time from panel height)
+infoPanel.maxLines = 0
 
 -- Owned IDs for cleanup
 infoPanel.ownedPanels  = {}
@@ -95,34 +96,42 @@ function infoPanel.destroyOwned()
     infoPanel.ownedPanels  = {}
     infoPanel.panelId      = nil
     infoPanel.tabBarId     = nil
-    infoPanel.contentLabelId = nil
+    infoPanel.tabLineIds   = { basic = {}, weather = {}, advanced = {} }
 end
 
 -----------------------------------------------------------
--- Helpers
+-- Visibility helpers
 -----------------------------------------------------------
-
 local function hasContent()
     return (infoPanel.tabText.basic    ~= "")
         or (infoPanel.tabText.weather  ~= "")
         or (infoPanel.tabText.advanced ~= "")
 end
 
-local function weatherHasContent()
-    return infoPanel.tabText.weather ~= ""
+-----------------------------------------------------------
+-- Split a string on newlines
+-----------------------------------------------------------
+local function splitLines(text)
+    if not text or text == "" then return {} end
+    local lines = {}
+    for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+        table.insert(lines, line)
+    end
+    return lines
 end
 
--- Build the list of tab defs that should currently exist
-local function buildTabList()
-    local tabs = {}
-    for _, def in ipairs(coreTabDefs) do
-        table.insert(tabs, { name = def.name, key = def.key })
+-----------------------------------------------------------
+-- Build the list of tab definitions to use right now
+-----------------------------------------------------------
+local function currentTabDefs()
+    local defs = {}
+    for _, def in ipairs(tabDefs) do
+        table.insert(defs, def)
     end
-    if weatherHasContent() then
-        table.insert(tabs, { name = weatherTabDef.name,
-                             key  = weatherTabDef.key })
+    if infoPanel.weatherTabActive then
+        table.insert(defs, weatherTabDef)
     end
-    return tabs
+    return defs
 end
 
 -----------------------------------------------------------
@@ -135,9 +144,6 @@ end
 function infoPanel.create(params)
     infoPanel.destroyOwned()
 
-    -- Cache params for later rebuilds
-    infoPanel.createParams = params
-
     local page      = params.page
     local boxTexSet = params.boxTexSet
     local menuFont  = params.menuFont
@@ -149,6 +155,10 @@ function infoPanel.create(params)
 
     -- Store page reference for later visibility toggling
     infoPanel.page = page
+    infoPanel.createParams = params
+
+    -- Decide whether to include weather tab
+    infoPanel.weatherTabActive = (infoPanel.tabText.weather ~= "")
 
     -- Panel dimensions
     local panelWidth  = math.floor(fbW * base.widthFrac)
@@ -175,10 +185,13 @@ function infoPanel.create(params)
     local bounds = panel.getContentBounds(infoPanel.panelId)
 
     ---------------------------------------------------------
-    -- Tab bar (tabs chosen dynamically)
+    -- Tab bar
     ---------------------------------------------------------
-    local tabList = buildTabList()
-    infoPanel.weatherTabBuilt = weatherHasContent()
+    local defs = currentTabDefs()
+    local tabList = {}
+    for _, def in ipairs(defs) do
+        table.insert(tabList, { name = def.name, key = def.key })
+    end
 
     local tabX = panelX + bounds.x
     local tabY = panelY + bounds.y
@@ -203,43 +216,57 @@ function infoPanel.create(params)
         tabs              = tabList,
         onChange = function(key, index, tbId)
             infoPanel.activeTab = key
-            infoPanel.refreshContent()
+            infoPanel.showTab(key)
         end,
     }))
 
-    -- If the saved activeTab no longer exists (e.g. weather was removed),
+    -- If the active tab was "weather" but weather tab is now gone,
     -- fall back to "basic"
-    local activeValid = false
-    for _, t in ipairs(tabList) do
-        if t.key == infoPanel.activeTab then activeValid = true; break end
-    end
-    if not activeValid then
+    if infoPanel.activeTab == "weather" and not infoPanel.weatherTabActive then
         infoPanel.activeTab = "basic"
     end
-
     tabbar.selectByKey(infoPanel.tabBarId, infoPanel.activeTab)
 
     ---------------------------------------------------------
-    -- Single content label (shared across all tabs)
+    -- Content line labels (one set per tab, inside the frame)
     ---------------------------------------------------------
     local frameX, frameY, frameW, frameH =
         tabbar.getFrameBounds(infoPanel.tabBarId)
     local contentPad = math.floor(8 * uiscale)
+    local lineHeight = math.floor(base.fontSize * base.lineSpacing * uiscale)
+    local availableH = frameH - contentPad * 2
+    local maxLines   = math.max(1, math.floor(availableH / lineHeight))
+    infoPanel.maxLines = maxLines
 
-    infoPanel.contentLabelId = trackLabel(label.new({
-        name     = "hud_info_content",
-        text     = infoPanel.tabText[infoPanel.activeTab] or "",
-        font     = menuFont,
-        fontSize = base.fontSize,
-        color    = {0.9, 0.9, 0.9, 1.0},
-        page     = page,
-        uiscale  = uiscale,
-    }))
-    local lh = label.getElementHandle(infoPanel.contentLabelId)
-    UI.addToPage(page, lh,
-        frameX + contentPad,
-        frameY + contentPad + s.fontSize)
-    UI.setZIndex(lh, Z_CONTENT)
+    for _, def in ipairs(defs) do
+        local lineIds = {}
+        for i = 1, maxLines do
+            local lid = trackLabel(label.new({
+                name     = "hud_info_" .. def.key .. "_line_" .. i,
+                text     = "",
+                font     = menuFont,
+                fontSize = base.fontSize,
+                color    = {0.9, 0.9, 0.9, 1.0},
+                page     = page,
+                uiscale  = uiscale,
+            }))
+            local lh = label.getElementHandle(lid)
+            UI.addToPage(page, lh,
+                frameX + contentPad,
+                frameY + contentPad + (i - 1) * lineHeight + s.fontSize)
+            UI.setZIndex(lh, Z_CONTENT)
+            table.insert(lineIds, lid)
+        end
+        infoPanel.tabLineIds[def.key] = lineIds
+    end
+
+    -- Populate labels from current text
+    for _, def in ipairs(defs) do
+        infoPanel.refreshTabLines(def.key)
+    end
+
+    -- Show only the active tab's labels
+    infoPanel.showTab(infoPanel.activeTab)
 
     -- Start hidden via page visibility
     infoPanel.visible = false
@@ -249,30 +276,40 @@ function infoPanel.create(params)
     if hasContent() then
         infoPanel.visible = true
         UI.showPage(page)
+        infoPanel.showTab(infoPanel.activeTab)
     end
 
-    engine.logDebug("HUD info panel created (weather tab: "
-        .. tostring(infoPanel.weatherTabBuilt) .. ")")
+    engine.logDebug("HUD info panel created: maxLines=" .. maxLines)
 end
 
 -----------------------------------------------------------
--- Rebuild (preserving text and active tab)
+-- Refresh a single tab's line labels from its stored text
 -----------------------------------------------------------
+function infoPanel.refreshTabLines(tabKey)
+    local lineIds = infoPanel.tabLineIds[tabKey]
+    if not lineIds then return end
 
-local function rebuild()
-    if not infoPanel.createParams then return end
-    infoPanel.create(infoPanel.createParams)
+    local lines = splitLines(infoPanel.tabText[tabKey])
+    for i, lid in ipairs(lineIds) do
+        local text = lines[i] or ""
+        label.setText(lid, text)
+    end
 end
 
 -----------------------------------------------------------
--- Refresh the single content label with the active tab's text
+-- Show / hide individual tab labels
 -----------------------------------------------------------
-
-function infoPanel.refreshContent()
-    if not infoPanel.contentLabelId then return end
-    local text = infoPanel.tabText[infoPanel.activeTab] or ""
-    local lh = label.getElementHandle(infoPanel.contentLabelId)
-    UI.setText(lh, text)
+function infoPanel.showTab(key)
+    local defs = currentTabDefs()
+    for _, def in ipairs(defs) do
+        local lineIds = infoPanel.tabLineIds[def.key]
+        if lineIds then
+            local vis = (def.key == key)
+            for _, lid in ipairs(lineIds) do
+                label.setVisible(lid, vis)
+            end
+        end
+    end
 end
 
 -----------------------------------------------------------
@@ -282,6 +319,7 @@ function infoPanel.setAllVisible(vis)
     if not infoPanel.page then return end
     if vis then
         UI.showPage(infoPanel.page)
+        infoPanel.showTab(infoPanel.activeTab)
     else
         UI.hidePage(infoPanel.page)
     end
@@ -291,27 +329,39 @@ end
 -- Public API: set text for a tab
 -----------------------------------------------------------
 
+-- Sets the text for the given tab ("basic", "advanced", or "weather").
+-- Text can contain newline characters which will be split across
+-- pre-allocated line labels.
+-- If all tabs become empty, the panel hides itself.
+-- If any tab has content, the panel shows itself.
 function infoPanel.setText(tabKey, text)
     text = text or ""
+    local oldText = infoPanel.tabText[tabKey]
     infoPanel.tabText[tabKey] = text
 
-    -- Check whether the weather tab needs to appear or disappear
+    -- If the weather tab appeared or disappeared, we need a full rebuild
     if tabKey == "weather" then
-        local needsWeatherTab = (text ~= "")
-        if needsWeatherTab ~= infoPanel.weatherTabBuilt then
-            if not needsWeatherTab
-               and infoPanel.activeTab == "weather" then
-                infoPanel.activeTab = "basic"
+        local wasActive = infoPanel.weatherTabActive
+        local shouldBeActive = (text ~= "")
+        if wasActive ~= shouldBeActive then
+            -- Need to rebuild the tabbar to add/remove the weather tab.
+            -- But we can only do that if we have the create params.
+            -- Store a flag so the next createUI call picks it up.
+            infoPanel.weatherTabActive = shouldBeActive
+            -- For now, if we have a page, rebuild via the stored params
+            if infoPanel.createParams then
+                infoPanel.create(infoPanel.createParams)
+                if hasContent() then
+                    infoPanel.visible = true
+                    infoPanel.setAllVisible(true)
+                end
+                return
             end
-            rebuild()
-            return
         end
     end
 
-    -- If this is the active tab, update the displayed text immediately
-    if tabKey == infoPanel.activeTab then
-        infoPanel.refreshContent()
-    end
+    -- Fast path: just update the line labels in place
+    infoPanel.refreshTabLines(tabKey)
 
     -- Auto-show / auto-hide
     if hasContent() then
@@ -327,25 +377,21 @@ function infoPanel.setText(tabKey, text)
     end
 end
 
--- Convenience: set both core tabs at once
+-- Convenience: set both tabs at once
 function infoPanel.setInfo(basicText, advancedText)
     infoPanel.setText("basic",    basicText    or "")
     infoPanel.setText("advanced", advancedText or "")
 end
 
--- Convenience: set the optional weather tab
 function infoPanel.setWeatherInfo(weatherText)
     infoPanel.setText("weather", weatherText or "")
 end
 
--- Clear all text (hides the panel, removes weather tab)
+-- Clear all text (hides the panel)
 function infoPanel.clear()
-    infoPanel.tabText.weather  = ""
-    infoPanel.tabText.basic    = ""
-    infoPanel.tabText.advanced = ""
-    infoPanel.weatherTabBuilt  = false
-    infoPanel.activeTab = "basic"
-    rebuild()
+    infoPanel.setText("basic",    "")
+    infoPanel.setText("advanced", "")
+    infoPanel.setText("weather",  "")
 end
 
 -----------------------------------------------------------
