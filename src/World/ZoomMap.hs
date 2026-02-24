@@ -547,19 +547,14 @@ pressureToColorAt ∷ CameraFacing → Int → Float → Float
               → HM.HashMap ClimateCoord RegionClimate
               → (Float, Float, Float)
 pressureToColorAt facing worldSize x y cg =
-    let -- 1. Screen-space → grid-tile (gx, gy)
-        (gx, gy) = worldToGrid facing x y
+    let (gx, gy) = worldToGrid facing x y
 
-        -- 2. Convert to (u, v) and wrap u
         u = gx - gy
         v = gx + gy
         w = worldSize * chunkSize
         halfW = w `div` 2
         wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
 
-        -- 3. (u, v) in tiles → (u, v) in chunks → climate region (ru, rv)
-        --    Chunk-u = u / chunkSize, then same offset as initEarlyClimate:
-        --    ru = (chunkU + halfChunks) / climateRegionSize
         halfChunks = worldSize `div` 2
         chunkU = floorDiv wrappedU chunkSize
         chunkV = floorDiv v chunkSize
@@ -568,8 +563,11 @@ pressureToColorAt facing worldSize x y cg =
 
         coord = ClimateCoord ru rv
     in case HM.lookup coord cg of
-        Just region → let t = clamp01 $ (rcPressure region)
-                       in (t, 0, 1 - t)
+        Just region →
+            -- rcPressure is centered at 1.0 with perturbations of ~±0.1
+            -- Map [0.9, 1.1] → [0.0, 1.0] so the color range is visible
+            let t = clamp01 ((rcPressure region - 0.9) / 0.2)
+            in (t, 0, 1 - t)  -- red = high pressure, blue = low pressure
         Nothing     → (1.0, 1.0, 1.0)
   where
     floorDiv a b
