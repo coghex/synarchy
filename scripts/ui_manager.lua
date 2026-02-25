@@ -90,6 +90,10 @@ function uiManager.init(scriptId)
     createWorldMenu.setShowMenuCallback(function(menuName)
         uiManager.showMenu(menuName)
     end)
+
+    mainMenu.setShowMenuCallback(function(menuName)
+        uiManager.showMenu(menuName)
+    end)
     
     engine.logDebug("UI Manager waiting for assets...")
 end

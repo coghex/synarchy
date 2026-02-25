@@ -26,6 +26,9 @@ mainMenu.ownedPanels  = {}
 mainMenu.saves = {}        -- cached list from engine.listSaves()
 mainMenu.latestSave = nil  -- name of most recent save
 
+-- Callback to switch menus (set by ui_manager)
+mainMenu.showMenuCallback = nil
+
 -- Base sizes (unscaled)
 mainMenu.baseSizes = {
     titleFontSize = 96,
@@ -62,7 +65,7 @@ function mainMenu.buildMenuItems()
         table.insert(items, {
             name = "continue",
             label = "Continue",
-            callback = "onContinue",
+            onClick = function() mainMenu.onContinue() end,
         })
         
         -- If multiple saves, add "Load Game" button
@@ -70,7 +73,7 @@ function mainMenu.buildMenuItems()
             table.insert(items, {
                 name = "load_game",
                 label = "Load Game",
-                callback = "onLoadGame",
+                onClick = function() mainMenu.onLoadGame() end,
             })
         end
     end
@@ -79,17 +82,17 @@ function mainMenu.buildMenuItems()
     table.insert(items, {
         name = "create_world",
         label = "Create World",
-        callback = "onCreateWorld",
+        onClick = function() mainMenu.onCreateWorld() end,
     })
     table.insert(items, {
         name = "settings",
         label = "Settings",
-        callback = "onSettings",
+        onClick = function() mainMenu.onSettings() end,
     })
     table.insert(items, {
         name = "quit",
         label = "Quit",
-        callback = "onQuit",
+        onClick = function() mainMenu.onQuit() end,
     })
     
     return items
@@ -106,6 +109,10 @@ function mainMenu.destroyOwned()
     mainMenu.ownedLabels  = {}
     mainMenu.ownedButtons = {}
     mainMenu.ownedPanels  = {}
+end
+
+function mainMenu.setShowMenuCallback(callback)
+    mainMenu.showMenuCallback = callback
 end
 
 function mainMenu.init(boxTex, btnTex, font, tFont, width, height)
@@ -228,7 +235,8 @@ function mainMenu.createUI()
             textureSet = mainMenu.boxTexSet,
             bgColor = {1.0, 1.0, 1.0, 1.0},
             textColor = {1.0, 1.0, 1.0, 1.0},
-            callbackName = item.callback,
+            onClick = item.onClick,
+            -- No callbackName: uses default "onButtonClick"
         })
         table.insert(mainMenu.ownedButtons, btnId)
         
@@ -266,18 +274,65 @@ end
 function mainMenu.onContinue()
     if mainMenu.latestSave then
         engine.logInfo("Continuing from save: " .. mainMenu.latestSave)
-        engine.loadSave(mainMenu.latestSave)
-        mainMenu.hide()
-        -- Transition to world view (same flow as after world gen completes)
+        mainMenu.loadAndShowSave(mainMenu.latestSave)
     end
 end
 
 function mainMenu.onLoadGame()
     engine.logInfo("Opening load game screen")
-    mainMenu.hide()
-    -- Show save browser (a new Lua module, similar to create_world_menu)
-    local saveBrowser = require("scripts.save_browser")
-    saveBrowser.show(mainMenu.saves)
+    -- TODO: Show a save browser. For now, load the latest.
+    if mainMenu.latestSave then
+        mainMenu.loadAndShowSave(mainMenu.latestSave)
+    end
+end
+
+function mainMenu.onCreateWorld()
+    if mainMenu.showMenuCallback then
+        mainMenu.showMenuCallback("create_world")
+    end
+end
+
+function mainMenu.onSettings()
+    if mainMenu.showMenuCallback then
+        mainMenu.showMenuCallback("settings")
+    end
+end
+
+function mainMenu.onQuit()
+    engine.quit()
+end
+
+-----------------------------------------------------------
+-- Load a save and transition to world view
+-----------------------------------------------------------
+
+function mainMenu.loadAndShowSave(saveName)
+    local worldView = require("scripts.world_view")
+    local worldManager = require("scripts.world_manager")
+    
+    -- 1. Deserialize save file and queue WorldLoadSave on the world thread
+    local ok = engine.loadSave(saveName)
+    if not ok then
+        engine.logError("Failed to load save: " .. saveName)
+        return
+    end
+    
+    -- 2. Tell worldManager about the loaded world so Lua state is consistent
+    worldManager.currentWorld = "main_world"
+    worldManager.active = true
+    
+    -- 3. Send all textures to the world
+    --    (The Haskell WorldLoadSave handler restores WorldState but textures
+    --     are GPU handles that must be re-sent from Lua)
+    worldView.sendTexturesToWorld("main_world")
+    
+    -- 4. Show the world on the Haskell side
+    world.show("main_world")
+    
+    -- 5. Transition UI to world view
+    if mainMenu.showMenuCallback then
+        mainMenu.showMenuCallback("world_view")
+    end
 end
 
 function mainMenu.show()
