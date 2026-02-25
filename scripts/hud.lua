@@ -33,6 +33,8 @@ hud.texMapPressure         = nil
 hud.texMapPressureSelected = nil
 hud.texMapHumidity         = nil
 hud.texMapHumiditySelected = nil
+hud.texMapPrecipitation    = nil
+hud.texMapPrecipitationSelected = nil
 
 hud.texToolDefault         = nil
 hud.texToolDefaultSelected = nil
@@ -76,6 +78,8 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texMapPressureSelected = engine.loadTexture("assets/textures/hud/map_pressure_selected.png")
     hud.texMapHumidity        = engine.loadTexture("assets/textures/hud/map_humidity.png")
     hud.texMapHumiditySelected = engine.loadTexture("assets/textures/hud/map_humidity_selected.png")
+    hud.texMapPrecipitation        = engine.loadTexture("assets/textures/hud/map_precipitation.png")
+    hud.texMapPrecipitationSelected = engine.loadTexture("assets/textures/hud/map_precipitation_selected.png")
     hud.texToolDefault         = engine.loadTexture("assets/textures/hud/tool_default.png")
     hud.texToolDefaultSelected = engine.loadTexture("assets/textures/hud/tool_default_selected.png")
     hud.texToolInfo            = engine.loadTexture("assets/textures/hud/tool_info.png")
@@ -150,6 +154,9 @@ function hud.createUI()
                     { name = "map_humidity",
                       texDefault = hud.texMapHumidity,
                       texSelected = hud.texMapHumiditySelected },
+                    { name = "map_precipitation",
+                      texDefault = hud.texMapPrecipitation,
+                      texSelected = hud.texMapPrecipitationSelected },
                     { name = "map_seatemp",
                       texDefault = hud.texMapSeaTemp,
                       texSelected = hud.texMapSeaTempSelected },
