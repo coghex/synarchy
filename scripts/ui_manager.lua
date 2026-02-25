@@ -22,6 +22,7 @@ local mainMenu = nil
 local settingsMenu = nil
 local createWorldMenu = nil
 local worldView = nil
+local saveBrowser = nil
 local worldManager = nil
 local textbox = nil
 local checkbox = nil
@@ -81,6 +82,7 @@ function uiManager.init(scriptId)
     createWorldMenu = require("scripts.create_world_menu")
     worldManager = require("scripts.world_manager")
     worldView = require("scripts.world_view")
+    saveBrowser = require("scripts.save_browser")
     hud = require("scripts.hud")
     
     settingsMenu.setShowMenuCallback(function(menuName)
@@ -124,6 +126,7 @@ function uiManager.checkReady()
             createWorldMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             worldView.init(fbW, fbH)
             hud.init(boxTexSet, menuFont, fbW, fbH)
+            saveBrowser.init(boxTexSet, menuFont, fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -146,6 +149,7 @@ function uiManager.onFramebufferResize(width, height)
     if createWorldMenu then createWorldMenu.onFramebufferResize(width, height) end
     if worldView then worldView.onFramebufferResize(width, height) end
     if hud then hud.onFramebufferResize(width, height) end
+    if saveBrowser then saveBrowser.onFramebufferResize(width, height) end
     
     if currentMenu == "main" then
         if mainMenu and mainMenu.page then UI.showPage(mainMenu.page) end
@@ -156,7 +160,9 @@ function uiManager.onFramebufferResize(width, height)
     elseif currentMenu == "world_view" then
         if worldView and worldView.page then UI.showPage(worldView.page) end
         if hud and hud.page then UI.showPage(hud.page) end
-    end
+    elseif currentMenu == "save_browser" then
+        if saveBrowser and saveBrowser.page then UI.showPage(saveBrowser.page) end
+    end 
 end
 
 function uiManager.showMenu(menuName)
@@ -177,12 +183,26 @@ function uiManager.showMenu(menuName)
     elseif menuName == "world_view" then
         worldView.show()
         hud.show()
+    elseif menuName == "save_browser" then
+        saveBrowser.show(mainMenu.saves, function(saveName)
+            mainMenu.loadAndShowSave(saveName)
+        end, function()
+            uiManager.showMenu("main")
+        end)
     end
 end
 
 function uiManager.onCreateWorld()
     handleNonTextBoxClick()
     uiManager.showMenu("create_world")
+end
+
+function uiManager.onMainMenuItem(elemHandle)
+    handleNonTextBoxClick()
+    if mainMenu then
+        return mainMenu.handleClick(elemHandle)
+    end
+    return false
 end
 
 function uiManager.onSettings()
@@ -338,6 +358,7 @@ function uiManager.shutdown()
     if createWorldMenu then createWorldMenu.shutdown() end
     if worldView then worldView.shutdown() end
     if hud then hud.shutdown() end
+    if saveBrowser then saveBrowser.shutdown() end
 end
 
 function uiManager.onTextBoxClick(elemHandle)
