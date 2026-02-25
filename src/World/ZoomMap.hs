@@ -508,6 +508,40 @@ makeMapQuads params mapMode baked facing vb camX camY alpha layer =
                     then Just (emitQuad entry color wrappedX wrappedY layer)
                     else Nothing
                  ) baked
+    ZMPrecipType → V.mapMaybe (\entry →
+                 let baseX = bzeDrawX entry
+                     baseY = bzeDrawY entry
+                     w = bzeWidth entry
+                     h = bzeHeight entry
+                     centerX = baseX + w / 2.0
+                     centerY = baseY + h / 2.0
+                     (offX, offY) = bestZoomWrapOffset facing ws camX camY
+                                                       centerX centerY
+                     wrappedX = baseX + offX
+                     wrappedY = baseY + offY
+                     (cr, cb, cg) = precipTypeToColorAt facing ws wrappedX wrappedY cgrid
+                     color = Vec4 cr cb cg alpha
+                 in if isChunkInView vb wrappedX wrappedY w h
+                    then Just (emitQuad entry color wrappedX wrappedY layer)
+                    else Nothing
+                 ) baked
+    ZMEvaporation → V.mapMaybe (\entry →
+                 let baseX = bzeDrawX entry
+                     baseY = bzeDrawY entry
+                     w = bzeWidth entry
+                     h = bzeHeight entry
+                     centerX = baseX + w / 2.0
+                     centerY = baseY + h / 2.0
+                     (offX, offY) = bestZoomWrapOffset facing ws camX camY
+                                                       centerX centerY
+                     wrappedX = baseX + offX
+                     wrappedY = baseY + offY
+                     (cr, cb, cg) = evapToColorAt facing ws wrappedX wrappedY cgrid
+                     color = Vec4 cr cb cg alpha
+                 in if isChunkInView vb wrappedX wrappedY w h
+                    then Just (emitQuad entry color wrappedX wrappedY layer)
+                    else Nothing
+                 ) baked
     ZMHumidity → V.mapMaybe (\entry →
                  let baseX = bzeDrawX entry
                      baseY = bzeDrawY entry
@@ -666,7 +700,63 @@ precipToColorAt facing worldSize x y cg =
       | b > 0     = if a >= 0 then a `div` b else -(((-a) + b - 1) `div` b)
       | otherwise = error "floorDiv: non-positive divisor"
 
+precipTypeToColorAt ∷ CameraFacing → Int → Float → Float
+              → HM.HashMap ClimateCoord RegionClimate
+              → (Float, Float, Float)
+precipTypeToColorAt facing worldSize x y cg =
+    let (gx, gy) = worldToGrid facing x y
 
+        u = gx - gy
+        v = gx + gy
+        w = worldSize * chunkSize
+        halfW = w `div` 2
+        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+
+        halfChunks = worldSize `div` 2
+        chunkU = floorDiv wrappedU chunkSize
+        chunkV = floorDiv v chunkSize
+        ru = (chunkU + halfChunks) `div` climateRegionSize
+        rv = (chunkV + halfChunks) `div` climateRegionSize
+
+        coord = ClimateCoord ru rv
+    in case HM.lookup coord cg of
+        Just region →
+            let t = 1 - (clamp01 (rcPrecipType region))
+            in (t, t, t)
+        Nothing     → (1.0, 1.0, 1.0)
+  where
+    floorDiv a b
+      | b > 0     = if a >= 0 then a `div` b else -(((-a) + b - 1) `div` b)
+      | otherwise = error "floorDiv: non-positive divisor"
+
+evapToColorAt ∷ CameraFacing → Int → Float → Float
+              → HM.HashMap ClimateCoord RegionClimate
+              → (Float, Float, Float)
+evapToColorAt facing worldSize x y cg =
+    let (gx, gy) = worldToGrid facing x y
+
+        u = gx - gy
+        v = gx + gy
+        w = worldSize * chunkSize
+        halfW = w `div` 2
+        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+
+        halfChunks = worldSize `div` 2
+        chunkU = floorDiv wrappedU chunkSize
+        chunkV = floorDiv v chunkSize
+        ru = (chunkU + halfChunks) `div` climateRegionSize
+        rv = (chunkV + halfChunks) `div` climateRegionSize
+
+        coord = ClimateCoord ru rv
+    in case HM.lookup coord cg of
+        Just region →
+            let t = clamp01 (rcEvaporation region)
+            in (t, t, t)
+        Nothing     → (1.0, 1.0, 1.0)
+  where
+    floorDiv a b
+      | b > 0     = if a >= 0 then a `div` b else -(((-a) + b - 1) `div` b)
+      | otherwise = error "floorDiv: non-positive divisor"
 
 seaTempToColorAt ∷ CameraFacing → Int → Float → Float
               → HM.HashMap ClimateCoord OceanCell

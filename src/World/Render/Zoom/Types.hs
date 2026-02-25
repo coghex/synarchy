@@ -16,7 +16,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
 import Engine.Asset.Handle (TextureHandle(..))
 
 data ZoomMapMode = ZMDefault | ZMTemp | ZMSeaTemp | ZMPressure | ZMHumidity
-                 | ZMPrecipitation
+                 | ZMPrecipitation | ZMPrecipType | ZMEvaporation
     deriving (Show, Eq)
 
 textToMapMode ∷ Text → ZoomMapMode
@@ -24,6 +24,8 @@ textToMapMode "map_temp" = ZMTemp
 textToMapMode "map_pressure" = ZMPressure
 textToMapMode "map_humidity" = ZMHumidity
 textToMapMode "map_precipitation" = ZMPrecipitation
+textToMapMode "map_preciptype" = ZMPrecipType
+textToMapMode "map_evaporation" = ZMEvaporation
 textToMapMode "map_seatemp" = ZMSeaTemp
 textToMapMode _          = ZMDefault
 

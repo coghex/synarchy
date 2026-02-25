@@ -23,18 +23,22 @@ hud.boxTexSet = nil
 hud.menuFont  = nil
 
 -- Texture handles (loaded once)
-hud.texMapDefault          = nil
-hud.texMapDefaultSelected  = nil
-hud.texMapTemp             = nil
-hud.texMapTempSelected     = nil
-hud.texMapSeaTemp          = nil
-hud.texMapSeaTempSelected  = nil
-hud.texMapPressure         = nil
-hud.texMapPressureSelected = nil
-hud.texMapHumidity         = nil
-hud.texMapHumiditySelected = nil
-hud.texMapPrecipitation    = nil
+hud.texMapDefault               = nil
+hud.texMapDefaultSelected       = nil
+hud.texMapTemp                  = nil
+hud.texMapTempSelected          = nil
+hud.texMapSeaTemp               = nil
+hud.texMapSeaTempSelected       = nil
+hud.texMapPressure              = nil
+hud.texMapPressureSelected      = nil
+hud.texMapHumidity              = nil
+hud.texMapHumiditySelected      = nil
+hud.texMapPrecipitation         = nil
 hud.texMapPrecipitationSelected = nil
+hud.texMapPrecipType            = nil
+hud.texMapPrecipTypeSelected    = nil
+hud.texMapEvaporation           = nil
+hud.texMapEvaporationSelected   = nil
 
 hud.texToolDefault         = nil
 hud.texToolDefaultSelected = nil
@@ -80,6 +84,10 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texMapHumiditySelected = engine.loadTexture("assets/textures/hud/map_humidity_selected.png")
     hud.texMapPrecipitation        = engine.loadTexture("assets/textures/hud/map_precipitation.png")
     hud.texMapPrecipitationSelected = engine.loadTexture("assets/textures/hud/map_precipitation_selected.png")
+    hud.texMapPrecipType       = engine.loadTexture("assets/textures/hud/map_preciptype.png")
+    hud.texMapPrecipTypeSelected = engine.loadTexture("assets/textures/hud/map_preciptype_selected.png")
+    hud.texMapEvaporation       = engine.loadTexture("assets/textures/hud/map_evaporation.png")
+    hud.texMapEvaporationSelected = engine.loadTexture("assets/textures/hud/map_evaporation_selected.png")
     hud.texToolDefault         = engine.loadTexture("assets/textures/hud/tool_default.png")
     hud.texToolDefaultSelected = engine.loadTexture("assets/textures/hud/tool_default_selected.png")
     hud.texToolInfo            = engine.loadTexture("assets/textures/hud/tool_info.png")
@@ -157,6 +165,12 @@ function hud.createUI()
                     { name = "map_precipitation",
                       texDefault = hud.texMapPrecipitation,
                       texSelected = hud.texMapPrecipitationSelected },
+                    { name = "map_preciptype",
+                      texDefault = hud.texMapPrecipType,
+                      texSelected = hud.texMapPrecipTypeSelected },
+                    { name = "map_evaporation",
+                      texDefault = hud.texMapEvaporation,
+                      texSelected = hud.texMapEvaporationSelected },
                     { name = "map_seatemp",
                       texDefault = hud.texMapSeaTemp,
                       texSelected = hud.texMapSeaTempSelected },
