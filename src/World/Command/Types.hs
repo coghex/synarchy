@@ -9,76 +9,8 @@ import Engine.Asset.Handle (TextureHandle(..))
 import World.Page.Types (WorldPageId(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
-
-data WorldTextureType
-    = GraniteTexture
-    | DioriteTexture
-    | GabbroTexture
-    | NoTexture
-    | OceanTexture
-    | IsoFaceMap
-    | SlopeFaceMapN
-    | SlopeFaceMapE
-    | SlopeFaceMapNE
-    | SlopeFaceMapS
-    | SlopeFaceMapNS
-    | SlopeFaceMapES
-    | SlopeFaceMapNES
-    | SlopeFaceMapW
-    | SlopeFaceMapNW
-    | SlopeFaceMapEW
-    | SlopeFaceMapNEW
-    | SlopeFaceMapSW
-    | SlopeFaceMapNSW
-    | SlopeFaceMapESW
-    | SlopeFaceMapNESW
-    | NoFaceMap
-    | ZoomGraniteTexture
-    | ZoomDioriteTexture
-    | ZoomGabbroTexture
-    | ZoomOceanTexture
-    | GlacierTexture
-    | LavaTexture
-    | ZoomGlacierTexture
-    | ZoomLavaTexture
-    | BlankTexture
-    | BgGraniteTexture
-    | BgGabbroTexture
-    | BgDioriteTexture
-    | BgOceanTexture
-    | BgGlacierTexture
-    | BgLavaTexture
-    | BasaltTexture
-    | ObsidianTexture
-    | SandstoneTexture
-    | LimestoneTexture
-    | ShaleTexture
-    | ImpactiteTexture
-    | IronTexture
-    | OlivineTexture
-    | PyroxeneTexture
-    | FeldsparTexture
-    | ZoomBasaltTexture
-    | ZoomObsidianTexture
-    | ZoomImpactiteTexture
-    | BgBasaltTexture
-    | BgImpactiteTexture
-    | BgObsidianTexture
-    | ZoomSandstoneTexture
-    | ZoomLimestoneTexture
-    | ZoomShaleTexture
-    | ZoomIronTexture
-    | ZoomOlivineTexture
-    | ZoomPyroxeneTexture
-    | ZoomFeldsparTexture
-    | BgSandstoneTexture
-    | BgLimestoneTexture
-    | BgShaleTexture
-    | BgIronTexture
-    | BgOlivineTexture
-    | BgPyroxeneTexture
-    | BgFeldsparTexture
-    deriving (Show, Eq)
+import World.Save.Types (SaveData(..))
+import World.Texture.Types (WorldTextureType(..))
 
 data WorldCommand
     = WorldInit WorldPageId Word64 Int Int
@@ -104,4 +36,6 @@ data WorldCommand
     | WorldSetWorldCursorSelect WorldPageId
     | WorldSetWorldCursorDeselect WorldPageId
     | WorldSetToolMode WorldPageId ToolMode
-    deriving (Show, Eq)
+    | WorldSave WorldPageId Text
+    | WorldLoadSave WorldPageId SaveData
+    deriving (Show)

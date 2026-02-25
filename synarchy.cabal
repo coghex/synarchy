@@ -72,6 +72,7 @@ test-suite synarchy-test
                 , vector
                 , vector-algorithms
                 , vector-th-unbox
+                , cereal
                 , yaml
                 , aeson
                 , deepseq
@@ -212,6 +213,7 @@ library
                      Engine.Scripting.Lua.API.Debug
                      Engine.Scripting.Lua.API.Log
                      Engine.Scripting.Lua.API.Config
+                     Engine.Scripting.Lua.API.Save
                      Engine.Scripting.Lua.API.Graphics
                      Engine.Scripting.Lua.API.Input
                      Engine.Scripting.Lua.API.Text
@@ -319,8 +321,11 @@ library
                      World.Plate.Types
                      World.Region.Types
                      World.State.Types
+                     World.Save.Types
+                     World.Save.Serialize
                      World.Scale
                      World.Slope
+                     World.Texture.Types
                      World.Tool.Types
                      World.Tile.Types
                      World.Time.Types
@@ -336,6 +341,7 @@ library
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields
+                      , FlexibleInstances
                       , MagicHash
                       , NoMonomorphismRestriction
                       , NoImplicitPrelude
@@ -373,6 +379,7 @@ library
                  , vector
                  , vector-algorithms
                  , vector-th-unbox
+                 , cereal
                  , yaml
                  , aeson
                  , deepseq
@@ -449,6 +456,7 @@ executable synarchy
                       , NoImplicitPrelude
                       , NumDecimals
                       , OverloadedStrings
+                      , FlexibleInstances
                       , PatternSynonyms
                       , QuantifiedConstraints
                       , RecordWildCards
@@ -480,6 +488,7 @@ executable synarchy
                  , vector
                  , vector-algorithms
                  , vector-th-unbox
+                 , cereal
                  , yaml
                  , aeson
                  , deepseq

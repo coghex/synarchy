@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -28,8 +28,10 @@ module World.Material
     ) where
 
 import UPrelude
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize)
 import Control.DeepSeq (NFData(..))
-import World.Command.Types (WorldTextureType(..))
+import World.Texture.Types (WorldTextureType(..))
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.Vector.Unboxed.Deriving (derivingUnbox)
@@ -41,6 +43,7 @@ import Data.Vector.Unboxed.Deriving (derivingUnbox)
 newtype MaterialId = MaterialId { unMaterialId ∷ Word8 }
     deriving stock (Show, Eq, Ord)
     deriving newtype (NFData)
+    deriving (Serialize, Generic)
 
 derivingUnbox "MaterialId"
     [t| MaterialId -> Word8 |]

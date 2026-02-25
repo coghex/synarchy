@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Render.Zoom.Types
     ( ZoomChunkEntry(..)
     , ZoomCameraSnapshot(..)
@@ -9,6 +9,8 @@ module World.Render.Zoom.Types
     ) where
 
 import UPrelude
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize)
 import Control.DeepSeq (NFData(..))
 import qualified Data.Vector as V
 import Engine.Scene.Types.Batch (SortableQuad(..))
@@ -17,7 +19,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 
 data ZoomMapMode = ZMDefault | ZMTemp | ZMSeaTemp | ZMPressure | ZMHumidity
                  | ZMPrecipitation | ZMPrecipType | ZMEvaporation
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize)
 
 textToMapMode ∷ Text → ZoomMapMode
 textToMapMode "map_temp" = ZMTemp

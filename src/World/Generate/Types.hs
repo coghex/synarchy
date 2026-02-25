@@ -1,10 +1,13 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Generate.Types
     ( WorldGenParams(..)
     , defaultWorldGenParams
     ) where
 
-import UPrelude
+import UPrelude hiding (get)
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize(..))
+import Data.Hashable (Hashable)
 import qualified Data.HashSet as HS
 import World.Plate.Types (TectonicPlate(..))
 import World.Time.Types
@@ -34,7 +37,11 @@ data WorldGenParams = WorldGenParams
     , wgpOceanMap   ∷ !OceanMap         -- ^ Pre-generated ocean map for worldgen
     , wgpClimateParams ∷ !ClimateParams   -- ^ Climate parameters
     , wgpClimateState ∷ !ClimateState     -- ^ Initial climate state
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
+instance (Serialize a, Eq a, Hashable a)
+    ⇒ Serialize (HS.HashSet a) where
+    put = put . HS.toList
+    get = HS.fromList <$> get
 
 defaultWorldGenParams ∷ WorldGenParams
 defaultWorldGenParams = WorldGenParams

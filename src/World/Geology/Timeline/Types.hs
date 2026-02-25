@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Geology.Timeline.Types
     ( GeoScale(..)
     , GeoPeriod(..)
@@ -41,8 +41,12 @@ module World.Geology.Timeline.Types
     , explodeRiverEvent
     ) where
 
-import UPrelude
+import UPrelude hiding (get)
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize(..))
+import Data.Hashable (Hashable)
 import qualified Data.Vector as V
+import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Hydrology.Types
     ( HydroFeature(..)
@@ -59,7 +63,7 @@ data GeoScale
     | Period    -- ^ Tens of millions — mountain building, rifting
     | Epoch     -- ^ Millions — climate shifts, glaciation
     | Age       -- ^ Hundreds of thousands — local events, erosion detail
-    deriving (Show, Eq, Ord)
+    deriving (Show, Eq, Ord, Generic, Serialize)
 
 data GeoPeriod = GeoPeriod
     { gpName       ∷ !Text
@@ -71,14 +75,14 @@ data GeoPeriod = GeoPeriod
     , gpTaggedEvents ∷ ![(GeoEvent, EventBBox)]
     , gpExplodedEvents ∷ !(V.Vector (GeoEvent, EventBBox))
     , gpPeriodBBox    ∷ !EventBBox      -- ^ Bounding box of all events in this period
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 data GeoTimeline = GeoTimeline
     { gtSeed       ∷ !Word64
     , gtWorldSize  ∷ !Int
     , gtPeriods    ∷ ![GeoPeriod]
     , gtFeatures   ∷ ![PersistentFeature]
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 emptyTimeline ∷ GeoTimeline
 emptyTimeline = GeoTimeline
@@ -93,7 +97,7 @@ data EventBBox = EventBBox
     , bbMinY ∷ !Int
     , bbMaxX ∷ !Int
     , bbMaxY ∷ !Int
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 noBBox ∷ EventBBox
 noBBox = EventBBox minBound minBound maxBound maxBound
@@ -108,14 +112,14 @@ noBBox = EventBBox minBound minBound maxBound maxBound
 data RiverSegmentCarve = RiverSegmentCarve
     { rscSegment     ∷ !RiverSegment
     , rscMeanderSeed ∷ !Word64
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 -- | Delta deposit at the river mouth. Extracted from the last
 --   segment so it gets its own small bbox around the mouth.
 data RiverDeltaParams = RiverDeltaParams
     { rdpLastSegment ∷ !RiverSegment  -- ^ Last segment (for mouth position + direction)
     , rdpFlowRate    ∷ !Float         -- ^ Total river flow (drives delta size)
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 -----------------------------------------------------------
 -- GeoEvent — now with per-segment river events
@@ -133,7 +137,7 @@ data GeoEvent
     | HydroModify !GeoFeatureId !HydroEvolution
     | RiverSegmentEvent !RiverSegmentCarve
     | RiverDeltaEvent   !RiverDeltaParams
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize, Hashable)
 
 -----------------------------------------------------------
 -- Explode a river HydroEvent into per-segment events
@@ -434,14 +438,14 @@ tagEventsWithBBox worldSize events =
 data FeatureShape
     = VolcanicShape !VolcanicFeature
     | HydroShape   !HydroFeature
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data FeatureActivity
     = FActive
     | FDormant
     | FExtinct
     | FCollapsed
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data FeatureEvolution
     = Reactivate
@@ -477,7 +481,7 @@ data FeatureEvolution
         , feCenter        ∷ !GeoCoord
         , feRadius        ∷ !Int
         }
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data CraterParams = CraterParams
     { cpCenter     ∷ !GeoCoord
@@ -486,7 +490,7 @@ data CraterParams = CraterParams
     , cpRimHeight  ∷ !Int
     , cpEjectaRadius ∷ !Int
     , cpMeteorite  ∷ !(Maybe Word8)
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data VolcanicFeature
     = ShieldVolcano    !ShieldParams
@@ -497,7 +501,7 @@ data VolcanicFeature
     | LavaTube         !LavaTubeParams
     | SuperVolcano     !SuperVolcanoParams
     | HydrothermalVent !HydrothermalParams
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data ShieldParams = ShieldParams
     { shCenter     ∷ !GeoCoord
@@ -506,7 +510,7 @@ data ShieldParams = ShieldParams
     , shSummitPit  ∷ !Bool
     , shPitRadius  ∷ !Int
     , shPitDepth   ∷ !Int
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data CinderConeParams = CinderConeParams
     { ccCenter     ∷ !GeoCoord
@@ -514,13 +518,13 @@ data CinderConeParams = CinderConeParams
     , ccPeakHeight ∷ !Int
     , ccCraterRadius ∷ !Int
     , ccCraterDepth  ∷ !Int
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data LavaDomeParams = LavaDomeParams
     { ldCenter     ∷ !GeoCoord
     , ldBaseRadius ∷ !Int
     , ldHeight     ∷ !Int
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data CalderaParams = CalderaParams
     { caCenter     ∷ !GeoCoord
@@ -529,7 +533,7 @@ data CalderaParams = CalderaParams
     , caRimHeight   ∷ !Int
     , caFloorDepth  ∷ !Int
     , caHasLake     ∷ !Bool
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data FissureParams = FissureParams
     { fpStart      ∷ !GeoCoord
@@ -537,7 +541,7 @@ data FissureParams = FissureParams
     , fpWidth      ∷ !Int
     , fpRidgeHeight ∷ !Int
     , fpHasMagma   ∷ !Bool
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data LavaTubeParams = LavaTubeParams
     { ltStart      ∷ !GeoCoord
@@ -546,7 +550,7 @@ data LavaTubeParams = LavaTubeParams
     , ltRidgeHeight ∷ !Int
     , ltCollapses  ∷ !Int
     , ltCollapseSeed ∷ !Word64
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data SuperVolcanoParams = SuperVolcanoParams
     { svCenter      ∷ !GeoCoord
@@ -555,27 +559,27 @@ data SuperVolcanoParams = SuperVolcanoParams
     , svFloorDepth   ∷ !Int
     , svEjectaRadius ∷ !Int
     , svEjectaDepth  ∷ !Int
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data HydrothermalParams = HydrothermalParams
     { htCenter     ∷ !GeoCoord
     , htRadius     ∷ !Int
     , htChimneyHeight ∷ !Int
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data LandslideParams = LandslideParams
     { lsCenter     ∷ !GeoCoord
     , lsRadius     ∷ !Int
     , lsDirection  ∷ !Float
     , lsVolume     ∷ !Int
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data FloodParams = FloodParams
     { fpCenter     ∷ !GeoCoord
     , fpRadius     ∷ !Int
     , fpDepositDepth ∷ !Int
     , fpMaterial   ∷ !Word8
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data ErosionParams = ErosionParams
     { epIntensity    ∷ !Float
@@ -584,7 +588,7 @@ data ErosionParams = ErosionParams
     , epWind         ∷ !Float
     , epChemical     ∷ !Float
     , epSeed         ∷ !Word64
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 defaultErosionParams ∷ ErosionParams
 defaultErosionParams = ErosionParams
@@ -601,7 +605,7 @@ data VolcanicActivity
     | Dormant
     | Extinct
     | Collapsed
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data PersistentFeature = PersistentFeature
     { pfId            ∷ !GeoFeatureId
@@ -611,7 +615,7 @@ data PersistentFeature = PersistentFeature
     , pfLastActivePeriod ∷ !Int
     , pfEruptionCount ∷ !Int
     , pfParentId      ∷ !(Maybe GeoFeatureId)
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data LavaFlow = LavaFlow
     { lfSourceX   ∷ !Int
@@ -621,4 +625,4 @@ data LavaFlow = LavaFlow
     , lfVolume    ∷ !Int
     , lfMaterial  ∷ !Word8
     , lfViscosity ∷ !Int
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)

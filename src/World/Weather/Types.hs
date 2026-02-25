@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Weather.Types
     ( -- * Climate Region Grid
       ClimateCoord(..)
@@ -33,10 +33,13 @@ module World.Weather.Types
     , defaultClimateParams
     ) where
 
-import UPrelude
+import UPrelude hiding (get)
 import Control.DeepSeq (NFData(..))
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize(..))
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as HM
+import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 
 -----------------------------------------------------------
 -- Climate Region Coordinate
@@ -49,7 +52,7 @@ climateRegionSize ∷ Int
 climateRegionSize = 4  -- in chunks (so 64 tiles per side)
 
 data ClimateCoord = ClimateCoord !Int !Int
-    deriving (Show, Eq, Ord)
+    deriving (Show, Eq, Ord, Generic, Serialize)
 
 instance NFData ClimateCoord where
     rnf (ClimateCoord x y) = rnf x `seq` rnf y
@@ -68,7 +71,7 @@ instance Hashable ClimateCoord where
 data SeasonalClimate = SeasonalClimate
     { scSummer ∷ !Float
     , scWinter ∷ !Float
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 instance NFData SeasonalClimate where
     rnf (SeasonalClimate s w) = rnf s `seq` rnf w
@@ -105,7 +108,7 @@ data RegionClimate = RegionClimate
     , rcAlbedo         ∷ !Float            -- ^ Surface reflectivity 0.0-1.0
                                            --   (ice ~0.8, forest ~0.15, desert ~0.35)
     , rcElevAvg        ∷ !Int              -- ^ Mean elevation across region
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 instance NFData RegionClimate where
     rnf (RegionClimate at h p pt e cc pr wd ws ol co al el) =
@@ -137,7 +140,7 @@ defaultRegionClimate = RegionClimate
 data ClimateGrid = ClimateGrid
     { cgRegions ∷ !(HM.HashMap ClimateCoord RegionClimate)
     , cgSize    ∷ !Int   -- ^ Number of climate regions per side
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 emptyClimateGrid ∷ Int → ClimateGrid
 emptyClimateGrid size = ClimateGrid HM.empty size
@@ -168,7 +171,7 @@ data OceanCell = OceanCell
                                         --   Brings nutrients + cold water to surface
     , ocIceCover    ∷ !Float            -- ^ Fraction covered by sea ice (0.0-1.0)
                                         --   Affects albedo and heat exchange
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 instance NFData OceanCell where
     rnf (OceanCell t s d cd cs u i) =
@@ -187,7 +190,7 @@ data OceanCurrent = OceanCurrent
     , ocPath       ∷ ![(ClimateCoord)] -- ^ Cells this current passes through
     , ocWarm       ∷ !Bool             -- ^ Warm current (affects coastal climate)
     , ocStrength   ∷ !Float            -- ^ Relative strength 0.0-1.0
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | Deep water mass for thermohaline circulation.
 --   Dense cold salty water sinks at polar regions,
@@ -198,7 +201,7 @@ data WaterMass = WaterMass
     , wmSalinity    ∷ !Float   -- ^ Deep water salinity
     , wmFlowDir     ∷ !Float   -- ^ Deep current direction
     , wmFlowSpd     ∷ !Float   -- ^ Deep current speed (much slower than surface)
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | Thermohaline circulation cell: connects sinking zones
 --   (polar, high salinity) to upwelling zones (tropical, divergent).
@@ -207,14 +210,14 @@ data ThermohalineCell = ThermohalineCell
     , thcUpwellRegion  ∷ !ClimateCoord   -- ^ Where deep water returns to surface
     , thcStrength      ∷ !Float          -- ^ Circulation intensity (0.0-1.0)
     , thcDeepTemp      ∷ !Float          -- ^ Temperature of the deep current
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 data OceanGrid = OceanGrid
     { ogCells      ∷ !(HM.HashMap ClimateCoord OceanCell)
     , ogDeepWater  ∷ !(HM.HashMap ClimateCoord WaterMass)
     , ogCurrents   ∷ ![OceanCurrent]        -- ^ Named currents (extracted post-sim)
     , ogThcCells   ∷ ![ThermohalineCell]     -- ^ Major thermohaline loops
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 emptyOceanGrid ∷ OceanGrid
 emptyOceanGrid = OceanGrid HM.empty HM.empty [] []
@@ -240,7 +243,7 @@ data WindCell = WindCell
     { wcDir      ∷ !Float   -- ^ Wind direction (radians)
     , wcSpeed    ∷ !Float   -- ^ Wind speed (0.0-1.0)
     , wcPressure ∷ !Float   -- ^ Sea-level pressure (relative)
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 instance NFData WindCell where
     rnf (WindCell d s p) = rnf d `seq` rnf s `seq` rnf p
@@ -254,7 +257,7 @@ data MoistureCell = MoistureCell
                              --   is being carried through this cell
     , mcSource   ∷ !Float   -- ^ Local moisture source (evaporation from ocean/lakes)
     , mcSink     ∷ !Float   -- ^ Local moisture sink (precipitation)
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 instance NFData MoistureCell where
     rnf (MoistureCell f s sk) = rnf f `seq` rnf s `seq` rnf sk
@@ -266,18 +269,18 @@ data PressureSystem = PressureSystem
     , psType     ∷ !PressureType
     , psRadius   ∷ !Int          -- ^ Approximate radius in climate regions
     , psStrength ∷ !Float        -- ^ How far from baseline pressure
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 data PressureType
     = HighPressure    -- ^ Subtropical high, polar high (clear skies, dry)
     | LowPressure     -- ^ Subpolar low, equatorial trough (storms, rain)
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize)
 
 data AtmoGrid = AtmoGrid
     { agWind     ∷ !(HM.HashMap ClimateCoord WindCell)
     , agMoisture ∷ !(HM.HashMap ClimateCoord MoistureCell)
     , agSystems  ∷ ![PressureSystem]    -- ^ Major pressure systems (extracted)
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 emptyAtmoGrid ∷ AtmoGrid
 emptyAtmoGrid = AtmoGrid HM.empty HM.empty []
@@ -300,7 +303,7 @@ data SurfaceType
     | SurfSavanna          -- ^ Tropical grassland with scattered trees (albedo ~0.20)
     | SurfWetland          -- ^ Swamp/marsh (albedo ~0.12, high evaporation)
     | SurfOcean            -- ^ Open water (albedo ~0.06)
-    deriving (Show, Eq, Enum, Bounded)
+    deriving (Show, Eq, Enum, Bounded, Generic, Serialize)
 
 -- | Energy/moisture budget summary for a region.
 --   Computed from all the other fields; useful for
@@ -313,7 +316,7 @@ data SurfaceBudget = SurfaceBudget
                                     --   High for mountains, low for flat desert
     , sbSnowpack    ∷ !Float        -- ^ Annual snowpack accumulation
                                     --   Drives spring melt → seasonal river peaks
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -----------------------------------------------------------
 -- Full Climate Simulation State
@@ -330,7 +333,11 @@ data ClimateState = ClimateState
     , csGlobalCO2 ∷ !Float           -- ^ Global CO2 level (from GeoState)
     , csGlobalTemp ∷ !Float          -- ^ Global mean temperature offset
     , csSolarConst ∷ !Float          -- ^ Solar constant (can vary over deep time)
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
+instance (Serialize k, Serialize v, Eq k, Hashable k)
+    ⇒ Serialize (HM.HashMap k v) where
+    put = put . HM.toList
+    get = HM.fromList <$> get
 
 initClimateState ∷ Int → ClimateState
 initClimateState worldSize =
@@ -360,7 +367,7 @@ data ClimateParams = ClimateParams
     , cpEvapScale       ∷ !Float   -- ^ Evaporation rate multiplier
     , cpAlbedoFeedback  ∷ !Float   -- ^ How much ice-albedo feedback amplifies cooling
     , cpThcThreshold    ∷ !Float   -- ^ Density threshold for deep water formation
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 defaultClimateParams ∷ ClimateParams
 defaultClimateParams = ClimateParams

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Time.Types
     ( WorldTime(..)
     , defaultWorldTime
@@ -15,6 +15,8 @@ module World.Time.Types
     ) where
 
 import UPrelude
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize)
 
 -- | Time of day in the world.
 --   hour: 0-23, minute: 0-59
@@ -71,7 +73,7 @@ data CalendarConfig = CalendarConfig
     , ccMonthsPerYear ∷ !Int      -- ^ e.g. 12
     , ccHoursPerDay   ∷ !Int      -- ^ e.g. 24 (controls sun cycle)
     , ccMinutesPerHour ∷ !Int     -- ^ e.g. 60
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 defaultCalendarConfig ∷ CalendarConfig
 defaultCalendarConfig = CalendarConfig
@@ -84,7 +86,7 @@ defaultCalendarConfig = CalendarConfig
 data SunConfig = SunConfig
     { scTiltAngle    ∷ !Float   -- ^ Axial tilt in radians, controls season intensity
     , scDayLength    ∷ !Float   -- ^ Base day/night ratio at equinox (0.5 = equal)
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 defaultSunConfig ∷ SunConfig
 defaultSunConfig = SunConfig
@@ -95,7 +97,7 @@ defaultSunConfig = SunConfig
 data MoonConfig = MoonConfig
     { mcCycleDays    ∷ !Int     -- ^ Days per lunar cycle
     , mcPhaseOffset  ∷ !Float   -- ^ Starting phase offset (0.0-1.0)
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 defaultMoonConfig ∷ MoonConfig
 defaultMoonConfig = MoonConfig

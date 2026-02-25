@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Hydrology.Types
     ( -- * Persistent hydrological features
       HydroFeature(..)
@@ -14,7 +14,10 @@ module World.Hydrology.Types
     , HydroEvolution(..)
     ) where
 
-import UPrelude
+import UPrelude hiding (get)
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize(..))
+import Data.Hashable (Hashable(..))
 import Control.DeepSeq (NFData(..))
 import qualified Data.Vector as V
 import World.Base (GeoCoord(..), GeoFeatureId(..))
@@ -37,7 +40,14 @@ data RiverParams = RiverParams
     , rpSegments      ∷ !(V.Vector RiverSegment) -- ^ Ordered list of path segments
     , rpFlowRate      ∷ !Float          -- ^ Accumulated precipitation along path
     , rpMeanderSeed   ∷ !Word64         -- ^ Sub-seed for meander noise
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
+instance (Serialize a, Eq a, Hashable a)
+    ⇒ Serialize (V.Vector a) where
+    put = put . V.toList
+    get = V.fromList <$> get
+instance (Serialize a, Eq a, Hashable a)
+    ⇒ Hashable (V.Vector a) where
+    hashWithSalt s v = hashWithSalt s (V.toList v)
 
 instance NFData RiverParams where
     rnf (RiverParams s m segs f ms) =
@@ -55,7 +65,7 @@ data RiverSegment = RiverSegment
     , rsFlowRate   ∷ !Float      -- ^ Flow at this segment (increases downstream)
     , rsStartElev  ∷ !Int        -- ^ Elevation at start (for slope calculation)
     , rsEndElev    ∷ !Int        -- ^ Elevation at end
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 instance NFData RiverSegment where
     rnf (RiverSegment s e w vw d f se ee) =
@@ -88,14 +98,14 @@ data GlacierParams = GlacierParams
     , glCarveDepth  ∷ !Int        -- ^ U-valley depth
     , glMoraineSize ∷ !Int        -- ^ Sediment pile at terminus
     , glIsIceSheet  ∷ !Bool       -- ^ True = polar ice sheet edge, False = alpine
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data GlacierActivity
     = Advancing        -- ^ Growing, carving deeper
     | Stable           -- ^ Holding position
     | Retreating       -- ^ Melting back, leaving moraine
     | Melted           -- ^ Gone, only the carved valley remains
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize, Hashable)
 
 -----------------------------------------------------------
 -- Lake System
@@ -111,14 +121,14 @@ data LakeParams = LakeParams
     , lkSurface     ∷ !Int        -- ^ Water surface elevation (= spillway height)
     , lkDepth       ∷ !Int        -- ^ Max depth below surface
     , lkSource      ∷ !LakeSource -- ^ What created this lake
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 data LakeSource
     = DammedRiver !GeoFeatureId    -- ^ River was blocked
     | GlacialBasin !GeoFeatureId   -- ^ Glacier carved a basin
     | TectonicBasin                -- ^ Low point between plates
     | CalderaLake !GeoFeatureId    -- ^ Volcanic caldera filled
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize, Hashable)
 
 -----------------------------------------------------------
 -- Hydrological Feature (unified, like VolcanicFeature)
@@ -128,7 +138,7 @@ data HydroFeature
     = RiverFeature    !RiverParams
     | GlacierFeature  !GlacierParams
     | LakeFeature     !LakeParams
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize, Hashable)
 
 -----------------------------------------------------------
 -- Hydrological Evolution (like FeatureEvolution)
@@ -181,4 +191,4 @@ data HydroEvolution
         { heNewRadius     ∷ !Int
         , heNewSurface    ∷ !Int
         }
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize, Hashable)

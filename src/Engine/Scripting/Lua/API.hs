@@ -30,6 +30,7 @@ import Engine.Scripting.Lua.API.Text (loadFontFn, spawnTextFn, setTextFn,
 import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn, 
                                         releaseFocusFn, getFocusIdFn)
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
+import Engine.Scripting.Lua.API.Save (saveListFn, saveWorldFn, loadSaveFn)
 import Engine.Scripting.Lua.API.World
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
@@ -112,6 +113,11 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
  
   -- Shell functions
   registerLuaFunction "shellExecute" shellExecuteFn
+
+  -- load/save functions
+  registerLuaFunction "listSaves" (saveListFn env)
+  registerLuaFunction "saveWorld" (saveWorldFn env)
+  registerLuaFunction "loadSave"  (loadSaveFn env)
   
   Lua.setglobal (Lua.Name "engine")
   

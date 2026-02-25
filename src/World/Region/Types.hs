@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Region.Types
     ( RegionCoord(..)
     , regionSize
@@ -9,6 +9,8 @@ module World.Region.Types
     ) where
 
 import UPrelude
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize)
 import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..))
@@ -16,7 +18,7 @@ import World.Chunk.Types (ChunkCoord(..))
 -- | Coarse spatial grid coordinate.
 --   Each region covers regionSize x regionSize chunks.
 data RegionCoord = RegionCoord !Int !Int
-    deriving (Show, Eq, Ord)
+    deriving (Show, Eq, Ord, Generic, Serialize)
 
 instance Hashable RegionCoord where
     hashWithSalt s (RegionCoord x y) = s `hashWithSalt` x `hashWithSalt` y

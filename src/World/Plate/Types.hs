@@ -1,9 +1,11 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Plate.Types
     ( TectonicPlate(..)
     ) where
 
 import UPrelude
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize)
 import World.Material (MaterialId(..))
 
 data TectonicPlate = TectonicPlate
@@ -15,4 +17,4 @@ data TectonicPlate = TectonicPlate
     , plateDensity  ∷ !Float
     , plateDriftX   ∷ !Float
     , plateDriftY   ∷ !Float
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)

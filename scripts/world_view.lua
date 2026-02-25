@@ -483,4 +483,12 @@ end
 -- Utility
 -----------------------------------------------------------
 
+function worldView.saveGame(saveName)
+    local worldId = worldManager.getCurrentWorld()
+    if worldId then
+        engine.saveWorld(worldId, saveName or "quicksave")
+        engine.logInfo("Game saved: " .. (saveName or "quicksave"))
+    end
+end
+
 return worldView

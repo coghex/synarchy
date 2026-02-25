@@ -28,8 +28,11 @@ import Prelude.Unicode
 import qualified Prelude as P
 import Prelude hiding ((>>=), (=<<))
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as T
 import qualified Data.Bits as B
 import qualified Data.Functor as F
+import Data.Serialize (Serialize(..))
+import qualified Data.Serialize as S
 
 -- Standard Haskell modules for string handling, word-sized integers, file paths, etc.
 import Data.String (fromString)
@@ -150,3 +153,11 @@ clamp minVal maxVal x
 (⊙) ∷ FilePath → String → FilePath
 (⊙) = (FP.<.>)
 {-# INLINE (⊙) #-}
+
+--------------------------------------------------------------------------------
+-- Universal Instances
+--------------------------------------------------------------------------------
+
+instance Serialize Text where
+    put txt = put $ T.encodeUtf8 txt
+    get     = fmap T.decodeUtf8 S.get

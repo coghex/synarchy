@@ -20,6 +20,7 @@ module World.Types
     , module World.Render.Textures.Types
     , module World.Render.Zoom.Types
     , module World.State.Types
+    , module World.Save.Types
     , module World.Command.Types
     ) where
 
@@ -43,4 +44,5 @@ import World.Render.Camera.Types
 import World.Render.Textures.Types
 import World.Render.Zoom.Types
 import World.State.Types
+import World.Save.Types
 import World.Command.Types

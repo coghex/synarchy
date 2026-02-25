@@ -22,6 +22,10 @@ mainMenu.ownedLabels  = {}
 mainMenu.ownedButtons = {}
 mainMenu.ownedPanels  = {}
 
+-- Save state
+mainMenu.saves = {}        -- cached list from engine.listSaves()
+mainMenu.latestSave = nil  -- name of most recent save
+
 -- Base sizes (unscaled)
 mainMenu.baseSizes = {
     titleFontSize = 96,
@@ -40,11 +44,56 @@ mainMenu.baseSizes = {
 
 mainMenu.buttons = {}
 
-mainMenu.menuItems = {
-    { name = "create_world", label = "Create World", callback = "onCreateWorld" },
-    { name = "settings", label = "Settings", callback = "onSettings" },
-    { name = "quit", label = "Quit", callback = "onQuit" }
-}
+-- Build menu items dynamically based on available saves
+function mainMenu.buildMenuItems()
+    local items = {}
+    
+    -- Check for saves
+    mainMenu.saves = engine.listSaves() or {}
+    
+    if #mainMenu.saves > 0 then
+        -- Sort by timestamp descending to find latest
+        table.sort(mainMenu.saves, function(a, b)
+            return a.timestamp > b.timestamp
+        end)
+        mainMenu.latestSave = mainMenu.saves[1].name
+        
+        -- Add "Continue" button (loads most recent save)
+        table.insert(items, {
+            name = "continue",
+            label = "Continue",
+            callback = "onContinue",
+        })
+        
+        -- If multiple saves, add "Load Game" button
+        if #mainMenu.saves > 1 then
+            table.insert(items, {
+                name = "load_game",
+                label = "Load Game",
+                callback = "onLoadGame",
+            })
+        end
+    end
+    
+    -- Always show these
+    table.insert(items, {
+        name = "create_world",
+        label = "Create World",
+        callback = "onCreateWorld",
+    })
+    table.insert(items, {
+        name = "settings",
+        label = "Settings",
+        callback = "onSettings",
+    })
+    table.insert(items, {
+        name = "quit",
+        label = "Quit",
+        callback = "onQuit",
+    })
+    
+    return items
+end
 
 -----------------------------------------------------------
 -- Scoped cleanup
@@ -80,16 +129,22 @@ function mainMenu.createUI()
         end
     end
     
+    -- Build menu items dynamically based on saves
+    local menuItems = mainMenu.buildMenuItems()
+    
     local uiscale = scale.get()
     local s = scale.applyAll(mainMenu.baseSizes)
     
-    engine.logDebug("Creating main menu with framebuffer size: " .. mainMenu.fbW .. " x " .. mainMenu.fbH .. ", scale: " .. uiscale)
+    engine.logDebug("Creating main menu with framebuffer size: "
+        .. mainMenu.fbW .. " x " .. mainMenu.fbH
+        .. ", scale: " .. uiscale
+        .. ", saves found: " .. #mainMenu.saves)
     
     mainMenu.page = UI.newPage("main_menu", "menu")
 
     -- Calculate max text width for button sizing
     local maxLabelWidth = 0
-    for i, item in ipairs(mainMenu.menuItems) do
+    for i, item in ipairs(menuItems) do
         local labelWidth = engine.getTextWidth(mainMenu.menuFont, item.label, s.fontSize)
         if labelWidth > maxLabelWidth then
             maxLabelWidth = labelWidth
@@ -99,7 +154,8 @@ function mainMenu.createUI()
     local buttonWidth = maxLabelWidth + s.buttonPaddingX
     
     -- Calculate menu dimensions
-    local menuHeight = #mainMenu.menuItems * (s.buttonHeight + s.buttonSpacing) + s.buttonSpacing + s.menuPaddingY
+    local menuHeight = #menuItems * (s.buttonHeight + s.buttonSpacing)
+        + s.buttonSpacing + s.menuPaddingY
     local menuWidth = buttonWidth + s.menuPaddingX
     
     -- Center the menu panel
@@ -119,14 +175,19 @@ function mainMenu.createUI()
         tileSize = s.menuTileSize,
         overflow = s.menuOverflow,
         zIndex = 1,
-        padding = { top = s.menuPaddingY / 2, bottom = s.menuPaddingY / 2, left = s.menuPaddingX / 2, right = s.menuPaddingX / 2 },
-        uiscale = 1.0,  -- Already scaled above
+        padding = {
+            top = s.menuPaddingY / 2,
+            bottom = s.menuPaddingY / 2,
+            left = s.menuPaddingX / 2,
+            right = s.menuPaddingX / 2,
+        },
+        uiscale = 1.0,
     })
     table.insert(mainMenu.ownedPanels, mainMenu.panelId)
     
     local baseZ = panel.getZIndex(mainMenu.panelId)
     
-    -- Create title above menu panel using label component
+    -- Create title above menu panel
     mainMenu.titleLabelId = label.new({
         name = "title",
         text = "Ecce Homo",
@@ -141,20 +202,22 @@ function mainMenu.createUI()
     local titleW, titleH = label.getSize(mainMenu.titleLabelId)
     local titleX = (mainMenu.fbW - titleW) / 2
     local titleY = menuY - s.titleOffset
-    UI.addToPage(mainMenu.page, label.getElementHandle(mainMenu.titleLabelId), titleX, titleY)
+    UI.addToPage(mainMenu.page,
+        label.getElementHandle(mainMenu.titleLabelId), titleX, titleY)
     
-    -- Create menu buttons and collect them for placeColumn
+    -- Create menu buttons
     local buttonElements = {}
     local buttonSizes = {}
     
-    for i, item in ipairs(mainMenu.menuItems) do
-        local labelWidth = engine.getTextWidth(mainMenu.menuFont, item.label, s.fontSize)
+    for i, item in ipairs(menuItems) do
+        local labelWidth = engine.getTextWidth(
+            mainMenu.menuFont, item.label, s.fontSize)
         local thisButtonWidth = labelWidth + s.buttonPaddingX
         
         local btnId = button.new({
             name = item.name,
             text = item.label,
-            width = thisButtonWidth / uiscale,  -- Base size (button.new will scale it)
+            width = thisButtonWidth / uiscale,
             height = mainMenu.baseSizes.buttonHeight,
             fontSize = mainMenu.baseSizes.fontSize,
             tileSize = mainMenu.baseSizes.buttonTileSize,
@@ -193,11 +256,32 @@ function mainMenu.createUI()
     )
     
     mainMenu.uiCreated = true
-    engine.logDebug("Main menu created with " .. #mainMenu.menuItems .. " buttons")
+    engine.logDebug("Main menu created with " .. #menuItems .. " buttons")
+end
+
+-----------------------------------------------------------
+-- Callbacks
+-----------------------------------------------------------
+
+function mainMenu.onContinue()
+    if mainMenu.latestSave then
+        engine.logInfo("Continuing from save: " .. mainMenu.latestSave)
+        engine.loadSave(mainMenu.latestSave)
+        mainMenu.hide()
+        -- Transition to world view (same flow as after world gen completes)
+    end
+end
+
+function mainMenu.onLoadGame()
+    engine.logInfo("Opening load game screen")
+    mainMenu.hide()
+    -- Show save browser (a new Lua module, similar to create_world_menu)
+    local saveBrowser = require("scripts.save_browser")
+    saveBrowser.show(mainMenu.saves)
 end
 
 function mainMenu.show()
-    mainMenu.createUI()
+    mainMenu.createUI()  -- Rebuild to re-check saves
     if mainMenu.page then
         UI.showPage(mainMenu.page)
         engine.logDebug("Main menu shown")
@@ -212,7 +296,8 @@ function mainMenu.hide()
 end
 
 function mainMenu.onFramebufferResize(width, height)
-    engine.logDebug("Main menu onFramebufferResize: " .. width .. " x " .. height)
+    engine.logDebug("Main menu onFramebufferResize: "
+        .. width .. " x " .. height)
     mainMenu.fbW = width
     mainMenu.fbH = height
     

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Chunk.Types
     ( ChunkCoord(..)
     , Chunk
@@ -13,6 +13,8 @@ module World.Chunk.Types
 
 import UPrelude
 import Control.DeepSeq (NFData(..))
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize)
 import Data.Hashable (Hashable(..))
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
@@ -20,7 +22,7 @@ import World.Material (MaterialId(..))
 import World.Fluid.Types (FluidCell(..))
 
 data ChunkCoord = ChunkCoord !Int !Int
-    deriving (Show, Eq, Ord)
+    deriving (Show, Eq, Ord, Generic, Serialize)
 instance NFData ChunkCoord where
     rnf (ChunkCoord x y) = rnf x `seq` rnf y
 
