@@ -1,5 +1,7 @@
 module World.Thread.Command.Basic
     ( handleWorldTickCommand
+    , handleWorldSetCameraCommand
+    , handleWorldDestroyCommand
     ) where
 
 import UPrelude
@@ -34,3 +36,29 @@ import World.Thread.ChunkLoading (maxChunksPerTick)
 handleWorldTickCommand ∷ EngineEnv → LoggerState → Double → IO ()
 handleWorldTickCommand _ _ _ = return ()
 
+handleWorldSetCameraCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Float → Float → IO ()
+handleWorldSetCameraCommand env logger pageId x y = do
+            mgr ← readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just worldState →
+                    atomicModifyIORef' (wsCameraRef worldState) $ \_ →
+                        (WorldCamera x y, ())
+                Nothing → 
+                    logDebug logger CatWorld $ 
+                        "World not found for camera update: " <> unWorldPageId pageId
+
+handleWorldDestroyCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
+handleWorldDestroyCommand env logger pageId = do
+    logInfo logger CatWorld $ "Destroying world: " <> unWorldPageId pageId
+    
+    -- Remove from visible list
+    atomicModifyIORef' (worldManagerRef env) $ \mgr →
+        (mgr { wmVisible = filter (/= pageId) (wmVisible mgr)
+             , wmWorlds  = filter ((/= pageId) . fst) (wmWorlds mgr)
+             }, ())
+    
+    -- Clear world quads so renderer stops drawing the old world
+    writeIORef (worldQuadsRef env) V.empty
+    
+    logInfo logger CatWorld $ "World destroyed: " <> unWorldPageId pageId

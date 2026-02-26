@@ -280,6 +280,7 @@ library
                      World.Thread.Command
                      World.Thread.Command.Basic
                      World.Thread.Command.Init
+                     World.Thread.Command.Save
                      World.Thread.Command.Time
                      World.Thread.Command.Cursor
                      World.Thread.Command.Texture
