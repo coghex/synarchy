@@ -67,8 +67,10 @@ createWorldMenu.page         = nil
 createWorldMenu.panelId      = nil
 createWorldMenu.leftPanelId  = nil
 createWorldMenu.rightPanelId = nil
+createWorldMenu.genBarId     = nil
 createWorldMenu.panelTexSet  = nil
 createWorldMenu.buttonTexSet = nil
+createWorldMenu.barTextures  = nil
 createWorldMenu.menuFont     = nil
 createWorldMenu.fbW          = 0
 createWorldMenu.fbH          = 0
@@ -200,6 +202,13 @@ function createWorldMenu.init(panelTex, btnTex, font, width, height)
 
     createWorldMenu.worldPreviewTexture =
         engine.loadTexture("assets/textures/world/notexture.png")
+    createWorldMenu.barTextures = {
+        trackLeft   = engine.loadTexture("assets/textures/ui/bar/bar_left.png"),
+        trackCenter = engine.loadTexture("assets/textures/ui/bar/bar_center.png"),
+        trackRight  = engine.loadTexture("assets/textures/ui/bar/bar_right.png"),
+        fillLeft    = engine.loadTexture("assets/textures/ui/bar/bar_fill_left.png"),
+        fillCenter  = engine.loadTexture("assets/textures/ui/bar/bar_fill_center.png"),
+    }
 
     createWorldMenu.createUI()
 end
@@ -216,6 +225,7 @@ function createWorldMenu.createUI()
     createWorldMenu.generateButtonId   = nil
     createWorldMenu.regenerateButtonId = nil
     createWorldMenu.continueButtonId   = nil
+    createWorldMenu.genBarId           = nil
     createWorldMenu.panelId            = nil
     createWorldMenu.leftPanelId        = nil
     createWorldMenu.rightPanelId       = nil
@@ -459,6 +469,7 @@ function createWorldMenu.buttonParams()
         btnLayout  = createWorldMenu.btnLayout,
         zButtons   = Z_BUTTONS,
         trackButton = createWorldMenu.trackButton,
+        barTextures = createWorldMenu.barTextures,
         onBack          = function() createWorldMenu.onBack() end,
         onDefaults      = function() createWorldMenu.onDefaults() end,
         onGenerateWorld = function() createWorldMenu.onGenerateWorld() end,
@@ -473,6 +484,10 @@ end
 
 function createWorldMenu.buildButtonsDone()
     bottomButtons.buildDone(createWorldMenu.buttonParams())
+end
+
+function createWorldMenu.buildButtonsGenerating()
+    bottomButtons.buildGenerating(createWorldMenu.buttonParams())
 end
 
 -----------------------------------------------------------
@@ -491,13 +506,14 @@ function createWorldMenu.onWorldPreviewReady(textureHandle)
     engine.logInfo("Updating world preview with texture handle: "
         .. tostring(textureHandle))
     createWorldMenu.worldPreviewTexture = textureHandle
-    -- Only rebuild if the create world page is currently visible
     if createWorldMenu.page and UI.isPageVisible(createWorldMenu.page) then
         local savedGenState = createWorldMenu.genState
         createWorldMenu.createUI()
         createWorldMenu.genState = savedGenState
         if savedGenState == generation.DONE then
             createWorldMenu.buildButtonsDone()
+        elseif savedGenState == generation.RUNNING then
+            createWorldMenu.buildButtonsGenerating()
         end
         UI.showPage(createWorldMenu.page)
     end
@@ -579,6 +595,7 @@ end
 
 function createWorldMenu.onGenerateWorld()
     generation.start(createWorldMenu, logPanelMod)
+    createWorldMenu.buildButtonsGenerating()
 end
 
 function createWorldMenu.onContinue()
@@ -592,9 +609,31 @@ end
 -----------------------------------------------------------
 
 function createWorldMenu.update(dt)
+    local bar = require("scripts.ui.bar")
+
+    local prevState = createWorldMenu.genState
+
     generation.poll(createWorldMenu, dt, logPanelMod, function()
-        createWorldMenu.buildButtonsDone()
+        -- generation.poll sets genState = DONE and calls this callback
     end)
+
+    -- Update the progress bar while generating
+    if createWorldMenu.genState == generation.RUNNING and createWorldMenu.genBarId then
+        local remaining, total = world.getInitProgress()
+        if total and total > 0 then
+            local generated = total - (remaining or 0)
+            local progress = generated / total
+            bar.setProgress(createWorldMenu.genBarId, progress)
+            bar.setText(createWorldMenu.genBarId,
+                tostring(generated) .. " / " .. tostring(total))
+        end
+    end
+
+    -- Transition: just became DONE → swap bar for Continue button
+    if createWorldMenu.genState == generation.DONE
+        and prevState == generation.RUNNING then
+        createWorldMenu.buildButtonsDone()
+    end
 end
 
 -----------------------------------------------------------

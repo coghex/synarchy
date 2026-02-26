@@ -42,12 +42,12 @@ loadingScreen.baseSizes = {
     fontSize    = 24,
     barWidth    = 500,
     barHeight   = 32,
-    barCapWidth = 8,
+    barCapWidth = 32,
     barFontSize  = 16,
     panelPadX   = 60,
     panelPadY   = 60,
     tileSize    = 64,
-    spacing     = 20,
+    spacing     = 40,
 }
 
 -----------------------------------------------------------
