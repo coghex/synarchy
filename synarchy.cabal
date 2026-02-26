@@ -220,6 +220,12 @@ library
                      Engine.Scripting.Lua.API.Focus
                      Engine.Scripting.Lua.API.Shell
                      Engine.Scripting.Lua.API.UI
+                     Engine.Scripting.Lua.API.UI.Page
+                     Engine.Scripting.Lua.API.UI.Element
+                     Engine.Scripting.Lua.API.UI.Hierarchy
+                     Engine.Scripting.Lua.API.UI.Focus
+                     Engine.Scripting.Lua.API.UI.TextInput
+                     Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.World
                      Engine.Core.Defaults
                      Engine.Core.Init
