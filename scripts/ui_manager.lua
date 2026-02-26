@@ -31,6 +31,7 @@ local dropdown = nil
 local slider = nil
 local randbox = nil
 local toggle = nil
+local uiList = nil
 
 local hoveredElement = nil
 local hoveredCallback = nil
@@ -60,6 +61,7 @@ function uiManager.init(scriptId)
     slider = require("scripts.ui.slider")
     randbox = require("scripts.ui.randbox")
     toggle = require("scripts.ui.toggle")
+    uiList = require("scripts.ui.list")
 
     button.init()
     scrollbar.init()
@@ -67,6 +69,7 @@ function uiManager.init(scriptId)
     slider.init()
     randbox.init()
     toggle.init()
+    uiList.init()
     uiscale = engine.getUIScale()
     
     menuFontHandle = engine.loadFont("assets/fonts/arcade.ttf", 24)
@@ -94,6 +97,10 @@ function uiManager.init(scriptId)
     end)
 
     mainMenu.setShowMenuCallback(function(menuName)
+        uiManager.showMenu(menuName)
+    end)
+
+    saveBrowser.setShowMenuCallback(function(menuName)
         uiManager.showMenu(menuName)
     end)
     
@@ -126,7 +133,7 @@ function uiManager.checkReady()
             createWorldMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             worldView.init(fbW, fbH)
             hud.init(boxTexSet, menuFont, fbW, fbH)
-            saveBrowser.init(boxTexSet, menuFont, fbW, fbH)
+            saveBrowser.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -173,6 +180,7 @@ function uiManager.showMenu(menuName)
     createWorldMenu.hide()
     worldView.hide()
     hud.hide()
+    if saveBrowser then saveBrowser.hide() end
     
     if menuName == "main" then
         mainMenu.show()
@@ -190,6 +198,24 @@ function uiManager.showMenu(menuName)
             uiManager.showMenu("main")
         end)
     end
+end
+
+function uiManager.onListItemClick(elemHandle)
+    handleNonTextBoxClick()
+    if uiList then
+        return uiList.handleCallback("onListItemClick", elemHandle)
+    end
+    return false
+end
+
+function uiManager.onSaveBrowserBack(elemHandle)
+    handleNonTextBoxClick()
+    if saveBrowser and saveBrowser.onBackCallback then
+        saveBrowser.onBackCallback()
+        return true
+    end
+    uiManager.showMenu("main")
+    return true
 end
 
 function uiManager.onCreateWorld()
@@ -331,6 +357,8 @@ function uiManager.onHoverEnter(elemHandle, callbackName)
         toggle.onHoverEnter(elemHandle)
     elseif randbox and randbox.isRandBoxCallback(callbackName) then
         randbox.onHoverEnter(elemHandle)
+    elseif uiList and uiList.isListCallback(callbackName) then
+        uiList.onHoverEnter(elemHandle)
     end
 end
 
@@ -349,6 +377,8 @@ function uiManager.onHoverLeave(elemHandle, callbackName)
         toggle.onHoverLeave(elemHandle)
     elseif randbox and randbox.isRandBoxCallback(callbackName) then
         randbox.onHoverLeave(elemHandle)
+    elseif uiList and uiList.isListCallback(callbackName) then
+        uiList.onHoverLeave(elemHandle)
     end
 end
 
@@ -479,6 +509,13 @@ function uiManager.onScrollUp(elemHandle)
             end
         end
     end
+    if saveBrowser and currentMenu == "save_browser" then
+        if saveBrowser.handleScrollCallback then
+            if saveBrowser.handleScrollCallback("onScrollUp", elemHandle) then
+                return true
+            end
+        end
+    end
     return false
 end
 
@@ -497,6 +534,13 @@ function uiManager.onScrollDown(elemHandle)
     if createWorldMenu and currentMenu == "create_world" then
         if createWorldMenu.handleScrollCallback then
             if createWorldMenu.handleScrollCallback("onScrollDown", elemHandle) then
+                return true
+            end
+        end
+    end
+    if saveBrowser and currentMenu == "save_browser" then
+        if saveBrowser.handleScrollCallback then
+            if saveBrowser.handleScrollCallback("onScrollDown", elemHandle) then
                 return true
             end
         end
@@ -546,6 +590,11 @@ function uiManager.onUIScroll(elemHandle, dx, dy)
     end
     if createWorldMenu and currentMenu == "create_world" then
         if createWorldMenu.onScroll(elemHandle, dx, dy) then
+            return
+        end
+    end
+    if saveBrowser and currentMenu == "save_browser" then
+        if saveBrowser.onScroll(elemHandle, dx, dy) then
             return
         end
     end

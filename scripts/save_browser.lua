@@ -1,47 +1,87 @@
--- Save Browser - lists all saved worlds for loading
-local scale = require("scripts.ui.scale")
-local panel = require("scripts.ui.panel")
-local label = require("scripts.ui.label")
+-- Save Browser - lists saved worlds using the list widget
+local scale  = require("scripts.ui.scale")
+local panel  = require("scripts.ui.panel")
+local label  = require("scripts.ui.label")
+local button = require("scripts.ui.button")
+local list   = require("scripts.ui.list")
 
 local saveBrowser = {}
 
 saveBrowser.page = nil
 saveBrowser.panelId = nil
+saveBrowser.listId = nil
 saveBrowser.saves = {}
-saveBrowser.ownedLabels = {}
-saveBrowser.ownedBoxes = {}
-saveBrowser.ownedPanels = {}
-saveBrowser.clickHandlers = {}
 saveBrowser.onSelectCallback = nil
 saveBrowser.onBackCallback = nil
 saveBrowser.menuFont = nil
 saveBrowser.boxTexSet = nil
+saveBrowser.btnTexSet = nil
 saveBrowser.fbW = 0
 saveBrowser.fbH = 0
 saveBrowser.uiCreated = false
+saveBrowser.showMenuCallback = nil
+
+-- Owned IDs for cleanup
+saveBrowser.ownedLabels  = {}
+saveBrowser.ownedButtons = {}
+saveBrowser.ownedPanels  = {}
+saveBrowser.ownedLists   = {}
 
 saveBrowser.baseSizes = {
     fontSize      = 24,
-    rowHeight     = 60,
-    rowSpacing    = 12,
-    rowPaddingX   = 120,
     titleFontSize = 32,
+    itemHeight    = 40,
+    maxVisible    = 12,
     panelPadX     = 60,
     panelPadY     = 60,
     tileSize      = 64,
-    backBtnWidth  = 200,
-    backBtnHeight = 52,
+    btnHeight     = 52,
+    btnSpacing    = 16,
+    btnPaddingX   = 80,
+    btnTileSize   = 64,
+    btnOverflow   = 16,
+    textPadding   = 14,
+    scrollBtnSize = 24,
 }
 
 -----------------------------------------------------------
--- Init (called once from ui_manager.checkReady or on first show)
+-- Init (called once from ui_manager.checkReady)
 -----------------------------------------------------------
 
-function saveBrowser.init(boxTex, font, width, height)
+function saveBrowser.init(boxTex, btnTex, font, width, height)
     saveBrowser.boxTexSet = boxTex
+    saveBrowser.btnTexSet = btnTex
     saveBrowser.menuFont  = font
     saveBrowser.fbW       = width
     saveBrowser.fbH       = height
+end
+
+function saveBrowser.setShowMenuCallback(callback)
+    saveBrowser.showMenuCallback = callback
+end
+
+-----------------------------------------------------------
+-- Cleanup
+-----------------------------------------------------------
+
+function saveBrowser.destroyOwned()
+    for _, id in ipairs(saveBrowser.ownedLists)   do list.destroy(id)   end
+    for _, id in ipairs(saveBrowser.ownedLabels)   do label.destroy(id)  end
+    for _, id in ipairs(saveBrowser.ownedButtons)  do button.destroy(id) end
+    for _, id in ipairs(saveBrowser.ownedPanels)   do panel.destroy(id)  end
+    saveBrowser.ownedLists   = {}
+    saveBrowser.ownedLabels  = {}
+    saveBrowser.ownedButtons = {}
+    saveBrowser.ownedPanels  = {}
+    saveBrowser.listId = nil
+end
+
+function saveBrowser.shutdown()
+    saveBrowser.destroyOwned()
+    if saveBrowser.page then
+        UI.deletePage(saveBrowser.page)
+        saveBrowser.page = nil
+    end
 end
 
 -----------------------------------------------------------
@@ -61,28 +101,6 @@ end
 function saveBrowser.hide()
     if saveBrowser.page then
         UI.hidePage(saveBrowser.page)
-    end
-end
-
------------------------------------------------------------
--- Cleanup
------------------------------------------------------------
-
-function saveBrowser.destroyOwned()
-    for _, id in ipairs(saveBrowser.ownedLabels) do label.destroy(id) end
-    for _, h  in ipairs(saveBrowser.ownedBoxes)  do UI.deleteElement(h) end
-    for _, id in ipairs(saveBrowser.ownedPanels) do panel.destroy(id) end
-    saveBrowser.ownedLabels  = {}
-    saveBrowser.ownedBoxes   = {}
-    saveBrowser.ownedPanels  = {}
-    saveBrowser.clickHandlers = {}
-end
-
-function saveBrowser.shutdown()
-    saveBrowser.destroyOwned()
-    if saveBrowser.page then
-        UI.deletePage(saveBrowser.page)
-        saveBrowser.page = nil
     end
 end
 
@@ -107,12 +125,30 @@ function saveBrowser.createUI()
     saveBrowser.page = UI.newPage("save_browser", "modal")
 
     local saves = saveBrowser.saves
-    -- +1 row for the Back button, +1 for title
-    local rowCount = #saves + 1
-    local panelHeight = s.panelPadY * 2
-                      + s.titleFontSize + s.rowSpacing
-                      + rowCount * (s.rowHeight + s.rowSpacing)
+
+    -- Build list items
+    local listItems = {}
+    for i, save in ipairs(saves) do
+        local displayText = save.name
+        if save.timestamp then
+            displayText = displayText .. "  -  " .. save.timestamp
+        end
+        table.insert(listItems, {
+            text  = displayText,
+            value = save.name,
+        })
+    end
+
+    -- Panel sizing
+    local visibleCount = math.min(#listItems, saveBrowser.baseSizes.maxVisible)
+    if visibleCount < 1 then visibleCount = 1 end
+    local listHeight = visibleCount * s.itemHeight
+
     local panelWidth  = math.floor(saveBrowser.fbW * 0.6)
+    local contentHeight = s.titleFontSize + s.btnSpacing
+                        + listHeight + s.btnSpacing
+                        + s.btnHeight
+    local panelHeight = s.panelPadY * 2 + contentHeight
     panelHeight = math.min(panelHeight, math.floor(saveBrowser.fbH * 0.85))
 
     local panelX = (saveBrowser.fbW - panelWidth) / 2
@@ -135,7 +171,8 @@ function saveBrowser.createUI()
         uiscale = 1.0,
     })
     table.insert(saveBrowser.ownedPanels, saveBrowser.panelId)
-    local baseZ = panel.getZIndex(saveBrowser.panelId)
+
+    local baseZ  = panel.getZIndex(saveBrowser.panelId)
     local bounds = panel.getContentBounds(saveBrowser.panelId)
 
     -- Title
@@ -149,6 +186,7 @@ function saveBrowser.createUI()
         uiscale  = uiscale,
     })
     table.insert(saveBrowser.ownedLabels, titleId)
+
     local titleW, _ = label.getSize(titleId)
     local titleX = panelX + bounds.x + (bounds.width - titleW) / 2
     local titleY = panelY + bounds.y + s.titleFontSize
@@ -156,131 +194,104 @@ function saveBrowser.createUI()
         label.getElementHandle(titleId), titleX, titleY)
     UI.setZIndex(label.getElementHandle(titleId), baseZ + 1)
 
-    -- Save rows
-    local rowElements = {}
-    local rowSizes    = {}
-    local rowY = titleY + s.titleFontSize + s.rowSpacing
+    -- List widget
+    local listWidth = bounds.width - 20  -- leave room for potential scrollbar
+    local listX = panelX + bounds.x + 10
+    local listY = titleY + s.btnSpacing
 
-    for i, save in ipairs(saves) do
-        local displayText = save.name
-        if save.timestamp then
-            displayText = displayText .. "  —  " .. save.timestamp
-        end
-        if save.seed then
-            displayText = displayText .. "  (seed: " .. tostring(save.seed) .. ")"
-        end
-
-        local textW = engine.getTextWidth(
-            saveBrowser.menuFont, displayText, s.fontSize)
-        local rowW = math.max(textW + s.rowPaddingX, bounds.width - 20)
-
-        local boxH = UI.newBox(
-            "save_row_" .. i .. "_box",
-            rowW, s.rowHeight,
-            saveBrowser.boxTexSet,
-            s.tileSize,
-            0.9, 0.9, 0.9, 1.0,
-            0,
-            saveBrowser.page
-        )
-        table.insert(saveBrowser.ownedBoxes, boxH)
-
-        UI.setClickable(boxH, true)
-        UI.setOnClick(boxH, "onSaveBrowserItem")
-
-        local saveName = save.name  -- capture for closure
-        saveBrowser.clickHandlers[boxH] = function()
-            if saveBrowser.onSelectCallback then
-                saveBrowser.onSelectCallback(saveName)
-            end
-        end
-
-        local textH = UI.newText(
-            "save_row_" .. i .. "_text",
-            displayText,
-            saveBrowser.menuFont,
-            s.fontSize,
-            0.0, 0.0, 0.0, 1.0,
-            saveBrowser.page
-        )
-        local lblX = s.rowPaddingX / 2
-        local lblY = (s.rowHeight / 2) + (s.fontSize / 2)
-        UI.addChild(boxH, textH, lblX, lblY)
-        UI.setZIndex(textH, 1)
-        UI.setZIndex(boxH, baseZ + 2)
-
-        table.insert(rowElements, boxH)
-        table.insert(rowSizes, { width = rowW, height = s.rowHeight })
+    if #listItems > 0 then
+        saveBrowser.listId = list.new({
+            name           = "save_list",
+            page           = saveBrowser.page,
+            x              = listX,
+            y              = listY,
+            width          = listWidth,
+            font           = saveBrowser.menuFont,
+            fontSize       = saveBrowser.baseSizes.fontSize,
+            itemHeight     = saveBrowser.baseSizes.itemHeight,
+            textPadding    = saveBrowser.baseSizes.textPadding,
+            scrollButtonSize = saveBrowser.baseSizes.scrollBtnSize,
+            maxVisible     = saveBrowser.baseSizes.maxVisible,
+            uiscale        = uiscale,
+            zIndex         = baseZ + 2,
+            items          = listItems,
+            textColor           = {1.0, 1.0, 1.0, 1.0},
+            highlightColor      = {0.3, 0.5, 0.8, 0.8},
+            highlightTextColor  = {1.0, 1.0, 1.0, 1.0},
+            selectedColor       = {0.2, 0.4, 0.7, 1.0},
+            selectedTextColor   = {1.0, 1.0, 1.0, 1.0},
+            onSelect = function(value, text, index, listId, listName)
+                engine.logInfo("Save selected: " .. value)
+                if saveBrowser.onSelectCallback then
+                    saveBrowser.onSelectCallback(value)
+                end
+            end,
+        })
+        table.insert(saveBrowser.ownedLists, saveBrowser.listId)
+    else
+        -- No saves: show a message
+        local noSavesId = label.new({
+            name     = "no_saves_label",
+            text     = "No saved games found.",
+            font     = saveBrowser.menuFont,
+            fontSize = saveBrowser.baseSizes.fontSize,
+            color    = {0.7, 0.7, 0.7, 1.0},
+            page     = saveBrowser.page,
+            uiscale  = uiscale,
+        })
+        table.insert(saveBrowser.ownedLabels, noSavesId)
+        local nsW, _ = label.getSize(noSavesId)
+        local nsX = panelX + bounds.x + (bounds.width - nsW) / 2
+        UI.addToPage(saveBrowser.page,
+            label.getElementHandle(noSavesId), nsX, listY + s.itemHeight / 2)
+        UI.setZIndex(label.getElementHandle(noSavesId), baseZ + 2)
     end
 
-    -- Back button (same raw box+label style)
+    -- Back button
     local backText = "Back"
-    local backTextW = engine.getTextWidth(
-        saveBrowser.menuFont, backText, s.fontSize)
-    local backW = backTextW + s.rowPaddingX
+    local backBtnId = button.new({
+        name       = "save_browser_back",
+        text       = backText,
+        width      = 120,
+        height     = saveBrowser.baseSizes.btnHeight,
+        fontSize   = saveBrowser.baseSizes.fontSize,
+        tileSize   = saveBrowser.baseSizes.btnTileSize,
+        overflow   = saveBrowser.baseSizes.btnOverflow,
+        uiscale    = uiscale,
+        page       = saveBrowser.page,
+        font       = saveBrowser.menuFont,
+        textureSet = saveBrowser.btnTexSet,
+        bgColor    = {1.0, 1.0, 1.0, 1.0},
+        textColor  = {1.0, 1.0, 1.0, 1.0},
+        callbackName = "onSaveBrowserBack",
+    })
+    table.insert(saveBrowser.ownedButtons, backBtnId)
 
-    local backBoxH = UI.newBox(
-        "save_browser_back_box",
-        backW, s.backBtnHeight,
-        saveBrowser.boxTexSet,
-        s.tileSize,
-        1.0, 1.0, 1.0, 1.0,
-        0,
-        saveBrowser.page
-    )
-    table.insert(saveBrowser.ownedBoxes, backBoxH)
-
-    UI.setClickable(backBoxH, true)
-    UI.setOnClick(backBoxH, "onSaveBrowserItem")
-    saveBrowser.clickHandlers[backBoxH] = function()
-        if saveBrowser.onBackCallback then
-            saveBrowser.onBackCallback()
-        end
-    end
-
-    local backTextH = UI.newText(
-        "save_browser_back_text",
-        backText,
-        saveBrowser.menuFont,
-        s.fontSize,
-        1.0, 1.0, 1.0, 1.0,
-        saveBrowser.page
-    )
-    local backLblX = (backW - backTextW) / 2
-    local backLblY = (s.backBtnHeight / 2) + (s.fontSize / 2)
-    UI.addChild(backBoxH, backTextH, backLblX, backLblY)
-    UI.setZIndex(backTextH, 1)
-    UI.setZIndex(backBoxH, baseZ + 2)
-
-    table.insert(rowElements, backBoxH)
-    table.insert(rowSizes, { width = backW, height = s.backBtnHeight })
-
-    -- Layout all rows in a column
-    panel.placeColumn(
-        saveBrowser.panelId,
-        rowElements,
-        rowSizes,
-        {
-            x = "50%",
-            y = "50%",
-            origin = "center",
-            spacing = s.rowSpacing,
-        }
-    )
+    local btnW, btnH = button.getSize(backBtnId)
+    local btnX = panelX + bounds.x + (bounds.width - btnW) / 2
+    local btnY = listY + listHeight + s.btnSpacing
+    UI.addToPage(saveBrowser.page,
+        button.getElementHandle(backBtnId), btnX, btnY)
+    UI.setZIndex(button.getElementHandle(backBtnId), baseZ + 2)
 
     saveBrowser.uiCreated = true
     engine.logInfo("Save browser created with " .. #saves .. " saves")
 end
 
 -----------------------------------------------------------
--- Click dispatch (called from ui_manager.onSaveBrowserItem)
+-- Scroll events (forwarded from ui_manager)
 -----------------------------------------------------------
 
-function saveBrowser.handleClick(elemHandle)
-    local handler = saveBrowser.clickHandlers[elemHandle]
-    if handler then
-        handler()
-        return true
+function saveBrowser.onScroll(elemHandle, dx, dy)
+    if saveBrowser.listId then
+        return list.onScroll(elemHandle, dx, dy)
+    end
+    return false
+end
+
+function saveBrowser.handleScrollCallback(callbackName, elemHandle)
+    if saveBrowser.listId then
+        return list.handleCallback(callbackName, elemHandle)
     end
     return false
 end
