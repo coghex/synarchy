@@ -8,8 +8,9 @@ import Data.Word (Word64)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Base (GeoCoord(..))
+import World.Constants (seaLevel)
 import World.Types
-import World.Fluids (fixupSegmentContinuity, seaLevel)
+import World.Fluids (fixupSegmentContinuity)
 import World.Plate (isBeyondGlacier, wrapGlobalU)
 import World.Geology.Hash
 import World.Hydrology.Types (RiverParams(..), RiverSegment(..))

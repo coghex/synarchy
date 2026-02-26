@@ -19,12 +19,12 @@ import qualified Data.Set as Set
 import Control.Monad.ST (runST)
 import Control.Monad (forM_, when)
 import World.Base (GeoCoord(..), GeoFeatureId(..))
+import World.Constants (seaLevel)
 import World.Types
 import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Geology.Types
 import World.Geology.Hash (hashGeo, wrappedDeltaUV)
 import World.Hydrology.Types
-import World.Fluids (seaLevel)
 
 -----------------------------------------------------------
 -- Configuration

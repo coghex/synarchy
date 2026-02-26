@@ -16,10 +16,11 @@ import qualified Data.Set as Set
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import World.Types
+import World.Constants (seaLevel)
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), elevationAtGlobal
                    , isBeyondGlacier, wrapGlobalU)
-import World.Fluids (seaLevel, isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid)
+import World.Fluids (isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid)
 import World.Generate (applyTimelineFast)
 
 -----------------------------------------------------------

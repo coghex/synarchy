@@ -349,6 +349,11 @@ library
                      World.Time.Types
                      World.Fluids
                      World.Fluid.Types
+                     World.Fluid.Internal
+                     World.Fluid.Ocean
+                     World.Fluid.River
+                     World.Fluid.Lake
+                     World.Fluid.Lava
                      World.Weather
                      World.Weather.Types
                      World.Weather.Log

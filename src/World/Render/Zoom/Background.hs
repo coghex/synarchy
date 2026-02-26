@@ -18,7 +18,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
-import World.Fluids (seaLevel)
+import World.Constants (seaLevel)
 import World.Grid (backgroundMapLayer)
 
 import World.Render.Zoom.Bake (ensureBaked)

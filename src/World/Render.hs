@@ -22,8 +22,9 @@ import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
+import World.Constants (seaLevel)
 import World.Slope (slopeToFaceMapIndex)
-import World.Fluids (FluidCell(..), FluidType(..), seaLevel)
+import World.Fluids (FluidCell(..), FluidType(..))
 import World.Generate (chunkToGlobal, chunkWorldBounds, viewDepth, globalToChunk)
 import World.Grid (tileWidth, tileHeight, gridToScreen, tileSideHeight, worldLayer,
                    tileHalfWidth, tileHalfDiamondHeight, zoomFadeStart, zoomFadeEnd
