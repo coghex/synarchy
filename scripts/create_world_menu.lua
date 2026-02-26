@@ -328,7 +328,14 @@ function createWorldMenu.createUI()
         panelWidth = panelWidth, panelHeight = panelHeight,
         bounds = bounds, s = s, uiscale = uiscale,
     }
-    createWorldMenu.buildButtonsIdle()
+    -- Build buttons matching current generation state
+    if createWorldMenu.genState == generation.RUNNING then
+        createWorldMenu.buildButtonsGenerating()
+    elseif createWorldMenu.genState == generation.DONE then
+        createWorldMenu.buildButtonsDone()
+    else
+        createWorldMenu.buildButtonsIdle()
+    end
 
     createWorldMenu.uiCreated = true
 end
@@ -510,11 +517,7 @@ function createWorldMenu.onWorldPreviewReady(textureHandle)
         local savedGenState = createWorldMenu.genState
         createWorldMenu.createUI()
         createWorldMenu.genState = savedGenState
-        if savedGenState == generation.DONE then
-            createWorldMenu.buildButtonsDone()
-        elseif savedGenState == generation.RUNNING then
-            createWorldMenu.buildButtonsGenerating()
-        end
+        -- createUI already builds the right buttons now, no extra call needed
         UI.showPage(createWorldMenu.page)
     end
 end
@@ -594,8 +597,13 @@ function createWorldMenu.onDefaults()
 end
 
 function createWorldMenu.onGenerateWorld()
+    engine.logInfo("onGenerateWorld called, current genState=" .. tostring(createWorldMenu.genState))
     generation.start(createWorldMenu, logPanelMod)
+    engine.logInfo("After generation.start, genState=" .. tostring(createWorldMenu.genState))
+    engine.logInfo("btnLayout=" .. tostring(createWorldMenu.btnLayout))
+    engine.logInfo("barTextures=" .. tostring(createWorldMenu.barTextures))
     createWorldMenu.buildButtonsGenerating()
+    engine.logInfo("After buildButtonsGenerating, genBarId=" .. tostring(createWorldMenu.genBarId))
 end
 
 function createWorldMenu.onContinue()

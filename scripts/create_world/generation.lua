@@ -78,7 +78,11 @@ function generation.poll(menu, dt, logPanel, onDone)
 
     menu.genElapsed = menu.genElapsed + dt
 
-    if worldManager.isActive() then
+    -- Check actual chunk generation progress, not just world existence
+    local remaining, total = world.getInitProgress()
+
+    if total and total > 0 and remaining == 0 then
+        -- All chunks generated — truly done
         menu.genState = generation.DONE
         local elapsed = string.format("%.1f", menu.genElapsed)
         logPanel.setStatus(menu, "World generated! (" .. elapsed .. "s)")

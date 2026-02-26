@@ -37,7 +37,7 @@ function bar.new(params)
     local uiscale  = params.uiscale or scale.get()
     local width    = math.floor((params.width or 300) * uiscale)
     local height   = math.floor((params.height or 24) * uiscale)
-    local capW     = math.floor((params.capWidth or 8) * uiscale)
+    local capW     = math.floor((params.capWidth or 32) * uiscale)
     local x        = params.x or 0
     local y        = params.y or 0
     local page     = params.page
