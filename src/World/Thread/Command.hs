@@ -32,8 +32,24 @@ import World.Save.Serialize (saveWorld)
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import World.Thread.ChunkLoading (maxChunksPerTick)
+import World.Thread.Command.Basic (handleWorldTickCommand)
 import World.Thread.Command.Init (handleWorldInitCommand)
+import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
+                                   , handleWorldSetZoomCursorSelectCommand
+                                   , handleWorldSetZoomCursorDeselectCommand
+                                   , handleWorldSetZoomCursorSelectTextureCommand
+                                   , handleWorldSetZoomCursorHoverTextureCommand
+                                   , handleWorldSetWorldCursorHoverCommand
+                                   , handleWorldSetWorldCursorSelectCommand
+                                   , handleWorldSetWorldCursorDeselectCommand
+                                   , handleWorldSetWorldCursorSelectTextureCommand
+                                   , handleWorldSetWorldCursorHoverTextureCommand
+                                   , handleWorldSetWorldCursorSelectBgTextureCommand
+                                   , handleWorldSetWorldCursorHoverBgTextureCommand)
 import World.Thread.Command.Texture (handleWorldSetTextureCommand)
+import World.Thread.Command.Time (handleWorldSetTimeCommand
+                                 , handleWorldSetDateCommand
+                                 , handleWorldSetTimeScaleCommand)
 import World.Thread.Command.UI (handleWorldShowCommand, handleWorldHideCommand
                                , handleWorldSetMapModeCommand
                                , handleWorldSetToolModeCommand)
@@ -55,11 +71,40 @@ handleWorldCommand env logger (WorldSetMapMode pageId mapMode)
   = handleWorldSetMapModeCommand env logger pageId mapMode
 handleWorldCommand env logger (WorldSetToolMode pageId toolMode)
   = handleWorldSetToolModeCommand env logger pageId toolMode
+handleWorldCommand env logger (WorldTick dt)
+  = handleWorldTickCommand env logger dt
+handleWorldCommand env logger (WorldSetTime pageId hour minute)
+  = handleWorldSetTimeCommand env logger pageId hour minute
+handleWorldCommand env logger (WorldSetDate pageId year month day)
+  = handleWorldSetDateCommand env logger pageId year month day
+handleWorldCommand env logger (WorldSetTimeScale pageId scale)
+  = handleWorldSetTimeScaleCommand env logger pageId scale
+handleWorldCommand env logger (WorldSetZoomCursorHover pageId x y)
+  = handleWorldSetZoomCursorHoverCommand env logger pageId x y
+handleWorldCommand env logger (WorldSetZoomCursorSelect pageId)
+  = handleWorldSetZoomCursorSelectCommand env logger pageId
+handleWorldCommand env logger (WorldSetZoomCursorDeselect pageId)
+  = handleWorldSetZoomCursorDeselectCommand env logger pageId
+handleWorldCommand env logger (WorldSetZoomCursorSelectTexture pageId texHandle)
+  = handleWorldSetZoomCursorSelectTextureCommand env logger pageId texHandle
+handleWorldCommand env logger (WorldSetZoomCursorHoverTexture pageId texHandle)
+  = handleWorldSetZoomCursorHoverTextureCommand env logger pageId texHandle
+handleWorldCommand env logger (WorldSetWorldCursorHover pageId x y)
+  = handleWorldSetWorldCursorHoverCommand env logger pageId x y
+handleWorldCommand env logger (WorldSetWorldCursorSelect pageId)
+  = handleWorldSetWorldCursorSelectCommand env logger pageId
+handleWorldCommand env logger (WorldSetWorldCursorDeselect pageId)
+  = handleWorldSetWorldCursorDeselectCommand env logger pageId
+handleWorldCommand env logger (WorldSetWorldCursorSelectTexture pageId texHandle)
+  = handleWorldSetWorldCursorSelectTextureCommand env logger pageId texHandle
+handleWorldCommand env logger (WorldSetWorldCursorHoverTexture pageId texHandle)
+  = handleWorldSetWorldCursorHoverTextureCommand env logger pageId texHandle
+handleWorldCommand env logger (WorldSetWorldCursorSelectBgTexture pageId texHandle)
+  = handleWorldSetWorldCursorSelectBgTextureCommand env logger pageId texHandle
+handleWorldCommand env logger (WorldSetWorldCursorHoverBgTexture pageId texHandle)
+  = handleWorldSetWorldCursorHoverBgTextureCommand env logger pageId texHandle
 handleWorldCommand env logger cmd = do
     case cmd of
-        WorldTick dt → do
-            return ()
-       
         WorldSetCamera pageId x y → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
@@ -69,153 +114,6 @@ handleWorldCommand env logger cmd = do
                 Nothing → 
                     logDebug logger CatWorld $ 
                         "World not found for camera update: " <> unWorldPageId pageId
-
-        WorldSetTime pageId hour minute → do
-            logDebug logger CatWorld $
-                "Setting time for world: " <> unWorldPageId pageId
-                <> " to " <> T.pack (show hour) <> ":" <> T.pack (show minute)
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState → do
-                    let clampedH = max 0 (min 23 hour)
-                        clampedM = max 0 (min 59 minute)
-                    atomicModifyIORef' (wsTimeRef worldState) $ \_ →
-                        (WorldTime clampedH clampedM, ())
-                Nothing →
-                    logDebug logger CatWorld $
-                        "World not found for time update: " <> unWorldPageId pageId
-
-        WorldSetDate pageId year month day → do
-            logDebug logger CatWorld $
-                "Setting date for world: " <> unWorldPageId pageId
-                <> " to " <> T.pack (show year) <> "-"
-                <> T.pack (show month) <> "-" <> T.pack (show day)
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    atomicModifyIORef' (wsDateRef worldState) $ \_ →
-                        (WorldDate year month day, ())
-                Nothing →
-                    logDebug logger CatWorld $
-                        "World not found for date update: " <> unWorldPageId pageId
-
-        WorldSetTimeScale pageId scale → do
-            logDebug logger CatWorld $
-                "Setting time scale for world: " <> unWorldPageId pageId
-                <> " to " <> T.pack (show scale) <> " game-min/real-sec"
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    writeIORef (wsTimeScaleRef worldState) scale
-                Nothing →
-                    logDebug logger CatWorld $
-                        "World not found for time scale update: " <> unWorldPageId pageId
-        WorldSetZoomCursorHover pageId x y → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                      (cs { zoomCursorPos = Just (x, y) }, ())
-                Nothing → 
-                    logWarn logger CatWorld $ 
-                        "World not found for cursor hover update: " <> unWorldPageId pageId
-        WorldSetZoomCursorSelect pageId → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                        (cs { zoomSelectNow = True }, ())
-                Nothing → pure ()
-        WorldSetZoomCursorDeselect pageId → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                        (cs { zoomSelectedPos = Nothing, zoomSelectNow = False }, ())
-                Nothing → pure ()
-        WorldSetZoomCursorSelectTexture pageId tid → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                      (cs { zoomCursorTexture = Just tid }, ())
-                Nothing → 
-                    logWarn logger CatWorld $ 
-                        "World not found for zoom cursor texture update: "
-                            <> unWorldPageId pageId
-        WorldSetZoomCursorHoverTexture pageId tid → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                      (cs { zoomHoverTexture = Just tid }, ())
-                Nothing → 
-                    logWarn logger CatWorld $ 
-                        "World not found for zoom cursor hover texture update: "
-                            <> unWorldPageId pageId
-        WorldSetWorldCursorHover pageId x y → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                      (cs { worldCursorPos = Just (x, y) }, ())
-                Nothing → 
-                    logWarn logger CatWorld $ 
-                        "World not found for cursor hover update: " <> unWorldPageId pageId
-        WorldSetWorldCursorSelect pageId → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                        (cs { worldSelectNow = True }, ())
-                Nothing → pure ()
-        WorldSetWorldCursorDeselect pageId → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                        (cs { worldSelectedTile = Nothing, worldSelectNow = False }, ())
-                Nothing → pure ()
-        WorldSetWorldCursorSelectTexture pageId tid → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                      (cs { worldCursorTexture = Just tid }, ())
-                Nothing → 
-                    logWarn logger CatWorld $ 
-                        "World not found for cursor texture update: "
-                            <> unWorldPageId pageId
-        WorldSetWorldCursorHoverTexture pageId tid → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState → do
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                      (cs { worldHoverTexture = Just tid }, ())
-                Nothing → 
-                    logWarn logger CatWorld $ 
-                        "World not found for cursor hover texture update: "
-                            <> unWorldPageId pageId
-        WorldSetWorldCursorSelectBgTexture pageId tid → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState →
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                      (cs { worldCursorBgTexture = Just tid }, ())
-                Nothing → 
-                    logWarn logger CatWorld $ 
-                        "World not found for cursor texture update: "
-                            <> unWorldPageId pageId
-        WorldSetWorldCursorHoverBgTexture pageId tid → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState → do
-                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                      (cs { worldHoverBgTexture = Just tid }, ())
-                Nothing → 
-                    logWarn logger CatWorld $ 
-                        "World not found for cursor hover texture update: "
-                            <> unWorldPageId pageId
         -- ── Save: snapshot the live WorldState and write to disk ──
         WorldSave pageId saveName → do
             logInfo logger CatWorld $ "Saving world: " <> unWorldPageId pageId
