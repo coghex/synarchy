@@ -3,18 +3,19 @@ module Engine.Scripting.Lua.Material
     ) where
 
 import UPrelude
+import qualified Data.Text as T
+import Text.Read (readMaybe)
 import World.Command.Types (WorldTextureType(..))
 
 parseTextureType ∷ Text → WorldTextureType
-parseTextureType "granite"        = GraniteTexture
-parseTextureType "diorite"        = DioriteTexture
-parseTextureType "gabbro"         = GabbroTexture
-parseTextureType "glacier"        = GlacierTexture
+-- Structural
 parseTextureType "ocean"          = OceanTexture
+parseTextureType "glacier"        = GlacierTexture
 parseTextureType "lava"           = LavaTexture
 parseTextureType "blank"          = BlankTexture
 parseTextureType "notexture"      = NoTexture
-parseTextureType "iso_facemap"             = IsoFaceMap
+-- Facemaps
+parseTextureType "iso_facemap"              = IsoFaceMap
 parseTextureType "iso_slope_facemap_n"      = SlopeFaceMapN
 parseTextureType "iso_slope_facemap_e"      = SlopeFaceMapE
 parseTextureType "iso_slope_facemap_ne"     = SlopeFaceMapNE
@@ -30,47 +31,16 @@ parseTextureType "iso_slope_facemap_sw"     = SlopeFaceMapSW
 parseTextureType "iso_slope_facemap_nsw"    = SlopeFaceMapNSW
 parseTextureType "iso_slope_facemap_esw"    = SlopeFaceMapESW
 parseTextureType "iso_slope_facemap_nesw"   = SlopeFaceMapNESW
-parseTextureType "nofacemap"               = NoFaceMap
-parseTextureType "zoom_granite"   = ZoomGraniteTexture
-parseTextureType "zoom_diorite"   = ZoomDioriteTexture
-parseTextureType "zoom_gabbro"    = ZoomGabbroTexture
-parseTextureType "zoom_ocean"     = ZoomOceanTexture
-parseTextureType "zoom_glacier"   = ZoomGlacierTexture
-parseTextureType "zoom_lava"      = ZoomLavaTexture
-parseTextureType "zoom_sandstone" = ZoomSandstoneTexture
-parseTextureType "zoom_limestone" = ZoomLimestoneTexture
-parseTextureType "zoom_shale"     = ZoomShaleTexture
-parseTextureType "zoom_iron"      = ZoomIronTexture
-parseTextureType "zoom_olivine"   = ZoomOlivineTexture
-parseTextureType "zoom_pyroxene"  = ZoomPyroxeneTexture
-parseTextureType "zoom_feldspar"  = ZoomFeldsparTexture
-parseTextureType "bg_granite"     = BgGraniteTexture
-parseTextureType "bg_diorite"     = BgDioriteTexture
-parseTextureType "bg_gabbro"      = BgGabbroTexture
-parseTextureType "bg_ocean"       = BgOceanTexture
-parseTextureType "bg_glacier"     = BgGlacierTexture
-parseTextureType "bg_lava"        = BgLavaTexture
-parseTextureType "basalt"         = BasaltTexture
-parseTextureType "obsidian"       = ObsidianTexture
-parseTextureType "sandstone"      = SandstoneTexture
-parseTextureType "limestone"      = LimestoneTexture
-parseTextureType "shale"          = ShaleTexture
-parseTextureType "impactite"      = ImpactiteTexture
-parseTextureType "iron"           = IronTexture
-parseTextureType "olivine"        = OlivineTexture
-parseTextureType "pyroxene"       = PyroxeneTexture
-parseTextureType "feldspar"       = FeldsparTexture
-parseTextureType "zoom_basalt"    = ZoomBasaltTexture
-parseTextureType "zoom_obsidian"  = ZoomObsidianTexture
-parseTextureType "zoom_impactite" = ZoomImpactiteTexture
-parseTextureType "bg_basalt"      = BgBasaltTexture
-parseTextureType "bg_impactite"   = BgImpactiteTexture
-parseTextureType "bg_obsidian"    = BgObsidianTexture
-parseTextureType "bg_sandstone"   = BgSandstoneTexture
-parseTextureType "bg_limestone"   = BgLimestoneTexture
-parseTextureType "bg_shale"       = BgShaleTexture
-parseTextureType "bg_iron"        = BgIronTexture
-parseTextureType "bg_olivine"     = BgOlivineTexture
-parseTextureType "bg_pyroxene"    = BgPyroxeneTexture
-parseTextureType "bg_feldspar"    = BgFeldsparTexture
-parseTextureType _                = NoTexture
+parseTextureType "nofacemap"                = NoFaceMap
+-- Material textures: "mat_tile_N", "mat_zoom_N", "mat_bg_N"
+parseTextureType t
+    | Just suffix ← T.stripPrefix "mat_tile_" t
+    , Just n ← readMaybe (T.unpack suffix)
+    = MatTileTexture n
+    | Just suffix ← T.stripPrefix "mat_zoom_" t
+    , Just n ← readMaybe (T.unpack suffix)
+    = MatZoomTexture n
+    | Just suffix ← T.stripPrefix "mat_bg_" t
+    , Just n ← readMaybe (T.unpack suffix)
+    = MatBgTexture n
+    | otherwise = NoTexture

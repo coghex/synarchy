@@ -3,11 +3,13 @@ module World.Texture.Types where
 import UPrelude
 
 data WorldTextureType
-    = GraniteTexture
-    | DioriteTexture
-    | GabbroTexture
+    -- Structural (no material ID)
+    = OceanTexture
+    | GlacierTexture
+    | LavaTexture
+    | BlankTexture
     | NoTexture
-    | OceanTexture
+    -- Facemaps
     | IsoFaceMap
     | SlopeFaceMapN
     | SlopeFaceMapE
@@ -25,49 +27,8 @@ data WorldTextureType
     | SlopeFaceMapESW
     | SlopeFaceMapNESW
     | NoFaceMap
-    | ZoomGraniteTexture
-    | ZoomDioriteTexture
-    | ZoomGabbroTexture
-    | ZoomOceanTexture
-    | GlacierTexture
-    | LavaTexture
-    | ZoomGlacierTexture
-    | ZoomLavaTexture
-    | BlankTexture
-    | BgGraniteTexture
-    | BgGabbroTexture
-    | BgDioriteTexture
-    | BgOceanTexture
-    | BgGlacierTexture
-    | BgLavaTexture
-    | BasaltTexture
-    | ObsidianTexture
-    | SandstoneTexture
-    | LimestoneTexture
-    | ShaleTexture
-    | ImpactiteTexture
-    | IronTexture
-    | OlivineTexture
-    | PyroxeneTexture
-    | FeldsparTexture
-    | ZoomBasaltTexture
-    | ZoomObsidianTexture
-    | ZoomImpactiteTexture
-    | BgBasaltTexture
-    | BgImpactiteTexture
-    | BgObsidianTexture
-    | ZoomSandstoneTexture
-    | ZoomLimestoneTexture
-    | ZoomShaleTexture
-    | ZoomIronTexture
-    | ZoomOlivineTexture
-    | ZoomPyroxeneTexture
-    | ZoomFeldsparTexture
-    | BgSandstoneTexture
-    | BgLimestoneTexture
-    | BgShaleTexture
-    | BgIronTexture
-    | BgOlivineTexture
-    | BgPyroxeneTexture
-    | BgFeldsparTexture
+    -- Material textures: layer + material ID
+    | MatTileTexture  !Word8   -- ^ tile layer for material N
+    | MatZoomTexture  !Word8   -- ^ zoom layer for material N
+    | MatBgTexture    !Word8   -- ^ bg layer for material N
     deriving (Show, Eq)

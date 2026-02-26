@@ -8,17 +8,79 @@ worldView.visible = false
 worldView.fbW = 0
 worldView.fbH = 0
 
--- Texture handles
-worldView.textures = {
-    granite = -1,
-    diorite = -1,
-    gabbro = -1,
-    ocean = -1,
-    glacier = -1,
-    lava = -1,
-    noTexture = -1,
-    blankTexture = -1,
-    isoFaceMap = -1,
+-----------------------------------------------------------
+-- Material Table
+--
+-- Single source of truth for material ID → texture paths.
+-- To add a new material, add one row here. No Haskell changes.
+--
+-- Each entry:
+--   id   = MaterialId (Word8) matching Haskell's Material.hs
+--   name = human-readable name (for logging)
+--   tile = path to isometric tile texture
+--   zoom = path to zoom map chunk texture
+--   bg   = path to zoom map background texture
+-----------------------------------------------------------
+
+worldView.materialDefs = {
+    { id = 1,   name = "granite",    tile = "assets/textures/world/granite/granite.png",
+                                     zoom = "assets/textures/world/zoommap/granite_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/granite_chunk_background.png" },
+    { id = 2,   name = "diorite",    tile = "assets/textures/world/diorite/diorite.png",
+                                     zoom = "assets/textures/world/zoommap/diorite_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/diorite_chunk_background.png" },
+    { id = 3,   name = "gabbro",     tile = "assets/textures/world/gabbro/gabbro.png",
+                                     zoom = "assets/textures/world/zoommap/gabbro_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/gabbro_chunk_background.png" },
+    { id = 4,   name = "basalt",     tile = "assets/textures/world/basalt/basalt.png",
+                                     zoom = "assets/textures/world/zoommap/basalt_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/basalt_chunk_background.png" },
+    { id = 5,   name = "obsidian",   tile = "assets/textures/world/obsidian/obsidian.png",
+                                     zoom = "assets/textures/world/zoommap/obsidian_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/obsidian_chunk_background.png" },
+    { id = 10,  name = "sandstone",  tile = "assets/textures/world/sandstone/sandstone.png",
+                                     zoom = "assets/textures/world/zoommap/sandstone_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/sandstone_chunk_background.png" },
+    { id = 11,  name = "limestone",  tile = "assets/textures/world/limestone/limestone.png",
+                                     zoom = "assets/textures/world/zoommap/limestone_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/limestone_chunk_background.png" },
+    { id = 12,  name = "shale",      tile = "assets/textures/world/shale/shale.png",
+                                     zoom = "assets/textures/world/zoommap/shale_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/shale_chunk_background.png" },
+    { id = 20,  name = "impactite",  tile = "assets/textures/world/impactite/impactite.png",
+                                     zoom = "assets/textures/world/zoommap/impactite_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/impactite_chunk_background.png" },
+    { id = 30,  name = "iron",       tile = "assets/textures/world/iron/iron.png",
+                                     zoom = "assets/textures/world/zoommap/iron_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/iron_chunk_background.png" },
+    { id = 31,  name = "olivine",    tile = "assets/textures/world/olivine/olivine.png",
+                                     zoom = "assets/textures/world/zoommap/olivine_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/olivine_chunk_background.png" },
+    { id = 32,  name = "pyroxene",   tile = "assets/textures/world/pyroxene/pyroxene.png",
+                                     zoom = "assets/textures/world/zoommap/pyroxene_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/pyroxene_chunk_background.png" },
+    { id = 33,  name = "feldspar",   tile = "assets/textures/world/feldspar/feldspar.png",
+                                     zoom = "assets/textures/world/zoommap/feldspar_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/feldspar_chunk_background.png" },
+    { id = 100, name = "lava",       tile = "assets/textures/world/lava/lava.png",
+                                     zoom = "assets/textures/world/zoommap/lava_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/lava_chunk_background.png" },
+}
+
+-----------------------------------------------------------
+-- Texture Storage
+--
+-- Structural textures: named fields (small fixed set)
+-- Material textures:   materialTextures[id] = { tile=h, zoom=h, bg=h }
+-----------------------------------------------------------
+
+worldView.structuralTextures = {
+    ocean          = -1,
+    glacier        = -1,
+    lava           = -1,
+    noTexture      = -1,
+    blankTexture   = -1,
+    isoFaceMap     = -1,
     isoSlopeFaceMapN    = -1,
     isoSlopeFaceMapE    = -1,
     isoSlopeFaceMapNE   = -1,
@@ -34,50 +96,15 @@ worldView.textures = {
     isoSlopeFaceMapNSW  = -1,
     isoSlopeFaceMapESW  = -1,
     isoSlopeFaceMapNESW = -1,
-    noFaceMap = -1,
-    zoomGranite = -1,
-    zoomDiorite = -1,
-    zoomGabbro = -1,
-    zoomOcean = -1,
-    zoomGlacier = -1,
-    zoomLava = -1,
-    bgGranite = -1,
-    bgDiorite = -1,
-    bgGabbro = -1,
-    bgOcean = -1,
-    bgGlacier = -1,
-    bgLava = -1,
-    basalt = -1,
-    obsidian = -1,
-    sandstone = -1,
-    limestone = -1,
-    shale = -1,
-    impactite = -1,
-    iron = -1,
-    olivine = -1,
-    pyroxene = -1,
-    feldspar = -1,
-    zoomBasalt = -1,
-    zoomObsidian = -1,
-    zoomImpactite = -1,
-    bgBasalt = -1,
-    bgImpactite = -1,
-    bgObsidian = -1,
-    zoomSandstone = -1,
-    zoomLimestone = -1,
-    zoomShale = -1,
-    zoomIron = -1,
-    zoomOlivine = -1,
-    zoomPyroxene = -1,
-    zoomFeldspar = -1,
-    bgSandstone = -1,
-    bgLimestone = -1,
-    bgShale = -1,
-    bgIron = -1,
-    bgOlivine = -1,
-    bgPyroxene = -1,
-    bgFeldspar = -1,
+    noFaceMap      = -1,
 }
+
+-- materialTextures[matId] = { tile = handle, zoom = handle, bg = handle }
+worldView.materialTextures = {}
+
+-- All loaded handles for asset-loaded tracking
+worldView.allHandles = {}
+
 worldView.texturesNeeded = 0
 worldView.texturesLoadedCount = 0
 
@@ -90,90 +117,64 @@ worldView.pendingGeneration = false
 -----------------------------------------------------------
 
 function worldView.init(width, height)
-    -- Track which textures have loaded
-    local function getTableSize(t)
-        local c = 0
-        for k,v in pairs(t) do
-            c = c + 1
-        end
-        return c
-    end
-    worldView.texturesNeeded = getTableSize(worldView.textures)
-    worldView.texturesLoadedCount = 0
-
     worldView.fbW = width
     worldView.fbH = height
-    
-    -- Load all world textures
-    worldView.textures.granite    = engine.loadTexture("assets/textures/world/granite/granite.png")
-    worldView.textures.diorite    = engine.loadTexture("assets/textures/world/diorite/diorite.png")
-    worldView.textures.gabbro     = engine.loadTexture("assets/textures/world/gabbro/gabbro.png")
-    worldView.textures.ocean      = engine.loadTexture("assets/textures/world/ocean/ocean.png")
-    worldView.textures.glacier    = engine.loadTexture("assets/textures/world/glacier/glacier.png")
-    worldView.textures.lava       = engine.loadTexture("assets/textures/world/lava/lava.png")
-    worldView.textures.blankTexture = engine.loadTexture("assets/textures/world/blanktexture.png")
-    worldView.textures.noTexture  = engine.loadTexture("assets/textures/world/notexture.png")
-    worldView.textures.isoFaceMap = engine.loadTexture("assets/textures/world/facemap/isoface.png")
-    worldView.textures.isoSlopeFaceMapN    = engine.loadTexture("assets/textures/world/facemap/isoface_slope_n.png")
-    worldView.textures.isoSlopeFaceMapE    = engine.loadTexture("assets/textures/world/facemap/isoface_slope_e.png")
-    worldView.textures.isoSlopeFaceMapNE   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_ne.png")
-    worldView.textures.isoSlopeFaceMapS    = engine.loadTexture("assets/textures/world/facemap/isoface_slope_s.png")
-    worldView.textures.isoSlopeFaceMapNS   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_ns.png")
-    worldView.textures.isoSlopeFaceMapES   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_es.png")
-    worldView.textures.isoSlopeFaceMapNES  = engine.loadTexture("assets/textures/world/facemap/isoface_slope_nes.png")
-    worldView.textures.isoSlopeFaceMapW    = engine.loadTexture("assets/textures/world/facemap/isoface_slope_w.png")
-    worldView.textures.isoSlopeFaceMapNW   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_nw.png")
-    worldView.textures.isoSlopeFaceMapEW   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_ew.png")
-    worldView.textures.isoSlopeFaceMapNEW  = engine.loadTexture("assets/textures/world/facemap/isoface_slope_new.png")
-    worldView.textures.isoSlopeFaceMapSW   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_sw.png")
-    worldView.textures.isoSlopeFaceMapNSW  = engine.loadTexture("assets/textures/world/facemap/isoface_slope_nsw.png")
-    worldView.textures.isoSlopeFaceMapESW  = engine.loadTexture("assets/textures/world/facemap/isoface_slope_esw.png")
-    worldView.textures.isoSlopeFaceMapNESW = engine.loadTexture("assets/textures/world/facemap/isoface_slope_nesw.png")
-    worldView.textures.noFaceMap  = engine.loadTexture("assets/textures/world/facemap/noface.png")
-    worldView.textures.zoomGranite  = engine.loadTexture("assets/textures/world/zoommap/granite_chunk.png")
-    worldView.textures.zoomDiorite  = engine.loadTexture("assets/textures/world/zoommap/diorite_chunk.png")
-    worldView.textures.zoomGabbro   = engine.loadTexture("assets/textures/world/zoommap/gabbro_chunk.png")
-    worldView.textures.zoomOcean    = engine.loadTexture("assets/textures/world/zoommap/ocean_chunk.png")
-    worldView.textures.zoomGlacier  = engine.loadTexture("assets/textures/world/zoommap/glacier_chunk.png")
-    worldView.textures.zoomLava     = engine.loadTexture("assets/textures/world/zoommap/lava_chunk.png")
-    worldView.textures.bgGranite    = engine.loadTexture("assets/textures/world/zoommap/granite_chunk_background.png")
-    worldView.textures.bgDiorite    = engine.loadTexture("assets/textures/world/zoommap/diorite_chunk_background.png")
-    worldView.textures.bgGabbro     = engine.loadTexture("assets/textures/world/zoommap/gabbro_chunk_background.png")
-    worldView.textures.bgOcean      = engine.loadTexture("assets/textures/world/zoommap/ocean_chunk_background.png")
-    worldView.textures.bgGlacier    = engine.loadTexture("assets/textures/world/zoommap/glacier_chunk_background.png")
-    worldView.textures.bgLava       = engine.loadTexture("assets/textures/world/zoommap/lava_chunk_background.png")
-    worldView.textures.basalt       = engine.loadTexture("assets/textures/world/basalt/basalt.png")
-    worldView.textures.obsidian     = engine.loadTexture("assets/textures/world/obsidian/obsidian.png")
-    worldView.textures.sandstone    = engine.loadTexture("assets/textures/world/sandstone/sandstone.png")
-    worldView.textures.limestone    = engine.loadTexture("assets/textures/world/limestone/limestone.png")
-    worldView.textures.shale        = engine.loadTexture("assets/textures/world/shale/shale.png")
-    worldView.textures.impactite    = engine.loadTexture("assets/textures/world/impactite/impactite.png")
-    worldView.textures.iron         = engine.loadTexture("assets/textures/world/iron/iron.png")
-    worldView.textures.olivine      = engine.loadTexture("assets/textures/world/olivine/olivine.png")
-    worldView.textures.pyroxene     = engine.loadTexture("assets/textures/world/pyroxene/pyroxene.png")
-    worldView.textures.feldspar     = engine.loadTexture("assets/textures/world/feldspar/feldspar.png")
-    worldView.textures.zoomBasalt     = engine.loadTexture("assets/textures/world/zoommap/basalt_chunk.png")
-    worldView.textures.zoomObsidian   = engine.loadTexture("assets/textures/world/zoommap/obsidian_chunk.png")
-    worldView.textures.zoomImpactite  = engine.loadTexture("assets/textures/world/zoommap/impactite_chunk.png")
-    worldView.textures.bgBasalt       = engine.loadTexture("assets/textures/world/zoommap/basalt_chunk_background.png")
-    worldView.textures.bgImpactite    = engine.loadTexture("assets/textures/world/zoommap/impactite_chunk_background.png")
-    worldView.textures.bgObsidian     = engine.loadTexture("assets/textures/world/zoommap/obsidian_chunk_background.png")
-    worldView.textures.zoomSandstone   = engine.loadTexture("assets/textures/world/zoommap/sandstone_chunk.png")
-    worldView.textures.zoomLimestone   = engine.loadTexture("assets/textures/world/zoommap/limestone_chunk.png")
-    worldView.textures.zoomShale       = engine.loadTexture("assets/textures/world/zoommap/shale_chunk.png")
-    worldView.textures.zoomIron        = engine.loadTexture("assets/textures/world/zoommap/iron_chunk.png")
-    worldView.textures.zoomOlivine     = engine.loadTexture("assets/textures/world/zoommap/olivine_chunk.png")
-    worldView.textures.zoomPyroxene    = engine.loadTexture("assets/textures/world/zoommap/pyroxene_chunk.png")
-    worldView.textures.zoomFeldspar    = engine.loadTexture("assets/textures/world/zoommap/feldspar_chunk.png")
-    worldView.textures.bgSandstone     = engine.loadTexture("assets/textures/world/zoommap/sandstone_chunk_background.png")
-    worldView.textures.bgLimestone     = engine.loadTexture("assets/textures/world/zoommap/limestone_chunk_background.png")
-    worldView.textures.bgShale         = engine.loadTexture("assets/textures/world/zoommap/shale_chunk_background.png")
-    worldView.textures.bgIron          = engine.loadTexture("assets/textures/world/zoommap/iron_chunk_background.png")
-    worldView.textures.bgOlivine       = engine.loadTexture("assets/textures/world/zoommap/olivine_chunk_background.png")
-    worldView.textures.bgPyroxene      = engine.loadTexture("assets/textures/world/zoommap/pyroxene_chunk_background.png")
-    worldView.textures.bgFeldspar      = engine.loadTexture("assets/textures/world/zoommap/feldspar_chunk_background.png")
-    
-    engine.logInfo("World view initialized, loading " .. worldView.texturesNeeded .. " textures")
+    worldView.allHandles = {}
+
+    -- Count how many textures we need to load
+    local count = 0
+
+    -- Load structural textures
+    local st = worldView.structuralTextures
+    st.ocean          = engine.loadTexture("assets/textures/world/ocean/ocean.png")
+    st.glacier        = engine.loadTexture("assets/textures/world/glacier/glacier.png")
+    st.lava           = engine.loadTexture("assets/textures/world/lava/lava.png")
+    st.noTexture      = engine.loadTexture("assets/textures/world/notexture.png")
+    st.blankTexture   = engine.loadTexture("assets/textures/world/blanktexture.png")
+    st.isoFaceMap     = engine.loadTexture("assets/textures/world/facemap/isoface.png")
+    st.isoSlopeFaceMapN    = engine.loadTexture("assets/textures/world/facemap/isoface_slope_n.png")
+    st.isoSlopeFaceMapE    = engine.loadTexture("assets/textures/world/facemap/isoface_slope_e.png")
+    st.isoSlopeFaceMapNE   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_ne.png")
+    st.isoSlopeFaceMapS    = engine.loadTexture("assets/textures/world/facemap/isoface_slope_s.png")
+    st.isoSlopeFaceMapNS   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_ns.png")
+    st.isoSlopeFaceMapES   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_es.png")
+    st.isoSlopeFaceMapNES  = engine.loadTexture("assets/textures/world/facemap/isoface_slope_nes.png")
+    st.isoSlopeFaceMapW    = engine.loadTexture("assets/textures/world/facemap/isoface_slope_w.png")
+    st.isoSlopeFaceMapNW   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_nw.png")
+    st.isoSlopeFaceMapEW   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_ew.png")
+    st.isoSlopeFaceMapNEW  = engine.loadTexture("assets/textures/world/facemap/isoface_slope_new.png")
+    st.isoSlopeFaceMapSW   = engine.loadTexture("assets/textures/world/facemap/isoface_slope_sw.png")
+    st.isoSlopeFaceMapNSW  = engine.loadTexture("assets/textures/world/facemap/isoface_slope_nsw.png")
+    st.isoSlopeFaceMapESW  = engine.loadTexture("assets/textures/world/facemap/isoface_slope_esw.png")
+    st.isoSlopeFaceMapNESW = engine.loadTexture("assets/textures/world/facemap/isoface_slope_nesw.png")
+    st.noFaceMap      = engine.loadTexture("assets/textures/world/facemap/noface.png")
+
+    for _, handle in pairs(st) do
+        worldView.allHandles[handle] = true
+        count = count + 1
+    end
+
+    -- Load material textures from the table
+    worldView.materialTextures = {}
+    for _, def in ipairs(worldView.materialDefs) do
+        local tileH = engine.loadTexture(def.tile)
+        local zoomH = engine.loadTexture(def.zoom)
+        local bgH   = engine.loadTexture(def.bg)
+        worldView.materialTextures[def.id] = {
+            tile = tileH,
+            zoom = zoomH,
+            bg   = bgH,
+        }
+        worldView.allHandles[tileH] = true
+        worldView.allHandles[zoomH] = true
+        worldView.allHandles[bgH]   = true
+        count = count + 3
+    end
+
+    worldView.texturesNeeded = count
+    worldView.texturesLoadedCount = 0
+
+    engine.logInfo("World view initialized, loading " .. count .. " textures")
 end
 
 -----------------------------------------------------------
@@ -182,31 +183,19 @@ end
 
 function worldView.onAssetLoaded(assetType, handle, path)
     if assetType ~= "texture" then return end
-    
-    local matched = false
-    for name, texHandle in pairs(worldView.textures) do
-        if handle == texHandle then
-            engine.logDebug("World texture loaded: " .. name .. " handle=" .. tostring(handle))
-            matched = true
-            break
-        end
-    end
-    
-    if not matched then return end
-    
+
+    if not worldView.allHandles[handle] then return end
+
     worldView.texturesLoadedCount = worldView.texturesLoadedCount + 1
-    engine.logInfo("World textures: " .. worldView.texturesLoadedCount 
-        .. "/" .. worldView.texturesNeeded .. " loaded")
-    
+    engine.logDebug("World texture loaded: handle=" .. tostring(handle)
+        .. " (" .. worldView.texturesLoadedCount .. "/" .. worldView.texturesNeeded .. ")")
+
     -- Check if all textures are now loaded
     if worldView.texturesLoadedCount >= worldView.texturesNeeded then
-        -- If showing world view directly, create the world
         if worldView.visible then
             engine.logInfo("All world textures loaded, creating world...")
             worldView.createWorld()
         end
-        -- If create_world_menu asked us to generate while textures
-        -- were still loading, do it now
         if worldView.pendingGeneration then
             worldView.pendingGeneration = false
             engine.logInfo("Pending generation triggered, creating world...")
@@ -217,18 +206,12 @@ end
 
 -----------------------------------------------------------
 -- Start Generation (called from create_world_menu)
---
--- Kicks off world creation without switching screens.
--- The create_world_menu polls worldManager.isActive()
--- to know when it's done.
 -----------------------------------------------------------
 
 function worldView.startGeneration()
     if worldView.texturesLoadedCount >= worldView.texturesNeeded then
-        -- Textures ready — generate immediately
         worldView.createWorld()
     else
-        -- Textures still loading — defer
         worldView.pendingGeneration = true
         engine.logInfo("World generation deferred, waiting for textures... ("
             .. worldView.texturesLoadedCount .. "/" .. worldView.texturesNeeded .. ")")
@@ -255,79 +238,14 @@ function worldView.createWorld()
     local seed = wp.seed or 42
     local worldSize = wp.worldSize or 128
     local plateCount = wp.plateCount or 10
-    
-    worldManager.createWorld({ 
-        worldId = "main_world",
-        seed = seed,
-        worldSize = worldSize,
+
+    worldManager.createWorld({
+        worldId    = "main_world",
+        seed       = seed,
+        worldSize  = worldSize,
         plateCount = plateCount,
-        graniteTexture = worldView.textures.granite,
-        dioriteTexture = worldView.textures.diorite,
-        gabbroTexture  = worldView.textures.gabbro,
-        oceanTexture   = worldView.textures.ocean,
-        glacierTexture = worldView.textures.glacier,
-        lavaTexture = worldView.textures.lava,
-        blankTexture   = worldView.textures.blankTexture,
-        noTexture      = worldView.textures.noTexture,
-        isoFaceMap              = worldView.textures.isoFaceMap,
-        isoSlopeFaceMapN        = worldView.textures.isoSlopeFaceMapN,
-        isoSlopeFaceMapE        = worldView.textures.isoSlopeFaceMapE,
-        isoSlopeFaceMapNE       = worldView.textures.isoSlopeFaceMapNE,
-        isoSlopeFaceMapS        = worldView.textures.isoSlopeFaceMapS,
-        isoSlopeFaceMapNS       = worldView.textures.isoSlopeFaceMapNS,
-        isoSlopeFaceMapES       = worldView.textures.isoSlopeFaceMapES,
-        isoSlopeFaceMapNES      = worldView.textures.isoSlopeFaceMapNES,
-        isoSlopeFaceMapW        = worldView.textures.isoSlopeFaceMapW,
-        isoSlopeFaceMapNW       = worldView.textures.isoSlopeFaceMapNW,
-        isoSlopeFaceMapEW       = worldView.textures.isoSlopeFaceMapEW,
-        isoSlopeFaceMapNEW      = worldView.textures.isoSlopeFaceMapNEW,
-        isoSlopeFaceMapSW       = worldView.textures.isoSlopeFaceMapSW,
-        isoSlopeFaceMapNSW      = worldView.textures.isoSlopeFaceMapNSW,
-        isoSlopeFaceMapESW      = worldView.textures.isoSlopeFaceMapESW,
-        isoSlopeFaceMapNESW     = worldView.textures.isoSlopeFaceMapNESW,
-        noFaceMap               = worldView.textures.noFaceMap,
-        zoomGranite    = worldView.textures.zoomGranite,
-        zoomDiorite    = worldView.textures.zoomDiorite,
-        zoomGabbro     = worldView.textures.zoomGabbro,
-        zoomOcean      = worldView.textures.zoomOcean,
-        zoomGlacier    = worldView.textures.zoomGlacier,
-        zoomLava       = worldView.textures.zoomLava,
-        bgGranite      = worldView.textures.bgGranite,
-        bgDiorite      = worldView.textures.bgDiorite,
-        bgGabbro       = worldView.textures.bgGabbro,
-        bgOcean        = worldView.textures.bgOcean,
-        bgGlacier      = worldView.textures.bgGlacier,
-        basaltTexture    = worldView.textures.basalt,
-        obsidianTexture  = worldView.textures.obsidian,
-        sandstoneTexture = worldView.textures.sandstone,
-        limestoneTexture = worldView.textures.limestone,
-        shaleTexture     = worldView.textures.shale,
-        impactiteTexture = worldView.textures.impactite,
-        ironTexture      = worldView.textures.iron,
-        olivineTexture   = worldView.textures.olivine,
-        pyroxeneTexture  = worldView.textures.pyroxene,
-        feldsparTexture  = worldView.textures.feldspar,
-        zoomBasalt       = worldView.textures.zoomBasalt,
-        zoomObsidian     = worldView.textures.zoomObsidian,
-        zoomImpactite    = worldView.textures.zoomImpactite,
-        bgBasalt         = worldView.textures.bgBasalt,
-        bgImpactite      = worldView.textures.bgImpactite,
-        bgLava           = worldView.textures.bgLava,
-        bgObsidian       = worldView.textures.bgObsidian,
-        zoomSandstone    = worldView.textures.zoomSandstone,
-        zoomLimestone    = worldView.textures.zoomLimestone,
-        zoomShale        = worldView.textures.zoomShale,
-        zoomIron         = worldView.textures.zoomIron,
-        zoomOlivine      = worldView.textures.zoomOlivine,
-        zoomPyroxene     = worldView.textures.zoomPyroxene,
-        zoomFeldspar     = worldView.textures.zoomFeldspar,
-        bgSandstone      = worldView.textures.bgSandstone,
-        bgLimestone      = worldView.textures.bgLimestone,
-        bgShale          = worldView.textures.bgShale,
-        bgIron           = worldView.textures.bgIron,
-        bgOlivine        = worldView.textures.bgOlivine,
-        bgPyroxene       = worldView.textures.bgPyroxene,
-        bgFeldspar       = worldView.textures.bgFeldspar,
+        structural = worldView.structuralTextures,
+        materials  = worldView.materialTextures,
     })
     worldManager.showWorld()
 end
@@ -340,9 +258,9 @@ function worldView.createUI()
     if worldView.page then
         UI.deletePage(worldView.page)
     end
-    
+
     worldView.page = UI.newPage("world_view_hud", "hud")
-    
+
     engine.logInfo("World view UI created")
 end
 
@@ -354,12 +272,10 @@ function worldView.show()
     if not worldView.page then
         worldView.createUI()
     end
-    
+
     worldView.visible = true
     UI.showPage(worldView.page)
-    
-    -- If world is already active (generated from create_world_menu),
-    -- just show it. Otherwise create it.
+
     if worldManager.getCurrentWorld() then
         worldManager.showWorld()
     elseif worldView.texturesLoadedCount >= worldView.texturesNeeded then
@@ -368,18 +284,18 @@ function worldView.show()
         engine.logInfo("World view shown, waiting for textures... ("
             .. worldView.texturesLoadedCount .. "/" .. worldView.texturesNeeded .. ")")
     end
-    
+
     engine.logInfo("World view shown")
 end
 
 function worldView.hide()
     worldManager.hideWorld()
-    
+
     worldView.visible = false
     if worldView.page then
         UI.hidePage(worldView.page)
     end
-    
+
     engine.logInfo("World view hidden")
 end
 
@@ -408,37 +324,30 @@ end
 -- Camera Zoom (normal scroll, no shift, no UI focus)
 -----------------------------------------------------------
 
--- Zoom impulse per scroll tick (world-space units/sec added)
 local zoomImpulseScale = 0.4
 
 function worldView.onScroll(dx, dy)
     if not worldView.visible then return end
-    
+
     local current = camera.getZoomVelocity()
     local zoom = camera.getZoom()
-    local zoomFadeStart = camera.getZoomFadeStart()
-    local zoomFadeEnd = camera.getZoomFadeEnd()
     local impulse = zoomImpulseScale * zoom
     if dy > 0 then
-        -- Zoom in: negative velocity (zoom value decreases)
         camera.setZoomVelocity(current - impulse)
     elseif dy < 0 then
-        -- Zoom out: positive velocity (zoom value increases)
         camera.setZoomVelocity(current + impulse)
     end
 end
 
 -----------------------------------------------------------
 -- Z-Slice Control (shift+scroll)
--- Disables surface tracking and manually adjusts z-slice.
 -----------------------------------------------------------
 
 function worldView.onZSliceScroll(dx, dy)
     if not worldView.visible then return end
-    
-    -- Enter locked mode
+
     camera.setZTracking(false)
-    
+
     local current = camera.getZSlice()
     if dy > 0 then
         camera.setZSlice(current + 1)
@@ -461,7 +370,6 @@ function worldView.onKeyDown(key)
         camera.rotateCW()
         engine.logDebug("Camera rotated CW, facing=" .. tostring(camera.getFacing()))
     elseif key == "Home" then
-        -- Return to surface tracking mode
         camera.setZTracking(true)
         engine.logDebug("Z-slice tracking re-enabled")
     end
@@ -475,7 +383,7 @@ function worldView.shutdown()
     if worldView.page then
         UI.deletePage(worldView.page)
     end
-    
+
     worldManager.destroyWorld()
 end
 
@@ -501,77 +409,41 @@ function worldView.sendTexturesToWorld(worldId)
             .. worldView.texturesLoadedCount .. "/" .. worldView.texturesNeeded .. ")")
         return false
     end
-    
+
     engine.logInfo("Sending textures to loaded world: " .. worldId)
-    
-    world.setTexture(worldId, "granite", worldView.textures.granite)
-    world.setTexture(worldId, "diorite", worldView.textures.diorite)
-    world.setTexture(worldId, "gabbro", worldView.textures.gabbro)
-    world.setTexture(worldId, "ocean", worldView.textures.ocean)
-    world.setTexture(worldId, "glacier", worldView.textures.glacier)
-    world.setTexture(worldId, "lava", worldView.textures.lava)
-    world.setTexture(worldId, "blank", worldView.textures.blankTexture)
-    world.setTexture(worldId, "notexture", worldView.textures.noTexture)
-    world.setTexture(worldId, "iso_facemap", worldView.textures.isoFaceMap)
-    world.setTexture(worldId, "iso_slope_facemap_n", worldView.textures.isoSlopeFaceMapN)
-    world.setTexture(worldId, "iso_slope_facemap_e", worldView.textures.isoSlopeFaceMapE)
-    world.setTexture(worldId, "iso_slope_facemap_ne", worldView.textures.isoSlopeFaceMapNE)
-    world.setTexture(worldId, "iso_slope_facemap_s", worldView.textures.isoSlopeFaceMapS)
-    world.setTexture(worldId, "iso_slope_facemap_ns", worldView.textures.isoSlopeFaceMapNS)
-    world.setTexture(worldId, "iso_slope_facemap_es", worldView.textures.isoSlopeFaceMapES)
-    world.setTexture(worldId, "iso_slope_facemap_nes", worldView.textures.isoSlopeFaceMapNES)
-    world.setTexture(worldId, "iso_slope_facemap_w", worldView.textures.isoSlopeFaceMapW)
-    world.setTexture(worldId, "iso_slope_facemap_nw", worldView.textures.isoSlopeFaceMapNW)
-    world.setTexture(worldId, "iso_slope_facemap_ew", worldView.textures.isoSlopeFaceMapEW)
-    world.setTexture(worldId, "iso_slope_facemap_new", worldView.textures.isoSlopeFaceMapNEW)
-    world.setTexture(worldId, "iso_slope_facemap_sw", worldView.textures.isoSlopeFaceMapSW)
-    world.setTexture(worldId, "iso_slope_facemap_nsw", worldView.textures.isoSlopeFaceMapNSW)
-    world.setTexture(worldId, "iso_slope_facemap_esw", worldView.textures.isoSlopeFaceMapESW)
-    world.setTexture(worldId, "iso_slope_facemap_nesw", worldView.textures.isoSlopeFaceMapNESW)
-    world.setTexture(worldId, "nofacemap", worldView.textures.noFaceMap)
-    world.setTexture(worldId, "zoom_granite", worldView.textures.zoomGranite)
-    world.setTexture(worldId, "zoom_diorite", worldView.textures.zoomDiorite)
-    world.setTexture(worldId, "zoom_gabbro", worldView.textures.zoomGabbro)
-    world.setTexture(worldId, "zoom_ocean", worldView.textures.zoomOcean)
-    world.setTexture(worldId, "zoom_glacier", worldView.textures.zoomGlacier)
-    world.setTexture(worldId, "zoom_lava", worldView.textures.zoomLava)
-    world.setTexture(worldId, "bg_granite", worldView.textures.bgGranite)
-    world.setTexture(worldId, "bg_diorite", worldView.textures.bgDiorite)
-    world.setTexture(worldId, "bg_gabbro", worldView.textures.bgGabbro)
-    world.setTexture(worldId, "bg_ocean", worldView.textures.bgOcean)
-    world.setTexture(worldId, "bg_glacier", worldView.textures.bgGlacier)
-    world.setTexture(worldId, "bg_lava", worldView.textures.bgLava)
-    world.setTexture(worldId, "basalt", worldView.textures.basalt)
-    world.setTexture(worldId, "obsidian", worldView.textures.obsidian)
-    world.setTexture(worldId, "sandstone", worldView.textures.sandstone)
-    world.setTexture(worldId, "limestone", worldView.textures.limestone)
-    world.setTexture(worldId, "shale", worldView.textures.shale)
-    world.setTexture(worldId, "impactite", worldView.textures.impactite)
-    world.setTexture(worldId, "iron", worldView.textures.iron)
-    world.setTexture(worldId, "olivine", worldView.textures.olivine)
-    world.setTexture(worldId, "pyroxene", worldView.textures.pyroxene)
-    world.setTexture(worldId, "feldspar", worldView.textures.feldspar)
-    world.setTexture(worldId, "zoom_basalt", worldView.textures.zoomBasalt)
-    world.setTexture(worldId, "zoom_obsidian", worldView.textures.zoomObsidian)
-    world.setTexture(worldId, "zoom_impactite", worldView.textures.zoomImpactite)
-    world.setTexture(worldId, "bg_basalt", worldView.textures.bgBasalt)
-    world.setTexture(worldId, "bg_impactite", worldView.textures.bgImpactite)
-    world.setTexture(worldId, "bg_obsidian", worldView.textures.bgObsidian)
-    world.setTexture(worldId, "zoom_sandstone", worldView.textures.zoomSandstone)
-    world.setTexture(worldId, "zoom_limestone", worldView.textures.zoomLimestone)
-    world.setTexture(worldId, "zoom_shale", worldView.textures.zoomShale)
-    world.setTexture(worldId, "zoom_iron", worldView.textures.zoomIron)
-    world.setTexture(worldId, "zoom_olivine", worldView.textures.zoomOlivine)
-    world.setTexture(worldId, "zoom_pyroxene", worldView.textures.zoomPyroxene)
-    world.setTexture(worldId, "zoom_feldspar", worldView.textures.zoomFeldspar)
-    world.setTexture(worldId, "bg_sandstone", worldView.textures.bgSandstone)
-    world.setTexture(worldId, "bg_limestone", worldView.textures.bgLimestone)
-    world.setTexture(worldId, "bg_shale", worldView.textures.bgShale)
-    world.setTexture(worldId, "bg_iron", worldView.textures.bgIron)
-    world.setTexture(worldId, "bg_olivine", worldView.textures.bgOlivine)
-    world.setTexture(worldId, "bg_pyroxene", worldView.textures.bgPyroxene)
-    world.setTexture(worldId, "bg_feldspar", worldView.textures.bgFeldspar)
-    
+
+    -- Structural
+    local st = worldView.structuralTextures
+    world.setTexture(worldId, "ocean",     st.ocean)
+    world.setTexture(worldId, "glacier",   st.glacier)
+    world.setTexture(worldId, "lava",      st.lava)
+    world.setTexture(worldId, "blank",     st.blankTexture)
+    world.setTexture(worldId, "notexture", st.noTexture)
+    world.setTexture(worldId, "iso_facemap",           st.isoFaceMap)
+    world.setTexture(worldId, "iso_slope_facemap_n",   st.isoSlopeFaceMapN)
+    world.setTexture(worldId, "iso_slope_facemap_e",   st.isoSlopeFaceMapE)
+    world.setTexture(worldId, "iso_slope_facemap_ne",  st.isoSlopeFaceMapNE)
+    world.setTexture(worldId, "iso_slope_facemap_s",   st.isoSlopeFaceMapS)
+    world.setTexture(worldId, "iso_slope_facemap_ns",  st.isoSlopeFaceMapNS)
+    world.setTexture(worldId, "iso_slope_facemap_es",  st.isoSlopeFaceMapES)
+    world.setTexture(worldId, "iso_slope_facemap_nes", st.isoSlopeFaceMapNES)
+    world.setTexture(worldId, "iso_slope_facemap_w",   st.isoSlopeFaceMapW)
+    world.setTexture(worldId, "iso_slope_facemap_nw",  st.isoSlopeFaceMapNW)
+    world.setTexture(worldId, "iso_slope_facemap_ew",  st.isoSlopeFaceMapEW)
+    world.setTexture(worldId, "iso_slope_facemap_new", st.isoSlopeFaceMapNEW)
+    world.setTexture(worldId, "iso_slope_facemap_sw",  st.isoSlopeFaceMapSW)
+    world.setTexture(worldId, "iso_slope_facemap_nsw", st.isoSlopeFaceMapNSW)
+    world.setTexture(worldId, "iso_slope_facemap_esw", st.isoSlopeFaceMapESW)
+    world.setTexture(worldId, "iso_slope_facemap_nesw",st.isoSlopeFaceMapNESW)
+    world.setTexture(worldId, "nofacemap",             st.noFaceMap)
+
+    -- Materials (loop over the loaded handles)
+    for matId, handles in pairs(worldView.materialTextures) do
+        world.setTexture(worldId, "mat_tile_" .. matId, handles.tile)
+        world.setTexture(worldId, "mat_zoom_" .. matId, handles.zoom)
+        world.setTexture(worldId, "mat_bg_"   .. matId, handles.bg)
+    end
+
     engine.logInfo("All textures sent to world: " .. worldId)
     return true
 end
