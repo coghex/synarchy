@@ -267,6 +267,11 @@ library
                      World.Cursor.Types
                      World.Types
                      World.Thread
+                     World.Thread.Helpers
+                     World.Thread.Cursor
+                     World.Thread.Time
+                     World.Thread.ChunkLoading
+                     World.Thread.Command
                      World.Grid
                      World.Render
                      World.Render.Camera
