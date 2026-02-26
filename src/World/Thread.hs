@@ -1044,6 +1044,19 @@ handleWorldCommand env logger cmd = do
                 <> T.pack (show totalInitialChunks) <> " chunks, "
                 <> "surface at z=" <> T.pack (show surfaceElev)
                 <> ": " <> unWorldPageId pageId
+        WorldDestroy pageId → do
+            logInfo logger CatWorld $ "Destroying world: " <> unWorldPageId pageId
+            
+            -- Remove from visible list
+            atomicModifyIORef' (worldManagerRef env) $ \mgr →
+                (mgr { wmVisible = filter (/= pageId) (wmVisible mgr)
+                     , wmWorlds  = filter ((/= pageId) . fst) (wmWorlds mgr)
+                     }, ())
+            
+            -- Clear world quads so renderer stops drawing the old world
+            writeIORef (worldQuadsRef env) V.empty
+            
+            logInfo logger CatWorld $ "World destroyed: " <> unWorldPageId pageId
 
 unWorldPageId ∷ WorldPageId → Text
 unWorldPageId (WorldPageId t) = t

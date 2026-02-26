@@ -24,6 +24,7 @@ module Engine.Scripting.Lua.API.World
     , worldSetWorldCursorHoverBgTextureFn
     , worldSetToolModeFn
     , worldGetInitProgressFn
+    , worldDestroyFn
     ) where
 
 import UPrelude
@@ -396,3 +397,17 @@ worldGetInitProgressFn env = do
             Lua.pushinteger 0
             Lua.pushinteger 0
             return 3
+
+-- | world.destroy(pageId)
+-- Removes the world from the world manager entirely, freeing its state.
+worldDestroyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldDestroyFn env = do
+    pageIdArg ← Lua.tostring 1
+    
+    case pageIdArg of
+        Just pageIdBS → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env) (WorldDestroy pageId)
+        Nothing → pure ()
+    
+    return 0

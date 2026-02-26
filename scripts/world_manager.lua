@@ -261,11 +261,19 @@ function worldManager.destroyWorld(worldId)
         return
     end
     
+    engine.logInfo("Destroying world: " .. worldId)
+    
     worldManager.hideWorld(worldId)
+    
+    -- Tell Haskell to remove this world from wmWorlds
+    world.destroy(worldId)
     
     if worldManager.currentWorld == worldId then
         worldManager.currentWorld = nil
     end
+    
+    -- CRITICAL: reset active flag so a new world can be created
+    worldManager.active = false
 end
 
 -----------------------------------------------------------

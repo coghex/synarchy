@@ -218,6 +218,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "clearWorldCursorSelect" (worldClearWorldCursorSelectFn env)
   registerLuaFunction "setToolMode" (worldSetToolModeFn env)
   registerLuaFunction "getInitProgress" (worldGetInitProgressFn env)
+  registerLuaFunction "destroy" (worldDestroyFn env)
   Lua.setglobal (Lua.Name "world")
 
   -- Camera table
