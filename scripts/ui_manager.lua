@@ -32,6 +32,7 @@ local slider = nil
 local randbox = nil
 local toggle = nil
 local uiList = nil
+local loadingScreen = nil
 
 local hoveredElement = nil
 local hoveredCallback = nil
@@ -62,6 +63,7 @@ function uiManager.init(scriptId)
     randbox = require("scripts.ui.randbox")
     toggle = require("scripts.ui.toggle")
     uiList = require("scripts.ui.list")
+    loadingScreen = require("scripts.loading_screen")
 
     button.init()
     scrollbar.init()
@@ -88,22 +90,26 @@ function uiManager.init(scriptId)
     saveBrowser = require("scripts.save_browser")
     hud = require("scripts.hud")
     
-    settingsMenu.setShowMenuCallback(function(menuName)
-        uiManager.showMenu(menuName)
+    settingsMenu.setShowMenuCallback(function(menuName, params)
+        uiManager.showMenu(menuName, params)
     end)
 
-    createWorldMenu.setShowMenuCallback(function(menuName)
-        uiManager.showMenu(menuName)
+    createWorldMenu.setShowMenuCallback(function(menuName, params)
+        uiManager.showMenu(menuName, params)
     end)
 
-    mainMenu.setShowMenuCallback(function(menuName)
-        uiManager.showMenu(menuName)
+    mainMenu.setShowMenuCallback(function(menuName, params)
+        uiManager.showMenu(menuName, params)
     end)
 
-    saveBrowser.setShowMenuCallback(function(menuName)
-        uiManager.showMenu(menuName)
+    saveBrowser.setShowMenuCallback(function(menuName, params)
+        uiManager.showMenu(menuName, params)
     end)
-    
+
+    loadingScreen.setShowMenuCallback(function(menuName, params)
+        uiManager.showMenu(menuName, params)
+    end)
+
     engine.logDebug("UI Manager waiting for assets...")
 end
 
@@ -134,6 +140,7 @@ function uiManager.checkReady()
             worldView.init(fbW, fbH)
             hud.init(boxTexSet, menuFont, fbW, fbH)
             saveBrowser.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+            loadingScreen.init(boxTexSet, menuFont, titleFont, fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -157,6 +164,7 @@ function uiManager.onFramebufferResize(width, height)
     if worldView then worldView.onFramebufferResize(width, height) end
     if hud then hud.onFramebufferResize(width, height) end
     if saveBrowser then saveBrowser.onFramebufferResize(width, height) end
+    if loadingScreen then loadingScreen.onFramebufferResize(width, height) end
     
     if currentMenu == "main" then
         if mainMenu and mainMenu.page then UI.showPage(mainMenu.page) end
@@ -172,16 +180,17 @@ function uiManager.onFramebufferResize(width, height)
     end 
 end
 
-function uiManager.showMenu(menuName)
+function uiManager.showMenu(menuName, params)
     currentMenu = menuName
-    
+
     mainMenu.hide()
     settingsMenu.hide()
     createWorldMenu.hide()
     worldView.hide()
     hud.hide()
     if saveBrowser then saveBrowser.hide() end
-    
+    if loadingScreen then loadingScreen.hide() end
+
     if menuName == "main" then
         mainMenu.show()
     elseif menuName == "settings" then
@@ -197,6 +206,11 @@ function uiManager.showMenu(menuName)
         end, function()
             uiManager.showMenu("main")
         end)
+    elseif menuName == "loading" then
+        params = params or {}
+        params.fbW = fbW
+        params.fbH = fbH
+        loadingScreen.show(params)
     end
 end
 
@@ -284,6 +298,10 @@ function uiManager.update(dt)
 
     if hud then
         hud.update(dt)
+    end
+
+    if loadingScreen then
+        loadingScreen.update(dt)
     end
 
     -- slider drag detection
@@ -389,6 +407,7 @@ function uiManager.shutdown()
     if worldView then worldView.shutdown() end
     if hud then hud.shutdown() end
     if saveBrowser then saveBrowser.shutdown() end
+    if loadingScreen then loadingScreen.shutdown() end
 end
 
 function uiManager.onTextBoxClick(elemHandle)

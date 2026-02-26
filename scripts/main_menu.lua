@@ -319,6 +319,10 @@ end
 -- Load a save and transition to world view
 -----------------------------------------------------------
 
+-----------------------------------------------------------
+-- Load a save and transition to world view via loading screen
+-----------------------------------------------------------
+
 function mainMenu.loadAndShowSave(saveName)
     local worldView = require("scripts.world_view")
     local worldManager = require("scripts.world_manager")
@@ -335,8 +339,13 @@ function mainMenu.loadAndShowSave(saveName)
     worldView.sendTexturesToWorld("main_world")
     world.show("main_world")
 
+    -- Show loading screen instead of jumping straight to world_view.
+    -- The loading screen polls world.getInitProgress() and transitions
+    -- to world_view when all chunks are loaded.
     if mainMenu.showMenuCallback then
-        mainMenu.showMenuCallback("world_view")
+        mainMenu.showMenuCallback("loading", {
+            statusText = "Loading " .. saveName .. "...",
+        })
     end
 end
 

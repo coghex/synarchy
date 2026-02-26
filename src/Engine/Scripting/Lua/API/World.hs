@@ -23,20 +23,21 @@ module Engine.Scripting.Lua.API.World
     , worldSetWorldCursorSelectBgTextureFn
     , worldSetWorldCursorHoverBgTextureFn
     , worldSetToolModeFn
+    , worldGetInitProgressFn
     ) where
 
 import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
+import Data.IORef (atomicModifyIORef', readIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
-import World.Types (WorldCommand(..), WorldPageId(..), WorldTextureType(..))
+import World.Types
 import World.Tool.Types (ToolMode(..), textToToolMode)
 import World.Render.Zoom.Types (ZoomMapMode(..), textToMapMode)
-import Data.IORef (atomicModifyIORef')
 
 -- | world.init(pageId, seed, worldSizeInChunks)
 worldInitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -361,3 +362,21 @@ worldSetToolModeFn env = do
                 WorldSetToolMode pageId $ textToToolMode toolMode
         _ → pure ()
     return 0
+
+-- | world.getInitProgress() → (remaining, total)
+worldGetInitProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetInitProgressFn env = do
+    manager ← Lua.liftIO $ readIORef (worldManagerRef env)
+    case wmWorlds manager of
+        ((_, worldState):_) → do
+            remaining ← Lua.liftIO $ readIORef (wsInitQueueRef worldState)
+            let remCount = length remaining
+                radius   = 2
+                total    = (2 * radius + 1) * (2 * radius + 1)
+            Lua.pushinteger (fromIntegral remCount)
+            Lua.pushinteger (fromIntegral total)
+            return 2
+        [] → do
+            Lua.pushinteger 0
+            Lua.pushinteger 0
+            return 2
