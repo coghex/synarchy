@@ -278,6 +278,9 @@ library
                      World.Thread.Time
                      World.Thread.ChunkLoading
                      World.Thread.Command
+                     World.Thread.Command.Init
+                     World.Thread.Command.Texture
+                     World.Thread.Command.UI
                      World.Grid
                      World.Render
                      World.Render.Camera

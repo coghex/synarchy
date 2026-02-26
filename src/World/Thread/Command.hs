@@ -32,249 +32,34 @@ import World.Save.Serialize (saveWorld)
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import World.Thread.ChunkLoading (maxChunksPerTick)
+import World.Thread.Command.Init (handleWorldInitCommand)
+import World.Thread.Command.Texture (handleWorldSetTextureCommand)
+import World.Thread.Command.UI (handleWorldShowCommand, handleWorldHideCommand
+                               , handleWorldSetMapModeCommand
+                               , handleWorldSetToolModeCommand)
 
 -----------------------------------------------------------
 -- Command Handler
 -----------------------------------------------------------
 
 handleWorldCommand ∷ EngineEnv → LoggerState → WorldCommand → IO ()
+handleWorldCommand env logger (WorldInit pageId seed worldSize placeCount)
+  = handleWorldInitCommand env logger pageId seed worldSize placeCount
+handleWorldCommand env logger (WorldSetTexture pageId texType texHandle)
+  = handleWorldSetTextureCommand env logger pageId texType texHandle
+handleWorldCommand env logger (WorldShow pageId)
+  = handleWorldShowCommand env logger pageId
+handleWorldCommand env logger (WorldHide pageId)
+  = handleWorldHideCommand env logger pageId
+handleWorldCommand env logger (WorldSetMapMode pageId mapMode)
+  = handleWorldSetMapModeCommand env logger pageId mapMode
+handleWorldCommand env logger (WorldSetToolMode pageId toolMode)
+  = handleWorldSetToolModeCommand env logger pageId toolMode
 handleWorldCommand env logger cmd = do
-    logDebug logger CatWorld $ "Processing world command: " <> T.pack (show cmd)
-    
     case cmd of
-        WorldInit pageId seed worldSize placeCount → do
-            logDebug logger CatWorld $ "Initializing world: " <> unWorldPageId pageId
-                <> " (seed=" <> T.pack (show seed)
-                <> ", size=" <> T.pack (show worldSize)
-                <> ", places=" <> T.pack (show placeCount) <> ")"
-            
-            sendGenLog env "Initializing world state..."
-            
-            worldState ← emptyWorldState
-            let phaseRef = wsLoadPhaseRef worldState
-                totalSteps = 8
-
-            -- register early so lua can read the loading phase
-            atomicModifyIORef' (worldManagerRef env) $ \mgr →
-                (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
-            
-            -- Step 1: Timeline
-            writeIORef phaseRef (LoadPhase1 1 totalSteps)
-            sendGenLog env "Building geological timeline..."
-            let timeline = buildTimeline seed worldSize placeCount
-            _ ← evaluate (force timeline)  -- do the work now
-            let plateLines = formatPlatesSummary seed worldSize placeCount
-            forM_ plateLines $ \line → do
-                logInfo logger CatWorld line
-                sendGenLog env line
-            
-            -- Step 2: Ocean map
-            writeIORef phaseRef (LoadPhase1 2 totalSteps)
-            sendGenLog env "Computing ocean map..."
-            let plates = generatePlates seed worldSize placeCount
-            _ ← evaluate (force plates)  -- do the work now
-            let applyTL gx gy base = applyTimelineFast timeline worldSize gx gy base
-                oceanMap = computeOceanMap seed worldSize placeCount plates applyTL
-            _ <- evaluate (force oceanMap)  -- do the work now
-            
-            sendGenLog env $ "Ocean flood fill complete: "
-                <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
-            
-            -- Step 3: Climate
-            writeIORef phaseRef (LoadPhase1 3 totalSteps)
-            sendGenLog env "Initializing early climate state..."
-            let climateState = initEarlyClimate worldSize oceanMap
-            _ ← evaluate (force climateState)  -- do the work now
-            
-            let weatherLines = formatWeather climateState
-            forM_ weatherLines $ \line → do
-                logInfo logger CatWorld line
-                sendGenLog env line
-            
-            let params = defaultWorldGenParams
-                    { wgpSeed        = seed
-                    , wgpWorldSize   = worldSize
-                    , wgpPlateCount  = placeCount
-                    , wgpPlates      = plates
-                    , wgpGeoTimeline = timeline
-                    , wgpOceanMap    = oceanMap
-                    , wgpClimateState = climateState
-                    , wgpClimateParams = defaultClimateParams
-                    }
-            
-            writeIORef (wsGenParamsRef worldState) (Just params)
-            
-            -- Step 4: Zoom cache
-            writeIORef phaseRef (LoadPhase1 4 totalSteps)
-            sendGenLog env "Building zoom cache..."
-            let zoomCache = buildZoomCache params
-            _ <- evaluate (force zoomCache)  -- do the work now
-            writeIORef (wsZoomCacheRef worldState) zoomCache
-            
-            -- Step 5: Preview
-            writeIORef phaseRef (LoadPhase1 5 totalSteps)
-            sendGenLog env "Rendering world preview..."
-            let preview = buildPreviewImage params zoomCache
-            _ <- evaluate (force preview)  -- do the work now
-            writeIORef (worldPreviewRef env) $
-                Just (piWidth preview, piHeight preview, piData preview)
-            sendGenLog env "World preview ready."
-            
-            -- Step 6: Center chunk
-            writeIORef phaseRef (LoadPhase1 6 totalSteps)
-            let radius = chunkLoadRadius
-                totalInitialChunks = (2 * radius + 1) * (2 * radius + 1)
-            sendGenLog env $ "Generating initial chunks ("
-                <> T.pack (show totalInitialChunks) <> ")..."
-            
-            let centerCoord = ChunkCoord 0 0
-                (ct, cs, cterrain, cf) = generateChunk params centerCoord
-                centerChunk = LoadedChunk
-                    { lcCoord      = centerCoord
-                    , lcTiles      = ct
-                    , lcSurfaceMap = cs
-                    , lcTerrainSurfaceMap = cterrain
-                    , lcFluidMap   = cf
-                    , lcModified   = False
-                    }
-            
-            atomicModifyIORef' (wsTilesRef worldState) $ \_ →
-                (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
-                               , wtdMaxChunks = 200 }, ())
-            
-            -- Step 7: Queue remaining chunks
-            writeIORef phaseRef (LoadPhase1 7 totalSteps)
-            let remainingCoords = [ ChunkCoord cx cy
-                                  | cx ← [-chunkLoadRadius .. chunkLoadRadius]
-                                  , cy ← [-chunkLoadRadius .. chunkLoadRadius]
-                                  , not (cx ≡ 0 ∧ cy ≡ 0)
-                                  ]
-            writeIORef (wsInitQueueRef worldState) remainingCoords
-            
-            -- Now switch to Phase 2 tracking
-            writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
-            
-            sendGenLog env "Calculating surface elevation..."
-            let (surfaceElev, _mat) = elevationAtGlobal seed (wgpPlates params)
-                                                        worldSize 0 0
-                startZSlice = surfaceElev + surfaceHeadroom
-            atomicModifyIORef' (cameraRef env) $ \cam →
-                (cam { camZSlice = startZSlice, camZTracking = True }, ())
-            
-            sendGenLog env $ "World initialized: "
-                <> T.pack (show totalInitialChunks) <> " chunks queued"
-            
-            logInfo logger CatWorld $ "World initialized: " 
-                <> T.pack (show totalInitialChunks) <> " chunks, "
-                <> "surface at z=" <> T.pack (show surfaceElev)
-                <> ": " <> unWorldPageId pageId
-        
-        WorldShow pageId → do
-            logDebug logger CatWorld $ "Showing world: " <> unWorldPageId pageId
-            
-            atomicModifyIORef' (worldManagerRef env) $ \mgr →
-                if pageId `elem` wmVisible mgr
-                then (mgr, ())
-                else (mgr { wmVisible = pageId : wmVisible mgr }, ())
-            
-            mgr ← readIORef (worldManagerRef env)
-            logDebug logger CatWorld $ 
-                "Visible worlds after show: " <> T.pack (show $ length $ wmVisible mgr)
-        
-        WorldHide pageId → do
-            logDebug logger CatWorld $ "Hiding world: " <> unWorldPageId pageId
-            
-            atomicModifyIORef' (worldManagerRef env) $ \mgr →
-                (mgr { wmVisible = filter (/= pageId) (wmVisible mgr) }, ())
-        
         WorldTick dt → do
             return ()
-        
-        WorldSetTexture pageId texType texHandle → do
-            logDebug logger CatWorld $ 
-                "Setting texture for world: " <> unWorldPageId pageId 
-                <> ", type: " <> T.pack (show texType)
-                <> ", handle: " <> T.pack (show texHandle)
-            
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState → do
-                    let updateTextures wt = case texType of
-                          GraniteTexture      → wt { wtGraniteTexture   = texHandle }
-                          DioriteTexture      → wt { wtDioriteTexture   = texHandle }
-                          GabbroTexture       → wt { wtGabbroTexture    = texHandle }
-                          OceanTexture        → wt { wtOceanTexture     = texHandle }
-                          GlacierTexture      → wt { wtGlacierTexture   = texHandle }
-                          LavaTexture         → wt { wtLavaTexture      = texHandle }
-                          BlankTexture        → wt { wtBlankTexture     = texHandle }
-                          NoTexture           → wt { wtNoTexture        = texHandle }
-                          IsoFaceMap          → wt { wtIsoFaceMap       = texHandle }
-                          SlopeFaceMapN       → wt { wtSlopeFaceMapN    = texHandle }
-                          SlopeFaceMapE       → wt { wtSlopeFaceMapE    = texHandle }
-                          SlopeFaceMapNE      → wt { wtSlopeFaceMapNE   = texHandle }
-                          SlopeFaceMapS       → wt { wtSlopeFaceMapS    = texHandle }
-                          SlopeFaceMapNS      → wt { wtSlopeFaceMapNS   = texHandle }
-                          SlopeFaceMapES      → wt { wtSlopeFaceMapES   = texHandle }
-                          SlopeFaceMapNES     → wt { wtSlopeFaceMapNES  = texHandle }
-                          SlopeFaceMapW       → wt { wtSlopeFaceMapW    = texHandle }
-                          SlopeFaceMapNW      → wt { wtSlopeFaceMapNW   = texHandle }
-                          SlopeFaceMapEW      → wt { wtSlopeFaceMapEW   = texHandle }
-                          SlopeFaceMapNEW     → wt { wtSlopeFaceMapNEW  = texHandle }
-                          SlopeFaceMapSW      → wt { wtSlopeFaceMapSW   = texHandle }
-                          SlopeFaceMapNSW     → wt { wtSlopeFaceMapNSW  = texHandle }
-                          SlopeFaceMapESW     → wt { wtSlopeFaceMapESW  = texHandle }
-                          SlopeFaceMapNESW    → wt { wtSlopeFaceMapNESW = texHandle }
-                          NoFaceMap           → wt { wtNoFaceMap        = texHandle }
-                          ZoomGraniteTexture  → wt { wtZoomGranite      = texHandle }
-                          ZoomDioriteTexture  → wt { wtZoomDiorite      = texHandle }
-                          ZoomGabbroTexture   → wt { wtZoomGabbro       = texHandle }
-                          ZoomOceanTexture    → wt { wtZoomOcean        = texHandle }
-                          ZoomGlacierTexture  → wt { wtZoomGlacier      = texHandle }
-                          ZoomLavaTexture      → wt { wtZoomLava         = texHandle }
-                          BgGraniteTexture    → wt { wtBgGranite        = texHandle }
-                          BgGabbroTexture     → wt { wtBgGabbro         = texHandle }
-                          BgDioriteTexture    → wt { wtBgDiorite        = texHandle }
-                          BgOceanTexture      → wt { wtBgOcean          = texHandle }
-                          BgGlacierTexture    → wt { wtBgGlacier        = texHandle }
-                          BgLavaTexture       → wt { wtBgLava           = texHandle }
-                          BasaltTexture       → wt { wtBasaltTexture    = texHandle }
-                          ObsidianTexture     → wt { wtObsidianTexture  = texHandle }
-                          SandstoneTexture    → wt { wtSandstoneTexture = texHandle }
-                          LimestoneTexture    → wt { wtLimestoneTexture = texHandle }
-                          ShaleTexture        → wt { wtShaleTexture     = texHandle }
-                          ImpactiteTexture    → wt { wtImpactiteTexture = texHandle }
-                          IronTexture         → wt { wtIronTexture      = texHandle }
-                          OlivineTexture      → wt { wtOlivineTexture   = texHandle }
-                          PyroxeneTexture     → wt { wtPyroxeneTexture  = texHandle }
-                          FeldsparTexture     → wt { wtFeldsparTexture  = texHandle }
-                          ZoomBasaltTexture   → wt { wtZoomBasalt       = texHandle }
-                          ZoomObsidianTexture → wt { wtZoomObsidian     = texHandle }
-                          ZoomImpactiteTexture → wt { wtZoomImpactite   = texHandle }
-                          BgBasaltTexture     → wt { wtBgBasalt         = texHandle }
-                          BgImpactiteTexture  → wt { wtBgImpactite      = texHandle }
-                          BgObsidianTexture    → wt { wtBgObsidian       = texHandle }
-                          ZoomSandstoneTexture  → wt { wtZoomSandstone  = texHandle }
-                          ZoomLimestoneTexture  → wt { wtZoomLimestone  = texHandle }
-                          ZoomShaleTexture      → wt { wtZoomShale      = texHandle }
-                          ZoomIronTexture       → wt { wtZoomIron       = texHandle }
-                          ZoomOlivineTexture    → wt { wtZoomOlivine    = texHandle }
-                          ZoomPyroxeneTexture   → wt { wtZoomPyroxene   = texHandle }
-                          ZoomFeldsparTexture   → wt { wtZoomFeldspar   = texHandle }
-                          BgSandstoneTexture    → wt { wtBgSandstone    = texHandle }
-                          BgLimestoneTexture    → wt { wtBgLimestone    = texHandle }
-                          BgShaleTexture        → wt { wtBgShale        = texHandle }
-                          BgIronTexture         → wt { wtBgIron         = texHandle }
-                          BgOlivineTexture      → wt { wtBgOlivine      = texHandle }
-                          BgPyroxeneTexture     → wt { wtBgPyroxene     = texHandle }
-                          BgFeldsparTexture     → wt { wtBgFeldspar     = texHandle }
-                    atomicModifyIORef' (wsTexturesRef worldState) 
-                        (\wt → (updateTextures wt, ()))
-                    logDebug logger CatWorld $ 
-                        "Texture updated for world: " <> unWorldPageId pageId
-                Nothing → 
-                    logDebug logger CatWorld $ 
-                        "World not found for texture update: " <> unWorldPageId pageId
-        
+       
         WorldSetCamera pageId x y → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
@@ -325,20 +110,6 @@ handleWorldCommand env logger cmd = do
                 Nothing →
                     logDebug logger CatWorld $
                         "World not found for time scale update: " <> unWorldPageId pageId
-        WorldSetMapMode pageId mode → do
-            logDebug logger CatWorld $
-                "Setting map mode for world: " <> unWorldPageId pageId
-                <> " to " <> T.pack (show mode)
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pageId (wmWorlds mgr) of
-                Just worldState → do
-                    writeIORef (wsMapModeRef worldState) mode
-                    logInfo logger CatWorld $
-                        "Map mode updated for world: " <> unWorldPageId pageId
-                        <> ", new mode: " <> T.pack (show mode)
-                Nothing →
-                    logDebug logger CatWorld $
-                        "World not found for map mode update: " <> unWorldPageId pageId
         WorldSetZoomCursorHover pageId x y → do
             mgr ← readIORef (worldManagerRef env)
             case lookup pageId (wmWorlds mgr) of
@@ -445,17 +216,6 @@ handleWorldCommand env logger cmd = do
                     logWarn logger CatWorld $ 
                         "World not found for cursor hover texture update: "
                             <> unWorldPageId pageId
-        WorldSetToolMode pagedId mode → do
-            mgr ← readIORef (worldManagerRef env)
-            case lookup pagedId (wmWorlds mgr) of
-                Just worldState → do
-                    writeIORef (wsToolModeRef worldState) mode
-                    logInfo logger CatWorld $
-                        "Tool mode updated for world: " <> unWorldPageId pagedId
-                        <> ", new mode: " <> T.pack (show mode)
-                Nothing →
-                    logDebug logger CatWorld $
-                        "World not found for tool mode update: " <> unWorldPageId pagedId
         -- ── Save: snapshot the live WorldState and write to disk ──
         WorldSave pageId saveName → do
             logInfo logger CatWorld $ "Saving world: " <> unWorldPageId pageId
