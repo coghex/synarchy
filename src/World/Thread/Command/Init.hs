@@ -28,6 +28,7 @@ import World.Render (surfaceHeadroom)
 import World.ZoomMap (buildZoomCache)
 import World.Save.Serialize (saveWorld)
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
+import World.Weather.Types (ClimateState(..))
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import World.Thread.ChunkLoading (maxChunksPerTick)
 
@@ -49,39 +50,47 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     atomicModifyIORef' (worldManagerRef env) $ \mgr →
         (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
     
-    -- Step 1: Timeline
+    -- Step 1: Timeline (now co-evolves climate)
     writeIORef phaseRef (LoadPhase1 1 totalSteps)
     sendGenLog env "Building geological timeline..."
-    let timeline = buildTimeline seed worldSize placeCount
-    _ ← evaluate (force timeline)  -- do the work now
+    let (timeline, timelineClimate) = buildTimeline seed worldSize placeCount
+    _ ← evaluate (force timeline)
+    _ ← evaluate (force timelineClimate)
     let plateLines = formatPlatesSummary seed worldSize placeCount
     forM_ plateLines $ \line → do
         logInfo logger CatWorld line
         sendGenLog env line
-    
+
     -- Step 2: Ocean map
     writeIORef phaseRef (LoadPhase1 2 totalSteps)
     sendGenLog env "Computing ocean map..."
     let plates = generatePlates seed worldSize placeCount
-    _ ← evaluate (force plates)  -- do the work now
+    _ ← evaluate (force plates)
     let applyTL gx gy base = applyTimelineFast timeline worldSize gx gy base
         oceanMap = computeOceanMap seed worldSize placeCount plates applyTL
-    _ <- evaluate (force oceanMap)  -- do the work now
-    
+    _ <- evaluate (force oceanMap)
+
     sendGenLog env $ "Ocean flood fill complete: "
         <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
-    
-    -- Step 3: Climate
+
+    -- Step 3: Climate — refine the timeline's co-evolved climate
+    --   with the precise chunk-resolution ocean map
     writeIORef phaseRef (LoadPhase1 3 totalSteps)
-    sendGenLog env "Initializing early climate state..."
+    sendGenLog env "Refining climate with ocean data..."
     let climateState = initEarlyClimate worldSize oceanMap
-    _ ← evaluate (force climateState)  -- do the work now
-    
-    let weatherLines = formatWeather climateState
+    -- Carry forward CO2 and global temp from timeline evolution
+    let climateState' = climateState
+            { csGlobalCO2  = csGlobalCO2 timelineClimate
+            , csGlobalTemp = csGlobalTemp timelineClimate
+            , csSolarConst = csSolarConst timelineClimate
+            }
+    _ ← evaluate (force climateState')
+
+    let weatherLines = formatWeather climateState'
     forM_ weatherLines $ \line → do
         logInfo logger CatWorld line
         sendGenLog env line
-    
+
     let params = defaultWorldGenParams
             { wgpSeed        = seed
             , wgpWorldSize   = worldSize
@@ -89,7 +98,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , wgpPlates      = plates
             , wgpGeoTimeline = timeline
             , wgpOceanMap    = oceanMap
-            , wgpClimateState = climateState
+            , wgpClimateState = climateState'
             , wgpClimateParams = defaultClimateParams
             }
     

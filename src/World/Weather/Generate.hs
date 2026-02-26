@@ -2,15 +2,25 @@
 module World.Weather.Generate
     ( -- * Initialization (post-bombardment, early-Earth-like)
       initEarlyClimate
+      -- * Timeline-internal climate update from ElevGrid
+    , updateClimateFromGrid
+    , oceanRegionsFromGrid
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
+import qualified Data.Vector.Unboxed as VU
 import World.Weather.Types
 import World.Chunk.Types (ChunkCoord(..))
 import World.Ocean.Types (OceanMap)
+import World.Hydrology.Simulation (ElevGrid(..))
+import World.Constants (seaLevel)
+
+-----------------------------------------------------------
+-- Public: init from chunk-resolution OceanMap (used in Init.hs)
+-----------------------------------------------------------
 
 -- | Initialize climate state with early-Earth-like conditions.
 --   Called after tectonic plates and primordial bombardment are done.
@@ -30,21 +40,14 @@ initEarlyClimate ∷ Int          -- ^ worldSize (in chunks)
                  → ClimateState
 initEarlyClimate worldSize oceanMap =
     let regionsPerSide = worldSize `div` climateRegionSize
-        halfRegions    = regionsPerSide `div` 2
+        halfChunks = worldSize `div` 2
 
         allCoords = [ ClimateCoord ru rv
                     | ru ← [0 .. regionsPerSide - 1]
                     , rv ← [0 .. regionsPerSide - 1]
                     ]
 
-        -------------------------------------------------------
-        -- Ocean/land mapping
-        -------------------------------------------------------
-
         -- Check if a climate region overlaps any ocean chunk.
-        -- We check a sample of chunk coords that fall inside this
-        -- region's (u, v) bounding box.
-        halfChunks = worldSize `div` 2
         isOceanRegion (ClimateCoord ru rv) =
             let u0 = ru * climateRegionSize - halfChunks
                 v0 = rv * climateRegionSize - halfChunks
@@ -61,6 +64,87 @@ initEarlyClimate worldSize oceanMap =
                                , dv ← [0 .. climateRegionSize - 1] ]
 
         oceanSet = HS.fromList [ coord | coord ← allCoords, isOceanRegion coord ]
+
+    in buildClimateFromOceanSet worldSize oceanSet 1.0 0.0 1.0
+
+-----------------------------------------------------------
+-- Public: derive coarse ocean regions from ElevGrid
+-----------------------------------------------------------
+
+-- | Derive a set of ocean ClimateCoords from the coarse ElevGrid.
+--   Used during timeline construction to approximate ocean coverage
+--   without running the expensive chunk-level BFS flood fill.
+--
+--   Each grid sample below seaLevel and not flagged as land maps
+--   to a ClimateCoord via (u, v) → (ru, rv) conversion.
+oceanRegionsFromGrid ∷ ElevGrid → Int → HS.HashSet ClimateCoord
+oceanRegionsFromGrid grid worldSize =
+    let gridW   = egGridW grid
+        spacing = egSpacing grid
+        halfGrid = gridW `div` 2
+        regionsPerSide = worldSize `div` climateRegionSize
+        halfChunks = worldSize `div` 2
+    in HS.fromList
+        [ ClimateCoord ru rv
+        | ix ← [0 .. gridW - 1]
+        , iy ← [0 .. gridW - 1]
+        , let idx = iy * gridW + ix
+        , not (egLand grid VU.! idx)
+          -- Map grid sample → (u,v) → ClimateCoord
+        , let u = (ix - halfGrid) * spacing
+              v = (iy - halfGrid) * spacing
+              -- u-axis wraps, v-axis is bounded
+              ru = (u + halfChunks) `div` climateRegionSize
+              rv = (v + halfChunks) `div` climateRegionSize
+        , ru ≥ 0, ru < regionsPerSide
+        , rv ≥ 0, rv < regionsPerSide
+        ]
+
+-----------------------------------------------------------
+-- Public: lightweight climate update during timeline
+-----------------------------------------------------------
+
+-- | Update climate from the current ElevGrid's ocean distribution.
+--   Called at each Era/Period boundary inside buildTimeline.
+--   
+--   Takes the previous ClimateState to carry forward CO2, solar
+--   constant, and global temperature offset. Recomputes maritime
+--   index, temperatures, ocean cells, and regional climate from
+--   the new ocean set.
+updateClimateFromGrid ∷ Int                        -- ^ worldSize
+                      → HS.HashSet ClimateCoord    -- ^ coarse ocean regions
+                      → ClimateState               -- ^ previous climate state
+                      → ClimateState
+updateClimateFromGrid worldSize coarseOcean prevClimate =
+    buildClimateFromOceanSet worldSize coarseOcean
+        (csGlobalCO2  prevClimate)
+        (csGlobalTemp prevClimate)
+        (csSolarConst prevClimate)
+
+-----------------------------------------------------------
+-- Internal: shared climate builder
+-----------------------------------------------------------
+
+-- | Build a complete ClimateState from a set of ocean ClimateCoords.
+--   This is the core climate model, parameterized by global state
+--   so it can be called both from initEarlyClimate (with defaults)
+--   and from updateClimateFromGrid (with carried-forward values).
+buildClimateFromOceanSet ∷ Int                       -- ^ worldSize
+                         → HS.HashSet ClimateCoord   -- ^ which regions are ocean
+                         → Float                     -- ^ global CO2
+                         → Float                     -- ^ global temp offset
+                         → Float                     -- ^ solar constant
+                         → ClimateState
+buildClimateFromOceanSet worldSize oceanSet globalCO2 globalTempOffset solarConst =
+    let regionsPerSide = worldSize `div` climateRegionSize
+        halfRegions    = regionsPerSide `div` 2
+
+        allCoords = [ ClimateCoord ru rv
+                    | ru ← [0 .. regionsPerSide - 1]
+                    , rv ← [0 .. regionsPerSide - 1]
+                    ]
+
+        isOceanRegion coord = HS.member coord oceanSet
 
         -------------------------------------------------------
         -- Maritime index via BFS distance to ocean
@@ -106,10 +190,12 @@ initEarlyClimate worldSize oceanMap =
                 in exp (-(d / coastScale))
 
         -------------------------------------------------------
-        -- Climate model constants (early Earth warm baseline)
+        -- Climate model constants
+        -- CO2 modulates base temperature: higher CO2 = warmer
         -------------------------------------------------------
 
-        tEquator    = 34.0  ∷ Float
+        co2TempBoost = (globalCO2 - 1.0) * 6.0  -- +6°C per doubling above baseline
+        tEquator    = 34.0 + co2TempBoost + globalTempOffset ∷ Float
         tPoleDrop   = 52.0  ∷ Float
         tGamma      = 1.25  ∷ Float
         seasonBase  = 3.0   ∷ Float
@@ -144,7 +230,6 @@ initEarlyClimate worldSize oceanMap =
             let (_latSigned, latRatio, _latDeg) = latInfo coord
                 m = maritimeIndex coord
                 tMeanLat = tEquator - tPoleDrop * (latRatio ** tGamma)
-                -- Maritime slightly dampens extremes; warm oceanic bias.
                 tMean = tMeanLat + 2.0 * m
             in tMean
 
@@ -296,7 +381,7 @@ initEarlyClimate worldSize oceanMap =
             }
         , csAtmo       = emptyAtmoGrid
         , csSurface    = HM.empty
-        , csGlobalCO2  = 1.0
-        , csGlobalTemp = 0.0
-        , csSolarConst = 1.0
+        , csGlobalCO2  = globalCO2
+        , csGlobalTemp = globalMeanTemp
+        , csSolarConst = solarConst
         }

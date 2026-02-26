@@ -29,11 +29,13 @@ import Data.Word (Word64)
 import qualified Data.Vector as V
 import qualified Data.Vector.Algorithms.Intro as VA
 import qualified Data.Vector.Unboxed as VU
+import qualified Data.HashMap.Strict as HM
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Plate (wrapGlobalU)
 import World.Geology.Types
 import World.Geology.Hash
+import World.Weather.Types
 import World.Hydrology.Glacier (evolveGlacier)
 import World.Hydrology.Types (HydroFeature(..), GlacierParams(..)
                              , RiverParams(..), LakeParams(..))
@@ -114,15 +116,47 @@ isSourceNew worldSize existingRivers (sx, sy, _, _) =
 -- Erosion
 -----------------------------------------------------------
 
-erosionFromGeoState ∷ GeoState → Word64 → Int → ErosionParams
-erosionFromGeoState gs seed ageIdx =
+erosionFromGeoState ∷ GeoState → ClimateState → Word64 → Int → ErosionParams
+erosionFromGeoState gs climate seed ageIdx =
     let co2 = gsCO2 gs
         chemical = min 1.0 (0.2 + (co2 - 1.0) * 0.3)
+
+        -- Global climate summary for erosion modulation
+        globalTemp = csGlobalTemp climate
+        regions = cgRegions (csClimate climate)
+
+        -- Average precipitation across all regions (0.0-1.0 scale)
+        avgPrecip = if HM.null regions then 0.5
+                    else let total = HM.foldl' (\acc rc →
+                               let SeasonalClimate s w = rcPrecipitation rc
+                               in acc + (s + w) / 2.0
+                               ) 0.0 regions
+                         in total / fromIntegral (HM.size regions)
+
+        -- Hydraulic erosion scales with precipitation
+        -- More rain = more water = more erosion
+        hydraulicScale = 0.3 + 0.7 * min 1.0 (avgPrecip / 0.5)
+
+        -- Thermal erosion (freeze-thaw) peaks at moderate temps
+        -- Very cold = permanently frozen (less cycling)
+        -- Very hot = no freezing
+        -- Sweet spot around 0-10°C
+        thermalScale =
+            let t = globalTemp
+            in if t < -10.0 then 0.15       -- too cold, permafrost
+               else if t < 0.0 then 0.3 + 0.7 * ((t + 10.0) / 10.0)
+               else if t < 10.0 then 1.0    -- peak freeze-thaw cycling
+               else if t < 25.0 then 1.0 - 0.6 * ((t - 10.0) / 15.0)
+               else 0.15                     -- too hot, no freeze-thaw
+
+        -- Wind erosion increases in arid conditions (inverse of precip)
+        windScale = 0.1 + 0.9 * max 0.0 (1.0 - avgPrecip * 2.0)
+
     in ErosionParams
         { epIntensity = 0.5
-        , epHydraulic = 0.5
-        , epThermal   = 0.3
-        , epWind      = 0.2
+        , epHydraulic = 0.5 * hydraulicScale
+        , epThermal   = 0.3 * thermalScale
+        , epWind      = 0.2 * windScale
         , epChemical  = chemical
         , epSeed      = seed + fromIntegral ageIdx * 7
         }

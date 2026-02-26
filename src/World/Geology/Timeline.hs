@@ -8,6 +8,7 @@ import Data.Bits (xor)
 import Data.Word (Word64)
 import qualified Data.Text as T
 import qualified Data.Vector.Unboxed as VU
+import qualified Data.HashMap.Strict as HM
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Plate (generatePlates, TectonicPlate)
@@ -24,13 +25,14 @@ import World.Geology.Timeline.Volcanism
     ( applyPeriodVolcanism, applyVolcanicEvolution, generateEruption )
 import World.Geology.Timeline.River
     ( reconcileHydrology, mergeConvergingRivers )
-import World.Weather.Types (ClimateState, initClimateState)
+import World.Weather.Types
+import World.Weather.Generate (updateClimateFromGrid, oceanRegionsFromGrid)
 
 -----------------------------------------------------------
 -- Top Level
 -----------------------------------------------------------
 
-buildTimeline ∷ Word64 → Int → Int → GeoTimeline
+buildTimeline ∷ Word64 → Int → Int → (GeoTimeline, ClimateState)
 buildTimeline seed worldSize plateCount =
     let plates = generatePlates seed worldSize plateCount
         gs0 = initGeoState seed worldSize plates
@@ -46,14 +48,23 @@ buildTimeline seed worldSize plateCount =
 
         grid0 = buildInitialElevGrid seed worldSize plates
         (s1, grid1) = buildPrimordialBombardment seed worldSize plates tbs0 grid0
-        (s2, _grid2) = buildEon seed worldSize plates s1 grid1
 
-    in GeoTimeline
-        { gtSeed      = seed
-        , gtWorldSize = worldSize
-        , gtPeriods   = reverse (tbsPeriods s2)
-        , gtFeatures  = tbsFeatures s2
-        }
+        -- After bombardment: first climate snapshot from the
+        -- initial plate-derived elevation grid
+        ocean1 = oceanRegionsFromGrid grid1 worldSize
+        climate1 = updateClimateFromGrid worldSize ocean1 (tbsClimateState s1)
+        s1' = s1 { tbsClimateState = climate1 }
+
+        (s2, _grid2) = buildEon seed worldSize plates s1' grid1
+
+    in ( GeoTimeline
+            { gtSeed      = seed
+            , gtWorldSize = worldSize
+            , gtPeriods   = reverse (tbsPeriods s2)
+            , gtFeatures  = tbsFeatures s2
+            }
+       , tbsClimateState s2
+       )
 
 -----------------------------------------------------------
 -- Primordial Bombardment
@@ -107,11 +118,23 @@ buildEra seed worldSize plates eraIdx tbs grid =
         gs = tbsGeoState tbs
         currentDate = gdMillionYears (gsDate gs)
         gs' = gs { gsDate = advanceGeoDate 100.0 (gsDate gs) }
+
+        -- === CLIMATE UPDATE AT ERA BOUNDARY ===
+        -- Derive coarse ocean from current ElevGrid and recompute
+        -- the full climate model. This captures continent drift,
+        -- ocean basin changes, and CO2 evolution from prior eras.
+        coarseOcean = oceanRegionsFromGrid grid worldSize
+        prevClimate = tbsClimateState tbs
+        -- Sync CO2 from GeoState into climate before recomputing
+        prevClimate' = prevClimate { csGlobalCO2 = gsCO2 gs' }
+        climate' = updateClimateFromGrid worldSize coarseOcean prevClimate'
+
         eraPeriod = mkGeoPeriod worldSize
             ("Era " <> T.pack (show eraIdx) <> " Events")
             Era 100 currentDate [] 
             (ErosionParams 0.7 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx))
-        s1 = addPeriod eraPeriod (tbs { tbsGeoState = gs' })
+        s1 = addPeriod eraPeriod (tbs { tbsGeoState  = gs'
+                                       , tbsClimateState = climate' })
         (s2, grid2) = buildPeriodLoop eraSeed worldSize plates 0 2 4 s1 grid
     in (s2, grid2)
 
@@ -187,6 +210,7 @@ buildAge ∷ Word64 → Int → [TectonicPlate] → Int
 buildAge seed worldSize plates ageIdx tbs elevGrid =
     let ageSeed = seed `xor` (fromIntegral ageIdx * 0xF0F1)
         gs = tbsGeoState tbs
+        climate = tbsClimateState tbs
         currentDate = gdMillionYears (gsDate gs)
         durationHash = hashGeo ageSeed ageIdx 610
         duration = 1.0 + hashToFloatGeo durationHash * 14.0 ∷ Float
@@ -210,6 +234,22 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
                 Nothing → False
             ]
 
+        -- === CO2 SPIKE FROM ERUPTIONS ===
+        -- Each eruption bumps CO2. Super volcanoes bump it a lot.
+        eruptionCO2Boost = sum
+            [ case pfFeature pf of
+                VolcanicShape (SuperVolcano _) → 0.15  -- massive CO2 injection
+                _ → 0.02                               -- normal eruption
+            | pf ← tbsFeatures tbs
+            , case eruptionProfile (pfFeature pf) of
+                Just ep → epTimelineScale ep ≡ Age
+                Nothing → False
+            , let GeoFeatureId fidInt = pfId pf
+                  h = hashGeo eruptSeed fidInt (700 + ageIdx)
+                  roll = hashToFloatGeo h
+              in roll < maybe 0.0 epEruptChance (eruptionProfile (pfFeature pf))
+            ]
+
         hydroSeed = ageSeed `xor` 0xA0CA71C
         flowResult = simulateHydrology hydroSeed worldSize ageIdx elevGrid
 
@@ -220,23 +260,50 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
         tbs_h = mergeConvergingRivers worldSize (tbsPeriodIdx tbs) tbs_h0
         allEvents = meteorites <> eruptions <> hydroEvents
 
-        gs2 = gs1 { gsCO2 = max 0.5 (gsCO2 gs1 - duration * 0.005) }
-        erosion = erosionFromGeoState gs2 seed ageIdx
+        -- === BIDIRECTIONAL CO2 SYNC ===
+        -- CO2 rises from eruptions, decays from weathering.
+        -- Weathering rate depends on temperature and precipitation
+        -- (warmer + wetter = faster silicate weathering = more CO2 drawdown)
+        avgTemp = csGlobalTemp climate
+        avgPrecip = climateAvgPrecip climate
+        weatheringRate = duration * 0.005
+                       * (1.0 + 0.5 * max 0.0 (avgTemp - 10.0) / 20.0)
+                       * (1.0 + 0.3 * avgPrecip)
+        newCO2 = max 0.5 (gsCO2 gs1 + eruptionCO2Boost - weatheringRate)
+
+        gs2 = gs1 { gsCO2 = newCO2 }
+
+        -- === CLIMATE-AWARE EROSION ===
+        erosion = erosionFromGeoState gs2 climate seed ageIdx
+
         _debugLandCount = VU.length (VU.filter id (egLand elevGrid))
         _debugGridW = egGridW elevGrid
-  --      _debugRiverCount = length (frRiverSources flowResult)
-  --      _debugLakeCount = length (frLakes flowResult)
 
         period = mkGeoPeriod worldSize
             ("Age " <> T.pack (show (tbsPeriodIdx tbs))
              <> " [grid=" <> T.pack (show _debugGridW)
              <> " land=" <> T.pack (show _debugLandCount) <> "]")
-  --           <> " rivers=" <> T.pack (show _debugRiverCount)
-  --           <> " lakes=" <> T.pack (show _debugLakeCount) <> "]")
             Age (round duration) currentDate
             allEvents erosion
 
-        tbs_final = addPeriod period (tbs_h { tbsGeoState = gs2 })
+        -- Update climate's CO2 to stay in sync
+        climate' = climate { csGlobalCO2 = newCO2 }
+        tbs_final = addPeriod period (tbs_h { tbsGeoState = gs2
+                                             , tbsClimateState = climate' })
         elevGrid' = updateElevGrid worldSize elevGrid period
 
     in (tbs_final, elevGrid')
+
+-----------------------------------------------------------
+-- Helper: average precipitation from climate state
+-----------------------------------------------------------
+
+climateAvgPrecip ∷ ClimateState → Float
+climateAvgPrecip cs =
+    let regions = cgRegions (csClimate cs)
+    in if HM.null regions then 0.5
+       else let total = HM.foldl' (\acc rc →
+                    let SeasonalClimate s w = rcPrecipitation rc
+                    in acc + (s + w) / 2.0
+                    ) 0.0 regions
+            in total / fromIntegral (HM.size regions)
