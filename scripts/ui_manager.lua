@@ -37,7 +37,7 @@ local loadingScreen = nil
 local hoveredElement = nil
 local hoveredCallback = nil
 
-local hud = nuil
+local hud = nil
 
 local currentMenu = "main"
 
