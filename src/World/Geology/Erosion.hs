@@ -17,23 +17,30 @@ import World.Geology.Types
 --   Smooths the tile's elevation toward the average of its
 --   4 cardinal neighbors, gated by material hardness.
 --
---   Harder materials (granite 0.9, obsidian 0.95) barely erode.
---   Softer materials (shale 0.25, sandstone 0.4) smooth quickly.
---   Indestructible materials (glacier 1.0) don't erode at all.
+--   Four erosion modes combine to produce the final rate:
 --
---   The erosion delta is always toward the neighbor average:
---     - Tile higher than neighbors → negative delta (erosion)
---     - Tile lower than neighbors → positive delta (deposition)
+--   * Hydraulic (rainfall/runoff): dominant mode. Scales with
+--     elevation difference (steeper = faster). Drives most
+--     valley carving.
 --
---   Erosion deposits sedimentary material. Deposition also
---   deposits sedimentary material with full intrusion depth
---   so it appears in stratigraphy.
+--   * Wind (aeolian): weak but steady. Less sensitive to slope,
+--     flattens exposed surfaces. Strongest in arid regions.
 --
---   The rate formula uses sqrt(worldScale) instead of raw worldScale
---   so that small worlds (128 chunks, scale=0.25) still get meaningful
---   erosion (sqrt 0.25 = 0.5) while large worlds don't over-erode.
---   The base smoothing factor is raised to 1.5 to compensate for
---   the per-period application (each age is one pass, not many).
+--   * Thermal (freeze-thaw): shatters steep rock faces.
+--     Scales with slope squared — very aggressive on cliffs
+--     but negligible on gentle terrain.
+--
+--   * Chemical (dissolution): slow, uniform. Increases effective
+--     erodability of softer rocks (limestone, shale). Barely
+--     touches granite.
+--
+--   All four modes produce a delta toward the neighbor average.
+--   They differ in how strongly they respond to slope and
+--   material, which creates distinct erosion signatures:
+--     - Wet climate:  deep V-valleys from hydraulic dominance
+--     - Arid climate: gentle wind-smoothed plateaus
+--     - Cold climate: jagged peaks from thermal shattering
+--     - Warm/wet:     rounded limestone karst from chemical
 applyErosion ∷ ErosionParams
              → Int       -- ^ worldSize
              → Int       -- ^ period duration (millions of years)
@@ -52,33 +59,84 @@ applyErosion params _worldSize duration worldScale matId elev (nN, nS, nE, nW) =
            avgNeighbor = fromIntegral (nN + nS + nE + nW) / 4.0 ∷ Float
            diff = avgNeighbor - fromIntegral elev
 
-           -- Erosion rate: how much of the difference we close per age
-           --   intensity:     0.0–1.0 from ErosionParams
-           --   erodability:   (1 - hardness), e.g. shale=0.75, granite=0.1
-           --   durationScale: duration / 5.0 (5 MY reference age, was 10)
-           --   scaleFactor:   sqrt(worldScale) — flattens the curve so
-           --                  small worlds still erode
-           --   smoothing:     1.5 base factor (was 0.5)
-           --
-           -- Old formula at ws=128, granite, 5MY age:
-           --   0.5 * 0.1 * 0.5 * 0.25 * 0.5 = 0.003 (rounds to 0)
-           -- New formula at ws=128, granite, 5MY age:
-           --   0.5 * 0.1 * 1.0 * 0.5 * 1.5 = 0.0375 (10-tile diff → delta 0.375, rounds to 0 still)
-           -- But for shale (erodability 0.75) at 5MY:
-           --   0.5 * 0.75 * 1.0 * 0.5 * 1.5 = 0.28 (10-tile diff → delta 2.8, rounds to 2!)
-           -- And for sandstone (erodability 0.6):
-           --   0.5 * 0.6 * 1.0 * 0.5 * 1.5 = 0.225 (10-tile diff → delta 2.25, rounds to 2)
+           -- Common scaling factors
            erodability = 1.0 - hardness
            durationScale = fromIntegral duration / 5.0 ∷ Float
            scaleFactor = sqrt (max 0.1 worldScale)
-           rate = epIntensity params
-                * erodability
-                * durationScale
-                * scaleFactor
-                * 1.5  -- base smoothing factor
+
+           -- Slope magnitude: max absolute difference to any neighbor
+           -- Used to modulate slope-sensitive erosion modes
+           absDiff = abs diff
+           slopeNorm = min 1.0 (absDiff / 30.0)  -- normalize: 30 tiles = max slope
+
+           ---------------------------------------------------------
+           -- Hydraulic erosion (rainfall/runoff)
+           --   The dominant carver. Proportional to slope —
+           --   water flows faster on steep terrain, carries more
+           --   sediment. Flat areas barely erode hydraulically.
+           --   epHydraulic is high when climate is wet (lots of rain).
+           ---------------------------------------------------------
+           hydraulicSlopeBoost = 0.4 + 0.6 * slopeNorm
+               -- even flat terrain erodes a little (sheet wash),
+               -- but steep terrain erodes 2.5× faster
+           hydraulicRate = epHydraulic params
+                         * erodability
+                         * hydraulicSlopeBoost
+
+           ---------------------------------------------------------
+           -- Wind erosion (aeolian)
+           --   Weak but nearly slope-independent. Grinds down
+           --   exposed surfaces. Strongest in arid regions
+           --   (high epWind). Barely affected by slope — wind
+           --   hits everything equally.
+           ---------------------------------------------------------
+           windSlopeBoost = 0.8 + 0.2 * slopeNorm
+               -- almost flat response, slight boost on ridges
+           windRate = epWind params
+                    * erodability
+                    * windSlopeBoost
+
+           ---------------------------------------------------------
+           -- Thermal erosion (freeze-thaw)
+           --   Shatters steep cliffs. Proportional to slope²
+           --   so it's negligible on gentle terrain but very
+           --   aggressive on cliffs. epThermal peaks in climates
+           --   that cycle around 0°C.
+           ---------------------------------------------------------
+           thermalSlopeBoost = slopeNorm * slopeNorm
+               -- squared: only bites on steep terrain
+           thermalRate = epThermal params
+                       * erodability
+                       * thermalSlopeBoost
+
+           ---------------------------------------------------------
+           -- Chemical erosion (dissolution)
+           --   Slow, uniform weathering. Dissolves soft rocks
+           --   faster than hard ones. Makes soft rocks even
+           --   softer (increases effective erodability beyond
+           --   the material's base value). Not slope-dependent.
+           --   epChemical is high when CO2 is high (acidic rain).
+           ---------------------------------------------------------
+           chemicalErodability = min 1.0 (erodability + epChemical params * 0.3)
+               -- chemical weathering softens rock beyond base hardness
+               -- e.g. limestone (hardness 0.4, erodability 0.6) at
+               -- epChemical 0.5: effective erodability = 0.6 + 0.15 = 0.75
+           chemicalRate = epChemical params
+                        * chemicalErodability
+                        * 0.5  -- intrinsically slower than hydraulic
+
+           ---------------------------------------------------------
+           -- Combined rate
+           --   Sum of all modes, then scale by duration and world.
+           --   Each mode contributes independently so a wet + cold
+           --   world gets both hydraulic valleys AND thermal peaks.
+           ---------------------------------------------------------
+           combinedRate = (hydraulicRate + windRate + thermalRate + chemicalRate)
+                        * durationScale
+                        * scaleFactor
 
            -- Clamp rate to prevent over-smoothing past the average
-           clampedRate = min 1.0 rate
+           clampedRate = min 1.0 combinedRate
 
            -- Raw delta: fraction of the difference we close
            rawDelta = diff * clampedRate
@@ -134,7 +192,7 @@ erosionSediment matId = case matId of
     30  → 10   -- iron meteorite → sandstone
 
     -- Sedimentary rocks stay as themselves
-    10  → 10   -- sandstone  sandstone
+    10  → 10   -- sandstone → sandstone
 
     -- Default: sandstone (general weathering product)
     _   → 10
