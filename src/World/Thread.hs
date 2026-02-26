@@ -14,7 +14,8 @@ import Data.List (partition, sortOn)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef', newIORef)
 import Control.Parallel.Strategies (parMap, rdeepseq)
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (SomeException, catch)
+import Control.DeepSeq (NFData, rnf, force)
+import Control.Exception (SomeException, catch, evaluate)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..))
@@ -484,12 +485,16 @@ handleWorldCommand env logger cmd = do
             worldState ← emptyWorldState
             let phaseRef = wsLoadPhaseRef worldState
                 totalSteps = 8
+
+            -- register early so lua can read the loading phase
+            atomicModifyIORef' (worldManagerRef env) $ \mgr →
+                (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
             
             -- Step 1: Timeline
             writeIORef phaseRef (LoadPhase1 1 totalSteps)
             sendGenLog env "Building geological timeline..."
             let timeline = buildTimeline seed worldSize placeCount
-            
+            _ ← evaluate (force timeline)  -- do the work now
             let plateLines = formatPlatesSummary seed worldSize placeCount
             forM_ plateLines $ \line → do
                 logInfo logger CatWorld line
@@ -499,8 +504,10 @@ handleWorldCommand env logger cmd = do
             writeIORef phaseRef (LoadPhase1 2 totalSteps)
             sendGenLog env "Computing ocean map..."
             let plates = generatePlates seed worldSize placeCount
-                applyTL gx gy base = applyTimelineFast timeline worldSize gx gy base
+            _ ← evaluate (force plates)  -- do the work now
+            let applyTL gx gy base = applyTimelineFast timeline worldSize gx gy base
                 oceanMap = computeOceanMap seed worldSize placeCount plates applyTL
+            _ <- evaluate (force oceanMap)  -- do the work now
             
             sendGenLog env $ "Ocean flood fill complete: "
                 <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
@@ -509,6 +516,7 @@ handleWorldCommand env logger cmd = do
             writeIORef phaseRef (LoadPhase1 3 totalSteps)
             sendGenLog env "Initializing early climate state..."
             let climateState = initEarlyClimate worldSize oceanMap
+            _ ← evaluate (force climateState)  -- do the work now
             
             let weatherLines = formatWeather climateState
             forM_ weatherLines $ \line → do
@@ -532,12 +540,14 @@ handleWorldCommand env logger cmd = do
             writeIORef phaseRef (LoadPhase1 4 totalSteps)
             sendGenLog env "Building zoom cache..."
             let zoomCache = buildZoomCache params
+            _ <- evaluate (force zoomCache)  -- do the work now
             writeIORef (wsZoomCacheRef worldState) zoomCache
             
             -- Step 5: Preview
             writeIORef phaseRef (LoadPhase1 5 totalSteps)
             sendGenLog env "Rendering world preview..."
             let preview = buildPreviewImage params zoomCache
+            _ <- evaluate (force preview)  -- do the work now
             writeIORef (worldPreviewRef env) $
                 Just (piWidth preview, piHeight preview, piData preview)
             sendGenLog env "World preview ready."
@@ -575,10 +585,6 @@ handleWorldCommand env logger cmd = do
             
             -- Now switch to Phase 2 tracking
             writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
-            
-            -- Step 8: Register world
-            atomicModifyIORef' (worldManagerRef env) $ \mgr →
-                (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
             
             sendGenLog env "Calculating surface elevation..."
             let (surfaceElev, _mat) = elevationAtGlobal seed (wgpPlates params)

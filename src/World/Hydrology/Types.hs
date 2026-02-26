@@ -98,7 +98,7 @@ data GlacierParams = GlacierParams
     , glCarveDepth  ∷ !Int        -- ^ U-valley depth
     , glMoraineSize ∷ !Int        -- ^ Sediment pile at terminus
     , glIsIceSheet  ∷ !Bool       -- ^ True = polar ice sheet edge, False = alpine
-    } deriving (Show, Eq, Generic, Serialize, Hashable)
+    } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 data GlacierActivity
     = Advancing        -- ^ Growing, carving deeper
@@ -121,14 +121,14 @@ data LakeParams = LakeParams
     , lkSurface     ∷ !Int        -- ^ Water surface elevation (= spillway height)
     , lkDepth       ∷ !Int        -- ^ Max depth below surface
     , lkSource      ∷ !LakeSource -- ^ What created this lake
-    } deriving (Show, Eq, Generic, Serialize, Hashable)
+    } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 data LakeSource
     = DammedRiver !GeoFeatureId    -- ^ River was blocked
     | GlacialBasin !GeoFeatureId   -- ^ Glacier carved a basin
     | TectonicBasin                -- ^ Low point between plates
     | CalderaLake !GeoFeatureId    -- ^ Volcanic caldera filled
-    deriving (Show, Eq, Generic, Serialize, Hashable)
+    deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 -----------------------------------------------------------
 -- Hydrological Feature (unified, like VolcanicFeature)
@@ -138,7 +138,7 @@ data HydroFeature
     = RiverFeature    !RiverParams
     | GlacierFeature  !GlacierParams
     | LakeFeature     !LakeParams
-    deriving (Show, Eq, Generic, Serialize, Hashable)
+    deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 -----------------------------------------------------------
 -- Hydrological Evolution (like FeatureEvolution)
@@ -191,4 +191,4 @@ data HydroEvolution
         { heNewRadius     ∷ !Int
         , heNewSurface    ∷ !Int
         }
-    deriving (Show, Eq, Generic, Serialize, Hashable)
+    deriving (Show, Eq, Generic, Serialize, Hashable, NFData)

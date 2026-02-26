@@ -4,6 +4,7 @@ module World.Plate.Types
     ) where
 
 import UPrelude
+import Control.DeepSeq (NFData)
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 import World.Material (MaterialId(..))
@@ -17,4 +18,4 @@ data TectonicPlate = TectonicPlate
     , plateDensity  ∷ !Float
     , plateDriftX   ∷ !Float
     , plateDriftY   ∷ !Float
-    } deriving (Show, Eq, Generic, Serialize)
+    } deriving (Show, Eq, Generic, Serialize, NFData)

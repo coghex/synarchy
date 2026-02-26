@@ -1,10 +1,12 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module World.Preview
     ( buildPreviewImage
     , PreviewImage(..)
     ) where
 
 import UPrelude
+import GHC.Generics (Generic)
+import Control.DeepSeq (NFData)
 import qualified Data.Vector as V
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BSI
@@ -21,7 +23,7 @@ data PreviewImage = PreviewImage
     { piWidth  ∷ !Int
     , piHeight ∷ !Int
     , piData   ∷ !BS.ByteString   -- ^ RGBA pixel data, length = w*h*4
-    } deriving (Show)
+    } deriving (Show, Generic, NFData)
 
 -----------------------------------------------------------
 -- Build Preview Image from Zoom Cache
