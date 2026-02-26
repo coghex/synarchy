@@ -283,6 +283,13 @@ library
                      World.Render.Textures
                      World.Render.Textures.Types
                      World.Render.Zoom.Types
+                     World.Render.Zoom.Bake
+                     World.Render.Zoom.ViewBounds
+                     World.Render.Zoom.Climate
+                     World.Render.Zoom.Textures
+                     World.Render.Zoom.Quads
+                     World.Render.Zoom.Cursor
+                     World.Render.Zoom.Background
                      World.Generate
                      World.Generate.Constants
                      World.Generate.Coordinates
@@ -343,6 +350,7 @@ library
                      World.Material
                      World.Preview
                      World.ZoomMap
+                     World.ZoomMap.Cache
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields
