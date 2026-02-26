@@ -23,6 +23,9 @@ worldView.fbH = 0
 -----------------------------------------------------------
 
 worldView.materialDefs = {
+    { id = 0,   name = "ocean",      tile = "assets/textures/world/ocean/ocean.png",
+                                     zoom = "assets/textures/world/zoommap/ocean_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/ocean_chunk_background.png" },
     { id = 1,   name = "granite",    tile = "assets/textures/world/granite/granite.png",
                                      zoom = "assets/textures/world/zoommap/granite_chunk.png",
                                      bg   = "assets/textures/world/zoommap/granite_chunk_background.png" },
@@ -65,6 +68,9 @@ worldView.materialDefs = {
     { id = 100, name = "lava",       tile = "assets/textures/world/lava/lava.png",
                                      zoom = "assets/textures/world/zoommap/lava_chunk.png",
                                      bg   = "assets/textures/world/zoommap/lava_chunk_background.png" },
+    { id = 250, name = "glacier",    tile = "assets/textures/world/glacier/glacier.png",
+                                     zoom = "assets/textures/world/zoommap/glacier_chunk.png",
+                                     bg   = "assets/textures/world/zoommap/glacier_chunk_background.png" },
 }
 
 -----------------------------------------------------------
