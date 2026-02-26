@@ -964,15 +964,19 @@ handleWorldCommand env logger cmd = do
                 seed      = wgpSeed params
                 worldSize = wgpWorldSize params
 
-
             worldState ← emptyWorldState
             let phaseRef = wsLoadPhaseRef worldState
                 totalSteps = 4
+
+            -- *** REGISTER EARLY so Lua can read wsLoadPhaseRef ***
+            atomicModifyIORef' (worldManagerRef env) $ \mgr →
+                (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
 
             -- 1. Restore gen params (the big one — plates, timeline,
             --    ocean map, climate are all inside here)
             writeIORef phaseRef (LoadPhase1 1 totalSteps)
             sendGenLog env "Loading saved world state..."
+            _ ← evaluate (force params)
             writeIORef (wsGenParamsRef worldState) (Just params)
 
             -- 2. Restore mutable game state from the save
@@ -987,17 +991,21 @@ handleWorldCommand env logger cmd = do
             writeIORef (wsTimeScaleRef worldState) (sdTimeScale saveData)
             writeIORef (wsMapModeRef worldState) (sdMapMode saveData)
             writeIORef (wsToolModeRef worldState) (sdToolMode saveData)
+            _ ← evaluate (force (sdClimate saveData))
             writeIORef (wsClimateRef worldState)  (sdClimate saveData)
+            _ ← evaluate (force (sdRiverFlow saveData))
             writeIORef (wsRiverFlowRef worldState) (sdRiverFlow saveData)
 
             -- 3. Rebuild derived caches (cheap compared to worldgen)
             writeIORef phaseRef (LoadPhase1 2 totalSteps)
             sendGenLog env "Building zoom cache..."
             let zoomCache = buildZoomCache params
+            _ ← evaluate (force zoomCache)
             writeIORef (wsZoomCacheRef worldState) zoomCache
 
             sendGenLog env "Rendering world preview..."
             let preview = buildPreviewImage params zoomCache
+            _ ← evaluate (force preview)
             writeIORef (worldPreviewRef env) $
                 Just (piWidth preview, piHeight preview, piData preview)
 
@@ -1006,7 +1014,11 @@ handleWorldCommand env logger cmd = do
             sendGenLog env "Generating initial chunks..."
             let centerCoord = ChunkCoord 0 0
                 (ct, cs, cterrain, cf) = generateChunk params centerCoord
-                centerChunk = LoadedChunk
+            _ ← evaluate (force ct)
+            _ ← evaluate (force cs)
+            _ ← evaluate (force cterrain)
+            _ ← evaluate (force cf)
+            let centerChunk = LoadedChunk
                     { lcCoord             = centerCoord
                     , lcTiles             = ct
                     , lcSurfaceMap        = cs
@@ -1028,11 +1040,7 @@ handleWorldCommand env logger cmd = do
                     ]
             writeIORef (wsInitQueueRef worldState) remainingCoords
 
-            -- 6. Register world in the manager
-            atomicModifyIORef' (worldManagerRef env) $ \mgr →
-                (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
-
-            -- 7. Set camera z-slice from saved camera position
+            -- 6. Set camera z-slice from saved camera position
             let (surfaceElev, _mat) =
                     elevationAtGlobal seed (wgpPlates params) worldSize 0 0
                 startZSlice = surfaceElev + surfaceHeadroom

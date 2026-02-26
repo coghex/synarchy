@@ -15,6 +15,7 @@ module World.Time.Types
     ) where
 
 import UPrelude
+import Control.DeepSeq (NFData)
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 
@@ -73,7 +74,7 @@ data CalendarConfig = CalendarConfig
     , ccMonthsPerYear ∷ !Int      -- ^ e.g. 12
     , ccHoursPerDay   ∷ !Int      -- ^ e.g. 24 (controls sun cycle)
     , ccMinutesPerHour ∷ !Int     -- ^ e.g. 60
-    } deriving (Show, Eq, Generic, Serialize)
+    } deriving (Show, Eq, Generic, Serialize, NFData)
 
 defaultCalendarConfig ∷ CalendarConfig
 defaultCalendarConfig = CalendarConfig
@@ -86,7 +87,7 @@ defaultCalendarConfig = CalendarConfig
 data SunConfig = SunConfig
     { scTiltAngle    ∷ !Float   -- ^ Axial tilt in radians, controls season intensity
     , scDayLength    ∷ !Float   -- ^ Base day/night ratio at equinox (0.5 = equal)
-    } deriving (Show, Eq, Generic, Serialize)
+    } deriving (Show, Eq, Generic, Serialize, NFData)
 
 defaultSunConfig ∷ SunConfig
 defaultSunConfig = SunConfig
@@ -97,7 +98,7 @@ defaultSunConfig = SunConfig
 data MoonConfig = MoonConfig
     { mcCycleDays    ∷ !Int     -- ^ Days per lunar cycle
     , mcPhaseOffset  ∷ !Float   -- ^ Starting phase offset (0.0-1.0)
-    } deriving (Show, Eq, Generic, Serialize)
+    } deriving (Show, Eq, Generic, Serialize, NFData)
 
 defaultMoonConfig ∷ MoonConfig
 defaultMoonConfig = MoonConfig

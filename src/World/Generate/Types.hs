@@ -6,6 +6,7 @@ module World.Generate.Types
 
 import UPrelude hiding (get)
 import GHC.Generics (Generic)
+import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize(..))
 import Data.Hashable (Hashable)
 import qualified Data.HashSet as HS
@@ -37,7 +38,7 @@ data WorldGenParams = WorldGenParams
     , wgpOceanMap   ∷ !OceanMap         -- ^ Pre-generated ocean map for worldgen
     , wgpClimateParams ∷ !ClimateParams   -- ^ Climate parameters
     , wgpClimateState ∷ !ClimateState     -- ^ Initial climate state
-    } deriving (Show, Eq, Generic, Serialize)
+    } deriving (Show, Eq, Generic, Serialize, NFData)
 instance (Serialize a, Eq a, Hashable a)
     ⇒ Serialize (HS.HashSet a) where
     put = put . HS.toList

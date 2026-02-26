@@ -367,7 +367,7 @@ data ClimateParams = ClimateParams
     , cpEvapScale       ∷ !Float   -- ^ Evaporation rate multiplier
     , cpAlbedoFeedback  ∷ !Float   -- ^ How much ice-albedo feedback amplifies cooling
     , cpThcThreshold    ∷ !Float   -- ^ Density threshold for deep water formation
-    } deriving (Show, Eq, Generic, Serialize)
+    } deriving (Show, Eq, Generic, Serialize, NFData)
 
 defaultClimateParams ∷ ClimateParams
 defaultClimateParams = ClimateParams
