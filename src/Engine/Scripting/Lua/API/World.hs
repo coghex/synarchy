@@ -363,20 +363,36 @@ worldSetToolModeFn env = do
         _ → pure ()
     return 0
 
--- | world.getInitProgress() → (remaining, total)
+-- | world.getInitProgress() → (phase, current, total)
+-- phase: 0 = idle, 1 = setup, 2 = chunks, 3 = done
+-- For phase 1: current = step number, total = total steps
+-- For phase 2: current = chunks generated, total = total chunks
 worldGetInitProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetInitProgressFn env = do
     manager ← Lua.liftIO $ readIORef (worldManagerRef env)
     case wmWorlds manager of
         ((_, worldState):_) → do
-            remaining ← Lua.liftIO $ readIORef (wsInitQueueRef worldState)
-            let remCount = length remaining
-                radius   = 2
-                total    = (2 * radius + 1) * (2 * radius + 1)
-            Lua.pushinteger (fromIntegral remCount)
-            Lua.pushinteger (fromIntegral total)
-            return 2
+            phase ← Lua.liftIO $ readIORef (wsLoadPhaseRef worldState)
+            case phase of
+                LoadIdle → do
+                    Lua.pushinteger 0
+                    Lua.pushinteger 0
+                    Lua.pushinteger 0
+                LoadPhase1 current total → do
+                    Lua.pushinteger 1
+                    Lua.pushinteger (fromIntegral current)
+                    Lua.pushinteger (fromIntegral total)
+                LoadPhase2 remaining total → do
+                    Lua.pushinteger 2
+                    Lua.pushinteger (fromIntegral (total - remaining))
+                    Lua.pushinteger (fromIntegral total)
+                LoadDone → do
+                    Lua.pushinteger 3
+                    Lua.pushinteger 1
+                    Lua.pushinteger 1
+            return 3
         [] → do
             Lua.pushinteger 0
             Lua.pushinteger 0
-            return 2
+            Lua.pushinteger 0
+            return 3

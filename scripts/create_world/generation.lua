@@ -70,7 +70,6 @@ end
 -- Poll (called every frame while RUNNING)
 -----------------------------------------------------------
 
--- Returns the new genState
 function generation.poll(menu, dt, logPanel, onDone)
     if menu.genState ~= generation.RUNNING then
         return menu.genState
@@ -78,11 +77,10 @@ function generation.poll(menu, dt, logPanel, onDone)
 
     menu.genElapsed = menu.genElapsed + dt
 
-    -- Check actual chunk generation progress, not just world existence
-    local remaining, total = world.getInitProgress()
+    local phase, current, total = world.getInitProgress()
 
-    if total and total > 0 and remaining == 0 then
-        -- All chunks generated — truly done
+    if phase == 3 then
+        -- LoadDone
         menu.genState = generation.DONE
         local elapsed = string.format("%.1f", menu.genElapsed)
         logPanel.setStatus(menu, "World generated! (" .. elapsed .. "s)")

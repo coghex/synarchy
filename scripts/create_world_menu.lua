@@ -627,13 +627,22 @@ function createWorldMenu.update(dt)
 
     -- Update the progress bar while generating
     if createWorldMenu.genState == generation.RUNNING and createWorldMenu.genBarId then
-        local remaining, total = world.getInitProgress()
-        if total and total > 0 then
-            local generated = total - (remaining or 0)
-            local progress = generated / total
+        local phase, current, total = world.getInitProgress()
+
+        if phase == 1 and total > 0 then
+            -- Phase 1: setup steps (timeline, ocean, climate, etc.)
+            -- Map to 0..0.5 of the bar
+            local progress = (current / total) * 0.5
             bar.setProgress(createWorldMenu.genBarId, progress)
             bar.setText(createWorldMenu.genBarId,
-                tostring(generated) .. " / " .. tostring(total))
+                "Setup " .. tostring(current) .. "/" .. tostring(total))
+        elseif phase == 2 and total > 0 then
+            -- Phase 2: chunk generation
+            -- Map to 0.5..1.0 of the bar
+            local progress = 0.5 + (current / total) * 0.5
+            bar.setProgress(createWorldMenu.genBarId, progress)
+            bar.setText(createWorldMenu.genBarId,
+                "Chunks " .. tostring(current) .. "/" .. tostring(total))
         end
     end
 

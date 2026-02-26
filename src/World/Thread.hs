@@ -482,23 +482,21 @@ handleWorldCommand env logger cmd = do
             sendGenLog env "Initializing world state..."
             
             worldState ← emptyWorldState
+            let phaseRef = wsLoadPhaseRef worldState
+                totalSteps = 8
             
-            -- Log the geological timeline to both stdout and Lua panel
+            -- Step 1: Timeline
+            writeIORef phaseRef (LoadPhase1 1 totalSteps)
             sendGenLog env "Building geological timeline..."
             let timeline = buildTimeline seed worldSize placeCount
-
-            -- Log plates first (not stored in timeline, computed from seed)
+            
             let plateLines = formatPlatesSummary seed worldSize placeCount
             forM_ plateLines $ \line → do
                 logInfo logger CatWorld line
                 sendGenLog env line
-
-            -- Log the full chronological timeline
---            let timelineLines = formatTimeline timeline
---            forM_ timelineLines $ \line → do
---                logInfo logger CatWorld line
---                sendGenLog env line
-
+            
+            -- Step 2: Ocean map
+            writeIORef phaseRef (LoadPhase1 2 totalSteps)
             sendGenLog env "Computing ocean map..."
             let plates = generatePlates seed worldSize placeCount
                 applyTL gx gy base = applyTimelineFast timeline worldSize gx gy base
@@ -506,16 +504,17 @@ handleWorldCommand env logger cmd = do
             
             sendGenLog env $ "Ocean flood fill complete: "
                 <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
-
+            
+            -- Step 3: Climate
+            writeIORef phaseRef (LoadPhase1 3 totalSteps)
             sendGenLog env "Initializing early climate state..."
             let climateState = initEarlyClimate worldSize oceanMap
-
-            -- Log the climate state
+            
             let weatherLines = formatWeather climateState
             forM_ weatherLines $ \line → do
                 logInfo logger CatWorld line
                 sendGenLog env line
-
+            
             let params = defaultWorldGenParams
                     { wgpSeed        = seed
                     , wgpWorldSize   = worldSize
@@ -526,35 +525,30 @@ handleWorldCommand env logger cmd = do
                     , wgpClimateState = climateState
                     , wgpClimateParams = defaultClimateParams
                     }
-
-            -- Store gen params for on-demand chunk loading
+            
             writeIORef (wsGenParamsRef worldState) (Just params)
-
-            -- Build zoom map cache (one-time computation)
-            sendGenLog env "Generating tectonic plates..."
-            camera ← readIORef (cameraRef env)
-            let facing = camFacing camera
-
+            
+            -- Step 4: Zoom cache
+            writeIORef phaseRef (LoadPhase1 4 totalSteps)
             sendGenLog env "Building zoom cache..."
             let zoomCache = buildZoomCache params
             writeIORef (wsZoomCacheRef worldState) zoomCache
-
-            -- Build world preview image for the create-world UI
+            
+            -- Step 5: Preview
+            writeIORef phaseRef (LoadPhase1 5 totalSteps)
             sendGenLog env "Rendering world preview..."
             let preview = buildPreviewImage params zoomCache
             writeIORef (worldPreviewRef env) $
                 Just (piWidth preview, piHeight preview, piData preview)
             sendGenLog env "World preview ready."
             
-            -- Compute total initial chunk count for the log message.
-            -- No need to build the coord list just for its length.
+            -- Step 6: Center chunk
+            writeIORef phaseRef (LoadPhase1 6 totalSteps)
             let radius = chunkLoadRadius
                 totalInitialChunks = (2 * radius + 1) * (2 * radius + 1)
-
             sendGenLog env $ "Generating initial chunks ("
                 <> T.pack (show totalInitialChunks) <> ")..."
-
-            -- Generate ONLY the center chunk synchronously for immediate display
+            
             let centerCoord = ChunkCoord 0 0
                 (ct, cs, cterrain, cf) = generateChunk params centerCoord
                 centerChunk = LoadedChunk
@@ -565,27 +559,27 @@ handleWorldCommand env logger cmd = do
                     , lcFluidMap   = cf
                     , lcModified   = False
                     }
-
-            -- Site 1: center chunk inserted alone — no neighbors yet,
-            -- so slopes are intra-chunk only (from generateChunk).
-            -- Neighbor slopes get patched when drainInitQueues runs.
+            
             atomicModifyIORef' (wsTilesRef worldState) $ \_ →
                 (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
                                , wtdMaxChunks = 200 }, ())
-
-            -- Queue the remaining coords for progressive loading
+            
+            -- Step 7: Queue remaining chunks
+            writeIORef phaseRef (LoadPhase1 7 totalSteps)
             let remainingCoords = [ ChunkCoord cx cy
                                   | cx ← [-chunkLoadRadius .. chunkLoadRadius]
                                   , cy ← [-chunkLoadRadius .. chunkLoadRadius]
-                                  , not (cx ≡ 0 ∧ cy ≡ 0)  -- skip center, already done
+                                  , not (cx ≡ 0 ∧ cy ≡ 0)
                                   ]
             writeIORef (wsInitQueueRef worldState) remainingCoords
-
-            -- Register + show world immediately
+            
+            -- Now switch to Phase 2 tracking
+            writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
+            
+            -- Step 8: Register world
             atomicModifyIORef' (worldManagerRef env) $ \mgr →
                 (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
             
-            -- Set the camera z-slice to just above the surface at (0,0)
             sendGenLog env "Calculating surface elevation..."
             let (surfaceElev, _mat) = elevationAtGlobal seed (wgpPlates params)
                                                         worldSize 0 0
@@ -595,7 +589,7 @@ handleWorldCommand env logger cmd = do
             
             sendGenLog env $ "World initialized: "
                 <> T.pack (show totalInitialChunks) <> " chunks queued"
-
+            
             logInfo logger CatWorld $ "World initialized: " 
                 <> T.pack (show totalInitialChunks) <> " chunks, "
                 <> "surface at z=" <> T.pack (show surfaceElev)
@@ -964,12 +958,15 @@ handleWorldCommand env logger cmd = do
                 seed      = wgpSeed params
                 worldSize = wgpWorldSize params
 
-            sendGenLog env "Loading saved world state..."
 
             worldState ← emptyWorldState
+            let phaseRef = wsLoadPhaseRef worldState
+                totalSteps = 4
 
             -- 1. Restore gen params (the big one — plates, timeline,
             --    ocean map, climate are all inside here)
+            writeIORef phaseRef (LoadPhase1 1 totalSteps)
+            sendGenLog env "Loading saved world state..."
             writeIORef (wsGenParamsRef worldState) (Just params)
 
             -- 2. Restore mutable game state from the save
@@ -988,6 +985,7 @@ handleWorldCommand env logger cmd = do
             writeIORef (wsRiverFlowRef worldState) (sdRiverFlow saveData)
 
             -- 3. Rebuild derived caches (cheap compared to worldgen)
+            writeIORef phaseRef (LoadPhase1 2 totalSteps)
             sendGenLog env "Building zoom cache..."
             let zoomCache = buildZoomCache params
             writeIORef (wsZoomCacheRef worldState) zoomCache
@@ -998,6 +996,7 @@ handleWorldCommand env logger cmd = do
                 Just (piWidth preview, piHeight preview, piData preview)
 
             -- 4. Generate center chunk synchronously for immediate display
+            writeIORef phaseRef (LoadPhase1 3 totalSteps)
             sendGenLog env "Generating initial chunks..."
             let centerCoord = ChunkCoord 0 0
                 (ct, cs, cterrain, cf) = generateChunk params centerCoord
@@ -1014,6 +1013,7 @@ handleWorldCommand env logger cmd = do
                                , wtdMaxChunks = 200 }, ())
 
             -- 5. Queue remaining initial chunks for progressive loading
+            writeIORef phaseRef (LoadPhase1 4 totalSteps)
             let remainingCoords =
                     [ ChunkCoord cx cy
                     | cx ← [-chunkLoadRadius .. chunkLoadRadius]
@@ -1036,6 +1036,7 @@ handleWorldCommand env logger cmd = do
             let totalInitialChunks =
                     (2 * chunkLoadRadius + 1) * (2 * chunkLoadRadius + 1)
 
+            writeIORef phaseRef (LoadPhase2 (length remainingCoords) totalInitialChunks)
             sendGenLog env $ "Save loaded: "
                 <> T.pack (show totalInitialChunks) <> " chunks queued"
 
@@ -1090,6 +1091,13 @@ drainInitQueues env logger = do
                         writeIORef (wsBgQuadCacheRef worldState) Nothing
                         
                         writeIORef (wsInitQueueRef worldState) rest
+                        
+                        -- Update phase 2 progress
+                        let totalChunks = (2 * chunkLoadRadius + 1) * (2 * chunkLoadRadius + 1)
+                        writeIORef (wsLoadPhaseRef worldState)
+                            (if null rest
+                             then LoadDone
+                             else LoadPhase2 (length rest) totalChunks)
                         
                         when (null rest) $
                             logDebug logger CatWorld $

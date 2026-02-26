@@ -5,6 +5,7 @@ module World.State.Types
     , WorldManager(..)
     , emptyWorldManager
     , CursorSnapshot(..)
+    , LoadPhase(..)
     ) where
 
 import UPrelude
@@ -47,6 +48,7 @@ data WorldState = WorldState
     , wsCursorRef ∷ IORef CursorState
     , wsToolModeRef ∷ IORef ToolMode
     , wsCursorSnapshotRef ∷ IORef CursorSnapshot
+    , wsLoadPhaseRef ∷ IORef LoadPhase
     }
 
 emptyWorldState ∷ IO WorldState
@@ -71,12 +73,14 @@ emptyWorldState = do
     wsCursorRef ← newIORef emptyCursorState
     wsToolModeRef ← newIORef DefaultTool
     wsCursorSnapshotRef ← newIORef emptyCursorSnapshot
+    wsLoadPhaseRef ← newIORef LoadIdle
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
                         wsClimateRef wsRiverFlowRef wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
+                        wsLoadPhaseRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]
@@ -98,3 +102,13 @@ data CursorSnapshot = CursorSnapshot
 
 emptyCursorSnapshot ∷ CursorSnapshot
 emptyCursorSnapshot = CursorSnapshot Nothing Nothing
+
+-- | Tracks overall world loading progress across both phases.
+-- Phase 1: synchronous setup (timeline, ocean, climate, zoom cache, preview)
+-- Phase 2: chunk generation (init queue draining)
+data LoadPhase
+    = LoadIdle
+    | LoadPhase1 !Int !Int    -- ^ (currentStep, totalSteps) for setup work
+    | LoadPhase2 !Int !Int    -- ^ (remaining, total) for chunk generation
+    | LoadDone
+    deriving (Eq, Show)

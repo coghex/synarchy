@@ -1,6 +1,14 @@
 -- Loading Screen
 -- Displays a progress bar during world generation or save loading.
 -- Polls world.getInitProgress() each frame.
+--
+-- The Haskell API returns three values:
+--   phase:   0 = idle, 1 = setup, 2 = chunks, 3 = done
+--   current: step number (phase 1) or chunks generated (phase 2)
+--   total:   total steps (phase 1) or total chunks (phase 2)
+--
+-- Phase 1 maps to 0%–50% of the bar (synchronous setup work).
+-- Phase 2 maps to 50%–100% of the bar (chunk generation).
 local scale = require("scripts.ui.scale")
 local panel = require("scripts.ui.panel")
 local label = require("scripts.ui.label")
@@ -48,6 +56,20 @@ loadingScreen.baseSizes = {
     panelPadY   = 60,
     tileSize    = 64,
     spacing     = 40,
+}
+
+-----------------------------------------------------------
+-- Phase 1 step labels (matches the order in World.Thread)
+-----------------------------------------------------------
+local phase1Labels = {
+    [1] = "Building geological timeline...",
+    [2] = "Computing ocean map...",
+    [3] = "Initializing climate...",
+    [4] = "Building zoom cache...",
+    [5] = "Rendering world preview...",
+    [6] = "Generating center chunk...",
+    [7] = "Queuing chunks...",
+    [8] = "Registering world...",
 }
 
 -----------------------------------------------------------
@@ -241,39 +263,76 @@ end
 function loadingScreen.update(dt)
     if loadingScreen.phase ~= "loading" then return end
 
-    local remaining, total = world.getInitProgress()
+    local wphase, current, total = world.getInitProgress()
 
-    if not total or total == 0 then return end
+    -- phase 0 = idle (world not registered yet), nothing to show
+    if not wphase or wphase == 0 then return end
 
-    local generated = total - (remaining or 0)
-    local progress = generated / total
+    local progress = 0
+    local barText  = ""
 
-    if loadingScreen.barId then
-        bar.setProgress(loadingScreen.barId, progress)
-
-        -- Optional overlay text from the Haskell side
-        local barText = world.getInitStatus and world.getInitStatus() or nil
-        if barText and barText ~= "" then
-            bar.setText(loadingScreen.barId, barText)
-        elseif remaining > 0 then
-            bar.setText(loadingScreen.barId,
-                tostring(generated) .. " / " .. tostring(total))
-        else
-            bar.setText(loadingScreen.barId, "")
+    if wphase == 1 then
+        -- Phase 1: synchronous setup → maps to 0%..50%
+        if total and total > 0 then
+            progress = (current / total) * 0.5
         end
+        local stepLabel = phase1Labels[current] or
+            ("Setup " .. tostring(current) .. "/" .. tostring(total))
+        barText = stepLabel
+
+    elseif wphase == 2 then
+        -- Phase 2: chunk generation → maps to 50%..100%
+        if total and total > 0 then
+            progress = 0.5 + (current / total) * 0.5
+        else
+            progress = 0.5
+        end
+        barText = "Chunks " .. tostring(current) .. " / " .. tostring(total)
+
+    elseif wphase == 3 then
+        -- Done
+        progress = 1.0
+        barText  = ""
     end
 
+    -- Update bar
+    if loadingScreen.barId then
+        bar.setProgress(loadingScreen.barId, progress)
+        bar.setText(loadingScreen.barId, barText)
+    end
+
+    -- Update percentage label
     local pctInt = math.floor(progress * 100)
     if loadingScreen.percentLabelId then
         label.setText(loadingScreen.percentLabelId,
             tostring(pctInt) .. "%")
     end
 
-    if remaining == 0 then
+    -- Update status label with the current step description
+    if loadingScreen.statusLabelId and wphase == 1 then
+        local stepLabel = phase1Labels[current]
+        if stepLabel then
+            label.setText(loadingScreen.statusLabelId, stepLabel)
+        end
+    elseif loadingScreen.statusLabelId and wphase == 2 then
+        label.setText(loadingScreen.statusLabelId, "Generating terrain...")
+    end
+
+    -- Transition to world view when done
+    if wphase == 3 then
         loadingScreen.phase = "done"
-        bar.setProgress(loadingScreen.barId, 1.0)
-        bar.setText(loadingScreen.barId, "")
-        label.setText(loadingScreen.percentLabelId, "100%")
+
+        if loadingScreen.barId then
+            bar.setProgress(loadingScreen.barId, 1.0)
+            bar.setText(loadingScreen.barId, "")
+        end
+        if loadingScreen.percentLabelId then
+            label.setText(loadingScreen.percentLabelId, "100%")
+        end
+        if loadingScreen.statusLabelId then
+            label.setText(loadingScreen.statusLabelId, "Complete!")
+        end
+
         engine.logInfo("Loading complete, transitioning to world view")
 
         if loadingScreen.showMenuCallback then
