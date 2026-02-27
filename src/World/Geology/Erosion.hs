@@ -165,47 +165,56 @@ applyErosion params _worldSize duration worldScale matId elev (nN, nS, nE, nW) =
            -- Round toward zero to avoid jitter on small differences
            delta = if abs rawDelta < 0.5 then 0
                    else truncateTowardZero rawDelta
+           -- Soil depth for last-age (from your previous change)
            soilDepth
-               | not (epIsLastAge params) = 0  -- no soil veneer in non-final ages
+               | not (epIsLastAge params) = 0
                | slopeNorm > 0.8          = 0
                | slopeNorm > 0.5          = 1
                | slopeNorm > 0.2          = 2
                | otherwise                = max 1 (round (4.0 * erodability))
 
+           -- Strata thickness bonus: longer ages deposit thicker layers.
+           -- A 15-MY age adds 5 bonus tiles, a 1-MY age adds 0.
+           -- This only applies to non-last-age periods (geological rock strata).
+           durationBonus
+               | epIsLastAge params = 0
+               | otherwise          = max 0 (truncateTowardZero
+                                        (fromIntegral duration / 3.0 ∷ Float))
+
        in if delta ≡ 0
-          then
-              if epIsLastAge params ∧ soilDepth > 0
-              then GeoModification
-                       { gmElevDelta        = 0
-                       , gmMaterialOverride = Just (erosionSediment params matId elev False)
-                       , gmIntrusionDepth   = soilDepth
-                       }
-              else noModification
+          then if epIsLastAge params ∧ soilDepth > 0
+               then GeoModification
+                   { gmElevDelta        = 0
+                   , gmMaterialOverride = Just (erosionSediment params matId elev False)
+                   , gmIntrusionDepth   = soilDepth
+                   }
+               else if epIsLastAge params
+               then GeoModification
+                   { gmElevDelta        = 0
+                   , gmMaterialOverride = Just (erosionSediment params matId elev False)
+                   , gmIntrusionDepth   = 0
+                   }
+               else noModification
           else if delta < 0
-               -- Erosion: tile is higher than neighbors, remove material
-               -- Surface becomes sedimentary rock (weathering product)
                then if epIsLastAge params ∧ soilDepth > 0
                     then GeoModification
-                             { gmElevDelta        = delta
-                             , gmMaterialOverride = Just (erosionSediment params matId elev False)
-                             , gmIntrusionDepth   = soilDepth
-                             }
-                    else GeoModification
-                             { gmElevDelta        = delta
-                             , gmMaterialOverride = Just (erosionSediment params matId elev False)
-                             , gmIntrusionDepth   = 0
-                             }
-               -- Deposition: tile is lower than neighbors, receive sediment
-               -- Deposited material is sedimentary, with full intrusion
-               -- so it shows in stratigraphy as a distinct layer
-               else let durationBonus = max 0 (truncateTowardZero
-                            (fromIntegral duration / 3.0 ∷ Float))
-                        intrusion = delta + durationBonus
-                    in GeoModification
                         { gmElevDelta        = delta
-                        , gmMaterialOverride = Just (erosionSediment params matId elev True)
-                        , gmIntrusionDepth   = intrusion
+                        , gmMaterialOverride = Just (erosionSediment params matId elev False)
+                        , gmIntrusionDepth   = soilDepth
                         }
+                    else GeoModification
+                        { gmElevDelta        = delta
+                        , gmMaterialOverride = Just (erosionSediment params matId elev False)
+                        , gmIntrusionDepth   = durationBonus  -- ← erosion strata thickness
+                        }
+               -- Deposition: tile is lower than neighbors, receive sediment
+               else GeoModification
+                   { gmElevDelta        = delta
+                   , gmMaterialOverride = Just (erosionSediment params matId elev True)
+                   , gmIntrusionDepth   = if epIsLastAge params
+                                          then max delta soilDepth
+                                          else delta + durationBonus  -- ← deposition strata thickness
+                   }
 
 -- | Truncate a float toward zero (not toward negative infinity).
 truncateTowardZero ∷ Float → Int

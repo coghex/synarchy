@@ -279,78 +279,131 @@ materialPropsTable =
     let size = 256
         base = V.replicate size defaultMaterialProps
         updates =
-            [ (1,   MaterialProps "granite"     0.9  2.7 0.5)
-            , (2,   MaterialProps "diorite"     0.85 2.8 0.5)
-            , (3,   MaterialProps "gabbro"      0.8  3.0 0.5)
-            , (6,   MaterialProps "anorthosite" 0.9  2.6 0.5)
-            , (7,   MaterialProps "peridotite"  0.8  3.3 0.5)
-            , (8,   MaterialProps "pegmatite"   0.9  2.7 0.5)
-            , (10,  MaterialProps "basalt"       0.7  3.0 0.5)
-            , (11,  MaterialProps "obsidian"     0.95 2.4 0.5)
-            , (12,  MaterialProps "rhyolite"     0.75 2.5 0.5)
-            , (13,  MaterialProps "andesite"     0.7  2.6 0.5)
-            , (14,  MaterialProps "tuff"         0.6  2.3 0.5)
-            , (15,  MaterialProps "pumice"       0.3  0.9 0.5)
-            , (16,  MaterialProps "scoria"       0.5  2.0 0.5)
-            , (20,  MaterialProps "sandstone"    0.6  2.2 0.5)
-            , (21,  MaterialProps "siltstone"    0.5  2.3 0.5)
-            , (22,  MaterialProps "shale"        0.5  2.4 0.5)
-            , (23,  MaterialProps "conglomerate" 0.7  2.5 0.5)
-            , (24,  MaterialProps "mudstone"     0.4  2.1 0.5)
-            , (25,  MaterialProps "claystone"    0.3  2.0 0.5)
-            , (30,  MaterialProps "limestone"    0.7  2.5 0.5)
-            , (31,  MaterialProps "chalk"         0.5  2.3 0.5)
-            , (32,  MaterialProps "chert"         0.8  2.6 0.5)
-            , (33,  MaterialProps "rock salt"     0.4  2.2 0.5)
-            , (34,  MaterialProps "gypsum"        0.3  2.3 0.5)
-            , (35,  MaterialProps "dolomite"      0.6  2.4 0.5)
-            , (40,  MaterialProps "marble"       0.8  2.7 0.5)
-            , (41,  MaterialProps "quartzite"     0.9  2.6 0.5)
-            , (42,  MaterialProps "slate"         0.7  2.5 0.5)
-            , (43,  MaterialProps "schist"        0.6  2.8 0.5)
-            , (44,  MaterialProps "gneiss"        0.8  2.7 0.5)
-            , (45,  MaterialProps "phyllite"      0.6  2.5 0.5)
-            , (50,  MaterialProps "clay"          0.3  1.6 0.5)
-            , (51,  MaterialProps "sandy_clay"    0.4  1.8 0.5)
-            , (52,  MaterialProps "sandy_clay_loam" 0.5 1.9 0.5)
-            , (53,  MaterialProps "sandy_loam"    0.5  1.7 0.5)
-            , (54,  MaterialProps "loamy_sand"    0.4  1.5 0.5)
-            , (55,  MaterialProps "sand"          0.4  1.6 0.5)
-            , (56,  MaterialProps "loam"          0.5  1.8 0.5)
-            , (57,  MaterialProps "clay_loam"     0.4  1.7 0.5)
-            , (58,  MaterialProps "silty_clay"    0.3  1.5 0.5)
-            , (59,  MaterialProps "silty_clay_loam" 0.4 1.6 0.5)
-            , (60,  MaterialProps "silt_loam"     0.4  1.7 0.5)
-            , (61,  MaterialProps "silt"          0.3  1.6 0.5)
-            , (62,  MaterialProps "peat"          0.2  0.9 0.5)
-            , (63,  MaterialProps "mucky_peat"    0.2  1.0 0.5)
-            , (64,  MaterialProps "muck"          0.2  1.2 0.5)
-            , (65,  MaterialProps "heavy_gravel"  0.5  2.0 0.5)
-            , (66,  MaterialProps "light_gravel"  0.4  1.8 0.5)
-            , (67,  MaterialProps "salt_flat"     0.3  1.5 0.5)
-            , (70,  MaterialProps "lignite"       0.2  1.3 0.5)
-            , (71,  MaterialProps "bituminous_coal" 0.3 1.4 0.5)
-            , (72,  MaterialProps "anthracite"    0.4  1.5 0.5)
-            , (80,  MaterialProps "iron_ore"      0.6  3.5 0.5)
-            , (81,  MaterialProps "olivine"       0.7  3.3 0.5)
-            , (82,  MaterialProps "pyroxene"      0.6  3.2 0.5)
-            , (83,  MaterialProps "feldspar"      0.7  2.6 0.5)
-            , (84,  MaterialProps "copper_ore"    0.5  3.0 0.5)
-            , (85,  MaterialProps "tin_ore"       0.5  3.0 0.5)
-            , (86,  MaterialProps "gold_ore"      0.5  3.0 0.5)
-            , (90,  MaterialProps "impactite"     0.7  2.5 0.5)
-            , (91,  MaterialProps "tektite"       0.6  2.4 0.5)
-            , (100, MaterialProps "lava"          0.9  3.0 0.5)
-            , (101, MaterialProps "magma"         0.9  3.0 0.5)
-            , (102, MaterialProps "volcanic_ash"  0.4  2.0 0.5)
-            , (103, MaterialProps "tephra"        0.5  2.2 0.5)
-            , (110, MaterialProps "till"          0.5  2.0 0.5)
-            , (111, MaterialProps "moraine"       0.5  2.2 0.5)
-            , (112, MaterialProps "glacial_clay"  0.4  1.8 0.5)
-            , (113, MaterialProps "outwash_gravel" 0.5 2.5 0.5)
-            , (250, MaterialProps "glacier"       0.4  0.9 0.5)
-            , (251, MaterialProps "mantle"        0.8  3.3 0.5)
-            , (255, MaterialProps "ocean"         0.5  1.0 0.5)
+            ---------------------------------------------------
+            -- Igneous Intrusive (1-9)
+            --   High hardness, high density, medium-low albedo
+            ---------------------------------------------------
+            [ (1,   MaterialProps "granite"       0.9  2.7  0.35)
+            , (2,   MaterialProps "diorite"        0.85 2.85 0.30)
+            , (3,   MaterialProps "gabbro"         0.8  3.0  0.18)
+            , (6,   MaterialProps "anorthosite"    0.9  2.75 0.45)
+            , (7,   MaterialProps "peridotite"     0.85 3.3  0.15)
+            , (8,   MaterialProps "pegmatite"      0.9  2.7  0.38)
+
+            ---------------------------------------------------
+            -- Igneous Extrusive (10-19)
+            ---------------------------------------------------
+            , (10,  MaterialProps "basalt"         0.7  3.0  0.10)  
+            , (11,  MaterialProps "obsidian"       0.95 2.4  0.05)  
+            , (12,  MaterialProps "rhyolite"       0.75 2.5  0.40)  
+            , (13,  MaterialProps "andesite"       0.7  2.6  0.25)
+            , (14,  MaterialProps "tuff"           0.5  1.8  0.35)  
+            , (15,  MaterialProps "pumice"         0.3  0.9  0.55)  
+            , (16,  MaterialProps "scoria"         0.5  1.8  0.12)  
+
+            ---------------------------------------------------
+            -- Sedimentary Clastic (20-29)
+            ---------------------------------------------------
+            , (20,  MaterialProps "sandstone"      0.5  2.2  0.40)  
+            , (21,  MaterialProps "siltstone"      0.45 2.3  0.30)  
+            , (22,  MaterialProps "shale"          0.4  2.4  0.15)  
+            , (23,  MaterialProps "conglomerate"   0.6  2.5  0.32)  
+            , (24,  MaterialProps "mudstone"       0.35 2.1  0.20)  
+            , (25,  MaterialProps "claystone"      0.3  2.0  0.22)
+
+            ---------------------------------------------------
+            -- Sedimentary Chemical / Organic (30-39)
+            ---------------------------------------------------
+            , (30,  MaterialProps "limestone"      0.55 2.55 0.52)  
+            , (31,  MaterialProps "chalk"          0.3  2.2  0.70)  
+            , (32,  MaterialProps "chert"          0.85 2.6  0.28)  
+            , (33,  MaterialProps "rock_salt"      0.3  2.16 0.50)  
+            , (34,  MaterialProps "gypsum"         0.2  2.3  0.55)  
+            , (35,  MaterialProps "dolomite"       0.6  2.85 0.48)  
+
+            ---------------------------------------------------
+            -- Metamorphic (40-49)
+            ---------------------------------------------------
+            , (40,  MaterialProps "marble"         0.7  2.7  0.60)  
+            , (41,  MaterialProps "quartzite"      0.95 2.65 0.42)  
+            , (42,  MaterialProps "slate"          0.65 2.75 0.12)  
+            , (43,  MaterialProps "schist"         0.55 2.8  0.18)  
+            , (44,  MaterialProps "gneiss"         0.8  2.7  0.28)  
+            , (45,  MaterialProps "phyllite"       0.5  2.7  0.16)  
+
+            ---------------------------------------------------
+            -- Soils — Mineral (50-59)
+            --   Low hardness, low density, albedo by color
+            ---------------------------------------------------
+            , (50,  MaterialProps "clay"            0.25 1.6  0.20) 
+            , (51,  MaterialProps "sandy_clay"      0.3  1.75 0.22) 
+            , (52,  MaterialProps "sandy_clay_loam" 0.3  1.7  0.25) 
+            , (53,  MaterialProps "sandy_loam"      0.25 1.55 0.30) 
+            , (54,  MaterialProps "loamy_sand"      0.2  1.5  0.35) 
+            , (55,  MaterialProps "sand"            0.15 1.55 0.40) 
+            , (56,  MaterialProps "loam"            0.25 1.45 0.25) 
+            , (57,  MaterialProps "clay_loam"       0.3  1.6  0.22) 
+            , (58,  MaterialProps "silty_clay"      0.25 1.55 0.18) 
+            , (59,  MaterialProps "silty_clay_loam" 0.25 1.55 0.20) 
+
+            ---------------------------------------------------
+            -- Soils — Silt & Special (60-69)
+            ---------------------------------------------------
+            , (60,  MaterialProps "silt_loam"       0.2  1.4  0.28) 
+            , (61,  MaterialProps "silt"            0.15 1.35 0.30) 
+            , (62,  MaterialProps "peat"            0.1  0.9  0.08) 
+            , (63,  MaterialProps "mucky_peat"      0.1  1.0  0.06) 
+            , (64,  MaterialProps "muck"            0.1  1.1  0.05) 
+            , (65,  MaterialProps "heavy_gravel"    0.5  2.0  0.30)
+            , (66,  MaterialProps "light_gravel"    0.4  1.8  0.32)
+            , (67,  MaterialProps "salt_flat"       0.15 1.5  0.65) 
+
+            ---------------------------------------------------
+            -- Carbonaceous (70-79)
+            ---------------------------------------------------
+            , (70,  MaterialProps "lignite"         0.2  1.3  0.10) 
+            , (71,  MaterialProps "bituminous_coal" 0.3  1.35 0.04) 
+            , (72,  MaterialProps "anthracite"      0.45 1.5  0.03) 
+
+            ---------------------------------------------------
+            -- Ores / Metals (80-89)
+            ---------------------------------------------------
+            , (80,  MaterialProps "iron_ore"        0.65 4.0  0.12) 
+            , (81,  MaterialProps "olivine"         0.7  3.3  0.20) 
+            , (82,  MaterialProps "pyroxene"        0.65 3.3  0.15) 
+            , (83,  MaterialProps "feldspar"        0.6  2.6  0.42) 
+            , (84,  MaterialProps "copper_ore"      0.55 4.2  0.22) 
+            , (85,  MaterialProps "tin_ore"         0.55 6.8  0.28) 
+            , (86,  MaterialProps "gold_ore"        0.5  3.5  0.35) 
+
+            ---------------------------------------------------
+            -- Impact (90-99)
+            ---------------------------------------------------
+            , (90,  MaterialProps "impactite"       0.7  2.5  0.15) 
+            , (91,  MaterialProps "tektite"         0.6  2.4  0.06) 
+
+            ---------------------------------------------------
+            -- Volcanic Active (100-109)
+            ---------------------------------------------------
+            , (100, MaterialProps "lava"            0.9  2.8  0.08) 
+            , (101, MaterialProps "magma"           0.9  2.8  0.04) 
+            , (102, MaterialProps "volcanic_ash"    0.2  1.0  0.30) 
+            , (103, MaterialProps "tephra"          0.35 1.5  0.20) 
+
+            ---------------------------------------------------
+            -- Glacial Deposits (110-119)
+            ---------------------------------------------------
+            , (110, MaterialProps "till"            0.45 2.0  0.25) 
+            , (111, MaterialProps "moraine"         0.5  2.2  0.28)
+            , (112, MaterialProps "glacial_clay"    0.3  1.8  0.30) 
+            , (113, MaterialProps "outwash_gravel"  0.45 2.1  0.32) 
+
+            ---------------------------------------------------
+            -- Special (250-255)
+            ---------------------------------------------------
+            , (250, MaterialProps "glacier"         1.0  0.92 0.85) 
+            , (251, MaterialProps "mantle"          1.0  3.3  0.04) 
+            , (255, MaterialProps "ocean"           0.0  1.03 0.06) 
             ]
     in base V.// updates
 
