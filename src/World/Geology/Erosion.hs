@@ -161,7 +161,7 @@ applyErosion params _worldSize duration worldScale matId elev (nN, nS, nE, nW) =
                -- so it shows in stratigraphy as a distinct layer
                else GeoModification
                    { gmElevDelta        = delta
-                   , gmMaterialOverride = Just (erosionSediment m params matId elev True)
+                   , gmMaterialOverride = Just (erosionSediment params matId elev True)
                    , gmIntrusionDepth   = delta
                    }
 
@@ -181,7 +181,7 @@ truncateTowardZero x
 --
 --   The seed field in ErosionParams provides deterministic variation
 --   so adjacent tiles don't all produce identical materials.
-erosionSediment ∷ ErosionParams → Word8 → Word8 → Bool → Word8
+erosionSediment ∷ ErosionParams → Word8 → Int → Bool → Word8
 erosionSediment params matId elev isDeposition =
     let temp  = epTemperature params
         precip = epPrecipitation params

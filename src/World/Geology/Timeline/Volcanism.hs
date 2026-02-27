@@ -74,7 +74,8 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs grid =
             ("Volcanism " <> T.pack (show periodIdx))
             Period 50 currentDate
             events
-            (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 4000))
+            (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 4000)
+                           200.0 0.0 0.0 0.0 False)
         tbs6 = addPeriod period (tbs5 { tbsGeoState = gs' })
         grid' = updateElevGrid worldSize grid period
     in (tbs6, grid')
@@ -143,7 +144,8 @@ applyVolcanicEvolution seed worldSize plates tbs grid =
             "Volcanic Evolution"
             Period 30 currentDate
             allEvents
-            (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 5000))
+            (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 5000)
+                           200.0 0.0 0.0 0.0 False)
     in if null allEvents then (tbs1, grid)
        else let tbs2 = addPeriod period tbs1
                 grid' = updateElevGrid worldSize grid period

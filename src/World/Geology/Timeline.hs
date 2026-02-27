@@ -281,7 +281,7 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
         gs2 = gs1 { gsCO2 = newCO2 }
 
         -- === CLIMATE-AWARE EROSION ===
-        erosion = erosionFromGeoState gs2 climate seed ageIdx isLastAge
+        erosion = erosionFromGeoState gs2 climate seed ageIdx False
 
         _debugLandCount = VU.length (VU.filter id (egLand elevGrid))
         _debugGridW = egGridW elevGrid
