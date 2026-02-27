@@ -356,7 +356,10 @@ rockFromSource matId temp precip roll = case matId of
 
 -- | Look up erosion params for a tile, using regional climate
 --   data when available, falling back to the global params.
---   Climate regions are climateRegionSize chunks (4 × 16 = 64 tiles) per side.
+--
+--   Climate regions are keyed by (ru, rv) in the rotated
+--   (u, v) = (gx - gy, gx + gy) coordinate system, divided
+--   into climateRegionSize chunks per side.
 {-# INLINE lookupRegionalErosion #-}
 lookupRegionalErosion ∷ ErosionParams
                       → HM.HashMap ClimateCoord ErosionParams
@@ -365,10 +368,23 @@ lookupRegionalErosion ∷ ErosionParams
 lookupRegionalErosion fallback regMap worldSize gx gy =
     if HM.null regMap
     then fallback
-    else let tilesPerRegion = climateRegionSize * chunkSizeTiles
-             halfWorld = worldSize * chunkSizeTiles `div` 2
-             rx = (gx + halfWorld) `div` tilesPerRegion
-             ry = (gy + halfWorld) `div` tilesPerRegion
-         in HM.lookupDefault fallback (ClimateCoord rx ry) regMap
+    else let -- Convert (gx, gy) tile coords → (u, v) tile coords
+             u = gx - gy
+             v = gx + gy
+             -- Convert tile coords → chunk coords
+             halfChunks = worldSize `div` 2
+             w = worldSize * chunkSizeTiles
+             halfW = w `div` 2
+             -- Wrap u-axis (cylindrical world), then to chunk space
+             wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+             chunkU = floorDiv wrappedU chunkSizeTiles
+             chunkV = floorDiv v chunkSizeTiles
+             -- Chunk space → climate region index
+             ru = (chunkU + halfChunks) `div` climateRegionSize
+             rv = (chunkV + halfChunks) `div` climateRegionSize
+         in HM.lookupDefault fallback (ClimateCoord ru rv) regMap
   where
     chunkSizeTiles = 16
+    floorDiv a b
+      | b > 0     = if a >= 0 then a `div` b else -(((-a) + b - 1) `div` b)
+      | otherwise = error "floorDiv: non-positive divisor"

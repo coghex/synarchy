@@ -11,6 +11,7 @@ import World.Slope (slopeToFaceMapIndex)
 import Engine.Asset.Handle (TextureHandle(..))
 
 getTileTexture ∷ WorldTextures → Word8 → TextureHandle
+getTileTexture _        0 = TextureHandle 0
 getTileTexture textures matId =
     case HM.lookup matId (wtTileTextures textures) of
         Just h  → h
