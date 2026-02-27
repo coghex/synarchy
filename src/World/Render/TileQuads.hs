@@ -10,11 +10,13 @@ module World.Render.TileQuads
     ) where
 
 import UPrelude
+import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import World.Constants (seaLevel)
+import World.Material (matOcean, matLava, unMaterialId)
 import World.Fluids (FluidCell(..), FluidType(..))
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight, worldLayer, applyFacing)
 import World.Types
@@ -137,7 +139,10 @@ oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSl
                 + fromIntegral relativeZ * 0.001
                 + 0.0005
 
-        texHandle = wtOceanTexture textures
+        texHandle = case HM.lookup (unMaterialId matOcean)
+                                   (wtTileTextures textures) of
+                           Nothing → wtNoTexture textures
+                           Just h  → h
         actualSlot = lookupSlot texHandle
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
 
@@ -168,7 +173,10 @@ lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSli
         sortKey = fromIntegral (fa + fb)
                 + fromIntegral relativeZ * 0.001
                 + 0.0005
-        texHandle = wtLavaTexture textures
+        texHandle = case HM.lookup (unMaterialId matLava)
+                                   (wtTileTextures textures) of
+                           Nothing → wtNoTexture textures
+                           Just h  → h
         actualSlot = lookupSlot texHandle
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
         finalAlpha = tileAlpha
@@ -203,7 +211,10 @@ freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
                 + fromIntegral relativeZ * 0.001
                 + 0.0005
 
-        texHandle = wtOceanTexture textures
+        texHandle = case HM.lookup (unMaterialId matOcean)
+                                   (wtTileTextures textures) of
+                           Nothing → wtNoTexture textures
+                           Just h  → h
         actualSlot = lookupSlot texHandle
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
 

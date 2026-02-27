@@ -105,7 +105,7 @@ determineMeteoriteType seed attemptIdx radius =
        else let typeHash = hashGeo seed attemptIdx 11
                 typeVal  = hashToRangeGeo typeHash 0 3
             in Just $ case typeVal of
-                0 → unMaterialId matIron      -- Iron meteorite
+                0 → unMaterialId matIronOre   -- Iron meteorite
                 1 → unMaterialId matOlivine   -- Stony (olivine-rich)
                 2 → unMaterialId matPyroxene  -- Stony (pyroxene-rich)
                 _ → unMaterialId matFeldspar  -- Stony (feldspar-rich)
