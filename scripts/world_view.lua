@@ -475,6 +475,18 @@ function worldView.init(width, height)
         local tileH = engine.loadTexture(def.tile)
         local zoomH = engine.loadTexture(def.zoom)
         local bgH   = engine.loadTexture(def.bg)
+        
+        -- DEBUG: detect handle collision
+        if tileH == zoomH then
+            engine.logWarn("HANDLE COLLISION tile==zoom for " .. def.name 
+                .. " id=" .. def.id .. " h=" .. tostring(tileH)
+                .. " tile=" .. def.tile .. " zoom=" .. def.zoom)
+        end
+        if tileH == bgH then
+            engine.logWarn("HANDLE COLLISION tile==bg for " .. def.name
+                .. " id=" .. def.id)
+        end
+        
         worldView.materialTextures[def.id] = {
             tile = tileH,
             zoom = zoomH,

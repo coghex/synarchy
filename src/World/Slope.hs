@@ -93,8 +93,7 @@ computeTileSlope seed coord lx ly z surfMap fluidMap tiles neighborLookup =
                .|. (if bitE then 2 else 0)
                .|. (if bitS then 4 else 0)
                .|. (if bitW then 8 else 0) ∷ Word8
-
-    in if not passesHardness ∨ rawSlope ≡ 0
+    in if not passesHardness ∨ rawSlope ≡ 0 ∨ rawSlope ≡ 15
        then 0
        else applyRoughness seed coord lx ly hardness rawSlope
 
