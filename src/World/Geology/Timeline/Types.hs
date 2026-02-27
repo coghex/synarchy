@@ -589,6 +589,11 @@ data ErosionParams = ErosionParams
     , epWind         ∷ !Float
     , epChemical     ∷ !Float
     , epSeed         ∷ !Word64
+    , epTemperature  ∷ !Float
+    , epPrecipitation ∷ !Float
+    , epHumidity     ∷ !Float
+    , epSnowFraction ∷ !Float
+    , epIsLastAge    ∷ !Bool
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 defaultErosionParams ∷ ErosionParams
@@ -599,6 +604,11 @@ defaultErosionParams = ErosionParams
     , epWind       = 0.1
     , epChemical   = 0.2
     , epSeed       = 0
+    , epTemperature = 15.0
+    , epPrecipitation = 0.5
+    , epHumidity   = 0.5
+    , epSnowFraction = 0.0
+    , epIsLastAge  = False
     }
 
 data VolcanicActivity

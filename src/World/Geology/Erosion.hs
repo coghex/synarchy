@@ -153,7 +153,7 @@ applyErosion params _worldSize duration worldScale matId elev (nN, nS, nE, nW) =
                -- Surface becomes sedimentary rock (weathering product)
                then GeoModification
                    { gmElevDelta        = delta
-                   , gmMaterialOverride = Just (erosionSediment matId)
+                   , gmMaterialOverride = Just (erosionSediment params matId elev False)
                    , gmIntrusionDepth   = 0
                    }
                -- Deposition: tile is lower than neighbors, receive sediment
@@ -161,41 +161,9 @@ applyErosion params _worldSize duration worldScale matId elev (nN, nS, nE, nW) =
                -- so it shows in stratigraphy as a distinct layer
                else GeoModification
                    { gmElevDelta        = delta
-                   , gmMaterialOverride = Just (erosionSediment matId)
+                   , gmMaterialOverride = Just (erosionSediment m params matId elev True)
                    , gmIntrusionDepth   = delta
                    }
-
--- | Determine what sedimentary material results from eroding
---   a given source material. Different rocks weather into
---   different sedimentary products.
-erosionSediment ∷ Word8 → Word8
-erosionSediment matId = case matId of
-    -- Quartz-rich rocks → sandstone
-    1   → 10   -- granite → sandstone
-    2   → 10   -- diorite → sandstone
-    33  → 10   -- feldspar → sandstone
-
-    -- Calcium/alkaline rocks → limestone
-    11  → 11   -- limestone → limestone (re-deposited)
-    31  → 11   -- olivine → limestone (calcium weathering)
-
-    -- Fine-grained / dark rocks → shale
-    3   → 12   -- gabbro → shale
-    4   → 12   -- basalt → shale
-    5   → 12   -- obsidian → shale
-    12  → 12   -- shale → shale (re-deposited)
-    32  → 12   -- pyroxene → shale
-    100 → 12   -- lava → shale
-
-    -- Impact materials → sandstone (mixed debris)
-    20  → 10   -- impactite → sandstone
-    30  → 10   -- iron meteorite → sandstone
-
-    -- Sedimentary rocks stay as themselves
-    10  → 10   -- sandstone → sandstone
-
-    -- Default: sandstone (general weathering product)
-    _   → 10
 
 -- | Truncate a float toward zero (not toward negative infinity).
 truncateTowardZero ∷ Float → Int
@@ -203,3 +171,182 @@ truncateTowardZero x
     | x > 0     = floor x
     | x < 0     = ceiling x
     | otherwise = 0
+
+-- | Determine what material results from erosion/deposition.
+--   Climate-aware: uses temperature, precipitation, humidity
+--   baked into ErosionParams at world-gen time.
+--
+--   For non-final ages: produces geological sedimentary rocks.
+--   For the final age (epIsLastAge): produces soils (0-5 tile veneer).
+--
+--   The seed field in ErosionParams provides deterministic variation
+--   so adjacent tiles don't all produce identical materials.
+erosionSediment ∷ ErosionParams → Word8 → Word8 → Bool → Word8
+erosionSediment params matId elev isDeposition =
+    let temp  = epTemperature params
+        precip = epPrecipitation params
+        humid = epHumidity params
+        snow  = epSnowFraction params
+        seed  = epSeed params
+        lastAge = epIsLastAge params
+
+        -- Hash for local variation (cheap: xor + shift)
+        localHash = fromIntegral (seed `xor` fromIntegral matId
+                                       `xor` (fromIntegral elev * 0x9E3779B9)) ∷ Word64
+        roll = fromIntegral (localHash .&. 0xFF) / 255.0 ∷ Float
+
+    in if lastAge
+       then soilFromClimate temp precip humid snow matId roll
+       else rockFromSource matId temp precip roll
+
+-- | Final-age soil selection based on climate.
+--   Produces soil materials (50-67) as a thin surface veneer.
+soilFromClimate ∷ Float → Float → Float → Float → Word8 → Float → Word8
+soilFromClimate temp precip humid snow srcMat roll
+    -- Glacial: till/moraine/glacial clay
+    | snow > 0.6 ∧ temp < -5.0 =
+        if roll < 0.5 then 110       -- till
+        else if roll < 0.8 then 111  -- moraine
+        else 112                      -- glacial clay
+
+    -- Cold + wet periglacial: silt + gravel
+    | temp < 0.0 ∧ precip > 0.3 =
+        if roll < 0.4 then 61        -- silt
+        else if roll < 0.7 then 65   -- heavy gravel
+        else 60                       -- silt loam
+
+    -- Cold + dry: salt flats, light gravel
+    | temp < 5.0 ∧ precip < 0.2 =
+        if roll < 0.5 then 67        -- salt flat
+        else 66                       -- light gravel
+
+    -- Hot + wet tropical: deep clay weathering
+    | temp > 25.0 ∧ precip > 0.5 =
+        if roll < 0.3 then 50        -- clay
+        else if roll < 0.5 then 58   -- silty clay
+        else if roll < 0.7 then 56   -- loam
+        else 64                       -- muck (organic-rich)
+
+    -- Hot + dry desert: sand
+    | temp > 25.0 ∧ precip < 0.2 =
+        if roll < 0.6 then 55        -- sand
+        else if roll < 0.8 then 54   -- loamy sand
+        else 67                       -- salt flat
+
+    -- Warm + moderate: clay-loam spectrum
+    | temp > 15.0 ∧ precip > 0.3 =
+        if roll < 0.25 then 57       -- clay loam
+        else if roll < 0.5 then 52   -- sandy clay loam
+        else if roll < 0.75 then 56  -- loam
+        else 62                       -- peat (if very wet + organic)
+
+    -- Temperate + wet: rich soils
+    | temp > 5.0 ∧ precip > 0.4 =
+        if roll < 0.3 then 60        -- silt loam
+        else if roll < 0.6 then 56   -- loam
+        else if roll < 0.8 then 59   -- silty clay loam
+        else 62                       -- peat
+
+    -- Temperate + dry: sandy soils
+    | temp > 5.0 ∧ precip < 0.3 =
+        if roll < 0.4 then 53        -- sandy loam
+        else if roll < 0.7 then 54   -- loamy sand
+        else 55                       -- sand
+
+    -- Default temperate
+    | otherwise =
+        if roll < 0.3 then 56        -- loam
+        else if roll < 0.6 then 60   -- silt loam
+        else 53                       -- sandy loam
+
+-- | Non-final-age sedimentary rock from source material.
+--   Climate modulates which sedimentary rock forms.
+rockFromSource ∷ Word8 → Float → Float → Float → Word8
+rockFromSource matId temp precip roll = case matId of
+    -- Quartz-rich igneous → sandstone family
+    1  → if precip > 0.5 ∧ roll < 0.3 then 25 else 20  -- granite → claystone or sandstone
+    2  → 20   -- diorite → sandstone
+    8  → 20   -- pegmatite → sandstone
+    83 → 20   -- feldspar → sandstone
+
+    -- Mafic igneous → fine-grained sediments
+    3  → if precip > 0.4 then 24 else 22  -- gabbro → mudstone or shale
+    7  → 24   -- peridotite → mudstone
+    10 → if temp > 20.0 ∧ precip > 0.5 then 25 else 22  -- basalt → claystone or shale
+    100 → 22  -- lava → shale
+    101 → 22  -- magma → shale
+
+    -- Calcium-bearing → limestone/chalk
+    6  → 30   -- anorthosite → limestone (calcium feldspar)
+    30 → 30   -- limestone → limestone (re-deposited)
+    35 → 30   -- dolomite → limestone
+    40 → if precip > 0.3 then 31 else 30  -- marble → chalk or limestone
+
+    -- Volcanic → tuff products
+    14 → 21   -- tuff → siltstone
+    15 → 21   -- pumice → siltstone
+    16 → 21   -- scoria → siltstone
+    102 → 21  -- volcanic ash → siltstone
+    103 → 21  -- tephra → siltstone
+
+    -- Obsidian/rhyolite → fine silica
+    11 → if roll < 0.5 then 22 else 32   -- obsidian → shale or chert
+    12 → 20   -- rhyolite → sandstone
+    13 → if precip > 0.4 then 24 else 20  -- andesite → mudstone or sandstone
+
+    -- Metamorphic weathering products
+    41 → 20   -- quartzite → sandstone
+    42 → 22   -- slate → shale
+    43 → if precip > 0.5 then 24 else 22  -- schist → mudstone or shale
+    44 → if roll < 0.4 then 20 else 22    -- gneiss → sandstone or shale
+    45 → 22   -- phyllite → shale
+
+    -- Sedimentary → stays or coarsens
+    20 → 20   -- sandstone → sandstone
+    21 → 21   -- siltstone → siltstone
+    22 → 22   -- shale → shale
+    23 → if roll < 0.5 then 20 else 23  -- conglomerate → sandstone or conglomerate
+    24 → 24   -- mudstone → mudstone
+    25 → 25   -- claystone → claystone
+
+    -- Chemical/organic sedimentary
+    31 → 31   -- chalk → chalk
+    32 → 32   -- chert → chert
+    33 → if precip < 0.2 then 33 else 34  -- rock salt → rock salt or gypsum
+    34 → 34   -- gypsum → gypsum
+
+    -- Impact materials → mixed debris
+    90 → if roll < 0.5 then 20 else 23  -- impactite → sandstone or conglomerate
+    91 → 20   -- tektite → sandstone
+
+    -- Ores stay (they're deep/hard, erosion rarely reaches them)
+    m | m ≥ 80 ∧ m ≤ 86 → 20  -- ore → sandstone (surface weathering)
+
+    -- Glacial deposits
+    110 → 23  -- till → conglomerate
+    111 → 23  -- moraine → conglomerate
+    112 → 25  -- glacial clay → claystone
+    113 → 23  -- outwash gravel → conglomerate
+
+    -- Soils from previous ages get lithified
+    50 → 25   -- clay → claystone
+    51 → 25   -- sandy clay → claystone
+    52 → 24   -- sandy clay loam → mudstone
+    53 → 20   -- sandy loam → sandstone
+    54 → 20   -- loamy sand → sandstone
+    55 → 20   -- sand → sandstone
+    56 → 24   -- loam → mudstone
+    57 → 25   -- clay loam → claystone
+    58 → 25   -- silty clay → claystone
+    59 → 24   -- silty clay loam → mudstone
+    60 → 21   -- silt loam → siltstone
+    61 → 21   -- silt → siltstone
+    62 → 70   -- peat → lignite
+    63 → 71   -- mucky peat → bituminous coal
+    64 → 72   -- muck → anthracite
+    65 → 23   -- heavy gravel → conglomerate
+    66 → 23   -- light gravel → conglomerate
+    67 → 33   -- salt flat → rock salt
+
+    -- Default
+    _  → 20   -- sandstone (general weathering product)

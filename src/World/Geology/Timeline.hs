@@ -57,10 +57,15 @@ buildTimeline seed worldSize plateCount =
 
         (s2, _grid2) = buildEon seed worldSize plates s1' grid1
 
+        -- Mark the final period for soil generation
+        finalPeriods = case tbsPeriods s2 of
+            []     → []
+            (p:ps) → p { gpErosion = (gpErosion p) { epIsLastAge = True } } : ps
+
     in ( GeoTimeline
             { gtSeed      = seed
             , gtWorldSize = worldSize
-            , gtPeriods   = reverse (tbsPeriods s2)
+            , gtPeriods   = reverse finalPeriods
             , gtFeatures  = tbsFeatures s2
             }
        , tbsClimateState s2
@@ -80,7 +85,8 @@ buildPrimordialBombardment seed worldSize plates tbs grid =
         period = mkGeoPeriod worldSize
             "Primordial Bombardment" Eon 500 currentDate
             events
-            (ErosionParams 0.8 0.3 0.6 0.4 0.1 (seed + 1000))
+            (ErosionParams 0.8 0.3 0.6 0.4 0.1 (seed + 1000)
+                           200.0 0.0 0.0 0.0 False)
         tbs' = addPeriod period (tbs { tbsGeoState = gs' })
         grid' = updateElevGrid worldSize grid period
     in (tbs', grid')
@@ -132,7 +138,8 @@ buildEra seed worldSize plates eraIdx tbs grid =
         eraPeriod = mkGeoPeriod worldSize
             ("Era " <> T.pack (show eraIdx) <> " Events")
             Era 100 currentDate [] 
-            (ErosionParams 0.7 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx))
+            (ErosionParams 0.7 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx)
+                           15.0 0.5 0.5 0.0 False)
         s1 = addPeriod eraPeriod (tbs { tbsGeoState  = gs'
                                        , tbsClimateState = climate' })
         (s2, grid2) = buildPeriodLoop eraSeed worldSize plates 0 2 4 s1 grid
@@ -274,7 +281,7 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
         gs2 = gs1 { gsCO2 = newCO2 }
 
         -- === CLIMATE-AWARE EROSION ===
-        erosion = erosionFromGeoState gs2 climate seed ageIdx
+        erosion = erosionFromGeoState gs2 climate seed ageIdx isLastAge
 
         _debugLandCount = VU.length (VU.filter id (egLand elevGrid))
         _debugGridW = egGridW elevGrid
