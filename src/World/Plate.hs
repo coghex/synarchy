@@ -282,10 +282,13 @@ elevationAtGlobal seed plates worldSize gx gy =
             boundary = classifyBoundary worldSize plateA plateB
             side = SidePlateA
             boundaryEffect = boundaryElevation wsc boundary side plateA plateB boundaryDist
+            interiorFade = clamp01 (abs boundaryDist / scaleDist wsc 200.0)
             localNoise = elevationNoise seed worldSize gx' gy'
             noiseScale = if plateIsLand myPlate
-                         then round (scaleElev wsc 5.0)
-                         else round (scaleElev wsc 2.0)
+                         then let mountainNoise = scaleElev wsc 50.0
+                                  plainsNoise   = scaleElev wsc 8.0
+                              in round (lerp interiorFade mountainNoise plainsNoise)
+                         else round (scaleElev wsc 20.0)
             terrainElev = baseElev + boundaryEffect + localNoise * noiseScale
         in (terrainElev + 3, matGlacier)
     else

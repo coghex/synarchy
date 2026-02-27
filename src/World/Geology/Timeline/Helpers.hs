@@ -153,10 +153,10 @@ erosionFromGeoState gs climate seed ageIdx isLastAge =
         windScale = 0.1 + 0.9 * max 0.0 (1.0 - avgPrecip * 2.0)
 
     in ErosionParams
-        { epIntensity     = 0.5
-        , epHydraulic     = 0.5 * hydraulicScale
-        , epThermal       = 0.3 * thermalScale
-        , epWind          = 0.2 * windScale
+        { epIntensity     = 0.7
+        , epHydraulic     = 0.8 * hydraulicScale
+        , epThermal       = 0.4 * thermalScale
+        , epWind          = 0.35 * windScale
         , epChemical      = chemical
         , epSeed          = seed + fromIntegral ageIdx * 7
         -- NEW: baked climate for erosionSediment
@@ -198,10 +198,10 @@ regionalErosionMap gs climate seed ageIdx isLastAge =
             windBoost = 0.5 + 0.5 * rcWindSpeed rc
 
         in ErosionParams
-            { epIntensity     = 0.5
-            , epHydraulic     = 0.5 * hydraulicScale
-            , epThermal       = 0.3 * thermalScale
-            , epWind          = 0.2 * windScale * windBoost
+            { epIntensity     = 0.7
+            , epHydraulic     = 0.8 * hydraulicScale
+            , epThermal       = 0.4 * thermalScale
+            , epWind          = 0.35 * windScale * windBoost
             , epChemical      = chemical
             , epSeed          = seed + fromIntegral ageIdx * 7
             , epTemperature   = regionTemp

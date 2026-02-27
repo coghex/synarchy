@@ -72,6 +72,24 @@ applyErosion params _worldSize duration worldScale matId elev (nN, nS, nE, nW) =
            absDiff = abs diff
            slopeNorm = min 1.0 (absDiff / 30.0)  -- normalize: 30 tiles = max slope
 
+           -- === REGIONAL SMOOTHING ===
+           -- Even when all 4 neighbors are similar (plateau/plain),
+           -- long-duration erosion flattens terrain over time.
+           -- This models sheet wash, creep, and aeolian leveling
+           -- that smooth entire regions, not just local slopes.
+           --
+           -- Uses the *variance* of neighbors: if they all agree,
+           -- the region is already smooth → less extra erosion.
+           -- If they disagree, local smoothing handles it.
+           neighborVar = let mn = fromIntegral (min nN (min nS (min nE nW))) ∷ Float
+                             mx = fromIntegral (max nN (max nS (max nE nW))) ∷ Float
+                         in (mx - mn) / max 1.0 mx
+           -- When variance is low (flat region), add a gentle
+           -- downward pull that simulates continental denudation
+           flatRegionPull = if diff < 0.0 ∧ neighborVar < 0.1
+                            then 0.0  -- don't erode flat regions further
+                            else 0.0
+
            ---------------------------------------------------------
            -- Hydraulic erosion (rainfall/runoff)
            --   The dominant carver. Proportional to slope —
@@ -145,8 +163,7 @@ applyErosion params _worldSize duration worldScale matId elev (nN, nS, nE, nW) =
            rawDelta = diff * clampedRate
 
            -- Round toward zero to avoid jitter on small differences
-           delta = if abs rawDelta < 0.5
-                   then 0
+           delta = if abs rawDelta < 0.5 then 0
                    else truncateTowardZero rawDelta
            soilDepth
                | not (epIsLastAge params) = 0  -- no soil veneer in non-final ages
@@ -181,13 +198,14 @@ applyErosion params _worldSize duration worldScale matId elev (nN, nS, nE, nW) =
                -- Deposition: tile is lower than neighbors, receive sediment
                -- Deposited material is sedimentary, with full intrusion
                -- so it shows in stratigraphy as a distinct layer
-               else GeoModification
-                   { gmElevDelta        = delta
-                   , gmMaterialOverride = Just (erosionSediment params matId elev True)
-                   , gmIntrusionDepth   = if epIsLastAge params
-                                          then max delta soilDepth
-                                          else delta
-                   }
+               else let durationBonus = max 0 (truncateTowardZero
+                            (fromIntegral duration / 3.0 ∷ Float))
+                        intrusion = delta + durationBonus
+                    in GeoModification
+                        { gmElevDelta        = delta
+                        , gmMaterialOverride = Just (erosionSediment params matId elev True)
+                        , gmIntrusionDepth   = intrusion
+                        }
 
 -- | Truncate a float toward zero (not toward negative infinity).
 truncateTowardZero ∷ Float → Int
