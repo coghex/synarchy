@@ -15,6 +15,7 @@ module World.Geology.Timeline.Helpers
     , getRiverParamsFromPf
       -- * Erosion
     , erosionFromGeoState
+    , regionalErosionMap
       -- * Glacier evolution wrapper
     , evolveGlacierCapped
       -- * Elev grid lookup
@@ -166,6 +167,50 @@ erosionFromGeoState gs climate seed ageIdx isLastAge =
         , epIsLastAge     = isLastAge
         }
 
+-- | Build per-region erosion parameters from the climate grid.
+--   Each climate region gets its own ErosionParams derived from
+--   its local temperature, precipitation, humidity, and snow.
+regionalErosionMap ∷ GeoState → ClimateState → Word64 → Int → Bool
+                   → HM.HashMap ClimateCoord ErosionParams
+regionalErosionMap gs climate seed ageIdx isLastAge =
+    let co2 = gsCO2 gs
+        chemical = min 1.0 (0.2 + (co2 - 1.0) * 0.3)
+        regions = cgRegions (csClimate climate)
+    in HM.map (buildRegionErosion co2 chemical) regions
+  where
+    buildRegionErosion co2 chemical rc =
+        let SeasonalClimate summerT winterT = rcAirTemp rc
+            regionTemp = (summerT + winterT) / 2.0
+            SeasonalClimate summerP winterP = rcPrecipitation rc
+            regionPrecip = (summerP + winterP) / 2.0
+            regionHumidity = rcHumidity rc
+            regionSnow = rcPrecipType rc
+
+            hydraulicScale = 0.3 + 0.7 * min 1.0 (regionPrecip / 0.5)
+            thermalScale =
+                let t = regionTemp
+                in if t < -10.0 then 0.15
+                   else if t < 0.0 then 0.3 + 0.7 * ((t + 10.0) / 10.0)
+                   else if t < 10.0 then 1.0
+                   else if t < 25.0 then 1.0 - 0.6 * ((t - 10.0) / 15.0)
+                   else 0.15
+            windScale = 0.1 + 0.9 * max 0.0 (1.0 - regionPrecip * 2.0)
+            windBoost = 0.5 + 0.5 * rcWindSpeed rc
+
+        in ErosionParams
+            { epIntensity     = 0.5
+            , epHydraulic     = 0.5 * hydraulicScale
+            , epThermal       = 0.3 * thermalScale
+            , epWind          = 0.2 * windScale * windBoost
+            , epChemical      = chemical
+            , epSeed          = seed + fromIntegral ageIdx * 7
+            , epTemperature   = regionTemp
+            , epPrecipitation = regionPrecip
+            , epHumidity      = regionHumidity
+            , epSnowFraction  = regionSnow
+            , epIsLastAge     = isLastAge
+            }
+
 -----------------------------------------------------------
 -- Feature center
 -----------------------------------------------------------
@@ -202,8 +247,9 @@ featureCenter (HydroShape (LakeFeature l))
 -- Period construction
 -----------------------------------------------------------
 
-mkGeoPeriod ∷ Int → Text → GeoScale → Int → Float → [GeoEvent] → ErosionParams → GeoPeriod
-mkGeoPeriod worldSize name scale duration date events erosion =
+mkGeoPeriod ∷ Int → Text → GeoScale → Int → Float → [GeoEvent]
+  → ErosionParams → HM.HashMap ClimateCoord ErosionParams → GeoPeriod
+mkGeoPeriod worldSize name scale duration date events erosion regErosion =
     let tagged = tagEventsWithBBox worldSize events
         exploded = concatMap (\(evt, _bb) →
             let evts = explodeRiverEvent evt
@@ -223,6 +269,7 @@ mkGeoPeriod worldSize name scale duration date events erosion =
         , gpDate            = date
         , gpEvents          = events
         , gpErosion         = erosion
+        , gpRegionalErosion = regErosion
         , gpTaggedEvents    = tagged
         , gpExplodedEvents  = explodedVec
         , gpPeriodBBox      = periodBB

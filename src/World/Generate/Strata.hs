@@ -21,7 +21,7 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector as V
 import World.Types
 import World.Geology (applyGeoEvent, GeoModification(..))
-import World.Geology.Erosion (applyErosion)
+import World.Geology.Erosion (applyErosion, lookupRegionalErosion)
 import World.Geology.Timeline.Types (tileInBBoxWrapped)
 import World.Scale (WorldScale(..))
 import World.Material (MaterialId(..))
@@ -92,8 +92,11 @@ buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
             -- Use pre-computed final neighbor elevations directly.
             -- No advanceNeighbor calls needed — eliminates ~4 × events
             -- applyGeoEvent calls per period per column.
+            regionalParams = lookupRegionalErosion
+                (gpErosion period) (gpRegionalErosion period)
+                worldSize gx gy
             erosionMod = applyErosion
-                (gpErosion period)
+                regionalParams
                 worldSize
                 (gpDuration period)
                 (wsScale wsc)

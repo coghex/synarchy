@@ -2,12 +2,15 @@
 module World.Geology.Erosion
     ( applyErosion
     , erosionSediment
+    , lookupRegionalErosion
     ) where
 
 import UPrelude
 import World.Types
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
 import World.Geology.Types
+import qualified Data.HashMap.Strict as HM
+import World.Weather.Types (ClimateCoord(..), climateRegionSize)
 
 -----------------------------------------------------------
 -- Erosion Application
@@ -350,3 +353,22 @@ rockFromSource matId temp precip roll = case matId of
 
     -- Default
     _  → 20   -- sandstone (general weathering product)
+
+-- | Look up erosion params for a tile, using regional climate
+--   data when available, falling back to the global params.
+--   Climate regions are climateRegionSize chunks (4 × 16 = 64 tiles) per side.
+{-# INLINE lookupRegionalErosion #-}
+lookupRegionalErosion ∷ ErosionParams
+                      → HM.HashMap ClimateCoord ErosionParams
+                      → Int → Int → Int
+                      → ErosionParams
+lookupRegionalErosion fallback regMap worldSize gx gy =
+    if HM.null regMap
+    then fallback
+    else let tilesPerRegion = climateRegionSize * chunkSizeTiles
+             halfWorld = worldSize * chunkSizeTiles `div` 2
+             rx = (gx + halfWorld) `div` tilesPerRegion
+             ry = (gy + halfWorld) `div` tilesPerRegion
+         in HM.lookupDefault fallback (ClimateCoord rx ry) regMap
+  where
+    chunkSizeTiles = 16

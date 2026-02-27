@@ -17,7 +17,7 @@ import World.Material (MaterialId(..), matGlacier)
 import World.Plate (wrapGlobalU)
 import World.Geology.Types (GeoModification(..))
 import World.Geology.Event (applyGeoEvent)
-import World.Geology.Erosion (applyErosion)
+import World.Geology.Erosion (applyErosion, lookupRegionalErosion)
 import World.Scale (WorldScale(..), computeWorldScale)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
@@ -115,8 +115,13 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
                                     , lookupElev postElev (lx + 1) ly elev
                                     , lookupElev postElev (lx - 1) ly elev
                                     )
+                                gx = cMinGX + lx + chunkBorder
+                                gy = cMinGY + ly + chunkBorder
+                                regionalParams = lookupRegionalErosion
+                                    (gpErosion period) (gpRegionalErosion period)
+                                    worldSize gx gy
                                 erosionMod = applyErosion
-                                    (gpErosion period)
+                                    regionalParams
                                     worldSize
                                     (gpDuration period)
                                     (wsScale wsc)
@@ -155,8 +160,11 @@ applyPeriodSingle ∷ Int → WorldScale → Int → Int
                   → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
 applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
     let (elev', mat') = foldl' applyOneEvent (elev, mat) (gpEvents period)
+        regionalParams = lookupRegionalErosion
+            (gpErosion period) (gpRegionalErosion period)
+            worldSize gx gy
         erosionMod = applyErosion
-            (gpErosion period)
+            regionalParams
             worldSize
             (gpDuration period)
             (wsScale wsc)
@@ -203,8 +211,11 @@ applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
             then (elev, mat)
             else applyExplodedEvents worldSize gx' gy' elev mat
                                      (gpExplodedEvents period)
+        regionalParams = lookupRegionalErosion
+            (gpErosion period) (gpRegionalErosion period)
+            worldSize gx gy
         erosionMod = applyErosion
-            (gpErosion period)
+            regionalParams
             worldSize
             (gpDuration period)
             (wsScale wsc)

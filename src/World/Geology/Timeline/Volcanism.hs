@@ -10,6 +10,7 @@ import Data.Bits (xor)
 import Data.List (foldl')
 import Data.Word (Word64)
 import qualified Data.Text as T
+import qualified Data.HashMap.Strict as HM
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Plate (TectonicPlate, elevationAtGlobal)
@@ -76,6 +77,7 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs grid =
             events
             (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 4000)
                            200.0 0.0 0.0 0.0 False)
+            HM.empty
         tbs6 = addPeriod period (tbs5 { tbsGeoState = gs' })
         grid' = updateElevGrid worldSize grid period
     in (tbs6, grid')
@@ -146,6 +148,7 @@ applyVolcanicEvolution seed worldSize plates tbs grid =
             allEvents
             (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 5000)
                            200.0 0.0 0.0 0.0 False)
+            HM.empty
     in if null allEvents then (tbs1, grid)
        else let tbs2 = addPeriod period tbs1
                 grid' = updateElevGrid worldSize grid period

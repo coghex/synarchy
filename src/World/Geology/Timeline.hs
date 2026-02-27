@@ -20,7 +20,7 @@ import World.Hydrology.Simulation (simulateHydrology, FlowResult(..)
                                   , ElevGrid(..), buildInitialElevGrid
                                   , updateElevGrid)
 import World.Geology.Timeline.Helpers
-    ( mkGeoPeriod, erosionFromGeoState )
+    ( mkGeoPeriod, erosionFromGeoState, regionalErosionMap )
 import World.Geology.Timeline.Volcanism
     ( applyPeriodVolcanism, applyVolcanicEvolution, generateEruption )
 import World.Geology.Timeline.River
@@ -60,7 +60,10 @@ buildTimeline seed worldSize plateCount =
         -- Mark the final period for soil generation
         finalPeriods = case tbsPeriods s2 of
             []     → []
-            (p:ps) → p { gpErosion = (gpErosion p) { epIsLastAge = True } } : ps
+            (p:ps) → p { gpErosion = (gpErosion p) { epIsLastAge = True }
+                        , gpRegionalErosion = HM.map (\ep → ep { epIsLastAge = True })
+                                                     (gpRegionalErosion p)
+                        } : ps
 
     in ( GeoTimeline
             { gtSeed      = seed
@@ -87,6 +90,7 @@ buildPrimordialBombardment seed worldSize plates tbs grid =
             events
             (ErosionParams 0.8 0.3 0.6 0.4 0.1 (seed + 1000)
                            200.0 0.0 0.0 0.0 False)
+            HM.empty
         tbs' = addPeriod period (tbs { tbsGeoState = gs' })
         grid' = updateElevGrid worldSize grid period
     in (tbs', grid')
@@ -140,6 +144,7 @@ buildEra seed worldSize plates eraIdx tbs grid =
             Era 100 currentDate [] 
             (ErosionParams 0.7 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx)
                            15.0 0.5 0.5 0.0 False)
+            HM.empty
         s1 = addPeriod eraPeriod (tbs { tbsGeoState  = gs'
                                        , tbsClimateState = climate' })
         (s2, grid2) = buildPeriodLoop eraSeed worldSize plates 0 2 4 s1 grid
@@ -282,6 +287,7 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
 
         -- === CLIMATE-AWARE EROSION ===
         erosion = erosionFromGeoState gs2 climate seed ageIdx False
+        regErosion = regionalErosionMap gs2 climate seed ageIdx False
 
         _debugLandCount = VU.length (VU.filter id (egLand elevGrid))
         _debugGridW = egGridW elevGrid
@@ -291,7 +297,7 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
              <> " [grid=" <> T.pack (show _debugGridW)
              <> " land=" <> T.pack (show _debugLandCount) <> "]")
             Age (round duration) currentDate
-            allEvents erosion
+            allEvents erosion regErosion
 
         -- Update climate's CO2 to stay in sync
         climate' = climate { csGlobalCO2 = newCO2 }

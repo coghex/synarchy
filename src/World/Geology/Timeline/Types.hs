@@ -46,6 +46,7 @@ import GHC.Generics (Generic)
 import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize(..))
 import Data.Hashable (Hashable)
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import World.Base (GeoCoord(..), GeoFeatureId(..))
@@ -57,6 +58,7 @@ import World.Hydrology.Types
     , RiverSegment(..)
     , LakeParams(..)
     )
+import World.Weather.Types (ClimateCoord(..))
 
 data GeoScale
     = Eon       -- ^ Billions of years — major crustal formation
@@ -73,6 +75,7 @@ data GeoPeriod = GeoPeriod
     , gpDate       ∷ !Float        -- ^ Date of period start
     , gpEvents     ∷ ![GeoEvent]
     , gpErosion    ∷ !ErosionParams
+    , gpRegionalErosion ∷ !(HM.HashMap ClimateCoord ErosionParams)
     , gpTaggedEvents ∷ ![(GeoEvent, EventBBox)]
     , gpExplodedEvents ∷ !(V.Vector (GeoEvent, EventBBox))
     , gpPeriodBBox    ∷ !EventBBox      -- ^ Bounding box of all events in this period
