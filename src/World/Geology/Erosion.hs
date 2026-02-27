@@ -150,7 +150,14 @@ applyErosion params _worldSize duration worldScale matId elev (nN, nS, nE, nW) =
                    else truncateTowardZero rawDelta
 
        in if delta ≡ 0
-          then noModification
+          then
+              if epIsLastAge params
+              then GeoModification
+                       { gmElevDelta        = 0
+                       , gmMaterialOverride = Just (erosionSediment params matId elev False)
+                       , gmIntrusionDepth   = 0
+                       }
+              else noModification
           else if delta < 0
                -- Erosion: tile is higher than neighbors, remove material
                -- Surface becomes sedimentary rock (weathering product)

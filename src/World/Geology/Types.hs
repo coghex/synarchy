@@ -164,7 +164,7 @@ eruptionProfile (VolcanicShape (ShieldVolcano p)) = Just EruptionProfile
     , epMinVolume     = 20
     , epMaxVolume     = 80
     , epViscosity     = 1          -- runny basalt, flows far
-    , epMaterial      = 4          -- matBasalt
+    , epMaterial      = 10         -- matBasalt
     , epTimelineScale = Age
     }
 eruptionProfile (VolcanicShape (CinderCone _)) = Just EruptionProfile
@@ -174,7 +174,7 @@ eruptionProfile (VolcanicShape (CinderCone _)) = Just EruptionProfile
     , epMinVolume     = 5
     , epMaxVolume     = 20
     , epViscosity     = 2          -- moderate viscosity
-    , epMaterial      = 5          -- matObsidian
+    , epMaterial      = 11         -- matObsidian
     , epTimelineScale = Age
     }
 eruptionProfile (VolcanicShape (FissureVolcano p)) = Just EruptionProfile
@@ -184,7 +184,7 @@ eruptionProfile (VolcanicShape (FissureVolcano p)) = Just EruptionProfile
     , epMinVolume     = 30
     , epMaxVolume     = 120
     , epViscosity     = 1          -- flood basalt, very runny
-    , epMaterial      = 4          -- matBasalt
+    , epMaterial      = 10         -- matBasalt
     , epTimelineScale = Age
     }
 eruptionProfile (VolcanicShape (LavaDome p)) = Just EruptionProfile
@@ -194,7 +194,7 @@ eruptionProfile (VolcanicShape (LavaDome p)) = Just EruptionProfile
     , epMinVolume     = 3
     , epMaxVolume     = 10
     , epViscosity     = 3          -- very viscous, piles up in place
-    , epMaterial      = 5          -- matObsidian
+    , epMaterial      = 11         -- matObsidian
     , epTimelineScale = Age
     }
 eruptionProfile (VolcanicShape (SuperVolcano p)) = Just EruptionProfile
@@ -204,7 +204,7 @@ eruptionProfile (VolcanicShape (SuperVolcano p)) = Just EruptionProfile
     , epMinVolume     = 200
     , epMaxVolume     = 800
     , epViscosity     = 1          -- massive flood
-    , epMaterial      = 4          -- matBasalt
+    , epMaterial      = 10         -- matBasalt
     , epTimelineScale = Period
     }
 eruptionProfile (VolcanicShape (Caldera _))          = Nothing  -- collapsed, no eruption
