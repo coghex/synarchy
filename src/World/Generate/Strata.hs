@@ -148,7 +148,8 @@ buildColumnStrata caches (baseElev, baseMat) startZ endZ =
                     (elev', _surfMat') ← V.foldM'
                         (\(!e, !sm) ed → do
                             writeDelta mats startZ depth e
-                                       (edDelta ed) (edIntrusion ed) (edMat ed)
+                                       (edDelta ed) (edIntrusion ed)
+                                       (edMat ed)
                             pure (e + edDelta ed, edMat ed)
                         ) (elev, surfMat) (pscEvents cache)
 
@@ -169,30 +170,33 @@ buildColumnStrata caches (baseElev, baseMat) startZ endZ =
 -- | Write the material effects of a single delta (event or erosion)
 --   into the mutable material vector. Only touches z-levels within
 --   [startZ .. startZ + depth - 1].
-writeDelta ∷ VUM.MVector s MaterialId
-           → Int → Int
-           → Int → Int → Int
-           → MaterialId
-           → ST s ()
+writeDelta ∷ VUM.MVector s MaterialId → Int → Int → Int → Int → Int → MaterialId → ST s ()
 writeDelta mats startZ depth elevBefore delta intrusion eventMat
-    | delta > 0 =
+    -- Deposition: fill from elevBefore+1 up to elevBefore+delta
+    | delta > 0 = do
         let clampedIntrusion = min intrusion delta
-            upliftAmount = delta - clampedIntrusion
-            intrusionBottom = elevBefore + upliftAmount + 1
-            intrusionTop = elevBefore + delta
-        in when (clampedIntrusion > 0) $
-            forM_ [max intrusionBottom startZ .. min intrusionTop (startZ + depth - 1)] $ \z →
-                VUM.write mats (z - startZ) eventMat
+            intrusionBottom = elevBefore + delta - clampedIntrusion + 1
+            intrusionTop    = elevBefore + delta
+        forM_ [max intrusionBottom startZ .. min intrusionTop (startZ + depth - 1)] $ \z →
+            VUM.write mats (z - startZ) eventMat
 
-    | delta < 0 =
-        let newSurfZ = elevBefore + delta
-        in do
-            when (newSurfZ ≥ startZ ∧ newSurfZ < startZ + depth) $
-                VUM.write mats (newSurfZ - startZ) eventMat
-            when (intrusion > 0) $
-                forM_ [max newSurfZ startZ .. min (newSurfZ + intrusion - 1) (startZ + depth - 1)] $ \z →
-                    VUM.write mats (z - startZ) eventMat
+    -- Erosion with soil backfill: write soil into the top `intrusion` tiles
+    -- below the new surface (elevBefore + delta)
+    | delta < 0 ∧ intrusion > 0 = do
+        let newSurf = elevBefore + delta  -- delta is negative
+            soilTop = newSurf
+            soilBot = newSurf - intrusion + 1
+        forM_ [max soilBot startZ .. min soilTop (startZ + depth - 1)] $ \z →
+            VUM.write mats (z - startZ) eventMat
 
+    -- No elevation change but soil intrusion (last-age in-situ weathering)
+    | delta ≡ 0 ∧ intrusion > 0 = do
+        let soilTop = elevBefore
+            soilBot = elevBefore - intrusion + 1
+        forM_ [max soilBot startZ .. min soilTop (startZ + depth - 1)] $ \z →
+            VUM.write mats (z - startZ) eventMat
+
+    -- Just stamp the surface tile
     | otherwise =
         when (elevBefore ≥ startZ ∧ elevBefore < startZ + depth) $
             VUM.write mats (elevBefore - startZ) eventMat
@@ -318,6 +322,15 @@ applyDelta queryZ elevBefore delta eventMat intrusion surfMat uplift zMat
             newZMat = if inIntrusion then eventMat else zMat
             newSurf = eventMat
         in (newSurf, newUplift, newZMat)
+    | delta < 0 ∧ intrusion > 0 =
+        -- Erosion with soil backfill
+        let newSurf = elevBefore + delta
+            soilTop = newSurf
+            soilBot = newSurf - intrusion + 1
+            inSoil = queryZ ≥ soilBot ∧ queryZ ≤ soilTop
+            newSurfMat = if inSoil then eventMat else surfMat
+            newZMat = if inSoil then eventMat else zMat
+        in (newSurfMat, uplift, newZMat)
     | delta < 0 =
         let newSurfZ = elevBefore + delta
             newSurf = eventMat
@@ -329,6 +342,14 @@ applyDelta queryZ elevBefore delta eventMat intrusion surfMat uplift zMat
                       then eventMat
                       else zMat
         in (newSurf, uplift, newZMat)
+    | intrusion > 0 =
+        -- delta == 0, soil veneer (in-situ weathering)
+        let soilTop = elevBefore
+            soilBot = elevBefore - intrusion + 1
+            inSoil = queryZ ≥ soilBot ∧ queryZ ≤ soilTop
+            newSurfMat = if inSoil then eventMat else surfMat
+            newZMat = if inSoil then eventMat else zMat
+        in (newSurfMat, uplift, newZMat)
     | otherwise =
         let newZMat = if queryZ ≡ elevBefore ∧ eventMat ≠ surfMat
                       then eventMat
