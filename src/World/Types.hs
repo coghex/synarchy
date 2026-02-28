@@ -9,6 +9,7 @@ module World.Types
     , module World.Tile.Types
     , module World.Constants
     , module World.Fluid.Types
+    , module World.Flora.Types
     , module World.Ocean.Types
     , module World.Region.Types
     , module World.Generate.Types
@@ -33,6 +34,7 @@ import World.Tool.Types
 import World.Tile.Types
 import World.Constants
 import World.Fluid.Types
+import World.Flora.Types
 import World.Ocean.Types
 import World.Region.Types
 import World.Generate.Types

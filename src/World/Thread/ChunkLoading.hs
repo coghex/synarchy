@@ -78,6 +78,7 @@ updateChunkLoading env logger = do
                                             , lcSurfaceMap = surfMap
                                             , lcTerrainSurfaceMap = tMap
                                             , lcFluidMap   = fluidMap
+                                            , lcFlora      = emptyFloraChunkData
                                             , lcModified   = False
                                             }) batch
                                 atomicModifyIORef' (wsTilesRef worldState) $ \td →
@@ -120,6 +121,7 @@ drainInitQueues env logger = do
                                     , lcSurfaceMap = surfMap
                                     , lcTerrainSurfaceMap = tMap
                                     , lcFluidMap   = fluidMap
+                                    , lcFlora      = emptyFloraChunkData
                                     , lcModified   = False
                                     }) batch
 

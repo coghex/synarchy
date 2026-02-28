@@ -20,6 +20,7 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import World.Material (MaterialId(..))
 import World.Fluid.Types (FluidCell(..))
+import World.Flora.Types (FloraChunkData(..), emptyFloraChunkData)
 
 data ChunkCoord = ChunkCoord !Int !Int
     deriving (Show, Eq, Ord, Generic, Serialize)
@@ -71,10 +72,11 @@ data LoadedChunk = LoadedChunk
     , lcSurfaceMap ∷ !(VU.Vector Int)
     , lcTerrainSurfaceMap ∷ !(VU.Vector Int)
     , lcFluidMap   ∷ !(V.Vector (Maybe FluidCell))
+    , lcFlora      ∷ !FloraChunkData
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
 
 instance NFData LoadedChunk where
-    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap modified) =
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap flora modified) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
-        rnf terrainMap `seq` rnf fluidMap `seq` rnf modified
+        rnf terrainMap `seq` rnf fluidMap `seq` rnf flora `seq` rnf modified

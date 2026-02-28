@@ -53,30 +53,12 @@ newtype FloraId = FloraId { unFloraId ∷ Word16 }
 -- Lifecycle Types
 -----------------------------------------------------------
 
--- | How a plant's annual cycle behaves.
---
---   Evergreen:  No annual cycle. Phase texture used year-round.
---               Douglas fir, cactus, most shrubs.
---
---   Perennial:  Repeats annual cycle each year within eligible
---               life phases. Has a lifespan after which it has
---               a chance to die. Dandelion, wildflowers, oak.
---               lcMinLifespan / lcMaxLifespan control when
---               death chance begins (in game-days).
---               lcDeathChance is probability per year once
---               past min lifespan.
---
---   Annual:     One annual cycle, then dead at end of year.
---               Wheat, some wildflowers.
---
---   Biennial:   Vegetative first year, flowers second year,
---               then dead.
 data LifecycleType
     = Evergreen
     | Perennial
-        { lcMinLifespan ∷ !Float   -- ^ game-days before death possible
-        , lcMaxLifespan ∷ !Float   -- ^ game-days, guaranteed dead by here
-        , lcDeathChance ∷ !Float   -- ^ per-year chance once past min
+        { lcMinLifespan ∷ !Float
+        , lcMaxLifespan ∷ !Float
+        , lcDeathChance ∷ !Float
         }
     | Annual
     | Biennial
@@ -119,8 +101,8 @@ lifePhaseOrder PhaseDead       = 8
 
 data LifePhase = LifePhase
     { lpTag     ∷ !LifePhaseTag
-    , lpAge     ∷ !Float           -- ^ game-days to enter this phase
-    , lpTexture ∷ !TextureHandle   -- ^ default texture for this phase
+    , lpAge     ∷ !Float
+    , lpTexture ∷ !TextureHandle
     } deriving (Show, Eq, Generic, Serialize)
 instance NFData LifePhase where
     rnf (LifePhase t a tex) = rnf t `seq` rnf a `seq` rnf tex
@@ -129,30 +111,25 @@ instance NFData LifePhase where
 -- Annual Cycle (day-of-year-driven, repeats)
 -----------------------------------------------------------
 
--- | Tags for stages within one annual cycle.
 data AnnualStageTag
-    = CycleDormant     -- ^ winter / off-season
-    | CycleBudding     -- ^ early growth
-    | CycleFlowering   -- ^ in bloom
-    | CycleFruiting    -- ^ bearing fruit / seeds
-    | CycleSenescing   -- ^ autumn color / wilting
+    = CycleDormant
+    | CycleBudding
+    | CycleFlowering
+    | CycleFruiting
+    | CycleSenescing
     deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
 instance NFData AnnualStageTag where rnf x = x `seq` ()
 instance Hashable AnnualStageTag where
     hashWithSalt s t = hashWithSalt s (fromEnum t)
 
--- | One stage in the annual cycle.
 data AnnualStage = AnnualStage
     { asTag      ∷ !AnnualStageTag
-    , asStartDay ∷ !Int             -- ^ day-of-year this stage begins (0-359)
-    , asTexture  ∷ !TextureHandle   -- ^ texture for this cycle stage
+    , asStartDay ∷ !Int
+    , asTexture  ∷ !TextureHandle
     } deriving (Show, Eq, Generic, Serialize)
 instance NFData AnnualStage where
     rnf (AnnualStage t d tex) = rnf t `seq` rnf d `seq` rnf tex
 
--- | Key for looking up a cycle texture override per life phase.
---   This lets "matured + flowering" have a different texture than
---   "vegetating + flowering" if you want.
 data AnnualCycleKey = AnnualCycleKey !LifePhaseTag !AnnualStageTag
     deriving (Show, Eq, Ord, Generic)
 instance Hashable AnnualCycleKey where
@@ -201,19 +178,36 @@ data FloraWorldGen = FloraWorldGen
 -- Per-Instance Data (Saved per chunk)
 -----------------------------------------------------------
 
+-- | A single placed flora instance in the world.
+--
+--   Position is stored as:
+--     fiTileX, fiTileY: which column in the chunk (0–15)
+--     fiOffU,  fiOffV:  sub-tile offset within that column
+--       (0.0, 0.0) = tile center
+--       range roughly (-0.5 .. 0.5) in each axis
+--     fiZ: integer z-slice the plant sits on
+--
+--   Multiple instances can share the same tile. A meadow
+--   tile might have 3-4 dandelions at different offsets;
+--   a forest tile has one oak at (0,0).
 data FloraInstance = FloraInstance
     { fiSpecies ∷ !FloraId
-    , fiLocalX  ∷ !Word8
-    , fiLocalY  ∷ !Word8
+    , fiTileX   ∷ !Word8         -- ^ column X within chunk (0–15)
+    , fiTileY   ∷ !Word8         -- ^ column Y within chunk (0–15)
+    , fiOffU    ∷ !Float         -- ^ sub-tile U offset (-0.5 .. 0.5)
+    , fiOffV    ∷ !Float         -- ^ sub-tile V offset (-0.5 .. 0.5)
+    , fiZ       ∷ !Int           -- ^ z-slice this plant sits on
     , fiAge     ∷ !Float         -- ^ current age in game-days
     , fiHealth  ∷ !Float         -- ^ 0.0 dead … 1.0 full
     , fiVariant ∷ !Word8         -- ^ visual variant (0–3)
     } deriving (Show, Eq, Generic, Serialize)
 instance NFData FloraInstance where
-    rnf (FloraInstance s x y a h v) =
-        rnf s `seq` rnf x `seq` rnf y `seq`
+    rnf (FloraInstance s tx ty ou ov z a h v) =
+        rnf s `seq` rnf tx `seq` rnf ty `seq`
+        rnf ou `seq` rnf ov `seq` rnf z `seq`
         rnf a `seq` rnf h `seq` rnf v
 
+-- | All flora placed in one chunk.
 data FloraChunkData = FloraChunkData
     { fcdInstances ∷ ![FloraInstance]
     } deriving (Show, Eq, Generic, Serialize)

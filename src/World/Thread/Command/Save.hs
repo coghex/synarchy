@@ -156,6 +156,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             , lcSurfaceMap        = cs
             , lcTerrainSurfaceMap = cterrain
             , lcFluidMap          = cf
+            , lcFlora             = emptyFloraChunkData
             , lcModified          = False
             }
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →

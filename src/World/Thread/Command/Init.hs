@@ -135,6 +135,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , lcSurfaceMap = cs
             , lcTerrainSurfaceMap = cterrain
             , lcFluidMap   = cf
+            , lcFlora      = emptyFloraChunkData
             , lcModified   = False
             }
     
