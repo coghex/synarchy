@@ -479,6 +479,46 @@ worldView.vegDefs = {
           "assets/textures/world/veg/marsh_grass_3.png",
           "assets/textures/world/veg/marsh_grass_4.png",
       }},
+    -- Dead grass
+    { idStart = 45, idEnd = 48, name = "dead_grass",
+      tiles = {
+          "assets/textures/world/veg/dead_grass_1.png",
+          "assets/textures/world/veg/dead_grass_2.png",
+          "assets/textures/world/veg/dead_grass_3.png",
+          "assets/textures/world/veg/dead_grass_4.png",
+      }},
+    -- Fallen leaves
+    { idStart = 49, idEnd = 52, name = "fallen_leaves",
+      tiles = {
+          "assets/textures/world/veg/fallen_leaves_1.png",
+          "assets/textures/world/veg/fallen_leaves_2.png",
+          "assets/textures/world/veg/fallen_leaves_3.png",
+          "assets/textures/world/veg/fallen_leaves_4.png",
+      }},
+    -- Pine needles
+    { idStart = 53, idEnd = 56, name = "pine_needles",
+      tiles = {
+          "assets/textures/world/veg/pine_needles_1.png",
+          "assets/textures/world/veg/pine_needles_2.png",
+          "assets/textures/world/veg/pine_needles_3.png",
+          "assets/textures/world/veg/pine_needles_4.png",
+      }},
+    -- Mushroom patch
+    { idStart = 57, idEnd = 60, name = "mushroom_patch",
+      tiles = {
+          "assets/textures/world/veg/mushroom_patch_1.png",
+          "assets/textures/world/veg/mushroom_patch_2.png",
+          "assets/textures/world/veg/mushroom_patch_3.png",
+          "assets/textures/world/veg/mushroom_patch_4.png",
+      }},
+    -- Wildflowers
+    { idStart = 61, idEnd = 64, name = "wildflowers",
+      tiles = {
+          "assets/textures/world/veg/wildflowers_1.png",
+          "assets/textures/world/veg/wildflowers_2.png",
+          "assets/textures/world/veg/wildflowers_3.png",
+          "assets/textures/world/veg/wildflowers_4.png",
+      }},
 }
 
 -----------------------------------------------------------
