@@ -719,6 +719,7 @@ function worldView.createWorld()
         plateCount = plateCount,
         structural = worldView.structuralTextures,
         materials  = worldView.materialTextures,
+        vegTextures = worldView.vegTextures,
     })
     worldManager.showWorld()
 end

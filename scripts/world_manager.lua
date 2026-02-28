@@ -17,7 +17,7 @@ local function sendStructuralTextures(worldId, st)
     if st.noTexture    then world.setTexture(worldId, "notexture", st.noTexture)    end
     if st.isoFaceMap   then world.setTexture(worldId, "iso_facemap", st.isoFaceMap) end
     if st.noFaceMap    then world.setTexture(worldId, "nofacemap",   st.noFaceMap)  end
-    -- Slope facemaps
+    -- Terrain slope facemaps
     local slopeNames = {
         "n", "e", "ne", "s", "ns", "es", "nes",
         "w", "nw", "ew", "new", "sw", "nsw", "esw", "nesw"
@@ -35,22 +35,17 @@ local function sendStructuralTextures(worldId, st)
         end
     end
     -- Vegetation facemaps
-    local vegSlopeNames = { "n", "e", "ne", "s", "ns", "es", "nes",
-                            "w", "nw", "ew", "new", "sw", "nsw", "esw", "nesw" }
+    if st.vegFaceMap then world.setTexture(worldId, "veg_facemap", st.vegFaceMap) end
     local vegSlopeFields = {
         "vegSlopeFaceMapN", "vegSlopeFaceMapE", "vegSlopeFaceMapNE",
         "vegSlopeFaceMapS", "vegSlopeFaceMapNS", "vegSlopeFaceMapES",
         "vegSlopeFaceMapNES", "vegSlopeFaceMapW", "vegSlopeFaceMapNW",
         "vegSlopeFaceMapEW", "vegSlopeFaceMapNEW", "vegSlopeFaceMapSW",
-        "vegSlopeFaceMapNSW", "vegSlopeFaceMapESW", "vegSlopeFaceMapNESW",
+        "vegSlopeFaceMapNSW", "vegSlopeFaceMapESW", "vegSlopeFaceMapNESW"
     }
-    if st.vegFaceMap then
-        world.setTexture(worldId, "veg_facemap", st.vegFaceMap)
-    end
-    for i = 1, #vegSlopeNames do
-        local field = vegSlopeFields[i]
+    for i, field in ipairs(vegSlopeFields) do
         if st[field] then
-            world.setTexture(worldId, "veg_slope_facemap_" .. vegSlopeNames[i], st[field])
+            world.setTexture(worldId, "veg_slope_facemap_" .. slopeNames[i], st[field])
         end
     end
 end
@@ -96,6 +91,7 @@ function worldManager.createWorld(params)
     -- Send all textures
     sendStructuralTextures(worldId, params.structural)
     sendMaterialTextures(worldId, params.materials)
+    sendVegTextures(worldId, params.vegTextures)
 
     worldManager.currentWorld = worldId
 
