@@ -227,6 +227,7 @@ library
                      Engine.Scripting.Lua.API.UI.TextInput
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.World
+                     Engine.Scripting.Lua.API.Flora
                      Engine.Core.Defaults
                      Engine.Core.Init
                      Engine.Core.Monad
@@ -354,6 +355,7 @@ library
                      World.Tool.Types
                      World.Tile.Types
                      World.Time.Types
+                     World.Flora.Types
                      World.Fluids
                      World.Fluid.Types
                      World.Fluid.Internal

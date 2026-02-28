@@ -32,6 +32,7 @@ import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn,
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
 import Engine.Scripting.Lua.API.Save (saveListFn, saveWorldFn, loadSaveFn)
 import Engine.Scripting.Lua.API.World
+import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
@@ -220,6 +221,15 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getInitProgress" (worldGetInitProgressFn env)
   registerLuaFunction "destroy" (worldDestroyFn env)
   Lua.setglobal (Lua.Name "world")
+
+  -- Flora table
+  Lua.newtable
+  registerLuaFunction "register" (floraRegisterFn env)
+  registerLuaFunction "addPhase" (floraAddPhaseFn env)
+  registerLuaFunction "addSeason" (floraAddSeasonFn env)
+  registerLuaFunction "registerForWorldGen" (floraRegisterForWorldGenFn env)
+
+  Lua.setglobal (Lua.Name "flora")
 
   -- Camera table
   Lua.newtable
