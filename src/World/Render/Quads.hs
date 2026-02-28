@@ -11,6 +11,7 @@ import qualified Data.Vector as V
 import Data.Maybe (isJust)
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
+import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..), Camera2D(..))
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
@@ -18,11 +19,13 @@ import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
 import World.Constants (seaLevel)
 import World.Fluids (FluidCell(..), FluidType(..))
+import World.Flora.Render (resolveFloraTexture)
 import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
 import World.Grid (gridToScreen, tileSideHeight, tileWidth, tileHeight, worldToGrid)
 import World.Render.ViewBounds (computeViewBounds, isTileVisible)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
+import World.Render.FloraQuads (floraToQuad)
 import World.Render.TileQuads
     ( tileToQuad, blankTileToQuad, oceanTileToQuad, lavaTileToQuad
     , freshwaterTileToQuad, worldCursorToQuad, worldCursorBgToQuad
@@ -40,9 +43,12 @@ renderWorldQuads env worldState zoomAlpha snap = do
     textures ← readIORef (wsTexturesRef worldState)
     paramsM ← readIORef (wsGenParamsRef worldState)
     camera ← readIORef (cameraRef env)
+    floraCat ← readIORef (wsFloraCatalogRef worldState)
+    worldDate ← readIORef (wsDateRef worldState)
 
     let (fbW, fbH) = wcsFbSize snap
         facing = camFacing camera
+        dayOfYear = wdDay worldDate
 
     mBindless ← readIORef (textureSystemRef env)
     defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
@@ -123,7 +129,20 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                             Nothing → tq : acc2
                                 ) acc [zLo .. zHi]
                     ) [] tileMap
-
+                -- Flora sprites
+                floraData = lcFlora lc
+                !floraQuads =
+                    [ fq
+                    | inst ← fcdInstances floraData
+                    , let tileX = fromIntegral (fiTileX inst)
+                          tileY = fromIntegral (fiTileY inst)
+                          (gx, gy) = chunkToGlobal coord tileX tileY
+                          texHandle = resolveFloraTexture floraCat dayOfYear inst
+                    , texHandle /= TextureHandle 0
+                    , Just fq ← [floraToQuad lookupSlot lookupFmSlot textures facing
+                                     gx gy inst texHandle zSlice effectiveDepth
+                                     zoomAlpha xOffset]
+                    ]
                 !blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures facing
                         gx gy zSlice zSlice zoomAlpha xOffset
@@ -202,7 +221,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                                 )
                     ) ([], [], []) fluidMap
 
-            in V.fromList (realQuads <> blankQuads <> oceanQuads <> lavaQuads <> freshwaterQuads)
+            in V.fromList (realQuads <> floraQuads <> blankQuads <> oceanQuads
+                                     <> lavaQuads <> freshwaterQuads)
             ) visibleChunksWithOffset
 
     return $! V.concat chunkVectors

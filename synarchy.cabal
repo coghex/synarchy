@@ -294,6 +294,7 @@ library
                      World.Render.ChunkCulling
                      World.Render.Quads
                      World.Render.TileQuads
+                     World.Render.FloraQuads
                      World.Render.Textures
                      World.Render.Textures.Types
                      World.Render.Zoom.Types
@@ -357,6 +358,7 @@ library
                      World.Time.Types
                      World.Flora.Types
                      World.Flora.Placement
+                     World.Flora.Render
                      World.Fluids
                      World.Fluid.Types
                      World.Fluid.Internal
