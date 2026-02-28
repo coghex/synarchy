@@ -361,6 +361,7 @@ library
                      World.Fluid.River
                      World.Fluid.Lake
                      World.Fluid.Lava
+                     World.Vegetation
                      World.Weather
                      World.Weather.Types
                      World.Weather.Log

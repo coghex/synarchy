@@ -2,6 +2,7 @@
 module World.Render.Textures
     ( getTileTexture
     , getTileFaceMapTexture
+    , getVegFaceMapTexture
     ) where
 
 import UPrelude
@@ -46,3 +47,24 @@ getTileFaceMapTexture textures _mat slopeId =
         14 → wtSlopeFaceMapESW textures
         15 → wtSlopeFaceMapNESW textures
         _  → wtIsoFaceMap textures
+
+getVegFaceMapTexture ∷ WorldTextures → Word8 → TextureHandle
+getVegFaceMapTexture textures slopeId =
+    case slopeToFaceMapIndex slopeId of
+        0  → wtVegFaceMap textures
+        1  → wtVegSlopeFaceMapN textures
+        2  → wtVegSlopeFaceMapE textures
+        3  → wtVegSlopeFaceMapNE textures
+        4  → wtVegSlopeFaceMapS textures
+        5  → wtVegSlopeFaceMapNS textures
+        6  → wtVegSlopeFaceMapES textures
+        7  → wtVegSlopeFaceMapNES textures
+        8  → wtVegSlopeFaceMapW textures
+        9  → wtVegSlopeFaceMapNW textures
+        10 → wtVegSlopeFaceMapEW textures
+        11 → wtVegSlopeFaceMapNEW textures
+        12 → wtVegSlopeFaceMapSW textures
+        13 → wtVegSlopeFaceMapNSW textures
+        14 → wtVegSlopeFaceMapESW textures
+        15 → wtVegSlopeFaceMapNESW textures
+        _  → wtVegFaceMap textures

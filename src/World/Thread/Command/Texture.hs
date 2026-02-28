@@ -50,7 +50,7 @@ handleWorldSetTextureCommand env logger pageId texType texHandle = do
                   LavaTexture         → wt { wtLavaTexture      = texHandle }
                   BlankTexture        → wt { wtBlankTexture     = texHandle }
                   NoTexture           → wt { wtNoTexture        = texHandle }
-                  -- Facemaps
+                  -- Terrain facemaps
                   IsoFaceMap          → wt { wtIsoFaceMap       = texHandle }
                   SlopeFaceMapN       → wt { wtSlopeFaceMapN    = texHandle }
                   SlopeFaceMapE       → wt { wtSlopeFaceMapE    = texHandle }
@@ -68,10 +68,29 @@ handleWorldSetTextureCommand env logger pageId texType texHandle = do
                   SlopeFaceMapESW     → wt { wtSlopeFaceMapESW  = texHandle }
                   SlopeFaceMapNESW    → wt { wtSlopeFaceMapNESW = texHandle }
                   NoFaceMap           → wt { wtNoFaceMap        = texHandle }
-                  -- Material layers → insert into the right HashMap
+                  -- Vegetation facemaps
+                  VegFaceMap          → wt { wtVegFaceMap          = texHandle }
+                  VegSlopeFaceMapN    → wt { wtVegSlopeFaceMapN   = texHandle }
+                  VegSlopeFaceMapE    → wt { wtVegSlopeFaceMapE   = texHandle }
+                  VegSlopeFaceMapNE   → wt { wtVegSlopeFaceMapNE  = texHandle }
+                  VegSlopeFaceMapS    → wt { wtVegSlopeFaceMapS   = texHandle }
+                  VegSlopeFaceMapNS   → wt { wtVegSlopeFaceMapNS  = texHandle }
+                  VegSlopeFaceMapES   → wt { wtVegSlopeFaceMapES  = texHandle }
+                  VegSlopeFaceMapNES  → wt { wtVegSlopeFaceMapNES = texHandle }
+                  VegSlopeFaceMapW    → wt { wtVegSlopeFaceMapW   = texHandle }
+                  VegSlopeFaceMapNW   → wt { wtVegSlopeFaceMapNW  = texHandle }
+                  VegSlopeFaceMapEW   → wt { wtVegSlopeFaceMapEW  = texHandle }
+                  VegSlopeFaceMapNEW  → wt { wtVegSlopeFaceMapNEW = texHandle }
+                  VegSlopeFaceMapSW   → wt { wtVegSlopeFaceMapSW  = texHandle }
+                  VegSlopeFaceMapNSW  → wt { wtVegSlopeFaceMapNSW = texHandle }
+                  VegSlopeFaceMapESW  → wt { wtVegSlopeFaceMapESW = texHandle }
+                  VegSlopeFaceMapNESW → wt { wtVegSlopeFaceMapNESW = texHandle }
+                  -- Material layers
                   MatTileTexture mid  → wt { wtTileTextures = HM.insert mid texHandle (wtTileTextures wt) }
                   MatZoomTexture mid  → wt { wtZoomTextures = HM.insert mid texHandle (wtZoomTextures wt) }
                   MatBgTexture   mid  → wt { wtBgTextures   = HM.insert mid texHandle (wtBgTextures wt) }
+                  -- Vegetation tiles
+                  VegTileTexture vid  → wt { wtVegTextures  = HM.insert vid texHandle (wtVegTextures wt) }
             atomicModifyIORef' (wsTexturesRef worldState) 
                 (\wt → (updateTextures wt, ()))
             logDebug logger CatWorld $ 

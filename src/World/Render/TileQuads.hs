@@ -7,6 +7,7 @@ module World.Render.TileQuads
     , freshwaterTileToQuad
     , worldCursorToQuad
     , worldCursorBgToQuad
+    , vegToQuad
     ) where
 
 import UPrelude
@@ -18,9 +19,11 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import World.Constants (seaLevel)
 import World.Material (matOcean, matLava, unMaterialId)
 import World.Fluids (FluidCell(..), FluidType(..))
+import World.Vegetation (getVegTexture)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight, worldLayer, applyFacing)
 import World.Types
-import World.Render.Textures (getTileTexture, getTileFaceMapTexture)
+import World.Render.Textures (getTileTexture, getTileFaceMapTexture
+                             , getVegFaceMapTexture)
 
 -----------------------------------------------------------
 -- Convert Tile to Quad
@@ -336,5 +339,65 @@ worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
         , sqV2       = v2
         , sqV3       = v3
         , sqTexture  = cursorBgTex
+        , sqLayer    = worldLayer
+        }
+
+-- | Vegetation overlay quad.
+--   Draws on top of terrain, under fluid, using the flat facemap.
+--   Returns Nothing for vegId 0 (no vegetation).
+vegToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
+          → WorldTextures → CameraFacing
+          → Int → Int → Int     -- ^ worldX, worldY, worldZ
+          → Word8               -- ^ vegId
+          → Word8               -- ^ slopeId (from the terrain tile)
+          → Int → Int           -- ^ zSlice, effectiveDepth
+          → Float               -- ^ tileAlpha
+          → Float               -- ^ xOffset
+          → Maybe SortableQuad
+vegToQuad _ _ _ _ _ _ _ 0 _ _ _ _ _ = Nothing
+vegToQuad lookupSlot lookupFmSlot textures facing
+          worldX worldY worldZ vegId slopeId zSlice effDepth tileAlpha xOffset =
+    let (rawX, rawY) = gridToScreen facing worldX worldY
+        (fa, fb) = applyFacing facing worldX worldY
+        relativeZ = worldZ - zSlice
+        heightOffset = fromIntegral relativeZ * tileSideHeight
+        drawX = rawX + xOffset
+        drawY = rawY - heightOffset
+
+        sortKey = fromIntegral (fa + fb)
+                + fromIntegral relativeZ * 0.001
+                + 0.0002
+
+        texHandle = getVegTexture textures vegId
+        actualSlot = lookupSlot texHandle
+
+        fmHandle = getVegFaceMapTexture textures slopeId
+        fmSlot = lookupFmSlot fmHandle
+
+        depth = zSlice - worldZ
+        fadeRange = max 1 effDepth
+        fadeT = clamp01 (fromIntegral depth / fromIntegral fadeRange)
+        hazeT = fadeT * fadeT * 0.6
+        r = 1.0 * (1.0 - hazeT) + 0.72 * hazeT
+        g = 1.0 * (1.0 - hazeT) + 0.85 * hazeT
+        b = 1.0 * (1.0 - hazeT) + 0.95 * hazeT
+
+        tint = Vec4 r g b tileAlpha
+
+        v0 = Vertex (Vec2 drawX drawY)
+                     (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)
+                     (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
+                     (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = Vertex (Vec2 drawX (drawY + tileHeight))
+                     (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+    in Just $ SortableQuad
+        { sqSortKey  = sortKey
+        , sqV0       = v0
+        , sqV1       = v1
+        , sqV2       = v2
+        , sqV3       = v3
+        , sqTexture  = texHandle
         , sqLayer    = worldLayer
         }

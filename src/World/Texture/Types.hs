@@ -9,7 +9,7 @@ data WorldTextureType
     | LavaTexture
     | BlankTexture
     | NoTexture
-    -- Facemaps
+    -- Facemaps (terrain — includes side faces)
     | IsoFaceMap
     | SlopeFaceMapN
     | SlopeFaceMapE
@@ -27,8 +27,27 @@ data WorldTextureType
     | SlopeFaceMapESW
     | SlopeFaceMapNESW
     | NoFaceMap
+    -- Vegetation facemaps (top face only — no side faces)
+    | VegFaceMap
+    | VegSlopeFaceMapN
+    | VegSlopeFaceMapE
+    | VegSlopeFaceMapNE
+    | VegSlopeFaceMapS
+    | VegSlopeFaceMapNS
+    | VegSlopeFaceMapES
+    | VegSlopeFaceMapNES
+    | VegSlopeFaceMapW
+    | VegSlopeFaceMapNW
+    | VegSlopeFaceMapEW
+    | VegSlopeFaceMapNEW
+    | VegSlopeFaceMapSW
+    | VegSlopeFaceMapNSW
+    | VegSlopeFaceMapESW
+    | VegSlopeFaceMapNESW
     -- Material textures: layer + material ID
-    | MatTileTexture  !Word8   -- ^ tile layer for material N
-    | MatZoomTexture  !Word8   -- ^ zoom layer for material N
-    | MatBgTexture    !Word8   -- ^ bg layer for material N
+    | MatTileTexture  !Word8
+    | MatZoomTexture  !Word8
+    | MatBgTexture    !Word8
+    -- Vegetation textures: vegId → tile handle
+    | VegTileTexture  !Word8
     deriving (Show, Eq)

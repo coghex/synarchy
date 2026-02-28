@@ -383,6 +383,105 @@ worldView.materialDefs = {
 }
 
 -----------------------------------------------------------
+-- Vegetation Table
+--
+-- Each entry maps a vegId range to a texture.
+-- Variants 0-3 within each type use the same base
+-- texture with different UV offsets or separate files.
+-----------------------------------------------------------
+
+worldView.vegDefs = {
+    -- Sparse grass (4 variants)
+    { idStart = 1,  idEnd = 4,  name = "sparse_grass",
+      tiles = {
+          "assets/textures/world/veg/sparse_grass_1.png",
+          "assets/textures/world/veg/sparse_grass_2.png",
+          "assets/textures/world/veg/sparse_grass_3.png",
+          "assets/textures/world/veg/sparse_grass_4.png",
+      }},
+    -- Medium grass
+    { idStart = 5,  idEnd = 8,  name = "medium_grass",
+      tiles = {
+          "assets/textures/world/veg/medium_grass_1.png",
+          "assets/textures/world/veg/medium_grass_2.png",
+          "assets/textures/world/veg/medium_grass_3.png",
+          "assets/textures/world/veg/medium_grass_4.png",
+      }},
+    -- Dense grass
+    { idStart = 9,  idEnd = 12, name = "dense_grass",
+      tiles = {
+          "assets/textures/world/veg/dense_grass_1.png",
+          "assets/textures/world/veg/dense_grass_2.png",
+          "assets/textures/world/veg/dense_grass_3.png",
+          "assets/textures/world/veg/dense_grass_4.png",
+      }},
+    -- Tall grass (prairie)
+    { idStart = 13, idEnd = 16, name = "tall_grass",
+      tiles = {
+          "assets/textures/world/veg/tall_grass_1.png",
+          "assets/textures/world/veg/tall_grass_2.png",
+          "assets/textures/world/veg/tall_grass_3.png",
+          "assets/textures/world/veg/tall_grass_4.png",
+      }},
+    -- Thin moss
+    { idStart = 17, idEnd = 20, name = "thin_moss",
+      tiles = {
+          "assets/textures/world/veg/thin_moss_1.png",
+          "assets/textures/world/veg/thin_moss_2.png",
+          "assets/textures/world/veg/thin_moss_3.png",
+          "assets/textures/world/veg/thin_moss_4.png",
+      }},
+    -- Thick moss
+    { idStart = 21, idEnd = 24, name = "thick_moss",
+      tiles = {
+          "assets/textures/world/veg/thick_moss_1.png",
+          "assets/textures/world/veg/thick_moss_2.png",
+          "assets/textures/world/veg/thick_moss_3.png",
+          "assets/textures/world/veg/thick_moss_4.png",
+      }},
+    -- Light ivy
+    { idStart = 25, idEnd = 28, name = "light_ivy",
+      tiles = {
+          "assets/textures/world/veg/light_ivy_1.png",
+          "assets/textures/world/veg/light_ivy_2.png",
+          "assets/textures/world/veg/light_ivy_3.png",
+          "assets/textures/world/veg/light_ivy_4.png",
+      }},
+    -- Heavy ivy
+    { idStart = 29, idEnd = 32, name = "heavy_ivy",
+      tiles = {
+          "assets/textures/world/veg/heavy_ivy_1.png",
+          "assets/textures/world/veg/heavy_ivy_2.png",
+          "assets/textures/world/veg/heavy_ivy_3.png",
+          "assets/textures/world/veg/heavy_ivy_4.png",
+      }},
+    -- Lichen / tundra
+    { idStart = 33, idEnd = 36, name = "lichen",
+      tiles = {
+          "assets/textures/world/veg/lichen_1.png",
+          "assets/textures/world/veg/lichen_2.png",
+          "assets/textures/world/veg/lichen_3.png",
+          "assets/textures/world/veg/lichen_4.png",
+      }},
+    -- Desert scrub
+    { idStart = 37, idEnd = 40, name = "desert_scrub",
+      tiles = {
+          "assets/textures/world/veg/desert_scrub_1.png",
+          "assets/textures/world/veg/desert_scrub_2.png",
+          "assets/textures/world/veg/desert_scrub_3.png",
+          "assets/textures/world/veg/desert_scrub_4.png",
+      }},
+    -- Marsh grass
+    { idStart = 41, idEnd = 44, name = "marsh_grass",
+      tiles = {
+          "assets/textures/world/veg/marsh_grass_1.png",
+          "assets/textures/world/veg/marsh_grass_2.png",
+          "assets/textures/world/veg/marsh_grass_3.png",
+          "assets/textures/world/veg/marsh_grass_4.png",
+      }},
+}
+
+-----------------------------------------------------------
 -- Texture Storage
 --
 -- Structural textures: named fields (small fixed set)
@@ -411,6 +510,23 @@ worldView.structuralTextures = {
     isoSlopeFaceMapNSW  = -1,
     isoSlopeFaceMapESW  = -1,
     isoSlopeFaceMapNESW = -1,
+    -- Vegetation facemaps (top face only, no cube sides)
+    vegFaceMap              = -1,
+    vegSlopeFaceMapN        = -1,
+    vegSlopeFaceMapE        = -1,
+    vegSlopeFaceMapNE       = -1,
+    vegSlopeFaceMapS        = -1,
+    vegSlopeFaceMapNS       = -1,
+    vegSlopeFaceMapES       = -1,
+    vegSlopeFaceMapNES      = -1,
+    vegSlopeFaceMapW        = -1,
+    vegSlopeFaceMapNW       = -1,
+    vegSlopeFaceMapEW       = -1,
+    vegSlopeFaceMapNEW      = -1,
+    vegSlopeFaceMapSW       = -1,
+    vegSlopeFaceMapNSW      = -1,
+    vegSlopeFaceMapESW      = -1,
+    vegSlopeFaceMapNESW     = -1,
     noFaceMap      = -1,
 }
 
@@ -463,6 +579,24 @@ function worldView.init(width, height)
     st.isoSlopeFaceMapESW  = engine.loadTexture("assets/textures/world/facemap/isoface_slope_esw.png")
     st.isoSlopeFaceMapNESW = engine.loadTexture("assets/textures/world/facemap/isoface_slope_nesw.png")
     st.noFaceMap      = engine.loadTexture("assets/textures/world/facemap/noface.png")
+    -- Vegetation facemaps (top face only — identical slope shapes
+    -- but bottom 16 rows are fully transparent)
+    st.vegFaceMap              = engine.loadTexture("assets/textures/world/facemap/vegface.png")
+    st.vegSlopeFaceMapN        = engine.loadTexture("assets/textures/world/facemap/vegface_slope_n.png")
+    st.vegSlopeFaceMapE        = engine.loadTexture("assets/textures/world/facemap/vegface_slope_e.png")
+    st.vegSlopeFaceMapNE       = engine.loadTexture("assets/textures/world/facemap/vegface_slope_ne.png")
+    st.vegSlopeFaceMapS        = engine.loadTexture("assets/textures/world/facemap/vegface_slope_s.png")
+    st.vegSlopeFaceMapNS       = engine.loadTexture("assets/textures/world/facemap/vegface_slope_ns.png")
+    st.vegSlopeFaceMapES       = engine.loadTexture("assets/textures/world/facemap/vegface_slope_es.png")
+    st.vegSlopeFaceMapNES      = engine.loadTexture("assets/textures/world/facemap/vegface_slope_nes.png")
+    st.vegSlopeFaceMapW        = engine.loadTexture("assets/textures/world/facemap/vegface_slope_w.png")
+    st.vegSlopeFaceMapNW       = engine.loadTexture("assets/textures/world/facemap/vegface_slope_nw.png")
+    st.vegSlopeFaceMapEW       = engine.loadTexture("assets/textures/world/facemap/vegface_slope_ew.png")
+    st.vegSlopeFaceMapNEW      = engine.loadTexture("assets/textures/world/facemap/vegface_slope_new.png")
+    st.vegSlopeFaceMapSW       = engine.loadTexture("assets/textures/world/facemap/vegface_slope_sw.png")
+    st.vegSlopeFaceMapNSW      = engine.loadTexture("assets/textures/world/facemap/vegface_slope_nsw.png")
+    st.vegSlopeFaceMapESW      = engine.loadTexture("assets/textures/world/facemap/vegface_slope_esw.png")
+    st.vegSlopeFaceMapNESW     = engine.loadTexture("assets/textures/world/facemap/vegface_slope_nesw.png")
 
     for _, handle in pairs(st) do
         worldView.allHandles[handle] = true
@@ -496,6 +630,18 @@ function worldView.init(width, height)
         worldView.allHandles[zoomH] = true
         worldView.allHandles[bgH]   = true
         count = count + 3
+    end
+
+    -- Load vegetation textures
+    worldView.vegTextures = {}
+    for _, def in ipairs(worldView.vegDefs) do
+        for i, path in ipairs(def.tiles) do
+            local vegId = def.idStart + (i - 1)
+            local h = engine.loadTexture(path)
+            worldView.vegTextures[vegId] = h
+            worldView.allHandles[h] = true
+            count = count + 1
+        end
     end
 
     worldView.texturesNeeded = count
@@ -763,6 +909,28 @@ function worldView.sendTexturesToWorld(worldId)
     world.setTexture(worldId, "iso_slope_facemap_esw", st.isoSlopeFaceMapESW)
     world.setTexture(worldId, "iso_slope_facemap_nesw",st.isoSlopeFaceMapNESW)
     world.setTexture(worldId, "nofacemap",             st.noFaceMap)
+    -- Vegetation facemaps
+    world.setTexture(worldId, "veg_facemap",              st.vegFaceMap)
+    world.setTexture(worldId, "veg_slope_facemap_n",      st.vegSlopeFaceMapN)
+    world.setTexture(worldId, "veg_slope_facemap_e",      st.vegSlopeFaceMapE)
+    world.setTexture(worldId, "veg_slope_facemap_ne",     st.vegSlopeFaceMapNE)
+    world.setTexture(worldId, "veg_slope_facemap_s",      st.vegSlopeFaceMapS)
+    world.setTexture(worldId, "veg_slope_facemap_ns",     st.vegSlopeFaceMapNS)
+    world.setTexture(worldId, "veg_slope_facemap_es",     st.vegSlopeFaceMapES)
+    world.setTexture(worldId, "veg_slope_facemap_nes",    st.vegSlopeFaceMapNES)
+    world.setTexture(worldId, "veg_slope_facemap_w",      st.vegSlopeFaceMapW)
+    world.setTexture(worldId, "veg_slope_facemap_nw",     st.vegSlopeFaceMapNW)
+    world.setTexture(worldId, "veg_slope_facemap_ew",     st.vegSlopeFaceMapEW)
+    world.setTexture(worldId, "veg_slope_facemap_new",    st.vegSlopeFaceMapNEW)
+    world.setTexture(worldId, "veg_slope_facemap_sw",     st.vegSlopeFaceMapSW)
+    world.setTexture(worldId, "veg_slope_facemap_nsw",    st.vegSlopeFaceMapNSW)
+    world.setTexture(worldId, "veg_slope_facemap_esw",    st.vegSlopeFaceMapESW)
+    world.setTexture(worldId, "veg_slope_facemap_nesw",   st.vegSlopeFaceMapNESW)
+
+    -- Vegetation tiles
+    for vegId, handle in pairs(worldView.vegTextures) do
+        world.setTexture(worldId, "veg_tile_" .. vegId, handle)
+    end
 
     -- Materials (loop over the loaded handles)
     for matId, handles in pairs(worldView.materialTextures) do

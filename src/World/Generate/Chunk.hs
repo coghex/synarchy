@@ -21,6 +21,7 @@ import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
 import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava
                     , computeChunkLakes, computeChunkRivers, unionFluidMap)
+import World.Vegetation (computeChunkVegetation)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 import World.Generate.Timeline (applyTimelineChunk)
@@ -174,6 +175,7 @@ generateChunk params coord =
                 { ctStartZ = 0
                 , ctMats   = VU.empty
                 , ctSlopes = VU.empty
+                , ctVeg    = VU.empty
                 }
             else
                 let lx = idx `mod` chunkSize
@@ -200,6 +202,7 @@ generateChunk params coord =
                     { ctStartZ = exposeFrom
                     , ctMats   = matIds
                     , ctSlopes = VU.replicate (VU.length matIds) 0
+                    , ctVeg    = VU.replicate (VU.length matIds) 0
                     }
 
         noNeighborLookup ∷ ChunkCoord → Maybe (VU.Vector Int)
@@ -207,7 +210,41 @@ generateChunk params coord =
 
         slopedTiles = computeChunkSlopes seed coord terrainSurfaceMap
                                          fluidMap rawChunk noNeighborLookup
-    in (slopedTiles, surfaceMap, terrainSurfaceMap, fluidMap)
+
+        -- Extract surface material and slope for vegetation computation
+        surfaceMats = VU.generate chunkArea $ \idx →
+            let col = slopedTiles V.! idx
+                surfZ = terrainSurfaceMap VU.! idx
+                i = surfZ - ctStartZ col
+            in if i ≥ 0 ∧ i < VU.length (ctMats col)
+               then ctMats col VU.! i
+               else 0
+
+        surfaceSlopes = VU.generate chunkArea $ \idx →
+            let col = slopedTiles V.! idx
+                surfZ = terrainSurfaceMap VU.! idx
+                i = surfZ - ctStartZ col
+            in if i ≥ 0 ∧ i < VU.length (ctSlopes col)
+               then ctSlopes col VU.! i
+               else 0
+
+        vegIds = computeChunkVegetation seed worldSize coord
+                    terrainSurfaceMap surfaceMats surfaceSlopes
+                    fluidMap (wgpClimateState params)
+
+        -- Inject veg IDs into column tiles
+        finalTiles = V.imap (\idx col →
+            let vegId = vegIds VU.! idx
+                vegVec = VU.replicate (VU.length (ctMats col)) 0
+                surfZ = terrainSurfaceMap VU.! idx
+                i = surfZ - ctStartZ col
+                vegVec' = if i ≥ 0 ∧ i < VU.length vegVec ∧ vegId > 0
+                          then vegVec VU.// [(i, vegId)]
+                          else vegVec
+            in col { ctVeg = vegVec' }
+            ) slopedTiles
+
+    in (finalTiles, surfaceMap, terrainSurfaceMap, fluidMap)
 
 -- | Generate only the exposed tiles for a column.
 --   Skips air tiles (MaterialId 0) to create caves and overhangs.

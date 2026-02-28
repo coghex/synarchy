@@ -37,10 +37,11 @@ data ColumnTiles = ColumnTiles
     { ctStartZ  ∷ !Int
     , ctMats    ∷ !(VU.Vector Word8)    -- material IDs (tileType)
     , ctSlopes  ∷ !(VU.Vector Word8)    -- slope IDs (tileSlopeId)
+    , ctVeg     ∷ !(VU.Vector Word8)    -- vegetation IDs (tileVegId)
     } deriving (Show, Eq)
 
 instance NFData ColumnTiles where
-    rnf (ColumnTiles z ms ss) = rnf z `seq` rnf ms `seq` rnf ss
+    rnf (ColumnTiles z ms ss v) = rnf z `seq` rnf ms `seq` rnf ss `seq` rnf v
 
 -- | A chunk is a flat vector of 16×16 columns.
 --   Index with: columnIndex lx ly = ly * chunkSize + lx
@@ -48,7 +49,7 @@ type Chunk = V.Vector ColumnTiles
 
 -- | Empty column (glacier, beyond-world, etc.)
 emptyColumn ∷ ColumnTiles
-emptyColumn = ColumnTiles 0 VU.empty VU.empty
+emptyColumn = ColumnTiles 0 VU.empty VU.empty VU.empty
 
 chunkSize ∷ Int
 chunkSize = 16

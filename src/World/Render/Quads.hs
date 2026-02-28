@@ -26,6 +26,7 @@ import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped
 import World.Render.TileQuads
     ( tileToQuad, blankTileToQuad, oceanTileToQuad, lavaTileToQuad
     , freshwaterTileToQuad, worldCursorToQuad, worldCursorBgToQuad
+    , vegToQuad
     )
 
 -----------------------------------------------------------
@@ -89,35 +90,37 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                 Just fc → fcType fc ≡ Lava ∧ fcSurface fc > zSlice - effectiveDepth
                                 Nothing → False
 
-                            -- Clamp z iteration to the intersection of
-                            -- the render window and the column's actual range
-                            colLen  = VU.length (ctMats col)
-                            colMinZ = ctStartZ col
-                            colMaxZ = colMinZ + colLen - 1
-                            zLo = max (zSlice - effectiveDepth) colMinZ
-                            zHi = min zSlice colMaxZ
+                            zLo = max (ctStartZ col) (zSlice - effectiveDepth)
+                            zHi = min (ctStartZ col + VU.length (ctMats col) - 1) zSlice
 
-                        in if colLen ≡ 0 ∨ zLo > zHi
+                            surfZ = terrainSurfMap VU.! idx
+                        in if isUnderLava ∨ zHi < zLo
                            then acc
                            else foldl' (\acc2 z →
-                                let i   = z - colMinZ
-                                    mat = ctMats col VU.! i
-                                in if mat ≡ 0  -- matAir
+                                let mat = ctMats col VU.! (z - ctStartZ col)
+                                    drawY' = rawY - fromIntegral (z - zSlice) * tileSideHeight
+                                in if mat ≡ 0 ∨ not (isTileVisible vb (rawX + xOffset) drawY')
                                    then acc2
-                                   else if isUnderLava ∧ z < maybe 0 fcSurface mFluid
-                                   then acc2
-                                   else
-                                   let relativeZ = z - zSlice
-                                       heightOffset = fromIntegral relativeZ * tileSideHeight
-                                       drawX = rawX + xOffset
-                                       drawY = rawY - heightOffset
-                                   in if isTileVisible vb drawX drawY
-                                      then let slopeId = ctSlopes col VU.! i
-                                               tile = Tile mat slopeId
-                                           in tileToQuad lookupSlot lookupFmSlot textures facing
-                                                gx gy z tile zSlice effectiveDepth zoomAlpha xOffset
-                                                mFluid chunkHasFluid : acc2
-                                      else acc2
+                                   else let slopeId = ctSlopes col VU.! (z - ctStartZ col)
+                                            tile = Tile mat slopeId
+                                            tq = tileToQuad lookupSlot lookupFmSlot textures facing
+                                                    gx gy z tile zSlice effectiveDepth zoomAlpha xOffset
+                                                    mFluid chunkHasFluid
+
+                                            -- Vegetation: only on surface tile, only when
+                                            -- no fluid covers it
+                                            vegQ = if z ≡ surfZ ∧ not (isJust mFluid)
+                                                   then let i = z - ctStartZ col
+                                                            vegId = ctVeg col VU.! i
+                                                            slopeId = ctSlopes col VU.! i
+                                                        in vegToQuad lookupSlot lookupFmSlot textures facing
+                                                               gx gy z vegId slopeId zSlice effectiveDepth
+                                                               zoomAlpha xOffset
+                                                   else Nothing
+
+                                        in case vegQ of
+                                            Just vq → vq : tq : acc2
+                                            Nothing → tq : acc2
                                 ) acc [zLo .. zHi]
                     ) [] tileMap
 

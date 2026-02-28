@@ -34,6 +34,25 @@ local function sendStructuralTextures(worldId, st)
             world.setTexture(worldId, "iso_slope_facemap_" .. slopeNames[i], st[field])
         end
     end
+    -- Vegetation facemaps
+    local vegSlopeNames = { "n", "e", "ne", "s", "ns", "es", "nes",
+                            "w", "nw", "ew", "new", "sw", "nsw", "esw", "nesw" }
+    local vegSlopeFields = {
+        "vegSlopeFaceMapN", "vegSlopeFaceMapE", "vegSlopeFaceMapNE",
+        "vegSlopeFaceMapS", "vegSlopeFaceMapNS", "vegSlopeFaceMapES",
+        "vegSlopeFaceMapNES", "vegSlopeFaceMapW", "vegSlopeFaceMapNW",
+        "vegSlopeFaceMapEW", "vegSlopeFaceMapNEW", "vegSlopeFaceMapSW",
+        "vegSlopeFaceMapNSW", "vegSlopeFaceMapESW", "vegSlopeFaceMapNESW",
+    }
+    if st.vegFaceMap then
+        world.setTexture(worldId, "veg_facemap", st.vegFaceMap)
+    end
+    for i = 1, #vegSlopeNames do
+        local field = vegSlopeFields[i]
+        if st[field] then
+            world.setTexture(worldId, "veg_slope_facemap_" .. vegSlopeNames[i], st[field])
+        end
+    end
 end
 
 local function sendMaterialTextures(worldId, materials)
@@ -48,6 +67,13 @@ local function sendMaterialTextures(worldId, materials)
         if handles.bg then
             world.setTexture(worldId, "mat_bg_" .. matId, handles.bg)
         end
+    end
+end
+
+local function sendVegTextures(worldId, vegTextures)
+    if not vegTextures then return end
+    for vegId, handle in pairs(vegTextures) do
+        world.setTexture(worldId, "veg_tile_" .. vegId, handle)
     end
 end
 
