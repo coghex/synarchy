@@ -225,8 +225,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- Flora table
   Lua.newtable
   registerLuaFunction "register" (floraRegisterFn env)
+  registerLuaFunction "setLifecycle" (floraSetLifecycleFn env)
+  registerLuaFunction "addCycleStage" (floraAddCycleStageFn env)
+  registerLuaFunction "addCycleOverride" (floraAddCycleOverrideFn env)
   registerLuaFunction "addPhase" (floraAddPhaseFn env)
-  registerLuaFunction "addSeason" (floraAddSeasonFn env)
   registerLuaFunction "registerForWorldGen" (floraRegisterForWorldGenFn env)
 
   Lua.setglobal (Lua.Name "flora")
