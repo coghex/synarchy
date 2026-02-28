@@ -91,6 +91,8 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
         logInfo logger CatWorld line
         sendGenLog env line
 
+    floraCat ← readIORef (wsFloraCatalogRef worldState)
+
     let params = defaultWorldGenParams
             { wgpSeed        = seed
             , wgpWorldSize   = worldSize
@@ -100,6 +102,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , wgpOceanMap    = oceanMap
             , wgpClimateState = climateState'
             , wgpClimateParams = defaultClimateParams
+            , wgpFloraCatalog = floraCat
             }
     
     writeIORef (wsGenParamsRef worldState) (Just params)
@@ -128,14 +131,14 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
         <> T.pack (show totalInitialChunks) <> ")..."
     
     let centerCoord = ChunkCoord 0 0
-        (ct, cs, cterrain, cf) = generateChunk params centerCoord
+        (ct, cs, cterrain, cf, cflora) = generateChunk params centerCoord
         centerChunk = LoadedChunk
             { lcCoord      = centerCoord
             , lcTiles      = ct
             , lcSurfaceMap = cs
             , lcTerrainSurfaceMap = cterrain
             , lcFluidMap   = cf
-            , lcFlora      = emptyFloraChunkData
+            , lcFlora      = cflora
             , lcModified   = False
             }
     

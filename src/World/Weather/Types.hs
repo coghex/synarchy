@@ -334,10 +334,6 @@ data ClimateState = ClimateState
     , csGlobalTemp ∷ !Float          -- ^ Global mean temperature offset
     , csSolarConst ∷ !Float          -- ^ Solar constant (can vary over deep time)
     } deriving (Show, Eq, Generic, Serialize, NFData)
-instance (Serialize k, Serialize v, Eq k, Hashable k)
-    ⇒ Serialize (HM.HashMap k v) where
-    put = put . HM.toList
-    get = HM.fromList <$> get
 
 initClimateState ∷ Int → ClimateState
 initClimateState worldSize =

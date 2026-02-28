@@ -32,6 +32,8 @@ import qualified Data.Text.Encoding as T
 import qualified Data.Bits as B
 import qualified Data.Functor as F
 import Data.Serialize (Serialize(..))
+import qualified Data.HashMap.Strict as HM
+import Data.Hashable (Hashable)
 import qualified Data.Serialize as S
 
 -- Standard Haskell modules for string handling, word-sized integers, file paths, etc.
@@ -161,3 +163,10 @@ clamp minVal maxVal x
 instance Serialize Text where
     put txt = put $ T.encodeUtf8 txt
     get     = fmap T.decodeUtf8 S.get
+
+instance (Serialize k, Serialize v, Eq k, Hashable k)
+    ⇒ Serialize (HM.HashMap k v) where
+    put = put . HM.toList
+    get = HM.fromList <$> S.get
+
+

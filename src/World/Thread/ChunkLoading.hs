@@ -71,14 +71,14 @@ updateChunkLoading env logger = do
                             when (not $ null batch) $ do
                                 let seed = wgpSeed params
                                 let !newChunks = parMap rdeepseq (\coord →
-                                        let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
+                                        let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk params coord
                                         in LoadedChunk
                                             { lcCoord      = coord
                                             , lcTiles      = chunkTiles
                                             , lcSurfaceMap = surfMap
                                             , lcTerrainSurfaceMap = tMap
                                             , lcFluidMap   = fluidMap
-                                            , lcFlora      = emptyFloraChunkData
+                                            , lcFlora      = flora
                                             , lcModified   = False
                                             }) batch
                                 atomicModifyIORef' (wsTilesRef worldState) $ \td →
@@ -114,14 +114,14 @@ drainInitQueues env logger = do
                             seed  = wgpSeed params
 
                         let newChunks = parMap rdeepseq (\coord →
-                                let (chunkTiles, surfMap, tMap, fluidMap) = generateChunk params coord
+                                let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk params coord
                                 in LoadedChunk
                                     { lcCoord      = coord
                                     , lcTiles      = chunkTiles
                                     , lcSurfaceMap = surfMap
                                     , lcTerrainSurfaceMap = tMap
                                     , lcFluidMap   = fluidMap
-                                    , lcFlora      = emptyFloraChunkData
+                                    , lcFlora      = flora
                                     , lcModified   = False
                                     }) batch
 

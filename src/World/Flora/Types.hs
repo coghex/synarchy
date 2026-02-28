@@ -131,7 +131,7 @@ instance NFData AnnualStage where
     rnf (AnnualStage t d tex) = rnf t `seq` rnf d `seq` rnf tex
 
 data AnnualCycleKey = AnnualCycleKey !LifePhaseTag !AnnualStageTag
-    deriving (Show, Eq, Ord, Generic)
+    deriving (Show, Eq, Ord, Generic, NFData, Serialize)
 instance Hashable AnnualCycleKey where
     hashWithSalt s (AnnualCycleKey p c) =
         s `hashWithSalt` fromEnum p `hashWithSalt` fromEnum c
@@ -147,7 +147,7 @@ data FloraSpecies = FloraSpecies
     , fsPhases         ∷ !(HM.HashMap LifePhaseTag LifePhase)
     , fsAnnualCycle    ∷ ![AnnualStage]
     , fsCycleOverrides ∷ !(HM.HashMap AnnualCycleKey TextureHandle)
-    } deriving (Show)
+    } deriving (Show, Eq, Generic, Serialize, NFData)
 
 newFloraSpecies ∷ Text → TextureHandle → FloraSpecies
 newFloraSpecies name baseTex = FloraSpecies
@@ -172,7 +172,7 @@ data FloraWorldGen = FloraWorldGen
     , fwMaxSlope  ∷ !Word8
     , fwDensity   ∷ !Float
     , fwSoils     ∷ ![Word8]
-    } deriving (Show)
+    } deriving (Show, Eq, Generic, Serialize, NFData)
 
 -----------------------------------------------------------
 -- Per-Instance Data (Saved per chunk)
@@ -225,7 +225,7 @@ data FloraCatalog = FloraCatalog
     { fcSpecies  ∷ !(HM.HashMap Word16 FloraSpecies)
     , fcWorldGen ∷ !(HM.HashMap Word16 FloraWorldGen)
     , fcNextId   ∷ !Word16
-    } deriving (Show)
+    } deriving (Show, Eq, Generic, Serialize, NFData)
 
 emptyFloraCatalog ∷ FloraCatalog
 emptyFloraCatalog = FloraCatalog

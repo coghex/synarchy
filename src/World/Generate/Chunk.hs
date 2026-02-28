@@ -22,6 +22,7 @@ import World.Slope (computeChunkSlopes)
 import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava
                     , computeChunkLakes, computeChunkRivers, unionFluidMap)
 import World.Vegetation (computeChunkVegetation)
+import World.Flora.Placement (computeChunkFlora)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 import World.Generate.Timeline (applyTimelineChunk)
@@ -45,7 +46,7 @@ import World.Generate.Strata
 --   The border is expanded to chunkBorder tiles so erosion at
 --   chunk edges has valid neighbor data.
 generateChunk ∷ WorldGenParams → ChunkCoord
-  → (Chunk, VU.Vector Int, VU.Vector Int, V.Vector (Maybe FluidCell))
+  → (Chunk, VU.Vector Int, VU.Vector Int, V.Vector (Maybe FluidCell), FloraChunkData)
 generateChunk params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -53,6 +54,7 @@ generateChunk params coord =
         plates = wgpPlates params
         wsc = computeWorldScale worldSize
         oceanMap = wgpOceanMap params
+        catalog = wgpFloraCatalog params
 
         borderSize = chunkSize + 2 * chunkBorder
         borderArea = borderSize * borderSize
@@ -231,6 +233,10 @@ generateChunk params coord =
         vegIds = computeChunkVegetation seed worldSize coord
                     terrainSurfaceMap surfaceMats surfaceSlopes
                     fluidMap (wgpClimateState params)
+        -- Flora sprites (trees, shrubs, wildflowers)
+        floraData = computeChunkFlora seed worldSize coord
+                        terrainSurfaceMap surfaceMats surfaceSlopes
+                        fluidMap (wgpClimateState params) catalog
 
         -- Inject veg IDs into column tiles
         finalTiles = V.imap (\idx col →
@@ -244,7 +250,7 @@ generateChunk params coord =
             in col { ctVeg = vegVec' }
             ) slopedTiles
 
-    in (finalTiles, surfaceMap, terrainSurfaceMap, fluidMap)
+    in (finalTiles, surfaceMap, terrainSurfaceMap, fluidMap, floraData)
 
 -- | Generate only the exposed tiles for a column.
 --   Skips air tiles (MaterialId 0) to create caves and overhangs.

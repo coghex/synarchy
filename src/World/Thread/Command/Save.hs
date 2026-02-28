@@ -149,14 +149,14 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     writeIORef phaseRef (LoadPhase1 3 totalSteps)
     sendGenLog env "Generating initial chunks..."
     let centerCoord = ChunkCoord 0 0
-        (ct, cs, cterrain, cf) = generateChunk params centerCoord
+        (ct, cs, cterrain, cf, cflora) = generateChunk params centerCoord
         centerChunk = LoadedChunk
             { lcCoord             = centerCoord
             , lcTiles             = ct
             , lcSurfaceMap        = cs
             , lcTerrainSurfaceMap = cterrain
             , lcFluidMap          = cf
-            , lcFlora             = emptyFloraChunkData
+            , lcFlora             = cflora
             , lcModified          = False
             }
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
