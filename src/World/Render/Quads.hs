@@ -5,7 +5,6 @@ module World.Render.Quads
     ) where
 
 import UPrelude
-import Debug.Trace (traceIO)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
@@ -46,6 +45,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
     camera ← readIORef (cameraRef env)
     floraCat ← readIORef (floraCatalogRef env)
     worldDate ← readIORef (wsDateRef worldState)
+    texSizes ← readIORef (textureSizeRef env)
 
     let (fbW, fbH) = wcsFbSize snap
         facing = camFacing camera
@@ -142,7 +142,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     , texHandle /= TextureHandle 0
                     , Just fq ← [floraToQuad lookupSlot lookupFmSlot textures facing
                                      gx gy inst texHandle zSlice effectiveDepth
-                                     zoomAlpha xOffset]
+                                     zoomAlpha xOffset texSizes]
                     ]
                 !blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures facing
@@ -225,12 +225,6 @@ renderWorldQuads env worldState zoomAlpha snap = do
             in V.fromList (realQuads <> floraQuads <> blankQuads <> oceanQuads
                                      <> lavaQuads <> freshwaterQuads)
             ) visibleChunksWithOffset
-    -- At the very end, before return:
-    let totalFloraInstances = sum [ length (fcdInstances (lcFlora lc))
-                                  | (lc, _) ← visibleChunksWithOffset ]
-    when (totalFloraInstances > 0) $
-        traceIO $ "Rendering flora: " ++ show totalFloraInstances ++ " instances"
-
     return $! V.concat chunkVectors
 
 -----------------------------------------------------------

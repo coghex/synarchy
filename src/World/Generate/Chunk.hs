@@ -5,7 +5,6 @@ module World.Generate.Chunk
     ) where
 
 import UPrelude
-import Debug.Trace (trace)
 import Control.Monad.ST (runST, ST)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
@@ -234,18 +233,9 @@ generateChunk catalog params coord =
                     terrainSurfaceMap surfaceMats surfaceSlopes
                     fluidMap (wgpClimateState params)
         -- Flora sprites (trees, shrubs, wildflowers)
---        floraData = computeChunkFlora seed worldSize coord
---                        terrainSurfaceMap surfaceMats surfaceSlopes
---                        fluidMap (wgpClimateState params) catalog
-
-        -- Flora sprites (trees, shrubs, wildflowers)
-        floraData0 = computeChunkFlora seed worldSize coord
+        floraData = computeChunkFlora seed worldSize coord
                         terrainSurfaceMap surfaceMats surfaceSlopes
                         fluidMap (wgpClimateState params) catalog
-        floraData = case fcdInstances floraData0 of
-            [] → floraData0
-            xs → trace ("Flora placed: " ++ show (length xs)
-                       ++ " instances in chunk " ++ show coord) floraData0
 
         -- Inject veg IDs into column tiles
         finalTiles = V.imap (\idx col →

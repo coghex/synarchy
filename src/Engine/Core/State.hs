@@ -4,9 +4,11 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.ByteString as BS
+import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef)
 import Engine.Asset.Base
 import Engine.Asset.Types
+import Engine.Asset.Handle
 import Engine.Core.Log
 import Engine.Core.Types
 import Engine.Core.Queue as Q
@@ -67,6 +69,7 @@ data EngineEnv = EngineEnv
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))
   , worldQuadsRef       ∷ IORef (V.Vector SortableQuad)
   , textureSystemRef    ∷ IORef (Maybe BindlessTextureSystem)
+  , textureSizeRef      ∷ IORef (HM.HashMap TextureHandle (Int, Int))
   , defaultFaceMapSlotRef  ∷ IORef Word32
   , floraCatalogRef     ∷ IORef FloraCatalog
   } deriving (Eq)

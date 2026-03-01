@@ -6,11 +6,13 @@ import UPrelude
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Data.ByteString as BS
+import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Data.Time.Clock (getCurrentTime)
 import Foreign.Ptr (castPtr)
 import Foreign.Marshal.Utils (copyBytes)
 import System.FilePath (takeBaseName)
+import qualified Codec.Picture as JP
 import Engine.Asset.Handle
 import Engine.Asset.Manager
 import Engine.Asset.Types
@@ -346,6 +348,18 @@ handleLoadTexture handle path = do
     liftIO $ Q.writeQueue (luaQueue env)
       (LuaAssetLoaded "texture" (fromIntegral h) (T.pack path))
     logDebugM CatLua $ "Texture loaded successfully: " <> T.pack path
+    -- record dimensions
+    mDims ← liftIO $ do
+        result ← JP.readImage path
+        case result of
+            Right dynImg →
+                let img = JP.convertRGBA8 dynImg
+                in pure $ Just (JP.imageWidth img, JP.imageHeight img)
+            Left _ → pure Nothing
+    case mDims of
+        Just (w, h) → liftIO $ atomicModifyIORef' (textureSizeRef env) $ \m →
+            (HM.insert handle (w, h) m, ())
+        Nothing → pure ()
 
 -- | Handle font load request
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM ε σ ()

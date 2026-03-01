@@ -14,12 +14,13 @@ module Engine.Asset.Handle
 import UPrelude
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
+import Data.Hashable (Hashable)
 import Control.DeepSeq (NFData)
 import Engine.Asset.Base (AssetId)
 
 -- | Asset Handles provide opaque references to assets
 newtype TextureHandle = TextureHandle Int
-  deriving (Show, Eq, Ord, Generic, Serialize, NFData)
+  deriving (Show, Eq, Ord, Generic, Serialize, NFData, Hashable)
 
 newtype FontHandle = FontHandle Int
   deriving (Show, Eq, Ord)

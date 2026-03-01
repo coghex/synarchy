@@ -9,6 +9,7 @@ import qualified Control.Monad.Logger.CallStack as Logger
 import Data.IORef (newIORef)
 import qualified Data.Map as Map
 import qualified Data.Vector as V
+import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
@@ -94,6 +95,7 @@ initializeEngine = do
   worldQuadsRef ← newIORef (V.empty)
   -- texture system
   textureSystemRef ← newIORef Nothing
+  texSizeRef ← newIORef HM.empty
   -- default face map slot
   defaultFaceMapSlotRef ← newIORef 0
   -- flora catalog
@@ -132,6 +134,7 @@ initializeEngine = do
         , worldPreviewRef    = worldPreviewRef
         , worldQuadsRef      = worldQuadsRef
         , textureSystemRef   = textureSystemRef
+        , textureSizeRef     = texSizeRef
         , defaultFaceMapSlotRef = defaultFaceMapSlotRef
         , floraCatalogRef    = floraCatRef
         }
