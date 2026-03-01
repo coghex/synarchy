@@ -25,10 +25,6 @@ import System.IO.Unsafe (unsafePerformIO)
 -- Chunk Flora Computation
 -----------------------------------------------------------
 
--- | Place flora instances for an entire chunk.
---   Uses an occupancy grid to prevent overlapping footprints.
---   Each placed tree claims a radius of tiles around it based
---   on its fwFootprint (in pixels → tile radius).
 computeChunkFlora
     ∷ Word64 → Int → ChunkCoord
     → VU.Vector Int → VU.Vector Word8 → VU.Vector Word8
@@ -40,14 +36,8 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
         chunkArea = chunkSize * chunkSize
         wgSpecies = worldGenSpecies catalog
 
-        -- Shuffle tile indices so placement isn't biased by scan order.
-        -- This ensures trees at the top-left of a chunk don't always
-        -- claim space before trees at the bottom-right.
         tileOrder = shuffledIndices seed cx cy chunkArea
 
-        -- Build instances with occupancy tracking.
-        -- The occupancy vector is chunkSize×chunkSize of Bool (0/1).
-        -- A tile marked occupied cannot have new flora placed on it.
         allInstances = unsafePerformIO $ do
             occupied ← VUM.replicate chunkArea (0 ∷ Word8)
             let go [] acc = return (reverse acc)
@@ -70,19 +60,14 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                     then go rest acc
                     else do
                         let newInsts = placeTileFlora seed gx gy lx ly surfZ
-                                          matId slopeId temp precip wgSpecies
+                                          matId slopeId temp precip wgSpecies catalog
                         case newInsts of
                             [] → go rest acc
                             insts → do
-                                -- Mark tiles as occupied based on footprint
-                                let baseW = case insts of
-                                        (fi:_) → fiBaseWidth fi
-                                        _      → 0.0
-                                    -- Convert pixel footprint to tile radius:
-                                    -- a 24px base on a 32px tile → radius 1
-                                    -- (claims the center tile + immediate neighbors)
-                                    tileRadius = if baseW > 0.0
-                                                 then max 0 (ceiling (baseW / 32.0) - 1)
+                                let maxFP = maximum
+                                        [ fiBaseWidth fi | fi ← insts ]
+                                    tileRadius = if maxFP > 0.0
+                                                 then max 0 (ceiling (maxFP / 32.0) - 1)
                                                  else 0 ∷ Int
                                 markOccupied occupied lx ly tileRadius chunkSize
                                 go rest (insts ++ acc)
@@ -91,7 +76,6 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
 
     in FloraChunkData allInstances
 
--- | Mark a radius of tiles as occupied in the mutable vector.
 markOccupied ∷ VUM.IOVector Word8 → Int → Int → Int → Int → IO ()
 markOccupied occupied cx cy radius chunkSz =
     forM_ [negate radius .. radius] $ \dx →
@@ -101,12 +85,10 @@ markOccupied occupied cx cy radius chunkSz =
             when (nx >= 0 ∧ nx < chunkSz ∧ ny >= 0 ∧ ny < chunkSz) $
                 VUM.write occupied (ny * chunkSz + nx) 1
 
--- | Generate a shuffled list of tile indices for a chunk.
---   Deterministic based on seed and chunk coord.
 shuffledIndices ∷ Word64 → Int → Int → Int → [Int]
 shuffledIndices seed cx cy n =
     map snd $ sortOn fst
-        [ (floraHash seed (cx * 1000 + i) (cy * 1000) 0x51151551, i)
+        [ (floraHash seed (cx * 1000 + i) (cy * 1000) 0x5A1F1E, i)
         | i ← [0 .. n - 1]
         ]
 
@@ -118,8 +100,9 @@ placeTileFlora
     ∷ Word64 → Int → Int → Int → Int → Int
     → Word8 → Word8 → Float → Float
     → [(FloraId, FloraWorldGen)]
+    → FloraCatalog
     → [FloraInstance]
-placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies =
+placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies catalog =
     concatMap (\(i, (fid, wg)) →
         let h = floraHash seed gx gy (fromIntegral i + 100)
             roll = fromIntegral (h .&. 0xFFFF) / 65535.0 ∷ Float
@@ -127,12 +110,46 @@ placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies =
            then let cat   = fwCategory wg
                     baseW = fwFootprint wg
                     count = instanceCount cat h
+                    maxAge = speciesMaxAge fid catalog
                 in [ mkInstance fid lx ly surfZ seed gx gy
-                         (i * 10 + j) count baseW
+                         (i * 10 + j) count baseW maxAge
                    | j ← [0 .. count - 1]
                    ]
            else []
     ) (zip [0..] wgSpecies)
+
+-----------------------------------------------------------
+-- Max Age from Lifecycle Data
+-----------------------------------------------------------
+
+-- | Determine the maximum initial age for worldgen spawning
+--   from the actual species lifecycle and phase definitions.
+--
+--   Strategy:
+--     Perennial → use lcMaxLifespan (cap at that, they die)
+--     Annual    → 360 game-days (one year)
+--     Biennial  → 720 game-days (two years)
+--     Evergreen → use the highest phase age, so we get a
+--                 spread across all defined growth stages.
+--                 If no phases defined, default to 1800 (~5yr).
+speciesMaxAge ∷ FloraId → FloraCatalog → Float
+speciesMaxAge fid catalog =
+    case lookupSpecies fid catalog of
+        Nothing → 360.0  -- fallback
+        Just species →
+            let lifecycle = fsLifecycle species
+                phases    = fsPhases species
+                -- Highest age threshold from any defined phase
+                maxPhaseAge = if HM.null phases
+                              then 0.0
+                              else maximum [ lpAge lp | lp ← HM.elems phases ]
+            in case lifecycle of
+                Perennial minL maxL _ → maxL
+                Annual                → 360.0
+                Biennial              → 720.0
+                Evergreen
+                    | maxPhaseAge > 0.0 → maxPhaseAge * 1.5
+                    | otherwise         → 1800.0
 
 -----------------------------------------------------------
 -- Instance Construction
@@ -150,23 +167,25 @@ instanceCount cat h
 --   ALL instances get a random offset (including trees with count=1).
 --   The offset is clamped by the footprint so the base stays on the tile.
 mkInstance ∷ FloraId → Int → Int → Int → Word64 → Int → Int
-           → Int → Int → Float → FloraInstance
-mkInstance fid lx ly surfZ seed gx gy i _count baseWidth =
+           → Int → Int → Float → Float → FloraInstance
+mkInstance fid lx ly surfZ seed gx gy i _count baseWidth maxAge =
     let h = floraHash seed gx gy (fromIntegral i + 1)
-        -- Always scatter — even single instances get a random position
         rawU = fromIntegral ((h `shiftR` 0)  .&. 0xFF) / 255.0 - 0.5
         rawV = fromIntegral ((h `shiftR` 8)  .&. 0xFF) / 255.0 - 0.5
 
-        -- Clamp offset so the base stays inside the tile.
         halfBase = if baseWidth > 0.0
                    then (baseWidth / 2.0) / 96.0
                    else 0.0
         maxOff = max 0.0 (0.5 - halfBase)
-        -- Scale down scatter range (0.7 keeps things off the very edge)
         offU = clamp (negate maxOff) maxOff (rawU * 0.7)
         offV = clamp (negate maxOff) maxOff (rawV * 0.7)
 
         variant = fromIntegral ((h `shiftR` 16) .&. 0x03)
+
+        -- Randomize initial age from lifecycle data
+        ageFrac = fromIntegral ((h `shiftR` 24) .&. 0xFF) / 255.0
+        age = ageFrac * maxAge
+
     in FloraInstance
         { fiSpecies   = fid
         , fiTileX     = fromIntegral lx
@@ -174,7 +193,7 @@ mkInstance fid lx ly surfZ seed gx gy i _count baseWidth =
         , fiOffU      = offU
         , fiOffV      = offV
         , fiZ         = surfZ
-        , fiAge       = 0.0
+        , fiAge       = age
         , fiHealth    = 1.0
         , fiVariant   = variant
         , fiBaseWidth = baseWidth
