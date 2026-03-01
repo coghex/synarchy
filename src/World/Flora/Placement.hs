@@ -6,10 +6,11 @@ module World.Flora.Placement
 import UPrelude
 import Data.Bits (xor, shiftR, (.&.))
 import Data.Word (Word8, Word16, Word64)
-import Data.List (sortOn)
+import Data.List (sortOn, foldl')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Types
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidCell(..))
@@ -18,30 +19,20 @@ import World.Weather.Types (ClimateState(..), ClimateGrid(..)
                            , RegionClimate(..), SeasonalClimate(..)
                            , ClimateCoord(..), climateRegionSize)
 import World.Flora.Types
+import System.IO.Unsafe (unsafePerformIO)
 
 -----------------------------------------------------------
 -- Chunk Flora Computation
 -----------------------------------------------------------
 
 -- | Place flora instances for an entire chunk.
---   Pure, deterministic, runs after vegetation groundcover
---   is computed.
---
---   For each tile, hashes to decide whether to place flora,
---   then checks each worldgen-registered species against the
---   local biome conditions. If a species fits, places one or
---   more instances depending on category (trees get 1 centered,
---   small plants get 2-4 scattered).
+--   Uses an occupancy grid to prevent overlapping footprints.
+--   Each placed tree claims a radius of tiles around it based
+--   on its fwFootprint (in pixels → tile radius).
 computeChunkFlora
-    ∷ Word64                     -- ^ world seed
-    → Int                        -- ^ worldSize
-    → ChunkCoord                 -- ^ chunk coordinate
-    → VU.Vector Int              -- ^ terrainSurfaceMap
-    → VU.Vector Word8            -- ^ surface material IDs
-    → VU.Vector Word8            -- ^ slope IDs
-    → V.Vector (Maybe FluidCell) -- ^ fluid map
-    → ClimateState               -- ^ climate for regional lookup
-    → FloraCatalog               -- ^ registered flora species
+    ∷ Word64 → Int → ChunkCoord
+    → VU.Vector Int → VU.Vector Word8 → VU.Vector Word8
+    → V.Vector (Maybe FluidCell) → ClimateState → FloraCatalog
     → FloraChunkData
 computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                   fluidMap climate catalog =
@@ -49,69 +40,91 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
         chunkArea = chunkSize * chunkSize
         wgSpecies = worldGenSpecies catalog
 
-        allInstances = concatMap (\idx →
-            let lx = idx `mod` chunkSize
-                ly = idx `div` chunkSize
-                gx = cx * chunkSize + lx
-                gy = cy * chunkSize + ly
-                matId    = surfMats   VU.! idx
-                slopeId  = surfSlopes VU.! idx
-                surfZ    = surfMap    VU.! idx
-                hasFluid = case fluidMap V.! idx of
-                    Just _  → True
-                    Nothing → False
-                (temp, precip, _, _) =
-                    lookupLocalClimate climate worldSize gx gy
-            in if hasFluid ∨ isBarrenMaterial matId ∨ surfZ ≡ minBound
-               then []
-               else placeTileFlora seed gx gy lx ly surfZ
-                        matId slopeId temp precip wgSpecies
-                        surfMap chunkSize
-            ) [0 .. chunkArea - 1]
+        -- Shuffle tile indices so placement isn't biased by scan order.
+        -- This ensures trees at the top-left of a chunk don't always
+        -- claim space before trees at the bottom-right.
+        tileOrder = shuffledIndices seed cx cy chunkArea
+
+        -- Build instances with occupancy tracking.
+        -- The occupancy vector is chunkSize×chunkSize of Bool (0/1).
+        -- A tile marked occupied cannot have new flora placed on it.
+        allInstances = unsafePerformIO $ do
+            occupied ← VUM.replicate chunkArea (0 ∷ Word8)
+            let go [] acc = return (reverse acc)
+                go (idx:rest) acc = do
+                    let lx = idx `mod` chunkSize
+                        ly = idx `div` chunkSize
+                        gx = cx * chunkSize + lx
+                        gy = cy * chunkSize + ly
+                        matId    = surfMats   VU.! idx
+                        slopeId  = surfSlopes VU.! idx
+                        surfZ    = surfMap    VU.! idx
+                        hasFluid = case fluidMap V.! idx of
+                            Just _  → True
+                            Nothing → False
+                        (temp, precip, _, _) =
+                            lookupLocalClimate climate worldSize gx gy
+
+                    occ ← VUM.read occupied idx
+                    if occ /= 0 ∨ hasFluid ∨ isBarrenMaterial matId ∨ surfZ ≡ minBound
+                    then go rest acc
+                    else do
+                        let newInsts = placeTileFlora seed gx gy lx ly surfZ
+                                          matId slopeId temp precip wgSpecies
+                        case newInsts of
+                            [] → go rest acc
+                            insts → do
+                                -- Mark tiles as occupied based on footprint
+                                let baseW = case insts of
+                                        (fi:_) → fiBaseWidth fi
+                                        _      → 0.0
+                                    -- Convert pixel footprint to tile radius:
+                                    -- a 24px base on a 32px tile → radius 1
+                                    -- (claims the center tile + immediate neighbors)
+                                    tileRadius = if baseW > 0.0
+                                                 then max 0 (ceiling (baseW / 32.0) - 1)
+                                                 else 0 ∷ Int
+                                markOccupied occupied lx ly tileRadius chunkSize
+                                go rest (insts ++ acc)
+
+            go tileOrder []
 
     in FloraChunkData allInstances
 
--- | Check that all tiles within a footprint radius have similar elevation.
---   "Similar" means no neighbor drops more than maxDrop below the center tile.
---   Only checks tiles within the chunk (border tiles conservatively pass).
-footprintSafe ∷ Int → Int → Int → Int → VU.Vector Int → Int → Bool
-footprintSafe lx ly surfZ radius surfMap chunkSz
-    | radius ≤ 0 = True
-    | otherwise  =
-        let maxDrop = 3  -- max Z difference before we call it a cliff
-        in all (\(nx, ny) →
-            if nx < 0 ∨ nx >= chunkSz ∨ ny < 0 ∨ ny >= chunkSz
-            then True  -- out of chunk, conservatively allow
-            else let nIdx = ny * chunkSz + nx
-                     nZ = surfMap VU.! nIdx
-                 in surfZ - nZ ≤ maxDrop
-            ) [ (lx + dx, ly + dy)
-              | dx ← [negate radius .. radius]
-              , dy ← [negate radius .. radius]
-              , dx /= 0 ∨ dy /= 0
-              ]
+-- | Mark a radius of tiles as occupied in the mutable vector.
+markOccupied ∷ VUM.IOVector Word8 → Int → Int → Int → Int → IO ()
+markOccupied occupied cx cy radius chunkSz =
+    forM_ [negate radius .. radius] $ \dx →
+        forM_ [negate radius .. radius] $ \dy → do
+            let nx = cx + dx
+                ny = cy + dy
+            when (nx >= 0 ∧ nx < chunkSz ∧ ny >= 0 ∧ ny < chunkSz) $
+                VUM.write occupied (ny * chunkSz + nx) 1
+
+-- | Generate a shuffled list of tile indices for a chunk.
+--   Deterministic based on seed and chunk coord.
+shuffledIndices ∷ Word64 → Int → Int → Int → [Int]
+shuffledIndices seed cx cy n =
+    map snd $ sortOn fst
+        [ (floraHash seed (cx * 1000 + i) (cy * 1000) 0x51151551, i)
+        | i ← [0 .. n - 1]
+        ]
 
 -----------------------------------------------------------
 -- Per-Tile Placement
 -----------------------------------------------------------
 
--- | Try to place flora on a single tile.
---   Iterates worldgen species sorted by density (highest first)
---   so dominant species claim tiles before rare ones.
---   Only one species wins per tile — first match takes it.
 placeTileFlora
     ∷ Word64 → Int → Int → Int → Int → Int
     → Word8 → Word8 → Float → Float
     → [(FloraId, FloraWorldGen)]
-    → VU.Vector Int → Int
     → [FloraInstance]
-placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies
-               surfMap chunkSz =
+placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies =
     let h0 = floraHash seed gx gy 0
         tileRoll = fromIntegral (h0 .&. 0xFFFF) / 65535.0 ∷ Float
 
         sorted = sortOn (negate . fwDensity . snd) wgSpecies
-        match = firstMatch sorted
+        match = firstMatch sorted tileRoll
     in case match of
         Nothing → []
         Just (fid, wg) →
@@ -122,55 +135,44 @@ placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies
                | i ← [0 .. count - 1]
                ]
   where
-    firstMatch [] = Nothing
-    firstMatch ((fid, wg):rest)
+    firstMatch [] _ = Nothing
+    firstMatch ((fid, wg):rest) roll
         | matchesBiome wg matId slopeId temp precip
-        , tileRoll < fwDensity wg
-        , footprintSafe lx ly surfZ (round (fwFootprint wg)) surfMap chunkSz
+        , roll < fwDensity wg
             = Just (fid, wg)
-        | otherwise = firstMatch rest
-
-    tileRoll ∷ Float
-    tileRoll =
-        let h0 = floraHash seed gx gy 0
-        in fromIntegral (h0 .&. 0xFFFF) / 65535.0
+        | otherwise = firstMatch rest roll
 
 -----------------------------------------------------------
 -- Instance Construction
 -----------------------------------------------------------
 
--- | How many instances to place per tile for a given category.
 instanceCount ∷ Text → Word64 → Int
 instanceCount cat h
     | cat ≡ "tree"      = 1
     | cat ≡ "shrub"     = 1
-    | cat ≡ "bush"      = 1 + fromIntegral ((h `shiftR` 16) .&. 0x01)  -- 1-2
+    | cat ≡ "bush"      = 1 + fromIntegral ((h `shiftR` 16) .&. 0x01)
     | cat ≡ "cactus"    = 1
-    | otherwise          = 2 + fromIntegral ((h `shiftR` 16) .&. 0x01)  -- 2-3 (wildflowers etc)
+    | otherwise          = 2 + fromIntegral ((h `shiftR` 16) .&. 0x01)
 
 -- | Build one FloraInstance with deterministic sub-tile offset.
---   clamped so the sprite base stays within the tile.
+--   ALL instances get a random offset (including trees with count=1).
+--   The offset is clamped by the footprint so the base stays on the tile.
 mkInstance ∷ FloraId → Int → Int → Int → Word64 → Int → Int
            → Int → Int → Float → FloraInstance
-mkInstance fid lx ly surfZ seed gx gy i count baseWidth =
+mkInstance fid lx ly surfZ seed gx gy i _count baseWidth =
     let h = floraHash seed gx gy (fromIntegral i + 1)
-        -- Sub-tile offset: centered for single, scattered for multiple
-        (rawU, rawV) = if count ≡ 1
-            then (0.0, 0.0)
-            else let u = fromIntegral ((h `shiftR` 0)  .&. 0xFF) / 255.0 - 0.5
-                     v = fromIntegral ((h `shiftR` 8)  .&. 0xFF) / 255.0 - 0.5
-                 in (u * 0.8, v * 0.8)
+        -- Always scatter — even single instances get a random position
+        rawU = fromIntegral ((h `shiftR` 0)  .&. 0xFF) / 255.0 - 0.5
+        rawV = fromIntegral ((h `shiftR` 8)  .&. 0xFF) / 255.0 - 0.5
 
         -- Clamp offset so the base stays inside the tile.
-        -- baseWidth is in pixels; tileWidth (32) is the full tile.
-        -- Half the base in tile-units:
         halfBase = if baseWidth > 0.0
                    then (baseWidth / 2.0) / 32.0
                    else 0.0
-        -- Maximum offset: half tile (0.5) minus half base
         maxOff = max 0.0 (0.5 - halfBase)
-        offU = clamp (negate maxOff) maxOff rawU
-        offV = clamp (negate maxOff) maxOff rawV
+        -- Scale down scatter range (0.7 keeps things off the very edge)
+        offU = clamp (negate maxOff) maxOff (rawU * 0.7)
+        offV = clamp (negate maxOff) maxOff (rawV * 0.7)
 
         variant = fromIntegral ((h `shiftR` 16) .&. 0x03)
     in FloraInstance
@@ -183,7 +185,8 @@ mkInstance fid lx ly surfZ seed gx gy i count baseWidth =
         , fiAge       = 0.0
         , fiHealth    = 1.0
         , fiVariant   = variant
-        , fiBaseWidth = baseWidth }
+        , fiBaseWidth = baseWidth
+        }
 
 -----------------------------------------------------------
 -- Biome Matching
@@ -202,7 +205,7 @@ matchesBiome wg matId slopeId temp precip =
     soilOk = null soils ∨ matId `elem` soils
 
 -----------------------------------------------------------
--- Climate Lookup (same as Vegetation.hs)
+-- Climate Lookup
 -----------------------------------------------------------
 
 lookupLocalClimate ∷ ClimateState → Int → Int → Int
@@ -239,8 +242,6 @@ lookupLocalClimate climate worldSize gx gy =
 -- Hash
 -----------------------------------------------------------
 
--- | Deterministic hash for flora placement.
---   Uses a different salt from vegetation to avoid correlation.
 floraHash ∷ Word64 → Int → Int → Word64 → Word64
 floraHash seed gx gy salt =
     let a = seed `xor` 0xF15A533D

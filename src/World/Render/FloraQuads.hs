@@ -88,8 +88,7 @@ floraToQuad lookupSlot lookupFmSlot textures facing
                     + fiOffV inst * 0.00005
 
             actualSlot = lookupSlot texHandle
-            fmHandle = getVegFaceMapTexture textures 0
-            fmSlot = lookupFmSlot fmHandle
+            fmSlot = lookupFmSlot (TextureHandle 0)
 
             depth = zSlice - floraZ
             fadeRange = max 1 effDepth
