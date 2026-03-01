@@ -44,7 +44,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
     textures ← readIORef (wsTexturesRef worldState)
     paramsM ← readIORef (wsGenParamsRef worldState)
     camera ← readIORef (cameraRef env)
-    floraCat ← readIORef (wsFloraCatalogRef worldState)
+    floraCat ← readIORef (floraCatalogRef env)
     worldDate ← readIORef (wsDateRef worldState)
 
     let (fbW, fbH) = wcsFbSize snap

@@ -50,7 +50,6 @@ data WorldState = WorldState
     , wsToolModeRef ∷ IORef ToolMode
     , wsCursorSnapshotRef ∷ IORef CursorSnapshot
     , wsLoadPhaseRef ∷ IORef LoadPhase
-    , wsFloraCatalogRef ∷ IORef FloraCatalog
     }
 
 emptyWorldState ∷ IO WorldState
@@ -76,14 +75,13 @@ emptyWorldState = do
     wsToolModeRef ← newIORef DefaultTool
     wsCursorSnapshotRef ← newIORef emptyCursorSnapshot
     wsLoadPhaseRef ← newIORef LoadIdle
-    wsFloraCatalogRef ← newIORef emptyFloraCatalog
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
                         wsClimateRef wsRiverFlowRef wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
-                        wsLoadPhaseRef wsFloraCatalogRef
+                        wsLoadPhaseRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]
