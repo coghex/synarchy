@@ -9,8 +9,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
-import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
-                  , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
+import World.Grid
 import World.Types
 import World.Flora.Types (FloraInstance(..))
 
@@ -68,9 +67,12 @@ floraToQuad lookupSlot lookupFmSlot textures facing
             (rawX, rawY) = gridToScreen facing gx gy
             heightOffset = fromIntegral relativeZ * tileSideHeight
 
-            -- Sub-tile offset
-            subX = fiOffU inst * tileWidth
-            subY = fiOffV inst * tileHeight * 0.5
+            -- Sub-tile offset in isometric space.
+            -- fiOffU moves along the iso-X axis (SE direction)
+            -- fiOffV moves along the iso-Y axis (SW direction)
+            -- These must follow the same projection as gridToWorld.
+            subX = (fiOffU inst - fiOffV inst) * tileHalfWidth
+            subY = (fiOffU inst + fiOffV inst) * tileHalfDiamondHeight
 
             -- Center horizontally on the tile, anchor at bottom
             drawX = rawX + xOffset + subX + (tileWidth - quadW) * 0.5

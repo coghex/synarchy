@@ -137,14 +137,17 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     | inst ← fcdInstances floraData
                     , let tileX = fromIntegral (fiTileX inst)
                           tileY = fromIntegral (fiTileY inst)
-                          idx = columnIndex tileX tileY
-                          actualZ = terrainSurfMap VU.! idx
+                          idx   = columnIndex tileX tileY
+                          col   = tileMap V.! idx
+                          -- Find the actual topmost solid tile in the column
+                          actualZ = findTopSolid col
                           inst' = inst { fiZ = actualZ }
                           (gx, gy) = chunkToGlobal coord tileX tileY
                           texHandle = resolveFloraTexture floraCat dayOfYear inst'
+                    , actualZ > minBound  -- skip empty columns
                     , texHandle /= TextureHandle 0
                     , Just fq ← [floraToQuad lookupSlot lookupFmSlot textures facing
-                                     gx gy inst texHandle zSlice effectiveDepth
+                                     gx gy inst' texHandle zSlice effectiveDepth
                                      zoomAlpha xOffset texSizes]
                     ]
                 !blankQuads =
@@ -374,3 +377,17 @@ renderWorldCursorQuads env worldState tileAlpha = do
                 _ → V.empty
 
         return $ hoverQuads <> selectQuads
+
+-- | Find the topmost Z that has a non-zero material in a column.
+--   This is the actual rendered surface — no trusting surface maps.
+findTopSolid ∷ ColumnTiles → Int
+findTopSolid col =
+    let mats = ctMats col
+        start = ctStartZ col
+        len = VU.length mats
+    in go (len - 1)
+  where
+    go i
+        | i < 0 = minBound
+        | ctMats col VU.! i /= 0 = ctStartZ col + i
+        | otherwise = go (i - 1)
