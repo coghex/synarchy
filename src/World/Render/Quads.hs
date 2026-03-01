@@ -137,8 +137,11 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     | inst ← fcdInstances floraData
                     , let tileX = fromIntegral (fiTileX inst)
                           tileY = fromIntegral (fiTileY inst)
+                          idx = columnIndex tileX tileY
+                          actualZ = terrainSurfMap VU.! idx
+                          inst' = inst { fiZ = actualZ }
                           (gx, gy) = chunkToGlobal coord tileX tileY
-                          texHandle = resolveFloraTexture floraCat dayOfYear inst
+                          texHandle = resolveFloraTexture floraCat dayOfYear inst'
                     , texHandle /= TextureHandle 0
                     , Just fq ← [floraToQuad lookupSlot lookupFmSlot textures facing
                                      gx gy inst texHandle zSlice effectiveDepth
