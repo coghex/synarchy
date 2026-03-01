@@ -53,7 +53,7 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                         hasFluid = case fluidMap V.! idx of
                             Just _  → True
                             Nothing → False
-                        (temp, precip, _, _) =
+                        (temp, precip, humidity, _) =
                             lookupLocalClimate climate worldSize gx gy
 
                     occ ← VUM.read occupied idx
@@ -61,7 +61,8 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                     then go rest acc
                     else do
                         let newInsts = placeTileFlora seed gx gy lx ly surfZ
-                                          matId slopeId temp precip wgSpecies catalog
+                                          matId slopeId temp precip humidity surfZ
+                                          wgSpecies catalog -- surfZ passed as altitude
                         case newInsts of
                             [] → go rest acc
                             insts → do
@@ -99,16 +100,17 @@ shuffledIndices seed cx cy n =
 
 placeTileFlora
     ∷ Word64 → Int → Int → Int → Int → Int
-    → Word8 → Word8 → Float → Float
+    → Word8 → Word8 → Float → Float → Float → Int
     → [(FloraId, FloraWorldGen)]
     → FloraCatalog
     → [FloraInstance]
-placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies catalog =
+placeTileFlora seed gx gy lx ly surfZ matId slopeId
+               temp precip humidity altitude wgSpecies catalog =
     concatMap (\(i, (fid, wg)) →
         let h = floraHash seed gx gy (fromIntegral i + 100)
             roll = fromIntegral (h .&. 0xFFFF) / 65535.0 ∷ Float
-            fitness = speciesFitness wg matId slopeId temp precip
-            -- Effective density: species is most common at ideal conditions
+            fitness = speciesFitness wg matId slopeId
+                          temp precip humidity altitude
             effectiveDensity = fwDensity wg * fitness
         in if fitness > 0.0 ∧ roll < effectiveDensity
            then let cat   = fwCategory wg
@@ -223,6 +225,7 @@ matchesBiome wg matId slopeId temp precip =
 -- Climate Lookup
 -----------------------------------------------------------
 
+-- | returns (temperature, precipitation, humidity, precipType)
 lookupLocalClimate ∷ ClimateState → Int → Int → Int
                    → (Float, Float, Float, Float)
 lookupLocalClimate climate worldSize gx gy =
@@ -273,29 +276,71 @@ floraHash seed gx gy salt =
 -----------------------------------------------------------
 
 -- | Compute how well a species fits the local conditions.
+--   Uses a weighted geometric mean so that one weak factor
+--   doesn't completely eliminate placement.
 --   Returns 0.0 (impossible) to 1.0 (ideal habitat).
---   The fitness is used as a multiplier on density.
-speciesFitness ∷ FloraWorldGen → Word8 → Word8 → Float → Float → Float
-speciesFitness wg matId slopeId temp precip
+speciesFitness ∷ FloraWorldGen → Word8 → Word8
+               → Float → Float → Float → Int
+               → Float
+speciesFitness wg matId slopeId temp precip humidity altitude
     | slopeId > fwMaxSlope wg = 0.0
     | not soilOk              = 0.0
-    | otherwise               = tempFit * precipFit * slopeFit
+    -- Hard kills: if any factor is truly zero (completely outside
+    -- range), the species cannot grow here at all.
+    | tempFit ≡ 0.0 ∨ precipFit ≡ 0.0
+      ∨ humidityFit ≡ 0.0 ∨ altFit ≡ 0.0 = 0.0
+    | otherwise =
+        -- Weighted geometric mean: raise each factor to its weight,
+        -- then multiply. This is equivalent to:
+        --   exp(w1*ln(f1) + w2*ln(f2) + ...) / (w1+w2+...)
+        -- but simpler to compute with power functions.
+        --
+        -- Higher weight = more influence on final score.
+        -- Temperature and precipitation are primary drivers.
+        -- Altitude and humidity are secondary modifiers.
+        let weighted =
+                (tempFit     ** wTemp)
+              * (precipFit   ** wPrecip)
+              * (humidityFit ** wHumidity)
+              * (altFit      ** wAlt)
+              * slopeFit
+            totalW = wTemp + wPrecip + wHumidity + wAlt
+        in weighted ** (1.0 / totalW)
   where
     soils  = fwSoils wg
     soilOk = null soils ∨ matId `elem` soils
 
-    -- Asymmetric bell: peaks at ideal, falls to 0 at lo/hi
-    asymBell lo ideal hi x
-        | x < lo ∨ x > hi = 0.0
-        | x ≤ ideal =
-            let t = (x - lo) / max 0.001 (ideal - lo)
-            in t * t  -- quadratic ramp up
-        | otherwise =
-            let t = (hi - x) / max 0.001 (hi - ideal)
-            in t * t  -- quadratic ramp down
+    -- Weights: how much each factor matters
+    wTemp     = 1.0   -- primary
+    wPrecip   = 1.0   -- primary
+    wHumidity = 0.5   -- secondary
+    wAlt      = 0.5   -- secondary
 
-    tempFit   = asymBell (fwMinTemp wg)   (fwIdealTemp wg)   (fwMaxTemp wg)   temp
-    precipFit = asymBell (fwMinPrecip wg) (fwIdealPrecip wg) (fwMaxPrecip wg) precip
+    tempFit = asymBell
+        (fwMinTemp wg) (fwIdealTemp wg) (fwMaxTemp wg) temp
 
-    -- Steeper slopes reduce fitness even below maxSlope
-    slopeFit = 1.0 - (fromIntegral slopeId / fromIntegral (max 1 (fwMaxSlope wg))) * 0.3
+    precipFit = asymBell
+        (fwMinPrecip wg) (fwIdealPrecip wg) (fwMaxPrecip wg) precip
+
+    humidityFit = asymBell
+        (fwMinHumidity wg) (fwIdealHumidity wg) (fwMaxHumidity wg)
+        humidity
+
+    altFit = asymBell
+        (fromIntegral (fwMinAlt wg))
+        (fromIntegral (fwIdealAlt wg))
+        (fromIntegral (fwMaxAlt wg))
+        (fromIntegral altitude)
+
+    slopeFit = 1.0 - (fromIntegral slopeId
+                      / fromIntegral (max 1 (fwMaxSlope wg))) * 0.3
+
+asymBell ∷ Float → Float → Float → Float → Float
+asymBell lo ideal hi x
+    | x < lo ∨ x > hi = 0.0
+    | x ≤ ideal =
+        let t = (x - lo) / max 0.001 (ideal - lo)
+        in t * t
+    | otherwise =
+        let t = (hi - x) / max 0.001 (hi - ideal)
+        in t * t

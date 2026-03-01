@@ -212,6 +212,12 @@ floraRegisterForWorldGenFn env = do
     maxSlopeArg ← Lua.tointeger 9
     densityArg  ← Lua.tonumber 10
     footprintArg ← Lua.tonumber 11
+    minAltArg      ← Lua.tointeger 12
+    maxAltArg      ← Lua.tointeger 13
+    idealAltArg    ← Lua.tointeger 14
+    minHumArg      ← Lua.tonumber 15
+    maxHumArg      ← Lua.tonumber 16
+    idealHumArg    ← Lua.tonumber 17
 
     case (fidArg, catArg) of
         (Just fidInt, Just catBS) → do
@@ -227,6 +233,12 @@ floraRegisterForWorldGenFn env = do
                 maxSlope = maybe 15 fromIntegral maxSlopeArg
                 density  = luaNum densityArg 0.1
                 footprint = luaNum footprintArg 0.0
+                minAlt = maybe 0 fromIntegral minAltArg
+                maxAlt = maybe 1000 fromIntegral maxAltArg
+                idealAlt = maybe ((minAlt + maxAlt) `div` 2) fromIntegral idealAltArg
+                minHum = luaNum minHumArg 0.0
+                maxHum = luaNum maxHumArg 1.0
+                idealHum = luaNum idealHumArg ((minHum + maxHum) / 2.0)
 
                 wg = FloraWorldGen
                     { fwCategory  = category
@@ -236,6 +248,12 @@ floraRegisterForWorldGenFn env = do
                     , fwMinPrecip = minPrec
                     , fwMaxPrecip = maxPrec
                     , fwIdealPrecip = idealPrec
+                    , fwMinAlt    = minAlt
+                    , fwMaxAlt    = maxAlt
+                    , fwIdealAlt   = idealAlt
+                    , fwMinHumidity = minHum
+                    , fwMaxHumidity = maxHum
+                    , fwIdealHumidity = idealHum
                     , fwMaxSlope  = maxSlope
                     , fwDensity   = density
                     , fwSoils     = []

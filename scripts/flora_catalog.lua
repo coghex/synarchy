@@ -57,7 +57,9 @@ function floraCatalog.init()
         0.2, 0.9, 0.5, -- precip range
         4,             -- max slope
         0.2,           -- density
-        0)             -- footprint radius
+        0,             -- footprint radius
+        -50, 300, 50,   -- altitude range
+        0.3, 0.8, 0.5) -- humidity range
 
     -----------------------------------------------------------
     -- Oak (long-lived tree with seasonal appearance)
@@ -123,7 +125,9 @@ function floraCatalog.init()
         0.4, 1.0, 0.7, -- precip range
         2,             -- max slope
         0.25,          -- density
-        18)            -- footprint radius (trees need more space than small plants)
+        18,            -- footprint radius (trees need more space than small plants)
+        -20, 500, 100,   -- altitude range
+        0.4, 0.9, 0.7) -- humidity range
 
     engine.logInfo("Flora catalog loaded: dandelion, oak ("
         .. tostring(dandelion) .. ", " .. tostring(oak) .. ")")

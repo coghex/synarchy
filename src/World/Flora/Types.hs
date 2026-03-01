@@ -171,6 +171,12 @@ data FloraWorldGen = FloraWorldGen
     , fwMinPrecip ∷ !Float
     , fwMaxPrecip ∷ !Float
     , fwIdealPrecip ∷ !Float
+    , fwMinAlt      ∷ !Int
+    , fwMaxAlt      ∷ !Int
+    , fwIdealAlt    ∷ !Int
+    , fwMinHumidity ∷ !Float
+    , fwMaxHumidity ∷ !Float
+    , fwIdealHumidity ∷ !Float
     , fwMaxSlope  ∷ !Word8
     , fwDensity   ∷ !Float
     , fwSoils     ∷ ![Word8]
