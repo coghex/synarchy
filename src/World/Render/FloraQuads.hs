@@ -9,17 +9,11 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
-import World.Grid
+import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
+                  , tileHalfWidth, tileHalfDiamondHeight
+                  , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
 import World.Types
 import World.Flora.Types (FloraInstance(..))
-
------------------------------------------------------------
--- Flora Instance → Quad
---
--- Scales the quad to match the actual texture dimensions.
--- A texture matching the tile pixel size (96×64) renders
--- as exactly 1 tile. Larger textures scale proportionally.
------------------------------------------------------------
 
 -- | Tile pixel dimensions — must match GridConfig.
 baseTileW ∷ Float
@@ -33,13 +27,13 @@ floraToQuad
     → (TextureHandle → Float)
     → WorldTextures
     → CameraFacing
-    → Int → Int                     -- ^ gx, gy
+    → Int → Int
     → FloraInstance
-    → TextureHandle                 -- ^ resolved texture
-    → Int → Int                     -- ^ zSlice, effectiveDepth
-    → Float                         -- ^ tileAlpha
-    → Float                         -- ^ xOffset
-    → HM.HashMap TextureHandle (Int, Int)  -- ^ texture sizes
+    → TextureHandle
+    → Int → Int
+    → Float
+    → Float
+    → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
 floraToQuad lookupSlot lookupFmSlot textures facing
             gx gy inst texHandle zSlice effDepth tileAlpha xOffset texSizes =
@@ -60,25 +54,29 @@ floraToQuad lookupSlot lookupFmSlot textures facing
             quadW = tileWidth  * scaleX
             quadH = tileHeight * scaleY
 
-            -- Extra height above the base tile (for tall sprites like trees)
-            extraH = quadH - tileHeight
-
             -- Base screen position of the tile
             (rawX, rawY) = gridToScreen facing gx gy
             heightOffset = fromIntegral relativeZ * tileSideHeight
 
-            -- Sub-tile offset in isometric space.
-            -- fiOffU moves along the iso-X axis (SE direction)
-            -- fiOffV moves along the iso-Y axis (SW direction)
-            -- These must follow the same projection as gridToWorld.
+            -- Sub-tile offset in isometric space
             subX = (fiOffU inst - fiOffV inst) * tileHalfWidth
             subY = (fiOffU inst + fiOffV inst) * tileHalfDiamondHeight
 
-            -- Center horizontally on the tile, anchor at bottom
+            -- The trunk base in the texture is a circle of diameter
+            -- fiBaseWidth pixels. The ground contact center is
+            -- baseRadius pixels up from the bottom of the texture.
+            baseRadius = fiBaseWidth inst * 0.5 / baseTileH * tileHeight
+
+            -- Center horizontally on the tile
             drawX = rawX + xOffset + subX + (tileWidth - quadW) * 0.5
-            -- Shift upward by extraH so the bottom of the sprite
-            -- sits where a normal tile would
-            drawY = rawY - heightOffset + subY - extraH
+
+            -- Anchor: the point (baseRadius up from quad bottom)
+            -- sits at the tile diamond center Y.
+            --   tile center Y = rawY - heightOffset + tileHalfDiamondHeight
+            --   anchor Y      = drawY + quadH - baseRadius
+            -- Solve for drawY:
+            drawY = rawY - heightOffset + subY
+                  + tileHalfDiamondHeight - quadH + baseRadius
 
             (fa, fb) = applyFacing facing gx gy
             sortKey = fromIntegral (fa + fb)

@@ -120,27 +120,19 @@ placeTileFlora
     → [(FloraId, FloraWorldGen)]
     → [FloraInstance]
 placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies =
-    let h0 = floraHash seed gx gy 0
-        tileRoll = fromIntegral (h0 .&. 0xFFFF) / 65535.0 ∷ Float
-
-        sorted = sortOn (negate . fwDensity . snd) wgSpecies
-        match = firstMatch sorted tileRoll
-    in case match of
-        Nothing → []
-        Just (fid, wg) →
-            let cat  = fwCategory wg
-                baseW = fwFootprint wg
-                count = instanceCount cat h0
-            in [ mkInstance fid lx ly surfZ seed gx gy i count baseW
-               | i ← [0 .. count - 1]
-               ]
-  where
-    firstMatch [] _ = Nothing
-    firstMatch ((fid, wg):rest) roll
-        | matchesBiome wg matId slopeId temp precip
-        , roll < fwDensity wg
-            = Just (fid, wg)
-        | otherwise = firstMatch rest roll
+    concatMap (\(i, (fid, wg)) →
+        let h = floraHash seed gx gy (fromIntegral i + 100)
+            roll = fromIntegral (h .&. 0xFFFF) / 65535.0 ∷ Float
+        in if matchesBiome wg matId slopeId temp precip ∧ roll < fwDensity wg
+           then let cat   = fwCategory wg
+                    baseW = fwFootprint wg
+                    count = instanceCount cat h
+                in [ mkInstance fid lx ly surfZ seed gx gy
+                         (i * 10 + j) count baseW
+                   | j ← [0 .. count - 1]
+                   ]
+           else []
+    ) (zip [0..] wgSpecies)
 
 -----------------------------------------------------------
 -- Instance Construction
