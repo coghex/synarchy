@@ -172,6 +172,7 @@ data FloraWorldGen = FloraWorldGen
     , fwMaxSlope  ∷ !Word8
     , fwDensity   ∷ !Float
     , fwSoils     ∷ ![Word8]
+    , fwFootprint ∷ !Float
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 -----------------------------------------------------------
@@ -200,12 +201,13 @@ data FloraInstance = FloraInstance
     , fiAge     ∷ !Float         -- ^ current age in game-days
     , fiHealth  ∷ !Float         -- ^ 0.0 dead … 1.0 full
     , fiVariant ∷ !Word8         -- ^ visual variant (0–3)
+    , fiBaseWidth  ∷ !Float         -- ^ base width in pixels for offset clamp
     } deriving (Show, Eq, Generic, Serialize)
 instance NFData FloraInstance where
-    rnf (FloraInstance s tx ty ou ov z a h v) =
+    rnf (FloraInstance s tx ty ou ov z a h v bw) =
         rnf s `seq` rnf tx `seq` rnf ty `seq`
         rnf ou `seq` rnf ov `seq` rnf z `seq`
-        rnf a `seq` rnf h `seq` rnf v
+        rnf a `seq` rnf h `seq` rnf v `seq` rnf bw
 
 -- | All flora placed in one chunk.
 data FloraChunkData = FloraChunkData

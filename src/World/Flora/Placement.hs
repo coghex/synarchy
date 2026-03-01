@@ -46,14 +46,14 @@ computeChunkFlora
 computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                   fluidMap climate catalog =
     let ChunkCoord cx cy = coord
-        chunkArea = chunkSz * chunkSz
+        chunkArea = chunkSize * chunkSize
         wgSpecies = worldGenSpecies catalog
 
         allInstances = concatMap (\idx →
-            let lx = idx `mod` chunkSz
-                ly = idx `div` chunkSz
-                gx = cx * chunkSz + lx
-                gy = cy * chunkSz + ly
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+                gx = cx * chunkSize + lx
+                gy = cy * chunkSize + ly
                 matId    = surfMats   VU.! idx
                 slopeId  = surfSlopes VU.! idx
                 surfZ    = surfMap    VU.! idx
@@ -66,10 +66,30 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                then []
                else placeTileFlora seed gx gy lx ly surfZ
                         matId slopeId temp precip wgSpecies
+                        surfMap chunkSize
             ) [0 .. chunkArea - 1]
 
     in FloraChunkData allInstances
-  where chunkSz = chunkSize
+
+-- | Check that all tiles within a footprint radius have similar elevation.
+--   "Similar" means no neighbor drops more than maxDrop below the center tile.
+--   Only checks tiles within the chunk (border tiles conservatively pass).
+footprintSafe ∷ Int → Int → Int → Int → VU.Vector Int → Int → Bool
+footprintSafe lx ly surfZ radius surfMap chunkSz
+    | radius ≤ 0 = True
+    | otherwise  =
+        let maxDrop = 3  -- max Z difference before we call it a cliff
+        in all (\(nx, ny) →
+            if nx < 0 ∨ nx >= chunkSz ∨ ny < 0 ∨ ny >= chunkSz
+            then True  -- out of chunk, conservatively allow
+            else let nIdx = ny * chunkSz + nx
+                     nZ = surfMap VU.! nIdx
+                 in surfZ - nZ ≤ maxDrop
+            ) [ (lx + dx, ly + dy)
+              | dx ← [negate radius .. radius]
+              , dy ← [negate radius .. radius]
+              , dx /= 0 ∨ dy /= 0
+              ]
 
 -----------------------------------------------------------
 -- Per-Tile Placement
@@ -83,21 +103,22 @@ placeTileFlora
     ∷ Word64 → Int → Int → Int → Int → Int
     → Word8 → Word8 → Float → Float
     → [(FloraId, FloraWorldGen)]
+    → VU.Vector Int → Int
     → [FloraInstance]
-placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies =
-    let -- Per-tile hash: decides whether flora appears at all
-        h0 = floraHash seed gx gy 0
+placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies
+               surfMap chunkSz =
+    let h0 = floraHash seed gx gy 0
         tileRoll = fromIntegral (h0 .&. 0xFFFF) / 65535.0 ∷ Float
 
-        -- Find the first matching species
         sorted = sortOn (negate . fwDensity . snd) wgSpecies
         match = firstMatch sorted
     in case match of
         Nothing → []
         Just (fid, wg) →
             let cat  = fwCategory wg
+                baseW = fwFootprint wg
                 count = instanceCount cat h0
-            in [ mkInstance fid lx ly surfZ seed gx gy i count
+            in [ mkInstance fid lx ly surfZ seed gx gy i count baseW
                | i ← [0 .. count - 1]
                ]
   where
@@ -105,6 +126,7 @@ placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies =
     firstMatch ((fid, wg):rest)
         | matchesBiome wg matId slopeId temp precip
         , tileRoll < fwDensity wg
+        , footprintSafe lx ly surfZ (round (fwFootprint wg)) surfMap chunkSz
             = Just (fid, wg)
         | otherwise = firstMatch rest
 
@@ -127,29 +149,41 @@ instanceCount cat h
     | otherwise          = 2 + fromIntegral ((h `shiftR` 16) .&. 0x01)  -- 2-3 (wildflowers etc)
 
 -- | Build one FloraInstance with deterministic sub-tile offset.
+--   clamped so the sprite base stays within the tile.
 mkInstance ∷ FloraId → Int → Int → Int → Word64 → Int → Int
-           → Int → Int → FloraInstance
-mkInstance fid lx ly surfZ seed gx gy i count =
+           → Int → Int → Float → FloraInstance
+mkInstance fid lx ly surfZ seed gx gy i count baseWidth =
     let h = floraHash seed gx gy (fromIntegral i + 1)
         -- Sub-tile offset: centered for single, scattered for multiple
-        (offU, offV) = if count ≡ 1
+        (rawU, rawV) = if count ≡ 1
             then (0.0, 0.0)
-            else let rawU = fromIntegral ((h `shiftR` 0)  .&. 0xFF) / 255.0 - 0.5
-                     rawV = fromIntegral ((h `shiftR` 8)  .&. 0xFF) / 255.0 - 0.5
-                     -- Clamp to (-0.4 .. 0.4) so sprites stay visually in-tile
-                 in (rawU * 0.8, rawV * 0.8)
+            else let u = fromIntegral ((h `shiftR` 0)  .&. 0xFF) / 255.0 - 0.5
+                     v = fromIntegral ((h `shiftR` 8)  .&. 0xFF) / 255.0 - 0.5
+                 in (u * 0.8, v * 0.8)
+
+        -- Clamp offset so the base stays inside the tile.
+        -- baseWidth is in pixels; tileWidth (32) is the full tile.
+        -- Half the base in tile-units:
+        halfBase = if baseWidth > 0.0
+                   then (baseWidth / 2.0) / 32.0
+                   else 0.0
+        -- Maximum offset: half tile (0.5) minus half base
+        maxOff = max 0.0 (0.5 - halfBase)
+        offU = clamp (negate maxOff) maxOff rawU
+        offV = clamp (negate maxOff) maxOff rawV
+
         variant = fromIntegral ((h `shiftR` 16) .&. 0x03)
     in FloraInstance
-        { fiSpecies = fid
-        , fiTileX   = fromIntegral lx
-        , fiTileY   = fromIntegral ly
-        , fiOffU    = offU
-        , fiOffV    = offV
-        , fiZ       = surfZ
-        , fiAge     = 0.0
-        , fiHealth  = 1.0
-        , fiVariant = variant
-        }
+        { fiSpecies   = fid
+        , fiTileX     = fromIntegral lx
+        , fiTileY     = fromIntegral ly
+        , fiOffU      = offU
+        , fiOffV      = offV
+        , fiZ         = surfZ
+        , fiAge       = 0.0
+        , fiHealth    = 1.0
+        , fiVariant   = variant
+        , fiBaseWidth = baseWidth }
 
 -----------------------------------------------------------
 -- Biome Matching

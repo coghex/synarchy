@@ -209,6 +209,7 @@ floraRegisterForWorldGenFn env = do
     maxPrecArg  ← Lua.tonumber 6
     maxSlopeArg ← Lua.tointeger 7
     densityArg  ← Lua.tonumber 8
+    footprintArg ← Lua.tonumber 9
 
     case (fidArg, catArg) of
         (Just fidInt, Just catBS) → do
@@ -221,6 +222,7 @@ floraRegisterForWorldGenFn env = do
                 maxPrec  = luaNum maxPrecArg 1.0
                 maxSlope = maybe 15 fromIntegral maxSlopeArg
                 density  = luaNum densityArg 0.1
+                footprint = luaNum footprintArg 0.0
 
                 wg = FloraWorldGen
                     { fwCategory  = category
@@ -231,6 +233,7 @@ floraRegisterForWorldGenFn env = do
                     , fwMaxSlope  = maxSlope
                     , fwDensity   = density
                     , fwSoils     = []
+                    , fwFootprint = footprint
                     }
 
             Lua.liftIO $ atomicModifyIORef' catRef $ \cat →
