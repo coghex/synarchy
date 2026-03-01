@@ -205,11 +205,13 @@ floraRegisterForWorldGenFn env = do
     catArg      ← Lua.tostring 2
     minTempArg  ← Lua.tonumber 3
     maxTempArg  ← Lua.tonumber 4
-    minPrecArg  ← Lua.tonumber 5
-    maxPrecArg  ← Lua.tonumber 6
-    maxSlopeArg ← Lua.tointeger 7
-    densityArg  ← Lua.tonumber 8
-    footprintArg ← Lua.tonumber 9
+    idealTempArg ← Lua.tonumber 5
+    minPrecArg  ← Lua.tonumber 6
+    maxPrecArg  ← Lua.tonumber 7
+    idealPrecArg ← Lua.tonumber 8
+    maxSlopeArg ← Lua.tointeger 9
+    densityArg  ← Lua.tonumber 10
+    footprintArg ← Lua.tonumber 11
 
     case (fidArg, catArg) of
         (Just fidInt, Just catBS) → do
@@ -218,8 +220,10 @@ floraRegisterForWorldGenFn env = do
                 catRef = floraCatalogRef env
                 minTemp  = luaNum minTempArg (-40.0)
                 maxTemp  = luaNum maxTempArg 50.0
+                idealTemp = luaNum idealTempArg ((minTemp + maxTemp) / 2.0)
                 minPrec  = luaNum minPrecArg 0.0
                 maxPrec  = luaNum maxPrecArg 1.0
+                idealPrec = luaNum idealPrecArg ((minPrec + maxPrec) / 2.0)
                 maxSlope = maybe 15 fromIntegral maxSlopeArg
                 density  = luaNum densityArg 0.1
                 footprint = luaNum footprintArg 0.0
@@ -228,8 +232,10 @@ floraRegisterForWorldGenFn env = do
                     { fwCategory  = category
                     , fwMinTemp   = minTemp
                     , fwMaxTemp   = maxTemp
+                    , fwIdealTemp = idealTemp
                     , fwMinPrecip = minPrec
                     , fwMaxPrecip = maxPrec
+                    , fwIdealPrecip = idealPrec
                     , fwMaxSlope  = maxSlope
                     , fwDensity   = density
                     , fwSoils     = []

@@ -167,8 +167,10 @@ data FloraWorldGen = FloraWorldGen
     { fwCategory  ∷ !Text
     , fwMinTemp   ∷ !Float
     , fwMaxTemp   ∷ !Float
+    , fwIdealTemp ∷ !Float
     , fwMinPrecip ∷ !Float
     , fwMaxPrecip ∷ !Float
+    , fwIdealPrecip ∷ !Float
     , fwMaxSlope  ∷ !Word8
     , fwDensity   ∷ !Float
     , fwSoils     ∷ ![Word8]

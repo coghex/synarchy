@@ -53,11 +53,11 @@ function floraCatalog.init()
 
     -- World generation: temperate wildflower
     flora.registerForWorldGen(dandelion, "wildflower",
-        5, 30,      -- temp range
-        0.3, 1.0,   -- precip range
-        4,           -- max slope
-        0.15,        -- density
-        0)           -- footprint radius
+        2, 35, 15.0,   -- temp range
+        0.2, 0.9, 0.5, -- precip range
+        4,             -- max slope
+        0.2,           -- density
+        0)             -- footprint radius
 
     -----------------------------------------------------------
     -- Oak (long-lived tree with seasonal appearance)
@@ -119,11 +119,11 @@ function floraCatalog.init()
 
     -- World generation: temperate deciduous tree
     flora.registerForWorldGen(oak, "tree",
-        2, 30,       -- temp range
-        0.3, 1.0,    -- precip range
-        2,            -- max slope
-        0.2,          -- density
-        18)         -- footprint radius (trees need more space than small plants)
+        0, 32, 18.0,   -- temp range
+        0.4, 1.0, 0.7, -- precip range
+        2,             -- max slope
+        0.25,          -- density
+        18)            -- footprint radius (trees need more space than small plants)
 
     engine.logInfo("Flora catalog loaded: dandelion, oak ("
         .. tostring(dandelion) .. ", " .. tostring(oak) .. ")")

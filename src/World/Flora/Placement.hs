@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Flora.Placement
     ( computeChunkFlora
+    , speciesFitness
     ) where
 
 import UPrelude
@@ -106,7 +107,10 @@ placeTileFlora seed gx gy lx ly surfZ matId slopeId temp precip wgSpecies catalo
     concatMap (\(i, (fid, wg)) →
         let h = floraHash seed gx gy (fromIntegral i + 100)
             roll = fromIntegral (h .&. 0xFFFF) / 65535.0 ∷ Float
-        in if matchesBiome wg matId slopeId temp precip ∧ roll < fwDensity wg
+            fitness = speciesFitness wg matId slopeId temp precip
+            -- Effective density: species is most common at ideal conditions
+            effectiveDensity = fwDensity wg * fitness
+        in if fitness > 0.0 ∧ roll < effectiveDensity
            then let cat   = fwCategory wg
                     baseW = fwFootprint wg
                     count = instanceCount cat h
@@ -263,3 +267,35 @@ floraHash seed gx gy salt =
         f = e * 2246822519
         g = f `xor` (f `shiftR` 13)
     in g
+
+-----------------------------------------------------------
+-- Species Fitness Calculation
+-----------------------------------------------------------
+
+-- | Compute how well a species fits the local conditions.
+--   Returns 0.0 (impossible) to 1.0 (ideal habitat).
+--   The fitness is used as a multiplier on density.
+speciesFitness ∷ FloraWorldGen → Word8 → Word8 → Float → Float → Float
+speciesFitness wg matId slopeId temp precip
+    | slopeId > fwMaxSlope wg = 0.0
+    | not soilOk              = 0.0
+    | otherwise               = tempFit * precipFit * slopeFit
+  where
+    soils  = fwSoils wg
+    soilOk = null soils ∨ matId `elem` soils
+
+    -- Asymmetric bell: peaks at ideal, falls to 0 at lo/hi
+    asymBell lo ideal hi x
+        | x < lo ∨ x > hi = 0.0
+        | x ≤ ideal =
+            let t = (x - lo) / max 0.001 (ideal - lo)
+            in t * t  -- quadratic ramp up
+        | otherwise =
+            let t = (hi - x) / max 0.001 (hi - ideal)
+            in t * t  -- quadratic ramp down
+
+    tempFit   = asymBell (fwMinTemp wg)   (fwIdealTemp wg)   (fwMaxTemp wg)   temp
+    precipFit = asymBell (fwMinPrecip wg) (fwIdealPrecip wg) (fwMaxPrecip wg) precip
+
+    -- Steeper slopes reduce fitness even below maxSlope
+    slopeFit = 1.0 - (fromIntegral slopeId / fromIntegral (max 1 (fwMaxSlope wg))) * 0.3
