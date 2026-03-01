@@ -167,7 +167,7 @@ mkInstance fid lx ly surfZ seed gx gy i _count baseWidth =
 
         -- Clamp offset so the base stays inside the tile.
         halfBase = if baseWidth > 0.0
-                   then (baseWidth / 2.0) / 32.0
+                   then (baseWidth / 2.0) / 96.0
                    else 0.0
         maxOff = max 0.0 (0.5 - halfBase)
         -- Scale down scatter range (0.7 keeps things off the very edge)

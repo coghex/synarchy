@@ -10,27 +10,24 @@ import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
-                  , worldLayer, applyFacing)
+                  , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
 import World.Types
-import World.Render.Textures (getVegFaceMapTexture)
 import World.Flora.Types (FloraInstance(..))
 
 -----------------------------------------------------------
 -- Flora Instance → Quad
 --
 -- Scales the quad to match the actual texture dimensions.
--- A 32×32 texture renders at exactly 1 tile.
--- A 32×64 texture renders 1 tile wide, 2 tiles tall,
--- anchored at the bottom so the base sits on the surface.
+-- A texture matching the tile pixel size (96×64) renders
+-- as exactly 1 tile. Larger textures scale proportionally.
 -----------------------------------------------------------
 
--- | Base tile size that textures are measured against.
---   A texture this size renders as exactly one tile.
+-- | Tile pixel dimensions — must match GridConfig.
 baseTileW ∷ Float
-baseTileW = 32.0
+baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)   -- 96
 
 baseTileH ∷ Float
-baseTileH = 32.0
+baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)  -- 64
 
 floraToQuad
     ∷ (TextureHandle → Int)
@@ -52,12 +49,12 @@ floraToQuad lookupSlot lookupFmSlot textures facing
     in if floraZ > zSlice ∨ floraZ < (zSlice - effDepth)
        then Nothing
        else
-        let -- Look up actual texture dimensions, default to one tile
+        let -- Look up actual texture dimensions, default to tile size
             (texW, texH) = case HM.lookup texHandle texSizes of
                 Just (w, h) → (fromIntegral w, fromIntegral h)
                 Nothing     → (baseTileW, baseTileH)
 
-            -- Scale relative to the base tile size
+            -- Scale relative to the actual tile pixel size
             scaleX = texW / baseTileW
             scaleY = texH / baseTileH
 
