@@ -148,8 +148,9 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- 4. Generate center chunk synchronously for immediate display
     writeIORef phaseRef (LoadPhase1 3 totalSteps)
     sendGenLog env "Generating initial chunks..."
+    catalog ← readIORef (floraCatalogRef env)
     let centerCoord = ChunkCoord 0 0
-        (ct, cs, cterrain, cf, cflora) = generateChunk params centerCoord
+        (ct, cs, cterrain, cf, cflora) = generateChunk catalog params centerCoord
         centerChunk = LoadedChunk
             { lcCoord             = centerCoord
             , lcTiles             = ct

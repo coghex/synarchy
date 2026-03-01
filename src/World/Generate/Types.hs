@@ -39,7 +39,6 @@ data WorldGenParams = WorldGenParams
     , wgpOceanMap   ∷ !OceanMap         -- ^ Pre-generated ocean map for worldgen
     , wgpClimateParams ∷ !ClimateParams   -- ^ Climate parameters
     , wgpClimateState ∷ !ClimateState     -- ^ Initial climate state
-    , wgpFloraCatalog ∷ !FloraCatalog     -- ^ Catalog of flora for worldgen
     } deriving (Show, Eq, Generic, Serialize, NFData)
 instance (Serialize a, Eq a, Hashable a)
     ⇒ Serialize (HS.HashSet a) where
@@ -59,5 +58,4 @@ defaultWorldGenParams = WorldGenParams
     , wgpOceanMap = HS.empty
     , wgpClimateParams = defaultClimateParams
     , wgpClimateState = initClimateState 128
-    , wgpFloraCatalog = emptyFloraCatalog
     }

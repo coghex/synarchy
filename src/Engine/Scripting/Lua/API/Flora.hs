@@ -16,30 +16,10 @@ import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef', IORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
-import World.Types
 import World.Flora.Types
 
 -----------------------------------------------------------
--- Helper: get wsFloraCatalogRef from the first world
------------------------------------------------------------
-
-withFloraCatalog ∷ EngineEnv
-                 → (IORef FloraCatalog → Lua.LuaE Lua.Exception Lua.NumResults)
-                 → Lua.LuaE Lua.Exception Lua.NumResults
-withFloraCatalog env action = do
-    manager ← Lua.liftIO $ readIORef (worldManagerRef env)
-    case wmWorlds manager of
-        ((_, worldState):_) → action (wsFloraCatalogRef worldState)
-        [] → do
-            Lua.pushnil
-            return 1
-
------------------------------------------------------------
 -- flora.register(name, baseTextureHandle) → floraId
---
--- Lua:
---   local tex = engine.loadTexture("assets/.../default.png")
---   local oak = flora.register("oak", tex)
 -----------------------------------------------------------
 
 floraRegisterFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -48,9 +28,10 @@ floraRegisterFn env = do
     texArg  ← Lua.tointeger 2
 
     case (nameArg, texArg) of
-        (Just nameBS, Just texInt) → withFloraCatalog env $ \catRef → do
+        (Just nameBS, Just texInt) → do
             let name = TE.decodeUtf8 nameBS
                 baseTex = TextureHandle (fromIntegral texInt)
+                catRef = floraCatalogRef env
 
             fid ← Lua.liftIO $ atomicModifyIORef' catRef $ \cat →
                 let (newId, cat') = nextFloraId cat
@@ -67,13 +48,6 @@ floraRegisterFn env = do
 -----------------------------------------------------------
 -- flora.setLifecycle(floraId, type)
 -- flora.setLifecycle(floraId, "perennial", minLifespan, maxLifespan, deathChance)
---
--- type: "evergreen" (default), "perennial", "annual", "biennial"
---
--- For perennial:
---   minLifespan = game-days before death is possible
---   maxLifespan = game-days, guaranteed dead by here
---   deathChance = per-year probability once past min (0.0-1.0)
 -----------------------------------------------------------
 
 floraSetLifecycleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -85,13 +59,14 @@ floraSetLifecycleFn env = do
     arg5     ← Lua.tonumber 5
 
     case (fidArg, typeArg) of
-        (Just fidInt, Just typeBS) → withFloraCatalog env $ \catRef → do
+        (Just fidInt, Just typeBS) → do
             let fid = FloraId (fromIntegral fidInt)
                 typeText = TE.decodeUtf8 typeBS
+                catRef = floraCatalogRef env
                 lifecycle = case typeText of
                     "perennial" →
-                        let minL = luaNum arg3 1800.0   -- ~5 years default
-                            maxL = luaNum arg4 3600.0   -- ~10 years default
+                        let minL = luaNum arg3 1800.0
+                            maxL = luaNum arg4 3600.0
                             dc   = luaNum arg5 0.2
                         in Perennial minL maxL dc
                     "annual"    → Annual
@@ -109,10 +84,6 @@ floraSetLifecycleFn env = do
 
 -----------------------------------------------------------
 -- flora.addPhase(floraId, phaseTag, textureHandle, age)
---
--- phaseTag: "sprout", "seedling", "vegetating", "budding",
---   "flowering", "ripening", "matured", "withering", "dead"
--- age: game-days to enter this phase (default 0)
 -----------------------------------------------------------
 
 floraAddPhaseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -123,10 +94,11 @@ floraAddPhaseFn env = do
     ageArg ← Lua.tonumber 4
 
     case (fidArg, tagArg, texArg) of
-        (Just fidInt, Just tagBS, Just texInt) → withFloraCatalog env $ \catRef → do
+        (Just fidInt, Just tagBS, Just texInt) → do
             let fid = FloraId (fromIntegral fidInt)
                 tagText = TE.decodeUtf8 tagBS
                 tex = TextureHandle (fromIntegral texInt)
+                catRef = floraCatalogRef env
                 age = case ageArg of
                     Just (Lua.Number a) → realToFrac a
                     _                   → 0.0
@@ -151,18 +123,6 @@ floraAddPhaseFn env = do
 
 -----------------------------------------------------------
 -- flora.addCycleStage(floraId, stageTag, startDay, textureHandle)
---
--- Defines one stage of the annual cycle.
--- stageTag: "dormant", "budding", "flowering",
---           "fruiting", "senescing"
--- startDay: day-of-year (0-359) when this stage begins.
---           Stages run until the next stage's startDay.
---
--- Lua:
---   flora.addCycleStage(dandelion, "dormant",   0,   texDormant)
---   flora.addCycleStage(dandelion, "budding",   60,  texBud)
---   flora.addCycleStage(dandelion, "flowering",  90, texFlower)
---   flora.addCycleStage(dandelion, "senescing", 150, texWilt)
 -----------------------------------------------------------
 
 floraAddCycleStageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -173,40 +133,33 @@ floraAddCycleStageFn env = do
     texArg   ← Lua.tointeger 4
 
     case (fidArg, tagArg, dayArg, texArg) of
-        (Just fidInt, Just tagBS, Just dayInt, Just texInt) →
-            withFloraCatalog env $ \catRef → do
-                let fid = FloraId (fromIntegral fidInt)
-                    tagText = TE.decodeUtf8 tagBS
-                    tex = TextureHandle (fromIntegral texInt)
-                    day = fromIntegral dayInt
+        (Just fidInt, Just tagBS, Just dayInt, Just texInt) → do
+            let fid = FloraId (fromIntegral fidInt)
+                tagText = TE.decodeUtf8 tagBS
+                tex = TextureHandle (fromIntegral texInt)
+                day = fromIntegral dayInt
+                catRef = floraCatalogRef env
 
-                case parseCycleTag tagText of
-                    Just tag → Lua.liftIO $ atomicModifyIORef' catRef $ \cat →
-                        case lookupSpecies fid cat of
-                            Just species →
-                                let stage = AnnualStage
-                                        { asTag      = tag
-                                        , asStartDay = day
-                                        , asTexture  = tex
-                                        }
-                                    species' = species
-                                        { fsAnnualCycle =
-                                            fsAnnualCycle species ++ [stage] }
-                                in (insertSpecies fid species' cat, ())
-                            Nothing → (cat, ())
-                    Nothing → pure ()
-                return 0
+            case parseCycleTag tagText of
+                Just tag → Lua.liftIO $ atomicModifyIORef' catRef $ \cat →
+                    case lookupSpecies fid cat of
+                        Just species →
+                            let stage = AnnualStage
+                                    { asTag      = tag
+                                    , asStartDay = day
+                                    , asTexture  = tex
+                                    }
+                                species' = species
+                                    { fsAnnualCycle =
+                                        fsAnnualCycle species ++ [stage] }
+                            in (insertSpecies fid species' cat, ())
+                        Nothing → (cat, ())
+                Nothing → pure ()
+            return 0
         _ → return 0
 
 -----------------------------------------------------------
 -- flora.addCycleOverride(floraId, phaseTag, cycleTag, textureHandle)
---
--- Override the annual cycle texture for a specific life phase.
--- E.g. an oak's "matured + flowering" looks different from
--- its "vegetating + flowering".
---
--- Lua:
---   flora.addCycleOverride(oak, "matured", "budding", texOakMatureBud)
 -----------------------------------------------------------
 
 floraAddCycleOverrideFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -217,27 +170,27 @@ floraAddCycleOverrideFn env = do
     texArg   ← Lua.tointeger 4
 
     case (fidArg, phaseArg, cycleArg, texArg) of
-        (Just fidInt, Just phaseBS, Just cycleBS, Just texInt) →
-            withFloraCatalog env $ \catRef → do
-                let fid = FloraId (fromIntegral fidInt)
-                    phaseText = TE.decodeUtf8 phaseBS
-                    cycleText = TE.decodeUtf8 cycleBS
-                    tex = TextureHandle (fromIntegral texInt)
+        (Just fidInt, Just phaseBS, Just cycleBS, Just texInt) → do
+            let fid = FloraId (fromIntegral fidInt)
+                phaseText = TE.decodeUtf8 phaseBS
+                cycleText = TE.decodeUtf8 cycleBS
+                tex = TextureHandle (fromIntegral texInt)
+                catRef = floraCatalogRef env
 
-                case (parsePhaseTag phaseText, parseCycleTag cycleText) of
-                    (Just pTag, Just cTag) →
-                        Lua.liftIO $ atomicModifyIORef' catRef $ \cat →
-                            case lookupSpecies fid cat of
-                                Just species →
-                                    let key = AnnualCycleKey pTag cTag
-                                        species' = species
-                                            { fsCycleOverrides =
-                                                HM.insert key tex
-                                                    (fsCycleOverrides species) }
-                                    in (insertSpecies fid species' cat, ())
-                                Nothing → (cat, ())
-                    _ → pure ()
-                return 0
+            case (parsePhaseTag phaseText, parseCycleTag cycleText) of
+                (Just pTag, Just cTag) →
+                    Lua.liftIO $ atomicModifyIORef' catRef $ \cat →
+                        case lookupSpecies fid cat of
+                            Just species →
+                                let key = AnnualCycleKey pTag cTag
+                                    species' = species
+                                        { fsCycleOverrides =
+                                            HM.insert key tex
+                                                (fsCycleOverrides species) }
+                                in (insertSpecies fid species' cat, ())
+                            Nothing → (cat, ())
+                _ → pure ()
+            return 0
         _ → return 0
 
 -----------------------------------------------------------
@@ -258,9 +211,10 @@ floraRegisterForWorldGenFn env = do
     densityArg  ← Lua.tonumber 8
 
     case (fidArg, catArg) of
-        (Just fidInt, Just catBS) → withFloraCatalog env $ \catRef → do
+        (Just fidInt, Just catBS) → do
             let fid = FloraId (fromIntegral fidInt)
                 category = TE.decodeUtf8 catBS
+                catRef = floraCatalogRef env
                 minTemp  = luaNum minTempArg (-40.0)
                 maxTemp  = luaNum maxTempArg 50.0
                 minPrec  = luaNum minPrecArg 0.0

@@ -32,7 +32,7 @@ import qualified Vulkan.Core10 as Vk
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 import UI.Types (UIPageManager)
 import UI.Focus (FocusManager)
-import World.Types (WorldCommand, WorldManager)
+import World.Types (WorldCommand, WorldManager, FloraCatalog)
 
 -- | Engine environment (read-only)
 data EngineEnv = EngineEnv
@@ -68,6 +68,7 @@ data EngineEnv = EngineEnv
   , worldQuadsRef       ∷ IORef (V.Vector SortableQuad)
   , textureSystemRef    ∷ IORef (Maybe BindlessTextureSystem)
   , defaultFaceMapSlotRef  ∷ IORef Word32
+  , floraCatalogRef     ∷ IORef FloraCatalog
   } deriving (Eq)
 
 -- | Engine state (mutable)

@@ -29,6 +29,7 @@ maxChunksPerTick = 4
 updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
 updateChunkLoading env logger = do
     camera ← readIORef (cameraRef env)
+    catalog ← readIORef (floraCatalogRef env)
     let zoom = camZoom camera
     when (zoom < (zoomFadeEnd + 0.5)) $ do
         manager ← readIORef (worldManagerRef env)
@@ -71,7 +72,7 @@ updateChunkLoading env logger = do
                             when (not $ null batch) $ do
                                 let seed = wgpSeed params
                                 let !newChunks = parMap rdeepseq (\coord →
-                                        let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk params coord
+                                        let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk catalog params coord
                                         in LoadedChunk
                                             { lcCoord      = coord
                                             , lcTiles      = chunkTiles
@@ -100,6 +101,7 @@ partitionChunks coords tileData =
 drainInitQueues ∷ EngineEnv → LoggerState → IO ()
 drainInitQueues env logger = do
     manager ← readIORef (worldManagerRef env)
+    catalog ← readIORef (floraCatalogRef env)
     forM_ (wmWorlds manager) $ \(pageId, worldState) → do
         remaining ← readIORef (wsInitQueueRef worldState)
         case remaining of
@@ -114,7 +116,7 @@ drainInitQueues env logger = do
                             seed  = wgpSeed params
 
                         let newChunks = parMap rdeepseq (\coord →
-                                let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk params coord
+                                let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk catalog params coord
                                 in LoadedChunk
                                     { lcCoord      = coord
                                     , lcTiles      = chunkTiles
