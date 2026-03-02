@@ -201,23 +201,23 @@ floraAddCycleOverrideFn env = do
 
 floraRegisterForWorldGenFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 floraRegisterForWorldGenFn env = do
-    fidArg      ← Lua.tointeger 1
-    catArg      ← Lua.tostring 2
-    minTempArg  ← Lua.tonumber 3
-    maxTempArg  ← Lua.tonumber 4
-    idealTempArg ← Lua.tonumber 5
-    minPrecArg  ← Lua.tonumber 6
-    maxPrecArg  ← Lua.tonumber 7
-    idealPrecArg ← Lua.tonumber 8
-    maxSlopeArg ← Lua.tointeger 9
-    densityArg  ← Lua.tonumber 10
-    footprintArg ← Lua.tonumber 11
-    minAltArg      ← Lua.tointeger 12
-    maxAltArg      ← Lua.tointeger 13
-    idealAltArg    ← Lua.tointeger 14
-    minHumArg      ← Lua.tonumber 15
-    maxHumArg      ← Lua.tonumber 16
-    idealHumArg    ← Lua.tonumber 17
+    fidArg       ← Lua.tointeger 1
+    catArg       ← Lua.tostring 2
+    minTempArg   ← Lua.tonumber 3
+    maxTempArg   ← Lua.tonumber 4
+    minPrecArg   ← Lua.tonumber 5
+    maxPrecArg   ← Lua.tonumber 6
+    maxSlopeArg  ← Lua.tointeger 7
+    densityArg   ← Lua.tonumber 8
+    footprintArg ← Lua.tonumber 9
+    idealTempArg ← Lua.tonumber 10
+    idealPrecArg ← Lua.tonumber 11
+    minAltArg    ← Lua.tointeger 12
+    maxAltArg    ← Lua.tointeger 13
+    idealAltArg  ← Lua.tointeger 14
+    minHumArg    ← Lua.tonumber 15
+    maxHumArg    ← Lua.tonumber 16
+    idealHumArg  ← Lua.tonumber 17
 
     case (fidArg, catArg) of
         (Just fidInt, Just catBS) → do
@@ -233,31 +233,31 @@ floraRegisterForWorldGenFn env = do
                 maxSlope = maybe 15 fromIntegral maxSlopeArg
                 density  = luaNum densityArg 0.1
                 footprint = luaNum footprintArg 0.0
-                minAlt = maybe 0 fromIntegral minAltArg
-                maxAlt = maybe 1000 fromIntegral maxAltArg
+                minAlt   = maybe (-100) fromIntegral minAltArg
+                maxAlt   = maybe 800 fromIntegral maxAltArg
                 idealAlt = maybe ((minAlt + maxAlt) `div` 2) fromIntegral idealAltArg
-                minHum = luaNum minHumArg 0.0
-                maxHum = luaNum maxHumArg 1.0
+                minHum   = luaNum minHumArg 0.0
+                maxHum   = luaNum maxHumArg 1.0
                 idealHum = luaNum idealHumArg ((minHum + maxHum) / 2.0)
 
                 wg = FloraWorldGen
-                    { fwCategory  = category
-                    , fwMinTemp   = minTemp
-                    , fwMaxTemp   = maxTemp
-                    , fwIdealTemp = idealTemp
-                    , fwMinPrecip = minPrec
-                    , fwMaxPrecip = maxPrec
-                    , fwIdealPrecip = idealPrec
-                    , fwMinAlt    = minAlt
-                    , fwMaxAlt    = maxAlt
-                    , fwIdealAlt   = idealAlt
-                    , fwMinHumidity = minHum
-                    , fwMaxHumidity = maxHum
+                    { fwCategory      = category
+                    , fwMinTemp       = minTemp
+                    , fwMaxTemp       = maxTemp
+                    , fwIdealTemp     = idealTemp
+                    , fwMinPrecip     = minPrec
+                    , fwMaxPrecip     = maxPrec
+                    , fwIdealPrecip   = idealPrec
+                    , fwMinAlt        = minAlt
+                    , fwMaxAlt        = maxAlt
+                    , fwIdealAlt      = idealAlt
+                    , fwMinHumidity   = minHum
+                    , fwMaxHumidity   = maxHum
                     , fwIdealHumidity = idealHum
-                    , fwMaxSlope  = maxSlope
-                    , fwDensity   = density
-                    , fwSoils     = []
-                    , fwFootprint = footprint
+                    , fwMaxSlope      = maxSlope
+                    , fwDensity       = density
+                    , fwSoils         = []
+                    , fwFootprint     = footprint
                     }
 
             Lua.liftIO $ atomicModifyIORef' catRef $ \cat →
