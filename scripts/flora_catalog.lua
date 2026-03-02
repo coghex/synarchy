@@ -1,136 +1,180 @@
--- Flora Catalog
--- Defines all plant species for world generation and gameplay.
--- Called after world.init() so the world state exists.
-
 local floraCatalog = {}
-
 floraCatalog.species = {}
+
+-- Helper to reduce boilerplate.
+-- Every species needs at minimum: a base texture, lifecycle, one
+-- phase, one cycle stage, and worldgen registration.
+local function quickSpecies(args)
+    local base = engine.loadTexture(args.tex)
+    local fid  = flora.register(args.name, base)
+    floraCatalog.species[args.name] = fid
+
+    flora.setLifecycle(fid, args.lifecycle or "evergreen",
+        args.minLife, args.maxLife, args.deathChance)
+
+    -- Minimal phases: sprout + mature
+    local sproutTex  = args.sproutTex
+                       and engine.loadTexture(args.sproutTex) or base
+    local matureTex  = args.matureTex
+                       and engine.loadTexture(args.matureTex) or base
+    flora.addPhase(fid, "sprout",  sproutTex, 0)
+    flora.addPhase(fid, "matured", matureTex, args.matureAge or 360)
+
+    -- Minimal annual cycle: just dormant + flowering
+    local dormantTex = args.dormantTex
+                       and engine.loadTexture(args.dormantTex) or base
+    local flowerTex  = args.flowerTex
+                       and engine.loadTexture(args.flowerTex) or base
+    flora.addCycleStage(fid, "dormant",   0,   dormantTex)
+    flora.addCycleStage(fid, "flowering", 120, flowerTex)
+
+    -- Worldgen
+    flora.registerForWorldGen(fid, args.category,
+        args.minTemp,    args.maxTemp,
+        args.minPrecip,  args.maxPrecip,
+        args.maxSlope    or 4,
+        args.density     or 0.15,
+        args.footprint   or 0,
+        args.idealTemp,
+        args.idealPrecip,
+        args.minAlt      or -100,
+        args.maxAlt      or 800,
+        args.idealAlt    or 50,
+        args.minHumidity or 0.1,
+        args.maxHumidity or 0.9,
+        args.idealHumidity or 0.5)
+
+    return fid
+end
 
 function floraCatalog.init()
 
-    -----------------------------------------------------------
-    -- Dandelion (perennial wildflower)
-    --
-    -- Textures (4):
-    --   dandelion_sprout.png     - tiny green nub
-    --   dandelion_budding.png    - green leaves, closed bud
-    --   dandelion_flowering.png  - yellow flower open
-    --   dandelion_dead.png       - brown dried stalk
-    --
-    -- Life phases control long-term growth.
-    -- Annual cycle controls the yearly bud→flower→die-back.
-    -- "dormant" reuses the sprout texture (underground/invisible
-    --  in winter, but we just show the base nub).
-    -----------------------------------------------------------
+    ---------------------------------------------------------
+    -- TEMPERATE
+    ---------------------------------------------------------
 
-    local dandBase    = engine.loadTexture("assets/textures/world/flora/dandelion/sprout.png")
-    local dandSprout  = engine.loadTexture("assets/textures/world/flora/dandelion/sprout.png")
-    local dandBud     = engine.loadTexture("assets/textures/world/flora/dandelion/budding.png")
-    local dandFlower  = engine.loadTexture("assets/textures/world/flora/dandelion/flowering.png")
-    local dandDead    = engine.loadTexture("assets/textures/world/flora/dandelion/dead.png")
+    quickSpecies({
+        name = "white_oak", category = "tree",
+        tex = "assets/textures/world/flora/white_oak/matured.png",
+        lifecycle = "evergreen", matureAge = 720,
+        minTemp = 0, maxTemp = 32, idealTemp = 18,
+        minPrecip = 0.4, maxPrecip = 1.0, idealPrecip = 0.7,
+        minAlt = -20, maxAlt = 500, idealAlt = 100,
+        minHumidity = 0.4, maxHumidity = 0.9, idealHumidity = 0.7,
+        maxSlope = 2, density = 0.25, footprint = 18,
+    })
 
-    local dandelion = flora.register("dandelion", dandBase)
-    floraCatalog.species.dandelion = dandelion
+    quickSpecies({
+        name = "paper_birch", category = "tree",
+        tex = "assets/textures/world/flora/paper_birch/matured.png",
+        lifecycle = "evergreen", matureAge = 540,
+        minTemp = -5, maxTemp = 25, idealTemp = 12,
+        minPrecip = 0.3, maxPrecip = 0.9, idealPrecip = 0.5,
+        minAlt = 0, maxAlt = 600, idealAlt = 150,
+        minHumidity = 0.3, maxHumidity = 0.8, idealHumidity = 0.5,
+        maxSlope = 3, density = 0.2, footprint = 14,
+    })
 
-    -- Lifecycle: perennial, lives 3-7 years (1080-2520 game-days),
-    -- 30% chance to die each year once past minimum
-    flora.setLifecycle(dandelion, "perennial", 1080, 2520, 0.3)
+    quickSpecies({
+        name = "common_dandelion", category = "wildflower",
+        tex = "assets/textures/world/flora/common_dandelion/flowering.png",
+        lifecycle = "perennial", minLife = 1080, maxLife = 2520,
+        deathChance = 0.3, matureAge = 30,
+        minTemp = 2, maxTemp = 35, idealTemp = 15,
+        minPrecip = 0.2, maxPrecip = 0.9, idealPrecip = 0.5,
+        minAlt = -50, maxAlt = 300, idealAlt = 50,
+        minHumidity = 0.3, maxHumidity = 0.8, idealHumidity = 0.5,
+        maxSlope = 4, density = 0.2, footprint = 0,
+    })
 
-    -- Life phases (age-driven, happens once)
-    flora.addPhase(dandelion, "sprout",     dandSprout,  0)
-    flora.addPhase(dandelion, "vegetating", dandBud,     30)
-    flora.addPhase(dandelion, "dead",       dandDead,    2520)
+    quickSpecies({
+        name = "white_clover", category = "wildflower",
+        tex = "assets/textures/world/flora/white_clover/flowering.png",
+        lifecycle = "perennial", minLife = 720, maxLife = 1800,
+        deathChance = 0.4, matureAge = 20,
+        minTemp = 5, maxTemp = 28, idealTemp = 16,
+        minPrecip = 0.3, maxPrecip = 0.8, idealPrecip = 0.6,
+        minAlt = -30, maxAlt = 250, idealAlt = 40,
+        minHumidity = 0.4, maxHumidity = 0.8, idealHumidity = 0.6,
+        maxSlope = 4, density = 0.18, footprint = 0,
+    })
 
-    -- Annual cycle (day-of-year driven, repeats each year)
-    -- Day 0-59:    dormant (winter/early spring) — shows sprout tex
-    -- Day 60-99:   budding (spring)  leaves and closed bud
-    -- Day 100-159: flowering (late spring/summer) — yellow bloom
-    -- Day 160-359: senescing (summer through winter) — dried stalk
-    flora.addCycleStage(dandelion, "dormant",   0,   dandSprout)
-    flora.addCycleStage(dandelion, "budding",   60,  dandBud)
-    flora.addCycleStage(dandelion, "flowering", 100, dandFlower)
-    flora.addCycleStage(dandelion, "senescing", 160, dandDead)
+    ---------------------------------------------------------
+    -- BOREAL / COLD
+    ---------------------------------------------------------
 
-    -- World generation: temperate wildflower
-    flora.registerForWorldGen(dandelion, "wildflower",
-        2, 35, 15.0,   -- temp range
-        0.2, 0.9, 0.5, -- precip range
-        4,             -- max slope
-        0.2,           -- density
-        0,             -- footprint radius
-        -50, 300, 50,   -- altitude range
-        0.3, 0.8, 0.5) -- humidity range
+    quickSpecies({
+        name = "scots_pine", category = "tree",
+        tex = "assets/textures/world/flora/scots_pine/matured.png",
+        lifecycle = "evergreen", matureAge = 1080,
+        minTemp = -15, maxTemp = 18, idealTemp = 5,
+        minPrecip = 0.2, maxPrecip = 0.8, idealPrecip = 0.4,
+        minAlt = 50, maxAlt = 700, idealAlt = 300,
+        minHumidity = 0.2, maxHumidity = 0.7, idealHumidity = 0.4,
+        maxSlope = 3, density = 0.3, footprint = 12,
+    })
 
-    -----------------------------------------------------------
-    -- Oak (long-lived tree with seasonal appearance)
-    --
-    -- Textures (8):
-    --   oak_sprout.png               - small sapling
-    --   oak_matured.png              - full tree (summer default)
-    --   oak_matured_budding.png      - spring buds / light green
-    --   oak_matured_flowering.png    - full summer canopy
-    --   oak_matured_senescing.png    - autumn orange/red
-    --   oak_matured_dormant.png      - bare winter branches
-    --   oak_sprout_budding.png       - sapling spring
-    --   oak_sprout_dormant.png       - sapling winter (bare stick)
-    --
-    -- The oak uses Evergreen lifecycle (no age-based death)
-    -- but has an annual cycle for seasonal textures.
-    -----------------------------------------------------------
+    quickSpecies({
+        name = "white_spruce", category = "tree",
+        tex = "assets/textures/world/flora/white_spruce/matured.png",
+        lifecycle = "evergreen", matureAge = 1080,
+        minTemp = -20, maxTemp = 15, idealTemp = 2,
+        minPrecip = 0.3, maxPrecip = 0.9, idealPrecip = 0.5,
+        minAlt = 100, maxAlt = 800, idealAlt = 400,
+        minHumidity = 0.3, maxHumidity = 0.8, idealHumidity = 0.5,
+        maxSlope = 3, density = 0.3, footprint = 10,
+    })
 
-    local oakBase      = engine.loadTexture("assets/textures/world/flora/oak/matured.png")
-    local oakSprout    = engine.loadTexture("assets/textures/world/flora/oak/sprout.png")
-    local oakMatured   = engine.loadTexture("assets/textures/world/flora/oak/matured.png")
+    ---------------------------------------------------------
+    -- TROPICAL / WARM
+    ---------------------------------------------------------
 
-    -- Annual cycle base textures (used for matured phase)
-    local oakDormant   = engine.loadTexture("assets/textures/world/flora/oak/matured_dormant.png")
-    local oakBudding   = engine.loadTexture("assets/textures/world/flora/oak/matured_budding.png")
-    local oakFlowering = engine.loadTexture("assets/textures/world/flora/oak/matured_flowering.png")
-    local oakSenescing = engine.loadTexture("assets/textures/world/flora/oak/matured_senescing.png")
+    quickSpecies({
+        name = "coconut_palm", category = "tree",
+        tex = "assets/textures/world/flora/coconut_palm/matured.png",
+        lifecycle = "evergreen", matureAge = 900,
+        minTemp = 20, maxTemp = 45, idealTemp = 30,
+        minPrecip = 0.5, maxPrecip = 1.0, idealPrecip = 0.8,
+        minAlt = -20, maxAlt = 200, idealAlt = 20,
+        minHumidity = 0.5, maxHumidity = 1.0, idealHumidity = 0.8,
+        maxSlope = 2, density = 0.2, footprint = 16,
+    })
 
-    -- Sprout-phase seasonal overrides
-    local oakSprBud    = engine.loadTexture("assets/textures/world/flora/oak/sprout_budding.png")
-    local oakSprDorm   = engine.loadTexture("assets/textures/world/flora/oak/sprout_dormant.png")
+    quickSpecies({
+        name = "red_mangrove", category = "tree",
+        tex = "assets/textures/world/flora/red_mangrove/matured.png",
+        lifecycle = "evergreen", matureAge = 720,
+        minTemp = 18, maxTemp = 40, idealTemp = 28,
+        minPrecip = 0.6, maxPrecip = 1.0, idealPrecip = 0.9,
+        minAlt = -30, maxAlt = 30, idealAlt = 0,
+        minHumidity = 0.7, maxHumidity = 1.0, idealHumidity = 0.9,
+        maxSlope = 1, density = 0.2, footprint = 14,
+    })
 
-    local oak = flora.register("oak", oakBase)
-    floraCatalog.species.oak = oak
+    ---------------------------------------------------------
+    -- ARID / DRY
+    ---------------------------------------------------------
 
-    -- Lifecycle: evergreen (no age-based death, lives forever)
-    -- This is the default so we don't need to call setLifecycle,
-    -- but being explicit is fine:
-    flora.setLifecycle(oak, "evergreen")
+    ---------------------------------------------------------
+    -- ALPINE / HIGH ELEVATION
+    ---------------------------------------------------------
 
-    -- Life phases
-    flora.addPhase(oak, "sprout",  oakSprout,  0)
-    flora.addPhase(oak, "matured", oakMatured,  720)  -- ~2 game-years
+    ---------------------------------------------------------
+    -- WETLAND
+    ---------------------------------------------------------
 
-    -- Annual cycle (these are the default textures per cycle stage)
-    flora.addCycleStage(oak, "dormant",   0,   oakDormant)
-    flora.addCycleStage(oak, "budding",   60,  oakBudding)
-    flora.addCycleStage(oak, "flowering", 120, oakFlowering)
-    flora.addCycleStage(oak, "senescing", 270, oakSenescing)
+    quickSpecies({
+        name = "weeping_willow", category = "tree",
+        tex = "assets/textures/world/flora/weeping_willow/matured.png",
+        lifecycle = "evergreen", matureAge = 900,
+        minTemp = 2, maxTemp = 30, idealTemp = 16,
+        minPrecip = 0.6, maxPrecip = 1.0, idealPrecip = 0.9,
+        minAlt = -40, maxAlt = 150, idealAlt = 10,
+        minHumidity = 0.7, maxHumidity = 1.0, idealHumidity = 0.9,
+        maxSlope = 2, density = 0.15, footprint = 16,
+    })
 
-    -- Cycle overrides for the sprout phase
-    -- (sapling looks different than mature tree in each season)
-    flora.addCycleOverride(oak, "sprout", "budding",  oakSprBud)
-    flora.addCycleOverride(oak, "sprout", "dormant",  oakSprDorm)
-    -- sprout + flowering/senescing: no override, falls back to
-    -- the base cycle texture (oakFlowering / oakSenescing),
-    -- which is fine for a sapling — same leaf color, just the
-    -- sprout phase texture shape
-
-    -- World generation: temperate deciduous tree
-    flora.registerForWorldGen(oak, "tree",
-        0, 32, 18.0,   -- temp range
-        0.4, 1.0, 0.7, -- precip range
-        2,             -- max slope
-        0.25,          -- density
-        18,            -- footprint radius (trees need more space than small plants)
-        -20, 500, 100,   -- altitude range
-        0.4, 0.9, 0.7) -- humidity range
-
-    engine.logInfo("Flora catalog loaded: dandelion, oak ("
-        .. tostring(dandelion) .. ", " .. tostring(oak) .. ")")
+    engine.logInfo("Flora catalog loaded: " .. tostring(21) .. " species")
 end
 
 return floraCatalog
