@@ -140,6 +140,7 @@ library
                      Engine.Asset.Types
                      Engine.Asset.Handle
                      Engine.Asset.Manager
+                     Engine.Asset.YamlTextures
                      Engine.Event.Base
                      Engine.Event.Types
                      Engine.Graphics.Base
@@ -228,6 +229,7 @@ library
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.World
                      Engine.Scripting.Lua.API.Flora
+                     Engine.Scripting.Lua.API.YamlTextures
                      Engine.Core.Defaults
                      Engine.Core.Init
                      Engine.Core.Monad

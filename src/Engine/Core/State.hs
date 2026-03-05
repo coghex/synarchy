@@ -9,6 +9,7 @@ import Data.IORef (IORef)
 import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Asset.Handle
+import Engine.Asset.YamlTextures
 import Engine.Core.Log
 import Engine.Core.Types
 import Engine.Core.Queue as Q
@@ -54,6 +55,7 @@ data EngineEnv = EngineEnv
   , luaQueue            ∷ Q.Queue LuaMsg
   , lifecycleRef        ∷ IORef EngineLifecycle
   , assetPoolRef        ∷ IORef AssetPool
+  , textureNameRegistryRef ∷ IORef TextureNameRegistry
   , nextObjectIdRef     ∷ IORef Word32
   , fontCacheRef        ∷ IORef FontCache
   , inputStateRef       ∷ IORef InputState

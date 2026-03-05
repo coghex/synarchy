@@ -7,20 +7,23 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Types
+import World.Material
+import World.Vegetation
 import World.Constants (seaLevel)
 
 -- | Generate a single flat loam chunk at seaLevel.
 --   Pure and trivial — no geology, no fluids, no flora.
 generateFlatChunk ∷ ChunkCoord → LoadedChunk
 generateFlatChunk coord =
-    let loamId    = 56 ∷ Word8
+    let MaterialId loamId = matLoam
+        vegId = vegMediumGrass
         arenaZ    = seaLevel
         chunkArea = chunkSize * chunkSize
         flatColumn = ColumnTiles
             { ctStartZ = arenaZ
             , ctMats   = VU.singleton loamId
             , ctSlopes = VU.singleton 0
-            , ctVeg    = VU.singleton 0
+            , ctVeg    = VU.singleton vegId
             }
     in LoadedChunk
         { lcCoord             = coord

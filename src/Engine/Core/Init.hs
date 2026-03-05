@@ -11,6 +11,7 @@ import qualified Data.Map as Map
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Types (defaultAssetPool)
+import Engine.Asset.YamlTextures
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
                        , LogLevel(..), LogCategory(..))
@@ -57,6 +58,7 @@ initializeEngine = do
   assetPool ← defaultAssetPool
   assetPoolRef ← newIORef assetPool
   nextObjectIdRef ← newIORef 0
+  texNameRegRef ← newIORef emptyTextureNameRegistry
   
   -- Initialize input state
   inputStateRef ← newIORef defaultInputState
@@ -119,6 +121,7 @@ initializeEngine = do
         , luaQueue           = engineToLuaQueue
         , lifecycleRef       = lifecycleRef
         , assetPoolRef       = assetPoolRef
+        , textureNameRegistryRef = texNameRegRef
         , nextObjectIdRef    = nextObjectIdRef
         , fontCacheRef       = fontCache
         , inputStateRef      = inputStateRef

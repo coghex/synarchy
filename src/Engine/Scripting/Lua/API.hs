@@ -20,6 +20,8 @@ import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
 import Engine.Scripting.Lua.API.Graphics (loadTextureFn, spawnSpriteFn, setPosFn,
                                            setColorFn, setSizeFn, setVisibleFn
                                            , destroyFn, getUIScaleFn)
+import Engine.Scripting.Lua.API.YamlTextures (loadMaterialYamlFn
+                                             , getTextureHandleFn)
 import Engine.Scripting.Lua.API.Log (logInfoFn, logWarnFn, logDebugFn)
 import Engine.Scripting.Lua.API.Input (isKeyDownFn, isActionDownFn,
                                        getMousePositionFn,
@@ -82,6 +84,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   
   -- Graphics functions
   registerLuaFunction "loadTexture"   (loadTextureFn backendState)
+  registerLuaFunction "getTextureHandle" (getTextureHandleFn env)
   registerLuaFunction "spawnSprite"   (spawnSpriteFn env backendState)
   registerLuaFunction "setPos"        (setPosFn env backendState)
   registerLuaFunction "setColor"      (setColorFn env backendState)
@@ -89,6 +92,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setVisible"    (setVisibleFn env backendState)
   registerLuaFunction "destroy"       (destroyFn env backendState)
   registerLuaFunction "getUIScale"    (getUIScaleFn env)
+
+  registerLuaFunction "loadMaterialYaml" (loadMaterialYamlFn env backendState)
   
   -- Input functions
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)

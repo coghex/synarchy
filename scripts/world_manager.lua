@@ -51,17 +51,36 @@ local function sendStructuralTextures(worldId, st)
     end
 end
 
-local function sendMaterialTextures(worldId, materials)
-    if not materials then return end
-    for matId, handles in pairs(materials) do
-        if handles.tile then
-            world.setTexture(worldId, "mat_tile_" .. matId, handles.tile)
+local function sendMaterialTextures(worldId)
+    -- Material IDs known to the engine (must match data/materials/*.yaml)
+    local matIds = {
+        1, 2, 3, 6, 7, 8,           -- igneous intrusive
+        10, 11, 12, 13, 14, 15, 16, -- igneous extrusive
+        20, 21, 22, 23, 24, 25,     -- sedimentary clastic
+        30, 31, 32, 33, 34, 35,     -- sedimentary chemical
+        40, 41, 42, 43, 44, 45,     -- metamorphic
+        50, 51, 52, 53, 54, 55, 56, 57, 58, 59, -- soils mineral
+        60, 61, 62, 63, 64, 65, 66, 67,         -- soils silt/special
+        70, 71, 72,                 -- carbonaceous
+        80, 81, 82, 83, 84, 85, 86, -- ores
+        90, 91,                     -- impact
+        100, 101, 102, 103,         -- volcanic
+        110, 111, 112, 113,         -- glacial
+        250, 251, 255,              -- special
+    }
+
+    for _, matId in ipairs(matIds) do
+        local tileH = engine.getTextureHandle("mat_tile_" .. matId)
+        local zoomH = engine.getTextureHandle("mat_zoom_" .. matId)
+        local bgH   = engine.getTextureHandle("mat_bg_"   .. matId)
+        if tileH and tileH >= 0 then
+            world.setTexture(worldId, "mat_tile_" .. matId, tileH)
         end
-        if handles.zoom then
-            world.setTexture(worldId, "mat_zoom_" .. matId, handles.zoom)
+        if zoomH and zoomH >= 0 then
+            world.setTexture(worldId, "mat_zoom_" .. matId, zoomH)
         end
-        if handles.bg then
-            world.setTexture(worldId, "mat_bg_" .. matId, handles.bg)
+        if bgH and bgH >= 0 then
+            world.setTexture(worldId, "mat_bg_"   .. matId, bgH)
         end
     end
 end
@@ -93,7 +112,7 @@ function worldManager.createWorld(params)
 
     -- Send all textures
     sendStructuralTextures(worldId, params.structural)
-    sendMaterialTextures(worldId, params.materials)
+    sendMaterialTextures(worldId)
     sendVegTextures(worldId, params.vegTextures)
 
     -- Register flora species into the catalog.

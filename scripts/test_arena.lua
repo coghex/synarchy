@@ -93,15 +93,13 @@ function testArena.sendTextures(worldId)
         end
     end
 
-    -- Loam tile texture (material ID 56)
-    local loamHandle = nil
-    if worldView.materialTextures and worldView.materialTextures[56] then
-        loamHandle = worldView.materialTextures[56].tile
-    end
-    if not loamHandle or loamHandle == -1 then
+    -- Loam tile texture (material ID 56) — look up from registry
+    local loamHandle = engine.getTextureHandle("mat_tile_56")
+    if loamHandle and loamHandle >= 0 then
+        world.setTexture(worldId, "mat_tile_56", loamHandle)
+    else
+        -- Fallback: load directly if YAML hasn't been processed yet
         loamHandle = engine.loadTexture("assets/textures/world/loam/loam.png")
-    end
-    if loamHandle then
         world.setTexture(worldId, "mat_tile_56", loamHandle)
     end
 end
