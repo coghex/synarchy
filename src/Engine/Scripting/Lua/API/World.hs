@@ -2,6 +2,7 @@
 module Engine.Scripting.Lua.API.World
     ( worldInitFn
     , worldInitArenaFn
+    , worldInitArenaDoneFn
     , worldShowFn
     , worldHideFn
     , worldSetTextureFn
@@ -68,6 +69,16 @@ worldInitArenaFn env = do
             Just bs → WorldPageId (TE.decodeUtf8 bs)
             Nothing → WorldPageId "test_arena"    -- default when called with no args
     Lua.liftIO $ Q.writeQueue (worldQueue env) (WorldInitArena pageId)
+    return 0
+
+-- | world.initArenaDone(pageId) — signal that all arena textures have been sent
+worldInitArenaDoneFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldInitArenaDoneFn env = do
+    pageIdArg ← Lua.tostring 1
+    let pageId = case pageIdArg of
+            Just bs → WorldPageId (TE.decodeUtf8 bs)
+            Nothing → WorldPageId "test_arena"
+    Lua.liftIO $ Q.writeQueue (worldQueue env) (WorldInitArenaDone pageId)
     return 0
 
 -- | world.show(pageId)

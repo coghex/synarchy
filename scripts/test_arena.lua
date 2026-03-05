@@ -54,14 +54,28 @@ end
 -----------------------------------------------------------
 
 function testArena.sendTextures(worldId)
-    -- Structural textures (reuses the same asset paths as world_view)
     local st = worldView.structuralTextures
-    if st.noTexture    then world.setTexture(worldId, "notexture",     st.noTexture)    end
-    if st.blankTexture then world.setTexture(worldId, "blank",         st.blankTexture) end
-    if st.isoFaceMap   then world.setTexture(worldId, "iso_facemap",   st.isoFaceMap)   end
-    if st.noFaceMap    then world.setTexture(worldId, "nofacemap",     st.noFaceMap)    end
 
-    -- Slope facemaps (needed for the renderer even though our arena is flat)
+    local function validHandle(h)
+        return h and h ~= -1
+    end
+
+    -- If worldView hasn't loaded textures yet, load the essentials ourselves
+    local noTex    = validHandle(st.noTexture) and st.noTexture
+                     or engine.loadTexture("assets/textures/world/notexture.png")
+    local blankTex = validHandle(st.blankTexture) and st.blankTexture
+                     or engine.loadTexture("assets/textures/world/blanktexture.png")
+    local isoFM    = validHandle(st.isoFaceMap) and st.isoFaceMap
+                     or engine.loadTexture("assets/textures/world/facemap/isoface.png")
+    local noFM     = validHandle(st.noFaceMap) and st.noFaceMap
+                     or engine.loadTexture("assets/textures/world/facemap/noface.png")
+
+    world.setTexture(worldId, "notexture",   noTex)
+    world.setTexture(worldId, "blank",       blankTex)
+    world.setTexture(worldId, "iso_facemap", isoFM)
+    world.setTexture(worldId, "nofacemap",   noFM)
+
+    -- Slope facemaps (send whatever worldView has, skip if not loaded)
     local slopeNames = {
         "n", "e", "ne", "s", "ns", "es", "nes",
         "w", "nw", "ew", "new", "sw", "nsw", "esw", "nesw"
@@ -74,24 +88,19 @@ function testArena.sendTextures(worldId)
         "isoSlopeFaceMapNSW", "isoSlopeFaceMapESW", "isoSlopeFaceMapNESW"
     }
     for i, field in ipairs(slopeFields) do
-        if st[field] then
+        if validHandle(st[field]) then
             world.setTexture(worldId, "iso_slope_facemap_" .. slopeNames[i], st[field])
         end
     end
 
     -- Loam tile texture (material ID 56)
-    -- Look up the handle from worldView's loaded material textures.
-    -- worldView stores loaded handles in materialTextures[id].tile
     local loamHandle = nil
     if worldView.materialTextures and worldView.materialTextures[56] then
         loamHandle = worldView.materialTextures[56].tile
     end
-
-    -- Fallback: if world_view hasn't loaded yet, load it ourselves
     if not loamHandle or loamHandle == -1 then
         loamHandle = engine.loadTexture("assets/textures/world/loam/loam.png")
     end
-
     if loamHandle then
         world.setTexture(worldId, "mat_tile_56", loamHandle)
     end
@@ -116,6 +125,11 @@ function testArena.createArenaWorld()
     -- be processed after WorldInitArena creates the WorldState.
     testArena.sendTextures(testArena.arenaWorldId)
 
+    -- Queue the "done" sentinel — the world thread processes these
+    -- sequentially, so by the time it reaches this command, all
+    -- textures above have been written into the WorldState.
+    world.initArenaDone(testArena.arenaWorldId)
+
     testArena.created = true
     engine.logInfo("Test arena world created")
 end
@@ -131,11 +145,12 @@ function testArena.show()
 
     testArena.createArenaWorld()
 
+    -- Show the page but mark as "waiting for textures"
     testArena.visible = true
+    testArena.ready = false
     UI.showPage(testArena.page)
-    world.show(testArena.arenaWorldId)
-
-    engine.logInfo("Test arena shown")
+    -- World won't be in wmVisible yet,
+    -- so nothing renders — just blank + HUD
 end
 
 function testArena.hide()

@@ -35,7 +35,8 @@ import World.Thread.Command.Basic (handleWorldTickCommand
                                   , handleWorldSetCameraCommand
                                   , handleWorldDestroyCommand)
 import World.Thread.Command.Init (handleWorldInitCommand
-                                 , handleWorldInitArenaCommand)
+                                 , handleWorldInitArenaCommand
+                                 , handleWorldInitArenaDoneCommand)
 import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldSetZoomCursorSelectCommand
                                    , handleWorldSetZoomCursorDeselectCommand
@@ -67,6 +68,8 @@ handleWorldCommand env logger (WorldInit pageId seed worldSize placeCount)
   = handleWorldInitCommand env logger pageId seed worldSize placeCount
 handleWorldCommand env logger (WorldInitArena pageId)
   = handleWorldInitArenaCommand env logger pageId
+handleWorldCommand env logger (WorldInitArenaDone pageId)
+  = handleWorldInitArenaDoneCommand env logger pageId
 handleWorldCommand env logger (WorldSetTexture pageId texType texHandle)
   = handleWorldSetTextureCommand env logger pageId texType texHandle
 handleWorldCommand env logger (WorldShow pageId)

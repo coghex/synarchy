@@ -224,7 +224,12 @@ function uiManager.showMenu(menuName, params)
         params.fbH = fbH
         loadingScreen.show(params)
     elseif menuName == "test_arena" then
-        testArena.show()
+        testArena.show()    -- this queues creation + shows loading screen
+    elseif menuName == "test_arena_view" then
+        -- Arena world already exists and is visible, just show the UI page
+        testArena.visible = true
+        if not testArena.page then testArena.createUI() end
+        UI.showPage(testArena.page)
     end
 end
 
@@ -249,6 +254,14 @@ end
 function uiManager.onCreateWorld()
     handleNonTextBoxClick()
     uiManager.showMenu("create_world")
+end
+
+function uiManager.onArenaReady(pageId)
+    if pageId == "test_arena" and testArena then
+        testArena.ready = true
+        -- The world is now in wmVisible, tiles will render next frame
+        engine.logInfo("Test arena ready!")
+    end
 end
 
 function uiManager.onMainMenuItem(elemHandle)
@@ -857,6 +870,11 @@ end
 
 function uiManager.onClearInfo()
     if hud then hud.clearInfo() end
+end
+
+-- Expose a shell-friendly global so the debug console can switch menus
+function showMenu(menuName, params)
+    uiManager.showMenu(menuName, params)
 end
 
 -----------------------------------------------------------

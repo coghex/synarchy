@@ -281,6 +281,8 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onKeyUp" [ScriptString (keyToText key)]
   LuaShellToggle → 
     broadcastToModules ls "onShellToggle" []
+  LuaArenaReady pageId →
+    broadcastToModules ls "onArenaReady" [ScriptString pageId]
   LuaDebugToggle → do
     logger ← readIORef (loggerRef env)
     logDebug logger CatLua "Debug overlay toggle requested"

@@ -15,6 +15,7 @@ import World.Texture.Types (WorldTextureType(..))
 data WorldCommand
     = WorldInit WorldPageId Word64 Int Int
     | WorldInitArena WorldPageId
+    | WorldInitArenaDone WorldPageId
     | WorldShow WorldPageId
     | WorldHide WorldPageId
     | WorldTick Double

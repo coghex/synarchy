@@ -1,6 +1,7 @@
 module World.Thread.Command.Init
     ( handleWorldInitCommand
     , handleWorldInitArenaCommand
+    , handleWorldInitArenaDoneCommand
     ) where
 
 import UPrelude
@@ -9,6 +10,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
+import qualified Engine.Core.Queue as Q
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
@@ -16,6 +18,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
+import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
 import World.Constants (seaLevel)
 import World.Generate (generateChunk)
@@ -245,13 +248,22 @@ handleWorldInitArenaCommand env logger pageId = do
              , camPosition = (0, 0)
              , camZoom = 0.5
              }, ())
-    -- Auto-show the arena
-    atomicModifyIORef' (worldManagerRef env) $ \mgr →
-        if pageId `elem` wmVisible mgr
-        then (mgr, ())
-        else (mgr { wmVisible = pageId : wmVisible mgr }, ())
 
     let totalChunks = length allChunks
     logInfo logger CatWorld $ "Test arena initialized: "
         <> T.pack (show totalChunks)
         <> " flat loam chunks at z=" <> T.pack (show arenaZ)
+
+handleWorldInitArenaDoneCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
+handleWorldInitArenaDoneCommand env logger pageId = do
+    logInfo logger CatWorld $ "Arena textures ready, showing: " <> unWorldPageId pageId
+    
+    -- Now safe to make visible — all texture commands have been processed
+    atomicModifyIORef' (worldManagerRef env) $ \mgr →
+        if pageId `elem` wmVisible mgr
+        then (mgr, ())
+        else (mgr { wmVisible = pageId : wmVisible mgr }, ())
+    
+    -- Broadcast to Lua that the arena is ready to display
+    let lteq = luaQueue env
+    Q.writeQueue lteq (LuaArenaReady (unWorldPageId pageId))
