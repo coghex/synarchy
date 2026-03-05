@@ -1,11 +1,13 @@
 module World.Thread.Command.Init
     ( handleWorldInitCommand
+    , handleWorldInitArenaCommand
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.DeepSeq (force)
@@ -175,3 +177,76 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
         <> T.pack (show totalInitialChunks) <> " chunks, "
         <> "surface at z=" <> T.pack (show surfaceElev)
         <> ": " <> unWorldPageId pageId
+
+handleWorldInitArenaCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
+handleWorldInitArenaCommand env logger pageId = do
+    logInfo logger CatWorld $ "Initializing test arena: " <> unWorldPageId pageId
+
+    worldState ← emptyWorldState
+
+    -- Register early so textures sent after this command are routed correctly
+    atomicModifyIORef' (worldManagerRef env) $ \mgr →
+        (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
+
+    -- Arena parameters
+    let arenaRadius = 2           -- 5×5 chunks
+        loamId     = 56 ∷ Word8  -- matLoam = MaterialId 56
+        arenaZ     = seaLevel    -- z = 0
+        chunkArea  = chunkSize * chunkSize  -- 256
+
+        -- A single flat column: one tile of loam at seaLevel
+        flatColumn = ColumnTiles
+            { ctStartZ = arenaZ
+            , ctMats   = VU.singleton loamId
+            , ctSlopes = VU.singleton 0
+            , ctVeg    = VU.singleton 0
+            }
+
+        flatChunk      = V.replicate chunkArea flatColumn
+        flatSurfaceMap = VU.replicate chunkArea arenaZ
+        flatFluidMap   = V.replicate chunkArea Nothing
+        flatFlora      = emptyFloraChunkData
+
+        mkChunk cx cy = LoadedChunk
+            { lcCoord             = ChunkCoord cx cy
+            , lcTiles             = flatChunk
+            , lcSurfaceMap        = flatSurfaceMap
+            , lcTerrainSurfaceMap = flatSurfaceMap
+            , lcFluidMap          = flatFluidMap
+            , lcFlora             = flatFlora
+            , lcModified          = False
+            }
+
+        allChunks = [ mkChunk cx cy
+                    | cx ← [-arenaRadius .. arenaRadius]
+                    , cy ← [-arenaRadius .. arenaRadius]
+                    ]
+
+        chunkMap = HM.fromList [ (lcCoord c, c) | c ← allChunks ]
+
+    -- Write tile data
+    atomicModifyIORef' (wsTilesRef worldState) $ \_ →
+        (WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }, ())
+
+    -- Minimal WorldGenParams so the render pipeline doesn't bail on Nothing
+    let arenaParams = defaultWorldGenParams
+            { wgpSeed      = 0
+            , wgpWorldSize = arenaRadius * 2 + 1
+            }
+    writeIORef (wsGenParamsRef worldState) (Just arenaParams)
+
+    -- Mark as fully loaded immediately (no progressive loading needed)
+    writeIORef (wsLoadPhaseRef worldState) LoadDone
+
+    -- Set camera z-slice to just above the surface
+    atomicModifyIORef' (cameraRef env) $ \cam →
+        (cam { camZSlice = arenaZ + surfaceHeadroom
+             , camZTracking = True
+             , camPosition = (0, 0)
+             , camZoom = 0.5
+             }, ())
+
+    let totalChunks = length allChunks
+    logInfo logger CatWorld $ "Test arena initialized: "
+        <> T.pack (show totalChunks)
+        <> " flat loam chunks at z=" <> T.pack (show arenaZ)

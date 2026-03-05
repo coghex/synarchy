@@ -33,6 +33,7 @@ local randbox = nil
 local toggle = nil
 local uiList = nil
 local loadingScreen = nil
+local testArena = nil
 
 local hoveredElement = nil
 local hoveredCallback = nil
@@ -89,6 +90,7 @@ function uiManager.init(scriptId)
     worldView = require("scripts.world_view")
     saveBrowser = require("scripts.save_browser")
     hud = require("scripts.hud")
+    testArena = require("scripts.test_arena")
     
     settingsMenu.setShowMenuCallback(function(menuName, params)
         uiManager.showMenu(menuName, params)
@@ -107,6 +109,9 @@ function uiManager.init(scriptId)
     end)
 
     loadingScreen.setShowMenuCallback(function(menuName, params)
+        uiManager.showMenu(menuName, params)
+    end)
+    testArena.setShowMenuCallback(function(menuName, params)
         uiManager.showMenu(menuName, params)
     end)
 
@@ -129,6 +134,9 @@ function uiManager.onAssetLoaded(assetType, handle, path)
     if worldView and worldView.onAssetLoaded then
         worldView.onAssetLoaded(assetType, handle, path)
     end
+    if testArena and testArena.onAssetLoaded then
+        testArena.onAssetLoaded(assetType, handle, path)
+    end
 end
 
 function uiManager.checkReady()
@@ -141,6 +149,7 @@ function uiManager.checkReady()
             hud.init(boxTexSet, menuFont, fbW, fbH)
             saveBrowser.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             loadingScreen.init(boxTexSet, menuFont, titleFont, fbW, fbH)
+            testArena.init(boxTexSet, menuFont, titleFont, fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -177,6 +186,8 @@ function uiManager.onFramebufferResize(width, height)
         if hud and hud.page then UI.showPage(hud.page) end
     elseif currentMenu == "save_browser" then
         if saveBrowser and saveBrowser.page then UI.showPage(saveBrowser.page) end
+    elseif currentMenu == "test_arena" then
+        if testArena and testArena.page then UI.showPage(testArena.page) end
     end 
 end
 
@@ -190,6 +201,7 @@ function uiManager.showMenu(menuName, params)
     hud.hide()
     if saveBrowser then saveBrowser.hide() end
     if loadingScreen then loadingScreen.hide() end
+    if testArena then testArena.hide() end
 
     if menuName == "main" then
         mainMenu.show()
@@ -211,6 +223,8 @@ function uiManager.showMenu(menuName, params)
         params.fbW = fbW
         params.fbH = fbH
         loadingScreen.show(params)
+    elseif menuName == "test_arena" then
+        testArena.show()
     end
 end
 
@@ -302,6 +316,10 @@ function uiManager.update(dt)
 
     if loadingScreen then
         loadingScreen.update(dt)
+    end
+
+    if testArena then
+        testArena.update(dt)
     end
 
     -- slider drag detection
@@ -408,6 +426,7 @@ function uiManager.shutdown()
     if hud then hud.shutdown() end
     if saveBrowser then saveBrowser.shutdown() end
     if loadingScreen then loadingScreen.shutdown() end
+    if testArena then testArena.shutdown() end
 end
 
 function uiManager.onTextBoxClick(elemHandle)
@@ -627,6 +646,8 @@ function uiManager.onScroll(dx, dy)
     if currentMenu == "world_view" and worldView then
         worldView.onScroll(dx, dy)
         hud.onScroll(dx, dy)
+    elseif currentMenu == "test_arena" and testArena then
+        testArena.onScroll(dx, dy)
     end
 end
 
@@ -637,6 +658,8 @@ end
 function uiManager.onZSliceScroll(dx, dy)
     if currentMenu == "world_view" and worldView then
         worldView.onZSliceScroll(dx, dy)
+    elseif currentMenu == "test_arena" and testArena then
+        testArena.onZSliceScroll(dx, dy)
     end
 end
 
@@ -843,6 +866,8 @@ end
 function uiManager.onKeyDown(key)
     if currentMenu == "world_view" and worldView then
         worldView.onKeyDown(key)
+    elseif currentMenu == "test_arena" and testArena then
+        testArena.onKeyDown(key)
     end
 end
 
@@ -850,6 +875,10 @@ function uiManager.onKeyUp(key)
     if currentMenu == "world_view" and worldView then
         if worldView.onKeyUp then
             worldView.onKeyUp(key)
+        end
+    elseif currentMenu == "test_arena" and testArena then
+        if testArena.onKeyUp then
+            testArena.onKeyUp(key)
         end
     end
 end

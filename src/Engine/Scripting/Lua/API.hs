@@ -190,6 +190,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   Lua.newtable
 
   registerLuaFunction "init" (worldInitFn env)
+  registerLuaFunction "initArena" (worldInitArenaFn env)
   registerLuaFunction "show" (worldShowFn env)
   registerLuaFunction "hide" (worldHideFn env)
   registerLuaFunction "setTexture" (worldSetTextureFn env)

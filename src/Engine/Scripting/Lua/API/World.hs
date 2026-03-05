@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scripting.Lua.API.World
     ( worldInitFn
+    , worldInitArenaFn
     , worldShowFn
     , worldHideFn
     , worldSetTextureFn
@@ -57,6 +58,17 @@ worldInitFn env = do
             Q.writeQueue (worldQueue env) (WorldInit pageId seed size plates)
         Nothing → pure ()
     
+    return 0
+
+-- | world.initArena(pageId) — create flat test arena, no geology
+worldInitArenaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldInitArenaFn env = do
+    pageIdArg ← Lua.tostring 1
+    case pageIdArg of
+        Just pageIdBS → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            Q.writeQueue (worldQueue env) (WorldInitArena pageId)
+        Nothing → pure ()
     return 0
 
 -- | world.show(pageId)
