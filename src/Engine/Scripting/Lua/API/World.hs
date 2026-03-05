@@ -3,6 +3,7 @@ module Engine.Scripting.Lua.API.World
     ( worldInitFn
     , worldInitArenaFn
     , worldInitArenaDoneFn
+    , worldOpenArenaFn
     , worldShowFn
     , worldHideFn
     , worldSetTextureFn
@@ -38,6 +39,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
+import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
 import World.Tool.Types (ToolMode(..), textToToolMode)
 import World.Render.Zoom.Types (ZoomMapMode(..), textToMapMode)
@@ -79,6 +81,12 @@ worldInitArenaDoneFn env = do
             Just bs → WorldPageId (TE.decodeUtf8 bs)
             Nothing → WorldPageId "test_arena"
     Lua.liftIO $ Q.writeQueue (worldQueue env) (WorldInitArenaDone pageId)
+    return 0
+
+-- | world.openArena() — convenience function that broadcasts to Lua
+worldOpenArenaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldOpenArenaFn env = do
+    Lua.liftIO $ Q.writeQueue (luaQueue env) (LuaOpenArena)
     return 0
 
 -- | world.show(pageId)

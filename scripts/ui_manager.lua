@@ -186,7 +186,7 @@ function uiManager.onFramebufferResize(width, height)
         if hud and hud.page then UI.showPage(hud.page) end
     elseif currentMenu == "save_browser" then
         if saveBrowser and saveBrowser.page then UI.showPage(saveBrowser.page) end
-    elseif currentMenu == "test_arena" then
+    elseif currentMenu == "test_arena_view" then
         if testArena and testArena.page then UI.showPage(testArena.page) end
     end 
 end
@@ -258,9 +258,10 @@ end
 
 function uiManager.onArenaReady(pageId)
     if pageId == "test_arena" and testArena then
+        engine.logInfo("Arena ready, switching to test arena view")
         testArena.ready = true
-        -- The world is now in wmVisible, tiles will render next frame
-        engine.logInfo("Test arena ready!")
+        -- Full menu transition: hides main menu, loading screen, everything
+        uiManager.showMenu("test_arena_view")
     end
 end
 
@@ -659,7 +660,7 @@ function uiManager.onScroll(dx, dy)
     if currentMenu == "world_view" and worldView then
         worldView.onScroll(dx, dy)
         hud.onScroll(dx, dy)
-    elseif currentMenu == "test_arena" and testArena then
+    elseif (currentMenu == "test_arena" or currentMenu == "test_arena_view") and testArena then
         testArena.onScroll(dx, dy)
     end
 end
@@ -671,7 +672,7 @@ end
 function uiManager.onZSliceScroll(dx, dy)
     if currentMenu == "world_view" and worldView then
         worldView.onZSliceScroll(dx, dy)
-    elseif currentMenu == "test_arena" and testArena then
+    elseif (currentMenu == "test_arena" or currentMenu == "test_arena_view") and testArena then
         testArena.onZSliceScroll(dx, dy)
     end
 end
@@ -872,9 +873,8 @@ function uiManager.onClearInfo()
     if hud then hud.clearInfo() end
 end
 
--- Expose a shell-friendly global so the debug console can switch menus
-function showMenu(menuName, params)
-    uiManager.showMenu(menuName, params)
+function uiManager.onOpenArena()
+    uiManager.showMenu("test_arena")
 end
 
 -----------------------------------------------------------
@@ -884,7 +884,7 @@ end
 function uiManager.onKeyDown(key)
     if currentMenu == "world_view" and worldView then
         worldView.onKeyDown(key)
-    elseif currentMenu == "test_arena" and testArena then
+    elseif (currentMenu == "test_arena" or currentMenu == "test_arena_view") and testArena then
         testArena.onKeyDown(key)
     end
 end
@@ -894,7 +894,7 @@ function uiManager.onKeyUp(key)
         if worldView.onKeyUp then
             worldView.onKeyUp(key)
         end
-    elseif currentMenu == "test_arena" and testArena then
+    elseif (currentMenu == "test_arena" or currentMenu == "test_arena_view") and testArena then
         if testArena.onKeyUp then
             testArena.onKeyUp(key)
         end
