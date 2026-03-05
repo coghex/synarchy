@@ -245,6 +245,11 @@ handleWorldInitArenaCommand env logger pageId = do
              , camPosition = (0, 0)
              , camZoom = 0.5
              }, ())
+    -- Auto-show the arena
+    atomicModifyIORef' (worldManagerRef env) $ \mgr →
+        if pageId `elem` wmVisible mgr
+        then (mgr, ())
+        else (mgr { wmVisible = pageId : wmVisible mgr }, ())
 
     let totalChunks = length allChunks
     logInfo logger CatWorld $ "Test arena initialized: "

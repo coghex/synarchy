@@ -64,11 +64,10 @@ worldInitFn env = do
 worldInitArenaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldInitArenaFn env = do
     pageIdArg ← Lua.tostring 1
-    case pageIdArg of
-        Just pageIdBS → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
-            Q.writeQueue (worldQueue env) (WorldInitArena pageId)
-        Nothing → pure ()
+    let pageId = case pageIdArg of
+            Just bs → WorldPageId (TE.decodeUtf8 bs)
+            Nothing → WorldPageId "test_arena"    -- default when called with no args
+    Lua.liftIO $ Q.writeQueue (worldQueue env) (WorldInitArena pageId)
     return 0
 
 -- | world.show(pageId)
