@@ -230,6 +230,7 @@ function uiManager.showMenu(menuName, params)
         testArena.visible = true
         if not testArena.page then testArena.createUI() end
         UI.showPage(testArena.page)
+        world.show(testArena.arenaWorldId)
     end
 end
 
