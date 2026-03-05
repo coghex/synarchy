@@ -17,7 +17,9 @@ import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
 import World.Generate (generateChunk, cameraChunkCoord)
+import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
+import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
 import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes)
 import World.Thread.Helpers (unWorldPageId)
@@ -69,19 +71,24 @@ updateChunkLoading env logger = do
                             let toGenerateSorted = sortOn (\(ChunkCoord cx cy) →
                                     abs (cx - ccx) + abs (cy - ccy)) toGenerate
                                 batch = take maxChunksPerTick toGenerateSorted
+                            let isArena = wgpGeoTimeline params
+                                            == emptyTimeline
+                                            && wgpSeed params == 0
                             when (not $ null batch) $ do
                                 let seed = wgpSeed params
-                                let !newChunks = parMap rdeepseq (\coord →
-                                        let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk catalog params coord
-                                        in LoadedChunk
-                                            { lcCoord      = coord
-                                            , lcTiles      = chunkTiles
-                                            , lcSurfaceMap = surfMap
-                                            , lcTerrainSurfaceMap = tMap
-                                            , lcFluidMap   = fluidMap
-                                            , lcFlora      = flora
-                                            , lcModified   = False
-                                            }) batch
+                                let !newChunks = if isArena
+                                        then map generateFlatChunk batch
+                                        else parMap rdeepseq (\coord →
+                                            let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk catalog params coord
+                                            in LoadedChunk
+                                                { lcCoord      = coord
+                                                , lcTiles      = chunkTiles
+                                                , lcSurfaceMap = surfMap
+                                                , lcTerrainSurfaceMap = tMap
+                                                , lcFluidMap   = fluidMap
+                                                , lcFlora      = flora
+                                                , lcModified   = False
+                                                }) batch
                                 atomicModifyIORef' (wsTilesRef worldState) $ \td →
                                     let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
                                         td'' = evictDistantChunks camChunk chunkLoadRadius td'

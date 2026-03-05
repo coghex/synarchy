@@ -306,6 +306,7 @@ library
                      World.Render.Zoom.Cursor
                      World.Render.Zoom.Background
                      World.Generate
+                     World.Generate.Arena
                      World.Generate.Constants
                      World.Generate.Coordinates
                      World.Generate.Chunk

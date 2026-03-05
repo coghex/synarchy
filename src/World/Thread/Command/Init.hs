@@ -234,7 +234,7 @@ handleWorldInitArenaCommand env logger pageId = do
     -- Minimal WorldGenParams so the render pipeline doesn't bail on Nothing
     let arenaParams = defaultWorldGenParams
             { wgpSeed      = 0
-            , wgpWorldSize = arenaRadius * 2 + 1
+            , wgpWorldSize = 100000 -- arena is very big
             }
     writeIORef (wsGenParamsRef worldState) (Just arenaParams)
 

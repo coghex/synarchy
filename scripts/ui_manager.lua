@@ -883,6 +883,9 @@ end
 -----------------------------------------------------------
 
 function uiManager.onKeyDown(key)
+    if key == "F7" then
+        world.openArena()
+    end
     if currentMenu == "world_view" and worldView then
         worldView.onKeyDown(key)
     elseif (currentMenu == "test_arena" or currentMenu == "test_arena_view") and testArena then

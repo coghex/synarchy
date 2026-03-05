@@ -179,7 +179,7 @@ function testArena.onScroll(dx, dy)
     -- Forward to the same zoom logic world_view uses
     local zoom = camera.getZoom()
     local newZoom = zoom - dy * 0.05
-    newZoom = math.max(0.1, math.min(5.0, newZoom))
+    newZoom = math.max(0.1, math.min(1.5, newZoom))
     camera.setZoom(newZoom)
 end
 
