@@ -211,6 +211,7 @@ function uiManager.showMenu(menuName, params)
         createWorldMenu.show()
     elseif menuName == "world_view" then
         worldView.show()
+        hud.worldId = "main_world"
         hud.show()
     elseif menuName == "save_browser" then
         saveBrowser.show(mainMenu.saves, function(saveName)
@@ -231,6 +232,8 @@ function uiManager.showMenu(menuName, params)
         if not testArena.page then testArena.createUI() end
         UI.showPage(testArena.page)
         world.show(testArena.arenaWorldId)
+        hud.worldId = testArena.arenaWorldId
+        hud.show()
     end
 end
 
@@ -663,6 +666,7 @@ function uiManager.onScroll(dx, dy)
         hud.onScroll(dx, dy)
     elseif (currentMenu == "test_arena" or currentMenu == "test_arena_view") and testArena then
         testArena.onScroll(dx, dy)
+        hud.onScroll(dx, dy)
     end
 end
 

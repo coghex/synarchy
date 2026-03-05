@@ -15,6 +15,7 @@ hud.uiCreated = false
 hud.fbW = 0
 hud.fbH = 0
 hud.currentView = "none"  -- "zoomed_in", "zoomed_out", or "none"
+hud.worldId = "main_world" -- default overridden per-context
 
 hud.mapToggleId = nil
 
@@ -131,15 +132,15 @@ function hud.createUI()
     hud.info_page = UI.newPage("hud_info_overlay", "overlay")
 
     if hud.texZoomSelect and hud.texZoomHover then
-        world.setZoomCursorSelectTexture("main_world", hud.texZoomSelect)
-        world.setZoomCursorHoverTexture("main_world", hud.texZoomHover)
+        world.setZoomCursorSelectTexture(hud.worldId, hud.texZoomSelect)
+        world.setZoomCursorHoverTexture(hud.worldId, hud.texZoomHover)
     end
     if hud.texWorldSelect and hud.texWorldHover
             and hud.texWorldSelectBg and hud.texWorldHoverBg then
-        world.setWorldCursorSelectTexture("main_world", hud.texWorldSelect)
-        world.setWorldCursorHoverTexture("main_world", hud.texWorldHover)
-        world.setWorldCursorSelectBgTexture("main_world", hud.texWorldSelectBg)
-        world.setWorldCursorHoverBgTexture("main_world", hud.texWorldHoverBg)
+        world.setWorldCursorSelectTexture(hud.worldId, hud.texWorldSelect)
+        world.setWorldCursorHoverTexture(hud.worldId, hud.texWorldHover)
+        world.setWorldCursorSelectBgTexture(hud.worldId, hud.texWorldSelectBg)
+        world.setWorldCursorHoverBgTexture(hud.worldId, hud.texWorldHoverBg)
     end
 
     -- Position: bottom-right, anchored so the right edge of the last
@@ -192,7 +193,7 @@ function hud.createUI()
         zIndex  = 100,
         uiscale = uiscale,
         onChange = function(index, itemName)
-            world.setMapMode("main_world", itemName)
+            world.setMapMode(hud.worldId, itemName)
             engine.logDebug("Map mode changed to: " .. tostring(itemName))
         end,
     })
@@ -230,7 +231,7 @@ function hud.createUI()
         zIndex  = 100,
         uiscale = uiscale,
         onChange = function(index, itemName)
-            world.setToolMode("main_world", itemName)
+            world.setToolMode(hud.worldId, itemName)
             engine.logDebug("Tool mode changed to: " .. tostring(itemName))
         end,
     })
@@ -310,15 +311,15 @@ end
 function hud.onMouseDown(button_num, mx, my)
     if hud.currentView == "zoomed_out" then
         if button_num == 1 then
-            world.setZoomCursorSelect("main_world")
+            world.setZoomCursorSelect(hud.worldId)
         elseif button_num == 2 then
-            world.clearZoomCursorSelect("main_world")
+            world.clearZoomCursorSelect(hud.worldId)
         end
     elseif hud.currentView == "zoomed_in" then
         if button_num == 1 then
-            world.setWorldCursorSelect("main_world")
+            world.setWorldCursorSelect(hud.worldId)
         elseif button_num == 2 then
-            world.clearWorldCursorSelect("main_world")
+            world.clearWorldCursorSelect(hud.worldId)
         end
     end
 end
@@ -368,9 +369,9 @@ function hud.update(dt)
     local mx, my = engine.getMousePosition()
     if mx and my then
         if hud.currentView == "zoomed_out" then
-            world.setZoomCursorHover("main_world", mx, my)
+            world.setZoomCursorHover(hud.worldId, mx, my)
         elseif hud.currentView == "zoomed_in" then
-            world.setWorldCursorHover("main_world", mx, my)
+            world.setWorldCursorHover(hud.worldId, mx, my)
         end
     end
 end
