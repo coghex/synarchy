@@ -108,6 +108,8 @@ initializeEngine = do
   materialRegistryRef ← newIORef emptyMaterialRegistry
   -- unit manager
   unitManagerRef ← newIORef emptyUnitManager
+  -- unit thread queue
+  unitQueue ← Q.newQueue
 
   -- Build environment
   let env = EngineEnv
@@ -148,6 +150,7 @@ initializeEngine = do
         , floraCatalogRef    = floraCatRef
         , materialRegistryRef = materialRegistryRef
         , unitManagerRef     = unitManagerRef
+        , unitQueue          = unitQueue
         }
   
   envVar   ← atomically $ newVar env

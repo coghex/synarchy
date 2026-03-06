@@ -274,6 +274,10 @@ library
                      UI.TextBuffer
                      Unit.Types
                      Unit.Render
+                     Unit.Command.Types
+                     Unit.Sim.Types
+                     Unit.Thread
+                     Unit.Thread.Command
                      World.Base
                      World.Constants
                      World.Command.Types

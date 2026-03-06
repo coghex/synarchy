@@ -203,7 +203,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "spawn"   (unitSpawnFn env)
   registerLuaFunction "destroy" (unitDestroyFn env)
   registerLuaFunction "setPos"  (unitSetPosFn env)
+  registerLuaFunction "getPos"  (unitGetPosFn env)
   registerLuaFunction "list"    (unitListFn env)
+  registerLuaFunction "moveTo"  (unitMoveToFn env)
+  registerLuaFunction "stop"    (unitStopFn env)
 
   Lua.setglobal (Lua.Name "unit")
 

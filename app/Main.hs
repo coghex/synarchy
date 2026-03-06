@@ -21,6 +21,7 @@ import Engine.Loop (mainLoop)
 import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
 import Engine.Scripting.Lua.Backend (startLuaThread)
 import World.Thread (startWorldThread)
+import Unit.Thread (startUnitThread)
 
 main ∷ IO ()
 main = do
@@ -42,6 +43,7 @@ main = do
   inputThreadState ← startInputThread env
   luaThreadState   ← startLuaThread env
   worldThreadState ← startWorldThread env
+  unitThreadState  ← startUnitThread env
   
   -- Load video configuration
   videoConfig ← readIORef (videoConfigRef env)
@@ -66,7 +68,8 @@ main = do
         mainLoop
         
         -- Shutdown
-        shutdownEngine window worldThreadState inputThreadState luaThreadState
+        shutdownEngine window unitThreadState worldThreadState
+                              inputThreadState luaThreadState
         logDebugM CatSystem "Engine shutdown complete."
   
   -- Run engine

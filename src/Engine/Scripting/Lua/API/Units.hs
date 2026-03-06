@@ -4,6 +4,9 @@ module Engine.Scripting.Lua.API.Units
     , unitSpawnFn
     , unitDestroyFn
     , unitSetPosFn
+    , unitMoveToFn
+    , unitStopFn
+    , unitGetPosFn
     , unitListFn
     ) where
 
@@ -22,7 +25,9 @@ import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
 import Engine.Asset.YamlUnits (UnitYamlDef(..), loadUnitYaml)
 import qualified Engine.Core.Queue as Q
 import Unit.Types
-import World.Types
+import Unit.Command.Types (UnitCommand(..))
+import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
+                    LoadedChunk(..), ChunkCoord(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
 
 -----------------------------------------------------------
@@ -79,9 +84,6 @@ loadUnitYamlFn env backendState = do
 -- Surface elevation lookup
 -----------------------------------------------------------
 
--- | Look up the surface elevation at absolute grid coords (gx, gy)
---   by walking worldManagerRef → wmVisible → wsTilesRef → chunk.
---   Returns Nothing if no visible world or the chunk isn't loaded.
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
 lookupSurfaceZ env gx gy = do
     wm ← readIORef (worldManagerRef env)
@@ -127,41 +129,40 @@ unitSpawnFn env = do
                          Just (Lua.Number n) → realToFrac n
                          _                   → 0.0
 
-            -- Resolve Z before the atomic block (reads a different IORef)
-            gz ← Lua.liftIO $ case zArg of
-                Just n  → return (fromIntegral n)
-                Nothing → do
-                    let gxi = floor gx ∷ Int
-                        gyi = floor gy ∷ Int
-                    mSurf ← lookupSurfaceZ env gxi gyi
-                    case mSurf of
-                        Just surfZ → return surfZ
-                        Nothing → do
-                            logger ← readIORef (loggerRef env)
-                            logWarn logger CatAsset $
-                                "unit.spawn: chunk not loaded at ("
-                                <> T.pack (show gxi) <> ", "
-                                <> T.pack (show gyi)
-                                <> "), defaulting Z=0"
-                            return 0
+            result ← Lua.liftIO $ do
+                -- Check def exists
+                um ← readIORef (unitManagerRef env)
+                case HM.lookup name (umDefs um) of
+                    Nothing → return (-1)
+                    Just _ → do
+                        -- Resolve Z
+                        gz ← case zArg of
+                            Just n  → return (fromIntegral n)
+                            Nothing → do
+                                let gxi = floor gx ∷ Int
+                                    gyi = floor gy ∷ Int
+                                mSurf ← lookupSurfaceZ env gxi gyi
+                                case mSurf of
+                                    Just z  → return z
+                                    Nothing → do
+                                        logger ← readIORef (loggerRef env)
+                                        logWarn logger CatAsset $
+                                            "unit.spawn: chunk not loaded at ("
+                                            <> T.pack (show gxi) <> ", "
+                                            <> T.pack (show gyi)
+                                            <> "), defaulting Z=0"
+                                        return 0
 
-            result ← Lua.liftIO $
-                atomicModifyIORef' (unitManagerRef env) $ \um →
-                    case HM.lookup name (umDefs um) of
-                        Nothing → (um, -1)
-                        Just def →
-                            let (uid, um') = nextUnitId um
-                                inst = UnitInstance
-                                    { uiDefName   = name
-                                    , uiTexture   = udTexture def
-                                    , uiBaseWidth = udBaseWidth def
-                                    , uiGridX     = gx
-                                    , uiGridY     = gy
-                                    , uiGridZ     = gz
-                                    }
-                                um'' = um' { umInstances =
-                                    HM.insert uid inst (umInstances um') }
-                            in (um'', fromIntegral (unUnitId uid) ∷ Int)
+                        -- Allocate ID
+                        uid ← atomicModifyIORef' (unitManagerRef env) $ \um' →
+                            let (uid', um'') = nextUnitId um'
+                            in (um'', uid')
+
+                        -- Enqueue spawn command
+                        Q.writeQueue (unitQueue env) $
+                            UnitSpawn uid name gx gy gz
+
+                        return (fromIntegral (unUnitId uid) ∷ Int)
 
             Lua.pushnumber (Lua.Number (fromIntegral result))
             return 1
@@ -169,7 +170,7 @@ unitSpawnFn env = do
 -----------------------------------------------------------
 -- unit.destroy(unitId)
 --
--- Removes a unit instance by ID. Returns true/false.
+-- Removes a unit instance by ID. Returns true.
 -----------------------------------------------------------
 
 unitDestroyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -181,18 +182,15 @@ unitDestroyFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            found ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
-                if HM.member uid (umInstances um)
-                then (um { umInstances = HM.delete uid (umInstances um) }, True)
-                else (um, False)
-            Lua.pushboolean found
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitDestroy uid
+            Lua.pushboolean True
             return 1
 
 -----------------------------------------------------------
 -- unit.setPos(unitId, gridX, gridY [, gridZ])
 --
--- Moves a unit instance to a new position.
--- If gridZ is omitted, keeps current Z.
+-- Teleports a unit instance to a new position.
+-- If gridZ is omitted, looks up surface elevation.
 -----------------------------------------------------------
 
 unitSetPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -214,19 +212,92 @@ unitSetPosFn env = do
                 gy = case yArg of
                          Just (Lua.Number v) → realToFrac v
                          _                   → 0.0
-            found ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
-                case HM.lookup uid (umInstances um) of
-                    Nothing → (um, False)
-                    Just inst →
-                        let gz = case zArg of
-                                     Just z  → fromIntegral z
-                                     Nothing → uiGridZ inst
-                            inst' = inst { uiGridX = gx
-                                         , uiGridY = gy
-                                         , uiGridZ = gz }
-                        in (um { umInstances = HM.insert uid inst' (umInstances um) }, True)
-            Lua.pushboolean found
+                mGz = case zArg of
+                         Just z  → Just (fromIntegral z)
+                         Nothing → Nothing
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $
+                UnitTeleport uid gx gy mGz
+            Lua.pushboolean True
             return 1
+
+-----------------------------------------------------------
+-- unit.moveTo(unitId, targetX, targetY [, speed])
+--
+-- Orders a unit to walk to (targetX, targetY).
+-- Speed is in tiles per second, defaults to 2.0.
+-----------------------------------------------------------
+
+unitMoveToFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitMoveToFn env = do
+    idArg    ← Lua.tointeger 1
+    xArg     ← Lua.tonumber 2
+    yArg     ← Lua.tonumber 3
+    speedArg ← Lua.tonumber 4
+
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+                tx = case xArg of
+                         Just (Lua.Number v) → realToFrac v
+                         _                   → 0.0
+                ty = case yArg of
+                         Just (Lua.Number v) → realToFrac v
+                         _                   → 0.0
+                speed = case speedArg of
+                            Just (Lua.Number v) → realToFrac v
+                            _                   → 2.0
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $
+                UnitMoveTo uid tx ty speed
+            Lua.pushboolean True
+            return 1
+
+-----------------------------------------------------------
+-- unit.stop(unitId)
+--
+-- Cancels any movement order on a unit.
+-----------------------------------------------------------
+
+unitStopFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitStopFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitStop uid
+            Lua.pushboolean True
+            return 1
+
+-----------------------------------------------------------
+-- unit.getPos(unitId)
+--
+-- Returns gridX, gridY, gridZ or nil on failure.
+-----------------------------------------------------------
+
+unitGetPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetPosFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            um ← Lua.liftIO $ readIORef (unitManagerRef env)
+            case HM.lookup uid (umInstances um) of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just inst → do
+                    Lua.pushnumber (Lua.Number (realToFrac (uiGridX inst)))
+                    Lua.pushnumber (Lua.Number (realToFrac (uiGridY inst)))
+                    Lua.pushnumber (Lua.Number (fromIntegral (uiGridZ inst)))
+                    return 3
 
 -----------------------------------------------------------
 -- unit.list()

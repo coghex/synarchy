@@ -22,9 +22,10 @@ import Engine.Scene.Types (createBatchManager, SceneManager(..)
 import Vulkan.Core10 (deviceWaitIdle, destroyBuffer, freeMemory)
 
 -- | Shutdown the engine
-shutdownEngine ∷ Window → ThreadState → ThreadState → ThreadState
+shutdownEngine ∷ Window → ThreadState → ThreadState → ThreadState → ThreadState
   → EngineM ε σ ()
-shutdownEngine (Window win) worldThreadState inputThreadState luaThreadState = do
+shutdownEngine (Window win) unitThreadState worldThreadState
+                            inputThreadState luaThreadState = do
     logInfoM CatSystem "Starting engine shutdown..."
     state ← gets graphicsState
     let device = vulkanDevice state
@@ -67,6 +68,10 @@ shutdownEngine (Window win) worldThreadState inputThreadState luaThreadState = d
     
     -- Shutdown threads
     env ← ask
+
+    logDebugM CatSystem "Shutting down unit thread..."
+    liftIO $ shutdownThread unitThreadState
+
     logDebugM CatSystem "Shutting down world thread..."
     liftIO $ shutdownThread worldThreadState
 
