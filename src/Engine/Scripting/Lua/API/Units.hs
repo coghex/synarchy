@@ -11,6 +11,7 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector.Unboxed as VU
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
@@ -21,6 +22,8 @@ import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
 import Engine.Asset.YamlUnits (UnitYamlDef(..), loadUnitYaml)
 import qualified Engine.Core.Queue as Q
 import Unit.Types
+import World.Types
+import World.Generate (globalToChunk)
 
 -----------------------------------------------------------
 -- engine.loadUnitYaml(filePath)
@@ -73,9 +76,34 @@ loadUnitYamlFn env backendState = do
             return 1
 
 -----------------------------------------------------------
+-- Surface elevation lookup
+-----------------------------------------------------------
+
+-- | Look up the surface elevation at absolute grid coords (gx, gy)
+--   by walking worldManagerRef → wmVisible → wsTilesRef → chunk.
+--   Returns Nothing if no visible world or the chunk isn't loaded.
+lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
+lookupSurfaceZ env gx gy = do
+    wm ← readIORef (worldManagerRef env)
+    go (wmVisible wm) (wmWorlds wm)
+  where
+    (chunkCoord, (lx, ly)) = globalToChunk gx gy
+    go [] _ = return Nothing
+    go (pageId:rest) worlds =
+        case lookup pageId worlds of
+            Nothing → go rest worlds
+            Just ws → do
+                td ← readIORef (wsTilesRef ws)
+                case lookupChunk chunkCoord td of
+                    Just lc → return $ Just ((lcSurfaceMap lc) VU.! columnIndex lx ly)
+                    Nothing → go rest worlds
+
+-----------------------------------------------------------
 -- unit.spawn(defName, gridX, gridY [, gridZ])
 --
--- Spawns a unit instance.  If gridZ is omitted, defaults to 0.
+-- Spawns a unit instance.  If gridZ is omitted, looks up the
+-- surface elevation at (gridX, gridY) from loaded terrain.
+-- Falls back to Z=0 if the chunk isn't loaded.
 -- Returns the unit ID (integer), or -1 on failure.
 -----------------------------------------------------------
 
@@ -98,9 +126,24 @@ unitSpawnFn env = do
                 gy = case yArg of
                          Just (Lua.Number n) → realToFrac n
                          _                   → 0.0
-                gz = case zArg of
-                         Just n  → fromIntegral n
-                         Nothing → 0
+
+            -- Resolve Z before the atomic block (reads a different IORef)
+            gz ← Lua.liftIO $ case zArg of
+                Just n  → return (fromIntegral n)
+                Nothing → do
+                    let gxi = floor gx ∷ Int
+                        gyi = floor gy ∷ Int
+                    mSurf ← lookupSurfaceZ env gxi gyi
+                    case mSurf of
+                        Just surfZ → return surfZ
+                        Nothing → do
+                            logger ← readIORef (loggerRef env)
+                            logWarn logger CatAsset $
+                                "unit.spawn: chunk not loaded at ("
+                                <> T.pack (show gxi) <> ", "
+                                <> T.pack (show gyi)
+                                <> "), defaulting Z=0"
+                            return 0
 
             result ← Lua.liftIO $
                 atomicModifyIORef' (unitManagerRef env) $ \um →
