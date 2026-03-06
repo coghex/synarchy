@@ -95,6 +95,7 @@ setupShellSandbox lst = Lua.runWith lst $ do
     copyGlobalTable "UI"
     copyGlobalTable "camera"
     copyGlobalTable "world"
+    copyGlobalTable "unit"
     
     -- Safe subset of os
     Lua.newtable

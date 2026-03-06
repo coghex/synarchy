@@ -197,6 +197,16 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   
   Lua.setglobal (Lua.Name "UI")
 
+  -- Unit table
+  Lua.newtable
+
+  registerLuaFunction "spawn"   (unitSpawnFn env)
+  registerLuaFunction "destroy" (unitDestroyFn env)
+  registerLuaFunction "setPos"  (unitSetPosFn env)
+  registerLuaFunction "list"    (unitListFn env)
+
+  Lua.setglobal (Lua.Name "unit")
+
   -- World table
   Lua.newtable
 

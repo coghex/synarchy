@@ -35,8 +35,7 @@ import World.Render.Camera (cameraChanged, camEpsilon)
 import World.Render.Quads (renderWorldQuads, renderWorldCursorQuads)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Render.ChunkCulling (isChunkRelevantForSlice)
-import World.Render.Textures ()
-import World.Render.TileQuads ()
+import Unit.Render (renderUnitQuads)
 
 -----------------------------------------------------------
 -- Surface Headroom
@@ -97,6 +96,17 @@ updateWorldTiles env = do
                     Nothing → return V.empty
             return $ V.concat cursorResults
 
+    -- Unit quads are generated every frame (cheap: handful of sprites)
+    -- so they respond instantly to movement
+    unitQuads ← if tileAlpha ≤ 0.001
+        then return V.empty
+        else do
+            let facing = camFacing camera
+                zSlice = camZSlice camera
+            renderUnitQuads env facing zSlice tileAlpha
+
+    zoomQuads ← generateZoomMapQuads env camera fbW fbH
+
     zoomQuads ← generateZoomMapQuads env camera fbW fbH
 
     let shouldTrack = camZTracking camera
@@ -123,5 +133,5 @@ updateWorldTiles env = do
                         Nothing → return ()
                 Nothing → return ()
 
-    let allQuads = tileQuads <> worldCursorQuads <> zoomQuads
+    let allQuads = tileQuads <> worldCursorQuads <> unitQuads <> zoomQuads
     return allQuads

@@ -9,12 +9,14 @@ module Unit.Types
     ) where
 
 import UPrelude
+import GHC.Generics (Generic)
+import Data.Hashable (Hashable)
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 
 -- | Unique identifier for a spawned unit instance.
 newtype UnitId = UnitId { unUnitId ∷ Word32 }
-    deriving (Show, Eq, Ord)
+    deriving (Show, Eq, Ord, Generic, Hashable)
 
 -- | A unit definition (loaded from YAML, immutable after init).
 --   This is the "template" — one per unit type.

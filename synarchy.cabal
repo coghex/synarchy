@@ -273,6 +273,7 @@ library
                      UI.Render
                      UI.TextBuffer
                      Unit.Types
+                     Unit.Render
                      World.Base
                      World.Constants
                      World.Command.Types
