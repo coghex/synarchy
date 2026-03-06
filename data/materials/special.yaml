@@ -1,0 +1,25 @@
+materials:
+  - id: 250
+    name: glacier
+    hardness: 1.0
+    density: 0.92
+    albedo: 0.85
+    tile: "assets/textures/world/glacier/glacier.png"
+    zoom: "assets/textures/world/zoommap/glacier_chunk.png"
+    bg:   "assets/textures/world/zoommap/glacier_chunk_background.png"
+  - id: 251
+    name: mantle
+    hardness: 1.0
+    density: 3.3
+    albedo: 0.04
+    tile: "assets/textures/world/mantle/mantle.png"
+    zoom: "assets/textures/world/zoommap/mantle_chunk.png"
+    bg:   "assets/textures/world/zoommap/mantle_chunk_background.png"
+  - id: 255
+    name: ocean
+    hardness: 0.0
+    density: 1.03
+    albedo: 0.06
+    tile: "assets/textures/world/ocean/ocean.png"
+    zoom: "assets/textures/world/zoommap/ocean_chunk.png"
+    bg:   "assets/textures/world/zoommap/ocean_chunk_background.png"

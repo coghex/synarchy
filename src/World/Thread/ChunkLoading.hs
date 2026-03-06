@@ -32,6 +32,7 @@ updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
 updateChunkLoading env logger = do
     camera ← readIORef (cameraRef env)
     catalog ← readIORef (floraCatalogRef env)
+    registry ← readIORef (materialRegistryRef env)
     let zoom = camZoom camera
     when (zoom < (zoomFadeEnd + 0.5)) $ do
         manager ← readIORef (worldManagerRef env)
@@ -79,7 +80,7 @@ updateChunkLoading env logger = do
                                 let !newChunks = if isArena
                                         then map generateFlatChunk batch
                                         else parMap rdeepseq (\coord →
-                                            let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk catalog params coord
+                                            let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk registry catalog params coord
                                             in LoadedChunk
                                                 { lcCoord      = coord
                                                 , lcTiles      = chunkTiles
@@ -93,6 +94,7 @@ updateChunkLoading env logger = do
                                     let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
                                         td'' = evictDistantChunks camChunk chunkLoadRadius td'
                                         td''' = recomputeNeighborSlopes seed
+                                                  registry
                                                   (map lcCoord newChunks) td''
                                     in (td''', ())
                                 writeIORef (wsQuadCacheRef worldState) Nothing
@@ -109,6 +111,7 @@ drainInitQueues ∷ EngineEnv → LoggerState → IO ()
 drainInitQueues env logger = do
     manager ← readIORef (worldManagerRef env)
     catalog ← readIORef (floraCatalogRef env)
+    registry ← readIORef (materialRegistryRef env)
     forM_ (wmWorlds manager) $ \(pageId, worldState) → do
         remaining ← readIORef (wsInitQueueRef worldState)
         case remaining of
@@ -123,7 +126,7 @@ drainInitQueues env logger = do
                             seed  = wgpSeed params
 
                         let newChunks = parMap rdeepseq (\coord →
-                                let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk catalog params coord
+                                let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk registry catalog params coord
                                 in LoadedChunk
                                     { lcCoord      = coord
                                     , lcTiles      = chunkTiles
@@ -138,7 +141,7 @@ drainInitQueues env logger = do
                         -- for the new chunks + their existing neighbors
                         atomicModifyIORef' (wsTilesRef worldState) $ \td →
                             let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
-                                td'' = recomputeNeighborSlopes seed
+                                td'' = recomputeNeighborSlopes seed registry
                                          (map lcCoord newChunks) td'
                             in (td'', ())
 

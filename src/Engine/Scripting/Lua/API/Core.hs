@@ -6,6 +6,7 @@ module Engine.Scripting.Lua.API.Core
   , setTickIntervalFn
   , pauseScriptFn
   , resumeScriptFn
+  , listFilesFn
   ) where
 
 import UPrelude
@@ -18,13 +19,16 @@ import Engine.Core.Log (logInfo, logThreadInfo, logWarn, logDebug, LogCategory(.
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
+import qualified Data.ByteString as BS
 import qualified Data.Map as Map
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
-import Control.Monad (when)
+import Control.Monad (when, filterM, zipWithM_)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LogLevel(..), toLogStr, defaultLoc)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
+import System.Directory (listDirectory, doesDirectoryExist)
+import System.FilePath (takeExtension)
 
 
 quitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -167,3 +171,36 @@ resumeScriptFn backendState = do
                            (fromIntegral sid)
         _ → return ()
     return 0
+
+-----------------------------------------------------------
+-- engine.listFiles(directoryPath, extension)
+--
+-- Returns a Lua table (array) of filenames in the given
+-- directory that match the given extension (e.g. ".yaml").
+-- Returns nil if the directory doesn't exist.
+-----------------------------------------------------------
+
+listFilesFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
+listFilesFn = do
+    dirArg ← Lua.tostring 1
+    extArg ← Lua.tostring 2
+    case (dirArg, extArg) of
+        (Just dirBS, Just extBS) → do
+            let dirPath = T.unpack (TE.decodeUtf8 dirBS)
+                ext     = T.unpack (TE.decodeUtf8 extBS)
+            exists ← Lua.liftIO $ doesDirectoryExist dirPath
+            if not exists
+                then do
+                    Lua.pushnil
+                    return 1
+                else do
+                    allFiles ← Lua.liftIO $ listDirectory dirPath
+                    let matching = filter (\f → takeExtension f ≡ ext) allFiles
+                    Lua.newtable
+                    forM_ (zip [1 ∷ Int ..] matching) $ \(i, filename) → do
+                        Lua.pushstring (TE.encodeUtf8 (T.pack filename))
+                        Lua.rawseti (-2) (fromIntegral i)
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1

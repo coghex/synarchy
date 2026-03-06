@@ -13,7 +13,8 @@ import qualified Data.Vector.Algorithms.Intro as VA
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Types
-import World.Material (MaterialId(..), matGlacier)
+import World.Material (MaterialId(..), matGlacier, MaterialRegistry(..)
+                      , getMaterialProps, MaterialProps(..))
 import World.Plate (wrapGlobalU)
 import World.Geology.Types (GeoModification(..))
 import World.Geology.Event (applyGeoEvent)
@@ -26,10 +27,10 @@ import World.Generate.Coordinates (chunkToGlobal)
 -- Per-Period Timeline Application (chunk-level with erosion)
 -----------------------------------------------------------
 
-applyTimelineChunk ∷ GeoTimeline → Int → WorldScale → ChunkCoord
+applyTimelineChunk ∷ GeoTimeline → Int → MaterialRegistry → WorldScale → ChunkCoord
                    → (VU.Vector Int, VU.Vector MaterialId)
                    → (VU.Vector Int, VU.Vector MaterialId)
-applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
+applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVec) =
     let ChunkCoord cx cy = coord
         chunkMinGX = cx * chunkSize - chunkBorder
         chunkMinGY = cy * chunkSize - chunkBorder
@@ -120,12 +121,15 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
                                 regionalParams = lookupRegionalErosion
                                     (gpErosion period) (gpRegionalErosion period)
                                     worldSize gx gy
+                                props = getMaterialProps registry mat
+                                hardness = mpHardness props
                                 erosionMod = applyErosion
                                     regionalParams
                                     worldSize
                                     (gpDuration period)
                                     (wsScale wsc)
                                     (unMaterialId mat)
+                                    hardness
                                     elev
                                     neighbors
                             VUM.write elevM idx (elev + gmElevDelta erosionMod)
@@ -150,15 +154,16 @@ applyTimelineChunk timeline worldSize wsc coord (baseElevVec, baseMatVec) =
 -- Legacy Timeline Application (single-column, for external callers)
 -----------------------------------------------------------
 
-applyTimeline ∷ GeoTimeline → Int → Int → Int → (Int, MaterialId) → (Int, MaterialId)
-applyTimeline timeline worldSize gx gy (baseElev, baseMat) =
+applyTimeline ∷ GeoTimeline → Int → Int → Int → Float
+  → (Int, MaterialId) → (Int, MaterialId)
+applyTimeline timeline worldSize gx gy hardness (baseElev, baseMat) =
     let wsc = computeWorldScale worldSize
-    in foldl' (applyPeriodSingle worldSize wsc gx gy)
+    in foldl' (applyPeriodSingle worldSize wsc gx gy hardness)
               (baseElev, baseMat) (gtPeriods timeline)
 
-applyPeriodSingle ∷ Int → WorldScale → Int → Int
-                  → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
-applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
+applyPeriodSingle ∷ Int → WorldScale → Int → Int → Float
+  → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
+applyPeriodSingle worldSize wsc gx gy hardness (elev, mat) period =
     let (elev', mat') = foldl' applyOneEvent (elev, mat) (gpEvents period)
         regionalParams = lookupRegionalErosion
             (gpErosion period) (gpRegionalErosion period)
@@ -169,6 +174,7 @@ applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
             (gpDuration period)
             (wsScale wsc)
             (unMaterialId mat')
+            hardness
             elev'
             (elev', elev', elev', elev')
         elev'' = elev' + gmElevDelta erosionMod
@@ -189,10 +195,11 @@ applyPeriodSingle worldSize wsc gx gy (elev, mat) period =
 -- Bbox-Filtered Timeline Application (for zoom cache)
 -----------------------------------------------------------
 
-applyTimelineFast ∷ GeoTimeline → Int → Int → Int → (Int, MaterialId) → (Int, MaterialId)
-applyTimelineFast timeline worldSize gx gy (baseElev, baseMat) =
+applyTimelineFast ∷ GeoTimeline → Int → Int → Int → Float
+  → (Int, MaterialId) → (Int, MaterialId)
+applyTimelineFast timeline worldSize gx gy hardness (baseElev, baseMat) =
     let wsc = computeWorldScale worldSize
-    in foldl' (applyPeriodFiltered worldSize wsc gx gy)
+    in foldl' (applyPeriodFiltered worldSize wsc gx gy hardness)
               (baseElev, baseMat) (gtPeriods timeline)
 
 -- ZOOM CACHE PATH: uses gpTaggedEvents (compact, ~10 events)
@@ -200,9 +207,9 @@ applyTimelineFast timeline worldSize gx gy (baseElev, baseMat) =
 -- handles per-segment iteration internally. This is fine because
 -- most tiles miss the coarse bbox entirely (~10 cheap comparisons),
 -- and the rare tile that hits a river does one segment fold.
-applyPeriodFiltered ∷ Int → WorldScale → Int → Int
-                    → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
-applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
+applyPeriodFiltered ∷ Int → WorldScale → Int → Int → Float
+  → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
+applyPeriodFiltered worldSize wsc gx gy hardness (elev, mat) period =
     let (gx', gy') = wrapGlobalU worldSize gx gy
         bb = gpPeriodBBox period
         -- Early exit: tile outside all events in this period
@@ -220,6 +227,7 @@ applyPeriodFiltered worldSize wsc gx gy (elev, mat) period =
             (gpDuration period)
             (wsScale wsc)
             (unMaterialId mat')
+            hardness
             elev'
             (elev', elev', elev', elev')
         elev'' = elev' + gmElevDelta erosionMod

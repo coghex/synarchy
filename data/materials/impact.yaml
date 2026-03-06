@@ -1,0 +1,17 @@
+materials:
+  - id: 90
+    name: impactite
+    hardness: 0.7
+    density: 2.5
+    albedo: 0.15
+    tile: "assets/textures/world/impactite/impactite.png"
+    zoom: "assets/textures/world/zoommap/impactite_chunk.png"
+    bg:   "assets/textures/world/zoommap/impactite_chunk_background.png"
+  - id: 91
+    name: tektite
+    hardness: 0.6
+    density: 2.4
+    albedo: 0.06
+    tile: "assets/textures/world/tektite/tektite.png"
+    zoom: "assets/textures/world/zoommap/tektite_chunk.png"
+    bg:   "assets/textures/world/zoommap/tektite_chunk_background.png"

@@ -1,0 +1,33 @@
+materials:
+  - id: 100
+    name: lava
+    hardness: 0.9
+    density: 2.8
+    albedo: 0.08
+    tile: "assets/textures/world/lava/lava.png"
+    zoom: "assets/textures/world/zoommap/lava_chunk.png"
+    bg:   "assets/textures/world/zoommap/lava_chunk_background.png"
+  - id: 101
+    name: magma
+    hardness: 0.9
+    density: 2.8
+    albedo: 0.04
+    tile: "assets/textures/world/magma/magma.png"
+    zoom: "assets/textures/world/zoommap/magma_chunk.png"
+    bg:   "assets/textures/world/zoommap/magma_chunk_background.png"
+  - id: 102
+    name: volcanic_ash
+    hardness: 0.2
+    density: 1.0
+    albedo: 0.30
+    tile: "assets/textures/world/volcanic_ash/volcanic_ash.png"
+    zoom: "assets/textures/world/zoommap/volcanic_ash_chunk.png"
+    bg:   "assets/textures/world/zoommap/volcanic_ash_chunk_background.png"
+  - id: 103
+    name: tephra
+    hardness: 0.35
+    density: 1.5
+    albedo: 0.20
+    tile: "assets/textures/world/tephra/tephra.png"
+    zoom: "assets/textures/world/zoommap/tephra_chunk.png"
+    bg:   "assets/textures/world/zoommap/tephra_chunk_background.png"

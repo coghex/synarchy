@@ -7,7 +7,8 @@ import UPrelude
 import Engine.Scripting.Lua.Types (LuaBackendState)
 import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn, 
                                       setTickIntervalFn, pauseScriptFn, 
-                                      resumeScriptFn, quitFn, getFPSFn)
+                                      resumeScriptFn, quitFn, getFPSFn,
+                                      listFilesFn)
 import Engine.Scripting.Lua.API.Camera
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
@@ -66,6 +67,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "pauseScript"       (pauseScriptFn backendState)
   registerLuaFunction "resumeScript"      (resumeScriptFn backendState)
   registerLuaFunction "setTickInterval"   (setTickIntervalFn env backendState)
+  registerLuaFunction "listFiles"         (listFilesFn)
 
   -- Config functions
   registerLuaFunction "getVideoConfig"    (getVideoConfigFn env)

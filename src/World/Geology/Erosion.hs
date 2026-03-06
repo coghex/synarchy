@@ -49,13 +49,12 @@ applyErosion ∷ ErosionParams
              → Int       -- ^ period duration (millions of years)
              → Float     -- ^ world scale factor (worldSize / 512)
              → Word8     -- ^ surface material ID at this tile
+             → Float     -- ^ material hardness (0.0-1.0)
              → Int       -- ^ this tile's post-event elevation
              → (Int, Int, Int, Int)
                          -- ^ neighbor post-event elevations (N, S, E, W)
              → GeoModification
-applyErosion params _worldSize duration worldScale matId elev (nN, nS, nE, nW) =
-    let hardness = matHardness (getMaterialProps (MaterialId matId))
-    in if hardness ≥ 1.0
+applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, nE, nW) = if hardness ≥ 1.0
        then noModification  -- indestructible (glacier, mantle)
        else
        let -- Average of 4 cardinal neighbors

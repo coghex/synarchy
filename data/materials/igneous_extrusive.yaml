@@ -1,0 +1,57 @@
+materials:
+  - id: 10
+    name: basalt
+    hardness: 0.7
+    density: 3.0
+    albedo: 0.10
+    tile: "assets/textures/world/basalt/basalt.png"
+    zoom: "assets/textures/world/zoommap/basalt_chunk.png"
+    bg:   "assets/textures/world/zoommap/basalt_chunk_background.png"
+  - id: 11
+    name: obsidian
+    hardness: 0.95
+    density: 2.4
+    albedo: 0.05
+    tile: "assets/textures/world/obsidian/obsidian.png"
+    zoom: "assets/textures/world/zoommap/obsidian_chunk.png"
+    bg:   "assets/textures/world/zoommap/obsidian_chunk_background.png"
+  - id: 12
+    name: rhyolite
+    hardness: 0.75
+    density: 2.5
+    albedo: 0.40
+    tile: "assets/textures/world/rhyolite/rhyolite.png"
+    zoom: "assets/textures/world/zoommap/rhyolite_chunk.png"
+    bg:   "assets/textures/world/zoommap/rhyolite_chunk_background.png"
+  - id: 13
+    name: andesite
+    hardness: 0.7
+    density: 2.6
+    albedo: 0.25
+    tile: "assets/textures/world/andesite/andesite.png"
+    zoom: "assets/textures/world/zoommap/andesite_chunk.png"
+    bg:   "assets/textures/world/zoommap/andesite_chunk_background.png"
+  - id: 14
+    name: tuff
+    hardness: 0.5
+    density: 1.8
+    albedo: 0.35
+    tile: "assets/textures/world/tuff/tuff.png"
+    zoom: "assets/textures/world/zoommap/tuff_chunk.png"
+    bg:   "assets/textures/world/zoommap/tuff_chunk_background.png"
+  - id: 15
+    name: pumice
+    hardness: 0.3
+    density: 0.9
+    albedo: 0.55
+    tile: "assets/textures/world/pumice/pumice.png"
+    zoom: "assets/textures/world/zoommap/pumice_chunk.png"
+    bg:   "assets/textures/world/zoommap/pumice_chunk_background.png"
+  - id: 16
+    name: scoria
+    hardness: 0.5
+    density: 1.8
+    albedo: 0.12
+    tile: "assets/textures/world/scoria/scoria.png"
+    zoom: "assets/textures/world/zoommap/scoria_chunk.png"
+    bg:   "assets/textures/world/zoommap/scoria_chunk_background.png"

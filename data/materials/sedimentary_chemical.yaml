@@ -1,0 +1,49 @@
+materials:
+  - id: 30
+    name: limestone
+    hardness: 0.55
+    density: 2.55
+    albedo: 0.52
+    tile: "assets/textures/world/limestone/limestone.png"
+    zoom: "assets/textures/world/zoommap/limestone_chunk.png"
+    bg:   "assets/textures/world/zoommap/limestone_chunk_background.png"
+  - id: 31
+    name: chalk
+    hardness: 0.3
+    density: 2.2
+    albedo: 0.70
+    tile: "assets/textures/world/chalk/chalk.png"
+    zoom: "assets/textures/world/zoommap/chalk_chunk.png"
+    bg:   "assets/textures/world/zoommap/chalk_chunk_background.png"
+  - id: 32
+    name: chert
+    hardness: 0.85
+    density: 2.6
+    albedo: 0.28
+    tile: "assets/textures/world/chert/chert.png"
+    zoom: "assets/textures/world/zoommap/chert_chunk.png"
+    bg:   "assets/textures/world/zoommap/chert_chunk_background.png"
+  - id: 33
+    name: rock_salt
+    hardness: 0.3
+    density: 2.16
+    albedo: 0.50
+    tile: "assets/textures/world/rock_salt/rock_salt.png"
+    zoom: "assets/textures/world/zoommap/rock_salt_chunk.png"
+    bg:   "assets/textures/world/zoommap/rock_salt_chunk_background.png"
+  - id: 34
+    name: gypsum
+    hardness: 0.2
+    density: 2.3
+    albedo: 0.55
+    tile: "assets/textures/world/gypsum/gypsum.png"
+    zoom: "assets/textures/world/zoommap/gypsum_chunk.png"
+    bg:   "assets/textures/world/zoommap/gypsum_chunk_background.png"
+  - id: 35
+    name: dolomite
+    hardness: 0.6
+    density: 2.85
+    albedo: 0.48
+    tile: "assets/textures/world/dolomite/dolomite.png"
+    zoom: "assets/textures/world/zoommap/dolomite_chunk.png"
+    bg:   "assets/textures/world/zoommap/dolomite_chunk_background.png"

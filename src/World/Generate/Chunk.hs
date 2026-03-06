@@ -11,12 +11,11 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector as V
 import World.Types
-import World.Material (MaterialId(..), matGlacier, getMaterialProps, MaterialProps(..)
-                      , matAir)
+import World.Material (MaterialId(..), matGlacier, getMaterialProps
+                      , MaterialProps(..), matAir, MaterialRegistry(..))
 import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Geology (applyGeoEvent, GeoModification(..))
-import World.Geology.Erosion (applyErosion)
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
 import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava
@@ -45,9 +44,10 @@ import World.Generate.Strata
 --
 --   The border is expanded to chunkBorder tiles so erosion at
 --   chunk edges has valid neighbor data.
-generateChunk ∷ FloraCatalog → WorldGenParams → ChunkCoord
-  → (Chunk, VU.Vector Int, VU.Vector Int, V.Vector (Maybe FluidCell), FloraChunkData)
-generateChunk catalog params coord =
+generateChunk ∷ MaterialRegistry → FloraCatalog → WorldGenParams
+  → ChunkCoord → (Chunk, VU.Vector Int, VU.Vector Int
+                 , V.Vector (Maybe FluidCell), FloraChunkData)
+generateChunk registry catalog params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
         timeline = wgpGeoTimeline params
@@ -101,7 +101,7 @@ generateChunk catalog params coord =
 
         -- Apply timeline using split vectors
         (finalElevVec, finalMatVec) =
-            applyTimelineChunk timeline worldSize wsc coord
+            applyTimelineChunk timeline worldSize registry wsc coord
                 (baseElevVec, baseMatVec)
 
         lookupFinal lx ly =
@@ -143,7 +143,7 @@ generateChunk catalog params coord =
         -- Terrain surface map (vector)
         terrainSurfaceMap = VU.generate chunkArea $ \idx →
             if coordBeyond VU.! idx
-            then minBound
+            then 0--minBound
             else lookupElev (idx `mod` chunkSize) (idx `div` chunkSize)
 
         -- Fluids
@@ -194,8 +194,9 @@ generateChunk catalog params coord =
                     finalE = lookupElevOr (lx + 1) ly surfZ
                     finalW = lookupElevOr (lx - 1) ly surfZ
                     neighborMinZ = min finalN (min finalS (min finalE finalW))
-                    exposeFrom = min surfZ neighborMinZ
-                    cache = buildStrataCache timeline worldSize wsc gx' gy' base
+                    exposeFrom = max (surfZ - 64) (min surfZ neighborMinZ)
+                    cache = buildStrataCache timeline worldSize wsc
+                                             gx' gy' registry base
                                              (finalN, finalS, finalE, finalW)
                     mats = buildColumnStrata cache base exposeFrom surfZ
                     matIds = VU.map unMaterialId mats
@@ -209,7 +210,7 @@ generateChunk catalog params coord =
         noNeighborLookup ∷ ChunkCoord → Maybe (VU.Vector Int)
         noNeighborLookup _ = Nothing
 
-        slopedTiles = computeChunkSlopes seed coord terrainSurfaceMap
+        slopedTiles = computeChunkSlopes seed coord terrainSurfaceMap registry
                                          fluidMap rawChunk noNeighborLookup
 
         -- Extract surface material and slope for vegetation computation

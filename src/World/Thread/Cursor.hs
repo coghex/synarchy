@@ -74,14 +74,15 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
 
     -- Try to find this chunk's zoom cache entry for material/elevation
     zoomCache ← readIORef (wsZoomCacheRef worldState)
+    materials ← readIORef (materialRegistryRef env)
     let mEntry = V.find (\e → zceChunkX e ≡ cx ∧ zceChunkY e ≡ cy) zoomCache
 
     let basicLines = T.unlines $ filter (not . T.null)
             [ "Chunk (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
             , case mEntry of
                 Just entry →
-                    let props = getMaterialProps (MaterialId (zceTexIndex entry))
-                    in "Material: " <> matName props
+                    let props = getMaterialProps materials (MaterialId (zceTexIndex entry))
+                    in "Material: " <> mpName props
                      <> "\nElevation: " <> T.pack (show (zceElev entry))
                      <> (if zceIsOcean entry then "\nOcean" else "")
                      <> (if zceHasLava entry then "\nLava" else "")
@@ -176,6 +177,7 @@ sendTileInfo ∷ EngineEnv → WorldState → Maybe WorldGenParams
              → Int → Int → Int → IO ()
 sendTileInfo env worldState _mParams gx gy z = do
     tileData ← readIORef (wsTilesRef worldState)
+    materials ← readIORef (materialRegistryRef env)
 
     let (coord, (lx, ly)) = globalToChunk gx gy
         mChunk = lookupChunk coord tileData
@@ -192,14 +194,15 @@ sendTileInfo env worldState _mParams gx gy z = do
                         if relZ >= 0 && relZ < VU.length (ctMats col)
                         then ctMats col VU.! relZ
                         else 0
-                    props = getMaterialProps (MaterialId selectedMat)
+                    props = getMaterialProps materials
+                                             (MaterialId selectedMat)
                     -- Fluid info
                     mFluid = (lcFluidMap lc) V.! colIdx
                     fluidStr = case mFluid of
                         Nothing → ""
                         Just fc → "Fluid: " <> T.pack (show (fcType fc))
                                 <> " (surface z=" <> T.pack (show (fcSurface fc)) <> ")"
-                in ( matName props
+                in ( mpName props
                    , T.pack (show surfZ)
                    , fluidStr
                    )

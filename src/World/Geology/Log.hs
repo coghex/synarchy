@@ -12,7 +12,8 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
-import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
+import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..)
+                      , MaterialRegistry(..))
 import World.Plate (TectonicPlate(..), generatePlates)
 import World.Geology.Types
 import World.Hydrology.Types
@@ -117,17 +118,17 @@ showScale Age    = "Age"
 -- | Format the tectonic plates as a summary section.
 --   Called separately since plates are generated from seed/size,
 --   not stored in the timeline.
-formatPlatesSummary ∷ Word64 → Int → Int → [Text]
-formatPlatesSummary seed worldSize plateCount =
+formatPlatesSummary ∷ Word64 → Int → Int → MaterialRegistry → [Text]
+formatPlatesSummary seed worldSize plateCount registry =
     let plates = generatePlates seed worldSize plateCount
         header = "═══ Tectonic Plates (" <> T.pack (show plateCount) <> ") ═══"
-        plateMsgs = zipWith formatOnePlate [0..] plates
+        plateMsgs = zipWith (formatOnePlate registry) [0..] plates
     in header : plateMsgs
 
-formatOnePlate ∷ Int → TectonicPlate → Text
-formatOnePlate idx plate =
+formatOnePlate ∷ MaterialRegistry → Int → TectonicPlate → Text
+formatOnePlate registry idx plate =
     let landType = if plateIsLand plate then "Continental" else "Oceanic"
-        matName' = matName (getMaterialProps (plateMaterial plate))
+        matName' = mpName (getMaterialProps registry (plateMaterial plate))
         GeoCoord cx cy = plateCoord plate
     in "  Plate #" <> T.pack (show idx) <> ": "
        <> padR 14 landType
@@ -230,7 +231,7 @@ formatEventDetailed (CraterEvent cp) =
        <> " depth=" <> T.pack (show (cpDepth cp))
        <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
        <> case cpMeteorite cp of
-            Just mat → " meteorite=" <> matName (getMaterialProps (MaterialId mat))
+            Just mat → " *meteorite*"
             Nothing  → ""
 
 formatEventDetailed (VolcanicEvent feature) =

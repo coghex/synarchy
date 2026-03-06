@@ -375,6 +375,7 @@ library
                      World.Weather.Log
                      World.Weather.Generate
                      World.Material
+                     World.Material.Yaml
                      World.Preview
                      World.ZoomMap
                      World.ZoomMap.Cache

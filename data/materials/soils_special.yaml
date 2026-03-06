@@ -1,0 +1,65 @@
+materials:
+  - id: 60
+    name: silt_loam
+    hardness: 0.2
+    density: 1.4
+    albedo: 0.28
+    tile: "assets/textures/world/silt_loam/silt_loam.png"
+    zoom: "assets/textures/world/zoommap/silt_loam_chunk.png"
+    bg:   "assets/textures/world/zoommap/silt_loam_chunk_background.png"
+  - id: 61
+    name: silt
+    hardness: 0.15
+    density: 1.35
+    albedo: 0.30
+    tile: "assets/textures/world/silt/silt.png"
+    zoom: "assets/textures/world/zoommap/silt_chunk.png"
+    bg:   "assets/textures/world/zoommap/silt_chunk_background.png"
+  - id: 62
+    name: peat
+    hardness: 0.1
+    density: 0.9
+    albedo: 0.08
+    tile: "assets/textures/world/peat/peat.png"
+    zoom: "assets/textures/world/zoommap/peat_chunk.png"
+    bg:   "assets/textures/world/zoommap/peat_chunk_background.png"
+  - id: 63
+    name: mucky_peat
+    hardness: 0.1
+    density: 1.0
+    albedo: 0.06
+    tile: "assets/textures/world/mucky_peat/mucky_peat.png"
+    zoom: "assets/textures/world/zoommap/mucky_peat_chunk.png"
+    bg:   "assets/textures/world/zoommap/mucky_peat_chunk_background.png"
+  - id: 64
+    name: muck
+    hardness: 0.1
+    density: 1.1
+    albedo: 0.05
+    tile: "assets/textures/world/muck/muck.png"
+    zoom: "assets/textures/world/zoommap/muck_chunk.png"
+    bg:   "assets/textures/world/zoommap/muck_chunk_background.png"
+  - id: 65
+    name: heavy_gravel
+    hardness: 0.5
+    density: 2.0
+    albedo: 0.30
+    tile: "assets/textures/world/heavy_gravel/heavy_gravel.png"
+    zoom: "assets/textures/world/zoommap/heavy_gravel_chunk.png"
+    bg:   "assets/textures/world/zoommap/heavy_gravel_chunk_background.png"
+  - id: 66
+    name: light_gravel
+    hardness: 0.4
+    density: 1.8
+    albedo: 0.32
+    tile: "assets/textures/world/light_gravel/light_gravel.png"
+    zoom: "assets/textures/world/zoommap/light_gravel_chunk.png"
+    bg:   "assets/textures/world/zoommap/light_gravel_chunk_background.png"
+  - id: 67
+    name: salt_flat
+    hardness: 0.15
+    density: 1.5
+    albedo: 0.65
+    tile: "assets/textures/world/salt_flat/salt_flat.png"
+    zoom: "assets/textures/world/zoommap/salt_flat_chunk.png"
+    bg:   "assets/textures/world/zoommap/salt_flat_chunk_background.png"

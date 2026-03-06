@@ -22,7 +22,8 @@ import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import World.Types
-import World.Material (getMaterialProps, MaterialProps(..), MaterialId(..))
+import World.Material (getMaterialProps, MaterialProps(..), MaterialId(..)
+                      , MaterialRegistry(..))
 
 -----------------------------------------------------------
 -- Constants
@@ -44,38 +45,40 @@ diamondRows = 48
 -- Slope Computation (Post-Processing Pass)
 -----------------------------------------------------------
 
-computeChunkSlopes ∷ Word64 → ChunkCoord → VU.Vector Int
+computeChunkSlopes ∷ Word64 → ChunkCoord → VU.Vector Int → MaterialRegistry
                    → V.Vector (Maybe FluidCell) → Chunk
                    → (ChunkCoord → Maybe (VU.Vector Int)) → Chunk
-computeChunkSlopes seed coord surfMap fluidMap chunk neighborLookup =
+computeChunkSlopes seed coord surfMap registry fluidMap chunk neighborLookup =
     V.imap (\idx col →
         let lx = idx `mod` chunkSize
             ly = idx `div` chunkSize
             surfZ = surfMap VU.! idx
             i = surfZ - ctStartZ col
         in if i ≥ 0 ∧ i < VU.length (ctSlopes col)
-           then let newSlope = computeTileSlope seed coord lx ly surfZ
-                                 surfMap fluidMap chunk neighborLookup
+           then let newSlope = computeTileSlope seed coord lx ly
+                                                surfZ registry
+                                                surfMap fluidMap
+                                                chunk neighborLookup
                     slopes' = ctSlopes col VU.// [(i, newSlope)]
                 in col { ctSlopes = slopes' }
            else col
     ) chunk
 
 computeTileSlope ∷ Word64 → ChunkCoord
-                → Int → Int → Int
+                → Int → Int → Int → MaterialRegistry
                 → VU.Vector Int
                 → V.Vector (Maybe FluidCell)
                 → Chunk
                 → (ChunkCoord → Maybe (VU.Vector Int))
                 → Word8
-computeTileSlope seed coord lx ly z surfMap fluidMap tiles neighborLookup =
+computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles neighborLookup =
     let col = tiles V.! columnIndex lx ly
         i = z - ctStartZ col
         matId = if i ≥ 0 ∧ i < VU.length (ctMats col)
                 then ctMats col VU.! i
                 else 0
-        props = getMaterialProps (MaterialId matId)
-        hardness = matHardness props
+        props = getMaterialProps registry (MaterialId matId)
+        hardness = mpHardness props
 
         passesHardness = hardness < slopeHardnessThreshold
 
@@ -281,11 +284,11 @@ clampByte x = fromIntegral (max 0 (min 255 x))
 -- Recompute Neighbor Slopes
 -----------------------------------------------------------
 
-recomputeNeighborSlopes ∷ Word64
+recomputeNeighborSlopes ∷ Word64 → MaterialRegistry
                         → [ChunkCoord]
                         → WorldTileData
                         → WorldTileData
-recomputeNeighborSlopes seed newCoords wtd =
+recomputeNeighborSlopes seed registry newCoords wtd =
     let chunks = wtdChunks wtd
         affected = HS.toList $ HS.fromList $
             newCoords <>
@@ -301,8 +304,8 @@ recomputeNeighborSlopes seed newCoords wtd =
             case HM.lookup coord acc of
                 Just lc →
                     let newTiles = computeChunkSlopes seed coord
-                            (lcTerrainSurfaceMap lc) (lcFluidMap lc)
-                            (lcTiles lc) neighborLookup
+                            (lcTerrainSurfaceMap lc) registry
+                            (lcFluidMap lc) (lcTiles lc) neighborLookup
                     in HM.insert coord (lc { lcTiles = newTiles }) acc
                 Nothing → acc
             ) chunks affected

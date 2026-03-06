@@ -1,0 +1,33 @@
+materials:
+  - id: 110
+    name: till
+    hardness: 0.45
+    density: 2.0
+    albedo: 0.25
+    tile: "assets/textures/world/till/till.png"
+    zoom: "assets/textures/world/zoommap/till_chunk.png"
+    bg:   "assets/textures/world/zoommap/till_chunk_background.png"
+  - id: 111
+    name: moraine
+    hardness: 0.5
+    density: 2.2
+    albedo: 0.28
+    tile: "assets/textures/world/moraine/moraine.png"
+    zoom: "assets/textures/world/zoommap/moraine_chunk.png"
+    bg:   "assets/textures/world/zoommap/moraine_chunk_background.png"
+  - id: 112
+    name: glacial_clay
+    hardness: 0.3
+    density: 1.8
+    albedo: 0.30
+    tile: "assets/textures/world/glacial_clay/glacial_clay.png"
+    zoom: "assets/textures/world/zoommap/glacial_clay_chunk.png"
+    bg:   "assets/textures/world/zoommap/glacial_clay_chunk_background.png"
+  - id: 113
+    name: outwash_gravel
+    hardness: 0.45
+    density: 2.1
+    albedo: 0.32
+    tile: "assets/textures/world/outwash_gravel/outwash_gravel.png"
+    zoom: "assets/textures/world/zoommap/outwash_gravel_chunk.png"
+    bg:   "assets/textures/world/zoommap/outwash_gravel_chunk_background.png"

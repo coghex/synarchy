@@ -137,7 +137,9 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     -- 3. Rebuild derived caches (cheap compared to worldgen)
     writeIORef phaseRef (LoadPhase1 2 totalSteps)
     sendGenLog env "Building zoom cache..."
-    let zoomCache = buildZoomCache params
+    registry ← readIORef (materialRegistryRef env)
+    let !_ = registry `seq` ()  -- force registry read before zoom cache build
+    let zoomCache = buildZoomCache params registry
     writeIORef (wsZoomCacheRef worldState) zoomCache
 
     sendGenLog env "Rendering world preview..."
@@ -150,7 +152,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     sendGenLog env "Generating initial chunks..."
     catalog ← readIORef (floraCatalogRef env)
     let centerCoord = ChunkCoord 0 0
-        (ct, cs, cterrain, cf, cflora) = generateChunk catalog params centerCoord
+        (ct, cs, cterrain, cf, cflora) = generateChunk registry catalog params centerCoord
         centerChunk = LoadedChunk
             { lcCoord             = centerCoord
             , lcTiles             = ct

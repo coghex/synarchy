@@ -1,0 +1,49 @@
+materials:
+  - id: 20
+    name: sandstone
+    hardness: 0.5
+    density: 2.2
+    albedo: 0.40
+    tile: "assets/textures/world/sandstone/sandstone.png"
+    zoom: "assets/textures/world/zoommap/sandstone_chunk.png"
+    bg:   "assets/textures/world/zoommap/sandstone_chunk_background.png"
+  - id: 21
+    name: siltstone
+    hardness: 0.45
+    density: 2.3
+    albedo: 0.30
+    tile: "assets/textures/world/siltstone/siltstone.png"
+    zoom: "assets/textures/world/zoommap/siltstone_chunk.png"
+    bg:   "assets/textures/world/zoommap/siltstone_chunk_background.png"
+  - id: 22
+    name: shale
+    hardness: 0.4
+    density: 2.4
+    albedo: 0.15
+    tile: "assets/textures/world/shale/shale.png"
+    zoom: "assets/textures/world/zoommap/shale_chunk.png"
+    bg:   "assets/textures/world/zoommap/shale_chunk_background.png"
+  - id: 23
+    name: conglomerate
+    hardness: 0.6
+    density: 2.5
+    albedo: 0.32
+    tile: "assets/textures/world/conglomerate/conglomerate.png"
+    zoom: "assets/textures/world/zoommap/conglomerate_chunk.png"
+    bg:   "assets/textures/world/zoommap/conglomerate_chunk_background.png"
+  - id: 24
+    name: mudstone
+    hardness: 0.35
+    density: 2.1
+    albedo: 0.20
+    tile: "assets/textures/world/mudstone/mudstone.png"
+    zoom: "assets/textures/world/zoommap/mudstone_chunk.png"
+    bg:   "assets/textures/world/zoommap/mudstone_chunk_background.png"
+  - id: 25
+    name: claystone
+    hardness: 0.3
+    density: 2.0
+    albedo: 0.22
+    tile: "assets/textures/world/claystone/claystone.png"
+    zoom: "assets/textures/world/zoommap/claystone_chunk.png"
+    bg:   "assets/textures/world/zoommap/claystone_chunk_background.png"

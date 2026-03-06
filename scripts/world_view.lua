@@ -274,12 +274,11 @@ function worldView.init(width, height)
         count = count + 1
     end
 
-    -- Load material textures from the table
-    worldView.materialTextures = {}
-    -- Load material textures from YAML (parsed + loaded on Haskell side)
-    local matCount = engine.loadMaterialYaml("data/materials")
+    -- Load materials from YAML
+    local materialLoader = require("scripts.material_loader")
+    local matCount = materialLoader.loadAll("data/materials")
     worldView.materialTextureCount = matCount
-    count = count + matCount
+    count = count + worldView.materialTextureCount
 
     engine.logInfo("Queued " .. matCount .. " material textures from YAML")
 

@@ -24,7 +24,8 @@ import World.Geology (applyGeoEvent, GeoModification(..))
 import World.Geology.Erosion (applyErosion, lookupRegionalErosion)
 import World.Geology.Timeline.Types (tileInBBoxWrapped)
 import World.Scale (WorldScale(..))
-import World.Material (MaterialId(..))
+import World.Material (MaterialId(..), MaterialRegistry(..)
+                      , getMaterialProps, MaterialProps(..))
 
 data StrataState = StrataState
     { ssElev      ∷ !Int
@@ -67,10 +68,10 @@ data StrataZState = StrataZState
 --   avoids the expensive distance/sqrt computation inside applyGeoEvent
 --   for events on the other side of the world.
 buildStrataCache ∷ GeoTimeline → Int → WorldScale → Int → Int
-                 → (Int, MaterialId)
+                 → MaterialRegistry → (Int, MaterialId)
                  → (Int, Int, Int, Int)
                  → V.Vector PeriodStrataCache
-buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
+buildStrataCache timeline worldSize wsc gx gy registry (baseElev, baseMat)
                  (nFinalN, nFinalS, nFinalE, nFinalW) =
     let initState = (baseElev, baseMat)
         caches = snd $ foldl' step (initState, []) (gtPeriods timeline)
@@ -88,7 +89,7 @@ buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
                        relevantEvents
 
             eventsVec = V.fromList (reverse eventDeltas)
-
+            hardness = mpHardness (getMaterialProps registry surfMat')
             -- Use pre-computed final neighbor elevations directly.
             -- No advanceNeighbor calls needed — eliminates ~4 × events
             -- applyGeoEvent calls per period per column.
@@ -101,6 +102,7 @@ buildStrataCache timeline worldSize wsc gx gy (baseElev, baseMat)
                 (gpDuration period)
                 (wsScale wsc)
                 (unMaterialId surfMat')
+                hardness
                 elev'
                 (nFinalN, nFinalS, nFinalE, nFinalW)
 
@@ -243,9 +245,9 @@ applyEventDelta queryZ state ed =
         , szZMat    = zMat'
         }
 
-applyPeriodStrata ∷ Int → WorldScale → Int → Int → Int
+applyPeriodStrata ∷ Int → WorldScale → Int → Int → Float → Int
                   → StrataState → GeoPeriod → StrataState
-applyPeriodStrata worldSize wsc gx gy queryZ state period =
+applyPeriodStrata worldSize wsc gx gy hardness queryZ state period =
     let afterEvents = foldl' (applyEventStrata worldSize gx gy queryZ)
                              state (gpEvents period)
 
@@ -266,6 +268,7 @@ applyPeriodStrata worldSize wsc gx gy queryZ state period =
             (gpDuration period)
             (wsScale wsc)
             (unMaterialId surfMat')
+            hardness
             elev'
             (nN', nS', nE', nW')
         erosionDelta = gmElevDelta erosionMod

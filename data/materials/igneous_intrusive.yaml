@@ -1,0 +1,49 @@
+materials:
+  - id: 1
+    name: granite
+    hardness: 0.9
+    density: 2.7
+    albedo: 0.35
+    tile: "assets/textures/world/granite/granite.png"
+    zoom: "assets/textures/world/zoommap/granite_chunk.png"
+    bg:   "assets/textures/world/zoommap/granite_chunk_background.png"
+  - id: 2
+    name: diorite
+    hardness: 0.85
+    density: 2.85
+    albedo: 0.30
+    tile: "assets/textures/world/diorite/diorite.png"
+    zoom: "assets/textures/world/zoommap/diorite_chunk.png"
+    bg:   "assets/textures/world/zoommap/diorite_chunk_background.png"
+  - id: 3
+    name: gabbro
+    hardness: 0.8
+    density: 3.0
+    albedo: 0.18
+    tile: "assets/textures/world/gabbro/gabbro.png"
+    zoom: "assets/textures/world/zoommap/gabbro_chunk.png"
+    bg:   "assets/textures/world/zoommap/gabbro_chunk_background.png"
+  - id: 6
+    name: anorthosite
+    hardness: 0.9
+    density: 2.75
+    albedo: 0.45
+    tile: "assets/textures/world/anorthosite/anorthosite.png"
+    zoom: "assets/textures/world/zoommap/anorthosite_chunk.png"
+    bg:   "assets/textures/world/zoommap/anorthosite_chunk_background.png"
+  - id: 7
+    name: peridotite
+    hardness: 0.85
+    density: 3.3
+    albedo: 0.15
+    tile: "assets/textures/world/peridotite/peridotite.png"
+    zoom: "assets/textures/world/zoommap/peridotite_chunk.png"
+    bg:   "assets/textures/world/zoommap/peridotite_chunk_background.png"
+  - id: 8
+    name: pegmatite
+    hardness: 0.9
+    density: 2.7
+    albedo: 0.38
+    tile: "assets/textures/world/pegmatite/pegmatite.png"
+    zoom: "assets/textures/world/zoommap/pegmatite_chunk.png"
+    bg:   "assets/textures/world/zoommap/pegmatite_chunk_background.png"

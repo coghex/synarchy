@@ -25,7 +25,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
 import World.Grid (gridToWorld, worldToGrid, zoomFadeStart, zoomFadeEnd)
 import World.Types
-import World.Material (MaterialId(..))
+import World.Material (MaterialId(..), MaterialProps(..), getMaterialProps)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Render (surfaceHeadroom)
 import World.Generate (globalToChunk, applyTimeline)
@@ -166,6 +166,7 @@ cameraGotoTileFn env = do
             -- Compute surface elevation from world gen params.
             -- This is a pure computation — no loaded chunks needed.
             manager ← readIORef (worldManagerRef env)
+            registry ← readIORef (materialRegistryRef env)
             forM_ (wmVisible manager) $ \pageId →
                 case lookup pageId (wmWorlds manager) of
                     Just worldState → do
@@ -177,7 +178,8 @@ cameraGotoTileFn env = do
                                     timeline  = wgpGeoTimeline params
                                     plates    = generatePlates seed worldSize (wgpPlateCount params)
                                     (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
-                                    (finalElev, _) = applyTimeline timeline worldSize gx gy (baseElev, baseMat)
+                                    hardness = mpHardness $ getMaterialProps registry baseMat
+                                    (finalElev, _) = applyTimeline timeline worldSize gx gy hardness (baseElev, baseMat)
                                     targetZ = finalElev + surfaceHeadroom
                                 atomicModifyIORef' (cameraRef env) $ \cam →
                                     (cam { camZSlice = targetZ, camZTracking = True }, ())

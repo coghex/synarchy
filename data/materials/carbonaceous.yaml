@@ -1,0 +1,25 @@
+materials:
+  - id: 70
+    name: lignite
+    hardness: 0.2
+    density: 1.3
+    albedo: 0.10
+    tile: "assets/textures/world/lignite/lignite.png"
+    zoom: "assets/textures/world/zoommap/lignite_chunk.png"
+    bg:   "assets/textures/world/zoommap/lignite_chunk_background.png"
+  - id: 71
+    name: bituminous_coal
+    hardness: 0.3
+    density: 1.35
+    albedo: 0.04
+    tile: "assets/textures/world/bituminous_coal/bituminous_coal.png"
+    zoom: "assets/textures/world/zoommap/bituminous_coal_chunk.png"
+    bg:   "assets/textures/world/zoommap/bituminous_coal_chunk_background.png"
+  - id: 72
+    name: anthracite
+    hardness: 0.45
+    density: 1.5
+    albedo: 0.03
+    tile: "assets/textures/world/anthracite/anthracite.png"
+    zoom: "assets/textures/world/zoommap/anthracite_chunk.png"
+    bg:   "assets/textures/world/zoommap/anthracite_chunk_background.png"

@@ -26,6 +26,7 @@ import World.Generate.Constants (chunkLoadRadius)
 import World.Generate.Timeline (applyTimelineFast)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatTimeline, formatPlatesSummary)
+import World.Material (getMaterialProps, MaterialProps(..))
 import World.Fluids (computeOceanMap, isOceanChunk)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Preview (buildPreviewImage, PreviewImage(..))
@@ -61,7 +62,9 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     let (timeline, timelineClimate) = buildTimeline seed worldSize placeCount
     _ ← evaluate (force timeline)
     _ ← evaluate (force timelineClimate)
-    let plateLines = formatPlatesSummary seed worldSize placeCount
+    registry ← readIORef (materialRegistryRef env)
+    let !_ = registry `seq` ()  -- ensure registry is read before logging timeline info
+    let plateLines = formatPlatesSummary seed worldSize placeCount registry
     forM_ plateLines $ \line → do
         logInfo logger CatWorld line
         sendGenLog env line
@@ -71,7 +74,10 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     sendGenLog env "Computing ocean map..."
     let plates = generatePlates seed worldSize placeCount
     _ ← evaluate (force plates)
-    let applyTL gx gy base = applyTimelineFast timeline worldSize gx gy base
+    let applyTL gx gy base = applyTimelineFast timeline worldSize gx gy
+                               (mpHardness
+                                 (getMaterialProps registry (snd base)))
+                               base
         oceanMap = computeOceanMap seed worldSize placeCount plates applyTL
     _ <- evaluate (force oceanMap)
 
@@ -117,7 +123,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     -- Step 4: Zoom cache
     writeIORef phaseRef (LoadPhase1 4 totalSteps)
     sendGenLog env "Building zoom cache..."
-    let zoomCache = buildZoomCache params
+    let zoomCache = buildZoomCache params registry
     _ <- evaluate (force zoomCache)  -- do the work now
     writeIORef (wsZoomCacheRef worldState) zoomCache
     
@@ -139,7 +145,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     
     catalog ← readIORef (floraCatalogRef env)
     let centerCoord = ChunkCoord 0 0
-        (ct, cs, cterrain, cf, cflora) = generateChunk catalog params centerCoord
+        (ct, cs, cterrain, cf, cflora) = generateChunk registry catalog params centerCoord
         centerChunk = LoadedChunk
             { lcCoord      = centerCoord
             , lcTiles      = ct

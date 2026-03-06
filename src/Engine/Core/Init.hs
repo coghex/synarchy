@@ -28,6 +28,7 @@ import Engine.Input.Types (defaultInputState)
 import UI.Focus (createFocusManager)
 import UI.Types (emptyUIPageManager)
 import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
+import World.Material (emptyMaterialRegistry)
 
 -- | Result of engine initialization
 data EngineInitResult = EngineInitResult
@@ -102,6 +103,8 @@ initializeEngine = do
   defaultFaceMapSlotRef ← newIORef 0
   -- flora catalog
   floraCatRef ← newIORef emptyFloraCatalog
+  -- materials
+  materialRegistryRef ← newIORef emptyMaterialRegistry
 
   -- Build environment
   let env = EngineEnv
@@ -140,6 +143,7 @@ initializeEngine = do
         , textureSizeRef     = texSizeRef
         , defaultFaceMapSlotRef = defaultFaceMapSlotRef
         , floraCatalogRef    = floraCatRef
+        , materialRegistryRef  = materialRegistryRef
         }
   
   envVar   ← atomically $ newVar env

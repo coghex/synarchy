@@ -16,15 +16,12 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Manager (generateTextureHandle, updateTextureState)
 import Engine.Asset.YamlTextures
-    ( loadMaterialDirectory, MaterialDef(..)
-    , lookupTextureName, registerTextureName
-    )
 import qualified Engine.Core.Queue as Q
 
 -----------------------------------------------------------
--- engine.loadMaterialYaml(directoryPath)
+-- engine.loadMaterialYaml(filePath)
 --
--- Parses all .yaml files in the given directory,
+-- Parses a single .yaml file,
 -- loads every texture referenced (tile/zoom/bg),
 -- registers name → handle mappings in the registry,
 -- and queues LuaLoadTextureRequest for each.
@@ -35,17 +32,17 @@ import qualified Engine.Core.Queue as Q
 loadMaterialYamlFn ∷ EngineEnv → LuaBackendState
                    → Lua.LuaE Lua.Exception Lua.NumResults
 loadMaterialYamlFn env backendState = do
-    dirArg ← Lua.tostring 1
-    case dirArg of
+    pathArg ← Lua.tostring 1
+    case pathArg of
         Nothing → do
             Lua.pushnumber 0
             return 1
-        Just dirBS → do
-            let dirPath = T.unpack (TE.decodeUtf8 dirBS)
+        Just pathBS → do
+            let filePath = T.unpack (TE.decodeUtf8 pathBS)
             count ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
-                -- Parse all YAML files in the directory
-                defs ← loadMaterialDirectory logger dirPath
+                -- Parse the single YAML file
+                defs ← loadMaterialYaml logger filePath
 
                 -- For each MaterialDef, load 3 textures and register names
                 let (lteq, _) = lbsMsgQueues backendState
@@ -73,7 +70,7 @@ loadMaterialYamlFn env backendState = do
 
                 logInfo logger CatAsset $
                     "loadMaterialYaml: loaded " <> T.pack (show total)
-                    <> " textures from " <> T.pack dirPath
+                    <> " textures from " <> T.pack filePath
                 return total
 
             Lua.pushnumber (Lua.Number (fromIntegral count))

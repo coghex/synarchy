@@ -1,0 +1,49 @@
+materials:
+  - id: 40
+    name: marble
+    hardness: 0.7
+    density: 2.7
+    albedo: 0.60
+    tile: "assets/textures/world/marble/marble.png"
+    zoom: "assets/textures/world/zoommap/marble_chunk.png"
+    bg:   "assets/textures/world/zoommap/marble_chunk_background.png"
+  - id: 41
+    name: quartzite
+    hardness: 0.95
+    density: 2.65
+    albedo: 0.42
+    tile: "assets/textures/world/quartzite/quartzite.png"
+    zoom: "assets/textures/world/zoommap/quartzite_chunk.png"
+    bg:   "assets/textures/world/zoommap/quartzite_chunk_background.png"
+  - id: 42
+    name: slate
+    hardness: 0.65
+    density: 2.75
+    albedo: 0.12
+    tile: "assets/textures/world/slate/slate.png"
+    zoom: "assets/textures/world/zoommap/slate_chunk.png"
+    bg:   "assets/textures/world/zoommap/slate_chunk_background.png"
+  - id: 43
+    name: schist
+    hardness: 0.55
+    density: 2.8
+    albedo: 0.18
+    tile: "assets/textures/world/schist/schist.png"
+    zoom: "assets/textures/world/zoommap/schist_chunk.png"
+    bg:   "assets/textures/world/zoommap/schist_chunk_background.png"
+  - id: 44
+    name: gneiss
+    hardness: 0.8
+    density: 2.7
+    albedo: 0.28
+    tile: "assets/textures/world/gneiss/gneiss.png"
+    zoom: "assets/textures/world/zoommap/gneiss_chunk.png"
+    bg:   "assets/textures/world/zoommap/gneiss_chunk_background.png"
+  - id: 45
+    name: phyllite
+    hardness: 0.5
+    density: 2.7
+    albedo: 0.16
+    tile: "assets/textures/world/phyllite/phyllite.png"
+    zoom: "assets/textures/world/zoommap/phyllite_chunk.png"
+    bg:   "assets/textures/world/zoommap/phyllite_chunk_background.png"

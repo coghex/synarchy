@@ -1,0 +1,81 @@
+materials:
+  - id: 50
+    name: clay
+    hardness: 0.25
+    density: 1.6
+    albedo: 0.20
+    tile: "assets/textures/world/clay/clay.png"
+    zoom: "assets/textures/world/zoommap/clay_chunk.png"
+    bg:   "assets/textures/world/zoommap/clay_chunk_background.png"
+  - id: 51
+    name: sandy_clay
+    hardness: 0.3
+    density: 1.75
+    albedo: 0.22
+    tile: "assets/textures/world/sandy_clay/sandy_clay.png"
+    zoom: "assets/textures/world/zoommap/sandy_clay_chunk.png"
+    bg:   "assets/textures/world/zoommap/sandy_clay_chunk_background.png"
+  - id: 52
+    name: sandy_clay_loam
+    hardness: 0.3
+    density: 1.7
+    albedo: 0.25
+    tile: "assets/textures/world/sandy_clay_loam/sandy_clay_loam.png"
+    zoom: "assets/textures/world/zoommap/sandy_clay_loam_chunk.png"
+    bg:   "assets/textures/world/zoommap/sandy_clay_loam_chunk_background.png"
+  - id: 53
+    name: sandy_loam
+    hardness: 0.25
+    density: 1.55
+    albedo: 0.30
+    tile: "assets/textures/world/sandy_loam/sandy_loam.png"
+    zoom: "assets/textures/world/zoommap/sandy_loam_chunk.png"
+    bg:   "assets/textures/world/zoommap/sandy_loam_chunk_background.png"
+  - id: 54
+    name: loamy_sand
+    hardness: 0.2
+    density: 1.5
+    albedo: 0.35
+    tile: "assets/textures/world/loamy_sand/loamy_sand.png"
+    zoom: "assets/textures/world/zoommap/loamy_sand_chunk.png"
+    bg:   "assets/textures/world/zoommap/loamy_sand_chunk_background.png"
+  - id: 55
+    name: sand
+    hardness: 0.15
+    density: 1.55
+    albedo: 0.40
+    tile: "assets/textures/world/sand/sand.png"
+    zoom: "assets/textures/world/zoommap/sand_chunk.png"
+    bg:   "assets/textures/world/zoommap/sand_chunk_background.png"
+  - id: 56
+    name: loam
+    hardness: 0.25
+    density: 1.45
+    albedo: 0.25
+    tile: "assets/textures/world/loam/loam.png"
+    zoom: "assets/textures/world/zoommap/loam_chunk.png"
+    bg:   "assets/textures/world/zoommap/loam_chunk_background.png"
+  - id: 57
+    name: clay_loam
+    hardness: 0.3
+    density: 1.6
+    albedo: 0.22
+    tile: "assets/textures/world/clay_loam/clay_loam.png"
+    zoom: "assets/textures/world/zoommap/clay_loam_chunk.png"
+    bg:   "assets/textures/world/zoommap/clay_loam_chunk_background.png"
+  - id: 58
+    name: silty_clay
+    hardness: 0.25
+    density: 1.55
+    albedo: 0.18
+    tile: "assets/textures/world/silty_clay/silty_clay.png"
+    zoom: "assets/textures/world/zoommap/silty_clay_chunk.png"
+    bg:   "assets/textures/world/zoommap/silty_clay_chunk_background.png"
+  - id: 59
+    name: silty_clay_loam
+    hardness: 0.25
+    density: 1.55
+    albedo: 0.20
+    tile: "assets/textures/world/silty_clay_loam/silty_clay_loam.png"
+    zoom: "assets/textures/world/zoommap/silty_clay_loam_chunk.png"
+    bg:   "assets/textures/world/zoommap/silty_clay_loam_chunk_background.png"

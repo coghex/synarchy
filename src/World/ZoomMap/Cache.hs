@@ -17,7 +17,8 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import World.Types
 import World.Constants (seaLevel)
-import World.Material (MaterialId(..), matGlacier)
+import World.Material (MaterialId(..), matGlacier, MaterialRegistry(..)
+                      , MaterialProps(..), getMaterialProps)
 import World.Plate (TectonicPlate(..), elevationAtGlobal
                    , isBeyondGlacier, wrapGlobalU)
 import World.Fluids (isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid)
@@ -42,8 +43,8 @@ sampleOffsets =
 -- Build Zoom Cache (called once at world init)
 -----------------------------------------------------------
 
-buildZoomCache ∷ WorldGenParams → V.Vector ZoomChunkEntry
-buildZoomCache params =
+buildZoomCache ∷ WorldGenParams → MaterialRegistry → V.Vector ZoomChunkEntry
+buildZoomCache params registry =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
         plates = wgpPlates params
@@ -62,10 +63,13 @@ buildZoomCache params =
                                 gy = baseGY + oy
                                 (gx', gy') = wrapGlobalU worldSize gx gy
                                 (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy'
+                                hardness = mpHardness (getMaterialProps registry baseMat)
                             in if baseMat ≡ matGlacier
                                then (baseElev, unMaterialId baseMat)
                                else if baseElev < -100 then (baseElev, 0)
-                               else let (e, m) = applyTimelineFast timeline worldSize gx' gy'
+                               else let (e, m) = applyTimelineFast timeline
+                                                     worldSize gx' gy'
+                                                     hardness
                                                      (baseElev, baseMat)
                                     in (e, unMaterialId m)
                           | (ox, oy) ← sampleOffsets

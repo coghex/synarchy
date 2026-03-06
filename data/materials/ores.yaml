@@ -1,0 +1,57 @@
+materials:
+  - id: 80
+    name: iron_ore
+    hardness: 0.65
+    density: 4.0
+    albedo: 0.12
+    tile: "assets/textures/world/iron_ore/iron_ore.png"
+    zoom: "assets/textures/world/zoommap/iron_ore_chunk.png"
+    bg:   "assets/textures/world/zoommap/iron_ore_chunk_background.png"
+  - id: 81
+    name: olivine
+    hardness: 0.7
+    density: 3.3
+    albedo: 0.20
+    tile: "assets/textures/world/olivine/olivine.png"
+    zoom: "assets/textures/world/zoommap/olivine_chunk.png"
+    bg:   "assets/textures/world/zoommap/olivine_chunk_background.png"
+  - id: 82
+    name: pyroxene
+    hardness: 0.65
+    density: 3.3
+    albedo: 0.15
+    tile: "assets/textures/world/pyroxene/pyroxene.png"
+    zoom: "assets/textures/world/zoommap/pyroxene_chunk.png"
+    bg:   "assets/textures/world/zoommap/pyroxene_chunk_background.png"
+  - id: 83
+    name: feldspar
+    hardness: 0.6
+    density: 2.6
+    albedo: 0.42
+    tile: "assets/textures/world/feldspar/feldspar.png"
+    zoom: "assets/textures/world/zoommap/feldspar_chunk.png"
+    bg:   "assets/textures/world/zoommap/feldspar_chunk_background.png"
+  - id: 84
+    name: copper_ore
+    hardness: 0.55
+    density: 4.2
+    albedo: 0.22
+    tile: "assets/textures/world/copper_ore/copper_ore.png"
+    zoom: "assets/textures/world/zoommap/copper_ore_chunk.png"
+    bg:   "assets/textures/world/zoommap/copper_ore_chunk_background.png"
+  - id: 85
+    name: tin_ore
+    hardness: 0.55
+    density: 6.8
+    albedo: 0.28
+    tile: "assets/textures/world/tin_ore/tin_ore.png"
+    zoom: "assets/textures/world/zoommap/tin_ore_chunk.png"
+    bg:   "assets/textures/world/zoommap/tin_ore_chunk_background.png"
+  - id: 86
+    name: gold_ore
+    hardness: 0.5
+    density: 3.5
+    albedo: 0.35
+    tile: "assets/textures/world/gold_ore/gold_ore.png"
+    zoom: "assets/textures/world/zoommap/gold_ore_chunk.png"
+    bg:   "assets/textures/world/zoommap/gold_ore_chunk_background.png"
