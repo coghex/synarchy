@@ -18,6 +18,7 @@ import Unit.Types
 import Unit.Sim.Types
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (processAllUnitCommands)
+import Unit.Thread.Movement (tickAllMovement)
 
 -----------------------------------------------------------
 -- Constants
@@ -70,14 +71,14 @@ unitLoop env stateRef lastTimeRef utsRef = do
         ThreadRunning → do
             tickStart ← realToFrac ⊚ getPOSIXTime
             lastTime ← readIORef lastTimeRef
-            let _dt = tickStart - lastTime ∷ Double
+            let dt = tickStart - lastTime
             writeIORef lastTimeRef tickStart
 
             -- 1. Process commands (spawn, destroy, teleport, moveTo, stop)
             processAllUnitCommands env utsRef
 
-            -- 2. [Future] Tick movement interpolation
-            --    tickAllMovement env dt utsRef
+            -- 2. Tick movement interpolation
+            tickAllMovement dt utsRef
 
             -- 3. Publish changed positions to unitManagerRef
             publishToRender env utsRef

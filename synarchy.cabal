@@ -278,6 +278,7 @@ library
                      Unit.Sim.Types
                      Unit.Thread
                      Unit.Thread.Command
+                     Unit.Thread.Movement
                      World.Base
                      World.Constants
                      World.Command.Types
