@@ -102,36 +102,23 @@ unitSpawnFn env = do
                          Just n  → fromIntegral n
                          Nothing → 0
 
-            result ← Lua.liftIO $ do
-                um ← readIORef (unitManagerRef env)
-                case HM.lookup name (umDefs um) of
-                    Nothing → do
-                        logger ← readIORef (loggerRef env)
-                        logWarn logger CatAsset $
-                            "unit.spawn: unknown unit def '" <> name <> "'"
-                        return (-1)
-                    Just def → do
-                        let (uid, um') = nextUnitId um
-                            inst = UnitInstance
-                                { uiDefName   = name
-                                , uiTexture   = udTexture def
-                                , uiBaseWidth = udBaseWidth def
-                                , uiGridX     = gx
-                                , uiGridY     = gy
-                                , uiGridZ     = gz
-                                }
-                            um'' = um' { umInstances =
-                                HM.insert uid inst (umInstances um') }
-                        atomicModifyIORef' (unitManagerRef env) $
-                            const (um'', ())
-                        logger ← readIORef (loggerRef env)
-                        logInfo logger CatAsset $
-                            "Spawned unit '" <> name <> "' id="
-                            <> T.pack (show (unUnitId uid))
-                            <> " at (" <> T.pack (show gx)
-                            <> ", " <> T.pack (show gy)
-                            <> ", " <> T.pack (show gz) <> ")"
-                        return (fromIntegral (unUnitId uid) ∷ Int)
+            result ← Lua.liftIO $
+                atomicModifyIORef' (unitManagerRef env) $ \um →
+                    case HM.lookup name (umDefs um) of
+                        Nothing → (um, -1)
+                        Just def →
+                            let (uid, um') = nextUnitId um
+                                inst = UnitInstance
+                                    { uiDefName   = name
+                                    , uiTexture   = udTexture def
+                                    , uiBaseWidth = udBaseWidth def
+                                    , uiGridX     = gx
+                                    , uiGridY     = gy
+                                    , uiGridZ     = gz
+                                    }
+                                um'' = um' { umInstances =
+                                    HM.insert uid inst (umInstances um') }
+                            in (um'', fromIntegral (unUnitId uid) ∷ Int)
 
             Lua.pushnumber (Lua.Number (fromIntegral result))
             return 1

@@ -50,12 +50,13 @@ renderUnitQuads env facing zSlice tileAlpha = do
                 Just bts → do
                     let lookupSlot h = getTextureSlotIndex h bts
                         defFmSlot = fromIntegral defFmSlotWord
-                        quads = HM.foldl' (\acc inst →
-                            case unitToQuad lookupSlot defFmSlot facing
-                                            zSlice tileAlpha inst texSizes of
-                                Just sq → V.snoc acc sq
-                                Nothing → acc
-                            ) V.empty instances
+                        quads = V.fromList
+                            $ HM.foldl' (\acc inst →
+                                case unitToQuad lookupSlot defFmSlot facing
+                                                zSlice tileAlpha inst texSizes of
+                                    Just sq → sq : acc
+                                    Nothing → acc
+                              ) [] instances
 
                     return quads
 
