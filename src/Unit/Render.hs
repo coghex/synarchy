@@ -116,10 +116,13 @@ unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha inst texSizes =
             drawY = rawY - heightOffset
                   + tileHalfDiamondHeight - quadH + baseRadius
 
-            -- Sort key: same formula as tiles/flora but with float coords
+            -- Sort key: use fractional position like tiles do, but
+            -- add a nudge that puts us after ALL sub-elements of
+            -- the current tile row (terrain, veg, fluid, cursor)
+            -- but before the next integer row.
             sortKey = (faF + fbF)
                     + fromIntegral relativeZ * 0.001
-                    + unitSortNudge
+                    + 0.5
 
             actualSlot = lookupSlot texHandle
 
