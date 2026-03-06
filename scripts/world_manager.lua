@@ -85,10 +85,13 @@ local function sendMaterialTextures(worldId)
     end
 end
 
-local function sendVegTextures(worldId, vegTextures)
-    if not vegTextures then return end
-    for vegId, handle in pairs(vegTextures) do
-        world.setTexture(worldId, "veg_tile_" .. vegId, handle)
+local function sendVegTextures(worldId)
+    -- Vegetation IDs: 16 types × 4 variants = IDs 1..64
+    for vegId = 1, 64 do
+        local h = engine.getTextureHandle("veg_tile_" .. vegId)
+        if h and h >= 0 then
+            world.setTexture(worldId, "veg_tile_" .. vegId, h)
+        end
     end
 end
 
@@ -113,7 +116,7 @@ function worldManager.createWorld(params)
     -- Send all textures
     sendStructuralTextures(worldId, params.structural)
     sendMaterialTextures(worldId)
-    sendVegTextures(worldId, params.vegTextures)
+    sendVegTextures(worldId)
 
     -- Register flora species into the catalog.
     -- world.init() created the world state (with its empty catalog IORef),
