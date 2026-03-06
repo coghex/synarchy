@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scripting.Lua.API.YamlTextures
     ( loadMaterialYamlFn
+    , loadVegetationYamlFn
     , getTextureHandleFn
     ) where
 
@@ -70,6 +71,56 @@ loadMaterialYamlFn env backendState = do
 
                 logInfo logger CatAsset $
                     "loadMaterialYaml: loaded " <> T.pack (show total)
+                    <> " textures from " <> T.pack filePath
+                return total
+
+            Lua.pushnumber (Lua.Number (fromIntegral count))
+            return 1
+
+-----------------------------------------------------------
+-- engine.loadVegetationYaml(filePath)
+--
+-- Parses a single vegetation .yaml file,
+-- loads every variant texture referenced,
+-- registers name → handle mappings in the registry as
+-- "veg_tile_<vegId>" for each variant,
+-- and queues LuaLoadTextureRequest for each.
+--
+-- Returns: number of textures queued for loading.
+-----------------------------------------------------------
+
+loadVegetationYamlFn ∷ EngineEnv → LuaBackendState
+                     → Lua.LuaE Lua.Exception Lua.NumResults
+loadVegetationYamlFn env backendState = do
+    pathArg ← Lua.tostring 1
+    case pathArg of
+        Nothing → do
+            Lua.pushnumber 0
+            return 1
+        Just pathBS → do
+            let filePath = T.unpack (TE.decodeUtf8 pathBS)
+            count ← Lua.liftIO $ do
+                logger ← readIORef (loggerRef env)
+                -- Parse the single vegetation YAML file
+                defs ← loadVegetationYaml logger filePath
+
+                -- For each VegetationDef, load 1 texture per variant
+                let (lteq, _) = lbsMsgQueues backendState
+                total ← foldM (\acc def → do
+                    let baseId = vdIdStart def
+                        variants = vdVariants def
+                    varCount ← foldM (\vacc (idx, texPath) → do
+                        let vegId = baseId + fromIntegral idx
+                            regName = "veg_tile_" <> T.pack (show vegId)
+                        _ ← loadAndRegister env backendState lteq
+                                regName (T.unpack texPath)
+                        return (vacc + 1)
+                        ) (0 ∷ Int) (zip [0..] variants)
+                    return (acc + varCount)
+                    ) (0 ∷ Int) defs
+
+                logInfo logger CatAsset $
+                    "loadVegetationYaml: loaded " <> T.pack (show total)
                     <> " textures from " <> T.pack filePath
                 return total
 

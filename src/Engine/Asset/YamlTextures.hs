@@ -1,14 +1,18 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
 module Engine.Asset.YamlTextures
-    ( -- * YAML types
+    ( -- * YAML types (materials)
       MaterialDef(..)
     , MaterialFile(..)
+      -- * YAML types (vegetation)
+    , VegetationDef(..)
+    , VegetationFile(..)
       -- * Registry
     , TextureNameRegistry
     , emptyTextureNameRegistry
       -- * Loading
     , loadMaterialYaml
     , loadMaterialDirectory
+    , loadVegetationYaml
       -- * Lookup
     , lookupTextureName
     , registerTextureName
@@ -31,7 +35,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Log (LoggerState, logInfo, logWarn, logDebug, LogCategory(..))
 
 -----------------------------------------------------------
--- YAML Data Types
+-- YAML Data Types (Materials)
 -----------------------------------------------------------
 
 -- | A single material definition from YAML.
@@ -61,6 +65,34 @@ instance FromJSON MaterialFile where
         ⊚ v .: "materials"
 
 -----------------------------------------------------------
+-- YAML Data Types (Vegetation)
+-----------------------------------------------------------
+
+-- | A single vegetation type definition from YAML.
+--   Each type has a base id_start and a list of variant
+--   texture paths.  Variant IDs are id_start .. id_start+len-1.
+data VegetationDef = VegetationDef
+    { vdIdStart  ∷ Word8
+    , vdName     ∷ Text
+    , vdVariants ∷ [Text]
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON VegetationDef where
+    parseJSON = withObject "VegetationDef" $ \v → VegetationDef
+        ⊚ v .: "id_start"
+        ⊛ v .: "name"
+        ⊛ v .: "variants"
+
+-- | Top-level vegetation YAML file structure.
+data VegetationFile = VegetationFile
+    { vfVegetation ∷ [VegetationDef]
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON VegetationFile where
+    parseJSON = withObject "VegetationFile" $ \v → VegetationFile
+        ⊚ v .: "vegetation"
+
+-----------------------------------------------------------
 -- Texture Name Registry
 --
 -- Maps human-readable names to TextureHandles.
@@ -73,6 +105,7 @@ instance FromJSON MaterialFile where
 --     mat_tile_<name>   e.g. "mat_tile_loam"
 --     mat_zoom_<name>   e.g. "mat_zoom_loam"
 --     mat_bg_<name>     e.g. "mat_bg_loam"
+--     veg_tile_<id>     e.g. "veg_tile_1"
 type TextureNameRegistry = HM.HashMap Text TextureHandle
 
 emptyTextureNameRegistry ∷ TextureNameRegistry
@@ -87,7 +120,7 @@ registryToList ∷ TextureNameRegistry → [(Text, TextureHandle)]
 registryToList = HM.toList
 
 -----------------------------------------------------------
--- YAML Parsing
+-- YAML Parsing (Materials)
 -----------------------------------------------------------
 
 -- | Parse a single YAML file into a list of MaterialDefs.
@@ -120,6 +153,25 @@ loadMaterialDirectory logger dir = do
     return mats
   where
     isYaml f = takeExtension f ∈ [".yaml", ".yml"]
+
+-----------------------------------------------------------
+-- YAML Parsing (Vegetation)
+-----------------------------------------------------------
+
+-- | Parse a single vegetation YAML file into a list of VegetationDefs.
+loadVegetationYaml ∷ LoggerState → FilePath → IO [VegetationDef]
+loadVegetationYaml logger path = do
+    result ← Yaml.decodeFileEither path
+    case result of
+        Left err → do
+            logWarn logger CatAsset $ "Failed to parse vegetation YAML "
+                <> T.pack path <> ": " <> T.pack (show err)
+            return []
+        Right vf → do
+            logDebug logger CatAsset $ "Loaded "
+                <> T.pack (show (length (vfVegetation vf)))
+                <> " vegetation types from " <> T.pack path
+            return (vfVegetation vf)
 
 -----------------------------------------------------------
 -- Registry Building

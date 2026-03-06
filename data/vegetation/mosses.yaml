@@ -1,0 +1,45 @@
+vegetation:
+  # Thin moss (IDs 17-20)
+  - id_start: 17
+    name: thin_moss
+    variants:
+      - "assets/textures/world/veg/thin_moss_1.png"
+      - "assets/textures/world/veg/thin_moss_2.png"
+      - "assets/textures/world/veg/thin_moss_3.png"
+      - "assets/textures/world/veg/thin_moss_4.png"
+
+  # Thick moss (IDs 21-24)
+  - id_start: 21
+    name: thick_moss
+    variants:
+      - "assets/textures/world/veg/thick_moss_1.png"
+      - "assets/textures/world/veg/thick_moss_2.png"
+      - "assets/textures/world/veg/thick_moss_3.png"
+      - "assets/textures/world/veg/thick_moss_4.png"
+
+  # Light ivy (IDs 25-28)
+  - id_start: 25
+    name: light_ivy
+    variants:
+      - "assets/textures/world/veg/light_ivy_1.png"
+      - "assets/textures/world/veg/light_ivy_2.png"
+      - "assets/textures/world/veg/light_ivy_3.png"
+      - "assets/textures/world/veg/light_ivy_4.png"
+
+  # Heavy ivy (IDs 29-32)
+  - id_start: 29
+    name: heavy_ivy
+    variants:
+      - "assets/textures/world/veg/heavy_ivy_1.png"
+      - "assets/textures/world/veg/heavy_ivy_2.png"
+      - "assets/textures/world/veg/heavy_ivy_3.png"
+      - "assets/textures/world/veg/heavy_ivy_4.png"
+
+  # Lichen / tundra (IDs 33-36)
+  - id_start: 33
+    name: lichen
+    variants:
+      - "assets/textures/world/veg/lichen_1.png"
+      - "assets/textures/world/veg/lichen_2.png"
+      - "assets/textures/world/veg/lichen_3.png"
+      - "assets/textures/world/veg/lichen_4.png"

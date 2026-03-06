@@ -1,0 +1,54 @@
+vegetation:
+  # Sparse grass (IDs 1-4)
+  - id_start: 1
+    name: sparse_grass
+    variants:
+      - "assets/textures/world/veg/sparse_grass_1.png"
+      - "assets/textures/world/veg/sparse_grass_2.png"
+      - "assets/textures/world/veg/sparse_grass_3.png"
+      - "assets/textures/world/veg/sparse_grass_4.png"
+
+  # Medium grass (IDs 5-8)
+  - id_start: 5
+    name: medium_grass
+    variants:
+      - "assets/textures/world/veg/medium_grass_1.png"
+      - "assets/textures/world/veg/medium_grass_2.png"
+      - "assets/textures/world/veg/medium_grass_3.png"
+      - "assets/textures/world/veg/medium_grass_4.png"
+
+  # Dense grass (IDs 9-12)
+  - id_start: 9
+    name: dense_grass
+    variants:
+      - "assets/textures/world/veg/dense_grass_1.png"
+      - "assets/textures/world/veg/dense_grass_2.png"
+      - "assets/textures/world/veg/dense_grass_3.png"
+      - "assets/textures/world/veg/dense_grass_4.png"
+
+  # Tall grass / prairie (IDs 13-16)
+  - id_start: 13
+    name: tall_grass
+    variants:
+      - "assets/textures/world/veg/tall_grass_1.png"
+      - "assets/textures/world/veg/tall_grass_2.png"
+      - "assets/textures/world/veg/tall_grass_3.png"
+      - "assets/textures/world/veg/tall_grass_4.png"
+
+  # Marsh grass (IDs 41-44)
+  - id_start: 41
+    name: marsh_grass
+    variants:
+      - "assets/textures/world/veg/marsh_grass_1.png"
+      - "assets/textures/world/veg/marsh_grass_2.png"
+      - "assets/textures/world/veg/marsh_grass_3.png"
+      - "assets/textures/world/veg/marsh_grass_4.png"
+
+  # Dead grass (IDs 45-48)
+  - id_start: 45
+    name: dead_grass
+    variants:
+      - "assets/textures/world/veg/dead_grass_1.png"
+      - "assets/textures/world/veg/dead_grass_2.png"
+      - "assets/textures/world/veg/dead_grass_3.png"
+      - "assets/textures/world/veg/dead_grass_4.png"

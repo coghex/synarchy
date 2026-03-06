@@ -9,149 +9,11 @@ worldView.fbW = 0
 worldView.fbH = 0
 
 -----------------------------------------------------------
--- Vegetation Table
---
--- Each entry maps a vegId range to a texture.
--- Variants 0-3 within each type use the same base
--- texture with different UV offsets or separate files.
------------------------------------------------------------
-
-worldView.vegDefs = {
-    -- Sparse grass (4 variants)
-    { idStart = 1,  idEnd = 4,  name = "sparse_grass",
-      tiles = {
-          "assets/textures/world/veg/sparse_grass_1.png",
-          "assets/textures/world/veg/sparse_grass_2.png",
-          "assets/textures/world/veg/sparse_grass_3.png",
-          "assets/textures/world/veg/sparse_grass_4.png",
-      }},
-    -- Medium grass
-    { idStart = 5,  idEnd = 8,  name = "medium_grass",
-      tiles = {
-          "assets/textures/world/veg/medium_grass_1.png",
-          "assets/textures/world/veg/medium_grass_2.png",
-          "assets/textures/world/veg/medium_grass_3.png",
-          "assets/textures/world/veg/medium_grass_4.png",
-      }},
-    -- Dense grass
-    { idStart = 9,  idEnd = 12, name = "dense_grass",
-      tiles = {
-          "assets/textures/world/veg/dense_grass_1.png",
-          "assets/textures/world/veg/dense_grass_2.png",
-          "assets/textures/world/veg/dense_grass_3.png",
-          "assets/textures/world/veg/dense_grass_4.png",
-      }},
-    -- Tall grass (prairie)
-    { idStart = 13, idEnd = 16, name = "tall_grass",
-      tiles = {
-          "assets/textures/world/veg/tall_grass_1.png",
-          "assets/textures/world/veg/tall_grass_2.png",
-          "assets/textures/world/veg/tall_grass_3.png",
-          "assets/textures/world/veg/tall_grass_4.png",
-      }},
-    -- Thin moss
-    { idStart = 17, idEnd = 20, name = "thin_moss",
-      tiles = {
-          "assets/textures/world/veg/thin_moss_1.png",
-          "assets/textures/world/veg/thin_moss_2.png",
-          "assets/textures/world/veg/thin_moss_3.png",
-          "assets/textures/world/veg/thin_moss_4.png",
-      }},
-    -- Thick moss
-    { idStart = 21, idEnd = 24, name = "thick_moss",
-      tiles = {
-          "assets/textures/world/veg/thick_moss_1.png",
-          "assets/textures/world/veg/thick_moss_2.png",
-          "assets/textures/world/veg/thick_moss_3.png",
-          "assets/textures/world/veg/thick_moss_4.png",
-      }},
-    -- Light ivy
-    { idStart = 25, idEnd = 28, name = "light_ivy",
-      tiles = {
-          "assets/textures/world/veg/light_ivy_1.png",
-          "assets/textures/world/veg/light_ivy_2.png",
-          "assets/textures/world/veg/light_ivy_3.png",
-          "assets/textures/world/veg/light_ivy_4.png",
-      }},
-    -- Heavy ivy
-    { idStart = 29, idEnd = 32, name = "heavy_ivy",
-      tiles = {
-          "assets/textures/world/veg/heavy_ivy_1.png",
-          "assets/textures/world/veg/heavy_ivy_2.png",
-          "assets/textures/world/veg/heavy_ivy_3.png",
-          "assets/textures/world/veg/heavy_ivy_4.png",
-      }},
-    -- Lichen / tundra
-    { idStart = 33, idEnd = 36, name = "lichen",
-      tiles = {
-          "assets/textures/world/veg/lichen_1.png",
-          "assets/textures/world/veg/lichen_2.png",
-          "assets/textures/world/veg/lichen_3.png",
-          "assets/textures/world/veg/lichen_4.png",
-      }},
-    -- Desert scrub
-    { idStart = 37, idEnd = 40, name = "desert_scrub",
-      tiles = {
-          "assets/textures/world/veg/desert_scrub_1.png",
-          "assets/textures/world/veg/desert_scrub_2.png",
-          "assets/textures/world/veg/desert_scrub_3.png",
-          "assets/textures/world/veg/desert_scrub_4.png",
-      }},
-    -- Marsh grass
-    { idStart = 41, idEnd = 44, name = "marsh_grass",
-      tiles = {
-          "assets/textures/world/veg/marsh_grass_1.png",
-          "assets/textures/world/veg/marsh_grass_2.png",
-          "assets/textures/world/veg/marsh_grass_3.png",
-          "assets/textures/world/veg/marsh_grass_4.png",
-      }},
-    -- Dead grass
-    { idStart = 45, idEnd = 48, name = "dead_grass",
-      tiles = {
-          "assets/textures/world/veg/dead_grass_1.png",
-          "assets/textures/world/veg/dead_grass_2.png",
-          "assets/textures/world/veg/dead_grass_3.png",
-          "assets/textures/world/veg/dead_grass_4.png",
-      }},
-    -- Fallen leaves
-    { idStart = 49, idEnd = 52, name = "fallen_leaves",
-      tiles = {
-          "assets/textures/world/veg/fallen_leaves_1.png",
-          "assets/textures/world/veg/fallen_leaves_2.png",
-          "assets/textures/world/veg/fallen_leaves_3.png",
-          "assets/textures/world/veg/fallen_leaves_4.png",
-      }},
-    -- Pine needles
-    { idStart = 53, idEnd = 56, name = "pine_needles",
-      tiles = {
-          "assets/textures/world/veg/pine_needles_1.png",
-          "assets/textures/world/veg/pine_needles_2.png",
-          "assets/textures/world/veg/pine_needles_3.png",
-          "assets/textures/world/veg/pine_needles_4.png",
-      }},
-    -- Mushroom patch
-    { idStart = 57, idEnd = 60, name = "mushroom_patch",
-      tiles = {
-          "assets/textures/world/veg/mushroom_patch_1.png",
-          "assets/textures/world/veg/mushroom_patch_2.png",
-          "assets/textures/world/veg/mushroom_patch_3.png",
-          "assets/textures/world/veg/mushroom_patch_4.png",
-      }},
-    -- Wildflowers
-    { idStart = 61, idEnd = 64, name = "wildflowers",
-      tiles = {
-          "assets/textures/world/veg/wildflowers_1.png",
-          "assets/textures/world/veg/wildflowers_2.png",
-          "assets/textures/world/veg/wildflowers_3.png",
-          "assets/textures/world/veg/wildflowers_4.png",
-      }},
-}
-
------------------------------------------------------------
 -- Texture Storage
 --
 -- Structural textures: named fields (small fixed set)
--- Material textures:   materialTextures[id] = { tile=h, zoom=h, bg=h }
+-- Material textures:   loaded from YAML via engine.loadMaterialYaml()
+-- Vegetation textures: loaded from YAML via engine.loadVegetationYaml()
 -----------------------------------------------------------
 
 worldView.structuralTextures = {
@@ -203,6 +65,11 @@ worldView.structuralTextures = {
 --
 -- worldView.materialTextureCount is set after the call returns.
 worldView.materialTextureCount = 0
+
+-- Vegetation textures are now loaded from YAML via engine.loadVegetationYaml().
+-- The Haskell side parses data/vegetation/*.yaml, loads every variant texture,
+-- and registers handles as "veg_tile_<vegId>" in the TextureNameRegistry.
+worldView.vegetationTextureCount = 0
 
 -- All loaded handles for asset-loaded tracking
 worldView.allHandles = {}
@@ -282,17 +149,13 @@ function worldView.init(width, height)
 
     engine.logInfo("Queued " .. matCount .. " material textures from YAML")
 
-    -- Load vegetation textures
-    worldView.vegTextures = {}
-    for _, def in ipairs(worldView.vegDefs) do
-        for i, path in ipairs(def.tiles) do
-            local vegId = def.idStart + (i - 1)
-            local h = engine.loadTexture(path)
-            worldView.vegTextures[vegId] = h
-            worldView.allHandles[h] = true
-            count = count + 1
-        end
-    end
+    -- Load vegetation from YAML
+    local vegetationLoader = require("scripts.vegetation_loader")
+    local vegCount = vegetationLoader.loadAll("data/vegetation")
+    worldView.vegetationTextureCount = vegCount
+    count = count + vegCount
+
+    engine.logInfo("Queued " .. vegCount .. " vegetation textures from YAML")
 
     worldView.seenHandles = {}
     worldView.texturesNeeded = count
@@ -309,10 +172,10 @@ function worldView.onAssetLoaded(assetType, handle, path)
     if assetType ~= "texture" then return end
     if worldView.seenHandles and worldView.seenHandles[handle] then return end  -- dedup
 
-    -- Accept if it's a tracked structural/veg handle OR any material handle
-    -- (material handles aren't in allHandles since YAML loaded them)
+    -- Accept if it's a tracked structural handle OR any material/veg handle
+    -- (material and veg handles aren't in allHandles since YAML loaded them)
     if not worldView.allHandles[handle] then
-        -- Not a structural/veg handle. Could be a material handle or
+        -- Not a structural handle. Could be a material/veg handle or
         -- something unrelated. Only count if we still need more textures.
         if worldView.texturesLoadedCount >= worldView.texturesNeeded then
             return  -- already done, ignore stray loads
@@ -378,8 +241,7 @@ function worldView.createWorld()
         worldSize  = worldSize,
         plateCount = plateCount,
         structural = worldView.structuralTextures,
-        vegTextures = worldView.vegTextures,
-        -- materials no longer passed here; sent via sendMaterialTextures
+        -- materials and vegetation textures sent via sendTexturesToWorld
     })
     worldManager.showWorld()
 end
@@ -588,9 +450,13 @@ function worldView.sendTexturesToWorld(worldId)
     world.setTexture(worldId, "veg_slope_facemap_esw",    st.vegSlopeFaceMapESW)
     world.setTexture(worldId, "veg_slope_facemap_nesw",   st.vegSlopeFaceMapNESW)
 
-    -- Vegetation tiles
-    for vegId, handle in pairs(worldView.vegTextures) do
-        world.setTexture(worldId, "veg_tile_" .. vegId, handle)
+    -- Vegetation tiles: look up from registry by numeric ID
+    -- 16 types × 4 variants = IDs 1..64
+    for vegId = 1, 64 do
+        local h = engine.getTextureHandle("veg_tile_" .. vegId)
+        if h and h >= 0 then
+            world.setTexture(worldId, "veg_tile_" .. vegId, h)
+        end
     end
 
     -- Materials: look up from registry by numeric ID
