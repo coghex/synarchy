@@ -35,6 +35,7 @@ import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn,
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
 import Engine.Scripting.Lua.API.Save (saveListFn, saveWorldFn, loadSaveFn)
 import Engine.Scripting.Lua.API.World
+import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
@@ -98,6 +99,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadMaterialYaml" (loadMaterialYamlFn env backendState)
   registerLuaFunction "loadVegetationYaml" (loadVegetationYamlFn env backendState)
   registerLuaFunction "loadFloraYaml" (loadFloraYamlFn env backendState)
+  registerLuaFunction "loadUnitYaml" (loadUnitYamlFn env backendState)
   
   -- Input functions
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)

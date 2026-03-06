@@ -27,6 +27,7 @@ import Engine.Input.Bindings (loadKeyBindings)
 import Engine.Input.Types (defaultInputState)
 import UI.Focus (createFocusManager)
 import UI.Types (emptyUIPageManager)
+import Unit.Types (emptyUnitManager)
 import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
 
@@ -105,6 +106,8 @@ initializeEngine = do
   floraCatRef ← newIORef emptyFloraCatalog
   -- materials
   materialRegistryRef ← newIORef emptyMaterialRegistry
+  -- unit manager
+  unitManagerRef ← newIORef emptyUnitManager
 
   -- Build environment
   let env = EngineEnv
@@ -143,7 +146,8 @@ initializeEngine = do
         , textureSizeRef     = texSizeRef
         , defaultFaceMapSlotRef = defaultFaceMapSlotRef
         , floraCatalogRef    = floraCatRef
-        , materialRegistryRef  = materialRegistryRef
+        , materialRegistryRef = materialRegistryRef
+        , unitManagerRef     = unitManagerRef
         }
   
   envVar   ← atomically $ newVar env

@@ -4,6 +4,7 @@ local game = {}
 local shellScriptId = nil
 local uiScriptId = nil
 local debugScriptId = nil
+local unitManagerScriptId = nil
 
 function game.init(scriptId)
     -- Initialize debug
@@ -11,7 +12,10 @@ function game.init(scriptId)
 
     -- Initialize shell
     shellScriptId = engine.loadScript("scripts/shell.lua", 0.5)
-    
+
+    -- Initialize unit manager (loads unit definitions from YAML)
+    unitManagerScriptId = engine.loadScript("scripts/unit_manager.lua", 0.1)
+
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
 end
@@ -37,6 +41,9 @@ function game.shutdown()
     end
     if shellScriptId then
         engine.killScript(shellScriptId)
+    end
+    if unitManagerScriptId then
+        engine.killScript(unitManagerScriptId)
     end
     if uiScriptId then
         engine.killScript(uiScriptId)

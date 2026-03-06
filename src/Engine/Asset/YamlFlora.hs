@@ -120,7 +120,7 @@ instance FromJSON FloraYamlDef where
         ⊚ v .:  "name"
         ⊛ v .:  "type"
         ⊛ v .:  "texDir"
-        ⊛ v .:  "lifecycle"    .!= "evergreen"
+        ⊛ v .:? "lifecycle"    .!= "evergreen"
         ⊛ v .:? "minLife"
         ⊛ v .:? "maxLife"
         ⊛ v .:? "deathChance"

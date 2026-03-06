@@ -58,18 +58,9 @@ worldView.structuralTextures = {
     noFaceMap      = -1,
 }
 
--- Material textures are now loaded from YAML via engine.loadMaterialYaml().
--- The Haskell side parses data/materials/*.yaml, loads every texture,
--- and registers handles by both name ("mat_tile_loam") and numeric id
--- ("mat_tile_56") in the engine's TextureNameRegistry.
---
--- worldView.materialTextureCount is set after the call returns.
 worldView.materialTextureCount = 0
-
--- Vegetation textures are now loaded from YAML via engine.loadVegetationYaml().
--- The Haskell side parses data/vegetation/*.yaml, loads every variant texture,
--- and registers handles as "veg_tile_<vegId>" in the TextureNameRegistry.
 worldView.vegetationTextureCount = 0
+worldView.unitTextureCount = 0
 
 -- All loaded handles for asset-loaded tracking
 worldView.allHandles = {}
@@ -165,6 +156,14 @@ function worldView.init(width, height)
     count = count + floraCount
 
     engine.logInfo("Queued " .. floraCount .. " flora textures from YAML")
+
+    -- Load unit definitions from YAML (textures queued for GPU loading)
+    local unitLoader = require("scripts.unit_loader")
+    local unitCount = unitLoader.loadAll("data/units")
+    worldView.unitTextureCount = unitCount
+    count = count + unitCount
+
+    engine.logInfo("Queued " .. unitCount .. " unit textures from YAML")
 
     worldView.seenHandles = {}
     worldView.texturesNeeded = count

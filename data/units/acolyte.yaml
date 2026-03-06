@@ -1,0 +1,3 @@
+units:
+  - name: "acolyte"
+    sprite: "assets/textures/units/acolyte/default.png"

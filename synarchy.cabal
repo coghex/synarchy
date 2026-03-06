@@ -142,6 +142,7 @@ library
                      Engine.Asset.Manager
                      Engine.Asset.YamlTextures
                      Engine.Asset.YamlFlora
+                     Engine.Asset.YamlUnits
                      Engine.Event.Base
                      Engine.Event.Types
                      Engine.Graphics.Base
@@ -228,6 +229,7 @@ library
                      Engine.Scripting.Lua.API.UI.Focus
                      Engine.Scripting.Lua.API.UI.TextInput
                      Engine.Scripting.Lua.API.UI.Property
+                     Engine.Scripting.Lua.API.Units
                      Engine.Scripting.Lua.API.World
                      Engine.Scripting.Lua.API.Flora
                      Engine.Scripting.Lua.API.YamlTextures
@@ -270,6 +272,7 @@ library
                      UI.Manager
                      UI.Render
                      UI.TextBuffer
+                     Unit.Types
                      World.Base
                      World.Constants
                      World.Command.Types

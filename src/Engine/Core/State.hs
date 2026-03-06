@@ -35,6 +35,7 @@ import qualified Vulkan.Core10 as Vk
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 import UI.Types (UIPageManager)
 import UI.Focus (FocusManager)
+import Unit.Types (UnitManager)
 import World.Types (WorldCommand, WorldManager, FloraCatalog)
 import World.Material (MaterialRegistry)
 
@@ -76,6 +77,7 @@ data EngineEnv = EngineEnv
   , defaultFaceMapSlotRef  ∷ IORef Word32
   , floraCatalogRef     ∷ IORef FloraCatalog
   , materialRegistryRef   ∷ IORef MaterialRegistry
+  , unitManagerRef      ∷ IORef UnitManager
   } deriving (Eq)
 
 -- | Engine state (mutable)

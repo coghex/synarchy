@@ -3,6 +3,7 @@ module Engine.Scripting.Lua.API.YamlTextures
     ( loadMaterialYamlFn
     , loadVegetationYamlFn
     , loadFloraYamlFn
+    , loadAndRegister
     , getTextureHandleFn
     ) where
 
