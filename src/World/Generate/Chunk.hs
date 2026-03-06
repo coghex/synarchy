@@ -143,7 +143,7 @@ generateChunk registry catalog params coord =
         -- Terrain surface map (vector)
         terrainSurfaceMap = VU.generate chunkArea $ \idx →
             if coordBeyond VU.! idx
-            then 0--minBound
+            then minBound
             else lookupElev (idx `mod` chunkSize) (idx `div` chunkSize)
 
         -- Fluids
@@ -194,7 +194,7 @@ generateChunk registry catalog params coord =
                     finalE = lookupElevOr (lx + 1) ly surfZ
                     finalW = lookupElevOr (lx - 1) ly surfZ
                     neighborMinZ = min finalN (min finalS (min finalE finalW))
-                    exposeFrom = max (surfZ - 64) (min surfZ neighborMinZ)
+                    exposeFrom = min surfZ neighborMinZ
                     cache = buildStrataCache timeline worldSize wsc
                                              gx' gy' registry base
                                              (finalN, finalS, finalE, finalW)
