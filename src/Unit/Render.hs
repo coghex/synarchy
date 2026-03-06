@@ -116,13 +116,17 @@ unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha inst texSizes =
             drawY = rawY - heightOffset
                   + tileHalfDiamondHeight - quadH + baseRadius
 
-            -- Sort key: use fractional position like tiles do, but
-            -- add a nudge that puts us after ALL sub-elements of
-            -- the current tile row (terrain, veg, fluid, cursor)
-            -- but before the next integer row.
+            -- The sprite's feet are at feetRow, but the quad extends
+            -- upward visually into rows ahead of it. Tiles at those
+            -- rows would sort after the unit and paint over it.
+            -- Shift the sort key forward by half the sprite's height
+            -- in isometric row-space so the unit sorts after all
+            -- tiles its body overlaps.
+            spriteRowSpan = quadH / tileHalfDiamondHeight * 0.5
             sortKey = (faF + fbF)
+                    + spriteRowSpan
                     + fromIntegral relativeZ * 0.001
-                    + 0.5
+                    + 0.0006
 
             actualSlot = lookupSlot texHandle
 
