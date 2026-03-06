@@ -16,6 +16,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef', IORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.YamlFlora (parsePhaseTag, parseCycleTag)
 import World.Flora.Types
 
 -----------------------------------------------------------
@@ -264,30 +265,6 @@ floraRegisterForWorldGenFn env = do
                 (insertWorldGen fid wg cat, ())
             return 0
         _ → return 0
-
------------------------------------------------------------
--- Parsers
------------------------------------------------------------
-
-parsePhaseTag ∷ Text → Maybe LifePhaseTag
-parsePhaseTag "sprout"     = Just PhaseSprout
-parsePhaseTag "seedling"   = Just PhaseSeedling
-parsePhaseTag "vegetating" = Just PhaseVegetating
-parsePhaseTag "budding"    = Just PhaseBudding
-parsePhaseTag "flowering"  = Just PhaseFlowering
-parsePhaseTag "ripening"   = Just PhaseRipening
-parsePhaseTag "matured"    = Just PhaseMatured
-parsePhaseTag "withering"  = Just PhaseWithering
-parsePhaseTag "dead"       = Just PhaseDead
-parsePhaseTag _            = Nothing
-
-parseCycleTag ∷ Text → Maybe AnnualStageTag
-parseCycleTag "dormant"   = Just CycleDormant
-parseCycleTag "budding"   = Just CycleBudding
-parseCycleTag "flowering" = Just CycleFlowering
-parseCycleTag "fruiting"  = Just CycleFruiting
-parseCycleTag "senescing" = Just CycleSenescing
-parseCycleTag _           = Nothing
 
 luaNum ∷ Maybe Lua.Number → Float → Float
 luaNum (Just (Lua.Number n)) _ = realToFrac n

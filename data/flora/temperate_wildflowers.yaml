@@ -1,0 +1,122 @@
+flora:
+  - name: common_dandelion
+    type: perennial_flower
+    texDir: "assets/textures/world/flora/common_dandelion"
+    lifecycle: perennial
+    minLife: 1080
+    maxLife: 2520
+    deathChance: 0.3
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: vegetating
+        texture: "budding.png"
+        age: 30
+      - tag: dead
+        texture: "dead.png"
+        age: 2520
+    annualCycle:
+      - tag: dormant
+        startDay: 0
+        texture: "dormant.png"
+      - tag: budding
+        startDay: 60
+        texture: "budding.png"
+      - tag: flowering
+        startDay: 100
+        texture: "flowering.png"
+      - tag: senescing
+        startDay: 200
+        texture: "senescing.png"
+    cycleOverrides:
+      - phase: dead
+        cycle: dormant
+        texture: "dead.png"
+      - phase: dead
+        cycle: budding
+        texture: "dead.png"
+      - phase: dead
+        cycle: flowering
+        texture: "dead.png"
+      - phase: dead
+        cycle: senescing
+        texture: "dead.png"
+    worldGen:
+      category: wildflower
+      minTemp: 2
+      maxTemp: 35
+      idealTemp: 15
+      minPrecip: 0.2
+      maxPrecip: 0.9
+      idealPrecip: 0.5
+      minAlt: -50
+      maxAlt: 300
+      idealAlt: 50
+      minHumidity: 0.3
+      maxHumidity: 0.8
+      idealHumidity: 0.5
+      maxSlope: 4
+      density: 0.2
+      footprint: 0
+
+  - name: white_clover
+    type: perennial_flower
+    texDir: "assets/textures/world/flora/white_clover"
+    lifecycle: perennial
+    minLife: 720
+    maxLife: 1800
+    deathChance: 0.4
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: vegetating
+        texture: "budding.png"
+        age: 20
+      - tag: dead
+        texture: "dead.png"
+        age: 1800
+    annualCycle:
+      - tag: dormant
+        startDay: 0
+        texture: "dormant.png"
+      - tag: budding
+        startDay: 60
+        texture: "budding.png"
+      - tag: flowering
+        startDay: 100
+        texture: "flowering.png"
+      - tag: senescing
+        startDay: 200
+        texture: "senescing.png"
+    cycleOverrides:
+      - phase: dead
+        cycle: dormant
+        texture: "dead.png"
+      - phase: dead
+        cycle: budding
+        texture: "dead.png"
+      - phase: dead
+        cycle: flowering
+        texture: "dead.png"
+      - phase: dead
+        cycle: senescing
+        texture: "dead.png"
+    worldGen:
+      category: wildflower
+      minTemp: 5
+      maxTemp: 28
+      idealTemp: 16
+      minPrecip: 0.3
+      maxPrecip: 0.8
+      idealPrecip: 0.6
+      minAlt: -30
+      maxAlt: 250
+      idealAlt: 40
+      minHumidity: 0.4
+      maxHumidity: 0.8
+      idealHumidity: 0.6
+      maxSlope: 4
+      density: 0.18
+      footprint: 0

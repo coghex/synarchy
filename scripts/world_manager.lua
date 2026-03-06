@@ -1,5 +1,4 @@
 -- World Manager - coordinates world state and rendering
-local floraCatalog = require("scripts.flora_catalog")
 local worldManager = {}
 
 worldManager.currentWorld = nil
@@ -117,13 +116,6 @@ function worldManager.createWorld(params)
     sendStructuralTextures(worldId, params.structural)
     sendMaterialTextures(worldId)
     sendVegTextures(worldId)
-
-    -- Register flora species into the catalog.
-    -- world.init() created the world state (with its empty catalog IORef),
-    -- and flora.register() writes directly to it via atomicModifyIORef'.
-    -- The world thread will snapshot the catalog into WorldGenParams
-    -- before generating any chunks.
-    floraCatalog.init()
 
     worldManager.currentWorld = worldId
 

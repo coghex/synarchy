@@ -157,6 +157,15 @@ function worldView.init(width, height)
 
     engine.logInfo("Queued " .. vegCount .. " vegetation textures from YAML")
 
+    -- Load flora from YAML (textures are loaded by Haskell,
+    -- species registered into FloraCatalog automatically)
+    local floraLoader = require("scripts.flora_loader")
+    local floraCount = floraLoader.loadAll("data/flora")
+    worldView.floraTextureCount = floraCount
+    count = count + floraCount
+
+    engine.logInfo("Queued " .. floraCount .. " flora textures from YAML")
+
     worldView.seenHandles = {}
     worldView.texturesNeeded = count
     worldView.texturesLoadedCount = 0

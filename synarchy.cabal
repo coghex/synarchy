@@ -141,6 +141,7 @@ library
                      Engine.Asset.Handle
                      Engine.Asset.Manager
                      Engine.Asset.YamlTextures
+                     Engine.Asset.YamlFlora
                      Engine.Event.Base
                      Engine.Event.Types
                      Engine.Graphics.Base

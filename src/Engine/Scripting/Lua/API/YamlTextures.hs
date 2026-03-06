@@ -2,22 +2,26 @@
 module Engine.Scripting.Lua.API.YamlTextures
     ( loadMaterialYamlFn
     , loadVegetationYamlFn
+    , loadFloraYamlFn
     , getTextureHandleFn
     ) where
 
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Control.Monad (foldM)
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef', newIORef, IORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Manager (generateTextureHandle, updateTextureState)
 import Engine.Asset.YamlTextures
+import Engine.Asset.YamlFlora
 import qualified Engine.Core.Queue as Q
+import World.Flora.Types
 
 -----------------------------------------------------------
 -- engine.loadMaterialYaml(filePath)
@@ -140,6 +144,178 @@ loadAndRegister env backendState lteq name path = do
     -- Queue for actual GPU loading on the engine thread
     Q.writeQueue lteq (LuaLoadTextureRequest handle path)
     return handle
+
+-----------------------------------------------------------
+-- engine.loadFloraYaml(filePath)
+--
+-- Parses a single flora .yaml file.  For each species:
+--   1. Loads all textures (phases, cycle stages, overrides)
+--   2. Builds FloraSpecies with lifecycle, phases, cycle, overrides
+--   3. Builds FloraWorldGen
+--   4. Inserts both into the FloraCatalog
+--
+-- Returns: number of textures queued for loading.
+-----------------------------------------------------------
+
+loadFloraYamlFn ∷ EngineEnv → LuaBackendState
+                → Lua.LuaE Lua.Exception Lua.NumResults
+loadFloraYamlFn env backendState = do
+    pathArg ← Lua.tostring 1
+    case pathArg of
+        Nothing → do
+            Lua.pushnumber 0
+            return 1
+        Just pathBS → do
+            let filePath = T.unpack (TE.decodeUtf8 pathBS)
+            count ← Lua.liftIO $ do
+                logger ← readIORef (loggerRef env)
+                defs ← loadFloraYaml logger filePath
+
+                let (lteq, _) = lbsMsgQueues backendState
+                    catRef = floraCatalogRef env
+
+                total ← foldM (\acc def → do
+                    texCount ← registerFloraSpecies env backendState lteq catRef def
+                    return (acc + texCount)
+                    ) (0 ∷ Int) defs
+
+                logInfo logger CatAsset $
+                    "loadFloraYaml: loaded " <> T.pack (show (length defs))
+                    <> " species (" <> T.pack (show total)
+                    <> " textures) from " <> T.pack filePath
+                return total
+
+            Lua.pushnumber (Lua.Number (fromIntegral count))
+            return 1
+
+-----------------------------------------------------------
+-- Register a single FloraYamlDef into the catalog
+-----------------------------------------------------------
+
+registerFloraSpecies ∷ EngineEnv → LuaBackendState → Q.Queue LuaToEngineMsg
+                     → IORef FloraCatalog → FloraYamlDef → IO Int
+registerFloraSpecies env backendState lteq catRef def = do
+    let texDir = T.unpack (fydTexDir def)
+        name   = fydName def
+
+    -- Allocate a FloraId
+    fid ← atomicModifyIORef' catRef $ \cat →
+        let (newId, cat') = nextFloraId cat
+        in (cat', newId)
+
+    -- Determine the "base" texture: first phase's texture, or matured.png
+    let baseTexPath = case fydPhases def of
+            (p:_) → texDir <> "/" <> T.unpack (fypTexture p)
+            []    → texDir <> "/matured.png"
+
+    -- Load base texture
+    baseH ← loadAndRegister env backendState lteq
+                ("flora_base_" <> name) baseTexPath
+    texCount ← newIORef (1 ∷ Int)
+
+    -- Build lifecycle
+    let lifecycle = case fydLifecycle def of
+            "perennial" → Perennial
+                (maybe 1800.0 id (fydMinLife def))
+                (maybe 3600.0 id (fydMaxLife def))
+                (maybe 0.2 id (fydDeathChance def))
+            "annual"   → Annual
+            "biennial" → Biennial
+            _          → Evergreen
+
+    -- Build life phases (load a texture for each)
+    phases ← foldM (\phaseMap yp → do
+        case parsePhaseTag (fypTag yp) of
+            Nothing → return phaseMap
+            Just tag → do
+                let path = texDir <> "/" <> T.unpack (fypTexture yp)
+                h ← loadAndRegister env backendState lteq
+                        ("flora_phase_" <> name <> "_" <> fypTag yp) path
+                atomicModifyIORef' texCount (\n → (n + 1, ()))
+                let phase = LifePhase
+                        { lpTag     = tag
+                        , lpAge     = fypAge yp
+                        , lpTexture = h
+                        }
+                return (HM.insert tag phase phaseMap)
+        ) HM.empty (fydPhases def)
+
+    -- Build annual cycle stages
+    cycleStages ← foldM (\stages ycs → do
+        case parseCycleTag (fycsTag ycs) of
+            Nothing → return stages
+            Just tag → do
+                let path = texDir <> "/" <> T.unpack (fycsTexture ycs)
+                h ← loadAndRegister env backendState lteq
+                        ("flora_cycle_" <> name <> "_" <> fycsTag ycs) path
+                atomicModifyIORef' texCount (\n → (n + 1, ()))
+                let stage = AnnualStage
+                        { asTag      = tag
+                        , asStartDay = fycsStartDay ycs
+                        , asTexture  = h
+                        }
+                return (stages ++ [stage])
+        ) [] (fydAnnualCycle def)
+
+    -- Build cycle overrides
+    overrides ← foldM (\ovMap yco → do
+        case (parsePhaseTag (fycoPhase yco), parseCycleTag (fycoCycle yco)) of
+            (Just pTag, Just cTag) → do
+                let path = texDir <> "/" <> T.unpack (fycoTexture yco)
+                h ← loadAndRegister env backendState lteq
+                        ("flora_ov_" <> name <> "_" <> fycoPhase yco
+                         <> "_" <> fycoCycle yco) path
+                atomicModifyIORef' texCount (\n → (n + 1, ()))
+                return (HM.insert (AnnualCycleKey pTag cTag) h ovMap)
+            _ → return ovMap
+        ) HM.empty (fydCycleOverrides def)
+
+    -- Assemble the FloraSpecies
+    let species = FloraSpecies
+            { fsName           = name
+            , fsBaseTexture    = baseH
+            , fsLifecycle      = lifecycle
+            , fsPhases         = phases
+            , fsAnnualCycle    = cycleStages
+            , fsCycleOverrides = overrides
+            }
+
+    -- Insert species into catalog
+    atomicModifyIORef' catRef $ \cat →
+        (insertSpecies fid species cat, ())
+
+    -- Build and insert FloraWorldGen
+    let wg = fydWorldGen def
+        minAlt   = maybe (-100) id (fywMinAlt wg)
+        maxAlt   = maybe 800    id (fywMaxAlt wg)
+        idealAlt = maybe ((minAlt + maxAlt) `div` 2) id (fywIdealAlt wg)
+        minHum   = maybe 0.0 id (fywMinHumidity wg)
+        maxHum   = maybe 1.0 id (fywMaxHumidity wg)
+        idealHum = maybe ((minHum + maxHum) / 2.0) id (fywIdealHumidity wg)
+        floraWG = FloraWorldGen
+            { fwCategory      = fywCategory wg
+            , fwMinTemp       = fywMinTemp wg
+            , fwMaxTemp       = fywMaxTemp wg
+            , fwIdealTemp     = fywIdealTemp wg
+            , fwMinPrecip     = fywMinPrecip wg
+            , fwMaxPrecip     = fywMaxPrecip wg
+            , fwIdealPrecip   = fywIdealPrecip wg
+            , fwMinAlt        = minAlt
+            , fwMaxAlt        = maxAlt
+            , fwIdealAlt      = idealAlt
+            , fwMinHumidity   = minHum
+            , fwMaxHumidity   = maxHum
+            , fwIdealHumidity = idealHum
+            , fwMaxSlope      = maybe 15 fromIntegral (fywMaxSlope wg)
+            , fwDensity       = maybe 0.1 id (fywDensity wg)
+            , fwSoils         = []
+            , fwFootprint     = maybe 0.0 id (fywFootprint wg)
+            }
+
+    atomicModifyIORef' catRef $ \cat →
+        (insertWorldGen fid floraWG cat, ())
+
+    readIORef texCount
 
 -----------------------------------------------------------
 -- engine.getTextureHandle(name)

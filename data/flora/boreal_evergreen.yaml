@@ -1,0 +1,58 @@
+flora:
+  - name: scots_pine
+    type: evergreen_tree
+    texDir: "assets/textures/world/flora/scots_pine"
+    lifecycle: evergreen
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: matured
+        texture: "matured.png"
+        age: 1080
+    worldGen:
+      category: tree
+      minTemp: -15
+      maxTemp: 18
+      idealTemp: 5
+      minPrecip: 0.2
+      maxPrecip: 0.8
+      idealPrecip: 0.4
+      minAlt: 50
+      maxAlt: 700
+      idealAlt: 300
+      minHumidity: 0.2
+      maxHumidity: 0.7
+      idealHumidity: 0.4
+      maxSlope: 3
+      density: 0.3
+      footprint: 12
+
+  - name: white_spruce
+    type: evergreen_tree
+    texDir: "assets/textures/world/flora/white_spruce"
+    lifecycle: evergreen
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: matured
+        texture: "matured.png"
+        age: 1080
+    worldGen:
+      category: tree
+      minTemp: -20
+      maxTemp: 15
+      idealTemp: 2
+      minPrecip: 0.3
+      maxPrecip: 0.9
+      idealPrecip: 0.5
+      minAlt: 100
+      maxAlt: 800
+      idealAlt: 400
+      minHumidity: 0.3
+      maxHumidity: 0.8
+      idealHumidity: 0.5
+      maxSlope: 3
+      density: 0.3
+      footprint: 10

@@ -1,0 +1,210 @@
+flora:
+  - name: white_oak
+    type: deciduous_tree
+    texDir: "assets/textures/world/flora/white_oak"
+    lifecycle: perennial
+    minLife: 10800
+    maxLife: 36000
+    deathChance: 0.02
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: matured
+        texture: "matured.png"
+        age: 720
+      - tag: dead
+        texture: "dead.png"
+        age: 36000
+    annualCycle:
+      - tag: dormant
+        startDay: 0
+        texture: "matured_dormant.png"
+      - tag: budding
+        startDay: 60
+        texture: "matured_budding.png"
+      - tag: flowering
+        startDay: 120
+        texture: "matured_flowering.png"
+      - tag: senescing
+        startDay: 270
+        texture: "matured_senescing.png"
+    cycleOverrides:
+      - phase: sprout
+        cycle: dormant
+        texture: "sprout_dormant.png"
+      - phase: sprout
+        cycle: budding
+        texture: "sprout_budding.png"
+      - phase: sprout
+        cycle: senescing
+        texture: "sprout_senescing.png"
+      - phase: dead
+        cycle: dormant
+        texture: "dead.png"
+      - phase: dead
+        cycle: budding
+        texture: "dead.png"
+      - phase: dead
+        cycle: flowering
+        texture: "dead.png"
+      - phase: dead
+        cycle: senescing
+        texture: "dead.png"
+    worldGen:
+      category: tree
+      minTemp: 0
+      maxTemp: 32
+      idealTemp: 18
+      minPrecip: 0.4
+      maxPrecip: 1.0
+      idealPrecip: 0.7
+      minAlt: -20
+      maxAlt: 500
+      idealAlt: 100
+      minHumidity: 0.4
+      maxHumidity: 0.9
+      idealHumidity: 0.7
+      maxSlope: 2
+      density: 0.25
+      footprint: 18
+
+  - name: paper_birch
+    type: deciduous_tree
+    texDir: "assets/textures/world/flora/paper_birch"
+    lifecycle: perennial
+    minLife: 5400
+    maxLife: 18000
+    deathChance: 0.05
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: matured
+        texture: "matured.png"
+        age: 540
+      - tag: dead
+        texture: "dead.png"
+        age: 18000
+    annualCycle:
+      - tag: dormant
+        startDay: 0
+        texture: "matured_dormant.png"
+      - tag: budding
+        startDay: 60
+        texture: "matured_budding.png"
+      - tag: flowering
+        startDay: 120
+        texture: "matured_flowering.png"
+      - tag: senescing
+        startDay: 270
+        texture: "matured_senescing.png"
+    cycleOverrides:
+      - phase: sprout
+        cycle: dormant
+        texture: "sprout_dormant.png"
+      - phase: sprout
+        cycle: budding
+        texture: "sprout_budding.png"
+      - phase: sprout
+        cycle: senescing
+        texture: "sprout_senescing.png"
+      - phase: dead
+        cycle: dormant
+        texture: "dead.png"
+      - phase: dead
+        cycle: budding
+        texture: "dead.png"
+      - phase: dead
+        cycle: flowering
+        texture: "dead.png"
+      - phase: dead
+        cycle: senescing
+        texture: "dead.png"
+    worldGen:
+      category: tree
+      minTemp: -5
+      maxTemp: 25
+      idealTemp: 12
+      minPrecip: 0.3
+      maxPrecip: 0.9
+      idealPrecip: 0.5
+      minAlt: 0
+      maxAlt: 600
+      idealAlt: 150
+      minHumidity: 0.3
+      maxHumidity: 0.8
+      idealHumidity: 0.5
+      maxSlope: 3
+      density: 0.2
+      footprint: 14
+
+  - name: weeping_willow
+    type: deciduous_tree
+    texDir: "assets/textures/world/flora/weeping_willow"
+    lifecycle: perennial
+    minLife: 7200
+    maxLife: 21600
+    deathChance: 0.04
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: matured
+        texture: "matured.png"
+        age: 900
+      - tag: dead
+        texture: "dead.png"
+        age: 21600
+    annualCycle:
+      - tag: dormant
+        startDay: 0
+        texture: "matured_dormant.png"
+      - tag: budding
+        startDay: 60
+        texture: "matured_budding.png"
+      - tag: flowering
+        startDay: 120
+        texture: "matured_flowering.png"
+      - tag: senescing
+        startDay: 270
+        texture: "matured_senescing.png"
+    cycleOverrides:
+      - phase: sprout
+        cycle: dormant
+        texture: "sprout_dormant.png"
+      - phase: sprout
+        cycle: budding
+        texture: "sprout_budding.png"
+      - phase: sprout
+        cycle: senescing
+        texture: "sprout_senescing.png"
+      - phase: dead
+        cycle: dormant
+        texture: "dead.png"
+      - phase: dead
+        cycle: budding
+        texture: "dead.png"
+      - phase: dead
+        cycle: flowering
+        texture: "dead.png"
+      - phase: dead
+        cycle: senescing
+        texture: "dead.png"
+    worldGen:
+      category: tree
+      minTemp: 2
+      maxTemp: 30
+      idealTemp: 16
+      minPrecip: 0.6
+      maxPrecip: 1.0
+      idealPrecip: 0.9
+      minAlt: -40
+      maxAlt: 150
+      idealAlt: 10
+      minHumidity: 0.7
+      maxHumidity: 1.0
+      idealHumidity: 0.9
+      maxSlope: 2
+      density: 0.15
+      footprint: 16

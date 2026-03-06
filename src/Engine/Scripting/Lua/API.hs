@@ -22,7 +22,7 @@ import Engine.Scripting.Lua.API.Graphics (loadTextureFn, spawnSpriteFn, setPosFn
                                            setColorFn, setSizeFn, setVisibleFn
                                            , destroyFn, getUIScaleFn)
 import Engine.Scripting.Lua.API.YamlTextures (loadMaterialYamlFn, loadVegetationYamlFn
-                                             , getTextureHandleFn)
+                                             , getTextureHandleFn, loadFloraYamlFn)
 import Engine.Scripting.Lua.API.Log (logInfoFn, logWarnFn, logDebugFn)
 import Engine.Scripting.Lua.API.Input (isKeyDownFn, isActionDownFn,
                                        getMousePositionFn,
@@ -97,6 +97,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
 
   registerLuaFunction "loadMaterialYaml" (loadMaterialYamlFn env backendState)
   registerLuaFunction "loadVegetationYaml" (loadVegetationYamlFn env backendState)
+  registerLuaFunction "loadFloraYaml" (loadFloraYamlFn env backendState)
   
   -- Input functions
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)

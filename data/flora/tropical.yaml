@@ -1,0 +1,58 @@
+flora:
+  - name: coconut_palm
+    type: evergreen_tree
+    texDir: "assets/textures/world/flora/coconut_palm"
+    lifecycle: evergreen
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: matured
+        texture: "matured.png"
+        age: 900
+    worldGen:
+      category: tree
+      minTemp: 20
+      maxTemp: 45
+      idealTemp: 30
+      minPrecip: 0.5
+      maxPrecip: 1.0
+      idealPrecip: 0.8
+      minAlt: -20
+      maxAlt: 200
+      idealAlt: 20
+      minHumidity: 0.5
+      maxHumidity: 1.0
+      idealHumidity: 0.8
+      maxSlope: 2
+      density: 0.2
+      footprint: 16
+
+  - name: red_mangrove
+    type: evergreen_tree
+    texDir: "assets/textures/world/flora/red_mangrove"
+    lifecycle: evergreen
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: matured
+        texture: "matured.png"
+        age: 720
+    worldGen:
+      category: tree
+      minTemp: 18
+      maxTemp: 40
+      idealTemp: 28
+      minPrecip: 0.6
+      maxPrecip: 1.0
+      idealPrecip: 0.9
+      minAlt: -30
+      maxAlt: 30
+      idealAlt: 0
+      minHumidity: 0.7
+      maxHumidity: 1.0
+      idealHumidity: 0.9
+      maxSlope: 1
+      density: 0.2
+      footprint: 14
