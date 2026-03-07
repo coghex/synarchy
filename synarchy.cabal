@@ -75,6 +75,7 @@ test-suite synarchy-test
                 , cereal
                 , yaml
                 , aeson
+                , random
                 , deepseq
                 , parallel
                 , unordered-containers
@@ -434,6 +435,7 @@ library
                  , cereal
                  , yaml
                  , aeson
+                 , random
                  , deepseq
                  , parallel
                  , unordered-containers
@@ -543,6 +545,7 @@ executable synarchy
                  , cereal
                  , yaml
                  , aeson
+                 , random
                  , deepseq
                  , parallel
                  , unordered-containers

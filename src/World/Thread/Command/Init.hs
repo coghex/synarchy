@@ -14,6 +14,7 @@ import qualified Engine.Core.Queue as Q
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
+import System.Random
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
@@ -192,6 +193,7 @@ handleWorldInitArenaCommand env logger pageId = do
     logInfo logger CatWorld $ "Initializing test arena: " <> unWorldPageId pageId
 
     worldState ← emptyWorldState
+    gen ← newStdGen
 
     -- Register early so textures sent after this command are routed correctly
     atomicModifyIORef' (worldManagerRef env) $ \mgr →
@@ -204,18 +206,22 @@ handleWorldInitArenaCommand env logger pageId = do
         arenaZ     = seaLevel    -- z = 0
         chunkArea  = chunkSize * chunkSize  -- 256
 
-        -- A single flat column: one tile of loam at seaLevel
-        flatColumn = ColumnTiles
-            { ctStartZ = arenaZ
-            , ctMats   = VU.singleton loamId
-            , ctSlopes = VU.singleton 0
-            , ctVeg    = VU.singleton grassId
-            }
-
-        flatChunk      = V.replicate chunkArea flatColumn
+        generateChunk ∷ Int → V.Vector ColumnTiles → StdGen → V.Vector ColumnTiles
+        generateChunk 0    init g = init
+        generateChunk area init g = generateChunk (area - 1)
+                                      (V.cons newelem init) newg
+            where (rand, newg) = randomR (0, 3) g
+                  actualId = grassId + rand
+                  newelem = (ColumnTiles
+                             { ctStartZ = arenaZ
+                             , ctMats   = VU.singleton loamId
+                             , ctSlopes = VU.singleton 0
+                             , ctVeg    = VU.singleton actualId
+                             })
         flatSurfaceMap = VU.replicate chunkArea arenaZ
         flatFluidMap   = V.replicate chunkArea Nothing
         flatFlora      = emptyFloraChunkData
+        flatChunk      = generateChunk chunkArea V.empty gen
 
         mkChunk cx cy = LoadedChunk
             { lcCoord             = ChunkCoord cx cy
