@@ -222,7 +222,7 @@ rotateCamera env rotateFn = do
     case mHit of
         Just (gx, gy, surfZ) → do
             -- Where that tile renders in the old facing (at its actual elevation)
-            let zOffset = fromIntegral (surfZ - zSlice) * tileSideHeight
+            let zOffset = fromIntegral (zSlice - surfZ) * tileSideHeight
             -- Where that same tile will be in the new facing
                 (nx, ny) = gridToWorld newFacing gx gy
             -- Apply same height offset so camera stays at same visual height
