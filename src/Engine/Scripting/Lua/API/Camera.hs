@@ -22,6 +22,7 @@ module Engine.Scripting.Lua.API.Camera
 import UPrelude
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import qualified Data.Text as T
+import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, LogCategory(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
@@ -30,7 +31,8 @@ import World.Types
 import World.Material (MaterialId(..), MaterialProps(..), getMaterialProps)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Render (surfaceHeadroom)
-import World.Generate (globalToChunk, applyTimeline)
+import World.Generate (globalToChunk, applyTimeline, viewDepth)
+import World.Generate.Coordinates (globalToChunk)
 import World.ZoomMap (buildZoomCache)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
@@ -194,36 +196,110 @@ cameraGotoTileFn env = do
 -- | camera.rotateCW()
 cameraRotateCWFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraRotateCWFn env = do
-    Lua.liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
-        let oldFacing  = camFacing cam
-            newFacing  = rotateCW oldFacing
-            (cx, cy)   = camPosition cam
-            -- 1) Find the integer grid tile at screen center
-            (gx, gy)   = worldToGrid oldFacing cx cy
-            -- 2) Where that tile will be in the new facing's screen space
-            (cx', cy') = gridToWorld newFacing gx gy
-        in (cam { camFacing   = newFacing
-                , camPosition = (cx', cy')
-                , camVelocity = (0, 0)
-                }, ())
-    Lua.liftIO $ invalidateWorldCaches env
+    Lua.liftIO $ rotateCamera env rotateCW
     return 0
 
 -- | camera.rotateCCW()
 cameraRotateCCWFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraRotateCCWFn env = do
-    Lua.liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
-        let oldFacing  = camFacing cam
-            newFacing  = rotateCCW oldFacing
-            (cx, cy)   = camPosition cam
-            (gx, gy)   = worldToGrid oldFacing cx cy
-            (cx', cy') = gridToWorld newFacing gx gy
-        in (cam { camFacing   = newFacing
-                , camPosition = (cx', cy')
-                , camVelocity = (0, 0)
-                }, ())
-    Lua.liftIO $ invalidateWorldCaches env
+    Lua.liftIO $ rotateCamera env rotateCCW
     return 0
+
+-- | Shared rotation logic: find the tile at visual screen center,
+--   rotate, and re-center the camera on that same tile.
+rotateCamera ∷ EngineEnv → (CameraFacing → CameraFacing) → IO ()
+rotateCamera env rotateFn = do
+    cam ← readIORef (cameraRef env)
+    let oldFacing = camFacing cam
+        (cx, cy)  = camPosition cam
+        zSlice    = camZSlice cam
+        newFacing = rotateFn oldFacing
+
+    -- Find the tile at the visual center of the screen.
+    -- Walk down from zSlice like the cursor hit-test does.
+    mHit ← findVisualCenterTile env oldFacing cx cy zSlice
+
+    case mHit of
+        Just (gx, gy, surfZ) → do
+            -- Where that tile renders in the old facing (at its actual elevation)
+            let zOffset = fromIntegral (surfZ - zSlice) * tileSideHeight
+            -- Where that same tile will be in the new facing
+                (nx, ny) = gridToWorld newFacing gx gy
+            -- Apply same height offset so camera stays at same visual height
+                newCy = ny + zOffset
+            atomicModifyIORef' (cameraRef env) $ \cam' →
+                (cam' { camFacing   = newFacing
+                      , camPosition = (nx, newCy)
+                      , camVelocity = (0, 0)
+                      }, ())
+        Nothing → do
+            -- Fallback: no terrain found, just do grid-based rotation
+            let (gx, gy) = worldToGrid oldFacing cx cy
+                (nx, ny) = gridToWorld newFacing gx gy
+            atomicModifyIORef' (cameraRef env) $ \cam' →
+                (cam' { camFacing   = newFacing
+                      , camPosition = (nx, ny)
+                      , camVelocity = (0, 0)
+                      }, ())
+
+    invalidateWorldCaches env
+
+-- | Find the topmost solid tile visible at screen center.
+--   Same approach as the cursor hit-test in Quads.hs:
+--   walk downward from zSlice, adjusting worldY for each z level,
+--   until we find a solid tile.
+findVisualCenterTile ∷ EngineEnv → CameraFacing → Float → Float → Int
+                     → IO (Maybe (Int, Int, Int))
+findVisualCenterTile env facing cx cy zSlice = do
+    wm ← readIORef (worldManagerRef env)
+    case wmVisible wm of
+        [] → return Nothing
+        (pageId:_) → case lookup pageId (wmWorlds wm) of
+            Nothing → return Nothing
+            Just ws → do
+                td ← readIORef (wsTilesRef ws)
+                let zMin = zSlice - viewDepth
+                    tryZ z
+                        | z < zMin = Nothing
+                        | otherwise =
+                            let relZ = z - zSlice
+                                adjustedY = cy + fromIntegral relZ * tileSideHeight
+                                (gx, gy) = worldToGrid facing cx adjustedY
+                                (chunkCoord, (lx, ly)) = globalToChunk gx gy
+                            in case lookupChunk chunkCoord td of
+                                Nothing → tryZ (z - 1)
+                                Just lc →
+                                    let col = lcTiles lc V.! columnIndex lx ly
+                                        i = z - ctStartZ col
+                                        colLen = VU.length (ctMats col)
+                                    in if i < 0 ∨ i >= colLen
+                                       then tryZ (z - 1)
+                                       else if ctMats col VU.! i ≠ 0
+                                            then Just (gx, gy, z)
+                                            else tryZ (z - 1)
+                return (tryZ zSlice)
+
+-- | Look up the surface elevation at the tile under the visual
+--   center of the screen (accounting for zSlice height offset).
+lookupVisualCenterZ ∷ EngineEnv → CameraFacing → Float → Float → Int → IO (Maybe Int)
+lookupVisualCenterZ env facing cx cy zSlice = do
+    wm ← readIORef (worldManagerRef env)
+    go (wmVisible wm) (wmWorlds wm)
+  where
+    -- The visual center is shifted in Y by the height offset.
+    -- We approximate by sampling at the camera's grid position
+    -- (accurate for flat terrain, close enough for hilly terrain).
+    (gx, gy) = worldToGrid facing cx cy
+    (chunkCoord, (lx, ly)) = globalToChunk gx gy
+    go [] _ = return Nothing
+    go (pageId:rest) worlds =
+        case lookup pageId worlds of
+            Nothing → go rest worlds
+            Just ws → do
+                td ← readIORef (wsTilesRef ws)
+                case lookupChunk chunkCoord td of
+                    Just lc → return $ Just ((lcSurfaceMap lc) VU.! columnIndex lx ly)
+                    Nothing → go rest worlds
 
 -- | Rotate camera screen position one step clockwise.
 --   Derivation: CW facing rotates the screen axes (a,b) → (b,-a).
