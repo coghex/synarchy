@@ -275,6 +275,7 @@ library
                      Unit.Types
                      Unit.Render
                      Unit.Command.Types
+                     Unit.Direction
                      Unit.Sim.Types
                      Unit.Thread
                      Unit.Thread.Command

@@ -13,6 +13,7 @@ import Engine.Core.Log (logDebug, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Sim.Types
+import Unit.Direction (Direction(..))
 import Unit.Command.Types (UnitCommand(..))
 import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
                     LoadedChunk(..), ChunkCoord(..), columnIndex, lookupChunk)
@@ -32,9 +33,7 @@ processAllUnitCommands env utsRef = do
         Nothing → return ()
 
 handleUnitCommand ∷ EngineEnv → IORef UnitThreadState → UnitCommand → IO ()
-
 handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
-    -- Look up the definition to get texture + base width
     um ← readIORef (unitManagerRef env)
     case HM.lookup defName (umDefs um) of
         Nothing → do
@@ -42,19 +41,20 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
             logWarn logger CatThread $
                 "UnitSpawn: unknown def '" <> defName <> "'"
         Just def → do
-            -- Create the render-visible instance
             let inst = UnitInstance
-                    { uiDefName   = defName
-                    , uiTexture   = udTexture def
-                    , uiBaseWidth = udBaseWidth def
-                    , uiGridX     = gx
-                    , uiGridY     = gy
-                    , uiGridZ     = gz
+                    { uiDefName    = defName
+                    , uiTexture    = udTexture def
+                    , uiDirSprites = udDirSprites def
+                    , uiBaseWidth  = udBaseWidth def
+                    , uiGridX      = gx
+                    , uiGridY      = gy
+                    , uiGridZ      = gz
+                    , uiFacing     = DirS -- Default facing south
                     }
             atomicModifyIORef' (unitManagerRef env) $ \um' →
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())
 
-            -- Create sim state
+            -- Create sim state (unchanged)
             let ss = UnitSimState
                     { usRealX  = gx
                     , usRealY  = gy

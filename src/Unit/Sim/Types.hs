@@ -3,7 +3,7 @@ module Unit.Sim.Types
     ( UnitSimState(..)
     , MoveTarget(..)
     , UnitActivity(..)
-    , Direction(..)
+    , Direction(..)          -- re-exported from Unit.Direction
     , UnitThreadState(..)
     , emptyUnitThreadState
     ) where
@@ -11,11 +11,12 @@ module Unit.Sim.Types
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Unit.Types (UnitId(..))
+import Unit.Direction (Direction(..))
 
 data UnitSimState = UnitSimState
-    { usRealX   ∷ !Float          -- true position X
-    , usRealY   ∷ !Float          -- true position Y
-    , usGridZ   ∷ !Int            -- current Z (from surface lookup)
+    { usRealX   ∷ !Float
+    , usRealY   ∷ !Float
+    , usGridZ   ∷ !Int
     , usTarget  ∷ !(Maybe MoveTarget)
     , usState   ∷ !UnitActivity
     , usFacing  ∷ !Direction
@@ -24,13 +25,10 @@ data UnitSimState = UnitSimState
 data MoveTarget = MoveTarget
     { mtTargetX ∷ !Float
     , mtTargetY ∷ !Float
-    , mtSpeed   ∷ !Float          -- tiles per second
+    , mtSpeed   ∷ !Float
     } deriving (Show, Eq)
 
 data UnitActivity = Idle | Walking
-    deriving (Show, Eq)
-
-data Direction = DirN | DirNE | DirE | DirSE | DirS | DirSW | DirW | DirNW
     deriving (Show, Eq)
 
 data UnitThreadState = UnitThreadState

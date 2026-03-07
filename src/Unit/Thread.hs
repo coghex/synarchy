@@ -104,9 +104,10 @@ publishToRender env utsRef = do
             let updated = HM.mapWithKey (\uid inst →
                     case HM.lookup uid simStates of
                         Nothing → inst
-                        Just ss → inst { uiGridX = usRealX ss
-                                       , uiGridY = usRealY ss
-                                       , uiGridZ = usGridZ ss
+                        Just ss → inst { uiGridX  = usRealX ss
+                                       , uiGridY  = usRealY ss
+                                       , uiGridZ  = usGridZ ss
+                                       , uiFacing = usFacing ss  -- ← NEW
                                        }
                   ) (umInstances um)
             in (um { umInstances = updated }, ())

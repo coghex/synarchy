@@ -8,6 +8,7 @@ module Engine.Asset.YamlUnits
 import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Text as T
+import qualified Data.Map.Strict as Map
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
@@ -19,16 +20,19 @@ import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 -- | A single unit definition from YAML.
 --   Only 'name' and 'sprite' are mandatory.
 data UnitYamlDef = UnitYamlDef
-    { uydName      ∷ !Text       -- ^ unique identifier (e.g. "acolyte")
-    , uydSprite    ∷ !Text       -- ^ path to default sprite texture
-    , uydBaseWidth ∷ !Float      -- ^ ground contact diameter in pixels (0 = point)
+    { uydName              ∷ !Text       -- ^ unique identifier (e.g. "acolyte")
+    , uydSprite            ∷ !Text       -- ^ path to default sprite texture
+    , uydBaseWidth         ∷ !Float      -- ^ ground contact diameter in pixels (0 = point)
+    , uydDirectionalSprites ∷ !(Map.Map Text Text)
+      -- ^ optional: direction key ("S","SW",…) → texture path
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
     parseJSON = withObject "UnitYamlDef" $ \v → UnitYamlDef
         ⊚ v .:  "name"
         ⊛ v .:  "sprite"
-        ⊛ v .:? "base_width"  .!= 0.0
+        ⊛ v .:? "base_width"          .!= 0.0
+        ⊛ v .:? "directional_sprites" .!= Map.empty
 
 -- | Top-level YAML file structure.
 newtype UnitYamlFile = UnitYamlFile

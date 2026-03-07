@@ -5,6 +5,7 @@ module Unit.Render
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv(..))
@@ -18,21 +19,50 @@ import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, GridConfig(..), defaultGridConfig)
 import Unit.Types
+import Unit.Direction (Direction(..), dirIndex, indexToDir)
 
--- | Tile pixel dimensions — must match GridConfig (same as FloraQuads).
 baseTileW ∷ Float
-baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)   -- 96
+baseTileW = fromIntegral (gcTilePixelWidth defaultGridConfig)
 
 baseTileH ∷ Float
-baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)  -- 64
+baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 
--- | Unit sort nudge — same as flora (0.0003) so units and trees
---   interleave correctly by position in the painter's algorithm.
 unitSortNudge ∷ Float
 unitSortNudge = 0.0003
 
 -----------------------------------------------------------
--- Top-Level: generate quads for all live unit instances
+-- Camera rotation → direction index offset
+-----------------------------------------------------------
+
+-- | How many direction steps (in our 8-dir clockwise ring) the
+--   camera rotation shifts.  Each 90° CW rotation = 2 steps.
+cameraRotSteps ∷ CameraFacing → Int
+cameraRotSteps FaceSouth = 0
+cameraRotSteps FaceWest  = 2
+cameraRotSteps FaceNorth = 4
+cameraRotSteps FaceEast  = 6
+
+-- | Given the unit's world-space facing and the camera rotation,
+--   compute the effective screen-space direction, then look up
+--   the appropriate directional texture.  Falls back to the
+--   default texture if no directional map or no entry for that dir.
+resolveTexture
+    ∷ CameraFacing
+    → Direction                          -- ^ unit world facing
+    → Map.Map Direction TextureHandle    -- ^ directional sprites
+    → TextureHandle                      -- ^ fallback default
+    → TextureHandle
+resolveTexture camFacing unitFacing dirSprites fallback
+    | Map.null dirSprites = fallback
+    | otherwise =
+        let screenIdx = (dirIndex unitFacing - cameraRotSteps camFacing) `mod` 8
+            screenDir = indexToDir screenIdx
+        in case Map.lookup screenDir dirSprites of
+            Just h  → h
+            Nothing → fallback
+
+-----------------------------------------------------------
+-- Top-Level
 -----------------------------------------------------------
 
 renderUnitQuads ∷ EngineEnv → CameraFacing → Int → Float → IO (V.Vector SortableQuad)
@@ -57,7 +87,6 @@ renderUnitQuads env facing zSlice tileAlpha = do
                                     Just sq → sq : acc
                                     Nothing → acc
                               ) [] instances
-
                     return quads
 
 -----------------------------------------------------------
@@ -65,13 +94,13 @@ renderUnitQuads env facing zSlice tileAlpha = do
 -----------------------------------------------------------
 
 unitToQuad
-    ∷ (TextureHandle → Word32)    -- ^ bindless slot lookup
-    → Float                     -- ^ default face map slot
+    ∷ (TextureHandle → Word32)
+    → Float
     → CameraFacing
-    → Int                       -- ^ current z-slice
-    → Float                     -- ^ tileAlpha
+    → Int
+    → Float
     → UnitInstance
-    → HM.HashMap TextureHandle (Int, Int)  -- ^ texture sizes
+    → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
 unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha inst texSizes =
     let gridZ = uiGridZ inst
@@ -79,49 +108,33 @@ unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha inst texSizes =
     in if gridZ > zSlice ∨ gridZ < (zSlice - 25)
        then Nothing
        else
-        let texHandle = uiTexture inst
+        -- ← NEW: pick the right texture based on facing + camera
+        let texHandle = resolveTexture facing (uiFacing inst)
+                                       (uiDirSprites inst) (uiTexture inst)
 
-            -- Look up actual texture dimensions, default to tile size
             (texW, texH) = case HM.lookup texHandle texSizes of
                 Just (w, h) → (fromIntegral w, fromIntegral h)
                 Nothing     → (baseTileW, baseTileH)
 
-            -- Scale relative to the base tile pixel size
             scaleX = texW / baseTileW
             scaleY = texH / baseTileH
-
             quadW = tileWidth  * scaleX
             quadH = tileHeight * scaleY
 
-            -- Fractional grid → isometric screen position.
-            -- Replicates gridToScreen math with floats for sub-tile precision.
             gxF = uiGridX inst
             gyF = uiGridY inst
-
             (faF, fbF) = applyFacingF facing gxF gyF
 
             rawX = (faF - fbF) * tileHalfWidth - tileHalfWidth
             rawY = (faF + fbF) * tileHalfDiamondHeight
 
             heightOffset = fromIntegral relativeZ * tileSideHeight
-
-            -- Anchor at ground contact: base_width gives the contact
-            -- circle diameter, same logic as FloraQuads.
             baseRadius = uiBaseWidth inst * 0.5 / baseTileH * tileHeight
 
-            -- Center horizontally on the position
             drawX = rawX + (tileWidth - quadW) * 0.5
-
-            -- Anchor: feet at the tile diamond center Y
             drawY = rawY - heightOffset
                   + tileHalfDiamondHeight - quadH + baseRadius
 
-            -- The sprite's feet are at feetRow, but the quad extends
-            -- upward visually into rows ahead of it. Tiles at those
-            -- rows would sort after the unit and paint over it.
-            -- Shift the sort key forward by half the sprite's height
-            -- in isometric row-space so the unit sorts after all
-            -- tiles its body overlaps.
             spriteRowSpan = quadH / tileHalfDiamondHeight * 0.5
             sortKey = (faF + fbF)
                     + spriteRowSpan
@@ -129,7 +142,6 @@ unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha inst texSizes =
                     + 0.0006
 
             actualSlot = lookupSlot texHandle
-
             tint = Vec4 1.0 1.0 1.0 tileAlpha
 
             v0 = Vertex (Vec2 drawX drawY)
@@ -152,7 +164,7 @@ unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha inst texSizes =
             }
 
 -----------------------------------------------------------
--- Float-precision facing transform (mirrors World.Grid.applyFacing)
+-- Float-precision facing transform
 -----------------------------------------------------------
 
 applyFacingF ∷ CameraFacing → Float → Float → (Float, Float)

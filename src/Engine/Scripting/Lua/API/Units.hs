@@ -15,6 +15,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
+import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
@@ -26,6 +27,7 @@ import Engine.Asset.YamlUnits (UnitYamlDef(..), loadUnitYaml)
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Command.Types (UnitCommand(..))
+import Unit.Direction (Direction(..))
 import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
                     LoadedChunk(..), ChunkCoord(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
@@ -51,16 +53,32 @@ loadUnitYamlFn env backendState = do
                 let (lteq, _) = lbsMsgQueues backendState
 
                 total ← foldM (\acc def → do
-                    let name = uydName def
+                    let name      = uydName def
                         spritePath = T.unpack (uydSprite def)
 
                     handle ← loadAndRegister env backendState lteq
                                  ("unit_" <> name) spritePath
 
+                    -- Load directional sprites (if any)
+                    dirMap ← foldM (\acc (dirKey, texPath) →
+                        case parseDirKey dirKey of
+                            Nothing → do
+                                logWarn logger CatAsset $
+                                    "Unknown direction key '" <> dirKey
+                                    <> "' in unit " <> name <> ", skipping"
+                                return acc
+                            Just dir → do
+                                h ← loadAndRegister env backendState lteq
+                                        ("unit_" <> name <> "_" <> dirKey)
+                                        (T.unpack texPath)
+                                return (Map.insert dir h acc)
+                        ) Map.empty (Map.toList (uydDirectionalSprites def))
+
                     let unitDef = UnitDef
-                            { udName      = name
-                            , udTexture   = handle
-                            , udBaseWidth = uydBaseWidth def
+                            { udName       = name
+                            , udTexture    = handle
+                            , udDirSprites = dirMap
+                            , udBaseWidth  = uydBaseWidth def
                             }
                     atomicModifyIORef' (unitManagerRef env) $ \um →
                         (um { umDefs = HM.insert name unitDef (umDefs um) }, ())
@@ -68,6 +86,8 @@ loadUnitYamlFn env backendState = do
                     logDebug logger CatAsset $
                         "Registered unit def: " <> name
                         <> " (handle " <> T.pack (show handle) <> ")"
+                        <> " (" <> T.pack (show (Map.size dirMap))
+                        <> " directional sprites)"
 
                     return (acc + 1)
                     ) (0 ∷ Int) defs
@@ -323,3 +343,19 @@ unitListFn env = do
             ) entries
     Lua.pushstring (TE.encodeUtf8 (T.pack result))
     return 1
+
+----------------------------------------------------------
+-- Helper functions
+----------------------------------------------------------
+
+-- | Parse a YAML direction key string to a Direction.
+parseDirKey ∷ Text → Maybe Direction
+parseDirKey "S"  = Just DirS
+parseDirKey "SW" = Just DirSW
+parseDirKey "W"  = Just DirW
+parseDirKey "NW" = Just DirNW
+parseDirKey "N"  = Just DirN
+parseDirKey "NE" = Just DirNE
+parseDirKey "E"  = Just DirE
+parseDirKey "SE" = Just DirSE
+parseDirKey _    = Nothing
