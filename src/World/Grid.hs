@@ -30,6 +30,11 @@ module World.Grid
     , zoomFadeEnd
     , applyFacing
     , unapplyFacing
+    -- * Float-precision versions of facing and coordinate conversions
+    , gridToWorldF
+    , worldToGridF
+    , applyFacingF
+    , unapplyFacingF
     ) where
 
 import UPrelude
@@ -174,6 +179,41 @@ unapplyFacing FaceSouth a b = ( a,  b)
 unapplyFacing FaceWest  a b = (-b,  a)
 unapplyFacing FaceNorth a b = (-a, -b)
 unapplyFacing FaceEast  a b = ( b, -a)
+
+-----------------------------------------------------------
+-- Float-precision Facing Transforms
+-----------------------------------------------------------
+
+-- | Float-precision facing rotation (grid → screen axes)
+applyFacingF ∷ CameraFacing → Float → Float → (Float, Float)
+applyFacingF FaceSouth gx gy = ( gx,  gy)
+applyFacingF FaceWest  gx gy = ( gy, -gx)
+applyFacingF FaceNorth gx gy = (-gx, -gy)
+applyFacingF FaceEast  gx gy = (-gy,  gx)
+
+-- | Float-precision inverse facing rotation (screen axes → grid)
+unapplyFacingF ∷ CameraFacing → Float → Float → (Float, Float)
+unapplyFacingF FaceSouth a b = ( a,  b)
+unapplyFacingF FaceWest  a b = (-b,  a)
+unapplyFacingF FaceNorth a b = (-a, -b)
+unapplyFacingF FaceEast  a b = ( b, -a)
+
+-----------------------------------------------------------
+-- Float-precision Coordinate Conversions
+-----------------------------------------------------------
+
+-- | Screen-space → float grid coords (NO rounding)
+worldToGridF ∷ CameraFacing → Float → Float → (Float, Float)
+worldToGridF facing sx sy =
+    let a = (sx / tileHalfWidth + sy / tileHalfDiamondHeight) / 2.0
+        b = (sy / tileHalfDiamondHeight - sx / tileHalfWidth) / 2.0
+    in unapplyFacingF facing a b
+
+-- | Float grid coords → screen-space (NO rounding)
+gridToWorldF ∷ CameraFacing → Float → Float → (Float, Float)
+gridToWorldF facing gx gy =
+    let (a, b) = applyFacingF facing gx gy
+    in ((a - b) * tileHalfWidth, (a + b) * tileHalfDiamondHeight)
 
 -----------------------------------------------------------
 -- Coordinate Conversions

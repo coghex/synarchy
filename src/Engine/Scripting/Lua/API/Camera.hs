@@ -21,9 +21,11 @@ module Engine.Scripting.Lua.API.Camera
 
 import UPrelude
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
+import qualified Data.Text as T
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Log (logInfo, LogCategory(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
-import World.Grid (gridToWorld, worldToGrid, zoomFadeStart, zoomFadeEnd)
+import World.Grid
 import World.Types
 import World.Material (MaterialId(..), MaterialProps(..), getMaterialProps)
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -189,19 +191,18 @@ cameraGotoTileFn env = do
         _ → pure ()
     return 0
 
-
 -- | camera.rotateCW()
 cameraRotateCWFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraRotateCWFn env = do
     Lua.liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
-        let oldFacing = camFacing cam
-            newFacing = rotateCW oldFacing
-            (cx, cy)  = camPosition cam
-            -- Convert screen position → grid coords using old facing
-            (gx, gy)  = worldToGrid oldFacing cx cy
-            -- Convert grid coords → screen position using new facing
+        let oldFacing  = camFacing cam
+            newFacing  = rotateCW oldFacing
+            (cx, cy)   = camPosition cam
+            -- 1) Find the integer grid tile at screen center
+            (gx, gy)   = worldToGrid oldFacing cx cy
+            -- 2) Where that tile will be in the new facing's screen space
             (cx', cy') = gridToWorld newFacing gx gy
-        in (cam { camFacing  = newFacing
+        in (cam { camFacing   = newFacing
                 , camPosition = (cx', cy')
                 , camVelocity = (0, 0)
                 }, ())
@@ -212,17 +213,65 @@ cameraRotateCWFn env = do
 cameraRotateCCWFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraRotateCCWFn env = do
     Lua.liftIO $ atomicModifyIORef' (cameraRef env) $ \cam →
-        let oldFacing = camFacing cam
-            newFacing = rotateCCW oldFacing
-            (cx, cy)  = camPosition cam
-            (gx, gy)  = worldToGrid oldFacing cx cy
+        let oldFacing  = camFacing cam
+            newFacing  = rotateCCW oldFacing
+            (cx, cy)   = camPosition cam
+            (gx, gy)   = worldToGrid oldFacing cx cy
             (cx', cy') = gridToWorld newFacing gx gy
-        in (cam { camFacing  = newFacing
+        in (cam { camFacing   = newFacing
                 , camPosition = (cx', cy')
                 , camVelocity = (0, 0)
                 }, ())
     Lua.liftIO $ invalidateWorldCaches env
     return 0
+
+-- | Rotate camera screen position one step clockwise.
+--   Derivation: CW facing rotates the screen axes (a,b) → (b,-a).
+--   Since sx = (a-b)*halfW and sy = (a+b)*halfDH:
+--     new_sx =  sy * (halfW / halfDH)
+--     new_sy = -sx * (halfDH / halfW)
+rotateCamCW ∷ (Float, Float) → (Float, Float)
+rotateCamCW (sx, sy) =
+    let r = tileHalfWidth / tileHalfDiamondHeight
+    in ( sy * r, -sx / r)
+
+-- | Rotate camera screen position one step counter-clockwise.
+rotateCamCCW ∷ (Float, Float) → (Float, Float)
+rotateCamCCW (sx, sy) =
+    let r = tileHalfWidth / tileHalfDiamondHeight
+    in (-sy * r,  sx / r)
+
+-- | Decompose screen-space (sx, sy) into the internal isometric
+--   axes (a, b) at float precision.  This is the continuous inverse
+--   of  sx = (a-b)*halfW,  sy = (a+b)*halfDH.
+screenToAB ∷ Float → Float → (Float, Float)
+screenToAB sx sy =
+    let hw  = tileHalfWidth
+        hdh = tileHalfDiamondHeight
+        a   = sx / (2.0 * hw) + sy / (2.0 * hdh)
+        b   = sy / (2.0 * hdh) - sx / (2.0 * hw)
+    in (a, b)
+
+-- | Recompose isometric axes (a, b) into screen-space (sx, sy).
+abToScreen ∷ Float → Float → (Float, Float)
+abToScreen a b =
+    let hw  = tileHalfWidth
+        hdh = tileHalfDiamondHeight
+    in ((a - b) * hw, (a + b) * hdh)
+
+-- | One CW facing step rotates (a, b) → (b, -a).
+rotateScreenPosCW ∷ (Float, Float) → (Float, Float)
+rotateScreenPosCW (sx, sy) =
+    let (a, b) = screenToAB sx sy
+        -- CW: new_a = b, new_b = -a  (matches applyFacing South→West)
+    in abToScreen b (-a)
+
+-- | One CCW facing step rotates (a, b) → (-b, a).
+rotateScreenPosCCW ∷ (Float, Float) → (Float, Float)
+rotateScreenPosCCW (sx, sy) =
+    let (a, b) = screenToAB sx sy
+        -- CCW: new_a = -b, new_b = a  (matches applyFacing South→East)
+    in abToScreen (-b) a
 
 -- | camera.getFacing() → int (0=South, 1=West, 2=North, 3=East)
 cameraGetFacingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

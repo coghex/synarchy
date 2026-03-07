@@ -249,8 +249,8 @@ handleWorldInitArenaCommand env logger pageId = do
 
     -- Set camera z-slice to just above the surface
     atomicModifyIORef' (cameraRef env) $ \cam →
-        (cam { camZSlice = arenaZ + surfaceHeadroom
-             , camZTracking = True
+        (cam { camZSlice = arenaZ-- + surfaceHeadroom
+             , camZTracking = False--True
              , camPosition = (0, 0)
              , camZoom = 0.5
              }, ())

@@ -1,6 +1,7 @@
 units:
   - name: "acolyte"
     sprite: "assets/textures/units/acolyte/default.png"
+    base_width: 8
     directional_sprites:
       S:  "assets/textures/units/acolyte/default.png"
       SW: "assets/textures/units/acolyte/sw.png"
