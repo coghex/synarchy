@@ -43,34 +43,6 @@ import World.Weather.Types (ClimateState(..), ClimateGrid(..)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Render.Textures.Types (WorldTextures(..))
 
------------------------------------------------------------
--- Vegetation ID Constants
---
--- Each constant is the base of a 4-variant range.
--- Usage: vegSparseGrass + variant  (variant ∈ 0..3)
---
--- Layout:
---   0           none
---   1-4         sparse grass
---   5-8         medium grass
---   9-12        dense grass
---   13-16       tall grass (prairie/savanna)
---   17-20       thin moss
---   21-24       thick moss
---   25-28       light ivy
---   29-32       heavy ivy
---   33-36       lichen / tundra
---   37-40       desert scrub
---   41-44       marsh grass
---   45-48       dead grass
---   49-52       fallen leaves
---   53-56       pine needles
---   57-60       mushroom patch
---   61-64       wildflowers
---   65-99       (reserved groundcover)
---   100+        sprites (phase 2)
------------------------------------------------------------
-
 vegNone ∷ Word8
 vegNone = 0
 

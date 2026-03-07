@@ -12,6 +12,7 @@ testArena.arenaWorldId = "test_arena"
 testArena.created = false
 testArena.fbW = 0
 testArena.fbH = 0
+testArena.vegetationTextureCount = 0
 
 -----------------------------------------------------------
 -- Callbacks
@@ -28,6 +29,13 @@ end
 function testArena.init(fbW, fbH)
     testArena.fbW = fbW
     testArena.fbH = fbH
+
+    local count = 0
+    -- Load vegetation from YAML
+    local vegetationLoader = require("scripts.vegetation_loader")
+    local vegCount = vegetationLoader.loadAll("data/vegetation")
+    testArena.vegetationTextureCount = vegCount
+    count = count + vegCount
 end
 
 -----------------------------------------------------------
@@ -67,12 +75,15 @@ function testArena.sendTextures(worldId)
                      or engine.loadTexture("assets/textures/world/blanktexture.png")
     local isoFM    = validHandle(st.isoFaceMap) and st.isoFaceMap
                      or engine.loadTexture("assets/textures/world/facemap/isoface.png")
+    local vegFM    = validHandle(st.vegFaceMap) and st.vegFaceMap
+                     or engine.loadTexture("assets/textures/world/facemap/vegface.png")
     local noFM     = validHandle(st.noFaceMap) and st.noFaceMap
                      or engine.loadTexture("assets/textures/world/facemap/noface.png")
 
     world.setTexture(worldId, "notexture",   noTex)
     world.setTexture(worldId, "blank",       blankTex)
     world.setTexture(worldId, "iso_facemap", isoFM)
+    world.setTexture(worldId, "veg_facemap", vegFM)
     world.setTexture(worldId, "nofacemap",   noFM)
 
     -- Slope facemaps (send whatever worldView has, skip if not loaded)
@@ -101,6 +112,12 @@ function testArena.sendTextures(worldId)
         -- Fallback: load directly if YAML hasn't been processed yet
         loamHandle = engine.loadTexture("assets/textures/world/loam/loam.png")
         world.setTexture(worldId, "mat_tile_56", loamHandle)
+    end
+    for vegId = 1, 64 do
+        local h = engine.getTextureHandle("veg_tile_" .. vegId)
+        if h and h >= 0 then
+            world.setTexture(worldId, "veg_tile_" .. vegId, h)
+        end
     end
 end
 

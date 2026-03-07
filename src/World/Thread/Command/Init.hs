@@ -200,6 +200,7 @@ handleWorldInitArenaCommand env logger pageId = do
     -- Arena parameters
     let arenaRadius = 2           -- 5×5 chunks
         loamId     = 56 ∷ Word8  -- matLoam = MaterialId 56
+        grassId    = 5 ∷ Word8  -- matGrass = MaterialId 5
         arenaZ     = seaLevel    -- z = 0
         chunkArea  = chunkSize * chunkSize  -- 256
 
@@ -208,7 +209,7 @@ handleWorldInitArenaCommand env logger pageId = do
             { ctStartZ = arenaZ
             , ctMats   = VU.singleton loamId
             , ctSlopes = VU.singleton 0
-            , ctVeg    = VU.singleton 0
+            , ctVeg    = VU.singleton grassId
             }
 
         flatChunk      = V.replicate chunkArea flatColumn
