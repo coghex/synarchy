@@ -38,7 +38,7 @@ minRiverTotalFlow ∷ Int
 minRiverTotalFlow = 2
 
 minRiverLength ∷ Int
-minRiverLength = 4
+minRiverLength = 2
 
 maxGridDim ∷ Int
 maxGridDim = 128

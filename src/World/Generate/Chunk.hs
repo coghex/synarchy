@@ -19,7 +19,8 @@ import World.Geology (applyGeoEvent, GeoModification(..))
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
 import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava
-                    , computeChunkLakes, computeChunkRivers, unionFluidMap)
+                    , computeChunkLakes, computeChunkRivers, unionFluidMap
+                    , equilibrateFluidMap)
 import World.Vegetation (computeChunkVegetation)
 import World.Flora.Placement (computeChunkFlora)
 import World.Generate.Constants (chunkBorder)
@@ -156,9 +157,14 @@ generateChunk registry catalog params coord =
         riverFluidMap = computeChunkRivers features seed plates worldSize
                                            coord terrainSurfaceMap
 
-        fluidMap = unionFluidMap oceanFluidMap
-                $ unionFluidMap lavaFluidMap
-                $ unionFluidMap lakeFluidMap riverFluidMap
+        -- Lava > Lake > River > Ocean: specific fluids override ocean
+        rawFluidMap = unionFluidMap lavaFluidMap
+                    $ unionFluidMap lakeFluidMap
+                    $ unionFluidMap riverFluidMap oceanFluidMap
+
+        -- Equilibrate: propagate water to adjacent empty tiles whose
+        -- terrain is at or below the neighboring water surface.
+        fluidMap = equilibrateFluidMap terrainSurfaceMap rawFluidMap
 
         -- Surface map with fluids
         surfaceMap = VU.imap (\idx surfZ →

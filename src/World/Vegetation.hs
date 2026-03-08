@@ -145,10 +145,10 @@ computeChunkVegetation seed worldSize coord surfMap surfMats surfSlopes
             gy = cy * chunkSz + ly
             matId   = surfMats   VU.! idx
             slopeId = surfSlopes VU.! idx
-            hasFluid = case fluidMap V.! idx of
-                Just _  → True
-                Nothing → False
             elev = surfMap VU.! idx
+            hasFluid = case fluidMap V.! idx of
+                Just fc → elev ≤ fcSurface fc
+                Nothing → False
             -- Per-tile deterministic hash for variant selection
             h = vegHash seed gx gy
             roll    = fromIntegral (h .&. 0xFF) / 255.0 ∷ Float

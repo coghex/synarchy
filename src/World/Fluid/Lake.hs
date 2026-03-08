@@ -99,12 +99,39 @@ fillLakePool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurfa
 
     in if clampedSurface ≤ seaLevel
        then pure ()
-       else forEachSurface surfaceMap $ \idx lx ly surfZ →
-            let gx = chunkGX + lx
-                gy = chunkGY + ly
-                (dxi, dyi) = wrappedDeltaUVFluid worldSize gx gy fx fy
-                dx = fromIntegral dxi ∷ Float
-                dy = fromIntegral dyi ∷ Float
-                dist = sqrt (dx * dx + dy * dy)
-            in when (dist < pr ∧ surfZ < clampedSurface) $
-                MV.write mv idx (Just (FluidCell Lake clampedSurface))
+       else do
+            -- Pass 1: fill tiles within radius that are at/below lake surface
+            forEachSurface surfaceMap $ \idx lx ly surfZ →
+                let gx = chunkGX + lx
+                    gy = chunkGY + ly
+                    (dxi, dyi) = wrappedDeltaUVFluid worldSize gx gy fx fy
+                    dx = fromIntegral dxi ∷ Float
+                    dy = fromIntegral dyi ∷ Float
+                    dist = sqrt (dx * dx + dy * dy)
+                in when (dist < pr ∧ surfZ ≤ clampedSurface ∧ surfZ > minBound) $
+                    MV.write mv idx (Just (FluidCell Lake clampedSurface))
+            -- Pass 2: extend one tile to adjacent empty tiles whose terrain
+            -- is strictly BELOW the water surface. This covers exposed
+            -- side-faces at the shoreline without jumping over ridges
+            -- (ridges have terrain above the water surface).
+            forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
+                val ← MV.read mv idx
+                when (isNothing val) $ do
+                    let surfZ = surfaceMap VU.! idx
+                    when (surfZ < clampedSurface ∧ surfZ > minBound) $ do
+                        let lx = idx `mod` chunkSize
+                            ly = idx `div` chunkSize
+                        adj ← adjacentHasFluid mv lx ly
+                        when adj $
+                            MV.write mv idx (Just (FluidCell Lake clampedSurface))
+
+adjacentHasFluid ∷ MV.MVector s (Maybe FluidCell) → Int → Int → ST s Bool
+adjacentHasFluid mv lx ly = do
+    let check x y
+          | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = return False
+          | otherwise = isJust ⊚ MV.read mv (y * chunkSize + x)
+    n ← check lx (ly - 1)
+    s ← check lx (ly + 1)
+    e ← check (lx + 1) ly
+    w ← check (lx - 1) ly
+    return (n ∨ s ∨ e ∨ w)

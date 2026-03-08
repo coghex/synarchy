@@ -16,6 +16,7 @@ module World.Fluids
     , computeChunkLakes
     , computeChunkRivers
     , unionFluidMap
+    , equilibrateFluidMap
     , fixupSegmentContinuity
       -- * Query
     , isOceanChunk
@@ -25,7 +26,7 @@ module World.Fluids
 
 -- Re-export from submodules
 import World.Fluid.Types (FluidType(..), FluidCell(..))
-import World.Fluid.Internal (unionFluidMap)
+import World.Fluid.Internal (unionFluidMap, equilibrateFluidMap)
 import World.Fluid.Ocean (computeOceanMap, isOceanChunk, hasAnyOceanFluid
                          , computeChunkFluid)
 import World.Fluid.River (computeChunkRivers, fixupSegmentContinuity)

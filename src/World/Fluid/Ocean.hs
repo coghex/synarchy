@@ -14,7 +14,8 @@ import qualified Data.Vector.Mutable as MV
 import Data.Hashable (Hashable(..))
 import Data.Sequence (Seq(..))
 import qualified Data.Sequence as Seq
-import Control.Monad (when)
+import Control.Monad (when, forM_)
+import Control.Monad.ST (ST)
 import World.Base
 import World.Types
 import World.Material (MaterialId(..), matGlacier)
@@ -53,7 +54,7 @@ computeOceanMap seed worldSize plateCount plates applyTL =
                      coord = ChunkCoord cx cy
                  in if cx ≥ -halfSize ∧ cx < halfSize
                      ∧ cy ≥ -halfSize ∧ cy < halfSize
-                     ∧ chunkElev coord < seaLevel
+                     ∧ chunkElev coord ≤ seaLevel
                     then [coord]
                     else []
             ) plates
@@ -82,7 +83,7 @@ computeOceanMap seed worldSize plateCount plates applyTL =
         bfs (current :<| queue) visited =
             let nextNeighbors = filter (\n →
                     not (HS.member n visited)
-                    ∧ chunkElev n < seaLevel
+                    ∧ chunkElev n ≤ seaLevel
                     ) (neighbors current)
                 visited' = foldl' (flip HS.insert) visited nextNeighbors
                 queue' = foldl' (:|>) queue nextNeighbors
@@ -122,11 +123,38 @@ computeChunkFluid worldSize oceanMap coord surfaceMap
       ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx + 1) (cy + 1)))
       ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx - 1) (cy + 1)))
 
+    -- Two-pass ocean fill:
+    --   Pass 1: place ocean where terrain ≤ sea level
+    --   Pass 2: propagate ocean one tile outward to cover coastline
+    --           gaps (terrain side faces at the water's edge)
     buildOceanSurface surf =
-        withFluidMap $ \mv →
+        withFluidMap $ \mv → do
+            -- Pass 1: seed ocean at/below sea level
             forEachSurface surf $ \idx _lx _ly surfZ →
-                when (surfZ < seaLevel) $
+                when (surfZ ≤ seaLevel ∧ surfZ > minBound) $
                     MV.write mv idx (Just (FluidCell Ocean seaLevel))
+            -- Pass 2: extend one tile into coast so the ocean
+            -- surface covers the terrain side-face at the waterline
+            forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
+                val ← MV.read mv idx
+                when (isNothing val) $ do
+                    let lx = idx `mod` chunkSize
+                        ly = idx `div` chunkSize
+                    adj ← adjacentHasOcean mv lx ly
+                    when adj $
+                        MV.write mv idx (Just (FluidCell Ocean seaLevel))
+
+    adjacentHasOcean ∷ MV.MVector s (Maybe FluidCell) → Int → Int
+                     → ST s Bool
+    adjacentHasOcean mv lx ly = do
+        let check x y
+              | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = return False
+              | otherwise = isJust ⊚ MV.read mv (y * chunkSize + x)
+        n ← check lx (ly - 1)
+        s ← check lx (ly + 1)
+        e ← check (lx + 1) ly
+        w ← check (lx - 1) ly
+        return (n ∨ s ∨ e ∨ w)
 
 -- | Quick boolean check: does this chunk have any ocean fluid?
 --   Just checks the ocean map and neighbors — no vector allocation.

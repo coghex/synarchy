@@ -115,8 +115,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                                     mFluid chunkHasFluid
 
                                             -- Vegetation: only on surface tile, only when
-                                            -- no fluid covers it
-                                            vegQ = if z ≡ surfZ ∧ not (isJust mFluid)
+                                            -- surface is above the fluid level
+                                            vegQ = if z ≡ surfZ ∧ maybe True (\fc → surfZ > fcSurface fc) mFluid
                                                    then let i = z - ctStartZ col
                                                             vegId = ctVeg col VU.! i
                                                             slopeId = ctSlopes col VU.! i
