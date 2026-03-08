@@ -94,10 +94,14 @@ unionFluidMap = V.zipWith (\a b → case a of
 -- Fluid Equilibration
 -----------------------------------------------------------
 
--- | Post-processing pass: propagate fluid to adjacent empty tiles
---   whose terrain is at or below the minimum neighboring fluid surface.
---   Uses minimum (not max) water surface — water seeks its lowest
---   level. Iterates until stable (max 8 passes).
+-- | Post-processing pass with two phases per iteration:
+--   1. LEVEL: lower existing water surfaces to the minimum
+--      neighbor water surface. This spreads the lowest water
+--      level across connected water bodies, implementing the
+--      spillway rule: water settles to the lowest overflow point.
+--   2. FILL: propagate water to adjacent empty tiles whose
+--      terrain is at or below the minimum neighbor water surface.
+--   Iterates until stable (max 20 passes).
 equilibrateFluidMap ∷ VU.Vector Int → FluidMap → FluidMap
 equilibrateFluidMap surfaceMap fluidMap = runST $ do
     mv ← V.thaw fluidMap
@@ -105,6 +109,36 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
 
         pass = do
             changed ← newSTRef False
+
+            -- Phase 1: Level — lower water to min neighbor surface.
+            -- Water seeks its lowest level. If a neighbor's water is
+            -- lower, our water should flow there (lowering ours).
+            -- Skip Ocean and Lava — their levels are fixed by definition.
+            -- Only level River and Lake fluid.
+            forM_ [0 .. area - 1] $ \idx → do
+                val ← MV.read mv idx
+                case val of
+                    Just fc
+                      | fcType fc ≡ Ocean → pure ()
+                      | fcType fc ≡ Lava  → pure ()
+                      | otherwise → do
+                        let lx = idx `mod` chunkSize
+                            ly = idx `div` chunkSize
+                            surfZ = surfaceMap VU.! idx
+                        minNS ← minNeighborSurfaceOfType mv (fcType fc) lx ly
+                        case minNS of
+                            Just minS
+                              | minS < fcSurface fc → do
+                                let newSurf = max surfZ minS
+                                if newSurf < fcSurface fc
+                                    then do
+                                        MV.write mv idx (Just (fc { fcSurface = newSurf }))
+                                        writeSTRef changed True
+                                    else pure ()
+                            _ → pure ()
+                    _ → pure ()
+
+            -- Phase 2: Fill — propagate water to empty neighbors.
             forM_ [0 .. area - 1] $ \idx → do
                 val ← MV.read mv idx
                 when (isNothing val) $ do
@@ -125,12 +159,33 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
             didChange ← pass
             when didChange $ loop (n - 1)
 
-    loop (8 ∷ Int)
+    loop (20 ∷ Int)
     V.freeze mv
+
+-- | Get minimum water surface among 4-connected same-type neighbors.
+--   Only considers neighbors with the same FluidType to prevent
+--   ocean dragging river levels down (or vice versa).
+minNeighborSurfaceOfType ∷ MV.MVector s (Maybe FluidCell) → FluidType
+                         → Int → Int → ST s (Maybe Int)
+minNeighborSurfaceOfType mv ftype lx ly = do
+    let check x y
+          | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = pure Nothing
+          | otherwise = do
+              val ← MV.read mv (y * chunkSize + x)
+              pure $ case val of
+                  Just fc | fcType fc ≡ ftype → Just (fcSurface fc)
+                  _                           → Nothing
+    vN ← check lx (ly - 1)
+    vS ← check lx (ly + 1)
+    vE ← check (lx + 1) ly
+    vW ← check (lx - 1) ly
+    let surfaces = catMaybes [vN, vS, vE, vW]
+    pure $ case surfaces of
+        []     → Nothing
+        (s:ss) → Just (foldl' min s ss)
 
 -- | Check if a tile should be filled by equilibration.
 --   Uses the minimum adjacent water surface (water seeks its level).
---   Only called for interior tiles (not chunk edges).
 containedFill ∷ MV.MVector s (Maybe FluidCell)
               → Int → Int → Int → ST s (Maybe FluidCell)
 containedFill mv lx ly surfZ = do

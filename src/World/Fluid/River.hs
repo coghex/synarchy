@@ -118,14 +118,16 @@ fillRiverFromFeature mv pf worldSize chunkGX chunkGY surfaceMap =
                     Just fc → MV.write mv idx (Just fc)
         _ → pure ()
 
--- | At overlapping regions, pick the higher water surface.
---   A tile might be claimed by two segments — we want the
---   one that actually covers this tile with more water.
+-- | At overlapping regions, pick the LOWER water surface.
+--   Water seeks its lowest level — at segment boundaries the
+--   downstream segment produces a lower interpolated surface,
+--   and that is the physically correct value.  Picking max
+--   created visible steps; picking min gives smooth descent.
 pickBestFill ∷ Maybe FluidCell → Maybe FluidCell → Maybe FluidCell
 pickBestFill Nothing b = b
 pickBestFill a Nothing = a
 pickBestFill (Just a) (Just b) =
-    if fcSurface b > fcSurface a then Just b else Just a
+    if fcSurface b < fcSurface a then Just b else Just a
 
 bestRiverFill ∷ Int → Int → Int → Int → Word64 → V.Vector RiverSegment
               → Maybe FluidCell
@@ -149,7 +151,7 @@ riverWaterDepth flow depth =
 
 riverFillFromSegment ∷ Int → Int → Int → Int → Word64 → RiverSegment
                      → Maybe FluidCell
-riverFillFromSegment worldSize gx gy surfZ meanderSeed seg =
+riverFillFromSegment worldSize gx gy surfZ _meanderSeed seg =
     let GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
         (dxi, dyi) = wrappedDeltaUVFluid worldSize sx sy ex ey
@@ -164,8 +166,7 @@ riverFillFromSegment worldSize gx gy surfZ meanderSeed seg =
            px = fromIntegral pxi ∷ Float
            py = fromIntegral pyi ∷ Float
            tRaw = (px * dx' + py * dy') / segLen2
-       -- Extended overlap at segment boundaries and bends so
-       -- pickBestFill smooths transitions between segments
+       -- Extended overlap at segment boundaries and bends
        in if tRaw < -0.3 ∨ tRaw > 1.3
           then Nothing
           else
@@ -174,26 +175,25 @@ riverFillFromSegment worldSize gx gy surfZ meanderSeed seg =
               flow = rsFlowRate seg
               depthI = rsDepth seg
 
-              -- Fill width scales with depth: covers the carved channel
-              -- plus surrounding carved valley floor. The surfZ check
-              -- prevents filling above the carved terrain.
-              channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
-              fillHalfW = channelHalfW + fromIntegral depthI
-          in if effectivePerpDist > fillHalfW
+              -- Full valley width: covers all carved terrain.
+              -- The surfZ check prevents filling above carved banks.
+              valleyHalfW = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
+          in if effectivePerpDist > valleyHalfW
              then Nothing
              else
-             let -- Interpolate water surface along the segment for
-                 -- gradual descent. Since fixupSegmentContinuity ensures
-                 -- startElev_{n+1} = endElev_n, this is smooth across
-                 -- segment boundaries.
-                 t = max 0.0 (min 1.0 tRaw)
-                 startFloor = rsStartElev seg - depthI
-                 endFloor   = rsEndElev seg - depthI
-                 interpFloor = fromIntegral startFloor * (1.0 - t)
-                             + fromIntegral endFloor * t
-                 channelFloor = round interpFloor ∷ Int
+             -- FLAT channel floor matching carved terrain exactly.
+             -- Carving uses: min(startElev - depth, endElev - depth)
+             -- so the fill must use the same formula.
+             let channelFloor = min (rsStartElev seg - depthI)
+                                    (rsEndElev seg - depthI)
                  waterDepth = riverWaterDepth flow depthI
-                 waterSurface = channelFloor + waterDepth
+                 -- Cap water at the valley wall height (channel edge).
+                 -- The wall at channel edge is carved to:
+                 --   max(startElev, endElev) - floor(0.7 * depth)
+                 -- Capping here prevents water from overflowing banks.
+                 wallHeight = max (rsStartElev seg) (rsEndElev seg)
+                            - floor (0.7 * fromIntegral depthI ∷ Float)
+                 waterSurface = min (channelFloor + waterDepth) wallHeight
              in if surfZ > waterSurface
                 then Nothing
                 else Just (FluidCell River waterSurface)
@@ -205,15 +205,18 @@ riverFillFromWaypoint worldSize gx gy surfZ _meanderSeed seg =
         (dxi, dyi) = wrappedDeltaUVFluid worldSize sx sy gx gy
         dist = sqrt (fromIntegral (dxi * dxi + dyi * dyi) ∷ Float)
         depth = rsDepth seg
-        -- Use valley width at waypoints to cover bends between segments
+        -- Valley width at waypoints to cover bends between segments
         fillR = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
     in if dist > fillR
        then Nothing
        else
        let flow = rsFlowRate seg
-           channelFloor = rsStartElev seg - depth
+           channelFloor = min (rsStartElev seg - depth)
+                              (rsEndElev seg - depth)
            waterDepth = riverWaterDepth flow depth
-           waterSurface = channelFloor + waterDepth
+           wallHeight = max (rsStartElev seg) (rsEndElev seg)
+                      - floor (0.7 * fromIntegral depth ∷ Float)
+           waterSurface = min (channelFloor + waterDepth) wallHeight
        in if surfZ > waterSurface
           then Nothing
           else Just (FluidCell River waterSurface)
@@ -225,15 +228,18 @@ riverFillFromEndpoint worldSize gx gy surfZ _meanderSeed seg =
         (dxi, dyi) = wrappedDeltaUVFluid worldSize ex ey gx gy
         dist = sqrt (fromIntegral (dxi * dxi + dyi * dyi) ∷ Float)
         depth = rsDepth seg
-        -- Use valley width at endpoints to cover bends
+        -- Valley width at endpoints to cover bends
         fillR = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
     in if dist > fillR
        then Nothing
        else
        let flow = rsFlowRate seg
-           channelFloor = rsEndElev seg - depth
+           channelFloor = min (rsStartElev seg - depth)
+                              (rsEndElev seg - depth)
            waterDepth = riverWaterDepth flow depth
-           waterSurface = channelFloor + waterDepth
+           wallHeight = max (rsStartElev seg) (rsEndElev seg)
+                      - floor (0.7 * fromIntegral depth ∷ Float)
+           waterSurface = min (channelFloor + waterDepth) wallHeight
        in if surfZ > waterSurface
           then Nothing
           else Just (FluidCell River waterSurface)
