@@ -20,6 +20,7 @@ module World.Geology.Timeline.Helpers
     , evolveGlacierCapped
       -- * Elev grid lookup
     , elevFromGrid
+    , filledElevFromGrid
       -- * Lake reconciliation
     , reconcileLakes
     ) where
@@ -65,6 +66,25 @@ elevFromGrid grid worldSize gx gy =
         idx = iv' * gridW + iu'
     in if idx ≥ 0 ∧ idx < VU.length (egElev grid)
        then egElev grid VU.! idx
+       else seaLevel
+
+-- | Look up filled (depression-free) elevation from a separate
+--   filled vector using the same grid indexing as elevFromGrid.
+{-# INLINE filledElevFromGrid #-}
+filledElevFromGrid ∷ VU.Vector Int → ElevGrid → Int → Int → Int → Int
+filledElevFromGrid filled grid worldSize gx gy =
+    let spacing = egSpacing grid
+        gridW = egGridW grid
+        halfGrid = gridW `div` 2
+        u = gx - gy
+        v = gx + gy
+        iu = ((u + spacing `div` 2) `div` spacing) + halfGrid
+        iv = ((v + spacing `div` 2) `div` spacing) + halfGrid
+        iu' = ((iu `mod` gridW) + gridW) `mod` gridW
+        iv' = max 0 (min (gridW - 1) iv)
+        idx = iv' * gridW + iu'
+    in if idx ≥ 0 ∧ idx < VU.length filled
+       then filled VU.! idx
        else seaLevel
 
 -----------------------------------------------------------

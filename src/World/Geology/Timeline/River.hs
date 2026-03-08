@@ -12,6 +12,7 @@ import Data.List (foldl', minimumBy)
 import Data.Ord (comparing)
 import Data.Word (Word64)
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Fluids (fixupSegmentContinuity)
@@ -37,6 +38,15 @@ reconcileHydrology ∷ Word64 → Int → FlowResult → Int → Int
                    → TimelineBuildState
                    → ([PersistentFeature], [GeoEvent], TimelineBuildState)
 reconcileHydrology seed ageIdx flowResult periodIdx worldSize elevGrid tbs =
+    let filledElev = frFilledElev flowResult
+    in reconcileHydrology' seed ageIdx flowResult periodIdx worldSize
+                           elevGrid filledElev tbs
+
+reconcileHydrology' ∷ Word64 → Int → FlowResult → Int → Int
+                    → ElevGrid → VU.Vector Int
+                    → TimelineBuildState
+                    → ([PersistentFeature], [GeoEvent], TimelineBuildState)
+reconcileHydrology' seed ageIdx flowResult periodIdx worldSize elevGrid filledElev tbs =
     let existingRivers = filter (isActiveRiver . pfFeature) (tbsFeatures tbs)
         existingLakes  = filter (isLakeFeature . pfFeature)  (tbsFeatures tbs)
         simSources = frRiverSources flowResult
@@ -72,7 +82,7 @@ reconcileHydrology seed ageIdx flowResult periodIdx worldSize elevGrid tbs =
 
         newRivers = catMaybes $
             parMap rdeepseq (\(idx, (gx, gy, elev, flow)) →
-                traceRiverFromSource seed worldSize elevGrid
+                traceRiverFromSource seed worldSize elevGrid filledElev
                     gx gy elev (ageIdx * 1000 + idx) flow
             ) (zip [0..] newSources)
 
@@ -166,8 +176,9 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
                 srcY = by - round (fromIntegral branchLen * sin branchAngle)
 
                 numTribSegs = hashToRangeGeo h6 2 4
+                branchElev = rsStartElev branchSeg
                 tribSegs = buildTributarySegments seed fidInt
-                               srcX srcY bx by numTribSegs
+                               srcX srcY bx by numTribSegs branchElev
 
                 tributaryParams = RiverParams
                     { rpSourceRegion = GeoCoord srcX srcY
@@ -215,7 +226,7 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
     else if roll < 0.60
     -- 10%: Widen — NO HydroEvent, only state update
     then let newSegs = V.map (\seg → seg
-                 { rsWidth = min 12 (rsWidth seg + 1)
+                 { rsWidth = min 16 (rsWidth seg + 1)
                  , rsValleyWidth = rsValleyWidth seg + 3
                  }) (rpSegments river)
              newRiver = river { rpSegments = newSegs }
@@ -369,7 +380,7 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
         newMainSegs = V.imap (\idx seg →
             if idx ≥ segIdx
             then seg { rsFlowRate = rsFlowRate seg + rpFlowRate tribRiver * 0.6
-                     , rsWidth = min 12 (rsWidth seg + 1)
+                     , rsWidth = min 16 (rsWidth seg + 1)
                      }
             else seg
             ) (rpSegments mainRiver)

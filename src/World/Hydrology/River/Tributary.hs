@@ -17,13 +17,23 @@ import World.Geology.Hash
 -- | Build segments for a tributary flowing from (srcX,srcY)
 --   to the branch point (bx,by), divided into numSegs pieces.
 --   Each waypoint is offset slightly from the straight line
---   for natural look.
-buildTributarySegments ∷ Word64 → Int → Int → Int → Int → Int → Int
+--   for natural look. branchElev is the elevation at the branch
+--   point; the source is estimated as higher based on length.
+buildTributarySegments ∷ Word64 → Int → Int → Int → Int → Int → Int → Int
                        → V.Vector RiverSegment
-buildTributarySegments seed fidInt srcX srcY bx by numSegs =
-    V.fromList $ zipWith (\segI ((wx1, wy1), (wx2, wy2)) →
+buildTributarySegments seed fidInt srcX srcY bx by numSegs branchElev =
+    let -- Estimate source elevation as higher than branch point
+        dx = fromIntegral (bx - srcX) ∷ Float
+        dy = fromIntegral (by - srcY) ∷ Float
+        tribLen = sqrt (dx * dx + dy * dy)
+        srcElev = branchElev + max 5 (round (tribLen * 0.3))
+    in V.fromList $ zipWith (\segI ((wx1, wy1), (wx2, wy2)) →
       let flow = 0.1 + fromIntegral segI * 0.05
-          w = max 2 (round (flow * 6.0))
+          w = max 4 (round (flow * 8.0))
+          t1 = fromIntegral segI / fromIntegral numSegs ∷ Float
+          t2 = fromIntegral (segI + 1) / fromIntegral numSegs ∷ Float
+          se = round (fromIntegral srcElev + t1 * fromIntegral (branchElev - srcElev) ∷ Float)
+          ee = round (fromIntegral srcElev + t2 * fromIntegral (branchElev - srcElev) ∷ Float)
       in RiverSegment
           { rsStart       = GeoCoord wx1 wy1
           , rsEnd         = GeoCoord wx2 wy2
@@ -31,8 +41,8 @@ buildTributarySegments seed fidInt srcX srcY bx by numSegs =
           , rsValleyWidth = w * 3
           , rsDepth       = max 3 (round (flow * 8.0))
           , rsFlowRate    = flow
-          , rsStartElev   = 0
-          , rsEndElev     = 0
+          , rsStartElev   = se
+          , rsEndElev     = ee
           }
       ) [0..] (zip waypoints (tail waypoints))
     where -- Interpolate waypoints along the line with hash-based offsets

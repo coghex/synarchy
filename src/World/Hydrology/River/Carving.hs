@@ -97,7 +97,7 @@ findDeepestCarve worldSize gx gy mSeed baseElev segs = go noModification 0
 --   Where refSurface = lerp(rsStartElev, rsEndElev, clampedT)
 --   and clampedT is the parametric position along the segment.
 carveFromSegment ∷ Int → Int → Int → Word64 → RiverSegment → Int → GeoModification
-carveFromSegment worldSize gx gy meanderSeed seg baseElev =
+carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
     let GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
 
@@ -123,51 +123,32 @@ carveFromSegment worldSize gx gy meanderSeed seg baseElev =
            dot = px * nx + py * ny
            alongT = dot / segLen
 
-           -- Perpendicular distance from segment axis
-           perpX = px - dot * nx
-           perpY = py - dot * ny
-           perpDist = sqrt (perpX * perpX + perpY * perpY)
+           -- Signed perpendicular distance from segment axis
+           signedPerp = px * ny - py * nx
+           effectivePerpDist = abs signedPerp
 
            -- Segment geometry
            channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
            valleyHalfW  = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
-           depth        = fromIntegral (rsDepth seg) ∷ Float
-           flow         = rsFlowRate seg
+           depthI       = rsDepth seg
 
-           -- Taper at segment endpoints to avoid hard edges
-           endTaper = min 1.0 (min ((alongT + 0.05) * 8.0)
-                                   ((1.05 - alongT) * 8.0))
-
-           -- Meander offset: sinusoidal displacement perpendicular
-           -- to the segment axis, giving the channel a winding path
-           meanderFreq = 2.0 * π / segLen * 1.5
-           meanderPhase = fromIntegral (fromIntegral meanderSeed `mod` (1000 ∷ Int))
-                        * 0.001 * 2.0 * π
-           meanderOffset = sin (alongT * segLen * meanderFreq
-                              / segLen * 2.0 * π + meanderPhase)
-                         * valleyHalfW * 0.2 * min 1.0 flow
-           effectivePerpDist = abs (perpDist - meanderOffset)
-
-           -- Interpolated reference surface at this point along
-           -- the segment. This is the elevation the terrain WOULD
-           -- have without the river — the "rim" of the valley.
-           clampedT = max 0.0 (min 1.0 alongT)
-           refSurface = fromIntegral (rsStartElev seg)
-                      + clampedT * fromIntegral (rsEndElev seg - rsStartElev seg)
+           -- FLAT channel floor per segment: use the lower endpoint
+           -- (min = deepest point, since rivers flow downhill).
+           -- NO float interpolation along the segment — this prevents
+           -- the checkerboard caused by round/floor of smoothly varying
+           -- floats creating alternating 1-tile elevation steps.
+           -- The elevation gradient is handled by segment-to-segment
+           -- stepping via fixupSegmentContinuity.
+           channelFloor = min (rsStartElev seg - depthI)
+                              (rsEndElev seg - depthI)
 
        in if alongT < -0.05 ∨ alongT > 1.05 ∨ effectivePerpDist > valleyHalfW
           then noModification
 
           -- Inside the channel proper
           else if effectivePerpDist < channelHalfW
-          then let channelT = effectivePerpDist / channelHalfW
-                   channelProfile = 1.0 - channelT * 0.1
-                   -- Absolute floor elevation at this point
-                   channelFloor = refSurface - depth * channelProfile * endTaper
-                   targetElev = round channelFloor
-                   -- Only carve if we're above the target
-                   carve = baseElev - targetElev
-                   alluviumDepth = max 1 (round (depth * 0.4 * endTaper))
+          then let carve = baseElev - channelFloor
+                   alluviumDepth = max 1 (depthI * 2 `div` 5)
                in if carve ≤ 0
                   then noModification
                   else GeoModification
@@ -176,16 +157,29 @@ carveFromSegment worldSize gx gy meanderSeed seg baseElev =
                       , gmIntrusionDepth   = min alluviumDepth carve
                       }
 
-          -- Valley walls: gradual slope from rim to channel edge
+          -- Valley walls: gradual slope from rim to channel edge.
+          -- wallT goes from 0 (at channel edge) to 1 (at valley rim).
+          -- Carve depth is an integer fraction of channel depth,
+          -- computed without per-tile float interpolation.
           else let wallT = (effectivePerpDist - channelHalfW)
                          / (valleyHalfW - channelHalfW)
-                   wallProfile = max 0.0 (1.0 - wallT)
-                   valleyFloor = refSurface - depth * wallProfile * endTaper * 0.7
-                   targetElev = round valleyFloor
+                   -- Integer wall carve depth: decreases from 70% of
+                   -- channel depth at channel edge to 0 at valley rim.
+                   wallCarveDepth = floor (fromIntegral depthI * 0.7
+                                         * max 0.0 (1.0 - wallT)) ∷ Int
+                   -- Use the higher segment endpoint as the reference
+                   -- surface (rim elevation) — pure integer, no interpolation.
+                   refSurface = max (rsStartElev seg) (rsEndElev seg)
+                   targetElev = refSurface - wallCarveDepth
                    carve = baseElev - targetElev
-               in if carve ≤ 0
+                   wallAlluvium = max 1 (wallCarveDepth * 3 `div` 10)
+               in if carve ≤ 0 ∨ wallCarveDepth ≤ 0
                   then noModification
-                  else GeoModification (negate carve) Nothing 0
+                  else GeoModification
+                      { gmElevDelta        = negate carve
+                      , gmMaterialOverride = Just (unMaterialId matSandstone)
+                      , gmIntrusionDepth   = min wallAlluvium carve
+                      }
 
 -----------------------------------------------------------
 -- Delta Deposit — original version (takes full RiverParams)
@@ -256,8 +250,10 @@ computeDeltaDeposit' lastSeg totalFlow worldSize gx gy baseElev =
               perpT = perpDist / (deltaRadius * 1.2)
 
               profile = max 0.0 ((1.0 - t) * (1.0 - min 1.0 perpT))
-              -- Absolute target elevation for the delta surface
-              targetElev = round (mouthElev + maxDeposit * profile)
+              -- Absolute target elevation for the delta surface.
+              -- Use floor to avoid round's half-to-even creating
+              -- alternating elevation steps at transition boundaries.
+              targetElev = floor (mouthElev + maxDeposit * profile) ∷ Int
               -- Only deposit if we're below the target
               deposit = targetElev - baseElev
 

@@ -199,7 +199,19 @@ generateChunk registry catalog params coord =
                                              gx' gy' registry base
                                              (finalN, finalS, finalE, finalW)
                     mats = buildColumnStrata cache base exposeFrom surfZ
-                    matIds = VU.map unMaterialId mats
+                    -- Correct the surface material to match the authoritative
+                    -- timeline path. buildStrataCache uses final neighbor
+                    -- elevations as an approximation, which can cause its
+                    -- accumulated elevation to diverge from surfZ by ±1-2
+                    -- tiles. This means the strata material at surfZ may be
+                    -- from the wrong layer, creating a checkerboard pattern
+                    -- in surface materials and vegetation.
+                    surfIdx = surfZ - exposeFrom
+                    correctedMats =
+                        if surfIdx ≥ 0 ∧ surfIdx < VU.length mats
+                        then mats VU.// [(surfIdx, surfMat)]
+                        else mats
+                    matIds = VU.map unMaterialId correctedMats
                 in ColumnTiles
                     { ctStartZ = exposeFrom
                     , ctMats   = matIds

@@ -5,11 +5,13 @@ module World.Hydrology.Event
     ) where
 
 import UPrelude
+import World.Base (GeoCoord(..))
 import World.Types
 import World.Hydrology.Types
 import World.Hydrology.River (applyRiverCarve, applyRiverEvolution)
 import World.Hydrology.Glacier (applyGlacierCarve, applyGlacierEvolution)
 import World.Geology.Types (GeoModification(..), noModification)
+import World.Geology.Hash (wrappedDeltaUV)
 
 -----------------------------------------------------------
 -- HydroEvent dispatch (for new feature placement)
@@ -21,18 +23,35 @@ import World.Geology.Types (GeoModification(..), noModification)
 --
 --   RiverFeature  → V-shaped valley carve
 --   GlacierFeature → U-shaped valley carve + moraine
---   LakeFeature   → no terrain mod (lakes are fluid, not carving)
+--   LakeFeature   → gentle bowl carve (smooths shoreline)
 applyHydroFeature ∷ HydroFeature → Int → Int → Int → Int → GeoModification
 applyHydroFeature (RiverFeature river) worldSize gx gy baseElev =
     applyRiverCarve river worldSize gx gy baseElev
 applyHydroFeature (GlacierFeature glacier) worldSize gx gy baseElev =
     applyGlacierCarve glacier worldSize gx gy baseElev
-applyHydroFeature (LakeFeature _) _worldSize _gx _gy _baseElev =
-    -- Lakes don't carve terrain. They fill with water at the
-    -- fluid stage (computeChunkFluid / computeChunkLakes).
-    -- The basin they sit in was carved by the glacier or river
-    -- that created them.
-    noModification
+applyHydroFeature (LakeFeature lk) worldSize gx gy baseElev =
+    -- Carve a gentle bowl so fine-scale terrain bumps don't poke
+    -- above the water surface (which creates jagged "teeth" shorelines).
+    -- The bowl floor rises linearly from full depth at center to
+    -- 1 tile below the surface at the rim.
+    let GeoCoord fx fy = lkCenter lk
+        (dxi, dyi) = wrappedDeltaUV worldSize gx gy fx fy
+        dist = sqrt (fromIntegral (dxi * dxi + dyi * dyi) ∷ Float)
+        radius = fromIntegral (lkRadius lk) ∷ Float
+        surface = lkSurface lk
+        depth = max 2 (lkDepth lk)
+    in if dist ≥ radius
+       then noModification
+       else let t = dist / radius
+                floorElev = surface - max 1 (round (fromIntegral depth * (1.0 - t)))
+                carve = baseElev - floorElev
+            in if carve ≤ 0
+               then noModification
+               else GeoModification
+                   { gmElevDelta        = negate carve
+                   , gmMaterialOverride = Nothing
+                   , gmIntrusionDepth   = 0
+                   }
 
 -----------------------------------------------------------
 -- HydroModify dispatch (for feature evolution)

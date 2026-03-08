@@ -133,20 +133,23 @@ bestRiverFill worldSize gx gy surfZ meanderSeed segments =
     let -- Check each segment
         segResults = V.toList $ V.map (riverFillFromSegment worldSize gx gy surfZ meanderSeed) segments
         -- Check each waypoint (joint between segments)
-        waypointResults = V.toList (V.map (riverFillFromWaypoint worldSize gx gy surfZ) segments)
+        waypointResults = V.toList (V.map (riverFillFromWaypoint worldSize gx gy surfZ meanderSeed) segments)
                        <> if V.null segments then []
-                          else [riverFillFromEndpoint worldSize gx gy surfZ (V.last segments)]
+                          else [riverFillFromEndpoint worldSize gx gy surfZ meanderSeed (V.last segments)]
     in foldl' pickBestFill Nothing (segResults <> waypointResults)
 
--- | Water depth in tiles above the channel floor, based on flow rate.
---   Small streams: 1-2 tiles of water
---   Large rivers: 3-5 tiles of water
-riverWaterDepth ∷ Float → Int
-riverWaterDepth flow = max 1 (round (1.0 + flow * 2.5))
+-- | Water depth in tiles above the channel floor, based on flow rate
+--   and channel depth. Capped at depth-1 so the water surface is
+--   always at least 1 tile below the bank elevation, preventing
+--   terrain at bank level from blocking the water.
+riverWaterDepth ∷ Float → Int → Int
+riverWaterDepth flow depth =
+    let raw = max 1 (round (1.0 + flow * 2.5))
+    in min raw (max 1 (depth - 1))
 
 riverFillFromSegment ∷ Int → Int → Int → Int → Word64 → RiverSegment
                      → Maybe FluidCell
-riverFillFromSegment worldSize gx gy surfZ _meanderSeed seg =
+riverFillFromSegment worldSize gx gy surfZ meanderSeed seg =
     let GeoCoord sx sy = rsStart seg
         GeoCoord ex ey = rsEnd seg
         (dxi, dyi) = wrappedDeltaUVFluid worldSize sx sy ex ey
@@ -156,68 +159,81 @@ riverFillFromSegment worldSize gx gy surfZ _meanderSeed seg =
     in if segLen2 < 1.0
        then Nothing
        else
-       let (pxi, pyi) = wrappedDeltaUVFluid worldSize sx sy gx gy
+       let segLen = sqrt segLen2
+           (pxi, pyi) = wrappedDeltaUVFluid worldSize sx sy gx gy
            px = fromIntegral pxi ∷ Float
            py = fromIntegral pyi ∷ Float
            tRaw = (px * dx' + py * dy') / segLen2
-       in if tRaw < 0.0 ∨ tRaw > 1.0
+       in if tRaw < -0.05 ∨ tRaw > 1.05
           then Nothing
           else
-          let closestX = tRaw * dx'
-              closestY = tRaw * dy'
-              perpX = px - closestX
-              perpY = py - closestY
-              perpDist = sqrt (perpX * perpX + perpY * perpY)
+          let -- Signed perpendicular distance (must match carveFromSegment)
+              signedPerp = (px * dy' - py * dx') / segLen
+
+              -- Meander offset: must match carveFromSegment exactly.
+              -- Uses absolute world position for cross-segment coherence.
+              valleyHalfW = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
+              flow = rsFlowRate seg
+              nx = dx' / segLen
+              ny = dy' / segLen
+              dot = tRaw * segLen
+              meanderPhase = fromIntegral (fromIntegral meanderSeed
+                           `mod` (1000 ∷ Int)) * 0.001 * 2.0 * π
+              absProgress = dot + fromIntegral sx * nx + fromIntegral sy * ny
+              meanderWavelength = 60.0
+              meanderOffset = sin (absProgress * 2.0 * π / meanderWavelength + meanderPhase)
+                            * valleyHalfW * 0.15 * min 1.0 flow
+              -- DIAGNOSTIC: meander disabled to isolate oscillation bug
+              effectivePerpDist = abs signedPerp
+
               channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
-          in if perpDist > channelHalfW
+          in if effectivePerpDist > channelHalfW
              then Nothing
              else
-             let clampedT = max 0.0 (min 1.0 tRaw)
-                 refSurface = fromIntegral (rsStartElev seg)
-                            + clampedT * fromIntegral (rsEndElev seg - rsStartElev seg)
-                 channelFloor = refSurface - fromIntegral (rsDepth seg)
-                 waterDepth = riverWaterDepth (rsFlowRate seg)
-                 waterSurface = round channelFloor + waterDepth
+             let -- Flat floor per segment: must match carveFromSegment
+                 depthI = rsDepth seg
+                 channelFloor = min (rsStartElev seg - depthI)
+                                    (rsEndElev seg - depthI)
+                 waterDepth = riverWaterDepth flow depthI
+                 waterSurface = channelFloor + waterDepth
              in if surfZ ≥ waterSurface
                 then Nothing
                 else Just (FluidCell River waterSurface)
 
-riverFillFromWaypoint ∷ Int → Int → Int → Int → RiverSegment
+riverFillFromWaypoint ∷ Int → Int → Int → Int → Word64 → RiverSegment
                       → Maybe FluidCell
-riverFillFromWaypoint worldSize gx gy surfZ seg =
-    let GeoCoord wx wy = rsStart seg
-        (dxi, dyi) = wrappedDeltaUVFluid worldSize wx wy gx gy
-        dx = fromIntegral dxi ∷ Float
-        dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+riverFillFromWaypoint worldSize gx gy surfZ _meanderSeed seg =
+    let GeoCoord sx sy = rsStart seg
+        (dxi, dyi) = wrappedDeltaUVFluid worldSize sx sy gx gy
+        dist = sqrt (fromIntegral (dxi * dxi + dyi * dyi) ∷ Float)
         channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
     in if dist > channelHalfW
        then Nothing
        else
-       let channelFloor = fromIntegral (rsStartElev seg)
-                        - fromIntegral (rsDepth seg) ∷ Float
-           waterDepth = riverWaterDepth (rsFlowRate seg)
-           waterSurface = round channelFloor + waterDepth
+       let flow = rsFlowRate seg
+           depth = rsDepth seg
+           channelFloor = rsStartElev seg - depth
+           waterDepth = riverWaterDepth flow depth
+           waterSurface = channelFloor + waterDepth
        in if surfZ ≥ waterSurface
           then Nothing
           else Just (FluidCell River waterSurface)
 
-riverFillFromEndpoint ∷ Int → Int → Int → Int → RiverSegment
+riverFillFromEndpoint ∷ Int → Int → Int → Int → Word64 → RiverSegment
                       → Maybe FluidCell
-riverFillFromEndpoint worldSize gx gy surfZ seg =
-    let GeoCoord wx wy = rsEnd seg
-        (dxi, dyi) = wrappedDeltaUVFluid worldSize wx wy gx gy
-        dx = fromIntegral dxi ∷ Float
-        dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+riverFillFromEndpoint worldSize gx gy surfZ _meanderSeed seg =
+    let GeoCoord ex ey = rsEnd seg
+        (dxi, dyi) = wrappedDeltaUVFluid worldSize ex ey gx gy
+        dist = sqrt (fromIntegral (dxi * dxi + dyi * dyi) ∷ Float)
         channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
     in if dist > channelHalfW
        then Nothing
        else
-       let channelFloor = fromIntegral (rsEndElev seg)
-                        - fromIntegral (rsDepth seg) ∷ Float
-           waterDepth = riverWaterDepth (rsFlowRate seg)
-           waterSurface = round channelFloor + waterDepth
+       let flow = rsFlowRate seg
+           depth = rsDepth seg
+           channelFloor = rsEndElev seg - depth
+           waterDepth = riverWaterDepth flow depth
+           waterSurface = channelFloor + waterDepth
        in if surfZ ≥ waterSurface
           then Nothing
           else Just (FluidCell River waterSurface)

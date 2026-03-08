@@ -44,7 +44,7 @@ maxGridDim ∷ Int
 maxGridDim = 128
 
 minLakeDepth ∷ Int
-minLakeDepth = 5
+minLakeDepth = 8
 
 -----------------------------------------------------------
 -- Types
@@ -57,6 +57,8 @@ data FlowResult = FlowResult
     { frRiverSources ∷ ![(Int, Int, Int, Float)]
       -- ^ (gx, gy, elevation, flowStrength) — sorted by flow descending
     , frLakes        ∷ ![LakeParams]
+    , frFilledElev   ∷ !(VU.Vector Int)
+      -- ^ Depression-filled elevation surface (same indexing as ElevGrid)
     } deriving (Show)
 
 data ElevGrid = ElevGrid
@@ -329,7 +331,7 @@ simulateHydrology seed worldSize ageIdx grid =
               in if landVec VU.! idx ∧ depth ≥ minLakeDepth
                  then Just LakeParams
                     { lkCenter  = GeoCoord gx gy
-                    , lkRadius  = min 30 (max 3 (depth * 2 + spacing))
+                    , lkRadius  = min 20 (max 3 (depth + spacing))
                     , lkSurface = fillE
                     , lkDepth   = depth
                     , lkSource  = TectonicBasin
@@ -381,7 +383,10 @@ simulateHydrology seed worldSize ageIdx grid =
             in (gx, gy, elev, flow)
             ) sortedSources
 
-    in FlowResult { frRiverSources = riverSources, frLakes = dedupedLakes }
+    in FlowResult { frRiverSources = riverSources
+                   , frLakes = dedupedLakes
+                   , frFilledElev = filledElev
+                   }
 
 -----------------------------------------------------------
 -- Lake Deduplication
@@ -537,7 +542,7 @@ makeSegment ∷ Int → Int
 makeSegment spacing _segIdx
     ((sx, sy, se, _sAccum), (ex, ey, ee, eAccum)) =
     let flow = fromIntegral eAccum * 0.05 + 0.1 ∷ Float
-        width = min 12 (max 2 (round (flow * 5.0) ∷ Int))
+        width = min 16 (max 4 (round (flow * 8.0) ∷ Int))
 
         slopeDelta = abs (se - ee)
         slopePerTile ∷ Float
@@ -554,7 +559,7 @@ makeSegment spacing _segIdx
         -- was min 96, now min 48
 
         -- Depth capped at 20 tiles (200m) absolute max
-        baseDepth = max 2 (slopeDelta `div` 3 + round (flow * 2.0))
+        baseDepth = max 4 (slopeDelta `div` 3 + round (flow * 3.0))
         maxDepth = min 20 (slopeDelta + 10)
         depth = min maxDepth baseDepth
 

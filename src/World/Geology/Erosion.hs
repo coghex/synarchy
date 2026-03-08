@@ -240,9 +240,12 @@ erosionSediment params matId elev isDeposition =
         seed  = epSeed params
         lastAge = epIsLastAge params
 
-        -- Hash for local variation (cheap: xor + shift)
+        -- Hash for local variation (cheap: xor + shift).
+        -- Quantize elevation to prevent fine-grained checkerboard
+        -- patterns on gentle slopes where adjacent tiles differ by ±1.
+        quantizedElev = elev `div` 8
         localHash = fromIntegral (seed `xor` fromIntegral matId
-                                       `xor` (fromIntegral elev * 0x9E3779B9)) ∷ Word64
+                                       `xor` (fromIntegral quantizedElev * 0x9E3779B9)) ∷ Word64
         roll = fromIntegral (localHash .&. 0xFF) / 255.0 ∷ Float
 
     in if lastAge

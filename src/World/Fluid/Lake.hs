@@ -85,19 +85,14 @@ fillLakePool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurfa
     let pr = fromIntegral poolRadius ∷ Float
         rimSamples = 32 ∷ Int
 
+        -- Always use elevationAtGlobal for rim samples so every chunk
+        -- computes the same spillway height deterministically.
         spillway = foldl' (\minElev i →
             let angle = fromIntegral i * 2.0 * π / fromIntegral rimSamples
                 rimGX = fx + round (pr * cos angle)
                 rimGY = fy + round (pr * sin angle)
-                rimLX = rimGX - chunkGX
-                rimLY = rimGY - chunkGY
-                rimElev =
-                    if rimLX ≥ 0 ∧ rimLX < chunkSize ∧ rimLY ≥ 0 ∧ rimLY < chunkSize
-                    then surfaceMap VU.! columnIndex rimLX rimLY
-                    else
-                        let (e, _) = elevationAtGlobal seed plates worldSize rimGX rimGY
-                        in e
-            in min minElev rimElev
+                (e, _) = elevationAtGlobal seed plates worldSize rimGX rimGY
+            in min minElev e
             ) lakeSurface [0 .. rimSamples - 1]
 
         clampedSurface = min lakeSurface spillway

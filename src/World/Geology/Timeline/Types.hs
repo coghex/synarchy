@@ -147,20 +147,12 @@ data GeoEvent
 -- Explode a river HydroEvent into per-segment events
 -----------------------------------------------------------
 
--- | Split a single HydroEvent (RiverFeature river) into N+1 events:
---   one RiverSegmentEvent per segment, plus one RiverDeltaEvent
---   for the mouth deposit. Non-river HydroEvents pass through unchanged.
+-- | Previously split rivers into per-segment events for tighter bbox
+--   filtering, but this caused gaps at waypoint joints where adjacent
+--   segments don't overlap. Now keeps rivers as a single HydroEvent
+--   so applyRiverCarve's findDeepestCarve considers all segments
+--   simultaneously, producing gap-free valleys.
 explodeRiverEvent ∷ GeoEvent → [GeoEvent]
-explodeRiverEvent (HydroEvent (RiverFeature river)) =
-    let segs   = rpSegments river
-        mSeed  = rpMeanderSeed river
-        segEvts = V.toList $ V.map (\seg → RiverSegmentEvent
-                        (RiverSegmentCarve seg mSeed)) segs
-        deltaEvt = if V.null segs
-            then []
-            else [RiverDeltaEvent (RiverDeltaParams (V.last segs)
-                                                     (rpFlowRate river))]
-    in segEvts ++ deltaEvt
 explodeRiverEvent evt = [evt]
 
 -----------------------------------------------------------
