@@ -71,8 +71,7 @@ fillLakeFromFeature mv pf seed plates worldSize chunkGX chunkGY surfaceMap =
         HydroShape (LakeFeature lk) →
             let GeoCoord fx fy = lkCenter lk
                 poolRadius = lkRadius lk
-                (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
-                lakeSurface = baseElev + lkSurface lk
+                lakeSurface = lkSurface lk
             in fillLakePool mv seed plates worldSize chunkGX chunkGY
                    fx fy poolRadius lakeSurface surfaceMap
         _ → pure ()

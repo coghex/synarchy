@@ -156,8 +156,7 @@ riverFillFromSegment worldSize gx gy surfZ _meanderSeed seg =
     in if segLen2 < 1.0
        then Nothing
        else
-       let segLen = sqrt segLen2
-           (pxi, pyi) = wrappedDeltaUVFluid worldSize sx sy gx gy
+       let (pxi, pyi) = wrappedDeltaUVFluid worldSize sx sy gx gy
            px = fromIntegral pxi ∷ Float
            py = fromIntegral pyi ∷ Float
            tRaw = (px * dx' + py * dy') / segLen2
@@ -173,9 +172,15 @@ riverFillFromSegment worldSize gx gy surfZ _meanderSeed seg =
           in if perpDist > channelHalfW
              then Nothing
              else
-             let waterDepth = riverWaterDepth (rsFlowRate seg)
-                 waterSurface = surfZ + waterDepth
-             in Just (FluidCell River waterSurface)
+             let clampedT = max 0.0 (min 1.0 tRaw)
+                 refSurface = fromIntegral (rsStartElev seg)
+                            + clampedT * fromIntegral (rsEndElev seg - rsStartElev seg)
+                 channelFloor = refSurface - fromIntegral (rsDepth seg)
+                 waterDepth = riverWaterDepth (rsFlowRate seg)
+                 waterSurface = round channelFloor + waterDepth
+             in if surfZ ≥ waterSurface
+                then Nothing
+                else Just (FluidCell River waterSurface)
 
 riverFillFromWaypoint ∷ Int → Int → Int → Int → RiverSegment
                       → Maybe FluidCell
@@ -189,9 +194,13 @@ riverFillFromWaypoint worldSize gx gy surfZ seg =
     in if dist > channelHalfW
        then Nothing
        else
-       let waterDepth = riverWaterDepth (rsFlowRate seg)
-           waterSurface = surfZ + waterDepth
-       in Just (FluidCell River waterSurface)
+       let channelFloor = fromIntegral (rsStartElev seg)
+                        - fromIntegral (rsDepth seg) ∷ Float
+           waterDepth = riverWaterDepth (rsFlowRate seg)
+           waterSurface = round channelFloor + waterDepth
+       in if surfZ ≥ waterSurface
+          then Nothing
+          else Just (FluidCell River waterSurface)
 
 riverFillFromEndpoint ∷ Int → Int → Int → Int → RiverSegment
                       → Maybe FluidCell
@@ -205,9 +214,13 @@ riverFillFromEndpoint worldSize gx gy surfZ seg =
     in if dist > channelHalfW
        then Nothing
        else
-       let waterDepth = riverWaterDepth (rsFlowRate seg)
-           waterSurface = surfZ + waterDepth
-       in Just (FluidCell River waterSurface)
+       let channelFloor = fromIntegral (rsEndElev seg)
+                        - fromIntegral (rsDepth seg) ∷ Float
+           waterDepth = riverWaterDepth (rsFlowRate seg)
+           waterSurface = round channelFloor + waterDepth
+       in if surfZ ≥ waterSurface
+          then Nothing
+          else Just (FluidCell River waterSurface)
 
 -----------------------------------------------------------
 -- Segment Continuity
@@ -220,7 +233,7 @@ riverFillFromEndpoint worldSize gx gy surfZ seg =
 fixupSegmentContinuity ∷ V.Vector RiverSegment → V.Vector RiverSegment
 fixupSegmentContinuity v
     | V.length v ≤ 1 = v
-    | otherwise = V.fromList (go (V.head v) (V.toList (V.tail v)))
+    | otherwise = V.fromList (V.head v : go (V.head v) (V.toList (V.tail v)))
   where
     go _ [] = []
     go prev (cur : xs) =
