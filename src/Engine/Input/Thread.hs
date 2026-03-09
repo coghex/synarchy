@@ -59,18 +59,26 @@ runInputLoop env stateRef = do
         threadDelay 100000  -- 100ms pause check
         runInputLoop env stateRef
     ThreadRunning → do
-        -- Start frame timing
-        frameStart ← getCurrentTime
-        -- Process all pending inputs
-        let sharedInputRef = inputStateRef env
-        inpSt ← readIORef sharedInputRef
-        newInpSt ← processInputs env inpSt
-        -- write to the shared state
-        writeIORef sharedInputRef newInpSt
+        catch
+          (do
+            -- Start frame timing
+            frameStart ← getCurrentTime
+            -- Process all pending inputs
+            let sharedInputRef = inputStateRef env
+            inpSt ← readIORef sharedInputRef
+            newInpSt ← processInputs env inpSt
+            -- write to the shared state
+            writeIORef sharedInputRef newInpSt
 
-        threadDelay 16666  -- Fixed delay for ~60 FPS
-        -- Continue loop
-        runInputLoop env stateRef
+            threadDelay 16666  -- Fixed delay for ~60 FPS
+            -- Continue loop
+            runInputLoop env stateRef
+          )
+          (\(e ∷ SomeException) → do
+            logger ← readIORef (loggerRef env)
+            logError logger CatInput $ "Input thread crashed: " <> T.pack (show e)
+            writeIORef (lifecycleRef env) CleaningUp
+          )
 
 -- | Process all queued inputs
 processInputs ∷ EngineEnv → InputState → IO InputState

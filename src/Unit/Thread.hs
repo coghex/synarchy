@@ -11,7 +11,7 @@ import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (SomeException, catch)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
@@ -69,26 +69,34 @@ unitLoop env stateRef lastTimeRef utsRef = do
             threadDelay 100000
             unitLoop env stateRef lastTimeRef utsRef
         ThreadRunning → do
-            tickStart ← realToFrac ⊚ getPOSIXTime
-            lastTime ← readIORef lastTimeRef
-            let dt = tickStart - lastTime
-            writeIORef lastTimeRef tickStart
+            catch
+              (do
+                tickStart ← realToFrac ⊚ getPOSIXTime
+                lastTime ← readIORef lastTimeRef
+                let dt = tickStart - lastTime
+                writeIORef lastTimeRef tickStart
 
-            -- 1. Process commands (spawn, destroy, teleport, moveTo, stop)
-            processAllUnitCommands env utsRef
+                -- 1. Process commands (spawn, destroy, teleport, moveTo, stop)
+                processAllUnitCommands env utsRef
 
-            -- 2. Tick movement interpolation
-            tickAllMovement dt utsRef
+                -- 2. Tick movement interpolation
+                tickAllMovement dt utsRef
 
-            -- 3. Publish changed positions to unitManagerRef
-            publishToRender env utsRef
+                -- 3. Publish changed positions to unitManagerRef
+                publishToRender env utsRef
 
-            -- Sleep to maintain tick rate
-            tickEnd ← realToFrac ⊚ getPOSIXTime
-            let elapsed = tickEnd - tickStart ∷ Double
-                sleepTime = max 0 (unitTickRate - elapsed)
-            threadDelay (floor (sleepTime * 1000000))
-            unitLoop env stateRef lastTimeRef utsRef
+                -- Sleep to maintain tick rate
+                tickEnd ← realToFrac ⊚ getPOSIXTime
+                let elapsed = tickEnd - tickStart ∷ Double
+                    sleepTime = max 0 (unitTickRate - elapsed)
+                threadDelay (floor (sleepTime * 1000000))
+                unitLoop env stateRef lastTimeRef utsRef
+              )
+              (\(e ∷ SomeException) → do
+                logger ← readIORef (loggerRef env)
+                logError logger CatThread $ "Unit thread crashed: " <> T.pack (show e)
+                writeIORef (lifecycleRef env) CleaningUp
+              )
 
 -----------------------------------------------------------
 -- Publish sim state to render-visible UnitManager

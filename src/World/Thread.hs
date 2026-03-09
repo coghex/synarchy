@@ -11,7 +11,7 @@ import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (SomeException, catch)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import qualified Engine.Core.Queue as Q
@@ -60,25 +60,32 @@ worldLoop env stateRef lastTimeRef = do
             threadDelay 100000
             worldLoop env stateRef lastTimeRef
         ThreadRunning → do
-            now ← realToFrac ⊚ getPOSIXTime
-            lastTime ← readIORef lastTimeRef
-            let dt = now - lastTime ∷ Double
-            writeIORef lastTimeRef now
+            catch
+              (do
+                now ← realToFrac ⊚ getPOSIXTime
+                lastTime ← readIORef lastTimeRef
+                let dt = now - lastTime ∷ Double
+                writeIORef lastTimeRef now
 
-            processAllCommands env logger
+                processAllCommands env logger
 
-            -- Drain initial chunk queues (progressive loading)
-            drainInitQueues env logger
+                -- Drain initial chunk queues (progressive loading)
+                drainInitQueues env logger
 
-            tickWorldTime env (realToFrac dt)
-            updateChunkLoading env logger
-            pollCursorInfo env
+                tickWorldTime env (realToFrac dt)
+                updateChunkLoading env logger
+                pollCursorInfo env
 
-            camera ← readIORef (cameraRef env)
-            allQuads ← updateWorldTiles env
-            writeIORef (worldQuadsRef env) allQuads
-            threadDelay 16666
-            worldLoop env stateRef lastTimeRef
+                camera ← readIORef (cameraRef env)
+                allQuads ← updateWorldTiles env
+                writeIORef (worldQuadsRef env) allQuads
+                threadDelay 16666
+                worldLoop env stateRef lastTimeRef
+              )
+              (\(e ∷ SomeException) → do
+                logError logger CatWorld $ "World thread crashed: " <> T.pack (show e)
+                writeIORef (lifecycleRef env) CleaningUp
+              )
 
 -- | Drain all pending commands from the queue
 processAllCommands ∷ EngineEnv → LoggerState → IO ()

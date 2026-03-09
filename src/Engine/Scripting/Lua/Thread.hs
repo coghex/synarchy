@@ -16,7 +16,7 @@ import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules)
 import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..))
 import Engine.Core.Thread
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Event.Types (Event(..))
 import Engine.Input.Types (InputState, keyToText)
 import UI.Types (ElementHandle(..))
@@ -154,36 +154,45 @@ runLuaLoop env ls stateRef = do
             threadDelay 100000
             runLuaLoop env ls stateRef
         ThreadRunning → do
-            currentTime ← getCurrentTime
-            let currentSecs = realToFrac $ utctDayTime currentTime
-            scriptsMap ← readTVarIO (lbsScripts ls)
-            let scripts = Map.elems scriptsMap
-                nextWakeTimes = map scriptNextTick scripts
-                nextWakeTime = if null nextWakeTimes
-                               then currentSecs + 1.0
-                               else minimum nextWakeTimes
-                sleeptime = max 0.001 (nextWakeTime - currentSecs)
-            let maxSleepMicros = min 16666 (floor (sleeptime * 1000000))
-                (_, etlq) = lbsMsgQueues ls
-            mMsg ← timeout maxSleepMicros (Q.readQueue etlq)
-            case mMsg of
-              Just msg → do
-                  processLuaMsg env ls stateRef msg
-                  processLuaMsgs env ls stateRef
-                  runLuaLoop env ls stateRef
-              Nothing → do
-                  currentTime' ← getCurrentTime
-                  let currentSecs' = realToFrac $ utctDayTime currentTime'
-                  scriptsMap' ← readTVarIO (lbsScripts ls)
-                  forM_ (Map.toList scriptsMap') $ \(sid, script) → do
-                    when (not (scriptPaused script) ∧ currentSecs' ≥ scriptNextTick script) $ do
-                      when (isValidRef (scriptModuleRef script)) $ do
-                        let dt = scriptTickRate script
-                        _ ← callModuleFunction (lbsLuaState ls) (scriptModuleRef script) "update" [ScriptNumber dt]
-                        return ()
-                      atomically $ modifyTVar (lbsScripts ls) $
-                        Map.adjust (\s → s { scriptNextTick = scriptNextTick s + scriptTickRate s }) sid
-                  runLuaLoop env ls stateRef
+            catch
+              (do
+                currentTime ← getCurrentTime
+                let currentSecs = realToFrac $ utctDayTime currentTime
+                scriptsMap ← readTVarIO (lbsScripts ls)
+                let scripts = Map.elems scriptsMap
+                    nextWakeTimes = map scriptNextTick scripts
+                    nextWakeTime = if null nextWakeTimes
+                                   then currentSecs + 1.0
+                                   else minimum nextWakeTimes
+                    sleeptime = max 0.001 (nextWakeTime - currentSecs)
+                let maxSleepMicros = min 16666 (floor (sleeptime * 1000000))
+                    (_, etlq) = lbsMsgQueues ls
+                mMsg ← timeout maxSleepMicros (Q.readQueue etlq)
+                case mMsg of
+                  Just msg → do
+                      processLuaMsg env ls stateRef msg
+                      processLuaMsgs env ls stateRef
+                      runLuaLoop env ls stateRef
+                  Nothing → do
+                      currentTime' ← getCurrentTime
+                      let currentSecs' = realToFrac $ utctDayTime currentTime'
+                      scriptsMap' ← readTVarIO (lbsScripts ls)
+                      forM_ (Map.toList scriptsMap') $ \(sid, script) → do
+                        when (not (scriptPaused script) ∧ currentSecs' ≥ scriptNextTick script) $ do
+                          when (isValidRef (scriptModuleRef script)) $ do
+                            let dt = scriptTickRate script
+                            _ ← callModuleFunction (lbsLuaState ls) (scriptModuleRef script) "update" [ScriptNumber dt]
+                            return ()
+                          atomically $ modifyTVar (lbsScripts ls) $
+                            Map.adjust (\s → s { scriptNextTick = scriptNextTick s + scriptTickRate s }) sid
+                      runLuaLoop env ls stateRef
+              )
+              (\(e ∷ SomeException) → do
+                logger ← readIORef (loggerRef env)
+                logWarn logger CatLua $ "Lua thread crashed: " <> T.pack (show e)
+                Lua.close (lbsLuaState ls)
+                writeIORef (lifecycleRef env) CleaningUp
+              )
 
 -- | Process messages from anywhere to lua
 processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
