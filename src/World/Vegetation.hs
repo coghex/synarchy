@@ -41,9 +41,8 @@ import qualified Data.HashMap.Strict as HM
 import World.Types
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
 import World.Fluid.Types (FluidCell(..))
-import World.Weather.Types (ClimateState(..), ClimateGrid(..)
-                           , RegionClimate(..), SeasonalClimate(..)
-                           , ClimateCoord(..), climateRegionSize)
+import World.Weather.Types (ClimateState(..))
+import World.Weather.Lookup (lookupLocalClimate)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Render.Textures.Types (WorldTextures(..))
 
@@ -304,63 +303,6 @@ isWetlandSoil _  = False
 -- Climate Lookup
 -----------------------------------------------------------
 
--- | Look up regional climate for a global tile coordinate.
---   Uses bilinear interpolation between the 4 nearest region centers
---   to eliminate hard grid boundaries.
---   Returns (temperature, precipitation, humidity, snowFraction).
-lookupLocalClimate ∷ ClimateState → Int → Int → Int
-                   → (Float, Float, Float, Float)
-lookupLocalClimate climate worldSize gx gy =
-    let regions = cgRegions (csClimate climate)
-        halfChunks = worldSize `div` 2
-        w = worldSize * chunkSz
-        halfW = w `div` 2
-        u = gx - gy
-        v = gx + gy
-        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
-
-        -- Continuous region coordinates
-        fCS = fromIntegral chunkSz ∷ Float
-        fCRS = fromIntegral climateRegionSize ∷ Float
-        hcF = fromIntegral halfChunks ∷ Float
-        ruF = (fromIntegral wrappedU / fCS + hcF) / fCRS
-        rvF = (fromIntegral v / fCS + hcF) / fCRS
-
-        -- Center-based interpolation
-        regionsPerSide = worldSize `div` climateRegionSize
-        ruC = ruF - 0.5
-        rvC = rvF - 0.5
-        ru0raw = floor ruC ∷ Int
-        rv0 = floor rvC ∷ Int
-        ru0 = ((ru0raw `mod` regionsPerSide) + regionsPerSide) `mod` regionsPerSide
-        ru1 = (ru0 + 1) `mod` regionsPerSide
-        rv1 = rv0 + 1
-        tu = ruC - fromIntegral ru0raw
-        tv = rvC - fromIntegral rv0
-
-        lookupRC ru rv =
-            case HM.lookup (ClimateCoord ru rv) regions of
-                Just rc →
-                    let SeasonalClimate st wt = rcAirTemp rc
-                        SeasonalClimate sp wp = rcPrecipitation rc
-                    in ((st + wt) / 2.0, (sp + wp) / 2.0
-                       , rcHumidity rc, rcPrecipType rc)
-                Nothing →
-                    (csGlobalTemp climate, 0.5, 0.5, 0.0)
-
-        (t00, p00, h00, s00) = lookupRC ru0 rv0
-        (t10, p10, h10, s10) = lookupRC ru1 rv0
-        (t01, p01, h01, s01) = lookupRC ru0 rv1
-        (t11, p11, h11, s11) = lookupRC ru1 rv1
-
-        lerpF a b t = a + t * (b - a)
-        temp   = lerpF (lerpF t00 t10 tu) (lerpF t01 t11 tu) tv
-        precip = lerpF (lerpF p00 p10 tu) (lerpF p01 p11 tu) tv
-        humid  = lerpF (lerpF h00 h10 tu) (lerpF h01 h11 tu) tv
-        snow   = lerpF (lerpF s00 s10 tu) (lerpF s01 s11 tu) tv
-    in (temp, precip, humid, snow)
-  where
-    chunkSz = chunkSize
 
 -----------------------------------------------------------
 -- Hash

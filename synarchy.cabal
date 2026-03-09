@@ -387,6 +387,7 @@ library
                      World.Weather.Types
                      World.Weather.Log
                      World.Weather.Generate
+                     World.Weather.Lookup
                      World.Material
                      World.Material.Yaml
                      World.Preview

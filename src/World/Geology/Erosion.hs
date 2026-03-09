@@ -10,7 +10,8 @@ import World.Types
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
 import World.Geology.Types
 import qualified Data.HashMap.Strict as HM
-import World.Weather.Types (ClimateCoord(..), climateRegionSize)
+import World.Weather.Types (ClimateCoord(..))
+import World.Weather.Lookup (RegionGridCoords(..), regionGridCoords)
 
 -----------------------------------------------------------
 -- Erosion Application
@@ -422,34 +423,8 @@ lookupRegionalErosion ∷ ErosionParams
 lookupRegionalErosion fallback regMap worldSize gx gy =
     if HM.null regMap
     then fallback
-    else let -- Convert (gx, gy) tile coords → (u, v) tile coords
-             u = gx - gy
-             v = gx + gy
-             -- Convert tile coords → chunk coords
-             halfChunks = worldSize `div` 2
-             w = worldSize * chunkSizeTiles
-             halfW = w `div` 2
-             -- Wrap u-axis (cylindrical world), then to chunk space
-             wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
-
-             -- Continuous region coordinates (float)
-             fCS  = fromIntegral chunkSizeTiles ∷ Float
-             fCRS = fromIntegral climateRegionSize ∷ Float
-             hcF  = fromIntegral halfChunks ∷ Float
-             ruF  = (fromIntegral wrappedU / fCS + hcF) / fCRS
-             rvF  = (fromIntegral v / fCS + hcF) / fCRS
-
-             -- Center-based interpolation
-             regionsPerSide = worldSize `div` climateRegionSize
-             ruC = ruF - 0.5
-             rvC = rvF - 0.5
-             ru0raw = floor ruC ∷ Int
-             rv0 = floor rvC ∷ Int
-             ru0 = ((ru0raw `mod` regionsPerSide) + regionsPerSide) `mod` regionsPerSide
-             ru1 = (ru0 + 1) `mod` regionsPerSide
-             rv1 = rv0 + 1
-             tu  = ruC - fromIntegral ru0raw
-             tv  = rvC - fromIntegral rv0
+    else let RegionGridCoords ru0 ru1 rv0 rv1 tu tv =
+                 regionGridCoords 16 worldSize gx gy
 
              lookupEP ru rv =
                  HM.lookupDefault fallback (ClimateCoord ru rv) regMap
@@ -476,5 +451,3 @@ lookupRegionalErosion fallback regMap worldSize gx gy =
             , epSnowFraction  = lerpField epSnowFraction
             , epIsLastAge     = epIsLastAge ep00
             }
-  where
-    chunkSizeTiles = 16

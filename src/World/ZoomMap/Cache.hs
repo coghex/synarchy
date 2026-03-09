@@ -25,16 +25,14 @@ import World.Material (MaterialId(..), matGlacier, MaterialRegistry(..)
                       , MaterialProps(..), getMaterialProps)
 import World.Plate (TectonicPlate(..), elevationAtGlobal
                    , isBeyondGlacier, wrapGlobalU)
-import qualified Data.HashMap.Strict as HM
 import World.Fluids (isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid
                     , hasAnyRiverQuick, hasAnyLakeQuick)
 import World.Generate (applyTimelineFast)
 import Data.Bits ((.&.), shiftR)
 import World.Vegetation (isBarrenMaterial, isWetlandSoil
                         , selectVegetation, vegHash, vegNone, vegVariants)
-import World.Weather.Types (ClimateState(..), ClimateGrid(..)
-                           , RegionClimate(..), SeasonalClimate(..)
-                           , ClimateCoord(..), climateRegionSize)
+import World.Weather.Types (ClimateState(..))
+import World.Weather.Lookup (lookupLocalClimate)
 import World.ZoomMap.ColorPalette (ZoomColorPalette, lookupMatColor
                                   , lookupVegColorById
                                   , defaultOceanColor, defaultLavaColor)
@@ -185,11 +183,13 @@ buildZoomCacheWithPixels params registry palette =
                                           in (e, unMaterialId m)
                                  -- Per-tile vegetation using actual selectVegetation
                                  (temp, precip, humid, snow) =
-                                     lookupClimateQuick climate worldSize gx gy
+                                     lookupLocalClimate climate worldSize gx gy
                                  h = vegHash seed gx gy
                                  roll    = fromIntegral (h .&. 0xFF) / 255.0 ∷ Float
                                  variant = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
-                                 vegId = if chunkOcean ∨ isBarrenMaterial matId
+                                 isOceanTile = elev < seaLevel
+                                                   ∧ isOceanChunk oceanMap coord
+                                 vegId = if isOceanTile ∨ isBarrenMaterial matId
                                          then vegNone
                                          else selectVegetation matId 0 False elev
                                                   temp precip humid snow roll variant
@@ -373,7 +373,7 @@ vegCategoryFromClimate climate worldSize baseGX baseGY matId
         let -- Sample at chunk center
             gx = baseGX + chunkSize `div` 2
             gy = baseGY + chunkSize `div` 2
-            (temp, precip, _, snow) = lookupClimateQuick climate worldSize gx gy
+            (temp, precip, _, snow) = lookupLocalClimate climate worldSize gx gy
         in if snow > 0.7           then 0
            else if temp < -5.0     then 1  -- tundra
            else if precip < 0.15   then 0  -- desert
@@ -383,56 +383,3 @@ vegCategoryFromClimate climate worldSize baseGX baseGY matId
            else if temp > 5.0  ∧ precip > 0.3 then 2  -- temperate
            else 1  -- cool / sparse
 
--- | Climate lookup with bilinear interpolation between region centers.
---   Eliminates hard 4×4 chunk grid edges in vegetation/climate transitions.
-lookupClimateQuick ∷ ClimateState → Int → Int → Int
-                   → (Float, Float, Float, Float)
-lookupClimateQuick climate worldSize gx gy =
-    let regions = cgRegions (csClimate climate)
-        halfChunks = worldSize `div` 2
-        w = worldSize * chunkSize
-        halfW = w `div` 2
-        u = gx - gy
-        v = gx + gy
-        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
-
-        -- Continuous region coordinates (tile → chunk → region)
-        fCS = fromIntegral chunkSize ∷ Float
-        fCRS = fromIntegral climateRegionSize ∷ Float
-        hcF = fromIntegral halfChunks ∷ Float
-        ruF = (fromIntegral wrappedU / fCS + hcF) / fCRS
-        rvF = (fromIntegral v / fCS + hcF) / fCRS
-
-        -- Center-based: region center is at integer + 0.5
-        regionsPerSide = worldSize `div` climateRegionSize
-        ruC = ruF - 0.5
-        rvC = rvF - 0.5
-        ru0raw = floor ruC ∷ Int
-        rv0 = floor rvC ∷ Int
-        ru0 = ((ru0raw `mod` regionsPerSide) + regionsPerSide) `mod` regionsPerSide
-        ru1 = (ru0 + 1) `mod` regionsPerSide
-        rv1 = rv0 + 1
-        tu = ruC - fromIntegral ru0raw
-        tv = rvC - fromIntegral rv0
-
-        lookupRC ru rv =
-            case HM.lookup (ClimateCoord ru rv) regions of
-                Just rc →
-                    let SeasonalClimate st wt = rcAirTemp rc
-                        SeasonalClimate sp wp = rcPrecipitation rc
-                    in ((st + wt) / 2.0, (sp + wp) / 2.0
-                       , rcHumidity rc, rcPrecipType rc)
-                Nothing →
-                    (csGlobalTemp climate, 0.5, 0.5, 0.0)
-
-        (t00, p00, h00, s00) = lookupRC ru0 rv0
-        (t10, p10, h10, s10) = lookupRC ru1 rv0
-        (t01, p01, h01, s01) = lookupRC ru0 rv1
-        (t11, p11, h11, s11) = lookupRC ru1 rv1
-
-        lerpF a b t = a + t * (b - a)
-        temp   = lerpF (lerpF t00 t10 tu) (lerpF t01 t11 tu) tv
-        precip = lerpF (lerpF p00 p10 tu) (lerpF p01 p11 tu) tv
-        humid  = lerpF (lerpF h00 h10 tu) (lerpF h01 h11 tu) tv
-        snow   = lerpF (lerpF s00 s10 tu) (lerpF s01 s11 tu) tv
-    in (temp, precip, humid, snow)
