@@ -24,18 +24,27 @@ import World.Geology.Hash
 -- Distance Perturbation (breaks circular symmetry)
 -----------------------------------------------------------
 
--- | Perturb a radial distance using angle-based noise.
---   Creates irregular, natural-looking feature boundaries.
+-- | Perturb a radial distance using multi-octave angle+radial noise.
+--   Creates irregular, natural-looking feature boundaries without
+--   visible concentric rings.
 perturbDist ∷ Int → Int → Float → Float → Float → Float → Float
 perturbDist cx cy dx dy dist radius =
     let angle = atan2 dy dx + π
         featureSeed = fromIntegral (cx * 7919 + cy * 6271) ∷ Word64
-        -- Coarse lobes (8 per revolution)
-        n1 = angularNoise featureSeed 8 angle 17
-        -- Fine detail (20 per revolution)
-        n2 = angularNoise featureSeed 20 angle 31
-        combined = n1 * 0.65 + n2 * 0.35
-        perturbation = (combined - 0.5) * 0.3 * radius
+        -- Radial position (0-1) for radial variation
+        radialT = if radius < 1.0 then 0.0 else dist / radius
+        -- Multiple octaves at different angular frequencies
+        -- with radial modulation to break concentric banding
+        n1 = angularNoise featureSeed 5  angle 17   -- very coarse lobes
+        n2 = angularNoise featureSeed 11 angle 31   -- medium lobes
+        n3 = angularNoise featureSeed 23 angle 47   -- fine detail
+        n4 = angularNoise featureSeed 37 angle 61   -- very fine detail
+        -- Radial noise: varies perturbation strength with distance
+        rn = angularNoise featureSeed 7 (radialT * 2.0 * π) 73
+        -- Blend octaves with decreasing amplitude
+        combined = n1 * 0.40 + n2 * 0.25 + n3 * 0.20 + n4 * 0.10
+                 + (rn - 0.5) * 0.10  -- radial variation breaks rings
+        perturbation = (combined - 0.5) * 0.35 * radius
     in dist + perturbation
 
 -- | Smooth noise sampled around a circle in angular buckets.

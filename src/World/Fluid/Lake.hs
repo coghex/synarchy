@@ -52,7 +52,7 @@ isNearbyLake worldSize chunkGX chunkGY pf =
 checkLakeRange ∷ Int → Int → Int → LakeParams → Bool
 checkLakeRange worldSize chunkGX chunkGY lk =
     let GeoCoord fx fy = lkCenter lk
-        maxR = lkRadius lk
+        maxR = round (fromIntegral (lkRadius lk) * 1.25 ∷ Float)
         (dxi, dyi) = wrappedDeltaUVFluid worldSize chunkGX chunkGY fx fy
         dx = abs dxi
         dy = abs dyi
@@ -91,7 +91,11 @@ fillLakePool ∷ MV.MVector s (Maybe FluidCell)
              → VU.Vector Int
              → ST s ()
 fillLakePool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurface surfaceMap =
-    let pr = fromIntegral poolRadius ∷ Float
+    let -- Expand fill radius by 25% to cover perturbed basin boundary.
+        -- The carving in Event.hs uses angular noise that can extend
+        -- the basin up to ~20% beyond the nominal radius. The surfZ
+        -- check ensures we only fill tiles actually carved below water.
+        pr = fromIntegral poolRadius * 1.25 ∷ Float
         rimSamples = 32 ∷ Int
 
         -- Always use elevationAtGlobal for rim samples so every chunk

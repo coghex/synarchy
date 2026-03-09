@@ -553,15 +553,16 @@ makeSegment spacing _segIdx
         valleyMult ∷ Float
         valleyMult = if slopePerTile > 0.5 then 3.0
                      else 3.0 + (1.0 - min 1.0 (slopePerTile * 2.0)) * 3.0
-                     -- was * 5.0, reduced to * 3.0
-        valleyW = min 48 (max (width * 3)
-                               (round (fromIntegral width * valleyMult) ∷ Int))
-        -- was min 96, now min 48
-
-        -- Depth capped at 20 tiles (200m) absolute max
-        baseDepth = max 4 (slopeDelta `div` 3 + round (flow * 3.0))
-        maxDepth = min 20 (slopeDelta + 10)
+        -- Depth capped at 10 tiles (100m) — keeps valleys wider than deep
+        baseDepth = max 3 (slopeDelta `div` 4 + round (flow * 2.0))
+        maxDepth = min 10 (slopeDelta + 6)
         depth = min maxDepth baseDepth
+        -- Valley must be wide enough that walls aren't steep cliffs.
+        -- Minimum half-width = depth × 4 → full width = depth × 8.
+        minValleyW = depth * 8
+        rawValleyW = max (width * 3)
+                         (round (fromIntegral width * valleyMult) ∷ Int)
+        valleyW = max minValleyW (min 96 rawValleyW)
 
     in RiverSegment
         { rsStart       = GeoCoord sx sy

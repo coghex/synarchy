@@ -5,13 +5,14 @@ module World.Hydrology.Event
     ) where
 
 import UPrelude
+import Data.Word (Word64)
 import World.Base (GeoCoord(..))
 import World.Types
 import World.Hydrology.Types
 import World.Hydrology.River (applyRiverCarve, applyRiverEvolution)
 import World.Hydrology.Glacier (applyGlacierCarve, applyGlacierEvolution)
 import World.Geology.Types (GeoModification(..), noModification)
-import World.Geology.Hash (wrappedDeltaUV)
+import World.Geology.Hash (wrappedDeltaUV, hashGeo, hashToFloatGeo, smoothstepGeo)
 
 -----------------------------------------------------------
 -- HydroEvent dispatch (for new feature placement)
@@ -32,18 +33,33 @@ applyHydroFeature (GlacierFeature glacier) worldSize gx gy baseElev =
 applyHydroFeature (LakeFeature lk) worldSize gx gy baseElev =
     -- Carve a gentle bowl so fine-scale terrain bumps don't poke
     -- above the water surface (which creates jagged "teeth" shorelines).
-    -- The bowl floor rises linearly from full depth at center to
-    -- 1 tile below the surface at the rim.
+    -- The bowl floor rises from full depth at center to surface at rim.
+    -- Uses angular + radial noise to break up the circular boundary.
     let GeoCoord fx fy = lkCenter lk
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy fx fy
-        dist = sqrt (fromIntegral (dxi * dxi + dyi * dyi) ∷ Float)
+        dx = fromIntegral dxi ∷ Float
+        dy = fromIntegral dyi ∷ Float
+        rawDist = sqrt (dx * dx + dy * dy)
         radius = fromIntegral (lkRadius lk) ∷ Float
         surface = lkSurface lk
         depth = max 2 (lkDepth lk)
+
+        -- Angular noise to break circular boundary (like volcano perturbation)
+        angle = atan2 dy dx + π
+        lakeSeed = fromIntegral (fx * 5381 + fy * 3571) ∷ Word64
+        n1 = lakeAngularNoise lakeSeed 5  angle 19
+        n2 = lakeAngularNoise lakeSeed 11 angle 37
+        n3 = lakeAngularNoise lakeSeed 19 angle 53
+        combined = n1 * 0.50 + n2 * 0.30 + n3 * 0.20
+        perturbation = (combined - 0.5) * 0.4 * radius
+        dist = rawDist + perturbation
+
     in if dist ≥ radius
        then noModification
        else let t = dist / radius
-                floorElev = surface - max 1 (round (fromIntegral depth * (1.0 - t)))
+                -- Smoothstep for softer edge transition
+                profile = 1.0 - smoothstepGeo (max 0.0 t)
+                floorElev = surface - max 1 (round (fromIntegral depth * profile))
                 carve = baseElev - floorElev
             in if carve ≤ 0
                then noModification
@@ -52,6 +68,19 @@ applyHydroFeature (LakeFeature lk) worldSize gx gy baseElev =
                    , gmMaterialOverride = Nothing
                    , gmIntrusionDepth   = 0
                    }
+
+-- | Angular noise for lake boundary perturbation.
+--   Same technique as volcano perturbation with smoothstep interpolation.
+lakeAngularNoise ∷ Word64 → Int → Float → Int → Float
+lakeAngularNoise seed buckets angle hashProp =
+    let angStep = 2.0 * π / fromIntegral buckets
+        angF = angle / angStep
+        bucket0 = floor angF ∷ Int
+        bucket1 = bucket0 + 1
+        t = angF - fromIntegral bucket0
+        n0 = hashToFloatGeo (hashGeo seed bucket0 hashProp)
+        n1 = hashToFloatGeo (hashGeo seed bucket1 hashProp)
+    in n0 + smoothstepGeo t * (n1 - n0)
 
 -----------------------------------------------------------
 -- HydroModify dispatch (for feature evolution)

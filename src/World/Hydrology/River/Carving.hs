@@ -157,16 +157,21 @@ carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
                       , gmIntrusionDepth   = min alluviumDepth carve
                       }
 
-          -- Valley walls: gradual slope from rim to channel edge.
+          -- Valley walls: smooth slope from rim to channel edge.
           -- wallT goes from 0 (at channel edge) to 1 (at valley rim).
-          -- Carve depth is an integer fraction of channel depth,
-          -- computed without per-tile float interpolation.
+          -- Uses smoothstep cubic (3t²−2t³) for gradual transitions
+          -- at both the channel edge and the valley rim, avoiding
+          -- sharp cliff angles.
           else let wallT = (effectivePerpDist - channelHalfW)
                          / (valleyHalfW - channelHalfW)
-                   -- Integer wall carve depth: decreases from 70% of
-                   -- channel depth at channel edge to 0 at valley rim.
+                   -- Smoothstep: smooth cubic ease-in/ease-out
+                   smoothT = let t' = max 0.0 (min 1.0 wallT)
+                             in t' * t' * (3.0 - 2.0 * t')
+                   -- Wall carve depth: decreases from 70% of channel
+                   -- depth at channel edge to 0 at valley rim, with
+                   -- smooth cubic profile to avoid cliff faces.
                    wallCarveDepth = floor (fromIntegral depthI * 0.7
-                                         * max 0.0 (1.0 - wallT)) ∷ Int
+                                         * (1.0 - smoothT)) ∷ Int
                    -- Use the higher segment endpoint as the reference
                    -- surface (rim elevation) — pure integer, no interpolation.
                    refSurface = max (rsStartElev seg) (rsEndElev seg)

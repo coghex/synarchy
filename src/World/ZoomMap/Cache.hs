@@ -36,6 +36,11 @@ import World.Weather.Lookup (lookupLocalClimate)
 import World.ZoomMap.ColorPalette (ZoomColorPalette, lookupMatColor
                                   , lookupVegColorById
                                   , defaultOceanColor, defaultLavaColor)
+import World.Base (GeoCoord(..))
+import World.Geology.Hash (wrappedDeltaUV)
+import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
+                             , RiverSegment(..))
+import World.Render.Zoom.Types (zoomTileSize)
 
 -----------------------------------------------------------
 -- Sampling Configuration
@@ -228,9 +233,14 @@ buildZoomCacheWithPixels params registry palette =
                     , zceVegCategory = vegCat
                     }
 
+                -- Collect nearby river segments for per-pixel river rendering
+                riverSegs = collectNearbyRiverSegs features worldSize
+                                baseGX baseGY
+
                 -- Generate zoomTileSize×zoomTileSize RGBA pixel data (isometric)
                 tileVec = V.fromList tileData
-                pixels = generateChunkPixels palette chunkOcean chunkLava tileVec
+                pixels = generateChunkPixels palette chunkOcean chunkLava
+                             worldSize riverSegs tileVec
 
             in (entry, pixels)
 
@@ -255,9 +265,10 @@ buildZoomCacheWithPixels params registry palette =
 --   Uses inverse isometric transform to map screen-space pixels
 --   back to grid tiles, producing a diamond-shaped image.
 generateChunkPixels ∷ ZoomColorPalette → Bool → Bool
+                    → Int → [RiverSegment]
                     → V.Vector (Int, Word8, Word8, Int, Int)
                     → BS.ByteString
-generateChunkPixels palette isOcean hasLava tileVec =
+generateChunkPixels palette isOcean hasLava worldSize riverSegs tileVec =
     BL.toStrict $ BB.toLazyByteString $ mconcat
         [ pixelAt px py
         | py ← [0 .. zoomTileSize - 1]
@@ -282,14 +293,30 @@ generateChunkPixels palette isOcean hasLava tileVec =
            then BB.word8 0 <> BB.word8 0 <> BB.word8 0 <> BB.word8 0
            else let idx = ly * chunkSize + lx
                     (elev, matId, vegId, gx, gy) = tileVec V.! idx
-                    (r, g, b, a) = tileColor palette isOcean hasLava
-                                       matId vegId elev gx gy
+                    baseColor = tileColor palette isOcean hasLava
+                                    matId vegId elev gx gy
+                    -- Per-pixel river check: compute distance to nearest
+                    -- river centerline and tint blue if within channel
+                    (r, g, b, a) =
+                        if null riverSegs ∨ isOcean ∨ elev < seaLevel
+                        then baseColor
+                        else case riverDistAtTile worldSize gx gy riverSegs of
+                            Nothing → baseColor
+                            Just blend →
+                                let (lr, lg, lb, la) = baseColor
+                                in ( round (fromIntegral lr * (1.0 - blend)
+                                          + 50.0 * blend ∷ Float)
+                                   , round (fromIntegral lg * (1.0 - blend)
+                                          + 90.0 * blend ∷ Float)
+                                   , round (fromIntegral lb * (1.0 - blend)
+                                          + 170.0 * blend ∷ Float)
+                                   , la )
                 in BB.word8 r <> BB.word8 g <> BB.word8 b <> BB.word8 a
 
 -- | Determine the color for a single tile.
 tileColor ∷ ZoomColorPalette → Bool → Bool → Word8 → Word8 → Int → Int → Int
           → (Word8, Word8, Word8, Word8)
-tileColor palette isOcean hasLava matId vegId elev gx gy
+tileColor palette isOcean hasLava matId vegId elev _gx _gy
     -- Any tile below sea level renders as water
     | elev < seaLevel ∧ (isOcean ∨ matId ≡ 0) = defaultOceanColor
     -- Lava only in actual depressions (below sea level)
@@ -331,6 +358,81 @@ vegDensityWeight vegId =
         57 → 0.3   -- mushroom patch
         61 → 0.4   -- wildflowers
         _  → 0.3
+
+-----------------------------------------------------------
+-- Per-Pixel River Rendering
+-----------------------------------------------------------
+
+-- | Collect river segments near this chunk for per-pixel distance checks.
+--   Only collects segments whose bounding box (padded by channel width)
+--   overlaps this chunk — much tighter than valley-width proximity.
+collectNearbyRiverSegs ∷ [PersistentFeature] → Int → Int → Int
+                       → [RiverSegment]
+collectNearbyRiverSegs features worldSize chunkGX chunkGY =
+    concatMap extractSegs features
+  where
+    cx = chunkGX + chunkSize `div` 2
+    cy = chunkGY + chunkSize `div` 2
+    extractSegs pf = case pfFeature pf of
+        HydroShape (RiverFeature river) →
+            case pfActivity pf of
+                FActive  → filter segNear (V.toList (rpSegments river))
+                FDormant → filter segNear (V.toList (rpSegments river))
+                _        → []
+        _ → []
+    segNear seg =
+        let GeoCoord sx sy = rsStart seg
+            GeoCoord ex ey = rsEnd seg
+            -- Use channel width + margin for proximity, NOT valley width
+            margin = rsWidth seg + chunkSize
+            midX = (sx + ex) `div` 2
+            midY = (sy + ey) `div` 2
+            (dxi, dyi) = wrappedDeltaUV worldSize cx cy midX midY
+            halfSpanX = abs (sx - ex) `div` 2 + margin
+            halfSpanY = abs (sy - ey) `div` 2 + margin
+        in abs dxi < halfSpanX ∧ abs dyi < halfSpanY
+
+-- | Check if a tile is near a river centerline for the zoom map.
+--   Returns a blend factor (0.0-1.0) for blue tinting, or Nothing.
+--   Uses a THIN display width (1-2 tiles) so rivers appear as lines
+--   on the zoom map, not blobs. Slightly wider for high-flow rivers.
+--   The tRaw range is clamped tightly to avoid circular end-caps.
+riverDistAtTile ∷ Int → Int → Int → [RiverSegment] → Maybe Float
+riverDistAtTile worldSize gx gy = go Nothing
+  where
+    go best [] = best
+    go best (seg : rest) =
+        let GeoCoord sx sy = rsStart seg
+            GeoCoord ex ey = rsEnd seg
+            (dxi, dyi) = wrappedDeltaUV worldSize ex ey sx sy
+            dx' = fromIntegral dxi ∷ Float
+            dy' = fromIntegral dyi ∷ Float
+            segLen2 = dx' * dx' + dy' * dy'
+        in if segLen2 < 1.0
+           then go best rest
+           else
+           let segLen = sqrt segLen2
+               (pxi, pyi) = wrappedDeltaUV worldSize gx gy sx sy
+               px = fromIntegral pxi ∷ Float
+               py = fromIntegral pyi ∷ Float
+               tRaw = (px * dx' + py * dy') / segLen2
+           -- Tight clamping: only render along the segment body,
+           -- no circular end-caps that create blobby junctions
+           in if tRaw < 0.0 ∨ tRaw > 1.0
+              then go best rest
+              else
+              let perpDist = abs (px * dy' - py * dx') / segLen
+                  -- Thin display: 1 tile base + slight scaling for flow
+                  -- This shows rivers as lines, not channels
+                  flow = rsFlowRate seg
+                  displayHalfW = 1.0 + min 1.5 (flow * 0.5)
+              in if perpDist > displayHalfW
+                 then go best rest
+                 else
+                 let blend = 0.7 ∷ Float  -- solid blue line
+                 in case best of
+                     Nothing → go (Just blend) rest
+                     Just b  → go (Just (max b blend)) rest
 
 -----------------------------------------------------------
 -- Helpers
