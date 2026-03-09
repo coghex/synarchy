@@ -110,11 +110,12 @@ plateAt seed worldSize plates gx gy =
 twoNearestPlates ∷ Word64 → Int → [TectonicPlate] → Int → Int
                  → ((TectonicPlate, Float), (TectonicPlate, Float))
 twoNearestPlates seed worldSize plates gx gy =
-    let jitter = jitterAmount seed worldSize gx gy
-        dist plate =
+    let dist plate =
             let du = fromIntegral (wrappedDeltaU worldSize gx gy
                         (plateCenterX plate) (plateCenterY plate)) ∷ Float
                 dv = fromIntegral ((gx + gy) - (plateCenterX plate + plateCenterY plate)) ∷ Float
+                jitter = plateJitter seed worldSize gx gy
+                             (plateCenterX plate) (plateCenterY plate)
             in sqrt (du * du + dv * dv) + jitter
     in case plates of
         (p:ps) →
@@ -132,11 +133,12 @@ twoNearestPlates seed worldSize plates gx gy =
         _ → error "no plates"
 
 rankPlates seed worldSize plates gx gy =
-    let jitter = jitterAmount seed worldSize gx gy
-        withDist plate =
+    let withDist plate =
             let du = fromIntegral (wrappedDeltaU worldSize gx gy
                         (plateCenterX plate) (plateCenterY plate)) ∷ Float
                 dv = fromIntegral ((gx + gy) - (plateCenterX plate + plateCenterY plate)) ∷ Float
+                jitter = plateJitter seed worldSize gx gy
+                             (plateCenterX plate) (plateCenterY plate)
             in (plate, sqrt (du * du + dv * dv) + jitter)
     in sortBy (comparing snd) (map withDist plates)
 
@@ -432,10 +434,14 @@ clampInt lo hi x
 -- Jitter
 -----------------------------------------------------------
 
-jitterAmount ∷ Word64 → Int → Int → Int → Float
-jitterAmount seed worldSize gx gy =
-    let n1 = wrappedValueNoise2D seed worldSize gx gy 20
-        n2 = wrappedValueNoise2D (seed + 99) worldSize gx gy 8
+-- | Per-plate jitter: each plate gets a different noise field
+--   keyed by its center coordinates. This creates irregular
+--   plate boundaries instead of straight Voronoi edges.
+plateJitter ∷ Word64 → Int → Int → Int → Int → Int → Float
+plateJitter seed worldSize gx gy plateCX plateCY =
+    let plateSeed = seed `xor` fromIntegral (plateCX * 7919 + plateCY * 6271)
+        n1 = wrappedValueNoise2D plateSeed worldSize gx gy 20
+        n2 = wrappedValueNoise2D (plateSeed + 99) worldSize gx gy 8
         combined = n1 * 0.7 + n2 * 0.3
     in (combined - 0.5) * 80.0
 

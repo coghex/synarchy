@@ -14,6 +14,7 @@ import World.Plate (isBeyondGlacier, elevationAtGlobal, TectonicPlate
                    , wrapGlobalU)
 import World.Geology.Types
 import World.Geology.Hash
+import World.Geology.Volcano (perturbDist)
 
 -----------------------------------------------------------
 -- Crater Generation
@@ -135,9 +136,11 @@ applyCrater params worldSize gx gy _baseElev =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+        rawDist = sqrt (dx * dx + dy * dy)
 
         radius      = fromIntegral (cpRadius params) ∷ Float
+        ejectaR0    = fromIntegral (cpEjectaRadius params) ∷ Float
+        dist = perturbDist cx cy dx dy rawDist ejectaR0
         depth       = fromIntegral (cpDepth params) ∷ Float
         rimHeight   = fromIntegral (cpRimHeight params) ∷ Float
         ejectaR     = fromIntegral (cpEjectaRadius params) ∷ Float

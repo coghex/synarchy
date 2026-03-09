@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Volcano
-    ( applyVolcanicFeature
+    ( perturbDist
+    , applyVolcanicFeature
     , applyShieldVolcano
     , applyCinderCone
     , applyLavaDome
@@ -12,11 +13,42 @@ module World.Geology.Volcano
     ) where
 
 import UPrelude
+import Data.Word (Word64)
 import World.Base (GeoCoord(..))
 import World.Types
 import World.Material
 import World.Geology.Types
 import World.Geology.Hash
+
+-----------------------------------------------------------
+-- Distance Perturbation (breaks circular symmetry)
+-----------------------------------------------------------
+
+-- | Perturb a radial distance using angle-based noise.
+--   Creates irregular, natural-looking feature boundaries.
+perturbDist ∷ Int → Int → Float → Float → Float → Float → Float
+perturbDist cx cy dx dy dist radius =
+    let angle = atan2 dy dx + π
+        featureSeed = fromIntegral (cx * 7919 + cy * 6271) ∷ Word64
+        -- Coarse lobes (8 per revolution)
+        n1 = angularNoise featureSeed 8 angle 17
+        -- Fine detail (20 per revolution)
+        n2 = angularNoise featureSeed 20 angle 31
+        combined = n1 * 0.65 + n2 * 0.35
+        perturbation = (combined - 0.5) * 0.3 * radius
+    in dist + perturbation
+
+-- | Smooth noise sampled around a circle in angular buckets.
+angularNoise ∷ Word64 → Int → Float → Int → Float
+angularNoise seed buckets angle hashProp =
+    let angStep = 2.0 * π / fromIntegral buckets
+        angF = angle / angStep
+        bucket0 = floor angF ∷ Int
+        bucket1 = bucket0 + 1
+        t = angF - fromIntegral bucket0
+        n0 = hashToFloatGeo (hashGeo seed bucket0 hashProp)
+        n1 = hashToFloatGeo (hashGeo seed bucket1 hashProp)
+    in n0 + smoothstepGeo t * (n1 - n0)
 
 -----------------------------------------------------------
 -- Volcanic Feature Dispatch
@@ -42,9 +74,10 @@ applyShieldVolcano params worldSize gx gy _baseElev =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+        rawDist = sqrt (dx * dx + dy * dy)
 
         baseR = fromIntegral (shBaseRadius params) ∷ Float
+        dist = perturbDist cx cy dx dy rawDist baseR
         peakH = fromIntegral (shPeakHeight params) ∷ Float
         pitR  = fromIntegral (shPitRadius params) ∷ Float
         pitD  = fromIntegral (shPitDepth params) ∷ Float
@@ -82,9 +115,10 @@ applyCinderCone params worldSize gx gy _baseElev =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+        rawDist = sqrt (dx * dx + dy * dy)
 
         baseR   = fromIntegral (ccBaseRadius params) ∷ Float
+        dist = perturbDist cx cy dx dy rawDist baseR
         peakH   = fromIntegral (ccPeakHeight params) ∷ Float
         craterR = fromIntegral (ccCraterRadius params) ∷ Float
         craterD = fromIntegral (ccCraterDepth params) ∷ Float
@@ -118,9 +152,10 @@ applyLavaDome params worldSize gx gy _baseElev =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+        rawDist = sqrt (dx * dx + dy * dy)
 
         baseR = fromIntegral (ldBaseRadius params) ∷ Float
+        dist = perturbDist cx cy dx dy rawDist baseR
         height = fromIntegral (ldHeight params) ∷ Float
 
     in if dist > baseR
@@ -145,9 +180,10 @@ applyCaldera params worldSize gx gy _baseElev =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+        rawDist = sqrt (dx * dx + dy * dy)
 
         outerR = fromIntegral (caOuterRadius params) ∷ Float
+        dist = perturbDist cx cy dx dy rawDist outerR
         innerR = fromIntegral (caInnerRadius params) ∷ Float
         rimH   = fromIntegral (caRimHeight params) ∷ Float
         floorD = fromIntegral (caFloorDepth params) ∷ Float
@@ -303,9 +339,11 @@ applySuperVolcano params worldSize gx gy baseElev =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+        rawDist = sqrt (dx * dx + dy * dy)
 
         calderaR = fromIntegral (svCalderaRadius params) ∷ Float
+        ejectaRForPerturb = fromIntegral (svEjectaRadius params) ∷ Float
+        dist = perturbDist cx cy dx dy rawDist ejectaRForPerturb
         rimH     = fromIntegral (svRimHeight params) ∷ Float
         floorD   = fromIntegral (svFloorDepth params) ∷ Float
         ejectaR  = fromIntegral (svEjectaRadius params) ∷ Float
@@ -356,9 +394,10 @@ applyHydrothermal params worldSize gx gy _baseElev =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+        rawDist = sqrt (dx * dx + dy * dy)
 
         radius = fromIntegral (htRadius params) ∷ Float
+        dist = perturbDist cx cy dx dy rawDist radius
         chimneyH = fromIntegral (htChimneyHeight params) ∷ Float
 
     in if dist > radius
