@@ -226,6 +226,8 @@ matchesBiome wg matId slopeId temp precip =
 -----------------------------------------------------------
 
 -- | returns (temperature, precipitation, humidity, precipType)
+--   Uses bilinear interpolation between the 4 nearest region
+--   centers to eliminate hard grid boundaries.
 lookupLocalClimate ∷ ClimateState → Int → Int → Int
                    → (Float, Float, Float, Float)
 lookupLocalClimate climate worldSize gx gy =
@@ -236,25 +238,47 @@ lookupLocalClimate climate worldSize gx gy =
         u = gx - gy
         v = gx + gy
         wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
-        chunkU = floorDiv wrappedU chunkSz
-        chunkV = floorDiv v chunkSz
-        ru = (chunkU + halfChunks) `div` climateRegionSize
-        rv = (chunkV + halfChunks) `div` climateRegionSize
-    in case HM.lookup (ClimateCoord ru rv) regions of
-        Just rc →
-            let SeasonalClimate st wt = rcAirTemp rc
-                temp = (st + wt) / 2.0
-                SeasonalClimate sp wp = rcPrecipitation rc
-                precip = (sp + wp) / 2.0
-            in (temp, precip, rcHumidity rc, rcPrecipType rc)
-        Nothing →
-            (csGlobalTemp climate, 0.5, 0.5, 0.0)
+
+        -- Continuous region coordinates
+        fCS  = fromIntegral chunkSz ∷ Float
+        fCRS = fromIntegral climateRegionSize ∷ Float
+        hcF  = fromIntegral halfChunks ∷ Float
+        ruF  = (fromIntegral wrappedU / fCS + hcF) / fCRS
+        rvF  = (fromIntegral v / fCS + hcF) / fCRS
+
+        -- Center-based interpolation
+        ruC = ruF - 0.5
+        rvC = rvF - 0.5
+        ru0 = floor ruC ∷ Int
+        rv0 = floor rvC ∷ Int
+        ru1 = ru0 + 1
+        rv1 = rv0 + 1
+        tu  = ruC - fromIntegral ru0
+        tv  = rvC - fromIntegral rv0
+
+        lookupRC ru rv =
+            case HM.lookup (ClimateCoord ru rv) regions of
+                Just rc →
+                    let SeasonalClimate st wt = rcAirTemp rc
+                        SeasonalClimate sp wp = rcPrecipitation rc
+                    in ((st + wt) / 2.0, (sp + wp) / 2.0
+                       , rcHumidity rc, rcPrecipType rc)
+                Nothing →
+                    (csGlobalTemp climate, 0.5, 0.5, 0.0)
+
+        (t00, p00, h00, s00) = lookupRC ru0 rv0
+        (t10, p10, h10, s10) = lookupRC ru1 rv0
+        (t01, p01, h01, s01) = lookupRC ru0 rv1
+        (t11, p11, h11, s11) = lookupRC ru1 rv1
+
+        lerpF a b t = a + t * (b - a)
+        temp   = lerpF (lerpF t00 t10 tu) (lerpF t01 t11 tu) tv
+        precip = lerpF (lerpF p00 p10 tu) (lerpF p01 p11 tu) tv
+        humid  = lerpF (lerpF h00 h10 tu) (lerpF h01 h11 tu) tv
+        snow   = lerpF (lerpF s00 s10 tu) (lerpF s01 s11 tu) tv
+    in (temp, precip, humid, snow)
   where
     chunkSz = chunkSize
-    floorDiv a b
-        | b > 0     = if a ≥ 0 then a `div` b
-                       else negate ((negate a + b - 1) `div` b)
-        | otherwise = 0
 
 -----------------------------------------------------------
 -- Hash

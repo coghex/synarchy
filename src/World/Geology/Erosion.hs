@@ -407,6 +407,9 @@ rockFromSource matId temp precip roll = case matId of
 -- | Look up erosion params for a tile, using regional climate
 --   data when available, falling back to the global params.
 --
+--   Uses bilinear interpolation between the 4 nearest region
+--   centers to eliminate hard grid boundaries.
+--
 --   Climate regions are keyed by (ru, rv) in the rotated
 --   (u, v) = (gx - gy, gx + gy) coordinate system, divided
 --   into climateRegionSize chunks per side.
@@ -427,14 +430,48 @@ lookupRegionalErosion fallback regMap worldSize gx gy =
              halfW = w `div` 2
              -- Wrap u-axis (cylindrical world), then to chunk space
              wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
-             chunkU = floorDiv wrappedU chunkSizeTiles
-             chunkV = floorDiv v chunkSizeTiles
-             -- Chunk space → climate region index
-             ru = (chunkU + halfChunks) `div` climateRegionSize
-             rv = (chunkV + halfChunks) `div` climateRegionSize
-         in HM.lookupDefault fallback (ClimateCoord ru rv) regMap
+
+             -- Continuous region coordinates (float)
+             fCS  = fromIntegral chunkSizeTiles ∷ Float
+             fCRS = fromIntegral climateRegionSize ∷ Float
+             hcF  = fromIntegral halfChunks ∷ Float
+             ruF  = (fromIntegral wrappedU / fCS + hcF) / fCRS
+             rvF  = (fromIntegral v / fCS + hcF) / fCRS
+
+             -- Center-based interpolation
+             ruC = ruF - 0.5
+             rvC = rvF - 0.5
+             ru0 = floor ruC ∷ Int
+             rv0 = floor rvC ∷ Int
+             ru1 = ru0 + 1
+             rv1 = rv0 + 1
+             tu  = ruC - fromIntegral ru0
+             tv  = rvC - fromIntegral rv0
+
+             lookupEP ru rv =
+                 HM.lookupDefault fallback (ClimateCoord ru rv) regMap
+
+             ep00 = lookupEP ru0 rv0
+             ep10 = lookupEP ru1 rv0
+             ep01 = lookupEP ru0 rv1
+             ep11 = lookupEP ru1 rv1
+
+             lerpF a b t = a + t * (b - a)
+             lerpField f = lerpF (lerpF (f ep00) (f ep10) tu)
+                                 (lerpF (f ep01) (f ep11) tu) tv
+
+         in ErosionParams
+            { epIntensity     = lerpField epIntensity
+            , epHydraulic     = lerpField epHydraulic
+            , epThermal       = lerpField epThermal
+            , epWind          = lerpField epWind
+            , epChemical      = lerpField epChemical
+            , epSeed          = epSeed ep00
+            , epTemperature   = lerpField epTemperature
+            , epPrecipitation = lerpField epPrecipitation
+            , epHumidity      = lerpField epHumidity
+            , epSnowFraction  = lerpField epSnowFraction
+            , epIsLastAge     = epIsLastAge ep00
+            }
   where
     chunkSizeTiles = 16
-    floorDiv a b
-      | b > 0     = if a >= 0 then a `div` b else -(((-a) + b - 1) `div` b)
-      | otherwise = error "floorDiv: non-positive divisor"

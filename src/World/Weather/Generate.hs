@@ -13,7 +13,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
 import qualified Data.Vector.Unboxed as VU
 import World.Weather.Types
-import World.Chunk.Types (ChunkCoord(..))
+import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Ocean.Types (OceanMap)
 import World.Hydrology.Simulation (ElevGrid(..))
 import World.Constants (seaLevel)
@@ -84,18 +84,21 @@ oceanRegionsFromGrid grid worldSize =
         halfGrid = gridW `div` 2
         regionsPerSide = worldSize `div` climateRegionSize
         halfChunks = worldSize `div` 2
+        -- Region size in tiles (climateRegionSize chunks × chunkSize tiles)
+        regionSizeTiles = climateRegionSize * chunkSize
+        halfW = halfChunks * chunkSize  -- half-world in tiles
     in HS.fromList
         [ ClimateCoord ru rv
         | ix ← [0 .. gridW - 1]
         , iy ← [0 .. gridW - 1]
         , let idx = iy * gridW + ix
         , not (egLand grid VU.! idx)
-          -- Map grid sample → (u,v) → ClimateCoord
+          -- Map grid sample → (u,v) tile coords → ClimateCoord
         , let u = (ix - halfGrid) * spacing
               v = (iy - halfGrid) * spacing
-              -- u-axis wraps, v-axis is bounded
-              ru = (u + halfChunks) `div` climateRegionSize
-              rv = (v + halfChunks) `div` climateRegionSize
+              -- Convert tile-space to region indices
+              ru = (u + halfW) `div` regionSizeTiles
+              rv = (v + halfW) `div` regionSizeTiles
         , ru ≥ 0, ru < regionsPerSide
         , rv ≥ 0, rv < regionsPerSide
         ]
