@@ -11,199 +11,126 @@ import World.Base (GeoCoord(..))
 import World.Constants (seaLevel)
 import World.Types
 import World.Fluids (fixupSegmentContinuity)
-import World.Plate (isBeyondGlacier, wrapGlobalU)
 import World.Geology.Hash
 import World.Hydrology.Types (RiverParams(..), RiverSegment(..))
 import World.Hydrology.Simulation (ElevGrid(..))
-import World.Geology.Timeline.Helpers (elevFromGrid, filledElevFromGrid)
 
 -----------------------------------------------------------
--- River tracing
+-- River tracing via flow-direction chain
 -----------------------------------------------------------
 
--- | Trace a river from a source cell downhill to the sea (or
---   until it gets stuck). Uses the FILLED elevation surface
---   for pathfinding so the path descends monotonically through
---   depressions (which become lakes). Records RAW elevation
---   for segment construction so carving targets real terrain.
+-- | Trace a river from a source cell to the ocean by following
+--   the pre-computed flow direction grid. This is GUARANTEED to
+--   reach the ocean because the flow directions are derived from
+--   the depression-filled surface (priority-flood algorithm).
 --
---   Uses gradient-based continuous direction with momentum for
---   natural, curving paths instead of 8-directional grid stepping.
+--   The grid path is augmented with hash-based perpendicular
+--   noise so the river doesn't look grid-aligned.
 traceRiverFromSource ∷ Word64 → Int → ElevGrid → VU.Vector Int
+                     → VU.Vector Int
                      → Int → Int → Int → Int → Float
                      → Maybe RiverParams
-traceRiverFromSource seed worldSize elevGrid filledElev gx gy srcElev riverIdx flow =
-    let stepSize   = 4       -- tiles per step (≥ half grid spacing for progress)
-        maxSteps   = 3000
-        sampleDist = 10      -- sample gradient at this distance (> grid spacing)
-        maxRetries = 4 ∷ Int -- retries with smaller steps on uphill
-        maxFlat    = 30 ∷ Int -- max consecutive flat steps before giving up
+traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
+                     gx gy srcElev riverIdx flow =
+    let gridW   = egGridW elevGrid
+        spacing = egSpacing elevGrid
+        halfGrid = gridW `div` 2
+        totalSamples = gridW * gridW
 
-        -- Raw elevation for segment construction (carving targets)
-        getRawElev x y =
-            let (x', y') = wrapGlobalU worldSize x y
-            in if isBeyondGlacier worldSize x' y'
-               then seaLevel + 500
-               else elevFromGrid elevGrid worldSize x' y'
+        -- Convert tile coordinates (gx, gy) to grid index.
+        -- Same math as elevFromGrid/filledElevFromGrid.
+        tileToGridIdx x y =
+            let u = x - y
+                v = x + y
+                iu = ((u + spacing `div` 2) `div` spacing) + halfGrid
+                iv = ((v + spacing `div` 2) `div` spacing) + halfGrid
+                iu' = ((iu `mod` gridW) + gridW) `mod` gridW
+                iv' = max 0 (min (gridW - 1) iv)
+            in iv' * gridW + iu'
 
-        -- Filled elevation for pathfinding — guarantees monotonic
-        -- descent through depressions to the ocean
-        getFilledElev x y =
-            let (x', y') = wrapGlobalU worldSize x y
-            in if isBeyondGlacier worldSize x' y'
-               then seaLevel + 500
-               else filledElevFromGrid filledElev elevGrid worldSize x' y'
+        -- Follow the flow direction chain from a grid index to the ocean.
+        -- Collects (gx, gy, rawElev) at each grid cell.
+        -- Guaranteed to terminate: filled surface is monotonically
+        -- descending along flowDir, so no cycles are possible.
+        traceGrid startIdx = go 0 startIdx []
+          where
+            maxGridSteps = 5000 ∷ Int
+            go step idx acc
+                | step ≥ maxGridSteps = reverse acc
+                | idx < 0 ∨ idx ≥ totalSamples = reverse acc
+                | otherwise =
+                    let tileGX  = egGX elevGrid VU.! idx
+                        tileGY  = egGY elevGrid VU.! idx
+                        rawElev = egElev elevGrid VU.! idx
+                        nextIdx = flowDir VU.! idx
+                        acc'    = (tileGX, tileGY, rawElev) : acc
+                    in if nextIdx < 0 ∨ nextIdx ≡ idx
+                       then reverse acc'  -- ocean sink or dead end
+                       else go (step + 1) nextIdx acc'
 
-        -- Compute downhill gradient by sampling in 16 directions
-        -- Returns (dx, dy) pointing downhill, normalized
-        computeGradient curX curY curFE =
-            let numDirs = 16 ∷ Int
-                angStep = 2.0 * π / fromIntegral numDirs
-                samples = [ let a = fromIntegral i * angStep
-                                nx = curX + round (cos a * fromIntegral sampleDist)
-                                ny = curY + round (sin a * fromIntegral sampleDist)
-                                fe = getFilledElev nx ny
-                                drop' = fromIntegral (curFE - fe) ∷ Float
-                            in (cos a * drop', sin a * drop')
-                          | i ← [0 .. numDirs - 1]
-                          ]
-                -- Sum all weighted directions (steeper drops contribute more)
-                (gdx, gdy) = foldl' (\(ax, ay) (bx, by) → (ax + bx, ay + by))
-                                    (0.0 ∷ Float, 0.0 ∷ Float) samples
-                glen = sqrt (gdx * gdx + gdy * gdy)
-            in if glen < 0.001
-               then (0.0, 0.0)  -- flat or local minimum
-               else (gdx / glen, gdy / glen)
+        startIdx = tileToGridIdx gx gy
+        gridPath = traceGrid startIdx
 
-        -- Main tracing loop with continuous direction and momentum.
-        -- dirX/dirY is the current movement direction (unit vector).
-        -- flatCount tracks consecutive steps with no elevation change;
-        -- the river continues through flat areas (common on filled
-        -- depressions and coastal plains) until maxFlat is reached.
-        go step curX curY curFilledElev dirX dirY flatCount acc
-            | step ≥ maxSteps = finishPath acc curX curY
-            | isBeyondGlacier worldSize curX curY = finishPath acc curX curY
-            | otherwise =
-                let rawElev = getRawElev curX curY
-                    -- Allow a few steps past sea level to form a proper mouth
-                    pastSea = rawElev ≤ seaLevel
-                    recentSea = case acc of
-                        ((_,_,e1):(_,_,e2):(_,_,e3):_) →
-                            e1 ≤ seaLevel ∧ e2 ≤ seaLevel ∧ e3 ≤ seaLevel
-                        _ → False
-                in if pastSea ∧ recentSea
-                   then finishPath acc curX curY
-                   else
-                let (gdx, gdy) = computeGradient curX curY curFilledElev
+        -- Prepend the actual source point if it differs from
+        -- the first grid cell (source may be between grid points).
+        fullPath = case gridPath of
+            ((fx, fy, _):_)
+                | fx ≠ gx ∨ fy ≠ gy → (gx, gy, srcElev) : gridPath
+            _ → (gx, gy, srcElev) : gridPath
 
-                in if gdx == 0.0 ∧ gdy == 0.0
-                   -- No gradient: continue in current direction on
-                   -- flat terrain (common in filled depressions).
-                   -- Only give up after maxFlat consecutive flat steps.
-                   then if flatCount < maxFlat
-                        then let nextX = curX + round (dirX * fromIntegral stepSize)
-                                 nextY = curY + round (dirY * fromIntegral stepSize)
-                                 (nextX', nextY') = wrapGlobalU worldSize nextX nextY
-                             in go (step + 1) nextX' nextY' curFilledElev
-                                   dirX dirY (flatCount + 1)
-                                   ((curX, curY, rawElev) : acc)
-                        else finishPath ((curX, curY, rawElev) : acc) curX curY
-                   else
-                   let -- Hash-based lateral perturbation for natural variation
-                       h1 = hashGeo seed step (1200 + abs curX `mod` 200
-                                                     + abs curY `mod` 200)
-                       noise = (hashToFloatGeo h1 - 0.5) * 0.6
-                       -- Perpendicular to gradient
-                       perpGX = -gdy
-                       perpGY = gdx
-                       -- Noisy gradient direction
-                       noisyDX = gdx + perpGX * noise
-                       noisyDY = gdy + perpGY * noise
-                       noisyLen = sqrt (noisyDX * noisyDX + noisyDY * noisyDY)
-                       nGDX = if noisyLen < 0.001 then gdx else noisyDX / noisyLen
-                       nGDY = if noisyLen < 0.001 then gdy else noisyDY / noisyLen
+        -- Add perpendicular noise to each waypoint so the path
+        -- looks natural instead of grid-aligned.
+        noisyPath = addPathNoise seed riverIdx spacing fullPath
 
-                       -- Blend momentum (current direction) with gradient.
-                       -- Momentum creates smooth curves; gradient ensures
-                       -- we keep going downhill.
-                       momentum = 0.3 ∷ Float
-                       blendDX = dirX * momentum + nGDX * (1.0 - momentum)
-                       blendDY = dirY * momentum + nGDY * (1.0 - momentum)
-                       bLen = sqrt (blendDX * blendDX + blendDY * blendDY)
-                       finalDX = if bLen < 0.001 then nGDX else blendDX / bLen
-                       finalDY = if bLen < 0.001 then nGDY else blendDY / bLen
+    in if length noisyPath < 4
+       then Nothing
+       else Just (buildRiverFromPath seed riverIdx flow noisyPath)
 
-                   in tryStep step curX curY curFilledElev
-                              finalDX finalDY rawElev flatCount acc 0
+-----------------------------------------------------------
+-- Path noise
+-----------------------------------------------------------
 
-        -- Try stepping forward; on uphill, retry with smaller steps
-        -- or pure gradient direction before giving up.
-        tryStep step curX curY curFE dirX dirY rawElev fCount acc retry
-            | retry > maxRetries =
-                finishPath ((curX, curY, rawElev) : acc) curX curY
-            | otherwise =
-                let curStep = max 1 (stepSize - retry)
-                    nextX = curX + round (dirX * fromIntegral curStep)
-                    nextY = curY + round (dirY * fromIntegral curStep)
-                    (nextX', nextY') = wrapGlobalU worldSize nextX nextY
-                    nextFE = getFilledElev nextX' nextY'
-                    -- Allow equal elevation (flat terrain) — only reject
-                    -- strictly uphill. Flat areas are traversed using the
-                    -- flatCount limit instead.
-                in if nextFE ≤ curFE
-                   then let newFlat = if nextFE == curFE then fCount + 1 else 0
-                        in go (step + 1) nextX' nextY' nextFE
-                              dirX dirY newFlat
-                              ((curX, curY, rawElev) : acc)
-                   -- On first uphill: try pure gradient (no momentum)
-                   else if retry == 0
-                   then let (gdx, gdy) = computeGradient curX curY curFE
-                        in if gdx == 0.0 ∧ gdy == 0.0
-                           then tryStep step curX curY curFE
-                                        dirX dirY rawElev fCount acc (retry + 1)
-                           else
-                           let pureX = curX + round (gdx * fromIntegral stepSize)
-                               pureY = curY + round (gdy * fromIntegral stepSize)
-                               (pureX', pureY') = wrapGlobalU worldSize pureX pureY
-                               pureFE = getFilledElev pureX' pureY'
-                           in if pureFE ≤ curFE
-                              then let newFlat = if pureFE == curFE then fCount + 1 else 0
-                                   in go (step + 1) pureX' pureY' pureFE
-                                         gdx gdy newFlat
-                                         ((curX, curY, rawElev) : acc)
-                              else tryStep step curX curY curFE
-                                           dirX dirY rawElev fCount acc (retry + 1)
-                   else tryStep step curX curY curFE
-                                dirX dirY rawElev fCount acc (retry + 1)
+-- | Offset each waypoint perpendicular to the local flow
+--   direction by a hash-based random amount. Maximum offset
+--   is ~40% of grid spacing. Keeps first and last points fixed.
+addPathNoise ∷ Word64 → Int → Int → [(Int, Int, Int)] → [(Int, Int, Int)]
+addPathNoise _ _ _ [] = []
+addPathNoise _ _ _ [x] = [x]
+addPathNoise seed riverIdx spacing pts =
+    let len = length pts
+        -- Keep first and last fixed (source and mouth position matters)
+        noisy = zipWith3 (\i (x, y, e) (dx, dy) →
+            if i ≡ 0 ∨ i ≡ len - 1
+            then (x, y, e)
+            else let h = hashGeo seed (riverIdx * 10000 + i) 1300
+                     noise = (hashToFloatGeo h - 0.5) * 2.0
+                     maxOff = fromIntegral spacing * 0.4 ∷ Float
+                     -- Perpendicular to flow direction
+                     dLen = sqrt (fromIntegral (dx * dx + dy * dy) ∷ Float)
+                     (perpX, perpY) = if dLen < 0.001
+                         then (0.0, 0.0)
+                         else ( negate (fromIntegral dy) / dLen
+                              , fromIntegral dx / dLen )
+                     offX = round (perpX * noise * maxOff) ∷ Int
+                     offY = round (perpY * noise * maxOff) ∷ Int
+                 in (x + offX, y + offY, e)
+            ) [0 ∷ Int ..] pts dirs
+        -- Flow direction at each point: vector to next point
+        dirs = zipWith (\(x1, y1, _) (x2, y2, _) → (x2 - x1, y2 - y1))
+                       pts (tail pts)
+               <> [(0, 0)]  -- last point has no direction
+    in noisy
 
-        finishPath acc lastX lastY =
-            let lastRaw = getRawElev lastX lastY
-                fullAcc = if null acc ∨ (case acc of
-                              ((ax,ay,_):_) → ax ≠ lastX ∨ ay ≠ lastY
-                              _ → True)
-                          then (lastX, lastY, lastRaw) : acc
-                          else acc
-                path = reverse fullAcc
-            in if length path < 4
-               then Nothing
-               else Just (buildRiverFromPath seed riverIdx flow path)
-
-        -- Initial direction: use gradient at source
-        (initDX, initDY) = let (gx', gy') = computeGradient gx gy (getFilledElev gx gy)
-                           in if gx' == 0.0 ∧ gy' == 0.0
-                              then (0.0, 1.0)  -- default: south
-                              else (gx', gy')
-
-    in go 0 gx gy (getFilledElev gx gy) initDX initDY 0 []
-
+-----------------------------------------------------------
+-- Path construction
+-----------------------------------------------------------
 
 buildRiverFromPath ∷ Word64 → Int → Float → [(Int, Int, Int)] → RiverParams
 buildRiverFromPath seed riverIdx baseFlow path =
     let monoPath = enforceMonotonicPath path
-        -- Decimate the dense path to ~every 8th point, keeping first and last.
-        -- Longer segments prevent blobby junction circles on the zoom map.
-        -- Each retained point is ~24 tiles apart (8 steps × 3 tiles/step).
-        decimated0 = decimatePath 8 monoPath
+        -- Grid-following produces one point per grid cell (~8 tiles apart).
+        -- Decimate to every 3rd to get ~24-tile segments, similar to before.
+        decimated0 = decimatePath 3 monoPath
         -- Clamp the last point's elevation to sea level if the river
         -- reaches the coast, ensuring smooth ocean transition.
         decimated = case reverse decimated0 of
@@ -238,12 +165,12 @@ decimatePath n xs =
         -- Ensure the last point is always included
     in case picked of
         [] → [lastPt]
-        _  → if last picked == lastPt then picked
+        _  → if last picked ≡ lastPt then picked
              else picked <> [lastPt]
   where
     go _ [] = []
     go i (x:rest)
-        | i `mod` n == 0 = x : go (i + 1) rest
+        | i `mod` n ≡ 0 = x : go (i + 1) rest
         | otherwise       = go (i + 1) rest
 
 enforceMonotonicPath ∷ [(Int, Int, Int)] → [(Int, Int, Int)]

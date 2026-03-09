@@ -39,14 +39,15 @@ reconcileHydrology ∷ Word64 → Int → FlowResult → Int → Int
                    → ([PersistentFeature], [GeoEvent], TimelineBuildState)
 reconcileHydrology seed ageIdx flowResult periodIdx worldSize elevGrid tbs =
     let filledElev = frFilledElev flowResult
+        flowDir    = frFlowDir flowResult
     in reconcileHydrology' seed ageIdx flowResult periodIdx worldSize
-                           elevGrid filledElev tbs
+                           elevGrid filledElev flowDir tbs
 
 reconcileHydrology' ∷ Word64 → Int → FlowResult → Int → Int
-                    → ElevGrid → VU.Vector Int
+                    → ElevGrid → VU.Vector Int → VU.Vector Int
                     → TimelineBuildState
                     → ([PersistentFeature], [GeoEvent], TimelineBuildState)
-reconcileHydrology' seed ageIdx flowResult periodIdx worldSize elevGrid filledElev tbs =
+reconcileHydrology' seed ageIdx flowResult periodIdx worldSize elevGrid filledElev flowDir tbs =
     let existingRivers = filter (isActiveRiver . pfFeature) (tbsFeatures tbs)
         existingLakes  = filter (isLakeFeature . pfFeature)  (tbsFeatures tbs)
         simSources = frRiverSources flowResult
@@ -82,7 +83,7 @@ reconcileHydrology' seed ageIdx flowResult periodIdx worldSize elevGrid filledEl
 
         newRivers = catMaybes $
             parMap rdeepseq (\(idx, (gx, gy, elev, flow)) →
-                traceRiverFromSource seed worldSize elevGrid filledElev
+                traceRiverFromSource seed worldSize elevGrid filledElev flowDir
                     gx gy elev (ageIdx * 1000 + idx) flow
             ) (zip [0..] newSources)
 

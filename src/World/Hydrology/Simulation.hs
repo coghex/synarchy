@@ -59,6 +59,9 @@ data FlowResult = FlowResult
     , frLakes        ∷ ![LakeParams]
     , frFilledElev   ∷ !(VU.Vector Int)
       -- ^ Depression-filled elevation surface (same indexing as ElevGrid)
+    , frFlowDir      ∷ !(VU.Vector Int)
+      -- ^ Flow direction: index of downstream neighbor, −1 for ocean/sink.
+      --   Following this chain is guaranteed to reach the ocean.
     } deriving (Show)
 
 data ElevGrid = ElevGrid
@@ -152,7 +155,13 @@ updateElevGrid worldSize grid period =
 -- | Priority-flood using Data.Set as a min-heap.
 --   Set entries are (elevation, index) so they sort by elevation.
 --   This is O(n log n) and guaranteed correct in a single pass.
-fillDepressions ∷ ElevGrid → VU.Vector Int
+--
+--   Returns BOTH the filled elevation surface AND a flow-direction
+--   vector. The flow direction is the drainage parent recorded
+--   during the flood: when cell A is expanded to neighbor B, B
+--   drains through A. This correctly handles flat areas (filled
+--   depressions) where steepest-descent would fail.
+fillDepressions ∷ ElevGrid → (VU.Vector Int, VU.Vector Int)
 fillDepressions grid =
     let gridW = egGridW grid
         totalSamples = gridW * gridW
@@ -174,6 +183,9 @@ fillDepressions grid =
     in runST $ do
         filled ← VUM.replicate totalSamples (maxBound ∷ Int)
         visited ← VUM.replicate totalSamples False
+        -- Drainage parent: −1 means sink (ocean/boundary seed).
+        -- For every other cell, points to the cell it drains through.
+        parent ← VUM.replicate totalSamples (-1 ∷ Int)
 
         -- Seed: all cells that are ocean or on Y-edges.
         -- X wraps, so no X edges.
@@ -184,7 +196,7 @@ fillDepressions grid =
                  ∨ iy ≡ gridW - 1
                 ) [0 .. totalSamples - 1]
 
-        -- Initialize seeds
+        -- Initialize seeds (sinks — parent stays −1)
         forM_ seeds $ \idx → do
             VUM.write filled idx (elevVec VU.! idx)
             VUM.write visited idx True
@@ -197,7 +209,8 @@ fillDepressions grid =
                 Set.insert (elevVec VU.! idx, idx) s
                 ) Set.empty seeds
 
-        -- Process queue: extract minimum, expand neighbors
+        -- Process queue: extract minimum, expand neighbors.
+        -- When expanding to a neighbor, record curIdx as its parent.
         let go queue
                 | Set.null queue = return ()
                 | otherwise = do
@@ -214,6 +227,8 @@ fillDepressions grid =
                                 -- Fill level: at least as high as how we reached it
                                 nFill = max nElev curElev
                             VUM.write filled nIdx nFill
+                            -- Record drainage parent: nIdx drains through curIdx
+                            VUM.write parent nIdx curIdx
                             return (Set.insert (nFill, nIdx) q)
                         ) queue' nbrs
                     go queue''
@@ -226,7 +241,9 @@ fillDepressions grid =
             when (not vis) $
                 VUM.write filled idx (elevVec VU.! idx)
 
-        VU.unsafeFreeze filled
+        filledV ← VU.unsafeFreeze filled
+        parentV ← VU.unsafeFreeze parent
+        return (filledV, parentV)
 
 -- | foldlM for lists in ST
 foldlM ∷ Monad m ⇒ (a → b → m a) → a → [b] → m a
@@ -267,39 +284,13 @@ simulateHydrology seed worldSize ageIdx grid =
                ]
 
         ---------------------------------------------------
-        -- Step 1: Fill depressions
+        -- Step 1: Fill depressions + drainage directions
         ---------------------------------------------------
-        filledElev = fillDepressions grid
-
-        ---------------------------------------------------
-        -- Step 2: Flow direction on filled surface
-        ---------------------------------------------------
-        flowDirVec ∷ VU.Vector Int
-        flowDirVec = VU.generate totalSamples $ \idx →
-            if not (landVec VU.! idx)
-            then -1
-            else let (ix, iy) = fromIdx idx
-                     myElev = filledElev VU.! idx
-                     findLowest ∷ Int → Int → Int → [(Int,Int)] → (Int, Int, Int)
-                     findLowest bi be bo [] = (bi, be, bo)
-                     findLowest bi be bo ((dx,dy):rest) =
-                         let ny = iy + dy
-                         in if ny < 0 ∨ ny ≥ gridW
-                            then findLowest bi be bo rest
-                            else let nIdx = toIdx (wrapIX (ix + dx)) ny
-                                     nFill = filledElev VU.! nIdx
-                                     nOrig = origElev VU.! nIdx
-                                 in if nFill < be
-                                      ∨ (nFill ≡ be ∧ nOrig < bo)
-                                    then findLowest nIdx nFill nOrig rest
-                                    else findLowest bi be bo rest
-                     myOrig = origElev VU.! idx
-                     (lowestIdx, lowestElev, _) =
-                         findLowest idx myElev myOrig neighborOffsets
-                 in if lowestElev ≥ myElev
-                      ∧ lowestIdx ≡ idx
-                    then -1
-                    else lowestIdx
+        -- fillDepressions now returns both the filled surface
+        -- AND the drainage parent for each cell, recorded during
+        -- the priority-flood. This correctly handles flat areas
+        -- (filled depressions) where steepest-descent would fail.
+        (filledElev, flowDirVec) = fillDepressions grid
 
         ---------------------------------------------------
         -- Step 3: Flow accumulation
@@ -386,6 +377,7 @@ simulateHydrology seed worldSize ageIdx grid =
     in FlowResult { frRiverSources = riverSources
                    , frLakes = dedupedLakes
                    , frFilledElev = filledElev
+                   , frFlowDir = flowDirVec
                    }
 
 -----------------------------------------------------------
