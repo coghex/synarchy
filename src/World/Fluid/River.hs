@@ -2,6 +2,7 @@
 module World.Fluid.River
     ( computeChunkRivers
     , fixupSegmentContinuity
+    , hasAnyRiverQuick
     ) where
 
 import UPrelude
@@ -97,6 +98,14 @@ riverNearChunk worldSize chunkGX chunkGY river =
                      in dist < fromIntegral margin
 
         in startNear ∨ endNear ∨ midNear
+
+-- | Quick boolean check: does this chunk have any river?
+hasAnyRiverQuick ∷ [PersistentFeature] → Int → ChunkCoord → Bool
+hasAnyRiverQuick features worldSize coord =
+    let ChunkCoord cx cy = coord
+        chunkMinGX = cx * chunkSize
+        chunkMinGY = cy * chunkSize
+    in any (isNearbyRiver worldSize chunkMinGX chunkMinGY) features
 
 -----------------------------------------------------------
 -- River Fluid Fill

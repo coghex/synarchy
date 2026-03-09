@@ -391,6 +391,8 @@ library
                      World.Preview
                      World.ZoomMap
                      World.ZoomMap.Cache
+                     World.ZoomMap.ChunkTexture
+                     World.ZoomMap.ColorPalette
     -- Use the same extensions as your executable
     default-extensions: DefaultSignatures
                       , DuplicateRecordFields

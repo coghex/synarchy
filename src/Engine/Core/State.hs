@@ -72,6 +72,7 @@ data EngineEnv = EngineEnv
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef Float
   , worldPreviewRef     ∷ IORef (Maybe (Int, Int, BS.ByteString))
+  , zoomAtlasDataRef    ∷ IORef (Maybe (Int, Int, BS.ByteString))  -- ^ Pending zoom atlas pixel data for GPU upload
   , worldQuadsRef       ∷ IORef (V.Vector SortableQuad)
   , textureSystemRef    ∷ IORef (Maybe BindlessTextureSystem)
   , textureSizeRef      ∷ IORef (HM.HashMap TextureHandle (Int, Int))

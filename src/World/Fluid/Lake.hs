@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Fluid.Lake
     ( computeChunkLakes
+    , hasAnyLakeQuick
     ) where
 
 import UPrelude
@@ -56,6 +57,14 @@ checkLakeRange worldSize chunkGX chunkGY lk =
         dx = abs dxi
         dy = abs dyi
     in dx < maxR + chunkSize ∧ dy < maxR + chunkSize
+
+-- | Quick boolean check: does this chunk have any lake?
+hasAnyLakeQuick ∷ [PersistentFeature] → Int → ChunkCoord → Bool
+hasAnyLakeQuick features worldSize coord =
+    let ChunkCoord cx cy = coord
+        chunkMinGX = cx * chunkSize
+        chunkMinGY = cy * chunkSize
+    in any (isNearbyLake worldSize chunkMinGX chunkMinGY) features
 
 -----------------------------------------------------------
 -- Lake Fill

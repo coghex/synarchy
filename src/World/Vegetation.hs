@@ -23,6 +23,10 @@ module World.Vegetation
     , vegPineNeedles
     , vegMushroomPatch
     , vegWildflowers
+    , vegVariants
+      -- * Per-tile vegetation selection
+    , selectVegetation
+    , vegHash
       -- * Classification helpers
     , isBarrenMaterial
     , isWetlandSoil

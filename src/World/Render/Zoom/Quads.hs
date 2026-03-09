@@ -25,7 +25,7 @@ import World.Weather.Types (ClimateCoord(..), ClimateGrid(..), ClimateState(..)
                            , RegionClimate(..), SeasonalClimate(..)
                            , OceanCell(..), OceanGrid(..))
 
-import World.Render.Zoom.Bake (ensureBaked)
+import World.Render.Zoom.Bake (ensureBaked, ensureBakedAtlas)
 import World.Render.Zoom.ViewBounds (ZoomViewBounds(..), computeZoomViewBounds
                                     , isChunkInView, bestZoomWrapOffset)
 import World.Render.Zoom.Climate (tempToColorAt, pressureToColorAt, humidityToColorAt
@@ -71,6 +71,7 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
     defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
     mapMode ← readIORef (wsMapModeRef worldState)
     (winW, winH) ← readIORef (windowSizeRef env)
+    mAtlas ← readIORef (wsZoomAtlasRef worldState)
     let lookupSlot texHandle = fromIntegral $ case mBindless of
             Just bindless → getTextureSlotIndex texHandle bindless
             Nothing       → 0
@@ -79,8 +80,8 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
     case mParams of
         Nothing → return V.empty
         Just params → do
-            baked ← ensureBaked bakedRef rawCache textures facing
-                        texturePicker lookupSlot defFmSlot
+            baked ← ensureBakedAtlas bakedRef rawCache textures facing
+                        mAtlas texturePicker lookupSlot defFmSlot
             let vb = computeZoomViewBounds camera fbW fbH
                 ws = wgpWorldSize params
                 (camX, camY) = camPosition camera

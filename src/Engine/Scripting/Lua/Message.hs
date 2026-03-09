@@ -42,6 +42,8 @@ import Engine.Scene.Graph (modifySceneNode, deleteSceneNode)
 import Engine.Scene.Manager (addObjectToScene)
 import Engine.Scene.Types
 import Engine.Scripting.Lua.Types
+import World.Render.Zoom.Types (ZoomAtlasInfo(..), zoomTileSize)
+import World.State.Types (WorldManager(..), WorldState(..))
 import qualified Graphics.UI.GLFW as GLFW
 import Vulkan.Core10
 import Vulkan.Zero (zero)
@@ -58,6 +60,8 @@ processLuaMessages = do
     forM_ messages handleLuaMessage
     -- poll for world preview image
     handleWorldPreview
+    -- poll for zoom atlas upload
+    handleZoomAtlasUpload
 
 handleLuaMessage ∷ LuaToEngineMsg → EngineM ε σ ()
 handleLuaMessage msg = do
@@ -527,3 +531,95 @@ handleWorldPreview = do
 
                 _ → logWarnM CatWorld
                         "Cannot create preview texture: Vulkan not ready"
+
+-- | Poll for pending zoom atlas pixel data and upload to GPU.
+--   Called every frame.  When the world thread produces atlas data,
+--   this creates a GPU texture and stores the ZoomAtlasInfo on all
+--   visible world states.
+handleZoomAtlasUpload ∷ EngineM ε σ ()
+handleZoomAtlasUpload = do
+    env ← ask
+    mAtlas ← liftIO $ atomicModifyIORef' (zoomAtlasDataRef env) $ \v → (Nothing, v)
+    case mAtlas of
+        Nothing → pure ()
+        Just (w, h, rgbaData) → do
+            logInfoM CatWorld $ "Uploading zoom atlas texture: "
+                <> T.pack (show w) <> "×" <> T.pack (show h)
+
+            gs ← gets graphicsState
+            case ( vulkanDevice gs
+                 , vulkanPDevice gs
+                 , vulkanCmdPool gs
+                 , deviceQueues gs
+                 , textureSystem gs ) of
+                (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless) → do
+                    poolRef ← asks assetPoolRef
+                    pool ← liftIO $ readIORef poolRef
+                    texHandle ← liftIO $ generateTextureHandle pool
+
+                    let width  = fromIntegral w ∷ Word32
+                        height = fromIntegral h ∷ Word32
+                        bufSize = fromIntegral (BS.length rgbaData)
+                        queue  = graphicsQueue queues
+
+                    -- Create GPU image
+                    image ← createVulkanImage dev pdev
+                        (width, height)
+                        FORMAT_R8G8B8A8_UNORM
+                        IMAGE_TILING_OPTIMAL
+                        (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
+                        MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+
+                    -- Upload via staging buffer
+                    locally $ do
+                        (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
+                            BUFFER_USAGE_TRANSFER_SRC_BIT
+                            (MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                             .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
+
+                        stagingPtr ← mapMemory dev stagingMem 0 bufSize zero
+                        liftIO $ BS.useAsCStringLen rgbaData $ \(srcPtr, len) →
+                            copyBytes (castPtr stagingPtr) srcPtr len
+                        unmapMemory dev stagingMem
+
+                        runCommandsOnce dev cmdPool queue $ \cmdBuf → do
+                            transitionImageLayout image FORMAT_R8G8B8A8_UNORM
+                                Undef_TransDst 1 cmdBuf
+                            copyBufferToImage cmdBuf stagingBuf image width height
+                            transitionImageLayout image FORMAT_R8G8B8A8_UNORM
+                                TransDst_ShaderRO 1 cmdBuf
+
+                    -- Create image view and sampler (LINEAR for smooth zoom)
+                    imageView ← createVulkanImageView dev image
+                        FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
+
+                    sampler ← createTextureSampler dev pdev FILTER_LINEAR
+
+                    -- Register in bindless system
+                    (_, newBindless) ← registerTexture dev texHandle
+                        imageView sampler bindless
+                    modify $ \s → s { graphicsState = (graphicsState s) {
+                        textureSystem = Just newBindless } }
+                    -- Sync to the IORef so render code can see the new slot
+                    liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
+
+                    -- Compute chunksPerRow from atlas dimensions
+                    let chunksPerRow = w `div` zoomTileSize
+                        atlasInfo = ZoomAtlasInfo
+                            { zaiTexture     = texHandle
+                            , zaiWidth       = w
+                            , zaiHeight      = h
+                            , zaiChunksPerRow = chunksPerRow
+                            }
+
+                    -- Store atlas info on all visible world states
+                    worldManager ← liftIO $ readIORef (worldManagerRef env)
+                    forM_ (wmWorlds worldManager) $ \(_pageId, ws) →
+                        liftIO $ writeIORef (wsZoomAtlasRef ws) (Just atlasInfo)
+
+                    logInfoM CatWorld $ "Zoom atlas uploaded: handle="
+                        <> T.pack (show texHandle) <> ", chunksPerRow="
+                        <> T.pack (show chunksPerRow)
+
+                _ → logWarnM CatWorld
+                        "Cannot upload zoom atlas: Vulkan not ready"

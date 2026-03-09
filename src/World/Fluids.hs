@@ -21,6 +21,8 @@ module World.Fluids
       -- * Query
     , isOceanChunk
     , hasAnyLavaQuick
+    , hasAnyRiverQuick
+    , hasAnyLakeQuick
     , hasAnyOceanFluid
     ) where
 
@@ -29,8 +31,9 @@ import World.Fluid.Types (FluidType(..), FluidCell(..))
 import World.Fluid.Internal (unionFluidMap, equilibrateFluidMap)
 import World.Fluid.Ocean (computeOceanMap, isOceanChunk, hasAnyOceanFluid
                          , computeChunkFluid)
-import World.Fluid.River (computeChunkRivers, fixupSegmentContinuity)
-import World.Fluid.Lake (computeChunkLakes)
+import World.Fluid.River (computeChunkRivers, fixupSegmentContinuity
+                         , hasAnyRiverQuick)
+import World.Fluid.Lake (computeChunkLakes, hasAnyLakeQuick)
 import World.Fluid.Lava (computeChunkLava, hasAnyLavaQuick)
 
 -- These are re-exported from World.Base / World.Types but kept in the

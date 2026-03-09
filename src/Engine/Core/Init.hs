@@ -95,6 +95,8 @@ initializeEngine = do
   sunAngleRef ← newIORef 0.25
   -- preview
   worldPreviewRef ← newIORef Nothing
+  -- zoom atlas pending data
+  zoomAtlasDataRef ← newIORef Nothing
   -- world quads
   worldQuadsRef ← newIORef (V.empty)
   -- texture system
@@ -143,6 +145,7 @@ initializeEngine = do
         , focusManagerRef    = focusMgrRef
         , sunAngleRef        = sunAngleRef
         , worldPreviewRef    = worldPreviewRef
+        , zoomAtlasDataRef   = zoomAtlasDataRef
         , worldQuadsRef      = worldQuadsRef
         , textureSystemRef   = textureSystemRef
         , textureSizeRef     = texSizeRef

@@ -5,6 +5,8 @@ module World.Render.Zoom.Types
     , ZoomQuadCache(..)
     , BakedZoomEntry(..)
     , ZoomMapMode(..)
+    , ZoomAtlasInfo(..)
+    , zoomTileSize
     , textToMapMode
     ) where
 
@@ -40,11 +42,15 @@ data ZoomChunkEntry = ZoomChunkEntry
     , zceElev     ∷ !Int       -- ^ Elevation (used to pick texture at render time)
     , zceIsOcean  ∷ !Bool      -- ^ Whether this chunk is ocean
     , zceHasLava  ∷ !Bool      -- ^ Whether this chunk has lava (for zoom rendering)
+    , zceHasRiver ∷ !Bool      -- ^ Whether this chunk has a river (for preview)
+    , zceHasLake  ∷ !Bool      -- ^ Whether this chunk has a lake (for preview)
+    , zceVegCategory ∷ !Word8  -- ^ Vegetation density category (0=none,1=sparse,2=medium,3=dense,4=marsh)
     } deriving (Show, Eq)
 instance NFData ZoomChunkEntry where
-    rnf (ZoomChunkEntry x y bgX bgY tex elev ocean lava) =
+    rnf (ZoomChunkEntry x y bgX bgY tex elev ocean lava river lake veg) =
         rnf x `seq` rnf y `seq` rnf bgX `seq` rnf bgY `seq`
-        rnf tex `seq` rnf elev `seq` rnf ocean `seq` rnf lava
+        rnf tex `seq` rnf elev `seq` rnf ocean `seq` rnf lava `seq`
+        rnf river `seq` rnf lake `seq` rnf veg
 
 data ZoomCameraSnapshot = ZoomCameraSnapshot
     { zcsPosition ∷ !(Float, Float)
@@ -75,3 +81,18 @@ data BakedZoomEntry = BakedZoomEntry
     , bzeHasLava ∷ !Bool
     , bzeElev    ∷ !Int
     } deriving (Show)
+
+-- | Information about the zoom atlas texture, used for
+--   computing per-chunk UV coordinates during baking.
+data ZoomAtlasInfo = ZoomAtlasInfo
+    { zaiTexture     ∷ !TextureHandle   -- ^ Atlas texture handle
+    , zaiWidth       ∷ !Int             -- ^ Atlas width in pixels
+    , zaiHeight      ∷ !Int             -- ^ Atlas height in pixels
+    , zaiChunksPerRow ∷ !Int            -- ^ Number of chunk tiles per atlas row
+    } deriving (Show, Eq)
+
+-- | Pixel size of each chunk tile in the zoom atlas.
+--   Larger than chunkSize (16) to accommodate the isometric
+--   diamond shape within a square texture tile.
+zoomTileSize ∷ Int
+zoomTileSize = 32

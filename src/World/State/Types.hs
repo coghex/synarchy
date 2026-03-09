@@ -20,7 +20,7 @@ import World.Chunk.Types (ChunkCoord(..))
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
 import World.Render.Camera.Types (WorldCamera(..), WorldQuadCache(..))
 import World.Render.Textures.Types (WorldTextures(..), defaultWorldTextures)
-import World.Render.Zoom.Types (ZoomChunkEntry(..), ZoomQuadCache(..), BakedZoomEntry(..), ZoomMapMode(..))
+import World.Render.Zoom.Types (ZoomChunkEntry(..), ZoomQuadCache(..), BakedZoomEntry(..), ZoomMapMode(..), ZoomAtlasInfo(..))
 import World.Tool.Types (ToolMode(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, defaultWorldDate)
@@ -50,6 +50,7 @@ data WorldState = WorldState
     , wsToolModeRef ∷ IORef ToolMode
     , wsCursorSnapshotRef ∷ IORef CursorSnapshot
     , wsLoadPhaseRef ∷ IORef LoadPhase
+    , wsZoomAtlasRef ∷ IORef (Maybe ZoomAtlasInfo)  -- ^ Atlas info once uploaded to GPU
     }
 
 emptyWorldState ∷ IO WorldState
@@ -75,13 +76,14 @@ emptyWorldState = do
     wsToolModeRef ← newIORef DefaultTool
     wsCursorSnapshotRef ← newIORef emptyCursorSnapshot
     wsLoadPhaseRef ← newIORef LoadIdle
+    wsZoomAtlasRef ← newIORef Nothing
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
                         wsClimateRef wsRiverFlowRef wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
-                        wsLoadPhaseRef
+                        wsLoadPhaseRef wsZoomAtlasRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]

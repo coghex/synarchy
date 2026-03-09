@@ -32,7 +32,9 @@ import World.Fluids (computeOceanMap, isOceanChunk)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Preview (buildPreviewImage, PreviewImage(..))
 import World.Render (surfaceHeadroom)
-import World.ZoomMap (buildZoomCache)
+import World.ZoomMap (buildZoomCacheWithPixels)
+import World.ZoomMap.ColorPalette (buildColorPalette)
+import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Save.Serialize (saveWorld)
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
 import World.Weather.Types (ClimateState(..))
@@ -121,12 +123,30 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     
     writeIORef (wsGenParamsRef worldState) (Just params)
     
-    -- Step 4: Zoom cache
+    -- Step 4: Zoom cache + texture atlas
     writeIORef phaseRef (LoadPhase1 4 totalSteps)
-    sendGenLog env "Building zoom cache..."
-    let zoomCache = buildZoomCache params registry
-    _ <- evaluate (force zoomCache)  -- do the work now
+    sendGenLog env "Building zoom color palette..."
+    palette ← buildColorPalette logger "data/materials" "data/vegetation"
+    _ ← evaluate (force palette)
+
+    sendGenLog env "Building zoom cache with per-chunk textures..."
+    let (zoomCache, chunkPixels) = buildZoomCacheWithPixels params registry palette
+    _ ← evaluate (force zoomCache)
+    _ ← evaluate (force chunkPixels)
     writeIORef (wsZoomCacheRef worldState) zoomCache
+
+    sendGenLog env "Assembling zoom texture atlas..."
+    let atlas = buildZoomAtlas (V.length zoomCache) chunkPixels
+    _ ← evaluate (force atlas)
+    writeIORef (zoomAtlasDataRef env) $
+        Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas)
+    -- Store atlas metadata (chunksPerRow) for UV computation during baking
+    writeIORef (wsZoomAtlasRef worldState) Nothing  -- will be filled after GPU upload
+    -- Store chunksPerRow for later use
+    logInfo logger CatWorld $ "Zoom atlas: "
+        <> T.pack (show (zadWidth atlas)) <> "×"
+        <> T.pack (show (zadHeight atlas)) <> " ("
+        <> T.pack (show (V.length zoomCache)) <> " chunks)"
     
     -- Step 5: Preview
     writeIORef phaseRef (LoadPhase1 5 totalSteps)
