@@ -270,6 +270,8 @@ data TimelineBuildState = TimelineBuildState
     , tbsPeriodIdx  ∷ !Int
     , tbsGeoState   ∷ !GeoState
     , tbsClimateState ∷ !ClimateState
+    , tbsErosionIntensity ∷ !Float
+    , tbsVolcanicActivity ∷ !Float
     }
 
 allocFeatureId ∷ TimelineBuildState → (GeoFeatureId, TimelineBuildState)

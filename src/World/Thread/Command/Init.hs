@@ -65,7 +65,10 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     -- Step 1: Timeline (now co-evolves climate)
     writeIORef phaseRef (LoadPhase1 1 totalSteps)
     sendGenLog env "Building geological timeline..."
-    let (timeline, timelineClimate) = buildTimeline seed worldSize placeCount
+    worldGenCfg0 ← readIORef (worldGenConfigRef env)
+    let erosionIntensity = wgcErosionIntensity worldGenCfg0
+        volcanicActivity = wgcVolcanicActivity worldGenCfg0
+    let (timeline, timelineClimate) = buildTimeline seed worldSize placeCount erosionIntensity volcanicActivity
     _ ← evaluate (force timeline)
     _ ← evaluate (force timelineClimate)
     registry ← readIORef (materialRegistryRef env)
@@ -113,9 +116,8 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
         <> T.pack (show (HM.size (fcSpecies floraCat))) <> " species, "
         <> T.pack (show (HM.size (fcWorldGen floraCat))) <> " worldgen entries"
 
-    -- Read world gen config (loaded from YAML at startup)
-    worldGenCfg ← readIORef (worldGenConfigRef env)
-    let baseParams = applyConfigToParams worldGenCfg
+    -- Use world gen config (already read for erosion intensity)
+    let baseParams = applyConfigToParams worldGenCfg0
         params = baseParams
             { wgpSeed        = seed
             , wgpWorldSize   = worldSize

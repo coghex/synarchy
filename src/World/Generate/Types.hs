@@ -39,6 +39,8 @@ data WorldGenParams = WorldGenParams
     , wgpOceanMap   ∷ !OceanMap         -- ^ Pre-generated ocean map for worldgen
     , wgpClimateParams ∷ !ClimateParams   -- ^ Climate parameters
     , wgpClimateState ∷ !ClimateState     -- ^ Initial climate state
+    , wgpErosionIntensity ∷ !Float        -- ^ Global erosion intensity multiplier
+    , wgpVolcanicActivity ∷ !Float        -- ^ Volcanic activity multiplier (scales counts + eruption chance)
     } deriving (Show, Eq, Generic, Serialize, NFData)
 instance (Serialize a, Eq a, Hashable a)
     ⇒ Serialize (HS.HashSet a) where
@@ -58,4 +60,6 @@ defaultWorldGenParams = WorldGenParams
     , wgpOceanMap = HS.empty
     , wgpClimateParams = defaultClimateParams
     , wgpClimateState = initClimateState 128
+    , wgpErosionIntensity = 0.7
+    , wgpVolcanicActivity = 1.0
     }

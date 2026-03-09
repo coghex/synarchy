@@ -32,8 +32,8 @@ import World.Weather.Generate (updateClimateFromGrid, oceanRegionsFromGrid)
 -- Top Level
 -----------------------------------------------------------
 
-buildTimeline ∷ Word64 → Int → Int → (GeoTimeline, ClimateState)
-buildTimeline seed worldSize plateCount =
+buildTimeline ∷ Word64 → Int → Int → Float → Float → (GeoTimeline, ClimateState)
+buildTimeline seed worldSize plateCount erosionIntensity volcanicActivity =
     let plates = generatePlates seed worldSize plateCount
         gs0 = initGeoState seed worldSize plates
 
@@ -44,6 +44,8 @@ buildTimeline seed worldSize plateCount =
             , tbsPeriodIdx = 0
             , tbsGeoState  = gs0
             , tbsClimateState = initClimateState worldSize
+            , tbsErosionIntensity = erosionIntensity
+            , tbsVolcanicActivity = volcanicActivity
             }
 
         grid0 = buildInitialElevGrid seed worldSize plates
@@ -141,8 +143,8 @@ buildEra seed worldSize plates eraIdx tbs grid =
 
         eraPeriod = mkGeoPeriod worldSize
             ("Era " <> T.pack (show eraIdx) <> " Events")
-            Era 100 currentDate [] 
-            (ErosionParams 0.7 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx)
+            Era 100 currentDate []
+            (ErosionParams (tbsErosionIntensity tbs) 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx)
                            15.0 0.5 0.5 0.0 False)
             HM.empty
         s1 = addPeriod eraPeriod (tbs { tbsGeoState  = gs'
@@ -239,7 +241,7 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
 
         eruptSeed = ageSeed `xor` 0x1A7A
         eruptions = catMaybes
-            [ generateEruption eruptSeed worldSize ageIdx plates pf
+            [ generateEruption (tbsVolcanicActivity tbs) eruptSeed worldSize ageIdx plates pf
             | pf ← tbsFeatures tbs
             , case eruptionProfile (pfFeature pf) of
                 Just ep → epTimelineScale ep ≡ Age
@@ -286,8 +288,8 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
         gs2 = gs1 { gsCO2 = newCO2 }
 
         -- === CLIMATE-AWARE EROSION ===
-        erosion = erosionFromGeoState gs2 climate seed ageIdx False
-        regErosion = regionalErosionMap gs2 climate seed ageIdx False
+        erosion = erosionFromGeoState (tbsErosionIntensity tbs) gs2 climate seed ageIdx False
+        regErosion = regionalErosionMap (tbsErosionIntensity tbs) gs2 climate seed ageIdx False
 
         _debugLandCount = VU.length (VU.filter id (egLand elevGrid))
         _debugGridW = egGridW elevGrid

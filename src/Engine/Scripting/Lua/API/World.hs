@@ -62,6 +62,10 @@ worldGetGenDefaultsFn env = do
     Lua.setfield (Lua.nth 2) "world_size"
     Lua.pushinteger (fromIntegral (wgcPlateCount cfg))
     Lua.setfield (Lua.nth 2) "plate_count"
+    Lua.pushnumber (Lua.Number (realToFrac (wgcErosionIntensity cfg)))
+    Lua.setfield (Lua.nth 2) "erosion_intensity"
+    Lua.pushnumber (Lua.Number (realToFrac (wgcVolcanicActivity cfg)))
+    Lua.setfield (Lua.nth 2) "volcanic_activity"
     -- Calendar sub-table
     let cal = wgcCalendar cfg
     Lua.newtable
@@ -170,6 +174,8 @@ worldSetGenConfigFn env = do
     -- Top-level
     plateCount ← getIntField "plate_count" (wgcPlateCount oldCfg)
     worldSize  ← getIntField "world_size"  (wgcWorldSize oldCfg)
+    erosionInt ← getFloatField "erosion_intensity" (wgcErosionIntensity oldCfg)
+    volcanicAct ← getFloatField "volcanic_activity" (wgcVolcanicActivity oldCfg)
 
     -- Calendar
     dpm  ← getSubInt "calendar" "days_per_month"   (cyDaysPerMonth oldCal)
@@ -198,6 +204,8 @@ worldSetGenConfigFn env = do
     let newCfg = oldCfg
             { wgcWorldSize  = worldSize
             , wgcPlateCount = plateCount
+            , wgcErosionIntensity = erosionInt
+            , wgcVolcanicActivity = volcanicAct
             , wgcCalendar   = CalendarYaml dpm mpy hpd mphr
             , wgcSun        = SunYaml tilt dayL
             , wgcMoon       = MoonYaml cyc poff

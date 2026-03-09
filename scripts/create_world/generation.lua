@@ -27,6 +27,12 @@ function generation.start(menu, logPanel)
     if advVals.plateCount then
         menu.pending.plateCount = advVals.plateCount
     end
+    if advVals.erosionIntensity then
+        menu.pending.erosionIntensity = advVals.erosionIntensity
+    end
+    if advVals.volcanicActivity then
+        menu.pending.volcanicActivity = advVals.volcanicActivity
+    end
 
     local genVals = generalTab.getWidgetValues()
     for k, v in pairs(genVals) do menu.pending[k] = v end
@@ -56,6 +62,8 @@ function generation.start(menu, logPanel)
     world.setGenConfig({
         world_size  = sizeNum,
         plate_count = plateNum,
+        erosion_intensity = tonumber(p.erosionIntensity) or 0.7,
+        volcanic_activity = tonumber(p.volcanicActivity) or 1.0,
         calendar = {
             days_per_month   = tonumber(p.daysPerMonth) or 30,
             months_per_year  = tonumber(p.monthsPerYear) or 12,

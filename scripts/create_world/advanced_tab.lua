@@ -11,6 +11,8 @@ local advancedTab = {}
 
 -- Widget IDs stored here so create_world_menu can read values
 advancedTab.plateCountTextBoxId = nil
+advancedTab.erosionIntensityTextBoxId = nil
+advancedTab.volcanicActivityTextBoxId = nil
 
 -----------------------------------------------------------
 -- Create all rows
@@ -79,6 +81,78 @@ function advancedTab.create(params)
     }))
     table.insert(elements, { type = "textbox", id = advancedTab.plateCountTextBoxId })
 
+    rowIndex = rowIndex + 1
+
+    ---------------------------------------------------------
+    -- Row 2: Erosion Intensity (textbox DECIMAL)
+    ---------------------------------------------------------
+    local erosionLabelId = params.trackLabel(label.new({
+        name     = "erosion_intensity_label",
+        text     = "Erosion Intensity",
+        font     = font,
+        fontSize = base.fontSize,
+        color    = {1.0, 1.0, 1.0, 1.0},
+        page     = page,
+        uiscale  = uiscale,
+    }))
+    local erosionLabelHandle = label.getElementHandle(erosionLabelId)
+    UI.addToPage(page, erosionLabelHandle,
+                 cx, rowY(rowIndex) + s.fontSize)
+    UI.setZIndex(erosionLabelHandle, zContent)
+    table.insert(elements, { type = "label", handle = erosionLabelHandle })
+
+    advancedTab.erosionIntensityTextBoxId = params.trackTextBox(textbox.new({
+        name     = "erosion_intensity_input",
+        width    = base.textboxWidth,
+        height   = base.textboxHeight,
+        page     = page,
+        x        = cx + cw - tbW,
+        y        = rowY(rowIndex),
+        uiscale  = uiscale,
+        font     = font,
+        fontSize = 24,
+        default  = pending.erosionIntensity,
+        textType = textbox.Type.DECIMAL,
+        zIndex   = zWidgets,
+    }))
+    table.insert(elements, { type = "textbox", id = advancedTab.erosionIntensityTextBoxId })
+
+    rowIndex = rowIndex + 1
+
+    ---------------------------------------------------------
+    -- Row 3: Volcanic Activity (textbox DECIMAL)
+    ---------------------------------------------------------
+    local volcanicLabelId = params.trackLabel(label.new({
+        name     = "volcanic_activity_label",
+        text     = "Volcanic Activity",
+        font     = font,
+        fontSize = base.fontSize,
+        color    = {1.0, 1.0, 1.0, 1.0},
+        page     = page,
+        uiscale  = uiscale,
+    }))
+    local volcanicLabelHandle = label.getElementHandle(volcanicLabelId)
+    UI.addToPage(page, volcanicLabelHandle,
+                 cx, rowY(rowIndex) + s.fontSize)
+    UI.setZIndex(volcanicLabelHandle, zContent)
+    table.insert(elements, { type = "label", handle = volcanicLabelHandle })
+
+    advancedTab.volcanicActivityTextBoxId = params.trackTextBox(textbox.new({
+        name     = "volcanic_activity_input",
+        width    = base.textboxWidth,
+        height   = base.textboxHeight,
+        page     = page,
+        x        = cx + cw - tbW,
+        y        = rowY(rowIndex),
+        uiscale  = uiscale,
+        font     = font,
+        fontSize = 24,
+        default  = pending.volcanicActivity,
+        textType = textbox.Type.DECIMAL,
+        zIndex   = zWidgets,
+    }))
+    table.insert(elements, { type = "textbox", id = advancedTab.volcanicActivityTextBoxId })
+
     return elements
 end
 
@@ -90,6 +164,12 @@ function advancedTab.getWidgetValues()
     local vals = {}
     if advancedTab.plateCountTextBoxId then
         vals.plateCount = textbox.getValue(advancedTab.plateCountTextBoxId)
+    end
+    if advancedTab.erosionIntensityTextBoxId then
+        vals.erosionIntensity = textbox.getValue(advancedTab.erosionIntensityTextBoxId)
+    end
+    if advancedTab.volcanicActivityTextBoxId then
+        vals.volcanicActivity = textbox.getValue(advancedTab.volcanicActivityTextBoxId)
     end
     return vals
 end

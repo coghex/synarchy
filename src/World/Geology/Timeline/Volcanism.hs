@@ -42,22 +42,24 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs grid =
         pIdx = tbsPeriodIdx tbs
         activityLevel = gsCO2 gs
         currentDate = gdMillionYears (gsDate gs)
+        va = tbsVolcanicActivity tbs
+        sc n = max 1 (round (fromIntegral n * va))
 
-        (shields, tbs1) = generateAndRegisterN 12 3 volcSeed worldSize plates
+        (shields, tbs1) = generateAndRegisterN 12 (sc 3) volcSeed worldSize plates
                               VolcanoEra_Hotspot generateShieldVolcano pIdx tbs
 
-        (fissures, tbs2) = generateAndRegisterN 10 3 (volcSeed + 1) worldSize plates
+        (fissures, tbs2) = generateAndRegisterN 10 (sc 3) (volcSeed + 1) worldSize plates
                                VolcanoEra_Boundary generateFissure pIdx tbs1
 
-        (cinders, tbs3) = generateAndRegisterN 16 5 (volcSeed + 2) worldSize plates
+        (cinders, tbs3) = generateAndRegisterN 16 (sc 5) (volcSeed + 2) worldSize plates
                               VolcanoEra_Boundary generateCinderCone pIdx tbs2
 
-        (vents, tbs4) = generateAndRegisterN 10 3 (volcSeed + 3) worldSize plates
+        (vents, tbs4) = generateAndRegisterN 10 (sc 3) (volcSeed + 3) worldSize plates
                             VolcanoEra_Boundary generateHydrothermalVent pIdx tbs3
 
         hasSuperVolcano = any isSuperVolcano (tbsFeatures tbs4)
         (supers, tbs5) = if periodIdx ≡ 0 ∨ (periodIdx ≡ 1 ∧ not hasSuperVolcano)
-            then let (s, t) = generateAndRegisterN 12 1 (volcSeed + 4) worldSize plates
+            then let (s, t) = generateAndRegisterN 12 (sc 1) (volcSeed + 4) worldSize plates
                                   VolcanoEra_Hotspot generateSuperVolcano pIdx tbs4
                  in if null s ∧ not hasSuperVolcano
                     then forceOneSuperVolcano (volcSeed + 5) worldSize plates pIdx t
@@ -133,7 +135,7 @@ applyVolcanicEvolution seed worldSize plates tbs grid =
 
         eruptSeed = seed `xor` 0x5E7A
         periodEruptions = catMaybes
-            [ generateEruption eruptSeed worldSize periodIdx plates pf
+            [ generateEruption (tbsVolcanicActivity tbs1) eruptSeed worldSize periodIdx plates pf
             | pf ← tbsFeatures tbs1
             , case eruptionProfile (pfFeature pf) of
                 Just ep → epTimelineScale ep ≡ Period
@@ -154,9 +156,9 @@ applyVolcanicEvolution seed worldSize plates tbs grid =
                 grid' = updateElevGrid worldSize grid period
             in (tbs2, grid')
 
-generateEruption ∷ Word64 → Int → Int → [TectonicPlate]
+generateEruption ∷ Float → Word64 → Int → Int → [TectonicPlate]
                  → PersistentFeature → Maybe GeoEvent
-generateEruption seed worldSize ageIdx plates pf =
+generateEruption volcanicActivity seed worldSize ageIdx plates pf =
     case pfActivity pf of
         FActive → case eruptionProfile (pfFeature pf) of
             Nothing → Nothing
@@ -164,7 +166,8 @@ generateEruption seed worldSize ageIdx plates pf =
                 let GeoFeatureId fidInt = pfId pf
                     h1 = hashGeo seed fidInt (700 + ageIdx)
                     roll = hashToFloatGeo h1
-                in if roll < epEruptChance profile
+                    scaledChance = min 1.0 (epEruptChance profile * volcanicActivity)
+                in if roll < scaledChance
                    then Just (buildEruptionEvent seed worldSize ageIdx plates pf profile)
                    else Nothing
         _ → Nothing

@@ -137,8 +137,8 @@ isSourceNew worldSize existingRivers (sx, sy, _, _) =
 -- Erosion
 -----------------------------------------------------------
 
-erosionFromGeoState ∷ GeoState → ClimateState → Word64 → Int → Bool → ErosionParams
-erosionFromGeoState gs climate seed ageIdx isLastAge =
+erosionFromGeoState ∷ Float → GeoState → ClimateState → Word64 → Int → Bool → ErosionParams
+erosionFromGeoState intensity gs climate seed ageIdx isLastAge =
     let co2 = gsCO2 gs
         chemical = min 1.0 (0.2 + (co2 - 1.0) * 0.3)
 
@@ -173,7 +173,7 @@ erosionFromGeoState gs climate seed ageIdx isLastAge =
         windScale = 0.1 + 0.9 * max 0.0 (1.0 - avgPrecip * 2.0)
 
     in ErosionParams
-        { epIntensity     = 0.7
+        { epIntensity     = intensity
         , epHydraulic     = 0.8 * hydraulicScale
         , epThermal       = 0.4 * thermalScale
         , epWind          = 0.35 * windScale
@@ -190,9 +190,9 @@ erosionFromGeoState gs climate seed ageIdx isLastAge =
 -- | Build per-region erosion parameters from the climate grid.
 --   Each climate region gets its own ErosionParams derived from
 --   its local temperature, precipitation, humidity, and snow.
-regionalErosionMap ∷ GeoState → ClimateState → Word64 → Int → Bool
+regionalErosionMap ∷ Float → GeoState → ClimateState → Word64 → Int → Bool
                    → HM.HashMap ClimateCoord ErosionParams
-regionalErosionMap gs climate seed ageIdx isLastAge =
+regionalErosionMap intensity gs climate seed ageIdx isLastAge =
     let co2 = gsCO2 gs
         chemical = min 1.0 (0.2 + (co2 - 1.0) * 0.3)
         regions = cgRegions (csClimate climate)
@@ -218,7 +218,7 @@ regionalErosionMap gs climate seed ageIdx isLastAge =
             windBoost = 0.5 + 0.5 * rcWindSpeed rc
 
         in ErosionParams
-            { epIntensity     = 0.7
+            { epIntensity     = intensity
             , epHydraulic     = 0.8 * hydraulicScale
             , epThermal       = 0.4 * thermalScale
             , epWind          = 0.35 * windScale * windBoost

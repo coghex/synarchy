@@ -404,13 +404,15 @@ lookupClimateQuick climate worldSize gx gy =
         rvF = (fromIntegral v / fCS + hcF) / fCRS
 
         -- Center-based: region center is at integer + 0.5
+        regionsPerSide = worldSize `div` climateRegionSize
         ruC = ruF - 0.5
         rvC = rvF - 0.5
-        ru0 = floor ruC ∷ Int
+        ru0raw = floor ruC ∷ Int
         rv0 = floor rvC ∷ Int
-        ru1 = ru0 + 1
+        ru0 = ((ru0raw `mod` regionsPerSide) + regionsPerSide) `mod` regionsPerSide
+        ru1 = (ru0 + 1) `mod` regionsPerSide
         rv1 = rv0 + 1
-        tu = ruC - fromIntegral ru0
+        tu = ruC - fromIntegral ru0raw
         tv = rvC - fromIntegral rv0
 
         lookupRC ru rv =

@@ -38,6 +38,8 @@ data WorldGenConfig = WorldGenConfig
     , wgcSun        ∷ !SunYaml
     , wgcMoon       ∷ !MoonYaml
     , wgcClimate    ∷ !ClimateYaml
+    , wgcErosionIntensity ∷ !Float
+    , wgcVolcanicActivity ∷ !Float
     } deriving (Show, Eq)
 
 data CalendarYaml = CalendarYaml
@@ -79,6 +81,8 @@ defaultWorldGenConfig = WorldGenConfig
     , wgcSun        = defaultSunYaml
     , wgcMoon       = defaultMoonYaml
     , wgcClimate    = defaultClimateYaml
+    , wgcErosionIntensity = 0.7
+    , wgcVolcanicActivity = 1.0
     }
 
 defaultCalendarYaml ∷ CalendarYaml
@@ -158,6 +162,8 @@ instance FromJSON WorldGenConfig where
             <*> wgObj .: "sun"         .!= wgcSun defaultWorldGenConfig
             <*> wgObj .: "moon"        .!= wgcMoon defaultWorldGenConfig
             <*> wgObj .: "climate"     .!= wgcClimate defaultWorldGenConfig
+            <*> wgObj .: "erosion_intensity" .!= wgcErosionIntensity defaultWorldGenConfig
+            <*> wgObj .: "volcanic_activity" .!= wgcVolcanicActivity defaultWorldGenConfig
     parseJSON _ = fail "Expected an object for world_gen"
 
 -- ToJSON instances
@@ -204,6 +210,8 @@ instance ToJSON WorldGenConfig where
             , "sun"         .= wgcSun cfg
             , "moon"        .= wgcMoon cfg
             , "climate"     .= wgcClimate cfg
+            , "erosion_intensity" .= wgcErosionIntensity cfg
+            , "volcanic_activity" .= wgcVolcanicActivity cfg
             ]
         ]
 
@@ -254,6 +262,8 @@ paramsToConfig p = WorldGenConfig
         , clAlbedoFeedback = cpAlbedoFeedback (wgpClimateParams p)
         , clThcThreshold   = cpThcThreshold (wgpClimateParams p)
         }
+    , wgcErosionIntensity = wgpErosionIntensity p
+    , wgcVolcanicActivity = wgpVolcanicActivity p
     }
 
 -- | Apply a YAML config to the default WorldGenParams.
@@ -292,4 +302,6 @@ applyConfigToParams cfg = defaultWorldGenParams
         , cpThcThreshold    = clThcThreshold (wgcClimate cfg)
         }
     , wgpClimateState = initClimateState (wgcWorldSize cfg)
+    , wgpErosionIntensity = wgcErosionIntensity cfg
+    , wgpVolcanicActivity = wgcVolcanicActivity cfg
     }

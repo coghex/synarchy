@@ -18,6 +18,9 @@ world_gen:
     cycle_days: 28        # Days per lunar cycle
     phase_offset: 0.0     # Starting phase offset (0.0-1.0)
 
+  erosion_intensity: 0.7  # Global erosion strength multiplier (0.0-2.0)
+  volcanic_activity: 1.0  # Volcanic activity multiplier (0.0-3.0)
+
   climate:
     iterations: 50        # Relaxation iterations per era
     coriolis_scale: 1.0   # Coriolis strength multiplier
