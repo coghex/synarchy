@@ -84,7 +84,7 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
 
     in if length noisyPath < 4
        then Nothing
-       else Just (buildRiverFromPath seed riverIdx flow noisyPath)
+       else buildRiverFromPath seed riverIdx flow noisyPath
 
 -----------------------------------------------------------
 -- Path noise
@@ -125,7 +125,7 @@ addPathNoise seed riverIdx spacing pts =
 -- Path construction
 -----------------------------------------------------------
 
-buildRiverFromPath ∷ Word64 → Int → Float → [(Int, Int, Int)] → RiverParams
+buildRiverFromPath ∷ Word64 → Int → Float → [(Int, Int, Int)] → Maybe RiverParams
 buildRiverFromPath seed riverIdx baseFlow path =
     let monoPath = enforceMonotonicPath path
         -- Grid-following produces one point per grid cell (~8 tiles apart).
@@ -137,22 +137,24 @@ buildRiverFromPath seed riverIdx baseFlow path =
             (lx, ly, le) : rest
                 | le ≤ seaLevel + 3 → reverse ((lx, ly, seaLevel) : rest)
             _ → decimated0
-        numWP = length decimated
-        segments = fixupSegmentContinuity $ V.fromList $
-                       zipWith (buildSegFromWaypoints seed numWP baseFlow)
-                               [0..] (zip decimated (drop 1 decimated))
-        (srcX, srcY, _) = case decimated of { ((x,y,e):_) → (x,y,e); [] → (0,0,0) }
-        (mouthX, mouthY, _) = last decimated
-        totalFlow = case V.null segments of
-            True  → baseFlow
-            False → rsFlowRate (V.last segments)
-    in RiverParams
-        { rpSourceRegion = GeoCoord srcX srcY
-        , rpMouthRegion  = GeoCoord mouthX mouthY
-        , rpSegments     = segments
-        , rpFlowRate     = totalFlow
-        , rpMeanderSeed  = fromIntegral (hashGeo seed riverIdx 1150)
-        }
+    in case decimated of
+        [] → Nothing
+        ((srcX, srcY, _) : _) →
+            let numWP = length decimated
+                segments = fixupSegmentContinuity $ V.fromList $
+                               zipWith (buildSegFromWaypoints seed numWP baseFlow)
+                                       [0..] (zip decimated (drop 1 decimated))
+                (mouthX, mouthY, _) = last decimated
+                totalFlow = case V.null segments of
+                    True  → baseFlow
+                    False → rsFlowRate (V.last segments)
+            in Just RiverParams
+                { rpSourceRegion = GeoCoord srcX srcY
+                , rpMouthRegion  = GeoCoord mouthX mouthY
+                , rpSegments     = segments
+                , rpFlowRate     = totalFlow
+                , rpMeanderSeed  = fromIntegral (hashGeo seed riverIdx 1150)
+                }
 
 -- | Keep every Nth point from the path, always preserving
 --   the first and last points.

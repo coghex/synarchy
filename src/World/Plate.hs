@@ -129,7 +129,11 @@ twoNearestPlates seed worldSize plates gx gy =
                        else if dq < d2
                             then go best1 d1 (q, dq) dq qs
                             else go best1 d1 best2 d2 qs
-                ((a, da), (b, db)) = go (p, d0) d0 (p, d0) (1/0) ps
+                -- When only one plate exists, use it for both with
+                -- a large but finite second distance to avoid NaN
+                -- propagation through boundary calculations.
+                maxDist = fromIntegral worldSize ∷ Float
+                ((a, da), (b, db)) = go (p, d0) d0 (p, maxDist) maxDist ps
             in ((a, da), (b, db))
         _ → error "no plates"
 
