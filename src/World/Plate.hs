@@ -104,8 +104,9 @@ generateOnePlate seed worldSize plateIndex =
 
 plateAt ∷ Word64 → Int → [TectonicPlate] → Int → Int → (TectonicPlate, Float)
 plateAt seed worldSize plates gx gy =
-    let ranked = rankPlates seed worldSize plates gx gy
-    in head ranked
+    case rankPlates seed worldSize plates gx gy of
+      (x:_) → x
+      []    → error "plateAt: no plates"
 
 twoNearestPlates ∷ Word64 → Int → [TectonicPlate] → Int → Int
                  → ((TectonicPlate, Float), (TectonicPlate, Float))

@@ -65,13 +65,13 @@ mergeLayeredTextItems = Map.map mergeInLayer
 
     mergeTextBatches ∷ [TextRenderBatch] → [TextRenderBatch]
     mergeTextBatches [] = []
-    mergeTextBatches batches =
+    mergeTextBatches batches@(first:_) =
         let grouped = Map.toList $ foldl' (\acc b →
                 let key = trbFont b
                     existing = Map.findWithDefault V.empty key acc
                 in Map.insert key (existing <> trbInstances b) acc
               ) Map.empty batches
-            layer = trbLayer (head batches)
+            layer = trbLayer first
         in [ TextRenderBatch
                { trbFont      = font
                , trbLayer     = layer

@@ -44,7 +44,7 @@ buildTributarySegments seed fidInt srcX srcY bx by numSegs branchElev =
           , rsStartElev   = se
           , rsEndElev     = ee
           }
-      ) [0..] (zip waypoints (tail waypoints))
+      ) [0..] (zip waypoints (drop 1 waypoints))
     where -- Interpolate waypoints along the line with hash-based offsets
           waypoints = [ let t = fromIntegral i / fromIntegral numSegs ∷ Float
                             baseX = fromIntegral srcX + t * fromIntegral (bx - srcX)

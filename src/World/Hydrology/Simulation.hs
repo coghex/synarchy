@@ -513,8 +513,8 @@ pathToRiverParams seed ageIdx worldSize spacing riverIdx path
     | length path < minRiverLength = Nothing
     | otherwise =
         let segments = V.fromList $ zipWith (makeSegment spacing)
-                               [0..] (zip path (tail path))
-            (srcX, srcY, _, _) = head path
+                               [0..] (zip path (drop 1 path))
+            (srcX, srcY, _, _) = case path of { (p:_) → p; [] → (0,0,0,0) }
             (mouthX, mouthY, _, _) = last path
             totalFlow = if V.null segments
                 then 0.1

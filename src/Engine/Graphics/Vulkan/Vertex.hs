@@ -46,7 +46,7 @@ createVertexBuffer ∷ Device
                   → EngineM ε σ (Buffer, DeviceMemory)
 createVertexBuffer device pDevice graphicsQueue commandPool = do
     let vertices = quadVertices  -- Our predefined vertices
-        bsize    = sizeOf (head vertices)
+        bsize    = case vertices of (v:_) → sizeOf v; [] → 0
         vertSize = fromIntegral $ bsize * length vertices
     
     -- Create staging buffer

@@ -117,7 +117,7 @@ addPathNoise seed riverIdx spacing pts =
             ) [0 ∷ Int ..] pts dirs
         -- Flow direction at each point: vector to next point
         dirs = zipWith (\(x1, y1, _) (x2, y2, _) → (x2 - x1, y2 - y1))
-                       pts (tail pts)
+                       pts (drop 1 pts)
                <> [(0, 0)]  -- last point has no direction
     in noisy
 
@@ -140,8 +140,8 @@ buildRiverFromPath seed riverIdx baseFlow path =
         numWP = length decimated
         segments = fixupSegmentContinuity $ V.fromList $
                        zipWith (buildSegFromWaypoints seed numWP baseFlow)
-                               [0..] (zip decimated (tail decimated))
-        (srcX, srcY, _) = head decimated
+                               [0..] (zip decimated (drop 1 decimated))
+        (srcX, srcY, _) = case decimated of { ((x,y,e):_) → (x,y,e); [] → (0,0,0) }
         (mouthX, mouthY, _) = last decimated
         totalFlow = case V.null segments of
             True  → baseFlow

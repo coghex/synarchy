@@ -50,6 +50,8 @@ instance ScriptBackend LuaBackend where
           _      → return $ ScriptError "Function call failed"
       Nothing → return $ ScriptError "Invalid Lua context"
   
+  registerFunction _ _ _ _ = pure ()
+
   backendName _    = "Lua"
   backendVersion _ = "5.5"
 

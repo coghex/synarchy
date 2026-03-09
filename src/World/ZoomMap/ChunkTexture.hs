@@ -15,7 +15,7 @@ import qualified Data.ByteString.Internal as BSI
 import qualified Data.Vector as V
 import Control.DeepSeq (NFData(..))
 import Foreign.Ptr (plusPtr)
-import Foreign.Marshal.Utils (copyBytes)
+import Foreign.Marshal.Utils (copyBytes, fillBytes)
 import World.Types (ChunkCoord(..), chunkSize, zoomTileSize)
 import World.ZoomMap.ColorPalette
 
@@ -62,7 +62,7 @@ assembleAtlas ∷ Int → Int → Int → V.Vector BS.ByteString → Int → BS.
 assembleAtlas atlasW _atlasH chunksPerRow chunkPixels totalSize =
     BSI.unsafeCreate totalSize $ \destPtr → do
         -- Zero-fill (for any padding chunks at the end)
-        BSI.memset destPtr 0 (fromIntegral totalSize)
+        fillBytes destPtr 0 totalSize
         -- Copy each chunk's pixel data into the atlas
         V.iforM_ chunkPixels $ \i chunkBS → do
             let col = i `mod` chunksPerRow

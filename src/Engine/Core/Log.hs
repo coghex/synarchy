@@ -327,15 +327,14 @@ getEnabledCategories LoggerState{..} = do
 
 -- | Extract the top-most (user's) call site from CallStack
 extractCallSite ∷ CallStack → Maybe SrcLoc
-extractCallSite cs = 
+extractCallSite cs =
   let frames = getCallStack cs
-  in case reverse frames of  -- Reverse to get most recent first
+      reversed = reverse frames
+  in case reversed of
     [] → Nothing
-    frames' → case dropWhile isInternalCall frames' of
-      [] → case frames' of  -- Fallback: if all internal, take the last one
-        [] → Nothing
-        ((_, loc):_) → Just loc
+    ((_, fallback):_) → case dropWhile isInternalCall reversed of
       ((_, loc):_) → Just loc
+      _            → Just fallback  -- All internal: use most recent frame
   where
     -- Only skip the exact logging function names, not prefixes
     isInternalCall (name, _) = name `elem`

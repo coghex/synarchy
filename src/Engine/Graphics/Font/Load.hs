@@ -287,7 +287,7 @@ packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow cellWidth cellHeight
         return $ Map.insert char glyphInfo gmap
 
 nextPowerOf2 ∷ Int → Int
-nextPowerOf2 n = head $ dropWhile (< n) powersOf2
+nextPowerOf2 n = fromMaybe 1 $ listToMaybe $ dropWhile (< n) powersOf2
   where powersOf2 = iterate (*2) 1
 
 -----------------------------------------------------------

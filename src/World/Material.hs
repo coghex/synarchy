@@ -5,7 +5,7 @@
 
 module World.Material
     ( -- * Core types
-      MaterialId(..), unMaterialId
+      MaterialId(..)
       -- * Named constants (compile-time, zero-cost)
     , matAir
     , matGranite, matDiorite, matGabbro
@@ -55,7 +55,8 @@ import Data.Vector.Unboxed.Deriving (derivingUnbox)
 newtype MaterialId = MaterialId { unMaterialId ∷ Word8 }
     deriving stock (Show, Eq, Ord)
     deriving newtype (NFData)
-    deriving (Serialize, Generic)
+    deriving anyclass (Serialize)
+    deriving stock (Generic)
 
 derivingUnbox "MaterialId"
     [t| MaterialId -> Word8 |]

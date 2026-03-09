@@ -96,14 +96,14 @@ buildLayeredBatches manager =
         spriteLists ∷ Map.Map LayerId [RenderItem]
         spriteLists = V.foldl' (\acc batch →
             let layer = rbLayer batch
-            in Map.insertWith (\new old → head new : old)
+            in Map.insertWith (\_ old → SpriteItem batch : old)
                 layer [SpriteItem batch] acc
           ) Map.empty sortedSprites
         
         textLists ∷ Map.Map LayerId [RenderItem]
         textLists = foldl' (\acc batch →
             let layer = trbLayer batch
-            in Map.insertWith (\new old → head new : old)
+            in Map.insertWith (\_ old → TextItem batch : old)
                 layer [TextItem batch] acc
           ) Map.empty sortedText
         

@@ -65,6 +65,7 @@ instance MonadError EngineException (EngineM ε σ) where
 instance MonadReader EngineEnv (EngineM ε σ) where
   ask = EngineM $ \e _ c →
     atomically (readVar e) ⌦ \env → c (Right env)
+  local _ = error "EngineM: local is not supported (STM-backed env)"
 
 instance MonadState EngineState (EngineM ε σ) where
   get = EngineM $ \_ s c →

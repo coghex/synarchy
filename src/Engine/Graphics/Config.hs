@@ -46,7 +46,7 @@ sampleCountToMSAA s
 clampSampleCount ∷ SampleCountFlags → SampleCountFlagBits → SampleCountFlagBits
 clampSampleCount supported requested =
     -- Try requested first, then fall back to lower counts
-    head $ filter isSupported candidates ++ [SAMPLE_COUNT_1_BIT]
+    fromMaybe SAMPLE_COUNT_1_BIT $ listToMaybe $ filter isSupported candidates
   where
     candidates = dropWhile (/= requested)
         [ SAMPLE_COUNT_8_BIT

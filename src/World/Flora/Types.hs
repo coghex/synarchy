@@ -47,7 +47,8 @@ import Engine.Asset.Handle (TextureHandle(..))
 newtype FloraId = FloraId { unFloraId ∷ Word16 }
     deriving stock (Show, Eq, Ord)
     deriving newtype (NFData, Hashable)
-    deriving (Serialize, Generic)
+    deriving anyclass (Serialize)
+    deriving stock (Generic)
 
 -----------------------------------------------------------
 -- Lifecycle Types

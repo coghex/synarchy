@@ -92,6 +92,7 @@ test-suite synarchy-test
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
                        -haddock
@@ -108,6 +109,7 @@ test-suite synarchy-test
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
                        -haddock
@@ -468,6 +470,7 @@ library
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wno-ambiguous-fields
                        -threaded
                        -haddock
                        -fno-full-laziness
@@ -482,6 +485,7 @@ library
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wno-ambiguous-fields
                        -threaded
                        -haddock
     else
@@ -490,12 +494,14 @@ library
           ghc-options: -optP-Wno-nonportable-include-path
                        -O2
                        -optc-O3
+                       -Wno-ambiguous-fields
                        -fexcess-precision
                        -threaded
                        -feager-blackholing
       else
           ghc-options: -O2
                        -optc-O3
+                       -Wno-ambiguous-fields
                        -fexcess-precision
                        -threaded
                        -feager-blackholing
@@ -583,6 +589,7 @@ executable synarchy
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
                        -haddock
