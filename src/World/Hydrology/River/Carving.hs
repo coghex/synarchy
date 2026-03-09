@@ -132,15 +132,15 @@ carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
            valleyHalfW  = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
            depthI       = rsDepth seg
 
-           -- FLAT channel floor per segment: use the lower endpoint
-           -- (min = deepest point, since rivers flow downhill).
-           -- NO float interpolation along the segment — this prevents
-           -- the checkerboard caused by round/floor of smoothly varying
-           -- floats creating alternating 1-tile elevation steps.
-           -- The elevation gradient is handled by segment-to-segment
-           -- stepping via fixupSegmentContinuity.
-           channelFloor = min (rsStartElev seg - depthI)
-                              (rsEndElev seg - depthI)
+           -- Interpolated channel floor along the segment.
+           -- Uses floor() to avoid checkerboard from round().
+           -- With fixupSegmentContinuity, adjacent segments share
+           -- endpoint elevations so the floor is continuous at junctions.
+           tClamped = max 0.0 (min 1.0 alongT) ∷ Float
+           startE = fromIntegral (rsStartElev seg) ∷ Float
+           endE   = fromIntegral (rsEndElev seg) ∷ Float
+           interpElev = startE + tClamped * (endE - startE)
+           channelFloor = floor (interpElev - fromIntegral depthI) ∷ Int
 
        in if alongT < -0.05 ∨ alongT > 1.05 ∨ effectivePerpDist > valleyHalfW
           then noModification
@@ -172,9 +172,8 @@ carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
                    -- smooth cubic profile to avoid cliff faces.
                    wallCarveDepth = floor (fromIntegral depthI * 0.7
                                          * (1.0 - smoothT)) ∷ Int
-                   -- Use the higher segment endpoint as the reference
-                   -- surface (rim elevation) — pure integer, no interpolation.
-                   refSurface = max (rsStartElev seg) (rsEndElev seg)
+                   -- Interpolated reference surface (rim elevation)
+                   refSurface = floor interpElev ∷ Int
                    targetElev = refSurface - wallCarveDepth
                    carve = baseElev - targetElev
                    wallAlluvium = max 1 (wallCarveDepth * 3 `div` 10)

@@ -113,14 +113,19 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
             -- Phase 1: Level — lower water to min neighbor surface.
             -- Water seeks its lowest level. If a neighbor's water is
             -- lower, our water should flow there (lowering ours).
-            -- Skip Ocean and Lava — their levels are fixed by definition.
-            -- Only level River and Lake fluid.
+            -- Skip Ocean, Lava, and River:
+            --   Ocean/Lava: levels are fixed by definition.
+            --   River: water surface is interpolated along segments and
+            --          intentionally varies. Equilibration would flatten
+            --          the gradient and cause chunk-boundary artifacts.
+            -- Only level Lake fluid.
             forM_ [0 .. area - 1] $ \idx → do
                 val ← MV.read mv idx
                 case val of
                     Just fc
                       | fcType fc ≡ Ocean → pure ()
                       | fcType fc ≡ Lava  → pure ()
+                      | fcType fc ≡ River → pure ()
                       | otherwise → do
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
@@ -186,6 +191,9 @@ minNeighborSurfaceOfType mv ftype lx ly = do
 
 -- | Check if a tile should be filled by equilibration.
 --   Uses the minimum adjacent water surface (water seeks its level).
+--   Only propagates Lake fluid — River has its own segment-based fill
+--   that covers the full valley width, and propagation would create
+--   lifted water blocks outside the valley.
 containedFill ∷ MV.MVector s (Maybe FluidCell)
               → Int → Int → Int → ST s (Maybe FluidCell)
 containedFill mv lx ly surfZ = do
@@ -196,14 +204,15 @@ containedFill mv lx ly surfZ = do
     vS ← check lx (ly + 1)
     vE ← check (lx + 1) ly
     vW ← check (lx - 1) ly
-    let waterCells = catMaybes [vN, vS, vE, vW]
+    -- Filter to only Lake neighbors for propagation
+    let waterCells = filter (\fc → fcType fc ≡ Lake)
+                            (catMaybes [vN, vS, vE, vW])
     pure $ case waterCells of
         [] → Nothing
         (w:ws) → let minSurf = foldl' (\a fc → min a (fcSurface fc))
                                        (fcSurface w) ws
-                     ftype   = fcType w
                  in if surfZ ≤ minSurf
-                    then Just (FluidCell ftype minSurf)
+                    then Just (FluidCell Lake minSurf)
                     else Nothing
 
 -- | Mutable ST reference (avoids IORef in ST)

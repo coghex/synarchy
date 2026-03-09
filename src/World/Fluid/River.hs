@@ -109,21 +109,19 @@ hasAnyRiverQuick features worldSize coord =
     in any (isNearbyRiver worldSize chunkMinGX chunkMinGY) features
 
 -----------------------------------------------------------
--- River Fluid Fill (flat reference surface)
+-- River Fluid Fill (interpolated water surface)
 -----------------------------------------------------------
 --
--- Water surface is FLAT across the river cross-section at any
--- point along a segment. Computed from the segment's channel
--- floor (min endpoint elevation − depth) plus water depth.
--- This prevents the staircase/terraced water that occurs when
--- each tile computes its own surface from terrain height.
+-- Water surface is INTERPOLATED along each segment, smoothly
+-- decreasing from start to end elevation. This gives a continuous
+-- gradient instead of discrete per-segment steps.
 --
--- Tiles in the FULL VALLEY width are checked. Only those whose
--- actual terrain (surfZ) is at or below the flat water surface
--- get filled — this naturally fills the carved channel and lower
--- valley walls while leaving the upper walls and rim dry.
--- The surfZ check also prevents floating water if terrain has
--- been raised by later geological ages.
+-- With fixupSegmentContinuity ensuring adjacent segments share
+-- endpoint elevations, the interpolated surface is continuous
+-- at segment junctions — no visible water cliffs.
+--
+-- Uses floor() to avoid round's half-to-even creating alternating
+-- elevation steps (checkerboard pattern) at transition tiles.
 
 fillRiverFromFeature ∷ MV.MVector s (Maybe FluidCell)
                      → PersistentFeature → Int → Int → Int
@@ -141,7 +139,9 @@ fillRiverFromFeature mv pf worldSize chunkGX chunkGY surfaceMap =
         _ → pure ()
 
 -- | At overlapping regions, pick the LOWER water surface.
---   Water seeks its lowest level.
+--   With interpolated surfaces and segment continuity, overlapping
+--   segments produce matching surfaces at junctions. Picking lower
+--   is physically correct: water seeks its lowest level.
 pickBestFill ∷ Maybe FluidCell → Maybe FluidCell → Maybe FluidCell
 pickBestFill Nothing b = b
 pickBestFill a Nothing = a
@@ -162,17 +162,20 @@ bestRiverFill worldSize gx gy surfZ segments =
     in foldl' pickBestFill Nothing (segResults <> waypointResults)
 
 -- | Water depth in tiles above the channel floor, based on flow rate
---   and channel depth. Capped at depth-2 so the water surface stays
---   well below bank level (prevents overflow at terrain bumps).
+--   and channel depth. Capped at depth-1 so the water surface stays
+--   below bank level.
 riverWaterDepth ∷ Float → Int → Int
 riverWaterDepth flow depth =
-    let raw = max 1 (round (1.0 + flow * 3.0))
-    in min raw (max 1 (depth - 2))
+    let raw = max 2 (round (1.0 + flow * 3.0))
+    in min raw (max 2 (depth - 1))
 
--- | Fill a tile from a segment using a FLAT reference water surface.
---   The water surface is constant across the segment cross-section,
---   computed from the channel floor + water depth. Fills any tile
---   in the valley whose terrain is at or below the water surface.
+-- | Fill a tile from a segment using an INTERPOLATED water surface.
+--   The water surface smoothly decreases along the segment from
+--   start to end, computed as: floor(lerp(startElev, endElev, t)) - depth + waterDepth.
+--   Uses floor() to avoid checkerboard from round().
+--
+--   With fixupSegmentContinuity, adjacent segments share endpoint
+--   elevations, so the interpolated surface is continuous at junctions.
 riverFillFromSegment ∷ Int → Int → Int → Int → RiverSegment
                      → Maybe FluidCell
 riverFillFromSegment worldSize gx gy surfZ seg =
@@ -191,7 +194,7 @@ riverFillFromSegment worldSize gx gy surfZ seg =
            py = fromIntegral pyi ∷ Float
            tRaw = (px * dx' + py * dy') / segLen2
        -- Extended overlap at segment boundaries
-       in if tRaw < -0.3 ∨ tRaw > 1.3
+       in if tRaw < -0.5 ∨ tRaw > 1.5
           then Nothing
           else
           let signedPerp = (px * dy' - py * dx') / segLen
@@ -204,11 +207,17 @@ riverFillFromSegment worldSize gx gy surfZ seg =
           in if effectivePerpDist > fillW
              then Nothing
              else
-             let -- Flat channel floor per segment (same as carving target)
-                 channelFloor = min (rsStartElev seg - depthI)
-                                    (rsEndElev seg - depthI)
+             let -- Interpolated reference elevation along the segment.
+                 -- Clamp t to [0,1] for interpolation (overlap tiles use
+                 -- endpoint values, which match the adjacent segment).
+                 tClamped = max 0.0 (min 1.0 tRaw)
+                 startE = fromIntegral (rsStartElev seg) ∷ Float
+                 endE   = fromIntegral (rsEndElev seg) ∷ Float
+                 interpElev = startE + tClamped * (endE - startE)
+                 -- Channel floor follows the gradient (not flat)
+                 channelFloor = floor (interpElev - fromIntegral depthI) ∷ Int
                  waterDepth = riverWaterDepth flow depthI
-                 -- Flat water surface: constant across the cross-section.
+                 -- Water surface: interpolated floor + water depth.
                  -- At ocean: use sea level.
                  waterSurface = if channelFloor ≤ seaLevel
                      then seaLevel
@@ -218,7 +227,8 @@ riverFillFromSegment worldSize gx gy surfZ seg =
                 else Just (FluidCell River waterSurface)
 
 -- | Fill tiles near segment start points (bends between segments).
---   Uses circular fill with flat reference surface.
+--   Uses the segment's start elevation for the water surface, which
+--   matches the interpolated surface at t=0.
 riverFillFromWaypoint ∷ Int → Int → Int → Int → RiverSegment
                       → Maybe FluidCell
 riverFillFromWaypoint worldSize gx gy surfZ seg =
@@ -232,8 +242,8 @@ riverFillFromWaypoint worldSize gx gy surfZ seg =
        then Nothing
        else
        let flow = rsFlowRate seg
-           channelFloor = min (rsStartElev seg - depthI)
-                              (rsEndElev seg - depthI)
+           -- Use start elevation (this is the junction point)
+           channelFloor = rsStartElev seg - depthI
            waterDepth = riverWaterDepth flow depthI
            waterSurface = if channelFloor ≤ seaLevel
                then seaLevel
@@ -243,6 +253,7 @@ riverFillFromWaypoint worldSize gx gy surfZ seg =
           else Just (FluidCell River waterSurface)
 
 -- | Fill tiles near the last segment endpoint (river mouth).
+--   Uses the segment's end elevation for the water surface.
 riverFillFromEndpoint ∷ Int → Int → Int → Int → RiverSegment
                       → Maybe FluidCell
 riverFillFromEndpoint worldSize gx gy surfZ seg =
@@ -256,8 +267,8 @@ riverFillFromEndpoint worldSize gx gy surfZ seg =
        then Nothing
        else
        let flow = rsFlowRate seg
-           channelFloor = min (rsStartElev seg - depthI)
-                              (rsEndElev seg - depthI)
+           -- Use end elevation (mouth of river)
+           channelFloor = rsEndElev seg - depthI
            waterDepth = riverWaterDepth flow depthI
            waterSurface = if channelFloor ≤ seaLevel
                then seaLevel
