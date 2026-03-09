@@ -14,6 +14,8 @@ local scrollbar      = require("scripts.ui.scrollbar")
 local sprite         = require("scripts.ui.sprite")
 local settingsTab    = require("scripts.create_world.settings_tab")
 local advancedTab    = require("scripts.create_world.advanced_tab")
+local generalTab     = require("scripts.create_world.general_tab")
+local climateTab     = require("scripts.create_world.climate_tab")
 local logPanelMod    = require("scripts.create_world.log_panel")
 local bottomButtons  = require("scripts.create_world.bottom_buttons")
 local generation     = require("scripts.create_world.generation")
@@ -55,7 +57,7 @@ createWorldMenu.baseSizes = {
     randboxWidth     = 200,
     randboxHeight    = 40,
     dropdownHeight   = 40,
-    textboxWidth     = 100,
+    textboxWidth     = 140,
     textboxHeight    = 40,
     logFontSize      = 16,
 }
@@ -80,13 +82,87 @@ createWorldMenu.activeTab    = "settings"
 createWorldMenu.showMenuCallback     = nil
 createWorldMenu.worldPreviewTexture  = nil
 
--- Pending world parameters
+-- Pending world parameters (populated from YAML defaults at init time)
 createWorldMenu.pending = {
     worldName  = "",
     seed       = "",
     worldSize  = "128",
-    plateCount = "7",
+    plateCount = "10",
+    -- Calendar
+    daysPerMonth   = "30",
+    monthsPerYear  = "12",
+    hoursPerDay    = "24",
+    minutesPerHour = "60",
+    -- Astronomy
+    tiltAngle  = "0.4",
+    dayLength  = "0.5",
+    cycleDays  = "28",
+    phaseOffset = "0.0",
+    -- Climate
+    climateIterations = "50",
+    coriolisScale     = "1.0",
+    windDrag          = "0.3",
+    thermalInertia    = "0.7",
+    orographicScale   = "1.5",
+    evapScale         = "1.0",
+    albedoFeedback    = "0.5",
+    thcThreshold      = "1.025",
 }
+
+-- Format a float for display, avoiding long floating point representations.
+-- Uses up to 4 decimal places, strips trailing zeros.
+local function fmtFloat(val, fallback)
+    local n = val or fallback
+    local s = string.format("%.4f", n)
+    -- Strip trailing zeros after decimal point
+    s = s:gsub("(%..-)0+$", "%1")
+    -- Strip trailing decimal point if no fractional part
+    s = s:gsub("%.$", ".0")
+    return s
+end
+
+local function fmtInt(val, fallback)
+    return tostring(math.floor(val or fallback))
+end
+
+-- Load defaults from config/world_gen_default.yaml via Haskell
+function createWorldMenu.loadDefaults()
+    local defaults = world.getGenDefaults()
+    if defaults then
+        createWorldMenu.pending.worldSize  = fmtInt(defaults.world_size, 128)
+        createWorldMenu.pending.plateCount = fmtInt(defaults.plate_count, 10)
+        -- Calendar
+        if defaults.calendar then
+            local c = defaults.calendar
+            createWorldMenu.pending.daysPerMonth   = fmtInt(c.days_per_month, 30)
+            createWorldMenu.pending.monthsPerYear  = fmtInt(c.months_per_year, 12)
+            createWorldMenu.pending.hoursPerDay    = fmtInt(c.hours_per_day, 24)
+            createWorldMenu.pending.minutesPerHour = fmtInt(c.minutes_per_hour, 60)
+        end
+        -- Astronomy
+        if defaults.sun then
+            createWorldMenu.pending.tiltAngle = fmtFloat(defaults.sun.tilt_angle, 0.4)
+            createWorldMenu.pending.dayLength = fmtFloat(defaults.sun.day_length, 0.5)
+        end
+        if defaults.moon then
+            createWorldMenu.pending.cycleDays   = fmtInt(defaults.moon.cycle_days, 28)
+            createWorldMenu.pending.phaseOffset = fmtFloat(defaults.moon.phase_offset, 0.0)
+        end
+        -- Climate
+        if defaults.climate then
+            local cl = defaults.climate
+            createWorldMenu.pending.climateIterations = fmtInt(cl.iterations, 50)
+            createWorldMenu.pending.coriolisScale     = fmtFloat(cl.coriolis_scale, 1.0)
+            createWorldMenu.pending.windDrag          = fmtFloat(cl.wind_drag, 0.3)
+            createWorldMenu.pending.thermalInertia    = fmtFloat(cl.thermal_inertia, 0.7)
+            createWorldMenu.pending.orographicScale   = fmtFloat(cl.orographic_scale, 1.5)
+            createWorldMenu.pending.evapScale         = fmtFloat(cl.evap_scale, 1.0)
+            createWorldMenu.pending.albedoFeedback    = fmtFloat(cl.albedo_feedback, 0.5)
+            createWorldMenu.pending.thcThreshold      = fmtFloat(cl.thc_threshold, 1.025)
+        end
+    end
+    return defaults
+end
 
 -- Generation state
 createWorldMenu.genState   = generation.IDLE
@@ -130,8 +206,9 @@ createWorldMenu.btnLayout = nil
 -- Tab registry
 -----------------------------------------------------------
 local tabDefs = {
-    { key = "settings", name = "Settings" },
-    { key = "advanced", name = "Advanced" },
+    { key = "settings", name = "General" },
+    { key = "advanced", name = "Geology" },
+    { key = "climate",  name = "Climate" },
 }
 
 -----------------------------------------------------------
@@ -199,6 +276,9 @@ function createWorldMenu.init(panelTex, btnTex, font, width, height)
     createWorldMenu.menuFont     = font
     createWorldMenu.fbW          = width
     createWorldMenu.fbH          = height
+
+    -- Load defaults from world_gen_default.yaml
+    createWorldMenu.loadDefaults()
 
     createWorldMenu.worldPreviewTexture =
         engine.loadTexture("assets/textures/world/notexture.png")
@@ -439,8 +519,21 @@ function createWorldMenu.createLeftPanel(panelX, panelY, bounds,
         trackTextBox  = createWorldMenu.trackTextBox,
     }
 
-    createWorldMenu.tabElements["settings"] = settingsTab.create(tabParams)
-    createWorldMenu.tabElements["advanced"]  = advancedTab.create(tabParams)
+    -- General tab: settings (name/seed/size) + calendar + astronomy
+    local settingsElems = settingsTab.create(tabParams)
+    -- Offset the general tab content below the settings rows
+    local generalParams = {}
+    for k, v in pairs(tabParams) do generalParams[k] = v end
+    generalParams.contentY = tabParams.contentY + s.rowSpacing * 3
+    local generalElems = generalTab.create(generalParams)
+    -- Merge both element lists
+    local combinedSettings = {}
+    for _, e in ipairs(settingsElems) do table.insert(combinedSettings, e) end
+    for _, e in ipairs(generalElems) do table.insert(combinedSettings, e) end
+    createWorldMenu.tabElements["settings"] = combinedSettings
+
+    createWorldMenu.tabElements["advanced"] = advancedTab.create(tabParams)
+    createWorldMenu.tabElements["climate"]  = climateTab.create(tabParams)
 
     createWorldMenu.showTab(createWorldMenu.activeTab)
 end
@@ -583,13 +676,30 @@ function createWorldMenu.onBack()
 end
 
 function createWorldMenu.onDefaults()
-    engine.logInfo("Loading create world defaults...")
+    engine.logInfo("Loading create world defaults from config...")
     createWorldMenu.pending = {
         worldName  = "",
         seed       = "",
         worldSize  = "128",
-        plateCount = "7",
+        plateCount = "10",
+        daysPerMonth   = "30",
+        monthsPerYear  = "12",
+        hoursPerDay    = "24",
+        minutesPerHour = "60",
+        tiltAngle  = "0.4",
+        dayLength  = "0.5",
+        cycleDays  = "28",
+        phaseOffset = "0.0",
+        climateIterations = "50",
+        coriolisScale     = "1.0",
+        windDrag          = "0.3",
+        thermalInertia    = "0.7",
+        orographicScale   = "1.5",
+        evapScale         = "1.0",
+        albedoFeedback    = "0.5",
+        thcThreshold      = "1.025",
     }
+    createWorldMenu.loadDefaults()
     createWorldMenu.genState = generation.IDLE
     logPanelMod.clear(createWorldMenu)
     createWorldMenu.createUI()

@@ -213,6 +213,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   -- World table
   Lua.newtable
 
+  registerLuaFunction "getGenDefaults" (worldGetGenDefaultsFn env)
+  registerLuaFunction "setGenConfig" (worldSetGenConfigFn env)
   registerLuaFunction "init" (worldInitFn env)
   registerLuaFunction "initArena" (worldInitArenaFn env)
   registerLuaFunction "initArenaDone" (worldInitArenaDoneFn env)

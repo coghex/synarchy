@@ -36,8 +36,11 @@ import World.ZoomMap (buildZoomCacheWithPixels)
 import World.ZoomMap.ColorPalette (buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Save.Serialize (saveWorld)
-import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
+import World.Weather (initEarlyClimate, formatWeather)
 import World.Weather.Types (ClimateState(..))
+import World.Generate.Config (WorldGenConfig(..), ClimateYaml(..)
+                             , CalendarYaml(..), SunYaml(..), MoonYaml(..)
+                             , applyConfigToParams)
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import World.Thread.ChunkLoading (maxChunksPerTick)
 
@@ -110,7 +113,10 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
         <> T.pack (show (HM.size (fcSpecies floraCat))) <> " species, "
         <> T.pack (show (HM.size (fcWorldGen floraCat))) <> " worldgen entries"
 
-    let params = defaultWorldGenParams
+    -- Read world gen config (loaded from YAML at startup)
+    worldGenCfg ← readIORef (worldGenConfigRef env)
+    let baseParams = applyConfigToParams worldGenCfg
+        params = baseParams
             { wgpSeed        = seed
             , wgpWorldSize   = worldSize
             , wgpPlateCount  = placeCount
@@ -118,7 +124,6 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , wgpGeoTimeline = timeline
             , wgpOceanMap    = oceanMap
             , wgpClimateState = climateState'
-            , wgpClimateParams = defaultClimateParams
             }
     
     writeIORef (wsGenParamsRef worldState) (Just params)

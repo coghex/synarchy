@@ -1,0 +1,29 @@
+world_gen:
+  # Leave seed as null for random generation
+  # seed: 42
+  world_size: 128
+  plate_count: 10
+
+  calendar:
+    days_per_month: 30
+    months_per_year: 12
+    hours_per_day: 24
+    minutes_per_hour: 60
+
+  sun:
+    tilt_angle: 0.4       # Axial tilt in radians (~23 degrees)
+    day_length: 0.5       # Day/night ratio at equinox (0.5 = equal)
+
+  moon:
+    cycle_days: 28        # Days per lunar cycle
+    phase_offset: 0.0     # Starting phase offset (0.0-1.0)
+
+  climate:
+    iterations: 50        # Relaxation iterations per era
+    coriolis_scale: 1.0   # Coriolis strength multiplier
+    wind_drag: 0.3        # Wind stress on ocean currents
+    thermal_inertia: 0.7  # Ocean thermal lag (0.0-1.0)
+    orographic_scale: 1.5 # Mountain rain forcing
+    evap_scale: 1.0       # Evaporation rate multiplier
+    albedo_feedback: 0.5  # Ice-albedo feedback strength
+    thc_threshold: 1.025  # Density threshold for deep water formation

@@ -30,6 +30,7 @@ import UI.Types (emptyUIPageManager)
 import Unit.Types (emptyUnitManager)
 import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
+import World.Generate.Config (loadWorldGenConfig)
 
 -- | Result of engine initialization
 data EngineInitResult = EngineInitResult
@@ -112,6 +113,9 @@ initializeEngine = do
   unitManagerRef ← newIORef emptyUnitManager
   -- unit thread queue
   unitQueue ← Q.newQueue
+  -- world gen config
+  worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
+  worldGenConfigRef ← newIORef worldGenConfig
 
   -- Build environment
   let env = EngineEnv
@@ -154,6 +158,7 @@ initializeEngine = do
         , materialRegistryRef = materialRegistryRef
         , unitManagerRef     = unitManagerRef
         , unitQueue          = unitQueue
+        , worldGenConfigRef  = worldGenConfigRef
         }
   
   envVar   ← atomically $ newVar env

@@ -261,27 +261,57 @@ function textbox.updateDisplay(id)
     local tb = textboxes[id]
     if not tb then return end
     if not tb.textId then return end
-    
+
     local displayText = textbox.formatDisplayText(id)
     local rawText = UI.getTextInput(tb.boxId) or ""
     local cursorPos = UI.getCursor(tb.boxId) or 0
-    
-    local textWidth = engine.getTextWidth(tb.font, displayText, tb.fontSize)
+
     local availableWidth = tb.width - (tb.textPadding * 2)
-    
+
+    -- Clip text from the left if it exceeds available width
+    local clippedText = displayText
+    local textWidth = engine.getTextWidth(tb.font, clippedText, tb.fontSize)
+    if textWidth > availableWidth then
+        -- Remove characters from the left until it fits
+        local startIdx = 1
+        while startIdx < #clippedText do
+            startIdx = startIdx + 1
+            local candidate = clippedText:sub(startIdx)
+            local w = engine.getTextWidth(tb.font, candidate, tb.fontSize)
+            if w <= availableWidth then
+                clippedText = candidate
+                textWidth = w
+                break
+            end
+        end
+    end
+
+    -- Right-justify within the box
     local textX = tb.width - tb.textPadding - textWidth
     if textX < tb.textPadding then
         textX = tb.textPadding
     end
-    
-    UI.setText(tb.textId, displayText)
+
+    UI.setText(tb.textId, clippedText)
     local textY = (tb.height / 2) + (tb.fontSize / 3)
     UI.setPosition(tb.textId, textX, textY)
-    
+
     if tb.cursorId then
+        -- Compute cursor position relative to the clipped text
         local textBeforeCursor = rawText:sub(1, cursorPos)
+        local suffixLen = #displayText - #rawText  -- suffix chars (e.g. "x")
+        local clipOffset = #displayText - #clippedText
         local cursorTextWidth = engine.getTextWidth(tb.font, textBeforeCursor, tb.fontSize)
+        -- Offset for clipping: if text was clipped, cursor shifts left
+        if clipOffset > 0 then
+            local clippedPrefix = displayText:sub(1, clipOffset)
+            local clippedWidth = engine.getTextWidth(tb.font, clippedPrefix, tb.fontSize)
+            cursorTextWidth = cursorTextWidth - clippedWidth
+        end
         local cursorX = textX + cursorTextWidth - (engine.getTextWidth(tb.font, "|", tb.fontSize) / 2)
+        -- Clamp cursor within box
+        if cursorX < tb.textPadding then cursorX = tb.textPadding end
+        if cursorX > tb.width - tb.textPadding then cursorX = tb.width - tb.textPadding end
         UI.setPosition(tb.cursorId, cursorX, textY)
     end
 end

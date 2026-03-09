@@ -1,6 +1,8 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Scripting.Lua.API.World
-    ( worldInitFn
+    ( worldGetGenDefaultsFn
+    , worldSetGenConfigFn
+    , worldInitFn
     , worldInitArenaFn
     , worldInitArenaDoneFn
     , worldOpenArenaFn
@@ -34,7 +36,7 @@ import UPrelude
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
-import Data.IORef (atomicModifyIORef', readIORef)
+import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
@@ -43,6 +45,166 @@ import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
 import World.Tool.Types (ToolMode(..), textToToolMode)
 import World.Render.Zoom.Types (ZoomMapMode(..), textToMapMode)
+import World.Generate.Config
+
+-- | world.getGenDefaults() → table
+--   Returns the world generation config as a Lua table.
+worldGetGenDefaultsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetGenDefaultsFn env = do
+    cfg ← Lua.liftIO $ readIORef (worldGenConfigRef env)
+    Lua.newtable
+    -- Top-level params
+    case wgcSeed cfg of
+        Just s  → do Lua.pushstring (TE.encodeUtf8 (T.pack (show s)))
+                     Lua.setfield (Lua.nth 2) "seed"
+        Nothing → pure ()
+    Lua.pushinteger (fromIntegral (wgcWorldSize cfg))
+    Lua.setfield (Lua.nth 2) "world_size"
+    Lua.pushinteger (fromIntegral (wgcPlateCount cfg))
+    Lua.setfield (Lua.nth 2) "plate_count"
+    -- Calendar sub-table
+    let cal = wgcCalendar cfg
+    Lua.newtable
+    Lua.pushinteger (fromIntegral (cyDaysPerMonth cal))
+    Lua.setfield (Lua.nth 2) "days_per_month"
+    Lua.pushinteger (fromIntegral (cyMonthsPerYear cal))
+    Lua.setfield (Lua.nth 2) "months_per_year"
+    Lua.pushinteger (fromIntegral (cyHoursPerDay cal))
+    Lua.setfield (Lua.nth 2) "hours_per_day"
+    Lua.pushinteger (fromIntegral (cyMinutesPerHour cal))
+    Lua.setfield (Lua.nth 2) "minutes_per_hour"
+    Lua.setfield (Lua.nth 2) "calendar"
+    -- Sun sub-table
+    let sun = wgcSun cfg
+    Lua.newtable
+    Lua.pushnumber (Lua.Number (realToFrac (syTiltAngle sun)))
+    Lua.setfield (Lua.nth 2) "tilt_angle"
+    Lua.pushnumber (Lua.Number (realToFrac (syDayLength sun)))
+    Lua.setfield (Lua.nth 2) "day_length"
+    Lua.setfield (Lua.nth 2) "sun"
+    -- Moon sub-table
+    let moon = wgcMoon cfg
+    Lua.newtable
+    Lua.pushinteger (fromIntegral (myCycleDays moon))
+    Lua.setfield (Lua.nth 2) "cycle_days"
+    Lua.pushnumber (Lua.Number (realToFrac (myPhaseOffset moon)))
+    Lua.setfield (Lua.nth 2) "phase_offset"
+    Lua.setfield (Lua.nth 2) "moon"
+    -- Climate sub-table
+    let cl = wgcClimate cfg
+    Lua.newtable
+    Lua.pushinteger (fromIntegral (clIterations cl))
+    Lua.setfield (Lua.nth 2) "iterations"
+    Lua.pushnumber (Lua.Number (realToFrac (clCoriolisScale cl)))
+    Lua.setfield (Lua.nth 2) "coriolis_scale"
+    Lua.pushnumber (Lua.Number (realToFrac (clWindDrag cl)))
+    Lua.setfield (Lua.nth 2) "wind_drag"
+    Lua.pushnumber (Lua.Number (realToFrac (clThermalInertia cl)))
+    Lua.setfield (Lua.nth 2) "thermal_inertia"
+    Lua.pushnumber (Lua.Number (realToFrac (clOrographicScale cl)))
+    Lua.setfield (Lua.nth 2) "orographic_scale"
+    Lua.pushnumber (Lua.Number (realToFrac (clEvapScale cl)))
+    Lua.setfield (Lua.nth 2) "evap_scale"
+    Lua.pushnumber (Lua.Number (realToFrac (clAlbedoFeedback cl)))
+    Lua.setfield (Lua.nth 2) "albedo_feedback"
+    Lua.pushnumber (Lua.Number (realToFrac (clThcThreshold cl)))
+    Lua.setfield (Lua.nth 2) "thc_threshold"
+    Lua.setfield (Lua.nth 2) "climate"
+    return 1
+
+-- | world.setGenConfig(table)
+--   Updates the world generation config from a Lua table.
+--   Only updates fields that are present in the table.
+worldSetGenConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetGenConfigFn env = do
+    -- Arg 1 is a table on the stack
+    let getIntField ∷ Lua.Name → Int → Lua.LuaE Lua.Exception Int
+        getIntField name def = do
+            Lua.getfield (Lua.nth 1) name
+            mi ← Lua.tointeger Lua.top
+            Lua.pop 1
+            pure $ maybe def fromIntegral mi
+        getFloatField ∷ Lua.Name → Float → Lua.LuaE Lua.Exception Float
+        getFloatField name def = do
+            Lua.getfield (Lua.nth 1) name
+            mn ← Lua.tonumber Lua.top
+            Lua.pop 1
+            pure $ case mn of
+                Just (Lua.Number n) → realToFrac n
+                _                   → def
+        getSubInt ∷ Lua.Name → Lua.Name → Int → Lua.LuaE Lua.Exception Int
+        getSubInt tbl name def = do
+            Lua.getfield (Lua.nth 1) tbl
+            isT ← Lua.istable Lua.top
+            if isT
+                then do
+                    Lua.getfield (Lua.nth 1) name
+                    mi ← Lua.tointeger Lua.top
+                    Lua.pop 2
+                    pure $ maybe def fromIntegral mi
+                else do
+                    Lua.pop 1
+                    pure def
+        getSubFloat ∷ Lua.Name → Lua.Name → Float → Lua.LuaE Lua.Exception Float
+        getSubFloat tbl name def = do
+            Lua.getfield (Lua.nth 1) tbl
+            isT ← Lua.istable Lua.top
+            if isT
+                then do
+                    Lua.getfield (Lua.nth 1) name
+                    mn ← Lua.tonumber Lua.top
+                    Lua.pop 2
+                    pure $ case mn of
+                        Just (Lua.Number n) → realToFrac n
+                        _                   → def
+                else do
+                    Lua.pop 1
+                    pure def
+
+    oldCfg ← Lua.liftIO $ readIORef (worldGenConfigRef env)
+    let oldCal = wgcCalendar oldCfg
+        oldSun = wgcSun oldCfg
+        oldMoon = wgcMoon oldCfg
+        oldCl  = wgcClimate oldCfg
+
+    -- Top-level
+    plateCount ← getIntField "plate_count" (wgcPlateCount oldCfg)
+    worldSize  ← getIntField "world_size"  (wgcWorldSize oldCfg)
+
+    -- Calendar
+    dpm  ← getSubInt "calendar" "days_per_month"   (cyDaysPerMonth oldCal)
+    mpy  ← getSubInt "calendar" "months_per_year"  (cyMonthsPerYear oldCal)
+    hpd  ← getSubInt "calendar" "hours_per_day"    (cyHoursPerDay oldCal)
+    mphr ← getSubInt "calendar" "minutes_per_hour" (cyMinutesPerHour oldCal)
+
+    -- Sun
+    tilt ← getSubFloat "sun" "tilt_angle" (syTiltAngle oldSun)
+    dayL ← getSubFloat "sun" "day_length" (syDayLength oldSun)
+
+    -- Moon
+    cyc  ← getSubInt   "moon" "cycle_days"   (myCycleDays oldMoon)
+    poff ← getSubFloat "moon" "phase_offset" (myPhaseOffset oldMoon)
+
+    -- Climate
+    iters  ← getSubInt   "climate" "iterations"       (clIterations oldCl)
+    corio  ← getSubFloat "climate" "coriolis_scale"   (clCoriolisScale oldCl)
+    wdrag  ← getSubFloat "climate" "wind_drag"        (clWindDrag oldCl)
+    therm  ← getSubFloat "climate" "thermal_inertia"  (clThermalInertia oldCl)
+    orog   ← getSubFloat "climate" "orographic_scale" (clOrographicScale oldCl)
+    evap   ← getSubFloat "climate" "evap_scale"       (clEvapScale oldCl)
+    albedo ← getSubFloat "climate" "albedo_feedback"  (clAlbedoFeedback oldCl)
+    thc    ← getSubFloat "climate" "thc_threshold"    (clThcThreshold oldCl)
+
+    let newCfg = oldCfg
+            { wgcWorldSize  = worldSize
+            , wgcPlateCount = plateCount
+            , wgcCalendar   = CalendarYaml dpm mpy hpd mphr
+            , wgcSun        = SunYaml tilt dayL
+            , wgcMoon       = MoonYaml cyc poff
+            , wgcClimate    = ClimateYaml iters corio wdrag therm orog evap albedo thc
+            }
+    Lua.liftIO $ writeIORef (worldGenConfigRef env) newCfg
+    return 0
 
 -- | world.init(pageId, seed, worldSizeInChunks)
 worldInitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

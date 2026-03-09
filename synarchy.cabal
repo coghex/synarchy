@@ -327,6 +327,7 @@ library
                      World.Generate.Timeline
                      World.Generate.Strata
                      World.Generate.Types
+                     World.Generate.Config
                      World.Geology
                      World.Geology.Types
                      World.Geology.Log
