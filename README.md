@@ -59,6 +59,53 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
 - [ ] hotloading
 - [ ] game (working title: "Ecce Homo")
 
+## Debug Console
+
+The engine runs a TCP debug server on port 8008 that accepts Lua commands. Use it to inspect and manipulate the running engine in real time.
+
+### Interactive REPL
+
+```bash
+./debug-console.sh
+```
+
+Install `rlwrap` (`brew install rlwrap`) for readline support (arrow key history, line editing).
+
+### Single commands
+
+```bash
+# run one command and print the result
+./debug-console.sh -c 'return camera.getPosition()'
+
+# or use nc/netcat directly
+printf 'return 2 + 2\n' | nc -w 2 localhost 8008
+```
+
+### Scripting multiple commands
+
+Each command must be a single line. For multi-statement scripts, separate with semicolons or chain with `printf`:
+
+```bash
+printf 'world.init("test", 42, 64, 10)\n' | nc -w 2 localhost 8008
+sleep 8
+printf 'world.show("test")\n' | nc -w 2 localhost 8008
+printf 'camera.goToTile(100, 93)\n' | nc -w 2 localhost 8008
+```
+
+### Available APIs
+
+The debug console has access to the full Lua environment. Key namespaces:
+
+- `world` — world creation and queries (`init`, `show`, `getTerrainAt`, `getFluidAt`, `getSurfaceAt`, `getChunkInfo`, `getAreaFluid`, `getRivers`, `getInitProgress`)
+- `camera` — camera control (`goToTile`, `getPosition`)
+- `engine` — engine control (`quit`)
+
+Use `return` to get values back, e.g. `return world.getInitProgress()`.
+
+### Configuration
+
+Set `SYNARCHY_DEBUG_PORT` to change the port (default: 8008).
+
 ## Known Issues
 
 - on macos you will get junk in stdout, apple says there is no way around this, which is wild, even redirecting stdout doesnt work
