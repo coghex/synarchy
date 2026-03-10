@@ -41,6 +41,18 @@ computeChunkRivers features _seed _plates worldSize coord surfaceMap =
         -- surface quad covers the terrain side-face at the waterline.
         -- Same approach as ocean's coastal extension in Ocean.hs.
         extendRiverBanks mv surfaceMap
+        -- Pass 3: drain water hanging over cliffs. Only affects
+        -- edge tiles (≤2 river neighbors) to avoid creating holes
+        -- in the river interior.
+        drainCliffWater mv surfaceMap
+        -- Pass 4: drain isolated river tiles not connected to a
+        -- chunk edge. River water must connect to the chunk boundary
+        -- (where it continues in adjacent chunks). Interior-only
+        -- pockets are artifacts and get removed.
+        drainIsolatedPockets mv
+        -- Pass 5: fill single-tile holes in the river. An empty
+        -- tile surrounded by river on 3+ sides gets filled.
+        fillRiverHoles mv surfaceMap
 
 -- | Extend river water one tile into banks. For each empty tile
 --   adjacent to a river tile, place a river fluid cell at the
@@ -79,6 +91,168 @@ adjacentRiverSurface mv lx ly = do
     pure $ case surfaces of
         []     → Nothing
         (s:ss) → Just (foldl' min s ss)
+
+-- | Remove river tiles that hang over cliffs. Only affects edge
+--   tiles (with ≤2 river neighbors) to avoid punching holes in
+--   the river interior. Checks if adjacent empty terrain drops
+--   below the tile's own terrain (cliff face).
+drainCliffWater ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s ()
+drainCliffWater mv surfaceMap = go (40 ∷ Int)
+  where
+    go 0 = pure ()
+    go n = do
+        changed ← drainCliffPass mv surfaceMap
+        when changed $ go (n - 1)
+
+drainCliffPass ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s Bool
+drainCliffPass mv surfaceMap = do
+    changedRef ← MV.replicate 1 False
+    forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
+        val ← MV.read mv idx
+        case val of
+            Just fc | fcType fc ≡ River → do
+                let lx = idx `mod` chunkSize
+                    ly = idx `div` chunkSize
+                    mySurfZ = surfaceMap VU.! idx
+                -- Count river neighbors
+                nCount ← countRiverNeighbors mv lx ly
+                -- Only drain edge tiles (≤2 river neighbors)
+                when (nCount ≤ 2) $ do
+                    cliff ← hasCliffEdge mv surfaceMap lx ly mySurfZ
+                    when cliff $ do
+                        MV.write mv idx Nothing
+                        MV.write changedRef 0 True
+            _ → pure ()
+    MV.read changedRef 0
+
+countRiverNeighbors ∷ MV.MVector s (Maybe FluidCell) → Int → Int → ST s Int
+countRiverNeighbors mv lx ly = do
+    let check nx ny
+            | nx < 0 ∨ nx ≥ chunkSize ∨ ny < 0 ∨ ny ≥ chunkSize = pure 0
+            | otherwise = do
+                v ← MV.read mv (ny * chunkSize + nx)
+                pure $ case v of
+                    Just fc | fcType fc ≡ River → 1
+                    _ → 0
+    n ← check lx (ly - 1)
+    e ← check (lx + 1) ly
+    s ← check lx (ly + 1)
+    w ← check (lx - 1) ly
+    pure (n + e + s + w)
+
+-- | Check if a river tile has an adjacent empty tile where terrain
+--   drops below the tile's own terrain. This indicates the water
+--   is sitting on a cliff edge where it would spill off.
+hasCliffEdge ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int
+             → Int → Int → Int → ST s Bool
+hasCliffEdge mv surfaceMap lx ly mySurfZ = do
+    let check nx ny
+            | nx < 0 ∨ nx ≥ chunkSize ∨ ny < 0 ∨ ny ≥ chunkSize =
+                pure False  -- chunk boundary → assume contained
+            | otherwise = do
+                let nIdx = ny * chunkSize + nx
+                nVal ← MV.read mv nIdx
+                case nVal of
+                    Just _  → pure False  -- has water → not a cliff edge
+                    Nothing →
+                        let nSurf = surfaceMap VU.! nIdx
+                        in pure (nSurf < mySurfZ - 1)
+    n ← check lx (ly - 1)
+    e ← check (lx + 1) ly
+    s ← check lx (ly + 1)
+    w ← check (lx - 1) ly
+    pure (n ∨ e ∨ s ∨ w)
+
+-- | Remove river tiles not connected to a chunk edge.
+--   River water must reach the chunk boundary (where it continues
+--   in adjacent chunks). Interior-only pockets are artifacts.
+drainIsolatedPockets ∷ MV.MVector s (Maybe FluidCell) → ST s ()
+drainIsolatedPockets mv = do
+    visited ← MV.replicate (chunkSize * chunkSize) False
+    -- Seed flood fill from river tiles on any chunk edge
+    forM_ [0 .. chunkSize - 1] $ \i → do
+        -- Top edge (ly=0): idx = i + 0*chunkSize = i
+        seedIfRiver mv visited i
+        -- Bottom edge (ly=chunkSize-1): idx = i + (chunkSize-1)*chunkSize
+        seedIfRiver mv visited (i + (chunkSize - 1) * chunkSize)
+        -- Left edge (lx=0): idx = 0 + i*chunkSize
+        seedIfRiver mv visited (i * chunkSize)
+        -- Right edge (lx=chunkSize-1): idx = (chunkSize-1) + i*chunkSize
+        seedIfRiver mv visited ((chunkSize - 1) + i * chunkSize)
+    -- Remove unvisited river tiles
+    forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
+        val ← MV.read mv idx
+        case val of
+            Just fc | fcType fc ≡ River → do
+                vis ← MV.read visited idx
+                when (not vis) $ MV.write mv idx Nothing
+            _ → pure ()
+
+seedIfRiver ∷ MV.MVector s (Maybe FluidCell)
+            → MV.MVector s Bool → Int → ST s ()
+seedIfRiver mv visited idx = do
+    val ← MV.read mv idx
+    case val of
+        Just fc | fcType fc ≡ River →
+            floodFillRiver mv visited idx
+        _ → pure ()
+
+-- | BFS flood fill from a seed tile to all connected river tiles.
+floodFillRiver ∷ MV.MVector s (Maybe FluidCell)
+               → MV.MVector s Bool → Int → ST s ()
+floodFillRiver mv visited seedIdx = do
+    vis ← MV.read visited seedIdx
+    when (not vis) $ do
+        MV.write visited seedIdx True
+        val ← MV.read mv seedIdx
+        case val of
+            Just fc | fcType fc ≡ River → do
+                let lx = seedIdx `mod` chunkSize
+                    ly = seedIdx `div` chunkSize
+                    neighbors = filter (\(nx, ny) →
+                        nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize)
+                        [(lx, ly-1), (lx+1, ly), (lx, ly+1), (lx-1, ly)]
+                forM_ neighbors $ \(nx, ny) → do
+                    let nIdx = ny * chunkSize + nx
+                    nVis ← MV.read visited nIdx
+                    when (not nVis) $ do
+                        nVal ← MV.read mv nIdx
+                        case nVal of
+                            Just nfc | fcType nfc ≡ River →
+                                floodFillRiver mv visited nIdx
+                            _ → pure ()
+            _ → pure ()
+
+-- | Fill single-tile holes in the river. An empty tile surrounded
+--   by river water on 3+ sides gets filled at the minimum
+--   neighbor water surface. Also removes 1-tile river spots
+--   (river tiles with 0 river neighbors).
+fillRiverHoles ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s ()
+fillRiverHoles mv surfaceMap = do
+    -- Pass A: fill holes (empty tiles with 3+ river neighbors)
+    forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
+        val ← MV.read mv idx
+        when (isNothing val) $ do
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+                surfZ = surfaceMap VU.! idx
+            nCount ← countRiverNeighbors mv lx ly
+            when (nCount ≥ 3) $ do
+                adj ← adjacentRiverSurface mv lx ly
+                case adj of
+                    Nothing → pure ()
+                    Just surf → when (surfZ ≤ surf) $
+                        MV.write mv idx (Just (FluidCell River surf))
+    -- Pass B: remove 1-tile spots (0 river neighbors)
+    forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
+        val ← MV.read mv idx
+        case val of
+            Just fc | fcType fc ≡ River → do
+                let lx = idx `mod` chunkSize
+                    ly = idx `div` chunkSize
+                nCount ← countRiverNeighbors mv lx ly
+                when (nCount ≡ 0) $ MV.write mv idx Nothing
+            _ → pure ()
 
 -----------------------------------------------------------
 -- River Proximity
@@ -225,8 +399,10 @@ riverFillFromSegment worldSize gx gy surfZ seg =
           let signedPerp = (px * dy' - py * dx') / segLen
               effectivePerpDist = abs signedPerp
 
-              -- Fill zone: full valley width + small margin
-              fillW = fromIntegral (rsValleyWidth seg) / 2.0 + 2.0 ∷ Float
+              -- Fill zone: valley width (the carved area).
+              -- No margin — surfZ check prevents fill on terrain
+              -- above water level. The valley IS the river bed.
+              fillW = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
           in if effectivePerpDist > fillW
              then Nothing
              else

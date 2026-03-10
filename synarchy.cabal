@@ -207,6 +207,7 @@ library
                      Engine.Scripting.Types
                      Engine.Scripting.Lua.Backend
                      Engine.Scripting.Lua.Debug
+                     Engine.Scripting.Lua.DebugServer
                      Engine.Scripting.Lua.Types
                      Engine.Scripting.Lua.Material
                      Engine.Scripting.Lua.Message

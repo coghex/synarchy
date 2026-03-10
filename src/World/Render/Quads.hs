@@ -33,6 +33,61 @@ import World.Render.TileQuads
     )
 
 -----------------------------------------------------------
+-- Water Slope Helpers
+-----------------------------------------------------------
+
+-- | Compute a slope ID (Word8) for a water tile by checking if
+--   adjacent water tiles have lower surfaces.
+--
+--   Grid-space directions map to isometric pixel-space as:
+--     Grid N (ly-1) → pixel right  (East,  bit 2)
+--     Grid E (lx+1) → pixel bottom (South, bit 4)
+--     Grid S (ly+1) → pixel left   (West,  bit 8)
+--     Grid W (lx-1) → pixel top    (North, bit 1)
+--
+--   Supports cross-chunk lookups via the chunkLookup function.
+waterSlopeAt ∷ V.Vector (Maybe FluidCell) → ChunkCoord
+             → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell)))
+             → Int → Int → Int → Word8
+waterSlopeAt fluidMap coord chunkLookup lx ly mySurf =
+    let checkNeighbor nx ny
+            | nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize =
+                case fluidMap V.! (ny * chunkSize + nx) of
+                    Just fc → fcSurface fc ≡ mySurf - 1
+                    Nothing → False
+            | otherwise =
+                -- Cross-chunk lookup
+                let ChunkCoord cx cy = coord
+                    (cx', lx') = if nx < 0 then (cx - 1, nx + chunkSize)
+                                 else if nx ≥ chunkSize then (cx + 1, nx - chunkSize)
+                                 else (cx, nx)
+                    (cy', ly') = if ny < 0 then (cy - 1, ny + chunkSize)
+                                 else if ny ≥ chunkSize then (cy + 1, ny - chunkSize)
+                                 else (cy, ny)
+                in case chunkLookup (ChunkCoord cx' cy') of
+                    Nothing → False
+                    Just neighborFM →
+                        case neighborFM V.! (ly' * chunkSize + lx') of
+                            Just fc → fcSurface fc ≡ mySurf - 1
+                            Nothing → False
+        -- Grid XY → UV/screen mapping. Each grid step is diagonal
+        -- in UV space (u=x-y, v=x+y):
+        --   Grid N (y-1) → u+, v- → pixel NE → bits 1+2 = 3
+        --   Grid E (x+1) → u+, v+ → pixel SE → bits 2+4 = 6
+        --   Grid S (y+1) → u-, v+ → pixel SW → bits 4+8 = 12
+        --   Grid W (x-1) → u-, v- → pixel NW → bits 1+8 = 9
+        gridN = checkNeighbor lx (ly - 1)
+        gridE = checkNeighbor (lx + 1) ly
+        gridS = checkNeighbor lx (ly + 1)
+        gridW = checkNeighbor (lx - 1) ly
+        raw = (if gridN then 3  else 0)   -- grid N → pixel NE (bits 1+2)
+          .|. (if gridE then 6  else 0)   -- grid E → pixel SE (bits 2+4)
+          .|. (if gridS then 12 else 0)   -- grid S → pixel SW (bits 4+8)
+          .|. (if gridW then 9  else 0)   -- grid W → pixel NW (bits 1+8)
+          ∷ Word8
+    in if raw ≡ 15 then 0 else raw
+
+-----------------------------------------------------------
 -- Render World Quads
 -----------------------------------------------------------
 
@@ -69,6 +124,11 @@ renderWorldQuads env worldState zoomAlpha snap = do
         (camX, _camY) = camPosition camera
 
         effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
+
+        -- Lookup neighbor chunk fluid maps for cross-chunk water slopes
+        fluidMapLookup cc = case HM.lookup cc (wtdChunks tileData) of
+            Just lc' → Just (lcFluidMap lc')
+            Nothing  → Nothing
 
         vb = computeViewBounds camera fbW fbH effectiveDepth
 
@@ -172,10 +232,10 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     , isTileVisible vb drawX drawY
                     ]
 
-                mkFreshwaterQuad gx gy ft fc =
+                mkFreshwaterQuad gx gy ft fc slopeId =
                         freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
                             gx gy (fcSurface fc) ft zSlice effectiveDepth
-                            zoomAlpha xOffset
+                            zoomAlpha xOffset slopeId
 
                 (!oceanQuads, !lavaQuads, !freshwaterQuads) =
                     V.ifoldl' (\(!oAcc, !lAcc, !fAcc) idx mFluid ->
@@ -211,19 +271,21 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                                 , fAcc
                                                 )
                                             Lake  ->
-                                                ( oAcc
+                                                let wSlope = waterSlopeAt fluidMap coord fluidMapLookup lx ly (fcSurface fc)
+                                                in ( oAcc
                                                 , lAcc
                                                 , freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
                                                     gx gy (fcSurface fc) Lake zSlice effectiveDepth
-                                                    zoomAlpha xOffset
+                                                    zoomAlpha xOffset wSlope
                                                   : fAcc
                                                 )
                                             River ->
-                                                ( oAcc
+                                                let wSlope = waterSlopeAt fluidMap coord fluidMapLookup lx ly (fcSurface fc)
+                                                in ( oAcc
                                                 , lAcc
                                                 , freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
                                                     gx gy (fcSurface fc) River zSlice effectiveDepth
-                                                    zoomAlpha xOffset
+                                                    zoomAlpha xOffset wSlope
                                                   : fAcc
                                                 )
                     ) ([], [], []) fluidMap

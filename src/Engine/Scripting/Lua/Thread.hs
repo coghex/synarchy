@@ -13,6 +13,7 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.Shell (setupShellSandbox)
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules)
+import Engine.Scripting.Lua.DebugServer (DebugCommand(..), startDebugServer, pollDebugCommand)
 import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..))
 import Engine.Core.Thread
@@ -29,6 +30,8 @@ import qualified Data.Map as Map
 import Data.List (find)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay, forkIO)
+import Control.Concurrent.MVar (putMVar)
+import Control.Concurrent.STM.TQueue (TQueue)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
 import Control.Exception (SomeException, catch)
@@ -100,7 +103,7 @@ startLuaThread env = do
                         return ()
                     
                     logDebug logger CatLua "Lua module initialized"
-                    
+
                 _ → do
                     errMsg ← Lua.runWith (lbsLuaState backendState) $ do
                         err ← Lua.tostring (-1)
@@ -110,7 +113,10 @@ startLuaThread env = do
                         "Failed to load Lua script: " <> T.pack scriptPath 
                         <> " - " <> errMsg
             
-            tid ← forkIO $ runLuaLoop env backendState stateRef
+            -- Start debug TCP server on port 8008
+            debugQueue ← startDebugServer 8008
+            logInfo logger CatLua "Debug server listening on port 8008"
+            tid ← forkIO $ runLuaLoop env backendState stateRef debugQueue
             return tid
         ) 
         (\(e ∷ SomeException) → do
@@ -141,8 +147,9 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef = do
     }
 
 -- | Lua event loop
-runLuaLoop ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
-runLuaLoop env ls stateRef = do
+runLuaLoop ∷ EngineEnv → LuaBackendState → IORef ThreadControl
+           → TQueue DebugCommand → IO ()
+runLuaLoop env ls stateRef debugQueue = do
     control ← readIORef stateRef
     case control of
         ThreadStopped → do
@@ -152,10 +159,13 @@ runLuaLoop env ls stateRef = do
             pure ()
         ThreadPaused → do
             threadDelay 100000
-            runLuaLoop env ls stateRef
+            runLuaLoop env ls stateRef debugQueue
         ThreadRunning → do
             catch
               (do
+                -- Poll debug server for commands (non-blocking)
+                processDebugCommands (lbsLuaState ls) debugQueue
+
                 currentTime ← getCurrentTime
                 let currentSecs = realToFrac $ utctDayTime currentTime
                 scriptsMap ← readTVarIO (lbsScripts ls)
@@ -172,7 +182,7 @@ runLuaLoop env ls stateRef = do
                   Just msg → do
                       processLuaMsg env ls stateRef msg
                       processLuaMsgs env ls stateRef
-                      runLuaLoop env ls stateRef
+                      runLuaLoop env ls stateRef debugQueue
                   Nothing → do
                       currentTime' ← getCurrentTime
                       let currentSecs' = realToFrac $ utctDayTime currentTime'
@@ -185,7 +195,7 @@ runLuaLoop env ls stateRef = do
                             return ()
                           atomically $ modifyTVar (lbsScripts ls) $
                             Map.adjust (\s → s { scriptNextTick = scriptNextTick s + scriptTickRate s }) sid
-                      runLuaLoop env ls stateRef
+                      runLuaLoop env ls stateRef debugQueue
               )
               (\(e ∷ SomeException) → do
                 logger ← readIORef (loggerRef env)
@@ -193,6 +203,63 @@ runLuaLoop env ls stateRef = do
                 Lua.close (lbsLuaState ls)
                 writeIORef (lifecycleRef env) CleaningUp
               )
+
+-- | Process all pending debug commands from the TCP server.
+--   Each command is a line of Lua code. We execute it via
+--   loadstring + pcall and send the result back through the MVar.
+processDebugCommands ∷ Lua.State → TQueue DebugCommand → IO ()
+processDebugCommands lst debugQueue = do
+    mCmd ← pollDebugCommand debugQueue
+    case mCmd of
+        Nothing → return ()
+        Just (DebugCommand cmdText responseMVar) → do
+            result ← executeDebugLua lst cmdText
+            putMVar responseMVar result
+            processDebugCommands lst debugQueue
+
+-- | Execute a Lua string and return the result as text.
+--   Uses loadstring to compile, then pcall to run safely.
+--   Captures return values and any errors.
+executeDebugLua ∷ Lua.State → Text → IO Text
+executeDebugLua lst cmdText = Lua.runWith lst $ do
+    let code = TE.encodeUtf8 cmdText
+        chunkName = Lua.Name ("=" <> code)
+    -- Try wrapping in "return ..." first for expressions
+    let returnWrapped = "return " <> code
+    status ← Lua.loadbuffer returnWrapped chunkName
+    status' ← if status ≡ Lua.OK
+        then return Lua.OK
+        else do
+            Lua.pop 1  -- pop error from failed load
+            Lua.loadbuffer code chunkName
+    case status' of
+        Lua.OK → do
+            -- Run the loaded chunk with pcall
+            callStatus ← Lua.pcall 0 Lua.multret Nothing
+            case callStatus of
+                Lua.OK → do
+                    -- Collect all return values
+                    top ← Lua.gettop
+                    if top ≡ 0
+                        then return "ok"
+                        else do
+                            parts ← forM [1..top] $ \i → do
+                                Lua.pushvalue i
+                                mStr ← Lua.tostring (-1)
+                                Lua.pop 1
+                                return $ case mStr of
+                                    Just bs → TE.decodeUtf8 bs
+                                    Nothing → "<non-string>"
+                            Lua.settop 0
+                            return (T.intercalate "\t" parts)
+                _ → do
+                    err ← Lua.tostring (-1)
+                    Lua.pop 1
+                    return $ "error: " <> maybe "unknown" TE.decodeUtf8 err
+        _ → do
+            err ← Lua.tostring (-1)
+            Lua.pop 1
+            return $ "syntax error: " <> maybe "unknown" TE.decodeUtf8 err
 
 -- | Process messages from anywhere to lua
 processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()

@@ -203,7 +203,7 @@ lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSli
 -----------------------------------------------------------
 
 freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
-                     fluidZ fluidType zSlice effDepth tileAlpha xOffset =
+                     fluidZ fluidType zSlice effDepth tileAlpha xOffset waterSlopeId =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = fluidZ - zSlice
@@ -219,7 +219,8 @@ freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
                            Nothing → wtNoTexture textures
                            Just h  → h
         actualSlot = lookupSlot texHandle
-        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+        fmHandle = getTileFaceMapTexture textures 0 waterSlopeId
+        fmSlot = lookupFmSlot fmHandle
 
         finalAlpha = tileAlpha
 
