@@ -53,6 +53,12 @@ computeChunkRivers features _seed _plates worldSize coord surfaceMap =
         -- Pass 5: fill single-tile holes in the river. An empty
         -- tile surrounded by river on 3+ sides gets filled.
         fillRiverHoles mv surfaceMap
+        -- Pass 6: clamp all river water surfaces to terrain + depth.
+        -- Previous passes (extend banks, fill holes) can propagate
+        -- inflated water surfaces from high-elevation source segments.
+        -- This final pass ensures no river tile has water unreasonably
+        -- far above its local terrain.
+        clampRiverDepth mv surfaceMap
 
 -- | Extend river water one tile into banks. For each empty tile
 --   adjacent to a river tile, place a river fluid cell at the
@@ -71,7 +77,9 @@ extendRiverBanks mv surfaceMap =
             case adj of
                 Nothing   → pure ()
                 Just surf → when (surfZ ≤ surf) $
-                    MV.write mv idx (Just (FluidCell River surf))
+                    -- Cap: water surface at most a few tiles above terrain
+                    let cappedSurf = min surf (surfZ + 4)
+                    in MV.write mv idx (Just (FluidCell River cappedSurf))
 
 adjacentRiverSurface ∷ MV.MVector s (Maybe FluidCell) → Int → Int
                      → ST s (Maybe Int)
@@ -254,6 +262,23 @@ fillRiverHoles mv surfaceMap = do
                 when (nCount ≡ 0) $ MV.write mv idx Nothing
             _ → pure ()
 
+-- | Clamp all river water surfaces so they don't exceed
+--   terrain + maxRiverDepth. Post-processing passes like
+--   extendRiverBanks and fillRiverHoles can propagate high
+--   water surfaces from headwater segments to lower terrain.
+clampRiverDepth ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s ()
+clampRiverDepth mv surfaceMap = do
+    let maxWaterAboveTerrain = 6  -- reasonable max depth
+    forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
+        val ← MV.read mv idx
+        case val of
+            Just fc | fcType fc ≡ River → do
+                let surfZ = surfaceMap VU.! idx
+                    cap = surfZ + maxWaterAboveTerrain
+                when (fcSurface fc > cap) $
+                    MV.write mv idx (Just (fc { fcSurface = cap }))
+            _ → pure ()
+
 -----------------------------------------------------------
 -- River Proximity
 -----------------------------------------------------------
@@ -392,8 +417,8 @@ riverFillFromSegment worldSize gx gy surfZ seg =
            px = fromIntegral pxi ∷ Float
            py = fromIntegral pyi ∷ Float
            tRaw = (px * dx' + py * dy') / segLen2
-       -- Extended overlap at segment boundaries
-       in if tRaw < -0.5 ∨ tRaw > 1.5
+       -- Modest overlap at segment boundaries for continuity
+       in if tRaw < -0.15 ∨ tRaw > 1.15
           then Nothing
           else
           let signedPerp = (px * dy' - py * dx') / segLen
@@ -412,10 +437,17 @@ riverFillFromSegment worldSize gx gy surfZ seg =
                  endW   = fromIntegral (rsWaterEnd seg) ∷ Float
                  waterSurface = floor (startW + tClamped * (endW - startW)) ∷ Int
                  -- Clamp to sea level at ocean interface
-                 finalSurface = if waterSurface ≤ seaLevel
+                 clampedSurface = if waterSurface ≤ seaLevel
                      then seaLevel
                      else waterSurface
-             in if surfZ > finalSurface
+                 -- Cap water depth above local terrain. The interpolated
+                 -- surface can be much higher than the terrain on valley
+                 -- slopes (headwater segments have high water at the
+                 -- source that drops steeply). Capping to terrain + depth
+                 -- keeps water in the carved channel.
+                 depthCap = rsDepth seg + 2
+                 finalSurface = min clampedSurface (surfZ + depthCap)
+             in if surfZ > clampedSurface
                 then Nothing
                 else Just (FluidCell River finalSurface)
 

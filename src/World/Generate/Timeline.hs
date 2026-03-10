@@ -18,6 +18,8 @@ import World.Material (MaterialId(..), matGlacier, MaterialRegistry(..)
 import World.Plate (wrapGlobalU)
 import World.Geology.Types (GeoModification(..))
 import World.Geology.Event (applyGeoEvent)
+import World.Geology.Timeline.Types (GeoEvent(..))
+import World.Hydrology.Types (HydroFeature(..))
 import World.Geology.Erosion (applyErosion, lookupRegionalErosion)
 import World.Scale (WorldScale(..), computeWorldScale)
 import World.Generate.Constants (chunkBorder)
@@ -36,8 +38,24 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
         chunkMinGY = cy * chunkSize - chunkBorder
         chunkMaxGX = cx * chunkSize + chunkSize + chunkBorder - 1
         chunkMaxGY = cy * chunkSize + chunkSize + chunkBorder - 1
-    in foldl' (applyOnePeriod chunkMinGX chunkMinGY chunkMaxGX chunkMaxGY)
-              (baseElevVec, baseMatVec) (gtPeriods timeline)
+        -- Apply all geological periods (events + erosion)
+        (postElev, postMat) =
+            foldl' (applyOnePeriod chunkMinGX chunkMinGY chunkMaxGX chunkMaxGY)
+                   (baseElevVec, baseMatVec) (gtPeriods timeline)
+        -- Final pass: re-apply all river carving events from every period.
+        -- Erosion in later periods fills carved channels. Re-applying
+        -- after all periods ensures the channels survive. River carving
+        -- is target-based so re-application is idempotent.
+        allRiverEvents = concatMap (\period →
+            let relevant = V.toList $ V.filter (\(_, bb) →
+                    bboxOverlapsChunk worldSize bb chunkMinGX chunkMinGY
+                                                   chunkMaxGX chunkMaxGY
+                    ) (gpExplodedEvents period)
+            in filter (\(evt, _) → isRiverCarveEvent evt) relevant
+            ) (gtPeriods timeline)
+    in if null allRiverEvents
+       then (postElev, postMat)
+       else applyRiverCarvePass coord allRiverEvents (postElev, postMat)
   where
     borderSize = chunkSize + 2 * chunkBorder
 
@@ -142,6 +160,12 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
 
         in (finalElev, finalMat)
 
+    isRiverCarveEvent ∷ GeoEvent → Bool
+    isRiverCarveEvent (HydroEvent (RiverFeature _)) = True
+    isRiverCarveEvent (RiverSegmentEvent _) = True
+    isRiverCarveEvent (RiverDeltaEvent _) = True
+    isRiverCarveEvent _ = False
+
     applyOneEvent ws gx gy (elev, mat) event =
         let mod' = applyGeoEvent event ws gx gy elev
             elev' = elev + gmElevDelta mod'
@@ -149,6 +173,36 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                 Just m  → MaterialId m
                 Nothing → mat
         in (elev', mat')
+
+    -- | Final pass: re-apply river carving events after all periods.
+    --   Erosion in later periods fills carved channels. This pass
+    --   ensures the channels are present at the correct depth.
+    applyRiverCarvePass crd riverEvts (elevVec, matVec) =
+        let borderArea = borderSize * borderSize
+        in runST $ do
+            elevM ← VUM.new borderArea
+            matM  ← VUM.new borderArea
+            forM_ [0 .. borderArea - 1] $ \idx → do
+                VUM.write elevM idx (elevVec VU.! idx)
+                VUM.write matM  idx (matVec  VU.! idx)
+            forM_ [0 .. borderArea - 1] $ \idx → do
+                elev ← VUM.read elevM idx
+                mat  ← VUM.read matM  idx
+                let (lx, ly) = fromIndex idx
+                    (gx, gy) = chunkToGlobal crd lx ly
+                    (gx', gy') = wrapGlobalU worldSize gx gy
+                    cellEvents = filter (\(_, bb) →
+                        tileInBBoxWrapped worldSize gx' gy' bb
+                        ) riverEvts
+                    (elevOut, matOut) =
+                        foldl' (\(e, m) (evt, _) →
+                            applyOneEvent worldSize gx' gy' (e, m) evt
+                        ) (elev, mat) cellEvents
+                VUM.write elevM idx elevOut
+                VUM.write matM  idx matOut
+            elevF ← VU.unsafeFreeze elevM
+            matF  ← VU.unsafeFreeze matM
+            pure (elevF, matF)
 
 -----------------------------------------------------------
 -- Legacy Timeline Application (single-column, for external callers)
@@ -158,13 +212,35 @@ applyTimeline ∷ GeoTimeline → Int → Int → Int → Float
   → (Int, MaterialId) → (Int, MaterialId)
 applyTimeline timeline worldSize gx gy hardness (baseElev, baseMat) =
     let wsc = computeWorldScale worldSize
-    in foldl' (applyPeriodSingle worldSize wsc gx gy hardness)
-              (baseElev, baseMat) (gtPeriods timeline)
+        (elev, mat) = foldl' (applyPeriodSingle worldSize wsc gx gy hardness)
+                             (baseElev, baseMat) (gtPeriods timeline)
+        -- Re-apply all river carving after all periods
+        allRiverEvts = concatMap (filter isRiverCarveEvtS . gpEvents)
+                                (gtPeriods timeline)
+        (elev', mat') = foldl' (applyOneEvtS worldSize gx gy)
+                               (elev, mat) allRiverEvts
+    in (elev', mat')
+
+isRiverCarveEvtS ∷ GeoEvent → Bool
+isRiverCarveEvtS (HydroEvent (RiverFeature _)) = True
+isRiverCarveEvtS (RiverSegmentEvent _) = True
+isRiverCarveEvtS (RiverDeltaEvent _) = True
+isRiverCarveEvtS _ = False
+
+applyOneEvtS ∷ Int → Int → Int → (Int, MaterialId) → GeoEvent → (Int, MaterialId)
+applyOneEvtS worldSize gx gy (e, m) event =
+    let mod' = applyGeoEvent event worldSize gx gy e
+        e' = e + gmElevDelta mod'
+        m' = case gmMaterialOverride mod' of
+            Just mm → MaterialId mm
+            Nothing → m
+    in (e', m')
 
 applyPeriodSingle ∷ Int → WorldScale → Int → Int → Float
   → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
 applyPeriodSingle worldSize wsc gx gy hardness (elev, mat) period =
-    let (elev', mat') = foldl' applyOneEvent (elev, mat) (gpEvents period)
+    let (elev', mat') = foldl' (applyOneEvtS worldSize gx gy) (elev, mat)
+                               (gpEvents period)
         regionalParams = lookupRegionalErosion
             (gpErosion period) (gpRegionalErosion period)
             worldSize gx gy
@@ -182,14 +258,6 @@ applyPeriodSingle worldSize wsc gx gy hardness (elev, mat) period =
             Just m  → MaterialId m
             Nothing → mat'
     in (elev'', mat'')
-  where
-    applyOneEvent (e, m) event =
-        let mod' = applyGeoEvent event worldSize gx gy e
-            e' = e + gmElevDelta mod'
-            m' = case gmMaterialOverride mod' of
-                Just mm → MaterialId mm
-                Nothing → m
-        in (e', m')
 
 -----------------------------------------------------------
 -- Bbox-Filtered Timeline Application (for zoom cache)
@@ -199,8 +267,14 @@ applyTimelineFast ∷ GeoTimeline → Int → Int → Int → Float
   → (Int, MaterialId) → (Int, MaterialId)
 applyTimelineFast timeline worldSize gx gy hardness (baseElev, baseMat) =
     let wsc = computeWorldScale worldSize
-    in foldl' (applyPeriodFiltered worldSize wsc gx gy hardness)
-              (baseElev, baseMat) (gtPeriods timeline)
+        (elev, mat) = foldl' (applyPeriodFiltered worldSize wsc gx gy hardness)
+                             (baseElev, baseMat) (gtPeriods timeline)
+        -- Re-apply all river carving after all periods
+        allRiverEvts = concatMap (filter isRiverCarveEvtS . gpEvents)
+                                (gtPeriods timeline)
+        (elev', mat') = foldl' (applyOneEvtS worldSize gx gy)
+                               (elev, mat) allRiverEvts
+    in (elev', mat')
 
 -- ZOOM CACHE PATH: uses gpTaggedEvents (compact, ~10 events)
 -- River events go through applyGeoEvent → applyRiverCarve which
@@ -258,3 +332,4 @@ applyExplodedEvents worldSize gx gy e0 m0 vec = go 0 e0 m0
                                  Just mm → MaterialId mm
                                  Nothing → m
                          in go (i + 1) e' m'
+

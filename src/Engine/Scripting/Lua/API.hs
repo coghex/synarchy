@@ -35,6 +35,7 @@ import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn,
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
 import Engine.Scripting.Lua.API.Save (saveListFn, saveWorldFn, loadSaveFn)
 import Engine.Scripting.Lua.API.World
+import Engine.Scripting.Lua.API.WorldQuery
 import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.UI
@@ -249,6 +250,15 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setToolMode" (worldSetToolModeFn env)
   registerLuaFunction "getInitProgress" (worldGetInitProgressFn env)
   registerLuaFunction "destroy" (worldDestroyFn env)
+
+  -- Debug query functions
+  registerLuaFunction "getTerrainAt" (worldGetTerrainAtFn env)
+  registerLuaFunction "getFluidAt" (worldGetFluidAtFn env)
+  registerLuaFunction "getSurfaceAt" (worldGetSurfaceAtFn env)
+  registerLuaFunction "getChunkInfo" (worldGetChunkInfoFn env)
+  registerLuaFunction "getAreaFluid" (worldGetAreaFluidFn env)
+  registerLuaFunction "getRivers" (worldGetRiversFn env)
+
   Lua.setglobal (Lua.Name "world")
 
   -- Flora table

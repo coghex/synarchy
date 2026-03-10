@@ -235,6 +235,7 @@ library
                      Engine.Scripting.Lua.API.UI.Property
                      Engine.Scripting.Lua.API.Units
                      Engine.Scripting.Lua.API.World
+                     Engine.Scripting.Lua.API.WorldQuery
                      Engine.Scripting.Lua.API.Flora
                      Engine.Scripting.Lua.API.YamlTextures
                      Engine.Core.Defaults

@@ -549,12 +549,12 @@ makeSegment spacing _segIdx
         baseDepth = max 3 (slopeDelta `div` 4 + round (flow * 2.0))
         maxDepth = min 10 (slopeDelta + 6)
         depth = min maxDepth baseDepth
-        -- Valley must be wide enough that walls aren't steep cliffs.
-        -- Minimum half-width = depth × 4 → full width = depth × 8.
-        minValleyW = depth * 8
+        -- Valley width for water fill. Kept modest to prevent
+        -- headwater segments from flooding wide areas at high elevation.
+        minValleyW = depth * 4
         rawValleyW = max (width * 3)
                          (round (fromIntegral width * valleyMult) ∷ Int)
-        valleyW = max minValleyW (min 96 rawValleyW)
+        valleyW = max minValleyW (min 48 rawValleyW)
 
         waterDepth = let raw = max 2 (round (1.0 + flow * 3.0))
                      in min raw (max 2 (depth - 1))
