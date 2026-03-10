@@ -51,15 +51,18 @@ spawnMeltwaterRiver seed periodIdx parentFid pf (events, tbs) =
 
         -- Simple single-segment river for now
         -- River generation will add more complexity later
+        segDepth = hashToRangeGeo (hashGeo seed fidInt 974) 5 15
         seg = RiverSegment
             { rsStart      = GeoCoord termX termY
             , rsEnd        = GeoCoord endX endY
             , rsWidth      = hashToRangeGeo h4 2 5
             , rsValleyWidth = hashToRangeGeo (hashGeo seed fidInt 973) 8 20
-            , rsDepth      = hashToRangeGeo (hashGeo seed fidInt 974) 5 15
+            , rsDepth      = segDepth
             , rsFlowRate   = 0.4  -- moderate meltwater
             , rsStartElev  = 0
             , rsEndElev    = 0
+            , rsWaterStart = 0
+            , rsWaterEnd   = 0
             }
 
         riverParams = RiverParams

@@ -15,7 +15,8 @@ import World.Plate (generatePlates, TectonicPlate)
 import World.Geology.Types
 import World.Geology.Hash
 import World.Geology.Crater (generateCraters)
-import World.Hydrology.Types (HydroFeature(..), RiverParams(..), LakeParams(..))
+import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
+                             , LakeParams(..))
 import World.Hydrology.Simulation (simulateHydrology, FlowResult(..)
                                   , ElevGrid(..), buildInitialElevGrid
                                   , updateElevGrid)
@@ -25,6 +26,7 @@ import World.Geology.Timeline.Volcanism
     ( applyPeriodVolcanism, applyVolcanicEvolution, generateEruption )
 import World.Geology.Timeline.River
     ( reconcileHydrology, mergeConvergingRivers )
+import World.Constants (seaLevel)
 import World.Weather.Types
 import World.Weather.Generate (updateClimateFromGrid, oceanRegionsFromGrid)
 
@@ -67,14 +69,14 @@ buildTimeline seed worldSize plateCount erosionIntensity volcanicActivity =
                                                      (gpRegionalErosion p)
                         } : ps
 
-    in ( GeoTimeline
+        rawTimeline = GeoTimeline
             { gtSeed      = seed
             , gtWorldSize = worldSize
             , gtPeriods   = reverse finalPeriods
             , gtFeatures  = tbsFeatures s2
             }
-       , tbsClimateState s2
-       )
+
+    in (rawTimeline, tbsClimateState s2)
 
 -----------------------------------------------------------
 -- Primordial Bombardment

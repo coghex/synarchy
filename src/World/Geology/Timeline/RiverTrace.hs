@@ -209,6 +209,8 @@ buildSegFromWaypoints seed totalSegs baseFlow segIdx ((sx, sy, se), (ex, ey, ee)
         rawValleyW = max (width * 3) (round (fromIntegral width * valleyMult))
         valleyW = max minValleyW (min 96 rawValleyW)
 
+        waterDepth = let raw = max 2 (round (1.0 + flow * 3.0))
+                     in min raw (max 2 (depth - 1))
     in RiverSegment
         { rsStart       = GeoCoord sx sy
         , rsEnd         = GeoCoord ex ey
@@ -218,4 +220,6 @@ buildSegFromWaypoints seed totalSegs baseFlow segIdx ((sx, sy, se), (ex, ey, ee)
         , rsFlowRate    = flow
         , rsStartElev   = se
         , rsEndElev     = ee
+        , rsWaterStart  = se - depth + waterDepth
+        , rsWaterEnd    = ee - depth + waterDepth
         }

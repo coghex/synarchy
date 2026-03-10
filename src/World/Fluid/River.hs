@@ -10,7 +10,7 @@ import Data.Word (Word64)
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
-import Control.Monad (forM_)
+import Control.Monad (forM_, when)
 import Control.Monad.ST (ST)
 import World.Base
 import World.Types
@@ -34,9 +34,51 @@ computeChunkRivers features _seed _plates worldSize coord surfaceMap =
         chunkMinGX = cx * chunkSize
         chunkMinGY = cy * chunkSize
         nearbyRivers = filter (isNearbyRiver worldSize chunkMinGX chunkMinGY) features
-    in withFluidMap $ \mv →
+    in withFluidMap $ \mv → do
         forM_ nearbyRivers $ \pf →
             fillRiverFromFeature mv pf worldSize chunkMinGX chunkMinGY surfaceMap
+        -- Pass 2: extend river water one tile into banks so the water
+        -- surface quad covers the terrain side-face at the waterline.
+        -- Same approach as ocean's coastal extension in Ocean.hs.
+        extendRiverBanks mv surfaceMap
+
+-- | Extend river water one tile into banks. For each empty tile
+--   adjacent to a river tile, place a river fluid cell at the
+--   neighbor's water surface — but only if the tile's terrain is
+--   at or below the water surface. This prevents water from
+--   appearing on hillsides above the river.
+extendRiverBanks ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s ()
+extendRiverBanks mv surfaceMap =
+    forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
+        val ← MV.read mv idx
+        when (isNothing val) $ do
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+                surfZ = surfaceMap VU.! idx
+            adj ← adjacentRiverSurface mv lx ly
+            case adj of
+                Nothing   → pure ()
+                Just surf → when (surfZ ≤ surf) $
+                    MV.write mv idx (Just (FluidCell River surf))
+
+adjacentRiverSurface ∷ MV.MVector s (Maybe FluidCell) → Int → Int
+                     → ST s (Maybe Int)
+adjacentRiverSurface mv lx ly = do
+    let check x y
+          | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = pure Nothing
+          | otherwise = do
+              v ← MV.read mv (y * chunkSize + x)
+              pure $ case v of
+                  Just fc | fcType fc ≡ River → Just (fcSurface fc)
+                  _ → Nothing
+    vN ← check lx (ly - 1)
+    vS ← check lx (ly + 1)
+    vE ← check (lx + 1) ly
+    vW ← check (lx - 1) ly
+    let surfaces = catMaybes [vN, vS, vE, vW]
+    pure $ case surfaces of
+        []     → Nothing
+        (s:ss) → Just (foldl' min s ss)
 
 -----------------------------------------------------------
 -- River Proximity
@@ -151,31 +193,14 @@ pickBestFill (Just a) (Just b) =
 bestRiverFill ∷ Int → Int → Int → Int → V.Vector RiverSegment
               → Maybe FluidCell
 bestRiverFill worldSize gx gy surfZ segments =
-    let -- Check each segment
-        segResults = V.toList $ V.map
+    let segResults = V.toList $ V.map
             (riverFillFromSegment worldSize gx gy surfZ) segments
-        -- Check each waypoint (joint between segments)
-        waypointResults = V.toList (V.map
-            (riverFillFromWaypoint worldSize gx gy surfZ) segments)
-            <> if V.null segments then []
-               else [riverFillFromEndpoint worldSize gx gy surfZ (V.last segments)]
-    in foldl' pickBestFill Nothing (segResults <> waypointResults)
+    in foldl' pickBestFill Nothing segResults
 
--- | Water depth in tiles above the channel floor, based on flow rate
---   and channel depth. Capped at depth-1 so the water surface stays
---   below bank level.
-riverWaterDepth ∷ Float → Int → Int
-riverWaterDepth flow depth =
-    let raw = max 2 (round (1.0 + flow * 3.0))
-    in min raw (max 2 (depth - 1))
-
--- | Fill a tile from a segment using an INTERPOLATED water surface.
---   The water surface smoothly decreases along the segment from
---   start to end, computed as: floor(lerp(startElev, endElev, t)) - depth + waterDepth.
---   Uses floor() to avoid checkerboard from round().
---
---   With fixupSegmentContinuity, adjacent segments share endpoint
---   elevations, so the interpolated surface is continuous at junctions.
+-- | Fill a tile from a segment using the PRECOMPUTED water surface.
+--   Water surface is interpolated from rsWaterStart to rsWaterEnd,
+--   which are set during world generation (and corrected post-timeline
+--   to match actual terrain). This decouples fill from carving references.
 riverFillFromSegment ∷ Int → Int → Int → Int → RiverSegment
                      → Maybe FluidCell
 riverFillFromSegment worldSize gx gy surfZ seg =
@@ -199,83 +224,24 @@ riverFillFromSegment worldSize gx gy surfZ seg =
           else
           let signedPerp = (px * dy' - py * dx') / segLen
               effectivePerpDist = abs signedPerp
-              flow = rsFlowRate seg
-              depthI = rsDepth seg
 
               -- Fill zone: full valley width + small margin
               fillW = fromIntegral (rsValleyWidth seg) / 2.0 + 2.0 ∷ Float
           in if effectivePerpDist > fillW
              then Nothing
              else
-             let -- Interpolated reference elevation along the segment.
-                 -- Clamp t to [0,1] for interpolation (overlap tiles use
-                 -- endpoint values, which match the adjacent segment).
+             let -- Interpolate precomputed water surface along segment.
                  tClamped = max 0.0 (min 1.0 tRaw)
-                 startE = fromIntegral (rsStartElev seg) ∷ Float
-                 endE   = fromIntegral (rsEndElev seg) ∷ Float
-                 interpElev = startE + tClamped * (endE - startE)
-                 -- Channel floor follows the gradient (not flat)
-                 channelFloor = floor (interpElev - fromIntegral depthI) ∷ Int
-                 waterDepth = riverWaterDepth flow depthI
-                 -- Water surface: interpolated floor + water depth.
-                 -- At ocean: use sea level.
-                 waterSurface = if channelFloor ≤ seaLevel
+                 startW = fromIntegral (rsWaterStart seg) ∷ Float
+                 endW   = fromIntegral (rsWaterEnd seg) ∷ Float
+                 waterSurface = floor (startW + tClamped * (endW - startW)) ∷ Int
+                 -- Clamp to sea level at ocean interface
+                 finalSurface = if waterSurface ≤ seaLevel
                      then seaLevel
-                     else channelFloor + waterDepth
-             in if surfZ > waterSurface
+                     else waterSurface
+             in if surfZ > finalSurface
                 then Nothing
-                else Just (FluidCell River waterSurface)
-
--- | Fill tiles near segment start points (bends between segments).
---   Uses the segment's start elevation for the water surface, which
---   matches the interpolated surface at t=0.
-riverFillFromWaypoint ∷ Int → Int → Int → Int → RiverSegment
-                      → Maybe FluidCell
-riverFillFromWaypoint worldSize gx gy surfZ seg =
-    let GeoCoord sx sy = rsStart seg
-        (dxi, dyi) = wrappedDeltaUVFluid worldSize sx sy gx gy
-        dist = sqrt (fromIntegral (dxi * dxi + dyi * dyi) ∷ Float)
-        depthI = rsDepth seg
-        -- Valley width at waypoints for circular fill
-        fillR = fromIntegral (rsValleyWidth seg) / 2.0 + 2.0 ∷ Float
-    in if dist > fillR
-       then Nothing
-       else
-       let flow = rsFlowRate seg
-           -- Use start elevation (this is the junction point)
-           channelFloor = rsStartElev seg - depthI
-           waterDepth = riverWaterDepth flow depthI
-           waterSurface = if channelFloor ≤ seaLevel
-               then seaLevel
-               else channelFloor + waterDepth
-       in if surfZ > waterSurface
-          then Nothing
-          else Just (FluidCell River waterSurface)
-
--- | Fill tiles near the last segment endpoint (river mouth).
---   Uses the segment's end elevation for the water surface.
-riverFillFromEndpoint ∷ Int → Int → Int → Int → RiverSegment
-                      → Maybe FluidCell
-riverFillFromEndpoint worldSize gx gy surfZ seg =
-    let GeoCoord ex ey = rsEnd seg
-        (dxi, dyi) = wrappedDeltaUVFluid worldSize ex ey gx gy
-        dist = sqrt (fromIntegral (dxi * dxi + dyi * dyi) ∷ Float)
-        depthI = rsDepth seg
-        -- Valley width at endpoint
-        fillR = fromIntegral (rsValleyWidth seg) / 2.0 + 2.0 ∷ Float
-    in if dist > fillR
-       then Nothing
-       else
-       let flow = rsFlowRate seg
-           -- Use end elevation (mouth of river)
-           channelFloor = rsEndElev seg - depthI
-           waterDepth = riverWaterDepth flow depthI
-           waterSurface = if channelFloor ≤ seaLevel
-               then seaLevel
-               else channelFloor + waterDepth
-       in if surfZ > waterSurface
-          then Nothing
-          else Just (FluidCell River waterSurface)
+                else Just (FluidCell River finalSurface)
 
 -----------------------------------------------------------
 -- Segment Continuity
@@ -292,9 +258,12 @@ fixupSegmentContinuity v
   where
     go _ [] = []
     go prev (cur : xs) =
-        let fixed = cur { rsStartElev = rsEndElev prev
-                        , rsStart     = rsEnd prev }
+        let fixed = cur { rsStartElev  = rsEndElev prev
+                        , rsStart      = rsEnd prev
+                        , rsWaterStart = rsWaterEnd prev }
             fixed' = if rsEndElev fixed > rsStartElev fixed
-                     then fixed { rsEndElev = rsStartElev fixed }
+                     then fixed { rsEndElev  = rsStartElev fixed
+                                , rsWaterEnd = min (rsWaterEnd fixed)
+                                                   (rsWaterStart fixed) }
                      else fixed
         in fixed' : go fixed' xs

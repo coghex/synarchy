@@ -556,6 +556,8 @@ makeSegment spacing _segIdx
                          (round (fromIntegral width * valleyMult) ∷ Int)
         valleyW = max minValleyW (min 96 rawValleyW)
 
+        waterDepth = let raw = max 2 (round (1.0 + flow * 3.0))
+                     in min raw (max 2 (depth - 1))
     in RiverSegment
         { rsStart       = GeoCoord sx sy
         , rsEnd         = GeoCoord ex ey
@@ -565,4 +567,6 @@ makeSegment spacing _segIdx
         , rsFlowRate    = flow
         , rsStartElev   = se
         , rsEndElev     = ee
+        , rsWaterStart  = se - depth + waterDepth
+        , rsWaterEnd    = ee - depth + waterDepth
         }

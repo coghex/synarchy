@@ -63,14 +63,17 @@ data RiverSegment = RiverSegment
     , rsValleyWidth ∷ !Int       -- ^ Total valley width (channel + slopes)
     , rsDepth      ∷ !Int        -- ^ Channel depth below surrounding terrain
     , rsFlowRate   ∷ !Float      -- ^ Flow at this segment (increases downstream)
-    , rsStartElev  ∷ !Int        -- ^ Elevation at start (for slope calculation)
-    , rsEndElev    ∷ !Int        -- ^ Elevation at end
+    , rsStartElev  ∷ !Int        -- ^ Elevation at start (for carving reference)
+    , rsEndElev    ∷ !Int        -- ^ Elevation at end (for carving reference)
+    , rsWaterStart ∷ !Int        -- ^ Precomputed water surface at start (for fill)
+    , rsWaterEnd   ∷ !Int        -- ^ Precomputed water surface at end (for fill)
     } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 instance NFData RiverSegment where
-    rnf (RiverSegment s e w vw d f se ee) =
+    rnf (RiverSegment s e w vw d f se ee ws we) =
         rnf s `seq` rnf e `seq` rnf w `seq` rnf vw `seq`
-        rnf d `seq` rnf f `seq` rnf se `seq` rnf ee `seq` ()
+        rnf d `seq` rnf f `seq` rnf se `seq` rnf ee `seq`
+        rnf ws `seq` rnf we `seq` ()
 
 data RiverActivity
     = Flowing          -- ^ Active river

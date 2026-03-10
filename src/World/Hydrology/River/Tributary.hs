@@ -34,15 +34,20 @@ buildTributarySegments seed fidInt srcX srcY bx by numSegs branchElev =
           t2 = fromIntegral (segI + 1) / fromIntegral numSegs ∷ Float
           se = round (fromIntegral srcElev + t1 * fromIntegral (branchElev - srcElev) ∷ Float)
           ee = round (fromIntegral srcElev + t2 * fromIntegral (branchElev - srcElev) ∷ Float)
+          d = max 3 (round (flow * 8.0))
+          wd = let raw = max 2 (round (1.0 + flow * 3.0))
+               in min raw (max 2 (d - 1))
       in RiverSegment
           { rsStart       = GeoCoord wx1 wy1
           , rsEnd         = GeoCoord wx2 wy2
           , rsWidth       = w
           , rsValleyWidth = w * 3
-          , rsDepth       = max 3 (round (flow * 8.0))
+          , rsDepth       = d
           , rsFlowRate    = flow
           , rsStartElev   = se
           , rsEndElev     = ee
+          , rsWaterStart  = se - d + wd
+          , rsWaterEnd    = ee - d + wd
           }
       ) [0..] (zip waypoints (drop 1 waypoints))
     where -- Interpolate waypoints along the line with hash-based offsets
