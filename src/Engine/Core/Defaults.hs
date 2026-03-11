@@ -30,6 +30,7 @@ defaultEngineConfig = EngineConfig
 #else
   , enableDebug  = False
 #endif
+  , ecHeadless   = False
   }
 
 defaultGraphicsConfig ∷ GraphicsConfig

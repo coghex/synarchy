@@ -25,7 +25,7 @@ flag dev
 flag profile
     default: False
 
-test-suite synarchy-test
+test-suite synarchy-test-graphical
     type: exitcode-stdio-1.0
     hs-source-dirs: test
     main-is: Spec.hs
@@ -133,6 +133,86 @@ test-suite synarchy-test
     if flag(profile)
           ghc-options: -fprof-auto
 
+test-suite synarchy-test-headless
+    type: exitcode-stdio-1.0
+    hs-source-dirs: test-headless
+    main-is: Spec.hs
+    other-modules: Test.Headless.Harness
+                   Test.Headless.WorldGen
+                   Test.Headless.WorldGen.Rivers
+                   Test.Headless.WorldGen.Geology
+    default-extensions: DefaultSignatures
+                     , DuplicateRecordFields
+                     , MagicHash
+                     , NoMonomorphismRestriction
+                     , NoImplicitPrelude
+                     , NumDecimals
+                     , OverloadedStrings
+                     , PatternSynonyms
+                     , QuantifiedConstraints
+                     , RecordWildCards
+                     , TypeFamilyDependencies
+                     , UnicodeSyntax
+                     , ViewPatterns
+                     , QuasiQuotes
+    build-depends: base
+                , base-unicode-symbols
+                , containers
+                , hspec
+                , synarchy
+                , text
+                , stm
+                , vector
+                , unordered-containers
+                , deepseq
+                , random
+    default-language: GHC2024
+    if flag(dev)
+      if os(darwin)
+          cpp-options: -DDARWIN -DDEVELOPMENT
+          ghc-options: -optP-Wno-nonportable-include-path
+                       -O1
+                       -Wall
+                       -Wcompat
+                       -Wincomplete-record-updates
+                       -Wincomplete-uni-patterns
+                       -Wno-ambiguous-fields
+                       -threaded
+                       "-with-rtsopts=-N -A128M"
+                       -fno-full-laziness
+                       -fno-cse
+                       -fPIC
+                       -optl-Wl,-dead_strip
+                       -optl-Wl,-bind_at_load
+      else
+          cpp-options: -DDEVELOPMENT
+          ghc-options: -O1
+                       -Wall
+                       -Wcompat
+                       -Wincomplete-record-updates
+                       -Wincomplete-uni-patterns
+                       -Wno-ambiguous-fields
+                       -threaded
+                       "-with-rtsopts=-N -A128M"
+    else
+      if os(darwin)
+          cpp-options: -DDARWIN
+          ghc-options: -optP-Wno-nonportable-include-path
+                       -O2
+                       -optc-O3
+                       -fexcess-precision
+                       -threaded
+                       "-with-rtsopts=-N -A128M"
+                       -feager-blackholing
+      else
+          ghc-options: -O2
+                       -optc-O3
+                       -fexcess-precision
+                       -threaded
+                       "-with-rtsopts=-N -A128M"
+                       -feager-blackholing
+    if flag(profile)
+          ghc-options: -fprof-auto
 
 
 library
@@ -270,6 +350,7 @@ library
                      Engine.Loop.Frame
                      Engine.Loop.Camera
                      Engine.Loop.Resource
+                     Engine.Loop.Headless
                      Engine.Loop.Shutdown
                      UI
                      UI.Types

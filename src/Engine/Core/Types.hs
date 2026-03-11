@@ -10,5 +10,6 @@ data EngineConfig = EngineConfig
   , windowHeight    ∷ Int
   , enableVSync     ∷ Bool
   , enableDebug     ∷ Bool
+  , ecHeadless      ∷ Bool
   } deriving (Eq, Show)
 

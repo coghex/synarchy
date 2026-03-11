@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 module Engine.Core.Init
   ( initializeEngine
+  , initializeEngineHeadless
   , EngineInitResult(..)
   ) where
 
@@ -163,5 +164,14 @@ initializeEngine = do
   
   envVar   ← atomically $ newVar env
   stateVar ← atomically $ newVar defaultEngineState
-  
+
   pure $ EngineInitResult env envVar stateVar
+
+-- | Initialize engine in headless mode (no GLFW/Vulkan)
+initializeEngineHeadless ∷ IO EngineInitResult
+initializeEngineHeadless = do
+  result ← initializeEngine
+  let env = eirEnv result
+      headlessEnv = env { engineConfig = (engineConfig env) { ecHeadless = True } }
+  envVar ← atomically $ newVar headlessEnv
+  pure $ result { eirEnv = headlessEnv, eirEnvVar = envVar }
