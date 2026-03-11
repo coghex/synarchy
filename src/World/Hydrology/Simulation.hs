@@ -81,7 +81,7 @@ buildInitialElevGrid ∷ Word64 → Int → [TectonicPlate] → ElevGrid
 buildInitialElevGrid seed worldSize plates =
     let totalTiles = worldSize * 16
         spacing = max baseSampleSpacing (totalTiles `div` maxGridDim)
-        gridW = max 4 (totalTiles `div` spacing)
+        gridW = min maxGridDim (max 4 (totalTiles `div` spacing))
         halfGrid = gridW `div` 2
         totalSamples = gridW * gridW
         fromIdx idx = (idx `mod` gridW, idx `div` gridW)

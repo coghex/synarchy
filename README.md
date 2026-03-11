@@ -66,16 +66,16 @@ The engine runs a TCP debug server on port 8008 that accepts Lua commands. Use i
 ### Interactive REPL
 
 ```bash
-./debug-console.sh
+./debug-console.py
 ```
 
-Install `rlwrap` (`brew install rlwrap`) for readline support (arrow key history, line editing).
+Or run `python3 debug-console.py` if the script is not executable.
 
 ### Single commands
 
 ```bash
 # run one command and print the result
-./debug-console.sh -c 'return camera.getPosition()'
+./debug-console.py -c 'return camera.getPosition()'
 
 # or use nc/netcat directly
 printf 'return 2 + 2\n' | nc -w 2 localhost 8008

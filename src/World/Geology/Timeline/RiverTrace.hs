@@ -131,19 +131,22 @@ buildRiverFromPath seed riverIdx baseFlow path =
         -- Grid-following produces one point per grid cell (~8 tiles apart).
         -- Decimate to every 3rd to get ~24-tile segments, similar to before.
         decimated0 = decimatePath 3 monoPath
-        -- Clamp the last point's elevation to sea level if the river
-        -- reaches the coast, ensuring smooth ocean transition.
+        -- Clamp the last point's elevation near sea level if the river
+        -- reaches the coast. Use seaLevel + 2 so that after freeboard
+        -- subtraction (water = elev - 1), the water surface is still
+        -- above sea level and the river doesn't end abruptly.
         decimated = case reverse decimated0 of
             (lx, ly, le) : rest
-                | le ≤ seaLevel + 3 → reverse ((lx, ly, seaLevel) : rest)
+                | le ≤ seaLevel + 3 → reverse ((lx, ly, seaLevel + 2) : rest)
             _ → decimated0
     in case decimated of
         [] → Nothing
         ((srcX, srcY, _) : _) →
             let numWP = length decimated
-                segments = fixupSegmentContinuity $ V.fromList $
+                segments0 = fixupSegmentContinuity $ V.fromList $
                                zipWith (buildSegFromWaypoints seed numWP baseFlow)
                                        [0..] (zip decimated (drop 1 decimated))
+                segments = poolWaterSurface segments0
                 (mouthX, mouthY, _) = last decimated
                 totalFlow = case V.null segments of
                     True  → baseFlow
@@ -209,8 +212,10 @@ buildSegFromWaypoints seed totalSegs baseFlow segIdx ((sx, sy, se), (ex, ey, ee)
         rawValleyW = max (width * 3) (round (fromIntegral width * valleyMult))
         valleyW = max minValleyW (min 48 rawValleyW)
 
-        waterDepth = let raw = max 2 (round (1.0 + flow * 3.0))
-                     in min raw (max 2 (depth - 1))
+        -- Consistent freeboard: water surface sits 1 tile below
+        -- the reference terrain. This keeps the water surface smooth
+        -- regardless of per-segment depth variation.
+        freeboard = 1 ∷ Int
     in RiverSegment
         { rsStart       = GeoCoord sx sy
         , rsEnd         = GeoCoord ex ey
@@ -220,6 +225,36 @@ buildSegFromWaypoints seed totalSegs baseFlow segIdx ((sx, sy, se), (ex, ey, ee)
         , rsFlowRate    = flow
         , rsStartElev   = se
         , rsEndElev     = ee
-        , rsWaterStart  = se - depth + waterDepth
-        , rsWaterEnd    = ee - depth + waterDepth
+        , rsWaterStart  = se - freeboard
+        , rsWaterEnd    = ee - freeboard
         }
+
+-----------------------------------------------------------
+-- Water surface pooling
+-----------------------------------------------------------
+
+-- | Pool water surfaces: where terrain forms depressions,
+--   water should fill to the level of the outflow point.
+--   Walk from mouth to source, propagating the downstream
+--   water level upstream through any depressions. This
+--   creates level pools in flat areas.
+poolWaterSurface ∷ V.Vector RiverSegment → V.Vector RiverSegment
+poolWaterSurface segs
+    | V.length segs ≤ 1 = segs
+    | otherwise =
+        let segList = V.toList segs
+            -- Extract n+1 water levels: [waterStart_0, waterEnd_0, waterEnd_1, ...]
+            waterLevels = rsWaterStart (head segList) : map rsWaterEnd segList
+            -- Pool: walk from mouth (last) to source (first).
+            -- Any depression gets filled to the outflow level.
+            pooled = reverse $ poolFill $ reverse waterLevels
+            -- Write back into segments as (start, end) pairs
+            pairs = zip pooled (drop 1 pooled)
+        in V.fromList $ zipWith (\seg (ws, we) →
+            seg { rsWaterStart = ws, rsWaterEnd = we }
+            ) segList pairs
+  where
+    poolFill [] = []
+    poolFill (x:xs) = x : goPool x xs
+    goPool _ [] = []
+    goPool lvl (x:xs) = let x' = max x lvl in x' : goPool x' xs
