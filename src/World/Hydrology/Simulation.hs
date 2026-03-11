@@ -187,8 +187,11 @@ fillDepressions grid =
         -- For every other cell, points to the cell it drains through.
         parent ← VUM.replicate totalSamples (-1 ∷ Int)
 
-        -- Seed: all cells that are ocean or on Y-edges.
-        -- X wraps, so no X edges.
+        -- Seed: all non-land cells (ocean, glacier) plus Y-boundary cells.
+        -- X wraps, so no X edges needed.
+        -- Y-boundary cells (iy=0, iy=gridW-1) must be seeded because they
+        -- may land exactly at the glacier edge and still be classified as
+        -- land. Without seeding them, nearby rivers have no drainage path.
         let seeds = filter (\idx →
                 let (_, iy) = fromIdx idx
                 in not (landVec VU.! idx)
@@ -499,7 +502,7 @@ carveSimple ws gx gy seg =
             in if alongT < -0.05 ∨ alongT > 1.05 ∨ perpDist > valleyHW
                then noModification
                else let t = perpDist / valleyHW
-                        carve = round (depth * max 0.0 (1.0 - t) * 0.7)
+                        carve = round (depth * max 0.0 (1.0 - t) * 0.5)
                     in if carve ≤ 0 then noModification
                        else GeoModification (negate carve) Nothing 0
 
@@ -543,18 +546,18 @@ makeSegment spacing _segIdx
                           / fromIntegral spacing
 
         valleyMult ∷ Float
-        valleyMult = if slopePerTile > 0.5 then 3.0
-                     else 3.0 + (1.0 - min 1.0 (slopePerTile * 2.0)) * 3.0
-        -- Depth capped at 10 tiles (100m) — keeps valleys wider than deep
-        baseDepth = max 3 (slopeDelta `div` 4 + round (flow * 2.0))
-        maxDepth = min 10 (slopeDelta + 6)
+        valleyMult = if slopePerTile > 0.5 then 2.0
+                     else 2.0 + (1.0 - min 1.0 (slopePerTile * 2.0)) * 1.5
+        -- Depth capped at 6 tiles — carves gentle channels, not canyons
+        baseDepth = max 2 (slopeDelta `div` 6 + round (flow * 1.0))
+        maxDepth = min 6 (slopeDelta + 4)
         depth = min maxDepth baseDepth
         -- Valley width for water fill. Kept modest to prevent
         -- headwater segments from flooding wide areas at high elevation.
-        minValleyW = depth * 4
-        rawValleyW = max (width * 3)
+        minValleyW = depth * 3
+        rawValleyW = max (width * 2)
                          (round (fromIntegral width * valleyMult) ∷ Int)
-        valleyW = max minValleyW (min 48 rawValleyW)
+        valleyW = max minValleyW (min 32 rawValleyW)
 
         waterDepth = let raw = max 2 (round (1.0 + flow * 3.0))
                      in min raw (max 2 (depth - 1))

@@ -5,16 +5,25 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import Data.IORef (readIORef)
+import Control.Concurrent (threadDelay)
+import Control.Monad (foldM)
+import qualified Data.Text as T
 import Test.Headless.Harness
 import World.Types
+import World.Grid (gridToWorld)
+import World.Geology.Timeline.Types (GeoTimeline(..), PersistentFeature(..)
+                                    , FeatureShape(..))
+import World.Hydrology.Types (HydroFeature(..))
+import Engine.Graphics.Camera (CameraFacing(..))
 
 spec ∷ Spec
 spec = around withHeadlessEngine $ do
 
-    describe "River generation" $ do
+    describe "River existence" $ do
 
         it "generates worlds with geological periods" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "rivers") 42 64 5)
+            sendWorldCommand env (WorldInit (WorldPageId "rivers") 42 128 5)
             ws ← waitForWorldInit env (WorldPageId "rivers") 180
             mParams ← getWorldGenParams ws
             case mParams of
@@ -24,19 +33,44 @@ spec = around withHeadlessEngine $ do
                     length periods `shouldSatisfy` (> 0)
                 Nothing → expectationFailure "params should exist"
 
-        it "some chunks have river fluid" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "rivfluid") 42 64 5)
-            ws ← waitForWorldInit env (WorldPageId "rivfluid") 180
-            tiles ← getWorldTileData ws
-            let chunks = HM.elems (wtdChunks tiles)
-                riverChunks = filter hasRiverFluid chunks
-            length chunks `shouldSatisfy` (> 0)
-            length riverChunks `shouldSatisfy` (> 0)
+        it "some chunks have river fluid across sampled areas" $ \env → do
+            sendWorldCommand env (WorldInit (WorldPageId "rivExist") 42 128 5)
+            ws ← waitForWorldInit env (WorldPageId "rivExist") 180
+            -- Sample several areas to find river fluid
+            let samplePoints = [(0, 0), (4, 4), (-4, -4), (6, -3), (-3, 6)]
+            totalRiverChunks ← foldM (\acc (cx, cy) → do
+                let (wx, wy) = gridToWorld FaceSouth (cx * chunkSize) (cy * chunkSize)
+                moveCamera env wx wy
+                threadDelay 500000
+                tiles ← getWorldTileData ws
+                let chunks = HM.elems (wtdChunks tiles)
+                    riverChunks = filter hasRiverFluid chunks
+                pure (acc + length riverChunks)
+                ) 0 samplePoints
+            totalRiverChunks `shouldSatisfy` (> 0)
+
+        it "timeline contains river features across multiple seeds" $ \env → do
+            -- Every generated world should have at least one river feature
+            let seeds = [42, 123, 999, 2024, 7777]
+            forM_ seeds $ \seed → do
+                let pid = WorldPageId (T.pack ("multiSeed" ⧺ show seed))
+                sendWorldCommand env (WorldInit pid seed 128 5)
+                ws ← waitForWorldInit env pid 180
+                mParams ← getWorldGenParams ws
+                case mParams of
+                    Nothing → expectationFailure $
+                        "seed " ⧺ show seed ⧺ ": no params"
+                    Just params → do
+                        let features = gtFeatures (wgpGeoTimeline params)
+                            rivers = filter isRiverFeature features
+                        length rivers `shouldSatisfy` (> 0)
+                sendWorldCommand env (WorldDestroy pid)
+                threadDelay 200000
 
     describe "River water physics" $ do
 
         it "river water surface is never below terrain" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "noFloat") 42 64 5)
+            sendWorldCommand env (WorldInit (WorldPageId "noFloat") 42 128 5)
             ws ← waitForWorldInit env (WorldPageId "noFloat") 180
             tiles ← getWorldTileData ws
             let violations = concatMap findFloatingWater (HM.toList (wtdChunks tiles))
@@ -47,55 +81,89 @@ spec = around withHeadlessEngine $ do
                     ⧺ "(water surface below terrain):\n"
                     ⧺ unlines (take 10 (map showFloating vs))
 
-        it "river tiles have no exposed unbounded sides" $ \env → do
-            -- For every river tile, each cardinal neighbor must either:
-            --   (a) also have water (river continues)
-            --   (b) have terrain >= the water surface (land bounds the water)
-            --   (c) be outside the loaded chunk set (edge of world — acceptable)
-            -- If a neighbor has no water AND terrain below the water surface,
-            -- the water tile would render with a visible floating side face.
-            sendWorldCommand env (WorldInit (WorldPageId "noBoundless") 42 64 5)
-            ws ← waitForWorldInit env (WorldPageId "noBoundless") 180
-            tiles ← getWorldTileData ws
-            let chunkMap = wtdChunks tiles
-                violations = concatMap (findExposedSides chunkMap)
-                                       (HM.toList chunkMap)
-            case violations of
-                [] → pure ()
-                vs → expectationFailure $
-                    "Found " ⧺ show (length vs)
-                    ⧺ " river tiles with exposed unbounded sides:\n"
-                    ⧺ unlines (take 20 (map showExposed vs))
+        it "river tiles have no exposed unbounded sides (multi-seed)" $ \env → do
+            let seeds = [42, 123, 999, 2024, 7777]
+            forM_ seeds $ \seed → do
+                let pid = WorldPageId (T.pack ("noBound" ⧺ show seed))
+                sendWorldCommand env (WorldInit pid seed 128 5)
+                ws ← waitForWorldInit env pid 180
+                -- Check initial chunks
+                tiles0 ← getWorldTileData ws
+                let violations0 = findAllExposedSides tiles0
+                -- Also move camera to a few spots and check new chunks
+                let samplePoints = [(3, 3), (-3, -3), (5, -2), (-2, 5)]
+                allViolations ← foldM (\acc (cx, cy) → do
+                    let (wx, wy) = gridToWorld FaceSouth (cx * chunkSize) (cy * chunkSize)
+                    moveCamera env wx wy
+                    threadDelay 500000
+                    tiles ← getWorldTileData ws
+                    let vs = findAllExposedSides tiles
+                    pure (acc ⧺ vs)
+                    ) violations0 samplePoints
+                case allViolations of
+                    [] → pure ()
+                    vs → expectationFailure $
+                        "seed " ⧺ show seed ⧺ ": Found "
+                        ⧺ show (length vs)
+                        ⧺ " river tiles with exposed unbounded sides:\n"
+                        ⧺ unlines (take 20 (map showExposed vs))
+                sendWorldCommand env (WorldDestroy pid)
+                threadDelay 200000
 
-        it "adjacent river tiles within a chunk do not jump more than 4 levels" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "noUphill") 42 64 5)
-            ws ← waitForWorldInit env (WorldPageId "noUphill") 180
-            tiles ← getWorldTileData ws
-            let violations = concatMap findUphillWater (HM.toList (wtdChunks tiles))
-            case violations of
-                [] → pure ()
-                vs → expectationFailure $
-                    "Found " ⧺ show (length vs)
-                    ⧺ " adjacent river pairs with surface jump > "
-                    ⧺ show maxSurfaceJump ⧺ ":\n"
-                    ⧺ unlines (take 10 (map showUphill vs))
+        it "adjacent river tiles within a chunk do not jump more than 2 levels (multi-seed)" $ \env → do
+            let seeds = [42, 123, 999, 2024, 7777]
+            forM_ seeds $ \seed → do
+                let pid = WorldPageId (T.pack ("noUphill" ⧺ show seed))
+                sendWorldCommand env (WorldInit pid seed 128 5)
+                ws ← waitForWorldInit env pid 180
+                -- Check with camera at multiple positions
+                let samplePoints = [(0, 0), (3, 3), (-3, -3), (5, -2)]
+                allViolations ← foldM (\acc (cx, cy) → do
+                    let (wx, wy) = gridToWorld FaceSouth (cx * chunkSize) (cy * chunkSize)
+                    moveCamera env wx wy
+                    threadDelay 500000
+                    tiles ← getWorldTileData ws
+                    let vs = concatMap findUphillWater (HM.toList (wtdChunks tiles))
+                    pure (acc ⧺ vs)
+                    ) [] samplePoints
+                case allViolations of
+                    [] → pure ()
+                    vs → expectationFailure $
+                        "seed " ⧺ show seed ⧺ ": Found " ⧺ show (length vs)
+                        ⧺ " adjacent river pairs with surface jump > "
+                        ⧺ show maxSurfaceJump ⧺ ":\n"
+                        ⧺ unlines (take 10 (map showUphill vs))
+                sendWorldCommand env (WorldDestroy pid)
+                threadDelay 200000
 
-        it "adjacent river tiles across chunk boundaries do not jump more than 4 levels" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "noCrossUphill") 42 64 5)
-            ws ← waitForWorldInit env (WorldPageId "noCrossUphill") 180
-            tiles ← getWorldTileData ws
-            let violations = findCrossChunkUphill (wtdChunks tiles)
-            case violations of
-                [] → pure ()
-                vs → expectationFailure $
-                    "Found " ⧺ show (length vs)
-                    ⧺ " cross-chunk river pairs with surface jump > "
-                    ⧺ show maxSurfaceJump ⧺ ":\n"
-                    ⧺ unlines (take 10 (map showCross vs))
+        it "adjacent river tiles across chunk boundaries do not jump more than 2 levels (multi-seed)" $ \env → do
+            let seeds = [42, 123, 999, 2024, 7777]
+            forM_ seeds $ \seed → do
+                let pid = WorldPageId (T.pack ("noCrossUp" ⧺ show seed))
+                sendWorldCommand env (WorldInit pid seed 128 5)
+                ws ← waitForWorldInit env pid 180
+                let samplePoints = [(0, 0), (3, 3), (-3, -3), (5, -2)]
+                allViolations ← foldM (\acc (cx, cy) → do
+                    let (wx, wy) = gridToWorld FaceSouth (cx * chunkSize) (cy * chunkSize)
+                    moveCamera env wx wy
+                    threadDelay 500000
+                    tiles ← getWorldTileData ws
+                    let vs = findCrossChunkUphill (wtdChunks tiles)
+                    pure (acc ⧺ vs)
+                    ) [] samplePoints
+                case allViolations of
+                    [] → pure ()
+                    vs → expectationFailure $
+                        "seed " ⧺ show seed ⧺ ": Found " ⧺ show (length vs)
+                        ⧺ " cross-chunk river pairs with surface jump > "
+                        ⧺ show maxSurfaceJump ⧺ ":\n"
+                        ⧺ unlines (take 10 (map showCross vs))
+                sendWorldCommand env (WorldDestroy pid)
+                threadDelay 200000
 
 -- | Maximum allowed surface elevation jump between adjacent river tiles
 maxSurfaceJump ∷ Int
-maxSurfaceJump = 4
+maxSurfaceJump = 2
 
 -- ──────────────────────────────────────────────────────────
 -- Floating water: water surface below terrain
@@ -124,12 +192,7 @@ showFloating v = "  chunk=" ⧺ showCoord (fvChunk v)
     ⧺ " terrainZ=" ⧺ show (fvTerrainZ v)
 
 -- ──────────────────────────────────────────────────────────
--- Exposed unbounded sides: the core "visible floating water" test
---
--- A river tile has an "exposed unbounded side" if a cardinal neighbor:
---   - has NO water (Nothing or non-river fluid)
---   - AND has terrain BELOW the water surface of the river tile
--- That means you'd see the side face of the water with air underneath.
+-- Exposed unbounded sides
 -- ──────────────────────────────────────────────────────────
 
 data ExposedViolation = ExposedViolation
@@ -137,10 +200,15 @@ data ExposedViolation = ExposedViolation
     , evLX       ∷ Int
     , evLY       ∷ Int
     , evWaterZ   ∷ Int
-    , evDir      ∷ String    -- which side is exposed
-    , evNbrTerr  ∷ Int       -- neighbor's terrain Z
+    , evDir      ∷ String
+    , evNbrTerr  ∷ Int
     , evNbrChunk ∷ ChunkCoord
     }
+
+findAllExposedSides ∷ WorldTileData → [ExposedViolation]
+findAllExposedSides tiles =
+    let chunkMap = wtdChunks tiles
+    in concatMap (findExposedSides chunkMap) (HM.toList chunkMap)
 
 findExposedSides ∷ HM.HashMap ChunkCoord LoadedChunk
                  → (ChunkCoord, LoadedChunk) → [ExposedViolation]
@@ -155,8 +223,6 @@ findExposedSides chunkMap (coord@(ChunkCoord cx cy), lc) =
     , violation ← checkNeighbor waterZ dir coord nChunkCoord nx ny
     ]
   where
-    -- Produce (direction, neighborLocalX, neighborLocalY, neighborChunkCoord)
-    -- wrapping across chunk boundaries
     neighbors ∷ Int → Int → [(String, Int, Int, ChunkCoord)]
     neighbors lx ly =
         [ ("N", lx, ly-1, coord)   | ly > 0 ] ⧺
@@ -179,16 +245,13 @@ findExposedSides chunkMap (coord@(ChunkCoord cx cy), lc) =
                     nbrFluid = lcFluidMap nbrLC V.! nIdx
                     nbrTerrZ = lcTerrainSurfaceMap nbrLC VU.! nIdx
                 in case nbrFluid of
-                    Just nfc | fcType nfc ≡ River → []  -- neighbor has river water — bounded
-                    Just nfc | fcType nfc ≡ Lake  → []  -- lake water also bounds
-                    Just nfc | fcType nfc ≡ Ocean → []  -- ocean bounds
+                    Just nfc | fcType nfc ≡ River → []
+                    Just nfc | fcType nfc ≡ Lake  → []
+                    Just nfc | fcType nfc ≡ Ocean → []
                     _ →
-                        -- No water on neighbor. Is terrain high enough to bound?
                         if nbrTerrZ ≥ waterZ
-                            then []  -- land walls off the water — bounded
-                            else [ExposedViolation myChunk
-                                    (if nbrChunk ≡ myChunk then nx else nx)
-                                    (if nbrChunk ≡ myChunk then ny else ny)
+                            then []
+                            else [ExposedViolation myChunk nx ny
                                     waterZ dir nbrTerrZ nbrChunk]
 
 showExposed ∷ ExposedViolation → String
@@ -209,18 +272,22 @@ data UphillViolation = UphillViolation
     , uvFrom  ∷ (Int, Int), uvTo ∷ (Int, Int)
     , uvFromZ ∷ Int, uvToZ ∷ Int }
 
+-- | Check ALL water-to-water adjacencies (river-river, river-lake, lake-lake, etc.)
+--   for surface jumps exceeding the threshold.
 findUphillWater ∷ (ChunkCoord, LoadedChunk) → [UphillViolation]
 findUphillWater (coord, lc) =
     [ UphillViolation coord (lx, ly) (nx, ny) z1 z2
     | ly ← [0..chunkSize-1], lx ← [0..chunkSize-1]
     , let idx1 = ly * chunkSize + lx
     , Just fc1 ← [lcFluidMap lc V.! idx1]
-    , fcType fc1 ≡ River, let z1 = fcSurface fc1
+    , fcType fc1 ≢ Ocean  -- skip ocean (infinite body, always level)
+    , let z1 = fcSurface fc1
     , (nx, ny) ← [(lx+1, ly), (lx, ly+1)]
     , nx < chunkSize, ny < chunkSize
     , let idx2 = ny * chunkSize + nx
     , Just fc2 ← [lcFluidMap lc V.! idx2]
-    , fcType fc2 ≡ River, let z2 = fcSurface fc2
+    , fcType fc2 ≢ Ocean
+    , let z2 = fcSurface fc2
     , abs (z1 - z2) > maxSurfaceJump
     ]
 
@@ -246,8 +313,6 @@ findCrossChunkUphill chunkMap =
         checkEdge coord lc (chunkSize-1) True  (ChunkCoord (cx+1) cy) 0 True
       ⧺ checkEdge coord lc (chunkSize-1) False (ChunkCoord cx (cy+1)) 0 False
 
-    -- isXEdge=True: compare lx=edgeVal in lc vs lx=nbrVal in neighbor (same ly)
-    -- isXEdge=False: compare ly=edgeVal in lc vs ly=nbrVal in neighbor (same lx)
     checkEdge coord lc edgeVal isXEdge nbrCoord nbrVal _ =
         case HM.lookup nbrCoord chunkMap of
             Nothing → []
@@ -261,9 +326,9 @@ findCrossChunkUphill chunkMap =
                       p1 = (lx1, ly1)
                       p2 = (lx2, ly2)
                 , Just fc1 ← [lcFluidMap lc V.! idx1]
-                , fcType fc1 ≡ River, let z1 = fcSurface fc1
+                , fcType fc1 ≢ Ocean, let z1 = fcSurface fc1
                 , Just fc2 ← [lcFluidMap nbrLC V.! idx2]
-                , fcType fc2 ≡ River, let z2 = fcSurface fc2
+                , fcType fc2 ≢ Ocean, let z2 = fcSurface fc2
                 , abs (z1 - z2) > maxSurfaceJump
                 ]
 
@@ -285,3 +350,8 @@ hasRiverFluid ∷ LoadedChunk → Bool
 hasRiverFluid lc = any isRiver (V.toList (lcFluidMap lc))
   where isRiver (Just (FluidCell River _)) = True
         isRiver _ = False
+
+isRiverFeature ∷ PersistentFeature → Bool
+isRiverFeature pf = case pfFeature pf of
+    HydroShape (RiverFeature _) → True
+    _ → False

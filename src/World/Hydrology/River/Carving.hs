@@ -167,10 +167,10 @@ carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
                    -- Smoothstep: smooth cubic ease-in/ease-out
                    smoothT = let t' = max 0.0 (min 1.0 wallT)
                              in t' * t' * (3.0 - 2.0 * t')
-                   -- Wall carve depth: decreases from 70% of channel
+                   -- Wall carve depth: decreases from 50% of channel
                    -- depth at channel edge to 0 at valley rim, with
                    -- smooth cubic profile to avoid cliff faces.
-                   wallCarveDepth = floor (fromIntegral depthI * 0.7
+                   wallCarveDepth = floor (fromIntegral depthI * 0.5
                                          * (1.0 - smoothT)) ∷ Int
                    -- Interpolated reference surface (rim elevation)
                    refSurface = floor interpElev ∷ Int

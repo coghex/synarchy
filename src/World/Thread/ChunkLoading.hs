@@ -22,6 +22,7 @@ import World.Generate.Constants (chunkLoadRadius)
 import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
 import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes)
+import World.Fluids (sealCrossChunkRivers)
 import World.Thread.Helpers (unWorldPageId)
 
 -- | Maximum chunks to generate per world loop iteration.
@@ -93,10 +94,11 @@ updateChunkLoading env logger = do
                                 atomicModifyIORef' (wsTilesRef worldState) $ \td →
                                     let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
                                         td'' = evictDistantChunks camChunk chunkLoadRadius td'
+                                        coords = map lcCoord newChunks
                                         td''' = recomputeNeighborSlopes seed
-                                                  registry
-                                                  (map lcCoord newChunks) td''
-                                    in (td''', ())
+                                                  registry coords td''
+                                        td'''' = sealCrossChunkRivers coords td'''
+                                    in (td'''', ())
                                 writeIORef (wsQuadCacheRef worldState) Nothing
                                 writeIORef (wsZoomQuadCacheRef worldState) Nothing
                                 writeIORef (wsBgQuadCacheRef worldState) Nothing
@@ -138,12 +140,15 @@ drainInitQueues env logger = do
                                     }) batch
 
                         -- Insert new chunks, then recompute slopes
-                        -- for the new chunks + their existing neighbors
+                        -- for the new chunks + their existing neighbors,
+                        -- then seal cross-chunk river boundaries.
                         atomicModifyIORef' (wsTilesRef worldState) $ \td →
                             let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
+                                coords = map lcCoord newChunks
                                 td'' = recomputeNeighborSlopes seed registry
-                                         (map lcCoord newChunks) td'
-                            in (td'', ())
+                                         coords td'
+                                td''' = sealCrossChunkRivers coords td''
+                            in (td''', ())
 
                         -- Invalidate all render caches so new chunks appear immediately
                         writeIORef (wsQuadCacheRef worldState) Nothing

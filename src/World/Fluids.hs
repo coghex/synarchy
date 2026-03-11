@@ -18,6 +18,7 @@ module World.Fluids
     , unionFluidMap
     , equilibrateFluidMap
     , fixupSegmentContinuity
+    , sealCrossChunkRivers
       -- * Query
     , isOceanChunk
     , hasAnyLavaQuick
@@ -32,7 +33,7 @@ import World.Fluid.Internal (unionFluidMap, equilibrateFluidMap)
 import World.Fluid.Ocean (computeOceanMap, isOceanChunk, hasAnyOceanFluid
                          , computeChunkFluid)
 import World.Fluid.River (computeChunkRivers, fixupSegmentContinuity
-                         , hasAnyRiverQuick)
+                         , hasAnyRiverQuick, sealCrossChunkRivers)
 import World.Fluid.Lake (computeChunkLakes, hasAnyLakeQuick)
 import World.Fluid.Lava (computeChunkLava, hasAnyLavaQuick)
 

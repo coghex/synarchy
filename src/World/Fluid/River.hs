@@ -3,10 +3,12 @@ module World.Fluid.River
     ( computeChunkRivers
     , fixupSegmentContinuity
     , hasAnyRiverQuick
+    , sealCrossChunkRivers
     ) where
 
 import UPrelude
 import Data.Word (Word64)
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
@@ -48,6 +50,11 @@ computeChunkRivers features _seed _plates worldSize coord surfaceMap =
         smoothRiverSurface mv surfaceMap
         -- Pass 6: remove tiles with unresolvable cliffs.
         removeUnresolvableCliffs mv surfaceMap
+        -- Pass 7: seal exposed river boundaries. Valley carving can
+        -- create terrain below water surface beyond the fill width.
+        -- Flood-fill outward from river edges into those carved tiles
+        -- so no river tile has a visible floating side face.
+        sealRiverBoundaries mv surfaceMap
 
 -- | Extend river water one tile into banks. For each empty tile
 --   adjacent to a river tile, place a river fluid cell at the
@@ -175,7 +182,7 @@ fillRiverHoles mv surfaceMap = do
 --   water surfaces from headwater segments to lower terrain.
 clampRiverDepth ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s ()
 clampRiverDepth mv surfaceMap = do
-    let maxDepthInterior = 5   -- keeps water close to terrain surface
+    let maxDepthInterior = 4   -- keeps water close to terrain surface
         maxDepthEdge = 3       -- tighter cap at chunk edges to limit
                                -- cross-chunk water cliff magnitude
     forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
@@ -229,7 +236,7 @@ smoothPass mv surfaceMap = do
                     case minNeighbor of
                         Nothing → pure ()
                         Just nMin → do
-                            let target = max (nMin + 4) (surfZ + 1)
+                            let target = max (nMin + 2) (surfZ + 1)
                             when (myWater > target) $ do
                                 MV.write mv idx (Just (fc { fcSurface = target }))
                                 MV.write changedRef 0 True
@@ -270,11 +277,63 @@ unresolvableCliffPass mv surfaceMap = do
                     Nothing → pure ()
                     Just nMin →
                         -- Can't lower below terrain+1, and that's still >4 above neighbor
-                        when (myWater > nMin + 4 ∧ surfZ + 1 > nMin + 4) $ do
+                        when (myWater > nMin + 3 ∧ surfZ + 1 > nMin + 3) $ do
                             MV.write mv idx Nothing
                             MV.write changedRef 0 True
             _ → pure ()
     MV.read changedRef 0
+
+-- | Seal exposed river boundaries by flood-filling outward.
+--   A river tile has an "exposed side" when a cardinal neighbor has
+--   no water and terrain below the water surface — the carved valley
+--   extends beyond the fill width. Fill those neighbors at the
+--   adjacent river tile's water surface (capped at terrain + 5).
+--   Iterate until all river edges are bounded by terrain or water.
+sealRiverBoundaries ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s ()
+sealRiverBoundaries mv surfaceMap = go (20 ∷ Int)
+  where
+    go 0 = pure ()
+    go n = do
+        changed ← sealPass mv surfaceMap
+        when changed $ go (n - 1)
+
+sealPass ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s Bool
+sealPass mv surfaceMap = do
+    -- Snapshot current state so we don't read our own writes this pass
+    snapshot ← MV.clone mv
+    changedRef ← MV.replicate 1 False
+    forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
+        val ← MV.read snapshot idx
+        case val of
+            Just fc | fcType fc ≡ River → do
+                let lx = idx `mod` chunkSize
+                    ly = idx `div` chunkSize
+                    waterZ = fcSurface fc
+                forM_ (cardinalNeighbors lx ly) $ \(nx, ny) → do
+                    let nIdx = ny * chunkSize + nx
+                    nVal ← MV.read mv nIdx
+                    case nVal of
+                        Just _  → pure ()  -- already has fluid
+                        Nothing → do
+                            let nTerrZ = surfaceMap VU.! nIdx
+                            -- Neighbor terrain is below our water: exposed side
+                            when (nTerrZ < waterZ) $ do
+                                -- Fill at our water surface — the adjacent river
+                                -- tile defines the correct level. Deep carved
+                                -- valleys are expected (user: depth is not a bug).
+                                let fillZ = waterZ
+                                when (fillZ > seaLevel) $ do
+                                    MV.write mv nIdx (Just (FluidCell River fillZ))
+                                    MV.write changedRef 0 True
+            _ → pure ()
+    MV.read changedRef 0
+
+cardinalNeighbors ∷ Int → Int → [(Int, Int)]
+cardinalNeighbors lx ly =
+    [ (nx, ny)
+    | (nx, ny) ← [(lx, ly-1), (lx, ly+1), (lx-1, ly), (lx+1, ly)]
+    , nx ≥ 0, nx < chunkSize, ny ≥ 0, ny < chunkSize
+    ]
 
 minRiverNeighborSurface ∷ MV.MVector s (Maybe FluidCell) → Int → Int
                         → ST s (Maybe Int)
@@ -497,3 +556,128 @@ fixupSegmentContinuity v
                                                    (rsWaterStart fixed) }
                      else fixed
         in fixed' : go fixed' xs
+
+-----------------------------------------------------------
+-- Cross-Chunk River Boundary Sealing
+-----------------------------------------------------------
+
+-- | Post-insertion pass: seal river boundaries across chunk borders.
+--   For each chunk in the list, examine edge river tiles and fill
+--   exposed neighbors in adjacent chunks. Iterates to propagate
+--   fills that create new exposed edges.
+sealCrossChunkRivers ∷ [ChunkCoord] → WorldTileData → WorldTileData
+sealCrossChunkRivers newCoords wtd = go (10 ∷ Int) wtd
+  where
+    -- Include new chunks AND their loaded neighbors — a river in
+    -- an existing neighbor chunk may have exposed sides toward the
+    -- newly-generated chunk.
+    allCoords = let nbrSet = HM.fromList
+                      [ (c, ())
+                      | coord ← newCoords
+                      , c ← coord : chunkNeighbors' coord
+                      , HM.member c (wtdChunks wtd)
+                      ]
+                in HM.keys nbrSet
+    go 0 td = td
+    go n td =
+        let (td', changed) = sealCrossChunkPass allCoords td
+        in if changed then go (n - 1) td' else td'
+
+chunkNeighbors' ∷ ChunkCoord → [ChunkCoord]
+chunkNeighbors' (ChunkCoord cx cy) =
+    [ ChunkCoord (cx-1) cy, ChunkCoord (cx+1) cy
+    , ChunkCoord cx (cy-1), ChunkCoord cx (cy+1) ]
+
+sealCrossChunkPass ∷ [ChunkCoord] → WorldTileData → (WorldTileData, Bool)
+sealCrossChunkPass coords wtd =
+    foldl' processChunk (wtd, False) coords
+
+processChunk ∷ (WorldTileData, Bool) → ChunkCoord → (WorldTileData, Bool)
+processChunk (wtd, changed) coord =
+    case HM.lookup coord (wtdChunks wtd) of
+        Nothing → (wtd, changed)
+        Just lc → foldl' (sealEdgeTile coord lc) (wtd, changed)
+                         (edgeRiverTiles lc)
+
+-- | Collect all river tiles on chunk edges with their cross-chunk
+--   neighbor coordinates.
+edgeRiverTiles ∷ LoadedChunk → [(Int, Int, Int)]
+edgeRiverTiles lc =
+    -- Each entry: (index in this chunk, waterZ, index to check in neighbor chunk)
+    -- But we actually need: (myIdx, waterZ, nbrChunkOffset, nbrIdx)
+    -- Let's just collect (lx, ly, waterZ) for edge tiles.
+    [ (lx, ly, fcSurface fc)
+    | ly ← [0..chunkSize-1], lx ← [0..chunkSize-1]
+    , ly ≡ 0 ∨ ly ≡ chunkSize-1 ∨ lx ≡ 0 ∨ lx ≡ chunkSize-1
+    , Just fc ← [lcFluidMap lc V.! (ly * chunkSize + lx)]
+    , fcType fc ≡ River
+    ]
+
+sealEdgeTile ∷ ChunkCoord → LoadedChunk
+             → (WorldTileData, Bool) → (Int, Int, Int)
+             → (WorldTileData, Bool)
+sealEdgeTile (ChunkCoord cx cy) _lc (wtd, changed) (lx, ly, waterZ) =
+    -- For each outward-facing direction at this edge tile,
+    -- check the cross-chunk neighbor
+    let dirs = [ (ChunkCoord cx (cy-1), lx, chunkSize-1) | ly ≡ 0 ]
+            ⧺ [ (ChunkCoord cx (cy+1), lx, 0)           | ly ≡ chunkSize-1 ]
+            ⧺ [ (ChunkCoord (cx-1) cy, chunkSize-1, ly) | lx ≡ 0 ]
+            ⧺ [ (ChunkCoord (cx+1) cy, 0, ly)           | lx ≡ chunkSize-1 ]
+    in foldl' (trySealNeighbor waterZ) (wtd, changed) dirs
+
+trySealNeighbor ∷ Int → (WorldTileData, Bool) → (ChunkCoord, Int, Int)
+                → (WorldTileData, Bool)
+trySealNeighbor waterZ (wtd, changed) (nbrCoord, nbrLX, nbrLY) =
+    case HM.lookup nbrCoord (wtdChunks wtd) of
+        Nothing → (wtd, changed)
+        Just nbrLC →
+            let nIdx = nbrLY * chunkSize + nbrLX
+                nbrFluid = lcFluidMap nbrLC V.! nIdx
+                nbrTerrZ = lcTerrainSurfaceMap nbrLC VU.! nIdx
+            in case nbrFluid of
+                Just _  → (wtd, changed)  -- neighbor already has fluid
+                Nothing
+                    | nbrTerrZ ≥ waterZ → (wtd, changed)  -- terrain bounds water
+                    | otherwise →
+                        let fillZ = waterZ
+                        in if fillZ ≤ seaLevel
+                           then (wtd, changed)
+                           else let newFluid = lcFluidMap nbrLC V.// [(nIdx, Just (FluidCell River fillZ))]
+                                    oldSurf = lcSurfaceMap nbrLC VU.! nIdx
+                                    newSurf = lcSurfaceMap nbrLC VU.// [(nIdx, max oldSurf fillZ)]
+                                    nbrLC' = nbrLC { lcFluidMap = newFluid
+                                                   , lcSurfaceMap = newSurf }
+                                    -- Propagate inward: the newly-filled tile may
+                                    -- expose intra-chunk neighbors too.
+                                    nbrLC'' = floodSealInChunk nbrLC' fillZ nbrLX nbrLY
+                                    chunks' = HM.insert nbrCoord nbrLC'' (wtdChunks wtd)
+                                in (wtd { wtdChunks = chunks' }, True)
+
+-- | After inserting a river tile into a chunk, propagate to any
+--   intra-chunk neighbors with terrain below the water surface.
+--   Iterates to flood the full carved valley within the chunk.
+floodSealInChunk ∷ LoadedChunk → Int → Int → Int → LoadedChunk
+floodSealInChunk lc0 startWaterZ startLX startLY =
+    go [(startLX, startLY, startWaterZ)] lc0
+  where
+    go [] lc = lc
+    go ((lx, ly, waterZ):queue) lc =
+        let newNeighbors =
+              [ (nx, ny, fillZ)
+              | (nx, ny) ← [ (lx-1,ly), (lx+1,ly), (lx,ly-1), (lx,ly+1) ]
+              , nx ≥ 0, nx < chunkSize, ny ≥ 0, ny < chunkSize
+              , let nIdx = ny * chunkSize + nx
+              , isNothing (lcFluidMap lc V.! nIdx)
+              , let nTerrZ = lcTerrainSurfaceMap lc VU.! nIdx
+              , nTerrZ < waterZ
+              , let fillZ = waterZ
+              , fillZ > seaLevel
+              ]
+            lc' = foldl' (\acc (nx, ny, fz) →
+                let nIdx = ny * chunkSize + nx
+                    fm' = lcFluidMap acc V.// [(nIdx, Just (FluidCell River fz))]
+                    oldS = lcSurfaceMap acc VU.! nIdx
+                    sm' = lcSurfaceMap acc VU.// [(nIdx, max oldS fz)]
+                in acc { lcFluidMap = fm', lcSurfaceMap = sm' }
+                ) lc newNeighbors
+        in go (queue ⧺ newNeighbors) lc'

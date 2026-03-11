@@ -165,6 +165,38 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
             when didChange $ loop (n - 1)
 
     loop (20 ∷ Int)
+
+    -- Phase 3: Cross-fluid boundary smoothing.
+    -- When different fluid types meet (e.g., river-lake), ensure
+    -- adjacent water surfaces differ by at most 1 level.  The
+    -- renderer only draws smooth slopes for exactly 1-level drops;
+    -- anything larger creates a hard cliff.
+    -- Raise the lower tile toward the higher one (water fills to
+    -- the overflow point).  Iterate to propagate.
+    let crossFluidPass = do
+            cRef ← newSTRef False
+            forM_ [0 .. area - 1] $ \idx → do
+                val ← MV.read mv idx
+                case val of
+                    Just fc
+                      | fcType fc ≢ Ocean ∧ fcType fc ≢ Lava → do
+                        let lx = idx `mod` chunkSize
+                            ly = idx `div` chunkSize
+                        maxNbr ← maxNeighborWaterSurface mv lx ly
+                        case maxNbr of
+                            Just nMax | nMax > fcSurface fc + 1 → do
+                                let newSurf = nMax - 1
+                                MV.write mv idx (Just (fc { fcSurface = newSurf }))
+                                writeSTRef cRef True
+                            _ → pure ()
+                    _ → pure ()
+            readSTRef cRef
+        crossLoop 0 = pure ()
+        crossLoop n = do
+            didChange ← crossFluidPass
+            when didChange $ crossLoop (n - 1)
+    crossLoop (10 ∷ Int)
+
     V.freeze mv
 
 -- | Get minimum water surface among 4-connected same-type neighbors.
@@ -188,6 +220,28 @@ minNeighborSurfaceOfType mv ftype lx ly = do
     pure $ case surfaces of
         []     → Nothing
         (s:ss) → Just (foldl' min s ss)
+
+-- | Get maximum water surface among 4-connected neighbors (any fluid type
+--   except ocean/lava). Used for cross-fluid boundary smoothing.
+maxNeighborWaterSurface ∷ MV.MVector s (Maybe FluidCell) → Int → Int
+                        → ST s (Maybe Int)
+maxNeighborWaterSurface mv lx ly = do
+    let check x y
+          | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = pure Nothing
+          | otherwise = do
+              val ← MV.read mv (y * chunkSize + x)
+              pure $ case val of
+                  Just fc | fcType fc ≢ Ocean ∧ fcType fc ≢ Lava
+                      → Just (fcSurface fc)
+                  _ → Nothing
+    vN ← check lx (ly - 1)
+    vS ← check lx (ly + 1)
+    vE ← check (lx + 1) ly
+    vW ← check (lx - 1) ly
+    let surfaces = catMaybes [vN, vS, vE, vW]
+    pure $ case surfaces of
+        []     → Nothing
+        (s:ss) → Just (foldl' max s ss)
 
 -- | Check if a tile should be filled by equilibration.
 --   Uses the minimum adjacent water surface (water seeks its level).

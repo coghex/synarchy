@@ -200,17 +200,17 @@ buildSegFromWaypoints seed totalSegs baseFlow segIdx ((sx, sy, se), (ex, ey, ee)
         width = min 16 rawWidth
 
         h1 = hashGeo seed segIdx 1161
-        valleyMult = 3.0 + hashToFloatGeo h1 * 3.0
+        valleyMult = 2.0 + hashToFloatGeo h1 * 1.5
 
         slopeDelta = abs (se - ee)
-        -- Depth capped at 10 tiles — keeps valleys wider than deep
-        baseDepth = max 3 (slopeDelta `div` 4 + round (flow * 2.0))
-        depth = min 10 baseDepth
+        -- Depth capped at 6 tiles — carves gentle channels, not canyons
+        baseDepth = max 2 (slopeDelta `div` 6 + round (flow * 1.0))
+        depth = min 6 baseDepth
         -- Valley width for water fill. Kept modest to prevent
         -- headwater segments from flooding wide areas at high elevation.
-        minValleyW = depth * 4
-        rawValleyW = max (width * 3) (round (fromIntegral width * valleyMult))
-        valleyW = max minValleyW (min 48 rawValleyW)
+        minValleyW = depth * 3
+        rawValleyW = max (width * 2) (round (fromIntegral width * valleyMult))
+        valleyW = max minValleyW (min 32 rawValleyW)
 
         -- Consistent freeboard: water surface sits 1 tile below
         -- the reference terrain. This keeps the water surface smooth
