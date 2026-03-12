@@ -14,6 +14,7 @@ import World.Fluids (fixupSegmentContinuity)
 import World.Geology.Hash
 import World.Hydrology.Types (RiverParams(..), RiverSegment(..))
 import World.Hydrology.Simulation (ElevGrid(..))
+import World.Chunk.Types (chunkSize)
 import World.Weather.Types (ClimateState)
 import World.Weather.Lookup (lookupLocalClimate)
 
@@ -81,11 +82,18 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
         startIdx = tileToGridIdx gx gy
         gridPath = traceGrid startIdx
 
+        -- Unwrap the path so coordinates are continuous across the
+        -- u-axis wrap boundary.  Without this, rivers that cross
+        -- ix=0 ↔ ix=gridW-1 in the flow grid get huge coordinate
+        -- jumps and appear to span the entire world.
+        worldTiles = worldSize * chunkSize
+        unwrappedPath = unwrapPathCoords worldTiles gridPath
+
         -- Extend past the ocean sink to ensure the river reaches
         -- below-sea-level terrain. Without this, the grid resolution
         -- (spacing tiles) can leave a gap of above-sea-level terrain
         -- between the river mouth and the actual ocean.
-        extendedPath = extendToCoast spacing gridPath
+        extendedPath = extendToCoast spacing unwrappedPath
 
         -- Prepend the actual source point if it differs from
         -- the first grid cell (source may be between grid points).
@@ -98,9 +106,52 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
         -- looks natural instead of grid-aligned.
         noisyPath = addPathNoise seed riverIdx spacing fullPath
 
-    in if length noisyPath < 4
+        -- Reject rivers that span more than 1/3 of the world.
+        -- These are following flow directions the wrong way around
+        -- the cylindrical u-axis instead of reaching the nearest coast.
+        maxSpan = worldTiles `div` 3
+        pathTooLong = case (noisyPath, reverse noisyPath) of
+            ((sx, sy, _):_, (mx, my, _):_) →
+                abs (mx - sx) > maxSpan ∨ abs (my - sy) > maxSpan
+            _ → False
+
+    in if length noisyPath < 4 ∨ pathTooLong
        then Nothing
        else buildRiverFromPath seed worldSize riverIdx flow climate noisyPath
+
+-----------------------------------------------------------
+-- Path unwrapping
+-----------------------------------------------------------
+
+-- | Make path coordinates continuous across the u-axis wrap.
+--   The flow grid wraps ix (u-axis), so consecutive grid cells may
+--   jump from ix=0 to ix=gridW-1 or vice versa.  The egGX/egGY
+--   coordinates reflect this jump, creating a discontinuity.
+--   Fix: for each consecutive pair, if u = gx-gy jumps by more
+--   than half the world width, adjust the second point.
+unwrapPathCoords ∷ Int → [(Int, Int, Int)] → [(Int, Int, Int)]
+unwrapPathCoords _ [] = []
+unwrapPathCoords _ [x] = [x]
+unwrapPathCoords worldTiles (p0:rest) =
+    p0 : go p0 rest
+  where
+    halfW = worldTiles `div` 2
+    go _ [] = []
+    go (px, py, _) ((x, y, e):xs) =
+        let prevU = px - py
+            curU  = x - y
+            v     = x + y
+            du    = curU - prevU
+            -- If du > halfW, the path jumped across the wrap going positive;
+            -- adjust u negative. If du < -halfW, jumped negative; adjust positive.
+            adjU  | du > halfW  = curU - worldTiles
+                  | du < negate halfW = curU + worldTiles
+                  | otherwise   = curU
+            -- Recover gx, gy from adjusted u and original v
+            x' = (adjU + v) `div` 2
+            y' = (v - adjU) `div` 2
+            p' = (x', y', e)
+        in p' : go p' xs
 
 -----------------------------------------------------------
 -- Coast extension

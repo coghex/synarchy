@@ -183,9 +183,9 @@ fillDepressions grid =
     in runST $ do
         filled ← VUM.replicate totalSamples (maxBound ∷ Int)
         visited ← VUM.replicate totalSamples False
-        -- Drainage parent: −1 means sink (ocean/boundary seed).
-        -- For every other cell, points to the cell it drains through.
-        parent ← VUM.replicate totalSamples (-1 ∷ Int)
+        -- Drainage parent from priority-flood: used as fallback for
+        -- flat areas where steepest-descent can't resolve direction.
+        floodParent ← VUM.replicate totalSamples (-1 ∷ Int)
 
         -- Seed: all non-land cells (ocean, glacier) plus Y-boundary cells.
         -- X wraps, so no X edges needed.
@@ -199,26 +199,28 @@ fillDepressions grid =
                  ∨ iy ≡ gridW - 1
                 ) [0 .. totalSamples - 1]
 
-        -- Initialize seeds (sinks — parent stays −1)
+        -- Initialize seeds (sinks — floodParent stays −1)
         forM_ seeds $ \idx → do
             VUM.write filled idx (elevVec VU.! idx)
             VUM.write visited idx True
 
+        -- Hash-based tie-breaking: when two cells have the same
+        -- elevation, use a deterministic hash instead of index order.
+        -- Without this, lower indices are processed first, creating
+        -- a systematic spatial bias in flood-parent directions.
+        let hashPri idx = hashGeo 7046029254386353131 idx 0
+
         -- Build initial priority queue.
-        -- Use (elevation, index) pairs. Set gives us O(log n) min extraction.
-        -- To handle duplicate elevations, encode index into the key
-        -- so every entry is unique: (elev, idx).
         let initQueue = foldl' (\s idx →
-                Set.insert (elevVec VU.! idx, idx) s
+                Set.insert (elevVec VU.! idx, hashPri idx, idx) s
                 ) Set.empty seeds
 
-        -- Process queue: extract minimum, expand neighbors.
-        -- When expanding to a neighbor, record curIdx as its parent.
+        -- Priority-flood: compute filled elevation surface.
+        -- Also records flood parents for flat-area fallback.
         let go queue
                 | Set.null queue = return ()
                 | otherwise = do
-                    let ((curElev, curIdx), queue') = Set.deleteFindMin queue
-                    -- Expand unvisited neighbors
+                    let ((curElev, _, curIdx), queue') = Set.deleteFindMin queue
                     let nbrs = neighbors curIdx
                     queue'' ← foldlM (\q nIdx → do
                         nVis ← VUM.read visited nIdx
@@ -227,12 +229,10 @@ fillDepressions grid =
                         else do
                             VUM.write visited nIdx True
                             let nElev = elevVec VU.! nIdx
-                                -- Fill level: at least as high as how we reached it
                                 nFill = max nElev curElev
                             VUM.write filled nIdx nFill
-                            -- Record drainage parent: nIdx drains through curIdx
-                            VUM.write parent nIdx curIdx
-                            return (Set.insert (nFill, nIdx) q)
+                            VUM.write floodParent nIdx curIdx
+                            return (Set.insert (nFill, hashPri nIdx, nIdx) q)
                         ) queue' nbrs
                     go queue''
 
@@ -245,8 +245,41 @@ fillDepressions grid =
                 VUM.write filled idx (elevVec VU.! idx)
 
         filledV ← VU.unsafeFreeze filled
-        parentV ← VU.unsafeFreeze parent
-        return (filledV, parentV)
+        floodParentV ← VU.unsafeFreeze floodParent
+
+        -- Step 2: Compute D8 steepest-descent flow directions on the
+        -- FILLED surface. Each cell drains to the neighbor with the
+        -- lowest filled elevation. For flat areas (filled depressions
+        -- where all neighbors have equal elevation), fall back to the
+        -- priority-flood parent which correctly resolves drainage
+        -- through filled basins.
+        --
+        -- This eliminates the directional bias of the priority-flood
+        -- parent alone, which was determined by seed processing order
+        -- rather than actual terrain gradients.
+        let d8FlowDir = VU.generate totalSamples $ \idx →
+                if not (landVec VU.! idx)
+                then -1  -- ocean/glacier → sink
+                else
+                    let myFill = filledV VU.! idx
+                        nbrs = neighbors idx
+                        -- Find neighbor with lowest filled elevation
+                        findLowest [] bestIdx _bestE = bestIdx
+                        findLowest (n:ns) bestIdx bestE =
+                            let nE = filledV VU.! n
+                            in if nE < bestE
+                               then findLowest ns n nE
+                               else findLowest ns bestIdx bestE
+                    in case nbrs of
+                        [] → -1
+                        (n0:ns) →
+                            let bestIdx = findLowest ns n0 (filledV VU.! n0)
+                                bestE = filledV VU.! bestIdx
+                            in if bestE < myFill
+                               then bestIdx  -- steepest descent
+                               else floodParentV VU.! idx  -- flat: use flood parent
+
+        return (filledV, d8FlowDir)
 
 -- | foldlM for lists in ST
 foldlM ∷ Monad m ⇒ (a → b → m a) → a → [b] → m a
