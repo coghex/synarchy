@@ -131,7 +131,7 @@ test-suite synarchy-test-graphical
                        "-with-rtsopts=-N -A128M"
                        -feager-blackholing
     if flag(profile)
-          ghc-options: -fprof-auto
+          ghc-options: -fprof-late
 
 test-suite synarchy-test-headless
     type: exitcode-stdio-1.0
@@ -212,7 +212,7 @@ test-suite synarchy-test-headless
                        "-with-rtsopts=-N -A128M"
                        -feager-blackholing
     if flag(profile)
-          ghc-options: -fprof-auto
+          ghc-options: -fprof-late
 
 
 library
@@ -589,7 +589,7 @@ library
                        -threaded
                        -feager-blackholing
     if flag(profile)
-          ghc-options: -fprof-auto
+          ghc-options: -fprof-late
 
 
 executable synarchy
@@ -695,4 +695,4 @@ executable synarchy
                        -feager-blackholing
 
     if flag(profile)
-          ghc-options: -fprof-auto
+          ghc-options: -fprof-late

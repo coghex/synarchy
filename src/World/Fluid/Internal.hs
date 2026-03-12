@@ -17,6 +17,7 @@ import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
 import Control.Monad (forM_, when)
 import Control.Monad.ST (ST, runST)
+import Data.STRef (newSTRef, readSTRef, writeSTRef)
 import World.Base
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
@@ -182,12 +183,15 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
                       | fcType fc ≢ Ocean ∧ fcType fc ≢ Lava → do
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
+                            terrZ = surfaceMap VU.! idx
                         maxNbr ← maxNeighborWaterSurface mv lx ly
                         case maxNbr of
                             Just nMax | nMax > fcSurface fc + 1 → do
-                                let newSurf = nMax - 1
-                                MV.write mv idx (Just (fc { fcSurface = newSurf }))
-                                writeSTRef cRef True
+                                -- Don't raise beyond terrain + 5 (depth cap)
+                                let newSurf = min (nMax - 1) (terrZ + 5)
+                                when (newSurf > fcSurface fc) $ do
+                                    MV.write mv idx (Just (fc { fcSurface = newSurf }))
+                                    writeSTRef cRef True
                             _ → pure ()
                     _ → pure ()
             readSTRef cRef
@@ -269,15 +273,3 @@ containedFill mv lx ly surfZ = do
                     then Just (FluidCell Lake minSurf)
                     else Nothing
 
--- | Mutable ST reference (avoids IORef in ST)
-newSTRef ∷ a → ST s (MV.MVector s a)
-newSTRef v = do
-    ref ← MV.new 1
-    MV.write ref 0 v
-    pure ref
-
-readSTRef ∷ MV.MVector s a → ST s a
-readSTRef ref = MV.read ref 0
-
-writeSTRef ∷ MV.MVector s a → a → ST s ()
-writeSTRef ref v = MV.write ref 0 v

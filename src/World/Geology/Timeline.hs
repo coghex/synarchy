@@ -7,6 +7,7 @@ import UPrelude
 import Data.Bits (xor)
 import Data.Word (Word64)
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashMap.Strict as HM
 import World.Base (GeoCoord(..), GeoFeatureId(..))
@@ -69,14 +70,32 @@ buildTimeline seed worldSize plateCount erosionIntensity volcanicActivity =
                                                      (gpRegionalErosion p)
                         } : ps
 
+        periods = reverse finalPeriods
+
+        -- Pre-compute all river carve events across all periods.
+        -- This is cached on GeoTimeline so applyTimeline/Fast don't
+        -- recompute it per-tile (was 35% of CPU in profiling).
+        riverExploded = V.concat
+            [ V.filter (\(evt, _) → isRiverCarveEvtCached evt)
+                       (gpExplodedEvents p)
+            | p ← periods
+            ]
+
         rawTimeline = GeoTimeline
             { gtSeed      = seed
             , gtWorldSize = worldSize
-            , gtPeriods   = reverse finalPeriods
+            , gtPeriods   = periods
             , gtFeatures  = tbsFeatures s2
+            , gtRiverExplodedEvents = riverExploded
             }
 
     in (rawTimeline, tbsClimateState s2)
+
+isRiverCarveEvtCached ∷ GeoEvent → Bool
+isRiverCarveEvtCached (HydroEvent (RiverFeature _)) = True
+isRiverCarveEvtCached (RiverSegmentEvent _) = True
+isRiverCarveEvtCached (RiverDeltaEvent _) = True
+isRiverCarveEvtCached _ = False
 
 -----------------------------------------------------------
 -- Primordial Bombardment

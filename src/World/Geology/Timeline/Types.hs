@@ -86,6 +86,10 @@ data GeoTimeline = GeoTimeline
     , gtWorldSize  ∷ !Int
     , gtPeriods    ∷ ![GeoPeriod]
     , gtFeatures   ∷ ![PersistentFeature]
+    , gtRiverExplodedEvents ∷ !(V.Vector (GeoEvent, EventBBox))
+      -- ^ All river carve events (segments, deltas, hydro rivers) across
+      --   all periods, pre-filtered and exploded with bounding boxes.
+      --   Cached here to avoid recomputing per-tile in applyTimeline/Fast.
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 emptyTimeline ∷ GeoTimeline
@@ -94,6 +98,7 @@ emptyTimeline = GeoTimeline
     , gtWorldSize = 128
     , gtPeriods = []
     , gtFeatures = []
+    , gtRiverExplodedEvents = V.empty
     }
 
 data EventBBox = EventBBox

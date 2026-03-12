@@ -63,20 +63,33 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
                         tileGY  = egGY elevGrid VU.! idx
                         rawElev = egElev elevGrid VU.! idx
                         nextIdx = flowDir VU.! idx
-                        acc'    = (tileGX, tileGY, rawElev) : acc
+                        -- Clamp to just below sea level — don't let
+                        -- the path drop to deep ocean floor.
+                        clampedElev = max (seaLevel - 3) rawElev
+                        acc'    = (tileGX, tileGY, clampedElev) : acc
                     in if nextIdx < 0 ∨ nextIdx ≡ idx
                        then reverse acc'  -- ocean sink or dead end
+                       -- Stop once raw terrain is well below sea level —
+                       -- we've reached the ocean.
+                       else if rawElev < seaLevel - 3
+                       then reverse acc'
                        else go (step + 1) nextIdx acc'
 
         startIdx = tileToGridIdx gx gy
         gridPath = traceGrid startIdx
 
+        -- Extend past the ocean sink to ensure the river reaches
+        -- below-sea-level terrain. Without this, the grid resolution
+        -- (spacing tiles) can leave a gap of above-sea-level terrain
+        -- between the river mouth and the actual ocean.
+        extendedPath = extendToCoast spacing gridPath
+
         -- Prepend the actual source point if it differs from
         -- the first grid cell (source may be between grid points).
-        fullPath = case gridPath of
+        fullPath = case extendedPath of
             ((fx, fy, _):_)
-                | fx ≠ gx ∨ fy ≠ gy → (gx, gy, srcElev) : gridPath
-            _ → (gx, gy, srcElev) : gridPath
+                | fx ≠ gx ∨ fy ≠ gy → (gx, gy, srcElev) : extendedPath
+            _ → (gx, gy, srcElev) : extendedPath
 
         -- Add perpendicular noise to each waypoint so the path
         -- looks natural instead of grid-aligned.
@@ -85,6 +98,36 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
     in if length noisyPath < 4
        then Nothing
        else buildRiverFromPath seed riverIdx flow noisyPath
+
+-----------------------------------------------------------
+-- Coast extension
+-----------------------------------------------------------
+
+-- | Extrapolate 2 waypoints past the flow grid sink to push the
+--   river path into below-sea-level terrain. The flow grid has
+--   coarse spacing, so the sink cell can be up to `spacing` tiles
+--   from the actual coastline. Without extension, there may be
+--   uncarved terrain between the river mouth and the ocean.
+--   Only extends if the last point is near sea level.
+extendToCoast ∷ Int → [(Int, Int, Int)] → [(Int, Int, Int)]
+extendToCoast _ [] = []
+extendToCoast _ [x] = [x]
+extendToCoast sp pts =
+    let n = length pts
+        (x1, y1, _) = pts !! max 0 (n - 2)
+        (x2, y2, e2) = pts !! (n - 1)
+    in if e2 > seaLevel + 5
+       then pts  -- river doesn't reach near the coast
+       else let dx = x2 - x1
+                dy = y2 - y1
+                len = sqrt (fromIntegral (dx * dx + dy * dy) ∷ Float)
+                -- Step in the same direction at ~spacing distance
+                (stepX, stepY) = if len < 1.0
+                    then (sp, 0)
+                    else ( round (fromIntegral dx / len * fromIntegral sp)
+                         , round (fromIntegral dy / len * fromIntegral sp) )
+            in pts ⧺ [ (x2 + stepX, y2 + stepY, seaLevel - 1)
+                      , (x2 + stepX * 2, y2 + stepY * 2, seaLevel - 2) ]
 
 -----------------------------------------------------------
 -- Path noise
@@ -131,14 +174,11 @@ buildRiverFromPath seed riverIdx baseFlow path =
         -- Grid-following produces one point per grid cell (~8 tiles apart).
         -- Decimate to every 3rd to get ~24-tile segments, similar to before.
         decimated0 = decimatePath 3 monoPath
-        -- Clamp the last point's elevation near sea level if the river
-        -- reaches the coast. Use seaLevel + 2 so that after freeboard
-        -- subtraction (water = elev - 1), the water surface is still
-        -- above sea level and the river doesn't end abruptly.
-        decimated = case reverse decimated0 of
-            (lx, ly, le) : rest
-                | le ≤ seaLevel + 3 → reverse ((lx, ly, seaLevel + 2) : rest)
-            _ → decimated0
+        -- Clamp the last above-sea-level point near sea level so the
+        -- river transitions smoothly to the coast. Points already
+        -- below sea level (from coast extension) are left as-is —
+        -- they ensure carving punches through to the ocean.
+        decimated = clampMouthTransition decimated0
     in case decimated of
         [] → Nothing
         ((srcX, srcY, _) : _) →
@@ -177,6 +217,22 @@ decimatePath n xs =
     go i (x:rest)
         | i `mod` n ≡ 0 = x : go (i + 1) rest
         | otherwise       = go (i + 1) rest
+
+-- | Clamp the last above-sea-level point to seaLevel+2 so the river
+--   transitions smoothly at the coast. Below-sea-level points (from
+--   coast extension) are left as-is — they carve through to the ocean.
+clampMouthTransition ∷ [(Int, Int, Int)] → [(Int, Int, Int)]
+clampMouthTransition [] = []
+clampMouthTransition pts =
+    let rev = reverse pts
+        -- Split into below-sea-level tail and the rest
+        (belowSea, rest) = span (\(_, _, e) → e < seaLevel) rev
+    in case rest of
+        -- Clamp the first above-sea-level point (= last above-sea in forward order)
+        (x, y, e) : rs
+            | e ≤ seaLevel + 3 →
+                reverse belowSea ⧺ reverse ((x, y, seaLevel + 2) : rs)
+        _ → pts
 
 enforceMonotonicPath ∷ [(Int, Int, Int)] → [(Int, Int, Int)]
 enforceMonotonicPath [] = []

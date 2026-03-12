@@ -81,7 +81,8 @@ extendRiverBanks mv surfaceMap =
                     -- Only extend if the water surface is above sea level,
                     -- terrain is below the water, and terrain matches the
                     -- river neighbor (not a valley wall).
-                    when (surf > seaLevel ∧ surfZ < surf ∧ surfZ ≥ nTerrZ - 3) $
+                    when (surf > seaLevel ∧ surfZ < surf ∧ surfZ ≥ nTerrZ - 3
+                         ∧ surf - surfZ ≤ 6) $
                         MV.write mv idx (Just (FluidCell River surf))
 
 adjacentRiverSurface ∷ MV.MVector s (Maybe FluidCell) → Int → Int
@@ -163,7 +164,8 @@ fillRiverHoles mv surfaceMap = do
                 adj ← adjacentRiverSurface mv lx ly
                 case adj of
                     Nothing → pure ()
-                    Just surf → when (surf > seaLevel ∧ surfZ < surf) $
+                    Just surf → when (surf > seaLevel ∧ surfZ < surf
+                                      ∧ surf - surfZ ≤ 6) $
                         MV.write mv idx (Just (FluidCell River surf))
     -- Pass B: remove 1-tile spots (0 river neighbors)
     forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
@@ -182,7 +184,7 @@ fillRiverHoles mv surfaceMap = do
 --   water surfaces from headwater segments to lower terrain.
 clampRiverDepth ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s ()
 clampRiverDepth mv surfaceMap = do
-    let maxDepthInterior = 4   -- keeps water close to terrain surface
+    let maxDepthInterior = 5   -- keeps water close to terrain surface
         maxDepthEdge = 3       -- tighter cap at chunk edges to limit
                                -- cross-chunk water cliff magnitude
     forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
@@ -195,16 +197,14 @@ clampRiverDepth mv surfaceMap = do
                     isEdge = lx ≡ 0 ∨ lx ≡ chunkSize - 1
                            ∨ ly ≡ 0 ∨ ly ≡ chunkSize - 1
                     maxD = if isEdge then maxDepthEdge else maxDepthInterior
-                    -- Floor cap at seaLevel+1 so river water never goes
-                    -- below sea level, even on below-sea-level terrain.
-                    cap = max (seaLevel + 1) (surfZ + maxD)
-                -- Remove river tiles whose water surface is at/below sea level.
-                -- Tiles on below-sea-level terrain are fine if the water
-                -- surface is above sea level (carved river channel).
-                if fcSurface fc ≤ seaLevel
-                    then MV.write mv idx Nothing
-                    else when (fcSurface fc > cap) $
-                        MV.write mv idx (Just (fc { fcSurface = cap }))
+                    cap = surfZ + maxD
+                -- Clamp: if water is deeper than allowed, reduce it.
+                -- If the capped surface would be at or below terrain, remove.
+                if fcSurface fc - surfZ > maxD
+                    then if cap ≤ surfZ
+                         then MV.write mv idx Nothing
+                         else MV.write mv idx (Just (fc { fcSurface = cap }))
+                    else pure ()
             _ → pure ()
 
 -- | Surface smoothing. Lowers any river tile whose water is more than
@@ -316,11 +316,11 @@ sealPass mv surfaceMap = do
                         Just _  → pure ()  -- already has fluid
                         Nothing → do
                             let nTerrZ = surfaceMap VU.! nIdx
-                            -- Neighbor terrain is below our water: exposed side
-                            when (nTerrZ < waterZ) $ do
-                                -- Fill at our water surface — the adjacent river
-                                -- tile defines the correct level. Deep carved
-                                -- valleys are expected (user: depth is not a bug).
+                            -- Neighbor terrain is below our water: exposed side.
+                            -- Cap depth to prevent cascading into deeply
+                            -- carved terrain (e.g. coastal valleys).
+                            let sealDepth = waterZ - nTerrZ
+                            when (nTerrZ + 1 < waterZ ∧ sealDepth ≤ 4) $ do
                                 let fillZ = waterZ
                                 when (fillZ > seaLevel) $ do
                                     MV.write mv nIdx (Just (FluidCell River fillZ))
@@ -524,13 +524,20 @@ riverFillFromSegment worldSize gx gy surfZ seg =
                  startE = fromIntegral (rsStartElev seg) ∷ Float
                  endE   = fromIntegral (rsEndElev seg) ∷ Float
                  refElev = floor (startE + tClamped * (endE - startE)) ∷ Int
+                 -- Maximum fill depth: don't flood deeply carved terrain.
+                 -- Uses segment depth + margin so the depth clamp pass
+                 -- can tighten further. Prevents coastal canyons from
+                 -- being flooded wall-to-wall.
+                 maxFillDepth = rsDepth seg + 2
              in if waterSurface ≤ seaLevel
                 then Nothing  -- water at/below sea level: ocean territory
                 else if surfZ ≥ waterSurface
                 then Nothing  -- terrain at/above water: no fill
                 else if surfZ > refElev
                      then Nothing  -- valley wall: terrain above reference
-                     else Just (FluidCell River waterSurface)
+                     else if waterSurface - surfZ > maxFillDepth
+                          then Nothing  -- too deep: carved canyon
+                          else Just (FluidCell River waterSurface)
 
 -----------------------------------------------------------
 -- Segment Continuity
@@ -638,8 +645,10 @@ trySealNeighbor waterZ (wtd, changed) (nbrCoord, nbrLX, nbrLY) =
                 Just _  → (wtd, changed)  -- neighbor already has fluid
                 Nothing
                     | nbrTerrZ ≥ waterZ → (wtd, changed)  -- terrain bounds water
+                    | nbrTerrZ + 1 ≥ waterZ → (wtd, changed) -- too shallow to seal
+                    | waterZ - nbrTerrZ > 4 → (wtd, changed) -- too deep to seal
                     | otherwise →
-                        let fillZ = waterZ
+                        let fillZ = min waterZ (nbrTerrZ + 4)
                         in if fillZ ≤ seaLevel
                            then (wtd, changed)
                            else let newFluid = lcFluidMap nbrLC V.// [(nIdx, Just (FluidCell River fillZ))]
@@ -669,8 +678,9 @@ floodSealInChunk lc0 startWaterZ startLX startLY =
               , let nIdx = ny * chunkSize + nx
               , isNothing (lcFluidMap lc V.! nIdx)
               , let nTerrZ = lcTerrainSurfaceMap lc VU.! nIdx
-              , nTerrZ < waterZ
-              , let fillZ = waterZ
+              , nTerrZ + 1 < waterZ
+              , waterZ - nTerrZ ≤ 4
+              , let fillZ = min waterZ (nTerrZ + 4)
               , fillZ > seaLevel
               ]
             lc' = foldl' (\acc (nx, ny, fz) →

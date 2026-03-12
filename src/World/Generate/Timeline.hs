@@ -214,18 +214,11 @@ applyTimeline timeline worldSize gx gy hardness (baseElev, baseMat) =
     let wsc = computeWorldScale worldSize
         (elev, mat) = foldl' (applyPeriodSingle worldSize wsc gx gy hardness)
                              (baseElev, baseMat) (gtPeriods timeline)
-        -- Re-apply all river carving after all periods
-        allRiverEvts = concatMap (filter isRiverCarveEvtS . gpEvents)
-                                (gtPeriods timeline)
-        (elev', mat') = foldl' (applyOneEvtS worldSize gx gy)
-                               (elev, mat) allRiverEvts
+        -- Re-apply cached river carving after all periods (bbox-filtered)
+        (gx', gy') = wrapGlobalU worldSize gx gy
+        (elev', mat') = applyExplodedEvents worldSize gx' gy' elev mat
+                                            (gtRiverExplodedEvents timeline)
     in (elev', mat')
-
-isRiverCarveEvtS ∷ GeoEvent → Bool
-isRiverCarveEvtS (HydroEvent (RiverFeature _)) = True
-isRiverCarveEvtS (RiverSegmentEvent _) = True
-isRiverCarveEvtS (RiverDeltaEvent _) = True
-isRiverCarveEvtS _ = False
 
 applyOneEvtS ∷ Int → Int → Int → (Int, MaterialId) → GeoEvent → (Int, MaterialId)
 applyOneEvtS worldSize gx gy (e, m) event =
@@ -269,11 +262,10 @@ applyTimelineFast timeline worldSize gx gy hardness (baseElev, baseMat) =
     let wsc = computeWorldScale worldSize
         (elev, mat) = foldl' (applyPeriodFiltered worldSize wsc gx gy hardness)
                              (baseElev, baseMat) (gtPeriods timeline)
-        -- Re-apply all river carving after all periods
-        allRiverEvts = concatMap (filter isRiverCarveEvtS . gpEvents)
-                                (gtPeriods timeline)
-        (elev', mat') = foldl' (applyOneEvtS worldSize gx gy)
-                               (elev, mat) allRiverEvts
+        -- Re-apply cached river carving after all periods (bbox-filtered)
+        (gx', gy') = wrapGlobalU worldSize gx gy
+        (elev', mat') = applyExplodedEvents worldSize gx' gy' elev mat
+                                            (gtRiverExplodedEvents timeline)
     in (elev', mat')
 
 -- ZOOM CACHE PATH: uses gpTaggedEvents (compact, ~10 events)

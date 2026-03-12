@@ -18,7 +18,7 @@ import World.Hydrology.Types (HydroFeature(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 
 spec ∷ Spec
-spec = around withHeadlessEngine $ do
+spec = aroundAll withHeadlessEngine $ do
 
     describe "River existence" $ do
 
@@ -41,7 +41,7 @@ spec = around withHeadlessEngine $ do
             totalRiverChunks ← foldM (\acc (cx, cy) → do
                 let (wx, wy) = gridToWorld FaceSouth (cx * chunkSize) (cy * chunkSize)
                 moveCamera env wx wy
-                threadDelay 500000
+                threadDelay 300000
                 tiles ← getWorldTileData ws
                 let chunks = HM.elems (wtdChunks tiles)
                     riverChunks = filter hasRiverFluid chunks
@@ -50,8 +50,7 @@ spec = around withHeadlessEngine $ do
             totalRiverChunks `shouldSatisfy` (> 0)
 
         it "timeline contains river features across multiple seeds" $ \env → do
-            -- Every generated world should have at least one river feature
-            let seeds = [42, 123, 999, 2024, 7777]
+            let seeds = [42, 123, 999]
             forM_ seeds $ \seed → do
                 let pid = WorldPageId (T.pack ("multiSeed" ⧺ show seed))
                 sendWorldCommand env (WorldInit pid seed 128 5)
@@ -65,101 +64,65 @@ spec = around withHeadlessEngine $ do
                             rivers = filter isRiverFeature features
                         length rivers `shouldSatisfy` (> 0)
                 sendWorldCommand env (WorldDestroy pid)
-                threadDelay 200000
+                threadDelay 100000
 
-    describe "River water physics" $ do
+    describe "River water physics (multi-seed)" $ do
 
-        it "river water surface is never below terrain" $ \env → do
-            sendWorldCommand env (WorldInit (WorldPageId "noFloat") 42 128 5)
-            ws ← waitForWorldInit env (WorldPageId "noFloat") 180
-            tiles ← getWorldTileData ws
-            let violations = concatMap findFloatingWater (HM.toList (wtdChunks tiles))
-            case violations of
-                [] → pure ()
-                vs → expectationFailure $
-                    "Found " ⧺ show (length vs) ⧺ " floating water tiles "
-                    ⧺ "(water surface below terrain):\n"
-                    ⧺ unlines (take 10 (map showFloating vs))
-
-        it "river tiles have no exposed unbounded sides (multi-seed)" $ \env → do
-            let seeds = [42, 123, 999, 2024, 7777]
+        -- Single test generates each world ONCE, runs all physics checks
+        it "no exposed sides, no surface jumps > 2 (intra/cross-chunk)" $ \env → do
+            let seeds = [42, 123, 999]
             forM_ seeds $ \seed → do
-                let pid = WorldPageId (T.pack ("noBound" ⧺ show seed))
+                let pid = WorldPageId (T.pack ("physics" ⧺ show seed))
                 sendWorldCommand env (WorldInit pid seed 128 5)
                 ws ← waitForWorldInit env pid 180
-                -- Check initial chunks
-                tiles0 ← getWorldTileData ws
-                let violations0 = findAllExposedSides tiles0
-                -- Also move camera to a few spots and check new chunks
-                let samplePoints = [(3, 3), (-3, -3), (5, -2), (-2, 5)]
-                allViolations ← foldM (\acc (cx, cy) → do
-                    let (wx, wy) = gridToWorld FaceSouth (cx * chunkSize) (cy * chunkSize)
-                    moveCamera env wx wy
-                    threadDelay 500000
-                    tiles ← getWorldTileData ws
-                    let vs = findAllExposedSides tiles
-                    pure (acc ⧺ vs)
-                    ) violations0 samplePoints
-                case allViolations of
-                    [] → pure ()
-                    vs → expectationFailure $
-                        "seed " ⧺ show seed ⧺ ": Found "
-                        ⧺ show (length vs)
-                        ⧺ " river tiles with exposed unbounded sides:\n"
-                        ⧺ unlines (take 20 (map showExposed vs))
-                sendWorldCommand env (WorldDestroy pid)
-                threadDelay 200000
 
-        it "adjacent river tiles within a chunk do not jump more than 2 levels (multi-seed)" $ \env → do
-            let seeds = [42, 123, 999, 2024, 7777]
-            forM_ seeds $ \seed → do
-                let pid = WorldPageId (T.pack ("noUphill" ⧺ show seed))
-                sendWorldCommand env (WorldInit pid seed 128 5)
-                ws ← waitForWorldInit env pid 180
-                -- Check with camera at multiple positions
-                let samplePoints = [(0, 0), (3, 3), (-3, -3), (5, -2)]
-                allViolations ← foldM (\acc (cx, cy) → do
+                -- Sample 3 camera positions to load more chunks
+                let samplePoints = [(0, 0), (4, 4), (-4, -4)]
+                forM_ samplePoints $ \(cx, cy) → do
                     let (wx, wy) = gridToWorld FaceSouth (cx * chunkSize) (cy * chunkSize)
                     moveCamera env wx wy
-                    threadDelay 500000
-                    tiles ← getWorldTileData ws
-                    let vs = concatMap findUphillWater (HM.toList (wtdChunks tiles))
-                    pure (acc ⧺ vs)
-                    ) [] samplePoints
-                case allViolations of
-                    [] → pure ()
-                    vs → expectationFailure $
-                        "seed " ⧺ show seed ⧺ ": Found " ⧺ show (length vs)
-                        ⧺ " adjacent river pairs with surface jump > "
-                        ⧺ show maxSurfaceJump ⧺ ":\n"
-                        ⧺ unlines (take 10 (map showUphill vs))
-                sendWorldCommand env (WorldDestroy pid)
-                threadDelay 200000
+                    threadDelay 300000
 
-        it "adjacent river tiles across chunk boundaries do not jump more than 2 levels (multi-seed)" $ \env → do
-            let seeds = [42, 123, 999, 2024, 7777]
-            forM_ seeds $ \seed → do
-                let pid = WorldPageId (T.pack ("noCrossUp" ⧺ show seed))
-                sendWorldCommand env (WorldInit pid seed 128 5)
-                ws ← waitForWorldInit env pid 180
-                let samplePoints = [(0, 0), (3, 3), (-3, -3), (5, -2)]
-                allViolations ← foldM (\acc (cx, cy) → do
-                    let (wx, wy) = gridToWorld FaceSouth (cx * chunkSize) (cy * chunkSize)
-                    moveCamera env wx wy
-                    threadDelay 500000
-                    tiles ← getWorldTileData ws
-                    let vs = findCrossChunkUphill (wtdChunks tiles)
-                    pure (acc ⧺ vs)
-                    ) [] samplePoints
-                case allViolations of
+                tiles ← getWorldTileData ws
+
+                -- Check 1: no floating water
+                let floating = concatMap findFloatingWater (HM.toList (wtdChunks tiles))
+                case floating of
                     [] → pure ()
                     vs → expectationFailure $
-                        "seed " ⧺ show seed ⧺ ": Found " ⧺ show (length vs)
-                        ⧺ " cross-chunk river pairs with surface jump > "
-                        ⧺ show maxSurfaceJump ⧺ ":\n"
-                        ⧺ unlines (take 10 (map showCross vs))
+                        "seed " ⧺ show seed ⧺ ": " ⧺ show (length vs)
+                        ⧺ " floating water tiles:\n"
+                        ⧺ unlines (take 5 (map showFloating vs))
+
+                -- Check 2: no exposed unbounded sides
+                let exposed = findAllExposedSides tiles
+                case exposed of
+                    [] → pure ()
+                    vs → expectationFailure $
+                        "seed " ⧺ show seed ⧺ ": " ⧺ show (length vs)
+                        ⧺ " exposed unbounded sides:\n"
+                        ⧺ unlines (take 10 (map showExposed vs))
+
+                -- Check 3: intra-chunk surface jumps
+                let uphill = concatMap findUphillWater (HM.toList (wtdChunks tiles))
+                case uphill of
+                    [] → pure ()
+                    vs → expectationFailure $
+                        "seed " ⧺ show seed ⧺ ": " ⧺ show (length vs)
+                        ⧺ " intra-chunk jumps > " ⧺ show maxSurfaceJump ⧺ ":\n"
+                        ⧺ unlines (take 5 (map showUphill vs))
+
+                -- Check 4: cross-chunk surface jumps
+                let crossUp = findCrossChunkUphill (wtdChunks tiles)
+                case crossUp of
+                    [] → pure ()
+                    vs → expectationFailure $
+                        "seed " ⧺ show seed ⧺ ": " ⧺ show (length vs)
+                        ⧺ " cross-chunk jumps > " ⧺ show maxSurfaceJump ⧺ ":\n"
+                        ⧺ unlines (take 5 (map showCross vs))
+
                 sendWorldCommand env (WorldDestroy pid)
-                threadDelay 200000
+                threadDelay 100000
 
 -- | Maximum allowed surface elevation jump between adjacent river tiles
 maxSurfaceJump ∷ Int

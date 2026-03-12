@@ -8,7 +8,7 @@ import Test.Headless.Harness
 import World.Types
 
 spec ∷ Spec
-spec = around withHeadlessEngine $ do
+spec = aroundAll withHeadlessEngine $ do
 
     describe "Geological features" $ do
 
