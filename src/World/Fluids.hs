@@ -17,6 +17,7 @@ module World.Fluids
     , computeChunkRivers
     , unionFluidMap
     , equilibrateFluidMap
+    , fillCoastalGaps
     , fixupSegmentContinuity
     , sealCrossChunkRivers
       -- * Query
@@ -29,7 +30,8 @@ module World.Fluids
 
 -- Re-export from submodules
 import World.Fluid.Types (FluidType(..), FluidCell(..))
-import World.Fluid.Internal (unionFluidMap, equilibrateFluidMap)
+import World.Fluid.Internal (unionFluidMap, equilibrateFluidMap
+                            , fillCoastalGaps)
 import World.Fluid.Ocean (computeOceanMap, isOceanChunk, hasAnyOceanFluid
                          , computeChunkFluid)
 import World.Fluid.River (computeChunkRivers, fixupSegmentContinuity

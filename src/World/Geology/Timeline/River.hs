@@ -81,10 +81,12 @@ reconcileHydrology' seed ageIdx flowResult periodIdx worldSize elevGrid filledEl
             then []
             else take budget $ filter (isSourceNew worldSize currentExistingRivers) simSources
 
+        climate = tbsClimateState tbs
+
         newRivers = catMaybes $
             parMap rdeepseq (\(idx, (gx, gy, elev, flow)) →
                 traceRiverFromSource seed worldSize elevGrid filledElev flowDir
-                    gx gy elev (ageIdx * 1000 + idx) flow
+                    gx gy elev (ageIdx * 1000 + idx) flow climate
             ) (zip [0..] newSources)
 
         (newPfs, newEvents, tbs2) =

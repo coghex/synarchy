@@ -7,7 +7,6 @@ module World.Fluid.River
     ) where
 
 import UPrelude
-import Data.Word (Word64)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
@@ -16,30 +15,26 @@ import Control.Monad (forM_, when)
 import Control.Monad.ST (ST)
 import World.Base
 import World.Types
-import World.Plate (TectonicPlate(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Fluid.Internal
 import World.Constants (seaLevel)
-import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
-                             , RiverSegment(..))
+import World.Hydrology.Types (RiverParams(..), RiverSegment(..))
 
 -----------------------------------------------------------
 -- Chunk-Level River Computation
 -----------------------------------------------------------
 
-computeChunkRivers ∷ [PersistentFeature] → Word64 → [TectonicPlate]
-                   → Int → ChunkCoord
+computeChunkRivers ∷ [RiverParams] → Int → ChunkCoord
                    → VU.Vector Int
                    → FluidMap
-computeChunkRivers features _seed _plates worldSize coord surfaceMap =
+computeChunkRivers rivers worldSize coord surfaceMap =
     let ChunkCoord cx cy = coord
         chunkMinGX = cx * chunkSize
         chunkMinGY = cy * chunkSize
-        nearbyRivers = filter (isNearbyRiver worldSize chunkMinGX chunkMinGY) features
+        nearbyRivers = filter (riverNearChunk worldSize chunkMinGX chunkMinGY) rivers
     in withFluidMap $ \mv → do
-        -- Pass 1: fill from segments (deterministic).
-        forM_ nearbyRivers $ \pf →
-            fillRiverFromFeature mv pf worldSize chunkMinGX chunkMinGY surfaceMap
+        forM_ nearbyRivers $ \river →
+            fillRiverDirect mv river worldSize chunkMinGX chunkMinGY surfaceMap
         -- Pass 2: extend river water one tile into banks.
         extendRiverBanks mv surfaceMap
         -- Pass 3: fill single-tile holes in the river.
@@ -50,11 +45,9 @@ computeChunkRivers features _seed _plates worldSize coord surfaceMap =
         smoothRiverSurface mv surfaceMap
         -- Pass 6: remove tiles with unresolvable cliffs.
         removeUnresolvableCliffs mv surfaceMap
-        -- Pass 7: seal exposed river boundaries. Valley carving can
-        -- create terrain below water surface beyond the fill width.
-        -- Flood-fill outward from river edges into those carved tiles
-        -- so no river tile has a visible floating side face.
+        -- Pass 7: seal exposed river boundaries.
         sealRiverBoundaries mv surfaceMap
+        pure ()
 
 -- | Extend river water one tile into banks. For each empty tile
 --   adjacent to a river tile, place a river fluid cell at the
@@ -81,8 +74,8 @@ extendRiverBanks mv surfaceMap =
                     -- Only extend if the water surface is above sea level,
                     -- terrain is below the water, and terrain matches the
                     -- river neighbor (not a valley wall).
-                    when (surf > seaLevel ∧ surfZ < surf ∧ surfZ ≥ nTerrZ - 3
-                         ∧ surf - surfZ ≤ 6) $
+                    when (surfZ < surf ∧ surfZ ≥ nTerrZ - 3
+                         ∧ surf - surfZ ≤ 6 ∧ surf > seaLevel) $
                         MV.write mv idx (Just (FluidCell River surf))
 
 adjacentRiverSurface ∷ MV.MVector s (Maybe FluidCell) → Int → Int
@@ -164,18 +157,22 @@ fillRiverHoles mv surfaceMap = do
                 adj ← adjacentRiverSurface mv lx ly
                 case adj of
                     Nothing → pure ()
-                    Just surf → when (surf > seaLevel ∧ surfZ < surf
-                                      ∧ surf - surfZ ≤ 6) $
+                    Just surf → when (surfZ < surf
+                                      ∧ surf - surfZ ≤ 6 ∧ surf > seaLevel) $
                         MV.write mv idx (Just (FluidCell River surf))
-    -- Pass B: remove 1-tile spots (0 river neighbors)
+    -- Pass B: remove completely isolated river tiles (0 neighbors).
+    -- Skip edge tiles — they may connect to the adjacent chunk's river.
     forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
         val ← MV.read mv idx
         case val of
             Just fc | fcType fc ≡ River → do
                 let lx = idx `mod` chunkSize
                     ly = idx `div` chunkSize
+                    isEdge = lx ≡ 0 ∨ lx ≡ chunkSize - 1
+                           ∨ ly ≡ 0 ∨ ly ≡ chunkSize - 1
                 nCount ← countRiverNeighbors mv lx ly
-                when (nCount ≡ 0) $ MV.write mv idx Nothing
+                when (nCount ≡ 0 ∧ not isEdge) $
+                    MV.write mv idx Nothing
             _ → pure ()
 
 -- | Clamp all river water surfaces so they don't exceed
@@ -320,11 +317,11 @@ sealPass mv surfaceMap = do
                             -- Cap depth to prevent cascading into deeply
                             -- carved terrain (e.g. coastal valleys).
                             let sealDepth = waterZ - nTerrZ
-                            when (nTerrZ + 1 < waterZ ∧ sealDepth ≤ 4) $ do
+                            when (nTerrZ + 1 < waterZ ∧ sealDepth ≤ 4
+                                 ∧ waterZ > seaLevel) $ do
                                 let fillZ = waterZ
-                                when (fillZ > seaLevel) $ do
-                                    MV.write mv nIdx (Just (FluidCell River fillZ))
-                                    MV.write changedRef 0 True
+                                MV.write mv nIdx (Just (FluidCell River fillZ))
+                                MV.write changedRef 0 True
             _ → pure ()
     MV.read changedRef 0
 
@@ -357,16 +354,6 @@ minRiverNeighborSurface mv lx ly = do
 -----------------------------------------------------------
 -- River Proximity
 -----------------------------------------------------------
-
-isNearbyRiver ∷ Int → Int → Int → PersistentFeature → Bool
-isNearbyRiver worldSize chunkGX chunkGY pf =
-    case pfFeature pf of
-        HydroShape (RiverFeature river) →
-            case pfActivity pf of
-                FActive  → riverNearChunk worldSize chunkGX chunkGY river
-                FDormant → riverNearChunk worldSize chunkGX chunkGY river
-                _        → False
-        _ → False
 
 -- | Check if any part of the river is near this chunk.
 --   Uses proper point-to-segment distance for each segment,
@@ -417,12 +404,12 @@ riverNearChunk worldSize chunkGX chunkGY river =
         in startNear ∨ endNear ∨ midNear
 
 -- | Quick boolean check: does this chunk have any river?
-hasAnyRiverQuick ∷ [PersistentFeature] → Int → ChunkCoord → Bool
-hasAnyRiverQuick features worldSize coord =
+hasAnyRiverQuick ∷ [RiverParams] → Int → ChunkCoord → Bool
+hasAnyRiverQuick rivers worldSize coord =
     let ChunkCoord cx cy = coord
         chunkMinGX = cx * chunkSize
         chunkMinGY = cy * chunkSize
-    in any (isNearbyRiver worldSize chunkMinGX chunkMinGY) features
+    in any (riverNearChunk worldSize chunkMinGX chunkMinGY) rivers
 
 -----------------------------------------------------------
 -- River Fluid Fill (interpolated water surface)
@@ -439,26 +426,22 @@ hasAnyRiverQuick features worldSize coord =
 -- Uses floor() to avoid round's half-to-even creating alternating
 -- elevation steps (checkerboard pattern) at transition tiles.
 
-fillRiverFromFeature ∷ MV.MVector s (Maybe FluidCell)
-                     → PersistentFeature → Int → Int → Int
-                     → VU.Vector Int
-                     → ST s ()
-fillRiverFromFeature mv pf worldSize chunkGX chunkGY surfaceMap =
-    case pfFeature pf of
-        HydroShape (RiverFeature river) →
-            let segments = rpSegments river
-            in forEachSurface surfaceMap $ \idx lx ly surfZ →
-                case bestRiverFill worldSize (chunkGX + lx) (chunkGY + ly)
-                                   surfZ segments of
-                    Nothing → pure ()
-                    Just fc → do
-                        existing ← MV.read mv idx
-                        case existing of
-                            -- Only overwrite if new fill is higher (dominant river wins)
-                            Just old | fcType old ≡ River ∧ fcSurface old ≥ fcSurface fc
-                                → pure ()
-                            _ → MV.write mv idx (Just fc)
-        _ → pure ()
+fillRiverDirect ∷ MV.MVector s (Maybe FluidCell)
+                → RiverParams → Int → Int → Int
+                → VU.Vector Int
+                → ST s ()
+fillRiverDirect mv river worldSize chunkGX chunkGY surfaceMap =
+    let segments = rpSegments river
+    in forEachSurface surfaceMap $ \idx lx ly surfZ →
+        case bestRiverFill worldSize (chunkGX + lx) (chunkGY + ly)
+                                     surfZ segments of
+            Nothing → pure ()
+            Just fc → do
+                existing ← MV.read mv idx
+                case existing of
+                    Just old | fcType old ≡ River ∧ fcSurface old ≥ fcSurface fc
+                        → pure ()
+                    _ → MV.write mv idx (Just fc)
 
 -- | At overlapping regions, pick the HIGHER water surface.
 --   When multiple rivers overlap, the dominant (higher water level)
@@ -507,10 +490,14 @@ riverFillFromSegment worldSize gx gy surfZ seg =
           let signedPerp = (px * dy' - py * dx') / segLen
               effectivePerpDist = abs signedPerp
 
-              -- Fill zone: half channel width + small bank margin.
-              -- rsWidth is total width, so half gives distance from
-              -- center to channel edge. Add 2 tiles for banks.
-              fillW = fromIntegral (rsWidth seg) / 2.0 + 2.0 ∷ Float
+              -- Fill zone: half the valley width ensures we fill all
+              -- carved terrain. The valley was carved to this extent,
+              -- so the water should cover it. Using a minimum of
+              -- half channel width + bank margin for very narrow valleys.
+              bankMargin = if rsWidth seg ≤ 2 then 1.0 else 2.0 ∷ Float
+              channelFill = fromIntegral (rsWidth seg) / 2.0 + bankMargin
+              valleyFill = fromIntegral (rsValleyWidth seg) / 2.0
+              fillW = max channelFill valleyFill
           in if effectivePerpDist > fillW
              then Nothing
              else
@@ -525,18 +512,17 @@ riverFillFromSegment worldSize gx gy surfZ seg =
                  endE   = fromIntegral (rsEndElev seg) ∷ Float
                  refElev = floor (startE + tClamped * (endE - startE)) ∷ Int
                  -- Maximum fill depth: don't flood deeply carved terrain.
-                 -- Uses segment depth + margin so the depth clamp pass
-                 -- can tighten further. Prevents coastal canyons from
-                 -- being flooded wall-to-wall.
-                 maxFillDepth = rsDepth seg + 2
-             in if waterSurface ≤ seaLevel
-                then Nothing  -- water at/below sea level: ocean territory
-                else if surfZ ≥ waterSurface
-                then Nothing  -- terrain at/above water: no fill
+                 -- Generous margin (8) accounts for erosion in later
+                 -- geological periods deepening the valley below the
+                 -- segment's carved depth. The depth clamp pass tightens
+                 -- further if needed.
+                 maxFillDepth = rsDepth seg + 8
+             in if surfZ ≥ waterSurface
+                then Nothing
                 else if surfZ > refElev
-                     then Nothing  -- valley wall: terrain above reference
+                     then Nothing
                      else if waterSurface - surfZ > maxFillDepth
-                          then Nothing  -- too deep: carved canyon
+                          then Nothing
                           else Just (FluidCell River waterSurface)
 
 -----------------------------------------------------------
@@ -651,16 +637,18 @@ trySealNeighbor waterZ (wtd, changed) (nbrCoord, nbrLX, nbrLY) =
                         let fillZ = min waterZ (nbrTerrZ + 4)
                         in if fillZ ≤ seaLevel
                            then (wtd, changed)
-                           else let newFluid = lcFluidMap nbrLC V.// [(nIdx, Just (FluidCell River fillZ))]
-                                    oldSurf = lcSurfaceMap nbrLC VU.! nIdx
-                                    newSurf = lcSurfaceMap nbrLC VU.// [(nIdx, max oldSurf fillZ)]
-                                    nbrLC' = nbrLC { lcFluidMap = newFluid
-                                                   , lcSurfaceMap = newSurf }
-                                    -- Propagate inward: the newly-filled tile may
-                                    -- expose intra-chunk neighbors too.
-                                    nbrLC'' = floodSealInChunk nbrLC' fillZ nbrLX nbrLY
-                                    chunks' = HM.insert nbrCoord nbrLC'' (wtdChunks wtd)
-                                in (wtd { wtdChunks = chunks' }, True)
+                           else if fillZ ≤ seaLevel
+                                then (wtd, changed)
+                                else let newFluid = lcFluidMap nbrLC V.// [(nIdx, Just (FluidCell River fillZ))]
+                                         oldSurf = lcSurfaceMap nbrLC VU.! nIdx
+                                         newSurf = lcSurfaceMap nbrLC VU.// [(nIdx, max oldSurf fillZ)]
+                                         nbrLC' = nbrLC { lcFluidMap = newFluid
+                                                        , lcSurfaceMap = newSurf }
+                                         -- Propagate inward: the newly-filled tile may
+                                         -- expose intra-chunk neighbors too.
+                                         nbrLC'' = floodSealInChunk nbrLC' fillZ nbrLX nbrLY
+                                         chunks' = HM.insert nbrCoord nbrLC'' (wtdChunks wtd)
+                                     in (wtd { wtdChunks = chunks' }, True)
 
 -- | After inserting a river tile into a chunk, propagate to any
 --   intra-chunk neighbors with terrain below the water surface.

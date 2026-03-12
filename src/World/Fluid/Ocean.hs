@@ -34,17 +34,33 @@ computeOceanMap ∷ Word64 → Int → Int → [TectonicPlate]
 computeOceanMap seed worldSize plateCount plates applyTL =
     let halfSize = worldSize `div` 2
 
-        chunkElev ∷ ChunkCoord → Int
-        chunkElev (ChunkCoord cx cy) =
-            let midGX = cx * chunkSize + chunkSize `div` 2
-                midGY = cy * chunkSize + chunkSize `div` 2
-                (gx', gy') = wrapGlobalU worldSize midGX midGY
+        -- Sample a single tile's post-timeline elevation
+        sampleElev gx gy =
+            let (gx', gy') = wrapGlobalU worldSize gx gy
             in if isBeyondGlacier worldSize gx' gy'
                then seaLevel + 100
                else let (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy'
                     in if baseMat ≡ matGlacier
                        then seaLevel + 100
                        else fst (applyTL gx' gy' (baseElev, baseMat))
+
+        -- Use MINIMUM elevation across 5 sample points (center + corners).
+        -- This ensures the BFS can traverse chunks where part of the
+        -- chunk is below sea level (e.g., river valleys, coastal areas)
+        -- even if the center point is above sea level.
+        chunkElev ∷ ChunkCoord → Int
+        chunkElev (ChunkCoord cx cy) =
+            let baseGX = cx * chunkSize
+                baseGY = cy * chunkSize
+                samples = [ sampleElev (baseGX + chunkSize `div` 2)
+                                       (baseGY + chunkSize `div` 2)
+                          , sampleElev baseGX baseGY
+                          , sampleElev (baseGX + chunkSize - 1) baseGY
+                          , sampleElev baseGX (baseGY + chunkSize - 1)
+                          , sampleElev (baseGX + chunkSize - 1)
+                                       (baseGY + chunkSize - 1)
+                          ]
+            in minimum samples
 
         oceanSeeds = concatMap (\plate →
             if plateIsLand plate

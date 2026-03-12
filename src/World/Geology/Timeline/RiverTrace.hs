@@ -14,6 +14,8 @@ import World.Fluids (fixupSegmentContinuity)
 import World.Geology.Hash
 import World.Hydrology.Types (RiverParams(..), RiverSegment(..))
 import World.Hydrology.Simulation (ElevGrid(..))
+import World.Weather.Types (ClimateState)
+import World.Weather.Lookup (lookupLocalClimate)
 
 -----------------------------------------------------------
 -- River tracing via flow-direction chain
@@ -29,9 +31,10 @@ import World.Hydrology.Simulation (ElevGrid(..))
 traceRiverFromSource ∷ Word64 → Int → ElevGrid → VU.Vector Int
                      → VU.Vector Int
                      → Int → Int → Int → Int → Float
+                     → ClimateState
                      → Maybe RiverParams
 traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
-                     gx gy srcElev riverIdx flow =
+                     gx gy srcElev riverIdx flow climate =
     let gridW   = egGridW elevGrid
         spacing = egSpacing elevGrid
         halfGrid = gridW `div` 2
@@ -97,7 +100,7 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
 
     in if length noisyPath < 4
        then Nothing
-       else buildRiverFromPath seed riverIdx flow noisyPath
+       else buildRiverFromPath seed worldSize riverIdx flow climate noisyPath
 
 -----------------------------------------------------------
 -- Coast extension
@@ -168,8 +171,9 @@ addPathNoise seed riverIdx spacing pts =
 -- Path construction
 -----------------------------------------------------------
 
-buildRiverFromPath ∷ Word64 → Int → Float → [(Int, Int, Int)] → Maybe RiverParams
-buildRiverFromPath seed riverIdx baseFlow path =
+buildRiverFromPath ∷ Word64 → Int → Int → Float → ClimateState
+                   → [(Int, Int, Int)] → Maybe RiverParams
+buildRiverFromPath seed worldSize riverIdx baseFlow climate path =
     let monoPath = enforceMonotonicPath path
         -- Grid-following produces one point per grid cell (~8 tiles apart).
         -- Decimate to every 3rd to get ~24-tile segments, similar to before.
@@ -184,7 +188,8 @@ buildRiverFromPath seed riverIdx baseFlow path =
         ((srcX, srcY, _) : _) →
             let numWP = length decimated
                 segments0 = fixupSegmentContinuity $ V.fromList $
-                               zipWith (buildSegFromWaypoints seed numWP baseFlow)
+                               zipWith (buildSegFromWaypoints seed worldSize
+                                            numWP baseFlow climate)
                                        [0..] (zip decimated (drop 1 decimated))
                 segments = poolWaterSurface segments0
                 (mouthX, mouthY, _) = last decimated
@@ -245,26 +250,42 @@ enforceMonotonicPath ((x0, y0, e0) : rest) =
         let e' = min maxE e
         in (x, y, e') : go e' xs
 
-buildSegFromWaypoints ∷ Word64 → Int → Float → Int
+buildSegFromWaypoints ∷ Word64 → Int → Int → Float → ClimateState → Int
                       → ((Int, Int, Int), (Int, Int, Int))
                       → RiverSegment
-buildSegFromWaypoints seed totalSegs baseFlow segIdx ((sx, sy, se), (ex, ey, ee)) =
+buildSegFromWaypoints seed worldSize totalSegs baseFlow climate segIdx
+                      ((sx, sy, se), (ex, ey, ee)) =
     let t = fromIntegral (segIdx + 1) / fromIntegral totalSegs
-        flow = baseFlow + t * baseFlow * 2.0
 
-        rawWidth = max 4 (round (flow * 8.0))
+        -- Climate modulation: look up precipitation at segment midpoint.
+        -- Higher precipitation → more water → wider/deeper river.
+        -- Normalized to 0.5 as "average" precipitation.
+        midGX = (sx + ex) `div` 2
+        midGY = (sy + ey) `div` 2
+        (_temp, precip, _humid, _snow) =
+            lookupLocalClimate climate worldSize midGX midGY
+        climateMult = max 0.3 (min 3.0 (precip / 0.5))
+
+        flow = (baseFlow + t * baseFlow * 2.0) * climateMult
+
+        -- Width scales with flow: narrow headwaters (1-2 tiles),
+        -- widening downstream as tributaries add volume.
+        rawWidth = max 1 (round (flow * 6.0)) ∷ Int
         width = min 16 rawWidth
 
         h1 = hashGeo seed segIdx 1161
         valleyMult = 2.0 + hashToFloatGeo h1 * 1.5
 
         slopeDelta = abs (se - ee)
-        -- Depth capped at 6 tiles — carves gentle channels, not canyons
-        baseDepth = max 2 (slopeDelta `div` 6 + round (flow * 1.0))
+        -- Depth scales with flow: shallow headwaters, deeper downstream.
+        -- Minimum 2 ensures carved channel is below the water surface
+        -- (freeboard = 1, so depth must be > 1 for water to fill).
+        -- Capped at 6 tiles — carves gentle channels, not canyons.
+        baseDepth = max 2 (slopeDelta `div` 6 + round (flow * 0.8))
         depth = min 6 baseDepth
-        -- Valley width for water fill. Kept modest to prevent
-        -- headwater segments from flooding wide areas at high elevation.
-        minValleyW = depth * 3
+        -- Valley width for water fill. Scales with river width
+        -- to prevent headwater streams from carving wide valleys.
+        minValleyW = max (width * 2) (depth * 2)
         rawValleyW = max (width * 2) (round (fromIntegral width * valleyMult))
         valleyW = max minValleyW (min 32 rawValleyW)
 
@@ -281,8 +302,8 @@ buildSegFromWaypoints seed totalSegs baseFlow segIdx ((sx, sy, se), (ex, ey, ee)
         , rsFlowRate    = flow
         , rsStartElev   = se
         , rsEndElev     = ee
-        , rsWaterStart  = se - freeboard
-        , rsWaterEnd    = ee - freeboard
+        , rsWaterStart  = max seaLevel (se - freeboard)
+        , rsWaterEnd    = max seaLevel (ee - freeboard)
         }
 
 -----------------------------------------------------------

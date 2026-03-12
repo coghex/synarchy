@@ -27,6 +27,8 @@ import World.Plate (TectonicPlate(..), elevationAtGlobal
                    , isBeyondGlacier, wrapGlobalU)
 import World.Fluids (isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid
                     , hasAnyRiverQuick, hasAnyLakeQuick)
+import World.Geology.Timeline.Types (GeoEvent(..))
+import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
 import World.Generate (applyTimelineFast)
 import Data.Bits ((.&.), shiftR)
 import World.Vegetation (isBarrenMaterial, isWetlandSoil
@@ -101,7 +103,8 @@ buildZoomCache params registry =
                 chunkLava = hasAnyLavaQuick features seed plates worldSize coord avgElev
                 chunkOcean = isOceanChunk oceanMap coord
                           ∨ hasAnyOceanFluid oceanMap coord
-                chunkRiver = hasAnyRiverQuick features worldSize coord
+                eventRivers = concatMap extractEventRivers' (gtPeriods timeline)
+                chunkRiver = hasAnyRiverQuick eventRivers worldSize coord
                 chunkLake  = hasAnyLakeQuick features worldSize coord
 
                 -- Vegetation category from climate
@@ -209,7 +212,8 @@ buildZoomCacheWithPixels params registry palette =
                 avgElev = let s = sum (map fst allMats)
                           in s `div` length allMats
                 chunkLava = hasAnyLavaQuick features seed plates worldSize coord avgElev
-                chunkRiver = hasAnyRiverQuick features worldSize coord
+                eventRivers = concatMap extractEventRivers' (gtPeriods timeline)
+                chunkRiver = hasAnyRiverQuick eventRivers worldSize coord
                 chunkLake  = hasAnyLakeQuick features worldSize coord
                 vegCat = if chunkOcean ∨ winnerMat ≡ 250
                          then 0
@@ -485,3 +489,9 @@ vegCategoryFromClimate climate worldSize baseGX baseGY matId
            else if temp > 5.0  ∧ precip > 0.3 then 2  -- temperate
            else 1  -- cool / sparse
 
+-- | Extract RiverParams from all HydroEvents in a period's events.
+extractEventRivers' ∷ GeoPeriod → [RiverParams]
+extractEventRivers' period = concatMap go (gpEvents period)
+  where
+    go (HydroEvent (RiverFeature rp)) = [rp]
+    go _ = []

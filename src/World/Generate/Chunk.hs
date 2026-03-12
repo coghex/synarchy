@@ -16,11 +16,13 @@ import World.Material (MaterialId(..), matGlacier, getMaterialProps
 import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Geology (applyGeoEvent, GeoModification(..))
+import World.Geology.Timeline.Types (GeoEvent(..))
+import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
 import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava
                     , computeChunkLakes, computeChunkRivers, unionFluidMap
-                    , equilibrateFluidMap)
+                    , equilibrateFluidMap, fillCoastalGaps)
 import World.Vegetation (computeChunkVegetation)
 import World.Flora.Placement (computeChunkFlora)
 import World.Generate.Constants (chunkBorder)
@@ -154,7 +156,10 @@ generateChunk registry catalog params coord =
                                         coord terrainSurfaceMap
         lakeFluidMap = computeChunkLakes features seed plates worldSize
                                          coord terrainSurfaceMap
-        riverFluidMap = computeChunkRivers features seed plates worldSize
+        -- Extract river params from events (not features) so fluid
+        -- fill matches the carved terrain, which uses event segments.
+        eventRivers = concatMap extractEventRivers (gtPeriods timeline)
+        riverFluidMap = computeChunkRivers eventRivers worldSize
                                            coord terrainSurfaceMap
 
         -- Lava > Lake > River > Ocean: specific fluids override ocean
@@ -164,7 +169,12 @@ generateChunk registry catalog params coord =
 
         -- Equilibrate: propagate water to adjacent empty tiles whose
         -- terrain is at or below the neighboring water surface.
-        fluidMap = equilibrateFluidMap terrainSurfaceMap rawFluidMap
+        equilFluidMap = equilibrateFluidMap terrainSurfaceMap rawFluidMap
+
+        -- Fill coastal gaps: below-sea-level terrain adjacent to any
+        -- fluid that was missed by the ocean BFS (which uses pre-carving
+        -- elevation) gets ocean water.
+        fluidMap = fillCoastalGaps terrainSurfaceMap equilFluidMap
 
         -- Surface map with fluids
         surfaceMap = VU.imap (\idx surfZ →
@@ -280,3 +290,11 @@ generateExposedColumn lx ly surfaceZ exposeFrom lookupMat =
     , let mat = lookupMat z
     , mat ≠ matAir
     ]
+
+-- | Extract RiverParams from all HydroEvents in a period's events.
+--   These are the ORIGINAL traced segments that match the carved terrain.
+extractEventRivers ∷ GeoPeriod → [RiverParams]
+extractEventRivers period = concatMap go (gpEvents period)
+  where
+    go (HydroEvent (RiverFeature rp)) = [rp]
+    go _ = []

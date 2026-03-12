@@ -9,6 +9,7 @@ module World.Fluid.Internal
     , floorDiv'
     , unionFluidMap
     , equilibrateFluidMap
+    , fillCoastalGaps
     ) where
 
 import UPrelude
@@ -19,6 +20,7 @@ import Control.Monad (forM_, when)
 import Control.Monad.ST (ST, runST)
 import Data.STRef (newSTRef, readSTRef, writeSTRef)
 import World.Base
+import World.Constants (seaLevel)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 
@@ -273,3 +275,47 @@ containedFill mv lx ly surfZ = do
                     then Just (FluidCell Lake minSurf)
                     else Nothing
 
+-- | Fill coastal gaps: below-sea-level tiles without fluid that are
+--   adjacent to any fluid (river, ocean, lake) should get ocean water.
+--   River carving can create below-sea-level terrain that neither the
+--   ocean BFS (which uses pre-carving elevation) nor the river fill
+--   (which stops where terrain ≥ water surface) covers.
+fillCoastalGaps ∷ VU.Vector Int → FluidMap → FluidMap
+fillCoastalGaps surfaceMap fluidMap = runST $ do
+    mv ← V.thaw fluidMap
+    let area = chunkSize * chunkSize
+
+        gapPass = do
+            changed ← newSTRef False
+            forM_ [0 .. area - 1] $ \idx → do
+                val ← MV.read mv idx
+                when (isNothing val) $ do
+                    let surfZ = surfaceMap VU.! idx
+                    when (surfZ < seaLevel ∧ surfZ > minBound) $ do
+                        let lx = idx `mod` chunkSize
+                            ly = idx `div` chunkSize
+                        hasAdj ← anyAdjacentFluid mv lx ly
+                        when hasAdj $ do
+                            MV.write mv idx (Just (FluidCell Ocean seaLevel))
+                            writeSTRef changed True
+            readSTRef changed
+
+        loop 0 = pure ()
+        loop n = do
+            didChange ← gapPass
+            when didChange $ loop (n - 1)
+
+    loop (10 ∷ Int)
+    V.freeze mv
+
+anyAdjacentFluid ∷ MV.MVector s (Maybe FluidCell) → Int → Int
+                 → ST s Bool
+anyAdjacentFluid mv lx ly = do
+    let check x y
+          | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = pure False
+          | otherwise = isJust ⊚ MV.read mv (y * chunkSize + x)
+    n ← check lx (ly - 1)
+    s ← check lx (ly + 1)
+    e ← check (lx + 1) ly
+    w ← check (lx - 1) ly
+    pure (n ∨ s ∨ e ∨ w)
