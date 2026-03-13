@@ -22,6 +22,7 @@ import World.Geology.Timeline.Types (GeoEvent(..))
 import World.Hydrology.Types (HydroFeature(..))
 import World.Geology.Erosion (applyErosion, lookupRegionalErosion)
 import World.Scale (WorldScale(..), computeWorldScale)
+import World.Constants (seaLevel)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 
@@ -53,9 +54,90 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                     ) (gpExplodedEvents period)
             in filter (\(evt, _) → isRiverCarveEvent evt) relevant
             ) (gtPeriods timeline)
+        -- Post-carving smoothing: collapse steep cliffs and pillars
+        -- left by river carving. Only affects tiles within a small
+        -- radius of tiles actually modified by river carving. This
+        -- prevents natural cliffs far from rivers from being flattened,
+        -- which would cause strata/elevation mismatches and black holes.
+        -- Iterates to propagate smoothing outward from carved tiles.
+        smoothCliffs preCarve vecs = go (3 ∷ Int) vecs
+          where
+            -- Build a mask of tiles that were modified by river carving.
+            -- Then dilate it by 2 tiles so smoothing affects immediate
+            -- neighbors of carved tiles but not distant terrain.
+            carveMask = buildCarveMask borderSize preCarve (fst vecs)
+
+            go 0 v = v
+            go n (ev, mv) =
+                let (ev', changed) = smoothCliffsPass borderSize carveMask ev
+                in if changed then go (n - 1) (ev', mv) else (ev', mv)
+
+        -- | Build a boolean mask: True for tiles within 2 tiles of a
+        --   carved tile. "Carved" = elevation decreased by the river
+        --   carve pass.
+        buildCarveMask bSize preElev postElev = runST $ do
+            mask ← VUM.replicate (bSize * bSize) (0 ∷ Int)
+            -- Mark carved tiles
+            forM_ [0 .. bSize * bSize - 1] $ \idx → do
+                let pre  = preElev VU.! idx
+                    post = postElev VU.! idx
+                when (post < pre) $
+                    VUM.write mask idx 3  -- 3 = carved tile + 2 dilation budget
+            -- Dilate: spread marks to neighbors, decrementing each step.
+            -- Two dilation passes give a 2-tile radius around carved tiles.
+            forM_ [1 ∷ Int, 2] $ \_ →
+                forM_ [0 .. bSize * bSize - 1] $ \idx → do
+                    v ← VUM.read mask idx
+                    when (v > 1) $ do
+                        let bx = idx `mod` bSize
+                            by = idx `div` bSize
+                            spread nIdx = do
+                                nv ← VUM.read mask nIdx
+                                when (nv < v - 1) $
+                                    VUM.write mask nIdx (v - 1)
+                        when (by > 0)          $ spread (idx - bSize)
+                        when (by < bSize - 1)  $ spread (idx + bSize)
+                        when (bx > 0)          $ spread (idx - 1)
+                        when (bx < bSize - 1)  $ spread (idx + 1)
+            VU.unsafeFreeze mask
+
+        smoothCliffsPass bSize mask ev = runST $ do
+            em ← VUM.new (bSize * bSize)
+            forM_ [0 .. bSize * bSize - 1] $ \i →
+                VUM.write em i (ev VU.! i)
+            changedRef ← VUM.new 1
+            VUM.write changedRef 0 (0 ∷ Int)
+            forM_ [0 .. bSize * bSize - 1] $ \idx → do
+                let bx = idx `mod` bSize
+                    by = idx `div` bSize
+                -- Only smooth tiles near carved areas (mask > 0)
+                -- and skip edge tiles of the border
+                when (mask VU.! idx > 0
+                     ∧ bx > 0 ∧ bx < bSize - 1
+                     ∧ by > 0 ∧ by < bSize - 1) $ do
+                    e ← VUM.read em idx
+                    n' ← VUM.read em (idx - bSize)
+                    s' ← VUM.read em (idx + bSize)
+                    w' ← VUM.read em (idx - 1)
+                    e' ← VUM.read em (idx + 1)
+                    let mn = min n' (min s' (min w' e'))
+                    -- If this tile is >3 above its lowest neighbor,
+                    -- lower it toward the neighbor. This collapses
+                    -- tall pillars and smooths cliff faces left by
+                    -- river carving.
+                    when (e - mn > 3) $ do
+                        let target = mn + 3
+                        VUM.write em idx target
+                        VUM.write changedRef 0 (1 ∷ Int)
+            ef ← VU.unsafeFreeze em
+            c ← VUM.read changedRef 0
+            pure (ef, c > 0)
+
     in if null allRiverEvents
        then (postElev, postMat)
-       else applyRiverCarvePass coord allRiverEvents (postElev, postMat)
+       else let preCarveElev = postElev
+                carved = applyRiverCarvePass coord allRiverEvents (postElev, postMat)
+            in smoothCliffs preCarveElev carved
   where
     borderSize = chunkSize + 2 * chunkBorder
 
@@ -185,6 +267,7 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
             forM_ [0 .. borderArea - 1] $ \idx → do
                 VUM.write elevM idx (elevVec VU.! idx)
                 VUM.write matM  idx (matVec  VU.! idx)
+            let minFloor = seaLevel - 1
             forM_ [0 .. borderArea - 1] $ \idx → do
                 elev ← VUM.read elevM idx
                 mat  ← VUM.read matM  idx
@@ -198,7 +281,13 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                         foldl' (\(e, m) (evt, _) →
                             applyOneEvent worldSize gx' gy' (e, m) evt
                         ) (elev, mat) cellEvents
-                VUM.write elevM idx elevOut
+                -- If river events touch this tile, enforce a floor to
+                -- prevent erosion-deepened terrain from creating deep
+                -- sub-ocean channels at river mouths.
+                let elevClamped = if not (null cellEvents) ∧ elevOut < minFloor
+                                  then minFloor
+                                  else elevOut
+                VUM.write elevM idx elevClamped
                 VUM.write matM  idx matOut
             elevF ← VU.unsafeFreeze elevM
             matF  ← VU.unsafeFreeze matM

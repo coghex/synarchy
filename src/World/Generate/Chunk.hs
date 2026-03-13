@@ -176,6 +176,7 @@ generateChunk registry catalog params coord =
         -- elevation) gets ocean water.
         fluidMap = fillCoastalGaps terrainSurfaceMap equilFluidMap
 
+
         -- Surface map with fluids
         surfaceMap = VU.imap (\idx surfZ →
             case fluidMap V.! idx of

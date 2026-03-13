@@ -249,6 +249,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "clearWorldCursorSelect" (worldClearWorldCursorSelectFn env)
   registerLuaFunction "setToolMode" (worldSetToolModeFn env)
   registerLuaFunction "getInitProgress" (worldGetInitProgressFn env)
+  registerLuaFunction "waitForInit" (worldWaitForInitFn env)
   registerLuaFunction "destroy" (worldDestroyFn env)
 
   -- Debug query functions

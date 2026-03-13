@@ -31,6 +31,7 @@ defaultEngineConfig = EngineConfig
   , enableDebug  = False
 #endif
   , ecHeadless   = False
+  , ecDebugPort  = 8008
   }
 
 defaultGraphicsConfig ∷ GraphicsConfig

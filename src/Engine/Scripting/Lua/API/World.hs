@@ -29,6 +29,7 @@ module Engine.Scripting.Lua.API.World
     , worldSetWorldCursorHoverBgTextureFn
     , worldSetToolModeFn
     , worldGetInitProgressFn
+    , worldWaitForInitFn
     , worldDestroyFn
     ) where
 
@@ -37,6 +38,7 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
+import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
@@ -564,10 +566,14 @@ worldSetToolModeFn env = do
         _ → pure ()
     return 0
 
--- | world.getInitProgress() → (phase, current, total)
--- phase: 0 = idle, 1 = setup, 2 = chunks, 3 = done
--- For phase 1: current = step number, total = total steps
--- For phase 2: current = chunks generated, total = total chunks
+-- | world.getInitProgress() → (phase, current, total, stage)
+--   phase: 0=idle, 1=setup, 2=chunks, 3=done
+--   current/total: numeric progress within current phase
+--   stage: human-readable string ("idle", "setup", "chunks", "done")
+--
+--   Returns 4 values for backward compatibility: existing Lua scripts
+--   use `local phase, current, total = world.getInitProgress()` and
+--   the 4th value (stage) is simply ignored by those callers.
 worldGetInitProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetInitProgressFn env = do
     manager ← Lua.liftIO $ readIORef (worldManagerRef env)
@@ -579,24 +585,58 @@ worldGetInitProgressFn env = do
                     Lua.pushinteger 0
                     Lua.pushinteger 0
                     Lua.pushinteger 0
+                    Lua.pushstring "idle"
                 LoadPhase1 current total → do
                     Lua.pushinteger 1
                     Lua.pushinteger (fromIntegral current)
                     Lua.pushinteger (fromIntegral total)
+                    Lua.pushstring "setup"
                 LoadPhase2 remaining total → do
                     Lua.pushinteger 2
                     Lua.pushinteger (fromIntegral (total - remaining))
                     Lua.pushinteger (fromIntegral total)
+                    Lua.pushstring "chunks"
                 LoadDone → do
                     Lua.pushinteger 3
                     Lua.pushinteger 1
                     Lua.pushinteger 1
-            return 3
+                    Lua.pushstring "done"
+            return 4
         [] → do
             Lua.pushinteger 0
             Lua.pushinteger 0
             Lua.pushinteger 0
-            return 3
+            Lua.pushstring "idle"
+            return 4
+
+-- | world.waitForInit(timeout_seconds) → table (same as getInitProgress)
+--   Blocks until world generation is complete or timeout is reached.
+--   Default timeout: 600 seconds (10 minutes).
+--   Returns the final progress table.
+worldWaitForInitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldWaitForInitFn env = do
+    timeoutArg ← Lua.tointeger 1
+    let timeoutSec = case timeoutArg of
+            Just t | t > 0 → fromIntegral t ∷ Int
+            _              → 600
+        maxIter = timeoutSec * 4  -- poll at 250ms intervals
+    Lua.liftIO $ waitLoop maxIter
+    worldGetInitProgressFn env
+  where
+    waitLoop 0 = return ()
+    waitLoop n = do
+        manager ← readIORef (worldManagerRef env)
+        case wmWorlds manager of
+            ((_, ws):_) → do
+                phase ← readIORef (wsLoadPhaseRef ws)
+                case phase of
+                    LoadDone → return ()
+                    _        → do
+                        threadDelay 250000
+                        waitLoop (n - 1)
+            [] → do
+                threadDelay 250000
+                waitLoop (n - 1)
 
 -- | world.destroy(pageId)
 -- Removes the world from the world manager entirely, freeing its state.

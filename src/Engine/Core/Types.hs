@@ -11,5 +11,6 @@ data EngineConfig = EngineConfig
   , enableVSync     ∷ Bool
   , enableDebug     ∷ Bool
   , ecHeadless      ∷ Bool
+  , ecDebugPort     ∷ Int
   } deriving (Eq, Show)
 

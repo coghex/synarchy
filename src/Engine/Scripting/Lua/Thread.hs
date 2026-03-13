@@ -18,6 +18,7 @@ import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..))
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import Engine.Core.Types (EngineConfig(..))
 import Engine.Event.Types (Event(..))
 import Engine.Input.Types (InputState, keyToText)
 import UI.Types (ElementHandle(..))
@@ -27,7 +28,8 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Map as Map
-import Data.List (find)
+import Data.List (find, sortBy)
+import qualified Data.Text.Read as T
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay, forkIO)
 import Control.Concurrent.MVar (putMVar)
@@ -113,9 +115,10 @@ startLuaThread env = do
                         "Failed to load Lua script: " <> T.pack scriptPath 
                         <> " - " <> errMsg
             
-            -- Start debug TCP server on port 8008
-            debugQueue ← startDebugServer 8008
-            logInfo logger CatLua "Debug server listening on port 8008"
+            -- Start debug TCP server
+            let port = ecDebugPort (engineConfig env)
+            debugQueue ← startDebugServer port
+            logInfo logger CatLua $ "Debug server listening on port " <> T.pack (show port)
             tid ← forkIO $ runLuaLoop env backendState stateRef debugQueue
             return tid
         ) 
@@ -220,6 +223,7 @@ processDebugCommands lst debugQueue = do
 -- | Execute a Lua string and return the result as text.
 --   Uses loadstring to compile, then pcall to run safely.
 --   Captures return values and any errors.
+--   Tables are automatically serialized to JSON format.
 executeDebugLua ∷ Lua.State → Text → IO Text
 executeDebugLua lst cmdText = Lua.runWith lst $ do
     let code = TE.encodeUtf8 cmdText
@@ -243,13 +247,8 @@ executeDebugLua lst cmdText = Lua.runWith lst $ do
                     if top ≡ 0
                         then return "ok"
                         else do
-                            parts ← forM [1..top] $ \i → do
-                                Lua.pushvalue i
-                                mStr ← Lua.tostring (-1)
-                                Lua.pop 1
-                                return $ case mStr of
-                                    Just bs → TE.decodeUtf8 bs
-                                    Nothing → "<non-string>"
+                            parts ← forM [1..top] $ \i →
+                                luaValueToText 0 i
                             Lua.settop 0
                             return (T.intercalate "\t" parts)
                 _ → do
@@ -260,6 +259,100 @@ executeDebugLua lst cmdText = Lua.runWith lst $ do
             err ← Lua.tostring (-1)
             Lua.pop 1
             return $ "syntax error: " <> maybe "unknown" TE.decodeUtf8 err
+
+-- | Convert a Lua value at the given stack index to a Text representation.
+--   Tables are recursively serialized to JSON format.
+--   Depth limit prevents infinite recursion on circular references.
+luaValueToText ∷ Int → Lua.StackIndex → Lua.LuaE Lua.Exception Text
+luaValueToText depth idx
+    | depth > 8 = return "\"<max depth>\""
+    | otherwise = do
+        ty ← Lua.ltype idx
+        case ty of
+            Lua.TypeNil     → return "null"
+            Lua.TypeBoolean → do
+                b ← Lua.toboolean idx
+                return $ if b then "true" else "false"
+            Lua.TypeNumber  → do
+                Lua.pushvalue idx
+                mStr ← Lua.tostring (-1)
+                Lua.pop 1
+                return $ maybe "0" TE.decodeUtf8 mStr
+            Lua.TypeString  → do
+                mStr ← Lua.tostring idx
+                return $ case mStr of
+                    Just bs → "\"" <> escapeJsonText (TE.decodeUtf8 bs) <> "\""
+                    Nothing → "\"\""
+            Lua.TypeTable   → luaTableToJson depth idx
+            _               → do
+                -- Function, userdata, thread, etc.
+                Lua.pushvalue idx
+                mStr ← Lua.tostring (-1)
+                Lua.pop 1
+                return $ case mStr of
+                    Just bs → TE.decodeUtf8 bs
+                    Nothing → "\"<" <> T.pack (show ty) <> ">\""
+
+-- | Serialize a Lua table to JSON. Detects arrays vs objects:
+--   if all keys are consecutive integers starting at 1, emit [...],
+--   otherwise emit {...}.
+luaTableToJson ∷ Int → Lua.StackIndex → Lua.LuaE Lua.Exception Text
+luaTableToJson depth idx = do
+    -- First pass: check if it's an array (consecutive integer keys 1..n)
+    let absIdx = if idx < 0 then idx - 1 else idx
+    Lua.pushnil  -- first key
+    pairs ← collectTablePairs (depth + 1) absIdx []
+    let isArray = not (null pairs)
+                ∧ all (\(k, _) → case T.decimal k of
+                        Right (n, rest) → T.null rest ∧ n > (0 ∷ Int)
+                        _ → False) pairs
+    if isArray
+        then do
+            -- Sort by integer key and emit as array
+            let readInt t = case T.decimal t of
+                    Right (n, _) → n ∷ Int
+                    _            → 0
+                sorted = sortBy (\(a,_) (b,_) → compare (readInt a) (readInt b)) pairs
+            return $ "[" <> T.intercalate "," (map snd sorted) <> "]"
+        else do
+            let entries = map (\(k, v) → "\"" <> escapeJsonText k <> "\":" <> v) pairs
+            return $ "{" <> T.intercalate "," entries <> "}"
+
+-- | Collect all key-value pairs from a table. Leaves stack clean.
+collectTablePairs ∷ Int → Lua.StackIndex → [(Text, Text)]
+                  → Lua.LuaE Lua.Exception [(Text, Text)]
+collectTablePairs depth tableIdx acc = do
+    hasNext ← Lua.next tableIdx
+    if not hasNext
+        then return (reverse acc)
+        else do
+            -- Stack: ... table ... key value
+            valText ← luaValueToText depth (-1)
+            -- Get key as text (careful: tostring on key would break next())
+            keyText ← do
+                keyTy ← Lua.ltype (-2)
+                case keyTy of
+                    Lua.TypeNumber → do
+                        Lua.pushvalue (-2)
+                        mStr ← Lua.tostring (-1)
+                        Lua.pop 1
+                        return $ maybe "0" TE.decodeUtf8 mStr
+                    Lua.TypeString → do
+                        mStr ← Lua.tostring (-2)
+                        return $ maybe "" TE.decodeUtf8 mStr
+                    _ → return "<key>"
+            Lua.pop 1  -- pop value, keep key for next iteration
+            collectTablePairs depth tableIdx ((keyText, valText) : acc)
+
+-- | Escape special characters for JSON string values.
+escapeJsonText ∷ Text → Text
+escapeJsonText = T.concatMap $ \c → case c of
+    '"'  → "\\\""
+    '\\' → "\\\\"
+    '\n' → "\\n"
+    '\r' → "\\r"
+    '\t' → "\\t"
+    _    → T.singleton c
 
 -- | Process messages from anywhere to lua
 processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()

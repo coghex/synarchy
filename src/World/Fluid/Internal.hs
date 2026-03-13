@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax  #-}
 module World.Fluid.Internal
     ( FluidMap
     , emptyFluidMap
@@ -18,7 +18,7 @@ import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
 import Control.Monad (forM_, when)
 import Control.Monad.ST (ST, runST)
-import Data.STRef (newSTRef, readSTRef, writeSTRef)
+import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
 import World.Base
 import World.Constants (seaLevel)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
@@ -182,15 +182,22 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
                 val ← MV.read mv idx
                 case val of
                     Just fc
-                      | fcType fc ≢ Ocean ∧ fcType fc ≢ Lava → do
+                      -- Skip River: river water surfaces are carefully
+                      -- computed per-segment with depth capping. Raising
+                      -- them here undoes the depth clamp and creates
+                      -- water-on-hills artifacts.
+                      | fcType fc ≢ Ocean ∧ fcType fc ≢ Lava
+                        ∧ fcType fc ≢ River → do
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
                             terrZ = surfaceMap VU.! idx
                         maxNbr ← maxNeighborWaterSurface mv lx ly
                         case maxNbr of
                             Just nMax | nMax > fcSurface fc + 1 → do
-                                -- Don't raise beyond terrain + 5 (depth cap)
-                                let newSurf = min (nMax - 1) (terrZ + 5)
+                                -- Don't raise beyond terrain + 3 (matches
+                                -- clampRiverDepth to prevent re-introducing
+                                -- depth violations after capping).
+                                let newSurf = min (nMax - 1) (terrZ + 3)
                                 when (newSurf > fcSurface fc) $ do
                                     MV.write mv idx (Just (fc { fcSurface = newSurf }))
                                     writeSTRef cRef True
@@ -202,6 +209,45 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
             didChange ← crossFluidPass
             when didChange $ crossLoop (n - 1)
     crossLoop (10 ∷ Int)
+
+    -- Phase 4: River water smoothing.
+    -- River tiles can have large water surface jumps where two
+    -- different river segments at different elevations meet.
+    -- Lower river water toward the minimum same-type neighbor,
+    -- floored at terrain+1.  Only lower — never raise — to
+    -- preserve the natural downhill gradient.
+    -- Also remove river tiles that create unresolvable cliffs
+    -- (terrain is too high to achieve a smooth surface).
+    let riverSmoothPass = do
+            rRef ← newSTRef False
+            forM_ [0 .. area - 1] $ \idx → do
+                val ← MV.read mv idx
+                case val of
+                    Just fc | fcType fc ≡ River → do
+                        let lx = idx `mod` chunkSize
+                            ly = idx `div` chunkSize
+                            surfZ = surfaceMap VU.! idx
+                        minNS ← minNeighborSurfaceOfType mv River lx ly
+                        case minNS of
+                            Just nMin → do
+                                let target = max (nMin + 1) (surfZ + 1)
+                                if fcSurface fc > target
+                                    then do
+                                        MV.write mv idx (Just (fc { fcSurface = target }))
+                                        writeSTRef rRef True
+                                    -- Unresolvable cliff: can't get within 2 of neighbor
+                                    else when (fcSurface fc > nMin + 2
+                                              ∧ surfZ + 1 > nMin + 2) $ do
+                                        MV.write mv idx Nothing
+                                        writeSTRef rRef True
+                            _ → pure ()
+                    _ → pure ()
+            readSTRef rRef
+        riverSmoothLoop 0 = pure ()
+        riverSmoothLoop n = do
+            didChange ← riverSmoothPass
+            when didChange $ riverSmoothLoop (n - 1)
+    riverSmoothLoop (10 ∷ Int)
 
     V.freeze mv
 
@@ -275,23 +321,29 @@ containedFill mv lx ly surfZ = do
                     then Just (FluidCell Lake minSurf)
                     else Nothing
 
--- | Fill coastal gaps: below-sea-level tiles without fluid that are
---   adjacent to any fluid (river, ocean, lake) should get ocean water.
+-- | Fill coastal gaps: tiles without fluid that are at or below sea level
+--   and adjacent to any fluid (river, ocean, lake) should get ocean water.
 --   River carving can create below-sea-level terrain that neither the
 --   ocean BFS (which uses pre-carving elevation) nor the river fill
 --   (which stops where terrain ≥ water surface) covers.
+--
+--   Phase 1: fills tiles at or below seaLevel adjacent to any fluid.
+--   Phase 2: fills tiles at seaLevel+1 adjacent to river water whose
+--   surface is above the tile. This prevents "dry gaps" between the
+--   river channel and surrounding terrain at river mouths.
 fillCoastalGaps ∷ VU.Vector Int → FluidMap → FluidMap
 fillCoastalGaps surfaceMap fluidMap = runST $ do
     mv ← V.thaw fluidMap
     let area = chunkSize * chunkSize
 
+        -- Phase 1: fill at-or-below-sea-level tiles adjacent to any fluid
         gapPass = do
             changed ← newSTRef False
             forM_ [0 .. area - 1] $ \idx → do
                 val ← MV.read mv idx
                 when (isNothing val) $ do
                     let surfZ = surfaceMap VU.! idx
-                    when (surfZ < seaLevel ∧ surfZ > minBound) $ do
+                    when (surfZ ≤ seaLevel ∧ surfZ > minBound) $ do
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
                         hasAdj ← anyAdjacentFluid mv lx ly
@@ -300,12 +352,49 @@ fillCoastalGaps surfaceMap fluidMap = runST $ do
                             writeSTRef changed True
             readSTRef changed
 
-        loop 0 = pure ()
-        loop n = do
+        loop1 0 = pure ()
+        loop1 n = do
             didChange ← gapPass
-            when didChange $ loop (n - 1)
+            when didChange $ loop1 (n - 1)
 
-    loop (10 ∷ Int)
+    loop1 (10 ∷ Int)
+
+    -- Phase 2: fill tiles just above sea level that are adjacent to
+    -- river water with surface above their terrain. These are the
+    -- "black hole" tiles at river mouths — carved coastline that is
+    -- between the river channel and the ocean. Without this, they
+    -- render as dry terrain patches surrounded by water.
+    let riverGapPass = do
+            changed ← newSTRef False
+            forM_ [0 .. area - 1] $ \idx → do
+                val ← MV.read mv idx
+                when (isNothing val) $ do
+                    let surfZ = surfaceMap VU.! idx
+                    -- Only fill tiles slightly above sea level (1-2 above)
+                    -- that are adjacent to river/ocean water high enough to
+                    -- cover them.
+                    when (surfZ > seaLevel ∧ surfZ ≤ seaLevel + 2
+                          ∧ surfZ > minBound) $ do
+                        let lx = idx `mod` chunkSize
+                            ly = idx `div` chunkSize
+                        adjWater ← maxAdjacentWaterSurface mv lx ly
+                        case adjWater of
+                            Just ws | ws > surfZ → do
+                                -- Cap water depth to prevent deep water on
+                                -- what is essentially flat terrain near the coast
+                                let cappedWs = min ws (surfZ + 3)
+                                MV.write mv idx (Just (FluidCell River cappedWs))
+                                writeSTRef changed True
+                            _ → pure ()
+            readSTRef changed
+
+        loop2 0 = pure ()
+        loop2 n = do
+            didChange ← riverGapPass
+            when didChange $ loop2 (n - 1)
+
+    loop2 (5 ∷ Int)
+
     V.freeze mv
 
 anyAdjacentFluid ∷ MV.MVector s (Maybe FluidCell) → Int → Int
@@ -319,3 +408,25 @@ anyAdjacentFluid mv lx ly = do
     e ← check (lx + 1) ly
     w ← check (lx - 1) ly
     pure (n ∨ s ∨ e ∨ w)
+
+-- | Get the maximum water surface among cardinal neighbors.
+--   Used by the river-gap filling phase to determine if adjacent
+--   water is high enough to cover this tile.
+maxAdjacentWaterSurface ∷ MV.MVector s (Maybe FluidCell) → Int → Int
+                        → ST s (Maybe Int)
+maxAdjacentWaterSurface mv lx ly = do
+    let check x y
+          | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = pure Nothing
+          | otherwise = do
+              val ← MV.read mv (y * chunkSize + x)
+              pure $ case val of
+                  Just fc → Just (fcSurface fc)
+                  Nothing → Nothing
+    vN ← check lx (ly - 1)
+    vS ← check lx (ly + 1)
+    vE ← check (lx + 1) ly
+    vW ← check (lx - 1) ly
+    let surfaces = catMaybes [vN, vS, vE, vW]
+    pure $ case surfaces of
+        []     → Nothing
+        (s:ss) → Just (foldl' max s ss)

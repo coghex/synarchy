@@ -13,6 +13,7 @@ import qualified Data.Vector as V
 import World.Base (GeoCoord(..))
 import World.Geology.Hash (wrappedDeltaUV)
 import World.Material (matSandstone, matShale, unMaterialId)
+import World.Constants (seaLevel)
 import World.Hydrology.Types
 import World.Geology.Types
 import World.Geology.Hash
@@ -140,7 +141,10 @@ carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
            startE = fromIntegral (rsStartElev seg) ∷ Float
            endE   = fromIntegral (rsEndElev seg) ∷ Float
            interpElev = startE + tClamped * (endE - startE)
-           channelFloor = floor (interpElev - fromIntegral depthI) ∷ Int
+           -- Clamp channel floor to seaLevel - 1 so rivers don't
+           -- carve deep canyons below the ocean surface at their mouths.
+           rawFloor = floor (interpElev - fromIntegral depthI) ∷ Int
+           channelFloor = max (seaLevel - 1) rawFloor
 
        in if alongT < -0.05 ∨ alongT > 1.05 ∨ effectivePerpDist > valleyHalfW
           then noModification
@@ -174,7 +178,8 @@ carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
                                          * (1.0 - smoothT)) ∷ Int
                    -- Interpolated reference surface (rim elevation)
                    refSurface = floor interpElev ∷ Int
-                   targetElev = refSurface - wallCarveDepth
+                   rawTarget = refSurface - wallCarveDepth
+                   targetElev = max (seaLevel - 1) rawTarget
                    carve = baseElev - targetElev
                    wallAlluvium = max 1 (wallCarveDepth * 3 `div` 10)
                in if carve ≤ 0 ∨ wallCarveDepth ≤ 0
