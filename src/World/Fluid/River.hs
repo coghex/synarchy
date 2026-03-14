@@ -701,6 +701,25 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
                  startW = fromIntegral (rsWaterStart seg) ∷ Float
                  endW   = fromIntegral (rsWaterEnd seg) ∷ Float
                  axialWaterSurface = floor (startW + tClamped * (endW - startW)) ∷ Int
+                 -- Coastal flattening: when a segment ends at or below sea
+                 -- level, the downstream portion should flatten to create a
+                 -- smooth estuary instead of a steep visible terrace. Blend
+                 -- the interpolated surface toward seaLevel+1 as we approach
+                 -- the mouth.
+                 coastalFlat = seaLevel + 1
+                 flattenedWater
+                   | rsEndElev seg ≤ seaLevel ∧ axialWaterSurface > coastalFlat =
+                       -- Cap the effective water drop to 3 levels for
+                       -- coastal segments. This creates a gentle estuary
+                       -- slope instead of a steep 15-level terrace. The
+                       -- interpolation range is compressed from
+                       -- (waterStart..waterEnd) to (coastalFlat+3..coastalFlat).
+                       let maxDrop = 3 ∷ Int
+                           cappedStart = coastalFlat + maxDrop
+                           cappedSurf = fromIntegral cappedStart
+                                      - tClamped * fromIntegral maxDrop
+                       in max coastalFlat (floor cappedSurf ∷ Int)
+                   | otherwise = axialWaterSurface
                  -- Reference terrain at this axial position.
                  -- Tiles above this are on the valley wall, not in the channel.
                  startE = fromIntegral (rsStartElev seg) ∷ Float
@@ -734,7 +753,7 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
                  -- on valley slopes sits close to the terrain surface.
                  -- Use max (surfZ+1) to ensure at least 1 tile of water
                  -- when the tile is in the carved channel (below refElev).
-                 waterSurface = min axialWaterSurface (surfZ + maxFillDepth)
+                 waterSurface = min flattenedWater (surfZ + maxFillDepth)
                  -- Force water placement on tiles near the channel center
                  -- (perpDist within channelHalfW + 1) AND below reference.
                  -- The +1 margin accounts for coordinate rounding between
@@ -753,7 +772,7 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
                  -- For valley wall tiles: only place water if waterSurface
                  -- naturally exceeds terrain.
                  effectiveWater = if inChannelProper ∧ waterSurface ≤ surfZ
-                                      ∧ axialWaterSurface ≥ surfZ
+                                      ∧ flattenedWater ≥ surfZ
                                   then surfZ + 1
                                   else waterSurface
              in if effectiveWater ≤ surfZ

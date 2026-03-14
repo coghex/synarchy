@@ -47,6 +47,7 @@ initializeEngine = do
   eventQueue ← Q.newQueue
   inputQueue ← Q.newQueue
   worldQueue ← Q.newQueue
+  simQueue ← Q.newQueue
   luaToEngineQueue ← Q.newQueue
   engineToLuaQueue ← Q.newQueue
   
@@ -160,6 +161,7 @@ initializeEngine = do
         , unitManagerRef     = unitManagerRef
         , unitQueue          = unitQueue
         , worldGenConfigRef  = worldGenConfigRef
+        , simQueue          = simQueue
         }
   
   envVar   ← atomically $ newVar env

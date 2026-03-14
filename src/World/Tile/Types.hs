@@ -7,6 +7,7 @@ module World.Tile.Types
     , insertChunk
     , chunkCount
     , evictDistantChunks
+    , evictDistantChunksWithReport
     ) where
 
 import UPrelude
@@ -71,3 +72,30 @@ evictDistantChunks (ChunkCoord camCX camCY) keepRadius wtd =
              kept = take roomLeft candidateList
              keptMap = HM.fromList [(lcCoord lc, lc) | lc ← kept]
          in wtd { wtdChunks = HM.union keep keptMap }
+
+-- | Like evictDistantChunks but also returns the coords of evicted chunks.
+evictDistantChunksWithReport ∷ ChunkCoord → Int → WorldTileData
+                             → (WorldTileData, [ChunkCoord])
+evictDistantChunksWithReport cam@(ChunkCoord camCX camCY) keepRadius wtd =
+    let chunks = wtdChunks wtd
+        maxC   = wtdMaxChunks wtd
+    in if HM.size chunks ≤ maxC
+       then (wtd, [])
+       else
+         let keep = HM.filterWithKey (\coord lc →
+                 let ChunkCoord cx cy = coord
+                     dx = abs (cx - camCX)
+                     dy = abs (cy - camCY)
+                 in lcModified lc ∨ (dx ≤ keepRadius ∧ dy ≤ keepRadius)
+                 ) chunks
+             candidates = HM.filterWithKey (\coord _ → not (HM.member coord keep)) chunks
+             candidateList = sortOn (\lc →
+                 let ChunkCoord cx cy = lcCoord lc
+                 in negate (abs (cx - camCX) + abs (cy - camCY))
+                 ) (HM.elems candidates)
+             roomLeft = max 0 (maxC - HM.size keep)
+             kept = take roomLeft candidateList
+             evicted = drop roomLeft candidateList
+             keptMap = HM.fromList [(lcCoord lc, lc) | lc ← kept]
+             evictedCoords = map lcCoord evicted
+         in (wtd { wtdChunks = HM.union keep keptMap }, evictedCoords)

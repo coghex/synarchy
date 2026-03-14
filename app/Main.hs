@@ -26,6 +26,7 @@ import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
 import Engine.Scripting.Lua.Backend (startLuaThread)
 import World.Thread (startWorldThread)
 import Unit.Thread (startUnitThread)
+import Sim.Thread (startSimThread)
 
 main ∷ IO ()
 main = do
@@ -72,6 +73,7 @@ runGraphical mPort = do
   luaThreadState   ← startLuaThread env'
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
+  simThreadState   ← startSimThread env'
 
   -- Load video configuration
   videoConfig ← readIORef (videoConfigRef env')
@@ -96,6 +98,7 @@ runGraphical mPort = do
         mainLoop
 
         -- Shutdown
+        liftIO $ shutdownThread simThreadState
         shutdownEngine window unitThreadState worldThreadState
                               inputThreadState luaThreadState
         logDebugM CatSystem "Engine shutdown complete."
@@ -105,6 +108,7 @@ runGraphical mPort = do
   case result of
     Left err → do
         putStrLn $ displayException err
+        shutdownThread simThreadState
         shutdownThread inputThreadState
         shutdownThread luaThreadState
         shutdownThread worldThreadState
@@ -126,6 +130,7 @@ runHeadless mPort = do
   luaThreadState   ← startLuaThread env'
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
+  simThreadState   ← startSimThread env'
 
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
@@ -133,6 +138,7 @@ runHeadless mPort = do
         headlessLoop
         -- Shutdown threads
         logInfoM CatSystem "Headless engine shutting down..."
+        liftIO $ shutdownThread simThreadState
         liftIO $ shutdownThread unitThreadState
         liftIO $ shutdownThread worldThreadState
         liftIO $ shutdownThread luaThreadState
@@ -146,6 +152,7 @@ runHeadless mPort = do
   case result of
     Left err → do
         putStrLn $ displayException err
+        shutdownThread simThreadState
         shutdownThread luaThreadState
         shutdownThread worldThreadState
     Right _ → pure ()

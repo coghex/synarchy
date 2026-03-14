@@ -366,6 +366,10 @@ library
                      Unit.Thread
                      Unit.Thread.Command
                      Unit.Thread.Movement
+                     Sim.Thread
+                     Sim.Command.Types
+                     Sim.State.Types
+                     Sim.Fluid.Tick
                      World.Base
                      World.Constants
                      World.Command.Types

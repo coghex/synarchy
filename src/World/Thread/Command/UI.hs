@@ -17,6 +17,8 @@ import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
+import qualified Engine.Core.Queue as Q
+import Sim.Command.Types (SimCommand(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
 import World.Constants (seaLevel)
@@ -45,15 +47,24 @@ handleWorldShowCommand env logger pageId = do
         else (mgr { wmVisible = pageId : wmVisible mgr }, ())
     
     mgr ← readIORef (worldManagerRef env)
-    logDebug logger CatWorld $ 
+    logDebug logger CatWorld $
         "Visible worlds after show: " <> T.pack (show $ length $ wmVisible mgr)
-        
+
+    -- Activate world in sim thread
+    case lookup pageId (wmWorlds mgr) of
+        Just worldState →
+            Q.writeQueue (simQueue env) (SimActivateWorld (wsTilesRef worldState))
+        Nothing → pure ()
+
 handleWorldHideCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldHideCommand env logger pageId = do
     logDebug logger CatWorld $ "Hiding world: " <> unWorldPageId pageId
-    
+
     atomicModifyIORef' (worldManagerRef env) $ \mgr →
         (mgr { wmVisible = filter (/= pageId) (wmVisible mgr) }, ())
+
+    -- Deactivate sim thread
+    Q.writeQueue (simQueue env) SimDeactivateWorld
 
 handleWorldSetMapModeCommand ∷ EngineEnv → LoggerState → WorldPageId
     → ZoomMapMode → IO ()

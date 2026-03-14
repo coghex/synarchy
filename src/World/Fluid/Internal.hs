@@ -116,12 +116,14 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
             -- Phase 1: Level — lower water to min neighbor surface.
             -- Water seeks its lowest level. If a neighbor's water is
             -- lower, our water should flow there (lowering ours).
-            -- Skip Ocean, Lava, and River:
+            -- Skip Ocean, Lava, River, and Lake:
             --   Ocean/Lava: levels are fixed by definition.
             --   River: water surface is interpolated along segments and
             --          intentionally varies. Equilibration would flatten
             --          the gradient and cause chunk-boundary artifacts.
-            -- Only level Lake fluid.
+            --   Lake: surfaces are uniform, set during initial fill in
+            --         Lake.hs. Equilibration would create terracing
+            --         artifacts at chunk boundaries.
             forM_ [0 .. area - 1] $ \idx → do
                 val ← MV.read mv idx
                 case val of
@@ -129,6 +131,7 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
                       | fcType fc ≡ Ocean → pure ()
                       | fcType fc ≡ Lava  → pure ()
                       | fcType fc ≡ River → pure ()
+                      | fcType fc ≡ Lake  → pure ()
                       | otherwise → do
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
@@ -187,7 +190,7 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
                       -- them here undoes the depth clamp and creates
                       -- water-on-hills artifacts.
                       | fcType fc ≢ Ocean ∧ fcType fc ≢ Lava
-                        ∧ fcType fc ≢ River → do
+                        ∧ fcType fc ≢ River ∧ fcType fc ≢ Lake → do
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
                             terrZ = surfaceMap VU.! idx
@@ -394,6 +397,18 @@ fillCoastalGaps surfaceMap fluidMap = runST $ do
             when didChange $ loop2 (n - 1)
 
     loop2 (5 ∷ Int)
+
+    -- Phase 3: Convert river tiles at sea level to ocean.
+    -- River water at seaLevel is effectively part of the ocean —
+    -- keeping it as River causes visual inconsistency at the coast.
+    forM_ [0 .. area - 1] $ \idx → do
+        val ← MV.read mv idx
+        case val of
+            Just fc | fcType fc ≡ River ∧ fcSurface fc ≤ seaLevel → do
+                let surfZ = surfaceMap VU.! idx
+                when (surfZ ≤ seaLevel) $
+                    MV.write mv idx (Just (FluidCell Ocean seaLevel))
+            _ → pure ()
 
     V.freeze mv
 

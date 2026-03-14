@@ -40,6 +40,7 @@ import Unit.Command.Types (UnitCommand)
 import World.Types (WorldCommand, WorldManager, FloraCatalog)
 import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
+import Sim.Command.Types (SimCommand)
 
 -- | Engine environment (read-only)
 data EngineEnv = EngineEnv
@@ -83,6 +84,7 @@ data EngineEnv = EngineEnv
   , unitManagerRef      ∷ IORef UnitManager
   , unitQueue           ∷ Q.Queue UnitCommand
   , worldGenConfigRef   ∷ IORef WorldGenConfig
+  , simQueue           ∷ Q.Queue SimCommand
   } deriving (Eq)
 
 -- | Engine state (mutable)

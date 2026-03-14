@@ -14,6 +14,7 @@ import Control.Parallel.Strategies (parMap, rdeepseq)
 import Control.DeepSeq (NFData)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
+import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
 import World.Generate (generateChunk, cameraChunkCoord)
@@ -24,6 +25,7 @@ import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes)
 import World.Fluids (sealCrossChunkRivers)
 import World.Thread.Helpers (unWorldPageId)
+import Sim.Command.Types (SimCommand(..))
 
 -- | Maximum chunks to generate per world loop iteration.
 maxChunksPerTick ∷ Int
@@ -91,14 +93,24 @@ updateChunkLoading env logger = do
                                                 , lcFlora      = flora
                                                 , lcModified   = False
                                                 }) batch
-                                atomicModifyIORef' (wsTilesRef worldState) $ \td →
+                                evicted ← atomicModifyIORef' (wsTilesRef worldState) $ \td →
                                     let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
-                                        td'' = evictDistantChunks camChunk chunkLoadRadius td'
+                                        (td'', evictedCoords) = evictDistantChunksWithReport
+                                                                  camChunk chunkLoadRadius td'
                                         coords = map lcCoord newChunks
                                         td''' = recomputeNeighborSlopes seed
                                                   registry coords td''
                                         td'''' = sealCrossChunkRivers coords td'''
-                                    in (td'''', ())
+                                    in (td'''', evictedCoords)
+                                -- Notify sim thread of loaded chunks
+                                forM_ newChunks $ \lc →
+                                    Q.writeQueue (simQueue env) $
+                                        SimChunkLoaded (lcCoord lc)
+                                            (lcFluidMap lc)
+                                            (lcTerrainSurfaceMap lc)
+                                -- Notify sim thread of evicted chunks
+                                forM_ evicted $ \cc →
+                                    Q.writeQueue (simQueue env) (SimChunkUnloaded cc)
                                 writeIORef (wsQuadCacheRef worldState) Nothing
                                 writeIORef (wsZoomQuadCacheRef worldState) Nothing
                                 writeIORef (wsBgQuadCacheRef worldState) Nothing
@@ -149,6 +161,13 @@ drainInitQueues env logger = do
                                          coords td'
                                 td''' = sealCrossChunkRivers coords td''
                             in (td''', ())
+
+                        -- Notify sim thread of loaded chunks
+                        forM_ newChunks $ \lc →
+                            Q.writeQueue (simQueue env) $
+                                SimChunkLoaded (lcCoord lc)
+                                    (lcFluidMap lc)
+                                    (lcTerrainSurfaceMap lc)
 
                         -- Invalidate all render caches so new chunks appear immediately
                         writeIORef (wsQuadCacheRef worldState) Nothing
