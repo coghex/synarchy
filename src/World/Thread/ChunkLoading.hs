@@ -16,7 +16,11 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Camera (Camera2D(..))
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
+import qualified Data.HashSet as HS
 import World.Types
+import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
@@ -24,6 +28,7 @@ import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
 import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes)
 import World.Fluids (sealCrossChunkRivers)
+import World.SideFace.Compute (computeChunkSideDecos)
 import World.Thread.Helpers (unWorldPageId)
 import Sim.Command.Types (SimCommand(..))
 
@@ -91,6 +96,7 @@ updateChunkLoading env logger = do
                                                 , lcTerrainSurfaceMap = tMap
                                                 , lcFluidMap   = fluidMap
                                                 , lcFlora      = flora
+                                                , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
                                                 , lcModified   = False
                                                 }) batch
                                 evicted ← atomicModifyIORef' (wsTilesRef worldState) $ \td →
@@ -101,7 +107,9 @@ updateChunkLoading env logger = do
                                         td''' = recomputeNeighborSlopes seed
                                                   registry coords td''
                                         td'''' = sealCrossChunkRivers coords td'''
-                                    in (td'''', evictedCoords)
+                                        td''''' = stripCrossChunkLakeCliffs coords td''''
+                                        td'''''' = computeSideDecos seed coords td'''''
+                                    in (td'''''', evictedCoords)
                                 -- Notify sim thread of loaded chunks
                                 forM_ newChunks $ \lc →
                                     Q.writeQueue (simQueue env) $
@@ -148,6 +156,7 @@ drainInitQueues env logger = do
                                     , lcTerrainSurfaceMap = tMap
                                     , lcFluidMap   = fluidMap
                                     , lcFlora      = flora
+                                    , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
                                     , lcModified   = False
                                     }) batch
 
@@ -160,7 +169,9 @@ drainInitQueues env logger = do
                                 td'' = recomputeNeighborSlopes seed registry
                                          coords td'
                                 td''' = sealCrossChunkRivers coords td''
-                            in (td''', ())
+                                td'''' = stripCrossChunkLakeCliffs coords td'''
+                                td''''' = computeSideDecos seed coords td''''
+                            in (td''''', ())
 
                         -- Notify sim thread of loaded chunks
                         forM_ newChunks $ \lc →
@@ -187,3 +198,107 @@ drainInitQueues env logger = do
                             logDebug logger CatWorld $
                                 "Initial chunk loading complete for: "
                                 <> unWorldPageId pageId
+
+-- | Compute side-face decorations for newly loaded chunks.
+computeSideDecos ∷ Word64 → [ChunkCoord] → WorldTileData → WorldTileData
+computeSideDecos seed newCoords wtd =
+    let chunks = wtdChunks wtd
+        neighborLookup coord = case HM.lookup coord chunks of
+            Just lc → Just (lcTerrainSurfaceMap lc)
+            Nothing → Nothing
+        updatedChunks = foldl' (\acc coord →
+            case HM.lookup coord acc of
+                Just lc →
+                    let decos = computeChunkSideDecos seed coord
+                            (lcTerrainSurfaceMap lc) (lcFluidMap lc) neighborLookup
+                    in HM.insert coord (lc { lcSideDeco = decos }) acc
+                Nothing → acc
+            ) chunks newCoords
+    in wtd { wtdChunks = updatedChunks }
+
+-- | Strip lake tiles that are adjacent to river tiles with a much lower
+--   surface, across chunk boundaries. Iterates to peel back multiple layers.
+stripCrossChunkLakeCliffs ∷ [ChunkCoord] → WorldTileData → WorldTileData
+stripCrossChunkLakeCliffs newCoords wtd =
+    let -- Affected chunks: new chunks + their neighbors
+        affected = HS.toList $ HS.fromList $
+            newCoords <>
+            [ ChunkCoord (cx + dx) (cy + dy)
+            | ChunkCoord cx cy ← newCoords
+            , dx ← [-1, 0, 1]
+            , dy ← [-1, 0, 1]
+            , dx ≠ 0 ∨ dy ≠ 0
+            , HM.member (ChunkCoord (cx+dx) (cy+dy)) (wtdChunks wtd)
+            ]
+    in go (10 ∷ Int) wtd affected
+  where
+    go 0 w _ = w
+    go n w coords =
+        let (w', anyChanged) = foldl' (\(acc, changed) cc →
+                case HM.lookup cc (wtdChunks acc) of
+                    Nothing → (acc, changed)
+                    Just lc →
+                        let (newFluid, didChange) = stripChunkLakeEdges acc cc lc
+                        in if didChange
+                           then let lc' = lc { lcFluidMap = newFluid
+                                             , lcSurfaceMap = recomputeSurfMap lc newFluid }
+                                in (acc { wtdChunks = HM.insert cc lc' (wtdChunks acc) }, True)
+                           else (acc, changed)
+                ) (w, False) coords
+        in if anyChanged then go (n - 1) w' coords else w'
+
+    stripChunkLakeEdges ∷ WorldTileData → ChunkCoord → LoadedChunk
+                        → (V.Vector (Maybe FluidCell), Bool)
+    stripChunkLakeEdges wtd' coord lc =
+        let fluidMap = lcFluidMap lc
+            ChunkCoord cx cy = coord
+            changed = V.ifoldl' (\acc idx mfc →
+                case mfc of
+                    Just fc | fcType fc ≡ Lake →
+                        let lx = idx `mod` chunkSize
+                            ly = idx `div` chunkSize
+                            lakeSurf = fcSurface fc
+                            -- Check cardinal neighbors including cross-chunk
+                            hasCliff = any (\(nx, ny) →
+                                let (cc', nlx, nly) = resolveNeighbor cx cy lx ly nx ny
+                                in case HM.lookup cc' (wtdChunks wtd') of
+                                    Nothing → False
+                                    Just nlc →
+                                        let nIdx = nly * chunkSize + nlx
+                                            nTerrZ = lcTerrainSurfaceMap nlc VU.! nIdx
+                                        in case lcFluidMap nlc V.! nIdx of
+                                            -- Adjacent to river with much lower surface
+                                            Just nfc | fcType nfc ≡ River →
+                                                lakeSurf - fcSurface nfc > 2
+                                            -- Adjacent to dry tile with terrain well
+                                            -- below lake surface (stripped or river valley)
+                                            Nothing →
+                                                lakeSurf - nTerrZ > 3
+                                            _ → False
+                                ) [(-1,0),(1,0),(0,-1),(0,1)]
+                        in if hasCliff then idx : acc else acc
+                    _ → acc
+                ) [] fluidMap
+        in if null changed
+           then (fluidMap, False)
+           else (V.imap (\idx v → if idx `elem` changed then Nothing else v) fluidMap, True)
+
+    resolveNeighbor ∷ Int → Int → Int → Int → Int → Int → (ChunkCoord, Int, Int)
+    resolveNeighbor cx cy lx ly dx dy =
+        let nlx = lx + dx
+            nly = ly + dy
+            (cx', nlx') = if nlx < 0 then (cx - 1, nlx + chunkSize)
+                          else if nlx ≥ chunkSize then (cx + 1, nlx - chunkSize)
+                          else (cx, nlx)
+            (cy', nly') = if nly < 0 then (cy - 1, nly + chunkSize)
+                          else if nly ≥ chunkSize then (cy + 1, nly - chunkSize)
+                          else (cy, nly)
+        in (ChunkCoord cx' cy', nlx', nly')
+
+    recomputeSurfMap ∷ LoadedChunk → V.Vector (Maybe FluidCell) → VU.Vector Int
+    recomputeSurfMap lc newFluid =
+        VU.imap (\idx terrZ →
+            case newFluid V.! idx of
+                Just fc → max terrZ (fcSurface fc)
+                Nothing → terrZ
+            ) (lcTerrainSurfaceMap lc)

@@ -22,6 +22,7 @@ import Engine.Core.Base
 import Engine.Core.Queue as Q
 import Engine.Core.Error.Exception
 import Engine.Input.Types
+import Data.IORef (newIORef)
 import qualified Control.Monad.Logger.CallStack as Logger
 
 -- | Initialize a minimal EngineState for testing
@@ -35,11 +36,13 @@ initTestState = do
     -- Create logging function
     logFunc ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
 
+    frameCounterRef ← newIORef (0 ∷ Word64)
     let env = EngineEnv
             { engineConfig = defaultEngineConfig
             , eventQueue = eventQ
             , inputQueue = inputQ
-            , logQueue = logQ }
+            , logQueue = logQ
+            , frameCounterRef = frameCounterRef }
     
     -- Return initial state
     pure (env, defaultEngineState logFunc)

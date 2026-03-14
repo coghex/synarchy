@@ -48,6 +48,8 @@ computeChunkRivers rivers worldSize coord surfaceMap =
         smoothRiverSurface mv surfaceMap
         -- Pass 6: remove tiles with unresolvable cliffs.
         removeUnresolvableCliffs mv surfaceMap
+        -- Pass 6b: fill holes created by cliff removal.
+        fillRiverHoles mv surfaceMap
         -- Pass 7: seal exposed river boundaries.
         sealRiverBoundaries mv surfaceMap
         -- Pass 8: re-smooth after sealing.
@@ -67,6 +69,19 @@ computeChunkRivers rivers worldSize coord surfaceMap =
         -- Note: only remove truly isolated interior tiles.
         -- Edge tiles and tiles connected to edges are preserved.
         removeDisconnectedWater mv surfaceMap
+        -- Pass 13: fill any single-tile holes created by the
+        -- disconnected-water removal. Iterate because each fill pass
+        -- may expose new tiles that now have 3+ river neighbors.
+        fillRiverHoles mv surfaceMap
+        fillRiverHoles mv surfaceMap
+        fillRiverHoles mv surfaceMap
+        -- Pass 14: final smooth after hole fills.
+        smoothRiverSurface mv surfaceMap
+        -- Pass 15: raise low tiles to match terrain-limited neighbors.
+        -- When a river tile is at terrain+1 and its neighbor is 2+
+        -- levels lower, raise the neighbor toward this tile to close
+        -- the gap. Iterates to propagate raises along the river.
+        raiseToMatchTerrain mv surfaceMap
         pure ()
 
 -- | Extend river water one tile into banks. For each empty tile
@@ -186,16 +201,25 @@ fillRiverHoles mv surfaceMap = do
             nCount ← countRiverNeighbors mv lx ly
             when (nCount ≥ 3) $ do
                 maxSurf ← maxRiverNeighborSurface mv lx ly
-                case maxSurf of
-                    Nothing → pure ()
-                    Just nMax →
-                        -- Fill if the max neighbor water covers this tile.
-                        -- Cap fill depth at terrain+3 to prevent deep water
-                        -- on terrain bumps.
-                        when (surfZ < nMax
-                              ∧ nMax - surfZ ≤ 5 ∧ nMax > seaLevel) $ do
-                            let fillZ = min nMax (surfZ + 3)
+                minSurf ← minRiverNeighborSurface mv lx ly
+                case (maxSurf, minSurf) of
+                    (Just nMax, Just nMin) → do
+                        -- Standard fill: terrain at or below water surface,
+                        -- cap fill depth at terrain+3.
+                        let standard = surfZ ≤ nMax
+                                     ∧ nMax - surfZ ≤ 5 ∧ nMax > seaLevel
+                        -- Uniform-surface fill: all neighbors at the same
+                        -- surface but terrain is above water. Place water at
+                        -- the neighbor surface to maintain fluid continuity.
+                        -- The water sits below terrain and is invisible, but
+                        -- prevents gaps in the fluid map.
+                            uniform = nMin ≡ nMax ∧ nCount ≥ 3
+                                    ∧ surfZ ≤ nMax + 2 ∧ nMax > seaLevel
+                        when (standard ∨ uniform) $ do
+                            let fillZ | standard   = min nMax (surfZ + 3)
+                                      | otherwise  = nMax
                             MV.write mv idx (Just (FluidCell River fillZ))
+                    _ → pure ()
     -- Pass B: remove completely isolated river tiles (0 neighbors).
     -- Skip edge tiles — they may connect to the adjacent chunk's river.
     forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
@@ -295,6 +319,52 @@ smoothPass mv surfaceMap = do
     forM_ [0 .. area - 1] smoothOne
     -- Reverse pass — propagates changes in the other direction
     forM_ [area - 1, area - 2 .. 0] smoothOne
+    MV.read changedRef 0
+
+-- | Raise river tiles to reduce surface jumps with terrain-limited
+--   neighbors. When a neighbor's water is at terrain+1 (can't be
+--   lowered) and this tile's water is 2+ levels below, raise this
+--   tile's water toward the neighbor. This closes diff=2 gaps caused
+--   by terrain steps. Only raises; never lowers. Iterates to
+--   propagate raises along the river. Cap at terrain + 5 depth.
+raiseToMatchTerrain ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s ()
+raiseToMatchTerrain mv surfaceMap = go (5 ∷ Int)
+  where
+    go 0 = pure ()
+    go n = do
+        changed ← raisePass mv surfaceMap
+        when changed $ go (n - 1)
+
+raisePass ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s Bool
+raisePass mv surfaceMap = do
+    changedRef ← MV.replicate 1 False
+    let area = chunkSize * chunkSize
+        raiseOne idx = do
+            val ← MV.read mv idx
+            case val of
+                Just fc | fcType fc ≡ River → do
+                    let lx = idx `mod` chunkSize
+                        ly = idx `div` chunkSize
+                        myWater = fcSurface fc
+                        surfZ = surfaceMap VU.! idx
+                    -- Find max river neighbor water surface
+                    maxNeighbor ← maxRiverNeighborSurface mv lx ly
+                    case maxNeighbor of
+                        Nothing → pure ()
+                        Just nMax → do
+                            let diff = nMax - myWater
+                                depthCap = surfZ + 5
+                                -- Only raise if diff >= 2 (there's a visible jump)
+                                -- and the raise won't exceed depth cap
+                                target = min (nMax - 1) depthCap
+                            when (diff ≥ 2 ∧ target > myWater ∧ target ≤ depthCap) $ do
+                                MV.write mv idx (Just (fc { fcSurface = target }))
+                                MV.write changedRef 0 True
+                _ → pure ()
+    -- Forward pass
+    forM_ [0 .. area - 1] raiseOne
+    -- Reverse pass
+    forM_ [area - 1, area - 2 .. 0] raiseOne
     MV.read changedRef 0
 
 -- | Average terrain elevation of cardinal neighbors.
@@ -709,16 +779,18 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
                  coastalFlat = seaLevel + 1
                  flattenedWater
                    | rsEndElev seg ≤ seaLevel ∧ axialWaterSurface > coastalFlat =
-                       -- Cap the effective water drop to 3 levels for
-                       -- coastal segments. This creates a gentle estuary
-                       -- slope instead of a steep 15-level terrace. The
-                       -- interpolation range is compressed from
-                       -- (waterStart..waterEnd) to (coastalFlat+3..coastalFlat).
-                       let maxDrop = 3 ∷ Int
-                           cappedStart = coastalFlat + maxDrop
-                           cappedSurf = fromIntegral cappedStart
-                                      - tClamped * fromIntegral maxDrop
-                       in max coastalFlat (floor cappedSurf ∷ Int)
+                       -- Only flatten the downstream portion of the
+                       -- segment.  Keep the original interpolated surface
+                       -- for the upstream part and smoothly blend toward
+                       -- coastalFlat over the final 40%.
+                       let blendStart = 0.6 ∷ Float
+                           coastT = max 0.0 ((tClamped - blendStart)
+                                            / (1.0 - blendStart))
+                           smoothT = coastT * coastT * (3.0 - 2.0 * coastT)
+                           blended = fromIntegral axialWaterSurface
+                                   * (1.0 - smoothT)
+                                   + fromIntegral coastalFlat * smoothT
+                       in max coastalFlat (floor blended ∷ Int)
                    | otherwise = axialWaterSurface
                  -- Reference terrain at this axial position.
                  -- Tiles above this are on the valley wall, not in the channel.
@@ -851,7 +923,18 @@ sealCrossChunkRivers newCoords wtd =
         -- creates new water tiles that weren't present during per-chunk
         -- processing, leaving dry gaps between sealed tiles and the
         -- main river body.
-    in fillCrossChunkHoles allCoords matched
+        filled = fillCrossChunkHoles allCoords matched
+        -- Phase 6: raise low tiles in each chunk to reduce jumps.
+        raised = foldl' (\td coord →
+            case HM.lookup coord (wtdChunks td) of
+                Nothing → td
+                Just lc →
+                    let lc' = raiseInChunk lc
+                    in if lcFluidMap lc' ≡ lcFluidMap lc
+                       then td
+                       else td { wtdChunks = HM.insert coord lc' (wtdChunks td) }
+            ) filled allCoords
+    in raised
   where
     sealLoop 0 _  td = td
     sealLoop n cs td =
@@ -1107,14 +1190,22 @@ fillCrossChunkHoles coords wtd = foldl' fillChunkHoles wtd coords
                     [] → (lc, changed)
                     (_:_) →
                         let nMax = foldl' max minBound allNbrs
+                            nMin = foldl' min maxBound allNbrs
                             nCount = length allNbrs
                             -- Edge tiles need only 2 neighbors (the 3rd may be
                             -- across the boundary and visible only via crossNbrs).
                             -- Interior tiles still need 3.
                             threshold = if isEdge then 2 else 3
-                        in if nCount ≥ threshold ∧ terrZ < nMax
-                              ∧ nMax - terrZ ≤ 5 ∧ nMax > seaLevel
-                           then let fillZ = min nMax (terrZ + 3)
+                            -- Standard: terrain below water.
+                            standard = nCount ≥ threshold ∧ terrZ < nMax
+                                     ∧ nMax - terrZ ≤ 5 ∧ nMax > seaLevel
+                            -- Uniform: terrain slightly above uniform water.
+                            -- Fill at nMax (below terrain) for continuity.
+                            uniform = nCount ≥ threshold ∧ nMin ≡ nMax
+                                    ∧ terrZ ≤ nMax + 2 ∧ nMax > seaLevel
+                        in if standard ∨ uniform
+                           then let fillZ | standard   = min nMax (terrZ + 3)
+                                          | otherwise  = nMax
                                     fm' = lcFluidMap lc V.// [(idx, Just (FluidCell River fillZ))]
                                     sm' = lcSurfaceMap lc VU.// [(idx, max terrZ fillZ)]
                                     lc' = lc { lcFluidMap = fm', lcSurfaceMap = sm' }
@@ -1130,6 +1221,52 @@ fillCrossChunkHoles coords wtd = foldl' fillChunkHoles wtd coords
                 in case lcFluidMap nbrLC V.! nIdx of
                     Just nfc | fcType nfc ≡ River → Just (fcSurface nfc)
                     _ → Nothing
+
+-- | Raise low river tiles to reduce surface jumps. For each river
+--   tile where a neighbor's water is 2+ levels higher, raise this
+--   tile's water to neighbor-1 (capped at terrain+5). Iterates to
+--   propagate raises. Works on immutable LoadedChunk data.
+raiseInChunk ∷ LoadedChunk → LoadedChunk
+raiseInChunk lc0 = go (5 ∷ Int) lc0
+  where
+    go 0 lc = lc
+    go n lc =
+        let (lc', changed) = raiseChunkPass lc
+        in if changed then go (n - 1) lc' else lc'
+
+    raiseChunkPass lc =
+        foldl' raiseTile (lc, False) [0 .. chunkSize * chunkSize - 1]
+
+    raiseTile (lc, changed) idx =
+        case lcFluidMap lc V.! idx of
+            Just fc | fcType fc ≡ River →
+                let lx = idx `mod` chunkSize
+                    ly = idx `div` chunkSize
+                    myWater = fcSurface fc
+                    terrZ = lcTerrainSurfaceMap lc VU.! idx
+                    neighbors = [ (nx, ny)
+                                | (nx, ny) ← [(lx,ly-1),(lx,ly+1),(lx-1,ly),(lx+1,ly)]
+                                , nx ≥ 0, nx < chunkSize, ny ≥ 0, ny < chunkSize
+                                ]
+                    nbrSurfaces = [ fcSurface nfc
+                                 | (nx, ny) ← neighbors
+                                 , Just nfc ← [lcFluidMap lc V.! (ny * chunkSize + nx)]
+                                 , fcType nfc ≡ River
+                                 ]
+                in case nbrSurfaces of
+                    [] → (lc, changed)
+                    _  →
+                        let nMax = foldl' max minBound nbrSurfaces
+                            diff = nMax - myWater
+                            depthCap = terrZ + 5
+                            target = min (nMax - 1) depthCap
+                        in if diff ≥ 2 ∧ target > myWater
+                           then let fm' = lcFluidMap lc V.// [(idx, Just (fc { fcSurface = target }))]
+                                    sm' = lcSurfaceMap lc VU.// [(idx, max terrZ target)]
+                                    lc' = lc { lcFluidMap = fm', lcSurfaceMap = sm' }
+                                in (lc', True)
+                           else (lc, changed)
+            _ → (lc, changed)
 
 smoothInwardFromEdge ∷ LoadedChunk → Int → Int → LoadedChunk
 smoothInwardFromEdge lc0 _startLX _startLY = go (8 ∷ Int) lc0

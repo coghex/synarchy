@@ -32,5 +32,6 @@ generateFlatChunk coord =
         , lcTerrainSurfaceMap = VU.replicate chunkArea arenaZ
         , lcFluidMap          = V.replicate chunkArea Nothing
         , lcFlora             = emptyFloraChunkData
+        , lcSideDeco          = VU.replicate chunkArea 0
         , lcModified          = False
         }

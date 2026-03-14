@@ -16,6 +16,7 @@ import Control.Monad.State (put)  -- Add this import
 import Control.Monad.Error.Class (throwError, catchError)  -- Add this import
 import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Text as T
+import Data.IORef (newIORef)
 import qualified Data.Map as Map
 import qualified Data.Vector as V
 
@@ -29,12 +30,14 @@ spec = do
         eventQueue <- Q.newQueue
         inputQueue <- Q.newQueue
         logQueue <- Q.newQueue
-        
-        let engineEnv = EngineEnv 
+        frameCounterRef <- newIORef (0 ∷ Word64)
+
+        let engineEnv = EngineEnv
               { engineConfig = defaultEngineConfig
               , eventQueue   = eventQueue
               , inputQueue   = inputQueue
-              , logQueue     = logQueue 
+              , logQueue     = logQueue
+              , frameCounterRef = frameCounterRef
               }
             engineState = defaultEngineState logFunc
         
@@ -57,12 +60,14 @@ spec = do
         eventQueue <- Q.newQueue
         inputQueue <- Q.newQueue
         logQueue <- Q.newQueue
-        
-        let engineEnv = EngineEnv 
+        frameCounterRef <- newIORef (0 ∷ Word64)
+
+        let engineEnv = EngineEnv
               { engineConfig = defaultEngineConfig
               , eventQueue   = eventQueue
               , inputQueue   = inputQueue
-              , logQueue     = logQueue 
+              , logQueue     = logQueue
+              , frameCounterRef = frameCounterRef
               }
             engineState = defaultEngineState logFunc
         
@@ -86,12 +91,14 @@ spec = do
         eventQueue <- Q.newQueue
         inputQueue <- Q.newQueue
         logQueue <- Q.newQueue
-        
-        let engineEnv = EngineEnv 
+        frameCounterRef <- newIORef (0 ∷ Word64)
+
+        let engineEnv = EngineEnv
               { engineConfig = defaultEngineConfig
               , eventQueue   = eventQueue
               , inputQueue   = inputQueue
-              , logQueue     = logQueue 
+              , logQueue     = logQueue
+              , frameCounterRef = frameCounterRef
               }
             engineState = defaultEngineState logFunc
         
@@ -111,12 +118,14 @@ spec = do
         eventQueue <- Q.newQueue
         inputQueue <- Q.newQueue
         logQueue <- Q.newQueue
-        
-        let engineEnv = EngineEnv 
+        frameCounterRef <- newIORef (0 ∷ Word64)
+
+        let engineEnv = EngineEnv
               { engineConfig = defaultEngineConfig
               , eventQueue   = eventQueue
               , inputQueue   = inputQueue
-              , logQueue     = logQueue 
+              , logQueue     = logQueue
+              , frameCounterRef = frameCounterRef
               }
             engineState = defaultEngineState logFunc
         
@@ -147,12 +156,14 @@ spec = do
         eventQueue <- Q.newQueue
         inputQueue <- Q.newQueue
         logQueue <- Q.newQueue
-        
-        let engineEnv = EngineEnv 
+        frameCounterRef <- newIORef (0 ∷ Word64)
+
+        let engineEnv = EngineEnv
               { engineConfig = defaultEngineConfig
               , eventQueue   = eventQueue
               , inputQueue   = inputQueue
-              , logQueue     = logQueue 
+              , logQueue     = logQueue
+              , frameCounterRef = frameCounterRef
               }
             engineState = defaultEngineState logFunc
         

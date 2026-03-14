@@ -121,8 +121,15 @@ fillLakePool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurfa
                     dx = fromIntegral dxi ∷ Float
                     dy = fromIntegral dyi ∷ Float
                     dist = sqrt (dx * dx + dy * dy)
-                in when (dist < pr ∧ surfZ ≤ clampedSurface ∧ surfZ > minBound) $
-                    MV.write mv idx (Just (FluidCell Lake clampedSurface))
+                in when (dist < pr ∧ surfZ ≤ clampedSurface ∧ surfZ > minBound) $ do
+                    existing ← MV.read mv idx
+                    case existing of
+                        -- When two lakes overlap, keep the LOWER surface.
+                        -- Lakes are flat water bodies; the lowest surface
+                        -- wins because water seeks its level.
+                        Just old | fcType old ≡ Lake ∧ fcSurface old < clampedSurface
+                            → pure ()
+                        _ → MV.write mv idx (Just (FluidCell Lake clampedSurface))
             -- Pass 2: extend one tile to adjacent empty tiles whose terrain
             -- is strictly BELOW the water surface. This covers exposed
             -- side-faces at the shoreline without jumping over ridges
@@ -135,8 +142,14 @@ fillLakePool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurfa
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
                         adj ← adjacentHasFluid mv lx ly
-                        when adj $
-                            MV.write mv idx (Just (FluidCell Lake clampedSurface))
+                        when adj $ do
+                            existing' ← MV.read mv idx
+                            case existing' of
+                                Just old | fcType old ≡ Lake
+                                           ∧ fcSurface old < clampedSurface
+                                    → pure ()
+                                _ → MV.write mv idx
+                                        (Just (FluidCell Lake clampedSurface))
 
 adjacentHasFluid ∷ MV.MVector s (Maybe FluidCell) → Int → Int → ST s Bool
 adjacentHasFluid mv lx ly = do

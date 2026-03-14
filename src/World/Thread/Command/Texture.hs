@@ -68,6 +68,9 @@ handleWorldSetTextureCommand env logger pageId texType texHandle = do
                   SlopeFaceMapESW     → wt { wtSlopeFaceMapESW  = texHandle }
                   SlopeFaceMapNESW    → wt { wtSlopeFaceMapNESW = texHandle }
                   NoFaceMap           → wt { wtNoFaceMap        = texHandle }
+                  -- Side face maps
+                  SideFaceMapLeft     → wt { wtSideFaceMapLeft  = texHandle }
+                  SideFaceMapRight    → wt { wtSideFaceMapRight = texHandle }
                   -- Vegetation facemaps
                   VegFaceMap          → wt { wtVegFaceMap          = texHandle }
                   VegSlopeFaceMapN    → wt { wtVegSlopeFaceMapN   = texHandle }

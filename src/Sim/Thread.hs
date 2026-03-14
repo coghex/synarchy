@@ -24,7 +24,9 @@ import World.Tile.Types (WorldTileData(..), lookupChunk)
 import World.State.Types (WorldManager(..), WorldState(..))
 import Sim.Command.Types (SimCommand(..))
 import Sim.State.Types (SimState(..), SimChunkState(..), emptySimState)
+import Sim.Fluid.Types (ActiveFluidCell(..), fluidCellToActive, activeToFluidCell)
 import Sim.Fluid.Tick (simulateFluidTick)
+import Sim.Fluid.Active (simulateActiveTick)
 
 -----------------------------------------------------------
 -- Start Simulation Thread
@@ -81,17 +83,20 @@ simLoop env stateRef simStateRef = do
                         -- Run settle ticks for newly loaded chunks
                         ss' ← settleNewChunks ss
 
-                        -- Run one fluid simulation tick
+                        -- Run one fluid simulation tick (passive chunks)
                         let ss'' = simulateFluidTick ss'
 
+                        -- Run active volume simulation for active chunks
+                        let ss''' = simulateActiveTick ss''
+
                         -- Write dirty fluid maps back to WorldTileData
-                        writeDirtyFluids env ss''
+                        writeDirtyFluids env ss'''
 
                         -- Clear dirty set
-                        let ss''' = ss'' { ssDirtyChunks = HS.empty }
-                        writeIORef simStateRef ss'''
+                        let ss'''' = ss''' { ssDirtyChunks = HS.empty }
+                        writeIORef simStateRef ss''''
 
-                        threadDelay (ssTickRate ss''')
+                        threadDelay (ssTickRate ss'''')
                         simLoop env stateRef simStateRef
               )
               (\(e ∷ SomeException) → do
@@ -131,11 +136,16 @@ handleSimCommand logger simStateRef cmd = do
             logDebug logger CatWorld "Sim: world deactivated"
 
         SimChunkLoaded coord fluidMap terrainMap → do
-            let scs = SimChunkState
+            let sz = chunkSize * chunkSize
+                scs = SimChunkState
                     { scsFluid       = fluidMap
                     , scsTerrain     = terrainMap
                     , scsGenFluid    = fluidMap
                     , scsSettleTicks = 64
+                    , scsActive      = False
+                    , scsActiveFluid = V.replicate sz Nothing
+                    , scsEquilTicks  = 0
+                    , scsSideDeco    = VU.replicate sz 0
                     }
             writeIORef simStateRef $
                 ss { ssChunks = HM.insert coord scs (ssChunks ss) }
@@ -149,11 +159,12 @@ handleSimCommand logger simStateRef cmd = do
                 Nothing → pure ()
                 Just scs → do
                     let terrV' = scsTerrain scs VU.// mods
+                        -- Activate the chunk for volume simulation
+                        activated = activateChunk (scs { scsTerrain = terrV'
+                                                       , scsSettleTicks = 24
+                                                       })
                     writeIORef simStateRef $
-                        ss { ssChunks = HM.insert coord
-                                (scs { scsTerrain = terrV'
-                                     , scsSettleTicks = 24
-                                     }) (ssChunks ss) }
+                        ss { ssChunks = HM.insert coord activated (ssChunks ss) }
 
         SimSetTickRate rate →
             writeIORef simStateRef $ ss { ssTickRate = rate }
@@ -163,6 +174,45 @@ handleSimCommand logger simStateRef cmd = do
 
         SimResume →
             writeIORef simStateRef $ ss { ssPaused = False }
+
+-----------------------------------------------------------
+-- Chunk Activation / Deactivation
+-----------------------------------------------------------
+
+-- | Activate a passive chunk for volume-based simulation.
+activateChunk ∷ SimChunkState → SimChunkState
+activateChunk scs
+    | scsActive scs = scs  -- already active
+    | otherwise =
+        let terrV = scsTerrain scs
+            fluidV = scsFluid scs
+            sz = V.length fluidV
+            activeFluid = V.imap (\idx mfc →
+                case mfc of
+                    Nothing → Nothing
+                    Just fc → fluidCellToActive (terrV VU.! idx) fc
+                ) fluidV
+        in scs { scsActive      = True
+               , scsActiveFluid = activeFluid
+               , scsEquilTicks  = 0
+               }
+
+-- | Deactivate a chunk that has reached equilibrium.
+--   Bakes active fluid back to passive FluidCells.
+deactivateChunk ∷ SimChunkState → SimChunkState
+deactivateChunk scs =
+    let terrV = scsTerrain scs
+        bakedFluid = V.imap (\idx mafc →
+            case mafc of
+                Nothing  → Nothing
+                Just afc → activeToFluidCell (terrV VU.! idx) afc
+            ) (scsActiveFluid scs)
+    in scs { scsActive      = False
+           , scsActiveFluid = V.replicate (V.length bakedFluid) Nothing
+           , scsFluid       = bakedFluid
+           , scsGenFluid    = bakedFluid
+           , scsEquilTicks  = 0
+           }
 
 -----------------------------------------------------------
 -- Settle: fast ticks for newly loaded chunks
@@ -201,15 +251,21 @@ writeDirtyFluids env ss = do
                     let wtd' = HS.foldl' (\w cc →
                             case (HM.lookup cc (ssChunks ss), lookupChunk cc w) of
                                 (Just scs, Just lc) →
-                                    let newFluid = scsFluid scs
+                                    let -- For active chunks, derive FluidMap from volumes
+                                        newFluid = if scsActive scs
+                                            then deriveFluidMap scs
+                                            else scsFluid scs
                                         -- Recompute surface map: max(terrain, fluid surface)
                                         newSurfMap = VU.imap (\idx terrZ →
                                             case newFluid V.! idx of
                                                 Just fc → max terrZ (fcSurface fc)
                                                 Nothing → terrZ
                                             ) (lcTerrainSurfaceMap lc)
+                                        -- Write back side decos if present
+                                        newSideDeco = scsSideDeco scs
                                         lc' = lc { lcFluidMap   = newFluid
                                                  , lcSurfaceMap = newSurfMap
+                                                 , lcSideDeco   = newSideDeco
                                                  , lcModified   = True }
                                     in w { wtdChunks = HM.insert cc lc' (wtdChunks w) }
                                 _ → w
@@ -218,6 +274,16 @@ writeDirtyFluids env ss = do
 
                 -- Invalidate render caches so changes become visible
                 invalidateRenderCaches env
+
+-- | Derive a FluidMap from active volume data.
+deriveFluidMap ∷ SimChunkState → V.Vector (Maybe FluidCell)
+deriveFluidMap scs =
+    let terrV = scsTerrain scs
+    in V.imap (\idx mafc →
+        case mafc of
+            Nothing  → Nothing
+            Just afc → activeToFluidCell (terrV VU.! idx) afc
+        ) (scsActiveFluid scs)
 
 -- | Invalidate all render caches for visible worlds
 invalidateRenderCaches ∷ EngineEnv → IO ()

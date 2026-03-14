@@ -10,6 +10,7 @@ module World.Fluid.Internal
     , unionFluidMap
     , equilibrateFluidMap
     , fillCoastalGaps
+    , stripLakeRiverCliffs
     ) where
 
 import UPrelude
@@ -185,12 +186,11 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
                 val ← MV.read mv idx
                 case val of
                     Just fc
-                      -- Skip River: river water surfaces are carefully
-                      -- computed per-segment with depth capping. Raising
-                      -- them here undoes the depth clamp and creates
-                      -- water-on-hills artifacts.
+                      -- Skip Lake: lake surfaces should stay uniform.
+                      -- River tiles still need cross-fluid smoothing to
+                      -- fill boundary gaps.
                       | fcType fc ≢ Ocean ∧ fcType fc ≢ Lava
-                        ∧ fcType fc ≢ River ∧ fcType fc ≢ Lake → do
+                        ∧ fcType fc ≢ Lake → do
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
                             terrZ = surfaceMap VU.! idx
@@ -445,3 +445,62 @@ maxAdjacentWaterSurface mv lx ly = do
     pure $ case surfaces of
         []     → Nothing
         (s:ss) → Just (foldl' max s ss)
+
+-----------------------------------------------------------
+-- Strip Lake/River Cliff Artifacts
+-----------------------------------------------------------
+
+-- | Remove lake tiles that are adjacent to river tiles with a much
+--   lower surface. These create massive water cliffs at river banks
+--   where the lake fill covers the carved river valley. Iterates to
+--   peel back multiple layers of lake tiles from the river bank.
+stripLakeRiverCliffs ∷ VU.Vector Int → FluidMap → FluidMap
+stripLakeRiverCliffs surfaceMap fluidMap = runST $ do
+    mv ← V.thaw fluidMap
+    let area = chunkSize * chunkSize
+
+        stripPass = do
+            changed ← newSTRef False
+            forM_ [0 .. area - 1] $ \idx → do
+                val ← MV.read mv idx
+                case val of
+                    Just fc | fcType fc ≡ Lake → do
+                        let lx = idx `mod` chunkSize
+                            ly = idx `div` chunkSize
+                        hasCliff ← checkAdjacentRiverCliff mv fc surfaceMap lx ly
+                        when hasCliff $ do
+                            MV.write mv idx Nothing
+                            writeSTRef changed True
+                    _ → pure ()
+            readSTRef changed
+
+        stripLoop 0 = pure ()
+        stripLoop n = do
+            didChange ← stripPass
+            when didChange $ stripLoop (n - 1)
+
+    stripLoop (20 ∷ Int)
+    V.freeze mv
+
+-- | Check if a lake tile has a cardinal neighbor that is a river (or
+--   dry gap) with a surface more than 2 levels below the lake surface.
+checkAdjacentRiverCliff ∷ MV.MVector s (Maybe FluidCell) → FluidCell
+                        → VU.Vector Int → Int → Int → ST s Bool
+checkAdjacentRiverCliff mv lakeCell surfMap lx ly = do
+    let lakeSurf = fcSurface lakeCell
+        check x y
+          | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = pure False
+          | otherwise = do
+              let nIdx = y * chunkSize + x
+                  nTerrZ = surfMap VU.! nIdx
+              val ← MV.read mv nIdx
+              pure $ case val of
+                  Just nfc | fcType nfc ≡ River →
+                      lakeSurf - fcSurface nfc > 2
+                  Nothing → lakeSurf - nTerrZ > 3
+                  _ → False
+    n ← check lx (ly - 1)
+    s ← check lx (ly + 1)
+    e ← check (lx + 1) ly
+    w ← check (lx - 1) ly
+    pure (n ∨ s ∨ e ∨ w)

@@ -17,6 +17,9 @@ local function sendStructuralTextures(worldId, st)
     if st.noTexture    then world.setTexture(worldId, "notexture", st.noTexture)    end
     if st.isoFaceMap   then world.setTexture(worldId, "iso_facemap", st.isoFaceMap) end
     if st.noFaceMap    then world.setTexture(worldId, "nofacemap",   st.noFaceMap)  end
+    -- Side face maps
+    if st.sideFaceMapLeft  then world.setTexture(worldId, "side_facemap_left",  st.sideFaceMapLeft)  end
+    if st.sideFaceMapRight then world.setTexture(worldId, "side_facemap_right", st.sideFaceMapRight) end
     -- Terrain slope facemaps
     local slopeNames = {
         "n", "e", "ne", "s", "ns", "es", "nes",

@@ -27,6 +27,9 @@ data WorldTextureType
     | SlopeFaceMapESW
     | SlopeFaceMapNESW
     | NoFaceMap
+    -- Side face maps (left/right only — no top face)
+    | SideFaceMapLeft
+    | SideFaceMapRight
     -- Vegetation facemaps (top face only — no side faces)
     | VegFaceMap
     | VegSlopeFaceMapN

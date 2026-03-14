@@ -55,7 +55,13 @@ simulateOnce ss =
 --        up to 20 times to cascade along valley walls.
 simulateChunk ∷ HM.HashMap ChunkCoord SimChunkState
               → ChunkCoord → SimChunkState → (SimChunkState, Bool)
-simulateChunk allChunks coord scs =
+simulateChunk allChunks coord scs
+    | scsActive scs = (scs, False)  -- active chunks use volume sim
+    | otherwise = simulatePassiveChunk allChunks coord scs
+
+simulatePassiveChunk ∷ HM.HashMap ChunkCoord SimChunkState
+                     → ChunkCoord → SimChunkState → (SimChunkState, Bool)
+simulatePassiveChunk allChunks coord scs =
     let terrainV = scsTerrain scs
         fluidV   = scsFluid scs
         genFluid = scsGenFluid scs
@@ -77,7 +83,8 @@ simulateChunk allChunks coord scs =
                         Just fc → do
                             let terrZ  = terrainV VU.! idx
                                 mySurf = fcSurface fc
-                            when (fcType fc /= Ocean ∧ mySurf > terrZ) $ do
+                            when (fcType fc /= Ocean ∧ fcType fc /= Lake
+                                 ∧ mySurf > terrZ) $ do
                                 let lx = idx `mod` chunkSize
                                     ly = idx `div` chunkSize
                                     nbrs = [(lx-1,ly),(lx+1,ly)
@@ -102,8 +109,13 @@ simulateChunk allChunks coord scs =
                                                 else MV.write mv idx
                                                         (Just fc { fcSurface = newSurf })
                                             writeSTRef changedRef True
-                                        -- Raise by 1 toward max - 1
-                                        else when (mySurf < maxW - 1) $ do
+                                        -- Raise ONLY in true depressions:
+                                        -- tile is below the MINIMUM neighbor
+                                        -- (below all neighbors, not just any).
+                                        -- Using maxW here caused uphill flow
+                                        -- at river junctions where a high-elev
+                                        -- tributary pulled the main river up.
+                                        else when (mySurf < minW) $ do
                                             let raised = mySurf + 1
                                             MV.write mv idx
                                                 (Just fc { fcSurface = raised })
@@ -229,6 +241,9 @@ simulateChunk allChunks coord scs =
                                             writeSTRef changedRef True
 
             -- Phase 4: Flow — spread water to lowest dry neighbor.
+            -- Only flow into tiles that were originally generated as
+            -- water. Without this guard, water spreads onto valley
+            -- walls and terrain bumps, creating floating patches.
             forM_ [0 .. sz - 1] $ \idx → do
                 cell ← MV.read mv idx
                 case cell of
@@ -248,10 +263,18 @@ simulateChunk allChunks coord scs =
                                 when inBounds $ do
                                     let nIdx   = nly * chunkSize + nlx
                                         nTerrZ = terrainV VU.! nIdx
+                                        -- Only flow into tiles that were
+                                        -- generated as water (part of the
+                                        -- river/lake). This prevents spreading
+                                        -- onto valley walls.
+                                        nWasGen = case genFluid V.! nIdx of
+                                                      Just gf → fcType gf /= Ocean
+                                                      Nothing → False
                                     nCell ← MV.read mv nIdx
                                     case nCell of
                                         Nothing →
-                                            when (nTerrZ < mySurf ∧ nTerrZ ≤ terrZ) $ do
+                                            when (nWasGen ∧ nTerrZ < mySurf
+                                                  ∧ nTerrZ ≤ terrZ) $ do
                                                 cur ← readSTRef bestRef
                                                 case cur of
                                                     Nothing →

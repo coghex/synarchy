@@ -32,6 +32,9 @@ parseTextureType "iso_slope_facemap_nsw"    = SlopeFaceMapNSW
 parseTextureType "iso_slope_facemap_esw"    = SlopeFaceMapESW
 parseTextureType "iso_slope_facemap_nesw"   = SlopeFaceMapNESW
 parseTextureType "nofacemap"                = NoFaceMap
+-- Side face maps (left/right only)
+parseTextureType "side_facemap_left"        = SideFaceMapLeft
+parseTextureType "side_facemap_right"       = SideFaceMapRight
 -- Vegetation facemaps (top face only)
 parseTextureType "veg_facemap"              = VegFaceMap
 parseTextureType "veg_slope_facemap_n"      = VegSlopeFaceMapN

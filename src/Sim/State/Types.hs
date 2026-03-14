@@ -14,6 +14,7 @@ import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..))
 import World.Fluid.Internal (FluidMap)
 import World.Tile.Types (WorldTileData(..))
+import Sim.Fluid.Types (ActiveFluidCell(..))
 
 data SimState = SimState
     { ssChunks      ∷ !(HM.HashMap ChunkCoord SimChunkState)
@@ -29,6 +30,10 @@ data SimChunkState = SimChunkState
     , scsTerrain     ∷ !(VU.Vector Int)   -- ^ Terrain surface (read-only until modified)
     , scsGenFluid    ∷ !FluidMap          -- ^ Original generated fluid (for diff on save)
     , scsSettleTicks ∷ !Int               -- ^ Remaining fast settle ticks (0 = settled)
+    , scsActive      ∷ !Bool              -- ^ True when volume sim is running
+    , scsActiveFluid ∷ !(V.Vector (Maybe ActiveFluidCell))  -- ^ Volume-tracked fluid (active only)
+    , scsEquilTicks  ∷ !Int               -- ^ Ticks at equilibrium (for deactivation)
+    , scsSideDeco    ∷ !(VU.Vector Word8) -- ^ Side-face decorations (waterfall etc.)
     }
 
 emptySimState ∷ SimState

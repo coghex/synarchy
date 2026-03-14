@@ -23,9 +23,10 @@ import World.Flora.Render (resolveFloraTexture)
 import World.Generate (chunkToGlobal, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
 import World.Grid (gridToScreen, tileSideHeight, tileWidth, tileHeight, worldToGrid)
-import World.Render.ViewBounds (computeViewBounds, isTileVisible)
+import World.Render.ViewBounds (ViewBounds, computeViewBounds, isTileVisible)
 import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped)
 import World.Render.FloraQuads (floraToQuad)
+import World.Render.SideDecoQuads (waterSideFaceQuads)
 import World.Render.TileQuads
     ( tileToQuad, blankTileToQuad, oceanTileToQuad, lavaTileToQuad
     , freshwaterTileToQuad, worldCursorToQuad, worldCursorBgToQuad
@@ -210,6 +211,14 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                      gx gy inst' texHandle zSlice effectiveDepth
                                      zoomAlpha xOffset texSizes]
                     ]
+                -- Water side-face quads: fill elevation gaps where water
+                -- drops over cliff edges
+                !waterSideQuads = if chunkHasFluid
+                    then waterSideFaceQuads lookupSlot lookupFmSlot textures facing
+                             coord fluidMap terrainSurfMap zSlice effectiveDepth
+                             zoomAlpha xOffset vb
+                    else []
+
                 !blankQuads =
                     [ blankTileToQuad lookupSlot lookupFmSlot textures facing
                         gx gy zSlice zSlice zoomAlpha xOffset
@@ -290,7 +299,8 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                                 )
                     ) ([], [], []) fluidMap
 
-            in V.fromList (realQuads <> floraQuads <> blankQuads <> oceanQuads
+            in V.fromList (realQuads <> floraQuads <> waterSideQuads
+                                     <> blankQuads <> oceanQuads
                                      <> lavaQuads <> freshwaterQuads)
             ) visibleChunksWithOffset
     return $! V.concat chunkVectors

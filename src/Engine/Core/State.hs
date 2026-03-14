@@ -85,6 +85,7 @@ data EngineEnv = EngineEnv
   , unitQueue           ∷ Q.Queue UnitCommand
   , worldGenConfigRef   ∷ IORef WorldGenConfig
   , simQueue           ∷ Q.Queue SimCommand
+  , frameCounterRef    ∷ IORef Word64  -- ^ Monotonic frame counter for animations
   } deriving (Eq)
 
 -- | Engine state (mutable)

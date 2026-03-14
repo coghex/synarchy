@@ -41,6 +41,9 @@ data WorldTextures = WorldTextures
     , wtSlopeFaceMapESW  ∷ TextureHandle
     , wtSlopeFaceMapNESW ∷ TextureHandle
     , wtNoFaceMap        ∷ TextureHandle
+      -- Side face maps (left/right only, no top face)
+    , wtSideFaceMapLeft  ∷ TextureHandle
+    , wtSideFaceMapRight ∷ TextureHandle
       -- Vegetation facemaps (top-face only, no side faces)
     , wtVegFaceMap        ∷ TextureHandle   -- flat
     , wtVegSlopeFaceMapN  ∷ TextureHandle
@@ -91,6 +94,8 @@ defaultWorldTextures = WorldTextures
     , wtSlopeFaceMapESW  = TextureHandle 0
     , wtSlopeFaceMapNESW = TextureHandle 0
     , wtNoFaceMap        = TextureHandle 0
+    , wtSideFaceMapLeft  = TextureHandle 0
+    , wtSideFaceMapRight = TextureHandle 0
     , wtVegFaceMap        = TextureHandle 0
     , wtVegSlopeFaceMapN  = TextureHandle 0
     , wtVegSlopeFaceMapE  = TextureHandle 0

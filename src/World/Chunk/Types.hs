@@ -73,10 +73,12 @@ data LoadedChunk = LoadedChunk
     , lcTerrainSurfaceMap ∷ !(VU.Vector Int)
     , lcFluidMap   ∷ !(V.Vector (Maybe FluidCell))
     , lcFlora      ∷ !FloraChunkData
+    , lcSideDeco   ∷ !(VU.Vector Word8)  -- ^ Side-face decorations per column
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
 
 instance NFData LoadedChunk where
-    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap flora modified) =
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap flora sideDeco modified) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
-        rnf terrainMap `seq` rnf fluidMap `seq` rnf flora `seq` rnf modified
+        rnf terrainMap `seq` rnf fluidMap `seq` rnf flora `seq`
+        rnf sideDeco `seq` rnf modified

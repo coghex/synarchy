@@ -119,6 +119,9 @@ initializeEngine = do
   worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
   worldGenConfigRef ← newIORef worldGenConfig
 
+  -- frame counter for animations
+  frameCounterRef ← newIORef (0 ∷ Word64)
+
   -- Build environment
   let env = EngineEnv
         { engineConfig       = defaultEngineConfig
@@ -162,6 +165,7 @@ initializeEngine = do
         , unitQueue          = unitQueue
         , worldGenConfigRef  = worldGenConfigRef
         , simQueue          = simQueue
+        , frameCounterRef   = frameCounterRef
         }
   
   envVar   ← atomically $ newVar env

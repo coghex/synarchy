@@ -370,6 +370,8 @@ library
                      Sim.Command.Types
                      Sim.State.Types
                      Sim.Fluid.Tick
+                     Sim.Fluid.Types
+                     Sim.Fluid.Active
                      World.Base
                      World.Constants
                      World.Command.Types
@@ -398,6 +400,7 @@ library
                      World.Render.Quads
                      World.Render.TileQuads
                      World.Render.FloraQuads
+                     World.Render.SideDecoQuads
                      World.Render.Textures
                      World.Render.Textures.Types
                      World.Render.Zoom.Types
@@ -457,6 +460,9 @@ library
                      World.Save.Serialize
                      World.Scale
                      World.Slope
+                     World.SideFace.Base
+                     World.SideFace.Types
+                     World.SideFace.Compute
                      World.Texture.Types
                      World.Tool.Types
                      World.Tile.Types

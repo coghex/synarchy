@@ -8,6 +8,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.DeepSeq (force)
@@ -160,6 +161,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             , lcTerrainSurfaceMap = cterrain
             , lcFluidMap          = cf
             , lcFlora             = cflora
+            , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
             , lcModified          = False
             }
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →

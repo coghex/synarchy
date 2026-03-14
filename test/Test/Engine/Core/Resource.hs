@@ -15,6 +15,7 @@ import Engine.Core.Var
 import Control.Monad.IO.Class (MonadIO(..))
 import qualified Control.Monad.Logger.CallStack as Logger
 import qualified Data.Text as T
+import Data.IORef (newIORef)
 
 spec ∷ Spec
 spec = do
@@ -25,12 +26,14 @@ spec = do
         eventQueue ← Q.newQueue
         inputQueue ← Q.newQueue
         logQueue ← Q.newQueue
-        
-        let engineEnv = EngineEnv 
+        frameCounterRef ← newIORef (0 ∷ Word64)
+
+        let engineEnv = EngineEnv
               { engineConfig = defaultEngineConfig
               , eventQueue   = eventQueue
               , inputQueue   = inputQueue
-              , logQueue     = logQueue 
+              , logQueue     = logQueue
+              , frameCounterRef = frameCounterRef
               }
             engineState = defaultEngineState logFunc
         
@@ -62,12 +65,14 @@ spec = do
         eventQueue ← Q.newQueue
         inputQueue ← Q.newQueue
         logQueue ← Q.newQueue
-        
-        let engineEnv = EngineEnv 
+        frameCounterRef ← newIORef (0 ∷ Word64)
+
+        let engineEnv = EngineEnv
               { engineConfig = defaultEngineConfig
               , eventQueue   = eventQueue
               , inputQueue   = inputQueue
               , logFunc      = logFunc
+              , frameCounterRef = frameCounterRef
               }
             engineState = defaultEngineState logFunc
         
@@ -100,12 +105,14 @@ spec = do
         eventQueue ← Q.newQueue
         inputQueue ← Q.newQueue
         logQueue ← Q.newQueue
-        
-        let engineEnv = EngineEnv 
+        frameCounterRef ← newIORef (0 ∷ Word64)
+
+        let engineEnv = EngineEnv
               { engineConfig = defaultEngineConfig
               , eventQueue   = eventQueue
               , inputQueue   = inputQueue
-              , logQueue     = logQueue 
+              , logQueue     = logQueue
+              , frameCounterRef = frameCounterRef
               }
             engineState = defaultEngineState logFunc
         

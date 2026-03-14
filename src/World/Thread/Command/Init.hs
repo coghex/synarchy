@@ -181,13 +181,14 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , lcTerrainSurfaceMap = cterrain
             , lcFluidMap   = cf
             , lcFlora      = cflora
+            , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
             , lcModified   = False
             }
-    
+
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
         (WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
                        , wtdMaxChunks = 200 }, ())
-    
+
     -- Step 7: Queue remaining chunks
     writeIORef phaseRef (LoadPhase1 7 totalSteps)
     let remainingCoords = [ ChunkCoord cx cy
@@ -257,6 +258,7 @@ handleWorldInitArenaCommand env logger pageId = do
             , lcTerrainSurfaceMap = flatSurfaceMap
             , lcFluidMap          = flatFluidMap
             , lcFlora             = flatFlora
+            , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
             , lcModified          = False
             }
 

@@ -23,6 +23,7 @@ import World.Slope (computeChunkSlopes)
 import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava
                     , computeChunkLakes, computeChunkRivers, unionFluidMap
                     , equilibrateFluidMap, fillCoastalGaps)
+import World.Fluid.Internal (stripLakeRiverCliffs)
 import World.Vegetation (computeChunkVegetation)
 import World.Flora.Placement (computeChunkFlora)
 import World.Generate.Constants (chunkBorder)
@@ -162,10 +163,13 @@ generateChunk registry catalog params coord =
         riverFluidMap = computeChunkRivers eventRivers worldSize
                                            coord terrainSurfaceMap
 
-        -- Lava > Lake > River > Ocean: specific fluids override ocean
+        -- Lava > River > Lake > Ocean: rivers override lakes because
+        -- river channels are carved to specific elevations, while lakes
+        -- fill to a uniform spillway height. Where a river runs through
+        -- a lake basin, the river's lower surface is correct.
         rawFluidMap = unionFluidMap lavaFluidMap
-                    $ unionFluidMap lakeFluidMap
-                    $ unionFluidMap riverFluidMap oceanFluidMap
+                    $ unionFluidMap riverFluidMap
+                    $ unionFluidMap lakeFluidMap oceanFluidMap
 
         -- Equilibrate: propagate water to adjacent empty tiles whose
         -- terrain is at or below the neighboring water surface.
@@ -174,7 +178,12 @@ generateChunk registry catalog params coord =
         -- Fill coastal gaps: below-sea-level terrain adjacent to any
         -- fluid that was missed by the ocean BFS (which uses pre-carving
         -- elevation) gets ocean water.
-        fluidMap = fillCoastalGaps terrainSurfaceMap equilFluidMap
+        coastalFluidMap = fillCoastalGaps terrainSurfaceMap equilFluidMap
+
+        -- Strip lake tiles adjacent to river tiles with much lower
+        -- surfaces. Must run AFTER equilibration so stripped tiles
+        -- aren't refilled by lake propagation.
+        fluidMap = stripLakeRiverCliffs terrainSurfaceMap coastalFluidMap
 
 
         -- Surface map with fluids

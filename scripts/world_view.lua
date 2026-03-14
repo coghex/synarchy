@@ -38,6 +38,9 @@ worldView.structuralTextures = {
     isoSlopeFaceMapNSW  = -1,
     isoSlopeFaceMapESW  = -1,
     isoSlopeFaceMapNESW = -1,
+    -- Side face maps (left/right only, no top face)
+    sideFaceMapLeft     = -1,
+    sideFaceMapRight    = -1,
     -- Vegetation facemaps (top face only, no cube sides)
     vegFaceMap              = -1,
     vegSlopeFaceMapN        = -1,
@@ -108,6 +111,9 @@ function worldView.init(width, height)
     st.isoSlopeFaceMapESW  = engine.loadTexture("assets/textures/world/facemap/isoface_slope_esw.png")
     st.isoSlopeFaceMapNESW = engine.loadTexture("assets/textures/world/facemap/isoface_slope_nesw.png")
     st.noFaceMap      = engine.loadTexture("assets/textures/world/facemap/noface.png")
+    -- Side face maps (left/right only)
+    st.sideFaceMapLeft  = engine.loadTexture("assets/textures/world/facemap/isoface_left.png")
+    st.sideFaceMapRight = engine.loadTexture("assets/textures/world/facemap/isoface_right.png")
     -- Vegetation facemaps (top face only — identical slope shapes
     -- but bottom 16 rows are fully transparent)
     st.vegFaceMap              = engine.loadTexture("assets/textures/world/facemap/vegface.png")
@@ -440,6 +446,9 @@ function worldView.sendTexturesToWorld(worldId)
     world.setTexture(worldId, "iso_slope_facemap_esw", st.isoSlopeFaceMapESW)
     world.setTexture(worldId, "iso_slope_facemap_nesw",st.isoSlopeFaceMapNESW)
     world.setTexture(worldId, "nofacemap",             st.noFaceMap)
+    -- Side face maps
+    world.setTexture(worldId, "side_facemap_left",   st.sideFaceMapLeft)
+    world.setTexture(worldId, "side_facemap_right",  st.sideFaceMapRight)
     -- Vegetation facemaps
     world.setTexture(worldId, "veg_facemap",              st.vegFaceMap)
     world.setTexture(worldId, "veg_slope_facemap_n",      st.vegSlopeFaceMapN)

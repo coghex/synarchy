@@ -7,6 +7,8 @@ module World.Slope
       -- * Slope Face Map Generation
     , SlopeFaceMaps(..)
     , generateSlopeFaceMaps
+    , generateSideFaceMapLeft
+    , generateSideFaceMapRight
       -- * Slope → Face Map Mapping
     , slopeToFaceMapIndex
       -- * Constants
@@ -279,6 +281,47 @@ rampGradient dir col row =
 
 clampByte ∷ Int → Word8
 clampByte x = fromIntegral (max 0 (min 255 x))
+
+-----------------------------------------------------------
+-- Side Face Maps (left/right only, no top face)
+-----------------------------------------------------------
+
+-- | Left side face map: G=0 (no top), B=255 for left-side pixels only.
+--   The left side face occupies the bottom-left portion of the tile sprite.
+generateSideFaceMapLeft ∷ VS.Vector Word8
+generateSideFaceMapLeft = VS.generate (tilePixelWidth * tilePixelHeight * 4) $ \i →
+    let px  = i `div` 4
+        col = px `mod` tilePixelWidth
+        row = px `div` tilePixelWidth
+        chan = i `mod` 4
+        halfW = tilePixelWidth `div` 2
+    in if row < diamondRows
+       then 0  -- no top face at all
+       else if col < halfW
+            then case chan of  -- left side face
+                0 → 0
+                1 → 0
+                2 → 255
+                _ → 255
+            else 0  -- no right side face
+
+-- | Right side face map: G=0 (no top), R=255 for right-side pixels only.
+generateSideFaceMapRight ∷ VS.Vector Word8
+generateSideFaceMapRight = VS.generate (tilePixelWidth * tilePixelHeight * 4) $ \i →
+    let px  = i `div` 4
+        col = px `mod` tilePixelWidth
+        row = px `div` tilePixelWidth
+        chan = i `mod` 4
+        halfW = tilePixelWidth `div` 2
+    in if row < diamondRows
+       then 0  -- no top face at all
+       else if col ≥ halfW
+            then case chan of  -- right side face
+                0 → 255
+                1 → 0
+                2 → 0
+                _ → 255
+            else 0  -- no left side face
 
 -----------------------------------------------------------
 -- Recompute Neighbor Slopes

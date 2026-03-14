@@ -11,7 +11,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import Control.Concurrent (forkIO)
-import System.IO (hPutStrLn, hFlush, stdout)
+import System.IO (hPutStrLn, hFlush, stdout, stderr)
 import Control.Concurrent.MVar
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TQueue
@@ -54,8 +54,11 @@ runServer port cmdQueue = do
         listen sock 4
         -- Ready signal on stdout — agents can wait for this line
         -- to know the debug console is accepting connections.
-        hPutStrLn stdout ("READY port=" <> show port)
-        hFlush stdout
+        -- When port=0 (dump mode), write to stderr to keep stdout
+        -- clean for JSON output.
+        let readyHandle = if port ≡ 0 then stderr else stdout
+        hPutStrLn readyHandle ("READY port=" <> show port)
+        hFlush readyHandle
         acceptLoop sock cmdQueue
 
 acceptLoop ∷ Socket → TQueue DebugCommand → IO ()
