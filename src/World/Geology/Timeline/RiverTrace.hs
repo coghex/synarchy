@@ -221,7 +221,9 @@ addPathNoise seed riverIdx spacing pts =
                <> [(0, 0)]
 
         -- Maximum perpendicular offset scales with grid spacing.
-        maxOff = fromIntegral spacing * 1.2 ∷ Float
+        -- With finer grids, paths already follow terrain well so
+        -- less noise is needed. Cap at 16 tiles max.
+        maxOff = min 16.0 (fromIntegral spacing * 1.5) ∷ Float
 
         noisy = zipWith (\(i, (x, y, e), (dx, dy)) arcLen →
             if i ≡ 0 ∨ i ≡ maxIdx

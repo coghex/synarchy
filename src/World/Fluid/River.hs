@@ -773,10 +773,9 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
                  axialWaterSurface = floor (startW + tClamped * (endW - startW)) ∷ Int
                  -- Coastal flattening: when a segment ends at or below sea
                  -- level, the downstream portion should flatten to create a
-                 -- smooth estuary instead of a steep visible terrace. Blend
-                 -- the interpolated surface toward seaLevel+1 as we approach
-                 -- the mouth.
-                 coastalFlat = seaLevel + 1
+                 -- smooth estuary. Blend toward seaLevel so river water
+                 -- meets ocean at the same height.
+                 coastalFlat = seaLevel
                  flattenedWater
                    | rsEndElev seg ≤ seaLevel ∧ axialWaterSurface > coastalFlat =
                        -- Only flatten the downstream portion of the

@@ -26,7 +26,7 @@ import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
 import World.Grid (zoomFadeEnd)
-import World.Slope (recomputeNeighborSlopes)
+import World.Slope (recomputeNeighborSlopes, patchEdgeStrata)
 import World.Fluids (sealCrossChunkRivers)
 import World.SideFace.Compute (computeChunkSideDecos)
 import World.Thread.Helpers (unWorldPageId)
@@ -106,7 +106,8 @@ updateChunkLoading env logger = do
                                         coords = map lcCoord newChunks
                                         td''' = recomputeNeighborSlopes seed
                                                   registry coords td''
-                                        td'''' = sealCrossChunkRivers coords td'''
+                                        td3b   = patchEdgeStrata coords td'''
+                                        td'''' = sealCrossChunkRivers coords td3b
                                         td''''' = stripCrossChunkLakeCliffs coords td''''
                                         td'''''' = computeSideDecos seed coords td'''''
                                     in (td'''''', evictedCoords)
@@ -168,7 +169,8 @@ drainInitQueues env logger = do
                                 coords = map lcCoord newChunks
                                 td'' = recomputeNeighborSlopes seed registry
                                          coords td'
-                                td''' = sealCrossChunkRivers coords td''
+                                td2b  = patchEdgeStrata coords td''
+                                td''' = sealCrossChunkRivers coords td2b
                                 td'''' = stripCrossChunkLakeCliffs coords td'''
                                 td''''' = computeSideDecos seed coords td''''
                             in (td''''', ())

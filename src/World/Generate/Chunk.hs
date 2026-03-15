@@ -20,15 +20,16 @@ import World.Geology.Timeline.Types (GeoEvent(..))
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
-import World.Fluids (isOceanChunk, computeChunkFluid, computeChunkLava
-                    , computeChunkLakes, computeChunkRivers, unionFluidMap
-                    , equilibrateFluidMap, fillCoastalGaps)
+import World.Fluids (isOceanChunk, hasAnyOceanFluid, computeChunkFluid
+                    , computeChunkLava, computeChunkLakes, computeChunkRivers
+                    , unionFluidMap, equilibrateFluidMap, fillCoastalGaps)
 import World.Fluid.Internal (stripLakeRiverCliffs)
 import World.Vegetation (computeChunkVegetation)
 import World.Flora.Placement (computeChunkFlora)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 import World.Generate.Timeline (applyTimelineChunk)
+import World.Geology.Coastal (applyCoastalErosion)
 import World.Generate.Strata
     ( buildStrataCache
     , buildColumnStrata
@@ -58,6 +59,11 @@ generateChunk registry catalog params coord =
         plates = wgpPlates params
         wsc = computeWorldScale worldSize
         oceanMap = wgpOceanMap params
+
+        -- True if this chunk or any of its 8 neighbors is oceanic.
+        -- Used to extend strata to sea level for all coastal columns,
+        -- preventing cliff-face voids at chunk boundaries.
+        isCoastalChunk = hasAnyOceanFluid oceanMap coord
 
         borderSize = chunkSize + 2 * chunkBorder
         borderArea = borderSize * borderSize
@@ -104,9 +110,16 @@ generateChunk registry catalog params coord =
             else (0, MaterialId 1)
 
         -- Apply timeline using split vectors
-        (finalElevVec, finalMatVec) =
+        (timelineElevVec, timelineMatVec) =
             applyTimelineChunk timeline worldSize registry wsc coord
                 (baseElevVec, baseMatVec)
+
+        -- Post-timeline coastal erosion: lower coastal terrain,
+        -- deposit sand/gravel/wetland materials based on plate tectonics
+        -- and river mouth proximity
+        (finalElevVec, finalMatVec) =
+            applyCoastalErosion seed worldSize plates registry timeline coord
+                (timelineElevVec, timelineMatVec)
 
         lookupFinal lx ly =
             if inBorder lx ly
@@ -121,6 +134,10 @@ generateChunk registry catalog params coord =
             if inBorder lx ly
             then finalElevVec VU.! toIndex lx ly
             else fallback
+
+        -- (timeline elevation lookup removed — strata now use clamped
+        -- post-coastal neighbors to prevent over-erosion without the
+        -- mismatch that creates air-tile gaps near the surface)
 
         -- Pre-compute wrapped coordinates for the 16×16 chunk interior.
         -- Used by terrainSurfaceMap and strataCache to avoid redundant
@@ -211,19 +228,28 @@ generateChunk registry catalog params coord =
                     gy' = coordGY VU.! idx
                     (surfZ, surfMat) = lookupFinal lx ly
                     base = lookupBase lx ly
-                    -- Pass FINAL post-timeline neighbor elevations instead
-                    -- of base (pre-timeline) elevations. buildStrataCache
-                    -- uses these directly for erosion, eliminating the
-                    -- expensive advanceNeighbor recomputation.
+                    -- Post-coastal neighbor elevations for determining how
+                    -- far down to expose strata (cliff face visibility).
                     finalN = lookupElevOr lx (ly - 1) surfZ
                     finalS = lookupElevOr lx (ly + 1) surfZ
                     finalE = lookupElevOr (lx + 1) ly surfZ
                     finalW = lookupElevOr (lx - 1) ly surfZ
                     neighborMinZ = min finalN (min finalS (min finalE finalW))
-                    exposeFrom = min surfZ neighborMinZ
+                    exposeFromRaw = min surfZ neighborMinZ
+                    exposeFrom = exposeFromRaw
+                    -- Clamp neighbor elevations for the strata cache.
+                    -- Coastal erosion can lower neighbors 30+ tiles below
+                    -- a cliff column. The cache uses neighbors to compute
+                    -- erosion at each geological period — extreme drops
+                    -- cause over-erosion that produces air tiles in the
+                    -- strata, which render as black voids. Clamping to
+                    -- surfZ-20 limits the erosion to realistic levels.
+                    -- This doesn't change ctStartZ or strata range.
+                    clampN n = max (surfZ - 20) n
                     cache = buildStrataCache timeline worldSize wsc
                                              gx' gy' registry base
-                                             (finalN, finalS, finalE, finalW)
+                                             (clampN finalN, clampN finalS
+                                             , clampN finalE, clampN finalW)
                     mats = buildColumnStrata cache base exposeFrom surfZ
                     -- Correct the surface material to match the authoritative
                     -- timeline path. buildStrataCache uses final neighbor

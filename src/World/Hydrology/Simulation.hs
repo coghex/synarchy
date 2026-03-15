@@ -23,7 +23,7 @@ import World.Constants (seaLevel)
 import World.Types
 import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Geology.Types
-import World.Geology.Hash (hashGeo, wrappedDeltaUV)
+import World.Geology.Hash (hashGeo, hashToFloatGeo, wrappedDeltaUV)
 import World.Hydrology.Types
 
 -----------------------------------------------------------
@@ -31,7 +31,7 @@ import World.Hydrology.Types
 -----------------------------------------------------------
 
 baseSampleSpacing ∷ Int
-baseSampleSpacing = 8
+baseSampleSpacing = 4
 
 -- | Minimum flow accumulation to qualify as a river.
 minRiverTotalFlow ∷ Int
@@ -41,7 +41,7 @@ minRiverLength ∷ Int
 minRiverLength = 2
 
 maxGridDim ∷ Int
-maxGridDim = 128
+maxGridDim = 512
 
 minLakeDepth ∷ Int
 minLakeDepth = 8
@@ -102,7 +102,7 @@ buildInitialElevGrid seed worldSize plates =
                 v = (iy - halfGrid) * spacing
             in (v - u) `div` 2
 
-        elevV = VU.generate totalSamples $ \idx →
+        rawElevV = VU.generate totalSamples $ \idx →
             let gx = gxV VU.! idx
                 gy = gyV VU.! idx
                 (gx', gy') = wrapGlobalU worldSize gx gy
@@ -110,14 +110,70 @@ buildInitialElevGrid seed worldSize plates =
                then seaLevel + 500
                else fst (elevationAtGlobal seed plates worldSize gx' gy')
 
+        -- Add meander-inducing micro-noise to the elevation grid.
+        -- On flat terrain, the D8 flow direction creates straight paths
+        -- because the gradient is nearly uniform. Small coherent noise
+        -- breaks the symmetry and forces flow to curve naturally,
+        -- creating meandering drainage patterns. The noise amplitude
+        -- scales with local flatness — steep terrain keeps its natural
+        -- gradient, flat terrain gets noise to induce curvature.
+        elevV = VU.imap (\idx rawE →
+            if rawE ≤ seaLevel then rawE  -- don't perturb ocean/sub-sea
+            else let gx = gxV VU.! idx
+                     gy = gyV VU.! idx
+                     -- Two octaves of coherent noise at different scales
+                     n1 = meanderNoise seed gx gy 40 1300
+                     n2 = meanderNoise seed gx gy 18 1301
+                     noise = n1 * 0.6 + n2 * 0.4
+                     -- Local slope: max elevation diff to any neighbor
+                     (ix, iy) = (idx `mod` gridW, idx `div` gridW)
+                     maxSlope = foldl' (\acc (dx, dy) →
+                         let nx = ((ix + dx) `mod` gridW + gridW) `mod` gridW
+                             ny = iy + dy
+                         in if ny < 0 ∨ ny ≥ gridW then acc
+                            else max acc (abs (rawE - rawElevV VU.! (ny * gridW + nx)))
+                         ) 0 [(-1,0),(1,0),(0,-1),(0,1)]
+                     -- Flat terrain (slope < 3) gets full noise;
+                     -- steep terrain (slope > 10) gets none
+                     flatness = clamp01 (1.0 - fromIntegral maxSlope / 10.0)
+                     -- Amplitude: up to 1 elevation level on flat terrain
+                     amplitude = 1.0 * flatness
+                 in rawE + round (noise * amplitude)
+            ) rawElevV
+
         landV = VU.generate totalSamples $ \idx →
             let gx = gxV VU.! idx
                 gy = gyV VU.! idx
                 (gx', gy') = wrapGlobalU worldSize gx gy
-            in elevV VU.! idx > seaLevel
+            in rawElevV VU.! idx > seaLevel
              ∧ not (isBeyondGlacier worldSize gx' gy')
 
     in ElevGrid gridW spacing elevV gxV gyV landV
+
+-- | 2D coherent noise for meander induction. Returns [-1, 1].
+--   Uses a simple value noise approach: hash at grid points,
+--   bilinear interpolation with smoothstep.
+meanderNoise ∷ Word64 → Int → Int → Int → Int → Float
+meanderNoise seed gx gy wavelength prop =
+    let -- Grid coordinates in noise space
+        fx = fromIntegral gx / fromIntegral wavelength ∷ Float
+        fy = fromIntegral gy / fromIntegral wavelength ∷ Float
+        ix = floor fx ∷ Int
+        iy = floor fy ∷ Int
+        fracX = fx - fromIntegral ix
+        fracY = fy - fromIntegral iy
+        -- Smoothstep for C1 continuity
+        sx = fracX * fracX * (3.0 - 2.0 * fracX)
+        sy = fracY * fracY * (3.0 - 2.0 * fracY)
+        -- Hash at four corners
+        h00 = hashToFloatGeo (hashGeo seed (ix * 7919 + iy * 6271) prop) * 2.0 - 1.0
+        h10 = hashToFloatGeo (hashGeo seed ((ix+1) * 7919 + iy * 6271) prop) * 2.0 - 1.0
+        h01 = hashToFloatGeo (hashGeo seed (ix * 7919 + (iy+1) * 6271) prop) * 2.0 - 1.0
+        h11 = hashToFloatGeo (hashGeo seed ((ix+1) * 7919 + (iy+1) * 6271) prop) * 2.0 - 1.0
+        -- Bilinear interpolation
+        top    = h00 * (1.0 - sx) + h10 * sx
+        bottom = h01 * (1.0 - sx) + h11 * sx
+    in top * (1.0 - sy) + bottom * sy
 
 -----------------------------------------------------------
 -- Incremental Update

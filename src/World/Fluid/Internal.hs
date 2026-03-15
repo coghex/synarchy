@@ -230,19 +230,36 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
                         let lx = idx `mod` chunkSize
                             ly = idx `div` chunkSize
                             surfZ = surfaceMap VU.! idx
+                        -- Check both River AND Ocean neighbors.
+                        -- River water adjacent to ocean should settle
+                        -- to sea level, not stay at its interpolated
+                        -- segment surface.
                         minNS ← minNeighborSurfaceOfType mv River lx ly
+                        hasOceanNbr ← hasNeighborOfType mv Ocean lx ly
+                        let effectiveMin = case minNS of
+                                Just nMin | hasOceanNbr →
+                                    min nMin seaLevel
+                                Just nMin → nMin
+                                Nothing | hasOceanNbr → seaLevel
+                                Nothing → fcSurface fc  -- no change
                         case minNS of
                             Just nMin → do
-                                let target = max (nMin + 1) (surfZ + 1)
+                                let target = max (effectiveMin + 1) (surfZ + 1)
                                 if fcSurface fc > target
                                     then do
                                         MV.write mv idx (Just (fc { fcSurface = target }))
                                         writeSTRef rRef True
-                                    -- Unresolvable cliff: can't get within 2 of neighbor
                                     else when (fcSurface fc > nMin + 2
                                               ∧ surfZ + 1 > nMin + 2) $ do
                                         MV.write mv idx Nothing
                                         writeSTRef rRef True
+                            Nothing | hasOceanNbr → do
+                                -- River tile with only ocean neighbors:
+                                -- lower to sea level
+                                let target = max seaLevel (surfZ + 1)
+                                when (fcSurface fc > target) $ do
+                                    MV.write mv idx (Just (fc { fcSurface = target }))
+                                    writeSTRef rRef True
                             _ → pure ()
                     _ → pure ()
             readSTRef rRef
@@ -275,6 +292,23 @@ minNeighborSurfaceOfType mv ftype lx ly = do
     pure $ case surfaces of
         []     → Nothing
         (s:ss) → Just (foldl' min s ss)
+
+-- | Check if any 4-connected neighbor has the given fluid type.
+hasNeighborOfType ∷ MV.MVector s (Maybe FluidCell) → FluidType
+                  → Int → Int → ST s Bool
+hasNeighborOfType mv ftype lx ly = do
+    let check x y
+          | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = pure False
+          | otherwise = do
+              val ← MV.read mv (y * chunkSize + x)
+              pure $ case val of
+                  Just fc → fcType fc ≡ ftype
+                  _       → False
+    n ← check lx (ly - 1)
+    s ← check lx (ly + 1)
+    e ← check (lx + 1) ly
+    w ← check (lx - 1) ly
+    pure (n ∨ s ∨ e ∨ w)
 
 -- | Get maximum water surface among 4-connected neighbors (any fluid type
 --   except ocean/lava). Used for cross-fluid boundary smoothing.
@@ -398,15 +432,17 @@ fillCoastalGaps surfaceMap fluidMap = runST $ do
 
     loop2 (5 ∷ Int)
 
-    -- Phase 3: Convert river tiles at sea level to ocean.
-    -- River water at seaLevel is effectively part of the ocean —
-    -- keeping it as River causes visual inconsistency at the coast.
+    -- Phase 3: Convert river tiles near sea level to ocean.
+    -- River water at or just above seaLevel is effectively part of
+    -- the ocean — keeping it as River causes a visible step at the
+    -- coast. Convert any river tile whose surface is within 1 tile
+    -- of seaLevel AND whose terrain is at/below seaLevel+1.
     forM_ [0 .. area - 1] $ \idx → do
         val ← MV.read mv idx
         case val of
-            Just fc | fcType fc ≡ River ∧ fcSurface fc ≤ seaLevel → do
+            Just fc | fcType fc ≡ River ∧ fcSurface fc ≤ seaLevel + 1 → do
                 let surfZ = surfaceMap VU.! idx
-                when (surfZ ≤ seaLevel) $
+                when (surfZ ≤ seaLevel + 1) $
                     MV.write mv idx (Just (FluidCell Ocean seaLevel))
             _ → pure ()
 

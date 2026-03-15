@@ -9,6 +9,8 @@ module World.Plate
     , twoNearestPlates
     , elevationAtGlobal
       -- * Boundary classification
+    , BoundaryType(..)
+    , classifyBoundary
     , isGlacierZone
     , isBeyondGlacier
       -- * wrapping
