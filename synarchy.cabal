@@ -476,6 +476,7 @@ library
                      World.Fluid.Internal
                      World.Fluid.Ocean
                      World.Fluid.River
+                     World.Fluid.Ice
                      World.Fluid.Lake
                      World.Fluid.Lava
                      World.Vegetation

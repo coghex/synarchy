@@ -22,6 +22,7 @@ data WorldTextures = WorldTextures
     , wtNoTexture        ∷ TextureHandle
     , wtBlankTexture     ∷ TextureHandle
     , wtGlacierTexture   ∷ TextureHandle
+    , wtIceTexture       ∷ TextureHandle
     , wtLavaTexture      ∷ TextureHandle
       -- Facemaps (fixed set of 16 + flat)
     , wtIsoFaceMap       ∷ TextureHandle
@@ -76,6 +77,7 @@ defaultWorldTextures = WorldTextures
     , wtNoTexture        = TextureHandle 0
     , wtBlankTexture     = TextureHandle 0
     , wtGlacierTexture   = TextureHandle 0
+    , wtIceTexture       = TextureHandle 0
     , wtLavaTexture      = TextureHandle 0
     , wtIsoFaceMap       = TextureHandle 0
     , wtSlopeFaceMapN    = TextureHandle 0

@@ -3,6 +3,7 @@ module World.Render.TileQuads
     ( tileToQuad
     , blankTileToQuad
     , oceanTileToQuad
+    , iceTileToQuad
     , lavaTileToQuad
     , freshwaterTileToQuad
     , worldCursorToQuad
@@ -17,7 +18,7 @@ import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
 import World.Constants (seaLevel)
-import World.Material (matOcean, matLava, unMaterialId)
+import World.Material (matOcean, matLava, matIce, unMaterialId)
 import World.Fluids (FluidCell(..), FluidType(..))
 import World.Vegetation (getVegTexture)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight, worldLayer, applyFacing)
@@ -151,6 +152,47 @@ oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSl
 
         finalAlpha = tileAlpha
         tint = Vec4 0.7 0.8 1.0 finalAlpha
+
+        v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+    in SortableQuad
+        { sqSortKey  = sortKey
+        , sqV0       = v0
+        , sqV1       = v1
+        , sqV2       = v2
+        , sqV3       = v3
+        , sqTexture  = texHandle
+        , sqLayer    = worldLayer
+        }
+
+-----------------------------------------------------------
+-- Ice Surface Tile Quad
+-----------------------------------------------------------
+
+iceTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY iceZ zSlice effDepth tileAlpha xOffset =
+    let (rawX, rawY) = gridToScreen facing worldX worldY
+        (fa, fb) = applyFacing facing worldX worldY
+        relativeZ = iceZ - zSlice
+        heightOffset = fromIntegral relativeZ * tileSideHeight
+        drawX = rawX + xOffset
+        drawY = rawY - heightOffset
+        -- Ice renders above ocean (+0.0005) but below lava
+        sortKey = fromIntegral (fa + fb)
+                + fromIntegral relativeZ * 0.001
+                + 0.0007
+
+        texHandle = case HM.lookup (unMaterialId matIce)
+                                   (wtTileTextures textures) of
+                           Nothing → wtNoTexture textures
+                           Just h  → h
+        actualSlot = lookupSlot texHandle
+        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+
+        finalAlpha = tileAlpha
+        -- No tinting — all color baked in texture
+        tint = Vec4 1.0 1.0 1.0 finalAlpha
 
         v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
         v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot

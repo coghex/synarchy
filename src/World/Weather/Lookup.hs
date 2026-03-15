@@ -2,6 +2,7 @@
 module World.Weather.Lookup
     ( -- * Climate interpolation
       lookupLocalClimate
+    , LocalClimate(..)
       -- * Shared coordinate math for custom interpolation
     , RegionGridCoords(..)
     , regionGridCoords
@@ -12,6 +13,16 @@ import qualified Data.HashMap.Strict as HM
 import World.Weather.Types (ClimateState(..), ClimateGrid(..)
                            , RegionClimate(..), SeasonalClimate(..)
                            , ClimateCoord(..), climateRegionSize)
+
+-- | Interpolated climate data at a specific tile coordinate.
+data LocalClimate = LocalClimate
+    { lcTemp       ∷ !Float  -- ^ Annual mean temperature (°C)
+    , lcSummerTemp ∷ !Float  -- ^ Summer mean temperature (°C)
+    , lcWinterTemp ∷ !Float  -- ^ Winter mean temperature (°C)
+    , lcPrecip     ∷ !Float  -- ^ Annual mean precipitation (0–1)
+    , lcHumidity   ∷ !Float  -- ^ Relative humidity (0–1)
+    , lcSnow       ∷ !Float  -- ^ Fraction of precipitation as snow (0–1)
+    } deriving (Show)
 
 -- | Pre-computed bilinear interpolation grid coordinates.
 --   Shared between climate and erosion lookups.
@@ -62,35 +73,38 @@ regionGridCoords chunkSz worldSize gx gy =
 -- | Look up regional climate for a global tile coordinate.
 --   Uses bilinear interpolation between the 4 nearest region centers
 --   to eliminate hard grid boundaries.
---   Returns (temperature, precipitation, humidity, snowFraction).
 {-# INLINE lookupLocalClimate #-}
-lookupLocalClimate ∷ ClimateState → Int → Int → Int
-                   → (Float, Float, Float, Float)
+lookupLocalClimate ∷ ClimateState → Int → Int → Int → LocalClimate
 lookupLocalClimate climate worldSize gx gy =
     let regions = cgRegions (csClimate climate)
         RegionGridCoords ru0 ru1 rv0 rv1 tu tv =
             regionGridCoords chunkSz worldSize gx gy
+
+        defTemp = csGlobalTemp climate
 
         lookupRC ru rv =
             case HM.lookup (ClimateCoord ru rv) regions of
                 Just rc →
                     let SeasonalClimate st wt = rcAirTemp rc
                         SeasonalClimate sp wp = rcPrecipitation rc
-                    in ((st + wt) / 2.0, (sp + wp) / 2.0
+                    in ((st + wt) / 2.0, st, wt
+                       , (sp + wp) / 2.0
                        , rcHumidity rc, rcPrecipType rc)
                 Nothing →
-                    (csGlobalTemp climate, 0.5, 0.5, 0.0)
+                    (defTemp, defTemp, defTemp, 0.5, 0.5, 0.0)
 
-        (t00, p00, h00, s00) = lookupRC ru0 rv0
-        (t10, p10, h10, s10) = lookupRC ru1 rv0
-        (t01, p01, h01, s01) = lookupRC ru0 rv1
-        (t11, p11, h11, s11) = lookupRC ru1 rv1
+        (t00, st00, wt00, p00, h00, s00) = lookupRC ru0 rv0
+        (t10, st10, wt10, p10, h10, s10) = lookupRC ru1 rv0
+        (t01, st01, wt01, p01, h01, s01) = lookupRC ru0 rv1
+        (t11, st11, wt11, p11, h11, s11) = lookupRC ru1 rv1
 
         lerpF a b t = a + t * (b - a)
-        temp   = lerpF (lerpF t00 t10 tu) (lerpF t01 t11 tu) tv
-        precip = lerpF (lerpF p00 p10 tu) (lerpF p01 p11 tu) tv
-        humid  = lerpF (lerpF h00 h10 tu) (lerpF h01 h11 tu) tv
-        snow   = lerpF (lerpF s00 s10 tu) (lerpF s01 s11 tu) tv
-    in (temp, precip, humid, snow)
+        temp    = lerpF (lerpF t00  t10  tu) (lerpF t01  t11  tu) tv
+        summer  = lerpF (lerpF st00 st10 tu) (lerpF st01 st11 tu) tv
+        winter  = lerpF (lerpF wt00 wt10 tu) (lerpF wt01 wt11 tu) tv
+        precip  = lerpF (lerpF p00  p10  tu) (lerpF p01  p11  tu) tv
+        humid   = lerpF (lerpF h00  h10  tu) (lerpF h01  h11  tu) tv
+        snow    = lerpF (lerpF s00  s10  tu) (lerpF s01  s11  tu) tv
+    in LocalClimate temp summer winter precip humid snow
   where
     chunkSz = 16

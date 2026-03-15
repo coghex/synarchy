@@ -23,6 +23,7 @@ module World.Vegetation
     , vegPineNeedles
     , vegMushroomPatch
     , vegWildflowers
+    , vegSnow
     , vegVariants
       -- * Per-tile vegetation selection
     , selectVegetation
@@ -42,7 +43,7 @@ import World.Types
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
 import World.Fluid.Types (FluidCell(..))
 import World.Weather.Types (ClimateState(..))
-import World.Weather.Lookup (lookupLocalClimate)
+import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Render.Textures.Types (WorldTextures(..))
 
@@ -96,6 +97,9 @@ vegMushroomPatch = 57
 
 vegWildflowers ∷ Word8
 vegWildflowers = 61
+
+vegSnow ∷ Word8
+vegSnow = 65
 
 -- | Number of variants per vegetation type.
 vegVariants ∷ Word8
@@ -158,7 +162,8 @@ computeChunkVegetation seed worldSize coord surfMap surfMats surfSlopes
             variant = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
 
             -- Regional climate
-            (temp, precip, humid, snow) =
+            LocalClimate{lcTemp=temp, lcPrecip=precip
+                        , lcHumidity=humid, lcSnow=snow} =
                 lookupLocalClimate climate worldSize gx gy
 
         in selectVegetation matId slopeId hasFluid elev
@@ -187,8 +192,11 @@ selectVegetation matId slopeId hasFluid elev
 
     -- === EXCLUSION RULES ===
     | hasFluid               = vegNone
-    | isBarrenMaterial matId = vegNone
-    | snow > 0.7             = vegNone
+    | isBarrenMaterial matId ∧ not (isSnowableMaterial matId)
+                             = vegNone
+
+    -- === SNOW COVER ===
+    | snow > 0.7             = vegSnow + variant
 
     -- === WETLAND ===
     | isWetlandSoil matId ∧ precip > 0.4
@@ -291,6 +299,11 @@ isBarrenMaterial m
     | m ≡ 55              = True   -- pure sand (dunes)
     | m ≡ 67              = True   -- salt flat
     | otherwise           = False
+
+-- | Materials that are barren but can still receive snow overlay.
+isSnowableMaterial ∷ Word8 → Bool
+isSnowableMaterial 250 = True   -- glacier
+isSnowableMaterial _   = False
 
 -- | Wetland soils that produce marsh vegetation.
 isWetlandSoil ∷ Word8 → Bool

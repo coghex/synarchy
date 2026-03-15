@@ -11,6 +11,7 @@ parseTextureType ∷ Text → WorldTextureType
 -- Structural
 parseTextureType "ocean"          = OceanTexture
 parseTextureType "glacier"        = GlacierTexture
+parseTextureType "ice"            = IceTexture
 parseTextureType "lava"           = LavaTexture
 parseTextureType "blank"          = BlankTexture
 parseTextureType "notexture"      = NoTexture

@@ -17,7 +17,7 @@ import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidCell(..))
 import World.Vegetation (isBarrenMaterial)
 import World.Weather.Types (ClimateState(..))
-import World.Weather.Lookup (lookupLocalClimate)
+import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.Flora.Types
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -52,7 +52,8 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                         hasFluid = case fluidMap V.! idx of
                             Just fc → surfZ ≤ fcSurface fc
                             Nothing → False
-                        (temp, precip, humidity, _) =
+                        LocalClimate{lcTemp=temp, lcPrecip=precip
+                                    , lcHumidity=humidity} =
                             lookupLocalClimate climate worldSize gx gy
 
                     occ ← VUM.read occupied idx

@@ -68,7 +68,7 @@ local function sendMaterialTextures(worldId)
         90, 91,                     -- impact
         100, 101, 102, 103,         -- volcanic
         110, 111, 112, 113,         -- glacial
-        250, 251, 255,              -- special
+        250, 251, 252, 255,         -- special
     }
 
     for _, matId in ipairs(matIds) do
@@ -88,8 +88,8 @@ local function sendMaterialTextures(worldId)
 end
 
 local function sendVegTextures(worldId)
-    -- Vegetation IDs: 16 types × 4 variants = IDs 1..64
-    for vegId = 1, 64 do
+    -- Vegetation IDs: 17 types × 4 variants = IDs 1..68
+    for vegId = 1, 68 do
         local h = engine.getTextureHandle("veg_tile_" .. vegId)
         if h and h >= 0 then
             world.setTexture(worldId, "veg_tile_" .. vegId, h)

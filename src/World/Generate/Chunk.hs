@@ -5,6 +5,7 @@ module World.Generate.Chunk
     ) where
 
 import UPrelude
+import Data.Bits (shiftR, (.&.))
 import Control.Monad.ST (runST, ST)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
@@ -24,7 +25,8 @@ import World.Fluids (isOceanChunk, hasAnyOceanFluid, computeChunkFluid
                     , computeChunkLava, computeChunkLakes, computeChunkRivers
                     , unionFluidMap, equilibrateFluidMap, fillCoastalGaps)
 import World.Fluid.Internal (stripLakeRiverCliffs)
-import World.Vegetation (computeChunkVegetation)
+import World.Fluid.Ice (computeChunkIce)
+import World.Vegetation (computeChunkVegetation, vegSnow, vegHash)
 import World.Flora.Placement (computeChunkFlora)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
@@ -51,7 +53,7 @@ import World.Generate.Strata
 --   chunk edges has valid neighbor data.
 generateChunk ∷ MaterialRegistry → FloraCatalog → WorldGenParams
   → ChunkCoord → (Chunk, VU.Vector Int, VU.Vector Int
-                 , V.Vector (Maybe FluidCell), FloraChunkData)
+                 , V.Vector (Maybe FluidCell), IceMap, FloraChunkData)
 generateChunk registry catalog params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -203,7 +205,8 @@ generateChunk registry catalog params coord =
         fluidMap = stripLakeRiverCliffs terrainSurfaceMap coastalFluidMap
 
 
-        -- Surface map with fluids
+        -- Surface map with fluids (ice is a visual overlay, does not
+        -- affect terrain column generation or surface-based logic)
         surfaceMap = VU.imap (\idx surfZ →
             case fluidMap V.! idx of
                 Just fc → max surfZ (fcSurface fc)
@@ -294,9 +297,24 @@ generateChunk registry catalog params coord =
                then ctSlopes col VU.! i
                else 0
 
-        vegIds = computeChunkVegetation seed worldSize coord
-                    terrainSurfaceMap surfaceMats surfaceSlopes
-                    fluidMap (wgpClimateState params)
+        baseVegIds = computeChunkVegetation seed worldSize coord
+                        terrainSurfaceMap surfaceMats surfaceSlopes
+                        fluidMap (wgpClimateState params)
+        -- Snow on ice-covered tiles: ice is an overlay not in the
+        -- terrain material system, so inject snow vegetation here.
+        vegIds = VU.imap (\idx v →
+            case iceMap V.! idx of
+                Just _  →
+                    let ChunkCoord cx cy = coord
+                        lx = idx `mod` chunkSize
+                        ly = idx `div` chunkSize
+                        gx = cx * chunkSize + lx
+                        gy = cy * chunkSize + ly
+                        h = vegHash seed gx gy
+                        variant = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
+                    in vegSnow + variant
+                Nothing → v
+            ) baseVegIds
         -- Flora sprites (trees, shrubs, wildflowers)
         floraData = computeChunkFlora seed worldSize coord
                         terrainSurfaceMap surfaceMats surfaceSlopes
@@ -314,7 +332,12 @@ generateChunk registry catalog params coord =
             in col { ctVeg = vegVec' }
             ) slopedTiles
 
-    in (finalTiles, surfaceMap, terrainSurfaceMap, fluidMap, floraData)
+        -- Ice overlay: climate-based ice on frozen ocean/lake/alpine terrain.
+        -- Computed after fluids so ice sits on top of water surfaces.
+        iceMap = computeChunkIce seed (wgpClimateState params) worldSize
+                                 coord terrainSurfaceMap fluidMap
+
+    in (finalTiles, surfaceMap, terrainSurfaceMap, fluidMap, iceMap, floraData)
 
 -- | Generate only the exposed tiles for a column.
 --   Skips air tiles (MaterialId 0) to create caves and overhangs.

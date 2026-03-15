@@ -90,13 +90,14 @@ updateChunkLoading env logger = do
                                 let !newChunks = if isArena
                                         then map generateFlatChunk batch
                                         else parMap rdeepseq (\coord →
-                                            let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk registry catalog params coord
+                                            let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora) = generateChunk registry catalog params coord
                                             in LoadedChunk
                                                 { lcCoord      = coord
                                                 , lcTiles      = chunkTiles
                                                 , lcSurfaceMap = surfMap
                                                 , lcTerrainSurfaceMap = tMap
                                                 , lcFluidMap   = fluidMap
+                                                , lcIceMap     = iceMap
                                                 , lcFlora      = flora
                                                 , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
                                                 , lcModified   = False
@@ -151,13 +152,14 @@ drainInitQueues env logger = do
                             seed  = wgpSeed params
 
                         let newChunks = parMap rdeepseq (\coord →
-                                let (chunkTiles, surfMap, tMap, fluidMap, flora) = generateChunk registry catalog params coord
+                                let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora) = generateChunk registry catalog params coord
                                 in LoadedChunk
                                     { lcCoord      = coord
                                     , lcTiles      = chunkTiles
                                     , lcSurfaceMap = surfMap
                                     , lcTerrainSurfaceMap = tMap
                                     , lcFluidMap   = fluidMap
+                                    , lcIceMap     = iceMap
                                     , lcFlora      = flora
                                     , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
                                     , lcModified   = False

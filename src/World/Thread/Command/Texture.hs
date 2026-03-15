@@ -47,6 +47,7 @@ handleWorldSetTextureCommand env logger pageId texType texHandle = do
                   -- Structural
                   OceanTexture        → wt { wtOceanTexture     = texHandle }
                   GlacierTexture      → wt { wtGlacierTexture   = texHandle }
+                  IceTexture          → wt { wtIceTexture       = texHandle }
                   LavaTexture         → wt { wtLavaTexture      = texHandle }
                   BlankTexture        → wt { wtBlankTexture     = texHandle }
                   NoTexture           → wt { wtNoTexture        = texHandle }

@@ -16,7 +16,7 @@ import World.Hydrology.Types (RiverParams(..), RiverSegment(..))
 import World.Hydrology.Simulation (ElevGrid(..))
 import World.Chunk.Types (chunkSize)
 import World.Weather.Types (ClimateState)
-import World.Weather.Lookup (lookupLocalClimate)
+import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 
 -----------------------------------------------------------
 -- River tracing via flow-direction chain
@@ -376,7 +376,7 @@ buildSegFromWaypoints seed worldSize totalSegs baseFlow climate segIdx
         -- Normalized to 0.5 as "average" precipitation.
         midGX = (sx + ex) `div` 2
         midGY = (sy + ey) `div` 2
-        (_temp, precip, _humid, _snow) =
+        LocalClimate{lcPrecip=precip} =
             lookupLocalClimate climate worldSize midGX midGY
         climateMult = max 0.3 (min 3.0 (precip / 0.5))
 

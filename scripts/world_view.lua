@@ -468,8 +468,8 @@ function worldView.sendTexturesToWorld(worldId)
     world.setTexture(worldId, "veg_slope_facemap_nesw",   st.vegSlopeFaceMapNESW)
 
     -- Vegetation tiles: look up from registry by numeric ID
-    -- 16 types × 4 variants = IDs 1..64
-    for vegId = 1, 64 do
+    -- 17 types × 4 variants = IDs 1..68
+    for vegId = 1, 68 do
         local h = engine.getTextureHandle("veg_tile_" .. vegId)
         if h and h >= 0 then
             world.setTexture(worldId, "veg_tile_" .. vegId, h)
@@ -490,7 +490,7 @@ function worldView.sendTexturesToWorld(worldId)
         90, 91,
         100, 101, 102, 103,
         110, 111, 112, 113,
-        250, 251, 255,
+        250, 251, 252, 255,
     }
     for _, matId in ipairs(matIds) do
         local tileH = engine.getTextureHandle("mat_tile_" .. matId)

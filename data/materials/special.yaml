@@ -7,6 +7,14 @@ materials:
     tile: "assets/textures/world/glacier/glacier.png"
     zoom: "assets/textures/world/zoommap/glacier_chunk.png"
     bg:   "assets/textures/world/zoommap/glacier_chunk_background.png"
+  - id: 252
+    name: ice
+    hardness: 0.8
+    density: 0.92
+    albedo: 0.80
+    tile: "assets/textures/world/ice/ice.png"
+    zoom: "assets/textures/world/zoommap/ice_chunk.png"
+    bg:   "assets/textures/world/zoommap/ice_chunk_background.png"
   - id: 251
     name: mantle
     hardness: 1.0

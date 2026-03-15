@@ -19,7 +19,7 @@ import Data.Hashable (Hashable(..))
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import World.Material (MaterialId(..))
-import World.Fluid.Types (FluidCell(..))
+import World.Fluid.Types (FluidCell(..), IceMap, emptyIceMap)
 import World.Flora.Types (FloraChunkData(..), emptyFloraChunkData)
 
 data ChunkCoord = ChunkCoord !Int !Int
@@ -72,13 +72,14 @@ data LoadedChunk = LoadedChunk
     , lcSurfaceMap ∷ !(VU.Vector Int)
     , lcTerrainSurfaceMap ∷ !(VU.Vector Int)
     , lcFluidMap   ∷ !(V.Vector (Maybe FluidCell))
+    , lcIceMap     ∷ !IceMap               -- ^ Ice overlay (frozen ocean/lake/alpine)
     , lcFlora      ∷ !FloraChunkData
-    , lcSideDeco   ∷ !(VU.Vector Word8)  -- ^ Side-face decorations per column
+    , lcSideDeco   ∷ !(VU.Vector Word8)    -- ^ Side-face decorations per column
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
 
 instance NFData LoadedChunk where
-    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap flora sideDeco modified) =
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco modified) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
-        rnf terrainMap `seq` rnf fluidMap `seq` rnf flora `seq`
-        rnf sideDeco `seq` rnf modified
+        rnf terrainMap `seq` rnf fluidMap `seq` rnf iceMap `seq`
+        rnf flora `seq` rnf sideDeco `seq` rnf modified

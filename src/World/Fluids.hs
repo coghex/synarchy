@@ -12,6 +12,7 @@ module World.Fluids
     , computeOceanMap
       -- * Chunk-level fluid
     , computeChunkFluid
+    , computeChunkIce
     , computeChunkLava
     , computeChunkLakes
     , computeChunkRivers
@@ -36,6 +37,7 @@ import World.Fluid.Ocean (computeOceanMap, isOceanChunk, hasAnyOceanFluid
                          , computeChunkFluid)
 import World.Fluid.River (computeChunkRivers, fixupSegmentContinuity
                          , hasAnyRiverQuick, sealCrossChunkRivers)
+import World.Fluid.Ice (computeChunkIce)
 import World.Fluid.Lake (computeChunkLakes, hasAnyLakeQuick)
 import World.Fluid.Lava (computeChunkLava, hasAnyLavaQuick)
 

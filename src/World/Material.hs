@@ -29,7 +29,7 @@ module World.Material
     , matImpactite, matTektite
     , matLava, matMagma, matVolcanicAsh, matTephra
     , matTill, matMoraine, matGlacialClay, matOutwashGravel
-    , matGlacier, matMantle, matOcean
+    , matGlacier, matMantle, matIce, matOcean
       -- * Properties (runtime, loaded from YAML)
     , MaterialProps(..)
     , MaterialRegistry
@@ -186,6 +186,9 @@ matGlacier = MaterialId 250
 
 matMantle ∷ MaterialId
 matMantle = MaterialId 251
+
+matIce ∷ MaterialId
+matIce = MaterialId 252
 
 matOcean ∷ MaterialId
 matOcean = MaterialId 255

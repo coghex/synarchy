@@ -6,6 +6,7 @@ data WorldTextureType
     -- Structural (no material ID)
     = OceanTexture
     | GlacierTexture
+    | IceTexture
     | LavaTexture
     | BlankTexture
     | NoTexture

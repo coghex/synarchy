@@ -28,10 +28,11 @@ import World.Render.ChunkCulling (isChunkRelevantForSlice, isChunkVisibleWrapped
 import World.Render.FloraQuads (floraToQuad)
 import World.Render.SideDecoQuads (waterSideFaceQuads)
 import World.Render.TileQuads
-    ( tileToQuad, blankTileToQuad, oceanTileToQuad, lavaTileToQuad
-    , freshwaterTileToQuad, worldCursorToQuad, worldCursorBgToQuad
-    , vegToQuad
+    ( tileToQuad, blankTileToQuad, oceanTileToQuad, iceTileToQuad
+    , lavaTileToQuad, freshwaterTileToQuad, worldCursorToQuad
+    , worldCursorBgToQuad, vegToQuad
     )
+import World.Fluid.Types (IceCell(..))
 
 -----------------------------------------------------------
 -- Water Slope Helpers
@@ -145,6 +146,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 tileMap = lcTiles lc
                 surfMap = lcSurfaceMap lc
                 fluidMap = lcFluidMap lc
+                iceMap   = lcIceMap lc
                 chunkHasFluid = V.any isJust fluidMap
                 terrainSurfMap = lcTerrainSurfaceMap lc
 
@@ -246,6 +248,25 @@ renderWorldQuads env worldState zoomAlpha snap = do
                             gx gy (fcSurface fc) ft zSlice effectiveDepth
                             zoomAlpha xOffset slopeId
 
+                -- Ice surface quads: rendered above ocean/freshwater
+                !iceQuads =
+                    [ iceTileToQuad lookupSlot lookupFmSlot textures facing
+                        gx gy (icSurface ic) zSlice effectiveDepth zoomAlpha xOffset
+                    | idx ← [0 .. chunkSize * chunkSize - 1]
+                    , Just ic ← [iceMap V.! idx]
+                    , icSurface ic ≤ zSlice
+                    , icSurface ic ≥ (zSlice - effectiveDepth)
+                    , let lx = idx `mod` chunkSize
+                          ly = idx `div` chunkSize
+                          (gx, gy) = chunkToGlobal coord lx ly
+                          (rawX, rawY) = gridToScreen facing gx gy
+                          relativeZ = icSurface ic - zSlice
+                          heightOffset = fromIntegral relativeZ * tileSideHeight
+                          drawX = rawX + xOffset
+                          drawY = rawY - heightOffset
+                    , isTileVisible vb drawX drawY
+                    ]
+
                 (!oceanQuads, !lavaQuads, !freshwaterQuads) =
                     V.ifoldl' (\(!oAcc, !lAcc, !fAcc) idx mFluid ->
                         case mFluid of
@@ -262,10 +283,14 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                         heightOffset = fromIntegral relativeZ * tileSideHeight
                                         drawX = rawX + xOffset
                                         drawY = rawY - heightOffset
+                                        -- Skip ocean/lake rendering where ice covers the surface
+                                        hasIce = isJust (iceMap V.! idx)
                                     in if not (isTileVisible vb drawX drawY)
                                        then (oAcc, lAcc, fAcc)
                                        else case fcType fc of
-                                            Ocean ->
+                                            Ocean
+                                              | hasIce -> (oAcc, lAcc, fAcc)
+                                              | otherwise ->
                                                 ( oceanTileToQuad lookupSlot lookupFmSlot textures facing
                                                     gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
                                                   : oAcc
@@ -279,7 +304,9 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                                   : lAcc
                                                 , fAcc
                                                 )
-                                            Lake  ->
+                                            Lake
+                                              | hasIce -> (oAcc, lAcc, fAcc)
+                                              | otherwise ->
                                                 let wSlope = waterSlopeAt fluidMap coord fluidMapLookup lx ly (fcSurface fc)
                                                 in ( oAcc
                                                 , lAcc
@@ -300,7 +327,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                     ) ([], [], []) fluidMap
 
             in V.fromList (realQuads <> floraQuads <> waterSideQuads
-                                     <> blankQuads <> oceanQuads
+                                     <> blankQuads <> iceQuads <> oceanQuads
                                      <> lavaQuads <> freshwaterQuads)
             ) visibleChunksWithOffset
     return $! V.concat chunkVectors

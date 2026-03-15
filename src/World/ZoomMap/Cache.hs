@@ -30,16 +30,17 @@ import World.Fluids (isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid
                     , hasAnyRiverQuick, hasAnyLakeQuick
                     , computeChunkFluid, computeChunkRivers
                     , computeChunkLakes, unionFluidMap)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMap)
 import World.Fluid.Internal (FluidMap)
 import World.Geology.Timeline.Types (GeoEvent(..))
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
 import World.Generate (applyTimelineFast)
-import Data.Bits ((.&.), shiftR)
+import Data.Bits ((.&.), shiftR, xor)
+import Data.Word (Word64)
 import World.Vegetation (isBarrenMaterial, isWetlandSoil
-                        , selectVegetation, vegHash, vegNone, vegVariants)
+                        , selectVegetation, vegHash, vegNone, vegSnow, vegVariants)
 import World.Weather.Types (ClimateState(..))
-import World.Weather.Lookup (lookupLocalClimate)
+import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.ZoomMap.ColorPalette (ZoomColorPalette, lookupMatColor
                                   , lookupVegColorById
                                   , defaultOceanColor, defaultLavaColor)
@@ -192,7 +193,8 @@ buildZoomCacheWithPixels params registry palette =
                                                             (baseElev, baseMat)
                                           in (e, unMaterialId m)
                                  -- Per-tile vegetation using actual selectVegetation
-                                 (temp, precip, humid, snow) =
+                                 LocalClimate{lcTemp=temp, lcPrecip=precip
+                                             , lcHumidity=humid, lcSnow=snow} =
                                      lookupLocalClimate climate worldSize gx gy
                                  h = vegHash seed gx gy
                                  roll    = fromIntegral (h .&. 0xFF) / 255.0 ∷ Float
@@ -253,10 +255,47 @@ buildZoomCacheWithPixels params registry palette =
                 chunkFluidMap = unionFluidMap riverFluid
                               $ unionFluidMap lakeFluid oceanFluid
 
+                -- Ice overlay: per-tile decision using continuous noise
+                -- that doesn't break at chunk boundaries.
+                chunkIceMap = V.fromList
+                    [ let (e, _, _, gx, gy) = td
+                          (gx', gy') = wrapGlobalU worldSize gx gy
+                          LocalClimate{lcTemp=mt, lcSummerTemp=st
+                                      , lcWinterTemp=wt} =
+                              lookupLocalClimate climate worldSize gx' gy'
+                          altAboveSea = max 0 (e - seaLevel)
+                          altCool = fromIntegral altAboveSea * (0.065 ∷ Float)
+                          isOcn = case chunkFluidMap V.! idx' of
+                              Just fc → fcType fc ≡ Ocean
+                              Nothing → False
+                          ocnPen = if isOcn then 5.0 else 0.0 ∷ Float
+                          -- Smooth noise at large scale for zoom view
+                          n = zoomIceNoise seed gx' gy'
+                          effT = mt + ocnPen - altCool + n
+                          ice = effT < -2.0
+                              ∨ (wt - altCool < -10.0
+                                 ∧ st - altCool < 5.0)
+                      in if ice ∧ e > minBound
+                         then Just (IceCell (e + 1))
+                         else Nothing
+                    | (td, idx') ← zip tileData [0 ∷ Int ..]
+                    ]
+
+                -- Inject snow veg on ice-covered tiles
+                tileDataWithIce = zipWith (\idx' td →
+                    case chunkIceMap V.! idx' of
+                        Just _ →
+                            let (e, m, _, gx, gy) = td
+                                h = vegHash seed gx gy
+                                var = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
+                            in (e, m, vegSnow + var, gx, gy)
+                        Nothing → td
+                    ) [0 ∷ Int ..] tileData
+
                 -- Generate zoomTileSize×zoomTileSize RGBA pixel data (isometric)
-                tileVec = V.fromList tileData
+                tileVec = V.fromList tileDataWithIce
                 pixels = generateChunkPixels palette chunkOcean chunkLava
-                             worldSize chunkFluidMap tileVec
+                             worldSize chunkFluidMap chunkIceMap tileVec
 
             in (entry, pixels)
 
@@ -281,10 +320,10 @@ buildZoomCacheWithPixels params registry palette =
 --   Uses inverse isometric transform to map screen-space pixels
 --   back to grid tiles, producing a diamond-shaped image.
 generateChunkPixels ∷ ZoomColorPalette → Bool → Bool
-                    → Int → FluidMap
+                    → Int → FluidMap → IceMap
                     → V.Vector (Int, Word8, Word8, Int, Int)
                     → BS.ByteString
-generateChunkPixels palette isOcean hasLava worldSize fluidMap tileVec =
+generateChunkPixels palette isOcean hasLava worldSize fluidMap iceMap tileVec =
     BL.toStrict $ BB.toLazyByteString $ mconcat
         [ pixelAt px py
         | py ← [0 .. zoomTileSize - 1]
@@ -311,26 +350,36 @@ generateChunkPixels palette isOcean hasLava worldSize fluidMap tileVec =
                     (elev, matId, vegId, gx, gy) = tileVec V.! idx
                     baseColor = tileColor palette isOcean hasLava
                                     matId vegId elev gx gy
+                    hasIce = isJust (iceMap V.! idx)
                     -- Check actual fluid map for this tile
-                    (r, g, b, a) = case fluidMap V.! idx of
-                        Just fc | fcType fc ≢ Ocean →
-                            -- River/Lake water: tint blue
-                            let blend = 0.7 ∷ Float
-                                (lr, lg, lb, la) = baseColor
-                            in ( round (fromIntegral lr * (1.0 - blend)
-                                      + 50.0 * blend ∷ Float)
-                               , round (fromIntegral lg * (1.0 - blend)
-                                      + 90.0 * blend ∷ Float)
-                               , round (fromIntegral lb * (1.0 - blend)
-                                      + 170.0 * blend ∷ Float)
-                               , la )
-                        _ → baseColor
+                    (r, g, b, a)
+                        -- Ice-covered: use the tile color which already
+                        -- has snow veg injected from tileDataWithIce
+                        | hasIce = baseColor
+                        | otherwise = case fluidMap V.! idx of
+                            Just fc | fcType fc ≢ Ocean →
+                                -- River/Lake water: tint blue
+                                let blend = 0.7 ∷ Float
+                                    (lr, lg, lb, la) = baseColor
+                                in ( round (fromIntegral lr * (1.0 - blend)
+                                          + 50.0 * blend ∷ Float)
+                                   , round (fromIntegral lg * (1.0 - blend)
+                                          + 90.0 * blend ∷ Float)
+                                   , round (fromIntegral lb * (1.0 - blend)
+                                          + 170.0 * blend ∷ Float)
+                                   , la )
+                            _ → baseColor
                 in BB.word8 r <> BB.word8 g <> BB.word8 b <> BB.word8 a
 
 -- | Determine the color for a single tile.
 tileColor ∷ ZoomColorPalette → Bool → Bool → Word8 → Word8 → Int → Int → Int
           → (Word8, Word8, Word8, Word8)
 tileColor palette isOcean hasLava matId vegId elev _gx _gy
+    -- Snow-covered tiles (including frozen ocean) use snow color
+    | isSnowVeg vegId =
+        case lookupVegColorById palette vegId of
+            Just vegColor → vegColor
+            Nothing       → (220, 225, 235, 255)
     -- Any tile below sea level renders as water
     | elev < seaLevel ∧ (isOcean ∨ matId ≡ 0) = defaultOceanColor
     -- Lava only in actual depressions (below sea level)
@@ -371,12 +420,72 @@ vegDensityWeight vegId =
         53 → 0.5   -- pine needles
         57 → 0.3   -- mushroom patch
         61 → 0.4   -- wildflowers
+        65 → 0.9   -- snow
         _  → 0.3
+
+-- | Check if a vegetation ID is snow (IDs 65-68).
+isSnowVeg ∷ Word8 → Bool
+isSnowVeg v = v ≥ 65 ∧ v ≤ 68
 
 -----------------------------------------------------------
 -- Per-Pixel River Rendering
 -----------------------------------------------------------
 
+
+-----------------------------------------------------------
+-- Ice Noise (zoom-level, continuous across chunk boundaries)
+-----------------------------------------------------------
+
+-- | Smooth noise for zoom-level ice boundaries.
+--   Uses larger scales than tile-level noise so the ice edge
+--   is smooth at the zoomed-out view. Returns ±2°C.
+zoomIceNoise ∷ Word64 → Int → Int → Float
+zoomIceNoise seed gx gy =
+    let -- Large-scale noise for smooth continental-scale variation
+        h1 = zoomIceHash seed gx gy 48
+        h2 = zoomIceHash seed gx gy 20
+        n1 = (zoomHashToFloat h1 - 0.5) * 3.0
+        n2 = (zoomHashToFloat h2 - 0.5) * 1.0
+    in n1 + n2
+
+zoomIceHash ∷ Word64 → Int → Int → Int → Word64
+zoomIceHash seed gx gy scale =
+    let fx = fromIntegral gx / fromIntegral scale ∷ Float
+        fy = fromIntegral gy / fromIntegral scale ∷ Float
+        ix = floor fx ∷ Int
+        iy = floor fy ∷ Int
+        tx = fx - fromIntegral ix
+        ty = fy - fromIntegral iy
+        sx = zoomSmoothstep tx
+        sy = zoomSmoothstep ty
+        v00 = zoomTileHash seed ix       iy
+        v10 = zoomTileHash seed (ix + 1) iy
+        v01 = zoomTileHash seed ix       (iy + 1)
+        v11 = zoomTileHash seed (ix + 1) (iy + 1)
+        f00 = zoomHashToFloat v00
+        f10 = zoomHashToFloat v10
+        f01 = zoomHashToFloat v01
+        f11 = zoomHashToFloat v11
+        top    = f00 + sx * (f10 - f00)
+        bottom = f01 + sx * (f11 - f01)
+        result = top + sy * (bottom - top)
+    in round (result * fromIntegral (0xFFFFFF ∷ Int)) ∷ Word64
+
+zoomTileHash ∷ Word64 → Int → Int → Word64
+zoomTileHash seed x y =
+    let h0 = seed `xor` 0x1CE1CE1CE
+        h1 = h0 `xor` (fromIntegral x * 0x517cc1b727220a95)
+        h2 = h1 `xor` (fromIntegral y * 0x6c62272e07bb0142)
+        h3 = h2 `xor` (h2 `shiftR` 33)
+        h4 = h3 * 0xff51afd7ed558ccd
+        h5 = h4 `xor` (h4 `shiftR` 33)
+    in h5
+
+zoomHashToFloat ∷ Word64 → Float
+zoomHashToFloat h = fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF ∷ Word64)
+
+zoomSmoothstep ∷ Float → Float
+zoomSmoothstep t = t * t * (3.0 - 2.0 * t)
 
 -----------------------------------------------------------
 -- Helpers
@@ -419,7 +528,8 @@ vegCategoryFromClimate climate worldSize baseGX baseGY matId
         let -- Sample at chunk center
             gx = baseGX + chunkSize `div` 2
             gy = baseGY + chunkSize `div` 2
-            (temp, precip, _, snow) = lookupLocalClimate climate worldSize gx gy
+            LocalClimate{lcTemp=temp, lcPrecip=precip, lcSnow=snow} =
+                lookupLocalClimate climate worldSize gx gy
         in if snow > 0.7           then 0
            else if temp < -5.0     then 1  -- tundra
            else if precip < 0.15   then 0  -- desert
