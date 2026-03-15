@@ -118,7 +118,7 @@ generateChunk registry catalog params coord =
         -- deposit sand/gravel/wetland materials based on plate tectonics
         -- and river mouth proximity
         (finalElevVec, finalMatVec) =
-            applyCoastalErosion seed worldSize plates registry timeline coord
+            applyCoastalErosion seed worldSize plates registry timeline oceanMap coord
                 (timelineElevVec, timelineMatVec)
 
         lookupFinal lx ly =

@@ -33,8 +33,10 @@ import World.Thread.Helpers (unWorldPageId)
 import Sim.Command.Types (SimCommand(..))
 
 -- | Maximum chunks to generate per world loop iteration.
+--   parMap uses all available cores, so larger batches
+--   utilize parallelism better during initial world generation.
 maxChunksPerTick ∷ Int
-maxChunksPerTick = 4
+maxChunksPerTick = 8
 
 updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
 updateChunkLoading env logger = do

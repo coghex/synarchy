@@ -15,8 +15,8 @@ import Data.Ord (comparing, Down(..))
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
-import qualified Data.Set as Set
-import Control.Monad.ST (runST)
+import qualified Data.Vector.Algorithms.Intro as VA
+import Control.Monad.ST (runST, ST)
 import Control.Monad (forM_, when)
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Constants (seaLevel)
@@ -41,7 +41,7 @@ minRiverLength ∷ Int
 minRiverLength = 2
 
 maxGridDim ∷ Int
-maxGridDim = 512
+maxGridDim = 384
 
 minLakeDepth ∷ Int
 minLakeDepth = 8
@@ -205,12 +205,12 @@ updateElevGrid worldSize grid period =
        in grid { egElev = newElev, egLand = newLand }
 
 -----------------------------------------------------------
--- Depression Filling (Priority-Flood using Data.Set)
+-- Depression Filling (Priority-Flood with mutable binary heap)
 -----------------------------------------------------------
 
--- | Priority-flood using Data.Set as a min-heap.
---   Set entries are (elevation, index) so they sort by elevation.
---   This is O(n log n) and guaranteed correct in a single pass.
+-- | Priority-flood using a mutable binary min-heap.
+--   Entries are keyed by (elevation, tieBreaker) and carry a cell
+--   index. This is O(n log n) and guaranteed correct in a single pass.
 --
 --   Returns BOTH the filled elevation surface AND a flow-direction
 --   vector. The flow direction is the drainage parent recorded
@@ -266,33 +266,119 @@ fillDepressions grid =
         -- a systematic spatial bias in flood-parent directions.
         let hashPri idx = hashGeo 7046029254386353131 idx 0
 
-        -- Build initial priority queue.
-        let initQueue = foldl' (\s idx →
-                Set.insert (elevVec VU.! idx, hashPri idx, idx) s
-                ) Set.empty seeds
+        -- Mutable binary min-heap (keyed by elevation, then hash tiebreak)
+        -- Three parallel arrays: keys1 (elev), keys2 (hash), values (idx)
+        heapK1 ← VUM.new totalSamples    -- elevation key
+        heapK2 ← VUM.new totalSamples    -- hash tiebreak key
+        heapVal ← VUM.new totalSamples   -- cell index
+        heapSize ← VUM.new 1
+        VUM.write heapSize 0 (0 ∷ Int)
+
+        -- Heap operations
+        let siftUp i = do
+                when (i > 0) $ do
+                    let parent = (i - 1) `div` 2
+                    ik1 ← VUM.read heapK1 i
+                    pk1 ← VUM.read heapK1 parent
+                    ik2 ← VUM.read heapK2 i
+                    pk2 ← VUM.read heapK2 parent
+                    when (ik1 < pk1 ∨ (ik1 ≡ pk1 ∧ ik2 < pk2)) $ do
+                        -- Swap entries
+                        iv ← VUM.read heapVal i
+                        pv ← VUM.read heapVal parent
+                        VUM.write heapK1 i pk1
+                        VUM.write heapK2 i pk2
+                        VUM.write heapVal i pv
+                        VUM.write heapK1 parent ik1
+                        VUM.write heapK2 parent ik2
+                        VUM.write heapVal parent iv
+                        siftUp parent
+
+            siftDown n i = do
+                let left = 2 * i + 1
+                    right = 2 * i + 2
+                smallest0 ← pure i
+                smallest1 ← if left < n
+                    then do
+                        lk1 ← VUM.read heapK1 left
+                        sk1 ← VUM.read heapK1 smallest0
+                        lk2 ← VUM.read heapK2 left
+                        sk2 ← VUM.read heapK2 smallest0
+                        pure (if lk1 < sk1 ∨ (lk1 ≡ sk1 ∧ lk2 < sk2)
+                              then left else smallest0)
+                    else pure smallest0
+                smallest2 ← if right < n
+                    then do
+                        rk1 ← VUM.read heapK1 right
+                        sk1 ← VUM.read heapK1 smallest1
+                        rk2 ← VUM.read heapK2 right
+                        sk2 ← VUM.read heapK2 smallest1
+                        pure (if rk1 < sk1 ∨ (rk1 ≡ sk1 ∧ rk2 < sk2)
+                              then right else smallest1)
+                    else pure smallest1
+                when (smallest2 ≠ i) $ do
+                    -- Swap
+                    ik1 ← VUM.read heapK1 i
+                    ik2 ← VUM.read heapK2 i
+                    iv  ← VUM.read heapVal i
+                    sk1 ← VUM.read heapK1 smallest2
+                    sk2 ← VUM.read heapK2 smallest2
+                    sv  ← VUM.read heapVal smallest2
+                    VUM.write heapK1 i sk1
+                    VUM.write heapK2 i sk2
+                    VUM.write heapVal i sv
+                    VUM.write heapK1 smallest2 ik1
+                    VUM.write heapK2 smallest2 ik2
+                    VUM.write heapVal smallest2 iv
+                    siftDown n smallest2
+
+            heapPush elev hp idx = do
+                n ← VUM.read heapSize 0
+                VUM.write heapK1 n elev
+                VUM.write heapK2 n hp
+                VUM.write heapVal n idx
+                VUM.write heapSize 0 (n + 1)
+                siftUp n
+
+            heapPop = do
+                n ← VUM.read heapSize 0
+                topK1 ← VUM.read heapK1 0
+                topV  ← VUM.read heapVal 0
+                let n' = n - 1
+                VUM.write heapSize 0 n'
+                when (n' > 0) $ do
+                    lastK1 ← VUM.read heapK1 n'
+                    lastK2 ← VUM.read heapK2 n'
+                    lastV  ← VUM.read heapVal n'
+                    VUM.write heapK1 0 lastK1
+                    VUM.write heapK2 0 lastK2
+                    VUM.write heapVal 0 lastV
+                    siftDown n' 0
+                pure (topK1, topV)
+
+        -- Build initial heap from seeds
+        forM_ seeds $ \idx →
+            heapPush (elevVec VU.! idx) (hashPri idx) idx
 
         -- Priority-flood: compute filled elevation surface.
         -- Also records flood parents for flat-area fallback.
-        let go queue
-                | Set.null queue = return ()
-                | otherwise = do
-                    let ((curElev, _, curIdx), queue') = Set.deleteFindMin queue
+        let go = do
+                n ← VUM.read heapSize 0
+                when (n > 0) $ do
+                    (curElev, curIdx) ← heapPop
                     let nbrs = neighbors curIdx
-                    queue'' ← foldlM (\q nIdx → do
+                    forM_ nbrs $ \nIdx → do
                         nVis ← VUM.read visited nIdx
-                        if nVis
-                        then return q
-                        else do
+                        when (not nVis) $ do
                             VUM.write visited nIdx True
                             let nElev = elevVec VU.! nIdx
                                 nFill = max nElev curElev
                             VUM.write filled nIdx nFill
                             VUM.write floodParent nIdx curIdx
-                            return (Set.insert (nFill, hashPri nIdx, nIdx) q)
-                        ) queue' nbrs
-                    go queue''
+                            heapPush nFill (hashPri nIdx) nIdx
+                    go
 
-        go initQueue
+        go
 
         -- Safety: any unvisited cell gets its own elevation
         forM_ [0 .. totalSamples - 1] $ \idx → do
@@ -387,14 +473,19 @@ simulateHydrology seed worldSize ageIdx grid =
         ---------------------------------------------------
         -- Step 3: Flow accumulation
         ---------------------------------------------------
-        sortedByElev ∷ [Int]
-        sortedByElev = sortBy (comparing (Down . (filledElev VU.!)))
-                              [0 .. totalSamples - 1]
+        -- Sort indices by descending filled elevation using in-place
+        -- vector sort. Much faster than list sort on 262K elements
+        -- because it avoids list node allocation and GC pressure.
+        sortedByElev ∷ VU.Vector Int
+        sortedByElev = runST $ do
+            mv ← VUM.generate totalSamples id
+            VA.sortBy (\a b → compare (filledElev VU.! b) (filledElev VU.! a)) mv
+            VU.unsafeFreeze mv
 
         accumVec ∷ VU.Vector Int
         accumVec = runST $ do
             mv ← VUM.replicate totalSamples (1 ∷ Int)
-            forM_ sortedByElev $ \idx → do
+            VU.forM_ sortedByElev $ \idx → do
                 myAccum ← VUM.read mv idx
                 let downstream = flowDirVec VU.! idx
                 when (downstream ≥ 0) $
@@ -434,24 +525,23 @@ simulateHydrology seed worldSize ageIdx grid =
         --      (i.e., this is where significant flow begins)
         ---------------------------------------------------
 
-        -- For a given cell, find upstream neighbors:
-        -- cells whose flowDir points TO this cell
-        upstreamQualified ∷ Int → [Int]
-        upstreamQualified idx =
-            let (ix, iy) = fromIdx idx
-            in [ nIdx
-               | (dx, dy) ← neighborOffsets
-               , let ny = iy + dy
-               , ny ≥ 0 ∧ ny < gridW
-               , let nIdx = toIdx (wrapIX (ix + dx)) ny
-               , flowDirVec VU.! nIdx ≡ idx
-               , accumVec VU.! nIdx ≥ minRiverTotalFlow
-               ]
+        -- Pre-compute which cells have a qualified upstream contributor.
+        -- For each cell with sufficient flow, mark its downstream target
+        -- as "has qualified upstream". This is O(n) instead of O(n×8).
+        hasQualifiedUpstream ∷ VU.Vector Bool
+        hasQualifiedUpstream = runST $ do
+            mv ← VUM.replicate totalSamples False
+            forM_ [0 .. totalSamples - 1] $ \idx →
+                when (accumVec VU.! idx ≥ minRiverTotalFlow) $ do
+                    let downstream = flowDirVec VU.! idx
+                    when (downstream ≥ 0 ∧ downstream < totalSamples) $
+                        VUM.write mv downstream True
+            VU.unsafeFreeze mv
 
         headwaters = filter (\idx →
             landVec VU.! idx
             ∧ accumVec VU.! idx ≥ minRiverTotalFlow
-            ∧ null (upstreamQualified idx)
+            ∧ not (hasQualifiedUpstream VU.! idx)
             ) [0 .. totalSamples - 1]
 
         -- Sort by accumulation descending — biggest rivers first
