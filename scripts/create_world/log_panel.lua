@@ -64,10 +64,10 @@ function logPanel.create(params)
     ---------------------------------------------------------
     -- World preview image (upper portion)
     ---------------------------------------------------------
-    local previewSize = math.min(rightBounds.width,
-                                 rightBounds.height * 0.5) * 0.7
+    local previewW = rightBounds.width * 0.9
+    local previewH = previewW / 2
     local previewX = rightX + rightBounds.x
-                   + (rightBounds.width - previewSize) / 2
+                   + (rightBounds.width - previewW) / 2
     local previewY = contentStartY + rightBounds.y
                    + math.floor(20 * uiscale)
 
@@ -77,8 +77,8 @@ function logPanel.create(params)
             page    = page,
             x       = previewX,
             y       = previewY,
-            width   = previewSize,
-            height  = previewSize,
+            width   = previewW,
+            height  = previewH,
             texture = params.worldPreviewTexture,
             color   = {1.0, 1.0, 1.0, 1.0},
             zIndex  = params.zPreview,
@@ -89,7 +89,7 @@ function logPanel.create(params)
     ---------------------------------------------------------
     -- Status label (below preview)
     ---------------------------------------------------------
-    local logTopY = previewY + previewSize + math.floor(20 * uiscale)
+    local logTopY = previewY + previewH + math.floor(20 * uiscale)
     local logX    = rightX + rightBounds.x + math.floor(10 * uiscale)
 
     local statusLabelId = params.trackLabel(label.new({

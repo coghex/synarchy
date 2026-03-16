@@ -30,7 +30,7 @@ import World.Geology.Log (formatTimeline, formatPlatesSummary)
 import World.Material (getMaterialProps, MaterialProps(..))
 import World.Fluids (computeOceanMap, isOceanChunk)
 import World.Plate (generatePlates, elevationAtGlobal)
-import World.Preview (buildPreviewImage, PreviewImage(..))
+import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
 import World.ZoomMap (buildZoomCacheWithPixels)
 import World.ZoomMap.ColorPalette (buildColorPalette)
@@ -158,7 +158,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     -- Step 5: Preview
     writeIORef phaseRef (LoadPhase1 5 totalSteps)
     sendGenLog env "Rendering world preview..."
-    let preview = buildPreviewImage params zoomCache
+    let preview = buildPreviewFromPixels params zoomCache chunkPixels
     _ <- evaluate (force preview)  -- do the work now
     writeIORef (worldPreviewRef env) $
         Just (piWidth preview, piHeight preview, piData preview)

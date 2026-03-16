@@ -115,21 +115,34 @@ buildZoomCache params registry =
                          then 0
                          else vegCategoryFromClimate climate worldSize
                                   baseGX baseGY winnerMat
+
+                -- Ice check at chunk center
+                centerGX = baseGX + chunkSize `div` 2
+                centerGY = baseGY + chunkSize `div` 2
+                (cgx, cgy) = wrapGlobalU worldSize centerGX centerGY
+                LocalClimate{lcTemp=cmt, lcSummerTemp=cst
+                            , lcWinterTemp=cwt} =
+                    lookupLocalClimate climate worldSize cgx cgy
+                altAboveSea = max 0 (avgElev - seaLevel)
+                altCool = fromIntegral altAboveSea * (0.065 ∷ Float)
+                ocnPen = if chunkOcean then 5.0 else 0.0 ∷ Float
+                iceNoise = zoomIceNoise seed cgx cgy
+                effT = cmt + ocnPen - altCool + iceNoise
+                chunkIce = effT < -2.0
+                         ∨ (cwt - altCool < -10.0 ∧ cst - altCool < 5.0)
             in ZoomChunkEntry
                 { zceChunkX = ccx
                 , zceChunkY = ccy
                 , zceBaseGX = baseGX
                 , zceBaseGY = baseGY
-                , zceTexIndex = if isOceanChunk oceanMap coord
-                                then 0
-                                else winnerMat
-                , zceElev     = if isOceanChunk oceanMap coord
-                                then seaLevel else avgElev
+                , zceTexIndex = winnerMat
+                , zceElev     = avgElev
                 , zceIsOcean  = chunkOcean
                 , zceHasLava  = chunkLava
                 , zceHasRiver = chunkRiver
                 , zceHasLake  = chunkLake
                 , zceVegCategory = vegCat
+                , zceHasIce  = chunkIce
                 }
 
         allCoords = [ let wrappedU = ((u + halfSize) `mod` w + w) `mod` w - halfSize
@@ -224,21 +237,34 @@ buildZoomCacheWithPixels params registry palette =
                          else vegCategoryFromClimate climate worldSize
                                   baseGX baseGY winnerMat
 
+                -- Ice check at chunk center
+                centerGX' = baseGX + chunkSize `div` 2
+                centerGY' = baseGY + chunkSize `div` 2
+                (cgx', cgy') = wrapGlobalU worldSize centerGX' centerGY'
+                LocalClimate{lcTemp=cmt', lcSummerTemp=cst'
+                            , lcWinterTemp=cwt'} =
+                    lookupLocalClimate climate worldSize cgx' cgy'
+                altAboveSea' = max 0 (avgElev - seaLevel)
+                altCool' = fromIntegral altAboveSea' * (0.065 ∷ Float)
+                ocnPen' = if chunkOcean then 5.0 else 0.0 ∷ Float
+                iceNoise' = zoomIceNoise seed cgx' cgy'
+                effT' = cmt' + ocnPen' - altCool' + iceNoise'
+                chunkIce' = effT' < -2.0
+                          ∨ (cwt' - altCool' < -10.0 ∧ cst' - altCool' < 5.0)
+
                 entry = ZoomChunkEntry
                     { zceChunkX = ccx
                     , zceChunkY = ccy
                     , zceBaseGX = baseGX
                     , zceBaseGY = baseGY
-                    , zceTexIndex = if isOceanChunk oceanMap coord
-                                    then 0
-                                    else winnerMat
-                    , zceElev     = if isOceanChunk oceanMap coord
-                                    then seaLevel else avgElev
+                    , zceTexIndex = winnerMat
+                    , zceElev     = avgElev
                     , zceIsOcean  = chunkOcean
                     , zceHasLava  = chunkLava
                     , zceHasRiver = chunkRiver
                     , zceHasLake  = chunkLake
                     , zceVegCategory = vegCat
+                    , zceHasIce  = chunkIce'
                     }
 
                 -- Compute per-tile fluid: build a terrain surface map from
@@ -503,12 +529,19 @@ majorityMaterial ∷ [(Int, Word8)] → Word8
 majorityMaterial samples =
     let counts = foldl' (\m (_, mat) → Map.insertWith (+) mat (1 ∷ Int) m)
                         Map.empty samples
-        (winner, _) = Map.foldlWithKey' (\(bestMat, bestCount) mat count →
+        -- Prefer land materials over ocean/air (matId=0).
+        -- A coastal chunk with 40% land should show as land in the
+        -- preview, since the per-chunk zoom pixel texture already
+        -- renders the per-tile detail correctly.
+        landCounts = Map.delete 0 counts
+        pickBest m = Map.foldlWithKey' (\(bestMat, bestCount) mat count →
             if count > bestCount ∨ (count ≡ bestCount ∧ mat > bestMat)
             then (mat, count)
             else (bestMat, bestCount)
-            ) (0, 0) counts
-    in winner
+            ) (0, 0) m
+        (landWinner, landCount) = pickBest landCounts
+        (anyWinner, _) = pickBest counts
+    in if landCount > 0 then landWinner else anyWinner
 
 -----------------------------------------------------------
 -- Vegetation Category (simplified climate-based)

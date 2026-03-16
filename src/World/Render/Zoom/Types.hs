@@ -45,12 +45,13 @@ data ZoomChunkEntry = ZoomChunkEntry
     , zceHasRiver ∷ !Bool      -- ^ Whether this chunk has a river (for preview)
     , zceHasLake  ∷ !Bool      -- ^ Whether this chunk has a lake (for preview)
     , zceVegCategory ∷ !Word8  -- ^ Vegetation density category (0=none,1=sparse,2=medium,3=dense,4=marsh)
+    , zceHasIce  ∷ !Bool      -- ^ Whether this chunk has ice cover
     } deriving (Show, Eq)
 instance NFData ZoomChunkEntry where
-    rnf (ZoomChunkEntry x y bgX bgY tex elev ocean lava river lake veg) =
+    rnf (ZoomChunkEntry x y bgX bgY tex elev ocean lava river lake veg ice) =
         rnf x `seq` rnf y `seq` rnf bgX `seq` rnf bgY `seq`
         rnf tex `seq` rnf elev `seq` rnf ocean `seq` rnf lava `seq`
-        rnf river `seq` rnf lake `seq` rnf veg
+        rnf river `seq` rnf lake `seq` rnf veg `seq` rnf ice
 
 data ZoomCameraSnapshot = ZoomCameraSnapshot
     { zcsPosition ∷ !(Float, Float)
