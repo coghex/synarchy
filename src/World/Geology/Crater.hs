@@ -16,9 +16,7 @@ import World.Geology.Types
 import World.Geology.Hash
 import World.Geology.Volcano (perturbDist)
 
------------------------------------------------------------
--- Crater Generation
------------------------------------------------------------
+-- * Crater Generation
 
 -- | Generate a set of crater events for a bombardment era.
 --   Picks random land positions, avoids ocean and glacier,
@@ -111,9 +109,7 @@ determineMeteoriteType seed attemptIdx radius =
                 2 → unMaterialId matPyroxene  -- Stony (pyroxene-rich)
                 _ → unMaterialId matFeldspar  -- Stony (feldspar-rich)
 
------------------------------------------------------------
--- Crater Application
------------------------------------------------------------
+-- * Crater Application
 
 --   Profile (cross section):
 --

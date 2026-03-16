@@ -1,4 +1,4 @@
- {-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Input.Event where
 
 import UPrelude
@@ -18,16 +18,10 @@ import Engine.Core.Error.Exception
 import Engine.Graphics.Camera ( Camera2D(..) )
 import Engine.Input.Types
 
--- | Process all pending input events
 handleInputEvents ∷ EngineM ε σ ()
 handleInputEvents = do
     env ← ask
-    -- read the shared input state
     sharedInput ← liftIO $ readIORef (inputStateRef env)
-    
-    -- Count pressed keys for debug
     let pressedKeys = Map.filter keyPressed (inpKeyStates sharedInput)
         keyCount = Map.size pressedKeys
-    
-    -- update local copy in engine state
     modify $ \s → s { inputState = sharedInput }

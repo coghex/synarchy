@@ -22,9 +22,7 @@ import World.Thread.Time (tickWorldTime)
 import World.Thread.ChunkLoading (updateChunkLoading, drainInitQueues)
 import World.Thread.Command (handleWorldCommand)
 
------------------------------------------------------------
--- Start World Thread
------------------------------------------------------------
+-- * Start World Thread
 
 startWorldThread ∷ EngineEnv → IO ThreadState
 startWorldThread env = do
@@ -44,9 +42,7 @@ startWorldThread env = do
         )
     return $ ThreadState stateRef threadId
 
------------------------------------------------------------
--- World Loop
------------------------------------------------------------
+-- * World Loop
 
 worldLoop ∷ EngineEnv → IORef ThreadControl → IORef Double → IO ()
 worldLoop env stateRef lastTimeRef = do

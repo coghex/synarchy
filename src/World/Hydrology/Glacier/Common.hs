@@ -7,9 +7,7 @@ import UPrelude
 import World.Types
 import World.Hydrology.Types
 
------------------------------------------------------------
--- Extract glacier params from PersistentFeature
------------------------------------------------------------
+-- * Extract glacier params from PersistentFeature
 
 getGlacierParams ∷ PersistentFeature → GlacierParams
 getGlacierParams pf = case pfFeature pf of

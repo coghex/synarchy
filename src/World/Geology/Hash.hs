@@ -13,9 +13,7 @@ import UPrelude
 import Data.Bits (xor, shiftR, (.&.))
 import Data.Word (Word32, Word64)
 
------------------------------------------------------------
--- Hash Utilities
------------------------------------------------------------
+-- * Hash Utilities
 
 hashGeo ∷ Word64 → Int → Int → Word32
 hashGeo seed idx prop =
@@ -67,9 +65,7 @@ wrappedDeltaUV worldSize gx1 gy1 gx2 gy2 =
         dy = (dv - wrappedDU) `div` 2
     in (dx, dy)
 
------------------------------------------------------------
--- Feature Scaling
------------------------------------------------------------
+-- * Feature Scaling
 
 scaleCount ∷ Int → Int → Int
 scaleCount worldSize baseCount =

@@ -35,41 +35,31 @@ recreateSwapchain ∷ Window → EngineM ε σ ()
 recreateSwapchain window = do
     state ← gets graphicsState
     
-    -- Extract required handles
     device ← getDeviceOrFail state
     pDevice ← getPhysicalDeviceOrFail state
     surface ← getSurfaceOrFail state
     queues ← getQueuesOrFail state
     
-    -- Wait for device to be idle before destroying resources
     liftIO $ deviceWaitIdle device
-    
-    -- Get new window dimensions
     let Window glfwWin = window
     (width, height) ← GLFW.getFramebufferSize glfwWin
     
-    -- Handle minimized window (zero size)
     if width ≡ 0 ∨ height ≡ 0
         then logDebugM CatSwapchain "Window minimized, skipping swapchain recreation"
         else do
-            -- Run all existing cleanup actions
             logDebugM CatSwapchain "Running cleanup before recreation..."
             liftIO $ runAllCleanups (vulkanCleanup state)
             
-            -- Reset cleanup to empty (we'll rebuild it)
             modify $ \s → s { graphicsState = (graphicsState s) {
                 vulkanCleanup = emptyCleanup
             }}
             
-            -- Recreate all resources
             recreateAllResources pDevice device queues surface window
             
-            -- Reset frame index
-            modify $ \s → s { graphicsState = (graphicsState s) { 
-                currentFrame = 0 
+            modify $ \s → s { graphicsState = (graphicsState s) {
+                currentFrame = 0
             }}
-            
-            -- Update UI camera with new dimensions
+
             env ← ask
             liftIO $ writeIORef (uiCameraRef env) $ 
                 UICamera (fromIntegral width) (fromIntegral height)
@@ -83,7 +73,7 @@ recreateAllResources ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR
 recreateAllResources pDevice device queues surface window = do
     state ← gets graphicsState
     
-    -- Get descriptor manager and texture system (these survive recreation)
+    -- Descriptor manager and texture system survive recreation
     descManager ← getDescriptorManagerOrFail state
     texSystem ← getTextureSystemOrFail state
     fontDescLayout ← getFontDescriptorLayoutOrFail state
@@ -91,7 +81,6 @@ recreateAllResources pDevice device queues surface window = do
     let uniformLayout = dmUniformLayout descManager
         bindlessLayout = btsDescriptorLayout texSystem
     
-    -- 1. Swapchain
     env ← ask
     videoConfig ← liftIO $ readIORef (videoConfigRef env)
     let vsyncEnabled = vcVSync videoConfig
@@ -104,20 +93,18 @@ recreateAllResources pDevice device queues surface window = do
     let newExtent = siSwapExtent swapInfo
         imgFormat = siSwapImgFormat swapInfo
     
-    -- 1.5. Determine actual sample count (clamp to device support)
+    -- Clamp requested sample count to device support
     deviceProps ← getPhysicalDeviceProperties pDevice
     let supportedSamples = framebufferColorSampleCounts (limits deviceProps)
         requestedSamples = msaaToSampleCount msaaInt
         sampleCount      = clampSampleCount supportedSamples requestedSamples
     
-    -- 2. Image views
     imageViews ← createSwapchainImageViews device swapInfo
     modify $ \s → s { graphicsState = (graphicsState s) {
         swapchainInfo = case swapchainInfo (graphicsState s) of
             Just si → Just si { siSwapImgViews = imageViews }
             Nothing → Nothing } }
     
-    -- 2.5. MSAA color image (only if sample count > 1)
     mMsaaView ← if sampleCount ≢ SAMPLE_COUNT_1_BIT
         then do
             (img, mem, view) ← createMSAAColorImage pDevice device imgFormat newExtent sampleCount
@@ -131,41 +118,35 @@ recreateAllResources pDevice device queues surface window = do
             }}
             pure Nothing
     
-    -- 3. Render pass (now MSAA-aware)
     renderPass ← createVulkanRenderPass device imgFormat sampleCount
     modify $ \s → s { graphicsState = (graphicsState s) {
         vulkanRenderPass = Just renderPass
     }}
     
-    -- 4. Framebuffers (now MSAA-aware)
     framebuffers ← createVulkanFramebuffers device renderPass swapInfo imageViews mMsaaView
     modify $ \s → s { graphicsState = (graphicsState s) {
         framebuffers = Just framebuffers
     }}
     
-    -- 5. Bindless pipeline (pass sample count)
-    (bindlessPipe, bindlessPipeLayout) ← 
+    (bindlessPipe, bindlessPipeLayout) ←
         createBindlessPipeline device renderPass newExtent uniformLayout bindlessLayout sampleCount
     modify $ \s → s { graphicsState = (graphicsState s) {
         bindlessPipeline = Just (bindlessPipe, bindlessPipeLayout)
     }}
     
-    -- 6. Bindless UI pipeline (pass sample count)
-    (bindlessUIPipe, bindlessUIPipeLayout) ← 
+    (bindlessUIPipe, bindlessUIPipeLayout) ←
         createBindlessUIPipeline device renderPass newExtent uniformLayout bindlessLayout sampleCount
     modify $ \s → s { graphicsState = (graphicsState s) {
         bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout)
     }}
     
-    -- 7. Font pipeline (pass sample count)
-    (fontPipe, fontPipeLayout, _) ← 
+    (fontPipe, fontPipeLayout, _) ←
         createFontPipeline device renderPass newExtent uniformLayout sampleCount
     modify $ \s → s { graphicsState = (graphicsState s) {
         fontPipeline = Just (fontPipe, fontPipeLayout)
     }}
     
-    -- 8. Font UI pipeline (pass sample count)
-    (fontUIPipe, fontUIPipeLayout) ← 
+    (fontUIPipe, fontUIPipeLayout) ←
         createFontUIPipeline device renderPass newExtent uniformLayout fontDescLayout sampleCount
     modify $ \s → s { graphicsState = (graphicsState s) {
         fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout)
@@ -173,7 +154,7 @@ recreateAllResources pDevice device queues surface window = do
     
     logDebugM CatGraphics "All resources recreated"
 
--- | Helper extractors
+-- * State extractors
 getDeviceOrFail ∷ GraphicsState → EngineM ε σ Device
 getDeviceOrFail state = case vulkanDevice state of
     Just d  → pure d

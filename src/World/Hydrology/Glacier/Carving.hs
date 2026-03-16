@@ -11,10 +11,7 @@ import World.Material (matSandstone, unMaterialId)
 import World.Hydrology.Types
 import World.Geology.Types
 
------------------------------------------------------------
--- Glacier Carving (pure GeoModification) — unchanged from
--- previous version, included for completeness
------------------------------------------------------------
+-- * Glacier Carving
 
 -- | Apply a glacier's U-shaped valley carving to a single column.
 applyGlacierCarve ∷ GlacierParams → Int → Int → Int → Int → GeoModification
@@ -72,9 +69,7 @@ applyGlacierCarve glacier worldSize gx gy _baseElev =
 
        else noModification
 
------------------------------------------------------------
--- Glacier Evolution Application (pure GeoModification)
------------------------------------------------------------
+-- * Glacier Evolution Application (pure GeoModification)
 
 applyGlacierEvolution ∷ HydroEvolution → Int → Int → Int → Int → GeoModification
 applyGlacierEvolution (GlacierAdvance _advLen _advWid) _ws _gx _gy _e =

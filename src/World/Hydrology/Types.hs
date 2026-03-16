@@ -22,9 +22,7 @@ import Control.DeepSeq (NFData(..))
 import qualified Data.Vector as V
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 
------------------------------------------------------------
--- River System
------------------------------------------------------------
+-- * River System
 
 -- | A river is a chain of segments from source to mouth.
 --   Each segment is a straight line between two GeoCoords.
@@ -82,9 +80,7 @@ data RiverActivity
     | Dammed           -- ^ Blocked, feeding a lake
     deriving (Show, Eq)
 
------------------------------------------------------------
--- Glacier System
------------------------------------------------------------
+-- * Glacier System
 
 -- | Alpine glaciers flow downhill from cold high elevations.
 --   They carve U-shaped valleys and push moraines.
@@ -110,9 +106,7 @@ data GlacierActivity
     | Melted           -- ^ Gone, only the carved valley remains
     deriving (Show, Eq, Generic, Serialize, Hashable)
 
------------------------------------------------------------
--- Lake System
------------------------------------------------------------
+-- * Lake System
 
 -- | Lakes form when rivers are dammed, or when glaciers
 --   carve basins, or in volcanic calderas.
@@ -133,9 +127,7 @@ data LakeSource
     | CalderaLake !GeoFeatureId    -- ^ Volcanic caldera filled
     deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
------------------------------------------------------------
--- Hydrological Feature (unified, like VolcanicFeature)
------------------------------------------------------------
+-- * Hydrological Feature (unified, like VolcanicFeature)
 
 data HydroFeature
     = RiverFeature    !RiverParams
@@ -143,9 +135,7 @@ data HydroFeature
     | LakeFeature     !LakeParams
     deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
------------------------------------------------------------
--- Hydrological Evolution (like FeatureEvolution)
------------------------------------------------------------
+-- * Hydrological Evolution (like FeatureEvolution)
 
 -- | How a hydrological feature changes between ages.
 --   Each is a pure event that gets stored in GeoPeriod.gpEvents.

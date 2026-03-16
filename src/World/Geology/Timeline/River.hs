@@ -29,9 +29,7 @@ import World.Geology.Timeline.Helpers
     , reconcileLakes )
 import World.Geology.Timeline.RiverTrace (traceRiverFromSource)
 
------------------------------------------------------------
--- Hydrology reconciliation
------------------------------------------------------------
+-- * Hydrology reconciliation
 
 reconcileHydrology ∷ Word64 → Int → FlowResult → Int → Int
                    → ElevGrid
@@ -70,7 +68,7 @@ reconcileHydrology' seed ageIdx flowResult periodIdx worldSize elevGrid filledEl
                         else let (pf', evt, st') = evolveExistingRiver
                                                        seed ageIdx periodIdx
                                                        existPf st
-                             in (pf' : pfs, evt ++ evts, st')
+                             in (pf' : pfs, evt ⧺ evts, st')
             ) ([], [], tbs) existingRiverIds
 
         budget = maxTotalRivers - currentRiverCount
@@ -115,14 +113,12 @@ reconcileHydrology' seed ageIdx flowResult periodIdx worldSize elevGrid filledEl
         (lakePfs, lakeEvents, tbs3) = reconcileLakes seed ageIdx periodIdx
                                           worldSize existingLakes simLakes tbs2
 
-        allNewPfs = evolvedPfs ++ newPfs ++ lakePfs
-        allEvents = evolveEvents ++ newEvents ++ lakeEvents
+        allNewPfs = evolvedPfs ⧺ newPfs ⧺ lakePfs
+        allEvents = evolveEvents ⧺ newEvents ⧺ lakeEvents
 
     in (allNewPfs, allEvents, tbs3)
 
------------------------------------------------------------
--- River evolution
------------------------------------------------------------
+-- * River evolution
 
 evolveExistingRiver ∷ Word64 → Int → Int
                     → PersistentFeature
@@ -277,9 +273,7 @@ evolveDeepen seed ageIdx periodIdx pf river tbs =
         tbs' = updateFeature fid (const updatedPf) tbs
     in (updatedPf, [], tbs')
 
------------------------------------------------------------
--- River merging
------------------------------------------------------------
+-- * River merging
 
 mergeConvergingRivers ∷ Int → Int → TimelineBuildState → TimelineBuildState
 mergeConvergingRivers worldSize periodIdx tbs =
@@ -411,9 +405,7 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
 
     in tbs''
 
------------------------------------------------------------
--- Spatial diversity for source selection
------------------------------------------------------------
+-- * Spatial diversity for source selection
 
 -- | Select river sources with spatial diversity. Instead of just
 --   taking the N highest-flow sources (which cluster in one basin),

@@ -1,4 +1,3 @@
--- src/Engine/Graphics/Vulkan/Image.hs
 module Engine.Graphics.Vulkan.Image
   ( createVulkanImage
   , createVulkanImage'
@@ -26,7 +25,6 @@ import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
 
--- Usage in createVulkanImage:
 createVulkanImage ∷ Device → PhysicalDevice → (Word32, Word32) → Format → ImageTiling 
                   → ImageUsageFlags → MemoryPropertyFlags → EngineM ε σ VulkanImage
 createVulkanImage device pDevice (width, height) format tiling usage memProps = do
@@ -62,7 +60,7 @@ createVulkanImage device pDevice (width, height) format tiling usage memProps = 
 
   pure $ VulkanImage image memory
 
--- | a version that returns a cleanup action
+-- | Like 'createVulkanImage' but returns an explicit cleanup action
 createVulkanImage' ∷ Device → PhysicalDevice → (Word32, Word32) → Format → ImageTiling 
                    → ImageUsageFlags → MemoryPropertyFlags 
                    → EngineM ε σ (VulkanImage, IO ())
@@ -80,7 +78,6 @@ createVulkanImage' device pDevice (width, height) format tiling usage memProps =
         , samples = SAMPLE_COUNT_1_BIT
         }
   
-  -- Use allocResource' instead of allocResource
   (image, cleanupImage) ← allocResource'IO 
     (\img → liftIO $ destroyImage device img Nothing)
     (createImage device imageInfo Nothing)
@@ -101,7 +98,6 @@ createVulkanImage' device pDevice (width, height) format tiling usage memProps =
 
   bindImageMemory device image memory 0
 
-  -- Combine cleanup actions
   let cleanup = do
         cleanupImage
         cleanupMemory
@@ -138,10 +134,7 @@ createTextureImage ∷ Device
                    → (Word32, Word32)  -- ^ Width and height
                    → EngineM ε σ VulkanImage
 createTextureImage device pDevice graphicsQueue cmdPool imageData (width, height) = do
-  -- Create staging buffer
-  let imageSize = width * height * 4  -- Assuming RGBA format
-  
-  -- Create final image
+  let imageSize = width * height * 4  -- RGBA format
   image ← createVulkanImage device pDevice (width, height)
             FORMAT_R8G8B8A8_SRGB
             IMAGE_TILING_OPTIMAL
@@ -149,18 +142,15 @@ createTextureImage device pDevice graphicsQueue cmdPool imageData (width, height
             MEMORY_PROPERTY_DEVICE_LOCAL_BIT
   pure image
 
--- | Clean up image resources
 destroyVulkanImage ∷ Device → VulkanImage → EngineM ε σ ()
 destroyVulkanImage device VulkanImage{..} = do
   destroyImage device viImage Nothing
   freeMemory device viMemory Nothing
 
--- | Clean up image view
 destroyVulkanImageView ∷ Device → ImageView → EngineM ε σ ()
 destroyVulkanImageView device view =
   liftIO $ destroyImageView device view Nothing
 
--- Function definition:
 findMemoryType ∷ PhysicalDevice → Word32 → MemoryPropertyFlags → EngineM ε σ Word32
 findMemoryType pdev typeFilter properties = do
   memProps ← getPhysicalDeviceMemoryProperties pdev

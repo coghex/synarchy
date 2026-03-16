@@ -28,9 +28,7 @@ import World.Scale (WorldScale(..), computeWorldScale, scaleElev, scaleDist)
 import World.Chunk.Types (chunkSize)
 import World.Plate.Types (TectonicPlate(..))
 
------------------------------------------------------------
--- Boundary Classification
------------------------------------------------------------
+-- * Boundary Classification
 
 data BoundaryType
     = Convergent !Float
@@ -41,9 +39,7 @@ data BoundaryType
 data BoundarySide = SidePlateA | SidePlateB
     deriving (Show, Eq)
 
------------------------------------------------------------
--- Plate Generation
------------------------------------------------------------
+-- * Plate Generation
 
 generatePlates ∷ Word64 → Int → Int → [TectonicPlate]
 generatePlates seed worldSize plateCount =
@@ -100,9 +96,7 @@ generateOnePlate seed worldSize plateIndex =
         , plateDriftY   = driftY
         }
 
------------------------------------------------------------
--- Plate Queries
------------------------------------------------------------
+-- * Plate Queries
 
 plateAt ∷ Word64 → Int → [TectonicPlate] → Int → Int → (TectonicPlate, Float)
 plateAt seed worldSize plates gx gy =
@@ -149,9 +143,7 @@ rankPlates seed worldSize plates gx gy =
             in (plate, sqrt (du * du + dv * dv) + jitter)
     in sortBy (comparing snd) (map withDist plates)
 
------------------------------------------------------------
--- Boundary Classification
------------------------------------------------------------
+-- * Boundary Classification
 
 classifyBoundary ∷ Int → TectonicPlate → TectonicPlate → BoundaryType
 classifyBoundary worldSize plateA plateB =
@@ -184,9 +176,7 @@ classifyBoundary worldSize plateA plateB =
             then Divergent (abs approach)
             else Transform shear
 
------------------------------------------------------------
--- Glacier Border
------------------------------------------------------------
+-- * Glacier Border
 
 glacierWidthRows ∷ Int
 glacierWidthRows = chunkSize
@@ -204,9 +194,7 @@ isBeyondGlacier worldSize gx gy =
         screenRow = gx + gy
     in abs screenRow > halfTiles
 
------------------------------------------------------------
--- Cylindrical Wrapping
------------------------------------------------------------
+-- * Cylindrical Wrapping
 
 worldWidthTiles ∷ Int → Int
 worldWidthTiles worldSize = worldSize * chunkSize
@@ -274,9 +262,7 @@ wrappedValueNoise2D seed worldSize gx gy scale =
         bottom = lerp su v01 v11
     in lerp sv top bottom
 
------------------------------------------------------------
--- Global Elevation Query
------------------------------------------------------------
+-- * Global Elevation Query
 
 elevationAtGlobal ∷ Word64 → [TectonicPlate] → Int → Int → Int → (Int, MaterialId)
 elevationAtGlobal seed plates worldSize gx gy =
@@ -325,9 +311,7 @@ elevationAtGlobal seed plates worldSize gx gy =
 
     in (finalElev, material)
 
------------------------------------------------------------
--- Boundary Elevation Profiles
------------------------------------------------------------
+-- * Boundary Elevation Profiles
 
 boundaryElevation ∷ WorldScale → BoundaryType → BoundarySide
                   → TectonicPlate → TectonicPlate
@@ -419,9 +403,7 @@ transformEffect wsc boundaryDist =
         metersPerTile = 10.0
     in round (scaleElev wsc (100.0 / metersPerTile) * t' * (if boundaryDist > 0 then 1.0 else -1.0))
 
------------------------------------------------------------
--- Local Noise
------------------------------------------------------------
+-- * Local Noise
 
 elevationNoise ∷ Word64 → Int → Int → Int → Int
 elevationNoise seed worldSize gx gy =
@@ -437,9 +419,7 @@ clampInt lo hi x
     | x > hi    = hi
     | otherwise = x
 
------------------------------------------------------------
--- Jitter
------------------------------------------------------------
+-- * Jitter
 
 -- | Per-plate jitter: each plate gets a different noise field
 --   keyed by its center coordinates. This creates irregular
@@ -452,9 +432,7 @@ plateJitter seed worldSize gx gy plateCX plateCY =
         combined = n1 * 0.7 + n2 * 0.3
     in (combined - 0.5) * 80.0
 
------------------------------------------------------------
--- Noise & Hash
------------------------------------------------------------
+-- * Noise & Hash
 
 valueNoise2D ∷ Word64 → Int → Int → Int → Float
 valueNoise2D seed x y scale =

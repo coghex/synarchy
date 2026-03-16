@@ -34,9 +34,7 @@ import World.Chunk.Types (chunkSize)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 
------------------------------------------------------------
--- Coast Classification
------------------------------------------------------------
+-- * Coast Classification
 
 data CoastType
     = ErosionalRocky
@@ -80,9 +78,7 @@ classifyCoast boundary aIsLand bIsLand hardness slope boundaryFade nearRiver =
                then TransformCoast
                else DepositionalSandy
 
------------------------------------------------------------
--- River Mouth Proximity
------------------------------------------------------------
+-- * River Mouth Proximity
 
 riverMouthRadius ∷ Int
 riverMouthRadius = 24
@@ -112,9 +108,7 @@ isNearRiverMouth worldSize mouths gx gy =
         in d2 ≤ riverMouthRadius * riverMouthRadius
         ) mouths
 
------------------------------------------------------------
--- Sand Profile
------------------------------------------------------------
+-- * Sand Profile
 
 sandProfile ∷ Int → Int
 sandProfile dist
@@ -125,9 +119,7 @@ sandProfile dist
 outcroppHardness ∷ Float
 outcroppHardness = 0.6
 
------------------------------------------------------------
--- Material Selection
------------------------------------------------------------
+-- * Material Selection
 
 beachMaterial ∷ Int → Word8 → Float → Word8
 beachMaterial dist origMat roll
@@ -180,9 +172,7 @@ deltaMaterial dist roll
         if roll < 0.4 then 53
         else 54
 
------------------------------------------------------------
--- Coastal Erosion Pass
------------------------------------------------------------
+-- * Coastal Erosion Pass
 
 maxCoastalDist ∷ Int
 maxCoastalDist = 8
@@ -324,9 +314,7 @@ applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elev
 
     in (smoothedElev, passMat)
 
------------------------------------------------------------
--- Distance Field
------------------------------------------------------------
+-- * Distance Field
 
 buildDistField ∷ Int → VU.Vector Int → VU.Vector Int
 buildDistField borderSize elevVec = runST $ do
@@ -376,9 +364,7 @@ buildDistField borderSize elevVec = runST $ do
     bfsLevel seeds sc0 0
     VU.unsafeFreeze distM
 
------------------------------------------------------------
--- Beach Smoothing
------------------------------------------------------------
+-- * Beach Smoothing
 
 smoothCoast ∷ Int → Int → VU.Vector Int → VU.Vector Int → VU.Vector Int
 smoothCoast 0 _ _ elev = elev
@@ -412,9 +398,7 @@ smoothCoast iters borderSize distF elev =
             VU.unsafeFreeze em
     in smoothCoast (iters - 1) borderSize distF smoothed
 
------------------------------------------------------------
--- Hash Utility
------------------------------------------------------------
+-- * Hash Utility
 
 {-# INLINE coastHash #-}
 coastHash ∷ Word64 → Int → Int → Word64

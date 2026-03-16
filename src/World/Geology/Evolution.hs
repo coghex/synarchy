@@ -15,9 +15,7 @@ import World.Geology.Types
 import World.Geology.Hash
 import World.Hydrology.Types
 
------------------------------------------------------------
--- Volcanic Evolution
------------------------------------------------------------
+-- * Volcanic Evolution
 
 evolveOneFeature ∷ Word64 → Int
                  → ([GeoEvent], TimelineBuildState)
@@ -167,9 +165,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
         FExtinct   → (events, tbs)
         FCollapsed → (events, tbs)
 
------------------------------------------------------------
--- Feature Query Helpers
------------------------------------------------------------
+-- * Feature Query Helpers
 
 getFeatureRadius ∷ FeatureShape → Int
 getFeatureRadius (VolcanicShape (ShieldVolcano p))    = shBaseRadius p

@@ -40,7 +40,6 @@ ensureTextInstanceBuffer device pDevice requiredInstances mOld = do
                 ,("required", T.pack $ show requiredInstances)]
             pure existing
         _ → do
-            -- Destroy old buffer if it exists
             case mOld of
                 Just old → do
                     logDebugSM CatRender "Destroying old text instance buffer"
@@ -79,7 +78,6 @@ uploadTextInstances ∷ Device → TextInstanceBuffer
                     → EngineM ε σ (TextInstanceBuffer, V.Vector (Word32, Word32))
 uploadTextInstances device tib batches = do
     let !instanceSize = fromIntegral $ sizeOf (undefined ∷ GlyphInstance)
-        -- Pre-compute per-batch (firstInstance, instanceCount)
         offsets = V.prescanl' (\acc trb → acc + fromIntegral (V.length (trbInstances trb))) 0 batches
         counts  = V.map (fromIntegral . V.length . trbInstances) batches
         drawInfos = V.zip offsets counts

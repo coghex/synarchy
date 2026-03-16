@@ -21,7 +21,6 @@ import Engine.Scene.Types
 import Linear (M44, V3(..), (!*!), mkTransformation)
 import Linear.Quaternion (axisAngle)
 
--- | Add a node to the scene graph
 addNode ∷ SceneNode → SceneGraph → (ObjectId, SceneGraph)
 addNode node graph = 
   let providedId = nodeId node
@@ -46,7 +45,6 @@ addNode node graph =
         }
       in (providedId, newGraph)
 
--- | Add a child node to a parent
 addChild ∷ ObjectId → ObjectId → SceneGraph → SceneGraph
 addChild parentId childId graph =
     case (Map.lookup parentId (sgNodes graph), Map.lookup childId (sgNodes graph)) of
@@ -123,7 +121,6 @@ deleteSceneNode objId = do
         else (graph, False)
     return $ fromMaybe False result
 
--- | Convert local transform to world matrix
 localToWorldMatrix ∷ Transform2D → M44 Float
 localToWorldMatrix transform =
     let (x, y) = position transform
@@ -134,7 +131,6 @@ localToWorldMatrix transform =
         rotationQuat = axisAngle (V3 0 0 1) rot
     in mkTransformation rotationQuat translation
 
--- | Update world transforms for dirty nodes
 updateWorldTransforms ∷ SceneGraph → SceneGraph
 updateWorldTransforms graph =
     let updatedGraph = foldr updateNodeTransform graph (Set.toList $ sgDirtyNodes graph)

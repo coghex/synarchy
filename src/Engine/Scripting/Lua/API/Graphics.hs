@@ -27,7 +27,6 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LogLevel(..), defaultLoc)
 
--- | engine.getUIScale()
 getUIScaleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getUIScaleFn env = do
     vconfig ← Lua.liftIO $ readIORef (videoConfigRef env)

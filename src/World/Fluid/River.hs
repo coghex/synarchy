@@ -21,9 +21,7 @@ import World.Fluid.Internal
 import World.Constants (seaLevel)
 import World.Hydrology.Types (RiverParams(..), RiverSegment(..))
 
------------------------------------------------------------
--- Chunk-Level River Computation
------------------------------------------------------------
+-- * Chunk-Level River Computation
 
 computeChunkRivers ∷ [RiverParams] → Int → ChunkCoord
                    → VU.Vector Int
@@ -600,9 +598,7 @@ maxRiverNeighborSurface mv lx ly = do
         []     → Nothing
         (s:ss) → Just (foldl' max s ss)
 
------------------------------------------------------------
--- River Proximity
------------------------------------------------------------
+-- * River Proximity
 
 -- | Check if any part of the river is near this chunk.
 --   Uses proper point-to-segment distance for each segment,
@@ -660,9 +656,7 @@ hasAnyRiverQuick rivers worldSize coord =
         chunkMinGY = cy * chunkSize
     in any (riverNearChunk worldSize chunkMinGX chunkMinGY) rivers
 
------------------------------------------------------------
--- River Fluid Fill (interpolated water surface)
------------------------------------------------------------
+-- * River Fluid Fill (interpolated water surface)
 --
 -- Water surface is INTERPOLATED along each segment, smoothly
 -- decreasing from start to end elevation. This gives a continuous
@@ -853,9 +847,7 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
                      then (Nothing, effectivePerpDist)
                      else (Just (FluidCell River effectiveWater), effectivePerpDist)
 
------------------------------------------------------------
--- Segment Continuity
------------------------------------------------------------
+-- * Segment Continuity
 
 -- | Ensure adjacent segments share consistent endpoint elevations.
 --   After any modification (meander, deepen, etc.), the end of
@@ -878,9 +870,7 @@ fixupSegmentContinuity v
                      else fixed
         in fixed' : go fixed' xs
 
------------------------------------------------------------
--- Cross-Chunk River Boundary Sealing
------------------------------------------------------------
+-- * Cross-Chunk River Boundary Sealing
 
 -- | Post-insertion pass: seal river boundaries across chunk borders.
 --   For each chunk in the list, examine edge river tiles and fill

@@ -1,4 +1,3 @@
--- src/Engine/Graphics/Vulkan/Buffer.hs
 module Engine.Graphics.Vulkan.Buffer
   ( -- Re-export from BufferUtils
     createVulkanBuffer
@@ -45,7 +44,6 @@ createStagingBuffer device pDevice bufferSize data' = do
       BUFFER_USAGE_TRANSFER_SRC_BIT
       (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
   
-  -- Map memory and copy data
   dataPtr ← mapMemory device mem 0 bufferSize zero
   liftIO $ pokeArray (castPtr dataPtr) data'
   unmapMemory device mem

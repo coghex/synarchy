@@ -19,9 +19,7 @@ import World.Plate (isBeyondGlacier, isGlacierZone, wrapGlobalU)
 import World.Weather.Types (ClimateState(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 
------------------------------------------------------------
--- Chunk-Level Ice Computation
------------------------------------------------------------
+-- * Chunk-Level Ice Computation
 
 -- | Compute the ice overlay for a chunk based on climate data.
 --   Ice forms based on effective temperature which accounts for:
@@ -96,9 +94,7 @@ computeChunkIce seed climate worldSize coord terrainSurfMap fluidMap =
 
     in smoothIceSurface terrainSurfMap fluidMap rawIce
 
------------------------------------------------------------
--- Noise
------------------------------------------------------------
+-- * Noise
 
 -- | Deterministic noise for ice boundary variation.
 --   Returns a value in [-2.0, 2.0] to add natural irregularity.
@@ -151,9 +147,7 @@ hashToFloat h = fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF ∷ W
 smoothstep ∷ Float → Float
 smoothstep t = t * t * (3.0 - 2.0 * t)
 
------------------------------------------------------------
--- Ice Surface Smoothing
------------------------------------------------------------
+-- * Ice Surface Smoothing
 
 -- | Smooth the ice surface to form a continuous sheet.
 --   Averages each ice tile's surface with its ice-covered neighbors,

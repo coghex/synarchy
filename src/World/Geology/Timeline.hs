@@ -31,9 +31,7 @@ import World.Constants (seaLevel)
 import World.Weather.Types
 import World.Weather.Generate (updateClimateFromGrid, oceanRegionsFromGrid)
 
------------------------------------------------------------
--- Top Level
------------------------------------------------------------
+-- * Top Level
 
 buildTimeline ∷ Word64 → Int → Int → Float → Float → (GeoTimeline, ClimateState)
 buildTimeline seed worldSize plateCount erosionIntensity volcanicActivity =
@@ -97,9 +95,7 @@ isRiverCarveEvtCached (RiverSegmentEvent _) = True
 isRiverCarveEvtCached (RiverDeltaEvent _) = True
 isRiverCarveEvtCached _ = False
 
------------------------------------------------------------
--- Primordial Bombardment
------------------------------------------------------------
+-- * Primordial Bombardment
 
 buildPrimordialBombardment seed worldSize plates tbs grid =
     let craterSeed = seed `xor` 0xDEADBEEF
@@ -118,9 +114,7 @@ buildPrimordialBombardment seed worldSize plates tbs grid =
         grid' = updateElevGrid worldSize grid period
     in (tbs', grid')
 
------------------------------------------------------------
--- Eon → Era → Period → Epoch → Age loops
------------------------------------------------------------
+-- * Eon → Era → Period → Epoch → Age loops
 
 buildEon ∷ Word64 → Int → [TectonicPlate]
          → TimelineBuildState → ElevGrid
@@ -330,9 +324,7 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
 
     in (tbs_final, elevGrid')
 
------------------------------------------------------------
--- Helper: average precipitation from climate state
------------------------------------------------------------
+-- * Average precipitation
 
 climateAvgPrecip ∷ ClimateState → Float
 climateAvgPrecip cs =

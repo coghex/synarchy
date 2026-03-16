@@ -43,10 +43,7 @@ import Sim.Thread (startSimThread)
 
 main ∷ IO ()
 main = do
-  -- Suppress macOS noise
   setEnv "NSLog_Disabled" "YES"
-  -- Enable MoltenVK argument buffers for higher descriptor limits (bindless)
-  -- Value 2 = use argument buffers when Metal Tier 2 is available (Apple Silicon)
   setEnv "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS" "2"
 #ifdef DEVELOPMENT
   setEnv "VK_LOADER_DEBUG" "none"
@@ -104,47 +101,36 @@ runGraphical mPort = do
   -- Initialize engine
   EngineInitResult env envVar stateVar ← initializeEngine
 
-  -- Apply port override if given
   let env' = case mPort of
         Just p  → env { engineConfig = (engineConfig env) { ecDebugPort = p } }
         Nothing → env
 
-  -- Fork worker threads
   inputThreadState ← startInputThread env'
   luaThreadState   ← startLuaThread env'
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
   simThreadState   ← startSimThread env'
 
-  -- Load video configuration
   videoConfig ← readIORef (videoConfigRef env')
 
-  -- Define main engine action
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
         logInfoM CatSystem "Starting engine..."
-        -- Create window
         window ← GLFW.createWindow $ defaultWindowConfig videoConfig
         modify $ \s → s { graphicsState = (graphicsState s) {
                             glfwWindow = Just window } }
 
-        -- Setup input callbacks
         let Window glfwWin = window
         liftIO $ setupCallbacks glfwWin (lifecycleRef env') (inputQueue env')
 
-        -- Initialize Vulkan
         _ ← initializeVulkan window
-
-        -- Run main loop
         mainLoop
 
-        -- Shutdown
         liftIO $ shutdownThread simThreadState
         shutdownEngine window unitThreadState worldThreadState
                               inputThreadState luaThreadState
         logDebugM CatSystem "Engine shutdown complete."
 
-  -- Run engine
   result ← runEngineM engineAction envVar stateVar checkStatus
   case result of
     Left err → do
@@ -162,12 +148,10 @@ runHeadless ∷ Maybe Int → IO ()
 runHeadless mPort = do
   EngineInitResult env envVar stateVar ← initializeEngineHeadless
 
-  -- Apply port override if given
   let env' = case mPort of
         Just p  → env { engineConfig = (engineConfig env) { ecDebugPort = p } }
         Nothing → env
 
-  -- No input thread needed — no window to receive events
   luaThreadState   ← startLuaThread env'
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
@@ -177,13 +161,11 @@ runHeadless mPort = do
       engineAction = do
         logInfoM CatSystem "Starting engine (headless)..."
         headlessLoop
-        -- Shutdown threads
         logInfoM CatSystem "Headless engine shutting down..."
         liftIO $ shutdownThread simThreadState
         liftIO $ shutdownThread unitThreadState
         liftIO $ shutdownThread worldThreadState
         liftIO $ shutdownThread luaThreadState
-        -- Shut down logger
         logger ← liftIO $ readIORef $ loggerRef env'
         liftIO $ shutdownLogger logger
         liftIO $ writeIORef (lifecycleRef env') EngineStopped
@@ -202,23 +184,21 @@ runHeadless mPort = do
 --   data as JSON to stdout, and exit. No TCP server, no loop.
 runDump ∷ Int → Int → Int → (Int, Int, Int, Int) → IO ()
 runDump seed worldSize ages (cx1, cy1, cx2, cy2) = do
-  hPutStrLn stderr $ "dump: seed=" ++ show seed
-                   ++ " worldSize=" ++ show worldSize
-                   ++ " ages=" ++ show ages
-                   ++ " region=(" ++ show cx1 ++ ","
-                   ++ show cy1 ++ "," ++ show cx2 ++ ","
-                   ++ show cy2 ++ ")"
+  hPutStrLn stderr $ "dump: seed=" ⧺ show seed
+                   ⧺ " worldSize=" ⧺ show worldSize
+                   ⧺ " ages=" ⧺ show ages
+                   ⧺ " region=(" ⧺ show cx1 ⧺ ","
+                   ⧺ show cy1 ⧺ "," ⧺ show cx2 ⧺ ","
+                   ⧺ show cy2 ⧺ ")"
 
   EngineInitResult env envVar stateVar ← initializeEngineHeadless
 
-  -- Disable debug port to avoid conflicts
   let env' = env { engineConfig = (engineConfig env) { ecDebugPort = 0 } }
 
-  -- Redirect logger to stderr so stdout is clean JSON
+  -- Redirect logger to stderr so stdout stays clean JSON
   atomicModifyIORef' (loggerRef env') $ \ls →
       (ls { lsBackend = LogToHandle stderr }, ())
 
-  -- Start worker threads (needed for world generation)
   luaThreadState   ← startLuaThread env'
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
@@ -226,29 +206,21 @@ runDump seed worldSize ages (cx1, cy1, cx2, cy2) = do
 
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
-        -- Wait for engine to be running
         liftIO $ writeIORef (lifecycleRef env') EngineRunning
-        liftIO $ threadDelay 500000  -- 500ms for threads to start
-
-        -- Drain any startup Lua messages
+        liftIO $ threadDelay 500000
         processLuaMessagesHeadless
 
-        -- Step 1: Init world
         liftIO $ hPutStrLn stderr "dump: generating world..."
         liftIO $ Q.writeQueue (worldQueue env')
             (WorldInit (WorldPageId "dump")
                        (fromIntegral seed ∷ Word64)
                        worldSize ages)
-
-        -- Step 2: Wait for generation to complete
         liftIO $ waitForInit env' (ages * 120)
 
-        -- Step 3: Show world
         liftIO $ Q.writeQueue (worldQueue env')
             (WorldShow (WorldPageId "dump"))
         liftIO $ threadDelay 500000
 
-        -- Step 4: Queue chunks for the region
         liftIO $ do
             manager ← readIORef (worldManagerRef env')
             case wmWorlds manager of
@@ -259,15 +231,13 @@ runDump seed worldSize ages (cx1, cy1, cx2, cy2) = do
                         needed = filter
                             (\c → isNothing (lookupChunk c td)) coords
                     atomicModifyIORef' (wsInitQueueRef ws) $ \q →
-                        (q ++ needed, ())
+                        (q ⧺ needed, ())
                     hPutStrLn stderr $ "dump: queued "
-                        ++ show (length needed) ++ " chunks"
+                        ⧺ show (length needed) ⧺ " chunks"
                 [] → hPutStrLn stderr "dump: no world found"
 
-        -- Step 5: Wait for chunks to load
         liftIO $ waitForChunks env' 300
 
-        -- Step 6: Read and dump fluid data
         liftIO $ do
             manager ← readIORef (worldManagerRef env')
             case wmWorlds manager of
@@ -279,7 +249,6 @@ runDump seed worldSize ages (cx1, cy1, cx2, cy2) = do
                     hPutStrLn stderr $ "dump: done"
                 [] → hPutStrLn stderr "dump: no world data"
 
-        -- Step 7: Shutdown
         liftIO $ writeIORef (lifecycleRef env') CleaningUp
         liftIO $ shutdownThread simThreadState
         liftIO $ shutdownThread unitThreadState
@@ -329,7 +298,7 @@ dumpFluidJSON ∷ WorldTileData → Int → Int → Int → Int → BS.ByteStrin
 dumpFluidJSON td cx1 cy1 cx2 cy2 =
     let entries = concatMap dumpChunkFluid
             [ ChunkCoord x y | x ← [cx1..cx2], y ← [cy1..cy2] ]
-    in BS.pack $ "[" ++ intercalate "," entries ++ "]\n"
+    in BS.pack $ "[" ⧺ intercalate "," entries ⧺ "]\n"
   where
     dumpChunkFluid coord = case lookupChunk coord td of
         Nothing → []
@@ -345,11 +314,11 @@ dumpFluidJSON td cx1 cy1 cx2 cy2 =
                , let terrZ = lcTerrainSurfaceMap lc VU.! idx
                ]
     fluidToJSON gx gy fc terrZ =
-        "{\"x\":" ++ show gx
-        ++ ",\"y\":" ++ show gy
-        ++ ",\"type\":\"" ++ fluidTypeStr (fcType fc) ++ "\""
-        ++ ",\"surface\":" ++ show (fcSurface fc)
-        ++ ",\"terrainZ\":" ++ show terrZ ++ "}"
+        "{\"x\":" ⧺ show gx
+        ⧺ ",\"y\":" ⧺ show gy
+        ⧺ ",\"type\":\"" ⧺ fluidTypeStr (fcType fc) ⧺ "\""
+        ⧺ ",\"surface\":" ⧺ show (fcSurface fc)
+        ⧺ ",\"terrainZ\":" ⧺ show terrZ ⧺ "}"
     fluidTypeStr Ocean = "ocean"
     fluidTypeStr Lake  = "lake"
     fluidTypeStr River = "river"

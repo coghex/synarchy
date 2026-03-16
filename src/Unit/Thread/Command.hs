@@ -19,10 +19,6 @@ import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
                     LoadedChunk(..), ChunkCoord(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
 
------------------------------------------------------------
--- Command Processing
------------------------------------------------------------
-
 processAllUnitCommands ∷ EngineEnv → IORef UnitThreadState → IO ()
 processAllUnitCommands env utsRef = do
     mCmd ← Q.tryReadQueue (unitQueue env)
@@ -54,7 +50,6 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
             atomicModifyIORef' (unitManagerRef env) $ \um' →
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())
 
-            -- Create sim state (unchanged)
             let ss = UnitSimState
                     { usRealX  = gx
                     , usRealY  = gy
@@ -83,7 +78,6 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
                 Just z  → return z
                 Nothing → return 0
 
-    -- Update sim state
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
@@ -97,7 +91,6 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
-    -- Immediate update to render state
     atomicModifyIORef' (unitManagerRef env) $ \um →
         let insts = umInstances um
         in case HM.lookup uid insts of
@@ -130,10 +123,6 @@ handleUnitCommand env utsRef (UnitStop uid) = do
                              , usState  = Idle
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
-
------------------------------------------------------------
--- Surface Z lookup (same as Units.hs version)
------------------------------------------------------------
 
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
 lookupSurfaceZ env gx gy = do

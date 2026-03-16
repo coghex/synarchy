@@ -37,16 +37,12 @@ import World.Render.ViewBounds (computeViewBounds)
 import World.Render.ChunkCulling (isChunkRelevantForSlice)
 import Unit.Render (renderUnitQuads)
 
------------------------------------------------------------
--- Surface Headroom
------------------------------------------------------------
+-- * Surface Headroom
 
 surfaceHeadroom ∷ Int
 surfaceHeadroom = 25
 
------------------------------------------------------------
--- Top-Level Entry Point
------------------------------------------------------------
+-- * Top-Level Entry Point
 
 updateWorldTiles ∷ EngineEnv → IO (V.Vector SortableQuad)
 updateWorldTiles env = do

@@ -12,7 +12,6 @@ import Engine.Asset.Handle (TextureHandle, FontHandle)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..))
 import Linear (M44)
 
--- | Represents a drawable object in the scene
 data SceneNode = SceneNode
     { nodeId         ∷ ObjectId
     , nodeType       ∷ NodeType
@@ -31,7 +30,6 @@ data SceneNode = SceneNode
     , nodeDirty      ∷ Bool
     } deriving (Show)
 
--- | World-space transform matrix
 data WorldTransform = WorldTransform
     { wtMatrix    ∷ M44 Float
     , wtPosition  ∷ (Float, Float)
@@ -40,7 +38,6 @@ data WorldTransform = WorldTransform
     , wtZIndex    ∷ Float
     } deriving (Show)
 
--- | Create a default scene node
 createSceneNode ∷ NodeType → SceneNode
 createSceneNode objType = SceneNode
     { nodeId = ObjectId 0

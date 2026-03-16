@@ -9,9 +9,7 @@ import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types
 
------------------------------------------------------------
--- Texture Pickers
------------------------------------------------------------
+-- * Texture Pickers
 
 getZoomTexture ∷ WorldTextures → Word8 → Int → TextureHandle
 getZoomTexture textures 0   _ = wtOceanTexture textures    -- ocean (air matId)

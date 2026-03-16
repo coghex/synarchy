@@ -56,9 +56,7 @@ import Control.Monad.ST (runST)
 import Control.Monad (when, forM_)
 import World.Render.Zoom.Types (zoomTileSize)
 
------------------------------------------------------------
--- Sampling Configuration
------------------------------------------------------------
+-- * Sampling Configuration
 
 sampleGridSize ∷ Int
 sampleGridSize = 5
@@ -71,9 +69,7 @@ sampleOffsets =
        , sy ← [1 .. sampleGridSize]
        ]
 
------------------------------------------------------------
--- Build Zoom Cache (called once at world init)
------------------------------------------------------------
+-- * Build Zoom Cache (called once at world init)
 
 buildZoomCache ∷ WorldGenParams → MaterialRegistry → V.Vector ZoomChunkEntry
 buildZoomCache params registry =
@@ -169,9 +165,7 @@ buildZoomCache params registry =
         results = map buildOne uniqueCoords `using` parListChunk chunkBatchSize rdeepseq
     in V.fromList results
 
------------------------------------------------------------
--- Build Zoom Cache + Per-Chunk Pixel Data
------------------------------------------------------------
+-- * Build Zoom Cache + Per-Chunk Pixel Data
 
 -- | Build the zoom cache and per-chunk pixel data in one pass.
 --   For each chunk, computes material and vegetation at every
@@ -573,14 +567,10 @@ vegDensityWeight vegId =
 isSnowVeg ∷ Word8 → Bool
 isSnowVeg v = v ≥ 65 ∧ v ≤ 68
 
------------------------------------------------------------
--- Per-Pixel River Rendering
------------------------------------------------------------
+-- * Per-Pixel River Rendering
 
 
------------------------------------------------------------
--- Ice Noise (zoom-level, continuous across chunk boundaries)
------------------------------------------------------------
+-- * Ice Noise (zoom-level, continuous across chunk boundaries)
 
 -- | Smooth noise for zoom-level ice boundaries.
 --   Uses larger scales than tile-level noise so the ice edge
@@ -633,9 +623,7 @@ zoomHashToFloat h = fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF �
 zoomSmoothstep ∷ Float → Float
 zoomSmoothstep t = t * t * (3.0 - 2.0 * t)
 
------------------------------------------------------------
--- Helpers
------------------------------------------------------------
+-- * Helpers
 
 wrapChunkX ∷ Int → Int → Int
 wrapChunkX halfSize cx =
@@ -663,15 +651,14 @@ majorityMaterial samples =
         (anyWinner, _) = pickBest counts
     in if landCount > 0 then landWinner else anyWinner
 
------------------------------------------------------------
--- Vegetation Category (simplified climate-based)
---
--- 0 = none (barren rock, ocean, glacier)
--- 1 = sparse (tundra, arid scrub)
--- 2 = medium (temperate grassland)
--- 3 = dense (lush grass, tropical)
--- 4 = marsh/wetland
------------------------------------------------------------
+-- * Vegetation Category
+
+-- | Climate-based vegetation density:
+--   0 = none (barren rock, ocean, glacier),
+--   1 = sparse (tundra, arid scrub),
+--   2 = medium (temperate grassland),
+--   3 = dense (lush grass, tropical),
+--   4 = marsh/wetland.
 
 vegCategoryFromClimate ∷ ClimateState → Int → Int → Int → Word8 → Word8
 vegCategoryFromClimate climate worldSize baseGX baseGY matId

@@ -26,9 +26,7 @@ import World.Types
 import World.Render.Textures (getTileTexture, getTileFaceMapTexture
                              , getVegFaceMapTexture)
 
------------------------------------------------------------
--- Convert Tile to Quad
------------------------------------------------------------
+-- * Convert Tile to Quad
 
 tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSlice effDepth tileAlpha xOffset mFluid chunkHasFluid =
     let (rawX, rawY) = gridToScreen facing worldX worldY
@@ -89,9 +87,7 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
         , sqLayer    = worldLayer
         }
 
------------------------------------------------------------
--- Blank Tile Quad
------------------------------------------------------------
+-- * Blank Tile Quad
 
 blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSlice tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
@@ -128,9 +124,7 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
         , sqLayer    = worldLayer
         }
 
------------------------------------------------------------
--- Ocean Surface Tile Quad
------------------------------------------------------------
+-- * Ocean Surface Tile Quad
 
 oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSlice effDepth tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
@@ -167,9 +161,7 @@ oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSl
         , sqLayer    = worldLayer
         }
 
------------------------------------------------------------
--- Ice Surface Tile Quad
------------------------------------------------------------
+-- * Ice Surface Tile Quad
 
 iceTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY iceZ zSlice effDepth tileAlpha xOffset =
     let (rawX, rawY) = gridToScreen facing worldX worldY
@@ -240,9 +232,7 @@ lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSli
         , sqLayer    = worldLayer
         }
 
------------------------------------------------------------
--- Freshwater (River/Lake) Surface Tile Quad
------------------------------------------------------------
+-- * Freshwater (River/Lake) Surface Tile Quad
 
 freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
                      fluidZ fluidType zSlice effDepth tileAlpha xOffset waterSlopeId =

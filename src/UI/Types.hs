@@ -1,24 +1,24 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module UI.Types
-  ( -- Handles
+  ( -- * Handles
     PageHandle(..)
   , ElementHandle(..)
   , BoxTextureHandle(..)
-    -- Layers
+    -- * Layers
   , UILayer(..)
   , TextBuffer(..)
   , emptyBuffer
-    -- Page
+    -- * Page
   , UIPage(..)
-    -- Element
+    -- * Element
   , UIElement(..)
   , UIRenderData(..)
   , UIBoxStyle(..)
   , UITextStyle(..)
   , UISpriteStyle(..)
-  -- Box Textures
+    -- * Box Textures
   , BoxTextureSet(..)
-    -- Manager
+    -- * Manager
   , UIPageManager(..)
   , emptyUIPageManager
   ) where
@@ -96,11 +96,11 @@ emptyBuffer = TextBuffer
   , tbCursor  = 0
   }
 
--- A handle to a group of 9 textures
+-- | Handle to a group of 9 textures (3x3 box corners/edges/center)
 newtype BoxTextureHandle = BoxTextureHandle { unBoxTextureHandle ∷ Word32 }
   deriving (Eq, Ord, Show)
 
--- The 9 textures for a box
+-- | The 9 textures for a 3x3 box
 data BoxTextureSet = BoxTextureSet
   { btsCenter ∷ TextureHandle
   , btsN      ∷ TextureHandle

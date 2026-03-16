@@ -49,14 +49,13 @@ data Dependent = Dependent
   , depType    ∷ Text
   } deriving (Show, Eq)
 
--- | Asset handle type class (simplified - no pool dependencies)
+-- | Type class for opaque asset handles backed by integer indices
 class (Eq h, Ord h, Show h) ⇒ AssetHandle h where
-  -- construct a handle from an integer
+  -- | Construct a handle from an integer index
   fromInt ∷ Int → h
-  -- extract Int from handle
+  -- | Extract the underlying integer index
   toInt ∷ h → Int
 
--- Instances
 instance AssetHandle TextureHandle where
   fromInt       = TextureHandle
   toInt (TextureHandle n) = n

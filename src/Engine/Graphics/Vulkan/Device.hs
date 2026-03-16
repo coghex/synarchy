@@ -42,14 +42,12 @@ createVulkanDevice ∷ Instance
                    → EngineM ε σ (Device, DevQueues)
 createVulkanDevice inst physicalDevice surface = do
   logDebugM CatVulkan "Finding queue families"
-  -- Find queue families
   indices ← findQueueFamilies physicalDevice surface
   
   logDebugSM CatVulkan "Queue families found"
     [("graphics_family", T.pack $ show $ graphicsFamily indices)
     ,("present_family", T.pack $ show $ presentFamily indices)]
   
-  -- Create unique queue create infos
   let queuePriority = 1.0
       uniqueFamilies = if graphicsFamily indices ≡ presentFamily indices
                       then [graphicsFamily indices]
@@ -62,7 +60,6 @@ createVulkanDevice inst physicalDevice surface = do
   logDebugSM CatVulkan "Creating device queues"
     [("queue_count", T.pack $ show $ length uniqueFamilies)]
   
-  -- Get device extensions - note how madrigal specifies both extensions upfront
   let deviceExtensions = [ KHR_SWAPCHAIN_EXTENSION_NAME
                         , KHR_PORTABILITY_SUBSET_EXTENSION_NAME  -- Required for macOS
                         ]
@@ -70,8 +67,7 @@ createVulkanDevice inst physicalDevice surface = do
   logDebugSM CatVulkan "Enabled device extensions"
     [("extensions", T.pack $ show $ map (\bs → BS.take 30 bs) deviceExtensions)]
   
-  -- enable vulkan 1.2 descriptor indexing functions
-  -- ths triggers moltenVk to use metal argument buffers
+  -- Vulkan 1.2 descriptor indexing triggers MoltenVK metal argument buffers
   let vulkan12Features = zero
         { descriptorIndexing = True
         , shaderSampledImageArrayNonUniformIndexing = True
@@ -83,7 +79,6 @@ createVulkanDevice inst physicalDevice surface = do
   
   logDebugM CatVulkan "Enabled Vulkan 1.2 descriptor indexing features"
   
-  -- Create the logical device
   let deviceCreateInfo = (zero ∷ DeviceCreateInfo '[])
         { queueCreateInfos = V.fromList queueCreateInfos
         , enabledExtensionNames = V.fromList deviceExtensions
@@ -97,7 +92,6 @@ createVulkanDevice inst physicalDevice surface = do
   
   logDebugM CatVulkan "Logical device created"
   
-  -- Get queue handles
   graphicsQ ← getDeviceQueue device (graphicsFamily indices) 0
   presentQ ← getDeviceQueue device (presentFamily indices) 0
   
@@ -112,7 +106,6 @@ createVulkanDevice inst physicalDevice surface = do
   
   return (device, queues)
 
--- | Clean up the logical device
 destroyVulkanDevice ∷ Device → EngineM ε σ ()
 destroyVulkanDevice device = liftIO $ destroyDevice device Nothing
 
@@ -121,13 +114,11 @@ pickPhysicalDevice ∷ Instance
                    → SurfaceKHR  -- ^ Window surface for checking present support
                    → EngineM ε σ PhysicalDevice
 pickPhysicalDevice inst surface = do
-  -- Get all physical devices
   (_, devices) ← liftIO $ enumeratePhysicalDevices inst
   when (V.null devices) $
     logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
       "Failed to find GPUs with Vulkan support"
   
-  -- Score and pick the best device
   scores ← V.mapM (rateDevice surface) devices
   let ratedDevices = V.zip scores devices
       bestDevice = V.maximumBy (\a b → compare (fst a) (fst b)) ratedDevices
@@ -140,22 +131,15 @@ pickPhysicalDevice inst surface = do
 -- | Rate a physical device's suitability (higher is better)
 rateDevice ∷ SurfaceKHR → PhysicalDevice → EngineM ε σ Int
 rateDevice surface device = do
-  -- Get device properties
   props ← liftIO $ getPhysicalDeviceProperties device
-  
-  -- Check for required queue families
   queueFamilies ← findQueueFamilies device surface
-  
-  -- Check for required device extensions
   extensionsSupported ← checkDeviceExtensionSupport device
-  
-  -- Base score on device type
+
   let baseScore = case deviceType props of
         PHYSICAL_DEVICE_TYPE_DISCRETE_GPU   → 1000
         PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU → 100
         _                                   → 10
   
-  -- Device is suitable only if it has required features
   if isDeviceSuitable device queueFamilies extensionsSupported
     then return baseScore
     else return 0
@@ -163,10 +147,8 @@ rateDevice surface device = do
 -- | Find required queue family indices
 findQueueFamilies ∷ PhysicalDevice → SurfaceKHR → EngineM ε σ QueueFamilyIndices
 findQueueFamilies device surface = do
-  -- Get queue family properties
   props ← liftIO $ getPhysicalDeviceQueueFamilyProperties device
-  
-  -- Find graphics queue family
+
   let graphicsIdx = V.findIndex 
         (\p → (queueFlags p) .&. QUEUE_GRAPHICS_BIT ≢ zeroBits) 
         props
@@ -175,7 +157,6 @@ findQueueFamilies device surface = do
     Nothing → logAndThrowM CatVulkan (ExInit DeviceCreationFailed)
                            "Could not find graphics queue family"
     Just gIdx → do
-      -- Find present queue family
       presentSupport ← V.generateM (V.length props) $ \i → 
         liftIO $ getPhysicalDeviceSurfaceSupportKHR device 
           (fromIntegral i) surface
@@ -196,22 +177,17 @@ isDeviceSuitable ∷ PhysicalDevice
                  → Bool  -- ^ Extension support
                  → Bool
 isDeviceSuitable device indices extensionsSupported =
-  -- Check if device has all required queue families
-  graphicsFamily indices ≥ 0 ∧ 
-  presentFamily indices ≥ 0 &&
-  -- Check if device supports required extensions
+  graphicsFamily indices ≥ 0 ∧
+  presentFamily indices ≥ 0 ∧
   extensionsSupported
 
 -- | Check if device supports required extensions
 checkDeviceExtensionSupport ∷ PhysicalDevice → EngineM ε σ Bool
 checkDeviceExtensionSupport device = do
-  -- Get available extensions
-  (_, availableExtensions) ← liftIO $ 
+  (_, availableExtensions) ← liftIO $
     enumerateDeviceExtensionProperties device Nothing
-  
-  -- Required extensions
+
   let requiredExtensions = [KHR_SWAPCHAIN_EXTENSION_NAME]
       availableExtNames = map extensionName $ V.toList availableExtensions
-  
-  -- Check if all required extensions are available
+
   return $ all (`elem` availableExtNames) requiredExtensions

@@ -43,19 +43,16 @@ import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 import qualified Data.ByteString.Char8 as BS
 
--- | Helper to register a Lua function with less boilerplate
 registerLuaFunction ∷ BS.ByteString → Lua.LuaE Lua.Exception Lua.NumResults
                     → Lua.LuaE Lua.Exception ()
 registerLuaFunction name action = do
     Lua.pushHaskellFunction action
     Lua.setfield (-2) (Lua.Name name)
 
--- | Register all engine API functions with Lua
 registerLuaAPI ∷ Lua.State → EngineEnv → LuaBackendState → IO ()
 registerLuaAPI lst env backendState = Lua.runWith lst $ do
   Lua.newtable
   
-  -- Core functions
   registerLuaFunction "quit"              (quitFn env)
   registerLuaFunction "logInfo"           (logInfoFn env)
   registerLuaFunction "logWarn"           (logWarnFn env)
@@ -71,7 +68,6 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setTickInterval"   (setTickIntervalFn env backendState)
   registerLuaFunction "listFiles"         (listFilesFn)
 
-  -- Config functions
   registerLuaFunction "getVideoConfig"    (getVideoConfigFn env)
   registerLuaFunction "setVideoConfig"    (setVideoConfigFn env)
   registerLuaFunction "saveVideoConfig"   (saveVideoConfigFn env)
@@ -86,7 +82,6 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setPixelSnap"      (setPixelSnapFn env)
   registerLuaFunction "setTextureFilter"  (setTextureFilterFn env)
   
-  -- Graphics functions
   registerLuaFunction "loadTexture"   (loadTextureFn backendState)
   registerLuaFunction "getTextureHandle" (getTextureHandleFn env)
   registerLuaFunction "spawnSprite"   (spawnSpriteFn env backendState)
@@ -102,7 +97,6 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadFloraYaml" (loadFloraYamlFn env backendState)
   registerLuaFunction "loadUnitYaml" (loadUnitYamlFn env backendState)
   
-  -- Input functions
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)
   registerLuaFunction "isActionDown"      (isActionDownFn env backendState)
   registerLuaFunction "getMousePosition"  (getMousePositionFn backendState)
@@ -111,45 +105,35 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getFramebufferSize" (getFramebufferSizeFn env backendState)
   registerLuaFunction "getWorldCoord"     (getWorldCoordFn env backendState)
   
-  -- Text functions
   registerLuaFunction "loadFont"     (loadFontFn env backendState)
   registerLuaFunction "spawnText"    (spawnTextFn env backendState)
   registerLuaFunction "setText"      (setTextFn env)
   registerLuaFunction "getText"      (getTextFn env)
   registerLuaFunction "getTextWidth" (getTextWidthFn env)
   
-  -- Focus functions
   registerLuaFunction "registerFocusable" (registerFocusableFn env)
   registerLuaFunction "requestFocus"      (requestFocusFn env)
   registerLuaFunction "releaseFocus"      (releaseFocusFn env)
   registerLuaFunction "getFocusId"        (getFocusIdFn env)
- 
-  -- Shell functions
   registerLuaFunction "shellExecute" shellExecuteFn
 
-  -- load/save functions
   registerLuaFunction "listSaves" (saveListFn env)
   registerLuaFunction "saveWorld" (saveWorldFn env)
   registerLuaFunction "loadSave"  (loadSaveFn env)
   
   Lua.setglobal (Lua.Name "engine")
   
-  -- Register UI table separately
   Lua.newtable
-  
-  -- UI Page functions
   registerLuaFunction "newPage"    (uiNewPageFn env)
   registerLuaFunction "deletePage" (uiDeletePageFn env)
   registerLuaFunction "showPage"   (uiShowPageFn env)
   registerLuaFunction "hidePage"   (uiHidePageFn env)
   
-  -- UI Element creation functions
   registerLuaFunction "newElement" (uiNewElementFn env)
   registerLuaFunction "newBox"     (uiNewBoxFn env)
   registerLuaFunction "newText"    (uiNewTextFn env)
   registerLuaFunction "newSprite"  (uiNewSpriteFn env)
   
-  -- UI Hierarchy functions
   registerLuaFunction "addToPage"      (uiAddToPageFn env)
   registerLuaFunction "addChild"       (uiAddChildFn env)
   registerLuaFunction "removeElement"  (uiRemoveElementFn env)
@@ -158,7 +142,6 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getElementOnClick" (uiGetElementOnClickFn env)
   registerLuaFunction "findHoverTarget" (uiFindHoverTargetFn env)
 
-  -- Text buffer operations
   registerLuaFunction "enableTextInput" (uiEnableTextInputFn env)
   registerLuaFunction "getTextInput" (uiGetTextFn env)
   registerLuaFunction "setTextInput" (uiSetTextInputFn env)
@@ -172,13 +155,11 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "cursorHome" (uiCursorHomeFn env)
   registerLuaFunction "cursorEnd" (uiCursorEndFn env)
 
-  -- UI Focus functions
   registerLuaFunction "setFocus"       (uiSetFocusFn env)
   registerLuaFunction "clearFocus"     (uiClearFocusFn env)
   registerLuaFunction "getFocus"       (uiGetFocusFn env)
   registerLuaFunction "hasFocus"       (uiHasFocusFn env)
   
-  -- UI Property functions
   registerLuaFunction "setPosition"  (uiSetPositionFn env)
   registerLuaFunction "setSize"      (uiSetSizeFn env)
   registerLuaFunction "setVisible"   (uiSetVisibleFn env)
@@ -192,13 +173,11 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setOnRightClick" (uiSetOnRightClickFn env)
   registerLuaFunction "removeFromPage" (uiRemoveFromPageFn env)
   
-  -- UI textures
   registerLuaFunction "setBoxTextures" (uiSetBoxTexturesFn env)
   registerLuaFunction "loadBoxTextures" (uiLoadBoxTexturesFn env)
   
   Lua.setglobal (Lua.Name "UI")
 
-  -- Unit table
   Lua.newtable
 
   registerLuaFunction "spawn"   (unitSpawnFn env)
@@ -211,9 +190,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
 
   Lua.setglobal (Lua.Name "unit")
 
-  -- World table
   Lua.newtable
-
   registerLuaFunction "getGenDefaults" (worldGetGenDefaultsFn env)
   registerLuaFunction "setGenConfig" (worldSetGenConfigFn env)
   registerLuaFunction "init" (worldInitFn env)
@@ -252,7 +229,6 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "waitForInit" (worldWaitForInitFn env)
   registerLuaFunction "destroy" (worldDestroyFn env)
 
-  -- Debug query functions
   registerLuaFunction "getTerrainAt" (worldGetTerrainAtFn env)
   registerLuaFunction "getFluidAt" (worldGetFluidAtFn env)
   registerLuaFunction "getSurfaceAt" (worldGetSurfaceAtFn env)
@@ -264,7 +240,6 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
 
   Lua.setglobal (Lua.Name "world")
 
-  -- Flora table
   Lua.newtable
   registerLuaFunction "register" (floraRegisterFn env)
   registerLuaFunction "setLifecycle" (floraSetLifecycleFn env)
@@ -275,7 +250,6 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
 
   Lua.setglobal (Lua.Name "flora")
 
-  -- Camera table
   Lua.newtable
 
   registerLuaFunction "goToTile" (cameraGotoTileFn env)

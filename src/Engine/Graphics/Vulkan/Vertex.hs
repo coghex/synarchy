@@ -18,18 +18,16 @@ import Engine.Graphics.Vulkan.Types.Vertex
 import Vulkan.Core10
 import Vulkan.Zero
 
--- Updated quad vertices to create two quads side by side with different atlas IDs
--- faceMapId = 0 means use the default (undefined/top-lit) face map
+-- | Two side-by-side quads with different atlas IDs.
+-- faceMapId = 0 means use the default (undefined/top-lit) face map.
 quadVertices ∷ [Vertex]
 quadVertices =
-    -- Left quad (atlas ID 0)
     [ Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0 0
     , Vertex (Vec2 (-0.5) (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 0 0
     , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0 0
     , Vertex (Vec2 (-0.5)   0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 0 0
     , Vertex (Vec2 (-1.5)   0.5)  (Vec2 0 1) (Vec4 1 1 1 1) 0 0
     , Vertex (Vec2 (-1.5) (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 0 0
-    -- Right quad (atlas ID 1)
     , Vertex (Vec2   0.5  (-0.5)) (Vec2 0 0) (Vec4 1 1 1 1) 1 0
     , Vertex (Vec2   1.5  (-0.5)) (Vec2 1 0) (Vec4 1 1 1 1) 1 0
     , Vertex (Vec2   1.5    0.5)  (Vec2 1 1) (Vec4 1 1 1 1) 1 0
@@ -49,7 +47,6 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
         bsize    = case vertices of (v:_) → sizeOf v; [] → 0
         vertSize = fromIntegral $ bsize * length vertices
     
-    -- Create staging buffer
     (stagingMemory, stagingBuffer) ← createVulkanBufferManual
         device 
         pDevice 
@@ -57,7 +54,6 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
         BUFFER_USAGE_TRANSFER_SRC_BIT
         (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
 
-    -- Map memory and copy vertex data
     dataPtr ← mapMemory device stagingMemory 0 vertSize zero
     liftIO $ do
         let ptr = castPtr dataPtr
@@ -66,12 +62,10 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
             poke (ptr `plusPtr` offset) vertex
     unmapMemory device stagingMemory
 
-    -- Create vertex buffer
     (vertexMemory, vertexBuffer) ← createVulkanBuffer device pDevice vertSize
         (BUFFER_USAGE_TRANSFER_DST_BIT .|. BUFFER_USAGE_VERTEX_BUFFER_BIT)
         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
-    -- Copy from staging to vertex buffer, free staging buffer
     copyBuffer device commandPool graphicsQueue stagingBuffer vertexBuffer vertSize
     liftIO $ destroyBuffer device stagingBuffer Nothing
     liftIO $ freeMemory device stagingMemory Nothing
@@ -82,7 +76,7 @@ createVertexBuffer device pDevice graphicsQueue commandPool = do
 getVertexBindingDescription ∷ VertexInputBindingDescription
 getVertexBindingDescription = zero
     { binding = 0
-    , stride = 40  -- was 36, now 40 with faceMapId
+    , stride = 40  -- 2+2+4+1+1 floats = 40 bytes (includes faceMapId)
     , inputRate = VERTEX_INPUT_RATE_VERTEX
     }
 
@@ -95,25 +89,25 @@ getVertexAttributeDescriptions = V.fromList
         , format = FORMAT_R32G32_SFLOAT
         , offset = 0
         }
-    , zero  -- TexCoord
+    , zero  -- ^ TexCoord
         { location = 1
         , binding = 0
         , format = FORMAT_R32G32_SFLOAT
         , offset = 8
         }
-    , zero  -- Color
+    , zero  -- ^ Color
         { location = 2
         , binding = 0
         , format = FORMAT_R32G32B32A32_SFLOAT
         , offset = 16
         }
-    , zero  -- Atlas ID (texture index)
+    , zero  -- ^ Atlas ID (texture index)
         { location = 3
         , binding = 0
         , format = FORMAT_R32_SFLOAT
         , offset = 32
         }
-    , zero  -- Face Map ID
+    , zero  -- ^ Face Map ID
         { location = 4
         , binding = 0
         , format = FORMAT_R32_SFLOAT

@@ -9,7 +9,6 @@ import Engine.Scene.Base (LayerId(..), Transform2D(..))
 import Engine.Scene.Types.Node (SceneNode(..))
 import Engine.Graphics.Camera (Camera2D(..))
 
--- | Check if a node is visible within camera frustum
 isNodeVisible ∷ Camera2D → Float → Float → SceneNode → Bool
 isNodeVisible camera viewWidth viewHeight node =
     if not (nodeVisible node)
@@ -33,6 +32,6 @@ isNodeVisible camera viewWidth viewHeight node =
         in not (nodeRight < left ∨ nodeLeft > right ∨ 
                 nodeTop < bottom ∨ nodeBottom > top)
 
--- | Check if a layer is a UI layer (always visible)
+-- | UI layers (>= 10) bypass frustum culling.
 isUILayer ∷ LayerId → Bool
 isUILayer (LayerId l) = l ≥ 10

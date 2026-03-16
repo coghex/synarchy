@@ -88,7 +88,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
                                  (getMaterialProps registry (snd base)))
                                base
         oceanMap = computeOceanMap seed worldSize placeCount plates applyTL
-    _ <- evaluate (force oceanMap)
+    _ ← evaluate (force oceanMap)
 
     sendGenLog env $ "Ocean flood fill complete: "
         <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
@@ -159,7 +159,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     writeIORef phaseRef (LoadPhase1 5 totalSteps)
     sendGenLog env "Rendering world preview..."
     let preview = buildPreviewFromPixels params zoomCache chunkPixels
-    _ <- evaluate (force preview)  -- do the work now
+    _ ← evaluate (force preview)
     writeIORef (worldPreviewRef env) $
         Just (piWidth preview, piHeight preview, piData preview)
     sendGenLog env "World preview ready."

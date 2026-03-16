@@ -1,4 +1,3 @@
--- src/Engine/Graphics/Vulkan/Texture.hs
 module Engine.Graphics.Vulkan.Texture
   ( createTextureImageView
   , createTextureImageView'
@@ -92,7 +91,6 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
     [("path", T.pack path)]
   
   let maxTimeout = maxBound ∷ Word64
-  -- Load and convert image data
   JP.Image { JP.imageWidth, JP.imageHeight, JP.imageData }
     ← liftIO (JP.readImage path) ⌦ \case
       Left err → do
@@ -111,7 +109,6 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
     ,("format", "RGBA8")
     ,("mip_levels", T.pack $ show mipLevels)]
 
-  -- Create the image with cleanup
   logDebugM CatTexture "Creating Vulkan image"
   (vulkanImage@(VulkanImage image imagedata), imageCleanup) ← createVulkanImage' dev pdev
     (fromIntegral imageWidth, fromIntegral imageHeight)
@@ -122,12 +119,10 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
     ⌄ IMAGE_USAGE_SAMPLED_BIT)
     MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
-  -- Create a fence for synchronization
   let fenceInfo = ( zero ∷ FenceCreateInfo '[] )
                     { flags = FENCE_CREATE_SIGNALED_BIT }
   fence ← createFence dev fenceInfo Nothing
     
-  -- Handle staging buffer with locally for automatic cleanup
   locally $ do
     logDebugSM CatTexture "Allocating staging buffer"
       [("size", T.pack $ show bufSize)]
@@ -141,12 +136,10 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
                           imageDataPtr imageDataLen
     unmapMemory dev stagingMem
 
-    -- Wait for the fence before proceeding
     waitForFences dev (V.singleton fence) True maxTimeout
     resetFences dev (V.singleton fence)
     
     logDebugM CatTexture "Copying buffer to image and transitioning layout"
-    -- Record and submit commands
     let commandInfo = (zero ∷ CommandBufferBeginInfo '[])
           { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
     
@@ -158,43 +151,31 @@ createTextureImageView' pdev dev cmdPool cmdQueue path = do
 
     beginCommandBuffer cmdBuf commandInfo
     
-    -- Transition image layout
     transitionImageLayout vulkanImage FORMAT_R8G8B8A8_UNORM
         Undef_TransDst mipLevels cmdBuf
-
-    -- Copy buffer to image
     copyBufferToImage cmdBuf stagingBuf vulkanImage
         (fromIntegral imageWidth) (fromIntegral imageHeight)
-
-    -- Transition to shader read
     transitionImageLayout vulkanImage FORMAT_R8G8B8A8_UNORM
         TransDst_ShaderRO mipLevels cmdBuf
 
     endCommandBuffer cmdBuf
 
-    -- Submit command buffer with fence
     let submitInfo = (zero ∷ SubmitInfo '[])
           { commandBuffers = V.singleton (commandBufferHandle cmdBuf) }
     queueSubmit cmdQueue (V.singleton $ SomeStruct submitInfo) fence
 
-    -- Wait for completion before cleanup
     waitForFences dev (V.singleton fence) True maxBound
-    
-    -- Free command buffer
     freeCommandBuffers dev cmdPool (V.singleton cmdBuf)
-  -- Cleanup fence
   destroyFence dev fence Nothing
 
-  -- Create image view with cleanup
   (imageView, viewCleanup) ← allocResource'IO
     (\view → liftIO $ destroyImageView dev view Nothing)
     (createVulkanImageView dev (VulkanImage image imagedata)
       FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT)
 
-  -- Combine cleanup actions
   let cleanup = do
-        viewCleanup    -- First cleanup the view
-        imageCleanup   -- Then cleanup the image and memory
+        viewCleanup
+        imageCleanup
 
   pure ((vulkanImage, imageView, mipLevels), cleanup)
 

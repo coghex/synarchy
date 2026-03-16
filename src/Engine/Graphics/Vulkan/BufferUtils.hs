@@ -1,5 +1,4 @@
--- src/Engine/Graphics/Vulkan/BufferUtils.hs
--- Low-level buffer utilities with no dependencies on Command.hs
+-- | Low-level buffer utilities with no dependencies on Command.hs
 module Engine.Graphics.Vulkan.BufferUtils
   ( createVulkanBuffer
   , createVulkanBufferManual
@@ -28,29 +27,24 @@ createVulkanBuffer device pDevice bufferSize usage memProperties = do
         , queueFamilyIndices = V.empty 
         }
   
-  -- Create buffer
   (buffer, freeBufferLater) ← allocResource' 
     (\buf → destroyBuffer device buf Nothing)
     $ createBuffer device bufferInfo Nothing
   
-  -- Get memory requirements
   MemoryRequirements { size=siz, memoryTypeBits=mtb }
     ← getBufferMemoryRequirements device buffer
-  
-  -- Find suitable memory type
+
   memTypeIndex ← findMemoryType pDevice mtb memProperties
-  
-  -- Allocate memory
-  let allocInfo = zero 
+
+  let allocInfo = zero
         { allocationSize = siz
         , memoryTypeIndex = memTypeIndex
         }
-  
-  bufferMemory ← allocResource 
+
+  bufferMemory ← allocResource
     (\mem → freeMemory device mem Nothing)
     $ allocateMemory device allocInfo Nothing
-  
-  -- Bind buffer memory
+
   freeBufferLater
   bindBufferMemory device buffer bufferMemory 0
   
@@ -89,25 +83,20 @@ createVulkanBufferManual device pDevice bufferSize usage memProperties = do
         , queueFamilyIndices = V.empty 
         }
   
-  -- Create buffer WITHOUT allocResource
   buffer ← createBuffer device bufferInfo Nothing
-  
-  -- Get memory requirements
+
   MemoryRequirements { size=siz, memoryTypeBits=mtb }
     ← getBufferMemoryRequirements device buffer
-  
-  -- Find suitable memory type
+
   memTypeIndex ← findMemoryType pDevice mtb memProperties
-  
-  -- Allocate memory WITHOUT allocResource
+
   let allocInfo = zero 
         { allocationSize = siz
         , memoryTypeIndex = memTypeIndex
         }
   
   bufferMemory ← allocateMemory device allocInfo Nothing
-  
-  -- Bind buffer memory
+
   bindBufferMemory device buffer bufferMemory 0
   
   pure (bufferMemory, buffer)

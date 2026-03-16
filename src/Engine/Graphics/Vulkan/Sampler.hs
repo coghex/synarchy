@@ -1,4 +1,3 @@
--- src/Engine/Graphics/Vulkan/Sampler.hs
 module Engine.Graphics.Vulkan.Sampler
   ( createVulkanSampler
   , destroyVulkanSampler
@@ -40,7 +39,6 @@ createVulkanSampler device pDevice = do
   allocResource (\s → destroySampler device s Nothing) $
     createSampler device samplerInfo Nothing
 
--- | Clean up sampler
 destroyVulkanSampler ∷ Device → Sampler → EngineM ε σ ()
 destroyVulkanSampler device sampler =
   liftIO $ destroySampler device sampler Nothing

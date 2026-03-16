@@ -33,9 +33,9 @@ data DefaultFaceMap = DefaultFaceMap
   }
 instance Show DefaultFaceMap where
   show (DefaultFaceMap _img view samp slot) =
-    "DefaultFaceMap { imageView = " ++ show view ++
-    ", sampler = " ++ show samp ++
-    ", slot = " ++ show slot ++
+    "DefaultFaceMap { imageView = " ⧺ show view ⧺
+    ", sampler = " ⧺ show samp ⧺
+    ", slot = " ⧺ show slot ⧺
     " }"
 
 -- | The 1×1 pure-green pixel data: R=0 G=255 B=0 A=255
@@ -59,7 +59,6 @@ createDefaultFaceMap pdev dev cmdPool cmdQueue bindless = do
       bufSize = fromIntegral imageDataLen
       mipLevels = 1  -- No mipmapping for 1×1 texture
 
-  -- Create the GPU-local image
   image ← createVulkanImage dev pdev
     (width, height)
     FORMAT_R8G8B8A8_UNORM
@@ -67,19 +66,16 @@ createDefaultFaceMap pdev dev cmdPool cmdQueue bindless = do
     (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
     MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
-  -- Upload via staging buffer (cleaned up after transfer)
   locally $ do
     (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
       BUFFER_USAGE_TRANSFER_SRC_BIT
       (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
 
-    -- Copy pixel data to staging buffer
     stagingDataPtr ← mapMemory dev stagingMem 0 bufSize zero
     liftIO $ withForeignPtr imageDataForeignPtr $ \imageDataPtr →
       copyArray (castPtr stagingDataPtr) imageDataPtr imageDataLen
     unmapMemory dev stagingMem
 
-    -- Transfer to GPU
     runCommandsOnce dev cmdPool cmdQueue $ \cmdBuf → do
       transitionImageLayout image FORMAT_R8G8B8A8_UNORM
         Undef_TransDst mipLevels cmdBuf
@@ -87,11 +83,9 @@ createDefaultFaceMap pdev dev cmdPool cmdQueue bindless = do
       transitionImageLayout image FORMAT_R8G8B8A8_UNORM
         TransDst_ShaderRO mipLevels cmdBuf
 
-  -- Create image view
   imageView ← createVulkanImageView dev image
     FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 
-  -- Create sampler (nearest — it's 1×1 so filtering doesn't matter)
   let samplerInfo = zero
         { magFilter    = FILTER_NEAREST
         , minFilter    = FILTER_NEAREST
@@ -112,8 +106,7 @@ createDefaultFaceMap pdev dev cmdPool cmdQueue bindless = do
   sampler ← allocResource (\s → destroySampler dev s Nothing) $
     createSampler dev samplerInfo Nothing
 
-  -- Register in the bindless system with a reserved TextureHandle
-  -- Using a high handle value that won't collide with normal texture handles
+  -- High handle value to avoid collisions with normal texture handles
   let faceMapTexHandle = TextureHandle 999999
   (mbHandle, newBindless) ← registerTexture dev faceMapTexHandle imageView sampler bindless
 

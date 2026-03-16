@@ -17,9 +17,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import World.Types (ZoomChunkEntry(..), WorldGenParams(..))
 import World.Render.Zoom.Types (zoomTileSize)
 
------------------------------------------------------------
--- Preview Image
------------------------------------------------------------
+-- * Preview Image
 
 data PreviewImage = PreviewImage
     { piWidth  ∷ !Int
@@ -27,12 +25,10 @@ data PreviewImage = PreviewImage
     , piData   ∷ !BS.ByteString   -- ^ RGBA pixel data, length = w*h*4
     } deriving (Show, Generic, NFData)
 
------------------------------------------------------------
--- Build Preview from Per-Chunk Pixel Data
---
--- Samples the center pixel of each chunk's zoom texture to
--- produce a preview that exactly matches the zoom map.
------------------------------------------------------------
+-- * Build Preview
+
+-- | Samples the center pixel of each chunk's zoom texture to
+--   produce a preview that exactly matches the zoom map.
 
 buildPreviewFromPixels ∷ WorldGenParams → V.Vector ZoomChunkEntry
                        → V.Vector BS.ByteString → PreviewImage
@@ -109,10 +105,7 @@ buildPreviewFromPixels params cache pixels =
 
     in PreviewImage imgW imgH pixelData
 
------------------------------------------------------------
--- Fallback: Build Preview from ZoomChunkEntry summary
--- (used when per-chunk pixel data is not available)
------------------------------------------------------------
+-- * Fallback: Build Preview from ZoomChunkEntry summary (used when per-chunk pixel data is not available)
 
 buildPreviewImage ∷ WorldGenParams → V.Vector ZoomChunkEntry → PreviewImage
 buildPreviewImage params cache =

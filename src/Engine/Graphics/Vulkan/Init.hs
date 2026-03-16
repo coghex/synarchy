@@ -63,21 +63,17 @@ initializeVulkan ∷ Window → EngineM ε σ CommandPool
 initializeVulkan window = do
   let Window glfwWin = window
   
-  -- Create Vulkan instance
   logDebugM CatVulkan "Creating Vulkan instance"
   (vkInstance, _debugMessenger) ← createVulkanInstance defaultGraphicsConfig
   logDebugM CatVulkan "Vulkan instance created successfully"
   
-  -- Create surface
   logDebugM CatVulkan "Creating window surface"
   surface ← GLFW.createWindowSurface window vkInstance
   logDebugM CatVulkan "Window surface created successfully"
   
-  -- Select physical device and create logical device
   logDebugM CatVulkan "Selecting physical device"
   physicalDevice ← pickPhysicalDevice vkInstance surface
   
-  -- Log device info
   props ← liftIO $ getPhysicalDeviceProperties physicalDevice
  
   logDebugM CatVulkan "Creating logical device"
@@ -96,7 +92,6 @@ initializeVulkan window = do
                     , deviceQueues   = Just queues
                     } }
   
-  -- Create swapchain
   env ← ask
   videoConfig ← liftIO $ readIORef (videoConfigRef env)
   let vsyncEnabled = vcVSync videoConfig
@@ -108,25 +103,20 @@ initializeVulkan window = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                       swapchainInfo = Just swapInfo } }
   
-  -- Log swapchain support
   support ← querySwapchainSupport physicalDevice surface
 
-  -- read msaa from config, determine appropriate sample count
   let msaaInt = vcMSAA videoConfig
       requestedSamples = msaaToSampleCount msaaInt
-  -- query device limits to clamp sample count
   let supportedSamples = framebufferColorSampleCounts (limits props)
       sampleCount = clampSampleCount supportedSamples requestedSamples
   logDebugSM CatVulkan "MSAA configuration"
     [("requested", T.pack $ show msaaInt)
     ,("actual_samples", T.pack $ show sampleCount)]
   
-  -- Create sync objects
   syncObjects ← createSyncObjects device defaultGraphicsConfig
   modify $ \s → s { graphicsState = (graphicsState s) {
                       syncObjects = Just syncObjects } }
   
-  -- Create command pool and frame resources
   let numFrames = gcMaxFrames defaultGraphicsConfig
   frameRes ← V.generateM (fromIntegral numFrames) $ \_ →
       createFrameResources device queues
@@ -135,7 +125,6 @@ initializeVulkan window = do
                       frameResources = frameRes
                     , vulkanCmdPool  = Just cmdPool } }
   
-  -- Create descriptor manager
   let descConfig = DescriptorManagerConfig
         { dmcMaxSets      = fromIntegral $ numFrames * 2
         , dmcUniformCount = fromIntegral numFrames
@@ -148,25 +137,21 @@ initializeVulkan window = do
   logDebugM CatDescriptor "Descriptor manager created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       descriptorState = Just descManager } }
-  -- create a font descriptor pool (supports up to 64 fonts)
   logDebugM CatDescriptor "Creating font descriptor pool"
   fontDescPool ← createFontDescriptorPool device 64
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontDescriptorPool = Just fontDescPool } }
   
-  -- Allocate descriptor sets
   descSets ← allocateVulkanDescriptorSets device descManager (fromIntegral numFrames)
   let updatedManager = descManager { dmActiveSets = descSets }
   modify $ \s → s { graphicsState = (graphicsState s) {
                       descriptorState = Just updatedManager } }
   
-  -- Create vertex buffer
   (vBuffer, vBufferMemory) ← createVertexBuffer device physicalDevice
                                (graphicsQueue queues) cmdPool
   modify $ \s → s { graphicsState = (graphicsState s) {
                       vertexBuffer = Just (vBuffer, vBufferMemory) } }
   
-  -- Create uniform descriptor set layout
   let texSystemConfig = TextureSystemConfig
         { tscMaxTextures   = 16384
         , tscReservedSlots = 1      -- Slot 0 = undefined texture
@@ -183,17 +168,14 @@ initializeVulkan window = do
   liftIO $ writeIORef (textureSystemRef env) (Just texSystemWithFaceMap)
   liftIO $ writeIORef (defaultFaceMapSlotRef env) (dfmSlot defaultFaceMap)
   
-  -- Create default scene
   let defaultSceneId = "default"
   sceneMgr ← gets sceneManager
   let sceneWithDefault = createScene defaultSceneId defaultCamera sceneMgr
       activeScene = setActiveScene defaultSceneId sceneWithDefault
   modify $ \s → s { sceneManager = activeScene }
   
-  -- Create uniform buffers
   createUniformBuffersForFrames device physicalDevice glfwWin descSets
   
-  -- Create render pass
   renderPass ← createVulkanRenderPass device (siSwapImgFormat swapInfo) sampleCount
   modify $ \s → s { graphicsState = (graphicsState s) {
                       vulkanRenderPass = Just renderPass } }
@@ -216,7 +198,6 @@ initializeVulkan window = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                           bindlessUIPipeline = Just (bindlessUIPipe, bindlessUIPipeLayout) } }
   
-  -- Create font pipeline
   logDebugM CatGraphics "Creating font pipeline"
   (fontPipe, fontPipeLayout, fontDescLayout) ←
     createFontPipeline device renderPass (siSwapExtent swapInfo)
@@ -233,19 +214,16 @@ initializeVulkan window = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontUIPipeline = Just (fontUIPipe, fontUIPipeLayout) } }
   
-  -- Create font quad buffer
   quadBuf ← createFontQuadBuffer device physicalDevice (graphicsQueue queues) cmdPool
   modify $ \s → s { graphicsState = (graphicsState s) {
                       fontQuadBuffer = Just quadBuf } }
   
-  -- Create swapchain image views
   imageViews ← createSwapchainImageViews device swapInfo
   modify $ \s → s { graphicsState = (graphicsState s) {
                       swapchainInfo = case swapchainInfo (graphicsState s) of
                         Just si → Just si { siSwapImgViews = imageViews }
                         Nothing → Nothing } }
   
-  -- Create MSAA color image if needed
   mMsaaImageView ← if sampleCount ≢ SAMPLE_COUNT_1_BIT
     then do
       (img, mem, view) ← createMSAAColorImage physicalDevice device
@@ -260,7 +238,6 @@ initializeVulkan window = do
                           msaaColorImage = Nothing } }
       pure Nothing
   
-  -- Create framebuffers
   logDebugSM CatGraphics "Creating framebuffers"
     [("count", T.pack $ show $ V.length imageViews)]
   framebuffers ← createVulkanFramebuffers device renderPass swapInfo
@@ -288,14 +265,13 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
   pixelSnap ← liftIO $ readIORef psRef
   sunAngle ← liftIO $ readIORef (sunAngleRef env)
   
-  -- UPDATE: Create/update UI camera with actual framebuffer size
   let uiCamera = defaultUICamera (fromIntegral width) (fromIntegral height)
       facing = case camFacing camera of
           FaceSouth → 0.0
           FaceWest → 1.0
           FaceNorth → 2.0
           FaceEast → 3.0
-  liftIO $ writeIORef uiCRef uiCamera  -- Update the ref with correct size
+  liftIO $ writeIORef uiCRef uiCamera
   
   let ambientLight = computeAmbientLight sunAngle
       uboData = UBO 
@@ -326,7 +302,6 @@ createUniformBuffersForFrames device physicalDevice glfwWin descSets = do
   modify $ \s → s { graphicsState = (graphicsState s) {
                       uniformBuffers = Just uniformBuffers } }
   
-  -- Update descriptor sets
   forM_ (zip [0..] (V.toList uniformBuffers)) $ \(i, (buffer, _)) → do
     logDebugSM CatDescriptor "Updating descriptor set"
       [("set_index", T.pack $ show (i ∷ Int))

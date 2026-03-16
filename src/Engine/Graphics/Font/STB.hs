@@ -24,14 +24,11 @@ import Engine.Core.Log (LoggerState, logWarn, LogCategory(CatFont))
 import Data.Word (Word8)
 import Data.Char (ord)
 
------------------------------------------------------------
--- C FFI Declarations
------------------------------------------------------------
+-- * C FFI Declarations
 
--- Opaque type for stbtt_fontinfo
+-- | Opaque type for stbtt_fontinfo
 data STBFontInfo
 
--- Font data and info
 data STBFont = STBFont
     { stbFontData ∷ Ptr Word8      -- Font file data
     , stbFontInfo ∷ Ptr STBFontInfo -- Font info struct
@@ -74,9 +71,7 @@ foreign import ccall "stb_free_font"
 foreign import ccall "stb_scale_for_pixel_height"
     c_stb_scale_for_pixel_height ∷ Ptr STBFontInfo → CFloat → IO CFloat
 
------------------------------------------------------------
--- Haskell API
------------------------------------------------------------
+-- * Haskell API
 
 -- | Load a TTF font file
 loadSTBFont ∷ LoggerState → FilePath → IO (Maybe STBFont)
@@ -90,10 +85,8 @@ loadSTBFont logger path = withCString path $ \cpath → do
             else do
                 size ← peek sizePtr
                 
-                -- Allocate fontinfo struct (opaque, ~512 bytes is safe)
+                -- stbtt_fontinfo is opaque, 512 bytes is a safe upper bound
                 fontInfo ← mallocBytes 512 ∷ IO (Ptr STBFontInfo)
-                
-                -- Initialize font
                 result ← c_stb_init_font fontData fontInfo
                 if result ≡ 0
                     then do
@@ -105,7 +98,7 @@ loadSTBFont logger path = withCString path $ \cpath → do
                     else do
                         return $ Just $ STBFont fontData fontInfo (fromIntegral size)
 
--- | Free font resources
+-- | Release font file data and info struct
 freeSTBFont ∷ STBFont → IO ()
 freeSTBFont font = do
     c_stb_free_font (stbFontData font)

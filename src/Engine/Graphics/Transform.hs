@@ -1,4 +1,3 @@
--- src/Engine/Graphics/Transform.hs
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Transform
     ( createModelMatrix

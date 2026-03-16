@@ -7,9 +7,7 @@ module World.Generate.Constants
 
 import UPrelude
 
------------------------------------------------------------
--- Constants
------------------------------------------------------------
+-- * Constants
 
 chunkLoadRadius ∷ Int
 chunkLoadRadius = 2

@@ -8,9 +8,7 @@ import UPrelude
 import World.Types
 import World.Grid (tileHalfWidth)
 
------------------------------------------------------------
--- Camera Change Detection
------------------------------------------------------------
+-- * Camera Change Detection
 
 camEpsilon ∷ Float
 camEpsilon = tileHalfWidth

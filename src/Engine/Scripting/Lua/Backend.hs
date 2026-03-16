@@ -14,7 +14,6 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import Data.Dynamic (toDyn, fromDynamic)
 
--- | Lua scripting backend
 data LuaBackend = LuaBackend
 
 instance ScriptBackend LuaBackend where
@@ -55,6 +54,5 @@ instance ScriptBackend LuaBackend where
   backendName _    = "Lua"
   backendVersion _ = "5.5"
 
--- | Create Lua backend
 createLuaBackend ∷ IO LuaBackend
 createLuaBackend = return LuaBackend

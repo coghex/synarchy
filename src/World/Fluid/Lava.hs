@@ -17,9 +17,7 @@ import World.Geology.Evolution (getFeatureCenter, getFeatureRadius)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Fluid.Internal
 
------------------------------------------------------------
--- Chunk-Level Lava Computation
------------------------------------------------------------
+-- * Chunk-Level Lava Computation
 
 computeChunkLava ∷ [PersistentFeature] → Word64 → [TectonicPlate]
                  → Int → ChunkCoord
@@ -34,9 +32,7 @@ computeChunkLava features seed plates worldSize coord surfaceMap =
         forM_ nearbyActive $ \pf →
             fillLavaFromFeature mv pf seed plates worldSize chunkMinGX chunkMinGY surfaceMap
 
------------------------------------------------------------
--- Lava Proximity
------------------------------------------------------------
+-- * Lava Proximity
 
 isNearbyActive ∷ Int → Int → Int → PersistentFeature → Bool
 isNearbyActive worldSize chunkGX chunkGY pf =
@@ -54,9 +50,7 @@ isNearbyActive worldSize chunkGX chunkGY pf =
                      dy = abs dyi
                  in dx < maxR + chunkSize ∧ dy < maxR + chunkSize
 
------------------------------------------------------------
--- Lava Fill
------------------------------------------------------------
+-- * Lava Fill
 
 fillLavaFromFeature ∷ MV.MVector s (Maybe FluidCell)
                     → PersistentFeature → Word64 → [TectonicPlate]
@@ -117,9 +111,7 @@ fillLavaFromFeature mv pf seed plates worldSize chunkGX chunkGY surfaceMap =
                    poolRadius lavaSurface surfaceMap
         _ → pure ()
 
------------------------------------------------------------
--- Circular Pool (shared by most volcanic features)
------------------------------------------------------------
+-- * Circular Pool (shared by most volcanic features)
 
 fillPool ∷ MV.MVector s (Maybe FluidCell)
          → Word64 → [TectonicPlate] → Int → Int → Int → Int → Int → Int → Int
@@ -157,9 +149,7 @@ fillPool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface s
             in when (dist < pr ∧ surfZ < clampedSurface) $
                 MV.write mv idx (Just (FluidCell Lava clampedSurface))
 
------------------------------------------------------------
--- Fissure Pool (linear lava fill)
------------------------------------------------------------
+-- * Fissure Pool (linear lava fill)
 
 fillFissurePool ∷ MV.MVector s (Maybe FluidCell)
                 → Word64 → [TectonicPlate] → Int → Int → Int
@@ -220,9 +210,7 @@ fillFissurePool mv seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth l
             in when (perpDist < hw ∧ surfZ < clampedSurface) $
                 MV.write mv idx (Just (FluidCell Lava clampedSurface))
 
------------------------------------------------------------
--- Quick Check
------------------------------------------------------------
+-- * Quick Check
 
 -- | Quick boolean check: does this chunk have any lava?
 --   Avoids allocating a full FluidMap — just checks if any

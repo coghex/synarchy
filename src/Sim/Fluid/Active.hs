@@ -20,7 +20,7 @@ import World.Fluid.Types (FluidType(..), FluidCell(..))
 import Sim.State.Types (SimState(..), SimChunkState(..))
 import Sim.Fluid.Types (ActiveFluidCell(..), volumePerLevel, volumeToSurface)
 
--- | Equilibrium tick threshold for deactivation.
+-- | Ticks at equilibrium before a chunk is deactivated.
 equilThreshold ∷ Int
 equilThreshold = 200
 
@@ -115,16 +115,13 @@ simulateActiveChunk allChunks coord scs =
             , scsSideDeco    = newDeco
             }, changed)
 
------------------------------------------------------------
--- Phase A: Gravity — downhill flow
------------------------------------------------------------
+-- * Phase A: Gravity — downhill flow
 
 phaseGravity ∷ MV.MVector s (Maybe ActiveFluidCell)
              → VU.Vector Int
              → STRef s Bool
              → ST s ()
 phaseGravity mv terrainV changedRef = do
-    -- Snapshot: read all decisions from frozen state, write transfers to mv
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
@@ -137,7 +134,6 @@ phaseGravity mv terrainV changedRef = do
                     lx = idx `mod` chunkSize
                     ly = idx `div` chunkSize
                     nbrs = cardinalNeighbors lx ly
-                    -- Compute all transfers from snapshot, then apply
                     transfers = mapMaybe (\(nx, ny) →
                         if nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize
                         then let nIdx = ny * chunkSize + nx
@@ -156,7 +152,6 @@ phaseGravity mv terrainV changedRef = do
                                 else Nothing
                         else Nothing
                         ) nbrs
-                    -- Cap total outflow to available volume
                     totalRequested = sum (map snd transfers)
                     avail = fromIntegral (afcVolume afc)
                     scale = if totalRequested > avail ∧ totalRequested > 0
@@ -172,13 +167,11 @@ phaseGravity mv terrainV changedRef = do
                             actual = min scaled (avail - soFar)
                         when (actual > 0) $ do
                             writeSTRef totalRef (soFar + actual)
-                            -- Subtract from source
                             srcCell ← MV.read mv idx
                             case srcCell of
                                 Just src → MV.write mv idx
                                     (Just src { afcVolume = afcVolume src - fromIntegral actual })
                                 Nothing → pure ()
-                            -- Add to destination
                             dst ← MV.read mv nIdx
                             case dst of
                                 Nothing →
@@ -192,16 +185,13 @@ phaseGravity mv terrainV changedRef = do
                                         { afcVolume = afcVolume d + fromIntegral actual })
                             writeSTRef changedRef True
 
------------------------------------------------------------
--- Phase B: Lateral pressure equalization
------------------------------------------------------------
+-- * Phase B: Lateral pressure equalization
 
 phaseLateral ∷ MV.MVector s (Maybe ActiveFluidCell)
              → VU.Vector Int
              → STRef s Bool
              → ST s ()
 phaseLateral mv terrainV changedRef = do
-    -- Snapshot: read all decisions from frozen state, write transfers to mv
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
@@ -219,18 +209,15 @@ phaseLateral mv terrainV changedRef = do
                     when (nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize) $ do
                         let nIdx = ny * chunkSize + nx
                             nTerrZ = terrainV VU.! nIdx
-                        -- Same terrain height: equalize volumes
                         when (nTerrZ ≡ terrZ) $ do
                             let nbrCell = snap V.! nIdx
                             case nbrCell of
                                 Just nfc → do
                                     let dstVol = fromIntegral (afcVolume nfc) ∷ Int
                                         diff   = srcVol - dstVol
-                                    -- Only transfer if we are the higher side (src > dst)
-                                    -- to avoid both sides transferring to each other
+                                    -- Only transfer from higher side to avoid double-counting
                                     when (diff > 1) $ do
                                         let transfer = max 1 (diff `div` 4)
-                                        -- Apply to live state
                                         curSrc ← MV.read mv idx
                                         curDst ← MV.read mv nIdx
                                         case (curSrc, curDst) of
@@ -242,7 +229,6 @@ phaseLateral mv terrainV changedRef = do
                                                 writeSTRef changedRef True
                                             _ → pure ()
                                 Nothing | srcVol > volumePerLevel → do
-                                    -- Source has excess: share with empty neighbor at same height
                                     let transfer = max 1 (srcVol `div` 4)
                                     curSrc ← MV.read mv idx
                                     case curSrc of
@@ -258,9 +244,7 @@ phaseLateral mv terrainV changedRef = do
                                         Nothing → pure ()
                                 _ → pure ()
 
------------------------------------------------------------
--- Phase C: Waterfall detection
------------------------------------------------------------
+-- * Phase C: Waterfall detection
 
 phaseWaterfall ∷ MV.MVector s (Maybe ActiveFluidCell)
                → MVU.MVector s Word8
@@ -268,7 +252,6 @@ phaseWaterfall ∷ MV.MVector s (Maybe ActiveFluidCell)
                → STRef s Bool
                → ST s ()
 phaseWaterfall mv decoMv terrainV changedRef = do
-    -- Snapshot: read all decisions from frozen state, write transfers to mv
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
@@ -282,7 +265,6 @@ phaseWaterfall mv decoMv terrainV changedRef = do
                     ly = idx `div` chunkSize
                     nbrs = cardinalNeighbors lx ly
                     avail = fromIntegral (afcVolume afc) ∷ Int
-                    -- Compute all waterfall transfers from snapshot
                     falls = mapMaybe (\(dirBit, (nx, ny)) →
                         if nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize
                         then let nIdx = ny * chunkSize + nx
@@ -293,7 +275,6 @@ phaseWaterfall mv decoMv terrainV changedRef = do
                                 else Nothing
                         else Nothing
                         ) (zip [0∷Int ..] nbrs)
-                    -- Cap total outflow to available volume
                     totalRequested = sum (map (\(_, _, t) → t) falls)
                     scale = if totalRequested > avail ∧ totalRequested > 0
                             then avail * 256 `div` totalRequested
@@ -309,13 +290,11 @@ phaseWaterfall mv decoMv terrainV changedRef = do
                             actual = min scaled (avail - soFar)
                         when (actual > 0) $ do
                             writeSTRef totalRef (soFar + actual)
-                            -- Subtract from source
                             srcCell ← MV.read mv idx
                             case srcCell of
                                 Just src → MV.write mv idx
                                     (Just src { afcVolume = afcVolume src - fromIntegral actual })
                                 Nothing → pure ()
-                            -- Add volume at bottom
                             dst ← MV.read mv nIdx
                             case dst of
                                 Nothing →
@@ -327,13 +306,10 @@ phaseWaterfall mv decoMv terrainV changedRef = do
                                 Just d →
                                     MV.write mv nIdx (Just d
                                         { afcVolume = afcVolume d + fromIntegral actual })
-                            -- Mark flow direction
                             fd ← readSTRef flowDirRef
                             writeSTRef flowDirRef (fd .|. ((1 ∷ Word8) `shiftL` dirBit))
-                            -- Write waterfall deco at the cliff edge
                             MVU.write decoMv idx (17 + fromIntegral (dirBit `mod` 4))
                             writeSTRef changedRef True
-                -- Update flow direction
                 newFD ← readSTRef flowDirRef
                 when (newFD ≠ afcFlowDir afc) $ do
                     cur ← MV.read mv idx
@@ -341,9 +317,7 @@ phaseWaterfall mv decoMv terrainV changedRef = do
                         Just c → MV.write mv idx (Just c { afcFlowDir = newFD })
                         Nothing → pure ()
 
------------------------------------------------------------
--- Phase D: Dry-out
------------------------------------------------------------
+-- * Phase D: Dry-out
 
 phaseDryOut ∷ MV.MVector s (Maybe ActiveFluidCell)
             → STRef s Bool
@@ -357,10 +331,6 @@ phaseDryOut mv changedRef = do
                 MV.write mv idx Nothing
                 writeSTRef changedRef True
             _ → pure ()
-
------------------------------------------------------------
--- Helpers
------------------------------------------------------------
 
 cardinalNeighbors ∷ Int → Int → [(Int, Int)]
 cardinalNeighbors lx ly =

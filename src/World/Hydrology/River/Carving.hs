@@ -18,9 +18,7 @@ import World.Hydrology.Types
 import World.Geology.Types
 import World.Geology.Hash
 
------------------------------------------------------------
--- River Carving (pure GeoModification)
------------------------------------------------------------
+-- * River Carving (pure GeoModification)
 
 -- | Apply a river's terrain modification to a single column.
 --   Finds the deepest carve across all segments, or falls
@@ -72,9 +70,7 @@ findDeepestCarve worldSize gx gy mSeed baseElev segs = go noModification 0
               carve = carveFromSegment worldSize gx gy mSeed seg baseElev
           in go (pickDeepest acc carve) (i + 1)
 
------------------------------------------------------------
--- Target-Based Segment Carving
------------------------------------------------------------
+-- * Target-Based Segment Carving
 
 -- | Compute the carving modification from a single river segment.
 --
@@ -190,9 +186,7 @@ carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
                       , gmIntrusionDepth   = min wallAlluvium carve
                       }
 
------------------------------------------------------------
--- Delta Deposit — original version (takes full RiverParams)
------------------------------------------------------------
+-- * Delta Deposit — original version (takes full RiverParams)
 
 -- | Compute delta deposit from a full RiverParams.
 --   Delegates to computeDeltaDeposit' using the last segment.
@@ -203,9 +197,7 @@ computeDeltaDeposit river worldSize gx gy baseElev =
     else computeDeltaDeposit' (V.last (rpSegments river))
                               (rpFlowRate river) worldSize gx gy baseElev
 
------------------------------------------------------------
--- Target-Based Delta Deposit
------------------------------------------------------------
+-- * Target-Based Delta Deposit
 
 -- | Compute delta deposit from the last segment and flow rate.
 --
@@ -276,9 +268,7 @@ computeDeltaDeposit' lastSeg totalFlow worldSize gx gy baseElev =
                  , gmIntrusionDepth   = deposit
                  }
 
------------------------------------------------------------
--- Helpers
------------------------------------------------------------
+-- * Helpers
 
 -- | Pick the deeper of two modifications (more negative delta wins).
 pickDeepest ∷ GeoModification → GeoModification → GeoModification
@@ -286,9 +276,7 @@ pickDeepest a b
     | gmElevDelta b < gmElevDelta a = b
     | otherwise                     = a
 
------------------------------------------------------------
--- River Evolution Application (pure GeoModification)
------------------------------------------------------------
+-- * River Evolution Application (pure GeoModification)
 
 -- | Apply a river evolution event's immediate terrain effect.
 --   Most evolution events only update PersistentFeature state;

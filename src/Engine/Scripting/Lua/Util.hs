@@ -16,11 +16,9 @@ import qualified Data.Map as Map
 import Control.Concurrent.STM (readTVarIO)
 import Control.Monad (forM_, when)
 
--- | Check if a Lua reference is valid (not nil)
 isValidRef ∷ Lua.Reference → Bool
 isValidRef (Lua.Reference n) = n ≠ fromIntegral Lua.refnil
 
--- | Broadcast an event to all loaded script modules
 broadcastToModules ∷ LuaBackendState → T.Text → [ScriptValue] → IO ()
 broadcastToModules ls funcName args = do
     scriptsMap ← readTVarIO (lbsScripts ls)

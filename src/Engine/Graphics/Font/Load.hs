@@ -66,7 +66,6 @@ loadFont requestedHandle fontPath fontSize = do
             logWarnM CatFont $ "Font already loaded: " <> T.pack (show fontPath)
             return handle
         Nothing → do
-            -- get the descriptor layout for font
             fontDescLayout ← case fontDescriptorLayout gs of
                 Nothing → logAndThrowM CatFont (ExGraphics DescriptorError)
                               "Font descriptor layout not initialized"
@@ -81,7 +80,6 @@ loadFont requestedHandle fontPath fontSize = do
                 ,("height", T.pack $ show $ faAtlasHeight atlas)
                 ,("glyph_count", T.pack $ show $ Map.size $ faGlyphData atlas)]
             
-            -- Upload to GPU
             (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas fontDescLayout
             
             logDebugSM CatFont "Font GPU upload completion"
@@ -112,7 +110,7 @@ loadSDFFont requestedHandle fontPath = do
     cache ← liftIO $ readIORef cacheRef
     gs ← gets graphicsState
     
-    -- Use a special cache key for SDF fonts (size = -1 to indicate SDF)
+    -- SDF fonts use size = -1 as cache key sentinel
     case Map.lookup (fontPath, -1) (fcPathCache cache) of
         Just existingHandle → do
             logDebugSM CatFont "SDF Font already loaded, reusing atlas"
@@ -120,7 +118,6 @@ loadSDFFont requestedHandle fontPath = do
                 ,("existing_handle", T.pack $ show existingHandle)
                 ,("requested_handle", T.pack $ show requestedHandle)]
             
-            -- Get the existing atlas and register it under the new handle too
             case Map.lookup existingHandle (fcFonts cache) of
                 Just existingAtlas → do
                     liftIO $ atomicModifyIORef' cacheRef $ \c → ((c
@@ -128,12 +125,11 @@ loadSDFFont requestedHandle fontPath = do
                         }), ())
                     return requestedHandle
                 Nothing → do
-                    -- Shouldn't happen, but fall through to load
                     logWarnM CatFont "Cached font handle has no atlas, reloading"
                     loadNewSDFFont requestedHandle fontPath cacheRef gs
         Nothing → loadNewSDFFont requestedHandle fontPath cacheRef gs
 
--- Helper to load a new SDF font (extracted from original loadSDFFont)
+-- | Load a new SDF font when not found in cache
 loadNewSDFFont ∷ FontHandle → FilePath → IORef FontCache → GraphicsState → EngineM ε σ FontHandle
 loadNewSDFFont requestedHandle fontPath cacheRef gs = do
     fontDescLayout ← case fontDescriptorLayout gs of
@@ -150,7 +146,6 @@ loadNewSDFFont requestedHandle fontPath cacheRef gs = do
         ,("height", T.pack $ show $ faAtlasHeight atlas)
         ,("glyph_count", T.pack $ show $ Map.size $ faGlyphData atlas)]
     
-    -- Upload to GPU (same as regular font)
     (texHandle, descriptorSet, imgView, samp) ← uploadFontAtlasToGPU atlas fontDescLayout
     
     let newAtlas = atlas { faTexture = texHandle
@@ -165,9 +160,7 @@ loadNewSDFFont requestedHandle fontPath cacheRef gs = do
     
     return requestedHandle
 
------------------------------------------------------------
--- Atlas Generation with STB
------------------------------------------------------------
+-- * Atlas Generation with STB
 
 generateFontAtlas ∷ LoggerState → FilePath → Int → IO FontAtlas
 generateFontAtlas logger fontPath fontSize = do
@@ -176,7 +169,7 @@ generateFontAtlas logger fontPath fontSize = do
     
     maybeFont ← loadSTBFont logger fontPath
     case maybeFont of
-        Nothing → error $ "Failed to load font: " ++ fontPath
+        Nothing → error $ "Failed to load font: " ⧺ fontPath
         Just font → do
             scale ← scaleForPixelHeight font (fromIntegral fontSize)
             (ascent, descent, lineGap) ← getSTBFontMetrics font scale
@@ -184,7 +177,6 @@ generateFontAtlas logger fontPath fontSize = do
             let chars = [' '..'~']
                 numChars = length chars
             
-            -- Enumerate chars with indices to limit debug logging to first 3 glyphs
             glyphDataWithMetrics ← forM (zip chars [0..]) $ \(c, idx) → do
                 (w,h,xoff,yoff,pixels) ← renderGlyphWithMetrics logger font c scale
                 (_,_,_,_,advance) ← getSTBGlyphMetrics font c scale
@@ -211,7 +203,6 @@ generateFontAtlas logger fontPath fontSize = do
                 "Font atlas size: " <> T.pack (show atlasWidth)
                 <> "x" <> T.pack (show atlasHeight)
             
-            -- Pack glyphs with metrics
             (atlasBitmap, glyphMap) ← packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow cellWidth cellHeight glyphDataWithMetrics chars
            
             logDebug logger CatFont $
@@ -246,7 +237,8 @@ renderGlyphWithMetrics logger font char scale = do
   where
     isExpectedEmptyGlyph c = c `elem` [' ', '\n', '\t', '\r']
 
--- Updated to use metrics stored before font was freed
+-- | Pack glyphs into atlas bitmap, producing glyph metadata map.
+-- Uses metrics stored before font was freed.
 packGlyphsSTBWithMetrics ∷ Int → Int → Int → Int → Int
                          → [(Int, Int, Int, Int, [Word8], Float)] → [Char]
                          → IO ([Word8], Map.Map Char GlyphInfo)
@@ -281,7 +273,7 @@ packGlyphsSTBWithMetrics atlasWidth atlasHeight charsPerRow cellWidth cellHeight
                 { giUVRect = (u0, v0, u1, v1)
                 , giSize = (fromIntegral w, fromIntegral h)
                 , giBearing = (fromIntegral xoff, fromIntegral yoff)
-                , giAdvance = advance  -- Use stored advance
+                , giAdvance = advance
                 }
         
         return $ Map.insert char glyphInfo gmap
@@ -290,9 +282,7 @@ nextPowerOf2 ∷ Int → Int
 nextPowerOf2 n = fromMaybe 1 $ listToMaybe $ dropWhile (< n) powersOf2
   where powersOf2 = iterate (*2) 1
 
------------------------------------------------------------
--- SDF Atlas Generation
------------------------------------------------------------
+-- * SDF Atlas Generation
 
 -- | The base size for SDF generation (atlas is generated once at this size)
 sdfBaseSize ∷ Int
@@ -310,7 +300,7 @@ generateSDFFontAtlas logger fontPath = do
     
     maybeFont ← loadSTBFont logger fontPath
     case maybeFont of
-        Nothing → error $ "Failed to load font: " ++ fontPath
+        Nothing → error $ "Failed to load font: " ⧺ fontPath
         Just font → do
             scale ← scaleForPixelHeight font (fromIntegral sdfBaseSize)
             (ascent, descent, lineGap) ← getSTBFontMetrics font scale
@@ -318,7 +308,6 @@ generateSDFFontAtlas logger fontPath = do
             let chars = [' '..'~']
                 numChars = length chars
             
-            -- Render all glyphs as SDF
             glyphDataWithMetrics ← forM (zip chars [0..]) $ \(c, idx) → do
                 result ← renderSTBGlyphSDF font c scale sdfPadding
                 (_, _, _, _, advance) ← getSTBGlyphMetrics font c scale
@@ -336,7 +325,6 @@ generateSDFFontAtlas logger fontPath = do
             
             freeSTBFont font
             
-            -- Calculate atlas dimensions
             let charsPerRow = 16
                 maxWidth = maximum $ map (\(w,_,_,_,_,_) → w) glyphDataWithMetrics
                 maxHeight = maximum $ map (\(_,h,_,_,_,_) → h) glyphDataWithMetrics
@@ -349,8 +337,7 @@ generateSDFFontAtlas logger fontPath = do
             logDebug logger CatFont $ "SDF Atlas size: " <> T.pack (show atlasWidth)
                                     <> "x" <> T.pack (show atlasHeight)
             
-            -- Pack glyphs into atlas
-            (atlasBitmap, glyphMap) ← packGlyphsSTBWithMetrics atlasWidth atlasHeight 
+            (atlasBitmap, glyphMap) ← packGlyphsSTBWithMetrics atlasWidth atlasHeight
                                          charsPerRow cellWidth cellHeight glyphDataWithMetrics chars
             
             logDebug logger CatFont $ "SDF Atlas generated with " 
@@ -361,7 +348,7 @@ generateSDFFontAtlas logger fontPath = do
                 , faGlyphData = glyphMap
                 , faAtlasWidth = atlasWidth
                 , faAtlasHeight = atlasHeight
-                , faFontSize = sdfBaseSize  -- Base size, not render size
+                , faFontSize = sdfBaseSize
                 , faLineHeight = ascent - descent + lineGap
                 , faBaseline = ascent
                 , faAtlasBitmap = atlasBitmap
@@ -370,16 +357,13 @@ generateSDFFontAtlas logger fontPath = do
                 , faSampler = Nothing
                 }
 
------------------------------------------------------------
--- GPU Upload
------------------------------------------------------------
+-- * GPU Upload
 
 uploadFontAtlasToGPU ∷ FontAtlas → DescriptorSetLayout
   → EngineM ε σ (TextureHandle, DescriptorSet, ImageView, Sampler)
 uploadFontAtlasToGPU atlas fontDescriptorsLayout = do
     state ← gets graphicsState
     
-    -- Get Vulkan handles
     device ← case vulkanDevice state of
         Nothing → logAndThrowM CatFont (ExGraphics VulkanDeviceLost)
                                        "No device"
@@ -402,7 +386,6 @@ uploadFontAtlasToGPU atlas fontDescriptorsLayout = do
         pixels = faAtlasBitmap atlas
         queue = graphicsQueue queues
 
-    -- Create grayscale texture
     (texHandle, descSet, imgView, samp) ← createFontTextureGrayscale device pDevice
                                             cmdPool queue width height pixels fontDescriptorsLayout
     
@@ -414,17 +397,14 @@ createFontTextureGrayscale ∷ Device → PhysicalDevice → CommandPool → Que
 createFontTextureGrayscale device pDevice cmdPool queue width height pixels fontDescLayout = do
     let bufferSize = fromIntegral $ width * height
     
-    -- 1. Create staging buffer
     (stagingMemory, stagingBuffer) ← createVulkanBufferManual device pDevice bufferSize
         BUFFER_USAGE_TRANSFER_SRC_BIT
         (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
     
-    -- 2. Upload pixel data
     dataPtr ← mapMemory device stagingMemory 0 bufferSize zero
     liftIO $ pokeArray (castPtr dataPtr) pixels
     unmapMemory device stagingMemory
     
-    -- 3. Create GPU image
     image ← createVulkanImage device pDevice
         (fromIntegral width, fromIntegral height)
         FORMAT_R8_UNORM
@@ -432,7 +412,6 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
         (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     
-    -- 4. Transition and copy
     runCommandsOnce device cmdPool queue $ \cmdBuf → do
         transitionImageLayout cmdBuf (viImage image) FORMAT_R8_UNORM
             IMAGE_LAYOUT_UNDEFINED IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
@@ -456,15 +435,9 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
         transitionImageLayout cmdBuf (viImage image) FORMAT_R8_UNORM
             IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     
-    -- 5. Create image view
     imageView ← createVulkanImageView device image FORMAT_R8_UNORM IMAGE_ASPECT_COLOR_BIT
     
-    -- 6. Create sampler
     sampler ← createFontTextureSampler device
-    
-    -- 7. There is no number 7
-    
-    -- 8. Allocate and update descriptor set
     state ← get
     fontPool ← case fontDescriptorPool (graphicsState state) of
         Nothing → logAndThrowM CatFont (ExGraphics DescriptorError)
@@ -480,7 +453,6 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
     
     logDebugM CatFont "Descriptor set allocated for font texture"
     
-    -- Update descriptor set with font texture
     let imgInfo = zero
           { sampler = sampler
           , imageView = imageView
@@ -496,18 +468,15 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
           }
     
     updateDescriptorSets device (V.singleton writeDescriptorSet) V.empty
-    -- Generate handle
+
     poolRef ← asks assetPoolRef
     pool ← liftIO $ readIORef poolRef
     handle ← liftIO $ generateTextureHandle pool
-    -- Cleanup staging buffer
     destroyBuffer device stagingBuffer Nothing
     freeMemory device stagingMemory Nothing
     return (handle, descSet, imageView, sampler)
 
------------------------------------------------------------
--- Helper Functions
------------------------------------------------------------
+-- * Helper Functions
 
 transitionImageLayout ∷ CommandBuffer → Image → Format 
                       → ImageLayout → ImageLayout → EngineM ε σ ()

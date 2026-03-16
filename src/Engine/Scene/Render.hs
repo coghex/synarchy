@@ -28,7 +28,6 @@ import Engine.Graphics.Window.Types (Window(..))
 import Vulkan.Core10
 import Vulkan.Zero
 
--- | Update scene and prepare render data
 updateSceneForRender ∷ EngineM ε σ ()
 updateSceneForRender = do
     state ← gets graphicsState
@@ -37,22 +36,18 @@ updateSceneForRender = do
     logDebugSM CatRender "Updating scene"
         [("activeScene", maybe "none" (T.pack . show) (smActiveScene sceneMgr))]
     
-    -- Get window dimensions for frustum culling
     let Window win = fromJust $ glfwWindow state
     (width, height) ← GLFW.getFramebufferSize win
-    -- and the screen dimensions from the swapchain
     let (screenW, screenH) = case swapchainInfo state of
                                Nothing → (800.0,600.0)
                                Just swapInfo → let Extent2D w h = siSwapExtent swapInfo
                                                in (fromIntegral w, fromIntegral h)
     
-    -- Update scene manager with current view dimensions
-    updatedSceneMgr ← updateSceneManager 
+    updatedSceneMgr ← updateSceneManager
                             (fromIntegral width) 
                             (fromIntegral height) 
                             sceneMgr
     
-    -- collect text batches from active scene
     case smActiveScene updatedSceneMgr of
         Just sceneId → case Map.lookup sceneId (smSceneGraphs updatedSceneMgr) of
             Just graph → do
@@ -91,7 +86,6 @@ updateSceneForRender = do
             logDebugM CatScene "No active scene"
             modify $ \s → s { sceneManager = updatedSceneMgr }
 
--- | Get current render batches from scene
 getCurrentRenderBatches ∷ EngineM ε σ (V.Vector RenderBatch)
 getCurrentRenderBatches = do
     sceneMgr ← gets sceneManager
@@ -108,7 +102,6 @@ ensureDynamicVertexBuffer ∷ Word64 → EngineM ε σ SceneDynamicBuffer
 ensureDynamicVertexBuffer requiredVertices = do
     state ← gets graphicsState
 
-    -- Check if we already have a buffer that's big enough
     case dynamicVertexBuffer state of
         Just existing | sdbCapacity existing ≥ requiredVertices → do
             logDebugSM CatRender "Reusing existing dynamic vertex buffer"
@@ -116,7 +109,6 @@ ensureDynamicVertexBuffer requiredVertices = do
                 ,("required", T.pack $ show requiredVertices)]
             pure existing
         mOld → do
-            -- Need a new buffer — first destroy the old one if it exists
             device ← case vulkanDevice state of
                 Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
                                                    "No device"
@@ -126,7 +118,6 @@ ensureDynamicVertexBuffer requiredVertices = do
                                                    "No physical device"
                 Just pd → pure pd
 
-            -- Destroy old buffer
             case mOld of
                 Just old → do
                     logDebugSM CatRender "Destroying old dynamic vertex buffer"
@@ -136,7 +127,7 @@ ensureDynamicVertexBuffer requiredVertices = do
                         freeMemory device (sdbMemory old) Nothing
                 Nothing → pure ()
 
-            -- Calculate required buffer size with 50% padding
+            -- 50% padding to avoid frequent reallocations
             let bufferSize = requiredVertices * (fromIntegral vertexTotalSize)
                 paddedSize = bufferSize + (bufferSize `div` 2)
                 paddedCapacity = requiredVertices + (requiredVertices `div` 2)
@@ -145,7 +136,7 @@ ensureDynamicVertexBuffer requiredVertices = do
                 [("vertices", T.pack $ show requiredVertices)
                 ,("sizeBytes", T.pack $ show paddedSize)]
 
-            -- *** Use Manual — we own this buffer's lifetime ***
+            -- Manual lifetime management (not auto-collected)
             (memory, buffer) ← createVulkanBufferManual
                 device
                 pDevice
@@ -160,13 +151,11 @@ ensureDynamicVertexBuffer requiredVertices = do
                     , sdbUsed = 0
                     }
 
-            -- Cache in GraphicsState
             modify $ \s → s { graphicsState = (graphicsState s) {
                 dynamicVertexBuffer = Just newBuf } }
 
             pure newBuf
 
--- | Upload batch vertices to dynamic buffer
 uploadBatchesToBuffer ∷ V.Vector RenderBatch → SceneDynamicBuffer → EngineM ε σ SceneDynamicBuffer
 uploadBatchesToBuffer batches dynamicBuffer = do
     state ← gets graphicsState
@@ -175,26 +164,22 @@ uploadBatchesToBuffer batches dynamicBuffer = do
                                            "No device"
         Just d → pure d
 
-    -- Calculate total vertices needed
     let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
 
     logDebugSM CatRender "Uploading batches to buffer"
         [("batches", T.pack $ show $ V.length batches)
         ,("totalVertices", T.pack $ show totalVertices)]
 
-    -- Ensure buffer capacity (this now reuses or grows as needed)
     finalBuffer ← if totalVertices > sdbCapacity dynamicBuffer
         then do
             logDebugM CatScene "Buffer too small, resizing..."
             ensureDynamicVertexBuffer totalVertices
         else pure dynamicBuffer
 
-    -- Upload vertex data
     let totalSize = totalVertices * (fromIntegral vertexTotalSize)
 
     dataPtr ← mapMemory device (sdbMemory finalBuffer) 0 totalSize zero
 
-    -- Copy all batch vertices sequentially
     currentOffset ← liftIO $ newIORef (0 ∷ Int)
     V.forM_ batches $ \batch → do
         offset ← liftIO $ readIORef currentOffset
@@ -213,7 +198,6 @@ uploadBatchesToBuffer batches dynamicBuffer = do
 
     let result = finalBuffer { sdbUsed = totalVertices }
 
-    -- Keep cache in sync after upload
     modify $ \s → s { graphicsState = (graphicsState s) {
         dynamicVertexBuffer = Just result } }
 

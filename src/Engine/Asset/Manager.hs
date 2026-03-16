@@ -1,5 +1,4 @@
--- Engine/Asset/Manager.hs
-module Engine.Asset.Manager 
+module Engine.Asset.Manager
   ( generateTextureHandle
   , generateFontHandle
   , generateShaderHandle
@@ -65,103 +64,87 @@ import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import qualified Vulkan.Core10 as Vk
 import Vulkan.Zero
 
--- | Generate a texture handle
 generateTextureHandle ∷ AssetPool → IO TextureHandle
 generateTextureHandle pool =
   atomicModifyIORef' (apNextTextureHandle pool) $ \n →
     (n + 1, TextureHandle n)
 
--- | Generate a font handle
 generateFontHandle ∷ AssetPool → IO FontHandle
 generateFontHandle pool =
   atomicModifyIORef' (apNextFontHandle pool) $ \n →
     (n + 1, FontHandle n)
 
--- | Generate a shader handle
 generateShaderHandle ∷ AssetPool → IO ShaderHandle
 generateShaderHandle pool =
   atomicModifyIORef' (apNextShaderHandle pool) $ \n →
     (n + 1, ShaderHandle n)
 
--- | Generate an asset ID atomically
 generateAssetId ∷ AssetPool → IO AssetId
 generateAssetId pool =
   atomicModifyIORef' (apNextAssetId pool) $ \n →
     (n + 1, AssetId $ fromIntegral n)
 
--- | Update texture handle state
 updateTextureState ∷ TextureHandle → AssetState AssetId → AssetPool → IO ()
 updateTextureState handle newState pool =
   atomicModifyIORef' (apTextureHandles pool) $ \m →
     (Map.insert handle newState m, ())
 
--- | Update font handle state
 updateFontState ∷ FontHandle → AssetState AssetId → AssetPool → IO ()
 updateFontState handle newState pool =
   atomicModifyIORef' (apFontHandles pool) $ \m →
     (Map.insert handle newState m, ())
 
--- | Update shader handle state
 updateShaderState ∷ ShaderHandle → AssetState AssetId → AssetPool → IO ()
 updateShaderState handle newState pool =
   atomicModifyIORef' (apShaderHandles pool) $ \m →
     (Map.insert handle newState m, ())
 
--- | Delete texture handle state
 deleteTextureState ∷ TextureHandle → AssetPool → IO ()
 deleteTextureState handle pool =
   atomicModifyIORef' (apTextureHandles pool) $ \m →
     (Map.delete handle m, ())
 
--- | Delete font handle state
 deleteFontState ∷ FontHandle → AssetPool → IO ()
 deleteFontState handle pool =
   atomicModifyIORef' (apFontHandles pool) $ \m →
     (Map.delete handle m, ())
 
--- | Delete shader handle state
 deleteShaderState ∷ ShaderHandle → AssetPool → IO ()
 deleteShaderState handle pool =
   atomicModifyIORef' (apShaderHandles pool) $ \m →
     (Map.delete handle m, ())
 
--- | Get all texture handles
 getAllTextureHandles ∷ AssetPool → IO [TextureHandle]
 getAllTextureHandles pool = do
   stateMap ← readIORef (apTextureHandles pool)
   return $ Map.keys stateMap
 
--- | Get all font handles
 getAllFontHandles ∷ AssetPool → IO [FontHandle]
 getAllFontHandles pool = do
   stateMap ← readIORef (apFontHandles pool)
   return $ Map.keys stateMap
 
--- | Get all shader handles
 getAllShaderHandles ∷ AssetPool → IO [ShaderHandle]
 getAllShaderHandles pool = do
   stateMap ← readIORef (apShaderHandles pool)
   return $ Map.keys stateMap
 
--- | Lookup texture handle state
 lookupTextureAsset ∷ TextureHandle → AssetPool → IO (Maybe (AssetState AssetId))
 lookupTextureAsset handle pool = do
   stateMap ← readIORef (apTextureHandles pool)
   return $ Map.lookup handle stateMap
 
--- | Lookup font handle state
 lookupFontAsset ∷ FontHandle → AssetPool → IO (Maybe (AssetState AssetId))
 lookupFontAsset handle pool = do
   stateMap ← readIORef (apFontHandles pool)
   return $ Map.lookup handle stateMap
 
--- | Lookup shader handle state
 lookupShaderAsset ∷ ShaderHandle → AssetPool → IO (Maybe (AssetState AssetId))
 lookupShaderAsset handle pool = do
   stateMap ← readIORef (apShaderHandles pool)
   return $ Map.lookup handle stateMap
 
--- | Load a texture atlas from file (generates a new handle)
+-- | Convenience wrapper that auto-generates a 'TextureHandle' before loading
 loadTextureAtlas ∷ Text → FilePath → Text → EngineM ε σ AssetId
 loadTextureAtlas name path arrayName = do
   poolRef ← asks assetPoolRef
@@ -169,8 +152,9 @@ loadTextureAtlas name path arrayName = do
   texHandle ← liftIO $ generateTextureHandle pool
   loadTextureAtlasWithHandle texHandle name path arrayName
 
--- | Load a texture atlas from file with a specific TextureHandle
--- This is used when the handle was already generated (e.g., from Lua)
+-- | Load a texture atlas from disk, register it in the bindless system, and
+--   insert it into the global asset pool. If the path is already loaded, the
+--   existing slot is reused and the ref count is bumped.
 loadTextureAtlasWithHandle ∷ TextureHandle  -- ^ Pre-generated handle
                           → Text            -- ^ Name of the atlas
                           → FilePath        -- ^ Path to the atlas file
@@ -339,7 +323,8 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
     
       pure nextId
 
--- | Unload an asset and cleanup its resources
+-- | Decrement an asset's ref count; if it reaches zero, run its cleanup
+--   action and remove it from the pool
 unloadAsset ∷ AssetId → EngineM' ε ()
 unloadAsset aid = do
   poolRef ← asks assetPoolRef
@@ -378,7 +363,6 @@ unloadAsset aid = do
         Nothing → logAndThrowM CatAsset (ExAsset (AssetNotFound aid))
                     "Attempted to unload non-existent asset"
 
--- | Get a texture atlas by ID
 getTextureAtlas ∷ AssetId → EngineM ε σ TextureAtlas
 getTextureAtlas aid = do
   poolRef ← asks assetPoolRef
@@ -388,7 +372,6 @@ getTextureAtlas aid = do
                 "Texture atlas not found"
     Just atlas → pure atlas
 
--- | Get a shader program by ID
 getShaderProgram ∷ AssetId → EngineM' ε ShaderProgram
 getShaderProgram aid = do
   poolRef ← asks assetPoolRef
@@ -398,7 +381,8 @@ getShaderProgram aid = do
                 "Shader program not found"
     Just shader → pure shader
 
--- | Clean up all asset resources
+-- | Drain all assets: wait for the device to idle, run every cleanup action,
+--   and reset the pool. Throws if cleanup is already in progress.
 cleanupAssetManager ∷ EngineM' ε ()
 cleanupAssetManager = do
     logInfoM CatAsset "Asset cleanup phase started"
@@ -460,31 +444,25 @@ cleanupResources device state = do
     (liftIO $ Vk.deviceWaitIdle device)
     logDebugM CatAsset "Asset manager cleanup complete"
 
--- | Get texture handle state map
 getTextureStateMap ∷ AssetPool → IO (Map.Map TextureHandle (AssetState AssetId))
 getTextureStateMap pool = readIORef (apTextureHandles pool)
 
--- | Get font handle state map
 getFontStateMap ∷ AssetPool → IO (Map.Map FontHandle (AssetState AssetId))
 getFontStateMap pool = readIORef (apFontHandles pool)
 
--- | Get shader handle state map
 getShaderStateMap ∷ AssetPool → IO (Map.Map ShaderHandle (AssetState AssetId))
 getShaderStateMap pool = readIORef (apShaderHandles pool)
 
--- | Get specific texture handle state
 getTextureHandleState ∷ TextureHandle → AssetPool → IO (Maybe (AssetState AssetId))
 getTextureHandleState handle pool = do
   stateMap ← readIORef (apTextureHandles pool)
   return $ Map.lookup handle stateMap
 
--- | Get specific font handle state
 getFontHandleState ∷ FontHandle → AssetPool → IO (Maybe (AssetState AssetId))
 getFontHandleState handle pool = do
   stateMap ← readIORef (apFontHandles pool)
   return $ Map.lookup handle stateMap
 
--- | Get specific shader handle state
 getShaderHandleState ∷ ShaderHandle → AssetPool → IO (Maybe (AssetState AssetId))
 getShaderHandleState handle pool = do
   stateMap ← readIORef (apShaderHandles pool)

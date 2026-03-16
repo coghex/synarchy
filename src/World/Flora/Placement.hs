@@ -21,9 +21,7 @@ import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.Flora.Types
 import System.IO.Unsafe (unsafePerformIO)
 
------------------------------------------------------------
--- Chunk Flora Computation
------------------------------------------------------------
+-- * Chunk Flora Computation
 
 computeChunkFlora
     ∷ Word64 → Int → ChunkCoord
@@ -72,7 +70,7 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                                                  then max 0 (ceiling (maxFP / 32.0) - 1)
                                                  else 0 ∷ Int
                                 markOccupied occupied lx ly tileRadius chunkSize
-                                go rest (insts ++ acc)
+                                go rest (insts ⧺ acc)
 
             go tileOrder []
 
@@ -94,9 +92,7 @@ shuffledIndices seed cx cy n =
         | i ← [0 .. n - 1]
         ]
 
------------------------------------------------------------
--- Per-Tile Placement
------------------------------------------------------------
+-- * Per-Tile Placement
 
 placeTileFlora
     ∷ Word64 → Int → Int → Int → Int → Int
@@ -124,9 +120,7 @@ placeTileFlora seed gx gy lx ly surfZ matId slopeId
            else []
     ) (zip [0..] wgSpecies)
 
------------------------------------------------------------
--- Max Age from Lifecycle Data
------------------------------------------------------------
+-- * Max Age from Lifecycle Data
 
 -- | Determine the maximum initial age for worldgen spawning
 --   from the actual species lifecycle and phase definitions.
@@ -157,9 +151,7 @@ speciesMaxAge fid catalog =
                     | maxPhaseAge > 0.0 → maxPhaseAge * 1.5
                     | otherwise         → 1800.0
 
------------------------------------------------------------
--- Instance Construction
------------------------------------------------------------
+-- * Instance Construction
 
 instanceCount ∷ Text → Word64 → Int
 instanceCount cat h
@@ -205,9 +197,7 @@ mkInstance fid lx ly surfZ seed gx gy i _count baseWidth maxAge =
         , fiBaseWidth = baseWidth
         }
 
------------------------------------------------------------
--- Biome Matching
------------------------------------------------------------
+-- * Biome Matching
 
 matchesBiome ∷ FloraWorldGen → Word8 → Word8 → Float → Float → Bool
 matchesBiome wg matId slopeId temp precip =
@@ -222,9 +212,7 @@ matchesBiome wg matId slopeId temp precip =
     soilOk = null soils ∨ matId `elem` soils
 
 
------------------------------------------------------------
--- Hash
------------------------------------------------------------
+-- * Hash
 
 floraHash ∷ Word64 → Int → Int → Word64 → Word64
 floraHash seed gx gy salt =
@@ -237,9 +225,7 @@ floraHash seed gx gy salt =
         g = f `xor` (f `shiftR` 13)
     in g
 
------------------------------------------------------------
--- Species Fitness Calculation
------------------------------------------------------------
+-- * Species Fitness Calculation
 
 -- | Compute how well a species fits the local conditions.
 --   Uses a weighted geometric mean so that one weak factor

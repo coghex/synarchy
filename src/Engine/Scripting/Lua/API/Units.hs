@@ -32,9 +32,7 @@ import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
                     LoadedChunk(..), ChunkCoord(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
 
------------------------------------------------------------
--- engine.loadUnitYaml(filePath)
------------------------------------------------------------
+-- * YAML loading
 
 loadUnitYamlFn ∷ EngineEnv → LuaBackendState
                → Lua.LuaE Lua.Exception Lua.NumResults
@@ -100,10 +98,6 @@ loadUnitYamlFn env backendState = do
             Lua.pushnumber (Lua.Number (fromIntegral count))
             return 1
 
------------------------------------------------------------
--- Surface elevation lookup
------------------------------------------------------------
-
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
 lookupSurfaceZ env gx gy = do
     wm ← readIORef (worldManagerRef env)
@@ -120,15 +114,8 @@ lookupSurfaceZ env gx gy = do
                     Just lc → return $ Just ((lcSurfaceMap lc) VU.! columnIndex lx ly)
                     Nothing → go rest worlds
 
------------------------------------------------------------
--- unit.spawn(defName, gridX, gridY [, gridZ])
---
--- Spawns a unit instance.  If gridZ is omitted, looks up the
--- surface elevation at (gridX, gridY) from loaded terrain.
--- Falls back to Z=0 if the chunk isn't loaded.
--- Returns the unit ID (integer), or -1 on failure.
------------------------------------------------------------
-
+-- | Spawn a unit. If gridZ is omitted, looks up surface elevation.
+--   Falls back to Z=0 if chunk isn't loaded. Returns unit ID or -1.
 unitSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitSpawnFn env = do
     nameArg ← Lua.tostring 1
@@ -187,12 +174,6 @@ unitSpawnFn env = do
             Lua.pushnumber (Lua.Number (fromIntegral result))
             return 1
 
------------------------------------------------------------
--- unit.destroy(unitId)
---
--- Removes a unit instance by ID. Returns true.
------------------------------------------------------------
-
 unitDestroyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitDestroyFn env = do
     idArg ← Lua.tointeger 1
@@ -206,13 +187,7 @@ unitDestroyFn env = do
             Lua.pushboolean True
             return 1
 
------------------------------------------------------------
--- unit.setPos(unitId, gridX, gridY [, gridZ])
---
--- Teleports a unit instance to a new position.
--- If gridZ is omitted, looks up surface elevation.
------------------------------------------------------------
-
+-- | Teleport a unit. If gridZ is omitted, looks up surface elevation.
 unitSetPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitSetPosFn env = do
     idArg ← Lua.tointeger 1
@@ -240,13 +215,7 @@ unitSetPosFn env = do
             Lua.pushboolean True
             return 1
 
------------------------------------------------------------
--- unit.moveTo(unitId, targetX, targetY [, speed])
---
--- Orders a unit to walk to (targetX, targetY).
--- Speed is in tiles per second, defaults to 2.0.
------------------------------------------------------------
-
+-- | Order a unit to walk to a target. Speed defaults to 2.0 tiles/sec.
 unitMoveToFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitMoveToFn env = do
     idArg    ← Lua.tointeger 1
@@ -274,12 +243,6 @@ unitMoveToFn env = do
             Lua.pushboolean True
             return 1
 
------------------------------------------------------------
--- unit.stop(unitId)
---
--- Cancels any movement order on a unit.
------------------------------------------------------------
-
 unitStopFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitStopFn env = do
     idArg ← Lua.tointeger 1
@@ -292,12 +255,6 @@ unitStopFn env = do
             Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitStop uid
             Lua.pushboolean True
             return 1
-
------------------------------------------------------------
--- unit.getPos(unitId)
---
--- Returns gridX, gridY, gridZ or nil on failure.
------------------------------------------------------------
 
 unitGetPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetPosFn env = do
@@ -319,13 +276,6 @@ unitGetPosFn env = do
                     Lua.pushnumber (Lua.Number (fromIntegral (uiGridZ inst)))
                     return 3
 
------------------------------------------------------------
--- unit.list()
---
--- Returns a string listing all live unit instances.
--- Useful for shell debugging.
------------------------------------------------------------
-
 unitListFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitListFn env = do
     result ← Lua.liftIO $ do
@@ -344,11 +294,6 @@ unitListFn env = do
     Lua.pushstring (TE.encodeUtf8 (T.pack result))
     return 1
 
-----------------------------------------------------------
--- Helper functions
-----------------------------------------------------------
-
--- | Parse a YAML direction key string to a Direction.
 parseDirKey ∷ Text → Maybe Direction
 parseDirKey "S"  = Just DirS
 parseDirKey "SW" = Just DirSW

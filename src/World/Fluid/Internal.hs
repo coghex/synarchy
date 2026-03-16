@@ -27,14 +27,12 @@ import World.Chunk.Types (ChunkCoord(..), chunkSize)
 
 type FluidMap = V.Vector (Maybe FluidCell)
 
------------------------------------------------------------
--- Helpers (Vector builders)
------------------------------------------------------------
+-- * Helpers (Vector builders)
 
 emptyFluidMap ∷ FluidMap
 emptyFluidMap = V.replicate (chunkSize * chunkSize) Nothing
 
-withFluidMap ∷ (forall s. MV.MVector s (Maybe FluidCell) → ST s ()) → FluidMap
+withFluidMap ∷ (∀ s. MV.MVector s (Maybe FluidCell) → ST s ()) → FluidMap
 withFluidMap action = runST $ do
     mv ← MV.replicate (chunkSize * chunkSize) Nothing
     action mv
@@ -48,9 +46,7 @@ forEachSurface surfaceMap f =
             surfZ = surfaceMap VU.! idx
         f idx lx ly surfZ
 
------------------------------------------------------------
--- Wrapped distance in u-space
------------------------------------------------------------
+-- * Wrapped distance in u-space
 
 -- | Wrapped distance in u-space for fluid computations.
 --   Returns (dx, dy) accounting for cylindrical wrapping along u-axis.
@@ -66,9 +62,7 @@ wrappedDeltaUVFluid worldSize gx1 gy1 gx2 gy2 =
         dy = (dv - wrappedDU) `div` 2
     in (dx, dy)
 
------------------------------------------------------------
--- Chunk coord wrapping
------------------------------------------------------------
+-- * Chunk coord wrapping
 
 wrapChunkCoordU ∷ Int → ChunkCoord → ChunkCoord
 wrapChunkCoordU worldSize (ChunkCoord cx cy) =
@@ -80,9 +74,7 @@ wrapChunkCoordU worldSize (ChunkCoord cx cy) =
         wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
     in ChunkCoord ((wrappedU + v) `div` 2) ((v - wrappedU) `div` 2)
 
------------------------------------------------------------
--- Misc helpers
------------------------------------------------------------
+-- * Misc helpers
 
 floorDiv' ∷ Int → Int → Int
 floorDiv' a b = floor (fromIntegral a / fromIntegral b ∷ Double)
@@ -94,9 +86,7 @@ unionFluidMap = V.zipWith (\a b → case a of
     Nothing → b
   )
 
------------------------------------------------------------
--- Fluid Equilibration
------------------------------------------------------------
+-- * Fluid Equilibration
 
 -- | Post-processing pass with two phases per iteration:
 --   1. LEVEL: lower existing water surfaces to the minimum
@@ -482,9 +472,7 @@ maxAdjacentWaterSurface mv lx ly = do
         []     → Nothing
         (s:ss) → Just (foldl' max s ss)
 
------------------------------------------------------------
--- Strip Lake/River Cliff Artifacts
------------------------------------------------------------
+-- * Strip Lake/River Cliff Artifacts
 
 -- | Remove lake tiles that are adjacent to river tiles with a much
 --   lower surface. These create massive water cliffs at river banks

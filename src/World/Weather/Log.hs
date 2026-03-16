@@ -8,9 +8,7 @@ import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import World.Weather.Types
 
------------------------------------------------------------
--- Helpers
------------------------------------------------------------
+-- * Helpers
 
 padR ∷ Int → Text → Text
 padR n t = t <> T.replicate (max 0 (n - T.length t)) " "
@@ -25,9 +23,7 @@ showSeasonal ∷ SeasonalClimate → Text
 showSeasonal (SeasonalClimate s w) =
     "summer=" <> showF1 s <> " winter=" <> showF1 w
 
------------------------------------------------------------
--- Public API
------------------------------------------------------------
+-- * Public API
 
 -- | Format the entire climate state as a list of log lines.
 --   Mirrors the style of formatTimeline in World.Geology.Log.
@@ -40,9 +36,7 @@ formatWeather cs =
         globalLines   = formatGlobals cs
     in globalLines <> oceanLines <> atmoLines <> climateLines <> surfaceLines
 
------------------------------------------------------------
--- Global Summary
------------------------------------------------------------
+-- * Global Summary
 
 formatGlobals ∷ ClimateState → [Text]
 formatGlobals cs =
@@ -56,9 +50,7 @@ formatGlobals cs =
     , ""
     ]
 
------------------------------------------------------------
--- Ocean Grid Summary
------------------------------------------------------------
+-- * Ocean Grid Summary
 
 formatOceanGrid ∷ OceanGrid → [Text]
 formatOceanGrid og =
@@ -86,9 +78,7 @@ formatOceanCellSample (ClimateCoord cx cy, oc) =
     <> " depth=" <> T.pack (show (ocDepth oc))
     <> " ice=" <> showF1 (ocIceCover oc)
 
------------------------------------------------------------
--- Atmosphere Grid Summary
------------------------------------------------------------
+-- * Atmosphere Grid Summary
 
 formatAtmoGrid ∷ AtmoGrid → [Text]
 formatAtmoGrid ag =
@@ -101,9 +91,7 @@ formatAtmoGrid ag =
               <> "  Pressure systems: " <> T.pack (show sysCount)
     in [header, stats, ""]
 
------------------------------------------------------------
--- Climate Grid Summary
------------------------------------------------------------
+-- * Climate Grid Summary
 
 formatClimateGrid ∷ ClimateGrid → [Text]
 formatClimateGrid cg =
@@ -125,9 +113,7 @@ formatRegionClimate (ClimateCoord cx cy, rc) =
     <> " cloud=" <> showF1 (rcCloudCover rc)
     <> " elev=" <> T.pack (show (rcElevAvg rc))
 
------------------------------------------------------------
--- Surface Budgets Summary
------------------------------------------------------------
+-- * Surface Budgets Summary
 
 formatSurfaceBudgets ∷ HM.HashMap ClimateCoord SurfaceBudget → [Text]
 formatSurfaceBudgets sb =

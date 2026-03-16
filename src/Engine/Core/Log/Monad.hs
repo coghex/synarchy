@@ -26,13 +26,11 @@ import Engine.Core.Log
 import Engine.Core.Error.Exception (EngineException, ExceptionType)
 import Engine.Core.State (EngineEnv(..))
 
--- | Get logger from engine environment
 getLogger ∷ (MonadIO m, MonadReader EngineEnv m) ⇒ m LoggerState
 getLogger = do
   ref ← asks loggerRef
   liftIO $ readIORef ref
 
--- | Monadic versions that auto-fetch logger from environment
 logDebugM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
           ⇒ LogCategory → Text → m ()
 logDebugM cat msg = do
@@ -57,7 +55,6 @@ logErrorM cat msg = do
   logger ← getLogger
   logError logger cat msg
 
--- Structured versions
 logDebugSM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m) 
            ⇒ LogCategory → Text → [(Text, Text)] → m ()
 logDebugSM cat msg fields = do
@@ -82,7 +79,6 @@ logErrorSM cat msg fields = do
   logger ← getLogger
   logErrorS logger cat msg fields
 
--- Log and throw
 logAndThrowM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m, MonadError EngineException m)
              ⇒ LogCategory
              → ExceptionType

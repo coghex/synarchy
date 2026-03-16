@@ -18,10 +18,6 @@ import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
 import UI.Types
 import UI.Manager
 
------------------------------------------------------------
--- Element Creation
------------------------------------------------------------
-
 -- | UI.newElement(name, width, height, pageHandle) -> elementHandle
 uiNewElementFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiNewElementFn env = do

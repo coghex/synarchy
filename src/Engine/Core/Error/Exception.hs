@@ -28,8 +28,8 @@ import qualified Data.Text as T
 import Type.Reflection
 import qualified Vulkan.Core10 as Vk
 
--- | Main exception type containing all possible engine errors
-data ExceptionType 
+-- | Sum of every error domain in the engine
+data ExceptionType
   = ExGraphics GraphicsError    -- ^ Graphics/Vulkan related errors
   | ExResource ResourceError    -- ^ Resource management errors
   | ExSystem SystemError       -- ^ System-level errors
@@ -39,7 +39,6 @@ data ExceptionType
   | ExLua LuaError         -- ^ Lua-specific errors
   deriving (Show, Eq, Typeable)
 
--- | Graphics-specific errors
 data GraphicsError
   = VulkanDeviceLost         -- ^ Device was lost during operation
   | VulkanSurfaceLost        -- ^ Vulkan surface was lost
@@ -58,7 +57,6 @@ data GraphicsError
   | VulkanError Vk.Result    -- ^ Raw Vulkan error
   deriving (Show, Eq, Typeable)
 
--- | Resource management errors
 data ResourceError
   = ResourceNotFound FilePath          -- ^ Resource file not found
   | ResourceAlreadyLoaded FilePath     -- ^ Attempting to load already loaded resource
@@ -68,7 +66,6 @@ data ResourceError
   | ResourceCountMismatch T.Text       -- ^ Resource count mismatch
   deriving (Show, Eq, Typeable)
 
--- | System-level errors
 data SystemError
   = GLFWError T.Text        -- ^ GLFW-related error
   | ThreadError T.Text      -- ^ Threading-related error
@@ -78,7 +75,6 @@ data SystemError
   | TestError T.Text       -- ^ Test error
   deriving (Show, Eq, Typeable)
 
--- | State management errors
 data StateError
   = InvalidStateTransition T.Text  -- ^ Invalid state transition attempted
   | MissingRequiredState T.Text    -- ^ Required state component missing
@@ -86,7 +82,6 @@ data StateError
   | InconsistentState T.Text       -- ^ State inconsistency detected
   deriving (Show, Eq, Typeable)
 
--- | Initialization errors
 data InitError
   = WindowCreationFailed    -- ^ Failed to create window
   | VulkanInitFailed       -- ^ Failed to initialize Vulkan
@@ -95,7 +90,6 @@ data InitError
   | ValidationLayerNotSupported -- ^ Required validation layer not supported
   deriving (Show, Eq, Typeable)
 
--- | Asset loading errors
 data AssetError
   = AssetNotFound AssetId           -- ^ Asset file not found
   | AssetAlreadyLoaded FilePath     -- ^ Attempting to load already loaded asset
@@ -106,7 +100,6 @@ data AssetError
   | AssetFailedCleanup
   deriving (Show, Eq, Typeable)
 
--- | Lua-specific errors
 data LuaError
   = LuaSyntaxError T.Text        -- ^ Syntax error during Lua script parsing
   | LuaRuntimeError T.Text       -- ^ Runtime error during Lua script execution
@@ -118,7 +111,6 @@ data LuaError
   | LuaGenericError T.Text       -- ^ General Lua error with a specific message
   deriving (Show, Eq, Typeable)
 
--- | Main exception type with enhanced context
 data EngineException = EngineException
   { errorType    ∷ ExceptionType  -- ^ Type of error
   , errorMsg     ∷ T.Text         -- ^ Error message
@@ -127,7 +119,6 @@ data EngineException = EngineException
 instance Eq EngineException where
   (==) a b = errorType a ≡ errorType b ∧ errorMsg a ≡ errorMsg b
 
--- | Error context, currently just a call stack
 data ErrorContext = ErrorContext
   { contextCallStack ∷ CallStack
   } deriving (Typeable)
@@ -143,22 +134,18 @@ instance Show EngineException where
 instance Exception EngineException where
   displayException ex = show ex
 
--- | Helper function to throw engine exceptions
 throwEngineException ∷ MonadError EngineException m ⇒ EngineException → m a
 throwEngineException = throwError
 
--- | Create error context from current call stack
 mkErrorContext ∷ HasCallStack ⇒ ErrorContext
 mkErrorContext = ErrorContext { contextCallStack = callStack }
 
--- | Catch EngineException in EngineM context
 catchEngine ∷ MonadError EngineException m 
            ⇒ m a                                  -- ^ Action that might fail
            → (EngineException → m a)            -- ^ Handler for exceptions
            → m a
 catchEngine action handler = catchError action handler
 
--- | Try running an action, returning Either
 tryEngine ∷ MonadError EngineException m 
          ⇒ m a 
          → m (Either EngineException a)

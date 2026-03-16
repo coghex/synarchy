@@ -40,9 +40,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.Hashable (Hashable(..))
 import Engine.Asset.Handle (TextureHandle(..))
 
------------------------------------------------------------
--- Species Identity
------------------------------------------------------------
+-- * Species Identity
 
 newtype FloraId = FloraId { unFloraId ∷ Word16 }
     deriving stock (Show, Eq, Ord)
@@ -50,9 +48,7 @@ newtype FloraId = FloraId { unFloraId ∷ Word16 }
     deriving anyclass (Serialize)
     deriving stock (Generic)
 
------------------------------------------------------------
--- Lifecycle Types
------------------------------------------------------------
+-- * Lifecycle Types
 
 data LifecycleType
     = Evergreen
@@ -70,9 +66,7 @@ instance NFData LifecycleType where
     rnf Annual = ()
     rnf Biennial = ()
 
------------------------------------------------------------
--- Life Phases (age-driven, happens once)
------------------------------------------------------------
+-- * Life Phases (age-driven, happens once)
 
 data LifePhaseTag
     = PhaseSprout
@@ -108,9 +102,7 @@ data LifePhase = LifePhase
 instance NFData LifePhase where
     rnf (LifePhase t a tex) = rnf t `seq` rnf a `seq` rnf tex
 
------------------------------------------------------------
--- Annual Cycle (day-of-year-driven, repeats)
------------------------------------------------------------
+-- * Annual Cycle (day-of-year-driven, repeats)
 
 data AnnualStageTag
     = CycleDormant
@@ -137,9 +129,7 @@ instance Hashable AnnualCycleKey where
     hashWithSalt s (AnnualCycleKey p c) =
         s `hashWithSalt` fromEnum p `hashWithSalt` fromEnum c
 
------------------------------------------------------------
--- Species Definition
------------------------------------------------------------
+-- * Species Definition
 
 data FloraSpecies = FloraSpecies
     { fsName           ∷ !Text
@@ -160,9 +150,7 @@ newFloraSpecies name baseTex = FloraSpecies
     , fsCycleOverrides = HM.empty
     }
 
------------------------------------------------------------
--- World Generation Registration
------------------------------------------------------------
+-- * World Generation Registration
 
 data FloraWorldGen = FloraWorldGen
     { fwCategory  ∷ !Text
@@ -184,9 +172,7 @@ data FloraWorldGen = FloraWorldGen
     , fwFootprint ∷ !Float
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
------------------------------------------------------------
--- Per-Instance Data (Saved per chunk)
------------------------------------------------------------
+-- * Per-Instance Data (Saved per chunk)
 
 -- | A single placed flora instance in the world.
 --
@@ -228,9 +214,7 @@ instance NFData FloraChunkData where
 emptyFloraChunkData ∷ FloraChunkData
 emptyFloraChunkData = FloraChunkData []
 
------------------------------------------------------------
--- Runtime Catalog
------------------------------------------------------------
+-- * Runtime Catalog
 
 data FloraCatalog = FloraCatalog
     { fcSpecies  ∷ !(HM.HashMap Word16 FloraSpecies)

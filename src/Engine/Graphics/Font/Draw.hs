@@ -40,9 +40,7 @@ import Vulkan.Core10
 import Vulkan.Zero
 import Vulkan.CStruct.Extends
 
------------------------------------------------------------
--- Text Rendering API
------------------------------------------------------------
+-- * Text Rendering API
 
 -- | Layout text into glyph instances (converts pixels to world coords)
 layoutText ∷ FontAtlas → Float → Float → Float → Float → Float
@@ -63,10 +61,9 @@ layoutText atlas desiredSize startX startY screenW screenH text color =
         case Map.lookup char (faGlyphData atlas) of
             Nothing → (currentX, acc)
             Just glyphInfo →
-                let -- Scale all glyph metrics by scaleFactor
-                    (bearingX, bearingY) = giBearing glyphInfo
+                let (bearingX, bearingY) = giBearing glyphInfo
                     (w, h) = giSize glyphInfo
-                    (u0, v0, u1, v1) = giUVRect glyphInfo  -- UVs don't change!
+                    (u0, v0, u1, v1) = giUVRect glyphInfo
                     
                     -- Apply scale to sizes and positions
                     scaledBearingX = bearingX * scaleFactor
@@ -85,15 +82,13 @@ layoutText atlas desiredSize startX startY screenW screenH text color =
                     instance' = GlyphInstance
                         { instancePosition = (ndcX, ndcY)
                         , instanceSize = (ndcW, ndcH)
-                        , instanceUVRect = (u0, v0, u1, v1)  -- UVs stay the same!
+                        , instanceUVRect = (u0, v0, u1, v1)
                         , instanceColor = color }
                     
                     nextX = currentX + scaledAdvance
                 in (nextX, instance' : acc)
 
------------------------------------------------------------
--- Instance Buffer Management
------------------------------------------------------------
+-- * Instance Buffer Management
 
 -- | Cleanup instance buffers from the previous frame
 cleanupPendingInstanceBuffers ∷ EngineM ε σ ()
@@ -112,16 +107,13 @@ cleanupPendingInstanceBuffers = do
                     }
                 }
 
------------------------------------------------------------
--- Pipeline Creation
------------------------------------------------------------
+-- * Pipeline Creation
 
 -- | Create font rendering pipeline with instancing
 createFontPipeline ∷ Device → RenderPass → Extent2D
   → DescriptorSetLayout → SampleCountFlagBits
   → EngineM ε σ (Pipeline, PipelineLayout, DescriptorSetLayout)
 createFontPipeline device renderPass swapExtent uniformLayout sampleCount = do
-    -- Create font-specific texture layout
     fontTexLayout ← createFontTextureLayout device
     
     let Extent2D w h = swapExtent
@@ -132,7 +124,6 @@ createFontPipeline device renderPass swapExtent uniformLayout sampleCount = do
     
     pipelineLayout ← createPipelineLayout device pipelineLayoutInfo Nothing
     
-    -- Create shader modules (temporary)
     vertModule ← createShaderModule device zero { code = fontVertexShaderCode } Nothing
     fragModule ← createShaderModule device zero { code = fontSDFFragmentShaderCode } Nothing
     
@@ -245,12 +236,10 @@ createFontPipeline device renderPass swapExtent uniformLayout sampleCount = do
           , basePipelineIndex = -1
           }
     
-    -- Create pipeline
-    (_, pipelinesVec) ← createGraphicsPipelines 
+    (_, pipelinesVec) ← createGraphicsPipelines
         device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
     let !pipeline = V.head pipelinesVec
-    
-    -- Destroy shader modules (no longer needed)
+
     destroyShaderModule device vertModule Nothing
     destroyShaderModule device fragModule Nothing
 
@@ -264,9 +253,7 @@ createFontPipeline device renderPass swapExtent uniformLayout sampleCount = do
     
     pure (pipeline, pipelineLayout, fontTexLayout)
 
------------------------------------------------------------
--- Quad Buffer Creation
------------------------------------------------------------
+-- * Quad Buffer Creation
 
 -- | Create shared quad buffer for all text rendering
 createFontQuadBuffer ∷ Device → PhysicalDevice → Queue → CommandPool 
@@ -283,35 +270,26 @@ createFontQuadBuffer device pDevice queue cmdPool = do
         
         vertSize = fromIntegral $ VS.length quadVertices * sizeOf (0 ∷ Float)
     
-    -- Create staging buffer (temporary - manually destroyed)
     (stagingMem, stagingBuff) ← createVulkanBufferManual device pDevice vertSize
         BUFFER_USAGE_TRANSFER_SRC_BIT
         (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
     
-    -- Upload data to staging buffer
     dataPtr ← mapMemory device stagingMem 0 vertSize zero
     liftIO $ VS.unsafeWith quadVertices $ \srcPtr →
         copyBytes (castPtr dataPtr) srcPtr (fromIntegral vertSize)
     unmapMemory device stagingMem
     
-    -- Create device-local vertex buffer using createVulkanBuffer
-    -- (this already uses allocResource internally)
     (vertexMem, vertexBuff) ← createVulkanBuffer device pDevice vertSize
         (BUFFER_USAGE_VERTEX_BUFFER_BIT .|. BUFFER_USAGE_TRANSFER_DST_BIT)
         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     
-    -- Copy from staging to vertex buffer
     copyBuffer device cmdPool queue stagingBuff vertexBuff vertSize
-    
-    -- Destroy staging buffer (no longer needed)
     destroyBuffer device stagingBuff Nothing
     freeMemory device stagingMem Nothing
     
     return (vertexBuff, vertexMem)
 
--------------------------------------------------------------
--- Font Texture Descriptor Set Layout
--------------------------------------------------------------
+-- * Font Texture Descriptor Set Layout
 
 -- | Create font-specific texture descriptor set layout (1 sampler)
 createFontTextureLayout ∷ Device → EngineM ε σ DescriptorSetLayout
@@ -342,7 +320,6 @@ createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout sa
     
     pipelineLayout ← createPipelineLayout device pipelineLayoutInfo Nothing
     
-    -- Create shader modules
     vertModule ← createShaderModule device zero { code = fontUIVertexShaderCode } Nothing
     fragModule ← createShaderModule device zero { code = fontSDFFragmentShaderCode } Nothing
     
@@ -447,16 +424,12 @@ createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout sa
           , basePipelineIndex = -1
           }
     
-    -- Create pipeline
-    (_, pipelinesVec) ← createGraphicsPipelines 
+    (_, pipelinesVec) ← createGraphicsPipelines
         device zero (V.singleton $ SomeStruct pipelineInfo) Nothing
     let !pipeline = V.head pipelinesVec
-    
-    -- Destroy shader modules
+
     destroyShaderModule device vertModule Nothing
     destroyShaderModule device fragModule Nothing
-
-    -- cleanup action for pipeline
     let cleanupAction = do
             destroyPipeline device pipeline Nothing
             destroyPipelineLayout device pipelineLayout Nothing
@@ -482,10 +455,9 @@ layoutTextUI atlas desiredSize startX startY text color =
         case Map.lookup char (faGlyphData atlas) of
             Nothing → (currentX, acc)
             Just glyphInfo →
-                let -- Scale all glyph metrics by scaleFactor
-                    (bearingX, bearingY) = giBearing glyphInfo
+                let (bearingX, bearingY) = giBearing glyphInfo
                     (w, h) = giSize glyphInfo
-                    (u0, v0, u1, v1) = giUVRect glyphInfo  -- UVs don't change!
+                    (u0, v0, u1, v1) = giUVRect glyphInfo
                     
                     -- Apply scale to positions and sizes
                     scaledBearingX = bearingX * scaleFactor
@@ -500,7 +472,7 @@ layoutTextUI atlas desiredSize startX startY text color =
                     instance' = GlyphInstance
                         { instancePosition = (pxX, pxY)
                         , instanceSize = (scaledW, scaledH)
-                        , instanceUVRect = (u0, v0, u1, v1)  -- UVs stay the same!
+                        , instanceUVRect = (u0, v0, u1, v1)
                         , instanceColor = color }
                     
                     nextX = currentX + scaledAdvance

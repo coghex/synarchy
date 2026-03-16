@@ -59,9 +59,7 @@ import World.Thread.Command.UI (handleWorldShowCommand, handleWorldHideCommand
                                , handleWorldSetMapModeCommand
                                , handleWorldSetToolModeCommand)
 
------------------------------------------------------------
--- Command Handler
------------------------------------------------------------
+-- * Command Handler
 
 handleWorldCommand ∷ EngineEnv → LoggerState → WorldCommand → IO ()
 handleWorldCommand env logger (WorldInit pageId seed worldSize placeCount)

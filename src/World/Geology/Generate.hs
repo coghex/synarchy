@@ -22,9 +22,7 @@ import World.Plate (isBeyondGlacier, elevationAtGlobal, TectonicPlate)
 import World.Geology.Types
 import World.Geology.Hash (hashGeo, hashToFloatGeo, hashToRangeGeo, scaleCount)
 
------------------------------------------------------------
--- Feature Generation Helpers
------------------------------------------------------------
+-- * Feature Generation Helpers
 
 -- | Generate and register a batch of volcanic features.
 --   Returns the list of new PersistentFeatures and updated state.
@@ -105,9 +103,7 @@ generateAndRegisterN baseMaxAttempts baseMaxFeatures seed worldSize plates
 
     in go 0 0 tbs0 []
 
------------------------------------------------------------
--- Feature Constructors (called by generateAndRegister)
------------------------------------------------------------
+-- * Feature Constructors (called by generateAndRegister)
 
 -- | Shield volcanos should be large but not world-dominating.
 --   At worldSize=128 (2048 tiles), baseRadius 30-60 means

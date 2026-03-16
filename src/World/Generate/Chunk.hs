@@ -37,9 +37,7 @@ import World.Generate.Strata
     , buildColumnStrata
     )
 
------------------------------------------------------------
--- Chunk Generation
------------------------------------------------------------
+-- * Chunk Generation
 
 -- | Generate a single chunk. Pure and deterministic.
 --   Returns (tiles, surfaceMap) where surfaceMap maps (lx,ly) -> surfaceZ.

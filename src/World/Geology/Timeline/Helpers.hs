@@ -43,9 +43,7 @@ import World.Hydrology.Types (HydroFeature(..), GlacierParams(..)
                              , RiverParams(..), LakeParams(..))
 import World.Hydrology.Simulation (ElevGrid(..))
 
------------------------------------------------------------
--- Elev grid lookup
------------------------------------------------------------
+-- * Elev grid lookup
 
 {-# INLINE elevFromGrid #-}
 elevFromGrid ∷ ElevGrid → Int → Int → Int → Int
@@ -87,9 +85,7 @@ filledElevFromGrid filled grid worldSize gx gy =
        then filled VU.! idx
        else seaLevel
 
------------------------------------------------------------
--- Feature classification helpers
------------------------------------------------------------
+-- * Feature classification helpers
 
 isHydroFeature ∷ FeatureShape → Bool
 isHydroFeature (HydroShape _) = True
@@ -133,9 +129,7 @@ isSourceNew worldSize existingRivers (sx, sy, _, _) =
         in dx < threshold ∧ dy < threshold
         ) existingRivers
 
------------------------------------------------------------
--- Erosion
------------------------------------------------------------
+-- * Erosion
 
 erosionFromGeoState ∷ Float → GeoState → ClimateState → Word64 → Int → Bool → ErosionParams
 erosionFromGeoState intensity gs climate seed ageIdx isLastAge =
@@ -231,9 +225,7 @@ regionalErosionMap intensity gs climate seed ageIdx isLastAge =
             , epIsLastAge     = isLastAge
             }
 
------------------------------------------------------------
--- Feature center
------------------------------------------------------------
+-- * Feature center
 
 featureCenter ∷ FeatureShape → (Int, Int)
 featureCenter (VolcanicShape (ShieldVolcano p))
@@ -263,9 +255,7 @@ featureCenter (HydroShape (GlacierFeature g))
 featureCenter (HydroShape (LakeFeature l))
     = let GeoCoord x y = lkCenter l in (x, y)
 
------------------------------------------------------------
--- Period construction
------------------------------------------------------------
+-- * Period construction
 
 mkGeoPeriod ∷ Int → Text → GeoScale → Int → Float → [GeoEvent]
   → ErosionParams → HM.HashMap ClimateCoord ErosionParams → GeoPeriod
@@ -295,9 +285,7 @@ mkGeoPeriod worldSize name scale duration date events erosion regErosion =
         , gpPeriodBBox      = periodBB
         }
 
------------------------------------------------------------
--- Glacier evolution wrapper
------------------------------------------------------------
+-- * Glacier evolution wrapper
 
 evolveGlacierCapped ∷ Word64 → Bool → Int → GeoState
                     → ([GeoEvent], TimelineBuildState)
@@ -316,9 +304,7 @@ evolveGlacierCapped seed canBranch periodIdx gs (events, tbs) pf =
             then (events, tbs)
             else evolveGlacier seed periodIdx gs (events, tbs) pf
 
------------------------------------------------------------
--- Lake reconciliation
------------------------------------------------------------
+-- * Lake reconciliation
 
 reconcileLakes ∷ Word64 → Int → Int → Int
               → [PersistentFeature] → [LakeParams]

@@ -21,9 +21,7 @@ import World.Weather.Types (ClimateCoord(..), ClimateState(..), ClimateGrid(..)
                            , OceanGrid(..), OceanCell(..)
                            , climateRegionSize)
 
------------------------------------------------------------
--- Cursor Info Polling
------------------------------------------------------------
+-- * Cursor Info Polling
 
 pollCursorInfo ∷ EngineEnv → IO ()
 pollCursorInfo env = do
@@ -57,9 +55,7 @@ pollCursorInfo env = do
                 when (newSnap ≢ snap) $
                     writeIORef (wsCursorSnapshotRef worldState) newSnap
 
------------------------------------------------------------
--- sendChunkInfo: zoom-level (chunk) selection
------------------------------------------------------------
+-- * sendChunkInfo: zoom-level (chunk) selection
 
 -- | Format and send HUD info for a selected chunk (zoomed-out view).
 --   baseGX/baseGY are the chunk's global grid origin (i.e. chunkX * chunkSize).
@@ -109,9 +105,7 @@ sendChunkInfo env worldState mParams baseGX baseGY = do
     sendHudInfo env basicLines advLines
     sendHudWeatherInfo env weatherInfo
 
------------------------------------------------------------
--- chunkWeatherInfo: format weather for a chunk's climate region
------------------------------------------------------------
+-- * chunkWeatherInfo: format weather for a chunk's climate region
 
 -- | Given a chunk's (cx, cy) and the world gen params, look up the
 --   climate region that contains this chunk and format it as a
@@ -167,9 +161,7 @@ chunkWeatherInfo params cx cy =
                 , oceanLine
                 ]
 
------------------------------------------------------------
--- sendTileInfo: world-level (tile) selection
------------------------------------------------------------
+-- * sendTileInfo: world-level (tile) selection
 
 -- | Format and send HUD info for a selected tile (zoomed-in view).
 --   gx/gy are global grid coords, z is the z-level the cursor hit.

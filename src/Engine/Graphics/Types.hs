@@ -1,4 +1,3 @@
--- Engine/Graphics/Types.hs
 {-# LANGUAGE Strict #-}
 module Engine.Graphics.Types where
 import UPrelude

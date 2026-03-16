@@ -22,7 +22,6 @@ import Engine.Loop.Camera (updateCameraPanning, updateCameraMouseDrag
                           , updateCameraZoom)
 import Engine.Scripting.Lua.Message (processLuaMessages)
 
--- | Main engine loop
 mainLoop ∷ EngineM ε σ ()
 mainLoop = do
     env ← ask
@@ -35,13 +34,11 @@ mainLoop = do
         CleaningUp     → logDebugM CatSystem "Engine is cleaning up"
         EngineStopped  → logDebugM CatSystem "Engine has stopped"
 
--- | Handle engine starting state
 handleEngineStarting ∷ EngineEnv → EngineM ε σ ()
 handleEngineStarting env = do
     logDebugM CatSystem "Engine starting..."
     liftIO $ threadDelay 100000
     
-    -- Clear the input queue before entering main loop
     flushed ← liftIO $ Q.flushQueue (inputQueue env)
     when (not $ null flushed) $
         logWarnM CatThread $ "Unexpected inputs during startup: "
@@ -51,7 +48,6 @@ handleEngineStarting env = do
     liftIO $ writeIORef (lifecycleRef env) EngineRunning
     mainLoop
 
--- | Handle engine running state
 handleEngineRunning ∷ EngineM ε σ ()
 handleEngineRunning = do
     state ← gets graphicsState
@@ -63,8 +59,6 @@ handleEngineRunning = do
     
     let Window glfwWin = window
     
-   
-    -- Process events
     GLFW.pollEvents
     handleInputEvents
     updateCameraPanning
@@ -72,7 +66,6 @@ handleEngineRunning = do
     updateCameraMouseDrag
     processLuaMessages
     
-    -- Check for shutdown
     shouldClose ← GLFW.windowShouldClose glfwWin
     env ← ask
     lifecycle ← liftIO $ readIORef (lifecycleRef env)

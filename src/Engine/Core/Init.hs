@@ -33,17 +33,15 @@ import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
 import World.Generate.Config (loadWorldGenConfig)
 
--- | Result of engine initialization
 data EngineInitResult = EngineInitResult
   { eirEnv      ∷ EngineEnv
   , eirEnvVar   ∷ Var EngineEnv
   , eirStateVar ∷ Var EngineState
   }
 
--- | Initialize all engine subsystems and create the environment
+-- | Allocate every 'IORef', queue, and subsystem, then bundle into 'EngineEnv'
 initializeEngine ∷ IO EngineInitResult
 initializeEngine = do
-  -- Initialize queues
   eventQueue ← Q.newQueue
   inputQueue ← Q.newQueue
   worldQueue ← Q.newQueue
@@ -51,26 +49,21 @@ initializeEngine = do
   luaToEngineQueue ← Q.newQueue
   engineToLuaQueue ← Q.newQueue
   
-  -- Initialize lifecycle ref
   lifecycleRef ← newIORef EngineStarting
   fpsRef ← newIORef 0.0
  
-  -- Initialize logging
   logger ← initLogger defaultLogConfig { lcMinLevel = LevelDebug }
   loggerRef ← newIORef logger
   
-  -- Initialize asset pool
   assetPool ← defaultAssetPool
   assetPoolRef ← newIORef assetPool
   nextObjectIdRef ← newIORef 0
   texNameRegRef ← newIORef emptyTextureNameRegistry
   
-  -- Initialize input state
   inputStateRef ← newIORef defaultInputState
   keyBindings ← loadKeyBindings logger "config/keybinds.yaml"
   keyBindingsRef ← newIORef keyBindings
   
-  -- Load video config
   videoConfig ← loadVideoConfig logger "config/video.yaml"
   videoConfigRef ← newIORef $ videoConfig
   windowSizeRef ← newIORef (vcWidth videoConfig, vcHeight videoConfig)
@@ -80,49 +73,29 @@ initializeEngine = do
   pixelSnapRef ← newIORef (vcPixelSnap videoConfig)
   textureFilterRef ← newIORef (vcTextureFilter videoConfig)
   
-  -- Create camera references
   cameraRef ← newIORef defaultCamera
   uiCameraRef ← newIORef $ defaultUICamera (fromIntegral (vcWidth videoConfig))
                                            (fromIntegral (vcHeight videoConfig))
-  -- Create UI manager references
   uiManagerRef ← newIORef emptyUIPageManager
-  -- create world manager references
   worldManagerRef ← newIORef emptyWorldManager
-  -- Create focus manager
   focusMgrRef ← newIORef createFocusManager
-  -- text buffers reference
   textBuffersRef ← newIORef Map.empty
-  -- font cache reference
   fontCache ← newIORef defaultFontCache
-  -- start time at noon
-  sunAngleRef ← newIORef 0.25
-  -- preview
+  sunAngleRef ← newIORef 0.25       -- start at noon
   worldPreviewRef ← newIORef Nothing
-  -- zoom atlas pending data
   zoomAtlasDataRef ← newIORef Nothing
-  -- world quads
   worldQuadsRef ← newIORef (V.empty)
-  -- texture system
   textureSystemRef ← newIORef Nothing
   texSizeRef ← newIORef HM.empty
-  -- default face map slot
   defaultFaceMapSlotRef ← newIORef 0
-  -- flora catalog
   floraCatRef ← newIORef emptyFloraCatalog
-  -- materials
   materialRegistryRef ← newIORef emptyMaterialRegistry
-  -- unit manager
   unitManagerRef ← newIORef emptyUnitManager
-  -- unit thread queue
   unitQueue ← Q.newQueue
-  -- world gen config
   worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
   worldGenConfigRef ← newIORef worldGenConfig
 
-  -- frame counter for animations
   frameCounterRef ← newIORef (0 ∷ Word64)
-
-  -- Build environment
   let env = EngineEnv
         { engineConfig       = defaultEngineConfig
         , videoConfigRef     = videoConfigRef
@@ -173,7 +146,7 @@ initializeEngine = do
 
   pure $ EngineInitResult env envVar stateVar
 
--- | Initialize engine in headless mode (no GLFW/Vulkan)
+-- | Like 'initializeEngine' but sets 'ecHeadless' — no window or GPU
 initializeEngineHeadless ∷ IO EngineInitResult
 initializeEngineHeadless = do
   result ← initializeEngine

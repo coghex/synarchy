@@ -7,9 +7,7 @@ import UPrelude
 import World.Types
 import World.Hydrology.Types
 
------------------------------------------------------------
--- Extract river params from PersistentFeature
------------------------------------------------------------
+-- * Extract river params from PersistentFeature
 
 getRiverParams ∷ PersistentFeature → RiverParams
 getRiverParams pf = case pfFeature pf of

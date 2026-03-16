@@ -46,9 +46,7 @@ defaultOceanColor = (30, 60, 120, 255)
 defaultLavaColor ∷ RGBA
 defaultLavaColor = (200, 60, 20, 255)
 
------------------------------------------------------------
--- Texture Sampling
------------------------------------------------------------
+-- * Texture Sampling
 
 -- | Sample a texture file at a grid of points and return
 --   the average RGBA color.  Returns Nothing if the file
@@ -85,9 +83,7 @@ sampleTextureAvgColor path = do
                                 , fromIntegral (sB `div` n)
                                 , fromIntegral (sA `div` n) )
 
------------------------------------------------------------
--- Palette Construction
------------------------------------------------------------
+-- * Palette Construction
 
 -- | Build the complete color palette by loading material and
 --   vegetation YAML files and sampling their textures.
@@ -147,9 +143,7 @@ listVegetationYamls dir = do
     pure [ dir </> f | f ← entries
          , takeExtension f ∈ [".yaml", ".yml"] ]
 
------------------------------------------------------------
--- Palette Lookup
------------------------------------------------------------
+-- * Palette Lookup
 
 -- | Look up material color, falling back to grey.
 lookupMatColor ∷ ZoomColorPalette → Word8 → RGBA

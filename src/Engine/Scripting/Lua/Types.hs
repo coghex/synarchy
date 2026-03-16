@@ -41,14 +41,14 @@ data LuaBackendState = LuaBackendState
   , lbsInputState   ∷ IORef InputState
   }
 
--- | Log levels for Lua
 data LuaLogLevel = LuaLogDebug
                  | LuaLogInfo
                  | LuaLogWarn
                  | LuaLogError
                  deriving (Eq, Show)
 
--- | messages from lua to the main thread
+-- * Lua-to-engine messages
+
 data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaSetWindowMode WindowMode
                     | LuaSetVSync Bool
@@ -82,7 +82,8 @@ data LuaToEngineMsg = LuaLog LuaLogLevel String
                     | LuaUnregisterFocusable Word32
                     deriving (Eq, Show)
 
--- | messages to lua from anywhere
+-- * Engine-to-Lua messages
+
 data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaFontLoaded FontHandle FilePath
             | LuaFontLoadFailed Text
@@ -135,7 +136,6 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaWorldPreviewReady Int
             deriving (Eq, Show)
 
--- | Lua execution result
 data LuaResult = LuaSuccess
                | LuaError String
                | LuaNoop

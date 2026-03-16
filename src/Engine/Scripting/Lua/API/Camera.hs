@@ -360,10 +360,9 @@ cameraGetFacingFn env = do
         FaceEast  → 3
     return 1
 
--- Helper to invalidate all baked caches
 invalidateWorldCaches ∷ EngineEnv → IO ()
 invalidateWorldCaches env = do
-    camera <- readIORef (cameraRef env)
+    camera ← readIORef (cameraRef env)
     manager ← readIORef (worldManagerRef env)
     forM_ (wmWorlds manager) $ \(_, ws) → do
         writeIORef (wsQuadCacheRef ws)     Nothing

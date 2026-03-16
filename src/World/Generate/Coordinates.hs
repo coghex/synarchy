@@ -11,9 +11,7 @@ import World.Types
 import World.Grid (worldToGrid)
 import Engine.Graphics.Camera (CameraFacing(..))
 
------------------------------------------------------------
--- Coordinate Helpers
------------------------------------------------------------
+-- * Coordinate Helpers
 
 globalToChunk ∷ Int → Int → (ChunkCoord, (Int, Int))
 globalToChunk gx gy =

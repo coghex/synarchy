@@ -21,10 +21,6 @@ import Engine.Core.State (EngineEnv(..))
 import UI.Types
 import UI.Manager
 
------------------------------------------------------------
--- Hierarchy
------------------------------------------------------------
-
 -- | UI.addToPage(pageHandle, elementHandle, x, y)
 uiAddToPageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiAddToPageFn env = do

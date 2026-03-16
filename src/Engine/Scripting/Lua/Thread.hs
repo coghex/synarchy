@@ -42,7 +42,6 @@ import Control.Monad.Logger (LogLevel(..), toLogStr, defaultLoc)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
 import System.Timeout (timeout)
 
--- | Start the Lua scripting thread
 startLuaThread ∷ EngineEnv → IO ThreadState
 startLuaThread env = do
     let apRef     = assetPoolRef env
@@ -61,7 +60,6 @@ startLuaThread env = do
             setupShellSandbox (lbsLuaState backendState)
             logDebug logger CatLua "Shell sandbox set up."
             
-            -- Load init.lua as a module
             let scriptPath = "scripts/init.lua"
             currentTime ← getCurrentTime
             let currentSecs = realToFrac $ utctDayTime currentTime
@@ -115,7 +113,6 @@ startLuaThread env = do
                         "Failed to load Lua script: " <> T.pack scriptPath 
                         <> " - " <> errMsg
             
-            -- Start debug TCP server
             let port = ecDebugPort (engineConfig env)
             debugQueue ← startDebugServer port
             logInfo logger CatLua $ "Debug server listening on port " <> T.pack (show port)
@@ -130,7 +127,6 @@ startLuaThread env = do
         )
     return $ ThreadState stateRef threadId
 
--- | Create Lua backend state
 createLuaBackendState ∷ Q.Queue LuaToEngineMsg → Q.Queue LuaMsg
                       → IORef AssetPool → IORef Word32
                       → IORef InputState → IO LuaBackendState
@@ -149,7 +145,6 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef = do
     , lbsInputState   = inputSRef
     }
 
--- | Lua event loop
 runLuaLoop ∷ EngineEnv → LuaBackendState → IORef ThreadControl
            → TQueue DebugCommand → IO ()
 runLuaLoop env ls stateRef debugQueue = do
@@ -166,7 +161,6 @@ runLuaLoop env ls stateRef debugQueue = do
         ThreadRunning → do
             catch
               (do
-                -- Poll debug server for commands (non-blocking)
                 processDebugCommands (lbsLuaState ls) debugQueue
 
                 currentTime ← getCurrentTime
@@ -203,7 +197,7 @@ runLuaLoop env ls stateRef debugQueue = do
               (\(e ∷ SomeException) → do
                 logger ← readIORef (loggerRef env)
                 logWarn logger CatLua $ "Lua thread crashed: " <> T.pack (show e)
-                -- Drain pending debug commands so clients don't block forever
+                -- Drain pending debug commands so clients don't hang
                 let drainDebug = do
                         mCmd ← pollDebugCommand debugQueue
                         case mCmd of
@@ -363,7 +357,6 @@ escapeJsonText = T.concatMap $ \c → case c of
     '\t' → "\\t"
     _    → T.singleton c
 
--- | Process messages from anywhere to lua
 processLuaMsgs ∷ EngineEnv → LuaBackendState → IORef ThreadControl → IO ()
 processLuaMsgs env ls stateRef = do
     let (_, etlq) = lbsMsgQueues ls
@@ -376,7 +369,6 @@ processLuaMsgs env ls stateRef = do
             processLuaMsgs env ls stateRef
         Nothing → return ()
 
--- | Process a single lua message
 processLuaMsg ∷ EngineEnv → LuaBackendState → IORef ThreadControl → LuaMsg → IO ()
 processLuaMsg env ls stateRef msg = case msg of
   LuaTextureLoaded handle assetId → do
@@ -467,7 +459,6 @@ processLuaMsg env ls stateRef msg = case msg of
     logger ← readIORef (loggerRef env)
     logDebug logger CatLua "Debug overlay toggle requested"
     scriptsMap ← readTVarIO (lbsScripts ls)
-    -- Find the debug script by path
     let mDebugScript = find (\s → scriptPath s ≡ "scripts/debug.lua")
                             (Map.elems scriptsMap)
     case mDebugScript of
@@ -482,7 +473,6 @@ processLuaMsg env ls stateRef msg = case msg of
     logger ← readIORef (loggerRef env)
     logDebug logger CatLua "Debug overlay show requested"
     scriptsMap ← readTVarIO (lbsScripts ls)
-    -- Find the debug script by path
     let mDebugScript = find (\s → scriptPath s ≡ "scripts/debug.lua")
                             (Map.elems scriptsMap)
     case mDebugScript of
@@ -497,7 +487,6 @@ processLuaMsg env ls stateRef msg = case msg of
     logger ← readIORef (loggerRef env)
     logDebug logger CatLua "Debug overlay hide requested"
     scriptsMap ← readTVarIO (lbsScripts ls)
-    -- Find the debug script by path
     let mDebugScript = find (\s → scriptPath s ≡ "scripts/debug.lua")
                             (Map.elems scriptsMap)
     case mDebugScript of

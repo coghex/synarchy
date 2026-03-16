@@ -30,9 +30,7 @@ import qualified World.Geology.Log   as GeoLog
 import qualified World.Hydrology.Log as HydroLog
 import qualified World.Weather.Log   as WeatherLog
 
------------------------------------------------------------
--- Verbosity Control
------------------------------------------------------------
+-- * Verbosity Control
 
 -- | Per-subsystem verbosity levels.
 --   Silent  = no output at all
@@ -46,9 +44,7 @@ data WorldVerbosity
     | Verbose
     deriving (Show, Eq, Ord, Enum, Bounded)
 
------------------------------------------------------------
--- Log Destination
------------------------------------------------------------
+-- * Log Destination
 
 -- | Where a log line should be sent.
 data WorldLogDest
@@ -57,9 +53,7 @@ data WorldLogDest
     | DestBoth     -- ^ Both destinations (typical for world-gen progress)
     deriving (Show, Eq)
 
------------------------------------------------------------
--- WorldLogger
------------------------------------------------------------
+-- * WorldLogger
 
 -- | A bundle of everything needed to emit world-gen log lines.
 --   Pass this down instead of bare LoggerState / EngineEnv.
@@ -86,9 +80,7 @@ makeWorldLogger env logRef dest = do
         , wlWeatherV = Normal
         }
 
------------------------------------------------------------
--- Core emit helper
------------------------------------------------------------
+-- * Core emit helper
 
 -- | Emit a single line respecting the destination setting.
 emitLine ∷ MonadIO m ⇒ WorldLogger → WorldLogDest → Text → m ()
@@ -107,17 +99,13 @@ emitDebug wl msg = liftIO $ logThreadDebug (wlLogger wl) CatWorld msg
 emitLines ∷ MonadIO m ⇒ WorldLogger → [Text] → m ()
 emitLines wl = mapM_ (emitLine wl (wlDest wl))
 
------------------------------------------------------------
--- Generic world-gen progress message
------------------------------------------------------------
+-- * Generic world-gen progress message
 
 -- | Emit a free-form world-gen progress message (both destinations).
 logWorldGen ∷ MonadIO m ⇒ WorldLogger → Text → m ()
 logWorldGen wl = emitLine wl DestBoth
 
------------------------------------------------------------
--- Geology dispatch
------------------------------------------------------------
+-- * Geology dispatch
 
 -- | Log the geological timeline, respecting wlGeoV.
 logGeoTimeline ∷ MonadIO m ⇒ WorldLogger → GeoTimeline → Word64 → Int → Int → m ()
@@ -132,9 +120,7 @@ logGeoTimeline wl tl seed worldSize plateCount =
             emitLines wl (GeoLog.formatTimeline tl)
             emitLines wl (GeoLog.formatPlatesSummary seed worldSize plateCount)
 
------------------------------------------------------------
--- Hydrology dispatch
------------------------------------------------------------
+-- * Hydrology dispatch
 
 -- | Log the hydrological features, respecting wlHydroV.
 logHydrology ∷ MonadIO m ⇒ WorldLogger → [PersistentFeature] → m ()
@@ -145,9 +131,7 @@ logHydrology wl features =
         Normal  → emitLines wl (HydroLog.formatHydroNormal features)
         Verbose → emitLines wl (HydroLog.formatHydroVerbose features)
 
------------------------------------------------------------
--- Weather dispatch
------------------------------------------------------------
+-- * Weather dispatch
 
 -- | Log the climate state, respecting wlWeatherV.
 logWeather ∷ MonadIO m ⇒ WorldLogger → ClimateState → m ()

@@ -41,11 +41,11 @@ createVulkanDescriptorPool device config = do
     ,("sampler_count", T.pack $ show $ dmcSamplerCount config)]
   
   let poolSizes = V.fromList
-        [ zero  -- Uniform buffers
+        [ zero
           { type' = DESCRIPTOR_TYPE_UNIFORM_BUFFER
           , descriptorCount = dmcUniformCount config
           }
-        , zero  -- Combined image samplers
+        , zero
           { type' = DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
           , descriptorCount = dmcSamplerCount config
           }
@@ -77,7 +77,6 @@ createUniformDescriptorSetLayout device = do
 
 createVulkanDescriptorManager ∷ Device → DescriptorManagerConfig → EngineM ε σ DescriptorManager
 createVulkanDescriptorManager device config = do
-  -- Create pool
   pool ← createVulkanDescriptorPool device config
   uniformLayout ← createUniformDescriptorSetLayout device
   
@@ -102,7 +101,6 @@ allocateVulkanDescriptorSets device manager count = do
 
 destroyVulkanDescriptorManager ∷ Device → DescriptorManager → EngineM ε σ ()
 destroyVulkanDescriptorManager device manager = do
-  -- Destroy layouts first
   destroyDescriptorSetLayout device (dmUniformLayout manager) Nothing
-  -- Then destroy pool (this implicitly frees all allocated sets)
+  -- Pool destruction implicitly frees all allocated sets
   destroyDescriptorPool device (dmPool manager) Nothing

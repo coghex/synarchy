@@ -13,9 +13,7 @@ import World.Geology.Hash
 import World.Hydrology.Glacier.Common (getGlacierParams)
 import World.Hydrology.Glacier.Spawn (spawnMeltwaterRiver, spawnMoraineLake)
 
------------------------------------------------------------
--- Glacier Evolution
------------------------------------------------------------
+-- * Glacier Evolution
 
 -- | Evolve a glacier feature for one age.
 --   Follows the same fold pattern as evolvePointFeature:

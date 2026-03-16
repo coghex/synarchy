@@ -26,10 +26,6 @@ import UI.Types
 import UI.Manager
 import qualified UI.TextBuffer as TB
 
------------------------------------------------------------
--- Text Buffer Operations
------------------------------------------------------------
-
 -- | UI.enableTextInput(elementHandle) - Enable text input on an element
 uiEnableTextInputFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiEnableTextInputFn env = do

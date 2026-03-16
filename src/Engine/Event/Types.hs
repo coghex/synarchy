@@ -1,4 +1,3 @@
--- Engine/Event/Types.hs
 module Engine.Event.Types
   ( Event(..)
   , LogLevel(..)

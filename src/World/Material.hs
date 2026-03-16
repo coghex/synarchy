@@ -48,9 +48,7 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.IORef as IORef
 import Data.Vector.Unboxed.Deriving (derivingUnbox)
 
------------------------------------------------------------
--- Material ID (unchanged)
------------------------------------------------------------
+-- * Material ID
 
 newtype MaterialId = MaterialId { unMaterialId ∷ Word8 }
     deriving stock (Show, Eq, Ord)
@@ -63,9 +61,7 @@ derivingUnbox "MaterialId"
     [| unMaterialId |]
     [| MaterialId |]
 
------------------------------------------------------------
--- Named Constants (keep — used everywhere, cost nothing)
------------------------------------------------------------
+-- * Named Constants
 
 matAir ∷ MaterialId
 matAir = MaterialId 0
@@ -193,9 +189,7 @@ matIce = MaterialId 252
 matOcean ∷ MaterialId
 matOcean = MaterialId 255
 
------------------------------------------------------------
--- Material Properties (runtime, populated from YAML)
------------------------------------------------------------
+-- * Material Properties
 
 data MaterialProps = MaterialProps
     { mpName     ∷ !Text
@@ -207,19 +201,16 @@ data MaterialProps = MaterialProps
 defaultMaterialProps ∷ MaterialProps
 defaultMaterialProps = MaterialProps "unknown" 0.5 2.5 0.5
 
--- | 256-slot vector, one per possible Word8 material ID.
---   Starts as all defaults; YAML loading fills in real values.
+-- | 256-slot vector indexed by 'Word8'; starts as defaults, filled by YAML.
 newtype MaterialRegistry = MaterialRegistry (V.Vector MaterialProps)
 
 emptyMaterialRegistry ∷ MaterialRegistry
 emptyMaterialRegistry = MaterialRegistry (V.replicate 256 defaultMaterialProps)
 
--- | Register a single material's properties into the registry.
 registerMaterial ∷ Word8 → MaterialProps → MaterialRegistry → MaterialRegistry
 registerMaterial idx props (MaterialRegistry vec) =
     MaterialRegistry (vec V.// [(fromIntegral idx, props)])
 
--- | Look up properties by ID.
 getMaterialProps ∷ MaterialRegistry → MaterialId → MaterialProps
 getMaterialProps (MaterialRegistry vec) (MaterialId mid) =
     vec V.! fromIntegral mid

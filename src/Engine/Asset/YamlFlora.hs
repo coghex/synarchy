@@ -19,13 +19,11 @@ import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject, withText)
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 import World.Flora.Types (LifePhaseTag(..), AnnualStageTag(..))
 
------------------------------------------------------------
--- YAML Sub-Structures
------------------------------------------------------------
+-- * YAML sub-structures
 
 data FloraYamlPhase = FloraYamlPhase
     { fypTag     ∷ Text
-    , fypTexture ∷ Text    -- relative to texDir
+    , fypTexture ∷ Text    -- ^ Relative to the species @texDir@
     , fypAge     ∷ Float
     } deriving (Show, Eq, Generic)
 
@@ -97,15 +95,13 @@ instance FromJSON FloraYamlWorldGen where
         ⊛ v .:? "density"
         ⊛ v .:? "footprint"
 
------------------------------------------------------------
--- Top-Level Species Definition
------------------------------------------------------------
+-- * Top-level species definition
 
 data FloraYamlDef = FloraYamlDef
     { fydName           ∷ Text
     , fydType           ∷ Text
     , fydTexDir         ∷ Text
-    , fydLifecycle      ∷ Text            -- "evergreen", "perennial", "annual", "biennial"
+    , fydLifecycle      ∷ Text            -- ^ @"evergreen"@, @"perennial"@, @"annual"@, or @"biennial"@
     , fydMinLife        ∷ Maybe Float
     , fydMaxLife        ∷ Maybe Float
     , fydDeathChance    ∷ Maybe Float
@@ -137,9 +133,7 @@ instance FromJSON FloraYamlFile where
     parseJSON = withObject "FloraYamlFile" $ \v → FloraYamlFile
         ⊚ v .: "flora"
 
------------------------------------------------------------
--- YAML Parsing
------------------------------------------------------------
+-- * YAML parsing
 
 loadFloraYaml ∷ LoggerState → FilePath → IO [FloraYamlDef]
 loadFloraYaml logger path = do
@@ -155,9 +149,7 @@ loadFloraYaml logger path = do
                 <> " flora species from " <> T.pack path
             return (fyfFlora ff)
 
------------------------------------------------------------
--- Tag Parsers (moved from Flora.hs Lua API — now shared)
------------------------------------------------------------
+-- * Tag parsers
 
 parsePhaseTag ∷ Text → Maybe LifePhaseTag
 parsePhaseTag "sprout"     = Just PhaseSprout

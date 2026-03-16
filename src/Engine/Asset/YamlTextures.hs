@@ -34,11 +34,8 @@ import System.FilePath ((</>), takeExtension)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Log (LoggerState, logInfo, logWarn, logDebug, LogCategory(..))
 
------------------------------------------------------------
--- YAML Data Types (Materials)
------------------------------------------------------------
+-- * Materials
 
--- | A single material definition from YAML.
 data MaterialDef = MaterialDef
     { mdId   ∷ Word8
     , mdName ∷ Text
@@ -55,7 +52,6 @@ instance FromJSON MaterialDef where
         ⊛ v .: "zoom"
         ⊛ v .: "bg"
 
--- | Top-level YAML file structure.
 data MaterialFile = MaterialFile
     { mfMaterials ∷ [MaterialDef]
     } deriving (Show, Eq, Generic)
@@ -64,13 +60,9 @@ instance FromJSON MaterialFile where
     parseJSON = withObject "MaterialFile" $ \v → MaterialFile
         ⊚ v .: "materials"
 
------------------------------------------------------------
--- YAML Data Types (Vegetation)
------------------------------------------------------------
+-- * Vegetation
 
--- | A single vegetation type definition from YAML.
---   Each type has a base id_start and a list of variant
---   texture paths.  Variant IDs are id_start .. id_start+len-1.
+-- | Variant IDs are @id_start .. id_start + len - 1@
 data VegetationDef = VegetationDef
     { vdIdStart  ∷ Word8
     , vdName     ∷ Text
@@ -83,7 +75,6 @@ instance FromJSON VegetationDef where
         ⊛ v .: "name"
         ⊛ v .: "variants"
 
--- | Top-level vegetation YAML file structure.
 data VegetationFile = VegetationFile
     { vfVegetation ∷ [VegetationDef]
     } deriving (Show, Eq, Generic)
@@ -92,38 +83,30 @@ instance FromJSON VegetationFile where
     parseJSON = withObject "VegetationFile" $ \v → VegetationFile
         ⊚ v .: "vegetation"
 
------------------------------------------------------------
--- Texture Name Registry
---
--- Maps human-readable names to TextureHandles.
--- Populated by the Lua API when textures are loaded.
--- Queried by Lua to get handles by name.
------------------------------------------------------------
+-- * Texture name registry
 
--- | Maps name → TextureHandle.
---   Names follow the convention:
---     mat_tile_<name>   e.g. "mat_tile_loam"
---     mat_zoom_<name>   e.g. "mat_zoom_loam"
---     mat_bg_<name>     e.g. "mat_bg_loam"
---     veg_tile_<id>     e.g. "veg_tile_1"
+-- | Maps human-readable names to 'TextureHandle's. Populated by the Lua API
+--   when textures are loaded.
+--
+--   Naming convention:
+--
+--   * @mat_tile_\<name\>@ — e.g. @"mat_tile_loam"@
+--   * @mat_zoom_\<name\>@ — e.g. @"mat_zoom_loam"@
+--   * @mat_bg_\<name\>@   — e.g. @"mat_bg_loam"@
+--   * @veg_tile_\<id\>@   — e.g. @"veg_tile_1"@
 type TextureNameRegistry = HM.HashMap Text TextureHandle
 
 emptyTextureNameRegistry ∷ TextureNameRegistry
 emptyTextureNameRegistry = HM.empty
 
--- | Look up a texture handle by name.
 lookupTextureName ∷ Text → TextureNameRegistry → Maybe TextureHandle
 lookupTextureName = HM.lookup
 
--- | Convert registry to association list (for debugging / iteration).
 registryToList ∷ TextureNameRegistry → [(Text, TextureHandle)]
 registryToList = HM.toList
 
------------------------------------------------------------
--- YAML Parsing (Materials)
------------------------------------------------------------
+-- * YAML parsing
 
--- | Parse a single YAML file into a list of MaterialDefs.
 loadMaterialYaml ∷ LoggerState → FilePath → IO [MaterialDef]
 loadMaterialYaml logger path = do
     result ← Yaml.decodeFileEither path
@@ -138,8 +121,7 @@ loadMaterialYaml logger path = do
                 <> " materials from " <> T.pack path
             return (mfMaterials mf)
 
--- | Load all .yaml files in a directory (non-recursive).
---   Returns the combined list of MaterialDefs from all files.
+-- | Load and concatenate all @.yaml@\/@.yml@ files in a directory (non-recursive)
 loadMaterialDirectory ∷ LoggerState → FilePath → IO [MaterialDef]
 loadMaterialDirectory logger dir = do
     entries ← listDirectory dir
@@ -154,11 +136,6 @@ loadMaterialDirectory logger dir = do
   where
     isYaml f = takeExtension f ∈ [".yaml", ".yml"]
 
------------------------------------------------------------
--- YAML Parsing (Vegetation)
------------------------------------------------------------
-
--- | Parse a single vegetation YAML file into a list of VegetationDefs.
 loadVegetationYaml ∷ LoggerState → FilePath → IO [VegetationDef]
 loadVegetationYaml logger path = do
     result ← Yaml.decodeFileEither path
@@ -173,39 +150,16 @@ loadVegetationYaml logger path = do
                 <> " vegetation types from " <> T.pack path
             return (vfVegetation vf)
 
------------------------------------------------------------
--- Registry Building
---
--- Called from the Lua API after textures are loaded.
--- For each MaterialDef, inserts three entries:
---   mat_tile_<name> → handle
---   mat_zoom_<name> → handle
---   mat_bg_<name>   → handle
------------------------------------------------------------
+-- * Registry building
 
--- | Insert a named handle into the registry IORef.
 registerTextureName ∷ IORef TextureNameRegistry → Text → TextureHandle → IO ()
 registerTextureName ref name handle =
     atomicModifyIORef' ref $ \reg → (HM.insert name handle reg, ())
 
------------------------------------------------------------
--- World Distribution
---
--- Generate the (texType string, TextureHandle) pairs
--- needed by world.setTexture for all materials in the
--- registry that match the mat_ prefix.
---
--- This maps from our name convention back to the existing
--- WorldTextureType string convention:
---   "mat_tile_<name>" → "mat_tile_<id>"
---   "mat_zoom_<name>" → "mat_zoom_<id>"
---   "mat_bg_<name>"   → "mat_bg_<id>"
------------------------------------------------------------
+-- * World distribution
 
--- | Given a list of MaterialDefs and the registry, produce
---   (worldTexType, handle) pairs for world.setTexture.
---   The worldTexType uses numeric IDs as the existing
---   parseTextureType expects: "mat_tile_56", "mat_zoom_56", etc.
+-- | Translate name-keyed registry entries into the numeric-ID format
+--   expected by @world.setTexture@ (e.g. @"mat_tile_loam"@ → @"mat_tile_56"@)
 registryToWorldCommands ∷ [MaterialDef] → TextureNameRegistry
                         → [(Text, TextureHandle)]
 registryToWorldCommands defs registry =

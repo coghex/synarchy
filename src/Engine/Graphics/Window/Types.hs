@@ -1,7 +1,6 @@
--- src/Engine/Graphics/Window/Types.hs
 module Engine.Graphics.Window.Types
   ( WindowConfig(..)
-  , Window(..)  -- or maybe just Window if you want to keep it opaque
+  , Window(..)
   ) where
 
 import UPrelude

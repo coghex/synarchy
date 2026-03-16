@@ -86,7 +86,6 @@ logDebugFn env = do
     
     return 0
 
--- | Register Lua logging API
 registerLogAPI ∷ Lua.State → IORef LoggerState → IO ()
 registerLogAPI lst loggerRef = Lua.runWith lst $ do
   -- synarchy.setDebug("Vulkan", true)
@@ -101,7 +100,6 @@ registerLogAPI lst loggerRef = Lua.runWith lst $ do
   Lua.pushHaskellFunction (enableLogFn loggerRef)
   Lua.setfield (-2) (Lua.Name "enableLog")
 
--- | Lua function: setDebug(category: string, enabled: boolean)
 setDebugCategoryFn ∷ IORef LoggerState → Lua.LuaE Lua.Exception Lua.NumResults
 setDebugCategoryFn loggerRef = do
   categoryStr ← Lua.tostring 1 ⌦ \case
@@ -124,7 +122,6 @@ setDebugCategoryFn loggerRef = do
       Lua.pushboolean True
       return 1
 
--- | Lua function: getDebugCategories() -> table of enabled categories
 getDebugCategoriesFn ∷ IORef LoggerState → Lua.LuaE Lua.Exception Lua.NumResults
 getDebugCategoriesFn loggerRef = do
   logger ← Lua.liftIO $ readIORef loggerRef
@@ -138,7 +135,6 @@ getDebugCategoriesFn loggerRef = do
   
   return 1
 
--- | Lua function: enableLog(enabled: boolean)
 enableLogFn ∷ IORef LoggerState → Lua.LuaE Lua.Exception Lua.NumResults
 enableLogFn loggerRef = do
   enabled ← Lua.toboolean 1

@@ -13,9 +13,7 @@ import World.Grid (gridToScreen, tileWidth, tileHeight, worldScreenWidth)
 import World.Types
 import World.Render.ViewBounds (ViewBounds(..))
 
------------------------------------------------------------
--- Chunk-Level Culling
------------------------------------------------------------
+-- * Chunk-Level Culling
 
 bestWrapOffset ∷ Int → Float → Float → Float
 bestWrapOffset worldSize camX chunkScreenX =

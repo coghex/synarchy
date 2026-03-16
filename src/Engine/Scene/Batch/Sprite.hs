@@ -25,7 +25,6 @@ import Engine.Core.State (EngineState(..), GraphicsState(..))
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 
--- | Collect sprite batches from scene graph
 collectSpriteBatches ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
 collectSpriteBatches graph camera viewWidth viewHeight = do
     gs ← gets graphicsState
@@ -43,7 +42,6 @@ collectSpriteBatches graph camera viewWidth viewHeight = do
     
     pure $ V.fromList drawableObjs
 
--- | Collect visible objects from scene graph (with UI layer bypass)
 collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
 collectVisibleObjects graph camera viewWidth viewHeight = do
     gs ← gets graphicsState
@@ -60,7 +58,6 @@ collectVisibleObjects graph camera viewWidth viewHeight = do
     
     pure $ V.fromList drawableObjs
 
--- | Convert scene node to drawable object (sprites only)
 nodeToDrawable ∷ SceneGraph → Maybe BindlessTextureSystem → Float → SceneNode → Maybe DrawableObject
 nodeToDrawable graph bts fmSlot node = do
     guard (nodeType node ≡ SpriteObject)

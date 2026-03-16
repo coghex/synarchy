@@ -36,9 +36,9 @@ instance Hashable ChunkCoord where
 --   so indexing is O(1). Only leading/trailing air is trimmed.
 data ColumnTiles = ColumnTiles
     { ctStartZ  ∷ !Int
-    , ctMats    ∷ !(VU.Vector Word8)    -- material IDs (tileType)
-    , ctSlopes  ∷ !(VU.Vector Word8)    -- slope IDs (tileSlopeId)
-    , ctVeg     ∷ !(VU.Vector Word8)    -- vegetation IDs (tileVegId)
+    , ctMats    ∷ !(VU.Vector Word8)    -- ^ material IDs
+    , ctSlopes  ∷ !(VU.Vector Word8)    -- ^ slope IDs
+    , ctVeg     ∷ !(VU.Vector Word8)    -- ^ vegetation IDs
     } deriving (Show, Eq)
 
 instance NFData ColumnTiles where
@@ -48,7 +48,6 @@ instance NFData ColumnTiles where
 --   Index with: columnIndex lx ly = ly * chunkSize + lx
 type Chunk = V.Vector ColumnTiles
 
--- | Empty column (glacier, beyond-world, etc.)
 emptyColumn ∷ ColumnTiles
 emptyColumn = ColumnTiles 0 VU.empty VU.empty VU.empty
 

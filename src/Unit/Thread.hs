@@ -20,17 +20,9 @@ import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (processAllUnitCommands)
 import Unit.Thread.Movement (tickAllMovement)
 
------------------------------------------------------------
--- Constants
------------------------------------------------------------
-
--- | Unit thread tick rate in seconds. 30 Hz.
+-- | Unit thread tick rate in seconds (30 Hz).
 unitTickRate ∷ Double
 unitTickRate = 1.0 / 30.0
-
------------------------------------------------------------
--- Start Unit Thread
------------------------------------------------------------
 
 startUnitThread ∷ EngineEnv → IO ThreadState
 startUnitThread env = do
@@ -52,10 +44,6 @@ startUnitThread env = do
         )
     return $ ThreadState stateRef threadId
 
------------------------------------------------------------
--- Unit Loop
------------------------------------------------------------
-
 unitLoop ∷ EngineEnv → IORef ThreadControl → IORef Double
          → IORef UnitThreadState → IO ()
 unitLoop env stateRef lastTimeRef utsRef = do
@@ -76,16 +64,10 @@ unitLoop env stateRef lastTimeRef utsRef = do
                 let dt = tickStart - lastTime
                 writeIORef lastTimeRef tickStart
 
-                -- 1. Process commands (spawn, destroy, teleport, moveTo, stop)
                 processAllUnitCommands env utsRef
-
-                -- 2. Tick movement interpolation
                 tickAllMovement dt utsRef
-
-                -- 3. Publish changed positions to unitManagerRef
                 publishToRender env utsRef
 
-                -- Sleep to maintain tick rate
                 tickEnd ← realToFrac ⊚ getPOSIXTime
                 let elapsed = tickEnd - tickStart ∷ Double
                     sleepTime = max 0 (unitTickRate - elapsed)
@@ -98,10 +80,7 @@ unitLoop env stateRef lastTimeRef utsRef = do
                 writeIORef (lifecycleRef env) CleaningUp
               )
 
------------------------------------------------------------
--- Publish sim state to render-visible UnitManager
------------------------------------------------------------
-
+-- | Copy sim-thread positions/facing into the render-visible UnitManager.
 publishToRender ∷ EngineEnv → IORef UnitThreadState → IO ()
 publishToRender env utsRef = do
     uts ← readIORef utsRef
@@ -115,7 +94,7 @@ publishToRender env utsRef = do
                         Just ss → inst { uiGridX  = usRealX ss
                                        , uiGridY  = usRealY ss
                                        , uiGridZ  = usGridZ ss
-                                       , uiFacing = usFacing ss  -- ← NEW
+                                       , uiFacing = usFacing ss
                                        }
                   ) (umInstances um)
             in (um { umInstances = updated }, ())

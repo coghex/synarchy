@@ -19,9 +19,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlFlora (parsePhaseTag, parseCycleTag)
 import World.Flora.Types
 
------------------------------------------------------------
--- flora.register(name, baseTextureHandle) → floraId
------------------------------------------------------------
+-- * Registration
 
 floraRegisterFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 floraRegisterFn env = do
@@ -46,10 +44,7 @@ floraRegisterFn env = do
             Lua.pushnil
             return 1
 
------------------------------------------------------------
--- flora.setLifecycle(floraId, type)
--- flora.setLifecycle(floraId, "perennial", minLifespan, maxLifespan, deathChance)
------------------------------------------------------------
+-- * Lifecycle
 
 floraSetLifecycleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 floraSetLifecycleFn env = do
@@ -83,9 +78,7 @@ floraSetLifecycleFn env = do
             return 0
         _ → return 0
 
------------------------------------------------------------
--- flora.addPhase(floraId, phaseTag, textureHandle, age)
------------------------------------------------------------
+-- * Life phases
 
 floraAddPhaseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 floraAddPhaseFn env = do
@@ -122,9 +115,7 @@ floraAddPhaseFn env = do
             return 0
         _ → return 0
 
------------------------------------------------------------
--- flora.addCycleStage(floraId, stageTag, startDay, textureHandle)
------------------------------------------------------------
+-- * Annual cycle stages
 
 floraAddCycleStageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 floraAddCycleStageFn env = do
@@ -159,9 +150,7 @@ floraAddCycleStageFn env = do
             return 0
         _ → return 0
 
------------------------------------------------------------
--- flora.addCycleOverride(floraId, phaseTag, cycleTag, textureHandle)
------------------------------------------------------------
+-- * Cycle overrides
 
 floraAddCycleOverrideFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 floraAddCycleOverrideFn env = do
@@ -194,11 +183,7 @@ floraAddCycleOverrideFn env = do
             return 0
         _ → return 0
 
------------------------------------------------------------
--- flora.registerForWorldGen(floraId, category,
---     minTemp, maxTemp, minPrecip, maxPrecip,
---     maxSlope, density)
------------------------------------------------------------
+-- * World generation parameters
 
 floraRegisterForWorldGenFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 floraRegisterForWorldGenFn env = do

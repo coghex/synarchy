@@ -53,7 +53,6 @@ createVulkanFramebuffers device renderPass swapInfo imageViews mMsaaView = do
             }
       createFramebuffer dev fbInfo Nothing
 
--- | Cleanup framebuffers
 destroyVulkanFramebuffers ∷ Device → V.Vector Framebuffer → EngineM ε σ ()
 destroyVulkanFramebuffers device =
   V.mapM_ (\fb → destroyFramebuffer device fb Nothing)
@@ -85,7 +84,6 @@ recordVulkanRenderCommands cmdBuffer renderPass framebuffer pipeline layout exte
   
   cmdBindPipeline cmdBuffer PIPELINE_BIND_POINT_GRAPHICS pipeline
   
-  -- Bind descriptor sets
   cmdBindDescriptorSets cmdBuffer
                        PIPELINE_BIND_POINT_GRAPHICS
                        layout
@@ -93,14 +91,12 @@ recordVulkanRenderCommands cmdBuffer renderPass framebuffer pipeline layout exte
                        (V.singleton descSet)
                        V.empty  -- No dynamic offsets
   
-  -- Bind vertex buffers if any exist
   when (not $ V.null vertexBuffers) $
     cmdBindVertexBuffers cmdBuffer
                         0  -- First binding
                         vertexBuffers
                         (V.singleton 0)  -- Offsets
   
-  -- Draw command - adjust vertices count as needed
   cmdDraw cmdBuffer
          4  -- vertex count
          1  -- instance count

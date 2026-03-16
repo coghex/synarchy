@@ -50,11 +50,9 @@ createSlotAllocator maxSlots = TextureSlotAllocator
 -- Returns Nothing if no slots available
 allocateSlot ∷ TextureSlotAllocator → Maybe (TextureSlot, TextureSlotAllocator)
 allocateSlot alloc
-  -- First try to reuse a freed slot
   | not (IntSet.null (tsaFreeSlots alloc)) =
       let slotIdx = IntSet.findMin (tsaFreeSlots alloc)
           newFreeSlots = IntSet.delete slotIdx (tsaFreeSlots alloc)
-          -- Get current generation and increment it
           currentGen = IntMap.findWithDefault 0 slotIdx (tsaGenerations alloc)
           newGen = currentGen + 1
           newGenerations = IntMap.insert slotIdx newGen (tsaGenerations alloc)
@@ -65,7 +63,6 @@ allocateSlot alloc
             }
       in Just (slot, newAlloc)
   
-  -- Otherwise allocate a new slot if available
   | tsaNextSlot alloc < tsaMaxSlots alloc =
       let slotIdx = tsaNextSlot alloc
           newGenerations = IntMap.insert (fromIntegral slotIdx) 0 (tsaGenerations alloc)
@@ -76,17 +73,14 @@ allocateSlot alloc
             }
       in Just (slot, newAlloc)
   
-  -- No slots available
   | otherwise = Nothing
 
 -- | Free a texture slot for reuse
 -- The slot can be reallocated later with an incremented generation
 freeSlot ∷ TextureSlot → TextureSlotAllocator → TextureSlotAllocator
 freeSlot slot alloc
-  -- Don't allow freeing slot 0 (undefined texture)
-  | tsIndex slot ≡ 0 = alloc
-  -- Don't free if generation doesn't match (stale handle)
-  | not (isValidSlot slot alloc) = alloc
+  | tsIndex slot ≡ 0 = alloc              -- slot 0 is reserved for undefined texture
+  | not (isValidSlot slot alloc) = alloc  -- stale handle (generation mismatch)
   | otherwise = alloc
       { tsaFreeSlots = IntSet.insert (fromIntegral $ tsIndex slot) (tsaFreeSlots alloc)
       }

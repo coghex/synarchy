@@ -62,7 +62,6 @@ createUndefinedTexture pdev dev cmdPool cmdQueue = do
       bufSize = fromIntegral imageDataLen
       mipLevels = 1  -- No mipmapping for this simple texture
 
-  -- Create the GPU-local image
   image ← createVulkanImage dev pdev
     (width, height)
     FORMAT_R8G8B8A8_UNORM
@@ -70,19 +69,16 @@ createUndefinedTexture pdev dev cmdPool cmdQueue = do
     (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
     MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
-  -- Upload via staging buffer (cleaned up after transfer)
   locally $ do
     (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
       BUFFER_USAGE_TRANSFER_SRC_BIT
       (MEMORY_PROPERTY_HOST_VISIBLE_BIT .|. MEMORY_PROPERTY_HOST_COHERENT_BIT)
     
-    -- Copy pixel data to staging buffer
     stagingDataPtr ← mapMemory dev stagingMem 0 bufSize zero
     liftIO $ withForeignPtr imageDataForeignPtr $ \imageDataPtr →
       copyArray (castPtr stagingDataPtr) imageDataPtr imageDataLen
     unmapMemory dev stagingMem
 
-    -- Transfer to GPU
     runCommandsOnce dev cmdPool cmdQueue $ \cmdBuf → do
       transitionImageLayout image FORMAT_R8G8B8A8_UNORM
         Undef_TransDst mipLevels cmdBuf
@@ -90,11 +86,9 @@ createUndefinedTexture pdev dev cmdPool cmdQueue = do
       transitionImageLayout image FORMAT_R8G8B8A8_UNORM
         TransDst_ShaderRO mipLevels cmdBuf
 
-  -- Create image view
   imageView ← createVulkanImageView dev image
     FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 
-  -- Create sampler (nearest filtering for crisp checkerboard)
   sampler ← createUndefinedTextureSampler dev
 
   pure $ UndefinedTexture

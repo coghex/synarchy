@@ -30,22 +30,17 @@ baseTileH = fromIntegral (gcTilePixelHeight defaultGridConfig)
 unitSortNudge ∷ Float
 unitSortNudge = 0.0003
 
------------------------------------------------------------
--- Camera rotation → direction index offset
------------------------------------------------------------
-
 -- | How many direction steps (in our 8-dir clockwise ring) the
---   camera rotation shifts.  Each 90° CW rotation = 2 steps.
+--   camera rotation shifts.  Each 90 deg CW rotation = 2 steps.
 cameraRotSteps ∷ CameraFacing → Int
 cameraRotSteps FaceSouth = 0
 cameraRotSteps FaceWest  = 2
 cameraRotSteps FaceNorth = 4
 cameraRotSteps FaceEast  = 6
 
--- | Given the unit's world-space facing and the camera rotation,
---   compute the effective screen-space direction, then look up
---   the appropriate directional texture.  Falls back to the
---   default texture if no directional map or no entry for that dir.
+-- | Pick the correct directional sprite for a unit given its world-space
+--   facing and the current camera rotation. Falls back to the default texture
+--   if no directional map or no entry for the computed screen direction.
 resolveTexture
     ∷ CameraFacing
     → Direction                          -- ^ unit world facing
@@ -60,10 +55,6 @@ resolveTexture camFacing unitFacing dirSprites fallback
         in case Map.lookup screenDir dirSprites of
             Just h  → h
             Nothing → fallback
-
------------------------------------------------------------
--- Top-Level
------------------------------------------------------------
 
 renderUnitQuads ∷ EngineEnv → CameraFacing → Int → Float → IO (V.Vector SortableQuad)
 renderUnitQuads env facing zSlice tileAlpha = do
@@ -89,10 +80,6 @@ renderUnitQuads env facing zSlice tileAlpha = do
                               ) [] instances
                     return quads
 
------------------------------------------------------------
--- Convert a single UnitInstance to a SortableQuad
------------------------------------------------------------
-
 unitToQuad
     ∷ (TextureHandle → Word32)
     → Float
@@ -108,7 +95,6 @@ unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha inst texSizes =
     in if gridZ > zSlice ∨ gridZ < (zSlice - 25)
        then Nothing
        else
-        -- ← NEW: pick the right texture based on facing + camera
         let texHandle = resolveTexture facing (uiFacing inst)
                                        (uiDirSprites inst) (uiTexture inst)
 
@@ -162,10 +148,6 @@ unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha inst texSizes =
             , sqTexture = texHandle
             , sqLayer   = worldLayer
             }
-
------------------------------------------------------------
--- Float-precision facing transform
------------------------------------------------------------
 
 applyFacingF ∷ CameraFacing → Float → Float → (Float, Float)
 applyFacingF FaceSouth gx gy = ( gx,  gy)

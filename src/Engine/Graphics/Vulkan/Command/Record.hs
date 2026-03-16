@@ -39,7 +39,6 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
     
     state ← gets graphicsState
     
-    -- Validate required state components
     renderPass ← maybe (logAndThrowM CatVulkan (ExGraphics RenderPassError)
                                      "Render pass not initialized")
                       pure
@@ -64,8 +63,8 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
                     pure
                     (vulkanPDevice state)
 
-    -- ── Collect ALL text batches across every layer, upload once ──
-    -- We walk layers in ascending order so the global index lines up.
+    -- Collect all text batches across layers for a single upload pass.
+    -- Layers are walked in ascending order so the global index stays aligned.
     let allTextBatches = V.concatMap
             (\(_, items) → V.mapMaybe (\case TextItem trb → Just trb; _ → Nothing) items)
             (V.fromList $ Map.toAscList layeredBatches)
@@ -83,15 +82,11 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
                Just t  → t
                Nothing → TextInstanceBuffer zero zero 0 0
 
-    -- Re-compute draw infos (cheap, pure arithmetic)
     let offsets = V.prescanl' (\acc trb → acc + fromIntegral (V.length (trbInstances trb))) 0 allTextBatches
         counts  = V.map (fromIntegral . V.length . trbInstances) allTextBatches
         drawInfos = V.zip offsets counts
 
-    -- Index into drawInfos as we walk layers
     batchIdxRef ← liftIO $ newIORef (0 ∷ Int)
-
-    -- Begin command buffer
     let beginInfo = (zero ∷ CommandBufferBeginInfo '[])
                       { flags = COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }
     liftIO $ beginCommandBuffer cmdBuf beginInfo
@@ -153,7 +148,6 @@ renderLayerItems ∷ CommandBuffer → GraphicsState → Viewport → Rect2D
 renderLayerItems cmdBuf state viewport scissor dynamicBuffer items 
                  vertexOffsetRef device pDevice isUI
                  tib drawInfos batchIdxRef = do
-    -- Render sprites in this layer
     let spriteBatches = V.mapMaybe (\case SpriteItem b → Just b; _ → Nothing) items
     
     if isUI
@@ -162,7 +156,6 @@ renderLayerItems cmdBuf state viewport scissor dynamicBuffer items
         else renderSpritesBindless cmdBuf state viewport scissor 
                                    dynamicBuffer spriteBatches vertexOffsetRef
     
-    -- Render text in this layer
     let textItems = V.mapMaybe (\case TextItem trb → Just trb; _ → Nothing) items 
     unless (V.null textItems) $ do
         let maybePipeline = if isUI 

@@ -4,7 +4,6 @@ module Engine.Core.Types
 
 import UPrelude
 
--- | Engine configuration
 data EngineConfig = EngineConfig
   { windowWidth     ∷ Int
   , windowHeight    ∷ Int

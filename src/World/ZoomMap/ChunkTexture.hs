@@ -31,9 +31,7 @@ instance NFData ZoomAtlasData where
     rnf (ZoomAtlasData w h cpr d) =
         rnf w `seq` rnf h `seq` rnf cpr `seq` rnf d
 
------------------------------------------------------------
--- Atlas Construction
------------------------------------------------------------
+-- * Atlas Construction
 
 -- | Build the zoom atlas from per-chunk color data.
 --   Each chunk's 16×16 pixel tile is generated from the
@@ -80,9 +78,7 @@ assembleAtlas atlasW _atlasH chunksPerRow chunkPixels totalSize =
                               (srcBasePtr `plusPtr` srcOff)
                               tileStride
 
------------------------------------------------------------
--- UV Computation
------------------------------------------------------------
+-- * UV Computation
 
 -- | Compute UV coordinates for a chunk at the given index
 --   within the atlas.  Returns (u0, v0, u1, v1).
@@ -99,9 +95,7 @@ chunkAtlasUVs atlas idx =
         v1  = fromIntegral ((row + 1) * zoomTileSize) / ah
     in (u0, v0, u1, v1)
 
------------------------------------------------------------
--- Helpers
------------------------------------------------------------
+-- * Helpers
 
 ceilSqrt ∷ Int → Int
 ceilSqrt n = ceiling (sqrt (fromIntegral n ∷ Double))

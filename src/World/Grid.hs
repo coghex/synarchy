@@ -42,9 +42,7 @@ import World.Types (chunkSize)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 
------------------------------------------------------------
--- Grid Configuration
------------------------------------------------------------
+-- * Grid Configuration
 
 -- | All world grid constants in one place.
 -- Changing the sprite size or proportions only requires
@@ -74,9 +72,7 @@ defaultGridConfig = GridConfig
     , gcCameraPanFriction = 4.0
     }
 
------------------------------------------------------------
--- Derived Constants
------------------------------------------------------------
+-- * Derived Constants
 
 -- | All derived values computed from defaultGridConfig.
 -- These are top-level CAFs — computed once, shared everywhere.
@@ -117,7 +113,6 @@ worldLayer = gcWorldLayer defaultGridConfig
 uiLayerThreshold ∷ LayerId
 uiLayerThreshold = gcUILayerThreshold defaultGridConfig
 
--- | Camera pan speed in world-space units per second
 cameraPanSpeed ∷ Float
 cameraPanSpeed = gcCameraPanSpeed defaultGridConfig
 
@@ -153,18 +148,14 @@ zoomFadeStart = 1.2
 zoomFadeEnd ∷ Float
 zoomFadeEnd = 1.6
 
------------------------------------------------------------
--- World Screen Width (wrapping period in screen-space X)
------------------------------------------------------------
+-- * World Screen Width (wrapping period in screen-space X)
 
 worldScreenWidth ∷ Int → Float
 worldScreenWidth worldSizeChunks =
     let worldTiles = worldSizeChunks * chunkSize
     in fromIntegral worldTiles * tileHalfWidth
 
------------------------------------------------------------
--- Facing Transforms
------------------------------------------------------------
+-- * Facing Transforms
 
 -- | Rotate grid coordinates into screen-aligned axes.
 applyFacing ∷ CameraFacing → Int → Int → (Int, Int)
@@ -180,9 +171,7 @@ unapplyFacing FaceWest  a b = (-b,  a)
 unapplyFacing FaceNorth a b = (-a, -b)
 unapplyFacing FaceEast  a b = ( b, -a)
 
------------------------------------------------------------
--- Float-precision Facing Transforms
------------------------------------------------------------
+-- * Float-precision Facing Transforms
 
 -- | Float-precision facing rotation (grid → screen axes)
 applyFacingF ∷ CameraFacing → Float → Float → (Float, Float)
@@ -198,9 +187,7 @@ unapplyFacingF FaceWest  a b = (-b,  a)
 unapplyFacingF FaceNorth a b = (-a, -b)
 unapplyFacingF FaceEast  a b = ( b, -a)
 
------------------------------------------------------------
--- Float-precision Coordinate Conversions
------------------------------------------------------------
+-- * Float-precision Coordinate Conversions
 
 -- | Screen-space → float grid coords (NO rounding)
 worldToGridF ∷ CameraFacing → Float → Float → (Float, Float)
@@ -215,9 +202,7 @@ gridToWorldF facing gx gy =
     let (a, b) = applyFacingF facing gx gy
     in ((a - b) * tileHalfWidth, (a + b) * tileHalfDiamondHeight)
 
------------------------------------------------------------
--- Coordinate Conversions
------------------------------------------------------------
+-- * Coordinate Conversions
 
 gridToWorld ∷ CameraFacing → Int → Int → (Float, Float)
 gridToWorld facing gx gy =

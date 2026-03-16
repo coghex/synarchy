@@ -76,17 +76,13 @@ initializeGLFW = do
 -- | Creates a GLFW window with given configuration
 createWindow ∷ WindowConfig → EngineM ε σ Window
 createWindow config = do
-  -- initialize glfw
   allocResource (\_ → do
                   terminateGLFW
                   logDebugM CatGraphics "GLFW terminated")
                 initializeGLFW
 
-  -- Set window hints
   liftIO $ GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
-  --liftIO $ GLFW.windowHint $ GLFW.WindowHint'Visible False
-  
-  -- Create the window
+
   window ← allocResource (\w0 → destroyWindow w0) $ do
     mw ← liftIO $ GLFW.createWindow (wcWidth config) (wcHeight config)
                                     (T.unpack $ wcTitle config) Nothing Nothing
@@ -99,7 +95,6 @@ createWindow config = do
         logInfoM CatGraphics $ "Window created with actual size: " <> T.pack (show actualSize)
         pure $ Window win
   let Window win = window
-  -- apply fullscreen if needed
   when (wcFullscreen config) $ do
     primaryMonitor ← liftIO $ GLFW.getPrimaryMonitor
     case primaryMonitor of
@@ -127,22 +122,20 @@ createWindow config = do
 createRawWindow ∷ WindowConfig → IO (Maybe Window)
 createRawWindow config = do
 
-  -- Set window hints
   GLFW.windowHint $ GLFW.WindowHint'Resizable (wcResizable config)
   GLFW.windowHint $ GLFW.WindowHint'ClientAPI GLFW.ClientAPI'NoAPI
   GLFW.windowHint $ GLFW.WindowHint'Visible True
-  -- Create the window
   mw ← liftIO $ GLFW.createWindow (wcWidth config) (wcHeight config)
                                   (T.unpack $ wcTitle config) Nothing Nothing
   pure $ case mw of
     Nothing → Nothing
     Just win → Just $ Window win
 
--- | Clean up GLFW window resources
+-- | Destroy a GLFW window
 destroyWindow ∷ Window → EngineM' ε ()
 destroyWindow (Window win) = liftIO $ GLFW.destroyWindow win
 
--- | Safely create window with automatic cleanup
+-- | Create a window with automatic cleanup registration
 initWindow ∷ WindowConfig → EngineM ε σ Window
 initWindow config = allocResource destroyWindow $ createWindow config
 

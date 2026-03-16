@@ -19,9 +19,7 @@ import World.Types (chunkSize)
 import World.Weather.Types (ClimateCoord(..), climateRegionSize, RegionClimate(..)
                            , SeasonalClimate(..), OceanCell(..))
 
------------------------------------------------------------
--- Shared Helper
------------------------------------------------------------
+-- * Shared Helper
 
 -- | Convert screen-space coords to a climate-region (ru, rv) pair.
 toClimateCoord ∷ CameraFacing → Int → Float → Float → ClimateCoord
@@ -43,9 +41,7 @@ toClimateCoord facing worldSize x y =
       | b > 0     = if a >= 0 then a `div` b else -(((-a) + b - 1) `div` b)
       | otherwise = error "floorDiv: non-positive divisor"
 
------------------------------------------------------------
--- Per-Mode Color Functions
------------------------------------------------------------
+-- * Per-Mode Color Functions
 
 tempToColorAt ∷ CameraFacing → Int → Float → Float
               → HM.HashMap ClimateCoord RegionClimate

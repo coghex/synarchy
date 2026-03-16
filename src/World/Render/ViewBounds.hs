@@ -10,9 +10,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 import World.Grid (tileWidth, tileHeight, tileSideHeight)
 import World.Render.Camera (camEpsilon)
 
------------------------------------------------------------
--- View Bounds
------------------------------------------------------------
+-- * View Bounds
 
 data ViewBounds = ViewBounds
     { vbLeft   ∷ !Float

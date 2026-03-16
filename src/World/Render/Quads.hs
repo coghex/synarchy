@@ -34,9 +34,7 @@ import World.Render.TileQuads
     )
 import World.Fluid.Types (IceCell(..))
 
------------------------------------------------------------
--- Water Slope Helpers
------------------------------------------------------------
+-- * Water Slope Helpers
 
 -- | Compute a slope ID (Word8) for a water tile by checking if
 --   adjacent water tiles have lower surfaces.
@@ -89,9 +87,7 @@ waterSlopeAt fluidMap coord chunkLookup lx ly mySurf =
           ∷ Word8
     in if raw ≡ 15 then 0 else raw
 
------------------------------------------------------------
--- Render World Quads
------------------------------------------------------------
+-- * Render World Quads
 
 renderWorldQuads ∷ EngineEnv → WorldState → Float → WorldCameraSnapshot
   → IO (V.Vector SortableQuad)
@@ -270,7 +266,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                 (!oceanQuads, !lavaQuads, !freshwaterQuads) =
                     V.ifoldl' (\(!oAcc, !lAcc, !fAcc) idx mFluid ->
                         case mFluid of
-                            Nothing -> (oAcc, lAcc, fAcc)
+                            Nothing → (oAcc, lAcc, fAcc)
                             Just fc ->
                                 if fcSurface fc > zSlice ∨ fcSurface fc < (zSlice - effectiveDepth)
                                 then (oAcc, lAcc, fAcc)
@@ -289,7 +285,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                        then (oAcc, lAcc, fAcc)
                                        else case fcType fc of
                                             Ocean
-                                              | hasIce -> (oAcc, lAcc, fAcc)
+                                              | hasIce → (oAcc, lAcc, fAcc)
                                               | otherwise ->
                                                 ( oceanTileToQuad lookupSlot lookupFmSlot textures facing
                                                     gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha xOffset
@@ -305,7 +301,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                                 , fAcc
                                                 )
                                             Lake
-                                              | hasIce -> (oAcc, lAcc, fAcc)
+                                              | hasIce → (oAcc, lAcc, fAcc)
                                               | otherwise ->
                                                 let wSlope = waterSlopeAt fluidMap coord fluidMapLookup lx ly (fcSurface fc)
                                                 in ( oAcc
@@ -332,9 +328,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
             ) visibleChunksWithOffset
     return $! V.concat chunkVectors
 
------------------------------------------------------------
--- World Cursor Quads (generated every frame, not cached)
------------------------------------------------------------
+-- * World Cursor Quads (generated every frame, not cached)
 
 renderWorldCursorQuads ∷ EngineEnv → WorldState → Float → IO (V.Vector SortableQuad)
 renderWorldCursorQuads env worldState tileAlpha = do

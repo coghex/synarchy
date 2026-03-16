@@ -13,12 +13,7 @@ import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 
------------------------------------------------------------
--- YAML Data Types
------------------------------------------------------------
-
--- | A single unit definition from YAML.
---   Only 'name' and 'sprite' are mandatory.
+-- | Only @name@ and @sprite@ are mandatory; everything else has defaults
 data UnitYamlDef = UnitYamlDef
     { uydName              ∷ !Text       -- ^ unique identifier (e.g. "acolyte")
     , uydSprite            ∷ !Text       -- ^ path to default sprite texture
@@ -34,7 +29,6 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "base_width"          .!= 0.0
         ⊛ v .:? "directional_sprites" .!= Map.empty
 
--- | Top-level YAML file structure.
 newtype UnitYamlFile = UnitYamlFile
     { uyfUnits ∷ [UnitYamlDef]
     } deriving (Show, Eq, Generic)
@@ -43,11 +37,6 @@ instance FromJSON UnitYamlFile where
     parseJSON = withObject "UnitYamlFile" $ \v → UnitYamlFile
         ⊚ v .: "units"
 
------------------------------------------------------------
--- YAML Parsing
------------------------------------------------------------
-
--- | Parse a single unit YAML file into a list of UnitYamlDefs.
 loadUnitYaml ∷ LoggerState → FilePath → IO [UnitYamlDef]
 loadUnitYaml logger path = do
     result ← Yaml.decodeFileEither path

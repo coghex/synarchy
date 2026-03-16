@@ -40,6 +40,5 @@ instance NFData IceCell where
 -- | Per-column ice overlay map, parallel to FluidMap.
 type IceMap = V.Vector (Maybe IceCell)
 
--- | Empty ice map (no ice anywhere in this chunk).
 emptyIceMap ∷ IceMap
 emptyIceMap = V.replicate 256 Nothing

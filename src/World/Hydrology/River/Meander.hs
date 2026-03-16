@@ -10,9 +10,7 @@ import World.Base (GeoCoord(..))
 import World.Hydrology.Types
 import World.Geology.Hash
 
------------------------------------------------------------
--- Meander Application
------------------------------------------------------------
+-- * Meander Application
 
 -- | Shift segment endpoints perpendicular to flow direction.
 --   Creates natural-looking bends in the river over time.

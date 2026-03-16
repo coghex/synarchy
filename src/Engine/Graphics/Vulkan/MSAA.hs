@@ -40,7 +40,6 @@ createMSAAColorImage pDevice device format extent sampleCount = do
 
     image ← createImage device imageInfo Nothing
 
-    -- Query memory requirements
     memReqs ← getImageMemoryRequirements device image
 
     -- Find a suitable memory type (prefer LAZILY_ALLOCATED, fall back to DEVICE_LOCAL)
@@ -54,7 +53,6 @@ createMSAAColorImage pDevice device format extent sampleCount = do
     memory ← allocateMemory device allocInfo Nothing
     bindImageMemory device image memory 0
 
-    -- Create image view
     let viewInfo = zero
           { image      = image
           , viewType   = IMAGE_VIEW_TYPE_2D
@@ -76,7 +74,6 @@ createMSAAColorImage pDevice device format extent sampleCount = do
 
     imageView ← createImageView device viewInfo Nothing
 
-    -- Register cleanup
     let cleanupAction = do
             destroyImageView device imageView Nothing
             destroyImage device image Nothing

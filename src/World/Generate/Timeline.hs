@@ -26,9 +26,7 @@ import World.Constants (seaLevel)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 
------------------------------------------------------------
--- Per-Period Timeline Application (chunk-level with erosion)
------------------------------------------------------------
+-- * Per-Period Timeline Application (chunk-level with erosion)
 
 applyTimelineChunk ∷ GeoTimeline → Int → MaterialRegistry → WorldScale → ChunkCoord
                    → (VU.Vector Int, VU.Vector MaterialId)
@@ -293,9 +291,7 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
             matF  ← VU.unsafeFreeze matM
             pure (elevF, matF)
 
------------------------------------------------------------
--- Legacy Timeline Application (single-column, for external callers)
------------------------------------------------------------
+-- * Legacy Timeline Application (single-column, for external callers)
 
 applyTimeline ∷ GeoTimeline → Int → Int → Int → Float
   → (Int, MaterialId) → (Int, MaterialId)
@@ -341,9 +337,7 @@ applyPeriodSingle worldSize wsc gx gy hardness (elev, mat) period =
             Nothing → mat'
     in (elev'', mat'')
 
------------------------------------------------------------
--- Bbox-Filtered Timeline Application (for zoom cache)
------------------------------------------------------------
+-- * Bbox-Filtered Timeline Application (for zoom cache)
 
 applyTimelineFast ∷ GeoTimeline → Int → Int → Int → Float
   → (Int, MaterialId) → (Int, MaterialId)

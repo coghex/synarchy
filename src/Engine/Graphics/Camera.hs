@@ -1,4 +1,3 @@
--- src/Engine/Graphics/Camera.hs
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Camera
     ( Camera2D(..)

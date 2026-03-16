@@ -28,9 +28,7 @@ import World.Types
 import World.Material (getMaterialProps, MaterialProps(..), MaterialId(..)
                       , MaterialRegistry(..))
 
------------------------------------------------------------
--- Constants
------------------------------------------------------------
+-- * Constants
 
 slopeHardnessThreshold ∷ Float
 slopeHardnessThreshold = 0.7
@@ -44,9 +42,7 @@ tilePixelHeight = 64
 diamondRows ∷ Int
 diamondRows = 48
 
------------------------------------------------------------
--- Slope Computation (Post-Processing Pass)
------------------------------------------------------------
+-- * Slope Computation (Post-Processing Pass)
 
 computeChunkSlopes ∷ Word64 → ChunkCoord → VU.Vector Int → MaterialRegistry
                    → V.Vector (Maybe FluidCell) → Chunk
@@ -152,9 +148,7 @@ floorDiv' a b = floor (fromIntegral a / fromIntegral b ∷ Double)
 floorMod' ∷ Int → Int → Int
 floorMod' a b = a - floorDiv' a b * b
 
------------------------------------------------------------
--- Probabilistic Roughness
------------------------------------------------------------
+-- * Probabilistic Roughness
 
 applyRoughness ∷ Word64 → ChunkCoord → Int → Int → Float → Word8 → Word8
 applyRoughness seed (ChunkCoord cx cy) lx ly hardness rawSlope
@@ -184,16 +178,12 @@ tileHash seed cx cy lx ly =
         g = f `xor` (f `shiftR` 13)
     in g
 
------------------------------------------------------------
--- Slope → Face Map Index Mapping
------------------------------------------------------------
+-- * Slope → Face Map Index Mapping
 
 slopeToFaceMapIndex ∷ Word8 → Int
 slopeToFaceMapIndex  = fromIntegral
 
------------------------------------------------------------
--- Procedural Face Map Generation
------------------------------------------------------------
+-- * Procedural Face Map Generation
 
 data SlopeFaceMaps = SlopeFaceMaps
     { sfmFlat  ∷ !(VS.Vector Word8)
@@ -283,9 +273,7 @@ rampGradient dir col row =
 clampByte ∷ Int → Word8
 clampByte x = fromIntegral (max 0 (min 255 x))
 
------------------------------------------------------------
--- Side Face Maps (left/right only, no top face)
------------------------------------------------------------
+-- * Side Face Maps (left/right only, no top face)
 
 -- | Left side face map: G=0 (no top), B=255 for left-side pixels only.
 --   The left side face occupies the bottom-left portion of the tile sprite.
@@ -324,9 +312,7 @@ generateSideFaceMapRight = VS.generate (tilePixelWidth * tilePixelHeight * 4) $ 
                 _ → 255
             else 0  -- no left side face
 
------------------------------------------------------------
--- Recompute Neighbor Slopes
------------------------------------------------------------
+-- * Recompute Neighbor Slopes
 
 recomputeNeighborSlopes ∷ Word64 → MaterialRegistry
                         → [ChunkCoord]

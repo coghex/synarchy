@@ -41,9 +41,7 @@ import Data.Hashable (Hashable(..))
 import qualified Data.HashMap.Strict as HM
 import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 
------------------------------------------------------------
--- Climate Region Coordinate
------------------------------------------------------------
+-- * Climate Region Coordinate
 
 -- | Climate regions are 4×4 chunks = 64×64 tiles.
 --   This is coarser than your geological RegionCoord (8×8 chunks)
@@ -61,9 +59,7 @@ instance Hashable ClimateCoord where
     hashWithSalt s (ClimateCoord x y) =
         s `hashWithSalt` x `hashWithSalt` y
 
------------------------------------------------------------
--- Seasonal Climate (summer / winter extremes)
------------------------------------------------------------
+-- * Seasonal Climate (summer / winter extremes)
 
 -- | Two-season snapshot. For geological timescales this
 --   captures the range; actual monthly interpolation
@@ -76,9 +72,7 @@ data SeasonalClimate = SeasonalClimate
 instance NFData SeasonalClimate where
     rnf (SeasonalClimate s w) = rnf s `seq` rnf w
 
------------------------------------------------------------
--- Regional Climate (equilibrium per geological era)
------------------------------------------------------------
+-- * Regional Climate (equilibrium per geological era)
 
 -- | Climate data for a single 4×4-chunk region.
 --   This is the main output of the climate simulation.
@@ -133,9 +127,7 @@ defaultRegionClimate = RegionClimate
     , rcElevAvg        = 0
     }
 
------------------------------------------------------------
--- Climate Grid (all regions)
------------------------------------------------------------
+-- * Climate Grid (all regions)
 
 data ClimateGrid = ClimateGrid
     { cgRegions ∷ !(HM.HashMap ClimateCoord RegionClimate)
@@ -145,9 +137,7 @@ data ClimateGrid = ClimateGrid
 emptyClimateGrid ∷ Int → ClimateGrid
 emptyClimateGrid size = ClimateGrid HM.empty size
 
------------------------------------------------------------
--- Ocean Cell
------------------------------------------------------------
+-- * Ocean Cell
 
 -- | Per-region ocean state. Only exists for ocean regions.
 --   The simulation iterates these to convergence each era.
@@ -178,9 +168,7 @@ instance NFData OceanCell where
         rnf t `seq` rnf s `seq` rnf d `seq` rnf cd `seq`
         rnf cs `seq` rnf u `seq` rnf i
 
------------------------------------------------------------
--- Ocean Currents (emergent from simulation)
------------------------------------------------------------
+-- * Ocean Currents (emergent from simulation)
 
 -- | A named ocean current, extracted after simulation converges.
 --   These are for bookkeeping/display, not simulation input.
@@ -222,9 +210,7 @@ data OceanGrid = OceanGrid
 emptyOceanGrid ∷ OceanGrid
 emptyOceanGrid = OceanGrid HM.empty HM.empty [] []
 
------------------------------------------------------------
--- Atmospheric Circulation
------------------------------------------------------------
+-- * Atmospheric Circulation
 
 -- | Per-region atmospheric cell. Wind emerges from
 --   pressure gradients + Coriolis + terrain blocking.
@@ -285,9 +271,7 @@ data AtmoGrid = AtmoGrid
 emptyAtmoGrid ∷ AtmoGrid
 emptyAtmoGrid = AtmoGrid HM.empty HM.empty []
 
------------------------------------------------------------
--- Surface Type (drives albedo + evaporation)
------------------------------------------------------------
+-- * Surface Type (drives albedo + evaporation)
 
 -- | Coarse surface classification per climate region.
 --   Determined by temperature + precipitation equilibrium.
@@ -318,9 +302,7 @@ data SurfaceBudget = SurfaceBudget
                                     --   Drives spring melt → seasonal river peaks
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
------------------------------------------------------------
--- Full Climate Simulation State
------------------------------------------------------------
+-- * Full Climate Simulation State
 
 -- | The complete climate state, threaded through geological
 --   timeline alongside GeoState. Updated each era after
@@ -348,9 +330,7 @@ initClimateState worldSize =
         , csSolarConst = 1.0
         }
 
------------------------------------------------------------
--- Simulation Parameters (tuning knobs)
------------------------------------------------------------
+-- * Simulation Parameters (tuning knobs)
 
 -- | Knobs for the climate simulation.
 --   These control convergence speed and physical constants.

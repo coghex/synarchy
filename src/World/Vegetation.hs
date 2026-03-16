@@ -105,9 +105,7 @@ vegSnow = 65
 vegVariants ∷ Word8
 vegVariants = 4
 
------------------------------------------------------------
--- Texture Lookup
------------------------------------------------------------
+-- * Texture Lookup
 
 -- | Look up the texture handle for a vegetation ID.
 --   Veg textures are stored in wtVegTextures keyed by
@@ -120,9 +118,7 @@ getVegTexture textures vegId =
         Just h  → h
         Nothing → wtBlankTexture textures
 
------------------------------------------------------------
--- Chunk Vegetation Computation
------------------------------------------------------------
+-- * Chunk Vegetation Computation
 
 newtype VegId = VegId { unVegId ∷ Word8 }
     deriving (Show, Eq)
@@ -170,9 +166,7 @@ computeChunkVegetation seed worldSize coord surfMap surfMats surfSlopes
                             temp precip humid snow roll variant
   where chunkSz = chunkSize
 
------------------------------------------------------------
--- Vegetation Selection
------------------------------------------------------------
+-- * Vegetation Selection
 
 -- | The core biome → vegetation mapping.
 selectVegetation
@@ -278,9 +272,7 @@ selectVegetation matId slopeId hasFluid elev
           then vegSparseGrass + variant
           else vegNone
 
------------------------------------------------------------
--- Material Classification
------------------------------------------------------------
+-- * Material Classification
 
 -- | Materials that never get vegetation.
 isBarrenMaterial ∷ Word8 → Bool
@@ -312,14 +304,10 @@ isWetlandSoil 63 = True  -- mucky peat
 isWetlandSoil 64 = True  -- muck
 isWetlandSoil _  = False
 
------------------------------------------------------------
--- Climate Lookup
------------------------------------------------------------
+-- * Climate Lookup
 
 
------------------------------------------------------------
--- Hash
------------------------------------------------------------
+-- * Hash
 
 -- | Deterministic hash for vegetation placement.
 vegHash ∷ Word64 → Int → Int → Word64

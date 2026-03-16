@@ -34,9 +34,7 @@ import World.Render.Zoom.Climate (tempToColorAt, pressureToColorAt, humidityToCo
 import World.Render.Zoom.Cursor (makeCursorQuad)
 import World.Render.Zoom.Textures (getZoomTexture)
 
------------------------------------------------------------
--- Generate Zoom Map Quads
------------------------------------------------------------
+-- * Generate Zoom Map Quads
 
 generateZoomMapQuads ∷ EngineEnv → Camera2D → Int → Int → IO (V.Vector SortableQuad)
 generateZoomMapQuads env camera fbW fbH = do
@@ -93,9 +91,7 @@ renderFromBaked env worldState camera fbW fbH alpha texturePicker bakedRef layer
                                         lookupSlot defFmSlot
             return $ visibleQuads <> cursorQuad
 
------------------------------------------------------------
--- Map Quads by Mode
------------------------------------------------------------
+-- * Map Quads by Mode
 
 makeMapQuads ∷ WorldGenParams → ZoomMapMode → V.Vector BakedZoomEntry
   → CameraFacing → ZoomViewBounds → Float → Float → Float
@@ -150,9 +146,7 @@ makeMapQuads params mapMode baked facing vb camX camY alpha layer =
         in Vec4 cr cg cb alpha
     _ → go $ \_ _ _ → Vec4 1.0 1.0 1.0 alpha
 
------------------------------------------------------------
--- Emit a Single Quad
------------------------------------------------------------
+-- * Emit a Single Quad
 
 emitQuad ∷ BakedZoomEntry → Vec4 → Float → Float → LayerId → SortableQuad
 emitQuad entry (Vec4 cr cg cb alpha) dx dy layer =

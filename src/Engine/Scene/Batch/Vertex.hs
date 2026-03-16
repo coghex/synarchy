@@ -8,9 +8,6 @@ import qualified Data.Vector as V
 import Engine.Scene.Types.Node (SceneNode(..), WorldTransform(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
 
--- | Generate quad vertices for a scene node
--- faceMapSlot = the bindless slot for this sprite's face map
--- (use defaultFaceMapSlot for sprites without a custom face map)
 generateQuadVertices ∷ SceneNode → WorldTransform → Float → Float → (Vertex, Vertex, Vertex, Vertex)
 generateQuadVertices node worldTrans atlasId faceMapSlot =
     let (sizeX, sizeY) = nodeSize node

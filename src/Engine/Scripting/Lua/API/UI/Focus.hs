@@ -14,10 +14,6 @@ import Engine.Core.State (EngineEnv(..))
 import UI.Types
 import UI.Manager
 
------------------------------------------------------------
--- Focus Operations
------------------------------------------------------------
-
 -- | UI.setFocus(elementHandle)
 uiSetFocusFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiSetFocusFn env = do

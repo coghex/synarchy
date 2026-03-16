@@ -16,7 +16,8 @@ import Engine.Scene.Base (ObjectId)
 import Engine.Graphics.Vulkan.Base (TextureInfo)
 import Engine.Graphics.Vulkan.Types.Texture (TextureData, TextureArrayState)
 
--- | Asset pool containing all loaded assets
+-- | Central registry of every loaded texture, font, and shader, plus the
+--   'IORef' counters used for atomic handle\/ID generation
 data AssetPool = AssetPool
   { apTextureAtlases    ∷ Map.Map AssetId TextureAtlas
   , apFonts             ∷ Map.Map AssetId Font
@@ -38,10 +39,9 @@ data GlyphInfo = GlyphInfo
   , giAdvance   ∷ Float                         -- ^ Horizontal advance to next glyph
   } deriving (Show, Eq)
 
--- | Create default asset pool with initialized IORefs
 defaultAssetPool ∷ IO AssetPool
 defaultAssetPool = do
-  nextAssetIdRef ← newIORef 0  -- Add this line
+  nextAssetIdRef ← newIORef 0
   nextTextureHandleRef ← newIORef 0
   nextFontHandleRef ← newIORef 0
   nextShaderHandleRef ← newIORef 0
@@ -54,7 +54,7 @@ defaultAssetPool = do
     , apFonts          = Map.empty
     , apShaders        = Map.empty
     , apAssetPaths     = Map.empty
-    , apNextAssetId    = nextAssetIdRef  -- Changed
+    , apNextAssetId    = nextAssetIdRef
     , apNextTextureHandle = nextTextureHandleRef
     , apNextFontHandle    = nextFontHandleRef
     , apNextShaderHandle  = nextShaderHandleRef
@@ -63,7 +63,6 @@ defaultAssetPool = do
     , apShaderHandles     = shaderHandlesRef
     }
 
--- | Asset loading configuration
 data AssetConfig = AssetConfig
   { acMaxTextureAtlases ∷ Word32
   , acMaxShaderPrograms ∷ Word32
@@ -71,44 +70,40 @@ data AssetConfig = AssetConfig
   , acEnableHotReload   ∷ Bool
   } deriving (Show)
 
--- | Metadata for texture atlases
 data AtlasMetadata = AtlasMetadata
-  { amDimensions    ∷ (Word32, Word32)  -- width and height
+  { amDimensions    ∷ (Word32, Word32)  -- ^ Width and height in pixels
   , amFormat        ∷ Format
   , amMipLevels     ∷ Word32
   , amSubTextures   ∷ Map.Map Text SubTextureInfo
   } deriving (Show)
 
--- | Information about a sub-texture in an atlas
 data SubTextureInfo = SubTextureInfo
-  { stiPosition     ∷ (Float, Float)    -- x, y position in atlas
-  , stiDimensions   ∷ (Float, Float)    -- width, height in atlas
-  , stiRotated      ∷ Bool              -- whether the subtexture is rotated
+  { stiPosition     ∷ (Float, Float)    -- ^ (x, y) offset in atlas
+  , stiDimensions   ∷ (Float, Float)    -- ^ (width, height) in atlas
+  , stiRotated      ∷ Bool              -- ^ Whether the sub-texture is rotated 90°
   } deriving (Show)
 
--- | Texture atlas resource
 data TextureAtlas = TextureAtlas
   { taId           ∷ AssetId
   , taName         ∷ Text
   , taPath         ∷ Text
   , taMetadata     ∷ AtlasMetadata
   , taStatus       ∷ AssetStatus
-  , taInfo         ∷ Maybe TextureInfo   -- Vulkan resources
+  , taInfo         ∷ Maybe TextureInfo   -- ^ Vulkan image\/view\/sampler; 'Nothing' until loaded
   , taRefCount     ∷ Word32
-  , taCleanup      ∷ Maybe (IO ()) -- cleanup function
-  , taBindlessSlot ∷ Maybe Word32  -- bindless texture slot index
-  , taTextureHandle ∷ TextureHandle -- handle for binless lookup
+  , taCleanup      ∷ Maybe (IO ())       -- ^ Destroy Vulkan resources on unload
+  , taBindlessSlot ∷ Maybe Word32        -- ^ Index into the bindless descriptor array
+  , taTextureHandle ∷ TextureHandle      -- ^ Handle for bindless lookup
   }
 
--- | Font resource (stub for future implementation)
 data Font = Font
   { fId         ∷ AssetId
   , fName       ∷ Text
   , fPath       ∷ Text
-  , fSize       ∷ Word32          -- Font size in pixels
+  , fSize       ∷ Word32                   -- ^ Rasterisation size in pixels
   , fStatus     ∷ AssetStatus
-  , fAtlasId    ∷ Maybe AssetId   -- References texture atlas with glyph data
-  , fGlyphMap   ∷ Map.Map Char GlyphInfo  -- Character → glyph lookup
+  , fAtlasId    ∷ Maybe AssetId            -- ^ Backing texture atlas with glyph bitmaps
+  , fGlyphMap   ∷ Map.Map Char GlyphInfo   -- ^ Character → glyph metrics lookup
   , fRefCount   ∷ Word32
   , fCleanup    ∷ Maybe (IO ())
   }
@@ -123,14 +118,12 @@ instance Show Font where
          <> ", fRefCount = " <> show (fRefCount f)
          <> ", fCleanup = " <> if isJust (fCleanup f) then "<present>" else "<absent> }"
         
--- | Shader stage specification
 data ShaderStageInfo = ShaderStageInfo
   { ssiStage       ∷ ShaderStageFlags
   , ssiEntryPoint  ∷ Text
   , ssiPath        ∷ Text
   } deriving (Show)
 
--- | Shader program resource
 data ShaderProgram = ShaderProgram
   { spId           ∷ AssetId
   , spName         ∷ Text
@@ -138,7 +131,7 @@ data ShaderProgram = ShaderProgram
   , spStatus       ∷ AssetStatus
   , spModules      ∷ V.Vector ShaderModule
   , spRefCount     ∷ Word32
-  , spCleanup      ∷ Maybe (IO ())      -- cleanup function
+  , spCleanup      ∷ Maybe (IO ())      -- ^ Destroy shader modules on unload
   }
 data TextureArrayManager = TextureArrayManager
   { tamArrays     ∷ Map.Map Text TextureArrayState

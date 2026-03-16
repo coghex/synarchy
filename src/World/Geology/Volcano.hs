@@ -20,9 +20,7 @@ import World.Material
 import World.Geology.Types
 import World.Geology.Hash
 
------------------------------------------------------------
--- Distance Perturbation (breaks circular symmetry)
------------------------------------------------------------
+-- * Distance Perturbation (breaks circular symmetry)
 
 -- | Perturb a radial distance using multi-octave angle+radial noise.
 --   Creates irregular, natural-looking feature boundaries without
@@ -59,9 +57,7 @@ angularNoise seed buckets angle hashProp =
         n1 = hashToFloatGeo (hashGeo seed bucket1 hashProp)
     in n0 + smoothstepGeo t * (n1 - n0)
 
------------------------------------------------------------
--- Volcanic Feature Dispatch
------------------------------------------------------------
+-- * Volcanic Feature Dispatch
 
 applyVolcanicFeature ∷ VolcanicFeature → Int → Int → Int → Int → GeoModification
 applyVolcanicFeature (ShieldVolcano p)    ws gx gy e = applyShieldVolcano p ws gx gy e
@@ -73,9 +69,7 @@ applyVolcanicFeature (LavaTube p)         ws gx gy e = applyLavaTube p ws gx gy 
 applyVolcanicFeature (SuperVolcano p)     ws gx gy e = applySuperVolcano p ws gx gy e
 applyVolcanicFeature (HydrothermalVent p) ws gx gy e = applyHydrothermal p ws gx gy e
 
------------------------------------------------------------
--- Shield Volcano
------------------------------------------------------------
+-- * Shield Volcano
 
 applyShieldVolcano ∷ ShieldParams → Int → Int → Int → Int → GeoModification
 applyShieldVolcano params worldSize gx gy _baseElev =
@@ -114,9 +108,7 @@ applyShieldVolcano params worldSize gx gy _baseElev =
           else
             GeoModification elevDelta Nothing 0
 
------------------------------------------------------------
--- Cinder Cone
------------------------------------------------------------
+-- * Cinder Cone
 
 applyCinderCone ∷ CinderConeParams → Int → Int → Int → Int → GeoModification
 applyCinderCone params worldSize gx gy _baseElev =
@@ -151,9 +143,7 @@ applyCinderCone params worldSize gx gy _baseElev =
                  else unMaterialId matBasalt
        in GeoModification elevDelta (Just mat) (abs elevDelta)
 
------------------------------------------------------------
--- Lava Dome
------------------------------------------------------------
+-- * Lava Dome
 
 applyLavaDome ∷ LavaDomeParams → Int → Int → Int → Int → GeoModification
 applyLavaDome params worldSize gx gy _baseElev =
@@ -179,9 +169,7 @@ applyLavaDome params worldSize gx gy _baseElev =
                  else unMaterialId matFeldspar
        in GeoModification elevDelta (Just mat) (abs elevDelta)
 
------------------------------------------------------------
--- Caldera
------------------------------------------------------------
+-- * Caldera
 
 applyCaldera ∷ CalderaParams → Int → Int → Int → Int → GeoModification
 applyCaldera params worldSize gx gy _baseElev =
@@ -225,9 +213,7 @@ applyCaldera params worldSize gx gy _baseElev =
            fillDepth = max 3 (abs elevDelta `div` 3)
        in GeoModification elevDelta (Just mat) fillDepth
 
------------------------------------------------------------
--- Fissure
------------------------------------------------------------
+-- * Fissure
 
 applyFissure ∷ FissureParams → Int → Int → Int → Int → GeoModification
 applyFissure params worldSize gx gy _baseElev =
@@ -278,9 +264,7 @@ applyFissure params worldSize gx gy _baseElev =
                   in GeoModification elevDelta (Just (unMaterialId matBasalt)) intrusion
              else GeoModification elevDelta Nothing 0
 
------------------------------------------------------------
--- Lava Tube
------------------------------------------------------------
+-- * Lava Tube
 
 applyLavaTube ∷ LavaTubeParams → Int → Int → Int → Int → GeoModification
 applyLavaTube params worldSize gx gy _baseElev =
@@ -338,9 +322,7 @@ applyLavaTube params worldSize gx gy _baseElev =
              let elevDelta = round (ridgeH * ridgeProfile)
              in GeoModification elevDelta Nothing 0
 
------------------------------------------------------------
--- Super Volcano
------------------------------------------------------------
+-- * Super Volcano
 
 applySuperVolcano ∷ SuperVolcanoParams → Int → Int → Int → Int → GeoModification
 applySuperVolcano params worldSize gx gy baseElev =
@@ -393,9 +375,7 @@ applySuperVolcano params worldSize gx gy baseElev =
            fillDepth = max 3 (abs elevDelta `div` 3)
        in GeoModification elevDelta (Just mat) fillDepth
 
------------------------------------------------------------
--- Hydrothermal Vent
------------------------------------------------------------
+-- * Hydrothermal Vent
 
 applyHydrothermal ∷ HydrothermalParams → Int → Int → Int → Int → GeoModification
 applyHydrothermal params worldSize gx gy _baseElev =

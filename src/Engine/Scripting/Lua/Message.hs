@@ -58,9 +58,7 @@ processLuaMessages = do
             [("count", T.pack $ show $ length messages)]
     
     forM_ messages handleLuaMessage
-    -- poll for world preview image
     handleWorldPreview
-    -- poll for zoom atlas upload
     handleZoomAtlasUpload
 
 handleLuaMessage ∷ LuaToEngineMsg → EngineM ε σ ()
@@ -100,14 +98,11 @@ handleLuaMessage msg = do
             logInfoM CatTexture $ "Texture filter changed to: " <> textureFilterToText tf
             env ← ask
             liftIO $ writeIORef (textureFilterRef env) tf
-            -- Live-update all existing texture samplers
             gs ← gets graphicsState
             case (vulkanDevice gs, vulkanPDevice gs, textureSystem gs) of
                 (Just dev, Just pdev, Just bindless) → do
                     let vkFilter = textureFilterToVulkan tf
-                    -- Create one new sampler with the desired filter
                     newSampler ← createTextureSampler dev pdev vkFilter
-                    -- Rewrite every bindless slot to use it
                     rewriteAllSamplers dev newSampler bindless
                     logInfoM CatTexture "All texture samplers updated live"
                 _ → pure ()
@@ -180,11 +175,9 @@ handleSetResolution w h = do
     case glfwWindow state of
         Nothing → logWarnM CatGraphics "Cannot set resolution: no window"
         Just (Window win) → do
-            -- w, h are logical window dimensions (screen coordinates)
-            -- On HiDPI displays, GLFW.setWindowSize expects logical pixels (screen coordinates)
-            -- The framebuffer will automatically be scaled by the OS content scale
+            -- GLFW.setWindowSize expects logical (screen-coordinate) pixels;
+            -- the OS scales to framebuffer size on HiDPI displays.
             liftIO $ GLFW.setWindowSize win w h
-            -- Update our refs with the actual sizes after resize
             env ← ask
             liftIO $ do
                 (winW, winH) ← GLFW.getWindowSize win
@@ -192,7 +185,6 @@ handleSetResolution w h = do
                 writeIORef (windowSizeRef env) (winW, winH)
                 writeIORef (framebufferSizeRef env) (fbW, fbH)
                 
-                -- Notify Lua of the actual sizes
                 Q.writeQueue (luaQueue env) (LuaWindowResize winW winH)
                 Q.writeQueue (luaQueue env) (LuaFramebufferResize fbW fbH)
             
@@ -207,8 +199,7 @@ handleSetWindowMode mode = do
         Just (Window win) → do
             env ← ask
             liftIO $ do
-                -- Before changing mode, cache current windowed geometry
-                -- (only if we're currently in windowed mode)
+                -- Cache windowed geometry before switching away from it
                 currentConfig ← readIORef (videoConfigRef env)
                 when (vcWindowMode currentConfig ≡ Windowed) $ do
                     (wx, wy) ← GLFW.getWindowPos win
@@ -249,9 +240,7 @@ handleSetWindowMode mode = do
                                     Just vm → do
                                         let monW = GLFW.videoModeWidth vm
                                             monH = GLFW.videoModeHeight vm
-                                        -- Switch to windowed first (unset monitor)
                                         GLFW.setWindowed win monW monH 0 0
-                                        -- Remove decorations
                                         GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated False
                                         (winW, winH) ← GLFW.getWindowSize win
                                         (fbW, fbH) ← GLFW.getFramebufferSize win
@@ -268,9 +257,7 @@ handleSetWindowMode mode = do
                         ws ← readIORef (windowStateRef env)
                         let (wx, wy) = wsWindowedPos ws
                             (ww, wh) = wsWindowedSize ws
-                        -- Restore decorations
                         GLFW.setWindowAttrib win GLFW.WindowAttrib'Decorated True
-                        -- Switch to windowed with cached geometry
                         GLFW.setWindowed win ww wh wx wy
                         (winW, winH) ← GLFW.getWindowSize win
                         (fbW, fbH) ← GLFW.getFramebufferSize win
@@ -284,13 +271,11 @@ handleSetWindowMode mode = do
 
 handleSetVSync ∷ Bool → EngineM ε σ ()
 handleSetVSync vsync = do
-    -- Update the config so recreateSwapchain reads the new value
     env ← ask
     liftIO $ do
         oldConfig ← readIORef (videoConfigRef env)
         writeIORef (videoConfigRef env) $ oldConfig { vcVSync = vsync }
     
-    -- Recreate the swapchain with the new present mode
     state ← gets graphicsState
     case glfwWindow state of
         Nothing → logWarnM CatGraphics "Cannot set VSync: no window"
@@ -299,7 +284,6 @@ handleSetVSync vsync = do
                 <> if vsync then "enabled" else "disabled"
             recreateSwapchain window
 
--- | Handle MSAA change — same pattern as VSync
 handleSetMSAA ∷ Int → EngineM ε σ ()
 handleSetMSAA msaa = do
     env ← ask
@@ -340,19 +324,16 @@ handleSetTextureFilter tf = do
                 <> " (takes effect on next texture load or restart)"
         _ → pure ()
 
--- | Handle texture load request
 handleLoadTexture ∷ TextureHandle → FilePath → EngineM ε σ ()
 handleLoadTexture handle path = do
     logDebugM CatLua $ "Loading texture from Lua: " <> T.pack path
                     <> " (handle: " <> T.pack (show handle) <> ")"
     assetId ← loadTextureAtlasWithHandle handle (T.pack $ takeBaseName path) path "default"
-    -- notify lua
     env ← ask
     let (TextureHandle h) = handle
     liftIO $ Q.writeQueue (luaQueue env)
       (LuaAssetLoaded "texture" (fromIntegral h) (T.pack path))
     logDebugM CatLua $ "Texture loaded successfully: " <> T.pack path
-    -- record dimensions
     mDims ← liftIO $ do
         result ← JP.readImage path
         case result of
@@ -365,7 +346,6 @@ handleLoadTexture handle path = do
             (HM.insert handle (w, h) m, ())
         Nothing → pure ()
 
--- | Handle font load request
 handleLoadFont ∷ FontHandle → FilePath → Int → EngineM ε σ ()
 handleLoadFont handle path size = do
     logDebugM CatLua $ "Loading font from Lua: " <> T.pack path
@@ -377,7 +357,6 @@ handleLoadFont handle path size = do
     liftIO $ Q.writeQueue etlq (LuaAssetLoaded "font" (fromIntegral h) (T.pack path))
     logDebugM CatLua $ "Font loaded successfully: " <> T.pack path
 
--- | Handle spawn text request
 handleSpawnText ∷ ObjectId → Float → Float → FontHandle → Text
                 → Vec4 → LayerId → Float → EngineM ε σ ()
 handleSpawnText oid x y fontHandle text color layer size = do
@@ -403,7 +382,6 @@ handleSpawnText oid x y fontHandle text color layer size = do
           Nothing → logDebugM CatLua $ "Failed to add text object " <> T.pack (show oid)
       Nothing → logDebugM CatLua "Cannot spawn text: no active scene"
 
--- | Handle set text request
 handleSetText ∷ ObjectId → Text → EngineM ε σ ()
 handleSetText objId text = do
     env ← ask
@@ -412,8 +390,7 @@ handleSetText objId text = do
     modifySceneNode objId $ \node → node { nodeText = Just text }
     return ()
 
--- | Handle spawn sprite request
-handleSpawnSprite ∷ ObjectId → Float → Float → Float → Float 
+handleSpawnSprite ∷ ObjectId → Float → Float → Float → Float
                   → TextureHandle → LayerId → EngineM ε σ ()
 handleSpawnSprite objId x y width height texHandle layer = do
     sceneMgr ← gets sceneManager
@@ -454,7 +431,6 @@ handleSetVisible objId visible =
 handleDestroy ∷ ObjectId → EngineM ε σ ()
 handleDestroy objId = void $ deleteSceneNode objId
 
--- Add this new function:
 handleWorldPreview ∷ EngineM ε σ ()
 handleWorldPreview = do
     env ← ask
@@ -472,7 +448,6 @@ handleWorldPreview = do
                  , deviceQueues gs
                  , textureSystem gs ) of
                 (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless) → do
-                    -- Generate a texture handle
                     poolRef ← asks assetPoolRef
                     pool ← liftIO $ readIORef poolRef
                     texHandle ← liftIO $ generateTextureHandle pool
@@ -482,7 +457,6 @@ handleWorldPreview = do
                         bufSize = fromIntegral (BS.length rgbaData)
                         queue  = graphicsQueue queues
 
-                    -- Create GPU image
                     image ← createVulkanImage dev pdev
                         (width, height)
                         FORMAT_R8G8B8A8_UNORM
@@ -490,7 +464,6 @@ handleWorldPreview = do
                         (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
                         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
-                    -- Upload via staging buffer
                     locally $ do
                         (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
                             BUFFER_USAGE_TRANSFER_SRC_BIT
@@ -509,19 +482,16 @@ handleWorldPreview = do
                             transitionImageLayout image FORMAT_R8G8B8A8_UNORM
                                 TransDst_ShaderRO 1 cmdBuf
 
-                    -- Create image view and sampler
                     imageView ← createVulkanImageView dev image
                         FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 
                     sampler ← createTextureSampler dev pdev FILTER_NEAREST
 
-                    -- Register in bindless system
                     (_, newBindless) ← registerTexture dev texHandle
                         imageView sampler bindless
                     modify $ \s → s { graphicsState = (graphicsState s) {
                         textureSystem = Just newBindless } }
 
-                    -- Notify Lua
                     let (TextureHandle h) = texHandle
                     liftIO $ Q.writeQueue (luaQueue env)
                         (LuaWorldPreviewReady (fromIntegral h))
@@ -562,7 +532,6 @@ handleZoomAtlasUpload = do
                         bufSize = fromIntegral (BS.length rgbaData)
                         queue  = graphicsQueue queues
 
-                    -- Create GPU image
                     image ← createVulkanImage dev pdev
                         (width, height)
                         FORMAT_R8G8B8A8_UNORM
@@ -570,7 +539,6 @@ handleZoomAtlasUpload = do
                         (IMAGE_USAGE_TRANSFER_DST_BIT .|. IMAGE_USAGE_SAMPLED_BIT)
                         MEMORY_PROPERTY_DEVICE_LOCAL_BIT
 
-                    -- Upload via staging buffer
                     locally $ do
                         (stagingMem, stagingBuf) ← createVulkanBuffer dev pdev bufSize
                             BUFFER_USAGE_TRANSFER_SRC_BIT
@@ -595,15 +563,12 @@ handleZoomAtlasUpload = do
 
                     sampler ← createTextureSampler dev pdev FILTER_LINEAR
 
-                    -- Register in bindless system
                     (_, newBindless) ← registerTexture dev texHandle
                         imageView sampler bindless
                     modify $ \s → s { graphicsState = (graphicsState s) {
                         textureSystem = Just newBindless } }
-                    -- Sync to the IORef so render code can see the new slot
                     liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
 
-                    -- Compute chunksPerRow from atlas dimensions
                     let chunksPerRow = w `div` zoomTileSize
                         atlasInfo = ZoomAtlasInfo
                             { zaiTexture     = texHandle
@@ -612,7 +577,6 @@ handleZoomAtlasUpload = do
                             , zaiChunksPerRow = chunksPerRow
                             }
 
-                    -- Store atlas info on all visible world states
                     worldManager ← liftIO $ readIORef (worldManagerRef env)
                     forM_ (wmWorlds worldManager) $ \(_pageId, ws) →
                         liftIO $ writeIORef (wsZoomAtlasRef ws) (Just atlasInfo)

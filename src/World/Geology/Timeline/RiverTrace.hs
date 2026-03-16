@@ -18,9 +18,7 @@ import World.Chunk.Types (chunkSize)
 import World.Weather.Types (ClimateState)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 
------------------------------------------------------------
--- River tracing via flow-direction chain
------------------------------------------------------------
+-- * River tracing via flow-direction chain
 
 -- | Trace a river from a source cell to the ocean by following
 --   the pre-computed flow direction grid. This is GUARANTEED to
@@ -119,9 +117,7 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
        then Nothing
        else buildRiverFromPath seed worldSize riverIdx flow climate noisyPath
 
------------------------------------------------------------
--- Path unwrapping
------------------------------------------------------------
+-- * Path unwrapping
 
 -- | Make path coordinates continuous across the u-axis wrap.
 --   The flow grid wraps ix (u-axis), so consecutive grid cells may
@@ -153,9 +149,7 @@ unwrapPathCoords worldTiles (p0:rest) =
             p' = (x', y', e)
         in p' : go p' xs
 
------------------------------------------------------------
--- Coast extension
------------------------------------------------------------
+-- * Coast extension
 
 -- | Extrapolate 2 waypoints past the flow grid sink to push the
 --   river path into below-sea-level terrain. The flow grid has
@@ -183,9 +177,7 @@ extendToCoast sp pts =
             in pts ⧺ [ (x2 + stepX, y2 + stepY, seaLevel - 1)
                       , (x2 + stepX * 2, y2 + stepY * 2, seaLevel - 2) ]
 
------------------------------------------------------------
--- Path noise
------------------------------------------------------------
+-- * Path noise
 
 -- | Offset each waypoint perpendicular to the local flow direction
 --   using coherent multi-scale noise. Three octaves create natural
@@ -281,9 +273,7 @@ coherentNoise seed idx t =
         s = smoothstepGeo frac
     in h0 * (1.0 - s) + h1 * s
 
------------------------------------------------------------
--- Path construction
------------------------------------------------------------
+-- * Path construction
 
 buildRiverFromPath ∷ Word64 → Int → Int → Float → ClimateState
                    → [(Int, Int, Int)] → Maybe RiverParams
@@ -433,9 +423,7 @@ buildSegFromWaypoints seed worldSize totalSegs baseFlow climate segIdx
         , rsWaterEnd    = max seaLevel (ee - freeboard)
         }
 
------------------------------------------------------------
--- Water surface pooling
------------------------------------------------------------
+-- * Water surface pooling
 
 -- | Pool water surfaces: where terrain forms depressions,
 --   water should fill to the level of the outflow point.

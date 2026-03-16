@@ -18,9 +18,7 @@ import World.Plate (TectonicPlate(..), generatePlates)
 import World.Geology.Types
 import World.Hydrology.Types
 
------------------------------------------------------------
--- Timeline Summary
------------------------------------------------------------
+-- * Timeline Summary
 
 data TimelineSummary = TimelineSummary
     { tsNumPeriods      ∷ !Int
@@ -100,9 +98,7 @@ countActivity (a, d, e) pf = case pfActivity pf of
     FExtinct   → (a, d, e + 1)
     FCollapsed → (a, d, e + 1)
 
------------------------------------------------------------
--- Scale Display
------------------------------------------------------------
+-- * Scale Display
 
 showScale ∷ GeoScale → Text
 showScale Eon    = "Eon"
@@ -111,9 +107,7 @@ showScale Period = "Period"
 showScale Epoch  = "Epoch"
 showScale Age    = "Age"
 
------------------------------------------------------------
--- Plate Formatting
------------------------------------------------------------
+-- * Plate Formatting
 
 -- | Format the tectonic plates as a summary section.
 --   Called separately since plates are generated from seed/size,
@@ -140,9 +134,7 @@ formatOnePlate registry idx plate =
 plateCoord ∷ TectonicPlate → GeoCoord
 plateCoord p = GeoCoord (plateCenterX p) (plateCenterY p)
 
------------------------------------------------------------
--- Full Timeline Formatting
------------------------------------------------------------
+-- * Full Timeline Formatting
 
 -- | Format the entire timeline as a list of text lines.
 --   Returns a [Text] so callers can send each line to
@@ -187,9 +179,7 @@ formatEventCountLines m =
     | (name, c) ← Map.toAscList m
     ]
 
------------------------------------------------------------
--- Chronological Period Formatting
------------------------------------------------------------
+-- * Chronological Period Formatting
 
 -- | Format a single period with its date and all events expanded.
 --   Each event gets its own line with coordinates.
@@ -322,9 +312,7 @@ formatEvolution (ParasiticEruption _ _ (GeoCoord cx cy) _) =
 formatEvolution (FlankCollapse _ _ _ (GeoCoord cx cy) _) =
     "Flank Collapse (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
 
------------------------------------------------------------
--- Feature List
------------------------------------------------------------
+-- * Feature List
 
 formatFeatureLines ∷ [PersistentFeature] → [Text]
 formatFeatureLines features =
@@ -401,9 +389,7 @@ describeFeature' (HydroShape (LakeFeature p)) =
      <> " surface=" <> T.pack (show (lkSurface p))
      <> " depth=" <> T.pack (show (lkDepth p)))
 
------------------------------------------------------------
--- IO Logging Functions
------------------------------------------------------------
+-- * IO Logging Functions
 
 -- | Log the full timeline using a provided log function.
 --   Returns the formatted lines so the caller can also

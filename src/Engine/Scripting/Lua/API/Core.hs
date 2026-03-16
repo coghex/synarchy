@@ -172,14 +172,8 @@ resumeScriptFn backendState = do
         _ → return ()
     return 0
 
------------------------------------------------------------
--- engine.listFiles(directoryPath, extension)
---
--- Returns a Lua table (array) of filenames in the given
--- directory that match the given extension (e.g. ".yaml").
--- Returns nil if the directory doesn't exist.
------------------------------------------------------------
-
+-- | List files in a directory matching an extension.
+--   Returns a Lua array of filenames, or nil if the directory doesn't exist.
 listFilesFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
 listFilesFn = do
     dirArg ← Lua.tostring 1

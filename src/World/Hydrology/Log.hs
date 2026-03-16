@@ -12,16 +12,12 @@ import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Hydrology.Types
 
------------------------------------------------------------
--- Helpers
------------------------------------------------------------
+-- * Helpers
 
 padR ∷ Int → Text → Text
 padR n t = t <> T.replicate (max 0 (n - T.length t)) " "
 
------------------------------------------------------------
--- Feature Counting
------------------------------------------------------------
+-- * Feature Counting
 
 data HydroSummaryStats = HydroSummaryStats
     { hsRivers    ∷ !Int
@@ -63,9 +59,7 @@ isLake ∷ FeatureShape → Bool
 isLake (HydroShape (LakeFeature _)) = True
 isLake _                            = False
 
------------------------------------------------------------
--- Summary (one box, counts only)
------------------------------------------------------------
+-- * Summary (one box, counts only)
 
 -- | One-box summary: feature counts and total river flow.
 formatHydroSummary ∷ [PersistentFeature] → [Text]
@@ -83,9 +77,7 @@ formatHydroSummary features =
        , ""
        ]
 
------------------------------------------------------------
--- Normal (summary + per-feature one-liners)
------------------------------------------------------------
+-- * Normal (summary + per-feature one-liners)
 
 -- | Summary box + a compact one-liner per hydrological feature.
 formatHydroNormal ∷ [PersistentFeature] → [Text]
@@ -96,9 +88,7 @@ formatHydroNormal features =
         featureLines = map formatOneHydroFeature hydroFeats
     in summaryLines <> [header] <> featureLines <> [""]
 
------------------------------------------------------------
--- Verbose (summary + full detail per feature)
------------------------------------------------------------
+-- * Verbose (summary + full detail per feature)
 
 -- | Summary box + full detail including activity, parent, evolution counts.
 formatHydroVerbose ∷ [PersistentFeature] → [Text]
@@ -109,9 +99,7 @@ formatHydroVerbose features =
         featureLines = concatMap formatOneHydroFeatureVerbose hydroFeats
     in summaryLines <> ["", header] <> featureLines
 
------------------------------------------------------------
--- Single-feature formatters
------------------------------------------------------------
+-- * Single-feature formatters
 
 formatOneHydroFeature ∷ PersistentFeature → Text
 formatOneHydroFeature pf =
@@ -177,9 +165,7 @@ describeHydroFeature other =
     , T.pack (show other)
     )
 
------------------------------------------------------------
--- Float formatting
------------------------------------------------------------
+-- * Float formatting
 
 showFF1 ∷ Float → String
 showFF1 f =

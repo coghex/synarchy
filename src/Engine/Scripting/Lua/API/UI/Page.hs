@@ -16,10 +16,6 @@ import Engine.Core.State (EngineEnv(..))
 import UI.Types
 import UI.Manager
 
------------------------------------------------------------
--- Page Functions
------------------------------------------------------------
-
 -- | UI.newPage(name, layer) -> pageHandle
 uiNewPageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiNewPageFn env = do
@@ -69,10 +65,6 @@ uiHidePageFn env = do
             (hidePage (PageHandle $ fromIntegral n) mgr, ())
         Nothing → pure ()
     return 0
-
------------------------------------------------------------
--- Helpers
------------------------------------------------------------
 
 -- | Parse a layer name string into a 'UILayer'.  Defaults to 'LayerMenu'
 --   for unrecognised input.

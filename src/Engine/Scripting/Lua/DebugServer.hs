@@ -19,7 +19,6 @@ import Control.Exception (SomeException, catch, bracket, finally)
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
 
--- | A debug command with its response channel
 data DebugCommand = DebugCommand
     { dcCommand  ∷ !Text      -- ^ Lua code to evaluate
     , dcResponse ∷ !(MVar Text)  -- ^ Response channel
@@ -33,11 +32,9 @@ startDebugServer port = do
     _ ← forkIO $ runServer port cmdQueue
     return cmdQueue
 
--- | Non-blocking poll for the next debug command.
 pollDebugCommand ∷ TQueue DebugCommand → IO (Maybe DebugCommand)
 pollDebugCommand = atomically . tryReadTQueue
 
--- | TCP server loop: accept connections and handle them.
 runServer ∷ Int → TQueue DebugCommand → IO ()
 runServer port cmdQueue = do
     let hints = defaultHints

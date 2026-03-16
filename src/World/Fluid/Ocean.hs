@@ -24,9 +24,7 @@ import World.Plate (TectonicPlate(..), elevationAtGlobal
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Fluid.Internal
 
------------------------------------------------------------
--- Ocean Flood Fill
------------------------------------------------------------
+-- * Ocean Flood Fill
 
 computeOceanMap ∷ Word64 → Int → Int → [TectonicPlate]
                → (Int → Int → (Int, MaterialId) → (Int, MaterialId))
@@ -113,9 +111,7 @@ computeOceanMap seed worldSize plateCount plates applyTL =
 isOceanChunk ∷ OceanMap → ChunkCoord → Bool
 isOceanChunk = flip HS.member
 
------------------------------------------------------------
--- Chunk-Level Ocean Fluid
------------------------------------------------------------
+-- * Chunk-Level Ocean Fluid
 
 computeChunkFluid ∷ Int → OceanMap → ChunkCoord
                   → VU.Vector Int

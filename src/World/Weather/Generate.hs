@@ -18,9 +18,7 @@ import World.Ocean.Types (OceanMap)
 import World.Hydrology.Simulation (ElevGrid(..))
 import World.Constants (seaLevel)
 
------------------------------------------------------------
--- Public: init from chunk-resolution OceanMap (used in Init.hs)
------------------------------------------------------------
+-- * Public: init from chunk-resolution OceanMap (used in Init.hs)
 
 -- | Initialize climate state with early-Earth-like conditions.
 --   Called after tectonic plates and primordial bombardment are done.
@@ -67,9 +65,7 @@ initEarlyClimate worldSize oceanMap =
 
     in buildClimateFromOceanSet worldSize oceanSet 1.0 0.0 1.0
 
------------------------------------------------------------
--- Public: derive coarse ocean regions from ElevGrid
------------------------------------------------------------
+-- * Public: derive coarse ocean regions from ElevGrid
 
 -- | Derive a set of ocean ClimateCoords from the coarse ElevGrid.
 --   Used during timeline construction to approximate ocean coverage
@@ -103,9 +99,7 @@ oceanRegionsFromGrid grid worldSize =
         , rv ≥ 0, rv < regionsPerSide
         ]
 
------------------------------------------------------------
--- Public: lightweight climate update during timeline
------------------------------------------------------------
+-- * Public: lightweight climate update during timeline
 
 -- | Update climate from the current ElevGrid's ocean distribution.
 --   Called at each Era/Period boundary inside buildTimeline.
@@ -124,9 +118,7 @@ updateClimateFromGrid worldSize coarseOcean prevClimate =
         (csGlobalTemp prevClimate)
         (csSolarConst prevClimate)
 
------------------------------------------------------------
--- Internal: shared climate builder
------------------------------------------------------------
+-- * Internal: shared climate builder
 
 -- | Build a complete ClimateState from a set of ocean ClimateCoords.
 --   This is the core climate model, parameterized by global state

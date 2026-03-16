@@ -29,9 +29,7 @@ import World.Hydrology.Simulation (ElevGrid(..), updateElevGrid)
 import World.Geology.Timeline.Helpers
     ( mkGeoPeriod, featureCenter, isSuperVolcano )
 
------------------------------------------------------------
--- Period-level volcanism
------------------------------------------------------------
+-- * Period-level volcanism
 
 applyPeriodVolcanism ∷ Word64 → Int → [TectonicPlate] → Int
                      → TimelineBuildState → ElevGrid
@@ -113,9 +111,7 @@ forceOneSuperVolcano seed worldSize plates periodIdx tbs =
                         in ([pf], tbs'')
     in go 0
 
------------------------------------------------------------
--- Volcanic evolution + eruption generation
------------------------------------------------------------
+-- * Volcanic evolution + eruption generation
 
 applyVolcanicEvolution ∷ Word64 → Int → [TectonicPlate]
                        → TimelineBuildState → ElevGrid

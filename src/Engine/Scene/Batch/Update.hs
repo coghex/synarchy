@@ -18,7 +18,6 @@ import Engine.Asset.Handle (TextureHandle, FontHandle)
 import Engine.Scene.Base (ObjectId, LayerId)
 import Engine.Scene.Types.Batch
 
--- | Update batches with new visible objects
 updateBatches ∷ V.Vector DrawableObject → BatchManager → BatchManager
 updateBatches objects manager =
     let groupedObjs = groupByTextureAndLayer objects
@@ -30,7 +29,6 @@ updateBatches objects manager =
         , bmDirtyBatches = dirtyKeys
         }
 
--- | Update batch manager with text batches
 updateTextBatches ∷ V.Vector TextRenderBatch → BatchManager → BatchManager
 updateTextBatches textBatches manager =
     let groupedText = V.foldl' (\acc trb →
@@ -38,7 +36,6 @@ updateTextBatches textBatches manager =
             in Map.insert key trb acc) Map.empty textBatches
     in manager { bmTextBatches = groupedText }
 
--- | Group drawable objects by texture and layer
 groupByTextureAndLayer ∷ V.Vector DrawableObject → [((TextureHandle, LayerId), V.Vector DrawableObject)]
 groupByTextureAndLayer objects =
     let objList = V.toList objects
@@ -49,7 +46,6 @@ groupByTextureAndLayer objects =
                         (obj:_) → ((doTexture obj, doLayer obj), V.fromList grp)) grouped
     in keyed
 
--- | Create a render batch from grouped objects
 createBatch ∷ ((TextureHandle, LayerId), V.Vector DrawableObject) → ((TextureHandle, LayerId), RenderBatch)
 createBatch ((textureId, layerId), objects) =
     let !numObjs = V.length objects

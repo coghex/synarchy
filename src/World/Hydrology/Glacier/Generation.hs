@@ -13,9 +13,7 @@ import World.Hydrology.Types
 import World.Geology.Types
 import World.Geology.Hash
 
------------------------------------------------------------
--- Glacier Generation
------------------------------------------------------------
+-- * Glacier Generation
 
 -- | Generate glaciers from high-elevation cold regions.
 --   Two sources:
@@ -41,9 +39,7 @@ generateGlaciers seed worldSize plates gs periodIdx tbs =
         (alpine,   tbs2) = generateAlpineGlaciers seed worldSize plates gs periodIdx tbs1
     in (iceSheet <> alpine, tbs2)
 
------------------------------------------------------------
--- Ice Sheet Tongues
------------------------------------------------------------
+-- * Ice Sheet Tongues
 
 -- | Ice sheet glaciers extend from the polar boundary inward.
 --   They flow toward the equator (perpendicular to the glacier edge).
@@ -160,9 +156,7 @@ nearGlacierZone worldSize gx gy =
         screenRow = abs (gx + gy)
     in screenRow ≥ glacierEdge - margin ∧ screenRow < halfTiles
 
------------------------------------------------------------
--- Alpine Glaciers
------------------------------------------------------------
+-- * Alpine Glaciers
 
 -- | Alpine glaciers form at high-elevation peaks in cold regions.
 --   These are smaller than ice sheet tongues but create dramatic

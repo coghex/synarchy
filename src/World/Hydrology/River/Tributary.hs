@@ -10,9 +10,7 @@ import World.Base (GeoCoord(..))
 import World.Hydrology.Types
 import World.Geology.Hash
 
------------------------------------------------------------
--- Tributary Segment Builder
------------------------------------------------------------
+-- * Tributary Segment Builder
 
 -- | Build segments for a tributary flowing from (srcX,srcY)
 --   to the branch point (bx,by), divided into numSegs pieces.

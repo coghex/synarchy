@@ -21,7 +21,7 @@ data Cleanup = Cleanup
   , cleanupSwapchain    ∷ IO ()
   }
 
--- | empty cleanup (no-op all fields)
+-- | No-op cleanup (all fields are @pure ()@)
 emptyCleanup ∷ Cleanup
 emptyCleanup = Cleanup
   { cleanupFontUI       = pure ()

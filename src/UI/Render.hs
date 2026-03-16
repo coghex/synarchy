@@ -29,7 +29,6 @@ import UI.Manager (getVisiblePages, getElementAbsolutePosition, getBoxTextureSet
 uiLayerBase ∷ Int
 uiLayerBase = 10
 
--- Helper to unwrap LayerId
 unLayerId ∷ LayerId → Word32
 unLayerId (LayerId i) = fromIntegral i
 
@@ -125,7 +124,6 @@ renderPage mgr bindless fontCache page = do
     
     pure (allBatches, allLayered)
 
--- Replace renderElement function:
 renderElement ∷ UIPageManager → BindlessTextureSystem → FontCache
               → LayerId → ElementHandle 
               → EngineM ε σ (V.Vector RenderBatch, Map.Map LayerId (V.Vector RenderItem))
@@ -160,14 +158,12 @@ renderElement mgr bindless fontCache baseLayerId handle = do
                 
                 pure (allBatches, allLayered)
 
--- | Get z-index for sorting
 getChildZIndex ∷ UIPageManager → ElementHandle → Int
 getChildZIndex mgr handle = 
     case Map.lookup handle (upmElements mgr) of
         Nothing → 0
         Just elem → ueZIndex elem
 
--- | Render element's visual data
 renderElementData ∷ UIPageManager → BindlessTextureSystem → FontCache 
                   → LayerId → UIElement → Float → Float 
                   → EngineM ε σ (V.Vector RenderBatch, V.Vector RenderItem)
@@ -300,9 +296,8 @@ makeBoxBatches bindless texSet x y w h tileSize color layerId =
         , makeBatch (btsSE texSet) seX seY ts ts
         ]
 
--- | Generate quad vertices for a UI element
--- faceMapId = 0 → default face map (UI uses the UI pipeline which
--- ignores face-map lighting entirely, so this value is just padding)
+-- | Generate quad vertices for a UI element.
+--   faceMapId is always 0 because the UI pipeline ignores face-map lighting.
 makeQuadVertices ∷ Float → Float → Float → Float 
                  → (Float, Float, Float, Float) 
                  → Float
@@ -314,7 +309,7 @@ makeQuadVertices x y w h (cr, cg, cb, ca) atlasId =
         y1 = y + h
         
         col = Vec4 cr cg cb ca
-        fmId = 0  -- default face map for UI
+        fmId = 0
         
         v1' = Vertex (Vec2 x0 y0) (Vec2 0 0) col atlasId fmId
         v2' = Vertex (Vec2 x1 y0) (Vec2 1 0) col atlasId fmId

@@ -14,9 +14,7 @@ import World.Hydrology.Glacier (applyGlacierCarve, applyGlacierEvolution)
 import World.Geology.Types (GeoModification(..), noModification)
 import World.Geology.Hash (wrappedDeltaUV, hashGeo, hashToFloatGeo, smoothstepGeo)
 
------------------------------------------------------------
--- HydroEvent dispatch (for new feature placement)
------------------------------------------------------------
+-- * HydroEvent dispatch (for new feature placement)
 
 -- | Apply a hydrological feature's terrain modification to
 --   a single column. Called from applyGeoEvent when it hits
@@ -82,9 +80,7 @@ lakeAngularNoise seed buckets angle hashProp =
         n1 = hashToFloatGeo (hashGeo seed bucket1 hashProp)
     in n0 + smoothstepGeo t * (n1 - n0)
 
------------------------------------------------------------
--- HydroModify dispatch (for feature evolution)
------------------------------------------------------------
+-- * HydroModify dispatch (for feature evolution)
 
 -- | Apply a hydrological evolution event to a single column.
 --   Called from applyGeoEvent when it hits a HydroModify.

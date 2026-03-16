@@ -103,7 +103,6 @@ mergeQuadsToBatch layer quads =
         , rbAvgZ     = avgZ
         }
 
--- | Render batch grouped by texture and layer
 data RenderBatch = RenderBatch
     { rbTexture    ∷ TextureHandle
     , rbLayer      ∷ LayerId
@@ -113,7 +112,6 @@ data RenderBatch = RenderBatch
     , rbAvgZ       ∷ Float
     } deriving (Show)
 
--- | Text render batch grouped by font and layer
 data TextRenderBatch = TextRenderBatch
     { trbFont      ∷ FontHandle
     , trbLayer     ∷ LayerId
@@ -121,20 +119,17 @@ data TextRenderBatch = TextRenderBatch
     , trbObjects   ∷ V.Vector ObjectId
     } deriving (Show)
 
--- | Simplified text batch for conversion
 data TextBatch = TextBatch
     { tbFontHandle ∷ FontHandle
     , tbInstances  ∷ V.Vector GlyphInstance
     , tbLayer      ∷ LayerId
     } deriving (Show)
 
--- | Unified render item for layer-based rendering
 data RenderItem
   = SpriteItem RenderBatch
   | TextItem TextRenderBatch
   deriving (Show)
 
--- | Batch manager state
 data BatchManager = BatchManager
     { bmBatches        ∷ Map.Map (TextureHandle, LayerId) RenderBatch
     , bmTextBatches    ∷ Map.Map (FontHandle, LayerId) TextRenderBatch
@@ -143,7 +138,6 @@ data BatchManager = BatchManager
     , bmLayeredBatches ∷ Map.Map LayerId (V.Vector RenderItem)
     } deriving (Show)
 
--- | Create empty batch manager
 createBatchManager ∷ BatchManager
 createBatchManager = BatchManager
     { bmBatches = Map.empty
@@ -153,7 +147,6 @@ createBatchManager = BatchManager
     , bmLayeredBatches = Map.empty
     }
 
--- | Dynamic vertex buffer for scene rendering
 data SceneDynamicBuffer = SceneDynamicBuffer
     { sdbBuffer   ∷ Vk.Buffer
     , sdbMemory   ∷ Vk.DeviceMemory

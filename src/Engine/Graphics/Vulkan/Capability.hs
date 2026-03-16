@@ -39,14 +39,12 @@ data TextureSystemCapability
 -- Must query Vulkan 1.2 properties to get UpdateAfterBind limits
 queryBindlessSupport ∷ PhysicalDevice → IO BindlessSupport
 queryBindlessSupport pDevice = do
-  -- Query base properties using record pattern matching to avoid ambiguity
   props ← getPhysicalDeviceProperties pDevice
   let PhysicalDeviceProperties { apiVersion = version, limits = deviceLimits } = props
       major = fromIntegral $ (version `shiftR` 22) .&. 0x7F ∷ Int
       minor = fromIntegral $ (version `shiftR` 12) .&. 0x3FF ∷ Int
       isVulkan12OrHigher = major > 1 ∨ (major ≡ 1 ∧ minor ≥ 2)
 
-  -- Query Vulkan 1.2 properties for UpdateAfterBind limits
   props12 ← if isVulkan12OrHigher
     then do
       PhysicalDeviceProperties2 { next = (vk12Props :& ()) }
@@ -72,7 +70,7 @@ isBindlessSupported bs = bsVulkan12OrHigher bs ∧ bsMaxUpdateAfterBindSampledIm
 -- | Determine what texture system to use based on support
 determineTextureCapability ∷ BindlessSupport → Word32 → TextureSystemCapability
 determineTextureCapability support reservedSlots =
-  -- Use the UPDATE_AFTER_BIND limit, not the base limit!
+  -- UpdateAfterBind limit is the real bindless limit, not the base one
   let maxSlots = bsMaxUpdateAfterBindSampledImages support
       availableSlots = if maxSlots > reservedSlots 
                        then maxSlots - reservedSlots 

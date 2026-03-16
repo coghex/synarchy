@@ -28,8 +28,6 @@ import Engine.Graphics.Config
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scripting.Lua.Types (LuaToEngineMsg(..))
 
--- | Get current video config settings
--- Returns: width, height, fullscreen, vsync, msaa
 getVideoConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getVideoConfigFn env = do
     config ← Lua.liftIO $ readIORef (videoConfigRef env)
@@ -46,7 +44,6 @@ getVideoConfigFn env = do
     Lua.pushstring (TE.encodeUtf8 $ textureFilterToText $ vcTextureFilter config)
     return 10
 
--- | Set video config (doesn't save to file)
 setVideoConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setVideoConfigFn env = do
     widthArg ← Lua.tointeger 1
@@ -89,7 +86,6 @@ setVideoConfigFn env = do
     
     return 1
 
--- | Save current video config to file
 saveVideoConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveVideoConfigFn env = do
     Lua.liftIO $ do
@@ -98,8 +94,6 @@ saveVideoConfigFn env = do
         saveVideoConfig logger "config/video.yaml" config
     return 0
 
--- | Load default video config from video_default.yaml
--- Returns same values as getVideoConfigFn
 loadDefaultConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 loadDefaultConfigFn env = do
     Lua.liftIO $ do
@@ -108,7 +102,6 @@ loadDefaultConfigFn env = do
         writeIORef (videoConfigRef env) defaultConfig
         logInfo logger CatInit "Loaded default video config"
     
-    -- Return same values as getVideoConfigFn
     config ← Lua.liftIO $ readIORef (videoConfigRef env)
     let scale = realToFrac (vcUIScale config) ∷ Double
     Lua.pushinteger (fromIntegral $ vcWidth config)
@@ -123,7 +116,6 @@ loadDefaultConfigFn env = do
     Lua.pushstring (TE.encodeUtf8 $ textureFilterToText $ vcTextureFilter config)
     return 10
 
--- | Set UI scale only
 setUIScaleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setUIScaleFn env = do
     scaleArg ← Lua.tonumber 1
@@ -138,7 +130,6 @@ setUIScaleFn env = do
         Nothing → Lua.pushboolean False
     return 1
 
--- | Set frame limit only
 setFrameLimitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setFrameLimitFn env = do
     frameLimitArg ← Lua.tointeger 1
@@ -154,8 +145,6 @@ setFrameLimitFn env = do
         Nothing → Lua.pushboolean False
     return 1
 
--- | Set resolution - sends message to engine thread to resize window
--- engine.setResolution(width, height)
 setResolutionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setResolutionFn env = do
     widthArg ← Lua.tointeger 1
@@ -164,22 +153,18 @@ setResolutionFn env = do
     case (widthArg, heightArg) of
         (Just w, Just h) → do
             Lua.liftIO $ do
-                -- Update the config
                 oldConfig ← readIORef (videoConfigRef env)
                 let newConfig = oldConfig
                       { vcWidth = fromIntegral w
                       , vcHeight = fromIntegral h
                       }
                 writeIORef (videoConfigRef env) newConfig
-                -- Send resize request to main thread
-                Q.writeQueue (luaToEngineQueue env) 
+                Q.writeQueue (luaToEngineQueue env)
                     (LuaSetResolution (fromIntegral w) (fromIntegral h))
             Lua.pushboolean True
         _ → Lua.pushboolean False
     return 1
 
--- | engine.setWindowMode(modeString)
--- modeString: "fullscreen", "borderless", or "windowed"
 setWindowModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setWindowModeFn env = do
     modeArg ← Lua.tostring 1
@@ -198,7 +183,6 @@ setWindowModeFn env = do
     
     return 0
 
--- | engine.setVSync(enabled)
 setVSyncFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setVSyncFn env = do
     vsyncArg ← Lua.toboolean 1

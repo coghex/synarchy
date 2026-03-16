@@ -26,9 +26,7 @@ import World.Geology.Types
 import World.Geology.Hash (hashGeo, hashToFloatGeo, wrappedDeltaUV)
 import World.Hydrology.Types
 
------------------------------------------------------------
--- Configuration
------------------------------------------------------------
+-- * Configuration
 
 baseSampleSpacing ∷ Int
 baseSampleSpacing = 4
@@ -46,9 +44,7 @@ maxGridDim = 384
 minLakeDepth ∷ Int
 minLakeDepth = 8
 
------------------------------------------------------------
--- Types
------------------------------------------------------------
+-- * Types
 
 -- | Result of flow simulation. Instead of full RiverParams,
 --   we now export river SOURCES — high-flow land cells that
@@ -73,9 +69,7 @@ data ElevGrid = ElevGrid
     , egLand    ∷ !(VU.Vector Bool)
     } deriving (Show)
 
------------------------------------------------------------
--- Grid Construction
------------------------------------------------------------
+-- * Grid Construction
 
 buildInitialElevGrid ∷ Word64 → Int → [TectonicPlate] → ElevGrid
 buildInitialElevGrid seed worldSize plates =
@@ -175,9 +169,7 @@ meanderNoise seed gx gy wavelength prop =
         bottom = h01 * (1.0 - sx) + h11 * sx
     in top * (1.0 - sy) + bottom * sy
 
------------------------------------------------------------
--- Incremental Update
------------------------------------------------------------
+-- * Incremental Update
 
 updateElevGrid ∷ Int → ElevGrid → GeoPeriod → ElevGrid
 updateElevGrid worldSize grid period =
@@ -204,9 +196,7 @@ updateElevGrid worldSize grid period =
 
        in grid { egElev = newElev, egLand = newLand }
 
------------------------------------------------------------
--- Depression Filling (Priority-Flood with mutable binary heap)
------------------------------------------------------------
+-- * Depression Filling (Priority-Flood with mutable binary heap)
 
 -- | Priority-flood using a mutable binary min-heap.
 --   Entries are keyed by (elevation, tieBreaker) and carry a cell
@@ -423,16 +413,13 @@ fillDepressions grid =
 
         return (filledV, d8FlowDir)
 
--- | foldlM for lists in ST
 foldlM ∷ Monad m ⇒ (a → b → m a) → a → [b] → m a
 foldlM _ acc [] = return acc
 foldlM f acc (x:xs) = do
     acc' ← f acc x
     foldlM f acc' xs
 
------------------------------------------------------------
--- Flow Simulation
------------------------------------------------------------
+-- * Flow Simulation
 
 simulateHydrology ∷ Word64 → Int → Int → ElevGrid → FlowResult
 simulateHydrology seed worldSize ageIdx grid =
@@ -562,9 +549,7 @@ simulateHydrology seed worldSize ageIdx grid =
                    , frFlowDir = flowDirVec
                    }
 
------------------------------------------------------------
--- Lake Deduplication
------------------------------------------------------------
+-- * Lake Deduplication
 
 dedupLakes ∷ Int → Int → [LakeParams] → [LakeParams]
 dedupLakes worldSize spacing = go []
@@ -581,9 +566,7 @@ dedupLakes worldSize spacing = go []
            then go acc rest
            else go (lk : acc) rest
 
------------------------------------------------------------
--- Simplified Event Application
------------------------------------------------------------
+-- * Simplified Event Application
 
 applyGeoEventSimple ∷ GeoEvent → Int → Int → Int → Int → GeoModification
 applyGeoEventSimple (CraterEvent params) ws gx gy _e =
@@ -685,9 +668,7 @@ carveSimple ws gx gy seg =
                     in if carve ≤ 0 then noModification
                        else GeoModification (negate carve) Nothing 0
 
------------------------------------------------------------
--- River Path Conversion
------------------------------------------------------------
+-- * River Path Conversion
 
 pathToRiverParams ∷ Word64 → Int → Int → Int → Int
                   → [(Int, Int, Int, Int)] → Maybe RiverParams

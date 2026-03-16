@@ -27,10 +27,6 @@ import Engine.Asset.Handle (TextureHandle(..))
 import UI.Types
 import UI.Manager
 
------------------------------------------------------------
--- Properties
------------------------------------------------------------
-
 -- | UI.setPosition(elementHandle, x, y)
 uiSetPositionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiSetPositionFn env = do

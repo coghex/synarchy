@@ -14,9 +14,7 @@ import World.Geology.Types
 import World.Geology.Hash
 import World.Hydrology.Glacier.Common (getGlacierParams)
 
------------------------------------------------------------
--- Helper: spawn a meltwater river at glacier terminus
------------------------------------------------------------
+-- * Meltwater river spawning
 
 -- | Creates a new river feature originating at the glacier's
 --   terminal point. The river flows in the same general direction
@@ -87,9 +85,7 @@ spawnMeltwaterRiver seed periodIdx parentFid pf (events, tbs) =
         tbs'' = registerFeature childPf tbs'
     in (evt : events, tbs'')
 
------------------------------------------------------------
--- Helper: spawn a moraine-dammed lake
------------------------------------------------------------
+-- * Moraine-dammed lake spawning
 
 -- | When a glacier retreats, its terminal moraine can dam
 --   the valley, creating a lake behind it. Classic examples:

@@ -42,7 +42,6 @@ import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
 import Sim.Command.Types (SimCommand)
 
--- | Engine environment (read-only)
 data EngineEnv = EngineEnv
   { engineConfig        ∷ EngineConfig
   , videoConfigRef      ∷ IORef VideoConfig
@@ -88,7 +87,6 @@ data EngineEnv = EngineEnv
   , frameCounterRef    ∷ IORef Word64  -- ^ Monotonic frame counter for animations
   } deriving (Eq)
 
--- | Engine state (mutable)
 data EngineState = EngineState
   { timingState      ∷ TimingState
   , inputState       ∷ InputState
@@ -98,10 +96,10 @@ data EngineState = EngineState
   }
 
 data EngineLifecycle
-  = EngineStarting        -- engine is initializing
-  | EngineRunning         -- engine is running normally
-  | CleaningUp            -- engine is cleaning up resources
-  | EngineStopped         -- engine has stopped
+  = EngineStarting
+  | EngineRunning
+  | CleaningUp
+  | EngineStopped
   deriving (Eq, Show)
 
 data TimingState = TimingState
@@ -143,7 +141,6 @@ data GraphicsState = GraphicsState
   , fontQuadBuffer     ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , fontDescriptorPool ∷ Maybe Vk.DescriptorPool
   , fontDescriptorLayout   ∷ Maybe Vk.DescriptorSetLayout
-  -- instance buffers that survive across frames
   , pendingInstanceBuffers ∷ V.Vector (Vk.Buffer, Vk.DeviceMemory)
   , cleanupStatus          ∷ CleanupStatus
   , vulkanCleanup          ∷ Cleanup
@@ -151,7 +148,7 @@ data GraphicsState = GraphicsState
   , textInstanceBuffer     ∷ Maybe TextInstanceBuffer
   }
 
--- | Cached windowed-mode geometry for restoring after fullscreen
+-- | Cached windowed-mode geometry so we can restore position\/size after fullscreen
 data WindowState = WindowState
   { wsWindowedPos  ∷ (Int, Int)   -- ^ Last known windowed position
   , wsWindowedSize ∷ (Int, Int)   -- ^ Last known windowed size (screen coords)

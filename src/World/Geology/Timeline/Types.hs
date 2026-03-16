@@ -111,9 +111,7 @@ data EventBBox = EventBBox
 noBBox ∷ EventBBox
 noBBox = EventBBox minBound minBound maxBound maxBound
 
------------------------------------------------------------
--- Per-segment river carving event data
------------------------------------------------------------
+-- * Per-segment river carving event data
 
 -- | A single river segment's carving parameters.
 --   Replaces the old whole-river HydroEvent (RiverFeature river)
@@ -130,9 +128,7 @@ data RiverDeltaParams = RiverDeltaParams
     , rdpFlowRate    ∷ !Float         -- ^ Total river flow (drives delta size)
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
------------------------------------------------------------
--- GeoEvent — now with per-segment river events
------------------------------------------------------------
+-- * GeoEvent — now with per-segment river events
 
 data GeoEvent
     = CraterEvent !CraterParams
@@ -148,9 +144,7 @@ data GeoEvent
     | RiverDeltaEvent   !RiverDeltaParams
     deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
------------------------------------------------------------
--- Explode a river HydroEvent into per-segment events
------------------------------------------------------------
+-- * Explode a river HydroEvent into per-segment events
 
 -- | Previously split rivers into per-segment events for tighter bbox
 --   filtering, but this caused gaps at waypoint joints where adjacent
@@ -160,9 +154,7 @@ data GeoEvent
 explodeRiverEvent ∷ GeoEvent → [GeoEvent]
 explodeRiverEvent evt = [evt]
 
------------------------------------------------------------
--- Bounding boxes
------------------------------------------------------------
+-- * Bounding boxes
 
 -- | Wrap a GeoCoord into canonical u-space.
 --   Duplicates the logic of wrapGlobalU to avoid circular imports.

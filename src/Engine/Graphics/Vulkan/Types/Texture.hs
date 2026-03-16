@@ -49,12 +49,11 @@ data TextureArrayState = TextureArrayState
 -- | Overall texture state as a type alias
 type TextureState = (TexturePoolState, V.Vector TextureData)
 
--- undefined texture
 data UndefinedTexture = UndefinedTexture
       { utImage     ∷ VulkanImage
       , utImageView ∷ Vk.ImageView
       , utSampler   ∷ Vk.Sampler }
 instance Show UndefinedTexture where
-  show ut = "UndefinedTexture { utImage = <VulkanImage>, utImageView = " ++ show (utImageView ut) ++ ", utSampler = " ++ show (utSampler ut) ++ " }"
+  show ut = "UndefinedTexture { utImage = <VulkanImage>, utImageView = " ⧺ show (utImageView ut) ⧺ ", utSampler = " ⧺ show (utSampler ut) ⧺ " }"
 
 

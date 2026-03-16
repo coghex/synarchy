@@ -16,21 +16,18 @@ import Engine.Core.Error.Exception (EngineException(..))
 import Engine.Core.State
 import Engine.Core.Var 
 
--- | Main engine monad transformer stack
--- ε = environment
--- σ = state
--- α = result
-newtype EngineM ε σ α = EngineM 
+-- | CPS monad with Reader ('EngineEnv'), State ('EngineState'), IO, and error
+--   handling. Type params: ε = environment tag, σ = continuation result, α = value.
+newtype EngineM ε σ α = EngineM
   { unEngineM ∷ Var EngineEnv 
               → Var EngineState 
               → (Either EngineException α → IO σ) 
               → IO σ 
   }
 
--- | Common case where σ is either an action or an error
+-- | Specialised alias: continuation returns @Either EngineException α@
 type EngineM' ε α = EngineM ε (Either EngineException α) α
 
--- | Run the engine monad
 runEngineM ∷ EngineM ε σ α 
          → Var EngineEnv 
          → Var EngineState 

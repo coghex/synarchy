@@ -46,7 +46,7 @@ data WorldTextures = WorldTextures
     , wtSideFaceMapLeft  ∷ TextureHandle
     , wtSideFaceMapRight ∷ TextureHandle
       -- Vegetation facemaps (top-face only, no side faces)
-    , wtVegFaceMap        ∷ TextureHandle   -- flat
+    , wtVegFaceMap        ∷ TextureHandle   -- ^ flat
     , wtVegSlopeFaceMapN  ∷ TextureHandle
     , wtVegSlopeFaceMapE  ∷ TextureHandle
     , wtVegSlopeFaceMapNE ∷ TextureHandle

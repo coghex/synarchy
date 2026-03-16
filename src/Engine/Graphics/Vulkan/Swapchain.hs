@@ -44,8 +44,6 @@ querySwapchainSupport pdev surface = do
   
   pure $ SwapchainSupportDetails caps fmts modes
 
--- Replace createVulkanSwapchain:
-
 -- | Creates a new swapchain
 createVulkanSwapchain ∷ PhysicalDevice → Device → DevQueues → SurfaceKHR → Bool
   → EngineM ε σ SwapchainInfo
@@ -89,10 +87,7 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled = do
   
   swapchain ← createSwapchainKHR dev swCreateInfo Nothing
   
-  -- Build cleanup action
   let cleanupAction = destroySwapchainKHR dev swapchain Nothing
-  
-  -- Store cleanup in state
   modify $ \s → s { graphicsState = (graphicsState s) {
       vulkanCleanup = (vulkanCleanup (graphicsState s)) {
           cleanupSwapchain = cleanupAction
@@ -117,11 +112,8 @@ createSwapchainImageViews dev SwapchainInfo{..} = do
   
   logDebugM CatSwapchain "Swapchain image views created"
   
-  -- Build cleanup action (destroy all image views)
   let cleanupAction = V.forM_ imageViews $ \iv →
           destroyImageView dev iv Nothing
-  
-  -- Store cleanup in state
   modify $ \s → s { graphicsState = (graphicsState s) {
       vulkanCleanup = (vulkanCleanup (graphicsState s)) {
           cleanupImageViews = cleanupAction
@@ -177,7 +169,7 @@ chooseSwapPresentMode ssd vsyncEnabled = do
         [("mode", T.pack $ show preferred)]
       pure preferred
 
--- | Set the width and height of the swapchain
+-- | Clamp swapchain extent to surface capabilities
 chooseSwapExtent ∷ SwapchainSupportDetails → Extent2D
 chooseSwapExtent SwapchainSupportDetails{..} = zero
   { width  = ( max (minw) $ min (maxw) (curw) )

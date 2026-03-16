@@ -9,24 +9,19 @@ import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Flora.Types
 
------------------------------------------------------------
--- Texture Resolution
+-- * Texture Resolution
+
+-- | Given a flora instance, the species catalog, and the
+--   current world time, determine which texture to draw.
 --
--- Given a flora instance, the species catalog, and the
--- current world time, determine which texture to draw.
+--   Lookup chain:
 --
--- Lookup chain:
---   1. Determine active life phase (highest-age phase where
---      lpAge ≤ fiAge)
---   2. If the species has an annual cycle:
---      a. Get day-of-year from world time
---      b. Find active cycle stage (highest asStartDay ≤ day)
---      c. Check fsCycleOverrides for (phase, cycleStage)
---      d. If found → use override texture
---      e. Otherwise → use cycle stage's asTexture
---   3. If no annual cycle → use life phase's lpTexture
---   4. If no life phases → use fsBaseTexture
------------------------------------------------------------
+--     1. Determine active life phase (highest-age phase where
+--        @lpAge <= fiAge@)
+--     2. If the species has an annual cycle:
+--        find active cycle stage, check overrides, fall back to stage texture
+--     3. If no annual cycle, use life phase texture
+--     4. If no life phases, use @fsBaseTexture@
 
 resolveFloraTexture ∷ FloraCatalog → Int → FloraInstance → TextureHandle
 resolveFloraTexture catalog dayOfYear inst =
@@ -68,9 +63,7 @@ resolveSpeciesTexture species dayOfYear age =
                                 Nothing  → asTexture stage  -- Default cycle tex
                         Nothing → asTexture stage
 
------------------------------------------------------------
--- Helpers
------------------------------------------------------------
+-- * Helpers
 
 -- | Find the highest-age phase where lpAge ≤ current age.
 findActivePhase ∷ HM.HashMap LifePhaseTag LifePhase → Float → Maybe LifePhase

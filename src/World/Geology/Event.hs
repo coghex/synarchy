@@ -18,9 +18,7 @@ import World.Hydrology.River (applyRiverCarve)
 import World.Hydrology.River.Carving (carveFromSegment, computeDeltaDeposit')
 import World.Hydrology.Glacier (applyGlacierCarve)
 
------------------------------------------------------------
--- Event Application
------------------------------------------------------------
+-- * Event Application
 
 applyGeoEvent ∷ GeoEvent → Int → Int → Int → Int → GeoModification
 applyGeoEvent (CraterEvent params)  worldSize gx gy baseElev =
@@ -47,9 +45,7 @@ applyGeoEvent (LandslideEvent _)    _ _ _ _ = noModification
 applyGeoEvent (GlaciationEvent _)   _ _ _ _ = noModification
 applyGeoEvent (FloodEvent _)        _ _ _ _ = noModification
 
------------------------------------------------------------
--- Lava Flow Application
------------------------------------------------------------
+-- * Lava Flow Application
 
 -- | Apply a lava flow to a single column.
 --   Lava flows radially from the source, losing elevation
@@ -85,9 +81,7 @@ applyLavaFlow flow worldSize gx gy baseElev =
           then noModification
           else GeoModification deposit (Just (lfMaterial flow)) deposit
 
------------------------------------------------------------
--- Feature Evolution Application
------------------------------------------------------------
+-- * Feature Evolution Application
 
 applyEvolution ∷ FeatureEvolution → Int → Int → Int → Int → GeoModification
 applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy _e =

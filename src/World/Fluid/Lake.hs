@@ -18,9 +18,7 @@ import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Fluid.Internal
 import World.Hydrology.Types (HydroFeature(..), LakeParams(..))
 
------------------------------------------------------------
--- Chunk-Level Lake Computation
------------------------------------------------------------
+-- * Chunk-Level Lake Computation
 
 computeChunkLakes ∷ [PersistentFeature] → Word64 → [TectonicPlate]
                   → Int → ChunkCoord
@@ -35,9 +33,7 @@ computeChunkLakes features seed plates worldSize coord surfaceMap =
         forM_ nearbyLakes $ \pf →
             fillLakeFromFeature mv pf seed plates worldSize chunkMinGX chunkMinGY surfaceMap
 
------------------------------------------------------------
--- Lake Proximity
------------------------------------------------------------
+-- * Lake Proximity
 
 isNearbyLake ∷ Int → Int → Int → PersistentFeature → Bool
 isNearbyLake worldSize chunkGX chunkGY pf =
@@ -66,9 +62,7 @@ hasAnyLakeQuick features worldSize coord =
         chunkMinGY = cy * chunkSize
     in any (isNearbyLake worldSize chunkMinGX chunkMinGY) features
 
------------------------------------------------------------
--- Lake Fill
------------------------------------------------------------
+-- * Lake Fill
 
 fillLakeFromFeature ∷ MV.MVector s (Maybe FluidCell)
                     → PersistentFeature → Word64 → [TectonicPlate]

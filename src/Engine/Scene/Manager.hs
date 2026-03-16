@@ -16,7 +16,6 @@ import Engine.Core.Monad
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM, logDebugSM, logInfoSM)
 
--- | Create a new scene
 createScene ∷ Text → Camera2D → SceneManager → SceneManager
 createScene sceneId camera manager =
     let scene = Scene
@@ -31,7 +30,6 @@ createScene sceneId camera manager =
         , smDirtyScenes = Set.insert sceneId (smDirtyScenes manager)
         }
 
--- | Add object to scene
 addObjectToScene ∷ Text → SceneNode → SceneManager → Maybe (ObjectId, SceneManager)
 addObjectToScene sceneId node manager = do
     graph ← Map.lookup sceneId (smSceneGraphs manager)
@@ -42,7 +40,6 @@ addObjectToScene sceneId node manager = do
             }
     return (objId, updatedManager)
 
--- | Set active scene
 setActiveScene ∷ Text → SceneManager → SceneManager
 setActiveScene sceneId manager =
     manager
@@ -50,7 +47,6 @@ setActiveScene sceneId manager =
         , smDirtyScenes = Set.insert sceneId (smDirtyScenes manager)
         }
 
--- | Update scene manager and regenerate batches
 updateSceneManager ∷ Float → Float → SceneManager → EngineM ε σ SceneManager
 updateSceneManager viewWidth viewHeight manager =
     case smActiveScene manager of
@@ -70,6 +66,5 @@ updateSceneManager viewWidth viewHeight manager =
                     , smDirtyScenes = Set.delete activeId (smDirtyScenes manager)
                     }
 
--- | Get current render batches
 getCurrentBatches ∷ SceneManager → V.Vector RenderBatch
 getCurrentBatches = getSortedBatches . smBatchManager

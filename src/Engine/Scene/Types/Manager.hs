@@ -13,14 +13,12 @@ import Engine.Scene.Types.Graph (SceneGraph)
 import Engine.Scene.Types.Batch (BatchManager, createBatchManager)
 import Engine.Graphics.Camera (Camera2D, defaultCamera)
 
--- | Enhanced scene with scene graph
 data Scene = Scene
     { sceneId     ∷ Text
     , sceneCamera ∷ Camera2D
     , sceneActive ∷ Bool
     } deriving (Show)
 
--- | Enhanced scene manager with batch processing
 data SceneManager = SceneManager
     { smScenes       ∷ Map.Map Text Scene
     , smActiveScene  ∷ Maybe Text
@@ -29,7 +27,6 @@ data SceneManager = SceneManager
     , smDirtyScenes  ∷ Set.Set Text
     } deriving (Show)
 
--- | Create empty scene manager
 createSceneManager ∷ SceneManager
 createSceneManager = SceneManager
     { smScenes = Map.empty
@@ -39,7 +36,6 @@ createSceneManager = SceneManager
     , smDirtyScenes = Set.empty
     }
 
--- | Create empty scene with default camera
 createEmptyScene ∷ Text → Scene
 createEmptyScene sid = Scene
     { sceneId = sid

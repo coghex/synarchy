@@ -1,35 +1,35 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module UI.Manager
-  ( -- Page operations
+  ( -- * Page Operations
     createPage
   , deletePage
   , showPage
   , hidePage
   , getPage
   , getVisiblePages
-    -- Element operations
+    -- * Element Creation
   , createBox
   , createText
   , createSprite
   , createElement
   , deleteElement
   , getElement
-    -- Hierarchy
+    -- * Hierarchy
   , addElementToPage
   , addChildElement
   , removeElement
-  -- Focus operations
+    -- * Focus Operations
   , setElementFocus
   , clearElementFocus
   , getElementFocus
   , getPageFocus
   , clearPageFocus
-    -- Text buffer operations
+    -- * Text Buffer Operations
   , enableTextInput
   , getTextBuffer
   , setTextBuffer
   , modifyTextBuffer
-    -- Property setters
+    -- * Property Setters
   , setElementPosition
   , setElementSize
   , setElementVisible
@@ -46,13 +46,13 @@ module UI.Manager
   , setTextColor
   , setSpriteTexture
   , setSpriteColor
-    -- Queries
+    -- * Queries
   , getElementAbsolutePosition
   , getPageElements
   , removeFromPage
   , getElementChildren
   , findElementAt
-    -- Box textures
+    -- * Box Textures
   , registerBoxTextures
   , getBoxTextureSet
   , setBoxTextures
@@ -66,9 +66,7 @@ import Data.List (sortOn)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
 import UI.Types
 
------------------------------------------------------------
--- Page Operations
------------------------------------------------------------
+-- * Page Operations
 
 createPage ∷ Text → UILayer → UIPageManager → (PageHandle, UIPageManager)
 createPage name layer mgr =
@@ -125,9 +123,7 @@ getVisiblePages mgr =
                               (Set.toList $ upmVisiblePages mgr)
     in sortOn (\p → (upLayer p, upZIndex p)) visibleList
 
------------------------------------------------------------
--- Element Creation
------------------------------------------------------------
+-- * Element Creation
 
 createElement ∷ Text → Float → Float → PageHandle → UIPageManager 
               → (ElementHandle, UIPageManager)
@@ -217,9 +213,7 @@ removeElementReference handle element mgr =
 getElement ∷ ElementHandle → UIPageManager → Maybe UIElement
 getElement handle mgr = Map.lookup handle (upmElements mgr)
 
------------------------------------------------------------
--- Hierarchy
------------------------------------------------------------
+-- * Hierarchy
 
 addElementToPage ∷ PageHandle → ElementHandle → Float → Float 
                  → UIPageManager → UIPageManager
@@ -227,7 +221,7 @@ addElementToPage pageHandle elemHandle x y mgr =
     let mgr' = modifyElement elemHandle mgr $ \elem →
             elem { uePosition = (x, y), uePage = pageHandle, ueParent = Nothing }
     in modifyPage pageHandle mgr' $ \page →
-            page { upRootElements = upRootElements page ++ [elemHandle] }
+            page { upRootElements = upRootElements page ⧺ [elemHandle] }
 
 addChildElement ∷ ElementHandle → ElementHandle → Float → Float 
                 → UIPageManager → UIPageManager
@@ -241,7 +235,7 @@ addChildElement parentHandle childHandle x y mgr =
                           , ueParent   = Just parentHandle 
                           }
             in modifyElement parentHandle mgr' $ \p →
-                    p { ueChildren = ueChildren p ++ [childHandle] }
+                    p { ueChildren = ueChildren p ⧺ [childHandle] }
 
 removeElement ∷ ElementHandle → UIPageManager → UIPageManager
 removeElement handle mgr =
@@ -249,9 +243,7 @@ removeElement handle mgr =
         Nothing → mgr
         Just element → removeElementReference handle element mgr
 
------------------------------------------------------------
--- Focus Operations
------------------------------------------------------------
+-- * Focus Operations
 
 -- | Set focus to an element (also updates page's remembered focus)
 setElementFocus ∷ ElementHandle → UIPageManager → UIPageManager
@@ -284,9 +276,7 @@ clearPageFocus ∷ PageHandle → UIPageManager → UIPageManager
 clearPageFocus handle = modifyPage handle `flip` \page →
     page { upFocusedElement = Nothing }
 
------------------------------------------------------------
--- Property Setters
------------------------------------------------------------
+-- * Property Setters
 
 setElementPosition ∷ ElementHandle → Float → Float → UIPageManager → UIPageManager
 setElementPosition handle x y = modifyElement handle `flip` 
@@ -342,9 +332,7 @@ setSpriteColor handle color = modifyElement handle `flip` \elem →
         RenderSprite style → elem { ueRenderData = RenderSprite style { ussColor = color } }
         _ → elem
 
------------------------------------------------------------
--- Queries
------------------------------------------------------------
+-- * Queries
 
 getElementAbsolutePosition ∷ ElementHandle → UIPageManager → Maybe (Float, Float)
 getElementAbsolutePosition handle mgr = 
@@ -379,9 +367,7 @@ getElementChildren handle mgr =
         Nothing → []
         Just elem → mapMaybe (`Map.lookup` upmElements mgr) (ueChildren elem)
 
------------------------------------------------------------
--- Click Detection
------------------------------------------------------------
+-- * Click Detection
 
 -- | Check if a point is inside an element's bounds (in screen coordinates)
 isPointInElement ∷ (Float, Float) → UIElement → UIPageManager → Bool
@@ -456,7 +442,7 @@ findClickableElementAt pos mgr =
                         then [handle]
                         else []
                     childClickables = concatMap (findClickableInTree point) (ueChildren elem)
-                in thisClickable ++ childClickables
+                in thisClickable ⧺ childClickables
 
 -- | Find the nearest ancestor (or self) that has an onClick callback
 findClickableAncestor ∷ ElementHandle → UIPageManager → Maybe (ElementHandle, Text)
@@ -511,7 +497,7 @@ findElementAt pos mgr =
                             else []
                         childHits = concatMap (findInTree point) sortedChildren
                         thisHit = if inBounds then [handle] else []
-                    in childHits ++ thisHit
+                    in childHits ⧺ thisHit
 
 -- | Set the right-click callback on an element
 setElementOnRightClick ∷ ElementHandle → Text → UIPageManager → UIPageManager
@@ -586,11 +572,9 @@ findRightClickableElementAt pos mgr =
                         then [handle]
                         else []
                     childClickables = concatMap (findRightClickInTree point) (ueChildren elem)
-                in thisClickable ++ childClickables
+                in thisClickable ⧺ childClickables
 
------------------------------------------------------------
--- Text Buffer Operations
------------------------------------------------------------
+-- * Text Buffer Operations
 
 -- | Enable text input on an element (initializes empty buffer)
 enableTextInput ∷ ElementHandle → UIPageManager → UIPageManager
@@ -613,12 +597,10 @@ setTextBuffer handle buffer = modifyElement handle `flip` \elem →
 modifyTextBuffer ∷ ElementHandle → (TextBuffer → TextBuffer) → UIPageManager → UIPageManager
 modifyTextBuffer handle f = modifyElement handle `flip` \elem →
     case ueTextBuffer elem of
-        Nothing → elem  -- No buffer, do nothing
+        Nothing → elem
         Just buf → elem { ueTextBuffer = Just (f buf) }
 
------------------------------------------------------------
--- Box Textures
------------------------------------------------------------
+-- * Box Textures
 
 registerBoxTextures ∷ BoxTextureSet → UIPageManager → (BoxTextureHandle, UIPageManager)
 registerBoxTextures texSet mgr =
@@ -637,9 +619,7 @@ setBoxTextures handle texHandle = modifyElement handle `flip` \elem →
         RenderBox style → elem { ueRenderData = RenderBox style { ubsTextures = texHandle } }
         _ → elem
 
------------------------------------------------------------
--- Internal Helpers
------------------------------------------------------------
+-- * Internal Helpers
 
 modifyElement ∷ ElementHandle → UIPageManager → (UIElement → UIElement) → UIPageManager
 modifyElement handle mgr f =

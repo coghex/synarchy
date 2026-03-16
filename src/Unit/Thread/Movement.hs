@@ -9,10 +9,6 @@ import Data.IORef (IORef, readIORef, writeIORef)
 import Unit.Types (UnitId(..))
 import Unit.Sim.Types
 
------------------------------------------------------------
--- Movement Tick
------------------------------------------------------------
-
 -- | Advance all units with active move targets.
 --   Z is left unchanged — terrain-aware Z comes later.
 tickAllMovement ∷ Double → IORef UnitThreadState → IO ()
@@ -48,10 +44,7 @@ tickUnit dt us = case usTarget us of
                        , usState  = Walking
                        }
 
------------------------------------------------------------
--- Direction from movement vector
------------------------------------------------------------
-
+-- | Convert a movement vector to the nearest 8-direction compass heading.
 vectorToDirection ∷ Float → Float → Direction
 vectorToDirection nx ny
     | angle < 22.5   = DirE

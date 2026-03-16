@@ -49,23 +49,17 @@ createBindlessTextureSystem ∷ PhysicalDevice
                             → BindlessConfig
                             → EngineM ε σ BindlessTextureSystem
 createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
-  -- Create the undefined texture first (slot 0)
   undefinedTex ← createUndefinedTexture pdev dev cmdPool cmdQueue
 
-  -- Create descriptor pool with UPDATE_AFTER_BIND flag
   descriptorPool ← createBindlessDescriptorPool dev config
 
-  -- Create descriptor set layout with UPDATE_AFTER_BIND flags (but NOT variable count)
   descriptorLayout ← createBindlessDescriptorSetLayout dev config
 
-  -- Allocate the single descriptor set
   descriptorSet ← allocateBindlessDescriptorSet dev descriptorPool descriptorLayout config
 
-  -- Initialize slot allocator (slot 0 reserved for undefined)
   let slotAllocator = createSlotAllocator (bcMaxTextures config)
 
-  -- Initialize ALL slots to the undefined texture
-  -- This is required for MoltenVK argument buffer compatibility
+  -- MoltenVK requires all argument buffer slots to be initialized
   initializeAllSlots dev descriptorSet config 
     (utImageView undefinedTex) (utSampler undefinedTex)
   pure $ BindlessTextureSystem
@@ -84,14 +78,12 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
 initializeAllSlots ∷ Device → DescriptorSet → BindlessConfig 
                    → ImageView → Sampler → EngineM ε σ ()
 initializeAllSlots dev descSet config imageView sampler = do
-  -- Build image info for all slots
   let maxSlots = bcMaxTextures config
       imageInfo = zero
         { imageLayout = IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         , imageView = imageView
         , sampler = sampler
         }
-      -- Create a vector of image infos, one per slot
       imageInfos = V.replicate (fromIntegral maxSlots) imageInfo
 
       write = zero
@@ -126,9 +118,8 @@ createBindlessDescriptorPool dev config = do
 -- Note: We do NOT use VARIABLE_DESCRIPTOR_COUNT for MoltenVK compatibility
 createBindlessDescriptorSetLayout ∷ Device → BindlessConfig → EngineM ε σ DescriptorSetLayout
 createBindlessDescriptorSetLayout dev config = do
-  -- Binding flags for bindless operation
-  -- NOT using VARIABLE_DESCRIPTOR_COUNT - MoltenVK has issues with it
-  let bindingFlags = 
+  -- Not using VARIABLE_DESCRIPTOR_COUNT due to MoltenVK limitations
+  let bindingFlags =
         DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
         .|. DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT
 
@@ -260,7 +251,6 @@ rewriteAllSamplers ∷ Device
 rewriteAllSamplers dev newSampler system = do
     let descSet = btsDescriptorSet system
         config  = btsConfig system
-    -- Rewrite every occupied slot
     forM_ (Map.toList $ btsHandleMap system) $ \(texHandle, bindlessHandle) → do
         let slotIdx = tsIndex (bthSlot bindlessHandle)
         case Map.lookup texHandle (btsImageViews system) of

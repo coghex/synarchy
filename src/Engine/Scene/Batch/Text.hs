@@ -24,7 +24,6 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 import Engine.Core.Log (LogCategory(..))
 
--- | Collect text batches from scene graph
 collectTextBatches ∷ SceneGraph → Float → Float → EngineM ε σ (V.Vector TextRenderBatch)
 collectTextBatches graph screenW screenH = do
   let allNodes = Map.elems (sgNodes graph)
@@ -80,7 +79,6 @@ collectTextBatches graph screenW screenH = do
   
   return result
 
--- | Group text nodes by font and layer
 groupByFontAndLayer ∷ [SceneNode] → [((FontHandle, LayerId), [SceneNode])]
 groupByFontAndLayer nodes =
   let nodesWithFont = filter (isJust . nodeFont) nodes
@@ -91,7 +89,6 @@ groupByFontAndLayer nodes =
                       (n:_) → ((fromJust $ nodeFont n, nodeLayer n), grp)) grouped
   in keyed
 
--- | Convert TextRenderBatch to simplified TextBatch
 convertToTextBatches ∷ V.Vector TextRenderBatch → V.Vector TextBatch
 convertToTextBatches = V.map $ \trb → TextBatch
     { tbFontHandle = trbFont trb

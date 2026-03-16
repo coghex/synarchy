@@ -13,9 +13,7 @@ import qualified Data.HashMap.Strict as HM
 import World.Weather.Types (ClimateCoord(..))
 import World.Weather.Lookup (RegionGridCoords(..), regionGridCoords)
 
------------------------------------------------------------
--- Erosion Application
------------------------------------------------------------
+-- * Erosion Application
 
 -- | Apply time-based erosion to a tile position.
 --   Smooths the tile's elevation toward the average of its

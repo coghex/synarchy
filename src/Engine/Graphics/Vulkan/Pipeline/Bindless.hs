@@ -74,7 +74,6 @@ createBindlessPipelineWithShader ∷ Device
                                  → BS.ByteString  -- ^ Fragment shader code
                                  → EngineM ε σ (Pipeline, PipelineLayout)
 createBindlessPipelineWithShader device renderPass swapExtent uniformLayout textureLayout sampleCount vertShaderCode fragShaderCode = do
-  -- Create shader modules
   vertShaderModule ← createShaderModule' device vertShaderCode
   fragShaderModule ← createShaderModule' device fragShaderCode
 
@@ -191,7 +190,7 @@ createBindlessPipelineWithShader device renderPass swapExtent uniformLayout text
 
   pure (pipeline, pipelineLayout)
 
--- | Helper to create shader module
+-- | Create a shader module from SPIR-V bytecode
 createShaderModule' ∷ Device → BS.ByteString → EngineM ε σ ShaderModule
 createShaderModule' device code = do
   let createInfo = zero { code = code }

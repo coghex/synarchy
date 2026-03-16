@@ -44,9 +44,7 @@ import World.Plate (TectonicPlate(..), twoNearestPlates, isBeyondGlacier)
 import World.Material (matBasalt, matObsidian)
 import World.Weather.Types (ClimateState)
 
------------------------------------------------------------
--- GeoModification
------------------------------------------------------------
+-- * GeoModification
 
 -- | Describes how a geological event modifies a single column.
 --
@@ -75,27 +73,21 @@ data GeoModification = GeoModification
 noModification ∷ GeoModification
 noModification = GeoModification 0 Nothing 0
 
------------------------------------------------------------
--- Volcano Era
------------------------------------------------------------
+-- * Volcano Era
 
 data VolcanoEra
     = VolcanoEra_Boundary
     | VolcanoEra_Hotspot
     deriving (Show, Eq)
 
------------------------------------------------------------
--- Crater Era
------------------------------------------------------------
+-- * Crater Era
 
 data CraterEra
     = CraterEra_Primordial
     | CraterEra_Late
     deriving (Show, Eq)
 
------------------------------------------------------------
--- Date Tracking
------------------------------------------------------------
+-- * Date Tracking
 
 -- | Geological date in millions of years from world origin.
 --   Accumulates forward through the timeline build.
@@ -135,9 +127,7 @@ modifyAllRegionTemp ∷ (Float → Float) → RegionalData → RegionalData
 modifyAllRegionTemp f rd = rd
     { rdTemperature = HM.map f (rdTemperature rd) }
 
------------------------------------------------------------
--- Eruption Profile (per volcano type)
------------------------------------------------------------
+-- * Eruption Profile (per volcano type)
 
 -- | Eruption characteristics that vary by volcano type.
 --   Used by the age-level eruption generator to determine
@@ -212,9 +202,7 @@ eruptionProfile (VolcanicShape (HydrothermalVent _)) = Nothing  -- no lava
 eruptionProfile (VolcanicShape (LavaTube _))         = Nothing  -- passive conduit
 eruptionProfile _ = Nothing  -- non-volcanic features don't erupt
 
------------------------------------------------------------
--- GeoState
------------------------------------------------------------
+-- * GeoState
 
 -- | Global and regional geological state.
 --   Threaded through the entire timeline build.
@@ -259,9 +247,7 @@ initGeoState seed worldSize plates =
             }
         }
 
------------------------------------------------------------
--- Timeline Build State & Helpers
------------------------------------------------------------
+-- * Timeline Build State & Helpers
 
 data TimelineBuildState = TimelineBuildState
     { tbsFeatures   ∷ ![PersistentFeature]

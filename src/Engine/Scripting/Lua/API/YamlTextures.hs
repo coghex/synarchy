@@ -24,17 +24,9 @@ import Engine.Asset.YamlFlora
 import qualified Engine.Core.Queue as Q
 import World.Flora.Types
 
------------------------------------------------------------
--- engine.loadMaterialYaml(filePath)
---
--- Parses a single .yaml file,
--- loads every texture referenced (tile/zoom/bg),
--- registers name → handle mappings in the registry,
--- and queues LuaLoadTextureRequest for each.
---
--- Returns: number of textures queued for loading.
------------------------------------------------------------
-
+-- | Parse a material YAML, load all referenced textures (tile/zoom/bg),
+--   register name-to-handle mappings, and queue load requests.
+--   Returns number of textures queued.
 loadMaterialYamlFn ∷ EngineEnv → LuaBackendState
                    → Lua.LuaE Lua.Exception Lua.NumResults
 loadMaterialYamlFn env backendState = do
@@ -82,18 +74,8 @@ loadMaterialYamlFn env backendState = do
             Lua.pushnumber (Lua.Number (fromIntegral count))
             return 1
 
------------------------------------------------------------
--- engine.loadVegetationYaml(filePath)
---
--- Parses a single vegetation .yaml file,
--- loads every variant texture referenced,
--- registers name → handle mappings in the registry as
--- "veg_tile_<vegId>" for each variant,
--- and queues LuaLoadTextureRequest for each.
---
--- Returns: number of textures queued for loading.
------------------------------------------------------------
-
+-- | Parse a vegetation YAML, load variant textures as @veg_tile_\<vegId\>@,
+--   and queue load requests. Returns number of textures queued.
 loadVegetationYamlFn ∷ EngineEnv → LuaBackendState
                      → Lua.LuaE Lua.Exception Lua.NumResults
 loadVegetationYamlFn env backendState = do
@@ -146,18 +128,8 @@ loadAndRegister env backendState lteq name path = do
     Q.writeQueue lteq (LuaLoadTextureRequest handle path)
     return handle
 
------------------------------------------------------------
--- engine.loadFloraYaml(filePath)
---
--- Parses a single flora .yaml file.  For each species:
---   1. Loads all textures (phases, cycle stages, overrides)
---   2. Builds FloraSpecies with lifecycle, phases, cycle, overrides
---   3. Builds FloraWorldGen
---   4. Inserts both into the FloraCatalog
---
--- Returns: number of textures queued for loading.
------------------------------------------------------------
-
+-- | Parse a flora YAML: load textures, build species and world-gen entries,
+--   insert into the FloraCatalog. Returns number of textures queued.
 loadFloraYamlFn ∷ EngineEnv → LuaBackendState
                 → Lua.LuaE Lua.Exception Lua.NumResults
 loadFloraYamlFn env backendState = do
@@ -188,10 +160,6 @@ loadFloraYamlFn env backendState = do
 
             Lua.pushnumber (Lua.Number (fromIntegral count))
             return 1
-
------------------------------------------------------------
--- Register a single FloraYamlDef into the catalog
------------------------------------------------------------
 
 registerFloraSpecies ∷ EngineEnv → LuaBackendState → Q.Queue LuaToEngineMsg
                      → IORef FloraCatalog → FloraYamlDef → IO Int
@@ -318,13 +286,7 @@ registerFloraSpecies env backendState lteq catRef def = do
 
     readIORef texCount
 
------------------------------------------------------------
--- engine.getTextureHandle(name)
---
--- Looks up a texture handle by its registered name.
--- Returns the handle integer, or -1 if not found.
------------------------------------------------------------
-
+-- | Look up a texture handle by registered name. Returns -1 if not found.
 getTextureHandleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getTextureHandleFn env = do
     nameArg ← Lua.tostring 1

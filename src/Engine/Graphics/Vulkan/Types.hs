@@ -1,4 +1,3 @@
--- Engine/Graphics/Vulkan/Types.hs
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Engine.Graphics.Vulkan.Types where
 import UPrelude
@@ -49,7 +48,7 @@ data FrameResources = FrameResources
 maxTimeout ∷ Word64
 maxTimeout = maxBound
 
--- | blocks on cleanup
+-- | Cleanup progress tracked during shutdown
 data CleanupStatus = NotStarted | InProgress | Completed
   deriving (Show, Eq)
 
