@@ -65,7 +65,7 @@ evolveGlacier ∷ Word64 → Int → GeoState
 evolveGlacier seed periodIdx gs (events, tbs) pf =
     let fid = pfId pf
         GeoFeatureId fidInt = fid
-        h1 = hashGeo seed fidInt 900
+        h1 = hashGeo seed fidInt (900 + fromIntegral periodIdx)
         roll = hashToFloatGeo h1
         temp = gsCO2 gs  -- CO2 as temperature proxy
     in case pfActivity pf of

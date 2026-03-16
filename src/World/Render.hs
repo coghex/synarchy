@@ -107,8 +107,6 @@ updateWorldTiles env = do
 
     zoomQuads ← generateZoomMapQuads env camera fbW fbH
 
-    zoomQuads ← generateZoomMapQuads env camera fbW fbH
-
     let shouldTrack = camZTracking camera
                     ∨ (tileAlpha > 0.001 ∧ tileAlpha < 0.999)
     when shouldTrack $ do

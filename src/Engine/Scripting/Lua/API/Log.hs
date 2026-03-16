@@ -112,7 +112,7 @@ setDebugCategoryFn loggerRef = do
   
   logger ← Lua.liftIO $ readIORef loggerRef
   
-  case parseCategory (T.pack $ show categoryStr) of
+  case parseCategory (TE.decodeUtf8 categoryStr) of
     Nothing → do
       Lua.pushstring $ "Unknown category: " <> categoryStr
       Lua.pushboolean False

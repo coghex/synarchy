@@ -250,6 +250,12 @@ selectVegetation matId slopeId hasFluid elev
           then vegDenseGrass + variant
           else vegWildflowers + variant
 
+    -- === PRAIRIE / SAVANNA ===
+    | temp > 15.0 ∧ precip > 0.2 ∧ precip < 0.4
+        = if roll < 0.7
+          then vegTallGrass + variant
+          else vegDeadGrass + variant
+
     -- === TEMPERATE ===
     | temp > 5.0 ∧ precip > 0.3
         = if roll < 0.6
@@ -257,12 +263,6 @@ selectVegetation matId slopeId hasFluid elev
           else if roll < 0.85
                then vegDenseGrass + variant
                else vegWildflowers + variant
-
-    -- === PRAIRIE / SAVANNA ===
-    | temp > 15.0 ∧ precip > 0.2 ∧ precip < 0.4
-        = if roll < 0.7
-          then vegTallGrass + variant
-          else vegDeadGrass + variant
 
     -- === COOL TEMPERATE ===
     | temp > 0.0

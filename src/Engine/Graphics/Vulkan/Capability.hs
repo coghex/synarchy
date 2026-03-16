@@ -14,7 +14,11 @@ import Data.Bits (shiftR, (.&.))
 import qualified Data.Text as T
 import Vulkan.Core10
 import Vulkan.Core10.DeviceInitialization (PhysicalDeviceProperties(..))
-import Vulkan.Core12
+import Vulkan.Core11 (getPhysicalDeviceProperties2)
+import Vulkan.Core11.Promoted_From_VK_KHR_get_physical_device_properties2 (PhysicalDeviceProperties2(..))
+import Vulkan.Core12 (PhysicalDeviceVulkan12Properties(..))
+import Vulkan.CStruct.Extends
+import Vulkan.Zero (zero)
 
 -- | Detailed bindless texture support information
 data BindlessSupport = BindlessSupport
@@ -45,8 +49,13 @@ queryBindlessSupport pDevice = do
   -- Query Vulkan 1.2 properties for UpdateAfterBind limits
   props12 ← if isVulkan12OrHigher
     then do
-      -- We know from vulkaninfo this is the value on M3 Max
-      return 1000000
+      PhysicalDeviceProperties2 { next = (vk12Props :& ()) }
+        ← getPhysicalDeviceProperties2 pDevice
+          ∷ IO (PhysicalDeviceProperties2 '[PhysicalDeviceVulkan12Properties])
+      let PhysicalDeviceVulkan12Properties
+            { maxPerStageDescriptorUpdateAfterBindSampledImages = maxBindless
+            } = vk12Props
+      pure maxBindless
     else return 0
 
   pure $ BindlessSupport

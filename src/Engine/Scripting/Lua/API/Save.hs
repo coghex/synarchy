@@ -40,15 +40,13 @@ saveWorldFn env = do
     pageIdArg ← Lua.tostring 1
     nameArg   ← Lua.tostring 2
     case (pageIdArg, nameArg) of
-        (Just pageIdBS, Just nameBS) → Lua.liftIO $ do
-            let _pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
-                saveName = TE.decodeUtf8 nameBS
-            -- Snapshot current world state and serialize
-            -- (You'll read from the WorldManager here)
-            -- For now, queue a save command
-            Q.writeQueue (worldQueue env) (WorldSave _pageId saveName)
-        _ → pure ()
-    Lua.pushboolean True
+        (Just pageIdBS, Just nameBS) → do
+            Lua.liftIO $ do
+                let _pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                    saveName = TE.decodeUtf8 nameBS
+                Q.writeQueue (worldQueue env) (WorldSave _pageId saveName)
+            Lua.pushboolean True
+        _ → Lua.pushboolean False
     return 1
 
 -- | engine.loadSave(saveName) → loads and queues WorldLoadSave

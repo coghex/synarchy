@@ -54,8 +54,9 @@ createVulkanSwapchain pdev dev queues surface vsyncEnabled = do
   SwapchainSupportDetails{..} ← querySwapchainSupport pdev surface
   let ssd = SwapchainSupportDetails{..}
       SurfaceFormatKHR{format=form,colorSpace=cs} = chooseSwapSurfaceFormat ssd
-      imageCount = min (Surf.maxImageCount capabilities)
-                      (Surf.minImageCount capabilities)
+      desired    = Surf.minImageCount capabilities + 1
+      maxImg     = Surf.maxImageCount capabilities
+      imageCount = if maxImg > 0 then min desired maxImg else desired
   spMode ← chooseSwapPresentMode ssd vsyncEnabled
   let sExtent = chooseSwapExtent ssd
       (sharing, qfi) = if (graphicsQueue queues ≠ presentQueue queues)

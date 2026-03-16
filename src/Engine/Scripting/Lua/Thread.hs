@@ -32,7 +32,7 @@ import Data.List (find, sortBy)
 import qualified Data.Text.Read as T
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay, forkIO)
-import Control.Concurrent.MVar (putMVar)
+import Control.Concurrent.MVar (putMVar, tryPutMVar)
 import Control.Concurrent.STM.TQueue (TQueue)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
@@ -203,6 +203,15 @@ runLuaLoop env ls stateRef debugQueue = do
               (\(e ∷ SomeException) → do
                 logger ← readIORef (loggerRef env)
                 logWarn logger CatLua $ "Lua thread crashed: " <> T.pack (show e)
+                -- Drain pending debug commands so clients don't block forever
+                let drainDebug = do
+                        mCmd ← pollDebugCommand debugQueue
+                        case mCmd of
+                            Nothing → pure ()
+                            Just (DebugCommand _ mvar) → do
+                                _ ← tryPutMVar mvar ("ERROR: Lua thread crashed: " <> T.pack (show e))
+                                drainDebug
+                drainDebug
                 Lua.close (lbsLuaState ls)
                 writeIORef (lifecycleRef env) CleaningUp
               )

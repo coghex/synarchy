@@ -14,7 +14,7 @@ import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef')
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (SomeException, catch)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn, LogCategory(..)
                         , LoggerState)
 import qualified Engine.Core.Queue as Q
@@ -101,6 +101,7 @@ simLoop env stateRef simStateRef = do
               )
               (\(e ∷ SomeException) → do
                 logError logger CatWorld $ "Sim thread crashed: " <> T.pack (show e)
+                writeIORef (lifecycleRef env) CleaningUp
               )
 
 -----------------------------------------------------------

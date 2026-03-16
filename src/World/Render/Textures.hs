@@ -6,7 +6,6 @@ module World.Render.Textures
     ) where
 
 import UPrelude
-import Debug.Trace (trace)
 import qualified Data.HashMap.Strict as HM
 import World.Types
 import World.Slope (slopeToFaceMapIndex)
@@ -17,15 +16,7 @@ getTileTexture _        0 = TextureHandle 0
 getTileTexture textures matId =
     case HM.lookup matId (wtTileTextures textures) of
         Just h  → h
-        Nothing →
-            -- Check if it exists in the ZOOM map instead (texture routing bug)
-            case HM.lookup matId (wtZoomTextures textures) of
-                Just _  → trace ("ROUTING BUG: matId=" <> show matId 
-                                  <> " missing from tile map but present in zoom map") $
-                           wtNoTexture textures
-                Nothing → trace ("MISSING: matId=" <> show matId 
-                                  <> " not in tile or zoom") $
-                           wtNoTexture textures
+        Nothing → wtNoTexture textures
 
 getTileFaceMapTexture ∷ WorldTextures → Word8 → Word8 → TextureHandle
 getTileFaceMapTexture textures _mat slopeId =

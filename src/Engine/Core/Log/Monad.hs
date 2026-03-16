@@ -10,7 +10,6 @@ module Engine.Core.Log.Monad
   , logInfoSM
   , logWarnSM
   , logErrorSM
-  , withLogContextM
   , logAndThrowM
   , withTiming
   ) where
@@ -82,13 +81,6 @@ logErrorSM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m)
 logErrorSM cat msg fields = do
   logger ← getLogger
   logErrorS logger cat msg fields
-
--- Context management
-withLogContextM ∷ (MonadIO m, MonadReader EngineEnv m) 
-                ⇒ Text → m a → m a
-withLogContextM breadcrumb action = do
-  logger ← getLogger
-  withLogContext logger breadcrumb action
 
 -- Log and throw
 logAndThrowM ∷ (HasCallStack, MonadIO m, MonadReader EngineEnv m, MonadError EngineException m)

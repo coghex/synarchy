@@ -1035,8 +1035,11 @@ equalizeCrossChunkRivers coords wtd = eqLoop (10 ∷ Int) wtd
                                                        in td1 { wtdChunks = chunks' }
                                                else td1
                                          -- Step 3: Check if the gap is still too large.
-                                         -- Re-read our water after lowering to see the actual diff.
-                                         finalDiff = myWaterZ' - nbrWaterZ
+                                         -- Use neighbor's actual water level (raised if step 2 fired).
+                                         nbrWaterZ' = if raiseTarget > nbrWaterZ ∧ raiseTarget ≤ nbrDepthCap
+                                                      then raiseTarget
+                                                      else nbrWaterZ
+                                         finalDiff = myWaterZ' - nbrWaterZ'
                                      in if finalDiff > 4
                                         then
                                           -- Gap too large even after lowering — remove
@@ -1415,18 +1418,16 @@ trySealNeighbor waterZ (wtd, changed) (nbrCoord, nbrLX, nbrLY) =
                         let fillZ = min waterZ (nbrTerrZ + 3)
                         in if fillZ ≤ seaLevel
                            then (wtd, changed)
-                           else if fillZ ≤ seaLevel
-                                then (wtd, changed)
-                                else let newFluid = lcFluidMap nbrLC V.// [(nIdx, Just (FluidCell River fillZ))]
-                                         oldSurf = lcSurfaceMap nbrLC VU.! nIdx
-                                         newSurf = lcSurfaceMap nbrLC VU.// [(nIdx, max oldSurf fillZ)]
-                                         nbrLC' = nbrLC { lcFluidMap = newFluid
-                                                        , lcSurfaceMap = newSurf }
-                                         -- Propagate inward: the newly-filled tile may
-                                         -- expose intra-chunk neighbors too.
-                                         nbrLC'' = floodSealInChunk nbrLC' fillZ nbrLX nbrLY
-                                         chunks' = HM.insert nbrCoord nbrLC'' (wtdChunks wtd)
-                                     in (wtd { wtdChunks = chunks' }, True)
+                           else let newFluid = lcFluidMap nbrLC V.// [(nIdx, Just (FluidCell River fillZ))]
+                                    oldSurf = lcSurfaceMap nbrLC VU.! nIdx
+                                    newSurf = lcSurfaceMap nbrLC VU.// [(nIdx, max oldSurf fillZ)]
+                                    nbrLC' = nbrLC { lcFluidMap = newFluid
+                                                   , lcSurfaceMap = newSurf }
+                                    -- Propagate inward: the newly-filled tile may
+                                    -- expose intra-chunk neighbors too.
+                                    nbrLC'' = floodSealInChunk nbrLC' fillZ nbrLX nbrLY
+                                    chunks' = HM.insert nbrCoord nbrLC'' (wtdChunks wtd)
+                                in (wtd { wtdChunks = chunks' }, True)
 
 -- | After inserting a river tile into a chunk, propagate to any
 --   intra-chunk neighbors with terrain below the water surface.

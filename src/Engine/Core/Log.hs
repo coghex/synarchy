@@ -32,10 +32,6 @@ module Engine.Core.Log
   , logWarnS
   , logErrorS
   
-  -- * Scoped logging (with extra context)
-  , withLogContext
-  , addLogContext
-  
   -- * Exception integration
   , logAndThrow
   , logException
@@ -541,28 +537,6 @@ logWarnS ls cat msg fields = logMessage ls LevelWarn cat msg (Map.fromList field
 logErrorS ∷ (HasCallStack, MonadIO m) 
           ⇒ LoggerState → LogCategory → Text → [(Text, Text)] → m ()
 logErrorS ls cat msg fields = logMessage ls LevelError cat msg (Map.fromList fields)
-
--- | Add context that will be included in all subsequent logs (in this scope)
-withLogContext ∷ MonadIO m ⇒ LoggerState → Text → m a → m a
-withLogContext LoggerState{..} breadcrumb action = do
-  -- Add breadcrumb
-  liftIO $ atomicModifyIORef' lsContext $ \ctx →
-    (ctx { lcBreadcrumbs = lcBreadcrumbs ctx <> [breadcrumb] }, ())
-  
-  -- Run action
-  result ← action
-  
-  -- Remove breadcrumb
-  liftIO $ atomicModifyIORef' lsContext $ \ctx →
-    (ctx { lcBreadcrumbs = take (length (lcBreadcrumbs ctx) - 1) (lcBreadcrumbs ctx) }, ())
-  
-  return result
-
--- | Add fields to log context
-addLogContext ∷ MonadIO m ⇒ LoggerState → [(Text, Text)] → m ()
-addLogContext LoggerState{..} fields = liftIO $
-  atomicModifyIORef' lsContext $ \ctx →
-    (ctx { lcFields = Map.union (Map.fromList fields) (lcFields ctx) }, ())
 
 -- | Log an error and throw exception
 logAndThrow ∷ (HasCallStack, MonadIO m, MonadError EngineException m)

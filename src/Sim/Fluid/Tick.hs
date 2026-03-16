@@ -75,8 +75,11 @@ simulatePassiveChunk allChunks coord scs =
             --         slow (by 1) when diff ≤ 3 (prevents shore depressions).
             -- Raise: by 1 per sub-iter toward max(water neighbors) - 1.
             -- 20 iterations propagates smoothing up to 20 tiles deep per tick.
-            forM_ [(1∷Int)..20] $ \_ → do
-                forM_ [0 .. sz - 1] $ \idx → do
+            forM_ [(1∷Int)..20] $ \iter → do
+                let indices = if even iter
+                              then [0 .. sz - 1]
+                              else [sz - 1, sz - 2 .. 0]
+                forM_ indices $ \idx → do
                     cell ← MV.read mv idx
                     case cell of
                         Nothing → pure ()

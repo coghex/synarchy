@@ -10,6 +10,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as MVU
+import Data.Maybe (mapMaybe)
 import Control.Monad (forM_, when)
 import Control.Monad.ST (ST, runST)
 import Data.STRef (STRef, newSTRef, readSTRef, writeSTRef)
@@ -123,57 +124,73 @@ phaseGravity ∷ MV.MVector s (Maybe ActiveFluidCell)
              → STRef s Bool
              → ST s ()
 phaseGravity mv terrainV changedRef = do
+    -- Snapshot: read all decisions from frozen state, write transfers to mv
+    snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
-        cell ← MV.read mv idx
+        let cell = snap V.! idx
         case cell of
             Nothing → pure ()
             Just afc | afcVolume afc ≡ 0 → pure ()
             Just afc → do
                 let terrZ = terrainV VU.! idx
-                    mySurf = volumeToSurface terrZ (afcVolume afc)
                     lx = idx `mod` chunkSize
                     ly = idx `div` chunkSize
                     nbrs = cardinalNeighbors lx ly
-                forM_ nbrs $ \(nx, ny) →
-                    when (nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize) $ do
-                        let nIdx = ny * chunkSize + nx
-                            nTerrZ = terrainV VU.! nIdx
-                        -- Flow downhill: neighbor terrain is lower and water surface lower
-                        when (nTerrZ < terrZ) $ do
+                    -- Compute all transfers from snapshot, then apply
+                    transfers = mapMaybe (\(nx, ny) →
+                        if nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize
+                        then let nIdx = ny * chunkSize + nx
+                                 nTerrZ = terrainV VU.! nIdx
+                             in if nTerrZ < terrZ
+                                then let srcSurf = volumeToSurface terrZ (afcVolume afc)
+                                         nbrSurf = case snap V.! nIdx of
+                                             Nothing  → nTerrZ
+                                             Just nfc → volumeToSurface nTerrZ (afcVolume nfc)
+                                         surfDiff = srcSurf - nbrSurf
+                                     in if surfDiff > 0
+                                        then let outflow = min (fromIntegral (afcVolume afc))
+                                                               (surfDiff * volumePerLevel `div` 4)
+                                             in Just (nIdx, max 1 outflow)
+                                        else Nothing
+                                else Nothing
+                        else Nothing
+                        ) nbrs
+                    -- Cap total outflow to available volume
+                    totalRequested = sum (map snd transfers)
+                    avail = fromIntegral (afcVolume afc)
+                    scale = if totalRequested > avail ∧ totalRequested > 0
+                            then (avail ∷ Int) * 256 `div` totalRequested
+                            else 256
+                when (not (null transfers) ∧ avail > 0) $ do
+                    totalRef ← newSTRef (0 ∷ Int)
+                    forM_ transfers $ \(nIdx, amt) → do
+                        soFar ← readSTRef totalRef
+                        let scaled = if scale < 256
+                                     then max 1 (amt * scale `div` 256)
+                                     else amt
+                            actual = min scaled (avail - soFar)
+                        when (actual > 0) $ do
+                            writeSTRef totalRef (soFar + actual)
+                            -- Subtract from source
                             srcCell ← MV.read mv idx
                             case srcCell of
+                                Just src → MV.write mv idx
+                                    (Just src { afcVolume = afcVolume src - fromIntegral actual })
                                 Nothing → pure ()
-                                Just src | afcVolume src ≡ 0 → pure ()
-                                Just src → do
-                                    let srcSurf = volumeToSurface terrZ (afcVolume src)
-                                    nbrCell ← MV.read mv nIdx
-                                    let nbrSurf = case nbrCell of
-                                            Nothing  → nTerrZ
-                                            Just nfc → volumeToSurface nTerrZ (afcVolume nfc)
-                                    when (srcSurf > nbrSurf) $ do
-                                        let surfDiff = srcSurf - nbrSurf
-                                            avail = fromIntegral (afcVolume src)
-                                            outflow = min avail
-                                                        (surfDiff * volumePerLevel `div` 4)
-                                            transfer = max 1 outflow
-                                        when (transfer > 0 ∧ avail > 0) $ do
-                                            let actualTransfer = min transfer avail
-                                                newSrcVol = afcVolume src - fromIntegral actualTransfer
-                                            MV.write mv idx (Just src { afcVolume = newSrcVol })
-                                            -- Add to destination
-                                            dst ← MV.read mv nIdx
-                                            case dst of
-                                                Nothing →
-                                                    MV.write mv nIdx (Just ActiveFluidCell
-                                                        { afcType = afcType src
-                                                        , afcVolume = fromIntegral actualTransfer
-                                                        , afcFlowDir = 0
-                                                        })
-                                                Just d →
-                                                    MV.write mv nIdx (Just d
-                                                        { afcVolume = afcVolume d + fromIntegral actualTransfer })
-                                            writeSTRef changedRef True
+                            -- Add to destination
+                            dst ← MV.read mv nIdx
+                            case dst of
+                                Nothing →
+                                    MV.write mv nIdx (Just ActiveFluidCell
+                                        { afcType = afcType afc
+                                        , afcVolume = fromIntegral actual
+                                        , afcFlowDir = 0
+                                        })
+                                Just d →
+                                    MV.write mv nIdx (Just d
+                                        { afcVolume = afcVolume d + fromIntegral actual })
+                            writeSTRef changedRef True
 
 -----------------------------------------------------------
 -- Phase B: Lateral pressure equalization
@@ -184,14 +201,17 @@ phaseLateral ∷ MV.MVector s (Maybe ActiveFluidCell)
              → STRef s Bool
              → ST s ()
 phaseLateral mv terrainV changedRef = do
+    -- Snapshot: read all decisions from frozen state, write transfers to mv
+    snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
-        cell ← MV.read mv idx
+        let cell = snap V.! idx
         case cell of
             Nothing → pure ()
             Just afc | afcVolume afc ≡ 0 → pure ()
             Just afc → do
                 let terrZ = terrainV VU.! idx
+                    srcVol = fromIntegral (afcVolume afc) ∷ Int
                     lx = idx `mod` chunkSize
                     ly = idx `div` chunkSize
                     nbrs = cardinalNeighbors lx ly
@@ -201,33 +221,41 @@ phaseLateral mv terrainV changedRef = do
                             nTerrZ = terrainV VU.! nIdx
                         -- Same terrain height: equalize volumes
                         when (nTerrZ ≡ terrZ) $ do
-                            srcCell ← MV.read mv idx
-                            dstCell ← MV.read mv nIdx
-                            case (srcCell, dstCell) of
-                                (Just src, Just dst) → do
-                                    let srcVol = fromIntegral (afcVolume src) ∷ Int
-                                        dstVol = fromIntegral (afcVolume dst) ∷ Int
+                            let nbrCell = snap V.! nIdx
+                            case nbrCell of
+                                Just nfc → do
+                                    let dstVol = fromIntegral (afcVolume nfc) ∷ Int
                                         diff   = srcVol - dstVol
+                                    -- Only transfer if we are the higher side (src > dst)
+                                    -- to avoid both sides transferring to each other
                                     when (diff > 1) $ do
-                                        let transfer = min 1 (diff `div` 2)
-                                        MV.write mv idx (Just src
-                                            { afcVolume = fromIntegral (srcVol - transfer) })
-                                        MV.write mv nIdx (Just dst
-                                            { afcVolume = fromIntegral (dstVol + transfer) })
-                                        writeSTRef changedRef True
-                                (Just src, Nothing) | afcVolume src > fromIntegral volumePerLevel → do
+                                        let transfer = max 1 (diff `div` 4)
+                                        -- Apply to live state
+                                        curSrc ← MV.read mv idx
+                                        curDst ← MV.read mv nIdx
+                                        case (curSrc, curDst) of
+                                            (Just s, Just d) → do
+                                                MV.write mv idx (Just s
+                                                    { afcVolume = afcVolume s - fromIntegral transfer })
+                                                MV.write mv nIdx (Just d
+                                                    { afcVolume = afcVolume d + fromIntegral transfer })
+                                                writeSTRef changedRef True
+                                            _ → pure ()
+                                Nothing | srcVol > volumePerLevel → do
                                     -- Source has excess: share with empty neighbor at same height
-                                    let srcVol = fromIntegral (afcVolume src) ∷ Int
-                                        transfer = min 1 (srcVol `div` 2)
-                                    when (transfer > 0) $ do
-                                        MV.write mv idx (Just src
-                                            { afcVolume = fromIntegral (srcVol - transfer) })
-                                        MV.write mv nIdx (Just ActiveFluidCell
-                                            { afcType = afcType src
-                                            , afcVolume = fromIntegral transfer
-                                            , afcFlowDir = 0
-                                            })
-                                        writeSTRef changedRef True
+                                    let transfer = max 1 (srcVol `div` 4)
+                                    curSrc ← MV.read mv idx
+                                    case curSrc of
+                                        Just s → do
+                                            MV.write mv idx (Just s
+                                                { afcVolume = afcVolume s - fromIntegral transfer })
+                                            MV.write mv nIdx (Just ActiveFluidCell
+                                                { afcType = afcType afc
+                                                , afcVolume = fromIntegral transfer
+                                                , afcFlowDir = 0
+                                                })
+                                            writeSTRef changedRef True
+                                        Nothing → pure ()
                                 _ → pure ()
 
 -----------------------------------------------------------
@@ -240,9 +268,11 @@ phaseWaterfall ∷ MV.MVector s (Maybe ActiveFluidCell)
                → STRef s Bool
                → ST s ()
 phaseWaterfall mv decoMv terrainV changedRef = do
+    -- Snapshot: read all decisions from frozen state, write transfers to mv
+    snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
-        cell ← MV.read mv idx
+        let cell = snap V.! idx
         case cell of
             Nothing → pure ()
             Just afc | afcVolume afc ≡ 0 → pure ()
@@ -251,43 +281,58 @@ phaseWaterfall mv decoMv terrainV changedRef = do
                     lx = idx `mod` chunkSize
                     ly = idx `div` chunkSize
                     nbrs = cardinalNeighbors lx ly
+                    avail = fromIntegral (afcVolume afc) ∷ Int
+                    -- Compute all waterfall transfers from snapshot
+                    falls = mapMaybe (\(dirBit, (nx, ny)) →
+                        if nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize
+                        then let nIdx = ny * chunkSize + nx
+                                 nTerrZ = terrainV VU.! nIdx
+                                 drop' = terrZ - nTerrZ
+                             in if drop' > 1
+                                then Just (nIdx, dirBit, min avail (volumePerLevel `div` 2))
+                                else Nothing
+                        else Nothing
+                        ) (zip [0∷Int ..] nbrs)
+                    -- Cap total outflow to available volume
+                    totalRequested = sum (map (\(_, _, t) → t) falls)
+                    scale = if totalRequested > avail ∧ totalRequested > 0
+                            then avail * 256 `div` totalRequested
+                            else 256
                 flowDirRef ← newSTRef (afcFlowDir afc)
-                forM_ (zip [0∷Int ..] nbrs) $ \(dirBit, (nx, ny)) →
-                    when (nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize) $ do
-                        let nIdx = ny * chunkSize + nx
-                            nTerrZ = terrainV VU.! nIdx
-                            drop' = terrZ - nTerrZ
-                        -- Waterfall: terrain drops > 1
-                        when (drop' > 1) $ do
+                when (not (null falls) ∧ avail > 0) $ do
+                    totalRef ← newSTRef (0 ∷ Int)
+                    forM_ falls $ \(nIdx, dirBit, amt) → do
+                        soFar ← readSTRef totalRef
+                        let scaled = if scale < 256
+                                     then max 1 (amt * scale `div` 256)
+                                     else amt
+                            actual = min scaled (avail - soFar)
+                        when (actual > 0) $ do
+                            writeSTRef totalRef (soFar + actual)
+                            -- Subtract from source
                             srcCell ← MV.read mv idx
                             case srcCell of
+                                Just src → MV.write mv idx
+                                    (Just src { afcVolume = afcVolume src - fromIntegral actual })
                                 Nothing → pure ()
-                                Just src | afcVolume src ≡ 0 → pure ()
-                                Just src → do
-                                    let avail = fromIntegral (afcVolume src) ∷ Int
-                                        transfer = min avail (volumePerLevel `div` 2)
-                                    when (transfer > 0) $ do
-                                        let newSrcVol = fromIntegral (avail - transfer)
-                                        MV.write mv idx (Just src { afcVolume = newSrcVol })
-                                        -- Add volume at bottom
-                                        dst ← MV.read mv nIdx
-                                        case dst of
-                                            Nothing →
-                                                MV.write mv nIdx (Just ActiveFluidCell
-                                                    { afcType = afcType src
-                                                    , afcVolume = fromIntegral transfer
-                                                    , afcFlowDir = 0
-                                                    })
-                                            Just d →
-                                                MV.write mv nIdx (Just d
-                                                    { afcVolume = afcVolume d + fromIntegral transfer })
-                                        -- Mark flow direction
-                                        fd ← readSTRef flowDirRef
-                                        writeSTRef flowDirRef (fd .|. ((1 ∷ Word8) `shiftL` dirBit))
-                                        -- Write waterfall deco at the cliff edge
-                                        -- Waterfall deco IDs: 17-20 (17 + variant)
-                                        MVU.write decoMv idx (17 + fromIntegral (dirBit `mod` 4))
-                                        writeSTRef changedRef True
+                            -- Add volume at bottom
+                            dst ← MV.read mv nIdx
+                            case dst of
+                                Nothing →
+                                    MV.write mv nIdx (Just ActiveFluidCell
+                                        { afcType = afcType afc
+                                        , afcVolume = fromIntegral actual
+                                        , afcFlowDir = 0
+                                        })
+                                Just d →
+                                    MV.write mv nIdx (Just d
+                                        { afcVolume = afcVolume d + fromIntegral actual })
+                            -- Mark flow direction
+                            fd ← readSTRef flowDirRef
+                            writeSTRef flowDirRef (fd .|. ((1 ∷ Word8) `shiftL` dirBit))
+                            -- Write waterfall deco at the cliff edge
+                            MVU.write decoMv idx (17 + fromIntegral (dirBit `mod` 4))
+                            writeSTRef changedRef True
                 -- Update flow direction
                 newFD ← readSTRef flowDirRef
                 when (newFD ≠ afcFlowDir afc) $ do

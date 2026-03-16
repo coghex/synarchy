@@ -219,9 +219,11 @@ padL n t = T.replicate (max 0 (n - T.length t)) " " <> t
 -- | Show a float with 1 decimal place.
 showFFloat1 ∷ Float → String
 showFFloat1 f =
-    let whole = floor f ∷ Int
-        frac  = round ((f - fromIntegral whole) * 10.0) ∷ Int
-    in show whole <> "." <> show (abs frac)
+    let sign  = if f < 0 then "-" else ""
+        af    = abs f
+        whole = floor af ∷ Int
+        frac  = round ((af - fromIntegral whole) * 10.0) ∷ Int
+    in sign <> show whole <> "." <> show frac
 
 -- | Format a single event with full detail including coordinates.
 formatEventDetailed ∷ GeoEvent → Text

@@ -267,10 +267,9 @@ processInput env inpSt event = case event of
         logDebug logger CatInput $ "Scroll event: dx=" <> T.pack (show x) <> ", dy=" <> T.pack (show y)
         
         -- Check modifier keys for shift+scroll (z-slice)
-        inpSt' ← readIORef (inputStateRef env)
-        let shiftHeld = case Map.lookup GLFW.Key'LeftShift (inpKeyStates inpSt') of
+        let shiftHeld = case Map.lookup GLFW.Key'LeftShift (inpKeyStates inpSt) of
                 Just ks → keyPressed ks
-                Nothing → case Map.lookup GLFW.Key'RightShift (inpKeyStates inpSt') of
+                Nothing → case Map.lookup GLFW.Key'RightShift (inpKeyStates inpSt) of
                     Just ks → keyPressed ks
                     Nothing → False
         
