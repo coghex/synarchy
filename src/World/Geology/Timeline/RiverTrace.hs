@@ -221,9 +221,9 @@ addPathNoise seed riverIdx spacing pts =
                <> [(0, 0)]
 
         -- Maximum perpendicular offset scales with grid spacing.
-        -- With finer grids, paths already follow terrain well so
-        -- less noise is needed. Cap at 16 tiles max.
-        maxOff = min 16.0 (fromIntegral spacing * 1.5) ∷ Float
+        -- Larger amplitude creates natural-looking meanders in flat
+        -- terrain. Slope taper (below) reduces this in mountains.
+        maxOff = min 28.0 (fromIntegral spacing * 2.5) ∷ Float
 
         noisy = zipWith (\(i, (x, y, e), (dx, dy)) arcLen →
             if i ≡ 0 ∨ i ≡ maxIdx
@@ -241,15 +241,15 @@ addPathNoise seed riverIdx spacing pts =
                      slopeTaper = max 0.3 (1.0 - fromIntegral slopeDelta / 15.0)
 
                      -- Coherent noise: 3 octaves at different frequencies.
-                     -- Each octave uses a different seed offset and frequency
-                     -- along the arc length for smooth spatial variation.
+                     -- Higher frequencies create more bends per river length,
+                     -- preventing the "straight line" look from coarse grids.
                      t = arcLen / totalArc
-                     octave1 = coherentNoise seed (riverIdx * 3)     (t * 2.5)  -- large bends
-                     octave2 = coherentNoise seed (riverIdx * 3 + 1) (t * 6.0)  -- medium curves
-                     octave3 = coherentNoise seed (riverIdx * 3 + 2) (t * 14.0) -- small wiggles
+                     octave1 = coherentNoise seed (riverIdx * 3)     (t * 4.0)  -- large bends
+                     octave2 = coherentNoise seed (riverIdx * 3 + 1) (t * 10.0) -- medium curves
+                     octave3 = coherentNoise seed (riverIdx * 3 + 2) (t * 22.0) -- small wiggles
 
                      -- Combine octaves with decreasing amplitude
-                     noise = octave1 * 0.6 + octave2 * 0.3 + octave3 * 0.1
+                     noise = octave1 * 0.55 + octave2 * 0.30 + octave3 * 0.15
 
                      -- Final offset
                      amplitude = maxOff * taper * slopeTaper
@@ -289,9 +289,11 @@ buildRiverFromPath ∷ Word64 → Int → Int → Float → ClimateState
                    → [(Int, Int, Int)] → Maybe RiverParams
 buildRiverFromPath seed worldSize riverIdx baseFlow climate path =
     let monoPath = enforceMonotonicPath path
-        -- Grid-following produces one point per grid cell (~8 tiles apart).
-        -- Decimate to every 3rd to get ~24-tile segments, similar to before.
-        decimated0 = decimatePath 3 monoPath
+        -- Keep every grid point (~10-tile segments at spacing=10).
+        -- Shorter segments make the noise-displaced waypoints more
+        -- visible as bends, preventing the "ruler-straight" look that
+        -- comes from long straight-line segments.
+        decimated0 = monoPath
         -- Clamp the last above-sea-level point near sea level so the
         -- river transitions smoothly to the coast. Points already
         -- below sea level (from coast extension) are left as-is —
@@ -301,22 +303,32 @@ buildRiverFromPath seed worldSize riverIdx baseFlow climate path =
         [] → Nothing
         ((srcX, srcY, _) : _) →
             let numWP = length decimated
-                segments0 = fixupSegmentContinuity $ V.fromList $
+                (mouthX, mouthY, mouthElev) = last decimated
+                -- Rivers that reach the coast (mouth near sea level) are
+                -- always accepted regardless of length.
+                reachesCoast = mouthElev ≤ seaLevel + 5
+                -- Inland rivers (feeding lakes, drying up) are fine if
+                -- they're long enough to look like a real river. Short
+                -- inland rivers just create blobs of water on hillsides.
+                minInlandSegments = 12
+                tooShortInland = not reachesCoast ∧ numWP < minInlandSegments
+            in if tooShortInland
+               then Nothing
+               else let segments0 = fixupSegmentContinuity $ V.fromList $
                                zipWith (buildSegFromWaypoints seed worldSize
                                             numWP baseFlow climate)
                                        [0..] (zip decimated (drop 1 decimated))
-                segments = poolWaterSurface segments0
-                (mouthX, mouthY, _) = last decimated
-                totalFlow = case V.null segments of
-                    True  → baseFlow
-                    False → rsFlowRate (V.last segments)
-            in Just RiverParams
-                { rpSourceRegion = GeoCoord srcX srcY
-                , rpMouthRegion  = GeoCoord mouthX mouthY
-                , rpSegments     = segments
-                , rpFlowRate     = totalFlow
-                , rpMeanderSeed  = fromIntegral (hashGeo seed riverIdx 1150)
-                }
+                        segments = poolWaterSurface segments0
+                        totalFlow = case V.null segments of
+                            True  → baseFlow
+                            False → rsFlowRate (V.last segments)
+                    in Just RiverParams
+                        { rpSourceRegion = GeoCoord srcX srcY
+                        , rpMouthRegion  = GeoCoord mouthX mouthY
+                        , rpSegments     = segments
+                        , rpFlowRate     = totalFlow
+                        , rpMeanderSeed  = fromIntegral (hashGeo seed riverIdx 1150)
+                        }
 
 -- | Keep every Nth point from the path, always preserving
 --   the first and last points.
@@ -383,25 +395,26 @@ buildSegFromWaypoints seed worldSize totalSegs baseFlow climate segIdx
         flow = (baseFlow + t * baseFlow * 2.0) * climateMult
 
         -- Width scales with flow: narrow headwaters (1-2 tiles),
-        -- widening downstream as tributaries add volume.
-        rawWidth = max 1 (round (flow * 6.0)) ∷ Int
-        width = min 16 rawWidth
+        -- widening modestly downstream. Most rivers should be 2-5 wide;
+        -- only major rivers near their mouth reach 6-8.
+        rawWidth = max 1 (round (flow * 2.0)) ∷ Int
+        width = min 8 rawWidth
 
         h1 = hashGeo seed segIdx 1161
-        valleyMult = 2.0 + hashToFloatGeo h1 * 1.5
+        valleyMult = 1.4 + hashToFloatGeo h1 * 0.6
 
         slopeDelta = abs (se - ee)
         -- Depth scales with flow: shallow headwaters, deeper downstream.
         -- Minimum 2 ensures carved channel is below the water surface
         -- (freeboard = 1, so depth must be > 1 for water to fill).
-        -- Capped at 6 tiles — carves gentle channels, not canyons.
-        baseDepth = max 2 (slopeDelta `div` 6 + round (flow * 0.8))
-        depth = min 6 baseDepth
-        -- Valley width for water fill. Scales with river width
-        -- to prevent headwater streams from carving wide valleys.
-        minValleyW = max (width * 2) (depth * 2)
-        rawValleyW = max (width * 2) (round (fromIntegral width * valleyMult))
-        valleyW = max minValleyW (min 32 rawValleyW)
+        -- Capped at 5 tiles — carves gentle channels, not canyons.
+        baseDepth = max 2 (slopeDelta `div` 8 + round (flow * 0.6))
+        depth = min 5 baseDepth
+        -- Valley width: just wide enough for the river + modest banks.
+        -- Tighter valleys prevent water from flooding wide areas.
+        minValleyW = width + depth
+        rawValleyW = max (width + 2) (round (fromIntegral width * valleyMult))
+        valleyW = max minValleyW (min 20 rawValleyW)
 
         -- Consistent freeboard: water surface sits 1 tile below
         -- the reference terrain. This keeps the water surface smooth

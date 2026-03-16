@@ -36,9 +36,8 @@ computeChunkRivers rivers worldSize coord surfaceMap =
     in withFluidMap $ \mv → do
         forM_ nearbyRivers $ \river →
             fillRiverDirect mv river worldSize chunkMinGX chunkMinGY surfaceMap
-        -- Pass 2: extend river water into banks (2 iterations to cover
-        -- gaps between the fill zone and the carved valley wall).
-        extendRiverBanks mv surfaceMap
+        -- Pass 2: extend river water into banks (1 iteration for modest
+        -- bank coverage without flooding the valley).
         extendRiverBanks mv surfaceMap
         -- Pass 3: fill single-tile holes in the river.
         fillRiverHoles mv surfaceMap
@@ -426,7 +425,7 @@ unresolvableCliffPass mv surfaceMap = do
 --   adjacent river tile's water surface (capped at terrain + 5).
 --   Iterate until all river edges are bounded by terrain or water.
 sealRiverBoundaries ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s ()
-sealRiverBoundaries mv surfaceMap = go (20 ∷ Int)
+sealRiverBoundaries mv surfaceMap = go (8 ∷ Int)
   where
     go 0 = pure ()
     go n = do
@@ -460,7 +459,7 @@ sealPass mv surfaceMap = do
                             -- valley tiles get deeper seal, hill tiles get shallow.
                             nbrAvg ← avgNeighborTerrain surfaceMap nx ny
                             let nInValley = nTerrZ < nbrAvg - 1
-                                maxSealDepth = if nInValley then 4 else 3
+                                maxSealDepth = if nInValley then 3 else 2
                                 sealDepth = waterZ - nTerrZ
                             when (nTerrZ + 1 < waterZ ∧ sealDepth ≤ maxSealDepth
                                  ∧ nTerrZ ≤ myTerrZ
@@ -762,7 +761,9 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
               -- floor while keeping water off the upper valley walls.
               channelEdge = fromIntegral (rsWidth seg) / 2.0 ∷ Float
               valleyEdge  = fromIntegral (rsValleyWidth seg) / 2.0 ∷ Float
-              fillW = channelEdge + max 2.0 ((valleyEdge - channelEdge) * 0.5)
+              -- Fill the channel plus a modest bank margin. Don't extend
+              -- halfway into the valley — that floods too much terrain.
+              fillW = channelEdge + min 2.0 ((valleyEdge - channelEdge) * 0.3)
           in if effectivePerpDist > fillW
              then (Nothing, effectivePerpDist)
              else

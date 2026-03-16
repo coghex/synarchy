@@ -326,6 +326,10 @@ reconcileLakes ∷ Word64 → Int → Int → Int
               → ([PersistentFeature], [GeoEvent], TimelineBuildState)
 reconcileLakes _seed _ageIdx periodIdx worldSize existingLakes simLakes tbs =
     let lakeMatchRadius = 60
+        -- Cap total lakes to keep continents natural.
+        maxTotalLakes = max 20 (scaleCount worldSize 40)
+        currentLakeCount = length existingLakes
+        budget = max 0 (maxTotalLakes - currentLakeCount)
 
         isNearExisting lk =
             let GeoCoord lx ly = lkCenter lk
@@ -338,7 +342,7 @@ reconcileLakes _seed _ageIdx periodIdx worldSize existingLakes simLakes tbs =
                 _ → False
                 ) existingLakes
 
-        newLakes = filter (not . isNearExisting) simLakes
+        newLakes = take budget $ filter (not . isNearExisting) simLakes
 
         (pfs, evts, tbs') = foldl' (\(ps, es, st) lake →
             let (fid, st') = allocFeatureId st

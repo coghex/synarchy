@@ -24,7 +24,8 @@ import World.Constants (seaLevel)
 import World.Material (MaterialId(..), matGlacier, MaterialRegistry(..)
                       , MaterialProps(..), getMaterialProps)
 import World.Plate (TectonicPlate(..), elevationAtGlobal
-                   , isBeyondGlacier, wrapGlobalU)
+                   , isBeyondGlacier, wrapGlobalU
+                   , twoNearestPlates, BoundaryType(..), classifyBoundary)
 import qualified Data.Vector.Unboxed as VU
 import World.Fluids (isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid
                     , hasAnyRiverQuick, hasAnyLakeQuick
@@ -45,6 +46,14 @@ import World.ZoomMap.ColorPalette (ZoomColorPalette, lookupMatColor
                                   , lookupVegColorById
                                   , defaultOceanColor, defaultLavaColor)
 import World.Base (GeoCoord(..))
+import World.Geology.Coastal (CoastType(..), classifyCoast, isDepositional
+                             , beachMaterial, wetlandMaterial, deltaMaterial
+                             , coastHash, sandProfile, outcroppHardness
+                             , maxCoastalDist, filterNearbyMouths
+                             , isNearRiverMouth)
+import qualified Data.Vector.Unboxed.Mutable as VUM
+import Control.Monad.ST (runST)
+import Control.Monad (when, forM_)
 import World.Render.Zoom.Types (zoomTileSize)
 
 -----------------------------------------------------------
@@ -223,8 +232,119 @@ buildZoomCacheWithPixels params registry palette =
                            , lx ← [0 .. chunkSize - 1]
                            ]
 
+                -- Coastal material pass: mimic applyCoastalErosion
+                -- for the zoom map by building a BFS distance field
+                -- and applying the same material selection.
+                tileData' = if not chunkOcean then tileData
+                    else let cs = chunkSize
+                             csA = cs * cs
+                             elevArr = VU.fromList [ e | (e, _, _, _, _) ← tileData ]
+                             -- BFS distance from ocean tiles
+                             distField = runST $ do
+                                 distM ← VUM.replicate csA (maxCoastalDist + 1)
+                                 seedsM ← VUM.new csA
+                                 scRef ← VUM.new 1
+                                 VUM.write scRef 0 (0 ∷ Int)
+                                 forM_ [0 .. csA - 1] $ \idx → do
+                                     let e = elevArr VU.! idx
+                                     when (e ≤ seaLevel) $ do
+                                         VUM.write distM idx 0
+                                         sc ← VUM.read scRef 0
+                                         VUM.write seedsM sc idx
+                                         VUM.write scRef 0 (sc + 1)
+                                 sc0 ← VUM.read scRef 0
+                                 let bfs curSeeds curCount level =
+                                         when (level ≤ maxCoastalDist ∧ curCount > 0) $ do
+                                             nextM ← VUM.new csA
+                                             ncRef ← VUM.new 1
+                                             VUM.write ncRef 0 (0 ∷ Int)
+                                             forM_ [0 .. curCount - 1] $ \si → do
+                                                 idx ← VUM.read curSeeds si
+                                                 let bx = idx `mod` cs
+                                                     by = idx `div` cs
+                                                     tryN nx ny =
+                                                         when (nx ≥ 0 ∧ nx < cs
+                                                              ∧ ny ≥ 0 ∧ ny < cs) $ do
+                                                             let nIdx = ny * cs + nx
+                                                             old ← VUM.read distM nIdx
+                                                             when (old > level + 1) $ do
+                                                                 VUM.write distM nIdx (level + 1)
+                                                                 nc ← VUM.read ncRef 0
+                                                                 VUM.write nextM nc nIdx
+                                                                 VUM.write ncRef 0 (nc + 1)
+                                                 tryN (bx - 1) by
+                                                 tryN (bx + 1) by
+                                                 tryN bx       (by - 1)
+                                                 tryN bx       (by + 1)
+                                             nc ← VUM.read ncRef 0
+                                             bfs nextM nc (level + 1)
+                                 bfs seedsM sc0 0
+                                 VU.unsafeFreeze distM
+                             -- Plate classification at chunk center
+                             ChunkCoord cx' cy' = coord
+                             cGX = cx' * cs + cs `div` 2
+                             cGY = cy' * cs + cs `div` 2
+                             (cGX', cGY') = wrapGlobalU worldSize cGX cGY
+                             ((pA, dA), (pB, dB)) =
+                                 twoNearestPlates seed worldSize plates cGX' cGY'
+                             cBoundary = classifyBoundary worldSize pA pB
+                             cBDist = (dB - dA) / 2.0
+                             maxBD = fromIntegral worldSize * 4.0 ∷ Float
+                             cBFade = min 1.0 (abs cBDist / maxBD)
+                             -- River mouths near this chunk
+                             allMouths = concatMap (\p →
+                                 [ (mx, my)
+                                 | HydroEvent (RiverFeature rp) ← gpEvents p
+                                 , let GeoCoord mx my = rpMouthRegion rp
+                                 ]) (gtPeriods timeline)
+                             nearMouths = filterNearbyMouths worldSize coord allMouths
+                         in zipWith (\idx (e, m, v, gx, gy) →
+                             let dist = distField VU.! idx
+                             in if dist ≤ 0 ∨ dist > maxCoastalDist
+                                then (e, m, v, gx, gy)
+                                else let hardness = mpHardness
+                                            (getMaterialProps registry (MaterialId m))
+                                         nearRiver = isNearRiverMouth worldSize
+                                            nearMouths gx gy
+                                         coastType = classifyCoast cBoundary
+                                            (plateIsLand pA) (plateIsLand pB)
+                                            hardness 0.0 cBFade nearRiver
+                                         lh = coastHash seed gx gy
+                                         roll = fromIntegral (lh .&. 0xFF)
+                                                / 255.0 ∷ Float
+                                         sandLevel = sandProfile dist
+                                         isOutcrop = hardness ≥ outcroppHardness
+                                                   ∧ e > sandLevel
+                                         newMat
+                                           | isDepositional coastType ∧ not isOutcrop
+                                             = case coastType of
+                                                 _ | isDepositional coastType →
+                                                     case coastType of
+                                                       DepositionalWetland →
+                                                           wetlandMaterial dist roll
+                                                       DeltaicCoast →
+                                                           deltaMaterial dist roll
+                                                       _ → beachMaterial dist m roll
+                                                 _ → m
+                                           | otherwise = m
+                                     in if newMat ≡ m
+                                        then (e, m, v, gx, gy)
+                                        else let h' = vegHash seed gx gy
+                                                 r' = fromIntegral (h' .&. 0xFF)
+                                                      / 255.0 ∷ Float
+                                                 var' = fromIntegral
+                                                    ((h' `shiftR` 8) .&. 0x03) ∷ Word8
+                                                 LocalClimate{lcTemp=t, lcPrecip=p
+                                                             , lcHumidity=hu, lcSnow=sn} =
+                                                     lookupLocalClimate climate
+                                                         worldSize gx gy
+                                                 v' = selectVegetation newMat 0 False e
+                                                          t p hu sn r' var'
+                                             in (e, newMat, v', gx, gy)
+                            ) [0 ∷ Int ..] tileData
+
                 -- Summary stats from all tiles (for ZoomChunkEntry)
-                allMats = [ (e, m) | (e, m, _, _, _) ← tileData ]
+                allMats = [ (e, m) | (e, m, _, _, _) ← tileData' ]
                 winnerMat = majorityMaterial allMats
                 avgElev = let s = sum (map fst allMats)
                           in s `div` length allMats
@@ -271,7 +391,7 @@ buildZoomCacheWithPixels params registry palette =
                 -- the already-computed tile elevations, then run the fluid
                 -- pipeline (ocean + river + lake) to get actual water data.
                 terrainSurfMap = VU.fromList
-                    [ e | (e, _, _, _, _) ← tileData ]
+                    [ e | (e, _, _, _, _) ← tileData' ]
                 oceanFluid = computeChunkFluid worldSize oceanMap
                                  coord terrainSurfMap
                 riverFluid = computeChunkRivers eventRivers worldSize
@@ -304,7 +424,7 @@ buildZoomCacheWithPixels params registry palette =
                       in if ice ∧ e > minBound
                          then Just (IceCell (e + 1))
                          else Nothing
-                    | (td, idx') ← zip tileData [0 ∷ Int ..]
+                    | (td, idx') ← zip tileData' [0 ∷ Int ..]
                     ]
 
                 -- Inject snow veg on ice-covered tiles
@@ -316,7 +436,7 @@ buildZoomCacheWithPixels params registry palette =
                                 var = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
                             in (e, m, vegSnow + var, gx, gy)
                         Nothing → td
-                    ) [0 ∷ Int ..] tileData
+                    ) [0 ∷ Int ..] tileData'
 
                 -- Generate zoomTileSize×zoomTileSize RGBA pixel data (isometric)
                 tileVec = V.fromList tileDataWithIce

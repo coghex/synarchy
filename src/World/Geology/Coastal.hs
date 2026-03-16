@@ -1,6 +1,19 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Coastal
     ( applyCoastalErosion
+    -- * Zoom map coastal support
+    , CoastType(..)
+    , classifyCoast
+    , isDepositional
+    , beachMaterial
+    , wetlandMaterial
+    , deltaMaterial
+    , coastHash
+    , sandProfile
+    , outcroppHardness
+    , maxCoastalDist
+    , filterNearbyMouths
+    , isNearRiverMouth
     ) where
 
 import UPrelude

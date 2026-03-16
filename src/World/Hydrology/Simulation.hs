@@ -35,7 +35,7 @@ baseSampleSpacing = 4
 
 -- | Minimum flow accumulation to qualify as a river.
 minRiverTotalFlow ∷ Int
-minRiverTotalFlow = 2
+minRiverTotalFlow = 15
 
 minRiverLength ∷ Int
 minRiverLength = 2
