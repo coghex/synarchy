@@ -34,6 +34,7 @@ local toggle = nil
 local uiList = nil
 local loadingScreen = nil
 local testArena = nil
+local pauseMenu = nil
 
 local hoveredElement = nil
 local hoveredCallback = nil
@@ -41,6 +42,7 @@ local hoveredCallback = nil
 local hud = nil
 
 local currentMenu = "main"
+local previousMenu = nil
 
 local function handleNonTextBoxClick()
     if textbox then
@@ -91,6 +93,7 @@ function uiManager.init(scriptId)
     saveBrowser = require("scripts.save_browser")
     hud = require("scripts.hud")
     testArena = require("scripts.test_arena")
+    pauseMenu = require("scripts.pause_menu")
     
     settingsMenu.setShowMenuCallback(function(menuName, params)
         uiManager.showMenu(menuName, params)
@@ -112,6 +115,9 @@ function uiManager.init(scriptId)
         uiManager.showMenu(menuName, params)
     end)
     testArena.setShowMenuCallback(function(menuName, params)
+        uiManager.showMenu(menuName, params)
+    end)
+    pauseMenu.setShowMenuCallback(function(menuName, params)
         uiManager.showMenu(menuName, params)
     end)
 
@@ -150,6 +156,7 @@ function uiManager.checkReady()
             saveBrowser.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             loadingScreen.init(boxTexSet, menuFont, titleFont, fbW, fbH)
             testArena.init(boxTexSet, menuFont, titleFont, fbW, fbH)
+            pauseMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -174,6 +181,7 @@ function uiManager.onFramebufferResize(width, height)
     if hud then hud.onFramebufferResize(width, height) end
     if saveBrowser then saveBrowser.onFramebufferResize(width, height) end
     if loadingScreen then loadingScreen.onFramebufferResize(width, height) end
+    if pauseMenu then pauseMenu.onFramebufferResize(width, height) end
     
     if currentMenu == "main" then
         if mainMenu and mainMenu.page then UI.showPage(mainMenu.page) end
@@ -192,16 +200,29 @@ function uiManager.onFramebufferResize(width, height)
 end
 
 function uiManager.showMenu(menuName, params)
+    -- Handle "back" by going to previousMenu (or main if none)
+    if menuName == "back" then
+        menuName = previousMenu or "main"
+    end
+
+    previousMenu = currentMenu
     currentMenu = menuName
+
+    -- When opening settings from a game view, keep the world visible behind
+    local keepWorld = (menuName == "settings")
+        and (previousMenu == "world_view" or previousMenu == "test_arena_view")
 
     mainMenu.hide()
     settingsMenu.hide()
     createWorldMenu.hide()
-    worldView.hide()
-    hud.hide()
+    if not keepWorld then
+        worldView.hide()
+        hud.hide()
+    end
     if saveBrowser then saveBrowser.hide() end
     if loadingScreen then loadingScreen.hide() end
-    if testArena then testArena.hide() end
+    if testArena and not keepWorld then testArena.hide() end
+    if pauseMenu then pauseMenu.hide() end
 
     if menuName == "main" then
         mainMenu.show()
@@ -213,6 +234,10 @@ function uiManager.showMenu(menuName, params)
         worldView.show()
         hud.worldId = "main_world"
         hud.show()
+        -- Re-show pause menu if returning from settings (opened via pause menu)
+        if previousMenu == "settings" then
+            if pauseMenu then pauseMenu.show() end
+        end
     elseif menuName == "save_browser" then
         saveBrowser.show(mainMenu.saves, function(saveName)
             mainMenu.loadAndShowSave(saveName)
@@ -234,6 +259,10 @@ function uiManager.showMenu(menuName, params)
         world.show(testArena.arenaWorldId)
         hud.worldId = testArena.arenaWorldId
         hud.show()
+        -- Re-show pause menu if returning from settings (opened via pause menu)
+        if previousMenu == "settings" then
+            if pauseMenu then pauseMenu.show() end
+        end
     end
 end
 
@@ -277,6 +306,14 @@ function uiManager.onMainMenuItem(elemHandle)
     return false
 end
 
+function uiManager.onPauseMenuItem(elemHandle)
+    handleNonTextBoxClick()
+    if pauseMenu then
+        return pauseMenu.handleClick(elemHandle)
+    end
+    return false
+end
+
 function uiManager.onSettings()
     handleNonTextBoxClick()
     uiManager.showMenu("settings")
@@ -289,7 +326,7 @@ end
 function uiManager.onSettingsBack()
     handleNonTextBoxClick()
     if settingsMenu then settingsMenu.onBack() end
-    uiManager.showMenu("main")
+    uiManager.showMenu("back")
 end
 
 function uiManager.onSettingsSave()
@@ -304,7 +341,7 @@ end
 
 function uiManager.onCancel()
     handleNonTextBoxClick()
-    uiManager.showMenu("main")
+    uiManager.showMenu("back")
 end
 
 function uiManager.update(dt)
@@ -445,6 +482,7 @@ function uiManager.shutdown()
     if saveBrowser then saveBrowser.shutdown() end
     if loadingScreen then loadingScreen.shutdown() end
     if testArena then testArena.shutdown() end
+    if pauseMenu then pauseMenu.shutdown() end
 end
 
 function uiManager.onTextBoxClick(elemHandle)
@@ -804,6 +842,7 @@ function uiManager.onUISubmit()
 end
 
 function uiManager.onUIEscape()
+    -- First, let UI widgets handle escape (close dropdowns, unfocus textboxes)
     if dropdown and dropdown.getFocusedId() then
         return dropdown.onEscape()
     end
@@ -822,7 +861,23 @@ function uiManager.onUIEscape()
             end
         end
     end
-    return false
+
+    -- Menu-level escape handling
+    if currentMenu == "main" then
+        engine.quit()
+    elseif currentMenu == "settings" or currentMenu == "create_world"
+        or currentMenu == "save_browser" then
+        uiManager.showMenu("back")
+    elseif currentMenu == "world_view" then
+        if pauseMenu then
+            pauseMenu.toggle({ showSave = true })
+        end
+    elseif currentMenu == "test_arena_view" then
+        if pauseMenu then
+            pauseMenu.toggle({ showSave = false })
+        end
+    end
+    return true
 end
 
 function uiManager.onUIFocusLost()

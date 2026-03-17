@@ -130,25 +130,33 @@ drawFrame = do
                         Map.insertWith (++) (sqLayer q) [q] acc)
                         Map.empty allWorldQuads
                 perLayerBatches = Map.mapWithKey mergeQuadsToBatch groupedByLayer
-                worldBatches = V.fromList $ Map.elems perLayerBatches
                 worldLayeredBatches = Map.map
                     (\batch → V.singleton (SpriteItem batch))
                     perLayerBatches
             
             -- 5. Render UI
-            (uiBatches, uiLayeredBatches) ← renderUIPages
+            (_uiBatches, uiLayeredBatches) ← renderUIPages
             
             -- 6. Final merge: world + UI
-            let batches = worldBatches <> uiBatches
-                layeredBatches = Map.unionsWith (<>) 
+            let layeredBatches = Map.unionsWith (<>)
                     [worldLayeredBatches, uiLayeredBatches]
+
+                -- Build sprite batches in layer-ascending order so the
+                -- vertex buffer layout matches the draw-call order in
+                -- recordSceneCommandBuffer.  Previously we used
+                -- worldBatches <> uiBatches which is per-page order;
+                -- when multiple visible pages shared layer IDs the
+                -- vertexOffsetRef tracking got out of sync.
+                batches = V.concatMap
+                    (V.mapMaybe (\case SpriteItem b → Just b; _ → Nothing))
+                    (V.fromList $ map snd $ Map.toAscList layeredBatches)
 
             -- Use the LIVE camera for the view/projection matrices
             updateUniformBufferForFrame win frameIdx liveCamera
-            
+
             -- Prepare dynamic vertex buffer
             let totalVertices = V.sum $ V.map (fromIntegral . V.length . rbVertices) batches
-            
+
             dynamicBuffer ← if totalVertices > 0
                 then do
                     buffer ← ensureDynamicVertexBuffer totalVertices

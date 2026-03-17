@@ -207,13 +207,6 @@ end
 
 function testArena.onKeyDown(key)
     if not testArena.visible then return end
-    -- Escape returns to main menu
-    if key == "Escape" then
-        if testArena.showMenuCallback then
-            testArena.showMenuCallback("main")
-        end
-        return
-    end
     -- Camera rotation (same as world_view)
     if key == "Q" then
         camera.rotateCCW()

@@ -16,7 +16,6 @@ import Engine.Core.Error.Exception (SystemError(..), ExceptionType(..))
 import Engine.Event.Types
 import Engine.Input.Types
 import Engine.Input.Callback
-import Engine.Input.Bindings
 import Engine.Scripting.Lua.Types
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Core.Queue as Q
@@ -164,15 +163,9 @@ processInput env inpSt event = case event of
                     Q.writeQueue lq (LuaKeyDownEvent key)
                 when (keyState ≡ GLFW.KeyState'Released) $
                     Q.writeQueue lq (LuaKeyUpEvent key)
-            bindings ← readIORef (keyBindingsRef env)
-            case getKeyForAction "escape" bindings of
-              Just escapeKeyName → do
-                logDebug logger CatInput $ "Key binding: action=escape, key=" <> escapeKeyName
-                when (Just key ≡ textToKey escapeKeyName
-                      ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
-                    logDebug logger CatInput "Action triggered: escape"
-                    writeIORef (lifecycleRef env) CleaningUp
-              Nothing → return ()
+            when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
+                logDebug logger CatInput "Action triggered: escape"
+                Q.writeQueue (luaQueue env) LuaUIEscape
 
         return $ updateKeyState inpSt glfwKey keyState mods
 

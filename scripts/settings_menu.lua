@@ -466,7 +466,7 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
         onClick = function(id, name)
             data.revert()
             if settingsMenu.showMenuCallback then
-                settingsMenu.showMenuCallback("main")
+                settingsMenu.showMenuCallback("back")
             end
         end,
     }))
