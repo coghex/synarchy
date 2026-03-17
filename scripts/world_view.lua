@@ -286,6 +286,12 @@ function worldView.show()
     worldView.visible = true
     UI.showPage(worldView.page)
 
+    -- Reset camera to defaults so regenerated worlds start fresh
+    camera.setPosition(0, 0)
+    camera.setZoom(64.0)
+    camera.setZoomVelocity(0)
+    camera.setZTracking(true)
+
     if worldManager.getCurrentWorld() then
         worldManager.showWorld()
     elseif worldView.texturesLoadedCount >= worldView.texturesNeeded then

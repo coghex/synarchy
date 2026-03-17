@@ -219,7 +219,7 @@ eventBBox (RiverDeltaEvent rdp) ws =                               -- was _ws
         GeoCoord mx0 my0 = rsEnd seg
         (mx, my) = wrapCoordU ws mx0 my0                          -- ADDED
         totalFlow = rdpFlowRate rdp
-        deltaRadius = round (totalFlow * 25.0 + 8.0) ∷ Int
+        deltaRadius = round (min 40.0 (totalFlow * 12.0 + 8.0)) ∷ Int
     in EventBBox (mx - deltaRadius) (my - deltaRadius)
                  (mx + deltaRadius) (my + deltaRadius)
 

@@ -228,8 +228,10 @@ computeDeltaDeposit' lastSeg totalFlow worldSize gx gy baseElev =
         dy = fromIntegral dyi ∷ Float
         dist = sqrt (dx * dx + dy * dy)
 
-        deltaRadius = totalFlow * 25.0 + 8.0
-        maxDeposit = max 2.0 (totalFlow * 6.0)
+        -- Cap delta size to prevent enormous flat plateaus from
+        -- high-flow rivers in wet climates (totalFlow can reach 7+).
+        deltaRadius = min 40.0 (totalFlow * 12.0 + 8.0)
+        maxDeposit = min 6.0 (max 2.0 (totalFlow * 3.0))
 
         -- Reference: the mouth elevation is the base of the delta
         mouthElev = fromIntegral (rsEndElev lastSeg) ∷ Float

@@ -279,6 +279,20 @@ function hud.show()
         hud.createUI()
     end
 
+    -- Re-apply cursor textures every show, because the WorldState is
+    -- recreated on world regeneration and loses its texture handles.
+    if hud.texZoomSelect and hud.texZoomHover then
+        world.setZoomCursorSelectTexture(hud.worldId, hud.texZoomSelect)
+        world.setZoomCursorHoverTexture(hud.worldId, hud.texZoomHover)
+    end
+    if hud.texWorldSelect and hud.texWorldHover
+            and hud.texWorldSelectBg and hud.texWorldHoverBg then
+        world.setWorldCursorSelectTexture(hud.worldId, hud.texWorldSelect)
+        world.setWorldCursorHoverTexture(hud.worldId, hud.texWorldHover)
+        world.setWorldCursorSelectBgTexture(hud.worldId, hud.texWorldSelectBg)
+        world.setWorldCursorHoverBgTexture(hud.worldId, hud.texWorldHoverBg)
+    end
+
     hud.visible = true
 
     if hud.currentView == "zoomed_in" and hud.world_page then

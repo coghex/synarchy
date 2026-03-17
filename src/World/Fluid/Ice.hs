@@ -15,7 +15,8 @@ import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Constants (seaLevel)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMap)
-import World.Plate (isBeyondGlacier, isGlacierZone, wrapGlobalU)
+import World.Plate (TectonicPlate, isBeyondGlacier, isGlacierZone
+                   , wrapGlobalU, elevationAtGlobal)
 import World.Weather.Types (ClimateState(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 
@@ -30,11 +31,11 @@ import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 --
 --   Glacier-zone tiles are skipped — the glacier wall is solid
 --   terrain and does not need an ice overlay.
-computeChunkIce ∷ Word64 → ClimateState → Int → ChunkCoord
+computeChunkIce ∷ Word64 → [TectonicPlate] → ClimateState → Int → ChunkCoord
                 → VU.Vector Int                   -- ^ terrain surface map
                 → V.Vector (Maybe FluidCell)      -- ^ fluid map
                 → IceMap
-computeChunkIce seed climate worldSize coord terrainSurfMap fluidMap =
+computeChunkIce seed plates climate worldSize coord terrainSurfMap fluidMap =
     let ChunkCoord cx cy = coord
         area = chunkSize * chunkSize
 
@@ -58,8 +59,11 @@ computeChunkIce seed climate worldSize coord terrainSurfMap fluidMap =
 
                         -- Altitude-adjusted temperature: lapse rate of
                         -- 6.5°C per 1000m (0.065°C per tile at 10m/tile).
-                        -- Higher terrain is effectively colder.
-                        altAboveSeaLevel = max 0 (terrainZ - seaLevel)
+                        -- Uses plate elevation (globally deterministic)
+                        -- instead of per-chunk terrain to avoid elevation
+                        -- discontinuities at chunk boundaries from erosion.
+                        (globalElev, _) = elevationAtGlobal seed plates worldSize gx' gy'
+                        altAboveSeaLevel = max 0 (globalElev - seaLevel)
                         lapseRate = 0.065 ∷ Float
                         altCooling = fromIntegral altAboveSeaLevel * lapseRate
 
@@ -78,8 +82,21 @@ computeChunkIce seed climate worldSize coord terrainSurfMap fluidMap =
                         -- Effective temperature for ice threshold
                         effectiveT = meanT + oceanPenalty - altCooling + noise
 
-                        -- Ice forms where effective temp is cold enough
-                        hasIce = effectiveT < -2.0
+                        -- Soft threshold: instead of a hard cutoff at -2°C,
+                        -- use a transition zone where ice probability depends
+                        -- on a per-tile hash. This prevents small elevation
+                        -- discontinuities at chunk boundaries from creating
+                        -- sharp ice edges on land.
+                        iceThreshold = -2.0 ∷ Float
+                        transitionWidth = 3.0 ∷ Float  -- °C wide transition
+                        tileRand = hashToFloat (tileHash (seed `xor` 0x1CE) gx' gy')
+                        hasIcePrimary
+                            | effectiveT < iceThreshold - transitionWidth = True
+                            | effectiveT > iceThreshold = False
+                            | otherwise =
+                                let t = (iceThreshold - effectiveT) / transitionWidth
+                                in tileRand < t
+                        hasIce = hasIcePrimary
                                ∨ (winterT - altCooling < -10.0
                                   ∧ summerT - altCooling < 5.0)
 
@@ -97,15 +114,19 @@ computeChunkIce seed climate worldSize coord terrainSurfMap fluidMap =
 -- * Noise
 
 -- | Deterministic noise for ice boundary variation.
---   Returns a value in [-2.0, 2.0] to add natural irregularity.
+--   Returns a value in roughly [-2.5, 2.5] to add natural irregularity.
+--   Three octaves at decreasing scales ensure the ice boundary
+--   doesn't align with chunk boundaries (16 tiles).
 iceNoise ∷ Word64 → Int → Int → Float
 iceNoise seed gx gy =
-    let -- Two octaves of hash-based noise at different scales
+    let -- Three octaves of hash-based noise at different scales
         h1 = iceHash seed gx gy 12     -- broad variation
-        h2 = iceHash seed gx gy 5      -- fine detail
+        h2 = iceHash seed gx gy 5      -- medium detail
+        h3 = iceHash seed gx gy 2      -- fine per-tile detail
         n1 = (hashToFloat h1 - 0.5) * 3.0   -- ±1.5
         n2 = (hashToFloat h2 - 0.5) * 1.0   -- ±0.5
-    in n1 + n2
+        n3 = (hashToFloat h3 - 0.5) * 1.0   -- ±0.5
+    in n1 + n2 + n3
 
 -- | Simple value noise: hash at grid cell corners, bilinear interpolate.
 iceHash ∷ Word64 → Int → Int → Int → Word64

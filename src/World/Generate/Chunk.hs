@@ -332,7 +332,7 @@ generateChunk registry catalog params coord =
 
         -- Ice overlay: climate-based ice on frozen ocean/lake/alpine terrain.
         -- Computed after fluids so ice sits on top of water surfaces.
-        iceMap = computeChunkIce seed (wgpClimateState params) worldSize
+        iceMap = computeChunkIce seed plates (wgpClimateState params) worldSize
                                  coord terrainSurfaceMap fluidMap
 
     in (finalTiles, surfaceMap, terrainSurfaceMap, fluidMap, iceMap, floraData)
