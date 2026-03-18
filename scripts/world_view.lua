@@ -5,6 +5,7 @@ local worldView = {}
 
 worldView.page = nil
 worldView.visible = false
+worldView.loadedFromSave = false
 worldView.fbW = 0
 worldView.fbH = 0
 
@@ -286,11 +287,14 @@ function worldView.show()
     worldView.visible = true
     UI.showPage(worldView.page)
 
-    -- Reset camera to defaults so regenerated worlds start fresh
-    camera.setPosition(0, 0)
-    camera.setZoom(64.0)
-    camera.setZoomVelocity(0)
-    camera.setZTracking(true)
+    -- Reset camera to defaults for new worlds; skip for loaded saves
+    if not worldView.loadedFromSave then
+        camera.setPosition(0, 0)
+        camera.setZoom(64.0)
+        camera.setZoomVelocity(0)
+        camera.setZTracking(true)
+    end
+    worldView.loadedFromSave = false
 
     if worldManager.getCurrentWorld() then
         worldManager.showWorld()

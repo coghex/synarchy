@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module Engine.Graphics.Camera
     ( Camera2D(..)
     , CameraFacing(..)
@@ -14,6 +14,8 @@ module Engine.Graphics.Camera
     ) where
 
 import UPrelude
+import Data.Serialize (Serialize)
+import GHC.Generics (Generic)
 import Linear (M44, V3(..), V4(..), identity)
 import qualified Data.Text as T
 import Linear.Matrix ((!*!))
@@ -23,7 +25,7 @@ import Engine.Input.Types (InputState(..))
 -- | Four camera facings, 90° apart.
 -- FaceSouth is the default (current) viewing direction.
 data CameraFacing = FaceSouth | FaceWest | FaceNorth | FaceEast
-    deriving (Show, Eq, Enum, Bounded)
+    deriving (Show, Eq, Enum, Bounded, Generic, Serialize)
 
 rotateCW ∷ CameraFacing → CameraFacing
 rotateCW FaceSouth = FaceWest

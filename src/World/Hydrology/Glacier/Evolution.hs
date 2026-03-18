@@ -101,8 +101,12 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                  advWid = hashToRangeGeo h3 2 8
                  evt = HydroModify fid (GlacierAdvance advLen advWid)
                  tbs' = updateFeature fid
-                     (\p → p { pfEruptionCount = pfEruptionCount p + 1
-                              , pfLastActivePeriod = periodIdx }) tbs
+                     (\p → let g = getGlacierParams p
+                           in p { pfFeature = HydroShape $ GlacierFeature
+                                      (g { glLength = glLength g + advLen
+                                         , glWidth = max (glWidth g) (glWidth g + advWid) })
+                                , pfEruptionCount = pfEruptionCount p + 1
+                                , pfLastActivePeriod = periodIdx }) tbs
              in (evt : events, tbs')
 
         else if roll < 0.65
@@ -164,8 +168,12 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                  surgeWid = hashToRangeGeo h3 5 15
                  evt = HydroModify fid (GlacierAdvance surgeLen surgeWid)
                  tbs' = updateFeature fid
-                     (\p → p { pfEruptionCount = pfEruptionCount p + 1
-                              , pfLastActivePeriod = periodIdx }) tbs
+                     (\p → let g = getGlacierParams p
+                           in p { pfFeature = HydroShape $ GlacierFeature
+                                      (g { glLength = glLength g + surgeLen
+                                         , glWidth = max (glWidth g) (glWidth g + surgeWid) })
+                                , pfEruptionCount = pfEruptionCount p + 1
+                                , pfLastActivePeriod = periodIdx }) tbs
              in (evt : events, tbs')
 
         else if roll < 0.80
@@ -178,7 +186,10 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
             advLen = hashToRangeGeo h2 3 10
             evt = HydroModify fid (GlacierAdvance advLen 0)
             tbs' = updateFeature fid
-                (\p → p { pfLastActivePeriod = periodIdx }) tbs
+                (\p → let g = getGlacierParams p
+                      in p { pfFeature = HydroShape $ GlacierFeature
+                                 (g { glLength = glLength g + advLen })
+                           , pfLastActivePeriod = periodIdx }) tbs
         in (evt : events, tbs')
 
     -- ===== MODERATE WORLD =====
@@ -189,7 +200,10 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                  advLen = hashToRangeGeo h2 5 15
                  evt = HydroModify fid (GlacierAdvance advLen 0)
                  tbs' = updateFeature fid
-                     (\p → p { pfLastActivePeriod = periodIdx }) tbs
+                     (\p → let g = getGlacierParams p
+                           in p { pfFeature = HydroShape $ GlacierFeature
+                                      (g { glLength = glLength g + advLen })
+                                , pfLastActivePeriod = periodIdx }) tbs
              in (evt : events, tbs')
 
         else if roll < 0.40
@@ -200,8 +214,11 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                  moraineDep = hashToRangeGeo h3 3 12
                  evt = HydroModify fid (GlacierRetreat retreatLen moraineDep)
                  tbs' = updateFeature fid
-                     (\p → p { pfActivity = FDormant
-                              , pfLastActivePeriod = periodIdx }) tbs
+                     (\p → let g = getGlacierParams p
+                           in p { pfFeature = HydroShape $ GlacierFeature
+                                      (g { glLength = max 5 (glLength g - retreatLen) })
+                                , pfActivity = FDormant
+                                , pfLastActivePeriod = periodIdx }) tbs
              in (evt : events, tbs')
 
         else if roll < 0.50
@@ -266,7 +283,10 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                  advLen = hashToRangeGeo h2 3 8  -- minimal
                  evt = HydroModify fid (GlacierAdvance advLen 0)
                  tbs' = updateFeature fid
-                     (\p → p { pfLastActivePeriod = periodIdx }) tbs
+                     (\p → let g = getGlacierParams p
+                           in p { pfFeature = HydroShape $ GlacierFeature
+                                      (g { glLength = glLength g + advLen })
+                                , pfLastActivePeriod = periodIdx }) tbs
              in (evt : events, tbs')
 
         else if roll < 0.45
@@ -277,8 +297,11 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                  moraineDep = hashToRangeGeo h3 5 20
                  evt = HydroModify fid (GlacierRetreat retreatLen moraineDep)
                  tbs' = updateFeature fid
-                     (\p → p { pfActivity = FDormant
-                              , pfLastActivePeriod = periodIdx }) tbs
+                     (\p → let g = getGlacierParams p
+                           in p { pfFeature = HydroShape $ GlacierFeature
+                                      (g { glLength = max 5 (glLength g - retreatLen) })
+                                , pfActivity = FDormant
+                                , pfLastActivePeriod = periodIdx }) tbs
              in (evt : events, tbs')
 
         else if roll < 0.65
@@ -323,9 +346,13 @@ evolveFDormantGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                  advWid = hashToRangeGeo h3 3 10
                  evt = HydroModify fid (GlacierAdvance advLen advWid)
                  tbs' = updateFeature fid
-                     (\p → p { pfActivity = FActive
-                              , pfEruptionCount = pfEruptionCount p + 1
-                              , pfLastActivePeriod = periodIdx }) tbs
+                     (\p → let g = getGlacierParams p
+                           in p { pfFeature = HydroShape $ GlacierFeature
+                                      (g { glLength = glLength g + advLen
+                                         , glWidth = max (glWidth g) (glWidth g + advWid) })
+                                , pfActivity = FActive
+                                , pfEruptionCount = pfEruptionCount p + 1
+                                , pfLastActivePeriod = periodIdx }) tbs
              in (evt : events, tbs')
         else
         -- 60%: Stay dormant
@@ -339,8 +366,11 @@ evolveFDormantGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                  advLen = hashToRangeGeo h2 5 15
                  evt = HydroModify fid (GlacierAdvance advLen 0)
                  tbs' = updateFeature fid
-                     (\p → p { pfActivity = FActive
-                              , pfLastActivePeriod = periodIdx }) tbs
+                     (\p → let g = getGlacierParams p
+                           in p { pfFeature = HydroShape $ GlacierFeature
+                                      (g { glLength = glLength g + advLen })
+                                , pfActivity = FActive
+                                , pfLastActivePeriod = periodIdx }) tbs
              in (evt : events, tbs')
 
         else if roll < 0.35

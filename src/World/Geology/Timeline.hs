@@ -17,17 +17,21 @@ import World.Geology.Types
 import World.Geology.Hash
 import World.Geology.Crater (generateCraters)
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
-                             , LakeParams(..))
+                             , LakeParams(..), GlacierParams(..))
 import World.Hydrology.Simulation (simulateHydrology, FlowResult(..)
                                   , ElevGrid(..), buildInitialElevGrid
                                   , updateElevGrid)
 import World.Geology.Timeline.Helpers
-    ( mkGeoPeriod, erosionFromGeoState, regionalErosionMap )
+    ( mkGeoPeriod, erosionFromGeoState, regionalErosionMap
+    , isGlacierFeature, evolveGlacierCapped )
 import World.Geology.Timeline.Volcanism
     ( applyPeriodVolcanism, applyVolcanicEvolution, generateEruption )
 import World.Geology.Timeline.River
     ( reconcileHydrology, mergeConvergingRivers )
 import World.Constants (seaLevel)
+import World.Geology.Hash (hashGeo, hashToFloatGeo, scaleCount)
+import World.Hydrology.Glacier (generateGlaciers)
+import World.Hydrology.Glacier.Common (getGlacierParams)
 import World.Weather.Types
 import World.Weather.Generate (updateClimateFromGrid, oceanRegionsFromGrid)
 
@@ -91,6 +95,7 @@ buildTimeline seed worldSize plateCount erosionIntensity volcanicActivity =
 
 isRiverCarveEvtCached ∷ GeoEvent → Bool
 isRiverCarveEvtCached (HydroEvent (RiverFeature _)) = True
+isRiverCarveEvtCached (HydroEvent (GlacierFeature _)) = True
 isRiverCarveEvtCached (RiverSegmentEvent _) = True
 isRiverCarveEvtCached (RiverDeltaEvent _) = True
 isRiverCarveEvtCached _ = False
@@ -287,7 +292,44 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
             elevGrid tbs
 
         tbs_h = mergeConvergingRivers worldSize (tbsPeriodIdx tbs) tbs_h0
+
+        -- === GLACIER GENERATION + EVOLUTION ===
+        glacierSeed = ageSeed `xor` 0x61AC1E5
+        existingGlaciers = filter (\pf → isGlacierFeature (pfFeature pf)
+                                       ∧ (pfActivity pf ≡ FActive
+                                        ∨ pfActivity pf ≡ FDormant))
+                                  (tbsFeatures tbs_h)
+        glacierCap = scaleCount worldSize 4
+
+        -- Generate new glaciers if below minimum population
+        (newGlacierPfs, tbs_g0) =
+            if length existingGlaciers < glacierCap
+            then generateGlaciers glacierSeed worldSize plates gs1
+                     (tbsPeriodIdx tbs) tbs_h
+            else ([], tbs_h)
+        newGlacierEvents = map (\pf → HydroEvent (pfToGlacierFeature pf))
+                               newGlacierPfs
+
+        -- Evolve existing glaciers (advance/retreat/surge/melt)
+        branchCap = scaleCount worldSize 8
+        canBranch = length existingGlaciers < branchCap
+        (glacierEvolveEvents, tbs_g1) =
+            foldl' (evolveGlacierCapped glacierSeed canBranch
+                        (tbsPeriodIdx tbs) gs1)
+                   ([], tbs_g0) existingGlaciers
+
+        -- Re-emit carving events for all still-active glaciers
+        -- This compounds carving across ages — deeper fjords each age
+        activeGlacierRecarve =
+            [ HydroEvent (pfToGlacierFeature pf)
+            | pf ← tbsFeatures tbs_g1
+            , isGlacierFeature (pfFeature pf)
+            , pfActivity pf ≡ FActive
+            ]
+
         allEvents = meteorites <> eruptions <> hydroEvents
+                 <> newGlacierEvents <> glacierEvolveEvents
+                 <> activeGlacierRecarve
 
         -- === BIDIRECTIONAL CO2 SYNC ===
         -- CO2 rises from eruptions, decays from weathering.
@@ -298,7 +340,10 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
         weatheringRate = duration * 0.005
                        * (1.0 + 0.5 * max 0.0 (avgTemp - 10.0) / 20.0)
                        * (1.0 + 0.3 * avgPrecip)
-        newCO2 = max 0.5 (gsCO2 gs1 + eruptionCO2Boost - weatheringRate)
+        -- Milankovitch-like CO2 oscillation for ice age cycles
+        iceAgePhase = currentDate * 0.4
+        co2Oscillation = 0.2 * sin (iceAgePhase * 2.0 * pi)
+        newCO2 = max 0.4 (gsCO2 gs1 + eruptionCO2Boost - weatheringRate + co2Oscillation)
 
         gs2 = gs1 { gsCO2 = newCO2 }
 
@@ -318,11 +363,16 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
 
         -- Update climate's CO2 to stay in sync
         climate' = climate { csGlobalCO2 = newCO2 }
-        tbs_final = addPeriod period (tbs_h { tbsGeoState = gs2
-                                             , tbsClimateState = climate' })
+        tbs_final = addPeriod period (tbs_g1 { tbsGeoState = gs2
+                                              , tbsClimateState = climate' })
         elevGrid' = updateElevGrid worldSize elevGrid period
 
     in (tbs_final, elevGrid')
+
+-- * Glacier helpers
+
+pfToGlacierFeature ∷ PersistentFeature → HydroFeature
+pfToGlacierFeature pf = GlacierFeature (getGlacierParams pf)
 
 -- * Average precipitation
 

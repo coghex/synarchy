@@ -7,6 +7,7 @@ module World.Fluid.Ocean
     ) where
 
 import UPrelude
+import Data.List (sort)
 import Data.Word (Word64)
 import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
@@ -42,10 +43,12 @@ computeOceanMap seed worldSize plateCount plates applyTL =
                        then seaLevel + 100
                        else fst (applyTL gx' gy' (baseElev, baseMat))
 
-        -- Use MINIMUM elevation across 5 sample points (center + corners).
-        -- This ensures the BFS can traverse chunks where part of the
-        -- chunk is below sea level (e.g., river valleys, coastal areas)
-        -- even if the center point is above sea level.
+        -- Use MEDIAN elevation across 5 sample points (center + corners).
+        -- This requires a majority (3+) of the chunk to be at/below sea
+        -- level for the BFS to propagate, preventing ocean from bleeding
+        -- inland through single low-lying corners on flat continents.
+        -- Coastal coverage is maintained by computeChunkFluid's
+        -- hasOceanNeighbor + per-tile surfZ checks.
         chunkElev ∷ ChunkCoord → Int
         chunkElev (ChunkCoord cx cy) =
             let baseGX = cx * chunkSize
@@ -58,7 +61,8 @@ computeOceanMap seed worldSize plateCount plates applyTL =
                           , sampleElev (baseGX + chunkSize - 1)
                                        (baseGY + chunkSize - 1)
                           ]
-            in minimum samples
+                sorted5 = sort samples
+            in sorted5 !! 2  -- median
 
         oceanSeeds = concatMap (\plate →
             if plateIsLand plate

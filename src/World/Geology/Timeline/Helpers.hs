@@ -312,8 +312,8 @@ reconcileLakes ∷ Word64 → Int → Int → Int
               → ([PersistentFeature], [GeoEvent], TimelineBuildState)
 reconcileLakes _seed _ageIdx periodIdx worldSize existingLakes simLakes tbs =
     let lakeMatchRadius = 60
-        -- Cap total lakes to keep continents natural.
-        maxTotalLakes = max 20 (scaleCount worldSize 40)
+        -- Fewer lakes with more size variation — natural distribution.
+        maxTotalLakes = max 15 (scaleCount worldSize 30)
         currentLakeCount = length existingLakes
         budget = max 0 (maxTotalLakes - currentLakeCount)
 

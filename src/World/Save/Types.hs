@@ -14,6 +14,7 @@ import World.Tool.Types (ToolMode(..))
 import World.Region.Types (RegionCoord(..))
 import World.Weather.Types (RegionClimate(..))
 import World.Base (GeoFeatureId(..))
+import Engine.Graphics.Camera (CameraFacing(..))
 
 -- | Human-readable metadata for save listing
 data SaveMetadata = SaveMetadata
@@ -30,6 +31,8 @@ data SaveData = SaveData
     , sdGenParams  ∷ !WorldGenParams
     , sdCameraX    ∷ !Float
     , sdCameraY    ∷ !Float
+    , sdCameraZoom ∷ !Float
+    , sdCameraFacing ∷ !CameraFacing
     , sdTimeHour   ∷ !Int
     , sdTimeMinute ∷ !Int
     , sdDateYear   ∷ !Int

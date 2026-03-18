@@ -42,7 +42,7 @@ maxGridDim ∷ Int
 maxGridDim = 384
 
 minLakeDepth ∷ Int
-minLakeDepth = 8
+minLakeDepth = 9
 
 -- * Types
 
@@ -482,17 +482,24 @@ simulateHydrology seed worldSize ageIdx grid =
         ---------------------------------------------------
         -- Step 4: Lakes
         ---------------------------------------------------
+        -- Raw lake candidates — sorted deepest-first so large basins
+        -- get priority during dedup (they "claim" more territory).
         lakes ∷ [LakeParams]
-        lakes = catMaybes
+        lakes = sortBy (comparing (Down . lkDepth)) $ catMaybes
             [ let origE  = origElev VU.! idx
                   fillE  = filledElev VU.! idx
                   depth  = fillE - origE
                   gx     = gxVec VU.! idx
                   gy     = gyVec VU.! idx
+                  -- Radius scales with sqrt(depth) — deep basins get
+                  -- proportionally larger lakes (power-law distribution).
+                  -- Cap at 50 to keep spillway checks within land.
+                  r = min 50 (max 4 (round (sqrt (fromIntegral depth ∷ Float)
+                           * (4.0 ∷ Float))))
               in if landVec VU.! idx ∧ depth ≥ minLakeDepth
                  then Just LakeParams
                     { lkCenter  = GeoCoord gx gy
-                    , lkRadius  = min 20 (max 3 (depth + spacing))
+                    , lkRadius  = r
                     , lkSurface = fillE
                     , lkDepth   = depth
                     , lkSource  = TectonicBasin
@@ -501,7 +508,7 @@ simulateHydrology seed worldSize ageIdx grid =
             | idx ← [0 .. totalSamples - 1]
             ]
 
-        dedupedLakes = dedupLakes worldSize spacing lakes
+        dedupedLakes = dedupLakes worldSize lakes
 
         ---------------------------------------------------
         -- Step 5: River sources
@@ -551,8 +558,12 @@ simulateHydrology seed worldSize ageIdx grid =
 
 -- * Lake Deduplication
 
-dedupLakes ∷ Int → Int → [LakeParams] → [LakeParams]
-dedupLakes worldSize spacing = go []
+-- | Radius-aware dedup: a new lake is rejected if it falls within
+--   the exclusion zone of any already-accepted lake.  The exclusion
+--   radius is the *larger* of the two lakes' radii × 1.5, so big
+--   lakes claim more territory and prevent noisy clusters.
+dedupLakes ∷ Int → [LakeParams] → [LakeParams]
+dedupLakes worldSize = go []
   where
     go acc [] = acc
     go acc (lk:rest) =
@@ -560,7 +571,11 @@ dedupLakes worldSize spacing = go []
                 let GeoCoord ex ey = lkCenter existing
                     GeoCoord lx ly = lkCenter lk
                     (dxi, dyi) = wrappedDeltaUV worldSize lx ly ex ey
-                in abs dxi < spacing * 3 ∧ abs dyi < spacing * 3
+                    -- Exclusion zone: 1.5× the larger radius
+                    exclR = round (fromIntegral (max (lkRadius existing)
+                                                     (lkRadius lk))
+                                   * (1.5 ∷ Float))
+                in abs dxi < exclR ∧ abs dyi < exclR
                 ) acc
         in if dominated
            then go acc rest

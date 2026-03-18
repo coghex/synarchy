@@ -242,6 +242,7 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
 
     isRiverCarveEvent ∷ GeoEvent → Bool
     isRiverCarveEvent (HydroEvent (RiverFeature _)) = True
+    isRiverCarveEvent (HydroEvent (GlacierFeature _)) = True
     isRiverCarveEvent (RiverSegmentEvent _) = True
     isRiverCarveEvent (RiverDeltaEvent _) = True
     isRiverCarveEvent _ = False

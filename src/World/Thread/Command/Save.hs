@@ -26,9 +26,11 @@ import World.Geology (buildTimeline)
 import World.Geology.Log (formatTimeline, formatPlatesSummary)
 import World.Fluids (computeOceanMap, isOceanChunk)
 import World.Plate (generatePlates, elevationAtGlobal)
-import World.Preview (buildPreviewImage, PreviewImage(..))
+import World.Preview (buildPreviewFromPixels, PreviewImage(..))
 import World.Render (surfaceHeadroom)
-import World.ZoomMap (buildZoomCache)
+import World.ZoomMap (buildZoomCacheWithPixels)
+import World.ZoomMap.ColorPalette (buildColorPalette)
+import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Save.Serialize (saveWorld)
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
@@ -47,7 +49,8 @@ handleWorldSaveCommand env logger pageId saveName = do
             -- Read every IORef we care about (we're on the
             -- world thread, so no races with worldLoop writes)
             mParams   ← readIORef (wsGenParamsRef worldState)
-            WorldCamera cx cy ← readIORef (wsCameraRef worldState)
+            cam       ← readIORef (cameraRef env)
+            let (cx, cy) = camPosition cam
             WorldTime h m     ← readIORef (wsTimeRef worldState)
             WorldDate y mo d  ← readIORef (wsDateRef worldState)
             tScale    ← readIORef (wsTimeScaleRef worldState)
@@ -73,6 +76,8 @@ handleWorldSaveCommand env logger pageId saveName = do
                             , sdGenParams  = params
                             , sdCameraX    = cx
                             , sdCameraY    = cy
+                            , sdCameraZoom = camZoom cam
+                            , sdCameraFacing = camFacing cam
                             , sdTimeHour   = h
                             , sdTimeMinute = m
                             , sdDateYear   = y
@@ -114,6 +119,11 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     let phaseRef = wsLoadPhaseRef worldState
         totalSteps = 4
 
+    -- Register early so the render thread can find this world
+    -- when uploading the zoom atlas (same as init path)
+    atomicModifyIORef' (worldManagerRef env) $ \mgr →
+        (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
+
     -- 1. Restore gen params (the big one — plates, timeline,
     --    ocean map, climate are all inside here)
     writeIORef phaseRef (LoadPhase1 1 totalSteps)
@@ -135,16 +145,30 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     writeIORef (wsClimateRef worldState)  (sdClimate saveData)
     writeIORef (wsRiverFlowRef worldState) (sdRiverFlow saveData)
 
-    -- 3. Rebuild derived caches (cheap compared to worldgen)
+    -- 3. Rebuild zoom cache with per-chunk textures (matches init path)
     writeIORef phaseRef (LoadPhase1 2 totalSteps)
-    sendGenLog env "Building zoom cache..."
+    sendGenLog env "Building zoom color palette..."
     registry ← readIORef (materialRegistryRef env)
-    let !_ = registry `seq` ()  -- force registry read before zoom cache build
-    let zoomCache = buildZoomCache params registry
+    let !_ = registry `seq` ()
+    palette ← buildColorPalette logger "data/materials" "data/vegetation"
+    _ ← evaluate (force palette)
+
+    sendGenLog env "Building zoom cache with per-chunk textures..."
+    let (zoomCache, chunkPixels) = buildZoomCacheWithPixels params registry palette
+    _ ← evaluate (force zoomCache)
+    _ ← evaluate (force chunkPixels)
     writeIORef (wsZoomCacheRef worldState) zoomCache
 
+    sendGenLog env "Assembling zoom texture atlas..."
+    let atlas = buildZoomAtlas (V.length zoomCache) chunkPixels
+    _ ← evaluate (force atlas)
+    writeIORef (zoomAtlasDataRef env) $
+        Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas)
+    writeIORef (wsZoomAtlasRef worldState) Nothing
+
     sendGenLog env "Rendering world preview..."
-    let preview = buildPreviewImage params zoomCache
+    let preview = buildPreviewFromPixels params zoomCache chunkPixels
+    _ ← evaluate (force preview)
     writeIORef (worldPreviewRef env) $
         Just (piWidth preview, piHeight preview, piData preview)
 
@@ -152,7 +176,9 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     writeIORef phaseRef (LoadPhase1 3 totalSteps)
     sendGenLog env "Generating initial chunks..."
     catalog ← readIORef (floraCatalogRef env)
-    let centerCoord = ChunkCoord 0 0
+    let camCX = floor (sdCameraX saveData) `div` chunkSize
+        camCY = floor (sdCameraY saveData) `div` chunkSize
+        centerCoord = ChunkCoord camCX camCY
         (ct, cs, cterrain, cf, cice, cflora) = generateChunk registry catalog params centerCoord
         centerChunk = LoadedChunk
             { lcCoord             = centerCoord
@@ -173,22 +199,24 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     writeIORef phaseRef (LoadPhase1 4 totalSteps)
     let remainingCoords =
             [ ChunkCoord cx cy
-            | cx ← [-chunkLoadRadius .. chunkLoadRadius]
-            , cy ← [-chunkLoadRadius .. chunkLoadRadius]
-            , not (cx ≡ 0 ∧ cy ≡ 0)
+            | cx ← [camCX - chunkLoadRadius .. camCX + chunkLoadRadius]
+            , cy ← [camCY - chunkLoadRadius .. camCY + chunkLoadRadius]
+            , not (cx ≡ camCX ∧ cy ≡ camCY)
             ]
     writeIORef (wsInitQueueRef worldState) remainingCoords
 
-    -- 6. Register world in the manager
-    atomicModifyIORef' (worldManagerRef env) $ \mgr →
-        (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
-
-    -- 7. Set camera z-slice from saved camera position
-    let (surfaceElev, _mat) =
-            elevationAtGlobal seed (wgpPlates params) worldSize 0 0
+    -- 6. Set camera z-slice from saved camera position
+    let camGX = round (sdCameraX saveData) ∷ Int
+        camGY = round (sdCameraY saveData) ∷ Int
+        (surfaceElev, _mat) =
+            elevationAtGlobal seed (wgpPlates params) worldSize camGX camGY
         startZSlice = surfaceElev + surfaceHeadroom
     atomicModifyIORef' (cameraRef env) $ \cam →
-        (cam { camZSlice = startZSlice, camZTracking = True }, ())
+        (cam { camPosition = (sdCameraX saveData, sdCameraY saveData)
+             , camZoom     = sdCameraZoom saveData
+             , camFacing   = sdCameraFacing saveData
+             , camZSlice   = startZSlice
+             , camZTracking = True }, ())
 
     let totalInitialChunks =
             (2 * chunkLoadRadius + 1) * (2 * chunkLoadRadius + 1)

@@ -335,6 +335,7 @@ function mainMenu.loadAndShowSave(saveName)
 
     worldManager.currentWorld = "main_world"
     worldManager.active = true
+    worldView.loadedFromSave = true
 
     worldView.sendTexturesToWorld("main_world")
     world.show("main_world")

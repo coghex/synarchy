@@ -50,7 +50,7 @@ import World.Geology.Coastal (CoastType(..), classifyCoast, isDepositional
                              , beachMaterial, wetlandMaterial, deltaMaterial
                              , coastHash, sandProfile, outcroppHardness
                              , maxCoastalDist, filterNearbyMouths
-                             , isNearRiverMouth)
+                             , isNearRiverMouth, shorelineOffset)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import Control.Monad.ST (runST)
 import Control.Monad (when, forM_)
@@ -306,19 +306,21 @@ buildZoomCacheWithPixels params registry palette =
                                          lh = coastHash seed gx gy
                                          roll = fromIntegral (lh .&. 0xFF)
                                                 / 255.0 ∷ Float
-                                         sandLevel = sandProfile dist
+                                         offset = shorelineOffset seed gx gy
+                                         effDist = max 1 (dist + round offset)
+                                         sandLevel = sandProfile effDist
                                          isOutcrop = hardness ≥ outcroppHardness
-                                                   ∧ e > sandLevel
+                                                   ∧ e > sandLevel + 2
                                          newMat
                                            | isDepositional coastType ∧ not isOutcrop
                                              = case coastType of
                                                  _ | isDepositional coastType →
                                                      case coastType of
                                                        DepositionalWetland →
-                                                           wetlandMaterial dist roll
+                                                           wetlandMaterial effDist roll
                                                        DeltaicCoast →
-                                                           deltaMaterial dist roll
-                                                       _ → beachMaterial dist m roll
+                                                           deltaMaterial effDist roll
+                                                       _ → beachMaterial effDist m roll
                                                  _ → m
                                            | otherwise = m
                                      in if newMat ≡ m

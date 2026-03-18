@@ -14,6 +14,7 @@ module World.Geology.Coastal
     , maxCoastalDist
     , filterNearbyMouths
     , isNearRiverMouth
+    , shorelineOffset
     ) where
 
 import UPrelude
@@ -117,7 +118,7 @@ sandProfile dist
     | otherwise = seaLevel + 3
 
 outcroppHardness ∷ Float
-outcroppHardness = 0.6
+outcroppHardness = 0.7
 
 -- * Material Selection
 
@@ -251,16 +252,20 @@ applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elev
                             (cx * chunkSize + lx) (cy * chunkSize + ly)
                         roll = fromIntegral (localHash .&. 0xFF) / 255.0 ∷ Float
 
-                        sandLevel = sandProfile dist
+                        gx = cx * chunkSize + lx
+                        gy = cy * chunkSize + ly
+                        offset = shorelineOffset seed gx gy
+                        effDist = max 1 (dist + round offset)
+                        sandLevel = sandProfile effDist
 
                     if isDepositional coastType
                     then do
                         let isOutcrop = hardness ≥ outcroppHardness
-                                      ∧ elev > sandLevel
+                                      ∧ elev > sandLevel + 2
                             chooseMat = case coastType of
-                                DepositionalWetland → wetlandMaterial dist roll
-                                DeltaicCoast → deltaMaterial dist roll
-                                _ → beachMaterial dist (unMaterialId mat) roll
+                                DepositionalWetland → wetlandMaterial effDist roll
+                                DeltaicCoast → deltaMaterial effDist roll
+                                _ → beachMaterial effDist (unMaterialId mat) roll
                         if isOutcrop
                         then pure ()
                         else do
@@ -310,7 +315,7 @@ applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elev
             matF  ← VU.unsafeFreeze matM
             pure (elevF, matF)
 
-        smoothedElev = smoothCoast 3 borderSize distField passElev
+        smoothedElev = smoothCoast 5 borderSize distField passElev
 
     in (smoothedElev, passMat)
 
@@ -387,7 +392,7 @@ smoothCoast iters borderSize distF elev =
                     let readN nx ny
                             | nx ≥ 0 ∧ nx < borderSize
                               ∧ ny ≥ 0 ∧ ny < borderSize
-                                = pure (elev VU.! (ny * borderSize + nx))
+                                = VUM.read em (ny * borderSize + nx)
                             | otherwise = pure e
                     n ← readN bx (by - 1)
                     s ← readN bx (by + 1)
@@ -397,6 +402,35 @@ smoothCoast iters borderSize distF elev =
                     VUM.write em idx (min e avg)
             VU.unsafeFreeze em
     in smoothCoast (iters - 1) borderSize distF smoothed
+
+-- * Shoreline Noise
+
+-- | Coherent 2D value noise for smoothing the depositional beach edge.
+--   Wavelength 48 tiles (~3 chunks), amplitude ±2 tiles.
+--   Returns a smooth float that shifts effective distance from ocean.
+shorelineOffset ∷ Word64 → Int → Int → Float
+shorelineOffset seed gx gy =
+    let fx = fromIntegral gx / 48.0 ∷ Float
+        fy = fromIntegral gy / 48.0 ∷ Float
+        ix = floor fx ∷ Int
+        iy = floor fy ∷ Int
+        fracX = fx - fromIntegral ix
+        fracY = fy - fromIntegral iy
+        sx = fracX * fracX * (3.0 - 2.0 * fracX)
+        sy = fracY * fracY * (3.0 - 2.0 * fracY)
+        h00 = shoreHash seed ix       iy
+        h10 = shoreHash seed (ix + 1) iy
+        h01 = shoreHash seed ix       (iy + 1)
+        h11 = shoreHash seed (ix + 1) (iy + 1)
+        top    = h00 + sx * (h10 - h00)
+        bottom = h01 + sx * (h11 - h01)
+        val    = top  + sy * (bottom - top)
+    in (val * 2.0 - 1.0) * 2.0  -- range ±2
+
+shoreHash ∷ Word64 → Int → Int → Float
+shoreHash seed x y =
+    let h = coastHash seed (x * 7919) (y * 6271)
+    in fromIntegral (h .&. 0xFFFF) / 65535.0
 
 -- * Hash Utility
 
