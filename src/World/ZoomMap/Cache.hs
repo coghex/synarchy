@@ -128,9 +128,12 @@ buildZoomCache params registry =
                 LocalClimate{lcTemp=cmt, lcSummerTemp=cst
                             , lcWinterTemp=cwt} =
                     lookupLocalClimate climate worldSize cgx cgy
-                altAboveSea = max 0 (avgElev - seaLevel)
+                -- Use plate elevation at chunk center (globally deterministic)
+                -- instead of avgElev (which includes erosion and varies per-chunk).
+                (centerElev, _) = elevationAtGlobal seed plates worldSize cgx cgy
+                altAboveSea = max 0 (centerElev - seaLevel)
                 altCool = fromIntegral altAboveSea * (0.065 ∷ Float)
-                ocnPen = if chunkOcean then 5.0 else 0.0 ∷ Float
+                ocnPen = if centerElev < seaLevel then 5.0 else 0.0 ∷ Float
                 iceNoise = zoomIceNoise seed cgx cgy
                 effT = cmt + ocnPen - altCool + iceNoise
                 chunkIce = effT < -2.0
@@ -360,9 +363,12 @@ buildZoomCacheWithPixels params registry palette =
                 LocalClimate{lcTemp=cmt', lcSummerTemp=cst'
                             , lcWinterTemp=cwt'} =
                     lookupLocalClimate climate worldSize cgx' cgy'
-                altAboveSea' = max 0 (avgElev - seaLevel)
+                -- Use plate elevation at chunk center (globally deterministic)
+                -- instead of avgElev (which includes erosion and varies per-chunk).
+                (centerElev', _) = elevationAtGlobal seed plates worldSize cgx' cgy'
+                altAboveSea' = max 0 (centerElev' - seaLevel)
                 altCool' = fromIntegral altAboveSea' * (0.065 ∷ Float)
-                ocnPen' = if chunkOcean then 5.0 else 0.0 ∷ Float
+                ocnPen' = if centerElev' < seaLevel then 5.0 else 0.0 ∷ Float
                 iceNoise' = zoomIceNoise seed cgx' cgy'
                 effT' = cmt' + ocnPen' - altCool' + iceNoise'
                 chunkIce' = effT' < -2.0
@@ -405,12 +411,16 @@ buildZoomCacheWithPixels params registry palette =
                           LocalClimate{lcTemp=mt, lcSummerTemp=st
                                       , lcWinterTemp=wt} =
                               lookupLocalClimate climate worldSize gx' gy'
-                          altAboveSea = max 0 (e - seaLevel)
+                          -- Use plate elevation (globally deterministic) to
+                          -- avoid chunk boundary discontinuities from erosion.
+                          (globalElev, _) = elevationAtGlobal seed plates worldSize gx' gy'
+                          altAboveSea = max 0 (globalElev - seaLevel)
                           altCool = fromIntegral altAboveSea * (0.065 ∷ Float)
-                          isOcn = case chunkFluidMap V.! idx' of
-                              Just fc → fcType fc ≡ Ocean
-                              Nothing → False
-                          ocnPen = if isOcn then 5.0 else 0.0 ∷ Float
+                          -- Ocean penalty from plate elevation (globally
+                          -- deterministic, avoids per-chunk fluid boundary
+                          -- discontinuities).
+                          ocnPen = if globalElev < seaLevel
+                                    then 5.0 else 0.0 ∷ Float
                           -- Smooth noise at large scale for zoom view
                           n = zoomIceNoise seed gx' gy'
                           effT = mt + ocnPen - altCool + n

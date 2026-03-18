@@ -68,35 +68,23 @@ computeChunkIce seed plates climate worldSize coord terrainSurfMap fluidMap =
                         altCooling = fromIntegral altAboveSeaLevel * lapseRate
 
                         -- Ocean thermal inertia: ocean resists freezing.
-                        -- Effectively makes ocean 5°C warmer for ice
-                        -- threshold purposes.
-                        isOcean = case fluidMap V.! idx of
-                            Just fc → fcType fc ≡ Ocean
-                            Nothing → False
-                        oceanPenalty = if isOcean then 5.0 else 0.0 ∷ Float
+                        -- Uses plate elevation vs sea level (globally
+                        -- deterministic) instead of per-chunk fluid map
+                        -- to avoid chunk boundary discontinuities.
+                        oceanPenalty = if globalElev < seaLevel
+                                       then 5.0 else 0.0 ∷ Float
 
-                        -- Deterministic noise: ±2°C variation to break
-                        -- up the straight latitude lines.
+                        -- Deterministic noise: ±2.5°C variation to break
+                        -- up the straight latitude lines and create smooth
+                        -- natural-looking ice boundaries.
                         noise = iceNoise seed gx' gy'
 
-                        -- Effective temperature for ice threshold
+                        -- Effective temperature for ice threshold.
+                        -- All inputs are globally deterministic so the
+                        -- ice boundary is smooth across chunk boundaries.
                         effectiveT = meanT + oceanPenalty - altCooling + noise
 
-                        -- Soft threshold: instead of a hard cutoff at -2°C,
-                        -- use a transition zone where ice probability depends
-                        -- on a per-tile hash. This prevents small elevation
-                        -- discontinuities at chunk boundaries from creating
-                        -- sharp ice edges on land.
-                        iceThreshold = -2.0 ∷ Float
-                        transitionWidth = 3.0 ∷ Float  -- °C wide transition
-                        tileRand = hashToFloat (tileHash (seed `xor` 0x1CE) gx' gy')
-                        hasIcePrimary
-                            | effectiveT < iceThreshold - transitionWidth = True
-                            | effectiveT > iceThreshold = False
-                            | otherwise =
-                                let t = (iceThreshold - effectiveT) / transitionWidth
-                                in tileRand < t
-                        hasIce = hasIcePrimary
+                        hasIce = effectiveT < -2.0
                                ∨ (winterT - altCooling < -10.0
                                   ∧ summerT - altCooling < 5.0)
 
