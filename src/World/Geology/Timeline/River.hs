@@ -28,6 +28,7 @@ import World.Geology.Timeline.Helpers
     ( isActiveRiver, isLakeFeature, isSourceNew, getRiverParamsFromPf
     , reconcileLakes )
 import World.Geology.Timeline.RiverTrace (traceRiverFromSource)
+import World.Chunk.Types (chunkSize)
 
 -- * Hydrology reconciliation
 
@@ -66,7 +67,7 @@ reconcileHydrology' seed ageIdx flowResult periodIdx worldSize elevGrid filledEl
                         if not (isActiveRiver (pfFeature existPf))
                         then (pfs, evts, st)
                         else let (pf', evt, st') = evolveExistingRiver
-                                                       seed ageIdx periodIdx
+                                                       seed ageIdx periodIdx worldSize
                                                        existPf st
                              in (pf' : pfs, evt ⧺ evts, st')
             ) ([], [], tbs) existingRiverIds
@@ -83,7 +84,7 @@ reconcileHydrology' seed ageIdx flowResult periodIdx worldSize elevGrid filledEl
         climate = tbsClimateState tbs
 
         allNewRivers = catMaybes $
-            parMap rdeepseq (\(idx, (gx, gy, elev, flow)) →
+            map (\(idx, (gx, gy, elev, flow)) →
                 traceRiverFromSource seed worldSize elevGrid filledElev flowDir
                     gx gy elev (ageIdx * 1000 + idx) flow climate
             ) (zip [0..] newSources)
@@ -120,11 +121,11 @@ reconcileHydrology' seed ageIdx flowResult periodIdx worldSize elevGrid filledEl
 
 -- * River evolution
 
-evolveExistingRiver ∷ Word64 → Int → Int
+evolveExistingRiver ∷ Word64 → Int → Int → Int
                     → PersistentFeature
                     → TimelineBuildState
                     → (PersistentFeature, [GeoEvent], TimelineBuildState)
-evolveExistingRiver seed ageIdx periodIdx pf tbs =
+evolveExistingRiver seed ageIdx periodIdx worldSize pf tbs =
     let fid = pfId pf
         GeoFeatureId fidInt = fid
         river = getRiverParamsFromPf pf
@@ -169,8 +170,12 @@ evolveExistingRiver seed ageIdx periodIdx pf tbs =
 
                 branchSegIdx = hashToRangeGeo h2 1 (numSegs - 1)
                 branchSeg = rpSegments river V.! min branchSegIdx (numSegs - 1)
-                GeoCoord bx by = rsStart branchSeg
-                GeoCoord bex bey = rsEnd branchSeg
+                -- Wrap coordinates to canonical u-space. Parent river
+                -- segments may have unwrapped coords from path tracing.
+                GeoCoord bx0 by0 = rsStart branchSeg
+                GeoCoord bex0 bey0 = rsEnd branchSeg
+                (bx, by) = wrapCoord worldSize bx0 by0
+                (bex, bey) = wrapCoord worldSize bex0 bey0
 
                 segDX = fromIntegral (bex - bx) ∷ Float
                 segDY = fromIntegral (bey - by) ∷ Float
@@ -463,7 +468,7 @@ spatiallyDiverseSources worldSize budget sources
 filterOverlappingMouths ∷ Int → [GeoCoord] → [RiverParams] → [RiverParams]
 filterOverlappingMouths worldSize existingMouths = go existingMouths
   where
-    mouthThreshold = 10 ∷ Int  -- min distance between river mouths
+    mouthThreshold = 30 ∷ Int  -- min distance between river mouths
     go _ [] = []
     go mouths (r:rs) =
         let GeoCoord mx my = rpMouthRegion r
@@ -474,3 +479,13 @@ filterOverlappingMouths worldSize existingMouths = go existingMouths
         in if tooClose
            then go mouths rs  -- skip this river
            else r : go (rpMouthRegion r : mouths) rs
+
+-- | Wrap (gx, gy) to canonical u-space.
+wrapCoord ∷ Int → Int → Int → (Int, Int)
+wrapCoord ws gx gy =
+    let w = ws * chunkSize
+        halfW = w `div` 2
+        u = gx - gy
+        v = gx + gy
+        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+    in ((wrappedU + v) `div` 2, (v - wrappedU) `div` 2)

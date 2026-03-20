@@ -84,8 +84,15 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
         -- u-axis wrap boundary.  Without this, rivers that cross
         -- ix=0 ↔ ix=gridW-1 in the flow grid get huge coordinate
         -- jumps and appear to span the entire world.
+        --
+        -- IMPORTANT: use the grid's actual u-axis period (gridW * spacing),
+        -- NOT worldTiles. The grid may not tile the world exactly (e.g.
+        -- gridW=384, spacing=10 → 3840, but worldTiles=4096). Using
+        -- worldTiles leaves a residual error of (worldTiles - gridW*spacing)
+        -- at each wrap crossing, creating long straight segments.
         worldTiles = worldSize * chunkSize
-        unwrappedPath = unwrapPathCoords worldTiles gridPath
+        gridWrapPeriod = gridW * spacing
+        unwrappedPath = unwrapPathCoords gridWrapPeriod gridPath
 
         -- Extend past the ocean sink to ensure the river reaches
         -- below-sea-level terrain. Without this, the grid resolution
@@ -105,17 +112,27 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
         noisyPath = addPathNoise seed riverIdx spacing fullPath
 
         -- Reject rivers that span more than 1/3 of the world.
-        -- These are following flow directions the wrong way around
-        -- the cylindrical u-axis instead of reaching the nearest coast.
+        -- Uses UNWRAPPED (continuous) coordinates to measure actual
+        -- path span, not canonical coordinates (which would show a
+        -- huge span for rivers crossing the wrap boundary).
         maxSpan = worldTiles `div` 3
         pathTooLong = case (noisyPath, reverse noisyPath) of
             ((sx, sy, _):_, (mx, my, _):_) →
                 abs (mx - sx) > maxSpan ∨ abs (my - sy) > maxSpan
             _ → False
 
-    in if length noisyPath < 4 ∨ pathTooLong
+        -- Re-wrap coordinates back to canonical u-space AFTER the
+        -- span check. The unwrap step made coordinates continuous
+        -- for noise displacement, but the resulting coords may be
+        -- outside the valid world range. If stored as-is, bounding
+        -- box computation wraps each point independently, producing
+        -- a bbox that spans the entire world — causing every chunk
+        -- to carve this river.
+        rewrappedPath = rewrapPath worldSize noisyPath
+
+    in if length rewrappedPath < 4 ∨ pathTooLong
        then Nothing
-       else buildRiverFromPath seed worldSize riverIdx flow climate noisyPath
+       else buildRiverFromPath seed worldSize spacing riverIdx flow climate rewrappedPath
 
 -- * Path unwrapping
 
@@ -149,6 +166,91 @@ unwrapPathCoords worldTiles (p0:rest) =
             p' = (x', y', e)
         in p' : go p' xs
 
+-- | Re-wrap path coordinates back into canonical u-space.
+--   After unwrapping (for continuous noise) and noise displacement,
+--   gx/gy may be outside the valid world range.
+--
+--   IMPORTANT: wraps using a CONSTANT u-offset derived from the
+--   first point. The old code wrapped each point independently,
+--   which could map consecutive smooth points to opposite sides
+--   of the world (u wraps from +halfW to -halfW), creating
+--   world-spanning segments that carve straight lines from
+--   source to mouth.
+--
+--   A constant offset preserves path continuity. The path may
+--   extend slightly outside [-halfW, halfW) for long rivers,
+--   but the carving/fluid code uses wrappedDeltaUV which handles
+--   this correctly. The bounding box may be conservatively large
+--   for wrap-crossing rivers, but that only affects performance.
+rewrapPath ∷ Int → [(Int, Int, Int)] → [(Int, Int, Int)]
+rewrapPath _ [] = []
+rewrapPath worldSize pts@((x0, y0, _) : _) =
+    let w = worldSize * chunkSize
+        halfW = w `div` 2
+        u0 = x0 - y0
+        wrappedU0 = ((u0 + halfW) `mod` w + w) `mod` w - halfW
+        uOffset = wrappedU0 - u0
+    in map (\(x, y, e) →
+        let u = x - y + uOffset
+            v = x + y
+            x' = (u + v) `div` 2
+            y' = (v - u) `div` 2
+        in (x', y', e)) pts
+
+-- * Long-gap subdivision
+
+-- | Split any consecutive pair of waypoints that are farther apart
+--   than maxLen into linearly interpolated sub-points. Elevations
+--   are interpolated linearly. This prevents single long straight
+--   segments from anomalous grid-path jumps or wrap-boundary residuals.
+subdivideLongGaps ∷ Int → [(Int, Int, Int)] → [(Int, Int, Int)]
+subdivideLongGaps _ [] = []
+subdivideLongGaps _ [x] = [x]
+subdivideLongGaps maxLen (p1@(x1, y1, e1) : p2@(x2, y2, e2) : rest) =
+    let dx = x2 - x1
+        dy = y2 - y1
+        dist = round (sqrt (fromIntegral (dx * dx + dy * dy) ∷ Float)) ∷ Int
+    in if dist ≤ maxLen
+       then p1 : subdivideLongGaps maxLen (p2 : rest)
+       else let n = (dist + maxLen - 1) `div` maxLen  -- number of sub-segments
+                interps = [ let t = fromIntegral i / fromIntegral n ∷ Float
+                                ix = x1 + round (fromIntegral dx * t)
+                                iy = y1 + round (fromIntegral dy * t)
+                                ie = e1 + round (fromIntegral (e2 - e1) * t)
+                            in (ix, iy, ie)
+                          | i ← [0 .. n - 1] ]
+            in interps ⧺ subdivideLongGaps maxLen (p2 : rest)
+
+-- * Long-segment splitting (segment-level safety net)
+
+-- | Split a single segment into sub-segments if it's longer than maxLen.
+--   Interpolates all fields linearly. Returns a singleton vector for
+--   short segments (no allocation overhead).
+splitLongSegment ∷ Int → RiverSegment → V.Vector RiverSegment
+splitLongSegment maxLen seg =
+    let GeoCoord sx sy = rsStart seg
+        GeoCoord ex ey = rsEnd seg
+        dx = ex - sx
+        dy = ey - sy
+        dist2 = dx * dx + dy * dy
+    in if dist2 ≤ maxLen * maxLen
+       then V.singleton seg
+       else let dist = round (sqrt (fromIntegral dist2 ∷ Float)) ∷ Int
+                n = max 2 ((dist + maxLen - 1) `div` maxLen)
+                lerp a b t = a + round (fromIntegral (b - a) * t)
+            in V.fromList
+                [ seg { rsStart     = GeoCoord (lerp sx ex t0) (lerp sy ey t0)
+                      , rsEnd       = GeoCoord (lerp sx ex t1) (lerp sy ey t1)
+                      , rsStartElev = lerp (rsStartElev seg) (rsEndElev seg) t0
+                      , rsEndElev   = lerp (rsStartElev seg) (rsEndElev seg) t1
+                      , rsWaterStart = lerp (rsWaterStart seg) (rsWaterEnd seg) t0
+                      , rsWaterEnd   = lerp (rsWaterStart seg) (rsWaterEnd seg) t1
+                      }
+                | i ← [0 .. n - 1]
+                , let t0 = fromIntegral i / fromIntegral n ∷ Float
+                      t1 = fromIntegral (i + 1) / fromIntegral n ∷ Float
+                ]
+
 -- * Coast extension
 
 -- | Extrapolate 2 waypoints past the flow grid sink to push the
@@ -164,18 +266,23 @@ extendToCoast sp pts =
     let n = length pts
         (x1, y1, _) = pts !! max 0 (n - 2)
         (x2, y2, e2) = pts !! (n - 1)
-    in if e2 > seaLevel + 5
-       then pts  -- river doesn't reach near the coast
+    -- Rivers within 15 elevation of sea level get extended to the
+    -- coast. The flow grid is coarse, so the river often stops a
+    -- few grid cells from the actual coastline.
+    in if e2 > seaLevel + 15
+       then pts
        else let dx = x2 - x1
                 dy = y2 - y1
                 len = sqrt (fromIntegral (dx * dx + dy * dy) ∷ Float)
-                -- Step in the same direction at ~spacing distance
+                halfSp = max 2 (sp `div` 2)
                 (stepX, stepY) = if len < 1.0
-                    then (sp, 0)
-                    else ( round (fromIntegral dx / len * fromIntegral sp)
-                         , round (fromIntegral dy / len * fromIntegral sp) )
-            in pts ⧺ [ (x2 + stepX, y2 + stepY, seaLevel - 1)
-                      , (x2 + stepX * 2, y2 + stepY * 2, seaLevel - 2) ]
+                    then (halfSp, 0)
+                    else ( round (fromIntegral dx / len * fromIntegral halfSp)
+                         , round (fromIntegral dy / len * fromIntegral halfSp) )
+                step1E = seaLevel
+                step2E = seaLevel - 1
+            in pts ⧺ [ (x2 + stepX,     y2 + stepY,     step1E)
+                      , (x2 + stepX * 2, y2 + stepY * 2, step2E) ]
 
 -- * Path noise
 
@@ -275,10 +382,17 @@ coherentNoise seed idx t =
 
 -- * Path construction
 
-buildRiverFromPath ∷ Word64 → Int → Int → Float → ClimateState
+buildRiverFromPath ∷ Word64 → Int → Int → Int → Float → ClimateState
                    → [(Int, Int, Int)] → Maybe RiverParams
-buildRiverFromPath seed worldSize riverIdx baseFlow climate path =
-    let monoPath = enforceMonotonicPath path
+buildRiverFromPath seed worldSize gridSpacing riverIdx baseFlow climate path =
+    let -- Subdivide any long gaps between consecutive waypoints.
+        -- This catches wrap-boundary residuals and anomalous grid-path
+        -- jumps that create visible straight-line carved segments.
+        -- Applied here (not earlier) so it works regardless of how the
+        -- path was produced (traced rivers, tributaries, etc.).
+        maxSegLen = gridSpacing * 3
+        subdividedPath = subdivideLongGaps maxSegLen path
+        monoPath = enforceMonotonicPath subdividedPath
         -- Keep every grid point (~10-tile segments at spacing=10).
         -- Shorter segments make the noise-displaced waypoints more
         -- visible as bends, preventing the "ruler-straight" look that
@@ -294,9 +408,10 @@ buildRiverFromPath seed worldSize riverIdx baseFlow climate path =
         ((srcX, srcY, _) : _) →
             let numWP = length decimated
                 (mouthX, mouthY, mouthElev) = last decimated
-                -- Rivers that reach the coast (mouth near sea level) are
-                -- always accepted regardless of length.
-                reachesCoast = mouthElev ≤ seaLevel + 5
+                -- Rivers that reach near the coast are always accepted
+                -- regardless of length. Generous threshold — the coast
+                -- extension will bridge the remaining gap.
+                reachesCoast = mouthElev ≤ seaLevel + 15
                 -- Inland rivers (feeding lakes, drying up) are fine if
                 -- they're long enough to look like a real river. Short
                 -- inland rivers just create blobs of water on hillsides.
@@ -308,7 +423,12 @@ buildRiverFromPath seed worldSize riverIdx baseFlow climate path =
                                zipWith (buildSegFromWaypoints seed worldSize
                                             numWP baseFlow climate)
                                        [0..] (zip decimated (drop 1 decimated))
-                        segments = poolWaterSurface segments0
+                        segments1 = poolWaterSurface segments0
+                        -- Split any segment longer than maxSegLen into
+                        -- sub-segments by linear interpolation. This is
+                        -- the final safety net — catches long segments
+                        -- regardless of their origin.
+                        segments = V.concatMap (splitLongSegment maxSegLen) segments1
                         totalFlow = case V.null segments of
                             True  → baseFlow
                             False → rsFlowRate (V.last segments)
@@ -351,8 +471,10 @@ clampMouthTransition pts =
     in case rest of
         -- Clamp the first above-sea-level point (= last above-sea in forward order)
         (x, y, e) : rs
-            | e ≤ seaLevel + 3 →
-                reverse belowSea ⧺ reverse ((x, y, seaLevel + 2) : rs)
+            | e ≤ seaLevel + 5 →
+                -- Restore original order: above-sea points, then clamped
+                -- transition point, then below-sea coast extension.
+                reverse rs ⧺ [(x, y, seaLevel + 2)] ⧺ reverse belowSea
         _ → pts
 
 enforceMonotonicPath ∷ [(Int, Int, Int)] → [(Int, Int, Int)]
@@ -384,32 +506,36 @@ buildSegFromWaypoints seed worldSize totalSegs baseFlow climate segIdx
 
         flow = (baseFlow + t * baseFlow * 2.0) * climateMult
 
-        -- Width scales with flow: narrow headwaters (1-2 tiles),
-        -- widening modestly downstream. Most rivers should be 2-5 wide;
-        -- only major rivers near their mouth reach 6-8.
+        -- Mouth proximity: the final 20% of the river widens into
+        -- a delta/estuary. mouthT ramps from 0 at t=0.8 to 1 at t=1.
+        mouthT = max 0.0 ((t - 0.8) / 0.2) ∷ Float
+        -- Below-sea-level segments (coast extension) get full widening.
+        belowSea = se ≤ seaLevel ∨ ee ≤ seaLevel
+        mouthFactor = if belowSea then 1.0 else mouthT
+
+        -- Width scales with flow, boosted at the mouth.
+        -- Headwaters: 1-3 tiles. Midstream: 3-8. Mouth: up to 16.
         rawWidth = max 1 (round (flow * 2.0)) ∷ Int
-        width = min 8 rawWidth
+        -- Mouth widening: up to 2× base width at the mouth
+        mouthBoost = round (fromIntegral rawWidth * mouthFactor) ∷ Int
+        width = min 16 (rawWidth + mouthBoost)
 
         h1 = hashGeo seed segIdx 1161
         valleyMult = 1.4 + hashToFloatGeo h1 * 0.6
 
         slopeDelta = abs (se - ee)
         -- Depth scales with flow: shallow headwaters, deeper downstream.
-        -- Minimum 2 ensures carved channel is below the water surface
-        -- (freeboard = 1, so depth must be > 1 for water to fill).
+        -- Minimum 2 gives visible water in the channel center.
         -- Capped at 5 tiles — carves gentle channels, not canyons.
+        -- Mouth segments are shallower (deltas are flat/wide, not deep).
         baseDepth = max 2 (slopeDelta `div` 8 + round (flow * 0.6))
-        depth = min 5 baseDepth
-        -- Valley width: just wide enough for the river + modest banks.
-        -- Tighter valleys prevent water from flooding wide areas.
+        depth = min 5 (if mouthFactor > 0.5 then max 2 (baseDepth - 1) else baseDepth)
+        -- Valley width: wider at the mouth to create a delta/sound.
+        -- Standard: channel + modest banks. Mouth: up to 2× wider.
         minValleyW = width + depth
         rawValleyW = max (width + 2) (round (fromIntegral width * valleyMult))
-        valleyW = max minValleyW (min 20 rawValleyW)
-
-        -- Consistent freeboard: water surface sits 1 tile below
-        -- the reference terrain. This keeps the water surface smooth
-        -- regardless of per-segment depth variation.
-        freeboard = 1 ∷ Int
+        mouthValleyBoost = round (fromIntegral rawValleyW * mouthFactor * 0.5) ∷ Int
+        valleyW = max minValleyW (min 32 (rawValleyW + mouthValleyBoost))
     in RiverSegment
         { rsStart       = GeoCoord sx sy
         , rsEnd         = GeoCoord ex ey
@@ -419,8 +545,11 @@ buildSegFromWaypoints seed worldSize totalSegs baseFlow climate segIdx
         , rsFlowRate    = flow
         , rsStartElev   = se
         , rsEndElev     = ee
-        , rsWaterStart  = max seaLevel (se - freeboard)
-        , rsWaterEnd    = max seaLevel (ee - freeboard)
+        -- Water surface = reference elevation (no freeboard). Every
+        -- tile carved below refElev gets water; uncarved tiles at
+        -- refElev don't. The carved terrain provides the depth profile.
+        , rsWaterStart  = max seaLevel se
+        , rsWaterEnd    = max seaLevel ee
         }
 
 -- * Water surface pooling

@@ -25,6 +25,7 @@ import World.Fluids (isOceanChunk, hasAnyOceanFluid, computeChunkFluid
                     , computeChunkLava, computeChunkLakes, computeChunkRivers
                     , unionFluidMap, equilibrateFluidMap, fillCoastalGaps)
 import World.Fluid.Internal (stripLakeRiverCliffs)
+import World.Fluid.Overflow (handleOverflow)
 import World.Fluid.Ice (computeChunkIce)
 import World.Vegetation (computeChunkVegetation, vegSnow, vegHash)
 import World.Flora.Placement (computeChunkFlora)
@@ -177,8 +178,13 @@ generateChunk registry catalog params coord =
         -- Extract river params from events (not features) so fluid
         -- fill matches the carved terrain, which uses event segments.
         eventRivers = concatMap extractEventRivers (gtPeriods timeline)
-        riverFluidMap = computeChunkRivers eventRivers worldSize
-                                           coord terrainSurfaceMap
+        -- Fill pass: compute river fluid from event segments.
+        initialRiverFluid = computeChunkRivers eventRivers worldSize
+                                               coord terrainSurfaceMap
+        -- Overflow detection: find dry tiles adjacent to river water
+        -- that are below the water surface (flat terrain spillover).
+        (adjustedTerrain, riverFluidMap) =
+            handleOverflow coord terrainSurfaceMap initialRiverFluid
 
         -- Lava > River > Lake > Ocean: rivers override lakes because
         -- river channels are carved to specific elevations, while lakes
@@ -188,19 +194,23 @@ generateChunk registry catalog params coord =
                     $ unionFluidMap riverFluidMap
                     $ unionFluidMap lakeFluidMap oceanFluidMap
 
+        -- Use adjusted terrain (with overflow channels carved) for
+        -- all downstream fluid processing.
+        finalTerrain = adjustedTerrain
+
         -- Equilibrate: propagate water to adjacent empty tiles whose
         -- terrain is at or below the neighboring water surface.
-        equilFluidMap = equilibrateFluidMap terrainSurfaceMap rawFluidMap
+        equilFluidMap = equilibrateFluidMap finalTerrain rawFluidMap
 
         -- Fill coastal gaps: below-sea-level terrain adjacent to any
         -- fluid that was missed by the ocean BFS (which uses pre-carving
         -- elevation) gets ocean water.
-        coastalFluidMap = fillCoastalGaps terrainSurfaceMap equilFluidMap
+        coastalFluidMap = fillCoastalGaps finalTerrain equilFluidMap
 
         -- Strip lake tiles adjacent to river tiles with much lower
         -- surfaces. Must run AFTER equilibration so stripped tiles
         -- aren't refilled by lake propagation.
-        fluidMap = stripLakeRiverCliffs terrainSurfaceMap coastalFluidMap
+        fluidMap = stripLakeRiverCliffs finalTerrain coastalFluidMap
 
 
         -- Surface map with fluids (ice is a visual overlay, does not
@@ -209,7 +219,7 @@ generateChunk registry catalog params coord =
             case fluidMap V.! idx of
                 Just fc → max surfZ (fcSurface fc)
                 Nothing → surfZ
-          ) terrainSurfaceMap
+          ) finalTerrain
 
         -- Build per-column tile data directly, fusing stratigraphy
         -- computation with ColumnTiles construction to avoid an
@@ -335,7 +345,7 @@ generateChunk registry catalog params coord =
         iceMap = computeChunkIce seed plates (wgpClimateState params) worldSize
                                  coord terrainSurfaceMap fluidMap
 
-    in (finalTiles, surfaceMap, terrainSurfaceMap, fluidMap, iceMap, floraData)
+    in (finalTiles, surfaceMap, finalTerrain, fluidMap, iceMap, floraData)
 
 -- | Generate only the exposed tiles for a column.
 --   Skips air tiles (MaterialId 0) to create caves and overhangs.

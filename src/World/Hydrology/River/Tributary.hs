@@ -9,6 +9,7 @@ import qualified Data.Vector as V
 import World.Base (GeoCoord(..))
 import World.Hydrology.Types
 import World.Geology.Hash
+import World.Constants (seaLevel)
 
 -- * Tributary Segment Builder
 
@@ -32,20 +33,20 @@ buildTributarySegments seed fidInt srcX srcY bx by numSegs branchElev =
           t2 = fromIntegral (segI + 1) / fromIntegral numSegs ∷ Float
           se = round (fromIntegral srcElev + t1 * fromIntegral (branchElev - srcElev) ∷ Float)
           ee = round (fromIntegral srcElev + t2 * fromIntegral (branchElev - srcElev) ∷ Float)
-          d = max 3 (round (flow * 8.0))
-          wd = let raw = max 2 (round (1.0 + flow * 3.0))
-               in min raw (max 2 (d - 1))
+          d = max 2 (min 4 (round (flow * 4.0)))
       in RiverSegment
           { rsStart       = GeoCoord wx1 wy1
           , rsEnd         = GeoCoord wx2 wy2
-          , rsWidth       = w
-          , rsValleyWidth = w * 3
+          , rsWidth       = min w 6
+          , rsValleyWidth = min (w * 2) 12
           , rsDepth       = d
           , rsFlowRate    = flow
           , rsStartElev   = se
           , rsEndElev     = ee
-          , rsWaterStart  = se - d + wd
-          , rsWaterEnd    = ee - d + wd
+          -- Water surface = reference elevation (no freeboard),
+          -- matching the main river fill convention.
+          , rsWaterStart  = max seaLevel se
+          , rsWaterEnd    = max seaLevel ee
           }
       ) [0..] (zip waypoints (drop 1 waypoints))
     where -- Interpolate waypoints along the line with coherent noise offsets.

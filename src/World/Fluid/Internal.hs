@@ -163,101 +163,10 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
 
     loop (20 ∷ Int)
 
-    -- Phase 3: Cross-fluid boundary smoothing.
-    -- When different fluid types meet (e.g., river-lake), ensure
-    -- adjacent water surfaces differ by at most 1 level.  The
-    -- renderer only draws smooth slopes for exactly 1-level drops;
-    -- anything larger creates a hard cliff.
-    -- Raise the lower tile toward the higher one (water fills to
-    -- the overflow point).  Iterate to propagate.
-    let crossFluidPass = do
-            cRef ← newSTRef False
-            forM_ [0 .. area - 1] $ \idx → do
-                val ← MV.read mv idx
-                case val of
-                    Just fc
-                      -- Skip Lake: lake surfaces should stay uniform.
-                      -- River tiles still need cross-fluid smoothing to
-                      -- fill boundary gaps.
-                      | fcType fc ≢ Ocean ∧ fcType fc ≢ Lava
-                        ∧ fcType fc ≢ Lake → do
-                        let lx = idx `mod` chunkSize
-                            ly = idx `div` chunkSize
-                            terrZ = surfaceMap VU.! idx
-                        maxNbr ← maxNeighborWaterSurface mv lx ly
-                        case maxNbr of
-                            Just nMax | nMax > fcSurface fc + 1 → do
-                                -- Don't raise beyond terrain + 3 (matches
-                                -- clampRiverDepth to prevent re-introducing
-                                -- depth violations after capping).
-                                let newSurf = min (nMax - 1) (terrZ + 3)
-                                when (newSurf > fcSurface fc) $ do
-                                    MV.write mv idx (Just (fc { fcSurface = newSurf }))
-                                    writeSTRef cRef True
-                            _ → pure ()
-                    _ → pure ()
-            readSTRef cRef
-        crossLoop 0 = pure ()
-        crossLoop n = do
-            didChange ← crossFluidPass
-            when didChange $ crossLoop (n - 1)
-    crossLoop (10 ∷ Int)
-
-    -- Phase 4: River water smoothing.
-    -- River tiles can have large water surface jumps where two
-    -- different river segments at different elevations meet.
-    -- Lower river water toward the minimum same-type neighbor,
-    -- floored at terrain+1.  Only lower — never raise — to
-    -- preserve the natural downhill gradient.
-    -- Also remove river tiles that create unresolvable cliffs
-    -- (terrain is too high to achieve a smooth surface).
-    let riverSmoothPass = do
-            rRef ← newSTRef False
-            forM_ [0 .. area - 1] $ \idx → do
-                val ← MV.read mv idx
-                case val of
-                    Just fc | fcType fc ≡ River → do
-                        let lx = idx `mod` chunkSize
-                            ly = idx `div` chunkSize
-                            surfZ = surfaceMap VU.! idx
-                        -- Check both River AND Ocean neighbors.
-                        -- River water adjacent to ocean should settle
-                        -- to sea level, not stay at its interpolated
-                        -- segment surface.
-                        minNS ← minNeighborSurfaceOfType mv River lx ly
-                        hasOceanNbr ← hasNeighborOfType mv Ocean lx ly
-                        let effectiveMin = case minNS of
-                                Just nMin | hasOceanNbr →
-                                    min nMin seaLevel
-                                Just nMin → nMin
-                                Nothing | hasOceanNbr → seaLevel
-                                Nothing → fcSurface fc  -- no change
-                        case minNS of
-                            Just nMin → do
-                                let target = max (effectiveMin + 1) (surfZ + 1)
-                                if fcSurface fc > target
-                                    then do
-                                        MV.write mv idx (Just (fc { fcSurface = target }))
-                                        writeSTRef rRef True
-                                    else when (fcSurface fc > nMin + 2
-                                              ∧ surfZ + 1 > nMin + 2) $ do
-                                        MV.write mv idx Nothing
-                                        writeSTRef rRef True
-                            Nothing | hasOceanNbr → do
-                                -- River tile with only ocean neighbors:
-                                -- lower to sea level
-                                let target = max seaLevel (surfZ + 1)
-                                when (fcSurface fc > target) $ do
-                                    MV.write mv idx (Just (fc { fcSurface = target }))
-                                    writeSTRef rRef True
-                            _ → pure ()
-                    _ → pure ()
-            readSTRef rRef
-        riverSmoothLoop 0 = pure ()
-        riverSmoothLoop n = do
-            didChange ← riverSmoothPass
-            when didChange $ riverSmoothLoop (n - 1)
-    riverSmoothLoop (10 ∷ Int)
+    -- Phases 3-4 (cross-fluid smoothing, river smoothing) removed.
+    -- River generation now handles surface smoothing directly via
+    -- poolWaterSurface + the in-pipeline smooth pass. No post-hoc
+    -- equilibration needed.
 
     V.freeze mv
 

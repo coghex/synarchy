@@ -47,26 +47,53 @@ spawnMeltwaterRiver seed periodIdx parentFid pf (events, tbs) =
         endX = termX + round (fromIntegral riverLen * cos riverAngle)
         endY = termY + round (fromIntegral riverLen * sin riverAngle)
 
-        -- Simple single-segment river for now
-        -- River generation will add more complexity later
-        segDepth = hashToRangeGeo (hashGeo seed fidInt 974) 5 15
-        seg = RiverSegment
-            { rsStart      = GeoCoord termX termY
-            , rsEnd        = GeoCoord endX endY
-            , rsWidth      = hashToRangeGeo h4 2 5
-            , rsValleyWidth = hashToRangeGeo (hashGeo seed fidInt 973) 8 20
-            , rsDepth      = segDepth
-            , rsFlowRate   = 0.4  -- moderate meltwater
-            , rsStartElev  = 0
-            , rsEndElev    = 0
-            , rsWaterStart = 0
-            , rsWaterEnd   = 0
-            }
+        -- Build 4 segments with perpendicular noise for natural look.
+        -- Without this, glacier rivers are ruler-straight from terminus
+        -- to endpoint — visually jarring and unrealistic.
+        numSegs = 4 ∷ Int
+        segWidth = hashToRangeGeo h4 2 5
+        segDepth = hashToRangeGeo (hashGeo seed fidInt 974) 3 8
+        segValleyW = hashToRangeGeo (hashGeo seed fidInt 973) 8 16
+        dx = fromIntegral (endX - termX) ∷ Float
+        dy = fromIntegral (endY - termY) ∷ Float
+        rLen = sqrt (dx * dx + dy * dy)
+        -- Perpendicular direction for noise offset
+        (perpX, perpY) = if rLen > 0.001
+            then (negate dy / rLen, dx / rLen)
+            else (0.0, 1.0)
+        -- Build waypoints with noise
+        waypoints = [ let t = fromIntegral i / fromIntegral numSegs ∷ Float
+                          baseX = fromIntegral termX + t * fromIntegral (endX - termX)
+                          baseY = fromIntegral termY + t * fromIntegral (endY - termY)
+                          -- Taper noise at endpoints
+                          taper = sin (t * 3.14159)
+                          noiseH = hashGeo seed (fidInt * 13 + i) 976
+                          noiseVal = (hashToFloatGeo noiseH - 0.5) * rLen * 0.25 * taper
+                          wx = round (baseX + perpX * noiseVal)
+                          wy = round (baseY + perpY * noiseVal)
+                      in GeoCoord wx wy
+                    | i ← [0 .. numSegs] ]
+        segments = V.fromList $ zipWith (\i (s, e) →
+            let t = fromIntegral (i + 1) / fromIntegral numSegs ∷ Float
+                flow = 0.2 + t * 0.3
+            in RiverSegment
+                { rsStart      = s
+                , rsEnd        = e
+                , rsWidth      = segWidth
+                , rsValleyWidth = segValleyW
+                , rsDepth      = segDepth
+                , rsFlowRate   = flow
+                , rsStartElev  = 0
+                , rsEndElev    = 0
+                , rsWaterStart = 0
+                , rsWaterEnd   = 0
+                }
+            ) [0∷Int ..] (zip waypoints (drop 1 waypoints))
 
         riverParams = RiverParams
             { rpSourceRegion = GeoCoord termX termY
             , rpMouthRegion  = GeoCoord endX endY
-            , rpSegments     = V.singleton seg
+            , rpSegments     = segments
             , rpFlowRate     = 0.4
             , rpMeanderSeed  = fromIntegral (hashGeo seed fidInt 975)
             }

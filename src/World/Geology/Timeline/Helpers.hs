@@ -119,14 +119,23 @@ getRiverParamsFromPf pf = case pfFeature pf of
 
 isSourceNew ∷ Int → [PersistentFeature] → (Int, Int, Int, Float) → Bool
 isSourceNew worldSize existingRivers (sx, sy, _, _) =
-    let threshold = 60  -- was 150 — allow rivers closer together
+    let threshold = 60
     in not $ any (\pf →
         let river = getRiverParamsFromPf pf
+            -- Check source proximity
             GeoCoord ex ey = rpSourceRegion river
             (dxi, dyi) = wrappedDeltaUV worldSize sx sy ex ey
-            dx = abs dxi
-            dy = abs dyi
-        in dx < threshold ∧ dy < threshold
+            sourceClose = abs dxi < threshold ∧ abs dyi < threshold
+            -- Also check mouth proximity — rivers from different ages
+            -- in the same drainage basin often have shifted sources but
+            -- converge to the same mouth. Without this, duplicate rivers
+            -- are created that carve overlapping straight+curved channels.
+            GeoCoord mx my = rpMouthRegion river
+            (dmxi, dmyi) = wrappedDeltaUV worldSize sx sy mx my
+            -- If the NEW source is close to an EXISTING mouth, the new
+            -- river would trace through the same basin to the same ocean.
+            nearExistingMouth = abs dmxi < threshold ∧ abs dmyi < threshold
+        in sourceClose ∨ nearExistingMouth
         ) existingRivers
 
 -- * Erosion

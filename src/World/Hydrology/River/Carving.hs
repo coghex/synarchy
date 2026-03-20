@@ -31,14 +31,12 @@ import World.Geology.Hash
 --   the target, we return noModification. This makes
 --   carving idempotent across multiple geological ages.
 applyRiverCarve ∷ RiverParams → Int → Int → Int → Int → GeoModification
+-- DEBUG STEP 1: carving only, no delta deposit
 applyRiverCarve river worldSize gx gy baseElev =
     let mSeed = rpMeanderSeed river
         bestCarve = findDeepestCarve worldSize gx gy mSeed baseElev
                                      (rpSegments river)
-        deltaDeposit = computeDeltaDeposit river worldSize gx gy baseElev
-    in if gmElevDelta bestCarve < 0
-       then bestCarve
-       else deltaDeposit
+    in bestCarve
 
 -- | Walk the segment list with an explicit recursive loop.
 --   This avoids the foldl' closure overhead and lets GHC
