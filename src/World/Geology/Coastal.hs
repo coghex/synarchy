@@ -392,7 +392,11 @@ smoothCoast iters borderSize distF elev =
                     let readN nx ny
                             | nx ≥ 0 ∧ nx < borderSize
                               ∧ ny ≥ 0 ∧ ny < borderSize
-                                = VUM.read em (ny * borderSize + nx)
+                                = let nIdx = ny * borderSize + nx
+                                      nd = distF VU.! nIdx
+                                  in if nd ≡ 0
+                                     then pure (seaLevel + 1)
+                                     else VUM.read em nIdx
                             | otherwise = pure e
                     n ← readN bx (by - 1)
                     s ← readN bx (by + 1)
