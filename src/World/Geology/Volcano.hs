@@ -22,28 +22,91 @@ import World.Geology.Hash
 
 -- * Distance Perturbation (breaks circular symmetry)
 
--- | Perturb a radial distance using multi-octave angle+radial noise.
---   Creates irregular, natural-looking feature boundaries without
---   visible concentric rings.
-perturbDist ∷ Int → Int → Float → Float → Float → Float → Float
-perturbDist cx cy dx dy dist radius =
-    let angle = atan2 dy dx + π
-        featureSeed = fromIntegral (cx * 7919 + cy * 6271) ∷ Word64
-        -- Radial position (0-1) for radial variation
-        radialT = if radius < 1.0 then 0.0 else dist / radius
-        -- Multiple octaves at different angular frequencies
-        -- with radial modulation to break concentric banding
-        n1 = angularNoise featureSeed 5  angle 17   -- very coarse lobes
-        n2 = angularNoise featureSeed 11 angle 31   -- medium lobes
-        n3 = angularNoise featureSeed 23 angle 47   -- fine detail
-        n4 = angularNoise featureSeed 37 angle 61   -- very fine detail
-        -- Radial noise: varies perturbation strength with distance
+-- | Perturb a radial distance using multi-octave angle+radial noise,
+--   pre-existing terrain elevation, and material hardness.
+--
+--   Terrain influence: higher ground increases effective distance (lava
+--   can't climb as far), lower ground decreases it (lava flows into
+--   valleys). Scales with radial position — near the vent the lava is
+--   thick and overpowers terrain; near the edges thin flows follow
+--   topography closely.
+--
+--   Hardness influence: harder rock creates more jagged boundaries
+--   (lava diverts around resistant ridges) by increasing noise
+--   amplitude, and slightly pulls the boundary inward. Softer rock
+--   lets lava flood uniformly, producing smoother shapes.
+perturbDist ∷ Int → Int → Float → Float → Float → Float → Int → Float → Float
+perturbDist cx cy dx dy _dist radius baseElev hardness =
+    let featureSeed = fromIntegral (cx * 7919 + cy * 6271) ∷ Word64
+
+        -- Domain warping: distort the (dx, dy) coordinate space so
+        -- that contour lines at different radii shift independently.
+        -- Without this, angular noise warps all contours identically
+        -- and they remain visibly concentric.
+        -- Two octaves at different cell sizes for multi-scale warp.
+        -- The finer cell is weighted heavily so that adjacent contour
+        -- rings (spaced ~5-15 tiles apart) get different warp offsets.
+        cellCoarse = max 4.0 (radius / 4.0)
+        cellFine   = max 3.0 (radius / 8.0)
+        rawDist    = sqrt (dx * dx + dy * dy)
+        -- Scale warp by distance from center: near the vent the lava
+        -- is thick and shape is always roughly circular; near the
+        -- edges the warp is full strength where rings are most visible.
+        centerScale = min 1.0 (rawDist / max 1.0 (radius * 0.25))
+        warpStr    = radius * 0.55 * centerScale
+        -- Coarse warp (large-scale bends)
+        wx0 = valueNoise2D featureSeed 41 dx dy cellCoarse
+        wy0 = valueNoise2D featureSeed 59 dx dy cellCoarse
+        -- Finer warp (differential shift between adjacent rings)
+        wx1 = valueNoise2D featureSeed 73 dx dy cellFine
+        wy1 = valueNoise2D featureSeed 89 dx dy cellFine
+        wx = (wx0 * 0.55 + wx1 * 0.45) * warpStr
+        wy = (wy0 * 0.55 + wy1 * 0.45) * warpStr
+        dx' = dx + wx
+        dy' = dy + wy
+        warpedDist = sqrt (dx' * dx' + dy' * dy')
+
+        -- Angular noise on warped coordinates for boundary shape
+        angle   = atan2 dy' dx' + π
+        radialT = if radius < 1.0 then 0.0 else warpedDist / radius
+        -- Coarse lobes only — no fine detail, preserves circular arcs
+        n0 = angularNoise featureSeed 2 angle 7    -- elongation axis
+        n1 = angularNoise featureSeed 4 angle 17   -- broad lobes
+        n2 = angularNoise featureSeed 7 angle 31   -- medium structure
         rn = angularNoise featureSeed 7 (radialT * 2.0 * π) 73
-        -- Blend octaves with decreasing amplitude
-        combined = n1 * 0.40 + n2 * 0.25 + n3 * 0.20 + n4 * 0.10
-                 + (rn - 0.5) * 0.10  -- radial variation breaks rings
-        perturbation = (combined - 0.5) * 0.35 * radius
-    in dist + perturbation
+        noiseCombined = n0 * 0.40 + n1 * 0.30 + n2 * 0.20
+                      + (rn - 0.5) * 0.10
+        noiseAmplitude = 0.35 + (hardness - 0.5) * 0.15
+        noisePerturbation = (noiseCombined - 0.5) * noiseAmplitude * radius
+
+        -- Terrain-based distance shift (stronger near edges where
+        -- thin lava follows topography).
+        edgeScale = min 1.0 (radialT * 2.0)
+        rawTerrainShift = fromIntegral baseElev * 0.20 * edgeScale
+        terrainShift = max (-0.25 * radius) (min (0.25 * radius) rawTerrainShift)
+
+        -- Hard rock resists reshaping, soft rock yields.
+        hardnessShift = (hardness - 0.5) * 0.12 * radius * min 1.0 (radialT * 1.5)
+
+    in warpedDist + noisePerturbation + terrainShift + hardnessShift
+
+-- | Smooth 2D value noise via bilinear interpolation of hashed grid cells.
+--   Returns a value centered around 0 (range approximately -0.5 to 0.5).
+valueNoise2D ∷ Word64 → Int → Float → Float → Float → Float
+valueNoise2D seed prop x y cellSize =
+    let cx0 = floor (x / cellSize) ∷ Int
+        cy0 = floor (y / cellSize) ∷ Int
+        fx  = x / cellSize - fromIntegral cx0
+        fy  = y / cellSize - fromIntegral cy0
+        tx  = smoothstepGeo fx
+        ty  = smoothstepGeo fy
+        h00 = hashToFloatGeo (hashGeo seed cx0       (cy0 * prop))
+        h10 = hashToFloatGeo (hashGeo seed (cx0 + 1) (cy0 * prop))
+        h01 = hashToFloatGeo (hashGeo seed cx0       ((cy0 + 1) * prop))
+        h11 = hashToFloatGeo (hashGeo seed (cx0 + 1) ((cy0 + 1) * prop))
+        top = h00 + tx * (h10 - h00)
+        bot = h01 + tx * (h11 - h01)
+    in (top + ty * (bot - top)) - 0.5
 
 -- | Smooth noise sampled around a circle in angular buckets.
 angularNoise ∷ Word64 → Int → Float → Int → Float
@@ -59,20 +122,20 @@ angularNoise seed buckets angle hashProp =
 
 -- * Volcanic Feature Dispatch
 
-applyVolcanicFeature ∷ VolcanicFeature → Int → Int → Int → Int → GeoModification
-applyVolcanicFeature (ShieldVolcano p)    ws gx gy e = applyShieldVolcano p ws gx gy e
-applyVolcanicFeature (CinderCone p)       ws gx gy e = applyCinderCone p ws gx gy e
-applyVolcanicFeature (LavaDome p)         ws gx gy e = applyLavaDome p ws gx gy e
-applyVolcanicFeature (Caldera p)          ws gx gy e = applyCaldera p ws gx gy e
-applyVolcanicFeature (FissureVolcano p)   ws gx gy e = applyFissure p ws gx gy e
-applyVolcanicFeature (LavaTube p)         ws gx gy e = applyLavaTube p ws gx gy e
-applyVolcanicFeature (SuperVolcano p)     ws gx gy e = applySuperVolcano p ws gx gy e
-applyVolcanicFeature (HydrothermalVent p) ws gx gy e = applyHydrothermal p ws gx gy e
+applyVolcanicFeature ∷ VolcanicFeature → Int → Int → Int → Int → Float → GeoModification
+applyVolcanicFeature (ShieldVolcano p)    ws gx gy e h = applyShieldVolcano p ws gx gy e h
+applyVolcanicFeature (CinderCone p)       ws gx gy e h = applyCinderCone p ws gx gy e h
+applyVolcanicFeature (LavaDome p)         ws gx gy e h = applyLavaDome p ws gx gy e h
+applyVolcanicFeature (Caldera p)          ws gx gy e h = applyCaldera p ws gx gy e h
+applyVolcanicFeature (FissureVolcano p)   ws gx gy e h = applyFissure p ws gx gy e h
+applyVolcanicFeature (LavaTube p)         ws gx gy e h = applyLavaTube p ws gx gy e h
+applyVolcanicFeature (SuperVolcano p)     ws gx gy e h = applySuperVolcano p ws gx gy e h
+applyVolcanicFeature (HydrothermalVent p) ws gx gy e h = applyHydrothermal p ws gx gy e h
 
 -- * Shield Volcano
 
-applyShieldVolcano ∷ ShieldParams → Int → Int → Int → Int → GeoModification
-applyShieldVolcano params worldSize gx gy _baseElev =
+applyShieldVolcano ∷ ShieldParams → Int → Int → Int → Int → Float → GeoModification
+applyShieldVolcano params worldSize gx gy baseElev hardness =
     let GeoCoord cx cy = shCenter params
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
@@ -80,7 +143,7 @@ applyShieldVolcano params worldSize gx gy _baseElev =
         rawDist = sqrt (dx * dx + dy * dy)
 
         baseR = fromIntegral (shBaseRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist baseR
+        dist = perturbDist cx cy dx dy rawDist baseR baseElev hardness
         peakH = fromIntegral (shPeakHeight params) ∷ Float
         pitR  = fromIntegral (shPitRadius params) ∷ Float
         pitD  = fromIntegral (shPitDepth params) ∷ Float
@@ -110,8 +173,8 @@ applyShieldVolcano params worldSize gx gy _baseElev =
 
 -- * Cinder Cone
 
-applyCinderCone ∷ CinderConeParams → Int → Int → Int → Int → GeoModification
-applyCinderCone params worldSize gx gy _baseElev =
+applyCinderCone ∷ CinderConeParams → Int → Int → Int → Int → Float → GeoModification
+applyCinderCone params worldSize gx gy baseElev hardness =
     let GeoCoord cx cy = ccCenter params
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
@@ -119,7 +182,7 @@ applyCinderCone params worldSize gx gy _baseElev =
         rawDist = sqrt (dx * dx + dy * dy)
 
         baseR   = fromIntegral (ccBaseRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist baseR
+        dist = perturbDist cx cy dx dy rawDist baseR baseElev hardness
         peakH   = fromIntegral (ccPeakHeight params) ∷ Float
         craterR = fromIntegral (ccCraterRadius params) ∷ Float
         craterD = fromIntegral (ccCraterDepth params) ∷ Float
@@ -145,8 +208,8 @@ applyCinderCone params worldSize gx gy _baseElev =
 
 -- * Lava Dome
 
-applyLavaDome ∷ LavaDomeParams → Int → Int → Int → Int → GeoModification
-applyLavaDome params worldSize gx gy _baseElev =
+applyLavaDome ∷ LavaDomeParams → Int → Int → Int → Int → Float → GeoModification
+applyLavaDome params worldSize gx gy baseElev hardness =
     let GeoCoord cx cy = ldCenter params
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
@@ -154,7 +217,7 @@ applyLavaDome params worldSize gx gy _baseElev =
         rawDist = sqrt (dx * dx + dy * dy)
 
         baseR = fromIntegral (ldBaseRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist baseR
+        dist = perturbDist cx cy dx dy rawDist baseR baseElev hardness
         height = fromIntegral (ldHeight params) ∷ Float
 
     in if dist > baseR
@@ -171,8 +234,8 @@ applyLavaDome params worldSize gx gy _baseElev =
 
 -- * Caldera
 
-applyCaldera ∷ CalderaParams → Int → Int → Int → Int → GeoModification
-applyCaldera params worldSize gx gy _baseElev =
+applyCaldera ∷ CalderaParams → Int → Int → Int → Int → Float → GeoModification
+applyCaldera params worldSize gx gy baseElev hardness =
     let GeoCoord cx cy = caCenter params
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
@@ -180,7 +243,7 @@ applyCaldera params worldSize gx gy _baseElev =
         rawDist = sqrt (dx * dx + dy * dy)
 
         outerR = fromIntegral (caOuterRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist outerR
+        dist = perturbDist cx cy dx dy rawDist outerR baseElev hardness
         innerR = fromIntegral (caInnerRadius params) ∷ Float
         rimH   = fromIntegral (caRimHeight params) ∷ Float
         floorD = fromIntegral (caFloorDepth params) ∷ Float
@@ -215,8 +278,8 @@ applyCaldera params worldSize gx gy _baseElev =
 
 -- * Fissure
 
-applyFissure ∷ FissureParams → Int → Int → Int → Int → GeoModification
-applyFissure params worldSize gx gy _baseElev =
+applyFissure ∷ FissureParams → Int → Int → Int → Int → Float → GeoModification
+applyFissure params worldSize gx gy _baseElev _hardness =
     let GeoCoord sx sy = fpStart params
         GeoCoord ex ey = fpEnd params
 
@@ -266,8 +329,8 @@ applyFissure params worldSize gx gy _baseElev =
 
 -- * Lava Tube
 
-applyLavaTube ∷ LavaTubeParams → Int → Int → Int → Int → GeoModification
-applyLavaTube params worldSize gx gy _baseElev =
+applyLavaTube ∷ LavaTubeParams → Int → Int → Int → Int → Float → GeoModification
+applyLavaTube params worldSize gx gy _baseElev _hardness =
     let GeoCoord sx sy = ltStart params
         GeoCoord ex ey = ltEnd params
 
@@ -324,8 +387,8 @@ applyLavaTube params worldSize gx gy _baseElev =
 
 -- * Super Volcano
 
-applySuperVolcano ∷ SuperVolcanoParams → Int → Int → Int → Int → GeoModification
-applySuperVolcano params worldSize gx gy baseElev =
+applySuperVolcano ∷ SuperVolcanoParams → Int → Int → Int → Int → Float → GeoModification
+applySuperVolcano params worldSize gx gy baseElev hardness =
     let GeoCoord cx cy = svCenter params
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
@@ -334,7 +397,7 @@ applySuperVolcano params worldSize gx gy baseElev =
 
         calderaR = fromIntegral (svCalderaRadius params) ∷ Float
         ejectaRForPerturb = fromIntegral (svEjectaRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist ejectaRForPerturb
+        dist = perturbDist cx cy dx dy rawDist ejectaRForPerturb baseElev hardness
         rimH     = fromIntegral (svRimHeight params) ∷ Float
         floorD   = fromIntegral (svFloorDepth params) ∷ Float
         ejectaR  = fromIntegral (svEjectaRadius params) ∷ Float
@@ -377,8 +440,8 @@ applySuperVolcano params worldSize gx gy baseElev =
 
 -- * Hydrothermal Vent
 
-applyHydrothermal ∷ HydrothermalParams → Int → Int → Int → Int → GeoModification
-applyHydrothermal params worldSize gx gy _baseElev =
+applyHydrothermal ∷ HydrothermalParams → Int → Int → Int → Int → Float → GeoModification
+applyHydrothermal params worldSize gx gy baseElev hardness =
     let GeoCoord cx cy = htCenter params
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
@@ -386,7 +449,7 @@ applyHydrothermal params worldSize gx gy _baseElev =
         rawDist = sqrt (dx * dx + dy * dy)
 
         radius = fromIntegral (htRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist radius
+        dist = perturbDist cx cy dx dy rawDist radius baseElev hardness
         chimneyH = fromIntegral (htChimneyHeight params) ∷ Float
 
     in if dist > radius

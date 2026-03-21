@@ -126,8 +126,8 @@ determineMeteoriteType seed attemptIdx radius =
 --   Rim: impactite, full intrusion (impact-melted rock).
 --   Bowl: depression (erosion), impactite at the surface.
 --   Center: meteorite material if present.
-applyCrater ∷ CraterParams → Int → Int → Int → Int → GeoModification
-applyCrater params worldSize gx gy _baseElev =
+applyCrater ∷ CraterParams → Int → Int → Int → Int → Float → GeoModification
+applyCrater params worldSize gx gy baseElev hardness =
     let GeoCoord cx cy = cpCenter params
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
@@ -136,7 +136,7 @@ applyCrater params worldSize gx gy _baseElev =
 
         radius      = fromIntegral (cpRadius params) ∷ Float
         ejectaR0    = fromIntegral (cpEjectaRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist ejectaR0
+        dist = perturbDist cx cy dx dy rawDist ejectaR0 baseElev hardness
         depth       = fromIntegral (cpDepth params) ∷ Float
         rimHeight   = fromIntegral (cpRimHeight params) ∷ Float
         ejectaR     = fromIntegral (cpEjectaRadius params) ∷ Float

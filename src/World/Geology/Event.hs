@@ -10,7 +10,7 @@ import World.Types
 import World.Material
 import World.Geology.Types
 import World.Geology.Crater (applyCrater)
-import World.Geology.Volcano (applyVolcanicFeature)
+import World.Geology.Volcano (applyVolcanicFeature, perturbDist)
 import World.Geology.Hash (smoothstepGeo, wrappedDeltaUV)
 import World.Hydrology.Types (HydroFeature(..))
 import World.Hydrology.Event (applyHydroEvolution, applyHydroFeature)
@@ -20,30 +20,30 @@ import World.Hydrology.Glacier (applyGlacierCarve)
 
 -- * Event Application
 
-applyGeoEvent ∷ GeoEvent → Int → Int → Int → Int → GeoModification
-applyGeoEvent (CraterEvent params)  worldSize gx gy baseElev =
-    applyCrater params worldSize gx gy baseElev
-applyGeoEvent (VolcanicEvent (VolcanicShape feature)) worldSize gx gy baseElev =
-    applyVolcanicFeature feature worldSize gx gy baseElev
-applyGeoEvent (VolcanicEvent _) worldSize gx gy baseElev =
+applyGeoEvent ∷ GeoEvent → Int → Int → Int → Int → Float → GeoModification
+applyGeoEvent (CraterEvent params)  worldSize gx gy baseElev hardness =
+    applyCrater params worldSize gx gy baseElev hardness
+applyGeoEvent (VolcanicEvent (VolcanicShape feature)) worldSize gx gy baseElev hardness =
+    applyVolcanicFeature feature worldSize gx gy baseElev hardness
+applyGeoEvent (VolcanicEvent _) _ _ _ _ _ =
     noModification
-applyGeoEvent (VolcanicModify _fid evolution) worldSize gx gy baseElev =
-    applyEvolution evolution worldSize gx gy baseElev
-applyGeoEvent (EruptionEvent _fid flow) worldSize gx gy baseElev =
-    applyLavaFlow flow worldSize gx gy baseElev
-applyGeoEvent (HydroEvent feature) worldSize gx gy baseElev =
+applyGeoEvent (VolcanicModify _fid evolution) worldSize gx gy baseElev hardness =
+    applyEvolution evolution worldSize gx gy baseElev hardness
+applyGeoEvent (EruptionEvent _fid flow) worldSize gx gy baseElev hardness =
+    applyLavaFlow flow worldSize gx gy baseElev hardness
+applyGeoEvent (HydroEvent feature) worldSize gx gy baseElev _ =
     applyHydroFeature feature worldSize gx gy baseElev
-applyGeoEvent (HydroModify _fid evolution) worldSize gx gy baseElev =
+applyGeoEvent (HydroModify _fid evolution) worldSize gx gy baseElev _ =
     applyHydroEvolution evolution worldSize gx gy baseElev
-applyGeoEvent (RiverSegmentEvent rsc) worldSize gx gy baseElev =
+applyGeoEvent (RiverSegmentEvent rsc) worldSize gx gy baseElev _ =
     carveFromSegment worldSize gx gy
                             (rscMeanderSeed rsc) (rscSegment rsc) baseElev
-applyGeoEvent (RiverDeltaEvent rdp) worldSize gx gy baseElev =
+applyGeoEvent (RiverDeltaEvent rdp) worldSize gx gy baseElev _ =
     computeDeltaDeposit' (rdpLastSegment rdp) (rdpFlowRate rdp)
                          worldSize gx gy baseElev
-applyGeoEvent (LandslideEvent _)    _ _ _ _ = noModification
-applyGeoEvent (GlaciationEvent _)   _ _ _ _ = noModification
-applyGeoEvent (FloodEvent _)        _ _ _ _ = noModification
+applyGeoEvent (LandslideEvent _)    _ _ _ _ _ = noModification
+applyGeoEvent (GlaciationEvent _)   _ _ _ _ _ = noModification
+applyGeoEvent (FloodEvent _)        _ _ _ _ _ = noModification
 
 -- * Lava Flow Application
 
@@ -60,15 +60,16 @@ applyGeoEvent (FloodEvent _)        _ _ _ _ = noModification
 --   The flow only deposits material where the lava surface
 --   is above the existing terrain — it fills valleys and
 --   pools in depressions rather than coating hilltops.
-applyLavaFlow ∷ LavaFlow → Int → Int → Int → Int → GeoModification
-applyLavaFlow flow worldSize gx gy baseElev =
+applyLavaFlow ∷ LavaFlow → Int → Int → Int → Int → Float → GeoModification
+applyLavaFlow flow worldSize gx gy baseElev hardness =
     let sx = lfSourceX flow
         sy = lfSourceY flow
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy sx sy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+        rawDist = sqrt (dx * dx + dy * dy)
         maxR = fromIntegral (lfRadius flow) ∷ Float
+        dist = perturbDist sx sy dx dy rawDist maxR baseElev hardness
 
     in if dist > maxR
        then noModification
@@ -83,14 +84,15 @@ applyLavaFlow flow worldSize gx gy baseElev =
 
 -- * Feature Evolution Application
 
-applyEvolution ∷ FeatureEvolution → Int → Int → Int → Int → GeoModification
-applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy _e =
+applyEvolution ∷ FeatureEvolution → Int → Int → Int → Int → Float → GeoModification
+applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy baseElev hardness =
     let GeoCoord cx cy = center
         (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+        rawDist = sqrt (dx * dx + dy * dy)
         rr = fromIntegral radius ∷ Float
+        dist = perturbDist cx cy dx dy rawDist rr baseElev hardness
     in if dist > rr
        then noModification
        else let t = dist / rr
@@ -101,16 +103,17 @@ applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy _e =
                     else (Nothing, 0)
             in GeoModification elevDelta mat intrusion
 
-applyEvolution (GoDormant _center _radius) _ _ _ _ = noModification
-applyEvolution (GoExtinct _center _radius) _ _ _ _ = noModification
+applyEvolution (GoDormant _center _radius) _ _ _ _ _ = noModification
+applyEvolution (GoExtinct _center _radius) _ _ _ _ _ = noModification
 
-applyEvolution (CollapseToCaldera depth _ratio center radius) ws gx gy _e =
+applyEvolution (CollapseToCaldera depth _ratio center radius) ws gx gy baseElev hardness =
     let GeoCoord cx cy = center
         (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
+        rawDist = sqrt (dx * dx + dy * dy)
         rr = fromIntegral radius ∷ Float
+        dist = perturbDist cx cy dx dy rawDist rr baseElev hardness
     in if dist > rr
        then noModification
        else let t = dist / rr
@@ -123,9 +126,9 @@ applyEvolution (CollapseToCaldera depth _ratio center radius) ws gx gy _e =
                     then Nothing
                     else Just (unMaterialId matObsidian)
             in GeoModification elevDelta mat 0
-applyEvolution (ParasiticEruption childFeature _childId _center _radius) ws gx gy e =
-    applyVolcanicFeature childFeature ws gx gy e
-applyEvolution (FlankCollapse collapseAngle collapseWidth debrisRadius center _radius) ws gx gy _e =
+applyEvolution (ParasiticEruption childFeature _childId _center _radius) ws gx gy e hardness =
+    applyVolcanicFeature childFeature ws gx gy e hardness
+applyEvolution (FlankCollapse collapseAngle collapseWidth debrisRadius center _radius) ws gx gy _e _ =
     let GeoCoord cx cy = center
         (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
         dx = fromIntegral dxi ∷ Float

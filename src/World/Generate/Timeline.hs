@@ -248,7 +248,8 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
     isRiverCarveEvent _ = False
 
     applyOneEvent ws gx gy (elev, mat) event =
-        let mod' = applyGeoEvent event ws gx gy elev
+        let hardness = mpHardness (getMaterialProps registry mat)
+            mod' = applyGeoEvent event ws gx gy elev hardness
             elev' = elev + gmElevDelta mod'
             mat'  = case gmMaterialOverride mod' of
                 Just m  → MaterialId m
@@ -302,13 +303,13 @@ applyTimeline timeline worldSize gx gy hardness (baseElev, baseMat) =
                              (baseElev, baseMat) (gtPeriods timeline)
         -- Re-apply cached river carving after all periods (bbox-filtered)
         (gx', gy') = wrapGlobalU worldSize gx gy
-        (elev', mat') = applyExplodedEvents worldSize gx' gy' elev mat
+        (elev', mat') = applyExplodedEvents worldSize gx' gy' elev mat hardness
                                             (gtRiverExplodedEvents timeline)
     in (elev', mat')
 
-applyOneEvtS ∷ Int → Int → Int → (Int, MaterialId) → GeoEvent → (Int, MaterialId)
-applyOneEvtS worldSize gx gy (e, m) event =
-    let mod' = applyGeoEvent event worldSize gx gy e
+applyOneEvtS ∷ Int → Int → Int → Float → (Int, MaterialId) → GeoEvent → (Int, MaterialId)
+applyOneEvtS worldSize gx gy hardness (e, m) event =
+    let mod' = applyGeoEvent event worldSize gx gy e hardness
         e' = e + gmElevDelta mod'
         m' = case gmMaterialOverride mod' of
             Just mm → MaterialId mm
@@ -318,7 +319,7 @@ applyOneEvtS worldSize gx gy (e, m) event =
 applyPeriodSingle ∷ Int → WorldScale → Int → Int → Float
   → (Int, MaterialId) → GeoPeriod → (Int, MaterialId)
 applyPeriodSingle worldSize wsc gx gy hardness (elev, mat) period =
-    let (elev', mat') = foldl' (applyOneEvtS worldSize gx gy) (elev, mat)
+    let (elev', mat') = foldl' (applyOneEvtS worldSize gx gy hardness) (elev, mat)
                                (gpEvents period)
         regionalParams = lookupRegionalErosion
             (gpErosion period) (gpRegionalErosion period)
@@ -348,7 +349,7 @@ applyTimelineFast timeline worldSize gx gy hardness (baseElev, baseMat) =
                              (baseElev, baseMat) (gtPeriods timeline)
         -- Re-apply cached river carving after all periods (bbox-filtered)
         (gx', gy') = wrapGlobalU worldSize gx gy
-        (elev', mat') = applyExplodedEvents worldSize gx' gy' elev mat
+        (elev', mat') = applyExplodedEvents worldSize gx' gy' elev mat hardness
                                             (gtRiverExplodedEvents timeline)
     in (elev', mat')
 
@@ -366,7 +367,7 @@ applyPeriodFiltered worldSize wsc gx gy hardness (elev, mat) period =
         (elev', mat') =
             if not (tileInBBoxWrapped worldSize gx' gy' bb)
             then (elev, mat)
-            else applyExplodedEvents worldSize gx' gy' elev mat
+            else applyExplodedEvents worldSize gx' gy' elev mat hardness
                                      (gpExplodedEvents period)
         regionalParams = lookupRegionalErosion
             (gpErosion period) (gpRegionalErosion period)
@@ -390,10 +391,10 @@ applyPeriodFiltered worldSize wsc gx gy hardness (elev, mat) period =
 --   Uses two separate accumulators instead of a tuple to avoid
 --   boxing overhead. The INLINE lets GHC unbox the Int accumulator.
 {-# INLINE applyExplodedEvents #-}
-applyExplodedEvents ∷ Int → Int → Int → Int → MaterialId
+applyExplodedEvents ∷ Int → Int → Int → Int → MaterialId → Float
                     → V.Vector (GeoEvent, EventBBox)
                     → (Int, MaterialId)
-applyExplodedEvents worldSize gx gy e0 m0 vec = go 0 e0 m0
+applyExplodedEvents worldSize gx gy e0 m0 hardness vec = go 0 e0 m0
   where
     len = V.length vec
     go !i !e !m
@@ -402,7 +403,7 @@ applyExplodedEvents worldSize gx gy e0 m0 vec = go 0 e0 m0
             let (evt, evtBB) = V.unsafeIndex vec i
             in if not (tileInBBoxWrapped worldSize gx gy evtBB)
                     then go (i + 1) e m
-                    else let mod' = applyGeoEvent evt worldSize gx gy e
+                    else let mod' = applyGeoEvent evt worldSize gx gy e hardness
                              e' = e + gmElevDelta mod'
                              m' = case gmMaterialOverride mod' of
                                  Just mm → MaterialId mm

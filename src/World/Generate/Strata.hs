@@ -125,7 +125,8 @@ buildStrataCache timeline worldSize wsc gx gy registry (baseElev, baseMat)
 
     -- Now receives tagged (event, bbox) pairs instead of raw events
     applyEvent elev surfMat (deltas, e, sm) (event, _bb) =
-        let mod' = applyGeoEvent event worldSize gx gy e
+        let h = mpHardness (getMaterialProps registry sm)
+            mod' = applyGeoEvent event worldSize gx gy e h
             delta = gmElevDelta mod'
             intrusion = gmIntrusionDepth mod'
             eventMat = case gmMaterialOverride mod' of
@@ -248,12 +249,12 @@ applyEventDelta queryZ state ed =
 applyPeriodStrata ∷ Int → WorldScale → Int → Int → Float → Int
                   → StrataState → GeoPeriod → StrataState
 applyPeriodStrata worldSize wsc gx gy hardness queryZ state period =
-    let afterEvents = foldl' (applyEventStrata worldSize gx gy queryZ)
+    let afterEvents = foldl' (applyEventStrata worldSize gx gy queryZ hardness)
                              state (gpEvents period)
 
         (nN, nS, nE, nW) = ssNeighbors afterEvents
         advanceNeighbor nElev ngx ngy =
-            foldl' (\e ev → e + gmElevDelta (applyGeoEvent ev worldSize ngx ngy e))
+            foldl' (\e ev → e + gmElevDelta (applyGeoEvent ev worldSize ngx ngy e hardness))
                    nElev (gpEvents period)
         nN' = advanceNeighbor nN gx (gy - 1)
         nS' = advanceNeighbor nS gx (gy + 1)
@@ -288,9 +289,9 @@ applyPeriodStrata worldSize wsc gx gy hardness queryZ state period =
         , ssNeighbors = (nN', nS', nE', nW')
         }
 
-applyEventStrata ∷ Int → Int → Int → Int → StrataState → GeoEvent → StrataState
-applyEventStrata worldSize gx gy queryZ state event =
-    let mod' = applyGeoEvent event worldSize gx gy (ssElev state)
+applyEventStrata ∷ Int → Int → Int → Int → Float → StrataState → GeoEvent → StrataState
+applyEventStrata worldSize gx gy queryZ hardness state event =
+    let mod' = applyGeoEvent event worldSize gx gy (ssElev state) hardness
         delta = gmElevDelta mod'
         intrusion = gmIntrusionDepth mod'
         eventMat = case gmMaterialOverride mod' of
