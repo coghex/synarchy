@@ -97,7 +97,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     --   with the precise chunk-resolution ocean map
     writeIORef phaseRef (LoadPhase1 3 totalSteps)
     sendGenLog env "Refining climate with ocean data..."
-    let climateState = initEarlyClimate worldSize oceanMap
+    let climateState = initEarlyClimate worldSize oceanMap timeline
     -- Carry forward CO2 and global temp from timeline evolution
     let climateState' = climateState
             { csGlobalCO2  = csGlobalCO2 timelineClimate

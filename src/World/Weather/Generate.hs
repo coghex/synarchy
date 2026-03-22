@@ -11,11 +11,17 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Weather.Types
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Ocean.Types (OceanMap)
 import World.Hydrology.Simulation (ElevGrid(..))
+import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
+                             , RiverSegment(..), LakeParams(..))
+import World.Geology.Timeline.Types (GeoTimeline(..), PersistentFeature(..)
+                                    , FeatureShape(..), FeatureActivity(..))
+import World.Base (GeoCoord(..))
 import World.Constants (seaLevel)
 
 -- * Public: init from chunk-resolution OceanMap (used in Init.hs)
@@ -35,8 +41,9 @@ import World.Constants (seaLevel)
 --   and chunk-v in the same range for rv.
 initEarlyClimate ∷ Int          -- ^ worldSize (in chunks)
                  → OceanMap     -- ^ which chunks are ocean
+                 → GeoTimeline  -- ^ completed timeline (for lake/river moisture)
                  → ClimateState
-initEarlyClimate worldSize oceanMap =
+initEarlyClimate worldSize oceanMap timeline =
     let regionsPerSide = worldSize `div` climateRegionSize
         halfChunks = worldSize `div` 2
 
@@ -63,7 +70,12 @@ initEarlyClimate worldSize oceanMap =
 
         oceanSet = HS.fromList [ coord | coord ← allCoords, isOceanRegion coord ]
 
-    in buildClimateFromOceanSet worldSize oceanSet 1.0 0.0 1.0
+        -- Extract freshwater moisture sources (lakes, rivers) from the
+        -- completed timeline. These act as secondary moisture sources
+        -- that create green corridors through dry continental interiors.
+        freshwater = extractFreshwaterSources worldSize (gtFeatures timeline)
+
+    in buildClimateFromOceanSet worldSize oceanSet freshwater 1.0 0.0 1.0
 
 -- * Public: derive coarse ocean regions from ElevGrid
 
@@ -113,7 +125,7 @@ updateClimateFromGrid ∷ Int                        -- ^ worldSize
                       → ClimateState               -- ^ previous climate state
                       → ClimateState
 updateClimateFromGrid worldSize coarseOcean prevClimate =
-    buildClimateFromOceanSet worldSize coarseOcean
+    buildClimateFromOceanSet worldSize coarseOcean HM.empty
         (csGlobalCO2  prevClimate)
         (csGlobalTemp prevClimate)
         (csSolarConst prevClimate)
@@ -126,11 +138,12 @@ updateClimateFromGrid worldSize coarseOcean prevClimate =
 --   and from updateClimateFromGrid (with carried-forward values).
 buildClimateFromOceanSet ∷ Int                       -- ^ worldSize
                          → HS.HashSet ClimateCoord   -- ^ which regions are ocean
+                         → HM.HashMap ClimateCoord Float -- ^ freshwater moisture weights
                          → Float                     -- ^ global CO2
                          → Float                     -- ^ global temp offset
                          → Float                     -- ^ solar constant
                          → ClimateState
-buildClimateFromOceanSet worldSize oceanSet globalCO2 globalTempOffset solarConst =
+buildClimateFromOceanSet worldSize oceanSet freshwaterSources globalCO2 globalTempOffset solarConst =
     let regionsPerSide = worldSize `div` climateRegionSize
         halfRegions    = regionsPerSide `div` 2
 
@@ -173,8 +186,11 @@ buildClimateFromOceanSet worldSize oceanSet globalCO2 globalTempOffset solarCons
                   then HM.empty
                   else go initQueue initMap
 
+        -- Maritime influence decays exponentially over this many
+        -- climate regions. Scales with world size so larger worlds
+        -- have proportionally wider coastal moisture belts.
         coastScale ∷ Float
-        coastScale = 4.0
+        coastScale = fromIntegral regionsPerSide / 20.0
 
         maritimeIndex ∷ ClimateCoord → Float
         maritimeIndex coord
@@ -183,6 +199,43 @@ buildClimateFromOceanSet worldSize oceanSet globalCO2 globalTempOffset solarCons
             | otherwise =
                 let d = fromIntegral (HM.lookupDefault (regionsPerSide * 2) coord bfsDistances)
                 in exp (-(d / coastScale))
+
+        -------------------------------------------------------
+        -- Freshwater moisture index via BFS from lakes/rivers
+        -------------------------------------------------------
+
+        freshwaterScale ∷ Float
+        freshwaterScale = 2.0
+
+        freshwaterSeeds = HM.keysSet freshwaterSources
+
+        freshwaterDistances ∷ HM.HashMap ClimateCoord Int
+        freshwaterDistances =
+            let initQueue = Seq.fromList (HS.toList freshwaterSeeds)
+                initMap   = HM.fromList [ (c, 0) | c ← HS.toList freshwaterSeeds ]
+                go queue distMap =
+                    case Seq.viewl queue of
+                        Seq.EmptyL → distMap
+                        coord Seq.:< rest →
+                            let d = HM.lookupDefault 0 coord distMap
+                                step (m', q) n =
+                                    if HM.member n m'
+                                       then (m', q)
+                                       else (HM.insert n (d + 1) m', q Seq.|> n)
+                                (distMap', queue') = foldl' step (distMap, rest) (neighbors coord)
+                            in go queue' distMap'
+            in if HS.null freshwaterSeeds
+                  then HM.empty
+                  else go initQueue initMap
+
+        freshwaterIndex ∷ ClimateCoord → Float
+        freshwaterIndex coord
+            | HM.null freshwaterSources = 0.0
+            | HM.member coord freshwaterSources =
+                HM.lookupDefault 0.0 coord freshwaterSources
+            | otherwise =
+                let d = fromIntegral (HM.lookupDefault (regionsPerSide * 2) coord freshwaterDistances)
+                in 0.5 * exp (-(d / freshwaterScale))
 
         -------------------------------------------------------
         -- Climate model constants
@@ -318,14 +371,29 @@ buildClimateFromOceanSet worldSize oceanSet globalCO2 globalTempOffset solarCons
                 highFactor = clamp01 (pressureDev / 0.08)
                 lowFactor  = clamp01 ((-pressureDev) / 0.08)
 
-                humidity = clamp01 (0.30 + 0.50 * m + 0.25 * lowFactor - 0.25 * highFactor)
+                -- Freshwater moisture from lakes/rivers
+                fw = freshwaterIndex coord
+                totalMoisture = clamp01 (m + 0.4 * fw)
+
+                -- Low pressure amplifies available moisture rather
+                -- than creating precipitation independently. This
+                -- makes continental interiors drier while coasts and
+                -- waterways stay wet.
+                moisturePrecip = 0.10 + 0.50 * totalMoisture
+                convectiveBase = 0.08 * lowFactor
+                upliftMultiplier = 1.0 + 1.2 * lowFactor - 0.6 * highFactor
+
+                humidity = clamp01 (0.15 + 0.55 * totalMoisture
+                                   + 0.15 * lowFactor - 0.20 * highFactor)
 
                 seasonNorm = clamp01 (seasonal / 25.0)
-                precipBase = max 0.0 (0.15 + 0.60 * lowFactor + 0.30 * m - 0.30 * highFactor)
+                precipBase = max 0.0 (moisturePrecip * upliftMultiplier
+                                     + convectiveBase)
                 precipSummer = precipBase * (1.0 + 0.20 * seasonNorm)
                 precipWinter = precipBase * (1.0 - 0.20 * seasonNorm)
 
-                evap = 0.15 + 0.02 * max 0.0 (tMean - 5.0) + 0.35 * m
+                evap = 0.15 + 0.02 * max 0.0 (tMean - 5.0)
+                     + 0.35 * m + 0.15 * fw
 
                 cloudCover = clamp01 (0.20 + 0.70 * humidity - 0.30 * highFactor)
 
@@ -334,7 +402,7 @@ buildClimateFromOceanSet worldSize oceanSet globalCO2 globalTempOffset solarCons
                 albedoBase = if isOcean then 0.06 else 0.20
                 albedo = clamp01 (albedoBase + 0.40 * snowFrac)
 
-                continentality = clamp01 ((1.0 - m) * (0.60 + 0.40 * highFactor))
+                continentality = clamp01 ((1.0 - m - 0.3 * fw) * (0.60 + 0.40 * highFactor))
 
             in RegionClimate
                 { rcAirTemp        = SeasonalClimate tSummer tWinter
@@ -380,3 +448,55 @@ buildClimateFromOceanSet worldSize oceanSet globalCO2 globalTempOffset solarCons
         , csGlobalTemp = globalMeanTemp
         , csSolarConst = solarConst
         }
+
+-- * Freshwater Moisture Sources
+
+-- | Convert tile-space coordinates to a ClimateCoord using the (u,v)
+--   convention: u = gx - gy (east-west), v = gx + gy (north-south).
+geoToClimateCoord ∷ Int → Int → Int → ClimateCoord
+geoToClimateCoord worldSize gx gy =
+    let halfChunks = worldSize `div` 2
+        halfW = halfChunks * chunkSize
+        u = gx - gy
+        v = gx + gy
+        regionSizeTiles = climateRegionSize * chunkSize
+        ru = (u + halfW) `div` regionSizeTiles
+        rv = (v + halfW) `div` regionSizeTiles
+    in ClimateCoord ru rv
+
+-- | Extract freshwater moisture sources from persistent features.
+--   Lakes contribute based on area, rivers based on flow rate.
+--   Returns a map of climate regions to moisture weights (0-1).
+extractFreshwaterSources ∷ Int → [PersistentFeature]
+                         → HM.HashMap ClimateCoord Float
+extractFreshwaterSources worldSize features =
+    let entries = concatMap (featureToMoisture worldSize) features
+    in HM.fromListWith max entries
+
+featureToMoisture ∷ Int → PersistentFeature → [(ClimateCoord, Float)]
+featureToMoisture worldSize pf
+    | pfActivity pf ≢ FActive = []
+    | otherwise = case pfFeature pf of
+        HydroShape (RiverFeature rp) → riverMoisture worldSize rp
+        HydroShape (LakeFeature lp)  → lakeMoisture worldSize lp
+        _                            → []
+
+riverMoisture ∷ Int → RiverParams → [(ClimateCoord, Float)]
+riverMoisture worldSize rp =
+    map (\seg →
+        let GeoCoord sx sy = rsStart seg
+            GeoCoord ex ey = rsEnd seg
+            mx = (sx + ex) `div` 2
+            my = (sy + ey) `div` 2
+            coord = geoToClimateCoord worldSize mx my
+            weight = min 1.0 (rsFlowRate seg * 2.0)
+        in (coord, weight)
+        ) (V.toList (rpSegments rp))
+
+lakeMoisture ∷ Int → LakeParams → [(ClimateCoord, Float)]
+lakeMoisture worldSize lp =
+    let GeoCoord cx cy = lkCenter lp
+        coord = geoToClimateCoord worldSize cx cy
+        area = fromIntegral (lkRadius lp * lkRadius lp) ∷ Float
+        weight = min 1.0 (area / 2500.0)
+    in [(coord, weight)]

@@ -618,6 +618,8 @@ vegDensityWeight vegId =
         57 → 0.3   -- mushroom patch
         61 → 0.4   -- wildflowers
         65 → 0.9   -- snow
+        69 → 0.8   -- desert sand
+        73 → 0.7   -- gravel tundra
         _  → 0.3
 
 -- | Check if a vegetation ID is snow (IDs 65-68).

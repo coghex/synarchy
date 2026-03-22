@@ -24,6 +24,8 @@ module World.Vegetation
     , vegMushroomPatch
     , vegWildflowers
     , vegSnow
+    , vegDesertSand
+    , vegGravelTundra
     , vegVariants
       -- * Per-tile vegetation selection
     , selectVegetation
@@ -101,6 +103,12 @@ vegWildflowers = 61
 
 vegSnow ∷ Word8
 vegSnow = 65
+
+vegDesertSand ∷ Word8
+vegDesertSand = 69
+
+vegGravelTundra ∷ Word8
+vegGravelTundra = 73
 
 -- | Number of variants per vegetation type.
 vegVariants ∷ Word8
@@ -206,37 +214,39 @@ selectVegetation matId slopeId hasFluid elev
 
     -- === EXCLUSION RULES ===
     | hasFluid               = vegNone
-    | isBarrenMaterial matId ∧ not (isSnowableMaterial matId)
-                             = vegNone
 
     -- === SNOW COVER ===
     | snow > 0.7             = vegSnow + variant
+
+    -- === TUNDRA / ALPINE (before barren check — covers bare rock) ===
+    | temp < -5.0 ∨ (temp < 2.0 ∧ snow > 0.3)
+        = if roll < 0.15
+          then vegLichen + variant
+          else vegGravelTundra + variant
+
+    -- === DESERT (before barren check — covers bare rock) ===
+    | temp > 25.0 ∧ precip < 0.15
+        = if roll < 0.20
+          then vegDesertScrub + variant
+          else vegDesertSand + variant
+
+    -- === BARREN MATERIALS ===
+    | isBarrenMaterial matId ∧ not (isSnowableMaterial matId)
+                             = vegNone
 
     -- === WETLAND ===
     | isWetlandSoil matId ∧ precip > 0.4
         = vegMarshGrass + variant
 
-    -- === TUNDRA / ALPINE ===
-    | temp < -5.0 ∨ (temp < 2.0 ∧ snow > 0.3)
-        = if roll < 0.15
-          then vegNone
-          else vegLichen + variant
-
-    -- === DESERT ===
-    | temp > 25.0 ∧ precip < 0.15
-        = if roll < 0.15
-          then vegDesertScrub + variant
-          else vegNone
-
     -- === ARID / SEMI-ARID ===
     | precip < 0.2
-        = if roll < 0.35
+        = if roll < 0.30
           then vegSparseGrass + variant
-          else if roll < 0.55
+          else if roll < 0.50
                then vegDeadGrass + variant
-               else if roll < 0.70
+               else if roll < 0.65
                     then vegDesertScrub + variant
-                    else vegNone
+                    else vegDesertSand + variant
 
     -- === MOSS ON WET SLOPES ===
     | slopeId > 0 ∧ humid > 0.5

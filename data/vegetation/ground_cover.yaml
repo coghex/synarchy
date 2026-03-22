@@ -43,3 +43,21 @@ vegetation:
       - "assets/textures/world/veg/wildflowers_2.png"
       - "assets/textures/world/veg/wildflowers_3.png"
       - "assets/textures/world/veg/wildflowers_4.png"
+
+  # Desert sand ground (IDs 69-72)
+  - id_start: 69
+    name: desert_sand
+    variants:
+      - "assets/textures/world/veg/desert_sand_1.png"
+      - "assets/textures/world/veg/desert_sand_2.png"
+      - "assets/textures/world/veg/desert_sand_3.png"
+      - "assets/textures/world/veg/desert_sand_4.png"
+
+  # Gravel tundra ground (IDs 73-76)
+  - id_start: 73
+    name: gravel_tundra
+    variants:
+      - "assets/textures/world/veg/gravel_tundra_1.png"
+      - "assets/textures/world/veg/gravel_tundra_2.png"
+      - "assets/textures/world/veg/gravel_tundra_3.png"
+      - "assets/textures/world/veg/gravel_tundra_4.png"
