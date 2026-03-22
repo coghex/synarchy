@@ -32,7 +32,7 @@ import World.Fluids (isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid
                     , computeChunkFluid, computeChunkRivers
                     , computeChunkLakes, unionFluidMap)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMap)
-import World.Fluid.Internal (FluidMap)
+import World.Fluid.Internal (FluidMap, wrapChunkCoordU)
 import World.Geology.Timeline.Types (GeoEvent(..))
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
 import World.Generate (applyTimelineFast)
@@ -218,8 +218,7 @@ buildZoomCacheWithPixels params registry palette =
                                  h = vegHash seed gx gy
                                  roll    = fromIntegral (h .&. 0xFF) / 255.0 ∷ Float
                                  variant = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
-                                 isOceanTile = elev < seaLevel
-                                                   ∧ isOceanChunk oceanMap coord
+                                 isOceanTile = elev ≤ seaLevel ∧ chunkOcean
                                  vegId = if isOceanTile ∨ isBarrenMaterial matId
                                          then vegNone
                                          else selectVegetation matId 0 False elev
@@ -236,19 +235,67 @@ buildZoomCacheWithPixels params registry palette =
                     else let cs = chunkSize
                              csA = cs * cs
                              elevArr = VU.fromList [ e | (e, _, _, _, _) ← tileData ]
+                             ChunkCoord cx' cy' = coord
+                             wrap = wrapChunkCoordU worldSize
+                             -- Check which cardinal neighbors are ocean chunks.
+                             -- Used to seed BFS from chunk edges so the distance
+                             -- field extends across chunk boundaries.
+                             oceanN = isOceanChunk oceanMap (wrap (ChunkCoord cx' (cy' - 1)))
+                             oceanS = isOceanChunk oceanMap (wrap (ChunkCoord cx' (cy' + 1)))
+                             oceanE = isOceanChunk oceanMap (wrap (ChunkCoord (cx' + 1) cy'))
+                             oceanW = isOceanChunk oceanMap (wrap (ChunkCoord (cx' - 1) cy'))
                              -- BFS distance from ocean tiles
                              distField = runST $ do
                                  distM ← VUM.replicate csA (maxCoastalDist + 1)
                                  seedsM ← VUM.new csA
                                  scRef ← VUM.new 1
                                  VUM.write scRef 0 (0 ∷ Int)
-                                 forM_ [0 .. csA - 1] $ \idx → do
-                                     let e = elevArr VU.! idx
-                                     when (e ≤ seaLevel) $ do
-                                         VUM.write distM idx 0
-                                         sc ← VUM.read scRef 0
-                                         VUM.write seedsM sc idx
-                                         VUM.write scRef 0 (sc + 1)
+                                 let addSeed idx d = do
+                                         old ← VUM.read distM idx
+                                         when (d < old) $ do
+                                             VUM.write distM idx d
+                                             sc ← VUM.read scRef 0
+                                             VUM.write seedsM sc idx
+                                             VUM.write scRef 0 (sc + 1)
+                                 -- Seed 1: actual ocean tiles within this chunk
+                                 forM_ [0 .. csA - 1] $ \idx →
+                                     when (elevArr VU.! idx ≤ seaLevel) $
+                                         addSeed idx 0
+                                 -- Helper: check if a global tile is below sea
+                                 -- level after timeline. Used to verify that
+                                 -- the tile across a chunk border is actually
+                                 -- ocean before seeding — prevents false coastal
+                                 -- zones along entire chunk edges.
+                                 let isOceanAt gx gy =
+                                         let (gx', gy') = wrapGlobalU worldSize gx gy
+                                             (nElev, nMat) = elevationAtGlobal seed plates worldSize gx' gy'
+                                             nH = mpHardness (getMaterialProps registry nMat)
+                                         in if nMat ≡ matGlacier then False
+                                            else if nElev < -100 then True
+                                            else fst (applyTimelineFast timeline worldSize gx' gy' nH (nElev, nMat)) ≤ seaLevel
+                                 -- Seed 2: edges facing ocean neighbor chunks.
+                                 -- Only seed if the tile across the border is
+                                 -- actually below sea level.
+                                 when oceanN $ forM_ [0 .. cs - 1] $ \x →
+                                     let idx = x in
+                                     when (elevArr VU.! idx > seaLevel
+                                          ∧ isOceanAt (baseGX + x) (baseGY - 1)) $
+                                         addSeed idx 1
+                                 when oceanS $ forM_ [0 .. cs - 1] $ \x →
+                                     let idx = (cs - 1) * cs + x in
+                                     when (elevArr VU.! idx > seaLevel
+                                          ∧ isOceanAt (baseGX + x) (baseGY + cs)) $
+                                         addSeed idx 1
+                                 when oceanW $ forM_ [0 .. cs - 1] $ \y →
+                                     let idx = y * cs in
+                                     when (elevArr VU.! idx > seaLevel
+                                          ∧ isOceanAt (baseGX - 1) (baseGY + y)) $
+                                         addSeed idx 1
+                                 when oceanE $ forM_ [0 .. cs - 1] $ \y →
+                                     let idx = y * cs + (cs - 1) in
+                                     when (elevArr VU.! idx > seaLevel
+                                          ∧ isOceanAt (baseGX + cs) (baseGY + y)) $
+                                         addSeed idx 1
                                  sc0 ← VUM.read scRef 0
                                  let bfs curSeeds curCount level =
                                          when (level ≤ maxCoastalDist ∧ curCount > 0) $ do
@@ -277,17 +324,6 @@ buildZoomCacheWithPixels params registry palette =
                                              bfs nextM nc (level + 1)
                                  bfs seedsM sc0 0
                                  VU.unsafeFreeze distM
-                             -- Plate classification at chunk center
-                             ChunkCoord cx' cy' = coord
-                             cGX = cx' * cs + cs `div` 2
-                             cGY = cy' * cs + cs `div` 2
-                             (cGX', cGY') = wrapGlobalU worldSize cGX cGY
-                             ((pA, dA), (pB, dB)) =
-                                 twoNearestPlates seed worldSize plates cGX' cGY'
-                             cBoundary = classifyBoundary worldSize pA pB
-                             cBDist = (dB - dA) / 2.0
-                             maxBD = fromIntegral worldSize * 4.0 ∷ Float
-                             cBFade = min 1.0 (abs cBDist / maxBD)
                              -- River mouths near this chunk
                              allMouths = concatMap (\p →
                                  [ (mx, my)
@@ -301,11 +337,20 @@ buildZoomCacheWithPixels params registry palette =
                                 then (e, m, v, gx, gy)
                                 else let hardness = mpHardness
                                             (getMaterialProps registry (MaterialId m))
+                                         -- Per-tile plate classification (not chunk-center)
+                                         -- to avoid seams at chunk boundaries.
+                                         (gxP', gyP') = wrapGlobalU worldSize gx gy
+                                         ((pA, dA), (pB, _dB)) =
+                                             twoNearestPlates seed worldSize plates gxP' gyP'
+                                         tileBdy = classifyBoundary worldSize pA pB
+                                         tileBDist = (_dB - dA) / 2.0
+                                         maxBD = fromIntegral worldSize * 4.0 ∷ Float
+                                         tileBFade = min 1.0 (abs tileBDist / maxBD)
                                          nearRiver = isNearRiverMouth worldSize
                                             nearMouths gx gy
-                                         coastType = classifyCoast cBoundary
+                                         coastType = classifyCoast tileBdy
                                             (plateIsLand pA) (plateIsLand pB)
-                                            hardness 0.0 cBFade nearRiver
+                                            hardness 0.0 tileBFade nearRiver
                                          lh = coastHash seed gx gy
                                          roll = fromIntegral (lh .&. 0xFF)
                                                 / 255.0 ∷ Float

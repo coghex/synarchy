@@ -25,6 +25,8 @@ import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGloba
 import World.Geology.Types
 import World.Geology.Hash (hashGeo, hashToFloatGeo, wrappedDeltaUV)
 import World.Hydrology.Types
+import World.Weather.Types (ClimateState(..))
+import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 
 -- * Configuration
 
@@ -32,8 +34,12 @@ baseSampleSpacing ∷ Int
 baseSampleSpacing = 4
 
 -- | Minimum flow accumulation to qualify as a river.
+--   Calibrated for precipitation-weighted accumulation where
+--   each cell contributes ~1-10 units based on rainfall + snowmelt
+--   (×10 scale). Average wet cell ≈ 5 units, so 80 ≈ 16 wet cells
+--   of drainage area — similar to the old threshold of 15 flat cells.
 minRiverTotalFlow ∷ Int
-minRiverTotalFlow = 15
+minRiverTotalFlow = 80
 
 minRiverLength ∷ Int
 minRiverLength = 2
@@ -421,8 +427,8 @@ foldlM f acc (x:xs) = do
 
 -- * Flow Simulation
 
-simulateHydrology ∷ Word64 → Int → Int → ElevGrid → FlowResult
-simulateHydrology seed worldSize ageIdx grid =
+simulateHydrology ∷ Word64 → Int → Int → ElevGrid → ClimateState → FlowResult
+simulateHydrology seed worldSize ageIdx grid climate =
     let gridW   = egGridW grid
         spacing = egSpacing grid
         totalSamples = gridW * gridW
@@ -469,9 +475,37 @@ simulateHydrology seed worldSize ageIdx grid =
             VA.sortBy (\a b → compare (filledElev VU.! b) (filledElev VU.! a)) mv
             VU.unsafeFreeze mv
 
+        -- Precipitation-weighted flow accumulation.
+        -- Each cell contributes water based on local rainfall + snowmelt
+        -- instead of a flat 1 unit. This ensures rivers form from wet
+        -- regions and mountain snowmelt, not just drainage area.
         accumVec ∷ VU.Vector Int
         accumVec = runST $ do
-            mv ← VUM.replicate totalSamples (1 ∷ Int)
+            mv ← VUM.new totalSamples
+            -- Initialize each cell's water contribution from climate
+            forM_ [0 .. totalSamples - 1] $ \idx →
+                if not (landVec VU.! idx)
+                then VUM.write mv idx 0
+                else do
+                    let gx = gxVec VU.! idx
+                        gy = gyVec VU.! idx
+                        LocalClimate{lcTemp=temp, lcPrecip=precip
+                                    , lcSnow=snowFrac} =
+                            lookupLocalClimate climate worldSize gx gy
+                        -- Direct rainfall (non-snow precipitation)
+                        rainfall = precip * (1.0 - snowFrac)
+                        -- Snowmelt: snow that thaws. Ramps from 0 at
+                        -- -5°C (permanently frozen) to full melt at +5°C.
+                        -- This places river sources at the snowmelt line
+                        -- below glacial peaks, not on the frozen summits.
+                        meltFactor = max 0.0 (min 1.0 ((temp + 5.0) / 10.0))
+                        snowmelt = snowFrac * precip * meltFactor
+                        -- Total water entering the system at this cell.
+                        -- Scale ×10 to keep integer precision (1 old unit = 10 new).
+                        -- Minimum 1 so that even dry cells contribute a trickle.
+                        waterUnits = max 1 (round ((rainfall + snowmelt) * 10.0) ∷ Int)
+                    VUM.write mv idx waterUnits
+            -- Accumulate downstream (topological order)
             VU.forM_ sortedByElev $ \idx → do
                 myAccum ← VUM.read mv idx
                 let downstream = flowDirVec VU.! idx
@@ -546,7 +580,9 @@ simulateHydrology seed worldSize ageIdx grid =
             let gx = gxVec VU.! idx
                 gy = gyVec VU.! idx
                 elev = origElev VU.! idx
-                flow = fromIntegral (accumVec VU.! idx) * 0.05 + 0.1
+                -- Accumulation is precipitation-weighted (×10 scale).
+                -- Divide by 10 to normalize, then apply same flow formula.
+                flow = fromIntegral (accumVec VU.! idx) * 0.005 + 0.1
             in (gx, gy, elev, flow)
             ) sortedSources
 

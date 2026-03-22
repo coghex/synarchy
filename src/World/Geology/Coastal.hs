@@ -113,9 +113,10 @@ isNearRiverMouth worldSize mouths gx gy =
 
 sandProfile ∷ Int → Int
 sandProfile dist
-    | dist ≤ 3  = seaLevel + 1
-    | dist ≤ 5  = seaLevel + 2
-    | otherwise = seaLevel + 3
+    | dist ≤ 1  = seaLevel + 1
+    | dist ≤ 2  = seaLevel + 2
+    | dist ≤ 3  = seaLevel + 3
+    | otherwise = seaLevel + 4
 
 outcroppHardness ∷ Float
 outcroppHardness = 0.7
@@ -124,8 +125,8 @@ outcroppHardness = 0.7
 
 beachMaterial ∷ Int → Word8 → Float → Word8
 beachMaterial dist origMat roll
-    | dist ≤ 4  = 55
-    | dist ≤ 6  = if roll < 0.85 then 55 else 54
+    | dist ≤ 2  = 55
+    | dist ≤ 3  = if roll < 0.85 then 55 else 54
     | otherwise = transitionMaterial origMat roll
 
 transitionMaterial ∷ Word8 → Float → Word8
@@ -175,17 +176,18 @@ deltaMaterial dist roll
 
 -- * Coastal Erosion Pass
 
+-- | Maximum coastal influence distance. Must not exceed chunkBorder
+--   (currently 4) — otherwise the BFS distance field can't see ocean
+--   tiles beyond the border overlap and produces wrong distances near
+--   chunk boundaries, causing visible seams.
 maxCoastalDist ∷ Int
-maxCoastalDist = 8
+maxCoastalDist = chunkBorder
 
 applyCoastalErosion ∷ Word64 → Int → [TectonicPlate] → MaterialRegistry
                     → GeoTimeline → OceanMap → ChunkCoord
                     → (VU.Vector Int, VU.Vector MaterialId)
                     → (VU.Vector Int, VU.Vector MaterialId)
 applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elevVec, matVec) =
-    -- Early exit for chunks far from the coast. Only skip if
-    -- this chunk AND all 8 neighbors are non-oceanic — those
-    -- chunks can't have coastal tiles even in their border zone.
     if not (hasAnyOceanFluid oceanMap coord)
     then (elevVec, matVec)
     else
@@ -207,46 +209,58 @@ applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elev
             ]
         nearbyMouths = filterNearbyMouths worldSize coord allMouths
 
-        -- Cache plate classification at chunk center. Plate boundaries
-        -- change slowly over 16 tiles, so one lookup suffices for the
-        -- entire chunk instead of per-tile twoNearestPlates calls.
         ChunkCoord cx cy = coord
-        chunkCenterGX = cx * chunkSize + chunkSize `div` 2
-        chunkCenterGY = cy * chunkSize + chunkSize `div` 2
-        (chunkCenterGX', chunkCenterGY') =
-            wrapGlobalU worldSize chunkCenterGX chunkCenterGY
-        ((chunkPlateA, chunkDistA), (chunkPlateB, chunkDistB)) =
-            twoNearestPlates seed worldSize plates chunkCenterGX' chunkCenterGY'
-        chunkBoundary = classifyBoundary worldSize chunkPlateA chunkPlateB
-        chunkBoundaryDist = (chunkDistB - chunkDistA) / 2.0
-        maxBDist = fromIntegral worldSize * 4.0 ∷ Float
-        chunkBoundaryFade = min 1.0 (abs chunkBoundaryDist / maxBDist)
 
-        distField = buildDistField borderSize elevVec
+        -- Single-pass outlier removal near sea level. Eliminates
+        -- isolated land tiles surrounded by ocean and vice versa.
+        -- Only 1 tile of propagation — stays within the chunk border
+        -- overlap so neighboring chunks produce identical results (no seams).
+        smoothedBaseElev = removeCoastalOutliers borderSize elevVec
+
+        distField = buildDistField borderSize smoothedBaseElev
 
         (passElev, passMat) = runST $ do
             elevM ← VUM.new borderArea
             matM  ← VUM.new borderArea
             forM_ [0 .. borderArea - 1] $ \idx → do
+                -- Start from ORIGINAL timeline elevation. The smoothed
+                -- version is only used for BFS ocean detection — writing
+                -- it here would leak outlier-removal artifacts into
+                -- non-coastal tiles, creating chunk boundary seams.
                 VUM.write elevM idx (elevVec VU.! idx)
                 VUM.write matM  idx (matVec  VU.! idx)
 
             forM_ [0 .. borderArea - 1] $ \idx → do
                 let dist = distField VU.! idx
                     (lx, ly) = fromIndex idx
-                    isInterior = lx ≥ 0 ∧ lx < chunkSize
-                               ∧ ly ≥ 0 ∧ ly < chunkSize
-                when (dist > 0 ∧ dist ≤ maxCoastalDist ∧ isInterior) $ do
+                -- Process ALL tiles in the border area, not just interior.
+                -- Border tiles must be eroded identically by both chunks
+                -- that share them, so the smoothing pass sees consistent
+                -- values and doesn't create seams at chunk boundaries.
+                when (dist > 0 ∧ dist ≤ maxCoastalDist) $ do
                     let elev = elevVec VU.! idx
                         mat  = matVec  VU.! idx
                         hardness = mpHardness (getMaterialProps registry mat)
 
-                        -- Use cached chunk-level plate classification
+                        -- Per-tile plate classification. Computing at the
+                        -- chunk center caused hard seams where adjacent
+                        -- chunks straddled a plate boundary. Per-tile is
+                        -- correct and only runs for coastal tiles (~10-20%
+                        -- of a coastal chunk).
+                        gxPlate = cx * chunkSize + lx
+                        gyPlate = cy * chunkSize + ly
+                        (gxP', gyP') = wrapGlobalU worldSize gxPlate gyPlate
+                        ((plateA, distA), (plateB, distB)) =
+                            twoNearestPlates seed worldSize plates gxP' gyP'
+                        tileBoundary = classifyBoundary worldSize plateA plateB
+                        tileBoundaryDist = (distB - distA) / 2.0
+                        maxBDist = fromIntegral worldSize * 4.0 ∷ Float
+                        tileBoundaryFade = min 1.0 (abs tileBoundaryDist / maxBDist)
                         nearRiver = isNearRiverMouth worldSize nearbyMouths
-                            (cx * chunkSize + lx) (cy * chunkSize + ly)
-                        coastType = classifyCoast chunkBoundary
-                            (plateIsLand chunkPlateA) (plateIsLand chunkPlateB)
-                            hardness 0.0 chunkBoundaryFade nearRiver
+                            gxPlate gyPlate
+                        coastType = classifyCoast tileBoundary
+                            (plateIsLand plateA) (plateIsLand plateB)
+                            hardness 0.0 tileBoundaryFade nearRiver
 
                         localHash = coastHash seed
                             (cx * chunkSize + lx) (cy * chunkSize + ly)
@@ -331,9 +345,18 @@ buildDistField borderSize elevVec = runST $ do
     seedCount ← VUM.new 1
     VUM.write seedCount 0 (0 ∷ Int)
 
+    -- Seed BFS from ocean tiles, but skip the outermost border ring.
+    -- The timeline erosion produces slightly inconsistent elevations
+    -- at the border edge (neighbor fallback to self). If those tiles
+    -- become BFS seeds in one chunk but not the adjacent chunk, the
+    -- distance fields diverge → different beach processing → seam.
     forM_ [0 .. borderArea - 1] $ \idx → do
         let elev = elevVec VU.! idx
-        when (elev ≤ seaLevel) $ do
+            bx = idx `mod` borderSize
+            by = idx `div` borderSize
+        when (elev ≤ seaLevel
+             ∧ bx > 0 ∧ bx < borderSize - 1
+             ∧ by > 0 ∧ by < borderSize - 1) $ do
             VUM.write distM idx 0
             sc ← VUM.read seedCount 0
             VUM.write seeds sc idx
@@ -375,6 +398,10 @@ smoothCoast ∷ Int → Int → VU.Vector Int → VU.Vector Int → VU.Vector In
 smoothCoast 0 _ _ elev = elev
 smoothCoast iters borderSize distF elev =
     let borderArea = borderSize * borderSize
+        -- Jacobi iteration: read from immutable previous pass, write
+        -- to new mutable vector. This ensures overlapping border tiles
+        -- in adjacent chunks produce identical results regardless of
+        -- processing order — eliminating chunk boundary seams.
         smoothed = runST $ do
             em ← VUM.new borderArea
             forM_ [0 .. borderArea - 1] $ \i →
@@ -383,29 +410,92 @@ smoothCoast iters borderSize distF elev =
                 let d = distF VU.! idx
                     bx = idx `mod` borderSize
                     by = idx `div` borderSize
-                    lx = bx - chunkBorder
-                    ly = by - chunkBorder
-                    isInt = lx ≥ 0 ∧ lx < chunkSize
-                          ∧ ly ≥ 0 ∧ ly < chunkSize
-                when (d > 0 ∧ d ≤ maxCoastalDist ∧ isInt) $ do
-                    e ← VUM.read em idx
-                    let readN nx ny
-                            | nx ≥ 0 ∧ nx < borderSize
-                              ∧ ny ≥ 0 ∧ ny < borderSize
+                -- Smooth tiles in the border area, but skip the outermost
+                -- ring. Edge tiles have out-of-bounds neighbors that fall
+                -- back to self, producing different results in adjacent
+                -- chunks. Skipping them ensures all processed tiles have
+                -- valid neighbors → identical results across chunks.
+                when (d > 0 ∧ d ≤ maxCoastalDist
+                     ∧ bx > 0 ∧ bx < borderSize - 1
+                     ∧ by > 0 ∧ by < borderSize - 1) $ do
+                    let e = elev VU.! idx
+                        -- Don't read from the outermost border ring — those
+                        -- tiles have potentially inconsistent values from
+                        -- timeline erosion (neighbor fallback to self at
+                        -- the border edge). Reading them would propagate
+                        -- the inconsistency inward across smoothing iterations.
+                        readN nx ny
+                            | nx > 0 ∧ nx < borderSize - 1
+                              ∧ ny > 0 ∧ ny < borderSize - 1
                                 = let nIdx = ny * borderSize + nx
                                       nd = distF VU.! nIdx
                                   in if nd ≡ 0
-                                     then pure (seaLevel + 1)
-                                     else VUM.read em nIdx
-                            | otherwise = pure e
-                    n ← readN bx (by - 1)
-                    s ← readN bx (by + 1)
-                    w ← readN (bx - 1) by
-                    eN ← readN (bx + 1) by
-                    let avg = (n + s + w + eN + e) `div` 5
+                                     then seaLevel + 1
+                                     else elev VU.! nIdx
+                            | otherwise = e
+                        n  = readN bx       (by - 1)
+                        s  = readN bx       (by + 1)
+                        w  = readN (bx - 1) by
+                        eN = readN (bx + 1) by
+                        avg = (n + s + w + eN + e) `div` 5
                     VUM.write em idx (min e avg)
             VU.unsafeFreeze em
     in smoothCoast (iters - 1) borderSize distF smoothed
+
+-- * Coastline Pre-Smoothing
+
+-- | Single-pass outlier removal at the land/ocean boundary.
+--   For tiles near sea level, count how many of the 8 neighbors
+--   are land vs ocean. If a tile disagrees with the strong majority
+--   of its neighbors, adjust it to match.
+--
+--   Only 1 tile of propagation per pass, so it stays within the
+--   chunk border overlap and produces identical results in
+--   neighboring chunks (no seams).
+removeCoastalOutliers ∷ Int → VU.Vector Int → VU.Vector Int
+removeCoastalOutliers borderSize elev =
+    let borderArea = borderSize * borderSize
+        threshold  = 10  -- only consider tiles within ±10 of sea level
+    in runST $ do
+        em ← VUM.new borderArea
+        forM_ [0 .. borderArea - 1] $ \i →
+            VUM.write em i (elev VU.! i)
+        forM_ [0 .. borderArea - 1] $ \idx → do
+            let e = elev VU.! idx
+            let bx = idx `mod` borderSize
+                by = idx `div` borderSize
+            -- Skip outermost border ring and tiles far from sea level.
+            -- Edge tiles have out-of-bounds neighbors that differ
+            -- between chunks — skipping ensures determinism.
+            when (abs (e - seaLevel) ≤ threshold
+                 ∧ bx > 0 ∧ bx < borderSize - 1
+                 ∧ by > 0 ∧ by < borderSize - 1) $ do
+                let readE nx ny
+                        | nx ≥ 0 ∧ nx < borderSize
+                          ∧ ny ≥ 0 ∧ ny < borderSize
+                            = elev VU.! (ny * borderSize + nx)
+                        | otherwise = e
+                    neighbors =
+                        [ readE (bx + dx) (by + dy)
+                        | dx ← [-1, 0, 1], dy ← [-1, 0, 1]
+                        , dx ≢ 0 ∨ dy ≢ 0
+                        ]
+                    landCount = length (filter (> seaLevel) neighbors)
+                    oceanCount = 8 - landCount
+                -- Isolated land tile surrounded mostly by ocean:
+                -- pull it below sea level (average of ocean neighbors)
+                if e > seaLevel ∧ oceanCount ≥ 6
+                then do
+                    let oceanSum = sum (filter (≤ seaLevel) neighbors)
+                    VUM.write em idx (oceanSum `div` max 1 oceanCount)
+                -- Isolated ocean tile surrounded mostly by land:
+                -- push it above sea level (average of land neighbors)
+                else if e ≤ seaLevel ∧ landCount ≥ 6
+                then do
+                    let landSum = sum (filter (> seaLevel) neighbors)
+                    VUM.write em idx (landSum `div` max 1 landCount)
+                else pure ()
+        VU.unsafeFreeze em
 
 -- * Shoreline Noise
 

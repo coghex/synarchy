@@ -4,6 +4,7 @@ module World.Geology.Hash
     , hashToFloatGeo
     , hashToRangeGeo
     , smoothstepGeo
+    , valueNoise2D
 --    , wrappedDeltaXGeo
     , wrappedDeltaUV
     , scaleCount
@@ -64,6 +65,26 @@ wrappedDeltaUV worldSize gx1 gy1 gx2 gy2 =
         dx = (wrappedDU + dv) `div` 2
         dy = (dv - wrappedDU) `div` 2
     in (dx, dy)
+
+-- * Smooth 2D Noise
+
+-- | Smooth 2D value noise via bilinear interpolation of hashed grid cells.
+--   Returns a value centered around 0 (range approximately -0.5 to 0.5).
+valueNoise2D ∷ Word64 → Int → Float → Float → Float → Float
+valueNoise2D seed prop x y cellSize =
+    let cx0 = floor (x / cellSize) ∷ Int
+        cy0 = floor (y / cellSize) ∷ Int
+        fx  = x / cellSize - fromIntegral cx0
+        fy  = y / cellSize - fromIntegral cy0
+        tx  = smoothstepGeo fx
+        ty  = smoothstepGeo fy
+        h00 = hashToFloatGeo (hashGeo seed cx0       (cy0 * prop))
+        h10 = hashToFloatGeo (hashGeo seed (cx0 + 1) (cy0 * prop))
+        h01 = hashToFloatGeo (hashGeo seed cx0       ((cy0 + 1) * prop))
+        h11 = hashToFloatGeo (hashGeo seed (cx0 + 1) ((cy0 + 1) * prop))
+        top = h00 + tx * (h10 - h00)
+        bot = h01 + tx * (h11 - h01)
+    in (top + ty * (bot - top)) - 0.5
 
 -- * Feature Scaling
 

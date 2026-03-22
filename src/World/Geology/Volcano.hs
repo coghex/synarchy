@@ -18,7 +18,8 @@ import World.Base (GeoCoord(..))
 import World.Types
 import World.Material
 import World.Geology.Types
-import World.Geology.Hash
+import World.Geology.Hash (hashGeo, hashToFloatGeo, smoothstepGeo, valueNoise2D
+                          , wrappedDeltaUV)
 
 -- * Distance Perturbation (breaks circular symmetry)
 
@@ -89,24 +90,6 @@ perturbDist cx cy dx dy _dist radius baseElev hardness =
         hardnessShift = (hardness - 0.5) * 0.12 * radius * min 1.0 (radialT * 1.5)
 
     in warpedDist + noisePerturbation + terrainShift + hardnessShift
-
--- | Smooth 2D value noise via bilinear interpolation of hashed grid cells.
---   Returns a value centered around 0 (range approximately -0.5 to 0.5).
-valueNoise2D ∷ Word64 → Int → Float → Float → Float → Float
-valueNoise2D seed prop x y cellSize =
-    let cx0 = floor (x / cellSize) ∷ Int
-        cy0 = floor (y / cellSize) ∷ Int
-        fx  = x / cellSize - fromIntegral cx0
-        fy  = y / cellSize - fromIntegral cy0
-        tx  = smoothstepGeo fx
-        ty  = smoothstepGeo fy
-        h00 = hashToFloatGeo (hashGeo seed cx0       (cy0 * prop))
-        h10 = hashToFloatGeo (hashGeo seed (cx0 + 1) (cy0 * prop))
-        h01 = hashToFloatGeo (hashGeo seed cx0       ((cy0 + 1) * prop))
-        h11 = hashToFloatGeo (hashGeo seed (cx0 + 1) ((cy0 + 1) * prop))
-        top = h00 + tx * (h10 - h00)
-        bot = h01 + tx * (h11 - h01)
-    in (top + ty * (bot - top)) - 0.5
 
 -- | Smooth noise sampled around a circle in angular buckets.
 angularNoise ∷ Word64 → Int → Float → Int → Float

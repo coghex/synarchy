@@ -139,6 +139,13 @@ computeChunkFluid worldSize oceanMap coord surfaceMap
       ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx + 1) (cy + 1)))
       ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx - 1) (cy + 1)))
 
+    -- Which cardinal neighbor chunks are ocean?
+    -- Used to extend ocean fluid across chunk boundaries.
+    oceanN = isOceanChunk oceanMap (wrap (ChunkCoord cx (cy - 1)))
+    oceanS = isOceanChunk oceanMap (wrap (ChunkCoord cx (cy + 1)))
+    oceanE = isOceanChunk oceanMap (wrap (ChunkCoord (cx + 1) cy))
+    oceanW = isOceanChunk oceanMap (wrap (ChunkCoord (cx - 1) cy))
+
     -- Two-pass ocean fill:
     --   Pass 1: place ocean where terrain ≤ sea level
     --   Pass 2: propagate ocean one tile outward to cover coastline
@@ -150,7 +157,9 @@ computeChunkFluid worldSize oceanMap coord surfaceMap
                 when (surfZ ≤ seaLevel ∧ surfZ > minBound) $
                     MV.write mv idx (Just (FluidCell Ocean seaLevel))
             -- Pass 2: extend one tile into coast so the ocean
-            -- surface covers the terrain side-face at the waterline
+            -- surface covers the terrain side-face at the waterline.
+            -- For edge tiles, also check if the neighboring CHUNK
+            -- is ocean — this extends water across chunk boundaries.
             forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
                 val ← MV.read mv idx
                 when (isNothing val) $ do
@@ -164,8 +173,12 @@ computeChunkFluid worldSize oceanMap coord surfaceMap
                      → ST s Bool
     adjacentHasOcean mv lx ly = do
         let check x y
-              | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = return False
-              | otherwise = isJust ⊚ MV.read mv (y * chunkSize + x)
+              -- At chunk edges, check if the neighboring chunk is ocean
+              | x < 0         = return oceanW
+              | x ≥ chunkSize = return oceanE
+              | y < 0         = return oceanN
+              | y ≥ chunkSize = return oceanS
+              | otherwise     = isJust ⊚ MV.read mv (y * chunkSize + x)
         n ← check lx (ly - 1)
         s ← check lx (ly + 1)
         e ← check (lx + 1) ly

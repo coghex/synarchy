@@ -41,9 +41,10 @@ import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import World.Types
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
-import World.Fluid.Types (FluidCell(..))
+import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Weather.Types (ClimateState(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
+import World.Geology.Hash (valueNoise2D)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Render.Textures.Types (WorldTextures(..))
 
@@ -149,21 +150,40 @@ computeChunkVegetation seed worldSize coord surfMap surfMats surfSlopes
             matId   = surfMats   VU.! idx
             slopeId = surfSlopes VU.! idx
             elev = surfMap VU.! idx
-            hasFluid = case fluidMap V.! idx of
-                Just fc → elev ≤ fcSurface fc
-                Nothing → False
-            -- Per-tile deterministic hash for variant selection
+            -- Fluid depth: how many tiles of water above terrain.
+            -- Only deep water (≥3) fully suppresses vegetation.
+            -- Shallow fresh water (1-2) gets marsh/wetland vegetation
+            -- instead of bare dark terrain.
+            fluidInfo = case fluidMap V.! idx of
+                Just fc → let d = max 0 (fcSurface fc - elev)
+                          in (d, fcType fc)
+                Nothing → (0, Ocean)  -- dummy type, depth 0 = no fluid
+            fluidDepth = fst fluidInfo
+            fluidTy    = snd fluidInfo
+            hasFluid   = fluidDepth ≥ 3
+
+            -- Per-tile hash for texture variant selection only
             h = vegHash seed gx gy
-            roll    = fromIntegral (h .&. 0xFF) / 255.0 ∷ Float
             variant = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
+
+            -- Spatially coherent noise for vegetation type selection.
+            -- Cell size ~10 tiles creates natural-looking patches:
+            -- a ~10-tile area of dense grass, then wildflowers, etc.
+            -- instead of per-tile salt-and-pepper randomness.
+            gxF = fromIntegral gx ∷ Float
+            gyF = fromIntegral gy ∷ Float
+            roll = valueNoise2D seed 47 gxF gyF 10.0 + 0.5
 
             -- Regional climate
             LocalClimate{lcTemp=temp, lcPrecip=precip
                         , lcHumidity=humid, lcSnow=snow} =
                 lookupLocalClimate climate worldSize gx gy
 
-        in selectVegetation matId slopeId hasFluid elev
-                            temp precip humid snow roll variant
+            -- Shallow fresh water → marsh vegetation (not bare ground)
+        in if fluidDepth ≥ 1 ∧ fluidDepth < 3 ∧ fluidTy ≢ Ocean
+           then vegMarshGrass + variant
+           else selectVegetation matId slopeId hasFluid elev
+                                temp precip humid snow roll variant
   where chunkSz = chunkSize
 
 -- * Vegetation Selection
@@ -198,23 +218,23 @@ selectVegetation matId slopeId hasFluid elev
 
     -- === TUNDRA / ALPINE ===
     | temp < -5.0 ∨ (temp < 2.0 ∧ snow > 0.3)
-        = if roll < 0.6
-          then vegLichen + variant
-          else vegNone
+        = if roll < 0.15
+          then vegNone
+          else vegLichen + variant
 
     -- === DESERT ===
     | temp > 25.0 ∧ precip < 0.15
-        = if roll < 0.25
+        = if roll < 0.15
           then vegDesertScrub + variant
           else vegNone
 
     -- === ARID / SEMI-ARID ===
     | precip < 0.2
-        = if roll < 0.3
+        = if roll < 0.35
           then vegSparseGrass + variant
-          else if roll < 0.45
+          else if roll < 0.55
                then vegDeadGrass + variant
-               else if roll < 0.55
+               else if roll < 0.70
                     then vegDesertScrub + variant
                     else vegNone
 
@@ -232,27 +252,29 @@ selectVegetation matId slopeId hasFluid elev
 
     -- === HOT + WET (tropical) ===
     | temp > 25.0 ∧ precip > 0.5
-        = if roll < 0.6
+        = if roll < 0.55
           then vegDenseGrass + variant
-          else if roll < 0.8
+          else if roll < 0.80
                then vegThickMoss + variant
                else vegMushroomPatch + variant
 
     -- === WARM + WET ===
     | temp > 15.0 ∧ precip > 0.4
-        = if roll < 0.8
+        = if roll < 0.75
           then vegDenseGrass + variant
           else vegWildflowers + variant
 
     -- === PRAIRIE / SAVANNA ===
     | temp > 15.0 ∧ precip > 0.2 ∧ precip < 0.4
-        = if roll < 0.7
+        = if roll < 0.65
           then vegTallGrass + variant
-          else vegDeadGrass + variant
+          else if roll < 0.90
+               then vegDeadGrass + variant
+               else vegSparseGrass + variant
 
     -- === TEMPERATE ===
     | temp > 5.0 ∧ precip > 0.3
-        = if roll < 0.6
+        = if roll < 0.55
           then vegMediumGrass + variant
           else if roll < 0.85
                then vegDenseGrass + variant
@@ -260,17 +282,19 @@ selectVegetation matId slopeId hasFluid elev
 
     -- === COOL TEMPERATE ===
     | temp > 0.0
-        = if roll < 0.4
+        = if roll < 0.45
           then vegMediumGrass + variant
-          else if roll < 0.7
+          else if roll < 0.80
                then vegSparseGrass + variant
                else vegDeadGrass + variant
 
-    -- === FALLBACK ===
+    -- === FALLBACK (near-polar) ===
     | otherwise
-        = if roll < 0.3
+        = if roll < 0.4
           then vegSparseGrass + variant
-          else vegNone
+          else if roll < 0.6
+               then vegLichen + variant
+               else vegNone
 
 -- * Material Classification
 
