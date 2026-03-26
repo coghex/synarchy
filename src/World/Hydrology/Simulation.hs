@@ -197,8 +197,11 @@ updateElevGrid worldSize grid period =
                   ) e0 events
 
            newLand = VU.generate totalSamples $ \idx →
-               newElev VU.! idx > seaLevel
-               ∧ egLand grid VU.! idx
+               let gx = egGX grid VU.! idx
+                   gy = egGY grid VU.! idx
+                   (gx', gy') = wrapGlobalU worldSize gx gy
+               in newElev VU.! idx > seaLevel
+                ∧ not (isBeyondGlacier worldSize gx' gy')
 
        in grid { egElev = newElev, egLand = newLand }
 

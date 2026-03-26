@@ -18,7 +18,10 @@ viewDepth ∷ Int
 viewDepth = 250
 
 -- | Border size around each chunk for neighbor lookups.
---   Needs to be large enough for erosion neighbor access.
---   4 tiles gives comfortable margin for smoothing.
+--   Must be larger than maxCoastalDist (in Coastal.hs) so that
+--   adjacent chunks' bordered regions overlap at ALL ocean tiles
+--   within beach distance of the chunk boundary. The extra margin
+--   prevents seams where one chunk's BFS sees an ocean tile but
+--   the neighbor's border doesn't include it.
 chunkBorder ∷ Int
-chunkBorder = 4
+chunkBorder = 14

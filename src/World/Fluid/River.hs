@@ -13,7 +13,7 @@ import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
 import Control.Monad (forM_, when)
 import Control.Monad.ST (ST)
-import Data.STRef (newSTRef, readSTRef, modifySTRef')
+import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
 import World.Base
 import World.Types
 import World.Fluid.Types (FluidCell(..), FluidType(..))
@@ -84,7 +84,7 @@ containWaterAtCliffs mv surfaceMap = go (8 ∷ Int)
 
 containPass ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s Bool
 containPass mv surfaceMap = do
-    changedRef ← MV.replicate 1 False
+    changedRef ← newSTRef False
     let area = chunkSize * chunkSize
     forM_ [0 .. area - 1] $ \idx → do
         val ← MV.read mv idx
@@ -112,7 +112,7 @@ containPass mv surfaceMap = do
                                 let target = max (surfZ + 1) (dryTerrZ + 1)
                                 when (target < myWater) $ do
                                     MV.write mv idx (Just (fc { fcSurface = target }))
-                                    MV.write changedRef 0 True
+                                    writeSTRef changedRef True
                 -- Also check: if any WATER neighbor was lowered and is now
                 -- much lower than us, we should lower too (inward propagation).
                 minNbr ← minRiverNeighborSurface mv lx ly
@@ -129,10 +129,10 @@ containPass mv surfaceMap = do
                                     Just fc' | fcType fc' ≡ River →
                                         when (target < fcSurface fc') $ do
                                             MV.write mv idx (Just (fc' { fcSurface = target }))
-                                            MV.write changedRef 0 True
+                                            writeSTRef changedRef True
                                     _ → pure ()
             _ → pure ()
-    MV.read changedRef 0
+    readSTRef changedRef
 
 -- | Find the lowest terrain elevation among dry cardinal neighbors.
 --   Returns Nothing if all neighbors have water.
@@ -248,7 +248,7 @@ smoothRiverSurface mv surfaceMap = go (3 ∷ Int)
 
 smoothPass ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s Bool
 smoothPass mv surfaceMap = do
-    changedRef ← MV.replicate 1 False
+    changedRef ← newSTRef False
     let area = chunkSize * chunkSize
         smoothOne idx = do
             val ← MV.read mv idx
@@ -265,13 +265,13 @@ smoothPass mv surfaceMap = do
                             let target = max (nMin + 2) (surfZ + 1)
                             when (myWater > target) $ do
                                 MV.write mv idx (Just (fc { fcSurface = target }))
-                                MV.write changedRef 0 True
+                                writeSTRef changedRef True
                 _ → pure ()
     -- Forward pass
     forM_ [0 .. area - 1] smoothOne
     -- Reverse pass — propagates changes in the other direction
     forM_ [area - 1, area - 2 .. 0] smoothOne
-    MV.read changedRef 0
+    readSTRef changedRef
 
 -- * Disconnected Water Removal
 

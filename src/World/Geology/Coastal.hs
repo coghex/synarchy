@@ -43,7 +43,7 @@ data CoastType
     | DepositionalSandy
     | DepositionalWetland
     | DeltaicCoast
-    | SubmergenRocky
+    | SubmergentRocky
     | TransformCoast
     deriving (Eq, Show)
 
@@ -72,7 +72,7 @@ classifyCoast boundary aIsLand bIsLand hardness slope boundaryFade nearRiver =
                else DepositionalSandy
            Divergent _ →
                if activity > 0.5 ∧ hardness > 0.4
-               then SubmergenRocky
+               then SubmergentRocky
                else DepositionalSandy
            Transform _ →
                if activity > 0.6 ∧ hardness > 0.4
@@ -114,9 +114,14 @@ isNearRiverMouth worldSize mouths gx gy =
 sandProfile ∷ Int → Int
 sandProfile dist
     | dist ≤ 1  = seaLevel + 1
-    | dist ≤ 2  = seaLevel + 2
-    | dist ≤ 3  = seaLevel + 3
-    | otherwise = seaLevel + 4
+    | dist ≤ 2  = seaLevel + 1
+    | dist ≤ 3  = seaLevel + 2
+    | dist ≤ 4  = seaLevel + 2
+    | dist ≤ 5  = seaLevel + 3
+    | dist ≤ 6  = seaLevel + 3
+    | dist ≤ 7  = seaLevel + 4
+    | dist ≤ 8  = seaLevel + 5
+    | otherwise = seaLevel + 6
 
 outcroppHardness ∷ Float
 outcroppHardness = 0.7
@@ -125,8 +130,9 @@ outcroppHardness = 0.7
 
 beachMaterial ∷ Int → Word8 → Float → Word8
 beachMaterial dist origMat roll
-    | dist ≤ 2  = 55
-    | dist ≤ 3  = if roll < 0.85 then 55 else 54
+    | dist ≤ 3  = 55
+    | dist ≤ 5  = if roll < 0.85 then 55 else 54
+    | dist ≤ 7  = if roll < 0.6  then 55 else 54
     | otherwise = transitionMaterial origMat roll
 
 transitionMaterial ∷ Word8 → Float → Word8
@@ -176,12 +182,12 @@ deltaMaterial dist roll
 
 -- * Coastal Erosion Pass
 
--- | Maximum coastal influence distance. Must not exceed chunkBorder
---   (currently 4) — otherwise the BFS distance field can't see ocean
---   tiles beyond the border overlap and produces wrong distances near
---   chunk boundaries, causing visible seams.
+-- | Maximum coastal influence distance. Must be strictly less than
+--   chunkBorder so that adjacent chunks' bordered regions overlap
+--   at ALL ocean tiles within this distance of the chunk boundary.
+--   chunkBorder - maxCoastalDist tiles of margin prevents BFS seams.
 maxCoastalDist ∷ Int
-maxCoastalDist = chunkBorder
+maxCoastalDist = 10
 
 applyCoastalErosion ∷ Word64 → Int → [TectonicPlate] → MaterialRegistry
                     → GeoTimeline → OceanMap → ChunkCoord
@@ -211,23 +217,25 @@ applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elev
 
         ChunkCoord cx cy = coord
 
-        -- Single-pass outlier removal near sea level. Eliminates
-        -- isolated land tiles surrounded by ocean and vice versa.
-        -- Only 1 tile of propagation — stays within the chunk border
-        -- overlap so neighboring chunks produce identical results (no seams).
-        smoothedBaseElev = removeCoastalOutliers borderSize elevVec
+        -- Multi-pass contour smoothing near sea level. Replaces the
+        -- old single-pass outlier removal with a proper smoothing pass
+        -- that pulls the sea-level isoline toward a cleaner curve.
+        -- Hardness-aware: soft rock coasts become smooth, hard rock
+        -- retains rugged headlands and outcrops.
+        smoothedContour = smoothCoastalContour 8 borderSize matVec
+                              registry elevVec
 
-        distField = buildDistField borderSize smoothedBaseElev
+        distField = buildDistField borderSize smoothedContour
 
         (passElev, passMat) = runST $ do
             elevM ← VUM.new borderArea
             matM  ← VUM.new borderArea
             forM_ [0 .. borderArea - 1] $ \idx → do
-                -- Start from ORIGINAL timeline elevation. The smoothed
-                -- version is only used for BFS ocean detection — writing
-                -- it here would leak outlier-removal artifacts into
-                -- non-coastal tiles, creating chunk boundary seams.
-                VUM.write elevM idx (elevVec VU.! idx)
+                -- Start from the contour-smoothed elevation so the
+                -- erosion pass is consistent with the distance field.
+                -- Tiles far from seaLevel are untouched by smoothing,
+                -- so non-coastal tiles retain their original values.
+                VUM.write elevM idx (smoothedContour VU.! idx)
                 VUM.write matM  idx (matVec  VU.! idx)
 
             forM_ [0 .. borderArea - 1] $ \idx → do
@@ -238,7 +246,7 @@ applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elev
                 -- that share them, so the smoothing pass sees consistent
                 -- values and doesn't create seams at chunk boundaries.
                 when (dist > 0 ∧ dist ≤ maxCoastalDist) $ do
-                    let elev = elevVec VU.! idx
+                    let elev = smoothedContour VU.! idx
                         mat  = matVec  VU.! idx
                         hardness = mpHardness (getMaterialProps registry mat)
 
@@ -275,7 +283,7 @@ applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elev
                     if isDepositional coastType
                     then do
                         let isOutcrop = hardness ≥ outcroppHardness
-                                      ∧ elev > sandLevel + 2
+                                      ∧ elev > sandLevel + 8
                             chooseMat = case coastType of
                                 DepositionalWetland → wetlandMaterial effDist roll
                                 DeltaicCoast → deltaMaterial effDist roll
@@ -305,7 +313,7 @@ applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elev
                                 when (dist ≤ 3 ∧ hardness < 0.4) $
                                     VUM.write matM idx (MaterialId
                                         (if roll < 0.5 then 65 else 66))
-                            SubmergenRocky → do
+                            SubmergentRocky → do
                                 when (dist ≤ 2 ∧ aboveSea > 0) $ do
                                     let cut = min aboveSea
                                               (round (2.5 * (1.0 - hardness)))
@@ -345,18 +353,17 @@ buildDistField borderSize elevVec = runST $ do
     seedCount ← VUM.new 1
     VUM.write seedCount 0 (0 ∷ Int)
 
-    -- Seed BFS from ocean tiles, but skip the outermost border ring.
-    -- The timeline erosion produces slightly inconsistent elevations
-    -- at the border edge (neighbor fallback to self). If those tiles
-    -- become BFS seeds in one chunk but not the adjacent chunk, the
-    -- distance fields diverge → different beach processing → seam.
+    -- Seed BFS from ALL ocean tiles, including the outermost border
+    -- ring. The ring has slightly inconsistent erosion values (1-2
+    -- tiles) due to neighbor fallback, but for ocean detection
+    -- (≤ seaLevel) this is negligible — ocean tiles are typically
+    -- hundreds below seaLevel. Skipping the ring caused a much worse
+    -- bug: when the ocean boundary fell at the ring, the chunk lost
+    -- all BFS seeds and skipped coastal processing entirely, creating
+    -- hard seams at chunk boundaries.
     forM_ [0 .. borderArea - 1] $ \idx → do
         let elev = elevVec VU.! idx
-            bx = idx `mod` borderSize
-            by = idx `div` borderSize
-        when (elev ≤ seaLevel
-             ∧ bx > 0 ∧ bx < borderSize - 1
-             ∧ by > 0 ∧ by < borderSize - 1) $ do
+        when (elev ≤ seaLevel) $ do
             VUM.write distM idx 0
             sc ← VUM.read seedCount 0
             VUM.write seeds sc idx
@@ -442,60 +449,92 @@ smoothCoast iters borderSize distF elev =
             VU.unsafeFreeze em
     in smoothCoast (iters - 1) borderSize distF smoothed
 
--- * Coastline Pre-Smoothing
+-- * Coastline Contour Smoothing
 
--- | Single-pass outlier removal at the land/ocean boundary.
---   For tiles near sea level, count how many of the 8 neighbors
---   are land vs ocean. If a tile disagrees with the strong majority
---   of its neighbors, adjust it to match.
+-- | Multi-pass coastal terrain flattening.
 --
---   Only 1 tile of propagation per pass, so it stays within the
---   chunk border overlap and produces identical results in
---   neighboring chunks (no seams).
-removeCoastalOutliers ∷ Int → VU.Vector Int → VU.Vector Int
-removeCoastalOutliers borderSize elev =
+--   The elevation noise in Plate.hs creates ±100-tile swings at
+--   5-tile wavelength. Where this noise straddles seaLevel, it
+--   produces a jagged, speckled coastline with steep gradients
+--   right at the coast — no room for flat beaches.
+--
+--   This function does two things:
+--     1. Smooths the sea-level isoline (removes speckle)
+--     2. Flattens the coastal gradient for soft rock, creating
+--        the gentle slope needed for wide sandy beaches
+--
+--   The flattening works by pulling each tile toward the minimum
+--   of its neighbors plus a small step. Over many iterations this
+--   propagates the low ocean elevation inland, creating a gradual
+--   ramp from seaLevel to natural terrain. Hard rock resists this
+--   pull, preserving cliffs and headlands.
+--
+--   Uses Jacobi iteration (reads from immutable previous pass) so
+--   overlapping border tiles in adjacent chunks produce identical
+--   results regardless of processing order — no seams.
+smoothCoastalContour ∷ Int → Int → VU.Vector MaterialId → MaterialRegistry
+                     → VU.Vector Int → VU.Vector Int
+smoothCoastalContour 0 _ _ _ elev = elev
+smoothCoastalContour iters borderSize matVec registry elev =
     let borderArea = borderSize * borderSize
-        threshold  = 10  -- only consider tiles within ±10 of sea level
-    in runST $ do
-        em ← VUM.new borderArea
-        forM_ [0 .. borderArea - 1] $ \i →
-            VUM.write em i (elev VU.! i)
-        forM_ [0 .. borderArea - 1] $ \idx → do
-            let e = elev VU.! idx
-            let bx = idx `mod` borderSize
-                by = idx `div` borderSize
-            -- Skip outermost border ring and tiles far from sea level.
-            -- Edge tiles have out-of-bounds neighbors that differ
-            -- between chunks — skipping ensures determinism.
-            when (abs (e - seaLevel) ≤ threshold
-                 ∧ bx > 0 ∧ bx < borderSize - 1
-                 ∧ by > 0 ∧ by < borderSize - 1) $ do
-                let readE nx ny
-                        | nx ≥ 0 ∧ nx < borderSize
-                          ∧ ny ≥ 0 ∧ ny < borderSize
-                            = elev VU.! (ny * borderSize + nx)
-                        | otherwise = e
-                    neighbors =
-                        [ readE (bx + dx) (by + dy)
-                        | dx ← [-1, 0, 1], dy ← [-1, 0, 1]
-                        , dx ≢ 0 ∨ dy ≢ 0
-                        ]
-                    landCount = length (filter (> seaLevel) neighbors)
-                    oceanCount = 8 - landCount
-                -- Isolated land tile surrounded mostly by ocean:
-                -- pull it below sea level (average of ocean neighbors)
-                if e > seaLevel ∧ oceanCount ≥ 6
-                then do
-                    let oceanSum = sum (filter (≤ seaLevel) neighbors)
-                    VUM.write em idx (oceanSum `div` max 1 oceanCount)
-                -- Isolated ocean tile surrounded mostly by land:
-                -- push it above sea level (average of land neighbors)
-                else if e ≤ seaLevel ∧ landCount ≥ 6
-                then do
-                    let landSum = sum (filter (> seaLevel) neighbors)
-                    VUM.write em idx (landSum `div` max 1 landCount)
-                else pure ()
-        VU.unsafeFreeze em
+        bandWidth  = 60 ∷ Int  -- process tiles within ±60 elev of seaLevel
+        fadeStart  = 45 ∷ Int  -- full strength below this, fade above
+        smoothed = runST $ do
+            em ← VUM.new borderArea
+            forM_ [0 .. borderArea - 1] $ \i →
+                VUM.write em i (elev VU.! i)
+            forM_ [0 .. borderArea - 1] $ \idx → do
+                let e  = elev VU.! idx
+                    bx = idx `mod` borderSize
+                    by = idx `div` borderSize
+                    absD = abs (e - seaLevel)
+                -- Skip outermost border ring (inconsistent between
+                -- chunks) and tiles outside the elevation band.
+                when (absD < bandWidth
+                     ∧ bx > 0 ∧ bx < borderSize - 1
+                     ∧ by > 0 ∧ by < borderSize - 1) $ do
+                    let mat = matVec VU.! idx
+                        hardness = mpHardness (getMaterialProps registry mat)
+                        -- Full strength within fadeStart, linear fade
+                        -- to zero at bandWidth edge.
+                        elevFade = if absD < fadeStart then 1.0
+                                   else 1.0 - fromIntegral (absD - fadeStart)
+                                            / fromIntegral (bandWidth - fadeStart) ∷ Float
+                        -- Hardness reduces smoothing but never
+                        -- eliminates it — even granite erodes over
+                        -- geological time. Soft rock (≤0.3): 100%.
+                        -- Hard rock (0.9 granite): 25%. This ensures
+                        -- flat beaches form on all coast types, just
+                        -- narrower on harder rock.
+                        hardFade = max 0.25 (min 1.0
+                                    (1.0 - (hardness - 0.3) * 1.0)) ∷ Float
+                        strength = elevFade * hardFade
+                    when (strength > 0.01) $ do
+                        let readN nx ny
+                                | nx > 0 ∧ nx < borderSize - 1
+                                  ∧ ny > 0 ∧ ny < borderSize - 1
+                                    = elev VU.! (ny * borderSize + nx)
+                                | otherwise = e
+                            n  = readN bx       (by - 1)
+                            s  = readN bx       (by + 1)
+                            w  = readN (bx - 1) by
+                            eN = readN (bx + 1) by
+                            minN = min n (min s (min w eN))
+                            avg  = (n + s + w + eN + e) `div` 5
+                        -- For tiles above sea level: use the minimum
+                        -- neighbor + 2 as an erosion target. This pulls
+                        -- elevated coastal land downhill toward the
+                        -- ocean, creating the gentle slope for beaches.
+                        -- Blend with neighbor average for smoothing.
+                        -- Below sea level: just average (fill small holes).
+                        let target
+                              | e > seaLevel = min avg (minN + 2)
+                              | otherwise    = avg
+                            delta = fromIntegral (target - e) ∷ Float
+                            newE = e + round (strength * delta)
+                        VUM.write em idx newE
+            VU.unsafeFreeze em
+    in smoothCoastalContour (iters - 1) borderSize matVec registry smoothed
 
 -- * Shoreline Noise
 

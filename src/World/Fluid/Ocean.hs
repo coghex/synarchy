@@ -123,21 +123,12 @@ computeChunkFluid ∷ Int → OceanMap → ChunkCoord
 computeChunkFluid worldSize oceanMap coord surfaceMap
     | isOceanChunk oceanMap coord =
         buildOceanSurface surfaceMap
-    | hasOceanNeighbor =
+    | hasAnyOceanFluid oceanMap coord =
         buildOceanSurface surfaceMap
     | otherwise = emptyFluidMap
   where
     ChunkCoord cx cy = coord
     wrap = wrapChunkCoordU worldSize
-    hasOceanNeighbor =
-        isOceanChunk oceanMap (wrap (ChunkCoord cx (cy - 1)))
-      ∨ isOceanChunk oceanMap (wrap (ChunkCoord cx (cy + 1)))
-      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx + 1) cy))
-      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx - 1) cy))
-      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx + 1) (cy - 1)))
-      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx - 1) (cy - 1)))
-      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx + 1) (cy + 1)))
-      ∨ isOceanChunk oceanMap (wrap (ChunkCoord (cx - 1) (cy + 1)))
 
     -- Which cardinal neighbor chunks are ocean?
     -- Used to extend ocean fluid across chunk boundaries.
@@ -186,16 +177,12 @@ computeChunkFluid worldSize oceanMap coord surfaceMap
         return (n ∨ s ∨ e ∨ w)
 
 -- | Quick boolean check: does this chunk have any ocean fluid?
---   Just checks the ocean map and neighbors — no vector allocation.
+--   Checks all chunks within Chebyshev distance 2 (a 5×5 grid).
+--   With chunkBorder=10 and chunkSize=16, beach processing can
+--   extend through a coastal chunk (not itself in the ocean map)
+--   into the next chunk. The 2-hop radius ensures that chunk
+--   still runs coastal erosion.
 hasAnyOceanFluid ∷ OceanMap → ChunkCoord → Bool
-hasAnyOceanFluid oceanMap coord =
-    let ChunkCoord cx cy = coord
-    in isOceanChunk oceanMap coord
-     ∨ isOceanChunk oceanMap (ChunkCoord cx (cy - 1))
-     ∨ isOceanChunk oceanMap (ChunkCoord cx (cy + 1))
-     ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) cy)
-     ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) cy)
-     ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy - 1))
-     ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy - 1))
-     ∨ isOceanChunk oceanMap (ChunkCoord (cx + 1) (cy + 1))
-     ∨ isOceanChunk oceanMap (ChunkCoord (cx - 1) (cy + 1))
+hasAnyOceanFluid oceanMap (ChunkCoord cx cy) =
+    any (\(dx, dy) → isOceanChunk oceanMap (ChunkCoord (cx + dx) (cy + dy)))
+        [ (dx, dy) | dx ← [-2 .. 2], dy ← [-2 .. 2] ]

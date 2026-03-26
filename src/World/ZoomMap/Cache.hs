@@ -234,6 +234,12 @@ buildZoomCacheWithPixels params registry palette =
                 tileData' = if not chunkOcean then tileData
                     else let cs = chunkSize
                              csA = cs * cs
+                             -- Zoom map operates on isolated 16×16 chunks
+                             -- with no border region. Cap coastal distance
+                             -- to 4 to avoid seams — the chunk pipeline
+                             -- uses the full maxCoastalDist with its
+                             -- 10-tile border for accurate wide beaches.
+                             zoomCoastalDist = 4 ∷ Int
                              elevArr = VU.fromList [ e | (e, _, _, _, _) ← tileData ]
                              ChunkCoord cx' cy' = coord
                              wrap = wrapChunkCoordU worldSize
@@ -246,7 +252,7 @@ buildZoomCacheWithPixels params registry palette =
                              oceanW = isOceanChunk oceanMap (wrap (ChunkCoord (cx' - 1) cy'))
                              -- BFS distance from ocean tiles
                              distField = runST $ do
-                                 distM ← VUM.replicate csA (maxCoastalDist + 1)
+                                 distM ← VUM.replicate csA (zoomCoastalDist + 1)
                                  seedsM ← VUM.new csA
                                  scRef ← VUM.new 1
                                  VUM.write scRef 0 (0 ∷ Int)
@@ -298,7 +304,7 @@ buildZoomCacheWithPixels params registry palette =
                                          addSeed idx 1
                                  sc0 ← VUM.read scRef 0
                                  let bfs curSeeds curCount level =
-                                         when (level ≤ maxCoastalDist ∧ curCount > 0) $ do
+                                         when (level ≤ zoomCoastalDist ∧ curCount > 0) $ do
                                              nextM ← VUM.new csA
                                              ncRef ← VUM.new 1
                                              VUM.write ncRef 0 (0 ∷ Int)
@@ -333,7 +339,7 @@ buildZoomCacheWithPixels params registry palette =
                              nearMouths = filterNearbyMouths worldSize coord allMouths
                          in zipWith (\idx (e, m, v, gx, gy) →
                              let dist = distField VU.! idx
-                             in if dist ≤ 0 ∨ dist > maxCoastalDist
+                             in if dist ≤ 0 ∨ dist > zoomCoastalDist
                                 then (e, m, v, gx, gy)
                                 else let hardness = mpHardness
                                             (getMaterialProps registry (MaterialId m))
@@ -362,14 +368,11 @@ buildZoomCacheWithPixels params registry palette =
                                          newMat
                                            | isDepositional coastType ∧ not isOutcrop
                                              = case coastType of
-                                                 _ | isDepositional coastType →
-                                                     case coastType of
-                                                       DepositionalWetland →
-                                                           wetlandMaterial effDist roll
-                                                       DeltaicCoast →
-                                                           deltaMaterial effDist roll
-                                                       _ → beachMaterial effDist m roll
-                                                 _ → m
+                                                 DepositionalWetland →
+                                                     wetlandMaterial effDist roll
+                                                 DeltaicCoast →
+                                                     deltaMaterial effDist roll
+                                                 _ → beachMaterial effDist m roll
                                            | otherwise = m
                                      in if newMat ≡ m
                                         then (e, m, v, gx, gy)
@@ -681,6 +684,53 @@ zoomHashToFloat h = fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF �
 
 zoomSmoothstep ∷ Float → Float
 zoomSmoothstep t = t * t * (3.0 - 2.0 * t)
+
+-- * Coastal Contour Smoothing (zoom map)
+
+-- | Lightweight coastal terrain flattening for the zoom map.
+--   Simplified version of smoothCoastalContour (Coastal.hs) without
+--   border overlap or hardness awareness. Flattens terrain near
+--   seaLevel by pulling toward minimum neighbor, creating gradual
+--   coastal slopes for the minimap.
+smoothZoomContour ∷ Int → Int → VU.Vector Int → VU.Vector Int
+smoothZoomContour 0 _ elev = elev
+smoothZoomContour iters cs elev =
+    let csA = cs * cs
+        bandWidth = 60 ∷ Int
+        fadeStart = 45 ∷ Int
+        smoothed = runST $ do
+            em ← VUM.new csA
+            forM_ [0 .. csA - 1] $ \i →
+                VUM.write em i (elev VU.! i)
+            forM_ [0 .. csA - 1] $ \idx → do
+                let e  = elev VU.! idx
+                    bx = idx `mod` cs
+                    by = idx `div` cs
+                    absD = abs (e - seaLevel)
+                when (absD < bandWidth
+                     ∧ bx > 0 ∧ bx < cs - 1
+                     ∧ by > 0 ∧ by < cs - 1) $ do
+                    let elevFade = if absD < fadeStart then 1.0
+                                   else 1.0 - fromIntegral (absD - fadeStart)
+                                            / fromIntegral (bandWidth - fadeStart) ∷ Float
+                        readN nx ny
+                            | nx ≥ 0 ∧ nx < cs ∧ ny ≥ 0 ∧ ny < cs
+                                = elev VU.! (ny * cs + nx)
+                            | otherwise = e
+                        n  = readN bx       (by - 1)
+                        s  = readN bx       (by + 1)
+                        w  = readN (bx - 1) by
+                        eN = readN (bx + 1) by
+                        minN = min n (min s (min w eN))
+                        avg  = (n + s + w + eN + e) `div` 5
+                        target
+                          | e > seaLevel = min avg (minN + 2)
+                          | otherwise    = avg
+                        delta = fromIntegral (target - e) ∷ Float
+                        newE = e + round (elevFade * delta)
+                    VUM.write em idx newE
+            VU.unsafeFreeze em
+    in smoothZoomContour (iters - 1) cs smoothed
 
 -- * Helpers
 

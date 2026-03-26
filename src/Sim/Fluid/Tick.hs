@@ -110,7 +110,8 @@ simulatePassiveChunk allChunks coord scs =
                     Just fc → do
                         let terrZ  = terrainV VU.! idx
                             mySurf = fcSurface fc
-                        when (fcType fc /= Ocean ∧ mySurf > terrZ) $ do
+                        when (fcType fc /= Ocean ∧ fcType fc /= Lake
+                             ∧ mySurf > terrZ) $ do
                             let lx = idx `mod` chunkSize
                                 ly = idx `div` chunkSize
                                 nbrs = [(lx-1,ly),(lx+1,ly)
