@@ -67,9 +67,8 @@ applyLavaFlow flow worldSize gx gy baseElev hardness =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy sx sy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        rawDist = sqrt (dx * dx + dy * dy)
         maxR = fromIntegral (lfRadius flow) ∷ Float
-        dist = perturbDist sx sy dx dy rawDist maxR baseElev hardness
+        dist = perturbDist sx sy dx dy maxR baseElev hardness
 
     in if dist > maxR
        then noModification
@@ -90,9 +89,8 @@ applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy baseElev 
         (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        rawDist = sqrt (dx * dx + dy * dy)
         rr = fromIntegral radius ∷ Float
-        dist = perturbDist cx cy dx dy rawDist rr baseElev hardness
+        dist = perturbDist cx cy dx dy rr baseElev hardness
     in if dist > rr
        then noModification
        else let t = dist / rr
@@ -111,9 +109,8 @@ applyEvolution (CollapseToCaldera depth _ratio center radius) ws gx gy baseElev 
         (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        rawDist = sqrt (dx * dx + dy * dy)
         rr = fromIntegral radius ∷ Float
-        dist = perturbDist cx cy dx dy rawDist rr baseElev hardness
+        dist = perturbDist cx cy dx dy rr baseElev hardness
     in if dist > rr
        then noModification
        else let t = dist / rr

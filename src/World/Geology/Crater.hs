@@ -132,11 +132,9 @@ applyCrater params worldSize gx gy baseElev hardness =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        rawDist = sqrt (dx * dx + dy * dy)
-
         radius      = fromIntegral (cpRadius params) ∷ Float
         ejectaR0    = fromIntegral (cpEjectaRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist ejectaR0 baseElev hardness
+        dist = perturbDist cx cy dx dy ejectaR0 baseElev hardness
         depth       = fromIntegral (cpDepth params) ∷ Float
         rimHeight   = fromIntegral (cpRimHeight params) ∷ Float
         ejectaR     = fromIntegral (cpEjectaRadius params) ∷ Float

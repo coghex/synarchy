@@ -36,8 +36,8 @@ import World.Geology.Hash (hashGeo, hashToFloatGeo, smoothstepGeo, valueNoise2D
 --   (lava diverts around resistant ridges) by increasing noise
 --   amplitude, and slightly pulls the boundary inward. Softer rock
 --   lets lava flood uniformly, producing smoother shapes.
-perturbDist ∷ Int → Int → Float → Float → Float → Float → Int → Float → Float
-perturbDist cx cy dx dy _dist radius baseElev hardness =
+perturbDist ∷ Int → Int → Float → Float → Float → Int → Float → Float
+perturbDist cx cy dx dy radius baseElev hardness =
     let featureSeed = fromIntegral (cx * 7919 + cy * 6271) ∷ Word64
 
         -- Domain warping: distort the (dx, dy) coordinate space so
@@ -123,10 +123,8 @@ applyShieldVolcano params worldSize gx gy baseElev hardness =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        rawDist = sqrt (dx * dx + dy * dy)
-
         baseR = fromIntegral (shBaseRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist baseR baseElev hardness
+        dist = perturbDist cx cy dx dy baseR baseElev hardness
         peakH = fromIntegral (shPeakHeight params) ∷ Float
         pitR  = fromIntegral (shPitRadius params) ∷ Float
         pitD  = fromIntegral (shPitDepth params) ∷ Float
@@ -162,10 +160,8 @@ applyCinderCone params worldSize gx gy baseElev hardness =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        rawDist = sqrt (dx * dx + dy * dy)
-
         baseR   = fromIntegral (ccBaseRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist baseR baseElev hardness
+        dist = perturbDist cx cy dx dy baseR baseElev hardness
         peakH   = fromIntegral (ccPeakHeight params) ∷ Float
         craterR = fromIntegral (ccCraterRadius params) ∷ Float
         craterD = fromIntegral (ccCraterDepth params) ∷ Float
@@ -197,10 +193,8 @@ applyLavaDome params worldSize gx gy baseElev hardness =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        rawDist = sqrt (dx * dx + dy * dy)
-
         baseR = fromIntegral (ldBaseRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist baseR baseElev hardness
+        dist = perturbDist cx cy dx dy baseR baseElev hardness
         height = fromIntegral (ldHeight params) ∷ Float
 
     in if dist > baseR
@@ -223,10 +217,8 @@ applyCaldera params worldSize gx gy baseElev hardness =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        rawDist = sqrt (dx * dx + dy * dy)
-
         outerR = fromIntegral (caOuterRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist outerR baseElev hardness
+        dist = perturbDist cx cy dx dy outerR baseElev hardness
         innerR = fromIntegral (caInnerRadius params) ∷ Float
         rimH   = fromIntegral (caRimHeight params) ∷ Float
         floorD = fromIntegral (caFloorDepth params) ∷ Float
@@ -376,11 +368,9 @@ applySuperVolcano params worldSize gx gy baseElev hardness =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        rawDist = sqrt (dx * dx + dy * dy)
-
         calderaR = fromIntegral (svCalderaRadius params) ∷ Float
         ejectaRForPerturb = fromIntegral (svEjectaRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist ejectaRForPerturb baseElev hardness
+        dist = perturbDist cx cy dx dy ejectaRForPerturb baseElev hardness
         rimH     = fromIntegral (svRimHeight params) ∷ Float
         floorD   = fromIntegral (svFloorDepth params) ∷ Float
         ejectaR  = fromIntegral (svEjectaRadius params) ∷ Float
@@ -429,10 +419,8 @@ applyHydrothermal params worldSize gx gy baseElev hardness =
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
-        rawDist = sqrt (dx * dx + dy * dy)
-
         radius = fromIntegral (htRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy rawDist radius baseElev hardness
+        dist = perturbDist cx cy dx dy radius baseElev hardness
         chimneyH = fromIntegral (htChimneyHeight params) ∷ Float
 
     in if dist > radius

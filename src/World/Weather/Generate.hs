@@ -209,6 +209,9 @@ buildClimateFromOceanSet worldSize oceanSet freshwaterSources globalCO2 globalTe
 
         freshwaterSeeds = HM.keysSet freshwaterSources
 
+        freshwaterMaxDist ∷ Int
+        freshwaterMaxDist = 10
+
         freshwaterDistances ∷ HM.HashMap ClimateCoord Int
         freshwaterDistances =
             let initQueue = Seq.fromList (HS.toList freshwaterSeeds)
@@ -221,7 +224,10 @@ buildClimateFromOceanSet worldSize oceanSet freshwaterSources globalCO2 globalTe
                                 step (m', q) n =
                                     if HM.member n m'
                                        then (m', q)
-                                       else (HM.insert n (d + 1) m', q Seq.|> n)
+                                       else let d' = d + 1
+                                            in if d' > freshwaterMaxDist
+                                               then (m', q)
+                                               else (HM.insert n d' m', q Seq.|> n)
                                 (distMap', queue') = foldl' step (distMap, rest) (neighbors coord)
                             in go queue' distMap'
             in if HS.null freshwaterSeeds

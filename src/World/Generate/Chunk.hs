@@ -64,7 +64,7 @@ generateChunk registry catalog params coord =
         -- True if this chunk or any of its 8 neighbors is oceanic.
         -- Used to extend strata to sea level for all coastal columns,
         -- preventing cliff-face voids at chunk boundaries.
-        isCoastalChunk = hasAnyOceanFluid oceanMap coord
+        isCoastalChunk = hasAnyOceanFluid worldSize oceanMap coord
 
         borderSize = chunkSize + 2 * chunkBorder
         borderArea = borderSize * borderSize

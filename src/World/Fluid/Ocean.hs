@@ -120,37 +120,53 @@ isOceanChunk = flip HS.member
 computeChunkFluid ∷ Int → OceanMap → ChunkCoord
                   → VU.Vector Int
                   → FluidMap
-computeChunkFluid worldSize oceanMap coord surfaceMap
-    | isOceanChunk oceanMap coord =
-        buildOceanSurface surfaceMap
-    | hasAnyOceanFluid oceanMap coord =
-        buildOceanSurface surfaceMap
-    | otherwise = emptyFluidMap
-  where
-    ChunkCoord cx cy = coord
-    wrap = wrapChunkCoordU worldSize
+computeChunkFluid worldSize oceanMap coord surfaceMap =
+    let nearOcean = isOceanChunk oceanMap coord
+                  ∨ hasAnyOceanFluid worldSize oceanMap coord
 
-    -- Which cardinal neighbor chunks are ocean?
-    -- Used to extend ocean fluid across chunk boundaries.
-    oceanN = isOceanChunk oceanMap (wrap (ChunkCoord cx (cy - 1)))
-    oceanS = isOceanChunk oceanMap (wrap (ChunkCoord cx (cy + 1)))
-    oceanE = isOceanChunk oceanMap (wrap (ChunkCoord (cx + 1) cy))
-    oceanW = isOceanChunk oceanMap (wrap (ChunkCoord (cx - 1) cy))
+        ChunkCoord cx cy = coord
+        wrap = wrapChunkCoordU worldSize
 
-    -- Two-pass ocean fill:
-    --   Pass 1: place ocean where terrain ≤ sea level
-    --   Pass 2: propagate ocean one tile outward to cover coastline
-    --           gaps (terrain side faces at the water's edge)
-    buildOceanSurface surf =
-        withFluidMap $ \mv → do
-            -- Pass 1: seed ocean at/below sea level
-            forEachSurface surf $ \idx _lx _ly surfZ →
-                when (surfZ ≤ seaLevel ∧ surfZ > minBound) $
-                    MV.write mv idx (Just (FluidCell Ocean seaLevel))
-            -- Pass 2: extend one tile into coast so the ocean
-            -- surface covers the terrain side-face at the waterline.
-            -- For edge tiles, also check if the neighboring CHUNK
-            -- is ocean — this extends water across chunk boundaries.
+        -- Which cardinal neighbor chunks are ocean?
+        -- Used to extend ocean fluid across chunk boundaries.
+        oceanN = isOceanChunk oceanMap (wrap (ChunkCoord cx (cy - 1)))
+        oceanS = isOceanChunk oceanMap (wrap (ChunkCoord cx (cy + 1)))
+        oceanE = isOceanChunk oceanMap (wrap (ChunkCoord (cx + 1) cy))
+        oceanW = isOceanChunk oceanMap (wrap (ChunkCoord (cx - 1) cy))
+
+        adjacentHasOcean ∷ MV.MVector s (Maybe FluidCell) → Int → Int
+                         → ST s Bool
+        adjacentHasOcean mv lx ly = do
+            let check x y
+                  | x < 0         = return oceanW
+                  | x ≥ chunkSize = return oceanE
+                  | y < 0         = return oceanN
+                  | y ≥ chunkSize = return oceanS
+                  | otherwise     = isJust ⊚ MV.read mv (y * chunkSize + x)
+            n ← check lx (ly - 1)
+            s ← check lx (ly + 1)
+            e ← check (lx + 1) ly
+            w ← check (lx - 1) ly
+            return (n ∨ s ∨ e ∨ w)
+
+    -- Pass 1 always runs: any below-seaLevel tile gets ocean fluid.
+    -- This prevents chunk-boundary artifacts in the world view where
+    -- the hasAnyOceanFluid gate would exclude coastal chunks just
+    -- beyond its distance-2 range. The world view's eroded terrain
+    -- has very few below-seaLevel tiles on continents, so this
+    -- doesn't create noise pools.
+    --
+    -- The zoom map is unaffected: its pixel rendering uses tileColor
+    -- (which checks the per-chunk chunkOcean flag), NOT the fluid map,
+    -- for ocean rendering. Ocean fluid falls through to baseColor.
+    --
+    -- Pass 2 (boundary extension) only runs near ocean chunks:
+    -- it extends water one tile into coast for side-face rendering.
+    in withFluidMap $ \mv → do
+        forEachSurface surfaceMap $ \idx _lx _ly surfZ →
+            when (surfZ ≤ seaLevel ∧ surfZ > minBound) $
+                MV.write mv idx (Just (FluidCell Ocean seaLevel))
+        when nearOcean $
             forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
                 val ← MV.read mv idx
                 when (isNothing val) $ do
@@ -160,29 +176,14 @@ computeChunkFluid worldSize oceanMap coord surfaceMap
                     when adj $
                         MV.write mv idx (Just (FluidCell Ocean seaLevel))
 
-    adjacentHasOcean ∷ MV.MVector s (Maybe FluidCell) → Int → Int
-                     → ST s Bool
-    adjacentHasOcean mv lx ly = do
-        let check x y
-              -- At chunk edges, check if the neighboring chunk is ocean
-              | x < 0         = return oceanW
-              | x ≥ chunkSize = return oceanE
-              | y < 0         = return oceanN
-              | y ≥ chunkSize = return oceanS
-              | otherwise     = isJust ⊚ MV.read mv (y * chunkSize + x)
-        n ← check lx (ly - 1)
-        s ← check lx (ly + 1)
-        e ← check (lx + 1) ly
-        w ← check (lx - 1) ly
-        return (n ∨ s ∨ e ∨ w)
-
 -- | Quick boolean check: does this chunk have any ocean fluid?
 --   Checks all chunks within Chebyshev distance 2 (a 5×5 grid).
 --   With chunkBorder=10 and chunkSize=16, beach processing can
 --   extend through a coastal chunk (not itself in the ocean map)
 --   into the next chunk. The 2-hop radius ensures that chunk
 --   still runs coastal erosion.
-hasAnyOceanFluid ∷ OceanMap → ChunkCoord → Bool
-hasAnyOceanFluid oceanMap (ChunkCoord cx cy) =
-    any (\(dx, dy) → isOceanChunk oceanMap (ChunkCoord (cx + dx) (cy + dy)))
-        [ (dx, dy) | dx ← [-2 .. 2], dy ← [-2 .. 2] ]
+hasAnyOceanFluid ∷ Int → OceanMap → ChunkCoord → Bool
+hasAnyOceanFluid worldSize oceanMap (ChunkCoord cx cy) =
+    let wrap = wrapChunkCoordU worldSize
+    in any (\(dx, dy) → isOceanChunk oceanMap (wrap (ChunkCoord (cx + dx) (cy + dy))))
+           [ (dx, dy) | dx ← [-2 .. 2], dy ← [-2 .. 2] ]
