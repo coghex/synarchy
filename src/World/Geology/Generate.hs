@@ -277,7 +277,7 @@ generateSuperVolcano seed worldSize plates gx gy =
                 calderaR = hashToRangeGeo h1 40 80
                 rimH     = hashToRangeGeo h2 10 39
                 floorD   = hashToRangeGeo h3 40 120
-                ejectaR  = hashToRangeGeo h4 80 150
+                ejectaR  = max (calderaR + 1) (hashToRangeGeo h4 80 150)
                 ejectaD  = hashToRangeGeo h5 2 12
             in Just $ VolcanicShape $ SuperVolcano SuperVolcanoParams
                 { svCenter        = GeoCoord gx gy

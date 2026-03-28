@@ -39,14 +39,15 @@ evolvePointFeature ∷ Word64 → Int
 evolvePointFeature seed periodIdx (events, tbs) pf =
     let fid = pfId pf
         GeoFeatureId fidInt = fid
-        h1 = hashGeo seed fidInt 40
+        pOff = periodIdx * 100
+        h1 = hashGeo seed fidInt (40 + pOff)
         roll = hashToFloatGeo h1
     in case pfActivity pf of
         FActive →
             if roll < 0.10
             -- 10%: collapse into caldera
-            then let h2 = hashGeo seed fidInt 41
-                     h3 = hashGeo seed fidInt 42
+            then let h2 = hashGeo seed fidInt (41 + pOff)
+                     h3 = hashGeo seed fidInt (42 + pOff)
                      depth = hashToRangeGeo h2 50 200
                      ratio = 0.3 + hashToFloatGeo h3 * 0.5
                      evt = VolcanicModify fid (CollapseToCaldera depth ratio
@@ -60,9 +61,9 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
 
             else if roll < 0.15
             -- 5%: flank collapse (Mt. St. Helens style)
-            then let h2 = hashGeo seed fidInt 52
-                     h3 = hashGeo seed fidInt 53
-                     h4 = hashGeo seed fidInt 54
+            then let h2 = hashGeo seed fidInt (52 + pOff)
+                     h3 = hashGeo seed fidInt (53 + pOff)
+                     h4 = hashGeo seed fidInt (54 + pOff)
                      collapseAngle = hashToFloatGeo h2 * 2.0 * π
                      collapseWidth = 0.6 + hashToFloatGeo h3 * 0.8
                          -- 0.6 to 1.4 radians (34° to 80°)
@@ -94,8 +95,8 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
             else if roll < 0.60
             -- 20%: parasitic eruption
             then let (childId, tbs') = allocFeatureId tbs
-                     h3 = hashGeo seed fidInt 43
-                     h4 = hashGeo seed fidInt 44
+                     h3 = hashGeo seed fidInt (43 + pOff)
+                     h4 = hashGeo seed fidInt (44 + pOff)
                      parentCenter = getFeatureCenter (pfFeature pf)
                      GeoCoord px py = parentCenter
                      angle = hashToFloatGeo h3 * 2.0 * 3.14159
@@ -103,12 +104,14 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                      dist = fromIntegral parentRadius * (0.5 + hashToFloatGeo h4 * 0.4)
                      childX = px + round (dist * cos angle)
                      childY = py + round (dist * sin angle)
+                     childBaseR = hashToRangeGeo (hashGeo seed fidInt (45 + pOff)) 5 12
                      childFeature = CinderCone CinderConeParams
                          { ccCenter       = GeoCoord childX childY
-                         , ccBaseRadius   = hashToRangeGeo (hashGeo seed fidInt 45) 5 12
-                         , ccPeakHeight   = hashToRangeGeo (hashGeo seed fidInt 46) 50 150
-                         , ccCraterRadius = hashToRangeGeo (hashGeo seed fidInt 47) 2 5
-                         , ccCraterDepth  = hashToRangeGeo (hashGeo seed fidInt 48) 10 40
+                         , ccBaseRadius   = childBaseR
+                         , ccPeakHeight   = hashToRangeGeo (hashGeo seed fidInt (46 + pOff)) 50 150
+                         , ccCraterRadius = hashToRangeGeo (hashGeo seed fidInt (47 + pOff)) 1
+                                              (max 2 (childBaseR `div` 3))
+                         , ccCraterDepth  = hashToRangeGeo (hashGeo seed fidInt (48 + pOff)) 10 40
                          , ccCenterElev   = getFeatureCenterElev (pfFeature pf)
                          }
                      childPf = PersistentFeature
@@ -130,7 +133,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
 
             else
             -- 40%: stays active, grows
-            let h5 = hashGeo seed fidInt 49
+            let h5 = hashGeo seed fidInt (49 + pOff)
                 heightGain = hashToRangeGeo h5 20 100
                 evt = VolcanicModify fid (Reactivate heightGain 0
                         (getFeatureCenter (pfFeature pf))
@@ -143,8 +146,8 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
 
         FDormant →
             if roll < 0.3
-            then let h5 = hashGeo seed fidInt 50
-                     h6 = hashGeo seed fidInt 51
+            then let h5 = hashGeo seed fidInt (50 + pOff)
+                     h6 = hashGeo seed fidInt (51 + pOff)
                      heightGain = hashToRangeGeo h5 30 150
                      lavaExt = hashToRangeGeo h6 5 20
                      evt = VolcanicModify fid (Reactivate heightGain lavaExt

@@ -178,7 +178,8 @@ applyCinderCone params worldSize gx gy baseElev hardness =
             in GeoModification elevDelta (Just (unMaterialId matObsidian)) (abs elevDelta)
 
        else
-       let t = (dist - craterR) / (baseR - craterR)
+       let denom = baseR - craterR
+           t = if denom > 0.0 then (dist - craterR) / denom else 0.0
            elevDelta = round (peakH * (1.0 - t))
            mat = if t < 0.3
                  then unMaterialId matObsidian

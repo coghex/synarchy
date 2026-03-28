@@ -18,6 +18,7 @@ import World.Geology.Hash
 import World.Geology.Crater (generateCraters)
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
                              , LakeParams(..), GlacierParams(..))
+import World.Fluid.IceLevel (computeIceLevelGrid)
 import World.Hydrology.Simulation (simulateHydrology, FlowResult(..)
                                   , ElevGrid(..), buildInitialElevGrid
                                   , updateElevGrid)
@@ -62,7 +63,7 @@ buildTimeline seed worldSize plateCount erosionIntensity volcanicActivity =
         climate1 = updateClimateFromGrid worldSize ocean1 (tbsClimateState s1)
         s1' = s1 { tbsClimateState = climate1 }
 
-        (s2, _grid2) = buildEon seed worldSize plates s1' grid1
+        (s2, finalGrid) = buildEon seed worldSize plates s1' grid1
 
         -- Mark the final period for soil generation
         finalPeriods = case tbsPeriods s2 of
@@ -89,6 +90,8 @@ buildTimeline seed worldSize plateCount erosionIntensity volcanicActivity =
             , gtPeriods   = periods
             , gtFeatures  = tbsFeatures s2
             , gtRiverExplodedEvents = riverExploded
+            , gtIceLevel  = computeIceLevelGrid seed worldSize plates
+                                                 (tbsClimateState s2) finalGrid
             }
 
     in (rawTimeline, tbsClimateState s2)

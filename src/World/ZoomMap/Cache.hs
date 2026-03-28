@@ -31,7 +31,8 @@ import World.Fluids (isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid
                     , hasAnyRiverQuick, hasAnyLakeQuick
                     , computeChunkFluid, computeChunkRivers
                     , computeChunkLakes, unionFluidMap)
-import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMap)
+import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..), IceMap)
+import World.Fluid.IceLevel (lookupIceLevel)
 import World.Fluid.Internal (FluidMap, wrapChunkCoordU)
 import World.Geology.Timeline.Types (GeoEvent(..))
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
@@ -369,6 +370,7 @@ buildZoomCacheWithPixels params registry palette =
                                              VUM.write ncRef 0 (0 ∷ Int)
                                              forM_ [0 .. curCount - 1] $ \si → do
                                                  idx ← VUM.read curSeeds si
+                                                 myDist ← VUM.read distM idx
                                                  let bx = idx `mod` cs
                                                      by = idx `div` cs
                                                      tryN nx ny =
@@ -376,8 +378,8 @@ buildZoomCacheWithPixels params registry palette =
                                                               ∧ ny ≥ 0 ∧ ny < cs) $ do
                                                              let nIdx = ny * cs + nx
                                                              old ← VUM.read distM nIdx
-                                                             when (old > level + 1) $ do
-                                                                 VUM.write distM nIdx (level + 1)
+                                                             when (old > myDist + 1) $ do
+                                                                 VUM.write distM nIdx (myDist + 1)
                                                                  nc ← VUM.read ncRef 0
                                                                  VUM.write nextM nc nIdx
                                                                  VUM.write ncRef 0 (nc + 1)
@@ -512,30 +514,30 @@ buildZoomCacheWithPixels params registry palette =
 
                 -- Ice overlay: per-tile decision using continuous noise
                 -- that doesn't break at chunk boundaries.
+                -- Uses global ice level grid for basin/drape decision.
+                ilGrid = gtIceLevel timeline
                 chunkIceMap = V.fromList
                     [ let (e, _, _, gx, gy) = td
                           (gx', gy') = wrapGlobalU worldSize gx gy
                           LocalClimate{lcTemp=mt, lcSummerTemp=st
                                       , lcWinterTemp=wt} =
                               lookupLocalClimate climate worldSize gx' gy'
-                          -- Use plate elevation (globally deterministic) to
-                          -- avoid chunk boundary discontinuities from erosion.
                           (globalElev, _) = elevationAtGlobal seed plates worldSize gx' gy'
                           altAboveSea = max 0 (globalElev - seaLevel)
                           altCool = fromIntegral altAboveSea * (0.065 ∷ Float)
-                          -- Ocean penalty from plate elevation (globally
-                          -- deterministic, avoids per-chunk fluid boundary
-                          -- discontinuities).
                           ocnPen = if globalElev < seaLevel
                                     then 5.0 else 0.0 ∷ Float
-                          -- Smooth noise at large scale for zoom view
                           n = zoomIceNoise seed gx' gy'
                           effT = mt + ocnPen - altCool + n
                           ice = effT < -2.0
                               ∨ (wt - altCool < -10.0
                                  ∧ st - altCool < 5.0)
+                          mIceLevel = lookupIceLevel ilGrid worldSize gx' gy'
                       in if ice ∧ e > minBound
-                         then Just (IceCell (e + 1))
+                         then case mIceLevel of
+                            Just iceLevel | e < iceLevel →
+                                Just (IceCell (min iceLevel (e + 20)) BasinIce)
+                            _ → Just (IceCell (e + 1) DrapeIce)
                          else Nothing
                     | (td, idx') ← zip tileData' [0 ∷ Int ..]
                     ]

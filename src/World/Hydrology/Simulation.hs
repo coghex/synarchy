@@ -5,6 +5,7 @@ module World.Hydrology.Simulation
     , ElevGrid(..)
     , buildInitialElevGrid
     , updateElevGrid
+    , fillDepressions
     ) where
 
 import UPrelude
@@ -145,7 +146,7 @@ buildInitialElevGrid seed worldSize plates =
             let gx = gxV VU.! idx
                 gy = gyV VU.! idx
                 (gx', gy') = wrapGlobalU worldSize gx gy
-            in rawElevV VU.! idx > seaLevel
+            in elevV VU.! idx > seaLevel
              ∧ not (isBeyondGlacier worldSize gx' gy')
 
     in ElevGrid gridW spacing elevV gxV gyV landV
@@ -197,8 +198,11 @@ updateElevGrid worldSize grid period =
                   ) e0 events
 
            newLand = VU.generate totalSamples $ \idx →
-               newElev VU.! idx > seaLevel
-               ∧ egLand grid VU.! idx
+               let gx = egGX grid VU.! idx
+                   gy = egGY grid VU.! idx
+                   (gx', gy') = wrapGlobalU worldSize gx gy
+               in newElev VU.! idx > seaLevel
+                ∧ not (isBeyondGlacier worldSize gx' gy')
 
        in grid { egElev = newElev, egLand = newLand }
 
@@ -676,7 +680,8 @@ applyVolcanicSimple (VolcanicShape (SuperVolcano p)) ws gx gy =
     in if dist > outerR then noModification
        else if dist < calderaR
             then GeoModification (negate (svFloorDepth p)) Nothing 0
-            else let t = 1.0 - (dist - calderaR) / (outerR - calderaR)
+            else let denom = outerR - calderaR
+                     t = if denom > 0.0 then 1.0 - (dist - calderaR) / denom else 1.0
                  in GeoModification (round (fromIntegral (svRimHeight p) * t)) Nothing 0
 applyVolcanicSimple (VolcanicShape (CinderCone p)) ws gx gy =
     let GeoCoord cx cy = ccCenter p

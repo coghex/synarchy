@@ -17,7 +17,7 @@ import World.Material (MaterialId(..), matGlacier, getMaterialProps
 import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Geology (applyGeoEvent, GeoModification(..))
-import World.Geology.Timeline.Types (GeoEvent(..))
+import World.Geology.Timeline.Types (GeoEvent(..), GeoTimeline(..))
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
@@ -342,8 +342,9 @@ generateChunk registry catalog params coord =
 
         -- Ice overlay: climate-based ice on frozen ocean/lake/alpine terrain.
         -- Computed after fluids so ice sits on top of water surfaces.
+        ilGrid = gtIceLevel (wgpGeoTimeline params)
         iceMap = computeChunkIce seed plates (wgpClimateState params) worldSize
-                                 coord terrainSurfaceMap fluidMap
+                                 coord ilGrid terrainSurfaceMap fluidMap
 
     in (finalTiles, surfaceMap, finalTerrain, fluidMap, iceMap, floraData)
 

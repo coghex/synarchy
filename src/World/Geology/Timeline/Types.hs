@@ -48,8 +48,10 @@ import Data.Serialize (Serialize(..))
 import Data.Hashable (Hashable)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import World.Base (GeoCoord(..), GeoFeatureId(..))
+import World.Fluid.Types (IceLevelGrid(..))
 import World.Hydrology.Types
     ( HydroFeature(..)
     , HydroEvolution(..)
@@ -90,6 +92,10 @@ data GeoTimeline = GeoTimeline
       -- ^ All river carve events (segments, deltas, hydro rivers) across
       --   all periods, pre-filtered and exploded with bounding boxes.
       --   Cached here to avoid recomputing per-tile in applyTimeline/Fast.
+    , gtIceLevel ∷ !IceLevelGrid
+      -- ^ Coarse-resolution ice fill levels, computed by running
+      --   fillDepressions on the final elevation grid restricted to
+      --   frozen cells. Used at chunk gen for basin/drape ice decision.
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 emptyTimeline ∷ GeoTimeline
@@ -99,6 +105,7 @@ emptyTimeline = GeoTimeline
     , gtPeriods = []
     , gtFeatures = []
     , gtRiverExplodedEvents = V.empty
+    , gtIceLevel = IceLevelGrid 0 1 VU.empty
     }
 
 data EventBBox = EventBBox
@@ -264,7 +271,7 @@ volcanicFeatureBBox (LavaDome p) ws =                              -- was _ws
 volcanicFeatureBBox (Caldera p) ws =                               -- was _ws
     let GeoCoord cx0 cy0 = caCenter p
         (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
-        r = caOuterRadius p
+        r = round (fromIntegral (caOuterRadius p) * (1.5 ∷ Float))
     in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
 volcanicFeatureBBox (SuperVolcano p) ws =                          -- was _ws
     let GeoCoord cx0 cy0 = svCenter p

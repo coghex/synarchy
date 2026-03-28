@@ -11,112 +11,97 @@ import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
 import Control.Monad (forM_, when)
 import Control.Monad.ST (runST)
-import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Constants (seaLevel)
-import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMap)
+import World.Fluid.Types (FluidCell(..), IceCell(..), IceMode(..), IceMap
+                         , IceLevelGrid)
+import World.Fluid.IceLevel (lookupIceLevel)
 import World.Plate (TectonicPlate, isBeyondGlacier, isGlacierZone
                    , wrapGlobalU, elevationAtGlobal)
-import World.Weather.Types (ClimateState(..))
+import World.Weather.Types (ClimateState)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 
 -- * Chunk-Level Ice Computation
 
--- | Compute the ice overlay for a chunk based on climate data.
---   Ice forms based on effective temperature which accounts for:
---     - Regional climate (mean, summer, winter temps)
---     - Altitude (lapse rate: higher = colder)
---     - Ocean thermal inertia (ocean needs colder temps to freeze)
---     - Noise (breaks up straight latitude lines)
+-- | Compute the ice overlay for a chunk.
+--   Two ice modes:
+--     - Basin ice: flat sheet filling valleys at the global ice level
+--     - Drape ice: thin coating (terrain+1) on peaks above basin level
 --
---   Glacier-zone tiles are skipped — the glacier wall is solid
---   terrain and does not need an ice overlay.
+--   The global ice level grid (from fillDepressions on frozen cells)
+--   determines basin fill heights. Tiles below the fill level get
+--   basin ice; tiles above get drape ice.
 computeChunkIce ∷ Word64 → [TectonicPlate] → ClimateState → Int → ChunkCoord
-                → VU.Vector Int                   -- ^ terrain surface map
-                → V.Vector (Maybe FluidCell)      -- ^ fluid map
+                → IceLevelGrid                 -- ^ global ice fill levels
+                → VU.Vector Int                -- ^ terrain surface map
+                → V.Vector (Maybe FluidCell)   -- ^ fluid map
                 → IceMap
-computeChunkIce seed plates climate worldSize coord terrainSurfMap fluidMap =
+computeChunkIce seed plates climate worldSize coord ilGrid terrainSurfMap fluidMap =
     let ChunkCoord cx cy = coord
         area = chunkSize * chunkSize
+        maxBasinThickness = 20 ∷ Int
+    in runST $ do
+        mv ← MV.replicate area Nothing
+        forM_ [0 .. area - 1] $ \idx → do
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+                gx = cx * chunkSize + lx
+                gy = cy * chunkSize + ly
+                (gx', gy') = wrapGlobalU worldSize gx gy
+            -- Skip beyond-glacier and glacier-zone tiles
+            when (not (isBeyondGlacier worldSize gx' gy')
+                  ∧ not (isGlacierZone worldSize gx' gy')) $ do
+                let LocalClimate{ lcTemp=meanT
+                                , lcSummerTemp=summerT
+                                , lcWinterTemp=winterT } =
+                        lookupLocalClimate climate worldSize gx' gy'
+                    terrainZ = terrainSurfMap VU.! idx
 
-        -- Pass 1: compute raw ice surface per tile
-        rawIce = runST $ do
-            mv ← MV.replicate area Nothing
-            forM_ [0 .. area - 1] $ \idx → do
-                let lx = idx `mod` chunkSize
-                    ly = idx `div` chunkSize
-                    gx = cx * chunkSize + lx
-                    gy = cy * chunkSize + ly
-                    (gx', gy') = wrapGlobalU worldSize gx gy
-                -- Skip beyond-glacier and glacier-zone tiles
-                when (not (isBeyondGlacier worldSize gx' gy')
-                      ∧ not (isGlacierZone worldSize gx' gy')) $ do
-                    let LocalClimate{ lcTemp=meanT
-                                    , lcSummerTemp=summerT
-                                    , lcWinterTemp=winterT } =
-                            lookupLocalClimate climate worldSize gx' gy'
-                        terrainZ = terrainSurfMap VU.! idx
+                    (globalElev, _) = elevationAtGlobal seed plates worldSize gx' gy'
+                    altAboveSeaLevel = max 0 (globalElev - seaLevel)
+                    lapseRate = 0.065 ∷ Float
+                    altCooling = fromIntegral altAboveSeaLevel * lapseRate
 
-                        -- Altitude-adjusted temperature: lapse rate of
-                        -- 6.5°C per 1000m (0.065°C per tile at 10m/tile).
-                        -- Uses plate elevation (globally deterministic)
-                        -- instead of per-chunk terrain to avoid elevation
-                        -- discontinuities at chunk boundaries from erosion.
-                        (globalElev, _) = elevationAtGlobal seed plates worldSize gx' gy'
-                        altAboveSeaLevel = max 0 (globalElev - seaLevel)
-                        lapseRate = 0.065 ∷ Float
-                        altCooling = fromIntegral altAboveSeaLevel * lapseRate
+                    oceanPenalty = if globalElev < seaLevel
+                                   then 5.0 else 0.0 ∷ Float
 
-                        -- Ocean thermal inertia: ocean resists freezing.
-                        -- Uses plate elevation vs sea level (globally
-                        -- deterministic) instead of per-chunk fluid map
-                        -- to avoid chunk boundary discontinuities.
-                        oceanPenalty = if globalElev < seaLevel
-                                       then 5.0 else 0.0 ∷ Float
+                    noise = iceNoise seed gx' gy'
 
-                        -- Deterministic noise: ±2.5°C variation to break
-                        -- up the straight latitude lines and create smooth
-                        -- natural-looking ice boundaries.
-                        noise = iceNoise seed gx' gy'
+                    effectiveT = meanT + oceanPenalty - altCooling + noise
 
-                        -- Effective temperature for ice threshold.
-                        -- All inputs are globally deterministic so the
-                        -- ice boundary is smooth across chunk boundaries.
-                        effectiveT = meanT + oceanPenalty - altCooling + noise
+                    hasIce = effectiveT < -2.0
+                           ∨ (winterT - altCooling < -10.0
+                              ∧ summerT - altCooling < 5.0)
 
-                        hasIce = effectiveT < -2.0
-                               ∨ (winterT - altCooling < -10.0
-                                  ∧ summerT - altCooling < 5.0)
-
-                    when (hasIce ∧ terrainZ > minBound) $ do
-                        let fluidZ = case fluidMap V.! idx of
-                                Just fc → fcSurface fc
-                                Nothing → minBound
-                            baseZ = max terrainZ fluidZ
-                            iceSurf = baseZ + 1
-                        MV.write mv idx (Just (IceCell iceSurf))
-            V.freeze mv
-
-    in smoothIceSurface terrainSurfMap fluidMap rawIce
+                when (hasIce ∧ terrainZ > minBound) $ do
+                    let fluidZ = case fluidMap V.! idx of
+                            Just fc → fcSurface fc
+                            Nothing → minBound
+                        baseZ = max terrainZ fluidZ
+                        mIceLevel = lookupIceLevel ilGrid worldSize gx' gy'
+                        cell = case mIceLevel of
+                            Just iceLevel | baseZ < iceLevel →
+                                -- Basin ice: flat at the fill level
+                                IceCell (min iceLevel (baseZ + maxBasinThickness))
+                                        BasinIce
+                            _ →
+                                -- Drape ice: thin coating on terrain
+                                IceCell (baseZ + 1) DrapeIce
+                    MV.write mv idx (Just cell)
+        V.freeze mv
 
 -- * Noise
 
--- | Deterministic noise for ice boundary variation.
---   Returns a value in roughly [-2.5, 2.5] to add natural irregularity.
---   Three octaves at decreasing scales ensure the ice boundary
---   doesn't align with chunk boundaries (16 tiles).
 iceNoise ∷ Word64 → Int → Int → Float
 iceNoise seed gx gy =
-    let -- Three octaves of hash-based noise at different scales
-        h1 = iceHash seed gx gy 12     -- broad variation
-        h2 = iceHash seed gx gy 5      -- medium detail
-        h3 = iceHash seed gx gy 2      -- fine per-tile detail
-        n1 = (hashToFloat h1 - 0.5) * 3.0   -- ±1.5
-        n2 = (hashToFloat h2 - 0.5) * 1.0   -- ±0.5
-        n3 = (hashToFloat h3 - 0.5) * 1.0   -- ±0.5
+    let h1 = iceHash seed gx gy 12
+        h2 = iceHash seed gx gy 5
+        h3 = iceHash seed gx gy 2
+        n1 = (hashToFloat h1 - 0.5) * 3.0
+        n2 = (hashToFloat h2 - 0.5) * 1.0
+        n3 = (hashToFloat h3 - 0.5) * 1.0
     in n1 + n2 + n3
 
--- | Simple value noise: hash at grid cell corners, bilinear interpolate.
 iceHash ∷ Word64 → Int → Int → Int → Word64
 iceHash seed gx gy scale =
     let fx = fromIntegral gx / fromIntegral scale ∷ Float
@@ -155,72 +140,3 @@ hashToFloat h = fromIntegral (h .&. 0x00FFFFFF) / fromIntegral (0x00FFFFFF ∷ W
 
 smoothstep ∷ Float → Float
 smoothstep t = t * t * (3.0 - 2.0 * t)
-
--- * Ice Surface Smoothing
-
--- | Smooth the ice surface to form a continuous sheet.
---   Averages each ice tile's surface with its ice-covered neighbors,
---   clamped to never go below the base (terrain or fluid surface).
---   Runs multiple iterations for convergence.
-smoothIceSurface ∷ VU.Vector Int
-                 → V.Vector (Maybe FluidCell)
-                 → IceMap → IceMap
-smoothIceSurface terrainSurfMap fluidMap iceMap = runST $ do
-    mv ← V.thaw iceMap
-    let area = chunkSize * chunkSize
-
-        -- Compute the base Z for a tile (ice cannot go below this)
-        baseAt idx =
-            let terrainZ = terrainSurfMap VU.! idx
-                fluidZ = case fluidMap V.! idx of
-                    Just fc → fcSurface fc
-                    Nothing → minBound
-            in max terrainZ fluidZ
-
-        smoothPass = do
-            changed ← newSTRef False
-            forM_ [0 .. area - 1] $ \idx → do
-                val ← MV.read mv idx
-                case val of
-                    Nothing → pure ()
-                    Just (IceCell mySurf) → do
-                        let lx = idx `mod` chunkSize
-                            ly = idx `div` chunkSize
-                        -- Gather ice-covered neighbor surfaces
-                        nbrSum ← newSTRef (0 ∷ Int)
-                        nbrCnt ← newSTRef (0 ∷ Int)
-                        let checkNbr nx ny
-                              | nx < 0 ∨ nx ≥ chunkSize
-                                ∨ ny < 0 ∨ ny ≥ chunkSize = pure ()
-                              | otherwise = do
-                                  nv ← MV.read mv (ny * chunkSize + nx)
-                                  case nv of
-                                      Just (IceCell ns) → do
-                                          modifySTRef' nbrSum (+ ns)
-                                          modifySTRef' nbrCnt (+ 1)
-                                      Nothing → pure ()
-                        checkNbr lx (ly - 1)
-                        checkNbr lx (ly + 1)
-                        checkNbr (lx + 1) ly
-                        checkNbr (lx - 1) ly
-                        cnt ← readSTRef nbrCnt
-                        when (cnt > 0) $ do
-                            total ← readSTRef nbrSum
-                            let avg = (mySurf * 2 + total)
-                                      `div` (2 + cnt)
-                                base = baseAt idx
-                                -- Never go below base + 1 (minimum
-                                -- ice thickness of 1 tile)
-                                newSurf = max (base + 1) avg
-                            when (newSurf ≠ mySurf) $ do
-                                MV.write mv idx (Just (IceCell newSurf))
-                                writeSTRef changed True
-            readSTRef changed
-
-        loop 0 = pure ()
-        loop n = do
-            didChange ← smoothPass
-            when didChange $ loop (n - 1)
-
-    loop (5 ∷ Int)
-    V.freeze mv
