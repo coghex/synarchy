@@ -71,6 +71,8 @@ countEvent m (GlaciationEvent _)     = Map.insertWith (+) "Glaciations" 1 m
 countEvent m (FloodEvent _)          = Map.insertWith (+) "Floods" 1 m
 countEvent m (HydroEvent _)          = Map.insertWith (+) "Hydro Events" 1 m
 countEvent m (HydroModify _ _)       = Map.insertWith (+) "Hydro Modifications" 1 m
+countEvent m (RiverSegmentEvent _)   = Map.insertWith (+) "River Segments" 1 m
+countEvent m (RiverDeltaEvent _)     = Map.insertWith (+) "River Deltas" 1 m
 
 featureTypeName ∷ FeatureShape → Text
 featureTypeName (VolcanicShape (ShieldVolcano _))    = "Shield Volcanoes"
@@ -84,10 +86,10 @@ featureTypeName (VolcanicShape (HydrothermalVent _)) = "Hydrothermal Vents"
 featureTypeName _                     = "Other Features"
 
 evolutionName ∷ FeatureEvolution → Text
-evolutionName (Reactivate _ _ _ _)        = "Reactivations"
+evolutionName (Reactivate _ _ _ _ _)      = "Reactivations"
 evolutionName (GoDormant _ _)             = "Went Dormant"
 evolutionName (GoExtinct _ _)             = "Went Extinct"
-evolutionName (CollapseToCaldera _ _ _ _) = "Caldera Collapses"
+evolutionName (CollapseToCaldera _ _ _ _ _) = "Caldera Collapses"
 evolutionName (ParasiticEruption _ _ _ _) = "Parasitic Eruptions"
 evolutionName (FlankCollapse _ _ _ _ _)   = "Flank Collapses"
 
@@ -240,6 +242,18 @@ formatEventDetailed (FloodEvent _) = "Flood"
 formatEventDetailed (HydroEvent _) = "Hydro Event"
 formatEventDetailed (HydroModify (GeoFeatureId fid) desc) =
     "Hydro modification at Feature #" <> T.pack (show fid) <> ": " <> T.pack (show desc)
+formatEventDetailed (RiverSegmentEvent rsc) =
+    let seg = rscSegment rsc
+        GeoCoord sx sy = rsStart seg
+        GeoCoord ex ey = rsEnd seg
+    in "River Segment w=" <> T.pack (show (rsWidth seg))
+       <> " (" <> T.pack (show sx) <> ", " <> T.pack (show sy) <> ")"
+       <> "→(" <> T.pack (show ex) <> ", " <> T.pack (show ey) <> ")"
+formatEventDetailed (RiverDeltaEvent rdp) =
+    let seg = rdpLastSegment rdp
+        GeoCoord mx my = rsEnd seg
+    in "River Delta flow=" <> T.pack (show (rdpFlowRate rdp))
+       <> " (" <> T.pack (show mx) <> ", " <> T.pack (show my) <> ")"
 
 -- | Format a volcanic feature event with type and coordinates.
 formatFeatureEvent ∷ FeatureShape → Text
@@ -297,14 +311,14 @@ formatFeatureEvent (VolcanicShape (HydrothermalVent p)) =
 
 -- | Format an evolution event.
 formatEvolution ∷ FeatureEvolution → Text
-formatEvolution (Reactivate hGain _ (GeoCoord cx cy) _) =
+formatEvolution (Reactivate hGain _ (GeoCoord cx cy) _ _) =
     "Reactivated +" <> T.pack (show hGain) <> "m"
     <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
 formatEvolution (GoDormant (GeoCoord cx cy) _) =
     "Went Dormant (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
 formatEvolution (GoExtinct (GeoCoord cx cy) _) =
     "Went Extinct (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
-formatEvolution (CollapseToCaldera depth _ (GeoCoord cx cy) _) =
+formatEvolution (CollapseToCaldera depth _ (GeoCoord cx cy) _ _) =
     "Collapsed to Caldera depth=" <> T.pack (show depth)
     <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
 formatEvolution (ParasiticEruption _ _ (GeoCoord cx cy) _) =

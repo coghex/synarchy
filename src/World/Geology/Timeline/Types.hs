@@ -168,11 +168,29 @@ wrapCoordU worldSize gx gy =
         wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
     in ((wrappedU + v) `div` 2, (v - wrappedU) `div` 2)
 
+-- | Position a point relative to an already-wrapped reference point,
+--   using the shortest u-axis path. For multi-point features (fissures,
+--   lava tubes, rivers), wrapping each endpoint independently with
+--   wrapCoordU can map nearby points to opposite sides of the world
+--   when the feature straddles the u-wrap boundary, producing a
+--   world-spanning bbox. This helper preserves spatial continuity.
+{-# INLINE wrapRelative #-}
+wrapRelative ∷ Int → Int → Int → Int → Int → (Int, Int)
+wrapRelative worldSize refX refY gx gy =
+    let w = worldSize * 16
+        halfW = w `div` 2
+        du = (gx - gy) - (refX - refY)
+        dv = (gx + gy) - (refX + refY)
+        wdu = ((du + halfW) `mod` w + w) `mod` w - halfW
+        dx = (wdu + dv) `div` 2
+        dy = (dv - wdu) `div` 2
+    in (refX + dx, refY + dy)
+
 eventBBox ∷ GeoEvent → Int → EventBBox
 eventBBox (CraterEvent cp) ws =                                    -- was _ws
     let GeoCoord cx0 cy0 = cpCenter cp
         (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
-        r = cpRadius cp + cpEjectaRadius cp
+        r = cpEjectaRadius cp
     in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
 eventBBox (VolcanicEvent shape) ws = featureShapeBBox shape ws
 eventBBox (VolcanicModify _fid evo) ws =                           -- was _ws
@@ -203,12 +221,12 @@ eventBBox (HydroModify _fid evo) ws =                              -- was _ws
     hydroEvolutionBBoxW ws evo                                     -- CHANGED
 
 -- tight bbox around just this one segment
-eventBBox (RiverSegmentEvent rsc) ws =                             -- was _ws
+eventBBox (RiverSegmentEvent rsc) ws =
     let seg = rscSegment rsc
         GeoCoord sx0 sy0 = rsStart seg
         GeoCoord ex0 ey0 = rsEnd seg
-        (sx, sy) = wrapCoordU ws sx0 sy0                          -- ADDED
-        (ex, ey) = wrapCoordU ws ex0 ey0                          -- ADDED
+        (sx, sy) = wrapCoordU ws sx0 sy0
+        (ex, ey) = wrapRelative ws sx sy ex0 ey0
         pad = rsValleyWidth seg
     in EventBBox (min sx ex - pad) (min sy ey - pad)
                  (max sx ex + pad) (max sy ey + pad)
@@ -258,19 +276,19 @@ volcanicFeatureBBox (HydrothermalVent p) ws =                      -- was _ws
         (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
         r = htRadius p
     in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
-volcanicFeatureBBox (FissureVolcano p) ws =                        -- was _ws
+volcanicFeatureBBox (FissureVolcano p) ws =
     let GeoCoord sx0 sy0 = fpStart p
         GeoCoord ex0 ey0 = fpEnd p
-        (sx, sy) = wrapCoordU ws sx0 sy0                          -- ADDED
-        (ex, ey) = wrapCoordU ws ex0 ey0                          -- ADDED
+        (sx, sy) = wrapCoordU ws sx0 sy0
+        (ex, ey) = wrapRelative ws sx sy ex0 ey0
         w = World.Geology.Timeline.Types.fpWidth p
     in EventBBox (min sx ex - w) (min sy ey - w)
                  (max sx ex + w) (max sy ey + w)
-volcanicFeatureBBox (LavaTube p) ws =                              -- was _ws
+volcanicFeatureBBox (LavaTube p) ws =
     let GeoCoord sx0 sy0 = ltStart p
         GeoCoord ex0 ey0 = ltEnd p
-        (sx, sy) = wrapCoordU ws sx0 sy0                          -- ADDED
-        (ex, ey) = wrapCoordU ws ex0 ey0                          -- ADDED
+        (sx, sy) = wrapCoordU ws sx0 sy0
+        (ex, ey) = wrapRelative ws sx sy ex0 ey0
         w = ltWidth p
     in EventBBox (min sx ex - w) (min sy ey - w)
                  (max sx ex + w) (max sy ey + w)
@@ -298,12 +316,13 @@ glacierBBox glacier =
 
 hydroFeatureBBox ∷ HydroFeature → Int → EventBBox
 hydroFeatureBBox (RiverFeature river) ws =
-    let wrapC (GeoCoord x y) = wrapCoordU ws x y
-        (srcX, srcY) = wrapC (rpSourceRegion river)
-        (mthX, mthY) = wrapC (rpMouthRegion river)
+    let GeoCoord srcX0 srcY0 = rpSourceRegion river
+        (srcX, srcY) = wrapCoordU ws srcX0 srcY0
+        wrapR (GeoCoord x y) = wrapRelative ws srcX srcY x y
+        (mthX, mthY) = wrapR (rpMouthRegion river)
         segBounds = V.foldl' (\(xlo, ylo, xhi, yhi) seg →
-            let (sx, sy) = wrapC (rsStart seg)
-                (ex, ey) = wrapC (rsEnd seg)
+            let (sx, sy) = wrapR (rsStart seg)
+                (ex, ey) = wrapR (rsEnd seg)
             in ( min xlo (min sx ex)
                , min ylo (min sy ey)
                , max xhi (max sx ex)
@@ -446,6 +465,7 @@ data FeatureEvolution
         , feLavaExtension ∷ !Int
         , feCenter        ∷ !GeoCoord
         , feRadius        ∷ !Int
+        , feCenterElev    ∷ !Int
         }
     | GoDormant
         { feCenter        ∷ !GeoCoord
@@ -460,6 +480,7 @@ data FeatureEvolution
         , feCollapseRatio ∷ !Float
         , feCenter        ∷ !GeoCoord
         , feRadius        ∷ !Int
+        , feCenterElev    ∷ !Int
         }
     | ParasiticEruption
         { feChildFeature  ∷ !VolcanicFeature
@@ -483,6 +504,7 @@ data CraterParams = CraterParams
     , cpRimHeight  ∷ !Int
     , cpEjectaRadius ∷ !Int
     , cpMeteorite  ∷ !(Maybe Word8)
+    , cpCenterElev ∷ !Int
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 data VolcanicFeature
@@ -503,6 +525,7 @@ data ShieldParams = ShieldParams
     , shSummitPit  ∷ !Bool
     , shPitRadius  ∷ !Int
     , shPitDepth   ∷ !Int
+    , shCenterElev ∷ !Int
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 data CinderConeParams = CinderConeParams
@@ -511,12 +534,14 @@ data CinderConeParams = CinderConeParams
     , ccPeakHeight ∷ !Int
     , ccCraterRadius ∷ !Int
     , ccCraterDepth  ∷ !Int
+    , ccCenterElev   ∷ !Int
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 data LavaDomeParams = LavaDomeParams
     { ldCenter     ∷ !GeoCoord
     , ldBaseRadius ∷ !Int
     , ldHeight     ∷ !Int
+    , ldCenterElev ∷ !Int
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 data CalderaParams = CalderaParams
@@ -526,6 +551,7 @@ data CalderaParams = CalderaParams
     , caRimHeight   ∷ !Int
     , caFloorDepth  ∷ !Int
     , caHasLake     ∷ !Bool
+    , caCenterElev  ∷ !Int
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 data FissureParams = FissureParams
@@ -552,12 +578,14 @@ data SuperVolcanoParams = SuperVolcanoParams
     , svFloorDepth   ∷ !Int
     , svEjectaRadius ∷ !Int
     , svEjectaDepth  ∷ !Int
+    , svCenterElev   ∷ !Int
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 data HydrothermalParams = HydrothermalParams
     { htCenter     ∷ !GeoCoord
     , htRadius     ∷ !Int
     , htChimneyHeight ∷ !Int
+    , htCenterElev   ∷ !Int
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 data LandslideParams = LandslideParams
@@ -627,5 +655,6 @@ data LavaFlow = LavaFlow
     , lfElevation ∷ !Int
     , lfVolume    ∷ !Int
     , lfMaterial  ∷ !Word8
-    , lfViscosity ∷ !Int
+    , lfViscosity  ∷ !Int
+    , lfCenterElev ∷ !Int
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)

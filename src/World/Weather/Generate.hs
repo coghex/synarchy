@@ -459,15 +459,21 @@ buildClimateFromOceanSet worldSize oceanSet freshwaterSources globalCO2 globalTe
 
 -- | Convert tile-space coordinates to a ClimateCoord using the (u,v)
 --   convention: u = gx - gy (east-west), v = gx + gy (north-south).
+--   Wraps u and clamps rv to match regionGridCoords in Lookup.hs.
 geoToClimateCoord ∷ Int → Int → Int → ClimateCoord
 geoToClimateCoord worldSize gx gy =
-    let halfChunks = worldSize `div` 2
-        halfW = halfChunks * chunkSize
+    let w = worldSize * chunkSize
+        halfW = w `div` 2
+        regionsPerSide = worldSize `div` climateRegionSize
+        regionSizeTiles = climateRegionSize * chunkSize
         u = gx - gy
         v = gx + gy
-        regionSizeTiles = climateRegionSize * chunkSize
-        ru = (u + halfW) `div` regionSizeTiles
-        rv = (v + halfW) `div` regionSizeTiles
+        -- Wrap u to [-halfW, halfW), matching regionGridCoords
+        wrappedU = ((u + halfW) `mod` w + w) `mod` w - halfW
+        ru = (wrappedU + halfW) `div` regionSizeTiles
+        -- Clamp rv to valid range (v-axis doesn't wrap)
+        rvRaw = (v + halfW) `div` regionSizeTiles
+        rv = max 0 (min (regionsPerSide - 1) rvRaw)
     in ClimateCoord ru rv
 
 -- | Extract freshwater moisture sources from persistent features.

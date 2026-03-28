@@ -253,12 +253,14 @@ splitLongSegment maxLen seg =
 
 -- * Coast extension
 
--- | Extrapolate 2 waypoints past the flow grid sink to push the
---   river path into below-sea-level terrain. The flow grid has
---   coarse spacing, so the sink cell can be up to `spacing` tiles
---   from the actual coastline. Without extension, there may be
---   uncarved terrain between the river mouth and the ocean.
---   Only extends if the last point is near sea level.
+-- | Extend the river path from the last flow-grid waypoint to
+--   below-sea-level terrain. The number of extension waypoints
+--   scales with the elevation drop, creating:
+--     - Deltas at flat coasts (≤3 above sea: 2 steps)
+--     - Inlets at moderate coasts (4–30: 3–5 steps)
+--     - Gorges at high coasts (30+: up to 10 steps)
+--   The carving system then cuts through the terrain along these
+--   segments, and fluid fill places water in the carved channel.
 extendToCoast ∷ Int → [(Int, Int, Int)] → [(Int, Int, Int)]
 extendToCoast _ [] = []
 extendToCoast _ [x] = [x]
@@ -266,23 +268,37 @@ extendToCoast sp pts =
     let n = length pts
         (x1, y1, _) = pts !! max 0 (n - 2)
         (x2, y2, e2) = pts !! (n - 1)
-    -- Rivers within 15 elevation of sea level get extended to the
-    -- coast. The flow grid is coarse, so the river often stops a
-    -- few grid cells from the actual coastline.
-    in if e2 > seaLevel + 15
-       then pts
-       else let dx = x2 - x1
-                dy = y2 - y1
-                len = sqrt (fromIntegral (dx * dx + dy * dy) ∷ Float)
-                halfSp = max 2 (sp `div` 2)
-                (stepX, stepY) = if len < 1.0
-                    then (halfSp, 0)
-                    else ( round (fromIntegral dx / len * fromIntegral halfSp)
-                         , round (fromIntegral dy / len * fromIntegral halfSp) )
-                step1E = seaLevel
-                step2E = seaLevel - 1
-            in pts ⧺ [ (x2 + stepX,     y2 + stepY,     step1E)
-                      , (x2 + stepX * 2, y2 + stepY * 2, step2E) ]
+        -- Direction from second-to-last to last waypoint.
+        dx = x2 - x1
+        dy = y2 - y1
+        len = sqrt (fromIntegral (dx * dx + dy * dy) ∷ Float)
+        halfSp = max 2 (sp `div` 2)
+        (stepX, stepY) = if len < 1.0
+            then (halfSp, 0)
+            else ( round (fromIntegral dx / len * fromIntegral halfSp)
+                 , round (fromIntegral dy / len * fromIntegral halfSp) )
+        -- Elevation above sea level determines extension character.
+        drop' = max 0 (e2 - seaLevel)
+        -- Low coast: 2 intermediate steps (similar to old behavior).
+        -- Moderate coast: 3–5 steps creating an inlet.
+        -- High coast: up to 10 steps creating a gorge/fjord.
+        numSteps = if drop' ≤ 3 then 2
+                   else min 10 (max 3 (drop' `div` 6 + 2))
+        -- Waypoints descending from mouth elevation to sea level.
+        extensionPts =
+            [ ( x2 + stepX * i
+              , y2 + stepY * i
+              , max seaLevel (e2 - (drop' * i) `div` numSteps)
+              )
+            | i ← [1 .. numSteps]
+            ]
+        -- Final 2 points at/below sea level ensure carving punches
+        -- through to the ocean.
+        lastX = x2 + stepX * numSteps
+        lastY = y2 + stepY * numSteps
+    in pts ⧺ extensionPts
+            ⧺ [ (lastX + stepX,     lastY + stepY,     seaLevel)
+              , (lastX + stepX * 2, lastY + stepY * 2, seaLevel - 1) ]
 
 -- * Path noise
 

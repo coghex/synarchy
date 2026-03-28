@@ -84,6 +84,7 @@ generateCraterAttempt seed worldSize plates halfTiles
             , cpRimHeight    = rimHeight
             , cpEjectaRadius = ejectaRadius
             , cpMeteorite    = meteoriteType
+            , cpCenterElev   = elev
             }
 
 -- | Determine what type of meteorite (if any) survives the impact.
@@ -134,7 +135,7 @@ applyCrater params worldSize gx gy baseElev hardness =
         dy = fromIntegral dyi ∷ Float
         radius      = fromIntegral (cpRadius params) ∷ Float
         ejectaR0    = fromIntegral (cpEjectaRadius params) ∷ Float
-        dist = perturbDist cx cy dx dy ejectaR0 baseElev hardness
+        dist = perturbDist cx cy dx dy ejectaR0 baseElev (cpCenterElev params) hardness
         depth       = fromIntegral (cpDepth params) ∷ Float
         rimHeight   = fromIntegral (cpRimHeight params) ∷ Float
         ejectaR     = fromIntegral (cpEjectaRadius params) ∷ Float

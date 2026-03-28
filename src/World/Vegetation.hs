@@ -188,8 +188,11 @@ computeChunkVegetation seed worldSize coord surfMap surfMats surfSlopes
                 lookupLocalClimate climate worldSize gx gy
 
             -- Shallow fresh water → marsh vegetation (not bare ground)
-        in if fluidDepth ≥ 1 ∧ fluidDepth < 3 ∧ fluidTy ≢ Ocean
-           then vegMarshGrass + variant
+            -- Shallow ocean/lava → no vegetation (underwater/submerged)
+        in if fluidDepth ≥ 1 ∧ fluidDepth < 3
+           then if fluidTy ≡ River ∨ fluidTy ≡ Lake
+                then vegMarshGrass + variant
+                else vegNone
            else selectVegetation matId slopeId hasFluid elev
                                 temp precip humid snow roll variant
   where chunkSz = chunkSize

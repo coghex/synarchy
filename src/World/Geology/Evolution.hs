@@ -4,6 +4,7 @@ module World.Geology.Evolution
     , evolvePointFeature
     , getFeatureCenter
     , getFeatureRadius
+    , getFeatureCenterElev
     ) where
 
 import UPrelude
@@ -50,7 +51,8 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                      ratio = 0.3 + hashToFloatGeo h3 * 0.5
                      evt = VolcanicModify fid (CollapseToCaldera depth ratio
                              (getFeatureCenter (pfFeature pf))
-                             (getFeatureRadius (pfFeature pf)))
+                             (getFeatureRadius (pfFeature pf))
+                             (getFeatureCenterElev (pfFeature pf)))
                      tbs' = updateFeature fid
                          (\p → p { pfActivity = FCollapsed
                                   , pfLastActivePeriod = periodIdx }) tbs
@@ -107,6 +109,7 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                          , ccPeakHeight   = hashToRangeGeo (hashGeo seed fidInt 46) 50 150
                          , ccCraterRadius = hashToRangeGeo (hashGeo seed fidInt 47) 2 5
                          , ccCraterDepth  = hashToRangeGeo (hashGeo seed fidInt 48) 10 40
+                         , ccCenterElev   = getFeatureCenterElev (pfFeature pf)
                          }
                      childPf = PersistentFeature
                          { pfId               = childId
@@ -131,7 +134,8 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                 heightGain = hashToRangeGeo h5 20 100
                 evt = VolcanicModify fid (Reactivate heightGain 0
                         (getFeatureCenter (pfFeature pf))
-                        (getFeatureRadius (pfFeature pf)))
+                        (getFeatureRadius (pfFeature pf))
+                        (getFeatureCenterElev (pfFeature pf)))
                 tbs' = updateFeature fid
                     (\p → p { pfEruptionCount = pfEruptionCount p + 1
                              , pfLastActivePeriod = periodIdx }) tbs
@@ -145,7 +149,8 @@ evolvePointFeature seed periodIdx (events, tbs) pf =
                      lavaExt = hashToRangeGeo h6 5 20
                      evt = VolcanicModify fid (Reactivate heightGain lavaExt
                                 (getFeatureCenter (pfFeature pf))
-                                (getFeatureRadius (pfFeature pf)))
+                                (getFeatureRadius (pfFeature pf))
+                                (getFeatureCenterElev (pfFeature pf)))
                      tbs' = updateFeature fid
                          (\p → p { pfActivity = FActive
                                   , pfEruptionCount = pfEruptionCount p + 1
@@ -228,3 +233,14 @@ getFeatureCenter (HydroShape (GlacierFeature g)) =
     glCenter g
 getFeatureCenter (HydroShape (LakeFeature l)) =
     lkCenter l
+
+getFeatureCenterElev ∷ FeatureShape → Int
+getFeatureCenterElev (VolcanicShape (ShieldVolcano p))    = shCenterElev p
+getFeatureCenterElev (VolcanicShape (CinderCone p))       = ccCenterElev p
+getFeatureCenterElev (VolcanicShape (LavaDome p))         = ldCenterElev p
+getFeatureCenterElev (VolcanicShape (Caldera p))          = caCenterElev p
+getFeatureCenterElev (VolcanicShape (SuperVolcano p))     = svCenterElev p
+getFeatureCenterElev (VolcanicShape (HydrothermalVent p)) = htCenterElev p
+getFeatureCenterElev (VolcanicShape (FissureVolcano _))   = 0
+getFeatureCenterElev (VolcanicShape (LavaTube _))         = 0
+getFeatureCenterElev (HydroShape _)                       = 0

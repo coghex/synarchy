@@ -105,10 +105,10 @@ containPass mv surfaceMap = do
                     case lowestDry of
                         Nothing → pure ()  -- no dry neighbors (interior tile)
                         Just dryTerrZ → do
-                            -- If water is floating >3 above dry terrain,
+                            -- If water is floating >5 above dry terrain,
                             -- lower to dry terrain + 1.
                             let cliff = myWater - dryTerrZ
-                            when (cliff > 3) $ do
+                            when (cliff > 5) $ do
                                 let target = max (surfZ + 1) (dryTerrZ + 1)
                                 when (target < myWater) $ do
                                     MV.write mv idx (Just (fc { fcSurface = target }))
@@ -119,10 +119,10 @@ containPass mv surfaceMap = do
                 case minNbr of
                     Nothing → pure ()
                     Just nMin → do
-                        -- If we're >3 above our lowest water neighbor,
+                        -- If we're >5 above our lowest water neighbor,
                         -- lower toward them (but not below terrain+1).
-                        when (myWater > nMin + 3) $ do
-                            let target = max (surfZ + 1) (nMin + 2)
+                        when (myWater > nMin + 5) $ do
+                            let target = max (surfZ + 1) (nMin + 3)
                             when (target < myWater) $ do
                                 val' ← MV.read mv idx
                                 case val' of
@@ -212,8 +212,8 @@ fillRiverHoles mv surfaceMap = do
 --   where the fill placed water too deep.
 clampRiverDepth ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s ()
 clampRiverDepth mv surfaceMap = do
-    let maxDepthValley = 5 ∷ Int
-        maxDepthHill   = 3 ∷ Int
+    let maxDepthValley = 12 ∷ Int
+        maxDepthHill   = 8 ∷ Int
     forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
         val ← MV.read mv idx
         case val of
@@ -262,7 +262,7 @@ smoothPass mv surfaceMap = do
                     case minNeighbor of
                         Nothing → pure ()
                         Just nMin → do
-                            let target = max (nMin + 2) (surfZ + 1)
+                            let target = max (nMin + 3) (surfZ + 1)
                             when (myWater > target) $ do
                                 MV.write mv idx (Just (fc { fcSurface = target }))
                                 writeSTRef changedRef True
@@ -571,12 +571,13 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
                  endE   = fromIntegral (rsEndElev seg) ∷ Float
                  refElev = floor (startE + tClamped * (endE - startE)) ∷ Int
 
-                 -- Generous depth cap: only activates in deep natural
-                 -- depressions far below the carved channel. On carved
-                 -- terrain (surfZ ≥ refElev - depth), this cap is always
-                 -- higher than the interpolated surface and has no effect.
+                 -- Water surface is the axial interpolation directly.
+                 -- No terrain-dependent cap — the valley/channel checks
+                 -- below constrain placement, and clampRiverDepth provides
+                 -- a backstop. This keeps the water surface uniform across
+                 -- the river width (flat, like real water).
                  maxFillDepth = rsDepth seg + 4
-                 waterSurface = min flattenedWater (surfZ + maxFillDepth)
+                 waterSurface = flattenedWater
 
                  -- "In valley" = terrain at or below reference elevation
                  -- AND within the expected depth range. The upper bound
@@ -584,9 +585,6 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
                  -- (≥ refElev - maxFillDepth) excludes terrain that was
                  -- naturally eroded far below the river — such terrain
                  -- isn't part of the carved valley and shouldn't get water.
-                 -- Without this, rivers from early geological periods whose
-                 -- refElev is stale (terrain eroded since creation) would
-                 -- flood entire hillsides.
                  inValley = surfZ ≤ refElev
                           ∧ surfZ ≥ refElev - maxFillDepth
 
@@ -596,19 +594,12 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
                  inChannelRelaxed = inChannel ∧ surfZ ≤ refElev + 2
                                   ∧ surfZ ≥ refElev - maxFillDepth
 
-                 effectiveWater = if waterSurface ≤ surfZ
-                                     ∧ (surfZ < refElev ∨ inChannel)
-                                     ∧ surfZ ≥ refElev - maxFillDepth
-                                  then surfZ + 1
-                                  else waterSurface
+                 shouldPlace = (inValley ∨ inChannelRelaxed)
+                             ∧ waterSurface > surfZ
 
-                 shouldPlace = inValley ∨ inChannelRelaxed
-
-             in if effectiveWater ≤ surfZ
+             in if not shouldPlace
                 then (Nothing, effectivePerpDist)
-                else if not shouldPlace
-                     then (Nothing, effectivePerpDist)
-                     else (Just (FluidCell River effectiveWater), effectivePerpDist)
+                else (Just (FluidCell River waterSurface), effectivePerpDist)
 
 -- * Segment Continuity
 
@@ -661,7 +652,7 @@ chunkNeighbors' (ChunkCoord cx cy) =
 --   For each pair of adjacent edge river tiles in different chunks,
 --   lower the higher water surface toward the lower one.
 equalizeCrossChunkRivers ∷ [ChunkCoord] → WorldTileData → WorldTileData
-equalizeCrossChunkRivers coords wtd = eqLoop (5 ∷ Int) wtd
+equalizeCrossChunkRivers coords wtd = eqLoop (10 ∷ Int) wtd
   where
     eqLoop 0 td = td
     eqLoop n td =

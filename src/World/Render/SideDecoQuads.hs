@@ -21,11 +21,11 @@ import World.Render.Textures.Types (WorldTextures(..))
 import World.Render.ViewBounds (ViewBounds, isTileVisible)
 
 -- | Generate quads for water side faces where water drops between
---   adjacent water tiles. Only draws where BOTH tiles have water
---   and the water surface is higher on our side — i.e., the water
---   is visually flowing downhill. Does NOT draw on river banks
---   (water adjacent to dry terrain) since the terrain cliff face
---   is already rendered by the terrain tiles.
+--   adjacent tiles. Draws side faces for:
+--   1. Water-to-water drops (water neighbor at lower surface)
+--   2. Water-to-dry drops (dry neighbor with terrain below water)
+--   In case 2, terrain cliff faces cover up to terrain level;
+--   water side faces cover terrain level to water surface.
 waterSideFaceQuads ∷ (TextureHandle → Int)
                    → (TextureHandle → Float)
                    → WorldTextures
@@ -50,15 +50,18 @@ waterSideFaceQuads lookupSlot lookupFmSlot textures facing coord
     , (nx, ny, isLeftFace) ← neighborDirs facing lx ly
     , nx ≥ 0, nx < chunkSize, ny ≥ 0, ny < chunkSize
     , let nIdx = columnIndex nx ny
-    -- Only draw side faces where the neighbor also has water
-    -- but at a lower surface (water-to-water drop).
-    -- Don't draw on river banks (water-to-dry-terrain).
-    , Just nfc ← [fluidMap V.! nIdx]
-    , let nSurf = fcSurface nfc
-          gap = mySurf - nSurf
-    , gap > 0
+          nFluid = fluidMap V.! nIdx
+          nTerrZ = terrainSurfMap VU.! nIdx
+          -- Bottom of the side-face stack depends on neighbor type:
+          --   Water neighbor: draw from neighbor water surface
+          --   Dry neighbor: draw from neighbor terrain surface
+          (bottomZ, shouldDraw) = case nFluid of
+              Just nfc | fcSurface nfc < mySurf → (fcSurface nfc, True)
+              Just _                            → (mySurf, False)
+              Nothing                           → (nTerrZ, nTerrZ < mySurf)
+    , shouldDraw
     -- One quad per z-level of gap
-    , z ← [nSurf .. mySurf - 1]
+    , z ← [bottomZ .. mySurf - 1]
     , z ≥ zSlice - effDepth
     , z ≤ zSlice
     , let (gx, gy) = chunkToGlobal coord lx ly

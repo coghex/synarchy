@@ -129,6 +129,7 @@ generateShieldVolcano seed worldSize plates gx gy =
                 , shSummitPit  = hasPit
                 , shPitRadius  = pitR
                 , shPitDepth   = pitD
+                , shCenterElev = elev
                 }
 
 -- | Cinder cones are small. Keep these tight.
@@ -152,6 +153,7 @@ generateCinderCone seed worldSize plates gx gy =
                 , ccPeakHeight  = peakH
                 , ccCraterRadius = craterR
                 , ccCraterDepth  = craterD
+                , ccCenterElev   = elev
                 }
 
 -- | Lava domes: small-medium, steep.
@@ -169,6 +171,7 @@ generateLavaDome seed worldSize plates gx gy =
                 { ldCenter     = GeoCoord gx gy
                 , ldBaseRadius = baseR
                 , ldHeight     = height
+                , ldCenterElev = elev
                 }
 
 -- | Calderas: medium features.
@@ -195,6 +198,7 @@ generateCaldera seed worldSize plates gx gy =
                 , caRimHeight   = rimH
                 , caFloorDepth  = floorD
                 , caHasLake     = hasLake
+                , caCenterElev  = elev
                 }
 
 -- | Fissures: shorter.
@@ -282,6 +286,7 @@ generateSuperVolcano seed worldSize plates gx gy =
                 , svFloorDepth    = floorD
                 , svEjectaRadius  = ejectaR
                 , svEjectaDepth   = ejectaD
+                , svCenterElev    = elev
                 }
 
 -- | Hydrothermal vents: unchanged, already tiny.
@@ -299,4 +304,5 @@ generateHydrothermalVent seed worldSize plates gx gy =
                 { htCenter        = GeoCoord gx gy
                 , htRadius        = radius
                 , htChimneyHeight = chimneyH
+                , htCenterElev    = elev
                 }

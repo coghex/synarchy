@@ -186,12 +186,13 @@ buildEruptionEvent seed worldSize ageIdx plates pf profile =
         lavaElev = srcElev + eruptionBoost + volume `div` 4
 
         flow = LavaFlow
-            { lfSourceX   = sx
-            , lfSourceY   = sy
-            , lfRadius    = radius
-            , lfElevation = lavaElev
-            , lfVolume    = volume
-            , lfMaterial  = epMaterial profile
-            , lfViscosity = epViscosity profile
+            { lfSourceX    = sx
+            , lfSourceY    = sy
+            , lfRadius     = radius
+            , lfElevation  = lavaElev
+            , lfVolume     = volume
+            , lfMaterial   = epMaterial profile
+            , lfViscosity  = epViscosity profile
+            , lfCenterElev = srcElev
             }
     in EruptionEvent (pfId pf) flow

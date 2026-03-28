@@ -68,7 +68,7 @@ applyLavaFlow flow worldSize gx gy baseElev hardness =
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
         maxR = fromIntegral (lfRadius flow) ∷ Float
-        dist = perturbDist sx sy dx dy maxR baseElev hardness
+        dist = perturbDist sx sy dx dy maxR baseElev (lfCenterElev flow) hardness
 
     in if dist > maxR
        then noModification
@@ -84,13 +84,13 @@ applyLavaFlow flow worldSize gx gy baseElev hardness =
 -- * Feature Evolution Application
 
 applyEvolution ∷ FeatureEvolution → Int → Int → Int → Int → Float → GeoModification
-applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy baseElev hardness =
+applyEvolution (Reactivate heightGain _lavaExt center radius cElev) ws gx gy baseElev hardness =
     let GeoCoord cx cy = center
         (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
         rr = fromIntegral radius ∷ Float
-        dist = perturbDist cx cy dx dy rr baseElev hardness
+        dist = perturbDist cx cy dx dy rr baseElev cElev hardness
     in if dist > rr
        then noModification
        else let t = dist / rr
@@ -104,13 +104,13 @@ applyEvolution (Reactivate heightGain _lavaExt center radius) ws gx gy baseElev 
 applyEvolution (GoDormant _center _radius) _ _ _ _ _ = noModification
 applyEvolution (GoExtinct _center _radius) _ _ _ _ _ = noModification
 
-applyEvolution (CollapseToCaldera depth _ratio center radius) ws gx gy baseElev hardness =
+applyEvolution (CollapseToCaldera depth _ratio center radius cElev) ws gx gy baseElev hardness =
     let GeoCoord cx cy = center
         (dxi, dyi) = wrappedDeltaUV ws gx gy cx cy
         dx = fromIntegral dxi ∷ Float
         dy = fromIntegral dyi ∷ Float
         rr = fromIntegral radius ∷ Float
-        dist = perturbDist cx cy dx dy rr baseElev hardness
+        dist = perturbDist cx cy dx dy rr baseElev cElev hardness
     in if dist > rr
        then noModification
        else let t = dist / rr
