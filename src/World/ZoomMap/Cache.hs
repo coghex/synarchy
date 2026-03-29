@@ -296,7 +296,7 @@ buildZoomCacheWithPixels params registry palette =
                             fillPass
                             c ← VUM.read changed 0
                             when (c ≡ 1) $ loop (n - 1)
-                    loop (16 ∷ Int)
+                    loop (32 ∷ Int)
                     VU.unsafeFreeze mask
 
                 -- Coastal material pass

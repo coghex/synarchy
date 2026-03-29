@@ -82,12 +82,6 @@ applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, 
            neighborVar = let mn = fromIntegral (min nN (min nS (min nE nW))) ∷ Float
                              mx = fromIntegral (max nN (max nS (max nE nW))) ∷ Float
                          in (mx - mn) / max 1.0 mx
-           -- When variance is low (flat region), add a gentle
-           -- downward pull that simulates continental denudation
-           flatRegionPull = if diff < 0.0 ∧ neighborVar < 0.1
-                            then 0.0  -- don't erode flat regions further
-                            else 0.0
-
            ---------------------------------------------------------
            -- Hydraulic erosion (rainfall/runoff)
            --   The dominant carver. Proportional to slope —

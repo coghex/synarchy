@@ -531,7 +531,7 @@ buildSegFromWaypoints seed worldSize totalSegs baseFlow climate segIdx
 
         -- Width scales with flow, boosted at the mouth.
         -- Headwaters: 1-3 tiles. Midstream: 3-8. Mouth: up to 16.
-        rawWidth = max 1 (round (flow * 2.0)) ∷ Int
+        rawWidth = max 1 (round (flow * 6.0)) ∷ Int
         -- Mouth widening: up to 2× base width at the mouth
         mouthBoost = round (fromIntegral rawWidth * mouthFactor) ∷ Int
         width = min 16 (rawWidth + mouthBoost)
@@ -581,7 +581,9 @@ poolWaterSurface segs
     | otherwise =
         let segList = V.toList segs
             -- Extract n+1 water levels: [waterStart_0, waterEnd_0, waterEnd_1, ...]
-            waterLevels = rsWaterStart (head segList) : map rsWaterEnd segList
+            waterLevels = case segList of
+                (s:_) → rsWaterStart s : map rsWaterEnd segList
+                []    → []
             -- Pool: walk from mouth (last) to source (first).
             -- Any depression gets filled to the outflow level.
             pooled = reverse $ poolFill $ reverse waterLevels

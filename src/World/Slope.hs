@@ -394,6 +394,12 @@ patchChunkEdges coord tSurf neighborLookup tiles =
                     nly = ((ly `mod` chunkSize) + chunkSize) `mod` chunkSize
                 in case neighborLookup (ChunkCoord cx' cy') of
                     Just nSurf → nSurf VU.! (nly * chunkSize + nlx)
+                    -- Neighbor chunk not loaded: clamp to own edge tile,
+                    -- which returns this tile's own elevation. This is
+                    -- intentional — it means a missing neighbor never
+                    -- drives a downward extension. patchEdgeStrata re-runs
+                    -- on existing neighbors when new chunks load, so the
+                    -- extension will be applied once the neighbor arrives.
                     Nothing → tSurf VU.! (max 0 (min (chunkSize-1) ly)
                                           * chunkSize
                                           + max 0 (min (chunkSize-1) lx))

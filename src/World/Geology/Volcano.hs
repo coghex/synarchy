@@ -401,7 +401,7 @@ applySuperVolcano params worldSize gx gy baseElev hardness =
             in GeoModification elevDelta (Just (unMaterialId matObsidian)) (abs elevDelta)
 
        else
-       let t = dist / rimInnerR
+       let t = dist / max 1.0 rimInnerR
            bowlT = smoothstepGeo t
            elevDelta = round (negate clampedFloorD * (1.0 - bowlT * 0.7))
            mat = if t < 0.15

@@ -236,7 +236,7 @@ buildAgeLoop seed worldSize plates ageIdx minAges maxAges tbs grid
         let ageSeed = seed `xor` (fromIntegral ageIdx * 0xD7E8F9A0)
             (s1, grid1) = buildAge ageSeed worldSize plates ageIdx tbs grid
             roll = hashToFloatGeo (hashGeo ageSeed ageIdx 600)
-            continue = ageIdx < (minAges - 1) ∨ roll < 0.4
+            continue = ageIdx < minAges ∨ roll < 0.4
         in if continue
            then buildAgeLoop seed worldSize plates (ageIdx + 1) minAges maxAges s1 grid1
            else (s1, grid1)
