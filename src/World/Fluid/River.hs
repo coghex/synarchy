@@ -227,11 +227,8 @@ clampRiverDepth mv surfaceMap = do
                 let inValley = surfZ < avgNbr - 1
                     maxD = if isEdge ∨ inValley then maxDepthValley else maxDepthHill
                     cap = surfZ + maxD
-                if fcSurface fc - surfZ > maxD
-                    then if cap ≤ surfZ
-                         then MV.write mv idx Nothing
-                         else MV.write mv idx (Just (fc { fcSurface = cap }))
-                    else pure ()
+                when (fcSurface fc - surfZ > maxD) $
+                    MV.write mv idx (Just (fc { fcSurface = cap }))
             _ → pure ()
 
 -- * Surface Smoothing

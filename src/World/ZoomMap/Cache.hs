@@ -24,7 +24,7 @@ import World.Constants (seaLevel)
 import World.Material (MaterialId(..), matGlacier, MaterialRegistry(..)
                       , MaterialProps(..), getMaterialProps)
 import World.Plate (TectonicPlate(..), elevationAtGlobal
-                   , isBeyondGlacier, wrapGlobalU
+                   , isBeyondGlacier, isGlacierZone, wrapGlobalU
                    , twoNearestPlates, BoundaryType(..), classifyBoundary)
 import qualified Data.Vector.Unboxed as VU
 import World.Fluids (isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid
@@ -138,8 +138,10 @@ buildZoomCache params registry =
                 ocnPen = if centerElev < seaLevel then 5.0 else 0.0 ∷ Float
                 iceNoise = zoomIceNoise seed cgx cgy
                 effT = cmt + ocnPen - altCool + iceNoise
-                chunkIce = effT < -2.0
-                         ∨ (cwt - altCool < -10.0 ∧ cst - altCool < 5.0)
+                chunkIce = not (isBeyondGlacier worldSize cgx cgy)
+                         ∧ (isGlacierZone worldSize cgx cgy
+                            ∨ effT < -2.0
+                            ∨ (cwt - altCool < -10.0 ∧ cst - altCool < 5.0))
             in ZoomChunkEntry
                 { zceChunkX = ccx
                 , zceChunkY = ccy
@@ -481,8 +483,10 @@ buildZoomCacheWithPixels params registry palette =
                 ocnPen' = if centerElev' < seaLevel then 5.0 else 0.0 ∷ Float
                 iceNoise' = zoomIceNoise seed cgx' cgy'
                 effT' = cmt' + ocnPen' - altCool' + iceNoise'
-                chunkIce' = effT' < -2.0
-                          ∨ (cwt' - altCool' < -10.0 ∧ cst' - altCool' < 5.0)
+                chunkIce' = not (isBeyondGlacier worldSize cgx' cgy')
+                          ∧ (isGlacierZone worldSize cgx' cgy'
+                             ∨ effT' < -2.0
+                             ∨ (cwt' - altCool' < -10.0 ∧ cst' - altCool' < 5.0))
 
                 entry = ZoomChunkEntry
                     { zceChunkX = ccx
@@ -530,9 +534,11 @@ buildZoomCacheWithPixels params registry palette =
                                     then 5.0 else 0.0 ∷ Float
                           n = zoomIceNoise seed gx' gy'
                           effT = mt + ocnPen - altCool + n
-                          ice = effT < -2.0
-                              ∨ (wt - altCool < -10.0
-                                 ∧ st - altCool < 5.0)
+                          ice = not (isBeyondGlacier worldSize gx' gy')
+                              ∧ (isGlacierZone worldSize gx' gy'
+                                 ∨ effT < -2.0
+                                 ∨ (wt - altCool < -10.0
+                                    ∧ st - altCool < 5.0))
                           mIceLevel = lookupIceLevel ilGrid worldSize gx' gy'
                       in if ice ∧ e > minBound
                          then case mIceLevel of
@@ -611,11 +617,11 @@ generateChunkPixels palette hasLava worldSize fluidMap iceMap oceanFlags tileVec
            else let idx = ly * chunkSize + lx
                     (elev, matId, vegId, gx, gy) = tileVec V.! idx
                     tileIsOcean = oceanFlags VU.! idx ≡ 1
-                    baseColor = if tileIsOcean
+                    hasIce = isJust (iceMap V.! idx)
+                    baseColor = if tileIsOcean ∧ not hasIce
                                 then defaultOceanColor
                                 else tileColor palette hasLava
                                          matId vegId elev gx gy
-                    hasIce = isJust (iceMap V.! idx)
                     -- Check actual fluid map for this tile
                     (r, g, b, a)
                         -- Ice-covered: use the tile color which already
@@ -702,9 +708,10 @@ isSnowVeg v = v ≥ 65 ∧ v ≤ 68
 --   is smooth at the zoomed-out view. Returns ±2°C.
 zoomIceNoise ∷ Word64 → Int → Int → Float
 zoomIceNoise seed gx gy =
-    let -- Large-scale noise for smooth continental-scale variation
-        h1 = zoomIceHash seed gx gy 48
-        h2 = zoomIceHash seed gx gy 20
+    let -- Must match iceNoise (Ice.hs) and iceLevelNoise (IceLevel.hs)
+        -- so frozen classification is consistent across zoom/chunk/grid.
+        h1 = zoomIceHash seed gx gy 12
+        h2 = zoomIceHash seed gx gy 5
         n1 = (zoomHashToFloat h1 - 0.5) * 3.0
         n2 = (zoomHashToFloat h2 - 0.5) * 1.0
     in n1 + n2

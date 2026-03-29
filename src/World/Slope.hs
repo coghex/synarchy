@@ -404,12 +404,16 @@ patchChunkEdges coord tSurf neighborLookup tiles =
                    ∨ ly ≡ 0 ∨ ly ≡ chunkSize - 1
         in if not isEdge
            then col
-           else let -- Find the actual minimum neighbor elevation
+           else let -- Find the actual minimum neighbor elevation.
+                    -- Filter out minBound sentinels (beyond-glacier tiles)
+                    -- to prevent integer overflow in the extension calc.
                     nN = getNeighborZ lx (ly - 1)
                     nS = getNeighborZ lx (ly + 1)
                     nE = getNeighborZ (lx + 1) ly
                     nW = getNeighborZ (lx - 1) ly
-                    actualMinZ = min nN (min nS (min nE nW))
+                    clampSentinel z = if z ≡ minBound then maxBound else z
+                    actualMinZ = min (clampSentinel nN) (min (clampSentinel nS)
+                                     (min (clampSentinel nE) (clampSentinel nW)))
                     currentStart = ctStartZ col
                 in if actualMinZ ≥ currentStart ∨ VU.null (ctMats col)
                    then col  -- No extension needed

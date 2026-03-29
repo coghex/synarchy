@@ -89,10 +89,9 @@ computeOceanMap seed worldSize plateCount plates applyTL =
             in (cx', cy')
 
         neighbors (ChunkCoord cx cy) =
-            [ let (cx', cy') = wrapChunkU (cx + dx, cy + dy)
-              in ChunkCoord cx' cy'
+            [ ChunkCoord cx' cy'
             | (dx, dy) ← [(-1,0), (1,0), (0,-1), (0,1)]
-            , let (_, cy') = wrapChunkU (cx + dx, cy + dy)
+            , let (cx', cy') = wrapChunkU (cx + dx, cy + dy)
             , cy' ≥ -halfSize ∧ cy' < halfSize
             ]
 

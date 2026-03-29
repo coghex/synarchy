@@ -48,9 +48,8 @@ computeChunkIce seed plates climate worldSize coord ilGrid terrainSurfMap fluidM
                 gx = cx * chunkSize + lx
                 gy = cy * chunkSize + ly
                 (gx', gy') = wrapGlobalU worldSize gx gy
-            -- Skip beyond-glacier and glacier-zone tiles
-            when (not (isBeyondGlacier worldSize gx' gy')
-                  ∧ not (isGlacierZone worldSize gx' gy')) $ do
+            -- Skip beyond-glacier tiles (outside the world diamond)
+            when (not (isBeyondGlacier worldSize gx' gy')) $ do
                 let LocalClimate{ lcTemp=meanT
                                 , lcSummerTemp=summerT
                                 , lcWinterTemp=winterT } =
@@ -69,7 +68,9 @@ computeChunkIce seed plates climate worldSize coord ilGrid terrainSurfMap fluidM
 
                     effectiveT = meanT + oceanPenalty - altCooling + noise
 
-                    hasIce = effectiveT < -2.0
+                    -- Glacier zone always freezes (impassable world boundary)
+                    hasIce = isGlacierZone worldSize gx' gy'
+                           ∨ effectiveT < -2.0
                            ∨ (winterT - altCooling < -10.0
                               ∧ summerT - altCooling < 5.0)
 
@@ -96,11 +97,9 @@ iceNoise ∷ Word64 → Int → Int → Float
 iceNoise seed gx gy =
     let h1 = iceHash seed gx gy 12
         h2 = iceHash seed gx gy 5
-        h3 = iceHash seed gx gy 2
         n1 = (hashToFloat h1 - 0.5) * 3.0
         n2 = (hashToFloat h2 - 0.5) * 1.0
-        n3 = (hashToFloat h3 - 0.5) * 1.0
-    in n1 + n2 + n3
+    in n1 + n2
 
 iceHash ∷ Word64 → Int → Int → Int → Word64
 iceHash seed gx gy scale =

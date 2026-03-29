@@ -11,7 +11,7 @@ import qualified Data.Vector.Unboxed as VU
 import World.Constants (seaLevel)
 import World.Fluid.Types (IceLevelGrid(..))
 import World.Hydrology.Simulation (ElevGrid(..), fillDepressions)
-import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
+import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, isGlacierZone, wrapGlobalU)
 import World.Weather.Types (ClimateState)
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 
@@ -36,6 +36,8 @@ computeIceLevelGrid seed worldSize plates climate grid =
                 (gx', gy') = wrapGlobalU worldSize gx gy
             in if isBeyondGlacier worldSize gx' gy'
                then False
+               else if isGlacierZone worldSize gx' gy'
+               then True  -- world boundary always frozen
                else let LocalClimate{ lcTemp = meanT
                                     , lcSummerTemp = summerT
                                     , lcWinterTemp = winterT } =
