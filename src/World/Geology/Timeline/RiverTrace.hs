@@ -268,37 +268,43 @@ extendToCoast sp pts =
     let n = length pts
         (x1, y1, _) = pts !! max 0 (n - 2)
         (x2, y2, e2) = pts !! (n - 1)
-        -- Direction from second-to-last to last waypoint.
-        dx = x2 - x1
-        dy = y2 - y1
-        len = sqrt (fromIntegral (dx * dx + dy * dy) ∷ Float)
-        halfSp = max 2 (sp `div` 2)
-        (stepX, stepY) = if len < 1.0
-            then (halfSp, 0)
-            else ( round (fromIntegral dx / len * fromIntegral halfSp)
-                 , round (fromIntegral dy / len * fromIntegral halfSp) )
-        -- Elevation above sea level determines extension character.
-        drop' = max 0 (e2 - seaLevel)
-        -- Low coast: 2 intermediate steps (similar to old behavior).
-        -- Moderate coast: 3–5 steps creating an inlet.
-        -- High coast: up to 10 steps creating a gorge/fjord.
-        numSteps = if drop' ≤ 3 then 2
-                   else min 10 (max 3 (drop' `div` 6 + 2))
-        -- Waypoints descending from mouth elevation to sea level.
-        extensionPts =
-            [ ( x2 + stepX * i
-              , y2 + stepY * i
-              , max seaLevel (e2 - (drop' * i) `div` numSteps)
-              )
-            | i ← [1 .. numSteps]
-            ]
-        -- Final 2 points at/below sea level ensure carving punches
-        -- through to the ocean.
-        lastX = x2 + stepX * numSteps
-        lastY = y2 + stepY * numSteps
-    in pts ⧺ extensionPts
-            ⧺ [ (lastX + stepX,     lastY + stepY,     seaLevel)
-              , (lastX + stepX * 2, lastY + stepY * 2, seaLevel - 1) ]
+    -- Skip extension for inland/glacial dead-ends far above sea level.
+    -- The graduated logic below handles legitimate coastal rivers up to
+    -- ~80 above sea; anything higher is a flow-grid boundary artifact.
+    in if e2 > seaLevel + 80
+       then pts
+       else
+        let -- Direction from second-to-last to last waypoint.
+            dx = x2 - x1
+            dy = y2 - y1
+            len = sqrt (fromIntegral (dx * dx + dy * dy) ∷ Float)
+            halfSp = max 2 (sp `div` 2)
+            (stepX, stepY) = if len < 1.0
+                then (halfSp, 0)
+                else ( round (fromIntegral dx / len * fromIntegral halfSp)
+                     , round (fromIntegral dy / len * fromIntegral halfSp) )
+            -- Elevation above sea level determines extension character.
+            drop' = max 0 (e2 - seaLevel)
+            -- Low coast: 2 intermediate steps (similar to old behavior).
+            -- Moderate coast: 3–5 steps creating an inlet.
+            -- High coast: up to 10 steps creating a gorge/fjord.
+            numSteps = if drop' ≤ 3 then 2
+                       else min 10 (max 3 (drop' `div` 6 + 2))
+            -- Waypoints descending from mouth elevation to sea level.
+            extensionPts =
+                [ ( x2 + stepX * i
+                  , y2 + stepY * i
+                  , max seaLevel (e2 - (drop' * i) `div` numSteps)
+                  )
+                | i ← [1 .. numSteps]
+                ]
+            -- Final 2 points at/below sea level ensure carving punches
+            -- through to the ocean.
+            lastX = x2 + stepX * numSteps
+            lastY = y2 + stepY * numSteps
+        in pts ⧺ extensionPts
+                ⧺ [ (lastX + stepX,     lastY + stepY,     seaLevel)
+                  , (lastX + stepX * 2, lastY + stepY * 2, seaLevel - 1) ]
 
 -- * Path noise
 

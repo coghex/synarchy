@@ -93,14 +93,24 @@ applyGlacierCarve glacier worldSize gx gy _baseElev =
        else noModification
 
 -- * Glacier Evolution Application (pure GeoModification)
+--
+-- NOTE: Advance and Branch need no terrain effect here — active glaciers
+-- are re-carved each age with updated dimensions (see activeGlacierRecarve
+-- in Timeline.hs), so dimension changes propagate automatically.
+--
+-- TODO: Retreat and Melt should deposit moraine at the former terminus.
+-- The moraineDep parameter is generated in Evolution.hs but currently
+-- discarded. Implementing this requires adding glacier geometry (center,
+-- flowDir, width, oldLength) to the GlacierRetreat/GlacierMelt variants
+-- of HydroEvolution so the spatial deposit can be computed here.
 
 applyGlacierEvolution ∷ HydroEvolution → Int → Int → Int → Int → GeoModification
 applyGlacierEvolution (GlacierAdvance _advLen _advWid) _ws _gx _gy _e =
     noModification
 applyGlacierEvolution (GlacierRetreat _retreatLen _moraineDep) _ws _gx _gy _e =
-    noModification
+    noModification  -- TODO: deposit moraine in retreat zone
 applyGlacierEvolution (GlacierMelt _moraineDep) _ws _gx _gy _e =
-    noModification
+    noModification  -- TODO: deposit final moraine at terminus
 applyGlacierEvolution (GlacierBranch _branchPt _angle _len _childId) _ws _gx _gy _e =
     noModification
 applyGlacierEvolution _ _ws _gx _gy _e = noModification

@@ -381,9 +381,6 @@ applySuperVolcano params worldSize gx gy baseElev hardness =
         rimOuterR = calderaR + rimWidth
         rimInnerR = calderaR - rimWidth
 
-        maxFloorDrop = max 10.0 (fromIntegral baseElev + 50.0)
-        clampedFloorD = min floorD maxFloorDrop
-
     in if dist > ejectaR
        then noModification
 
@@ -403,7 +400,7 @@ applySuperVolcano params worldSize gx gy baseElev hardness =
        else
        let t = dist / max 1.0 rimInnerR
            bowlT = smoothstepGeo t
-           elevDelta = round (negate clampedFloorD * (1.0 - bowlT * 0.7))
+           elevDelta = round (negate floorD * (1.0 - bowlT * 0.7))
            mat = if t < 0.15
                  then unMaterialId matMagma
                  else if t < 0.4

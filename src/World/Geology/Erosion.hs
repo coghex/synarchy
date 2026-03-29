@@ -70,18 +70,6 @@ applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, 
            absDiff = abs diff
            slopeNorm = min 1.0 (absDiff / 30.0)  -- normalize: 30 tiles = max slope
 
-           -- === REGIONAL SMOOTHING ===
-           -- Even when all 4 neighbors are similar (plateau/plain),
-           -- long-duration erosion flattens terrain over time.
-           -- This models sheet wash, creep, and aeolian leveling
-           -- that smooth entire regions, not just local slopes.
-           --
-           -- Uses the *variance* of neighbors: if they all agree,
-           -- the region is already smooth → less extra erosion.
-           -- If they disagree, local smoothing handles it.
-           neighborVar = let mn = fromIntegral (min nN (min nS (min nE nW))) ∷ Float
-                             mx = fromIntegral (max nN (max nS (max nE nW))) ∷ Float
-                         in (mx - mn) / max 1.0 mx
            ---------------------------------------------------------
            -- Hydraulic erosion (rainfall/runoff)
            --   The dominant carver. Proportional to slope —
