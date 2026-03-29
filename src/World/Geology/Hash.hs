@@ -36,7 +36,7 @@ hashToRangeGeo ∷ Word32 → Int → Int → Int
 hashToRangeGeo h lo hi =
     let f = hashToFloatGeo h
         span' = hi - lo + 1
-    in lo + floor (f * fromIntegral span')
+    in min hi (lo + floor (f * fromIntegral span'))
 
 smoothstepGeo ∷ Float → Float
 smoothstepGeo t = t * t * (3.0 - 2.0 * t)
@@ -78,10 +78,10 @@ valueNoise2D seed prop x y cellSize =
         fy  = y / cellSize - fromIntegral cy0
         tx  = smoothstepGeo fx
         ty  = smoothstepGeo fy
-        h00 = hashToFloatGeo (hashGeo seed cx0       (cy0 * prop))
-        h10 = hashToFloatGeo (hashGeo seed (cx0 + 1) (cy0 * prop))
-        h01 = hashToFloatGeo (hashGeo seed cx0       ((cy0 + 1) * prop))
-        h11 = hashToFloatGeo (hashGeo seed (cx0 + 1) ((cy0 + 1) * prop))
+        h00 = hashToFloatGeo (hashGeo seed cx0       (cy0 * 31 + prop))
+        h10 = hashToFloatGeo (hashGeo seed (cx0 + 1) (cy0 * 31 + prop))
+        h01 = hashToFloatGeo (hashGeo seed cx0       ((cy0 + 1) * 31 + prop))
+        h11 = hashToFloatGeo (hashGeo seed (cx0 + 1) ((cy0 + 1) * 31 + prop))
         top = h00 + tx * (h10 - h00)
         bot = h01 + tx * (h11 - h01)
     in (top + ty * (bot - top)) - 0.5

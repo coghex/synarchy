@@ -56,7 +56,7 @@ instance NFData IceCell where
 type IceMap = V.Vector (Maybe IceCell)
 
 emptyIceMap ∷ IceMap
-emptyIceMap = V.replicate 256 Nothing
+emptyIceMap = V.replicate (16 * 16) Nothing  -- chunkSize² (can't import Chunk.Types: circular)
 
 -- | Coarse-resolution ice surface level grid, computed once during
 --   timeline build using fillDepressions restricted to frozen cells.

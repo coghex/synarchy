@@ -122,10 +122,12 @@ oceanRegionsFromGrid grid worldSize =
 --   the new ocean set.
 updateClimateFromGrid ∷ Int                        -- ^ worldSize
                       → HS.HashSet ClimateCoord    -- ^ coarse ocean regions
+                      → [PersistentFeature]        -- ^ current persistent features
                       → ClimateState               -- ^ previous climate state
                       → ClimateState
-updateClimateFromGrid worldSize coarseOcean prevClimate =
-    buildClimateFromOceanSet worldSize coarseOcean HM.empty
+updateClimateFromGrid worldSize coarseOcean features prevClimate =
+    let freshwater = extractFreshwaterSources worldSize features
+    in buildClimateFromOceanSet worldSize coarseOcean freshwater
         (csGlobalCO2  prevClimate)
         (csGlobalTemp prevClimate)
         (csSolarConst prevClimate)

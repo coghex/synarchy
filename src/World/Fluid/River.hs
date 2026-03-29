@@ -675,35 +675,39 @@ equalizeCrossChunkRivers coords wtd = eqLoop (10 ∷ Int) wtd
                 ⧺ [ (ChunkCoord (cx+1) cy, 0, ly)           | lx ≡ chunkSize-1 ]
         in foldl' (tryEqualize (ChunkCoord cx cy) lx ly myWaterZ) (td, changed) dirs
 
-    tryEqualize myCoord myLX myLY myWaterZ (td, changed) (nbrCoord, nbrLX, nbrLY) =
-        case HM.lookup nbrCoord (wtdChunks td) of
+    tryEqualize myCoord myLX myLY _myWaterZ (td, changed) (nbrCoord, nbrLX, nbrLY) =
+        let myIdx = myLY * chunkSize + myLX
+        in case HM.lookup myCoord (wtdChunks td) of
             Nothing → (td, changed)
-            Just nbrLC →
-                let nIdx = nbrLY * chunkSize + nbrLX
-                    nbrFluid = lcFluidMap nbrLC V.! nIdx
-                in case nbrFluid of
-                    Just nbrFC | fcType nbrFC ≡ River →
-                        let nbrWaterZ = fcSurface nbrFC
-                            diff = abs (myWaterZ - nbrWaterZ)
-                        in if diff ≤ 1
-                           then (td, changed)
-                           else if myWaterZ > nbrWaterZ
-                           then
-                             -- Lower our side to within 1 of neighbor.
-                             let myIdx = myLY * chunkSize + myLX
-                             in case HM.lookup myCoord (wtdChunks td) of
-                                 Nothing → (td, changed)
-                                 Just myLC →
-                                     let myTerrZ = lcTerrainSurfaceMap myLC VU.! myIdx
-                                         target = max (nbrWaterZ + 1) (myTerrZ + 1)
-                                     in if target < myWaterZ
-                                        then let fm' = lcFluidMap myLC V.// [(myIdx, Just (FluidCell River target))]
-                                                 sm' = lcSurfaceMap myLC VU.// [(myIdx, max myTerrZ target)]
-                                                 myLC' = myLC { lcFluidMap = fm', lcSurfaceMap = sm' }
-                                                 chunks' = HM.insert myCoord myLC' (wtdChunks td)
-                                             in (td { wtdChunks = chunks' }, True)
-                                        else (td, changed)
-                           else (td, changed)
+            Just myLC →
+                case lcFluidMap myLC V.! myIdx of
+                    Just myFC | fcType myFC ≡ River →
+                        let curWaterZ = fcSurface myFC
+                        in case HM.lookup nbrCoord (wtdChunks td) of
+                            Nothing → (td, changed)
+                            Just nbrLC →
+                                let nIdx = nbrLY * chunkSize + nbrLX
+                                    nbrFluid = lcFluidMap nbrLC V.! nIdx
+                                in case nbrFluid of
+                                    Just nbrFC | fcType nbrFC ≡ River →
+                                        let nbrWaterZ = fcSurface nbrFC
+                                            diff = abs (curWaterZ - nbrWaterZ)
+                                        in if diff ≤ 1
+                                           then (td, changed)
+                                           else if curWaterZ > nbrWaterZ
+                                           then
+                                             -- Lower our side to within 1 of neighbor.
+                                             let myTerrZ = lcTerrainSurfaceMap myLC VU.! myIdx
+                                                 target = max (nbrWaterZ + 1) (myTerrZ + 1)
+                                             in if target < curWaterZ
+                                                then let fm' = lcFluidMap myLC V.// [(myIdx, Just (FluidCell River target))]
+                                                         sm' = lcSurfaceMap myLC VU.// [(myIdx, max myTerrZ target)]
+                                                         myLC' = myLC { lcFluidMap = fm', lcSurfaceMap = sm' }
+                                                         chunks' = HM.insert myCoord myLC' (wtdChunks td)
+                                                     in (td { wtdChunks = chunks' }, True)
+                                                else (td, changed)
+                                           else (td, changed)
+                                    _ → (td, changed)
                     _ → (td, changed)
 
 -- | Collect all river tiles on chunk edges.
@@ -778,7 +782,7 @@ fillCrossChunkHoles coords wtd = foldl' fillChunkHoles wtd coords
                             nMin = foldl' min maxBound allNbrs
                             nCount = length allNbrs
                             threshold = if isEdge then 2 else 3
-                            standard = nCount ≥ threshold ∧ terrZ < nMax
+                            standard = nCount ≥ threshold ∧ terrZ ≤ nMax
                                      ∧ nMax - terrZ ≤ 5 ∧ nMax > seaLevel
                             uniform = nCount ≥ threshold ∧ nMin ≡ nMax
                                     ∧ terrZ ≤ nMax + 2 ∧ nMax > seaLevel

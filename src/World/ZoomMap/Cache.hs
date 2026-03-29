@@ -47,6 +47,7 @@ import World.ZoomMap.ColorPalette (ZoomColorPalette, lookupMatColor
                                   , lookupVegColorById
                                   , defaultOceanColor, defaultLavaColor)
 import World.Base (GeoCoord(..))
+import World.Geology.Hash (valueNoise2D)
 import World.Geology.Coastal (CoastType(..), classifyCoast, isDepositional
                              , beachMaterial, wetlandMaterial, deltaMaterial
                              , coastHash, sandProfile, outcroppHardness
@@ -228,7 +229,7 @@ buildZoomCacheWithPixels params registry palette =
                                              , lcHumidity=humid, lcSnow=snow} =
                                      lookupLocalClimate climate worldSize gx gy
                                  h = vegHash seed gx gy
-                                 roll    = fromIntegral (h .&. 0xFF) / 255.0 ∷ Float
+                                 roll    = valueNoise2D seed 47 (fromIntegral gx) (fromIntegral gy) 10.0 + 0.5
                                  variant = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
                                  isOceanTile = elev ≤ seaLevel ∧ chunkOcean
                                  vegId = if isOceanTile ∨ isBarrenMaterial matId

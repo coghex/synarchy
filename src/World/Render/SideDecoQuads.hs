@@ -106,9 +106,9 @@ waterSideQuad lookupSlot lookupFmSlot textures facing gx gy z isLeft
         fmHandle0 = if isLeft
                     then wtSideFaceMapLeft textures
                     else wtSideFaceMapRight textures
-        fmSlot0 = lookupSlot fmHandle0
+        fmSlot0 = lookupFmSlot fmHandle0
 
-    in if not (isTileVisible vb drawX drawY) ∨ fmSlot0 ≡ 0
+    in if not (isTileVisible vb drawX drawY) ∨ fmSlot0 ≡ 0.0
        then Nothing
        else let
             sortKey = fromIntegral (fa + fb)
@@ -123,7 +123,7 @@ waterSideQuad lookupSlot lookupFmSlot textures facing gx gy z isLeft
             actualSlot = lookupSlot texHandle
 
             -- Side face map slot (already checked non-zero above)
-            fmSlot = fromIntegral fmSlot0
+            fmSlot = fmSlot0
 
             -- No tinting — color comes from texture
             tint = Vec4 1.0 1.0 1.0 tileAlpha

@@ -60,7 +60,7 @@ buildTimeline seed worldSize plateCount erosionIntensity volcanicActivity =
         -- After bombardment: first climate snapshot from the
         -- initial plate-derived elevation grid
         ocean1 = oceanRegionsFromGrid grid1 worldSize
-        climate1 = updateClimateFromGrid worldSize ocean1 (tbsClimateState s1)
+        climate1 = updateClimateFromGrid worldSize ocean1 (tbsFeatures s1) (tbsClimateState s1)
         s1' = s1 { tbsClimateState = climate1 }
 
         (s2, finalGrid) = buildEon seed worldSize plates s1' grid1
@@ -162,7 +162,7 @@ buildEra seed worldSize plates eraIdx tbs grid =
         prevClimate = tbsClimateState tbs
         -- Sync CO2 from GeoState into climate before recomputing
         prevClimate' = prevClimate { csGlobalCO2 = gsCO2 gs' }
-        climate' = updateClimateFromGrid worldSize coarseOcean prevClimate'
+        climate' = updateClimateFromGrid worldSize coarseOcean (tbsFeatures tbs) prevClimate'
 
         eraPeriod = mkGeoPeriod worldSize
             ("Era " <> T.pack (show eraIdx) <> " Events")
@@ -278,13 +278,15 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
                 VolcanicShape (SuperVolcano _) → 0.15  -- massive CO2 injection
                 _ → 0.02                               -- normal eruption
             | pf ← tbsFeatures tbs
+            , pfActivity pf ≡ FActive
             , case eruptionProfile (pfFeature pf) of
                 Just ep → epTimelineScale ep ≡ Age
                 Nothing → False
             , let GeoFeatureId fidInt = pfId pf
                   h = hashGeo eruptSeed fidInt (700 + ageIdx)
                   roll = hashToFloatGeo h
-              in roll < maybe 0.0 epEruptChance (eruptionProfile (pfFeature pf))
+                  scaledChance = maybe 0.0 (\ep → min 1.0 (epEruptChance ep * tbsVolcanicActivity tbs)) (eruptionProfile (pfFeature pf))
+              in roll < scaledChance
             ]
 
         hydroSeed = ageSeed `xor` 0xA0CA71C
