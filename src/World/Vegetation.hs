@@ -175,12 +175,18 @@ computeChunkVegetation seed worldSize coord surfMap surfMats surfSlopes
             variant = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
 
             -- Spatially coherent noise for vegetation type selection.
-            -- Cell size ~10 tiles creates natural-looking patches:
-            -- a ~10-tile area of dense grass, then wildflowers, etc.
-            -- instead of per-tile salt-and-pepper randomness.
+            -- Cell size ~10 tiles creates natural-looking patches.
+            -- Domain warping breaks the axis-aligned grid by distorting
+            -- input coordinates before sampling vegetation noise.
             gxF = fromIntegral gx ∷ Float
             gyF = fromIntegral gy ∷ Float
-            roll = valueNoise2D seed 47 gxF gyF 10.0 + 0.5
+            wx = valueNoise2D seed 101 gxF gyF 15.0 * 0.6
+               + valueNoise2D seed 103 gxF gyF 6.0  * 0.4
+            wy = valueNoise2D seed 102 gxF gyF 15.0 * 0.6
+               + valueNoise2D seed 104 gxF gyF 6.0  * 0.4
+            warpedGX = gxF + wx * 3.0
+            warpedGY = gyF + wy * 3.0
+            roll = valueNoise2D seed 47 warpedGX warpedGY 10.0 + 0.5
 
             -- Regional climate
             LocalClimate{lcTemp=temp, lcPrecip=precip
@@ -228,10 +234,11 @@ selectVegetation matId slopeId hasFluid elev
           else vegGravelTundra + variant
 
     -- === DESERT (before barren check — covers bare rock) ===
+    -- Precipitation gradient: driest = bare sand, wetter = scrub
     | temp > 25.0 ∧ precip < 0.15
-        = if roll < 0.20
-          then vegDesertScrub + variant
-          else vegDesertSand + variant
+        = if precip < 0.05
+          then vegDesertSand + variant                -- hyper-arid
+          else vegDesertScrub + variant               -- arid with some scrub
 
     -- === BARREN MATERIALS ===
     | isBarrenMaterial matId ∧ not (isSnowableMaterial matId)
@@ -242,14 +249,13 @@ selectVegetation matId slopeId hasFluid elev
         = vegMarshGrass + variant
 
     -- === ARID / SEMI-ARID ===
+    -- Precipitation gradient: less rain = more desert-like
     | precip < 0.2
-        = if roll < 0.30
-          then vegSparseGrass + variant
-          else if roll < 0.50
-               then vegDeadGrass + variant
-               else if roll < 0.65
-                    then vegDesertScrub + variant
-                    else vegDesertSand + variant
+        = if precip < 0.12
+          then vegDesertScrub + variant               -- dry end
+          else if precip < 0.16
+               then vegDeadGrass + variant            -- transitional
+               else vegSparseGrass + variant          -- wetter end
 
     -- === MOSS ON WET SLOPES ===
     | slopeId > 0 ∧ humid > 0.5

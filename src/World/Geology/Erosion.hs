@@ -146,13 +146,14 @@ applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, 
            -- Round toward zero to avoid jitter on small differences
            delta = if abs rawDelta < 0.5 then 0
                    else truncateTowardZero rawDelta
-           -- Soil depth for last-age (from your previous change)
+           -- Soil depth for last-age: continuous function of slope
+           -- instead of discrete thresholds (avoids visible contour lines).
+           -- Steep slopes (>0.8) get no soil; flat terrain gets full depth.
            soilDepth
                | not (epIsLastAge params) = 0
                | slopeNorm > 0.8          = 0
-               | slopeNorm > 0.5          = 1
-               | slopeNorm > 0.2          = 2
-               | otherwise                = max 1 (round (4.0 * erodability))
+               | otherwise                = max 1 (round
+                   (4.0 * erodability * (1.0 - slopeNorm) ∷ Float))
 
            -- Strata thickness bonus: longer ages deposit thicker layers.
            -- A 15-MY age adds 5 bonus tiles, a 1-MY age adds 0.
@@ -223,76 +224,89 @@ erosionSediment params matId elev isDeposition =
         lastAge = epIsLastAge params
 
         -- Hash for local variation (cheap: xor + shift).
-        -- Quantize elevation to prevent fine-grained checkerboard
-        -- patterns on gentle slopes where adjacent tiles differ by ±1.
-        quantizedElev = elev `div` 8
-        localHash = fromIntegral (seed `xor` fromIntegral matId
-                                       `xor` (fromIntegral quantizedElev * 0x9E3779B9)) ∷ Word64
-        roll = fromIntegral (localHash .&. 0xFF) / 255.0 ∷ Float
+        -- Interpolate between adjacent elevation buckets to prevent
+        -- both fine-grained checkerboard (from per-tile hashing) and
+        -- coarse 8-tile banding (from hard quantization).
+        bucket = elev `div` 8
+        bucketFrac = fromIntegral (elev `mod` 8) / 8.0 ∷ Float
+        hashBucket b = fromIntegral (seed `xor` fromIntegral matId
+                                          `xor` (fromIntegral b * 0x9E3779B9)) ∷ Word64
+        roll0 = fromIntegral (hashBucket bucket .&. 0xFF) / 255.0 ∷ Float
+        roll1 = fromIntegral (hashBucket (bucket + 1) .&. 0xFF) / 255.0 ∷ Float
+        roll = roll0 + bucketFrac * (roll1 - roll0)
 
     in if lastAge
        then soilFromClimate temp precip humid snow matId roll
        else rockFromSource matId temp precip roll
 
--- | Final-age soil selection based on climate.
---   Produces soil materials (50-67) as a thin surface veneer.
+-- | Final-age soil selection based on climate gradients.
+--   Materials follow temperature/precipitation smoothly.
+--   The roll value shifts each threshold by ±0.02, creating a
+--   natural transition zone instead of a hard line at each boundary.
 soilFromClimate ∷ Float → Float → Float → Float → Word8 → Float → Word8
-soilFromClimate temp precip humid snow srcMat roll
+soilFromClimate temp precip humid snow _srcMat roll
     -- Glacial: till/moraine/glacial clay
     | snow > 0.6 ∧ temp < -5.0 =
-        if roll < 0.5 then 110       -- till
-        else if roll < 0.8 then 111  -- moraine
-        else 112                      -- glacial clay
+        if snow > blur 0.85 then 112          -- glacial clay
+        else if snow > blur 0.7 then 111      -- moraine
+        else 110                               -- till
 
-    -- Cold + wet periglacial: silt + gravel
-    | temp < 0.0 ∧ precip > 0.3 =
-        if roll < 0.4 then 61        -- silt
-        else if roll < 0.7 then 65   -- heavy gravel
-        else 60                       -- silt loam
+    -- Cold + wet periglacial
+    | temp < blur 0.0 ∧ precip > blur 0.3 =
+        if temp < blur (-3.0) then 65          -- heavy gravel
+        else if precip > blur 0.5 then 61     -- silt
+        else 60                                -- silt loam
 
-    -- Cold + dry: salt flats, light gravel
-    | temp < 5.0 ∧ precip < 0.2 =
-        if roll < 0.5 then 67        -- salt flat
-        else 66                       -- light gravel
+    -- Cold + dry
+    | temp < blur 5.0 ∧ precip < blur 0.2 =
+        if precip < blur 0.08 then 67          -- salt flat
+        else 66                                -- light gravel
 
-    -- Hot + wet tropical: deep clay weathering
-    | temp > 25.0 ∧ precip > 0.5 =
-        if roll < 0.3 then 50        -- clay
-        else if roll < 0.5 then 58   -- silty clay
-        else if roll < 0.7 then 56   -- loam
-        else 64                       -- muck (organic-rich)
+    -- Hot + wet tropical
+    | temp > blur 25.0 ∧ precip > blur 0.5 =
+        if precip > blur 0.8 then 64           -- muck
+        else if precip > blur 0.65 then 50    -- clay
+        else if precip > blur 0.55 then 58    -- silty clay
+        else 56                                -- loam
 
-    -- Hot + dry desert: sand
-    | temp > 25.0 ∧ precip < 0.2 =
-        if roll < 0.6 then 55        -- sand
-        else if roll < 0.8 then 54   -- loamy sand
-        else 67                       -- salt flat
+    -- Hot + dry desert → transitional
+    | temp > blur 25.0 ∧ precip < blur 0.3 =
+        if precip < blur 0.08 then 55          -- sand (hyper-arid)
+        else if precip < blur 0.15 then 55    -- sand (arid)
+        else if precip < blur 0.2  then 54    -- loamy sand
+        else if precip < blur 0.25 then 53    -- sandy loam
+        else 52                                -- sandy clay loam
 
-    -- Warm + moderate: clay-loam spectrum
-    | temp > 15.0 ∧ precip > 0.3 =
-        if roll < 0.25 then 57       -- clay loam
-        else if roll < 0.5 then 52   -- sandy clay loam
-        else if roll < 0.75 then 56  -- loam
-        else 62                       -- peat (if very wet + organic)
+    -- Warm + moderate
+    | temp > blur 15.0 ∧ precip > blur 0.3 =
+        if precip > blur 0.6 then if humid > 0.6 then 62 else 57
+        else if precip > blur 0.45 then 57    -- clay loam
+        else if precip > blur 0.35 then 56    -- loam
+        else 52                                -- sandy clay loam
 
-    -- Temperate + wet: rich soils
-    | temp > 5.0 ∧ precip > 0.4 =
-        if roll < 0.3 then 60        -- silt loam
-        else if roll < 0.6 then 56   -- loam
-        else if roll < 0.8 then 59   -- silty clay loam
-        else 62                       -- peat
+    -- Temperate + wet
+    | temp > blur 5.0 ∧ precip > blur 0.4 =
+        if precip > blur 0.7 then 62           -- peat
+        else if precip > blur 0.55 then 59    -- silty clay loam
+        else if precip > blur 0.45 then 56    -- loam
+        else 60                                -- silt loam
 
-    -- Temperate + dry: sandy soils
-    | temp > 5.0 ∧ precip < 0.3 =
-        if roll < 0.4 then 53        -- sandy loam
-        else if roll < 0.7 then 54   -- loamy sand
-        else 55                       -- sand
+    -- Temperate + dry
+    | temp > blur 5.0 ∧ precip < blur 0.3 =
+        if precip < blur 0.1 then 55           -- sand
+        else if precip < blur 0.2 then 54     -- loamy sand
+        else 53                                -- sandy loam
 
     -- Default temperate
     | otherwise =
-        if roll < 0.3 then 56        -- loam
-        else if roll < 0.6 then 60   -- silt loam
-        else 53                       -- sandy loam
+        if precip > blur 0.5 then 60           -- silt loam
+        else if precip > blur 0.3 then 56     -- loam
+        else 53                                -- sandy loam
+  where
+    -- Shift threshold by ±0.02 based on roll to blur material
+    -- boundaries.  Creates a natural transition zone instead of
+    -- a hard line where the climate gradient crosses each threshold.
+    blur threshold = threshold + (roll - 0.5) * 0.04
 
 -- | Non-final-age sedimentary rock from source material.
 --   Climate modulates which sedimentary rock forms.

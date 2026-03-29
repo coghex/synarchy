@@ -231,7 +231,13 @@ buildZoomCacheWithPixels params registry palette =
                                              , lcHumidity=humid, lcSnow=snow} =
                                      lookupLocalClimate climate worldSize gx gy
                                  h = vegHash seed gx gy
-                                 roll    = valueNoise2D seed 47 (fromIntegral gx) (fromIntegral gy) 10.0 + 0.5
+                                 gxF'    = fromIntegral gx ∷ Float
+                                 gyF'    = fromIntegral gy ∷ Float
+                                 wx'     = valueNoise2D seed 101 gxF' gyF' 15.0 * 0.6
+                                         + valueNoise2D seed 103 gxF' gyF' 6.0  * 0.4
+                                 wy'     = valueNoise2D seed 102 gxF' gyF' 15.0 * 0.6
+                                         + valueNoise2D seed 104 gxF' gyF' 6.0  * 0.4
+                                 roll    = valueNoise2D seed 47 (gxF' + wx' * 3.0) (gyF' + wy' * 3.0) 10.0 + 0.5
                                  variant = fromIntegral ((h `shiftR` 8) .&. 0x03) ∷ Word8
                                  isOceanTile = elev ≤ seaLevel ∧ chunkOcean
                                  vegId = if isOceanTile ∨ isBarrenMaterial matId
@@ -252,6 +258,13 @@ buildZoomCacheWithPixels params registry palette =
                 -- Then flood-fill to connected ≤seaLevel tiles.
                 -- This gives per-tile ocean data (no chunk boundary) while
                 -- filtering inland noise dips (not connected to ocean).
+                --
+                -- Edge seeds use a relaxed threshold (seaLevel+3) to
+                -- compensate for the detail world's contour smoothing
+                -- which lowers near-coast tiles below seaLevel.  Without
+                -- this, coastal chunks where the zoom's raw elevation sits
+                -- slightly above seaLevel show as entirely land, creating
+                -- blocky chunk-aligned coastlines.
                 oceanFlags = runST $ do
                     let csA = chunkSize * chunkSize
                     mask ← VUM.replicate csA (0 ∷ Int)
@@ -261,17 +274,30 @@ buildZoomCacheWithPixels params registry palette =
                             when (old ≡ 0 ∧ elevRaw VU.! idx ≤ seaLevel) $ do
                                 VUM.write mask idx 1
                                 VUM.write changed 0 (1 ∷ Int)
-                    -- Seed from ocean-range chunks
-                    when chunkOcean $
+                    -- Relaxed seed for chunk edges: allows tiles slightly
+                    -- above seaLevel to be marked ocean when facing an
+                    -- ocean neighbor. Matches the effect of the detail
+                    -- world's contour smoothing + coastal erosion.
+                    let seedEdge idx = do
+                            old ← VUM.read mask idx
+                            when (old ≡ 0 ∧ elevRaw VU.! idx ≤ seaLevel + 3) $ do
+                                VUM.write mask idx 1
+                                VUM.write changed 0 (1 ∷ Int)
+                    -- Seed from chunks directly in the ocean map.
+                    -- Do NOT seed from hasAnyOceanFluid (near-ocean)
+                    -- chunks — that would mark inland lakes as ocean.
+                    when (isOceanChunk oceanMap coord) $
                         forM_ [0 .. csA - 1] $ \idx → seed idx
                     -- Seed edges facing ocean-range neighbor chunks
-                    when chunkOceanN $ forM_ [0 .. chunkSize - 1] $ \x → seed x
+                    when chunkOceanN $ forM_ [0 .. chunkSize - 1] $ \x → seedEdge x
                     when chunkOceanS $ forM_ [0 .. chunkSize - 1] $ \x →
-                        seed ((chunkSize - 1) * chunkSize + x)
-                    when chunkOceanW $ forM_ [0 .. chunkSize - 1] $ \y → seed (y * chunkSize)
+                        seedEdge ((chunkSize - 1) * chunkSize + x)
+                    when chunkOceanW $ forM_ [0 .. chunkSize - 1] $ \y → seedEdge (y * chunkSize)
                     when chunkOceanE $ forM_ [0 .. chunkSize - 1] $ \y →
-                        seed (y * chunkSize + chunkSize - 1)
+                        seedEdge (y * chunkSize + chunkSize - 1)
                     -- Flood fill: extend to connected ≤seaLevel tiles
+                    -- (strict threshold — only truly below-seaLevel tiles
+                    -- propagate, preventing blue speckles on land).
                     let fillPass = do
                             VUM.write changed 0 (0 ∷ Int)
                             forM_ [0 .. csA - 1] $ \idx → do
@@ -297,20 +323,61 @@ buildZoomCacheWithPixels params registry palette =
                             c ← VUM.read changed 0
                             when (c ≡ 1) $ loop (n - 1)
                     loop (32 ∷ Int)
+                    -- Smooth the ocean mask: remove isolated specks.
+                    -- The detail world's contour smoothing removes
+                    -- noise at the coastline.  Without borders we can't
+                    -- replicate that, but a majority-vote pass achieves
+                    -- a similar effect: a tile flips to match 3+ of its
+                    -- 4 neighbours.
+                    let countN lx ly = do
+                            let rd nx ny
+                                  | nx < 0 ∨ nx ≥ chunkSize
+                                    ∨ ny < 0 ∨ ny ≥ chunkSize = return 0
+                                  | otherwise = VUM.read mask (ny * chunkSize + nx)
+                            n ← rd lx (ly-1)
+                            s ← rd lx (ly+1)
+                            w ← rd (lx-1) ly
+                            e ← rd (lx+1) ly
+                            return (n + s + w + e ∷ Int)
+                    -- Run smoothing passes to clean up speckling
+                    let smoothPass = do
+                            VUM.write changed 0 (0 ∷ Int)
+                            forM_ [0 .. csA - 1] $ \idx → do
+                                let lx = idx `mod` chunkSize
+                                    ly = idx `div` chunkSize
+                                m ← VUM.read mask idx
+                                nc ← countN lx ly
+                                -- Remove isolated ocean (0-1 ocean neighbors)
+                                when (m ≡ 1 ∧ nc ≤ 1) $ do
+                                    VUM.write mask idx 0
+                                    VUM.write changed 0 (1 ∷ Int)
+                                -- Fill isolated land holes (3-4 ocean neighbors)
+                                when (m ≡ 0 ∧ nc ≥ 3
+                                     ∧ elevRaw VU.! idx ≤ seaLevel + 5) $ do
+                                    VUM.write mask idx 1
+                                    VUM.write changed 0 (1 ∷ Int)
+                        smoothLoop 0 = return ()
+                        smoothLoop n = do
+                            smoothPass
+                            c ← VUM.read changed 0
+                            when (c ≡ 1) $ smoothLoop (n - 1)
+                    smoothLoop (3 ∷ Int)
                     VU.unsafeFreeze mask
 
                 -- Coastal material pass
                 tileData' =
                          let cs = chunkSize
                              csA = cs * cs
-                             zoomCoastalDist = 4 ∷ Int
+                             zoomCoastalDist = maxCoastalDist
                              elevArr = elevRaw
                              ChunkCoord cx' cy' = coord
-                             wrap = wrapChunkCoordU worldSize
-                             oceanN = isOceanChunk oceanMap (wrap (ChunkCoord cx' (cy' - 1)))
-                             oceanS = isOceanChunk oceanMap (wrap (ChunkCoord cx' (cy' + 1)))
-                             oceanE = isOceanChunk oceanMap (wrap (ChunkCoord (cx' + 1) cy'))
-                             oceanW = isOceanChunk oceanMap (wrap (ChunkCoord (cx' - 1) cy'))
+                             -- Use the same neighbor ocean flags as the
+                             -- ocean flood fill so coastal materials extend
+                             -- consistently across chunk boundaries.
+                             oceanN = chunkOceanN
+                             oceanS = chunkOceanS
+                             oceanE = chunkOceanE
+                             oceanW = chunkOceanW
                              -- BFS distance from ocean tiles
                              distField = runST $ do
                                  distM ← VUM.replicate csA (zoomCoastalDist + 1)
@@ -428,7 +495,17 @@ buildZoomCacheWithPixels params registry palette =
                                          effDist = max 1 (dist + round offset)
                                          sandLevel = sandProfile effDist
                                          isOutcrop = hardness ≥ outcroppHardness
-                                                   ∧ e > sandLevel + 2
+                                                   ∧ e > sandLevel + 8
+                                         -- Lower terrain toward coast type target
+                                         -- (matches detail world Coastal.hs logic).
+                                         terrainTarget
+                                           | isDepositional coastType ∧ not isOutcrop
+                                               = sandLevel
+                                           | isDepositional coastType ∧ isOutcrop
+                                               = sandLevel + 8 + dist * 2
+                                           | otherwise
+                                               = seaLevel + dist * 2
+                                         e' = min e terrainTarget
                                          newMat
                                            | isDepositional coastType ∧ not isOutcrop
                                              = case coastType of
@@ -439,7 +516,7 @@ buildZoomCacheWithPixels params registry palette =
                                                  _ → beachMaterial effDist m roll
                                            | otherwise = m
                                      in if newMat ≡ m
-                                        then (e, m, v, gx, gy)
+                                        then (e', m, v, gx, gy)
                                         else let h' = vegHash seed gx gy
                                                  r' = fromIntegral (h' .&. 0xFF)
                                                       / 255.0 ∷ Float
@@ -449,9 +526,9 @@ buildZoomCacheWithPixels params registry palette =
                                                              , lcHumidity=hu, lcSnow=sn} =
                                                      lookupLocalClimate climate
                                                          worldSize gx gy
-                                                 v' = selectVegetation newMat 0 False e
+                                                 v' = selectVegetation newMat 0 False e'
                                                           t p hu sn r' var'
-                                             in (e, newMat, v', gx, gy)
+                                             in (e', newMat, v', gx, gy)
                             ) [0 ∷ Int ..] tileData
 
                 -- Summary stats from all tiles (for ZoomChunkEntry)
@@ -514,8 +591,19 @@ buildZoomCacheWithPixels params registry palette =
                                  coord terrainSurfMap
                 lakeFluid = computeChunkLakes features seed plates worldSize
                                  coord terrainSurfMap
-                chunkFluidMap = unionFluidMap riverFluid
-                              $ unionFluidMap lakeFluid oceanFluid
+                rawFluidMap = unionFluidMap riverFluid
+                            $ unionFluidMap lakeFluid oceanFluid
+                -- Convert river tiles near sea level to ocean
+                -- (matches detail world fillCoastalGaps Phase 3).
+                -- Prevents visible river-colored step at river mouths.
+                chunkFluidMap = V.imap (\idx mfc →
+                    case mfc of
+                        Just (FluidCell River surf)
+                            | surf ≤ seaLevel + 1
+                            , terrainSurfMap VU.! idx ≤ seaLevel + 1
+                            → Just (FluidCell Ocean seaLevel)
+                        _ → mfc
+                    ) rawFluidMap
 
                 -- Ice overlay: per-tile decision using continuous noise
                 -- that doesn't break at chunk boundaries.
@@ -616,7 +704,15 @@ generateChunkPixels palette hasLava worldSize fluidMap iceMap oceanFlags tileVec
            then BB.word8 0 <> BB.word8 0 <> BB.word8 0 <> BB.word8 0
            else let idx = ly * chunkSize + lx
                     (elev, matId, vegId, gx, gy) = tileVec V.! idx
+                    -- Ocean if connected flood fill says so AND the
+                    -- tile doesn't have lake/river fluid.  This lets
+                    -- lakes render with their own tint instead of being
+                    -- masked by ocean color.
+                    hasLakeOrRiver = case fluidMap V.! idx of
+                        Just fc → fcType fc ≢ Ocean
+                        Nothing → False
                     tileIsOcean = oceanFlags VU.! idx ≡ 1
+                               ∧ not hasLakeOrRiver
                     hasIce = isJust (iceMap V.! idx)
                     baseColor = if tileIsOcean ∧ not hasIce
                                 then defaultOceanColor
