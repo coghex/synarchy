@@ -89,15 +89,11 @@ emitQuadBg entry dx dy alpha layer zSlice =
         !xShift = dx - baseX
         !yShift = dy - baseY
 
-        (tintR, tintG, tintB) =
-            if bzeIsOcean entry ∧ zSlice < seaLevel
-            then let waterDepth = max 0 (seaLevel - zSlice)
-                     t = clamp01 (fromIntegral waterDepth / 30.0)
-                     r = 0.6 - t * 0.4
-                     g = 0.7 - t * 0.4
-                     b = 0.9 - t * 0.3
-                 in (r, g, b)
-            else (1.0, 1.0, 1.0)
+        -- No chunk-level ocean tint — per-tile pixel data already
+        -- handles ocean rendering (blue pixels for ocean, terrain for
+        -- land).  The old chunk-level tint made entire coastal chunks
+        -- look like deep ocean.
+        (tintR, tintG, tintB) = (1.0, 1.0, 1.0)
 
         shiftV (Vertex (Vec2 px py) uv (Vec4 _ _ _ _) aid fid) =
             Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 tintR tintG tintB alpha) aid fid

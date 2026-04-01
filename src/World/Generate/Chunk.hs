@@ -2,15 +2,19 @@
 module World.Generate.Chunk
     ( generateChunk
     , generateExposedColumn
+    , generateZoomTerrain
     ) where
 
 import UPrelude
 import Data.Bits (shiftR, (.&.))
+import Control.Monad (when, forM_)
 import Control.Monad.ST (runST, ST)
+import Data.STRef (newSTRef, readSTRef, writeSTRef)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as MV
 import World.Types
 import World.Material (MaterialId(..), matGlacier, getMaterialProps
                       , MaterialProps(..), matAir, MaterialRegistry(..))
@@ -366,3 +370,102 @@ extractEventRivers period = concatMap go (gpEvents period)
   where
     go (HydroEvent (RiverFeature rp)) = [rp]
     go _ = []
+
+-- * Zoom-Optimized Terrain Generation
+
+-- | Generate terrain + fluid for the zoom cache using the same pipeline
+--   as the detail world (bordered region + full timeline + coastal erosion).
+--   Skips strata, slopes, vegetation, and flora — the zoom cache computes
+--   those itself.
+--
+--   Returns (elevation, materialId, fluidMap) for the 16×16 interior.
+generateZoomTerrain ∷ MaterialRegistry → WorldGenParams → ChunkCoord
+  → (VU.Vector Int, VU.Vector Word8, V.Vector (Maybe FluidCell))
+generateZoomTerrain registry params coord =
+    let seed      = wgpSeed params
+        worldSize = wgpWorldSize params
+        timeline  = wgpGeoTimeline params
+        plates    = wgpPlates params
+        oceanMap  = wgpOceanMap params
+        wsc       = computeWorldScale worldSize
+
+        borderSize = chunkSize + 2 * chunkBorder
+        borderArea = borderSize * borderSize
+
+        fromIndex idx =
+            let (by, bx) = idx `divMod` borderSize
+            in (bx - chunkBorder, by - chunkBorder)
+
+        inBorder lx ly =
+            lx ≥ negate chunkBorder ∧ lx < chunkSize + chunkBorder ∧
+            ly ≥ negate chunkBorder ∧ ly < chunkSize + chunkBorder
+
+        toIndex lx ly =
+            let bx = lx + chunkBorder
+                by = ly + chunkBorder
+            in by * borderSize + bx
+
+        -- Base elevation + material (bordered region, same as generateChunk)
+        (baseElevVec, baseMatVec) = runST $ do
+            elevM ← VUM.new borderArea
+            matM  ← VUM.new borderArea
+            forM_ [0 .. borderArea - 1] $ \idx → do
+                let (lx, ly) = fromIndex idx
+                    (gx, gy) = chunkToGlobal coord lx ly
+                    (gx', gy') = wrapGlobalU worldSize gx gy
+                if isBeyondGlacier worldSize gx' gy'
+                    then do
+                        VUM.write elevM idx 0
+                        VUM.write matM  idx (MaterialId 1)
+                    else do
+                        let (elev, mat) =
+                                elevationAtGlobal seed plates worldSize gx' gy'
+                        VUM.write elevM idx elev
+                        VUM.write matM  idx mat
+            elevF ← VU.unsafeFreeze elevM
+            matF  ← VU.unsafeFreeze matM
+            pure (elevF, matF)
+
+        -- Full timeline with neighborhood-aware erosion (same as detail)
+        (timelineElevVec, timelineMatVec) =
+            applyTimelineChunk timeline worldSize registry wsc coord
+                (baseElevVec, baseMatVec)
+
+        -- Coastal erosion with contour smoothing (same as detail)
+        (finalElevVec, finalMatVec) =
+            applyCoastalErosion seed worldSize plates registry timeline
+                oceanMap coord (timelineElevVec, timelineMatVec)
+
+        -- Extract interior 16×16 from bordered region
+        chunkArea = chunkSize * chunkSize
+        interiorElev = VU.generate chunkArea $ \idx →
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+                (gx', gy') = wrapGlobalU worldSize
+                    (fst (chunkToGlobal coord lx ly))
+                    (snd (chunkToGlobal coord lx ly))
+            in if isBeyondGlacier worldSize gx' gy'
+               then minBound
+               else if inBorder lx ly
+                    then finalElevVec VU.! toIndex lx ly
+                    else 0
+        interiorMat = VU.generate chunkArea $ \idx →
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+            in if inBorder lx ly
+               then unMaterialId (finalMatVec VU.! toIndex lx ly)
+               else 1
+
+        -- Fluid pipeline (same as detail world)
+        features    = gtFeatures timeline
+        oceanFluid  = computeChunkFluid worldSize oceanMap coord interiorElev
+        lakeFluid   = computeChunkLakes features seed plates worldSize
+                          coord interiorElev
+        eventRivers = concatMap extractEventRivers (gtPeriods timeline)
+        riverFluid  = computeChunkRivers eventRivers worldSize coord interiorElev
+        rawFluid    = unionFluidMap riverFluid
+                    $ unionFluidMap lakeFluid oceanFluid
+        equilFluid  = equilibrateFluidMap interiorElev rawFluid
+        fluidMap    = fillCoastalGaps interiorElev equilFluid
+
+    in (interiorElev, interiorMat, fluidMap)
