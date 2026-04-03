@@ -342,10 +342,13 @@ buildZoomCacheWithPixels params registry palette =
                 -- No separate coastal material pass needed.
 
                 -- Summary stats from all tiles (for ZoomChunkEntry)
-                allMats = [ (e, m) | (e, m, _, _, _) ← tileData ]
+                -- Filter out beyond-glacier tiles (minBound elevation)
+                -- to prevent overflow in avgElev and material contamination.
+                allMats = [ (e, m) | (e, m, _, _, _) ← tileData, e > minBound ]
                 winnerMat = majorityMaterial allMats
-                avgElev = let s = sum (map fst allMats)
-                          in s `div` length allMats
+                avgElev = if null allMats then 0
+                          else let s = sum (map fst allMats)
+                               in s `div` length allMats
                 chunkLava = hasAnyLavaQuick features seed plates worldSize coord avgElev
                 eventRivers = concatMap extractEventRivers' (gtPeriods timeline)
                 chunkRiver = hasAnyRiverQuick eventRivers worldSize coord
@@ -553,13 +556,19 @@ generateChunkPixels palette hasLava worldSize fluidMap iceMap oceanFlags tileVec
            then BB.word8 0 <> BB.word8 0 <> BB.word8 0 <> BB.word8 0
            else let idx = ly * chunkSize + lx
                     (elev, matId, vegId, gx, gy) = tileVec V.! idx
-                    -- Ocean if the fluid map has ocean AND the terrain
-                    -- is at or below the water surface.  Tiles where
-                    -- terrain is ABOVE seaLevel but have ocean fluid
-                    -- (from Pass 2 coastline extension) are land with
-                    -- water beside them — in the detail world the terrain
-                    -- is visible above the water surface.
-                    tileIsOcean = case fluidMap V.! idx of
+               -- Beyond-glacier tiles (minBound elevation) are outside the
+               -- world diamond — render them transparent so ocean fluid
+               -- doesn't bleed through at the south pole boundary.
+               in if elev ≡ minBound
+               -- Beyond-glacier tiles are outside the world diamond —
+               -- render as glacier ice (snow veg color) so the boundary
+               -- is solid and matches adjacent glacier zone tiles.
+               then let (gr, gg, gb, ga) = case lookupVegColorById palette 65 of
+                            Just c  → c
+                            Nothing → (169, 189, 199, 255)
+                    in BB.word8 gr <> BB.word8 gg <> BB.word8 gb <> BB.word8 ga
+               else
+                let tileIsOcean = case fluidMap V.! idx of
                         Just (FluidCell Ocean surf) → elev ≤ surf
                         _ → False
                     hasIce = isJust (iceMap V.! idx)
@@ -567,14 +576,10 @@ generateChunkPixels palette hasLava worldSize fluidMap iceMap oceanFlags tileVec
                       | tileIsOcean ∧ not hasIce = defaultOceanColor
                       | otherwise = tileColor palette hasLava
                                         matId vegId elev gx gy
-                    -- Check actual fluid map for this tile
                     (r, g, b, a)
-                        -- Ice-covered: use the tile color which already
-                        -- has snow veg injected from tileDataWithIce
                         | hasIce = baseColor
                         | otherwise = case fluidMap V.! idx of
                             Just fc | fcType fc ≢ Ocean →
-                                -- River/Lake water: tint blue
                                 let blend = 0.7 ∷ Float
                                     (lr, lg, lb, la) = baseColor
                                 in ( round (fromIntegral lr * (1.0 - blend)

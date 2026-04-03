@@ -276,8 +276,11 @@ buildClimateFromOceanSet worldSize oceanSet freshwaterSources globalCO2 globalTe
         -------------------------------------------------------
 
         latInfo (ClimateCoord _ru rv) =
-            let latSigned = (fromIntegral (rv - halfRegions))
-                          / max 1 (fromIntegral halfRegions)  ∷ Float
+            -- Map rv ∈ [0, regionsPerSide-1] to latSigned ∈ [-1, 1]
+            -- symmetrically so both poles reach exactly ±1.0.
+            let latSigned = if regionsPerSide ≤ 1 then 0.0
+                            else (fromIntegral rv / fromIntegral (regionsPerSide - 1))
+                                 * 2.0 - 1.0 ∷ Float
                 latRatio  = abs latSigned
                 latDeg    = latRatio * 90.0
             in (latSigned, latRatio, latDeg)

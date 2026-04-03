@@ -75,19 +75,25 @@ computeChunkIce seed plates climate worldSize coord ilGrid terrainSurfMap fluidM
                               ∧ summerT - altCooling < 5.0)
 
                 when (hasIce ∧ terrainZ > minBound) $ do
-                    let fluidZ = case fluidMap V.! idx of
+                    let inGlacierZone = isGlacierZone worldSize gx' gy'
+                        fluidZ = case fluidMap V.! idx of
                             Just fc → fcSurface fc
                             Nothing → minBound
                         baseZ = max terrainZ fluidZ
                         mIceLevel = lookupIceLevel ilGrid worldSize gx' gy'
-                        cell = case mIceLevel of
-                            Just iceLevel | baseZ < iceLevel →
-                                -- Basin ice: flat at the fill level
-                                IceCell (min iceLevel (baseZ + maxBasinThickness))
-                                        BasinIce
-                            _ →
-                                -- Drape ice: thin coating on terrain
-                                IceCell (baseZ + 1) DrapeIce
+                        cell
+                          -- Glacier zone: always drape so ice matches
+                          -- adjacent natural ice at the boundary.
+                          | inGlacierZone =
+                              IceCell (baseZ + 1) DrapeIce
+                          | otherwise = case mIceLevel of
+                              Just iceLevel | baseZ < iceLevel →
+                                  -- Basin ice: flat at the fill level
+                                  IceCell (min iceLevel (baseZ + maxBasinThickness))
+                                          BasinIce
+                              _ →
+                                  -- Drape ice: thin coating on terrain
+                                  IceCell (baseZ + 1) DrapeIce
                     MV.write mv idx (Just cell)
         V.freeze mv
 

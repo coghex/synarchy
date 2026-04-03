@@ -25,7 +25,7 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Types
 import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..)
-                      , MaterialRegistry(..))
+                      , MaterialRegistry(..), matGlacier)
 import World.Plate (TectonicPlate(..), twoNearestPlates
                    , BoundaryType(..), classifyBoundary, wrapGlobalU)
 import World.Fluid.Ocean (hasAnyOceanFluid)
@@ -261,70 +261,74 @@ applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elev
                 when (dist > 0 ∧ dist ≤ maxCoastalDist) $ do
                     let elev = smoothedContour VU.! idx
                         mat  = matVec  VU.! idx
-                        hardness = mpHardness (getMaterialProps registry mat)
+                    -- Never erode glacier boundary tiles — they mark the
+                    -- impassable world edge and must not be replaced with
+                    -- coastal materials.
+                    when (mat ≢ matGlacier) $ do
+                      let hardness = mpHardness (getMaterialProps registry mat)
 
-                        -- Per-tile plate classification. Computing at the
-                        -- chunk center caused hard seams where adjacent
-                        -- chunks straddled a plate boundary. Per-tile is
-                        -- correct and only runs for coastal tiles (~10-20%
-                        -- of a coastal chunk).
-                        gxPlate = cx * chunkSize + lx
-                        gyPlate = cy * chunkSize + ly
-                        (gxP', gyP') = wrapGlobalU worldSize gxPlate gyPlate
-                        ((plateA, distA), (plateB, distB)) =
-                            twoNearestPlates seed worldSize plates gxP' gyP'
-                        tileBoundary = classifyBoundary worldSize plateA plateB
-                        tileBoundaryDist = (distB - distA) / 2.0
-                        maxBDist = fromIntegral worldSize * 4.0 ∷ Float
-                        tileBoundaryFade = min 1.0 (abs tileBoundaryDist / maxBDist)
-                        nearRiver = isNearRiverMouth worldSize nearbyMouths
-                            gxPlate gyPlate
-                        coastType = classifyCoast tileBoundary
-                            (plateIsLand plateA) (plateIsLand plateB)
-                            hardness 0.0 tileBoundaryFade nearRiver
+                          -- Per-tile plate classification. Computing at the
+                          -- chunk center caused hard seams where adjacent
+                          -- chunks straddled a plate boundary. Per-tile is
+                          -- correct and only runs for coastal tiles (~10-20%
+                          -- of a coastal chunk).
+                          gxPlate = cx * chunkSize + lx
+                          gyPlate = cy * chunkSize + ly
+                          (gxP', gyP') = wrapGlobalU worldSize gxPlate gyPlate
+                          ((plateA, distA), (plateB, distB)) =
+                              twoNearestPlates seed worldSize plates gxP' gyP'
+                          tileBoundary = classifyBoundary worldSize plateA plateB
+                          tileBoundaryDist = (distB - distA) / 2.0
+                          maxBDist = fromIntegral worldSize * 4.0 ∷ Float
+                          tileBoundaryFade = min 1.0 (abs tileBoundaryDist / maxBDist)
+                          nearRiver = isNearRiverMouth worldSize nearbyMouths
+                              gxPlate gyPlate
+                          coastType = classifyCoast tileBoundary
+                              (plateIsLand plateA) (plateIsLand plateB)
+                              hardness 0.0 tileBoundaryFade nearRiver
 
-                        localHash = coastHash seed
-                            (cx * chunkSize + lx) (cy * chunkSize + ly)
-                        roll = fromIntegral (localHash .&. 0xFF) / 255.0 ∷ Float
+                          localHash = coastHash seed
+                              (cx * chunkSize + lx) (cy * chunkSize + ly)
+                          roll = fromIntegral (localHash .&. 0xFF) / 255.0 ∷ Float
 
-                        gx = cx * chunkSize + lx
-                        gy = cy * chunkSize + ly
-                        offset = shorelineOffset seed gx gy
-                        effDist = max 1 (dist + round offset)
-                        sandLevel = sandProfile effDist
+                          gx = cx * chunkSize + lx
+                          gy = cy * chunkSize + ly
+                          offset = shorelineOffset seed gx gy
+                          effDist = max 1 (dist + round offset)
+                          sandLevel = sandProfile effDist
 
-                    -- Terrain target: every coast type gets a slope.
-                    -- Depositional coasts get flat sandy beaches.
-                    -- Erosional coasts get steeper rocky slopes.
-                    -- Outcrops (hard rock headlands) get the steepest.
-                    let isOutcrop = hardness ≥ outcroppHardness
-                                  ∧ elev > sandLevel + 8
-                        terrainTarget
-                          | isDepositional coastType ∧ not isOutcrop
-                              = sandLevel
-                          | isDepositional coastType ∧ isOutcrop
-                              = sandLevel + 8 + dist * 2
-                          | otherwise
-                              = seaLevel + dist * 2
+                      -- Terrain target: every coast type gets a slope.
+                      -- Depositional coasts get flat sandy beaches.
+                      -- Erosional coasts get steeper rocky slopes.
+                      -- Outcrops (hard rock headlands) get the steepest.
+                      let isOutcrop = hardness ≥ outcroppHardness
+                                    ∧ elev > sandLevel + 8
+                          terrainTarget
+                            | isDepositional coastType ∧ not isOutcrop
+                                = sandLevel
+                            | isDepositional coastType ∧ isOutcrop
+                                = sandLevel + 8 + dist * 2
+                            | otherwise
+                                = seaLevel + dist * 2
 
-                    -- Lower terrain toward the target (never raise)
-                    when (terrainTarget < elev) $
-                        VUM.write elevM idx terrainTarget
+                      -- Lower terrain toward the target (never raise)
+                      when (terrainTarget < elev) $
+                          VUM.write elevM idx terrainTarget
 
-                    -- Material: depositional coasts get beach material,
-                    -- erosional coasts get gravel/rock near the waterline.
-                    if isDepositional coastType ∧ not isOutcrop
-                    then do
-                        let chooseMat = case coastType of
-                                DepositionalWetland → wetlandMaterial effDist roll
-                                DeltaicCoast → deltaMaterial effDist roll
-                                _ → beachMaterial effDist (unMaterialId mat) roll
-                        VUM.write matM idx (MaterialId chooseMat)
-                    else when (dist ≤ 4) $ do
-                        let gravelMat
-                              | roll < 0.5 = 54  -- gravel
-                              | otherwise  = 53  -- coarse sand
-                        VUM.write matM idx (MaterialId gravelMat)
+                      -- Material: depositional coasts get beach material,
+                      -- erosional coasts get gravel/rock near the waterline.
+                      if isDepositional coastType ∧ not isOutcrop
+                      then do
+                          let chooseMat = case coastType of
+                                  DepositionalWetland → wetlandMaterial effDist roll
+                                  DeltaicCoast → deltaMaterial effDist roll
+                                  _ → beachMaterial effDist (unMaterialId mat) roll
+                          VUM.write matM idx (MaterialId chooseMat)
+                      else when (dist ≤ 4) $ do
+                          let gravelMat
+                                | roll < 0.5 = 54  -- gravel
+                                | otherwise  = 53  -- coarse sand
+                          VUM.write matM idx (MaterialId gravelMat)
             elevF ← VU.unsafeFreeze elevM
             matF  ← VU.unsafeFreeze matM
             pure (elevF, matF)
@@ -489,12 +493,13 @@ smoothCoastalContour iters borderSize matVec registry preDistField elev =
                 -- Only smooth land tiles (above seaLevel). Ocean tiles
                 -- must stay ≤ seaLevel so the BFS distance field can
                 -- seed from them — raising them kills coastal processing.
+                let mat = matVec VU.! idx
                 when (e > seaLevel ∧ absD < bandWidth
+                     ∧ mat ≢ matGlacier
                      ∧ preDist ≤ smoothDistMax
                      ∧ bx > 0 ∧ bx < borderSize - 1
                      ∧ by > 0 ∧ by < borderSize - 1) $ do
-                    let mat = matVec VU.! idx
-                        hardness = mpHardness (getMaterialProps registry mat)
+                    let hardness = mpHardness (getMaterialProps registry mat)
                         -- Full strength within fadeStart, linear fade
                         -- to zero at bandWidth edge.
                         elevFade = if absD < fadeStart then 1.0

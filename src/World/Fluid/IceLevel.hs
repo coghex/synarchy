@@ -120,12 +120,15 @@ lookupIceLevel ilGrid worldSize gx gy
         s10 = sample (ix0 + 1) iy0
         s01 = sample ix0       (iy0 + 1)
         s11 = sample (ix0 + 1) (iy0 + 1)
-    in if s00 < 0 ∧ s10 < 0 ∧ s01 < 0 ∧ s11 < 0
-       then Nothing  -- All corners are drape zone
+    in let validCount = length (filter (≥ 0) [s00, s10, s01, s11])
+       -- Need at least 3 valid corners for a reliable basin level.
+       -- With fewer, the tile is at the edge of a frozen basin —
+       -- fall through to drape ice for a smooth boundary.
+       in if validCount < 3
+       then Nothing
        else
-       -- For corners that are -1 (no basin), use a high fallback
-       -- so they don't pull the interpolation down.
-       let fb = max s00 (max s10 (max s01 s11)) + 5
+       let fb = let vc = filter (≥ 0) [s00, s10, s01, s11]
+                in sum vc `div` length vc
            v00 = if s00 < 0 then fb else s00
            v10 = if s10 < 0 then fb else s10
            v01 = if s01 < 0 then fb else s01

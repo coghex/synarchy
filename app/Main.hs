@@ -5,10 +5,11 @@ import UPrelude
 import Control.Exception (displayException)
 import Control.Concurrent (threadDelay)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Data.Word (Word64)
+import Data.Word (Word8, Word64)
+import Data.Char (toLower)
 import System.Environment (setEnv, getArgs)
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
-import Data.List (intercalate)
+import Data.List (intercalate, isPrefixOf)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
@@ -36,10 +37,39 @@ import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
 import Engine.Scripting.Lua.Backend (startLuaThread)
 import World.Thread (startWorldThread)
 import World.Types
-import World.Chunk.Types (ChunkCoord(..), chunkSize)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), chunkSize)
+import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..))
+import World.Plate (isGlacierZone, isBeyondGlacier)
 import Unit.Thread (startUnitThread)
 import Sim.Thread (startSimThread)
+
+-- | Which layers to include in dump output.
+data DumpLayers = DumpLayers
+    { dlTerrain  ∷ !Bool
+    , dlMaterial ∷ !Bool
+    , dlFluid    ∷ !Bool
+    , dlIce      ∷ !Bool
+    } deriving (Show)
+
+-- | All layers enabled (default when --dump has no =value).
+allLayers ∷ DumpLayers
+allLayers = DumpLayers True True True True
+
+-- | Parse --dump or --dump=layer1,layer2,... from args.
+--   Returns Nothing if --dump not present, Just layers otherwise.
+parseDump ∷ [String] → Maybe DumpLayers
+parseDump [] = Nothing
+parseDump (a:rest)
+    | a ≡ "--dump" = Just allLayers
+    | "--dump=" `isPrefixOf` a =
+        let flags = map (map toLower) $ splitOn ',' (drop 7 a)
+        in Just DumpLayers
+            { dlTerrain  = "terrain"  `elem` flags ∨ "elevation" `elem` flags
+            , dlMaterial = "material" `elem` flags
+            , dlFluid    = "fluid"    `elem` flags
+            , dlIce      = "ice"      `elem` flags
+            }
+    | otherwise = parseDump rest
 
 main ∷ IO ()
 main = do
@@ -53,19 +83,19 @@ main = do
 
   args ← getArgs
   let headless = "--headless" `elem` args
-      dump     = "--dump" `elem` args
+      mDump    = parseDump args
       port = parseArg "--port" args
       seed = parseArg "--seed" args
       worldSz = parseArg "--worldSize" args
       ages = parseArg "--ages" args
       region = parseRegion args
 
-  if dump
-    then runDump (fromMaybe 42 seed) (fromMaybe 256 worldSz)
-                 (fromMaybe 5 ages) region
-    else if headless
-      then runHeadless (Just (fromMaybe 8008 port))
-      else runGraphical (Just (fromMaybe 8008 port))
+  case mDump of
+    Just layers → runDump layers (fromMaybe 42 seed) (fromMaybe 256 worldSz)
+                                 (fromMaybe 5 ages) region
+    Nothing
+      | headless  → runHeadless (Just (fromMaybe 8008 port))
+      | otherwise → runGraphical (Just (fromMaybe 8008 port))
 
 -- | Parse --flag N from args
 parseArg ∷ Read a ⇒ String → [String] → Maybe a
@@ -180,10 +210,10 @@ runHeadless mPort = do
         shutdownThread worldThreadState
     Right _ → pure ()
 
--- | Run engine in dump mode: generate world, load chunks, dump fluid
+-- | Run engine in dump mode: generate world, load chunks, dump tile
 --   data as JSON to stdout, and exit. No TCP server, no loop.
-runDump ∷ Int → Int → Int → (Int, Int, Int, Int) → IO ()
-runDump seed worldSize ages (cx1, cy1, cx2, cy2) = do
+runDump ∷ DumpLayers → Int → Int → Int → (Int, Int, Int, Int) → IO ()
+runDump layers seed worldSize ages (cx1, cy1, cx2, cy2) = do
   hPutStrLn stderr $ "dump: seed=" ⧺ show seed
                    ⧺ " worldSize=" ⧺ show worldSize
                    ⧺ " ages=" ⧺ show ages
@@ -243,7 +273,7 @@ runDump seed worldSize ages (cx1, cy1, cx2, cy2) = do
             case wmWorlds manager of
                 ((_, ws):_) → do
                     td ← readIORef (wsTilesRef ws)
-                    let json = dumpFluidJSON td cx1 cy1 cx2 cy2
+                    let json = dumpTilesJSON layers worldSize td cx1 cy1 cx2 cy2
                     BS.putStr json
                     hFlush stdout
                     hPutStrLn stderr $ "dump: done"
@@ -293,33 +323,69 @@ waitForChunks env n = do
                 else threadDelay 250000 >> waitForChunks env (n - 1)
         [] → threadDelay 250000 >> waitForChunks env (n - 1)
 
--- | Dump all fluid cells in a chunk region as JSON
-dumpFluidJSON ∷ WorldTileData → Int → Int → Int → Int → BS.ByteString
-dumpFluidJSON td cx1 cy1 cx2 cy2 =
-    let entries = concatMap dumpChunkFluid
+-- | Dump per-tile data in a chunk region as JSON.
+--   Every tile in the region gets one object. Fields are included
+--   based on the DumpLayers whitelist.
+dumpTilesJSON ∷ DumpLayers → Int → WorldTileData
+              → Int → Int → Int → Int → BS.ByteString
+dumpTilesJSON layers worldSize td cx1 cy1 cx2 cy2 =
+    let entries = concatMap dumpChunkTiles
             [ ChunkCoord x y | x ← [cx1..cx2], y ← [cy1..cy2] ]
     in BS.pack $ "[" ⧺ intercalate "," entries ⧺ "]\n"
   where
-    dumpChunkFluid coord = case lookupChunk coord td of
+    dumpChunkTiles coord = case lookupChunk coord td of
         Nothing → []
         Just lc →
             let ChunkCoord cx cy = coord
                 gx0 = cx * chunkSize
                 gy0 = cy * chunkSize
-            in [ fluidToJSON (gx0 + lx) (gy0 + ly) fc terrZ
+            in [ tileToJSON lc (gx0 + lx) (gy0 + ly) idx
                | ly ← [0..chunkSize-1]
                , lx ← [0..chunkSize-1]
                , let idx = ly * chunkSize + lx
-               , Just fc ← [lcFluidMap lc V.! idx]
-               , let terrZ = lcTerrainSurfaceMap lc VU.! idx
                ]
-    fluidToJSON gx gy fc terrZ =
-        "{\"x\":" ⧺ show gx
-        ⧺ ",\"y\":" ⧺ show gy
-        ⧺ ",\"type\":\"" ⧺ fluidTypeStr (fcType fc) ⧺ "\""
-        ⧺ ",\"surface\":" ⧺ show (fcSurface fc)
-        ⧺ ",\"terrainZ\":" ⧺ show terrZ ⧺ "}"
+
+    tileToJSON lc gx gy idx =
+        let v = gx + gy
+            base = "{\"x\":" ⧺ show gx ⧺ ",\"y\":" ⧺ show gy
+                 ⧺ ",\"v\":" ⧺ show v
+            terrainZ = lcTerrainSurfaceMap lc VU.! idx
+            surfZ    = lcSurfaceMap lc VU.! idx
+            terrainFields
+              | dlTerrain layers =
+                  ",\"terrainZ\":" ⧺ show terrainZ
+                  ⧺ ",\"surfaceZ\":" ⧺ show surfZ
+              | otherwise = ""
+            matFields
+              | dlMaterial layers =
+                  let col = lcTiles lc V.! idx
+                      matId = if VU.null (ctMats col) then 0
+                              else ctMats col VU.! (VU.length (ctMats col) - 1)
+                  in ",\"matId\":" ⧺ show matId
+              | otherwise = ""
+            fluidFields
+              | dlFluid layers = case lcFluidMap lc V.! idx of
+                  Just fc → ",\"fluidType\":\"" ⧺ fluidTypeStr (fcType fc) ⧺ "\""
+                          ⧺ ",\"fluidSurf\":" ⧺ show (fcSurface fc)
+                  Nothing → ",\"fluidType\":null,\"fluidSurf\":null"
+              | otherwise = ""
+            iceFields
+              | dlIce layers = case lcIceMap lc V.! idx of
+                  Just ic → ",\"iceSurf\":" ⧺ show (icSurface ic)
+                          ⧺ ",\"iceMode\":\"" ⧺ iceModeStr (icMode ic) ⧺ "\""
+                  Nothing → ",\"iceSurf\":null,\"iceMode\":null"
+              | otherwise = ""
+            zoneFields =
+                  ",\"glacierZone\":" ⧺ boolStr (isGlacierZone worldSize gx gy)
+                ⧺ ",\"beyondGlacier\":" ⧺ boolStr (isBeyondGlacier worldSize gx gy)
+        in base ⧺ terrainFields ⧺ matFields ⧺ fluidFields
+                ⧺ iceFields ⧺ zoneFields ⧺ "}"
+
     fluidTypeStr Ocean = "ocean"
     fluidTypeStr Lake  = "lake"
     fluidTypeStr River = "river"
     fluidTypeStr Lava  = "lava"
+    iceModeStr BasinIce = "basin"
+    iceModeStr DrapeIce = "drape"
+    boolStr True  = "true"
+    boolStr False = "false"

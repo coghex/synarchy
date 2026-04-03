@@ -23,6 +23,7 @@ import World.Plate (TectonicPlate(..), generatePlates
 import World.Geology (applyGeoEvent, GeoModification(..))
 import World.Geology.Timeline.Types (GeoEvent(..), GeoTimeline(..))
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
+import World.Constants (seaLevel)
 import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
 import World.Fluids (isOceanChunk, hasAnyOceanFluid, computeChunkFluid
@@ -87,6 +88,9 @@ generateChunk registry catalog params coord =
             ly ≥ negate chunkBorder ∧ ly < chunkSize + chunkBorder
 
         -- Base elevation/material grids (with border) built in one pass
+        -- Beyond-glacier tiles use matGlacier + high elevation so the
+        -- timeline preserves them and coastal erosion doesn't treat the
+        -- world boundary as a coastline.
         (baseElevVec, baseMatVec) = runST $ do
             elevM ← VUM.new borderArea
             matM  ← VUM.new borderArea
@@ -96,8 +100,8 @@ generateChunk registry catalog params coord =
                     (gx', gy') = wrapGlobalU worldSize gx gy
                 if isBeyondGlacier worldSize gx' gy'
                     then do
-                        VUM.write elevM idx 0
-                        VUM.write matM  idx (MaterialId 1)
+                        VUM.write elevM idx (seaLevel + 100)
+                        VUM.write matM  idx matGlacier
                     else do
                         let (elev, mat) =
                                 elevationAtGlobal seed plates worldSize gx' gy'
@@ -406,6 +410,9 @@ generateZoomTerrain registry params coord =
             in by * borderSize + bx
 
         -- Base elevation + material (bordered region, same as generateChunk)
+        -- Beyond-glacier tiles use matGlacier + high elevation so the
+        -- timeline preserves them and coastal erosion doesn't treat the
+        -- world boundary as a coastline.
         (baseElevVec, baseMatVec) = runST $ do
             elevM ← VUM.new borderArea
             matM  ← VUM.new borderArea
@@ -415,8 +422,8 @@ generateZoomTerrain registry params coord =
                     (gx', gy') = wrapGlobalU worldSize gx gy
                 if isBeyondGlacier worldSize gx' gy'
                     then do
-                        VUM.write elevM idx 0
-                        VUM.write matM  idx (MaterialId 1)
+                        VUM.write elevM idx (seaLevel + 100)
+                        VUM.write matM  idx matGlacier
                     else do
                         let (elev, mat) =
                                 elevationAtGlobal seed plates worldSize gx' gy'

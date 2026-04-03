@@ -25,6 +25,7 @@ import Data.List (sortBy)
 import Data.Ord (comparing)
 import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro, matGlacier)
 import World.Scale (WorldScale(..), computeWorldScale, scaleElev, scaleDist)
+import World.Constants (seaLevel)
 import World.Chunk.Types (chunkSize)
 import World.Plate.Types (TectonicPlate(..))
 
@@ -270,6 +271,10 @@ elevationAtGlobal seed plates worldSize gx gy =
         wsc = computeWorldScale worldSize
     in if isBeyondGlacier worldSize gx' gy' then (0, matGlacier)
     else if isGlacierZone worldSize gx' gy' then
+        -- Glacier zone: natural plate terrain, matGlacier material.
+        -- The material marks the world boundary (impassable). Terrain
+        -- is unmodified so ice (from computeChunkIce) sits naturally
+        -- using the same basin/drape logic as everywhere else.
         let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy'
             myPlate = plateA
             baseElev = plateBaseElev myPlate
@@ -277,15 +282,15 @@ elevationAtGlobal seed plates worldSize gx gy =
             boundary = classifyBoundary worldSize plateA plateB
             side = SidePlateA
             boundaryEffect = boundaryElevation wsc boundary side plateA plateB boundaryDist
-            interiorFade = clamp01 (abs boundaryDist / scaleDist wsc 200.0)
             localNoise = elevationNoise seed worldSize gx' gy'
             noiseScale = if plateIsLand myPlate
                          then let mountainNoise = scaleElev wsc 50.0
                                   plainsNoise   = scaleElev wsc 8.0
+                                  interiorFade = clamp01 (abs boundaryDist / scaleDist wsc 200.0)
                               in round (lerp interiorFade mountainNoise plainsNoise)
                          else round (scaleElev wsc 20.0)
             terrainElev = baseElev + boundaryEffect + localNoise * noiseScale
-        in (terrainElev + 3, matGlacier)
+        in (terrainElev, matGlacier)
     else
     let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy'
 
