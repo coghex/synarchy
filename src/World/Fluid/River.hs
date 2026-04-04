@@ -725,7 +725,7 @@ fillCrossChunkHoles coords wtd = foldl' fillChunkHoles wtd coords
         case HM.lookup coord (wtdChunks td) of
             Nothing → td
             Just lc →
-                let lc' = holeFillLoop (2 ∷ Int) coord td lc
+                let lc' = holeFillLoop (8 ∷ Int) coord td lc
                 in if lcFluidMap lc' ≡ lcFluidMap lc
                    then td
                    else let chunks' = HM.insert coord lc' (wtdChunks td)
@@ -772,15 +772,23 @@ fillCrossChunkHoles coords wtd = foldl' fillChunkHoles wtd coords
                                       then maybeToList (crossChunkRiver td (ChunkCoord (cx+1) cy) 0 ly)
                                       else [])
                     allNbrs = riverNbrs ⧺ crossNbrs
+                    hasCrossNbr = not (null crossNbrs)
                 in case allNbrs of
                     [] → (lc, changed)
                     (_:_) →
                         let nMax = foldl' max minBound allNbrs
                             nMin = foldl' min maxBound allNbrs
                             nCount = length allNbrs
-                            threshold = if isEdge then 2 else 3
+                            -- A single cross-chunk river neighbor is
+                            -- sufficient to extend water across the
+                            -- boundary; interior tiles need 2 neighbors.
+                            threshold = if hasCrossNbr then 1
+                                        else if isEdge then 2 else 2
+                            -- Cross-chunk fills allow deeper water —
+                            -- we know a river exists on the other side.
+                            maxDepth = if hasCrossNbr then 12 else 5
                             standard = nCount ≥ threshold ∧ terrZ ≤ nMax
-                                     ∧ nMax - terrZ ≤ 5 ∧ nMax > seaLevel
+                                     ∧ nMax - terrZ ≤ maxDepth ∧ nMax > seaLevel
                             uniform = nCount ≥ threshold ∧ nMin ≡ nMax
                                     ∧ terrZ ≤ nMax + 2 ∧ nMax > seaLevel
                         in if standard ∨ uniform

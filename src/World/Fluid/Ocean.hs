@@ -171,9 +171,11 @@ computeChunkFluid worldSize oceanMap coord surfaceMap =
                 when (isNothing val) $ do
                     let lx = idx `mod` chunkSize
                         ly = idx `div` chunkSize
-                    adj ← adjacentHasOcean mv lx ly
-                    when adj $
-                        MV.write mv idx (Just (FluidCell Ocean seaLevel))
+                        surfZ = surfaceMap VU.! idx
+                    when (surfZ ≤ seaLevel + 2 ∧ surfZ > minBound) $ do
+                        adj ← adjacentHasOcean mv lx ly
+                        when adj $
+                            MV.write mv idx (Just (FluidCell Ocean seaLevel))
 
 -- | Quick boolean check: does this chunk have any ocean fluid?
 --   Checks all chunks within Chebyshev distance 2 (a 5×5 grid).

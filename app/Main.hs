@@ -40,6 +40,7 @@ import World.Types
 import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), chunkSize)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..))
 import World.Plate (isGlacierZone, isBeyondGlacier)
+import World.Fluids (sealCrossChunkRivers)
 import Unit.Thread (startUnitThread)
 import Sim.Thread (startSimThread)
 
@@ -267,6 +268,21 @@ runDump layers seed worldSize ages (cx1, cy1, cx2, cy2) = do
                 [] → hPutStrLn stderr "dump: no world found"
 
         liftIO $ waitForChunks env' 300
+
+        -- Final cross-chunk river seal: the per-batch seal during
+        -- loading may miss boundaries between chunks in different
+        -- batches. Run twice so fills from pass 1 are visible to
+        -- cross-chunk lookups in pass 2.
+        liftIO $ do
+            manager ← readIORef (worldManagerRef env')
+            case wmWorlds manager of
+                ((_, ws):_) → do
+                    atomicModifyIORef' (wsTilesRef ws) $ \td →
+                        let allCoords = HM.keys (wtdChunks td)
+                            td'  = sealCrossChunkRivers allCoords td
+                            td'' = sealCrossChunkRivers allCoords td'
+                        in (td'', ())
+                [] → pure ()
 
         liftIO $ do
             manager ← readIORef (worldManagerRef env')

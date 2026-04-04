@@ -200,7 +200,16 @@ drainInitQueues env logger = do
                              then LoadDone
                              else LoadPhase2 (length rest) totalChunks)
 
-                        when (null rest) $
+                        -- When all initial chunks are loaded, run a
+                        -- final cross-chunk river seal across the
+                        -- entire tile set. The per-batch seal may
+                        -- miss boundaries between different batches.
+                        when (null rest) $ do
+                            atomicModifyIORef' (wsTilesRef worldState) $ \td →
+                                let allCoords = HM.keys (wtdChunks td)
+                                    td'  = sealCrossChunkRivers allCoords td
+                                    td'' = sealCrossChunkRivers allCoords td'
+                                in (td'', ())
                             logDebug logger CatWorld $
                                 "Initial chunk loading complete for: "
                                 <> unWorldPageId pageId
