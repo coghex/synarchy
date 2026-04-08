@@ -791,8 +791,17 @@ fillCrossChunkHoles coords wtd = foldl' fillChunkHoles wtd coords
                             maxDepth = if hasCrossNbr then 12 else 5
                             standard = nCount ≥ threshold ∧ terrZ ≤ nMax
                                      ∧ nMax - terrZ ≤ maxDepth ∧ nMax > seaLevel
-                            uniform = nCount ≥ threshold ∧ nMin ≡ nMax
+                            -- 'uniform' lets a tile fill above the
+                            -- standard depth limit when MULTIPLE
+                            -- neighbors agree on the surface — that's
+                            -- evidence the tile sits inside a stable
+                            -- water column. With a single neighbor we
+                            -- have no such evidence, so require ≥2.
+                            -- Even then, cap depth at maxDepth so we
+                            -- don't pour water down a cliff face.
+                            uniform = nCount ≥ max 2 threshold ∧ nMin ≡ nMax
                                     ∧ terrZ ≤ nMax + 2 ∧ nMax > seaLevel
+                                    ∧ nMax - terrZ ≤ maxDepth
                             fillZ | standard   = min nMax (terrZ + 3)
                                   | otherwise  = nMax
                         in if (standard ∨ uniform) ∧ fillZ > terrZ

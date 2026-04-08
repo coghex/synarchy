@@ -12,6 +12,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef')
 import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.MVar (MVar, putMVar)
 import Control.Exception (SomeException, catch)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
@@ -91,12 +92,12 @@ processSimCommands env logger simStateRef = do
     mCmd ← Q.tryReadQueue (simQueue env)
     case mCmd of
         Just cmd → do
-            handleSimCommand logger simStateRef cmd
+            handleSimCommand env logger simStateRef cmd
             processSimCommands env logger simStateRef
         Nothing → return ()
 
-handleSimCommand ∷ LoggerState → IORef SimState → SimCommand → IO ()
-handleSimCommand logger simStateRef cmd = do
+handleSimCommand ∷ EngineEnv → LoggerState → IORef SimState → SimCommand → IO ()
+handleSimCommand env logger simStateRef cmd = do
     ss ← readIORef simStateRef
     case cmd of
         SimActivateWorld tilesRef → do
@@ -152,6 +153,89 @@ handleSimCommand logger simStateRef cmd = do
 
         SimResume →
             writeIORef simStateRef $ ss { ssPaused = False }
+
+        SimFastSettleAll done → do
+            -- Re-sync scsFluid from wsTilesRef BEFORE settling. The
+            -- world thread's seal/strip passes modify lcFluidMap after
+            -- SimChunkLoaded was sent (where scsFluid was first cached),
+            -- so the cached scsFluid is stale by the time we settle.
+            -- Without this resync, our writeDirtyFluids below would
+            -- overwrite the seal's work with stale pre-seal data.
+            ssSynced ← syncFluidsFromWorld ss
+            -- Run sim ticks synchronously (no sleeping) until all
+            -- chunks are settled and inactive, then write back.
+            -- Capped at maxIterations as a safety net.
+            let maxIterations = 500 ∷ Int
+                ssSettled = fastSettleAll maxIterations ssSynced
+                -- Mark every chunk as dirty so writeDirtyFluids
+                -- pushes the settled state back to wsTilesRef.
+                allCoords = HS.fromList (HM.keys (ssChunks ssSettled))
+                ssDirty = ssSettled { ssDirtyChunks = allCoords
+                                    , ssPaused = True }
+            writeIORef simStateRef ssDirty
+            writeDirtyFluids env ssDirty
+            -- Reset dirty after writing so we don't re-write next tick
+            writeIORef simStateRef $ ssDirty { ssDirtyChunks = HS.empty }
+            putMVar done ()
+            logDebug logger CatWorld "Sim: fast-settled and paused"
+
+-- | Re-read fluid maps from wsTilesRef into scsFluid for every chunk.
+--   The world thread's per-batch and final seal/strip passes modify
+--   lcFluidMap after SimChunkLoaded was processed, so the cached
+--   scsFluid in passive (non-active) chunks is stale. This sync
+--   reconciles them before settling so writeDirtyFluids doesn't
+--   clobber the seal's work.
+--
+--   Active chunks are left alone — their authoritative state lives
+--   in scsActiveFluid, not lcFluidMap.
+syncFluidsFromWorld ∷ SimState → IO SimState
+syncFluidsFromWorld ss =
+    case ssTilesRef ss of
+        Nothing → return ss
+        Just tilesRef → do
+            wtd ← readIORef tilesRef
+            let updatedChunks = HM.mapWithKey (\cc scs →
+                    if scsActive scs
+                    then scs
+                    else case lookupChunk cc wtd of
+                        Just lc → scs { scsFluid    = lcFluidMap lc
+                                      , scsGenFluid = lcFluidMap lc }
+                        Nothing → scs
+                    ) (ssChunks ss)
+            return ss { ssChunks = updatedChunks }
+
+-- | Run all sim ticks synchronously without sleeping. Stops when no
+--   chunks have settle ticks remaining and no chunks are active, or
+--   when the iteration cap is reached.
+fastSettleAll ∷ Int → SimState → SimState
+fastSettleAll = go
+  where
+    go 0 ss = ss
+    go n ss
+      | allDone ss = ss
+      | otherwise =
+          let ss'   = settleNewChunksPure ss
+              ss''  = simulateFluidTick ss'
+              ss''' = simulateActiveTick ss''
+          in go (n - 1) ss'''
+
+    allDone ss =
+        not (any (\scs → scsSettleTicks scs > 0) (ssChunks ss))
+        ∧ not (any scsActive (ssChunks ss))
+
+-- | Pure version of settleNewChunks for use in synchronous fast-settle.
+settleNewChunksPure ∷ SimState → SimState
+settleNewChunksPure ss =
+    if not (any (\scs → scsSettleTicks scs > 0) (ssChunks ss))
+    then ss
+    else
+        let ss' = simulateFluidTick ss
+            decremented = HM.map (\scs →
+                if scsSettleTicks scs > 0
+                    then scs { scsSettleTicks = scsSettleTicks scs - 1 }
+                    else scs
+                ) (ssChunks ss')
+        in ss' { ssChunks = decremented }
 
 -- | Activate a passive chunk for volume-based simulation.
 activateChunk ∷ SimChunkState → SimChunkState

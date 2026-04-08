@@ -4,6 +4,7 @@ module Sim.Command.Types
     ) where
 
 import UPrelude
+import Control.Concurrent.MVar (MVar)
 import Data.IORef (IORef)
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
@@ -26,6 +27,12 @@ data SimCommand
         -- ^ Tick rate in microseconds (default 100000 = 10Hz)
     | SimPause
     | SimResume
+    | SimFastSettleAll !(MVar ())
+        -- ^ Synchronously run all settle ticks (no sleeping) until all
+        --   chunks have scsSettleTicks == 0 and no chunks are active.
+        --   Then writes the result back to wsTilesRef, sets ssPaused,
+        --   and signals the MVar. Used by dump mode to get a stable
+        --   simulation state without waiting for the live sim loop.
 
 instance Show SimCommand where
     show (SimActivateWorld _)     = "SimActivateWorld"
@@ -37,3 +44,4 @@ instance Show SimCommand where
     show (SimSetTickRate r) = "SimSetTickRate " <> show r
     show SimPause  = "SimPause"
     show SimResume = "SimResume"
+    show (SimFastSettleAll _) = "SimFastSettleAll"

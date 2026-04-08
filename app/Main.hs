@@ -43,6 +43,8 @@ import World.Plate (isGlacierZone, isBeyondGlacier)
 import World.Thread.ChunkLoading (fillOrphanedSubseaTiles)
 import Unit.Thread (startUnitThread)
 import Sim.Thread (startSimThread)
+import Sim.Command.Types (SimCommand(..))
+import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
 
 -- | Which layers to include in dump output.
 data DumpLayers = DumpLayers
@@ -241,6 +243,12 @@ runDump layers seed worldSize ages (cx1, cy1, cx2, cy2) = do
         liftIO $ threadDelay 500000
         processLuaMessagesHeadless
 
+        -- Pause the sim thread BEFORE any chunks load. This prevents
+        -- the sim from racing with the world thread's per-batch seal
+        -- during chunk generation. The sim will be fast-settled
+        -- synchronously after all chunks are loaded.
+        liftIO $ Q.writeQueue (simQueue env') SimPause
+
         liftIO $ hPutStrLn stderr "dump: generating world..."
         liftIO $ Q.writeQueue (worldQueue env')
             (WorldInit (WorldPageId "dump")
@@ -269,14 +277,22 @@ runDump layers seed worldSize ages (cx1, cy1, cx2, cy2) = do
 
         liftIO $ waitForChunks env' 300
 
+        -- Run the sim thread's settle iterations synchronously so the
+        -- dump sees a stable state. The sim was paused at the start
+        -- of dump mode, so this is the first time it actually
+        -- simulates anything for these chunks.
+        liftIO $ do
+            hPutStrLn stderr "dump: fast-settling sim..."
+            settleDone ← newEmptyMVar
+            Q.writeQueue (simQueue env') (SimFastSettleAll settleDone)
+            takeMVar settleDone
+            hPutStrLn stderr "dump: sim settled"
+
         liftIO $ do
             manager ← readIORef (worldManagerRef env')
             case wmWorlds manager of
                 ((_, ws):_) → do
-                    -- Apply the orphaned-subsea cleanup atomically,
-                    -- then read the tile data in the same operation.
-                    -- This ensures the dump sees a consistent state
-                    -- even if the world thread continues running.
+                    -- Apply orphaned-subsea cleanup as a final pass.
                     td ← atomicModifyIORef' (wsTilesRef ws) $ \td →
                         let td' = fillOrphanedSubseaTiles td
                         in (td', td')
