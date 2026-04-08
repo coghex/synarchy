@@ -282,6 +282,7 @@ elevationAtGlobal seed plates worldSize gx gy =
             boundary = classifyBoundary worldSize plateA plateB
             side = SidePlateA
             boundaryEffect = boundaryElevation wsc boundary side plateA plateB boundaryDist
+            shelfEffect = continentalShelf wsc plateA plateB boundaryDist
             localNoise = elevationNoise seed worldSize gx' gy'
             noiseScale = if plateIsLand myPlate
                          then let mountainNoise = scaleElev wsc 50.0
@@ -289,7 +290,8 @@ elevationAtGlobal seed plates worldSize gx gy =
                                   interiorFade = clamp01 (abs boundaryDist / scaleDist wsc 200.0)
                               in round (lerp interiorFade mountainNoise plainsNoise)
                          else round (scaleElev wsc 20.0)
-            terrainElev = baseElev + boundaryEffect + localNoise * noiseScale
+            terrainElev = baseElev + shelfEffect + boundaryEffect
+                        + localNoise * noiseScale
         in (terrainElev, matGlacier)
     else
     let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy'
@@ -307,12 +309,18 @@ elevationAtGlobal seed plates worldSize gx gy =
         boundaryEffect = boundaryElevation wsc boundary side
                            plateA plateB boundaryDist
 
+        -- Continental shelf: smooth the base elevation gap between
+        -- land and ocean plates. Without this, elevation jumps from
+        -- land (~0-6) to deep ocean (~-20 to -40) in a single tile.
+        shelfEffect = continentalShelf wsc plateA plateB boundaryDist
+
         localNoise = elevationNoise seed worldSize gx' gy'
         noiseScale = if plateIsLand myPlate
                      then round (scaleElev wsc 50.0)
                      else round (scaleElev wsc 20.0)
 
-        finalElev = baseElev + boundaryEffect + localNoise * noiseScale
+        finalElev = baseElev + shelfEffect + boundaryEffect
+                  + localNoise * noiseScale
 
     in (finalElev, material)
 
@@ -407,6 +415,47 @@ transformEffect wsc boundaryDist =
         t' = t * t * (3.0 - 2.0 * t)
         metersPerTile = 10.0
     in round (scaleElev wsc (100.0 / metersPerTile) * t' * (if boundaryDist > 0 then 1.0 else -1.0))
+
+-- * Continental Shelf
+
+-- | Smooth the base elevation gap at land-ocean plate boundaries.
+--   On the ocean side: raises the deep ocean floor toward sea level,
+--   creating a gradual continental shelf slope.
+--   On the land side: lowers coastal terrain toward sea level,
+--   creating coastal lowlands instead of flat plateaus.
+continentalShelf ∷ WorldScale → TectonicPlate → TectonicPlate
+                 → Float → Int
+continentalShelf wsc plateA plateB boundaryDist
+    -- Ocean plate near land plate: continental shelf
+    | not (plateIsLand plateA) ∧ plateIsLand plateB =
+        let shelfRange = max 6.0 (scaleDist wsc 40.0)
+            dist = abs boundaryDist
+            t = clamp01 (dist / shelfRange)
+            -- Steep curve: shelf drops off quickly into the abyss
+            t' = t * t
+            -- At boundary (t'=0): raise floor to just below sea level
+            -- Far from boundary (t'=1): no effect (deep ocean)
+            shelfTop = fromIntegral seaLevel - 3.0
+            deepFloor = fromIntegral (plateBaseElev plateA)
+            gap = shelfTop - deepFloor
+        in if gap > 0
+           then round (gap * (1.0 - t'))
+           else 0
+    -- Land plate near ocean plate: coastal lowlands
+    | plateIsLand plateA ∧ not (plateIsLand plateB) =
+        let lowlandRange = max 4.0 (scaleDist wsc 20.0)
+            dist = abs boundaryDist
+            t = clamp01 (dist / lowlandRange)
+            t' = t * t
+            -- At boundary (t'=0): pull land down near sea level
+            -- Far from boundary (t'=1): no effect (normal land)
+            landElev = fromIntegral (plateBaseElev plateA)
+            coastTarget = fromIntegral seaLevel + 2.0
+            drop' = landElev - coastTarget
+        in if drop' > 0
+           then negate (round (drop' * (1.0 - t')))
+           else 0
+    | otherwise = 0
 
 -- * Local Noise
 

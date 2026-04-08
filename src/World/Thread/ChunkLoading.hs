@@ -4,6 +4,7 @@ module World.Thread.ChunkLoading
     ( updateChunkLoading
     , drainInitQueues
     , maxChunksPerTick
+    , fillOrphanedSubseaTiles
     ) where
 
 import UPrelude
@@ -20,6 +21,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashSet as HS
 import World.Types
+import World.Constants (seaLevel)
+import World.Chunk.Types (chunkSize)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Generate.Arena (generateFlatChunk)
@@ -191,6 +194,32 @@ drainInitQueues env logger = do
                         writeIORef (wsZoomQuadCacheRef worldState) Nothing
                         writeIORef (wsBgQuadCacheRef worldState) Nothing
 
+                        -- When all initial chunks are loaded, run a
+                        -- final cross-chunk river seal across the
+                        -- entire tile set. The per-batch seal may
+                        -- miss boundaries between different batches.
+                        -- Then defensively fill any tile with terrainZ
+                        -- ≤ seaLevel that ended up dry — these would
+                        -- otherwise show as 1-tile islands of dry land
+                        -- below sea level.
+                        --
+                        -- IMPORTANT: this must run BEFORE writing to
+                        -- wsInitQueueRef, because the dump path's
+                        -- waitForChunks polls that ref to know when
+                        -- loading is done. Updating the queue first
+                        -- creates a race where the dump reads stale
+                        -- tile data.
+                        when (null rest) $ do
+                            atomicModifyIORef' (wsTilesRef worldState) $ \td →
+                                let allCoords = HM.keys (wtdChunks td)
+                                    td'  = sealCrossChunkRivers allCoords td
+                                    td'' = sealCrossChunkRivers allCoords td'
+                                    td''' = fillOrphanedSubseaTiles td''
+                                in (td''', ())
+                            logDebug logger CatWorld $
+                                "Initial chunk loading complete for: "
+                                <> unWorldPageId pageId
+
                         writeIORef (wsInitQueueRef worldState) rest
 
                         -- Update phase 2 progress
@@ -200,19 +229,40 @@ drainInitQueues env logger = do
                              then LoadDone
                              else LoadPhase2 (length rest) totalChunks)
 
-                        -- When all initial chunks are loaded, run a
-                        -- final cross-chunk river seal across the
-                        -- entire tile set. The per-batch seal may
-                        -- miss boundaries between different batches.
-                        when (null rest) $ do
-                            atomicModifyIORef' (wsTilesRef worldState) $ \td →
-                                let allCoords = HM.keys (wtdChunks td)
-                                    td'  = sealCrossChunkRivers allCoords td
-                                    td'' = sealCrossChunkRivers allCoords td'
-                                in (td'', ())
-                            logDebug logger CatWorld $
-                                "Initial chunk loading complete for: "
-                                <> unWorldPageId pageId
+-- | Defensive cleanup: fill any tile with terrainZ ≤ seaLevel that
+--   ended up without fluid. These tiles slip through the multi-pass
+--   fluid pipeline (the exact mechanism isn't pinned down — the seal
+--   and strip passes interact in ways that occasionally drop river
+--   tiles below sea level). Without this, they appear as 1-tile dry
+--   "islands" with surfaceZ=-1 inside the ocean.
+--
+--   Strictly additive: only fills tiles that were Nothing. Never
+--   removes existing fluid.
+fillOrphanedSubseaTiles ∷ WorldTileData → WorldTileData
+fillOrphanedSubseaTiles wtd =
+    wtd { wtdChunks = HM.map fillChunk (wtdChunks wtd) }
+  where
+    area = chunkSize * chunkSize
+    fillChunk lc =
+        let fluidMap = lcFluidMap lc
+            terrMap  = lcTerrainSurfaceMap lc
+            updates =
+                [ (idx, Just (FluidCell Ocean seaLevel))
+                | idx ← [0 .. area - 1]
+                , isNothing (fluidMap V.! idx)
+                , let terrZ = terrMap VU.! idx
+                , terrZ ≤ seaLevel
+                , terrZ > minBound
+                ]
+        in if null updates
+           then lc
+           else let newFluid = fluidMap V.// updates
+                    newSurf  = VU.imap (\idx oldSurf →
+                        case newFluid V.! idx of
+                            Just fc → max (terrMap VU.! idx) (fcSurface fc)
+                            Nothing → oldSurf
+                      ) (lcSurfaceMap lc)
+                in lc { lcFluidMap = newFluid, lcSurfaceMap = newSurf }
 
 -- | Compute side-face decorations for newly loaded chunks.
 computeSideDecos ∷ Word64 → [ChunkCoord] → WorldTileData → WorldTileData

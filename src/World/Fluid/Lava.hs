@@ -65,7 +65,7 @@ fillLavaFromFeature mv pf seed plates worldSize chunkGX chunkGY surfaceMap =
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
                 lavaSurface = baseElev + svRimHeight p - 5
             in fillPool mv seed plates worldSize chunkGX chunkGY fx fy
-                   poolRadius lavaSurface surfaceMap
+                   poolRadius lavaSurface baseElev surfaceMap
 
         VolcanicShape (Caldera p) →
             let (fx, fy) = let GeoCoord x y = caCenter p in (x, y)
@@ -73,7 +73,7 @@ fillLavaFromFeature mv pf seed plates worldSize chunkGX chunkGY surfaceMap =
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
                 lavaSurface = baseElev + caRimHeight p - 3
             in fillPool mv seed plates worldSize chunkGX chunkGY fx fy
-                   poolRadius lavaSurface surfaceMap
+                   poolRadius lavaSurface baseElev surfaceMap
 
         VolcanicShape (ShieldVolcano p) | shSummitPit p →
             let (fx, fy) = let GeoCoord x y = shCenter p in (x, y)
@@ -81,7 +81,7 @@ fillLavaFromFeature mv pf seed plates worldSize chunkGX chunkGY surfaceMap =
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
                 lavaSurface = baseElev + shPeakHeight p - shPitDepth p + 2
             in fillPool mv seed plates worldSize chunkGX chunkGY fx fy
-                   poolRadius lavaSurface surfaceMap
+                   poolRadius lavaSurface baseElev surfaceMap
 
         VolcanicShape (CinderCone p) →
             let (fx, fy) = let GeoCoord x y = ccCenter p in (x, y)
@@ -89,7 +89,7 @@ fillLavaFromFeature mv pf seed plates worldSize chunkGX chunkGY surfaceMap =
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
                 lavaSurface = baseElev + ccPeakHeight p - ccCraterDepth p + 2
             in fillPool mv seed plates worldSize chunkGX chunkGY fx fy
-                   poolRadius lavaSurface surfaceMap
+                   poolRadius lavaSurface baseElev surfaceMap
 
         VolcanicShape (FissureVolcano p) | fpHasMagma p →
             let GeoCoord sx sy = fpStart p
@@ -100,7 +100,7 @@ fillLavaFromFeature mv pf seed plates worldSize chunkGX chunkGY surfaceMap =
                 poolWidth = fpWidth p `div` 2
                 lavaSurface = baseElev + fpRidgeHeight p - 3
             in fillFissurePool mv seed plates worldSize chunkGX chunkGY
-                   sx sy ex ey poolWidth lavaSurface surfaceMap
+                   sx sy ex ey poolWidth lavaSurface baseElev surfaceMap
 
         VolcanicShape (HydrothermalVent p) →
             let (fx, fy) = let GeoCoord x y = htCenter p in (x, y)
@@ -108,16 +108,16 @@ fillLavaFromFeature mv pf seed plates worldSize chunkGX chunkGY surfaceMap =
                 (baseElev, _) = elevationAtGlobal seed plates worldSize fx fy
                 lavaSurface = baseElev + htChimneyHeight p - 2
             in fillPool mv seed plates worldSize chunkGX chunkGY fx fy
-                   poolRadius lavaSurface surfaceMap
+                   poolRadius lavaSurface baseElev surfaceMap
         _ → pure ()
 
 -- * Circular Pool (shared by most volcanic features)
 
 fillPool ∷ MV.MVector s (Maybe FluidCell)
          → Word64 → [TectonicPlate] → Int → Int → Int → Int → Int → Int → Int
-         → VU.Vector Int
+         → Int → VU.Vector Int
          → ST s ()
-fillPool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface surfaceMap =
+fillPool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface baseElev surfaceMap =
     let pr = fromIntegral poolRadius ∷ Float
         rimSamples = 32 ∷ Int
         spillway = foldl' (\minElev i →
@@ -137,6 +137,10 @@ fillPool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface s
 
         clampedSurface = min lavaSurface spillway
 
+        -- Reject tiles whose terrain is far below the volcano's base
+        -- elevation — they are ocean floor, not caldera interior.
+        minTerrain = baseElev - 20
+
     in if clampedSurface ≤ seaLevel
        then pure ()
        else forEachSurface surfaceMap $ \idx lx ly surfZ →
@@ -146,7 +150,7 @@ fillPool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface s
                 dx = fromIntegral dxi ∷ Float
                 dy = fromIntegral dyi ∷ Float
                 dist = sqrt (dx * dx + dy * dy)
-            in when (dist < pr ∧ surfZ < clampedSurface) $
+            in when (dist < pr ∧ surfZ < clampedSurface ∧ surfZ ≥ minTerrain) $
                 MV.write mv idx (Just (FluidCell Lava clampedSurface))
 
 -- * Fissure Pool (linear lava fill)
@@ -154,10 +158,10 @@ fillPool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface s
 fillFissurePool ∷ MV.MVector s (Maybe FluidCell)
                 → Word64 → [TectonicPlate] → Int → Int → Int
                 → Int → Int → Int → Int
-                → Int → Int
+                → Int → Int → Int
                 → VU.Vector Int
                 → ST s ()
-fillFissurePool mv seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth lavaSurface surfaceMap =
+fillFissurePool mv seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth lavaSurface baseElev surfaceMap =
     let lineLen = sqrt (fromIntegral ((ex-sx)*(ex-sx) + (ey-sy)*(ey-sy))) ∷ Float
     in if lineLen < 0.001 then pure ()
     else
@@ -193,6 +197,8 @@ fillFissurePool mv seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth l
 
         clampedSurface = min lavaSurface spillway
 
+        minTerrain = baseElev - 20
+
     in if clampedSurface ≤ seaLevel
        then pure ()
        else forEachSurface surfaceMap $ \idx lx ly surfZ →
@@ -207,7 +213,7 @@ fillFissurePool mv seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth l
                 projX = t * lx'
                 projY = t * ly'
                 perpDist = sqrt ((dx - projX) * (dx - projX) + (dy - projY) * (dy - projY))
-            in when (perpDist < hw ∧ surfZ < clampedSurface) $
+            in when (perpDist < hw ∧ surfZ < clampedSurface ∧ surfZ ≥ minTerrain) $
                 MV.write mv idx (Just (FluidCell Lava clampedSurface))
 
 -- * Quick Check

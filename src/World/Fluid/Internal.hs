@@ -221,7 +221,44 @@ fillCoastalGaps surfaceMap fluidMap = runST $ do
 
     loop2 (5 ∷ Int)
 
-    -- Phase 3: Convert river tiles near sea level to ocean.
+    -- Phase 3: Smooth river surfaces toward sea level at mouths.
+    -- River tiles adjacent to ocean or to already-lowered coastal
+    -- water get their surface pulled down. The seaLevel + 6
+    -- threshold allows propagation upstream through tiles that
+    -- were lowered in previous iterations without flattening
+    -- interior river sections.
+    let mouthSmooth = do
+            changed ← newSTRef False
+            forM_ [0 .. area - 1] $ \idx → do
+                val ← MV.read mv idx
+                case val of
+                    Just fc | fcType fc ≡ River → do
+                        let lx = idx `mod` chunkSize
+                            ly = idx `div` chunkSize
+                            surfZ = surfaceMap VU.! idx
+                        hasOceanNbr ← anyAdjacentOcean mv lx ly
+                        minWater ← minAdjacentWaterSurface mv lx ly
+                        let nearCoast = hasOceanNbr ∨ case minWater of
+                                Just ms → ms ≤ seaLevel + 6
+                                Nothing → False
+                        when (nearCoast ∧ fcSurface fc > seaLevel + 2) $ do
+                            let target = case minWater of
+                                    Just ms → max (surfZ + 1) (ms + 1)
+                                    Nothing → max (surfZ + 1) (seaLevel + 1)
+                            when (target < fcSurface fc) $ do
+                                MV.write mv idx (Just (fc { fcSurface = target }))
+                                writeSTRef changed True
+                    _ → pure ()
+            readSTRef changed
+
+        mouthLoop 0 = pure ()
+        mouthLoop n = do
+            didChange ← mouthSmooth
+            when didChange $ mouthLoop (n - 1)
+
+    mouthLoop (12 ∷ Int)
+
+    -- Phase 4: Convert river tiles near sea level to ocean.
     -- River water at or just above seaLevel is effectively part of
     -- the ocean — keeping it as River causes a visible step at the
     -- coast. Convert any river tile whose surface is within 1 tile
@@ -248,6 +285,43 @@ anyAdjacentFluid mv lx ly = do
     e ← check (lx + 1) ly
     w ← check (lx - 1) ly
     pure (n ∨ s ∨ e ∨ w)
+
+-- | Check if any cardinal neighbor is ocean fluid.
+anyAdjacentOcean ∷ MV.MVector s (Maybe FluidCell) → Int → Int
+                 → ST s Bool
+anyAdjacentOcean mv lx ly = do
+    let check x y
+          | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = pure False
+          | otherwise = do
+              val ← MV.read mv (y * chunkSize + x)
+              pure $ case val of
+                  Just fc → fcType fc ≡ Ocean
+                  Nothing → False
+    n ← check lx (ly - 1)
+    s ← check lx (ly + 1)
+    e ← check (lx + 1) ly
+    w ← check (lx - 1) ly
+    pure (n ∨ s ∨ e ∨ w)
+
+-- | Get the minimum water surface among cardinal neighbors.
+minAdjacentWaterSurface ∷ MV.MVector s (Maybe FluidCell) → Int → Int
+                        → ST s (Maybe Int)
+minAdjacentWaterSurface mv lx ly = do
+    let check x y
+          | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = pure Nothing
+          | otherwise = do
+              val ← MV.read mv (y * chunkSize + x)
+              pure $ case val of
+                  Just fc → Just (fcSurface fc)
+                  Nothing → Nothing
+    vN ← check lx (ly - 1)
+    vS ← check lx (ly + 1)
+    vE ← check (lx + 1) ly
+    vW ← check (lx - 1) ly
+    let surfaces = catMaybes [vN, vS, vE, vW]
+    pure $ case surfaces of
+        []     → Nothing
+        (s:ss) → Just (foldl' min s ss)
 
 -- | Get the maximum water surface among cardinal neighbors.
 --   Used by the river-gap filling phase to determine if adjacent

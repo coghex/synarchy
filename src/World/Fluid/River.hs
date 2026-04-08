@@ -188,7 +188,9 @@ fillRiverHoles mv surfaceMap = do
                         when (standard ∨ uniform ∨ bridge) $ do
                             let fillZ | standard ∨ bridge = min nMax (surfZ + 3)
                                       | otherwise         = nMax
-                            MV.write mv idx (Just (FluidCell River fillZ))
+                            -- Only fill if water surface is above terrain
+                            when (fillZ > surfZ) $
+                                MV.write mv idx (Just (FluidCell River fillZ))
                     _ → pure ()
     -- Pass B: remove completely isolated river tiles (0 neighbors).
     -- Skip edge tiles — they may connect to the adjacent chunk's river.
@@ -791,10 +793,10 @@ fillCrossChunkHoles coords wtd = foldl' fillChunkHoles wtd coords
                                      ∧ nMax - terrZ ≤ maxDepth ∧ nMax > seaLevel
                             uniform = nCount ≥ threshold ∧ nMin ≡ nMax
                                     ∧ terrZ ≤ nMax + 2 ∧ nMax > seaLevel
-                        in if standard ∨ uniform
-                           then let fillZ | standard   = min nMax (terrZ + 3)
-                                          | otherwise  = nMax
-                                    fm' = lcFluidMap lc V.// [(idx, Just (FluidCell River fillZ))]
+                            fillZ | standard   = min nMax (terrZ + 3)
+                                  | otherwise  = nMax
+                        in if (standard ∨ uniform) ∧ fillZ > terrZ
+                           then let fm' = lcFluidMap lc V.// [(idx, Just (FluidCell River fillZ))]
                                     sm' = lcSurfaceMap lc VU.// [(idx, max terrZ fillZ)]
                                     lc' = lc { lcFluidMap = fm', lcSurfaceMap = sm' }
                                 in (lc', True)

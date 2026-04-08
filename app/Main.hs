@@ -40,7 +40,7 @@ import World.Types
 import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), chunkSize)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..))
 import World.Plate (isGlacierZone, isBeyondGlacier)
-import World.Fluids (sealCrossChunkRivers)
+import World.Thread.ChunkLoading (fillOrphanedSubseaTiles)
 import Unit.Thread (startUnitThread)
 import Sim.Thread (startSimThread)
 
@@ -269,26 +269,17 @@ runDump layers seed worldSize ages (cx1, cy1, cx2, cy2) = do
 
         liftIO $ waitForChunks env' 300
 
-        -- Final cross-chunk river seal: the per-batch seal during
-        -- loading may miss boundaries between chunks in different
-        -- batches. Run twice so fills from pass 1 are visible to
-        -- cross-chunk lookups in pass 2.
         liftIO $ do
             manager ← readIORef (worldManagerRef env')
             case wmWorlds manager of
                 ((_, ws):_) → do
-                    atomicModifyIORef' (wsTilesRef ws) $ \td →
-                        let allCoords = HM.keys (wtdChunks td)
-                            td'  = sealCrossChunkRivers allCoords td
-                            td'' = sealCrossChunkRivers allCoords td'
-                        in (td'', ())
-                [] → pure ()
-
-        liftIO $ do
-            manager ← readIORef (worldManagerRef env')
-            case wmWorlds manager of
-                ((_, ws):_) → do
-                    td ← readIORef (wsTilesRef ws)
+                    -- Apply the orphaned-subsea cleanup atomically,
+                    -- then read the tile data in the same operation.
+                    -- This ensures the dump sees a consistent state
+                    -- even if the world thread continues running.
+                    td ← atomicModifyIORef' (wsTilesRef ws) $ \td →
+                        let td' = fillOrphanedSubseaTiles td
+                        in (td', td')
                     let json = dumpTilesJSON layers worldSize td cx1 cy1 cx2 cy2
                     BS.putStr json
                     hFlush stdout
