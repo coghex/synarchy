@@ -36,7 +36,7 @@ import World.Vegetation (computeChunkVegetation, vegSnow, vegHash)
 import World.Flora.Placement (computeChunkFlora)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
-import World.Generate.Timeline (applyTimelineChunk)
+import World.Generate.Timeline (applyTimelineChunk, removeElevationSpikes)
 import World.Geology.Coastal (applyCoastalErosion)
 import World.Generate.Strata
     ( buildStrataCache
@@ -126,9 +126,18 @@ generateChunk registry catalog params coord =
         -- Post-timeline coastal erosion: lower coastal terrain,
         -- deposit sand/gravel/wetland materials based on plate tectonics
         -- and river mouth proximity
-        (finalElevVec, finalMatVec) =
+        (postCoastElev, finalMatVec) =
             applyCoastalErosion seed worldSize plates registry timeline oceanMap coord
                 (timelineElevVec, timelineMatVec)
+
+        -- Despike: remove single-tile elevation outliers that survived
+        -- timeline events and coastal erosion. These are typically
+        -- 1-tile-wide diagonal mountain ridges (features aligned with
+        -- the u-v isometric axes that end up 1 tile wide in xy) where
+        -- coastal erosion lowered the cardinal neighbors but the spike
+        -- itself was outside the coastal range.
+        (finalElevVec, _) = removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
+                                                  (postCoastElev, finalMatVec)
 
         lookupFinal lx ly =
             if inBorder lx ly

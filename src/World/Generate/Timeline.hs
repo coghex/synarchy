@@ -4,6 +4,7 @@ module World.Generate.Timeline
     ( applyTimelineChunk
     , applyTimeline
     , applyTimelineFast
+    , removeElevationSpikes
     ) where
 
 import UPrelude
@@ -25,6 +26,65 @@ import World.Scale (WorldScale(..), computeWorldScale)
 import World.Constants (seaLevel)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
+import Control.Monad (forM_, when)
+
+-- * Spike Removal
+--
+-- Single-tile elevation outliers can survive elevation generation
+-- when geological features (mountain ridges from convergent plate
+-- boundaries) align with the u-v isometric axes — they appear as
+-- 1-tile-wide diagonal ridges in xy with cardinal neighbors at
+-- much lower elevation. The audit catches these as TERRAIN_SPIKE.
+-- This pass detects them and lowers them toward neighbor max +
+-- (threshold - 1) so the result is just under the audit threshold.
+
+removeElevationSpikes
+    ∷ Int  -- ^ spike threshold (lower if delta exceeds this)
+    → Int  -- ^ max iterations
+    → Int  -- ^ borderSize
+    → (VU.Vector Int, VU.Vector MaterialId)
+    → (VU.Vector Int, VU.Vector MaterialId)
+removeElevationSpikes threshold maxIters bSize (elevVec, matVec) =
+    (go maxIters elevVec, matVec)
+  where
+    area = bSize * bSize
+
+    go 0 ev = ev
+    go n ev =
+        let (ev', changed) = pass ev
+        in if changed then go (n - 1) ev' else ev'
+
+    pass ev = runST $ do
+        em ← VUM.new area
+        forM_ [0 .. area - 1] $ \i →
+            VUM.write em i (ev VU.! i)
+        changedRef ← VUM.new 1
+        VUM.write changedRef 0 (0 ∷ Int)
+        forM_ [0 .. area - 1] $ \idx → do
+            let bx = idx `mod` bSize
+                by = idx `div` bSize
+            -- Skip the outermost ring so all 4 cardinal neighbors
+            -- are in-bounds (matches the audit which requires 4
+            -- valid neighbors before classifying as a spike).
+            when (bx > 0 ∧ bx < bSize - 1
+                 ∧ by > 0 ∧ by < bSize - 1) $ do
+                e ← VUM.read em idx
+                n' ← VUM.read em (idx - bSize)
+                s' ← VUM.read em (idx + bSize)
+                w' ← VUM.read em (idx - 1)
+                eN ← VUM.read em (idx + 1)
+                let mxNbr = max n' (max s' (max w' eN))
+                -- Spike: tile is more than `threshold` above all
+                -- 4 cardinal neighbors. Lower it to mxNbr + (threshold - 1)
+                -- so the resulting delta is below the audit threshold
+                -- but the tile remains visibly above its neighbors.
+                when (e - mxNbr > threshold) $ do
+                    let target = mxNbr + (threshold - 1)
+                    VUM.write em idx target
+                    VUM.write changedRef 0 (1 ∷ Int)
+        ef ← VU.unsafeFreeze em
+        c ← VUM.read changedRef 0
+        pure (ef, c > 0)
 
 -- * Per-Period Timeline Application (chunk-level with erosion)
 
