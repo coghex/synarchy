@@ -148,6 +148,20 @@ computeChunkFluid worldSize oceanMap coord surfaceMap =
             w ← check (lx - 1) ly
             return (n ∨ s ∨ e ∨ w)
 
+        -- Does the mutable fluid map have any ocean fluid set?
+        -- Used after Pass 1 to gate Pass 2 on actual content.
+        anyOceanInMap ∷ MV.MVector s (Maybe FluidCell) → ST s Bool
+        anyOceanInMap mv = go 0
+          where
+            n = chunkSize * chunkSize
+            go i
+              | i ≥ n = return False
+              | otherwise = do
+                  v ← MV.read mv i
+                  case v of
+                      Just _  → return True
+                      Nothing → go (i + 1)
+
     -- Pass 1 always runs: any below-seaLevel tile gets ocean fluid.
     -- This prevents chunk-boundary artifacts in the world view where
     -- the hasAnyOceanFluid gate would exclude coastal chunks just
@@ -159,13 +173,25 @@ computeChunkFluid worldSize oceanMap coord surfaceMap =
     -- (which checks the per-chunk chunkOcean flag), NOT the fluid map,
     -- for ocean rendering. Ocean fluid falls through to baseColor.
     --
-    -- Pass 2 (boundary extension) only runs near ocean chunks:
-    -- it extends water one tile into coast for side-face rendering.
+    -- Pass 2 (boundary extension) extends water one tile into coast
+    -- for side-face rendering. It runs whenever the chunk has any
+    -- in-chunk ocean tiles (filled by Pass 1) OR has an ocean neighbor
+    -- chunk. The chunk-level `nearOcean` gate based on the median
+    -- elevation map misses chunks where Pass 1 produced ocean tiles
+    -- but the median elevation is > seaLevel (e.g., a chunk that's
+    -- 60% ocean but has a few high tiles raising the median). Without
+    -- this fix, terr=1 tiles inside such chunks remain dry even when
+    -- surrounded by ocean — visible as 1-tile islands in the audit.
     in withFluidMap $ \mv → do
         forEachSurface surfaceMap $ \idx _lx _ly surfZ →
             when (surfZ ≤ seaLevel ∧ surfZ > minBound) $
                 MV.write mv idx (Just (FluidCell Ocean seaLevel))
-        when nearOcean $
+        -- Determine if Pass 2 should run: any ocean fluid in this
+        -- chunk (after Pass 1), or any cardinal neighbor chunk is
+        -- ocean per the chunk-level map.
+        hasInChunkOcean ← anyOceanInMap mv
+        let runPass2 = hasInChunkOcean ∨ oceanN ∨ oceanS ∨ oceanE ∨ oceanW
+        when runPass2 $
             forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
                 val ← MV.read mv idx
                 when (isNothing val) $ do
