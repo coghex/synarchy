@@ -119,6 +119,8 @@ ensureBaked ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)
               → (WorldTextures → Word8 → Int → TextureHandle)
               → (TextureHandle → Int) → Float
               → IO (V.Vector BakedZoomEntry)
+-- Only called from the world thread (via updateWorldTiles), so
+-- the read-check-write on bakedRef is single-threaded — no race.
 ensureBaked bakedRef rawCache textures facing texPicker lookupSlot defFmSlot = do
     (existing, bakedWith, bakedFacing) ← readIORef bakedRef
     let texturesChanged = bakedWith ≢ textures

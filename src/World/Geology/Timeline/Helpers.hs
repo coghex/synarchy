@@ -112,6 +112,10 @@ isSuperVolcano pf = case pfFeature pf of
     (VolcanicShape (SuperVolcano _)) → True
     _                                → False
 
+-- | Extract RiverParams from a PersistentFeature.
+--   All call sites pre-filter with 'isActiveRiver', which matches
+--   exactly HydroShape (RiverFeature _), so the error branch is
+--   unreachable in normal operation.  Kept as a defensive guard.
 getRiverParamsFromPf ∷ PersistentFeature → RiverParams
 getRiverParamsFromPf pf = case pfFeature pf of
     HydroShape (RiverFeature r) → r

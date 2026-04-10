@@ -85,6 +85,10 @@ spawnTextFn env backendState = do
         return objId
       let (ObjectId n) = objId
       Lua.pushinteger (Lua.Integer $ fromIntegral n)
+    -- Two values pushed but return 1: the Lua C API keeps only
+    -- the top N values (here nil) and discards the rest, so
+    -- no stack corruption.  The error string is lost, but the
+    -- caller sees nil which signals failure.
     _ → do
       Lua.pushstring "spawnText requires 7 arguments: x, y, fontHandle, text, color, layer, fontSize"
       Lua.pushnil

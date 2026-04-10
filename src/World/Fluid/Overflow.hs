@@ -105,6 +105,10 @@ tracePath surfaceMap fluidMap startLX startLY =
                then [(lx, ly)]
                else if terrZ ≤ seaLevel
                then [(lx, ly)]
+               -- nbrs is always non-empty here: the bounds check
+               -- above (lx ≤ 0 ∨ lx ≥ chunkSize-1 ∨ ...) returns
+               -- early for edge tiles, so all 4 cardinals are
+               -- in-bounds.  The [] case is a defensive fallback.
                else case nbrs of
                    [] → [(lx, ly)]
                    _  →

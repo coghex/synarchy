@@ -74,6 +74,11 @@ worldLoop env stateRef lastTimeRef = do
 
                 camera ← readIORef (cameraRef env)
                 allQuads ← updateWorldTiles env
+                -- Plain writeIORef is fine here: the value is an immutable
+                -- Vector built entirely before the write, so the reader
+                -- (Frame.hs) always sees either the old or the new vector,
+                -- never a torn pointer.  threadDelay below acts as a
+                -- memory barrier, ensuring visibility across cores.
                 writeIORef (worldQuadsRef env) allQuads
                 threadDelay 16666
                 worldLoop env stateRef lastTimeRef

@@ -169,6 +169,10 @@ buildZoomCache params registry =
                     , even (u + v)
                     ]
 
+        -- Deduplicate via Set.  The reordering is harmless: every
+        -- downstream consumer (entry vector, pixel vector, atlas
+        -- packing, bakeEntriesAtlas) iterates the same list in
+        -- the same order, so vector indices stay consistent.
         uniqueCoords = Set.toList $ Set.fromList allCoords
 
         chunkBatchSize = max 1 (length uniqueCoords `div` 128)
@@ -454,6 +458,8 @@ buildZoomCacheWithPixels params registry palette =
                     , even (u + v)
                     ]
 
+        -- Deduplicate via Set.  Same order used for entries, pixels,
+        -- and atlas packing — see comment in buildZoomCache.
         uniqueCoords = Set.toList $ Set.fromList allCoords
 
         chunkBatchSize = max 1 (length uniqueCoords `div` 128)

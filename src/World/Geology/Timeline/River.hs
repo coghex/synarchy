@@ -344,6 +344,11 @@ checkRiverProximity worldSize threshold mx my targetPf =
         _  → let (_, idx, coord) = minimumBy (\(d1,_,_) (d2,_,_) → compare d1 d2) close
              in Just (targetPf, coord, idx)
 
+-- | Merge a tributary into a main river at the given junction.
+--   rpSegments is always non-empty for active rivers:
+--   traceRiverFromSource returns Nothing for degenerate traces,
+--   and meanderSegments preserves vector length.  The error on
+--   empty tribSegs is a defensive guard for an unreachable case.
 performMerge ∷ Int → Int → PersistentFeature → PersistentFeature
              → GeoCoord → Int → TimelineBuildState → TimelineBuildState
 performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =

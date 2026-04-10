@@ -12,6 +12,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import Control.Concurrent (forkIO)
 import System.IO (hPutStrLn, hFlush, stdout, stderr)
+import System.Timeout (timeout)
 import Control.Concurrent.MVar
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TQueue
@@ -94,9 +95,17 @@ processLines conn cmdQueue buf =
                else do
                    responseMVar ← newEmptyMVar
                    atomically $ writeTQueue cmdQueue (DebugCommand cmdText responseMVar)
-                   -- Wait for Lua thread to process and respond
-                   result ← takeMVar responseMVar
-                   let resultBytes = TE.encodeUtf8 result
+                   -- Wait for Lua thread to process and respond.
+                   -- Timeout guards against deadlock: if the Lua thread
+                   -- crashes after dequeuing the command but before filling
+                   -- the MVar, an unbounded takeMVar would block forever
+                   -- (the crash handler only drains the TQueue, not
+                   -- already-dequeued commands).
+                   mResult ← timeout 30000000 (takeMVar responseMVar)
+                   let result = fromMaybe
+                         "ERROR: command timed out (Lua thread may have crashed)"
+                         mResult
+                       resultBytes = TE.encodeUtf8 result
                    sendAll conn resultBytes
                    sendAll conn "\n> "
                    processLines conn cmdQueue remaining
