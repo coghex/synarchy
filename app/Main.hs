@@ -40,7 +40,7 @@ import World.Types
 import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), chunkSize)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..))
 import World.Plate (isGlacierZone, isBeyondGlacier)
-import World.Thread.ChunkLoading (fillOrphanedSubseaTiles)
+import World.Thread.ChunkLoading (fillOrphanedSubseaTiles, clampRiverMouths)
 import Unit.Thread (startUnitThread)
 import Sim.Thread (startSimThread)
 import Sim.Command.Types (SimCommand(..))
@@ -292,9 +292,10 @@ runDump layers seed worldSize ages (cx1, cy1, cx2, cy2) = do
             manager ← readIORef (worldManagerRef env')
             case wmWorlds manager of
                 ((_, ws):_) → do
-                    -- Apply orphaned-subsea cleanup as a final pass.
+                    -- Apply orphaned-subsea cleanup and river mouth
+                    -- clamping as final passes.
                     td ← atomicModifyIORef' (wsTilesRef ws) $ \td →
-                        let td' = fillOrphanedSubseaTiles td
+                        let td' = clampRiverMouths (fillOrphanedSubseaTiles td)
                         in (td', td')
                     let json = dumpTilesJSON layers worldSize td cx1 cy1 cx2 cy2
                     BS.putStr json

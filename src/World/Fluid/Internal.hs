@@ -242,8 +242,15 @@ fillCoastalGaps surfaceMap fluidMap = runST $ do
                                 Just ms → ms ≤ seaLevel + 6
                                 Nothing → False
                         when (nearCoast ∧ fcSurface fc > seaLevel + 2) $ do
+                            -- Target = max of terrain+1 and the
+                            -- lowest neighbor water surface.  No +1
+                            -- offset: the terrain gradient provides
+                            -- the natural slope, and removing the
+                            -- offset lets the lowering propagate
+                            -- past the computeChunkRivers smooth
+                            -- floor within 12 iterations.
                             let target = case minWater of
-                                    Just ms → max (surfZ + 1) (ms + 1)
+                                    Just ms → max (surfZ + 1) ms
                                     Nothing → max (surfZ + 1) (seaLevel + 1)
                             when (target < fcSurface fc) $ do
                                 MV.write mv idx (Just (fc { fcSurface = target }))

@@ -5,6 +5,7 @@ module World.Thread.ChunkLoading
     , drainInitQueues
     , maxChunksPerTick
     , fillOrphanedSubseaTiles
+    , clampRiverMouths
     ) where
 
 import UPrelude
@@ -214,7 +215,7 @@ drainInitQueues env logger = do
                                 let allCoords = HM.keys (wtdChunks td)
                                     td'  = sealCrossChunkRivers allCoords td
                                     td'' = sealCrossChunkRivers allCoords td'
-                                    td''' = fillOrphanedSubseaTiles td''
+                                    td''' = clampRiverMouths (fillOrphanedSubseaTiles td'')
                                 in (td''', ())
                             logDebug logger CatWorld $
                                 "Initial chunk loading complete for: "
@@ -263,6 +264,64 @@ fillOrphanedSubseaTiles wtd =
                             Nothing → oldSurf
                       ) (lcSurfaceMap lc)
                 in lc { lcFluidMap = newFluid, lcSurfaceMap = newSurf }
+
+-- | Clamp river tiles adjacent to ocean so their surface does not
+--   exceed seaLevel + 2.  Runs as a final post-sim pass to enforce
+--   the mouth constraint after the sim smooth has stabilised.
+clampRiverMouths ∷ WorldTileData → WorldTileData
+clampRiverMouths wtd =
+    let chunks  = wtdChunks wtd
+        maxSurf = seaLevel + 2
+        clampChunk coord lc =
+            let fm   = lcFluidMap lc
+                terr = lcTerrainSurfaceMap lc
+                ChunkCoord cx cy = coord
+                area = chunkSize * chunkSize
+                updates =
+                    [ (idx, Just (FluidCell River (max (terr VU.! idx + 1) maxSurf)))
+                    | idx ← [0 .. area - 1]
+                    , Just fc ← [fm V.! idx]
+                    , fcType fc ≡ River
+                    , fcSurface fc > maxSurf
+                    , let lx = idx `mod` chunkSize
+                          ly = idx `div` chunkSize
+                    , hasAdjacentOceanTile chunks coord lx ly
+                    ]
+            in if null updates
+               then lc
+               else let newFluid = fm V.// updates
+                        newSurf  = VU.imap (\idx oldSurf →
+                            case newFluid V.! idx of
+                                Just fc → max (terr VU.! idx) (fcSurface fc)
+                                Nothing → oldSurf
+                          ) (lcSurfaceMap lc)
+                    in lc { lcFluidMap = newFluid, lcSurfaceMap = newSurf }
+        updated = HM.mapWithKey clampChunk chunks
+    in wtd { wtdChunks = updated }
+
+-- | Check if any cardinal neighbor (including cross-chunk) is ocean.
+hasAdjacentOceanTile ∷ HM.HashMap ChunkCoord LoadedChunk → ChunkCoord
+                     → Int → Int → Bool
+hasAdjacentOceanTile chunks (ChunkCoord cx cy) lx ly =
+    any checkDir [(lx-1,ly),(lx+1,ly),(lx,ly-1),(lx,ly+1)]
+  where
+    checkDir (nx, ny)
+      | nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize =
+          case HM.lookup (ChunkCoord cx cy) chunks of
+              Just lc → isOceanAt lc nx ny
+              Nothing → False
+      | otherwise =
+          let cx' = cx + (if nx < 0 then -1 else if nx ≥ chunkSize then 1 else 0)
+              cy' = cy + (if ny < 0 then -1 else if ny ≥ chunkSize then 1 else 0)
+              nlx = ((nx `mod` chunkSize) + chunkSize) `mod` chunkSize
+              nly = ((ny `mod` chunkSize) + chunkSize) `mod` chunkSize
+          in case HM.lookup (ChunkCoord cx' cy') chunks of
+              Just lc → isOceanAt lc nlx nly
+              Nothing → False
+    isOceanAt lc nx ny =
+        case lcFluidMap lc V.! (ny * chunkSize + nx) of
+            Just fc → fcType fc ≡ Ocean
+            Nothing → False
 
 -- | Compute side-face decorations for newly loaded chunks.
 computeSideDecos ∷ Word64 → [ChunkCoord] → WorldTileData → WorldTileData

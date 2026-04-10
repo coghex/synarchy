@@ -81,7 +81,8 @@ simulatePassiveChunk allChunks coord scs =
                                            ,(lx,ly-1),(lx,ly+1)]
                                 nbrInfo ← getNeighborInfo mv terrainV
                                               allChunks coord nbrs
-                                let waterSurfs = [ s | (s, _, True) ← nbrInfo ]
+                                let waterSurfs = [ s | (s, _, True, _) ← nbrInfo ]
+                                    hasOceanNbr = any (\(_, _, _, o) → o) nbrInfo
                                 unless (null waterSurfs) $ do
                                     let minW = minimum waterSurfs
                                         target = minW + 1
@@ -96,7 +97,11 @@ simulatePassiveChunk allChunks coord scs =
                                                 else MV.write mv idx
                                                         (Just fc { fcSurface = newSurf })
                                             writeSTRef changedRef True
-                                        else when (mySurf < minW) $ do
+                                        -- Don't raise river tiles adjacent
+                                        -- to ocean — the mouth was lowered
+                                        -- intentionally by fillCoastalGaps.
+                                        else when (mySurf < minW
+                                                  ∧ not hasOceanNbr) $ do
                                             let raised = mySurf + 1
                                             MV.write mv idx
                                                 (Just fc { fcSurface = raised })
@@ -118,7 +123,7 @@ simulatePassiveChunk allChunks coord scs =
                                        ,(lx,ly-1),(lx,ly+1)]
                             nbrInfo ← getNeighborInfo mv terrainV
                                           allChunks coord nbrs
-                            let hasWaterNbr = any (\(_, _, isW) → isW) nbrInfo
+                            let hasWaterNbr = any (\(_, _, isW, _) → isW) nbrInfo
                             when (not hasWaterNbr) $ do
                                 let newSurf = mySurf - 1
                                 if newSurf ≤ terrZ
@@ -133,13 +138,13 @@ simulatePassiveChunk allChunks coord scs =
     in (scs { scsFluid = newFluid }, changed)
 
 -- | Get info about cardinal neighbors.
---   Returns [(surface, terrainZ, isWater)]
+--   Returns [(surface, terrainZ, isWater, isOcean)]
 getNeighborInfo ∷ MV.MVector s (Maybe FluidCell)
                 → VU.Vector Int
                 → HM.HashMap ChunkCoord SimChunkState
                 → ChunkCoord
                 → [(Int, Int)]
-                → ST s [(Int, Int, Bool)]
+                → ST s [(Int, Int, Bool, Bool)]
 getNeighborInfo mv terrainV allChunks myCoord nbrs = do
     results ← newSTRef []
     forM_ nbrs $ \(nlx, nly) → do
@@ -150,12 +155,12 @@ getNeighborInfo mv terrainV allChunks myCoord nbrs = do
                     nTerrZ = terrainV VU.! nIdx
                 nCell ← MV.read mv nIdx
                 case nCell of
-                    Just nfc | fcType nfc /= Ocean →
-                        modifySTRef' results ((fcSurface nfc, nTerrZ, True) :)
+                    Just nfc | fcType nfc ≡ Ocean →
+                        modifySTRef' results ((fcSurface nfc, nTerrZ, False, True) :)
                     Just nfc →
-                        modifySTRef' results ((fcSurface nfc, nTerrZ, False) :)
+                        modifySTRef' results ((fcSurface nfc, nTerrZ, True, False) :)
                     Nothing →
-                        modifySTRef' results ((nTerrZ, nTerrZ, False) :)
+                        modifySTRef' results ((nTerrZ, nTerrZ, False, False) :)
             else do
                 let (nCoord, cnlx, cnly) = resolveNeighborCoord myCoord nlx nly
                 case HM.lookup nCoord allChunks of
@@ -165,15 +170,15 @@ getNeighborInfo mv terrainV allChunks myCoord nbrs = do
                             nTerrZ = scsTerrain ncs VU.! nIdx
                             nCell  = scsFluid ncs V.! nIdx
                         case nCell of
-                            Just nfc | fcType nfc /= Ocean →
+                            Just nfc | fcType nfc ≡ Ocean →
                                 modifySTRef' results
-                                    ((fcSurface nfc, nTerrZ, True) :)
+                                    ((fcSurface nfc, nTerrZ, False, True) :)
                             Just nfc →
                                 modifySTRef' results
-                                    ((fcSurface nfc, nTerrZ, False) :)
+                                    ((fcSurface nfc, nTerrZ, True, False) :)
                             Nothing →
                                 modifySTRef' results
-                                    ((nTerrZ, nTerrZ, False) :)
+                                    ((nTerrZ, nTerrZ, False, False) :)
     readSTRef results
 
 resolveNeighborCoord ∷ ChunkCoord → Int → Int → (ChunkCoord, Int, Int)
