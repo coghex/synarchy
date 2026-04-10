@@ -83,6 +83,12 @@ processInputs env inpSt = do
 processInput ∷ EngineEnv → InputState → InputEvent → IO InputState
 processInput env inpSt event = case event of
     InputKeyEvent glfwKey keyState mods → do
+        -- Two independent focus systems checked here:
+        --   1. FocusManager (focusManagerRef) — shell/console text input
+        --   2. UIPageManager (uiManagerRef)   — UI widget text input
+        -- Focus is cleared asynchronously by Lua callbacks:
+        --   Shell:   LuaFocusLost → shell.onFocusLost → engine.releaseFocus()
+        --   Textbox: LuaUIEscape  → uiManager.onUIEscape → UI.clearFocus()
         focusMgr ← readIORef (focusManagerRef env)
         uiMgr ← readIORef (uiManagerRef env)
         let shellMode = getInputMode focusMgr
@@ -94,8 +100,12 @@ processInput env inpSt event = case event of
             logDebug logger CatInput $ "Input mode: ShellTextInput, focusId=" <> T.pack (show fid)
             when (key ≡ KeyGrave ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
                 Q.writeQueue (luaQueue env) LuaShellToggle
+            -- Lua side clears focus: shell.onFocusLost → engine.releaseFocus()
             when (key ≡ KeyEscape ∧ keyState ≡ GLFW.KeyState'Pressed) $ do
                 Q.writeQueue (luaQueue env) $ LuaFocusLost fid
+            -- isKeyDown includes Pressed+Repeating for held-key repeat;
+            -- KeyState'Pressed is single-fire only. Backspace, arrows,
+            -- and delete intentionally repeat for text editing UX.
             when (key ≡ KeyBackspace ∧ isKeyDown keyState) $
                 Q.writeQueue (luaQueue env) (LuaTextBackspace fid)
             when (key ≡ KeyEnter ∧ keyState ≡ GLFW.KeyState'Pressed) $

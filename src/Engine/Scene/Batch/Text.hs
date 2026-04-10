@@ -84,6 +84,8 @@ groupByFontAndLayer nodes =
   let nodesWithFont = filter (isJust . nodeFont) nodes
       sorted = List.sortOn (\n → (nodeFont n, nodeLayer n, zIndex $ nodeTransform n)) nodesWithFont
       grouped = List.groupBy (\a b → (nodeFont a, nodeLayer a) ≡ (nodeFont b, nodeLayer b)) sorted
+      -- groupBy never produces empty groups, and the isJust filter above
+      -- guarantees nodeFont is Just for every element here.
       keyed = map (\grp → case grp of
                       [] → error "Empty group"
                       (n:_) → ((fromJust $ nodeFont n, nodeLayer n), grp)) grouped

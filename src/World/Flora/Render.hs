@@ -86,6 +86,8 @@ findActiveCycleStage stages dayOfYear =
         _  → Just (last eligible)
 
 -- | Like maximumBy but takes a key function.
+--   Callers must ensure the list is non-empty (findActivePhase guards
+--   with a [] → Nothing pattern match before calling this).
 maximumByKey ∷ Ord b ⇒ (a → b) → [a] → a
 maximumByKey _ [x]    = x
 maximumByKey f (x:xs) = foldl' (\best y → if f y > f best then y else best) x xs

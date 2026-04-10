@@ -1,3 +1,9 @@
+-- | Lua scripting thread.
+--
+--   Threading model: a single dedicated OS thread owns the Lua.State.
+--   All other threads (input, world, debug console) communicate via
+--   STM queues (luaQueue for LuaMsg, TQueue for DebugCommand).
+--   The Lua.State is NEVER accessed from another thread.
 module Engine.Scripting.Lua.Thread
   ( startLuaThread
   , runLuaLoop

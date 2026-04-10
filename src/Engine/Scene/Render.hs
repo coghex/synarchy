@@ -36,6 +36,9 @@ updateSceneForRender = do
     logDebugSM CatRender "Updating scene"
         [("activeScene", maybe "none" (T.pack . show) (smActiveScene sceneMgr))]
     
+    -- Safe: only called from drawFrame which already validates glfwWindow
+    -- is Just via extractWindow (see Engine.Loop.Frame). Never called in
+    -- headless or dump mode.
     let Window win = fromJust $ glfwWindow state
     (width, height) ← GLFW.getFramebufferSize win
     let (screenW, screenH) = case swapchainInfo state of
@@ -170,6 +173,10 @@ uploadBatchesToBuffer batches dynamicBuffer = do
         [("batches", T.pack $ show $ V.length batches)
         ,("totalVertices", T.pack $ show totalVertices)]
 
+    -- Buffer is resized to fit totalVertices (with 50% padding) before any
+    -- writes, so the pointer arithmetic below is bounded by the allocation.
+    -- Both totalVertices and the per-batch loop use the same batches vector,
+    -- and this runs single-threaded in EngineM, so no TOCTOU risk.
     finalBuffer ← if totalVertices > sdbCapacity dynamicBuffer
         then do
             logDebugM CatScene "Buffer too small, resizing..."

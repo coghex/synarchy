@@ -41,6 +41,7 @@ groupByTextureAndLayer objects =
     let objList = V.toList objects
         grouped = List.groupBy (\a b → (doTexture a, doLayer a) ≡ (doTexture b, doLayer b)) $
                   List.sortOn (\obj → (doTexture obj, doLayer obj, doZIndex obj)) objList
+        -- groupBy never produces empty groups.
         keyed = map (\grp → case grp of
                         [] → error "Empty group"
                         (obj:_) → ((doTexture obj, doLayer obj), V.fromList grp)) grouped

@@ -47,13 +47,18 @@ recreateSwapchain window = do
     if width ≡ 0 ∨ height ≡ 0
         then logDebugM CatSwapchain "Window minimized, skipping swapchain recreation"
         else do
+            -- Old resources must be destroyed before new ones are created
+            -- because Vulkan doesn't allow two swapchains for the same
+            -- surface simultaneously. If recreateAllResources throws, the
+            -- engine is in an unrecoverable state regardless (no swapchain),
+            -- so the cleanup ordering is acceptable.
             logDebugM CatSwapchain "Running cleanup before recreation..."
             liftIO $ runAllCleanups (vulkanCleanup state)
-            
+
             modify $ \s → s { graphicsState = (graphicsState s) {
                 vulkanCleanup = emptyCleanup
             }}
-            
+
             recreateAllResources pDevice device queues surface window
             
             modify $ \s → s { graphicsState = (graphicsState s) {

@@ -19,6 +19,10 @@ import Control.Monad (forM_, when)
 isValidRef ∷ Lua.Reference → Bool
 isValidRef (Lua.Reference n) = n ≠ fromIntegral Lua.refnil
 
+-- | Broadcast a callback to all loaded Lua modules.
+--   Thread safety: only called from the Lua thread (via processLuaMsg
+--   in runLuaLoop). The Lua.State is never touched from other threads;
+--   inter-thread communication uses STM queues (luaQueue, debugQueue).
 broadcastToModules ∷ LuaBackendState → T.Text → [ScriptValue] → IO ()
 broadcastToModules ls funcName args = do
     scriptsMap ← readTVarIO (lbsScripts ls)

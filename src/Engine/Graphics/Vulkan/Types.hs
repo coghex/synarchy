@@ -84,7 +84,7 @@ data UniformBufferObject = UBO
     } deriving (Show)
 
 instance Storable UniformBufferObject where
-    -- 5 matrices (64 bytes each) + 6 floats (24 bytes) + 8 bytes padding = 352
+    -- 5 matrices (64 bytes each) + 7 floats (28 bytes) + 4 bytes padding = 352
     sizeOf _ = 5 * sizeOf (undefined ∷ M44 Float) + 32
     alignment _ = 16  -- Vulkan requires 16-byte alignment for uniform buffers
     peek ptr = UBO
