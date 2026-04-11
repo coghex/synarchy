@@ -640,7 +640,12 @@ sealCrossChunkRivers newCoords wtd =
         equalized = equalizeCrossChunkRivers allCoords wtd
         -- Phase 2: fill 1-tile gaps at chunk edges.
         filled = fillCrossChunkHoles allCoords equalized
-    in filled
+        -- Phase 3: remove orphaned edge river tiles that have no
+        -- river neighbor in any direction (in-chunk or cross-chunk).
+        -- These are single tiles left by computeChunkRivers at chunk
+        -- edges where the river segment ends at a geographic barrier.
+        cleaned = removeOrphanedEdgeRivers allCoords filled
+    in cleaned
 
 chunkNeighbors' ∷ ChunkCoord → [ChunkCoord]
 chunkNeighbors' (ChunkCoord cx cy) =
@@ -786,11 +791,30 @@ fillCrossChunkHoles coords wtd = foldl' fillChunkHoles wtd coords
                             -- boundary; interior tiles need 2 neighbors.
                             threshold = if hasCrossNbr then 1
                                         else if isEdge then 2 else 2
-                            -- Cross-chunk fills allow deeper water —
-                            -- we know a river exists on the other side.
-                            maxDepth = if hasCrossNbr then 12 else 5
+                            -- For cross-chunk fills the depth check
+                            -- uses the cross-chunk neighbor's surface
+                            -- (the river we're connecting to), not
+                            -- nMax which may include an unrelated
+                            -- higher in-chunk river. The fill surface
+                            -- also tracks the cross-chunk river so
+                            -- the water continues at the right level.
+                            crossMin  = if hasCrossNbr
+                                        then foldl' min maxBound crossNbrs
+                                        else nMax
+                            crossMax  = if hasCrossNbr
+                                        then foldl' max minBound crossNbrs
+                                        else nMax
+                            -- Depth check uses the nearest (lowest)
+                            -- cross-chunk river. Fill level uses the
+                            -- highest so the water can bridge between
+                            -- rivers at different elevations.
+                            depthRef  = if hasCrossNbr then crossMin else nMax
+                            -- No depth limit for cross-chunk: the
+                            -- fill surface is capped at terrZ + 3
+                            -- which prevents excessive water depth.
+                            maxDepth  = if hasCrossNbr then maxBound else 5
                             standard = nCount ≥ threshold ∧ terrZ ≤ nMax
-                                     ∧ nMax - terrZ ≤ maxDepth ∧ nMax > seaLevel
+                                     ∧ depthRef - terrZ ≤ maxDepth ∧ nMax > seaLevel
                             -- 'uniform' lets a tile fill above the
                             -- standard depth limit when MULTIPLE
                             -- neighbors agree on the surface — that's
@@ -801,9 +825,10 @@ fillCrossChunkHoles coords wtd = foldl' fillChunkHoles wtd coords
                             -- don't pour water down a cliff face.
                             uniform = nCount ≥ max 2 threshold ∧ nMin ≡ nMax
                                     ∧ terrZ ≤ nMax + 2 ∧ nMax > seaLevel
-                                    ∧ nMax - terrZ ≤ maxDepth
-                            fillZ | standard   = min nMax (terrZ + 3)
-                                  | otherwise  = nMax
+                                    ∧ depthRef - terrZ ≤ maxDepth
+                            fillZ | standard ∧ hasCrossNbr = min crossMax (terrZ + 3)
+                                  | standard               = min nMax (terrZ + 3)
+                                  | otherwise               = nMax
                         in if (standard ∨ uniform) ∧ fillZ > terrZ
                            then let fm' = lcFluidMap lc V.// [(idx, Just (FluidCell River fillZ))]
                                     sm' = lcSurfaceMap lc VU.// [(idx, max terrZ fillZ)]
@@ -819,3 +844,63 @@ fillCrossChunkHoles coords wtd = foldl' fillChunkHoles wtd coords
                 in case lcFluidMap nbrLC V.! nIdx of
                     Just nfc | fcType nfc ≡ River → Just (fcSurface nfc)
                     _ → Nothing
+
+-- | Remove river tiles on chunk edges that have no river neighbor
+--   anywhere (in-chunk or cross-chunk). These are orphaned single
+--   tiles left where a river segment ends at a chunk boundary but
+--   the adjacent chunk has no matching river (e.g. a mountain wall).
+removeOrphanedEdgeRivers ∷ [ChunkCoord] → WorldTileData → WorldTileData
+removeOrphanedEdgeRivers coords wtd = foldl' cleanChunk wtd coords
+  where
+    cleanChunk td coord =
+        case HM.lookup coord (wtdChunks td) of
+            Nothing → td
+            Just lc →
+                let removals =
+                        [ idx
+                        | idx ← [0 .. chunkSize * chunkSize - 1]
+                        , Just fc ← [lcFluidMap lc V.! idx]
+                        , fcType fc ≡ River
+                        , let lx = idx `mod` chunkSize
+                              ly = idx `div` chunkSize
+                        , lx ≡ 0 ∨ lx ≡ chunkSize - 1
+                          ∨ ly ≡ 0 ∨ ly ≡ chunkSize - 1
+                        , not (hasAnyRiverNeighbor td coord lc lx ly)
+                        ]
+                in if null removals
+                   then td
+                   else let updates = [ (idx, Nothing) | idx ← removals ]
+                            fm' = lcFluidMap lc V.// updates
+                            sm' = VU.imap (\idx oldSurf →
+                                case fm' V.! idx of
+                                    Just fc → max (lcTerrainSurfaceMap lc VU.! idx)
+                                                  (fcSurface fc)
+                                    Nothing → lcTerrainSurfaceMap lc VU.! idx
+                                ) (lcSurfaceMap lc)
+                            lc' = lc { lcFluidMap = fm', lcSurfaceMap = sm' }
+                            chunks' = HM.insert coord lc' (wtdChunks td)
+                        in td { wtdChunks = chunks' }
+
+    hasAnyRiverNeighbor td coord lc lx ly =
+        let ChunkCoord cx cy = coord
+            inChunk = any (\(nx, ny) →
+                nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize
+                ∧ case lcFluidMap lc V.! (ny * chunkSize + nx) of
+                    Just nfc → fcType nfc ≡ River
+                    Nothing  → False
+                ) [(lx-1,ly),(lx+1,ly),(lx,ly-1),(lx,ly+1)]
+            cross = any (\(nCoord, nlx, nly) →
+                case HM.lookup nCoord (wtdChunks td) of
+                    Nothing → False
+                    Just nbrLC →
+                        case lcFluidMap nbrLC V.! (nly * chunkSize + nlx) of
+                            Just nfc → fcType nfc ≡ River
+                            Nothing  → False
+                ) (crossDirs (ChunkCoord cx cy) lx ly)
+        in inChunk ∨ cross
+
+    crossDirs (ChunkCoord cx cy) lx ly =
+        [ (ChunkCoord cx (cy-1), lx, chunkSize-1) | ly ≡ 0 ]
+     ⧺ [ (ChunkCoord cx (cy+1), lx, 0)           | ly ≡ chunkSize-1 ]
+     ⧺ [ (ChunkCoord (cx-1) cy, chunkSize-1, ly) | lx ≡ 0 ]
+     ⧺ [ (ChunkCoord (cx+1) cy, 0, ly)           | lx ≡ chunkSize-1 ]
