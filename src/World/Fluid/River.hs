@@ -166,7 +166,10 @@ lowestDryNeighborTerrain mv surfaceMap lx ly = do
 --   neighbors).
 fillRiverHoles ∷ MV.MVector s (Maybe FluidCell) → VU.Vector Int → ST s ()
 fillRiverHoles mv surfaceMap = do
-    -- Pass A: fill holes (empty tiles with 3+ river neighbors)
+    -- Pass A: fill holes (empty tiles with 3+ river neighbors).
+    -- Depth check uses nMin (nearest water level), not nMax, so
+    -- a tile with one shallow and one deep neighbor is still
+    -- fillable. The fillZ cap (surfZ + 3) bounds water depth.
     forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
         val ← MV.read mv idx
         when (isNothing val) $ do
@@ -180,7 +183,7 @@ fillRiverHoles mv surfaceMap = do
                 case (maxSurf, minSurf) of
                     (Just nMax, Just nMin) → do
                         let standard = nCount ≥ 3 ∧ surfZ ≤ nMax
-                                     ∧ nMax - surfZ ≤ 5 ∧ nMax > seaLevel
+                                     ∧ nMin - surfZ ≤ 5 ∧ nMax > seaLevel
                             uniform = nMin ≡ nMax ∧ nCount ≥ 3
                                     ∧ surfZ ≤ nMax + 2 ∧ nMax > seaLevel
                             bridge = nCount ≡ 2 ∧ nMax - nMin ≤ 2
@@ -188,7 +191,6 @@ fillRiverHoles mv surfaceMap = do
                         when (standard ∨ uniform ∨ bridge) $ do
                             let fillZ | standard ∨ bridge = min nMax (surfZ + 3)
                                       | otherwise         = nMax
-                            -- Only fill if water surface is above terrain
                             when (fillZ > surfZ) $
                                 MV.write mv idx (Just (FluidCell River fillZ))
                     _ → pure ()

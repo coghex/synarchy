@@ -282,6 +282,63 @@ def check_island_1tile(grid: dict[tuple[int, int], dict[str, Any]],
             ))
 
 
+def check_lake_hole(grid: dict[tuple[int, int], dict[str, Any]],
+                    issues: list[Issue]) -> None:
+    """Single dry tiles fully surrounded by lake water. These are
+    "holes" in a lake that should have been filled by equilibration."""
+    for (x, y), tile in grid.items():
+        if tile["fluidType"] is not None:
+            continue
+        if tile.get("beyondGlacier") or tile["terrainZ"] <= INT64_MIN + 1:
+            continue
+        nbrs = []
+        for nx, ny in neighbors4(x, y):
+            n = grid.get((nx, ny))
+            if n is None:
+                continue
+            nbrs.append(n)
+        if len(nbrs) < 4:
+            continue
+        if all(n["fluidType"] == "lake" for n in nbrs):
+            lake_surf = nbrs[0]["fluidSurf"]
+            issues.append(Issue(
+                "LAKE_HOLE", x, y,
+                f"terrainZ={tile['terrainZ']} surrounded by lake (surf={lake_surf})",
+            ))
+
+
+def check_submerged_bump(grid: dict[tuple[int, int], dict[str, Any]],
+                         issues: list[Issue]) -> None:
+    """Dry tiles whose terrain is BELOW all surrounding water surfaces.
+    These should be underwater but aren't — visible as terrain bumps
+    poking through the water."""
+    for (x, y), tile in grid.items():
+        if tile["fluidType"] is not None:
+            continue
+        if tile.get("beyondGlacier") or tile["terrainZ"] <= INT64_MIN + 1:
+            continue
+        nbrs = []
+        for nx, ny in neighbors4(x, y):
+            n = grid.get((nx, ny))
+            if n is None:
+                continue
+            nbrs.append(n)
+        if len(nbrs) < 4:
+            continue
+        water_nbrs = [n for n in nbrs if n["fluidType"] is not None
+                      and n["fluidSurf"] is not None]
+        # Only flag if ≥3 water neighbors AND terrain is below all of them
+        if len(water_nbrs) >= 3:
+            min_water = min(n["fluidSurf"] for n in water_nbrs)
+            if tile["terrainZ"] < min_water:
+                types = sorted(set(n["fluidType"] for n in water_nbrs))
+                issues.append(Issue(
+                    "SUBMERGED_BUMP", x, y,
+                    f"terrainZ={tile['terrainZ']} < min water surf {min_water} "
+                    f"({len(water_nbrs)} water nbrs: {','.join(types)})",
+                ))
+
+
 def check_isolated_fluid(grid: dict[tuple[int, int], dict[str, Any]],
                          issues: list[Issue]) -> None:
     """Single non-ocean fluid tiles fully surrounded by dry tiles."""
@@ -344,6 +401,8 @@ ALL_CHECKS = {
     "RIVER_CHUNK_GAP": check_river_chunk_gaps,
     "RIVER_MOUTH_DROP": check_river_mouth_drop,
     "ISLAND_1TILE": check_island_1tile,
+    "LAKE_HOLE": check_lake_hole,
+    "SUBMERGED_BUMP": check_submerged_bump,
     "ISOLATED_FLUID": check_isolated_fluid,
     "MINBOUND_LEAK": check_minbound_leak,
     "SURFACE_INCONSISTENT": check_surface_inconsistent,
