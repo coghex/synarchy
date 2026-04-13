@@ -55,10 +55,14 @@ waterSideFaceQuads lookupSlot lookupFmSlot textures facing coord
           -- Bottom of the side-face stack depends on neighbor type:
           --   Water neighbor: draw from neighbor water surface
           --   Dry neighbor: draw from neighbor terrain surface
+          -- A 1-z gap is handled by the sloped water surface tile
+          -- (freshwaterTileToQuad + waterSlopeAt), so we only draw
+          -- side faces for gaps ≥ 2 (real waterfalls).
           (bottomZ, shouldDraw) = case nFluid of
-              Just nfc | fcSurface nfc < mySurf → (fcSurface nfc, True)
-              Just _                            → (mySurf, False)
-              Nothing                           → (nTerrZ, nTerrZ < mySurf)
+              Just nfc | fcSurface nfc < mySurf - 1 → (fcSurface nfc, True)
+              Just _                                → (mySurf, False)
+              Nothing | nTerrZ < mySurf - 1         → (nTerrZ, True)
+              Nothing                               → (mySurf, False)
     , shouldDraw
     -- One quad per z-level of gap
     , z ← [bottomZ .. mySurf - 1]

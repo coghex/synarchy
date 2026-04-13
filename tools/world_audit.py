@@ -360,6 +360,283 @@ def check_isolated_fluid(grid: dict[tuple[int, int], dict[str, Any]],
             ))
 
 
+def check_water_above_land(grid: dict[tuple[int, int], dict[str, Any]],
+                           issues: list[Issue]) -> None:
+    """River/lake tile whose surface is ≥2 above an adjacent dry tile
+    that is above sea level (vegetated land). Visible as water
+    floating on top of grass with blue cliff sides — the water
+    should either drain or the terrain should be carved lower.
+    This is the specific bug visible in screenshots: water sitting
+    on top of vegetated land that it shouldn't be covering."""
+    for (x, y), tile in grid.items():
+        if tile["fluidType"] not in ("river", "lake"):
+            continue
+        wsurf = tile["fluidSurf"]
+        if wsurf is None:
+            continue
+        for nx, ny in neighbors4(x, y):
+            n = grid.get((nx, ny))
+            if n is None or n["fluidType"] is not None:
+                continue
+            nterr = n["terrainZ"]
+            cliff = wsurf - nterr
+            if cliff >= 2 and nterr > SEA_LEVEL:
+                issues.append(Issue(
+                    "WATER_ABOVE_LAND", x, y,
+                    f"{tile['fluidType']} surf={wsurf} terr={tile['terrainZ']} "
+                    f"-> land({nx},{ny}) terr={nterr} cliff={cliff}",
+                ))
+                break
+
+
+def check_water_cliff(grid: dict[tuple[int, int], dict[str, Any]],
+                      issues: list[Issue]) -> None:
+    """Water tile where the water surface is ≥2 above a dry neighbor's
+    terrain. A 1-z cliff is natural (terrain just below water level)
+    and excluded. ≥2-z cliffs are the visible multi-tile water edges
+    the user sees as artifacts. Ocean excluded (renderer skips it)."""
+    for (x, y), tile in grid.items():
+        if tile["fluidType"] not in ("river", "lake"):
+            continue
+        wsurf = tile["fluidSurf"]
+        if wsurf is None:
+            continue
+        for nx, ny in neighbors4(x, y):
+            n = grid.get((nx, ny))
+            if n is None or n["fluidType"] is not None:
+                continue
+            if n.get("beyondGlacier") or n["terrainZ"] <= INT64_MIN + 1:
+                continue
+            cliff_height = wsurf - n["terrainZ"]
+            if cliff_height >= 2:
+                issues.append(Issue(
+                    "WATER_CLIFF", x, y,
+                    f"{tile['fluidType']} surf={wsurf} -> dry({nx},{ny}) "
+                    f"terr={n['terrainZ']} cliff={cliff_height}",
+                ))
+                break  # one report per water tile is enough
+
+
+def check_mid_river_cliff(grid: dict[tuple[int, int], dict[str, Any]],
+                          issues: list[Issue]) -> None:
+    """Adjacent water tiles whose surface differs by ≥2 while their
+    terrain is approximately flat (≤ 2 z apart). A 1-z surface diff
+    is natural (gradual slope) and excluded. Terrain drop ≥3 is a
+    real waterfall and excluded. What remains are the 2+-z stair-step
+    artifacts the sim creates — visible as multi-tile water cliffs
+    inside what should be a smooth river."""
+    seen = set()
+    for (x, y), tile in grid.items():
+        if tile["fluidType"] not in ("river", "lake"):
+            continue
+        wsurf = tile["fluidSurf"]
+        wterr = tile["terrainZ"]
+        if wsurf is None:
+            continue
+        for nx, ny in neighbors4(x, y):
+            pair = ((min(x, nx), min(y, ny)), (max(x, nx), max(y, ny)))
+            if pair in seen:
+                continue
+            n = grid.get((nx, ny))
+            if n is None or n["fluidType"] not in ("river", "lake"):
+                continue
+            nsurf = n["fluidSurf"]
+            nterr = n["terrainZ"]
+            if nsurf is None:
+                continue
+            terr_diff = abs(wterr - nterr)
+            surf_diff = abs(wsurf - nsurf)
+            # Bug: water surface differs MORE than the terrain
+            # justifies.  surf_diff ≤ terr_diff + 1 is natural
+            # (water at terrain+1 on both tiles).  Only flag when
+            # the water step exceeds the terrain step.
+            if surf_diff > terr_diff + 1 and terr_diff < 3:
+                seen.add(pair)
+                if wsurf > nsurf:
+                    rx, ry, rsurf = x, y, wsurf
+                    osurf = nsurf
+                else:
+                    rx, ry, rsurf = nx, ny, nsurf
+                    osurf = wsurf
+                issues.append(Issue(
+                    "MID_RIVER_CLIFF", rx, ry,
+                    f"{tile['fluidType']} surf={rsurf} (terr={wterr if rx == x else nterr}) "
+                    f"-> water nbr surf={osurf} (terr={nterr if rx == x else wterr}) "
+                    f"surf_diff={surf_diff} terr_diff={terr_diff}",
+                ))
+
+
+def check_water_water_cliff(grid: dict[tuple[int, int], dict[str, Any]],
+                            issues: list[Issue]) -> None:
+    """Adjacent water tiles with different surface heights. The
+    renderer draws side faces between them, making the height
+    difference visible as a water cliff inside what should be a
+    flat water body. Ocean is excluded (the renderer skips it for
+    side faces). Connected water bodies should have uniform surface."""
+    seen = set()
+    for (x, y), tile in grid.items():
+        if tile["fluidType"] not in ("river", "lake"):
+            continue
+        wsurf = tile["fluidSurf"]
+        if wsurf is None:
+            continue
+        for nx, ny in neighbors4(x, y):
+            # Avoid double-reporting each pair
+            pair = ((min(x, nx), min(y, ny)), (max(x, nx), max(y, ny)))
+            if pair in seen:
+                continue
+            n = grid.get((nx, ny))
+            if n is None or n["fluidType"] not in ("river", "lake"):
+                continue
+            nsurf = n["fluidSurf"]
+            if nsurf is None:
+                continue
+            diff = abs(wsurf - nsurf)
+            if diff > 0:
+                seen.add(pair)
+                # Report the higher tile (the side face is drawn on it)
+                if wsurf > nsurf:
+                    rx, ry, rsurf = x, y, wsurf
+                    osurf = nsurf
+                else:
+                    rx, ry, rsurf = nx, ny, nsurf
+                    osurf = wsurf
+                issues.append(Issue(
+                    "WATER_WATER_CLIFF", rx, ry,
+                    f"{tile['fluidType']} surf={rsurf} -> water nbr surf={osurf} diff={diff}",
+                ))
+
+
+def check_floating_water(grid: dict[tuple[int, int], dict[str, Any]],
+                         issues: list[Issue]) -> None:
+    """Water tile whose terrain (channel bottom) is HIGHER than an
+    adjacent dry tile's terrain. The water has nothing supporting it
+    on that side — visible as a gap underneath the water column.
+    Ocean excluded."""
+    for (x, y), tile in grid.items():
+        if tile["fluidType"] not in ("river", "lake"):
+            continue
+        wterr = tile["terrainZ"]
+        if wterr <= INT64_MIN + 1 or tile.get("beyondGlacier"):
+            continue
+        for nx, ny in neighbors4(x, y):
+            n = grid.get((nx, ny))
+            if n is None or n["fluidType"] is not None:
+                continue
+            if n.get("beyondGlacier") or n["terrainZ"] <= INT64_MIN + 1:
+                continue
+            gap = wterr - n["terrainZ"]
+            if gap > 0:
+                issues.append(Issue(
+                    "FLOATING_WATER", x, y,
+                    f"{tile['fluidType']} terr={wterr} -> dry({nx},{ny}) "
+                    f"terr={n['terrainZ']} gap={gap}",
+                ))
+                break
+
+
+def check_multi_island(grid: dict[tuple[int, int], dict[str, Any]],
+                       issues: list[Issue]) -> None:
+    """Small clusters (≤4 tiles) of dry tiles fully surrounded by
+    water (any type). These are dry "islands" inside what should be
+    a contiguous water body."""
+    visited: set[tuple[int, int]] = set()
+    max_size = 4
+    for (x, y), tile in grid.items():
+        if (x, y) in visited:
+            continue
+        if tile["fluidType"] is not None:
+            continue
+        if tile.get("beyondGlacier") or tile["terrainZ"] <= INT64_MIN + 1:
+            continue
+        # BFS to find dry cluster
+        cluster = set()
+        queue = [(x, y)]
+        bounded = True
+        while queue:
+            cx, cy = queue.pop()
+            if (cx, cy) in cluster:
+                continue
+            ct = grid.get((cx, cy))
+            if ct is None:
+                bounded = False
+                continue
+            if ct["fluidType"] is not None:
+                continue
+            if ct.get("beyondGlacier") or ct["terrainZ"] <= INT64_MIN + 1:
+                bounded = False
+                continue
+            cluster.add((cx, cy))
+            if len(cluster) > max_size:
+                break
+            for ncx, ncy in neighbors4(cx, cy):
+                if (ncx, ncy) not in cluster:
+                    queue.append((ncx, ncy))
+        visited.update(cluster)
+        if not bounded or len(cluster) > max_size or len(cluster) < 1:
+            continue
+        # Check that the entire boundary is water
+        boundary_is_water = True
+        boundary_water_types: set[str] = set()
+        for cx, cy in cluster:
+            for ncx, ncy in neighbors4(cx, cy):
+                if (ncx, ncy) in cluster:
+                    continue
+                n = grid.get((ncx, ncy))
+                if n is None or n["fluidType"] is None:
+                    boundary_is_water = False
+                    break
+                boundary_water_types.add(n["fluidType"])
+            if not boundary_is_water:
+                break
+        if boundary_is_water and len(cluster) > 1:
+            cx, cy = sorted(cluster)[0]
+            issues.append(Issue(
+                "MULTI_ISLAND", cx, cy,
+                f"size={len(cluster)} dry cluster surrounded by "
+                f"{','.join(sorted(boundary_water_types))}",
+            ))
+
+
+def check_flat_isolated_water(grid: dict[tuple[int, int], dict[str, Any]],
+                              issues: list[Issue]) -> None:
+    """Water tile on approximately flat terrain with 0 or 1 water
+    neighbors — water that should flow or drain but is stuck as a
+    tiny pocket. Distinct from ISOLATED_FLUID (0 water nbrs): also
+    catches 1-water-nbr pairs sitting on flat land."""
+    for (x, y), tile in grid.items():
+        if tile["fluidType"] not in ("river", "lake"):
+            continue
+        wsurf = tile["fluidSurf"]
+        if wsurf is None:
+            continue
+        nbrs = []
+        for nx, ny in neighbors4(x, y):
+            n = grid.get((nx, ny))
+            if n is None:
+                continue
+            nbrs.append(n)
+        if len(nbrs) < 4:
+            continue
+        water_count = sum(1 for n in nbrs if n["fluidType"] is not None)
+        if water_count > 1:
+            continue
+        # Check if terrain is approximately flat around this tile
+        terr = tile["terrainZ"]
+        nbr_terrs = [n["terrainZ"] for n in nbrs
+                     if not n.get("beyondGlacier")
+                     and n["terrainZ"] > INT64_MIN + 1]
+        if not nbr_terrs:
+            continue
+        terr_range = max(nbr_terrs) - min(nbr_terrs)
+        if terr_range <= 2:  # approximately flat
+            issues.append(Issue(
+                "FLAT_ISOLATED_WATER", x, y,
+                f"{tile['fluidType']} surf={wsurf} terr={terr} "
+                f"water_nbrs={water_count} terr_range={terr_range}",
+            ))
+
+
 def check_minbound_leak(grid: dict[tuple[int, int], dict[str, Any]],
                         issues: list[Issue]) -> None:
     """Int64 minBound leaking outside the beyondGlacier zone."""
@@ -403,6 +680,13 @@ ALL_CHECKS = {
     "ISLAND_1TILE": check_island_1tile,
     "LAKE_HOLE": check_lake_hole,
     "SUBMERGED_BUMP": check_submerged_bump,
+    "WATER_ABOVE_LAND": check_water_above_land,
+    "WATER_CLIFF": check_water_cliff,
+    "WATER_WATER_CLIFF": check_water_water_cliff,
+    "MID_RIVER_CLIFF": check_mid_river_cliff,
+    "FLOATING_WATER": check_floating_water,
+    "MULTI_ISLAND": check_multi_island,
+    "FLAT_ISOLATED_WATER": check_flat_isolated_water,
     "ISOLATED_FLUID": check_isolated_fluid,
     "MINBOUND_LEAK": check_minbound_leak,
     "SURFACE_INCONSISTENT": check_surface_inconsistent,

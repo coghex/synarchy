@@ -165,8 +165,12 @@ handleSimCommand env logger simStateRef cmd = do
             -- Run sim ticks synchronously (no sleeping) until all
             -- chunks are settled and inactive, then write back.
             -- Capped at maxIterations as a safety net.
+            -- Explicitly unpause for the fast-settle — the dump path
+            -- pauses the sim before chunks load but simulateFluidTick
+            -- is a no-op when paused.
             let maxIterations = 500 ∷ Int
-                ssSettled = fastSettleAll maxIterations ssSynced
+                ssUnpaused = ssSynced { ssPaused = False }
+                ssSettled = fastSettleAll maxIterations ssUnpaused
                 -- Mark every chunk as dirty so writeDirtyFluids
                 -- pushes the settled state back to wsTilesRef.
                 allCoords = HS.fromList (HM.keys (ssChunks ssSettled))

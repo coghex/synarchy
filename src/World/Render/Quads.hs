@@ -46,15 +46,18 @@ import World.Fluid.Types (IceCell(..))
 --     Grid W (lx-1) → pixel top    (North, bit 1)
 --
 --   Supports cross-chunk lookups via the chunkLookup function.
-waterSlopeAt ∷ V.Vector (Maybe FluidCell) → ChunkCoord
+waterSlopeAt ∷ V.Vector (Maybe FluidCell) → VU.Vector Int → ChunkCoord
              → (ChunkCoord → Maybe (V.Vector (Maybe FluidCell)))
+             → (ChunkCoord → Maybe (VU.Vector Int))
              → Int → Int → Int → Word8
-waterSlopeAt fluidMap coord chunkLookup lx ly mySurf =
+waterSlopeAt fluidMap terrSurfMap coord chunkLookup terrLookup lx ly mySurf =
     let checkNeighbor nx ny
             | nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize =
                 case fluidMap V.! (ny * chunkSize + nx) of
                     Just fc → fcSurface fc ≡ mySurf - 1
-                    Nothing → False
+                    -- Dry neighbor: slope toward it if terrain is
+                    -- exactly 1 below water surface (river bank).
+                    Nothing → terrSurfMap VU.! (ny * chunkSize + nx) ≡ mySurf - 1
             | otherwise =
                 -- Cross-chunk lookup
                 let ChunkCoord cx cy = coord
@@ -69,7 +72,10 @@ waterSlopeAt fluidMap coord chunkLookup lx ly mySurf =
                     Just neighborFM →
                         case neighborFM V.! (ly' * chunkSize + lx') of
                             Just fc → fcSurface fc ≡ mySurf - 1
-                            Nothing → False
+                            Nothing → case terrLookup (ChunkCoord cx' cy') of
+                                Nothing → False
+                                Just nTerrMap →
+                                    nTerrMap VU.! (ly' * chunkSize + lx') ≡ mySurf - 1
         -- Grid XY → UV/screen mapping. Each grid step is diagonal
         -- in UV space (u=x-y, v=x+y):
         --   Grid N (y-1) → u+, v- → pixel NE → bits 1+2 = 3
@@ -123,9 +129,12 @@ renderWorldQuads env worldState zoomAlpha snap = do
 
         effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
 
-        -- Lookup neighbor chunk fluid maps for cross-chunk water slopes
+        -- Lookup neighbor chunk fluid/terrain maps for cross-chunk water slopes
         fluidMapLookup cc = case HM.lookup cc (wtdChunks tileData) of
             Just lc' → Just (lcFluidMap lc')
+            Nothing  → Nothing
+        terrMapLookup cc = case HM.lookup cc (wtdChunks tileData) of
+            Just lc' → Just (lcTerrainSurfaceMap lc')
             Nothing  → Nothing
 
         vb = computeViewBounds camera fbW fbH effectiveDepth
@@ -303,7 +312,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                             Lake
                                               | hasIce → (oAcc, lAcc, fAcc)
                                               | otherwise ->
-                                                let wSlope = waterSlopeAt fluidMap coord fluidMapLookup lx ly (fcSurface fc)
+                                                let wSlope = waterSlopeAt fluidMap terrainSurfMap coord fluidMapLookup terrMapLookup lx ly (fcSurface fc)
                                                 in ( oAcc
                                                 , lAcc
                                                 , freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
@@ -312,7 +321,7 @@ renderWorldQuads env worldState zoomAlpha snap = do
                                                   : fAcc
                                                 )
                                             River ->
-                                                let wSlope = waterSlopeAt fluidMap coord fluidMapLookup lx ly (fcSurface fc)
+                                                let wSlope = waterSlopeAt fluidMap terrainSurfMap coord fluidMapLookup terrMapLookup lx ly (fcSurface fc)
                                                 in ( oAcc
                                                 , lAcc
                                                 , freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
