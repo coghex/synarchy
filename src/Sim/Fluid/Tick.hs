@@ -130,171 +130,59 @@ simulatePassiveChunk allChunks coord scs =
                                                     writeSTRef changedRef True
                                         else when (mySurf < minNbr
                                                   ∧ minNbr < maxBound) $ do
-                                            -- Raise toward neighbors if below
-                                            -- all of them (fills basins).
-                                            -- Pool tiles (≥3 water neighbors)
-                                            -- jump directly to the min water
-                                            -- neighbor level so basins fill
-                                            -- quickly to a flat surface.
-                                            -- River tiles (1-2 water neighbors)
-                                            -- raise slowly (+1) to avoid
-                                            -- flooding banks.
-                                            let waterNbrSurfs =
-                                                    [ s | (s, _, True) ← nbrInfo ]
-                                                nWater = length waterNbrSurfs
-                                                minWater = if null waterNbrSurfs
-                                                           then maxBound
-                                                           else minimum waterNbrSurfs
-                                                raised = if nWater ≥ 3
-                                                         then minWater  -- pool: fill
-                                                         else min (mySurf + 1) minNbr
-                                            when (raised > mySurf
-                                                 ∧ raised > terrZ) $ do
+                                            -- Raise: jump directly to the
+                                            -- min neighbor level.  This fills
+                                            -- basins in one step (water finds
+                                            -- its level).  Rivers aren't
+                                            -- affected because their surface
+                                            -- already equals their min
+                                            -- neighbor.
+                                            when (minNbr > terrZ) $ do
                                                 MV.write mv idx
-                                                    (Just (fc' { fcSurface = raised }))
+                                                    (Just (fc' { fcSurface = minNbr }))
                                                 writeSTRef changedRef True
 
-            -- Phase 1b: Pool equalization.
-            -- After diffusion, river tiles sit at terrain+1 (correct).
-            -- But basin/pool tiles also sit at terrain+1, creating a
-            -- chaotic stair-step where the water should be flat.
-            -- BFS connected water tiles that have ≥3 water neighbors
-            -- (pool interior). Set all tiles in the pool to the MAX
-            -- surface in the pool (water fills to its highest level).
-            -- This fills basins to a uniform level while leaving
-            -- rivers (1-2 water neighbors) at their terrain-following
-            -- surface.
-            poolVisited ← MV.replicate sz (0 ∷ Int)
-            forM_ [0 .. sz - 1] $ \pstart → do
-                pv ← MV.read poolVisited pstart
-                when (pv ≡ 0) $ do
-                    pcell ← MV.read mv pstart
-                    case pcell of
-                        Just pfc | (fcType pfc ≡ River ∨ fcType pfc ≡ Lava) → do
-                            -- Count water neighbors to see if this is a pool tile
-                            let plx = pstart `mod` chunkSize
-                                ply = pstart `div` chunkSize
-                            pWaterCount ← do
-                                cnt ← newSTRef (0 ∷ Int)
-                                forM_ [(plx-1,ply),(plx+1,ply),(plx,ply-1),(plx,ply+1)]
-                                    $ \(pnx, pny) →
-                                        when (pnx ≥ 0 ∧ pnx < chunkSize
-                                             ∧ pny ≥ 0 ∧ pny < chunkSize) $ do
-                                            let pnIdx = pny * chunkSize + pnx
-                                            pnCell ← MV.read mv pnIdx
-                                            case pnCell of
-                                                Just pnfc | fcType pnfc /= Ocean
-                                                          ∧ fcType pnfc /= Lake →
-                                                    modifySTRef' cnt (+ 1)
-                                                _ → pure ()
-                                readSTRef cnt
-                            if pWaterCount < 3
-                                then MV.write poolVisited pstart 1
-                                else do
-                                    -- BFS the pool: collect connected
-                                    -- water tiles with ≥3 water neighbors.
-                                    poolRef ← newSTRef ([] ∷ [Int])
-                                    pqRef ← newSTRef [pstart]
-                                    let poolBfs = do
-                                            pq ← readSTRef pqRef
-                                            case pq of
-                                                [] → pure ()
-                                                (pidx : prest) → do
-                                                    writeSTRef pqRef prest
-                                                    ppv ← MV.read poolVisited pidx
-                                                    if ppv ≡ 1
-                                                        then poolBfs
-                                                        else do
-                                                            MV.write poolVisited pidx 1
-                                                            pc ← MV.read mv pidx
-                                                            case pc of
-                                                                Just pfc' | fcType pfc' ≡ River
-                                                                            ∨ fcType pfc' ≡ Lava → do
-                                                                    -- Count water neighbors
-                                                                    let plx' = pidx `mod` chunkSize
-                                                                        ply' = pidx `div` chunkSize
-                                                                    wc ← do
-                                                                        c ← newSTRef (0 ∷ Int)
-                                                                        forM_ [(plx'-1,ply'),(plx'+1,ply')
-                                                                              ,(plx',ply'-1),(plx',ply'+1)]
-                                                                            $ \(pnx, pny) →
-                                                                                when (pnx ≥ 0 ∧ pnx < chunkSize
-                                                                                     ∧ pny ≥ 0 ∧ pny < chunkSize) $ do
-                                                                                    let pni = pny * chunkSize + pnx
-                                                                                    pnc ← MV.read mv pni
-                                                                                    case pnc of
-                                                                                        Just pnf | fcType pnf /= Ocean
-                                                                                                 ∧ fcType pnf /= Lake →
-                                                                                            modifySTRef' c (+ 1)
-                                                                                        _ → pure ()
-                                                                        readSTRef c
-                                                                    if wc < 3
-                                                                        then poolBfs  -- not a pool tile
-                                                                        else do
-                                                                            modifySTRef' poolRef (pidx :)
-                                                                            forM_ [(plx'-1,ply'),(plx'+1,ply')
-                                                                                  ,(plx',ply'-1),(plx',ply'+1)]
-                                                                                $ \(pnx, pny) →
-                                                                                    when (pnx ≥ 0 ∧ pnx < chunkSize
-                                                                                         ∧ pny ≥ 0 ∧ pny < chunkSize) $
-                                                                                        modifySTRef' pqRef
-                                                                                            ((pny * chunkSize + pnx) :)
-                                                                            poolBfs
-                                                                _ → poolBfs
-                                    poolBfs
-                                    pool ← readSTRef poolRef
-                                    case pool of
-                                        [] → pure ()
-                                        _  → do
-                                            -- Find the spillway: the lowest
-                                            -- "exit" level adjacent to the
-                                            -- pool. This is the minimum of:
-                                            --  - non-pool water neighbor surfs
-                                            --  - dry neighbor (terrain + 1)
-                                            -- The pool fills to this level
-                                            -- (water can't be higher than its
-                                            -- lowest outlet).
-                                            let poolSet = foldl' (\s i → HS.insert i s)
-                                                                 HS.empty pool
-                                            spillRef ← newSTRef maxBound
-                                            forM_ pool $ \pi' → do
-                                                let plx' = pi' `mod` chunkSize
-                                                    ply' = pi' `div` chunkSize
-                                                forM_ [(plx'-1,ply'),(plx'+1,ply')
-                                                      ,(plx',ply'-1),(plx',ply'+1)]
-                                                    $ \(pnx, pny) →
-                                                        when (pnx ≥ 0 ∧ pnx < chunkSize
-                                                             ∧ pny ≥ 0 ∧ pny < chunkSize) $ do
-                                                            let pni = pny * chunkSize + pnx
-                                                            unless (HS.member pni poolSet) $ do
-                                                                pnc ← MV.read mv pni
-                                                                case pnc of
-                                                                    Just pnf →
-                                                                        modifySTRef' spillRef
-                                                                            (min (fcSurface pnf))
-                                                                    Nothing →
-                                                                        modifySTRef' spillRef
-                                                                            (min (terrainV VU.! pni + 1))
-                                            spillway ← readSTRef spillRef
-                                            -- Pool level = spillway (water
-                                            -- fills to the outlet level).
-                                            let pType = fcType pfc
-                                            when (spillway < maxBound) $
-                                                forM_ pool $ \pi' → do
-                                                    pc ← MV.read mv pi'
-                                                    case pc of
-                                                        Just pfc' | fcSurface pfc' ≢ spillway → do
-                                                            let ptZ = terrainV VU.! pi'
-                                                            if spillway ≤ ptZ
-                                                                then do
-                                                                    MV.write mv pi' Nothing
-                                                                    writeSTRef changedRef True
-                                                                else do
-                                                                    MV.write mv pi'
-                                                                        (Just (FluidCell pType spillway))
-                                                                    writeSTRef changedRef True
-                                                        _ → pure ()
-                        _ → MV.write poolVisited pstart 1
+            -- Phase 1b: Fill dry tiles below adjacent water.
+            -- If a dry tile has ≥2 water neighbors and its terrain
+            -- is below the minimum water neighbor surface, fill it
+            -- with water at that surface. This is how basins fill:
+            -- water extends into submerged dry tiles.
+            forM_ [0 .. sz - 1] $ \idx → do
+                cell ← MV.read mv idx
+                case cell of
+                    Nothing → do
+                        let terrZ = terrainV VU.! idx
+                        when (terrZ > minBound) $ do
+                            let lx = idx `mod` chunkSize
+                                ly = idx `div` chunkSize
+                            -- Count water neighbors and find min surface
+                            wCountRef ← newSTRef (0 ∷ Int)
+                            wMinRef ← newSTRef maxBound
+                            wTypeRef ← newSTRef River
+                            forM_ [(lx-1,ly),(lx+1,ly),(lx,ly-1),(lx,ly+1)]
+                                $ \(fnx, fny) →
+                                    when (fnx ≥ 0 ∧ fnx < chunkSize
+                                         ∧ fny ≥ 0 ∧ fny < chunkSize) $ do
+                                        let fIdx = fny * chunkSize + fnx
+                                        fc ← MV.read mv fIdx
+                                        case fc of
+                                            Just ffc | fcType ffc /= Ocean
+                                                     ∧ fcType ffc /= Lake → do
+                                                modifySTRef' wCountRef (+ 1)
+                                                modifySTRef' wMinRef
+                                                    (min (fcSurface ffc))
+                                                writeSTRef wTypeRef (fcType ffc)
+                                            _ → pure ()
+                            wCount ← readSTRef wCountRef
+                            wMin ← readSTRef wMinRef
+                            wType ← readSTRef wTypeRef
+                            when (wCount ≥ 2 ∧ terrZ < wMin) $ do
+                                let fillSurf = wMin
+                                when (fillSurf > terrZ) $ do
+                                    MV.write mv idx
+                                        (Just (FluidCell wType fillSurf))
+                                    writeSTRef changedRef True
+                    _ → pure ()
 
             -- Phase 2: Drain — isolated tiles (no water neighbors) lower.
             forM_ [0 .. sz - 1] $ \idx → do
