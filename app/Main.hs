@@ -41,6 +41,9 @@ import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), chunkSize)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..))
 import World.Plate (isGlacierZone, isBeyondGlacier)
 import World.Thread.ChunkLoading (fillOrphanedSubseaTiles, drainOceanLakes)
+import World.Generate.Types (WorldGenParams(..))
+import World.Weather.Types (ClimateState, initClimateState)
+import World.Weather.Lookup (lookupWaterTable)
 import Unit.Thread (startUnitThread)
 import Sim.Thread (startSimThread)
 import Sim.Command.Types (SimCommand(..))
@@ -295,11 +298,14 @@ runDump layers seed worldSize ages (cx1, cy1, cx2, cy2) = do
                     -- Apply final cleanup passes: orphaned subsea,
                     -- drain ocean-connected lakes, river mouth
                     -- clamping, and submerged-bump fill.
+                    mParams ← readIORef (wsGenParamsRef ws)
+                    let climate = maybe (initClimateState worldSize)
+                                     wgpClimateState mParams
                     td ← atomicModifyIORef' (wsTilesRef ws) $ \td →
                         let td' = drainOceanLakes
-                                $ fillOrphanedSubseaTiles td
+                                $ fillOrphanedSubseaTiles climate worldSize td
                         in (td', td')
-                    let json = dumpTilesJSON layers worldSize td cx1 cy1 cx2 cy2
+                    let json = dumpTilesJSON layers worldSize climate td cx1 cy1 cx2 cy2
                     BS.putStr json
                     hFlush stdout
                     hPutStrLn stderr $ "dump: done"
@@ -352,9 +358,9 @@ waitForChunks env n = do
 -- | Dump per-tile data in a chunk region as JSON.
 --   Every tile in the region gets one object. Fields are included
 --   based on the DumpLayers whitelist.
-dumpTilesJSON ∷ DumpLayers → Int → WorldTileData
+dumpTilesJSON ∷ DumpLayers → Int → ClimateState → WorldTileData
               → Int → Int → Int → Int → BS.ByteString
-dumpTilesJSON layers worldSize td cx1 cy1 cx2 cy2 =
+dumpTilesJSON layers worldSize climate td cx1 cy1 cx2 cy2 =
     let entries = concatMap dumpChunkTiles
             [ ChunkCoord x y | x ← [cx1..cx2], y ← [cy1..cy2] ]
     in BS.pack $ "[" ⧺ intercalate "," entries ⧺ "]\n"
@@ -377,10 +383,13 @@ dumpTilesJSON layers worldSize td cx1 cy1 cx2 cy2 =
                  ⧺ ",\"v\":" ⧺ show v
             terrainZ = lcTerrainSurfaceMap lc VU.! idx
             surfZ    = lcSurfaceMap lc VU.! idx
+            (wtSummer, wtWinter) = lookupWaterTable climate worldSize gx gy
             terrainFields
               | dlTerrain layers =
                   ",\"terrainZ\":" ⧺ show terrainZ
                   ⧺ ",\"surfaceZ\":" ⧺ show surfZ
+                  ⧺ ",\"waterTableSummer\":" ⧺ show wtSummer
+                  ⧺ ",\"waterTableWinter\":" ⧺ show wtWinter
               | otherwise = ""
             matFields
               | dlMaterial layers =

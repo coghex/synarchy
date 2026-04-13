@@ -415,6 +415,52 @@ buildClimateFromOceanSet worldSize oceanSet freshwaterSources globalCO2 globalTe
 
                 continentality = clamp01 ((1.0 - m - 0.3 * fw) * (0.60 + 0.40 * highFactor))
 
+                -- Water table: how deep below estimated terrain
+                -- groundwater sits. Ocean regions = seaLevel.
+                -- Inland: base offset of 20, raised by effective
+                -- precipitation and lowered by elevation.
+                --
+                -- Summer: rain + snowmelt from winter accumulation.
+                -- Winter: rain only (fallen snow stays frozen).
+                winterRain    = precipWinter * (1.0 - snowFrac)
+                snowAccum     = precipWinter * snowFrac
+                -- Snowmelt in summer depends on summer temperature
+                -- being above freezing. Cold summers = less melt.
+                meltFraction  = clamp01 ((tSummer - 0.0) / 15.0)
+                summerMelt    = snowAccum * meltFraction
+                summerEffective = precipSummer + summerMelt
+                winterEffective = winterRain
+
+                -- Estimate terrain elevation from ocean distance.
+                -- Actual per-tile elevation isn't available during
+                -- climate generation, but regions further from the
+                -- ocean tend to be higher (continental interiors).
+                bfsDist = fromIntegral
+                            (HM.lookupDefault 0 coord bfsDistances) ∷ Float
+                estimatedElev = bfsDist * 5.0  -- ~5 z per region step inland
+                elevPenalty   = estimatedElev / 15.0
+
+                -- Base offset below terrain
+                baseOffset  = 20.0 ∷ Float
+                precipScale = 40.0 ∷ Float
+
+                summerOffset = max 1.0 (baseOffset
+                             - summerEffective * precipScale
+                             + elevPenalty)
+                winterOffset = max 1.0 (baseOffset
+                             - winterEffective * precipScale
+                             + elevPenalty)
+
+                -- Water table = estimated terrain - offset.
+                -- For ocean regions, always sea level.
+                estTerrZ = fromIntegral seaLevel + estimatedElev
+                wtSummer = if isOcean
+                           then fromIntegral seaLevel
+                           else estTerrZ - summerOffset
+                wtWinter = if isOcean
+                           then fromIntegral seaLevel
+                           else estTerrZ - winterOffset
+
             in RegionClimate
                 { rcAirTemp        = SeasonalClimate tSummer tWinter
                 , rcHumidity       = humidity
@@ -429,6 +475,7 @@ buildClimateFromOceanSet worldSize oceanSet freshwaterSources globalCO2 globalTe
                 , rcContinentality = continentality
                 , rcAlbedo         = albedo
                 , rcElevAvg        = 0
+                , rcWaterTable     = SeasonalClimate wtSummer wtWinter
                 }
 
         -- Build ocean cells for ocean regions

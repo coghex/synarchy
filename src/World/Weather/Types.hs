@@ -102,13 +102,20 @@ data RegionClimate = RegionClimate
     , rcAlbedo         ∷ !Float            -- ^ Surface reflectivity 0.0-1.0
                                            --   (ice ~0.8, forest ~0.15, desert ~0.35)
     , rcElevAvg        ∷ !Int              -- ^ Mean elevation across region
+    , rcWaterTable     ∷ !SeasonalClimate  -- ^ Water table elevation (summer/winter).
+                                           --   Below this level, groundwater fills
+                                           --   basins. Above it, basins stay dry.
+                                           --   Ocean regions = seaLevel. Inland =
+                                           --   elevAvg - offset (modulated by
+                                           --   precipitation, snowmelt, elevation).
     } deriving (Show, Eq, Generic, Serialize)
 
 instance NFData RegionClimate where
-    rnf (RegionClimate at h p pt e cc pr wd ws ol co al el) =
+    rnf (RegionClimate at h p pt e cc pr wd ws ol co al el wt) =
         rnf at `seq` rnf h `seq` rnf p `seq` rnf pt `seq`
         rnf e `seq` rnf cc `seq` rnf pr `seq` rnf wd `seq`
         rnf ws `seq` rnf ol `seq` rnf co `seq` rnf al `seq` rnf el
+        `seq` rnf wt
 
 defaultRegionClimate ∷ RegionClimate
 defaultRegionClimate = RegionClimate
@@ -125,6 +132,7 @@ defaultRegionClimate = RegionClimate
     , rcContinentality = 0.5
     , rcAlbedo         = 0.3
     , rcElevAvg        = 0
+    , rcWaterTable     = SeasonalClimate 0.0 0.0
     }
 
 -- * Climate Grid (all regions)

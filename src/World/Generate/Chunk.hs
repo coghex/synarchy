@@ -34,6 +34,7 @@ import World.Fluid.Overflow (handleOverflow)
 import World.Fluid.Ice (computeChunkIce)
 import World.Vegetation (computeChunkVegetation, vegSnow, vegHash)
 import World.Flora.Placement (computeChunkFlora)
+import World.Weather.Lookup (lookupWaterTable)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 import World.Generate.Timeline (applyTimelineChunk, removeElevationSpikes)
@@ -190,8 +191,11 @@ generateChunk registry catalog params coord =
         features = gtFeatures timeline
         lavaFluidMap = computeChunkLava features seed plates worldSize
                                         coord terrainSurfaceMap
+        -- Water table lookup: summer value at the lake center
+        waterTableAt gx gy = fst (lookupWaterTable
+                                      (wgpClimateState params) worldSize gx gy)
         lakeFluidMap = computeChunkLakes features seed plates worldSize
-                                         coord terrainSurfaceMap
+                                         coord terrainSurfaceMap waterTableAt
         -- Extract river params from events (not features) so fluid
         -- fill matches the carved terrain, which uses event segments.
         eventRivers = concatMap extractEventRivers (gtPeriods timeline)
@@ -475,8 +479,10 @@ generateZoomTerrain registry params coord =
         -- Fluid pipeline (same as detail world)
         features    = gtFeatures timeline
         oceanFluid  = computeChunkFluid worldSize oceanMap coord interiorElev
+        zoomWTAt gx gy = fst (lookupWaterTable
+                                   (wgpClimateState params) worldSize gx gy)
         lakeFluid   = computeChunkLakes features seed plates worldSize
-                          coord interiorElev
+                          coord interiorElev zoomWTAt
         eventRivers = concatMap extractEventRivers (gtPeriods timeline)
         riverFluid  = computeChunkRivers eventRivers worldSize coord interiorElev
         rawFluid    = unionFluidMap riverFluid

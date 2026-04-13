@@ -23,15 +23,16 @@ import World.Hydrology.Types (HydroFeature(..), LakeParams(..))
 computeChunkLakes ∷ [PersistentFeature] → Word64 → [TectonicPlate]
                   → Int → ChunkCoord
                   → VU.Vector Int
+                  → (Int → Int → Int)  -- ^ water table lookup (gx, gy → summer WT level)
                   → FluidMap
-computeChunkLakes features seed plates worldSize coord surfaceMap =
+computeChunkLakes features seed plates worldSize coord surfaceMap waterTableAt =
     let ChunkCoord cx cy = coord
         chunkMinGX = cx * chunkSize
         chunkMinGY = cy * chunkSize
         nearbyLakes = filter (isNearbyLake worldSize chunkMinGX chunkMinGY) features
     in withFluidMap $ \mv →
         forM_ nearbyLakes $ \pf →
-            fillLakeFromFeature mv pf seed plates worldSize chunkMinGX chunkMinGY surfaceMap
+            fillLakeFromFeature mv pf seed plates worldSize chunkMinGX chunkMinGY surfaceMap waterTableAt
 
 -- * Lake Proximity
 
@@ -68,23 +69,25 @@ fillLakeFromFeature ∷ MV.MVector s (Maybe FluidCell)
                     → PersistentFeature → Word64 → [TectonicPlate]
                     → Int → Int → Int
                     → VU.Vector Int
+                    → (Int → Int → Int)
                     → ST s ()
-fillLakeFromFeature mv pf seed plates worldSize chunkGX chunkGY surfaceMap =
+fillLakeFromFeature mv pf seed plates worldSize chunkGX chunkGY surfaceMap waterTableAt =
     case pfFeature pf of
         HydroShape (LakeFeature lk) →
             let GeoCoord fx fy = lkCenter lk
                 poolRadius = lkRadius lk
                 lakeSurface = lkSurface lk
+                wtAtCenter = waterTableAt fx fy
             in fillLakePool mv seed plates worldSize chunkGX chunkGY
-                   fx fy poolRadius lakeSurface surfaceMap
+                   fx fy poolRadius lakeSurface wtAtCenter surfaceMap
         _ → pure ()
 
 fillLakePool ∷ MV.MVector s (Maybe FluidCell)
              → Word64 → [TectonicPlate] → Int → Int → Int
-             → Int → Int → Int → Int
+             → Int → Int → Int → Int → Int
              → VU.Vector Int
              → ST s ()
-fillLakePool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurface surfaceMap =
+fillLakePool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurface waterTable surfaceMap =
     let -- Expand fill radius by 25% to cover perturbed basin boundary.
         -- The carving in Event.hs uses angular noise that can extend
         -- the basin up to ~20% beyond the nominal radius. The surfZ
@@ -104,7 +107,11 @@ fillLakePool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurfa
 
         clampedSurface = min lakeSurface spillway
 
-    in if clampedSurface ≤ seaLevel
+        -- Lakes only fill above the water table. Below the water
+        -- table, the basin would be filled by groundwater (ocean).
+        -- Above the water table, the lake must be sustained by
+        -- precipitation/rivers via the spillway mechanism.
+    in if clampedSurface ≤ waterTable
        then pure ()
        else do
             -- Pass 1: fill tiles within radius that are at/below lake surface

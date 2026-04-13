@@ -34,6 +34,9 @@ import World.Slope (recomputeNeighborSlopes, patchEdgeStrata)
 import World.Fluids (sealCrossChunkRivers)
 import World.SideFace.Compute (computeChunkSideDecos)
 import World.Thread.Helpers (unWorldPageId)
+import World.Weather.Types (ClimateState(..))
+import World.Weather.Lookup (lookupWaterTable)
+import World.Generate.Types (WorldGenParams(..))
 import Sim.Command.Types (SimCommand(..))
 
 -- | Maximum chunks to generate per world loop iteration.
@@ -216,7 +219,10 @@ drainInitQueues env logger = do
                                     td'  = sealCrossChunkRivers allCoords td
                                     td'' = sealCrossChunkRivers allCoords td'
                                     td''' = drainOceanLakes
-                                          $ fillOrphanedSubseaTiles td''
+                                          $ fillOrphanedSubseaTiles
+                                                (wgpClimateState params)
+                                                (wgpWorldSize params)
+                                                td''
                                 in (td''', ())
                             logDebug logger CatWorld $
                                 "Initial chunk loading complete for: "
@@ -240,21 +246,32 @@ drainInitQueues env logger = do
 --
 --   Strictly additive: only fills tiles that were Nothing. Never
 --   removes existing fluid.
-fillOrphanedSubseaTiles ∷ WorldTileData → WorldTileData
-fillOrphanedSubseaTiles wtd =
-    wtd { wtdChunks = HM.map fillChunk (wtdChunks wtd) }
+--
+--   Uses the per-tile water table (from climate) instead of a flat
+--   seaLevel cutoff.  Dry tiles below the local water table get
+--   ocean; tiles above it stay dry even if below sea level (arid
+--   inland basins).
+fillOrphanedSubseaTiles ∷ ClimateState → Int → WorldTileData → WorldTileData
+fillOrphanedSubseaTiles climate worldSize wtd =
+    wtd { wtdChunks = HM.mapWithKey fillChunk (wtdChunks wtd) }
   where
     area = chunkSize * chunkSize
-    fillChunk lc =
+    fillChunk coord lc =
         let fluidMap = lcFluidMap lc
             terrMap  = lcTerrainSurfaceMap lc
+            ChunkCoord cx cy = coord
             updates =
                 [ (idx, Just (FluidCell Ocean seaLevel))
                 | idx ← [0 .. area - 1]
                 , isNothing (fluidMap V.! idx)
                 , let terrZ = terrMap VU.! idx
-                , terrZ ≤ seaLevel
                 , terrZ > minBound
+                , let lx = idx `mod` chunkSize
+                      ly = idx `div` chunkSize
+                      gx = cx * chunkSize + lx
+                      gy = cy * chunkSize + ly
+                      (wtSummer, _) = lookupWaterTable climate worldSize gx gy
+                , terrZ ≤ wtSummer
                 ]
         in if null updates
            then lc
@@ -290,12 +307,12 @@ hasAdjacentOceanTile chunks (ChunkCoord cx cy) lx ly =
             Just fc → fcType fc ≡ Ocean
             Nothing → False
 
--- | Convert lake tiles to ocean when they're below sea level and
---   adjacent to ocean (or connected via other such lake tiles).
---   The lake fill's 32-sample spillway check can miss narrow ocean
---   openings, leaving lake water sitting on below-sea-level terrain
---   directly next to the ocean. Iterates up to 8 passes so chains
---   of connected lake tiles all convert together.
+-- | Convert lake tiles to ocean in two cases:
+--   1. Below sea level AND adjacent to ocean (the spillway miss case).
+--   2. Extremely deep (depth > 15, terrain well below sea level).
+--      These are enclosed basins the ocean BFS didn't reach but
+--      that are clearly below the water table.
+--   Iterates up to 8 passes so chains of connected tiles convert.
 drainOceanLakes ∷ WorldTileData → WorldTileData
 drainOceanLakes = iterDrain (8 ∷ Int)
   where
@@ -314,10 +331,14 @@ drainOceanLakes = iterDrain (8 ∷ Int)
                         , Just fc ← [fm V.! idx]
                         , fcType fc ≡ Lake
                         , let terrZ = terr VU.! idx
+                              depth = fcSurface fc - terrZ
                         , terrZ ≤ seaLevel
                         , let lx = idx `mod` chunkSize
                               ly = idx `div` chunkSize
+                          -- Case 1: adjacent to ocean (spillway miss)
+                          -- Case 2: extreme depth (enclosed deep basin)
                         , hasAdjacentOceanTile chunks coord lx ly
+                          ∨ depth > 15
                         ]
                 in if null updates
                    then lc

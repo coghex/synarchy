@@ -2,6 +2,7 @@
 module World.Weather.Lookup
     ( -- * Climate interpolation
       lookupLocalClimate
+    , lookupWaterTable
     , LocalClimate(..)
       -- * Shared coordinate math for custom interpolation
     , RegionGridCoords(..)
@@ -106,5 +107,34 @@ lookupLocalClimate climate worldSize gx gy =
         humid   = lerpF (lerpF h00  h10  tu) (lerpF h01  h11  tu) tv
         snow    = lerpF (lerpF s00  s10  tu) (lerpF s01  s11  tu) tv
     in LocalClimate temp summer winter precip humid snow
+  where
+    chunkSz = 16
+
+-- | Look up the water table level at a global tile coordinate.
+--   Returns (summerWT, winterWT) as Ints (z-levels).
+--   Uses the same bilinear interpolation as lookupLocalClimate.
+{-# INLINE lookupWaterTable #-}
+lookupWaterTable ∷ ClimateState → Int → Int → Int → (Int, Int)
+lookupWaterTable climate worldSize gx gy =
+    let regions = cgRegions (csClimate climate)
+        RegionGridCoords ru0 ru1 rv0 rv1 tu tv =
+            regionGridCoords chunkSz worldSize gx gy
+
+        lookupWT ru rv =
+            case HM.lookup (ClimateCoord ru rv) regions of
+                Just rc →
+                    let SeasonalClimate ws ww = rcWaterTable rc
+                    in (ws, ww)
+                Nothing → (0.0, 0.0)
+
+        (ws00, ww00) = lookupWT ru0 rv0
+        (ws10, ww10) = lookupWT ru1 rv0
+        (ws01, ww01) = lookupWT ru0 rv1
+        (ws11, ww11) = lookupWT ru1 rv1
+
+        lerpF a b t = a + t * (b - a)
+        wtSummer = lerpF (lerpF ws00 ws10 tu) (lerpF ws01 ws11 tu) tv
+        wtWinter = lerpF (lerpF ww00 ww10 tu) (lerpF ww01 ww11 tu) tv
+    in (round wtSummer, round wtWinter)
   where
     chunkSz = 16
