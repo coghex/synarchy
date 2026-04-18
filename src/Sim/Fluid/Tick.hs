@@ -170,20 +170,33 @@ simulatePassiveChunk allChunks coord scs =
                             wCountRef ← newSTRef (0 ∷ Int)
                             wMaxRef ← newSTRef minBound
                             wTypeRef ← newSTRef Ocean
+                            -- Check all 4 cardinal neighbors including
+                            -- cross-chunk. Previously only checked
+                            -- within-chunk, so overflow at chunk
+                            -- boundaries was never detected.
                             forM_ [(lx-1,ly),(lx+1,ly),(lx,ly-1),(lx,ly+1)]
-                                $ \(fnx, fny) →
-                                    when (fnx ≥ 0 ∧ fnx < chunkSize
-                                         ∧ fny ≥ 0 ∧ fny < chunkSize) $ do
-                                        let fIdx = fny * chunkSize + fnx
-                                        fc ← MV.read mv fIdx
-                                        case fc of
-                                            Just ffc → do
-                                                modifySTRef' wCountRef (+ 1)
-                                                curMax ← readSTRef wMaxRef
-                                                when (fcSurface ffc > curMax) $ do
-                                                    writeSTRef wMaxRef (fcSurface ffc)
-                                                    writeSTRef wTypeRef (fcType ffc)
-                                            _ → pure ()
+                                $ \(fnx, fny) → do
+                                    let inBounds = fnx ≥ 0 ∧ fnx < chunkSize
+                                                 ∧ fny ≥ 0 ∧ fny < chunkSize
+                                    mfc ← if inBounds
+                                        then MV.read mv (fny * chunkSize + fnx)
+                                        else do
+                                            let (nCoord, cnlx, cnly) =
+                                                    resolveNeighborCoord
+                                                        coord fnx fny
+                                            pure $ case HM.lookup nCoord allChunks of
+                                                Nothing → Nothing
+                                                Just ncs →
+                                                    scsFluid ncs V.!
+                                                        (cnly * chunkSize + cnlx)
+                                    case mfc of
+                                        Just ffc → do
+                                            modifySTRef' wCountRef (+ 1)
+                                            curMax ← readSTRef wMaxRef
+                                            when (fcSurface ffc > curMax) $ do
+                                                writeSTRef wMaxRef (fcSurface ffc)
+                                                writeSTRef wTypeRef (fcType ffc)
+                                        _ → pure ()
                             wCount ← readSTRef wCountRef
                             wMax ← readSTRef wMaxRef
                             wType ← readSTRef wTypeRef
