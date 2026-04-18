@@ -143,10 +143,22 @@ simulatePassiveChunk allChunks coord scs =
                                                 writeSTRef changedRef True
 
             -- Phase 1b: Fill dry tiles below adjacent water.
-            -- If a dry tile has ≥2 water neighbors and its terrain
-            -- is below the minimum water neighbor surface, fill it
-            -- with water at that surface. This is how basins fill:
-            -- water extends into submerged dry tiles.
+            --
+            -- Count ALL water types (River, Ocean, Lake) as
+            -- neighbors. Previously Ocean/Lake were excluded,
+            -- causing overflow failure at river-ocean boundaries
+            -- (a dry tile between River and Ocean saw wCount=1
+            -- instead of 2, failing the ≥2 threshold).
+            --
+            -- Uses the MAXIMUM neighbor surface for the fill
+            -- threshold (not minimum). With min, an Ocean at
+            -- surf=0 next to a River at surf=5 would produce
+            -- wMin=0, and terrZ < 0 would fail for tiles above
+            -- sea level. Using max means terrZ < 5 → fills
+            -- correctly.
+            --
+            -- Fill type matches the highest water neighbor
+            -- (River if adjacent to River, Ocean if only Ocean).
             forM_ [0 .. sz - 1] $ \idx → do
                 cell ← MV.read mv idx
                 case cell of
@@ -155,10 +167,9 @@ simulatePassiveChunk allChunks coord scs =
                         when (terrZ > minBound) $ do
                             let lx = idx `mod` chunkSize
                                 ly = idx `div` chunkSize
-                            -- Count water neighbors and find min surface
                             wCountRef ← newSTRef (0 ∷ Int)
-                            wMinRef ← newSTRef maxBound
-                            wTypeRef ← newSTRef River
+                            wMaxRef ← newSTRef minBound
+                            wTypeRef ← newSTRef Ocean
                             forM_ [(lx-1,ly),(lx+1,ly),(lx,ly-1),(lx,ly+1)]
                                 $ \(fnx, fny) →
                                     when (fnx ≥ 0 ∧ fnx < chunkSize
@@ -166,18 +177,18 @@ simulatePassiveChunk allChunks coord scs =
                                         let fIdx = fny * chunkSize + fnx
                                         fc ← MV.read mv fIdx
                                         case fc of
-                                            Just ffc | fcType ffc /= Ocean
-                                                     ∧ fcType ffc /= Lake → do
+                                            Just ffc → do
                                                 modifySTRef' wCountRef (+ 1)
-                                                modifySTRef' wMinRef
-                                                    (min (fcSurface ffc))
-                                                writeSTRef wTypeRef (fcType ffc)
+                                                curMax ← readSTRef wMaxRef
+                                                when (fcSurface ffc > curMax) $ do
+                                                    writeSTRef wMaxRef (fcSurface ffc)
+                                                    writeSTRef wTypeRef (fcType ffc)
                                             _ → pure ()
                             wCount ← readSTRef wCountRef
-                            wMin ← readSTRef wMinRef
+                            wMax ← readSTRef wMaxRef
                             wType ← readSTRef wTypeRef
-                            when (wCount ≥ 2 ∧ terrZ < wMin) $ do
-                                let fillSurf = wMin
+                            when (wCount ≥ 2 ∧ terrZ < wMax) $ do
+                                let fillSurf = wMax
                                 when (fillSurf > terrZ) $ do
                                     MV.write mv idx
                                         (Just (FluidCell wType fillSurf))

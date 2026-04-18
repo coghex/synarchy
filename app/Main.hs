@@ -295,16 +295,15 @@ runDump layers seed worldSize ages (cx1, cy1, cx2, cy2) = do
             manager ← readIORef (worldManagerRef env')
             case wmWorlds manager of
                 ((_, ws):_) → do
-                    -- Apply final cleanup passes: orphaned subsea,
-                    -- drain ocean-connected lakes, river mouth
-                    -- clamping, and submerged-bump fill.
+                    -- Read tile data as-is after sim settle. Do NOT
+                    -- apply extra post-passes — the GUI doesn't get
+                    -- post-sim cleanup, so the dump must match what
+                    -- the user sees. The initial post-passes already
+                    -- ran during chunk loading (drainInitQueues).
                     mParams ← readIORef (wsGenParamsRef ws)
                     let climate = maybe (initClimateState worldSize)
                                      wgpClimateState mParams
-                    td ← atomicModifyIORef' (wsTilesRef ws) $ \td →
-                        let td' = drainOceanLakes
-                                $ fillOrphanedSubseaTiles climate worldSize td
-                        in (td', td')
+                    td ← readIORef (wsTilesRef ws)
                     let json = dumpTilesJSON layers worldSize climate td cx1 cy1 cx2 cy2
                     BS.putStr json
                     hFlush stdout
