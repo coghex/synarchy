@@ -26,10 +26,12 @@ import System.IO.Unsafe (unsafePerformIO)
 computeChunkFlora
     ∷ Word64 → Int → ChunkCoord
     → VU.Vector Int → VU.Vector Word8 → VU.Vector Word8
-    → V.Vector (Maybe FluidCell) → ClimateState → FloraCatalog
+    → V.Vector (Maybe FluidCell)
+    → VU.Vector Bool             -- ^ river channel mask
+    → ClimateState → FloraCatalog
     → FloraChunkData
 computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
-                  fluidMap climate catalog =
+                  fluidMap riverMask climate catalog =
     let ChunkCoord cx cy = coord
         chunkArea = chunkSize * chunkSize
         wgSpecies = worldGenSpecies catalog
@@ -55,7 +57,8 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                             lookupLocalClimate climate worldSize gx gy
 
                     occ ← VUM.read occupied idx
-                    if occ /= 0 ∨ hasFluid ∨ isBarrenMaterial matId ∨ surfZ ≡ minBound
+                    let isRiver = riverMask VU.! idx
+                    if occ /= 0 ∨ hasFluid ∨ isRiver ∨ isBarrenMaterial matId ∨ surfZ ≡ minBound
                     then go rest acc
                     else do
                         let newInsts = placeTileFlora seed gx gy lx ly surfZ

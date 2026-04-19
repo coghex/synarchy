@@ -179,7 +179,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     let camCX = floor (sdCameraX saveData) `div` chunkSize
         camCY = floor (sdCameraY saveData) `div` chunkSize
         centerCoord = ChunkCoord camCX camCY
-        (ct, cs, cterrain, cf, cice, cflora) = generateChunk registry catalog params centerCoord
+        (ct, cs, cterrain, cf, cice, cflora, crmask) = generateChunk registry catalog params centerCoord
         centerChunk = LoadedChunk
             { lcCoord             = centerCoord
             , lcTiles             = ct
@@ -189,6 +189,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             , lcIceMap            = cice
             , lcFlora             = cflora
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
+            , lcRiverMask         = crmask
             , lcModified          = False
             }
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →

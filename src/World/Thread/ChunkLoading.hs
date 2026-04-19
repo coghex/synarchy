@@ -97,16 +97,37 @@ updateChunkLoading env logger = do
                                 let !newChunks = if isArena
                                         then map generateFlatChunk batch
                                         else parMap rdeepseq (\coord →
-                                            let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora) = generateChunk registry catalog params coord
+                                            let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, rmask) = generateChunk registry catalog params coord
+                                                -- Seed river tiles from mask: for each
+                                                -- masked tile without existing fluid,
+                                                -- place River at terrZ+1. The sim owns
+                                                -- these from here on.
+                                                seededFluid = V.imap (\idx mfc →
+                                                    case mfc of
+                                                        Just _  → mfc
+                                                        Nothing →
+                                                            if rmask VU.! idx
+                                                            then let terrZ = tMap VU.! idx
+                                                                 in if terrZ > minBound
+                                                                    then Just (FluidCell River (terrZ + 1))
+                                                                    else Nothing
+                                                            else Nothing
+                                                    ) fluidMap
+                                                seededSurf = VU.imap (\idx surfZ →
+                                                    case seededFluid V.! idx of
+                                                        Just fc → max surfZ (fcSurface fc)
+                                                        Nothing → surfZ
+                                                    ) surfMap
                                             in LoadedChunk
                                                 { lcCoord      = coord
                                                 , lcTiles      = chunkTiles
-                                                , lcSurfaceMap = surfMap
+                                                , lcSurfaceMap = seededSurf
                                                 , lcTerrainSurfaceMap = tMap
-                                                , lcFluidMap   = fluidMap
+                                                , lcFluidMap   = seededFluid
                                                 , lcIceMap     = iceMap
                                                 , lcFlora      = flora
                                                 , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
+                                                , lcRiverMask  = rmask
                                                 , lcModified   = False
                                                 }) batch
                                 evicted ← atomicModifyIORef' (wsTilesRef worldState) $ \td →
@@ -159,16 +180,34 @@ drainInitQueues env logger = do
                             seed  = wgpSeed params
 
                         let newChunks = parMap rdeepseq (\coord →
-                                let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora) = generateChunk registry catalog params coord
+                                let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, rmask) = generateChunk registry catalog params coord
+                                    -- Seed river tiles from mask
+                                    seededFluid = V.imap (\idx mfc →
+                                        case mfc of
+                                            Just _  → mfc
+                                            Nothing →
+                                                if rmask VU.! idx
+                                                then let terrZ = tMap VU.! idx
+                                                     in if terrZ > minBound
+                                                        then Just (FluidCell River (terrZ + 1))
+                                                        else Nothing
+                                                else Nothing
+                                        ) fluidMap
+                                    seededSurf = VU.imap (\idx surfZ →
+                                        case seededFluid V.! idx of
+                                            Just fc → max surfZ (fcSurface fc)
+                                            Nothing → surfZ
+                                        ) surfMap
                                 in LoadedChunk
                                     { lcCoord      = coord
                                     , lcTiles      = chunkTiles
-                                    , lcSurfaceMap = surfMap
+                                    , lcSurfaceMap = seededSurf
                                     , lcTerrainSurfaceMap = tMap
-                                    , lcFluidMap   = fluidMap
+                                    , lcFluidMap   = seededFluid
                                     , lcIceMap     = iceMap
                                     , lcFlora      = flora
                                     , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
+                                    , lcRiverMask  = rmask
                                     , lcModified   = False
                                     }) batch
 

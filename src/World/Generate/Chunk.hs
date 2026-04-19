@@ -58,7 +58,8 @@ import World.Generate.Strata
 --   chunk edges has valid neighbor data.
 generateChunk ∷ MaterialRegistry → FloraCatalog → WorldGenParams
   → ChunkCoord → (Chunk, VU.Vector Int, VU.Vector Int
-                 , V.Vector (Maybe FluidCell), IceMap, FloraChunkData)
+                 , V.Vector (Maybe FluidCell), IceMap, FloraChunkData
+                 , VU.Vector Bool)  -- ^ river mask
 generateChunk registry catalog params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -196,27 +197,34 @@ generateChunk registry catalog params coord =
                                       (wgpClimateState params) worldSize gx gy)
         lakeFluidMap = computeChunkLakes features seed plates worldSize
                                          coord terrainSurfaceMap waterTableAt
-        -- Extract river params from events (not features) so fluid
-        -- fill matches the carved terrain, which uses event segments.
+        -- Extract river params from events (not features) so the
+        -- mask matches the carved terrain, which uses event segments.
         eventRivers = concatMap extractEventRivers (gtPeriods timeline)
-        -- Fill pass: compute river fluid from event segments.
+        -- Compute river fluid for two purposes:
+        --   1. Derive the river MASK (which tiles are river channels)
+        --   2. Run handleOverflow for terrain carving at spillways
+        -- The river fluid itself is NOT included in the chunk's
+        -- FluidMap — the sim owns river water placement.
         initialRiverFluid = computeChunkRivers eventRivers worldSize
                                                coord terrainSurfaceMap
-        -- Overflow detection: find dry tiles adjacent to river water
-        -- that are below the water surface (flat terrain spillover).
-        (adjustedTerrain, riverFluidMap) =
+        (adjustedTerrain, adjustedRiverFluid) =
             handleOverflow coord terrainSurfaceMap initialRiverFluid
 
-        -- Lava > River > Lake > Ocean: rivers override lakes because
-        -- river channels are carved to specific elevations, while lakes
-        -- fill to a uniform spillway height. Where a river runs through
-        -- a lake basin, the river's lower surface is correct.
+        -- River mask: marks tiles that are part of a river channel.
+        -- The sim uses this at chunk load to seed river water at
+        -- terrZ+1, then owns the water from that point.
+        maskArea = chunkSize * chunkSize
+        riverMask = VU.generate maskArea $ \idx →
+            case adjustedRiverFluid V.! idx of
+                Just fc → fcType fc ≡ River
+                _       → False
+
+        -- Static fluids only: lava > lake > ocean. No river fluid —
+        -- the sim places river water from the mask at chunk load.
         rawFluidMap = unionFluidMap lavaFluidMap
-                    $ unionFluidMap riverFluidMap
                     $ unionFluidMap lakeFluidMap oceanFluidMap
 
-        -- Use adjusted terrain (with overflow channels carved) for
-        -- all downstream fluid processing.
+        -- Use adjusted terrain (with overflow channels carved).
         finalTerrain = adjustedTerrain
 
         -- Equilibrate: propagate water to adjacent empty tiles whose
@@ -347,7 +355,7 @@ generateChunk registry catalog params coord =
         -- Flora sprites (trees, shrubs, wildflowers)
         floraData = computeChunkFlora seed worldSize coord
                         terrainSurfaceMap surfaceMats surfaceSlopes
-                        fluidMap (wgpClimateState params) catalog
+                        fluidMap riverMask (wgpClimateState params) catalog
 
         -- Inject veg IDs into column tiles
         finalTiles = V.imap (\idx col →
@@ -367,7 +375,7 @@ generateChunk registry catalog params coord =
         iceMap = computeChunkIce seed plates (wgpClimateState params) worldSize
                                  coord ilGrid terrainSurfaceMap fluidMap
 
-    in (finalTiles, surfaceMap, finalTerrain, fluidMap, iceMap, floraData)
+    in (finalTiles, surfaceMap, finalTerrain, fluidMap, iceMap, floraData, riverMask)
 
 -- | Generate only the exposed tiles for a column.
 --   Skips air tiles (MaterialId 0) to create caves and overhangs.

@@ -74,11 +74,12 @@ data LoadedChunk = LoadedChunk
     , lcIceMap     ∷ !IceMap               -- ^ Ice overlay (frozen ocean/lake/alpine)
     , lcFlora      ∷ !FloraChunkData
     , lcSideDeco   ∷ !(VU.Vector Word8)    -- ^ Side-face decorations per column
+    , lcRiverMask  ∷ !(VU.Vector Bool)     -- ^ River channel mask from worldgen
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
 
 instance NFData LoadedChunk where
-    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco modified) =
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco rmask modified) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
         rnf terrainMap `seq` rnf fluidMap `seq` rnf iceMap `seq`
-        rnf flora `seq` rnf sideDeco `seq` rnf modified
+        rnf flora `seq` rnf sideDeco `seq` rnf rmask `seq` rnf modified

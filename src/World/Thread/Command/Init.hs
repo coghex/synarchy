@@ -173,7 +173,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     
     catalog ← readIORef (floraCatalogRef env)
     let centerCoord = ChunkCoord 0 0
-        (ct, cs, cterrain, cf, cice, cflora) = generateChunk registry catalog params centerCoord
+        (ct, cs, cterrain, cf, cice, cflora, crmask) = generateChunk registry catalog params centerCoord
         centerChunk = LoadedChunk
             { lcCoord      = centerCoord
             , lcTiles      = ct
@@ -183,6 +183,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , lcIceMap     = cice
             , lcFlora      = cflora
             , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
+            , lcRiverMask  = crmask
             , lcModified   = False
             }
 
@@ -261,6 +262,7 @@ handleWorldInitArenaCommand env logger pageId = do
             , lcIceMap            = emptyIceMap
             , lcFlora             = flatFlora
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
+            , lcRiverMask         = VU.replicate (chunkSize * chunkSize) False
             , lcModified          = False
             }
 
