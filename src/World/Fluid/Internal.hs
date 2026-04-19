@@ -122,10 +122,16 @@ equilibrateFluidMap surfaceMap fluidMap = runST $ do
     V.freeze mv
 
 -- | Check if a tile should be filled by equilibration.
---   Uses the minimum adjacent water surface (water seeks its level).
---   Only propagates Lake fluid — River has its own segment-based fill
---   that covers the full valley width, and propagation would create
---   lifted water blocks outside the valley.
+--
+--   Two modes:
+--     Lake: flat propagation at minSurf (water seeks its level).
+--     River: terrain-following at terrZ+1 (preserves slope).
+--
+--   Lake takes priority when both types are adjacent. River
+--   propagation fills tiles below the highest adjacent river
+--   surface, placing water at terrZ+1 instead of at the
+--   neighbor's surface. This prevents flat pools in sloped
+--   river channels while still filling overflow gaps.
 containedFill ∷ MV.MVector s (Maybe FluidCell)
               → Int → Int → Int → ST s (Maybe FluidCell)
 containedFill mv lx ly surfZ = do
@@ -136,16 +142,28 @@ containedFill mv lx ly surfZ = do
     vS ← check lx (ly + 1)
     vE ← check (lx + 1) ly
     vW ← check (lx - 1) ly
-    -- Filter to only Lake neighbors for propagation
-    let waterCells = filter (\fc → fcType fc ≡ Lake)
-                            (catMaybes [vN, vS, vE, vW])
-    pure $ case waterCells of
-        [] → Nothing
-        (w:ws) → let minSurf = foldl' (\a fc → min a (fcSurface fc))
-                                       (fcSurface w) ws
-                 in if surfZ ≤ minSurf
-                    then Just (FluidCell Lake minSurf)
-                    else Nothing
+    let allNbrs   = catMaybes [vN, vS, vE, vW]
+        lakeCells = filter (\fc → fcType fc ≡ Lake) allNbrs
+        riverCells = filter (\fc → fcType fc ≡ River) allNbrs
+    pure $ case lakeCells of
+        -- Lake neighbor: flat pool at min surface
+        (w:ws) →
+            let minSurf = foldl' (\a fc → min a (fcSurface fc))
+                                 (fcSurface w) ws
+            in if surfZ ≤ minSurf
+               then Just (FluidCell Lake minSurf)
+               else Nothing
+        -- River neighbor only: terrain-following fill
+        [] → case riverCells of
+            [] → Nothing
+            _  →
+                let maxRiverSurf = foldl' (\a fc → max a (fcSurface fc))
+                                          minBound riverCells
+                -- Fill if terrain is strictly below the highest
+                -- adjacent river surface (genuine overflow).
+                in if surfZ < maxRiverSurf
+                   then Just (FluidCell River (surfZ + 1))
+                   else Nothing
 
 -- | Fill coastal gaps: tiles without fluid that are at or below sea level
 --   and adjacent to any fluid (river, ocean, lake) should get ocean water.
