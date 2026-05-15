@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Fluid.River
     ( computeChunkRivers
+    , computeChunkRiversStatic
     , fixupSegmentContinuity
     , hasAnyRiverQuick
     , sealCrossChunkRivers
@@ -610,6 +611,53 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
              in if not shouldPlace
                 then (Nothing, effectivePerpDist)
                 else (Just (FluidCell River waterSurface), effectivePerpDist)
+
+-- * Static (no-cleanup) river placement
+--
+-- Pure function of (RiverParams, gx, gy) per tile — no per-chunk
+-- state, no smoothing/clamping/cleanup. Adjacent tiles in adjacent
+-- chunks produce the same result by construction, so cross-chunk
+-- seams agree without a sealing pass.
+--
+-- Overlap policy: pick the LOWEST water surface from any covering
+-- segment. Two reasons:
+--   1. With `fixupSegmentContinuity`, adjacent segments share endpoint
+--      water levels — at junctions, both segments give the same value
+--      and "lowest" is a no-op. Picking lowest only matters where two
+--      DIFFERENT rivers' segments overlap (confluence/braided area),
+--      where the lower stream level dominates physically.
+--   2. Deterministic: doesn't depend on iteration order, distance ties,
+--      or which segment is "closer" to a tile.
+
+computeChunkRiversStatic ∷ [RiverParams] → Int → ChunkCoord
+                         → VU.Vector Int → FluidMap
+computeChunkRiversStatic rivers worldSize coord surfaceMap =
+    let ChunkCoord cx cy = coord
+        chunkMinGX = cx * chunkSize
+        chunkMinGY = cy * chunkSize
+        nearbyRivers = filter (riverNearChunk worldSize chunkMinGX chunkMinGY) rivers
+        nearbySegs = concatMap (V.toList . rpSegments) nearbyRivers
+    in V.generate (chunkSize * chunkSize) $ \idx →
+        let lx = idx `mod` chunkSize
+            ly = idx `div` chunkSize
+            gx = chunkMinGX + lx
+            gy = chunkMinGY + ly
+            surfZ = surfaceMap VU.! idx
+            candidates = [ fc
+                         | seg ← nearbySegs
+                         , let (mFc, _) = riverFillFromSegmentWithDist
+                                              worldSize gx gy surfZ seg
+                         , Just fc ← [mFc]
+                         ]
+        in pickLowestWater candidates
+
+pickLowestWater ∷ [FluidCell] → Maybe FluidCell
+pickLowestWater []     = Nothing
+pickLowestWater (x:xs) = Just (foldl' chooseLower x xs)
+  where
+    chooseLower a b
+      | fcSurface b < fcSurface a = b
+      | otherwise                 = a
 
 -- * Segment Continuity
 

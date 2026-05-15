@@ -66,17 +66,36 @@ computeOceanMap seed worldSize plateCount plates applyTL =
                 sorted5 = sort samples
             in sorted5 !! 2  -- median
 
+        -- For each ocean plate, seed the BFS from a below-sea-level
+        -- chunk near its center. If the center chunk itself is above
+        -- sea level (a volcanic island, say), spiral outward until we
+        -- find one. Without this fallback, an ocean plate with an
+        -- island center contributes no seed and its territory stays
+        -- unflooded.
+        seedRingRadius = 4 ∷ Int  -- up to 4 chunks (~64 tiles) out
+        inBounds (ChunkCoord cx cy) =
+              cx ≥ -halfSize ∧ cx < halfSize
+            ∧ cy ≥ -halfSize ∧ cy < halfSize
+        findOceanSeed cx0 cy0 =
+            let ring r = [ ChunkCoord (cx0 + dx) (cy0 + dy)
+                         | dx ← [-r .. r], dy ← [-r .. r]
+                         , max (abs dx) (abs dy) ≡ r
+                         ]
+                candidates r
+                  | r > seedRingRadius = []
+                  | otherwise =
+                      let here = filter (\c → inBounds c ∧ chunkElev c ≤ seaLevel)
+                                        (ring r)
+                      in case here of
+                           (c:_) → [c]
+                           []    → candidates (r + 1)
+            in candidates 0
         oceanSeeds = concatMap (\plate →
             if plateIsLand plate
             then []
             else let cx = floorDiv' (plateCenterX plate) chunkSize
                      cy = floorDiv' (plateCenterY plate) chunkSize
-                     coord = ChunkCoord cx cy
-                 in if cx ≥ -halfSize ∧ cx < halfSize
-                     ∧ cy ≥ -halfSize ∧ cy < halfSize
-                     ∧ chunkElev coord ≤ seaLevel
-                    then [coord]
-                    else []
+                 in findOceanSeed cx cy
             ) plates
 
         -- Wrap chunk coords in u-space (consistent with the isometric world)

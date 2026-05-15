@@ -27,8 +27,14 @@ import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
 import World.Fluids (hasAnyOceanFluid)
 import World.Ocean.Types (oceanDistAt)
-import World.Fluid.Internal (emptyFluidMap)
+import World.Fluid.Internal (emptyFluidMap, unionFluidMap)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.River (computeChunkRiversStatic)
+import World.Fluid.Lake (computeChunkLakes)
+import World.Fluid.Lava (computeChunkLava)
+import World.Fluid.Ice (computeChunkIce)
+import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
+import World.Geology.Timeline.Types (GeoEvent(..), GeoPeriod(..))
 import World.Weather.Lookup (lookupWaterTable)
 import World.Fluid.Types (emptyIceMap)
 import World.River.Types (RiverMask, emptyRiverMask)
@@ -209,19 +215,22 @@ generateChunk registry catalog params coord =
         gradient = 0.5 ∷ Float
 
         finalTerrain = terrainSurfaceMap
-        fluidMap = V.generate chunkArea $ \idx →
+
+        -- Ocean / inland-water-table layer.
+        -- Tiles below the local water level fill with water. Type is
+        -- Ocean at or below seaLevel, Lake above (inland basins fed
+        -- by groundwater gradient).
+        --
+        -- Bug-2 fallback: if all 4 bilinear corners are unreachable
+        -- (chunk far past BFS cutoff), tiles at or below seaLevel
+        -- still fill with Ocean at seaLevel. Without this, isolated
+        -- inland basins stay dry.
+        oceanFluid = V.generate chunkArea $ \idx →
             let terrZ = terrainSurfaceMap VU.! idx
                 lx = idx `mod` chunkSize
                 ly = idx `div` chunkSize
-                -- Fractional position within chunk (0.0 = left/top edge,
-                -- 1.0 = right/bottom edge). Offset by 0.5 so chunk
-                -- center is at 0.5.
                 tx = (fromIntegral lx + 0.5) / fromIntegral chunkSize ∷ Float
                 ty = (fromIntegral ly + 0.5) / fromIntegral chunkSize ∷ Float
-                -- Bilinear interpolation of ocean distance.
-                -- Use (d00, d10, d01, d11) for the quadrant
-                -- where tx,ty > 0.5, and the left/top neighbors
-                -- for tx,ty < 0.5.
                 (da, db, dc, dd, sx, sy) =
                     if tx ≥ 0.5 ∧ ty ≥ 0.5
                     then (d00, d10, d01, d11,
@@ -234,7 +243,6 @@ generateChunk registry catalog params coord =
                           tx - 0.5, ty + 0.5)
                     else (capDist (oceanDistAt oceanDist (ChunkCoord (cx-1) (cy-1))), d0N, dN0, d00,
                           tx + 0.5, ty + 0.5)
-                -- If any corner is unreachable (-1), use nearest valid
                 validCorners = filter (≥ 0) [da, db, dc, dd]
                 fallback = if null validCorners then -1.0
                            else sum validCorners / fromIntegral (length validCorners)
@@ -242,26 +250,75 @@ generateChunk registry catalog params coord =
                 sb = if db < 0 then fallback else db
                 sc = if dc < 0 then fallback else dc
                 sd = if dd < 0 then fallback else dd
-                -- Bilinear lerp
                 topRow  = sa + sx * (sb - sa)
                 botRow  = sc + sx * (sd - sc)
                 interpDist = topRow + sy * (botRow - topRow)
-                waterLevel = if interpDist < 0
-                             then minBound
-                             else round (fromIntegral seaLevel
-                                       + interpDist * gradient)
-            in if terrZ > minBound ∧ waterLevel > terrZ
-               then Just (FluidCell Ocean waterLevel)
+                waterLevel
+                  | interpDist < 0 ∧ terrZ ≤ seaLevel = seaLevel
+                  | interpDist < 0                    = minBound
+                  | otherwise = round (fromIntegral seaLevel
+                                     + interpDist * gradient)
+                ftype = if waterLevel ≤ seaLevel then Ocean else Lake
+            in if terrZ > minBound ∧ waterLevel ≥ terrZ ∧ waterLevel > minBound
+               then Just (FluidCell ftype waterLevel)
                else Nothing
+
+        -- Rivers from geological events. Each river contributes
+        -- segments that fill a carved valley with River fluid.
+        eventRivers ∷ [RiverParams]
+        eventRivers = concatMap goP (gtPeriods timeline)
+          where
+            goP p = concatMap goE (gpEvents p)
+            goE (HydroEvent (RiverFeature rp)) = [rp]
+            goE _                              = []
+
+        riverFluid = computeChunkRiversStatic eventRivers worldSize coord
+                                              terrainSurfaceMap
+
+        -- Lakes from persistent hydrological features.
+        features = gtFeatures timeline
+        waterTableAt gx gy = fst (lookupWaterTable
+                                    (wgpClimateState params)
+                                    worldSize gx gy)
+        lakeFluid = computeChunkLakes features seed plates
+                                      worldSize coord
+                                      terrainSurfaceMap waterTableAt
+
+        -- Lava from active volcanic features.
+        lavaFluid = computeChunkLava features seed plates
+                                     worldSize coord terrainSurfaceMap
+
+        -- Composite: priority is rivers > lakes > lava > ocean.
+        -- unionFluidMap keeps its first arg where present.
+        fluidMap = riverFluid
+                   `unionFluidMap` lakeFluid
+                   `unionFluidMap` lavaFluid
+                   `unionFluidMap` oceanFluid
+
         riverMask = emptyRiverMask
 
 
         -- Surface map with fluids (ice is a visual overlay, does not
-        -- affect terrain column generation or surface-based logic)
+        -- affect terrain column generation or surface-based logic).
+        --
+        -- For River fluid the surface is taken DIRECTLY from the
+        -- fluid cell, not max'd with terrain. The static-river
+        -- segment interpolation produces a smooth water surface,
+        -- but the carved channel terrain can have 1-2z protrusions
+        -- where carving was idempotent or where coastal flattening
+        -- dropped water below the rim. Using max() would expose
+        -- those protrusions as visible bumps mid-river. Taking the
+        -- fluid surface directly hides them under the water plane
+        -- — water bodies render flat, like real water.
+        --
+        -- For Ocean/Lake/Lava the max() rule still applies (water
+        -- can sit in a depression where terrain is below it, and
+        -- the surface is the higher of the two).
         surfaceMap = VU.imap (\idx surfZ →
             case fluidMap V.! idx of
-                Just fc → max surfZ (fcSurface fc)
-                Nothing → surfZ
+                Just fc | fcType fc ≡ River → fcSurface fc
+                Just fc                     → max surfZ (fcSurface fc)
+                Nothing                     → surfZ
           ) finalTerrain
 
         -- Build per-column tile data directly, fusing stratigraphy
@@ -383,8 +440,12 @@ generateChunk registry catalog params coord =
             in col { ctVeg = vegVec' }
             ) slopedTiles
 
-        -- Ice overlay: disabled (fluid placement removed).
-        iceMap = emptyIceMap
+        -- Ice overlay: computed from climate, altitude, and the global
+        -- ice level grid (pre-computed at world init in gtIceLevel).
+        -- Sits on top of terrain or fluid for frozen ocean/lake.
+        iceMap = computeChunkIce seed plates (wgpClimateState params)
+                                 worldSize coord (gtIceLevel timeline)
+                                 terrainSurfaceMap fluidMap
 
     in (finalTiles, surfaceMap, finalTerrain, fluidMap, iceMap, floraData, riverMask)
 

@@ -20,7 +20,7 @@ import Engine.Core.Log (logInfo, logDebug, logError, logWarn, LogCategory(..)
                         , LoggerState)
 import qualified Engine.Core.Queue as Q
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
-import World.Fluid.Types (FluidCell(..))
+import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Tile.Types (WorldTileData(..), lookupChunk)
 import World.State.Types (WorldManager(..), WorldState(..))
 import Sim.Command.Types (SimCommand(..))
@@ -308,8 +308,15 @@ writeDirtyFluids env ss = do
                                             then deriveFluidMap scs
                                             else scsFluid scs
                                         newTerrain = scsTerrain scs
+                                        -- River fluid renders as a flat plane:
+                                        -- surface comes directly from the fluid,
+                                        -- hiding any minor terrain protrusions
+                                        -- in the carved channel. Must match the
+                                        -- rule in World/Generate/Chunk.hs and
+                                        -- World/Thread/ChunkLoading.hs.
                                         newSurfMap = VU.imap (\idx terrZ →
                                             case newFluid V.! idx of
+                                                Just fc | fcType fc ≡ River → fcSurface fc
                                                 Just fc → max terrZ (fcSurface fc)
                                                 Nothing → terrZ
                                             ) newTerrain
