@@ -36,7 +36,26 @@ local MOUSE_RIGHT = 2
 function game.onMouseDown(button, x, y)
     -- Only handle clicks that reach us — UI hit-tests run earlier in
     -- the input thread; if a UI element ate the click, this never fires.
+    local debugOverlay = require("scripts.debug")
+
+    -- Debug overlay's parallel hit-test gets first crack. If a debug
+    -- rect (spawn button / list entry) eats the click, we stop here
+    -- so the click can't fall through into selection / tile-cursor.
+    if debugOverlay.tryClaimClick(button, x, y) then
+        return
+    end
+
     if button == MOUSE_LEFT then
+        -- Debug spawn mode: if armed, this click is a spawn, not a
+        -- selection. Spawn at the hovered tile and stay armed.
+        if debugOverlay.armedDef then
+            local gx, gy = world.getHoverTile()
+            if gx and gy then
+                unit.spawn(debugOverlay.armedDef, gx + 0.5, gy + 0.5)
+            end
+            return
+        end
+
         local id = unit.hitTestAt(x, y)
         if id then
             -- Hit a unit. Select it. The unit_info_panel watcher
@@ -53,6 +72,11 @@ function game.onMouseDown(button, x, y)
             unit.deselectAll()
         end
     elseif button == MOUSE_RIGHT then
+        -- Right-click is a cancel for debug spawn mode (highest priority).
+        if debugOverlay.armedDef then
+            debugOverlay.clearArmed()
+            return
+        end
         -- Right-click is a move order when units are selected.
         -- hud.onMouseDown also fires on right-click and clears the
         -- tile cursor — that's fine, it doesn't touch unit selection.

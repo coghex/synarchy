@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.Units
     , unitGetPosFn
     , unitGetInfoFn
     , unitListFn
+    , unitListDefsFn
     , unitSelectFn
     , unitDeselectAllFn
     , unitGetSelectedFn
@@ -301,6 +302,19 @@ unitListFn env = do
                 <> ", " <> T.pack (show (uiGridZ inst)) <> ")"
             ) entries
     Lua.pushstring (TE.encodeUtf8 (T.pack result))
+    return 1
+
+-- | unit.listDefs() — Lua array of available unit definition names.
+--   These are the keys loadable into `unit.spawn(name, ...)`.
+unitListDefsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitListDefsFn env = do
+    names ← Lua.liftIO $ do
+        um ← readIORef (unitManagerRef env)
+        return $ HM.keys (umDefs um)
+    Lua.newtable
+    forM_ (zip [1..] names) $ \(i, name) → do
+        Lua.pushstring (TE.encodeUtf8 name)
+        Lua.rawseti (-2) i
     return 1
 
 -- | unit.getInfo(id) — returns a Lua table with the unit's render-visible

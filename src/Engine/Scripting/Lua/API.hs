@@ -186,6 +186,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getPos"      (unitGetPosFn env)
   registerLuaFunction "getInfo"     (unitGetInfoFn env)
   registerLuaFunction "list"        (unitListFn env)
+  registerLuaFunction "listDefs"    (unitListDefsFn env)
   registerLuaFunction "moveTo"      (unitMoveToFn env)
   registerLuaFunction "stop"        (unitStopFn env)
   registerLuaFunction "select"      (unitSelectFn env)

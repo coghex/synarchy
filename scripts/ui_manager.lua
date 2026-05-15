@@ -416,6 +416,14 @@ function uiManager.update(dt)
 end
 
 function uiManager.onMouseDown(button_num, x, y)
+    -- Defer to the debug overlay's parallel hit-test first. It runs
+    -- independently of the UI manager and is idempotent across all
+    -- onMouseDown subscribers, so re-calling here is safe.
+    local debugOverlay = require("scripts.debug")
+    if debugOverlay.tryClaimClick(button_num, x, y) then
+        return
+    end
+
     local ww, wh = engine.getWindowSize()
     local sx, sy = x, y
     if ww and wh and ww > 0 and wh > 0 then

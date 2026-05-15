@@ -118,7 +118,7 @@ function label.setColor(id, color)
     lbl.color = color
     
     if lbl.textId then
-        UI.setTextColor(lbl.textId, color[1], color[2], color[3], color[4])
+        UI.setColor(lbl.textId, color[1], color[2], color[3], color[4])
     end
 end
 
