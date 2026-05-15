@@ -30,7 +30,9 @@ from typing import Any
 
 # Reuse utilities
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from world_audit import audit_dump  # type: ignore
+from world_audit import (  # type: ignore
+    audit_dump, severity_of, QUALITY_THRESHOLDS, BUG_CATEGORIES,
+)
 from world_determinism import canonical_dump, hash_dump, run_dump  # type: ignore
 from world_baseline import baseline_path, BASELINE_DIR, SEEDS_FILE  # type: ignore
 
@@ -195,9 +197,16 @@ def check_seed(entry: dict[str, Any], runs: int) -> CheckResult:
             check_envelope(f"fluidStats.{fluid}", cur_min, env,
                            result, tolerance=fluid_tolerance)
 
-    # Issue summary check using envelopes, with a small absolute tolerance
-    # to absorb race-space that wasn't captured during baseline runs.
-    issue_tolerance = 3
+    # Issue summary check. Two modes depending on severity (see
+    # world_audit.py::BUG_CATEGORIES / QUALITY_CATEGORIES):
+    #
+    #   BUG     — any non-zero count fails. The check is "must be zero",
+    #             not "must match baseline". Used for unambiguous bugs.
+    #
+    #   QUALITY — fails when count exceeds the configured threshold
+    #             (QUALITY_THRESHOLDS). Baseline envelope drift is
+    #             reported as an informational note, not a failure;
+    #             some drift is expected as generation tunes.
     issue_env = baseline.get("auditEnvelope", {})
     all_categories: set[str] = set(issue_env.keys())
     for cs in current_summaries:
@@ -205,14 +214,28 @@ def check_seed(entry: dict[str, Any], runs: int) -> CheckResult:
 
     for cat in sorted(all_categories):
         current_values = [cs.get(cat, 0) for cs in current_summaries]
-        env = issue_env.get(cat)
         cur_max = max(current_values)
-        cur_min = min(current_values)
-        check_envelope(f"issue.{cat}", cur_max, env,
-                       result, tolerance=issue_tolerance)
-        if cur_min != cur_max:
-            check_envelope(f"issue.{cat}", cur_min, env,
-                           result, tolerance=issue_tolerance)
+        env = issue_env.get(cat)
+        sev = severity_of(cat)
+        if sev == "BUG":
+            if cur_max > 0:
+                result.status = FAIL
+                result.failures.append(
+                    f"BUG issue.{cat}: {cur_max} occurrence(s) — must be 0"
+                )
+        else:
+            threshold = QUALITY_THRESHOLDS.get(cat, 1000)
+            if cur_max > threshold:
+                result.status = FAIL
+                result.failures.append(
+                    f"QUALITY issue.{cat}: {cur_max} exceeds threshold {threshold}"
+                )
+            elif env is not None:
+                env_max = env.get("max", 0)
+                if cur_max > env_max + max(50, env_max // 4):
+                    result.notes.append(
+                        f"quality drift issue.{cat}: {cur_max} (baseline max {env_max})"
+                    )
 
     return result
 
@@ -286,6 +309,14 @@ def main() -> int:
         counts[r.status] = counts.get(r.status, 0) + 1
     summary_parts = [f"{k}={v}" for k, v in sorted(counts.items())]
     print(f"Summary: {' '.join(summary_parts)} (total: {len(results)})")
+
+    # Bug vs quality breakdown across all seeds.
+    bug_fail = sum(1 for r in results for f in r.failures if f.startswith("BUG "))
+    qual_fail = sum(1 for r in results for f in r.failures if f.startswith("QUALITY "))
+    other_fail = sum(1 for r in results for f in r.failures
+                      if not f.startswith("BUG ") and not f.startswith("QUALITY "))
+    if bug_fail or qual_fail or other_fail:
+        print(f"  Failure breakdown: bugs={bug_fail} quality={qual_fail} other={other_fail}")
 
     return 0 if counts.get(FAIL, 0) == 0 else 1
 

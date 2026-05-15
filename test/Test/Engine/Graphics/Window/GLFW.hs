@@ -8,7 +8,6 @@ import Test.Hspec
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Core.State
-import Engine.Core.Base
 import Control.Monad (when)
 import Data.Maybe (isJust)
 

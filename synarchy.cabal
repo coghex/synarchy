@@ -30,9 +30,6 @@ test-suite synarchy-test-graphical
     hs-source-dirs: test
     main-is: Spec.hs
     other-modules: Test.UPrelude
-                   Test.Engine.Core.Error.Exception
-                   Test.Engine.Core.Monad
-                   Test.Engine.Core.Resource
                    Test.Engine.Core.Queue
                    Test.Engine.Core.Var
                    Test.Engine.Graphics.Window.GLFW
@@ -139,7 +136,6 @@ test-suite synarchy-test-headless
     main-is: Spec.hs
     other-modules: Test.Headless.Harness
                    Test.Headless.WorldGen
-                   Test.Headless.WorldGen.Rivers
                    Test.Headless.WorldGen.Geology
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields

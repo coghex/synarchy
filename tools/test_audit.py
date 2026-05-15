@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from world_audit import audit_dump, INT64_MIN  # type: ignore
+from world_audit import (  # type: ignore
+    audit_dump, INT64_MIN, severity_of,
+    BUG_CATEGORIES, QUALITY_CATEGORIES, QUALITY_THRESHOLDS,
+)
 
 
 # ----- Helpers -------------------------------------------------------------
@@ -250,6 +253,147 @@ def test_surface_inconsistent() -> None:
            f"SURFACE_INCONSISTENT count: {count_category(result, 'SURFACE_INCONSISTENT')}, expected 1")
 
 
+def test_river_surface_uses_fluid_not_max() -> None:
+    """River tiles render surfaceZ = fluidSurf (not max(terr, fluid))
+    because the engine hides terrain protrusions under the water plane.
+    A river tile with surfaceZ = terrainZ when fluidSurf < terrainZ is
+    INCONSISTENT (engine writes fluidSurf), and surfaceZ = fluidSurf is
+    correct even though terrain pokes above."""
+    print("test_river_surface_uses_fluid_not_max")
+    # Correct: river with terr=10, water=8, surface=8 (water plane, NOT max).
+    correct = [{
+        "x": 0, "y": 0, "v": 0,
+        "terrainZ": 10, "surfaceZ": 8,
+        "matId": 64,
+        "fluidType": "river", "fluidSurf": 8,
+        "iceSurf": None, "iceMode": None,
+        "glacierZone": False, "beyondGlacier": False,
+    }]
+    r = audit_dump(correct).to_dict()
+    expect(count_category(r, "SURFACE_INCONSISTENT") == 0,
+           f"river surface = fluidSurf should be consistent, "
+           f"got {count_category(r, 'SURFACE_INCONSISTENT')}")
+
+    # Incorrect: river where surfaceZ == max(terr, fluid). The engine
+    # never writes this for River, so it indicates a real bug.
+    wrong = [{
+        "x": 0, "y": 0, "v": 0,
+        "terrainZ": 10, "surfaceZ": 10,  # should be 8
+        "matId": 64,
+        "fluidType": "river", "fluidSurf": 8,
+        "iceSurf": None, "iceMode": None,
+        "glacierZone": False, "beyondGlacier": False,
+    }]
+    r = audit_dump(wrong).to_dict()
+    expect(count_category(r, "SURFACE_INCONSISTENT") == 1,
+           f"river with surface=max(terr,fluid) should flag, "
+           f"got {count_category(r, 'SURFACE_INCONSISTENT')}")
+
+
+def test_lake_surface_uses_max() -> None:
+    """Lake/ocean/lava still use max(terrainZ, fluidSurf) — only rivers
+    have the special flat rule."""
+    print("test_lake_surface_uses_max")
+    # Lake with terr=5, water=8, surface=8 (max) — correct
+    tiles = [{
+        "x": 0, "y": 0, "v": 0,
+        "terrainZ": 5, "surfaceZ": 8,
+        "matId": 64,
+        "fluidType": "lake", "fluidSurf": 8,
+        "iceSurf": None, "iceMode": None,
+        "glacierZone": False, "beyondGlacier": False,
+    }]
+    r = audit_dump(tiles).to_dict()
+    expect(count_category(r, "SURFACE_INCONSISTENT") == 0,
+           f"lake surface = max(terr, fluid) should be consistent, "
+           f"got {count_category(r, 'SURFACE_INCONSISTENT')}")
+
+
+def test_dry_below_sea_inland_basin() -> None:
+    """An inland basin below sea level that is NOT connected to the
+    ocean (e.g. a sub-sea-level cave system or a closed depression)
+    should not flag DRY_BELOW_SEA — those dry tiles are legitimate."""
+    print("test_dry_below_sea_inland_basin")
+    # Surround a sub-sea region with above-sea-level terrain — there's
+    # no ocean path to the inner dry tile, so it should not flag.
+    tiles = []
+    for y in range(-3, 4):
+        for x in range(-3, 4):
+            # Outer ring above sea level
+            if abs(x) == 3 or abs(y) == 3:
+                tiles.append(tile(x, y, terrainZ=20))
+            else:
+                # Inner region below sea level, all dry
+                tiles.append(tile(x, y, terrainZ=-5))
+    result = audit_dump(tiles).to_dict()
+    expect(count_category(result, "DRY_BELOW_SEA") == 0,
+           f"inland basin should not flag DRY_BELOW_SEA, "
+           f"got {count_category(result, 'DRY_BELOW_SEA')}")
+
+
+def test_dry_below_sea_ocean_connected() -> None:
+    """A dry tile directly adjacent to ocean tiles IS a bug and must
+    flag — the ocean has clearly not reached a tile it should have."""
+    print("test_dry_below_sea_ocean_connected")
+    tiles = []
+    # 5x5 ocean region
+    for y in range(-2, 3):
+        for x in range(-2, 3):
+            tiles.append(tile(x, y, terrainZ=-3,
+                              fluidType="ocean", fluidSurf=0))
+    # Convert one to dry
+    for i, t in enumerate(tiles):
+        if t["x"] == 0 and t["y"] == 0:
+            tiles[i] = tile(0, 0, terrainZ=-3, fluidType=None)
+            break
+    result = audit_dump(tiles).to_dict()
+    expect(count_category(result, "DRY_BELOW_SEA") == 1,
+           f"ocean-connected dry tile should flag, "
+           f"got {count_category(result, 'DRY_BELOW_SEA')}")
+
+
+def test_severity_classification() -> None:
+    """Every category produced by ALL_CHECKS must be classified as
+    either a BUG or a QUALITY metric — no implicit fallthrough."""
+    print("test_severity_classification")
+    # The catch-all bag of categories the audit can produce
+    every_cat = {
+        "DRY_BELOW_SEA", "OCEAN_ON_LAND",
+        "RIVER_UNDER_TERRAIN", "LAKE_UNDER_TERRAIN",
+        "FLOATING_LAVA", "FLOATING_RIVER", "FLOATING_LAKE", "FLOATING_FLUID",
+        "TERRAIN_SPIKE", "TERRAIN_PIT",
+        "RIVER_CHUNK_GAP", "RIVER_MOUTH_DROP",
+        "ISLAND_1TILE", "LAKE_HOLE", "SUBMERGED_BUMP",
+        "WATER_ABOVE_LAND", "WATER_CLIFF", "WATER_WATER_CLIFF",
+        "MID_RIVER_CLIFF", "FLOATING_WATER", "MULTI_ISLAND",
+        "FLAT_ISOLATED_WATER", "ISOLATED_FLUID",
+        "MINBOUND_LEAK", "SURFACE_INCONSISTENT",
+    }
+    classified = BUG_CATEGORIES | QUALITY_CATEGORIES
+    missing = every_cat - classified
+    expect(not missing,
+           f"unclassified categories (must be in BUG_CATEGORIES or "
+           f"QUALITY_CATEGORIES): {sorted(missing)}")
+
+    overlap = BUG_CATEGORIES & QUALITY_CATEGORIES
+    expect(not overlap,
+           f"categories in both BUG and QUALITY sets: {sorted(overlap)}")
+
+    # Every QUALITY category should have a threshold
+    missing_threshold = QUALITY_CATEGORIES - set(QUALITY_THRESHOLDS.keys())
+    expect(not missing_threshold,
+           f"QUALITY categories without thresholds: {sorted(missing_threshold)}")
+
+    # severity_of() returns the right label for known cats
+    expect(severity_of("OCEAN_ON_LAND") == "BUG",
+           "OCEAN_ON_LAND should be BUG severity")
+    expect(severity_of("ISOLATED_FLUID") == "QUALITY",
+           "ISOLATED_FLUID should be QUALITY severity")
+    expect(severity_of("RIVER_UNDER_TERRAIN") == "QUALITY",
+           "RIVER_UNDER_TERRAIN should be QUALITY severity (underground "
+           "water is legitimate)")
+
+
 def test_clean_grid() -> None:
     """A clean grid with no issues should return zero bugs."""
     print("test_clean_grid")
@@ -308,6 +452,11 @@ def main() -> int:
         test_isolated_fluid,
         test_minbound_leak,
         test_surface_inconsistent,
+        test_river_surface_uses_fluid_not_max,
+        test_lake_surface_uses_max,
+        test_dry_below_sea_inland_basin,
+        test_dry_below_sea_ocean_connected,
+        test_severity_classification,
     ]
 
     for t in tests:

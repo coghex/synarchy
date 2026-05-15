@@ -9,7 +9,6 @@ import qualified Data.ByteString as BS
 import qualified Data.Vector as V
 import Engine.Core.Error.Exception
 import Engine.Core.State
-import Engine.Core.Base
 import Engine.Core.Monad
 import Engine.Core.Var
 import Engine.Graphics.Base

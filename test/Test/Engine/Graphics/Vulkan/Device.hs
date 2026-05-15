@@ -11,7 +11,6 @@ import Engine.Graphics.Vulkan.Instance
 import Engine.Graphics.Vulkan.Device
 import Engine.Core.State
 import Engine.Core.Defaults
-import Engine.Core.Base
 import Engine.Core.Monad
 import Engine.Core.Var
 import Engine.Graphics.Window.Types

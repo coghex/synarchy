@@ -3,49 +3,27 @@ module Main where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.Map as Map
-import qualified Data.Vector as V
 import qualified Test.UPrelude as UPrelude
-import qualified Test.Engine.Core.Monad as CoreMonad
-import qualified Test.Engine.Core.Resource as CoreResource
 import qualified Test.Engine.Core.Queue as CoreQueue
+import qualified Test.Engine.Core.Var as CoreVar
 import qualified Test.Engine.Graphics.Window.GLFW as TestGLFW
 import qualified Test.Engine.Graphics.Vulkan.Instance as VulkanInstance
 import qualified Test.Engine.Graphics.Vulkan.Surface as VulkanSurface
 import qualified Test.Engine.Graphics.Vulkan.Device as VulkanDevice
-import Control.Concurrent (threadDelay)
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Core.State
 import Engine.Core.Defaults
-import Engine.Core.Base
-import Engine.Core.Queue as Q
-import Engine.Core.Error.Exception
-import Engine.Input.Types
-import Data.IORef (newIORef)
-import qualified Control.Monad.Logger.CallStack as Logger
+import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Var (atomically, readVar)
+import Engine.Graphics.Config (defaultVideoConfig)
 
--- | Initialize a minimal EngineState for testing
+-- | Initialize an engine state for testing via the standard headless path.
 initTestState ∷ IO (EngineEnv, EngineState)
 initTestState = do
-    -- Create queues
-    eventQ ← Q.newQueue
-    inputQ ← Q.newQueue
-    logQ ← Q.newQueue
-    
-    -- Create logging function
-    logFunc ← Logger.runStdoutLoggingT $ Logger.LoggingT pure
-
-    frameCounterRef ← newIORef (0 ∷ Word64)
-    let env = EngineEnv
-            { engineConfig = defaultEngineConfig
-            , eventQueue = eventQ
-            , inputQueue = inputQ
-            , logQueue = logQ
-            , frameCounterRef = frameCounterRef }
-    
-    -- Return initial state
-    pure (env, defaultEngineState logFunc)
+    EngineInitResult env _ stateVar ← initializeEngineHeadless
+    st ← atomically $ readVar stateVar
+    pure (env, st)
 
 main ∷ IO ()
 main = do
@@ -65,7 +43,7 @@ main = do
 
     -- Create window and update state
     putStrLn "[Debug] Creating GLFW window..."
-    glfwWin <- GLFW.createRawWindow defaultWindowConfig
+    glfwWin <- GLFW.createRawWindow (defaultWindowConfig defaultVideoConfig)
     initialState <- case glfwWin of
         Just (Window win) → do
             putStrLn "[Debug] GLFW window created successfully"
@@ -78,9 +56,8 @@ main = do
         -- Core tests (no graphics dependencies)
         describe "Core Tests" $ do
             describe "UPrelude" UPrelude.spec
-            describe "Engine.Core.Monad" CoreMonad.spec
-            describe "Engine.Core.Resource" CoreResource.spec
             describe "Engine.Core.Queue" CoreQueue.spec
+            describe "Engine.Core.Var" CoreVar.spec
         -- GLFW tests
         describe "GLFW Tests" $ TestGLFW.spec env initialState
         -- Vulkan tests

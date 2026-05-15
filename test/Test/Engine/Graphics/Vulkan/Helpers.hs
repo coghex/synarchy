@@ -1,6 +1,5 @@
 module Test.Engine.Graphics.Vulkan.Helpers where
 import UPrelude
-import Engine.Core.Base
 import Engine.Core.Defaults
 import Engine.Core.Monad
 import Engine.Graphics.Base

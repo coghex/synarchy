@@ -110,19 +110,57 @@ def neighbors4(x: int, y: int) -> list[tuple[int, int]]:
 
 def check_dry_below_sea(grid: dict[tuple[int, int], dict[str, Any]],
                         issues: list[Issue]) -> None:
-    """Tiles with terrainZ ≤ seaLevel but no fluid."""
+    """Dry tiles at or below sea level that are ocean-connected.
+
+    Inland basins and below-sea cave systems are legitimate — a dry
+    sub-sea tile is only a bug if it sits in a region that should be
+    ocean. We classify "should be ocean" as: connected (via cardinal
+    neighbors through other dry-or-ocean below-sea tiles) to a tile
+    flagged with fluidType=ocean.
+
+    Closed inland depressions that happen to dip below sea level are
+    ignored — they're either dry valleys (rain-shadow inland) or
+    represent caves the player would explore.
+    """
+    # Seed BFS from every ocean tile, expanding through any tile whose
+    # surface is at or below sea level. We don't care if the expanding
+    # tile is currently dry — the question is whether it CAN be reached
+    # from the ocean at the seaLevel water plane.
+    from collections import deque
+    ocean_seeds = [(t["x"], t["y"]) for t in grid.values()
+                   if t.get("fluidType") == "ocean"]
+    reachable: set[tuple[int, int]] = set(ocean_seeds)
+    queue = deque(ocean_seeds)
+    while queue:
+        x, y = queue.popleft()
+        for nx, ny in neighbors4(x, y):
+            if (nx, ny) in reachable:
+                continue
+            n = grid.get((nx, ny))
+            if n is None:
+                continue
+            if n.get("beyondGlacier") or n["terrainZ"] <= INT64_MIN + 1:
+                continue
+            # Tile is ocean-reachable if its terrain is at/below sea level
+            # (water at seaLevel could be there) OR if it's already ocean.
+            if n["terrainZ"] <= SEA_LEVEL or n.get("fluidType") == "ocean":
+                reachable.add((nx, ny))
+                queue.append((nx, ny))
+
     for tile in grid.values():
         if tile["fluidType"] is not None:
             continue
         terr = tile["terrainZ"]
-        # Skip beyondGlacier sentinel and minBound leakage (handled separately)
         if tile.get("beyondGlacier") or terr <= INT64_MIN + 1:
             continue
-        if terr <= SEA_LEVEL:
-            issues.append(Issue(
-                "DRY_BELOW_SEA", tile["x"], tile["y"],
-                f"terrainZ={terr} surfaceZ={tile['surfaceZ']}",
-            ))
+        if terr > SEA_LEVEL:
+            continue
+        if (tile["x"], tile["y"]) not in reachable:
+            continue  # inland basin or sub-sea cave — legitimate dry tile
+        issues.append(Issue(
+            "DRY_BELOW_SEA", tile["x"], tile["y"],
+            f"terrainZ={terr} surfaceZ={tile['surfaceZ']} (ocean-connected)",
+        ))
 
 
 def check_ocean_on_land(grid: dict[tuple[int, int], dict[str, Any]],
@@ -140,7 +178,14 @@ def check_ocean_on_land(grid: dict[tuple[int, int], dict[str, Any]],
 
 def check_fluid_under_terrain(grid: dict[tuple[int, int], dict[str, Any]],
                               issues: list[Issue]) -> None:
-    """River/lake tiles where the water surface is below the terrain."""
+    """River/lake tiles where the water surface is below the terrain.
+
+    NOT a strict bug — water legitimately exists underground (aquifers,
+    flooded cave systems, underground rivers). This metric exists to
+    track the proportion of below-terrain fluid as a quality score; a
+    sudden spike may indicate a placement error, but a moderate count
+    is expected on any world with cave or aquifer features.
+    """
     for tile in grid.values():
         ft = tile["fluidType"]
         if ft not in ("river", "lake"):
@@ -652,13 +697,28 @@ def check_minbound_leak(grid: dict[tuple[int, int], dict[str, Any]],
 
 def check_surface_inconsistent(grid: dict[tuple[int, int], dict[str, Any]],
                                issues: list[Issue]) -> None:
-    """surfaceZ should equal max(terrainZ, fluidSurf or terrainZ)."""
+    """surfaceZ must match the engine's mkSurfaceMap rule:
+      - River tiles: surfaceZ == fluidSurf (water plane renders flat,
+        hiding any minor terrain protrusion in the carved channel).
+      - Other fluid (Ocean/Lake/Lava): surfaceZ == max(terrainZ, fluidSurf).
+      - Dry tiles: surfaceZ == terrainZ.
+
+    This rule lives in `World/Generate/Chunk.hs::mkSurfaceMap` and is
+    repeated in `Sim/Thread.hs` and the chunk-load seeding paths;
+    keep them in sync if you change one.
+    """
     for tile in grid.values():
         if tile.get("beyondGlacier"):
             continue
         terr = tile["terrainZ"]
         fsurf = tile["fluidSurf"]
-        expected = max(terr, fsurf) if fsurf is not None else terr
+        ftype = tile["fluidType"]
+        if fsurf is None:
+            expected = terr
+        elif ftype == "river":
+            expected = fsurf
+        else:
+            expected = max(terr, fsurf)
         if tile["surfaceZ"] != expected:
             issues.append(Issue(
                 "SURFACE_INCONSISTENT", tile["x"], tile["y"],
@@ -691,6 +751,101 @@ ALL_CHECKS = {
     "MINBOUND_LEAK": check_minbound_leak,
     "SURFACE_INCONSISTENT": check_surface_inconsistent,
 }
+
+# ----- Severity classification --------------------------------------------
+#
+# Every category produced by ALL_CHECKS belongs to one of two buckets:
+#
+#   BUG     — any occurrence is a real bug. Must be 0 in a healthy world.
+#             world_check.py enforces this with a hard envelope of 0.
+#
+#   QUALITY — exists on a spectrum. Some occurrence is expected and
+#             realistic (small islands, underground aquifers, rivers
+#             drying up before the coast). Tracked as a quality score
+#             against a threshold; failure means the metric drifted far
+#             enough to indicate broken worldgen, not zero tolerance.
+#
+# See `feedback_testing_philosophy` in memory for the rationale.
+
+# Bug categories — any occurrence is unambiguous corruption.
+BUG_CATEGORIES = {
+    "OCEAN_ON_LAND",        # Ocean fluid type leaked onto high terrain
+    "TERRAIN_SPIKE",        # Despike pass should have removed
+    "TERRAIN_PIT",          # Same
+    "MINBOUND_LEAK",        # Int64 sentinel outside beyondGlacier zone
+    "SURFACE_INCONSISTENT", # surfaceZ doesn't match the documented rule
+}
+
+# Quality categories — tracked as scores against thresholds, not bugs.
+# A non-zero count can be legitimate; failure happens when the count
+# drifts above the threshold for that metric.
+QUALITY_CATEGORIES = {
+    "DRY_BELOW_SEA",         # ocean-connected dry tile (after BFS filter)
+    "RIVER_UNDER_TERRAIN",   # underground river/aquifer
+    "LAKE_UNDER_TERRAIN",    # underground/cave lake
+    "FLOATING_LAVA",
+    "FLOATING_RIVER",
+    "FLOATING_LAKE",
+    "FLOATING_FLUID",
+    "RIVER_CHUNK_GAP",       # cross-chunk seam mismatch or natural dry-up
+    "RIVER_MOUTH_DROP",      # waterfall at coast — physical for steep rivers
+    "ISLAND_1TILE",          # tiny isolated island — can be real
+    "LAKE_HOLE",             # dry tile mid-lake — can be a tiny lake island
+    "SUBMERGED_BUMP",        # terrain protrusion through water plane
+    "ISOLATED_FLUID",        # singleton fluid tile — small puddle / artifact
+    "WATER_ABOVE_LAND",      # river in valley with high banks
+    "WATER_CLIFF",           # water against terrain cliff
+    "WATER_WATER_CLIFF",     # downstream gradient stair-step
+    "MID_RIVER_CLIFF",       # river surface step larger than terrain step
+    "FLOATING_WATER",        # water-vs-dry side gap, often legitimate cliff
+    "MULTI_ISLAND",          # small dry cluster in a water body
+    "FLAT_ISOLATED_WATER",   # small puddle on flat terrain
+}
+
+# Quality thresholds — per-seed max occurrence count, calibrated against
+# observed values across the 21-seed baseline set. A category whose count
+# exceeds its threshold is flagged in world_check.py as a quality
+# regression; under-threshold counts are tracked but don't fail.
+#
+# Calibration policy: set to ~1.5× the worst current value across the
+# baseline set, so legitimate variance from new seeds doesn't trigger
+# false fails, but a doubling of any metric does. Tighten downward as
+# generation improves and the band of expected values narrows.
+QUALITY_THRESHOLDS = {
+    # Low-variance categories — should stay near zero.
+    "DRY_BELOW_SEA":         50,  # after ocean-connected BFS, expect ~0
+    "FLAT_ISOLATED_WATER":   50,  # observed max 15
+    "FLOATING_WATER":       150,  # observed max 52
+    "ISOLATED_FLUID":        50,  # observed max 9
+    "LAKE_HOLE":             25,  # observed max 4
+    "MULTI_ISLAND":          25,  # observed max 4
+    "RIVER_CHUNK_GAP":       50,  # observed max 14
+    "RIVER_MOUTH_DROP":      50,  # observed max 15
+    "SUBMERGED_BUMP":        25,  # observed max 4
+    # High-variance / by-design categories.
+    "FLOATING_LAKE":       2500,  # observed max 1487 (bilinear water-table)
+    "FLOATING_LAVA":        100,  # not observed in baselines
+    "FLOATING_RIVER":       300,  # not observed in baselines
+    "FLOATING_FLUID":       300,  # generic fallback
+    "ISLAND_1TILE":         100,  # not observed; small islands possible
+    "LAKE_UNDER_TERRAIN":   500,  # not observed; underground lakes possible
+    "MID_RIVER_CLIFF":     1500,  # observed max 1046 (downstream gradient)
+    "RIVER_UNDER_TERRAIN":  500,  # observed max 251 (underground rivers OK)
+    "WATER_ABOVE_LAND":     300,  # observed max 152 (steep valleys)
+    "WATER_CLIFF":          300,  # observed max 152
+    "WATER_WATER_CLIFF":   3500,  # observed max 2425 (stair-step gradient)
+}
+
+
+def severity_of(category: str) -> str:
+    """Return 'BUG' or 'QUALITY' for an issue category.
+
+    Unknown categories default to QUALITY (safe — they'll be
+    threshold-checked rather than treated as hard fails).
+    """
+    if category in BUG_CATEGORIES:
+        return "BUG"
+    return "QUALITY"
 
 
 def compute_stats(data: list[dict[str, Any]]) -> tuple[dict[str, int], dict[str, Any]]:
