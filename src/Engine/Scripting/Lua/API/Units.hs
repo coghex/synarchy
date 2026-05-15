@@ -15,6 +15,8 @@ module Engine.Scripting.Lua.API.Units
     , unitGetSelectedFn
     , unitIsSelectedFn
     , unitHitTestAtFn
+    , unitHitTestInRectFn
+    , unitSetSelectionFn
     ) where
 
 import UPrelude
@@ -435,6 +437,50 @@ unitHitTestAtFn env = do
         _ → do
             Lua.pushnil
             return 1
+
+-- | unit.hitTestInRect(x1, y1, x2, y2) — returns a Lua array of unit
+--   IDs whose sprite-quad center falls inside the screen rect (window
+--   pixels). Used by drag-box selection.
+unitHitTestInRectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitHitTestInRectFn env = do
+    x1A ← Lua.tonumber 1
+    y1A ← Lua.tonumber 2
+    x2A ← Lua.tonumber 3
+    y2A ← Lua.tonumber 4
+    case (x1A, y1A, x2A, y2A) of
+        (Just (Lua.Number a), Just (Lua.Number b),
+         Just (Lua.Number c), Just (Lua.Number d)) → do
+            ids ← Lua.liftIO $ HitTest.hitTestUnitsInRect env
+                                  (realToFrac a) (realToFrac b)
+                                  (realToFrac c) (realToFrac d)
+            Lua.newtable
+            forM_ (zip [1..] ids) $ \(i, uid) → do
+                Lua.pushinteger (fromIntegral (unUnitId uid))
+                Lua.rawseti (-2) i
+            return 1
+        _ → do
+            Lua.newtable
+            return 1
+
+-- | unit.setSelection(idTable) — replace the selection with the given
+--   array of unit IDs. IDs not corresponding to live units are filtered
+--   out by the underlying setSelection.
+unitSetSelectionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitSetSelectionFn env = do
+    n ← Lua.rawlen 1   -- 0 if arg 1 isn't a table; loop body skips
+    let go i acc
+            | i > fromIntegral n = return acc
+            | otherwise = do
+                _ ← Lua.rawgeti 1 i
+                m ← Lua.tointeger (-1)
+                Lua.pop 1
+                case m of
+                    Just k  → go (i + 1) (UnitId (fromIntegral k) : acc)
+                    Nothing → go (i + 1) acc
+    ids ← go 1 []
+    Lua.liftIO $ Sel.setSelection env (HS.fromList ids)
+    Lua.pushboolean True
+    return 1
 
 -- * Helpers
 

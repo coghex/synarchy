@@ -6,6 +6,7 @@ local uiScriptId = nil
 local debugScriptId = nil
 local unitManagerScriptId = nil
 local unitInfoPanelScriptId = nil
+local unitDragSelectScriptId = nil
 
 function game.init(scriptId)
     -- Initialize debug
@@ -21,6 +22,11 @@ function game.init(scriptId)
     -- Ticks at 0.1s — slow enough to be cheap, fast enough to feel
     -- responsive when selection changes via click.
     unitInfoPanelScriptId = engine.loadScript("scripts/unit_info_panel.lua", 0.1)
+
+    -- Drag-box selection: ticks at 0.03s so the rect tracks the
+    -- mouse smoothly without hammering every frame.
+    unitDragSelectScriptId = engine.loadScript(
+        "scripts/unit_drag_select.lua", 0.03)
 
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
@@ -57,19 +63,35 @@ function game.onMouseDown(button, x, y)
         end
 
         local id = unit.hitTestAt(x, y)
+        local shift = engine.isKeyDown("LeftShift")
+                      or engine.isKeyDown("RightShift")
         if id then
-            -- Hit a unit. Select it. The unit_info_panel watcher
-            -- will see the change next tick and (a) push unit info
-            -- into the shared HUD info panel and (b) clear the
-            -- world cursor's tile selection so the tile-cursor
-            -- visual goes away.
-            unit.select(id)
+            -- Hit a unit. Shift adds to the current selection;
+            -- otherwise replace. The unit_info_panel watcher will
+            -- see the change next tick and push unit info into the
+            -- HUD panel + clear any tile cursor.
+            if shift then
+                local current = unit.getSelected() or {}
+                local seen = {}
+                local merged = {}
+                for _, uid in ipairs(current) do
+                    if not seen[uid] then
+                        seen[uid] = true
+                        table.insert(merged, uid)
+                    end
+                end
+                if not seen[id] then table.insert(merged, id) end
+                unit.setSelection(merged)
+            else
+                unit.select(id)
+            end
         else
-            -- Click missed all units. Deselect any active unit. We
-            -- intentionally don't touch the tile cursor — hud.lua
-            -- handles that on its own onMouseDown for the click
-            -- that hit terrain instead of a unit.
-            unit.deselectAll()
+            -- Click missed all units. With Shift held, keep the
+            -- current selection (so shift-dragging from empty terrain
+            -- can extend it). Otherwise deselect.
+            if not shift then
+                unit.deselectAll()
+            end
         end
     elseif button == MOUSE_RIGHT then
         -- Right-click is a cancel for debug spawn mode (highest priority).
@@ -125,6 +147,9 @@ function game.shutdown()
     end
     if unitInfoPanelScriptId then
         engine.killScript(unitInfoPanelScriptId)
+    end
+    if unitDragSelectScriptId then
+        engine.killScript(unitDragSelectScriptId)
     end
     if uiScriptId then
         engine.killScript(uiScriptId)

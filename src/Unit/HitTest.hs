@@ -10,6 +10,7 @@
 -- so clicking a tile with two stacked units selects the one on top.
 module Unit.HitTest
     ( hitTestUnitAt
+    , hitTestUnitsInRect
     ) where
 
 import UPrelude
@@ -116,6 +117,74 @@ hitTestUnitAt env pixX pixY = do
   where
     pickBest = foldr1 $ \a@(za, da, _) b@(zb, db, _) →
                           if za > zb ∨ (za ≡ zb ∧ da < db) then a else b
+
+-- | Hit test all units whose sprite-quad CENTER lies inside the given
+--   screen-space rect (window pixels). Used by drag-box selection.
+--
+--   Order of corners doesn't matter — we normalise to min/max.
+hitTestUnitsInRect
+    ∷ EngineEnv → Double → Double → Double → Double → IO [UnitId]
+hitTestUnitsInRect env x1d y1d x2d y2d = do
+    um       ← readIORef (unitManagerRef env)
+    camera   ← readIORef (cameraRef env)
+    (winW, winH) ← readIORef (windowSizeRef env)
+    texSizes ← readIORef (textureSizeRef env)
+
+    let x1 = realToFrac (min x1d x2d) ∷ Float
+        x2 = realToFrac (max x1d x2d) ∷ Float
+        y1 = realToFrac (min y1d y2d) ∷ Float
+        y2 = realToFrac (max y1d y2d) ∷ Float
+
+        instances = umInstances um
+        facing  = camFacing camera
+        zoom    = camZoom camera
+        zSlice  = camZSlice camera
+        (camX, camY) = camPosition camera
+        vw      = zoom * (fromIntegral winW / fromIntegral winH)
+        vh      = zoom
+
+        -- World coord of the unit's sprite-quad center. Mirrors the
+        -- math in hitTestUnitAt for consistency with click selection.
+        unitCenter inst =
+            let texHandle = resolveTextureH facing (uiFacing inst)
+                                              (uiDirSprites inst)
+                                              (uiTexture inst)
+                (texW, texH) = case HM.lookup texHandle texSizes of
+                    Just (w, h) → (fromIntegral w, fromIntegral h)
+                    Nothing     → (baseTileW, baseTileH)
+                scaleX = texW / baseTileW
+                scaleY = texH / baseTileH
+                quadW  = tileWidth  * scaleX
+                quadH  = tileHeight * scaleY
+                gxF    = uiGridX inst
+                gyF    = uiGridY inst
+                (faF, fbF) = applyFacingF facing gxF gyF
+                rawX = (faF - fbF) * tileHalfWidth - tileHalfWidth
+                rawY = (faF + fbF) * tileHalfDiamondHeight
+                relativeZ    = uiGridZ inst - zSlice
+                heightOffset = fromIntegral relativeZ * tileSideHeight
+                baseRadius   = uiBaseWidth inst * 0.5
+                             / baseTileH * tileHeight
+                drawX = rawX + (tileWidth - quadW) * 0.5
+                drawY = rawY - heightOffset
+                      + tileHalfDiamondHeight - quadH + baseRadius
+            in (drawX + quadW * 0.5, drawY + quadH * 0.5)
+
+        -- World → screen pixel (inverse of hitTestUnitAt's projection).
+        worldToPixel (cx, cy) =
+            let viewX = cx - camX
+                viewY = cy - camY
+                normX = (viewX / vw + 1.0) / 2.0
+                normY = (viewY / vh + 1.0) / 2.0
+            in (normX * fromIntegral winW, normY * fromIntegral winH)
+
+        inRect inst =
+            let z = uiGridZ inst
+            in z ≤ zSlice ∧ z ≥ zSlice - 25 ∧
+               let (pixX, pixY) = worldToPixel (unitCenter inst)
+               in pixX ≥ x1 ∧ pixX ≤ x2 ∧ pixY ≥ y1 ∧ pixY ≤ y2
+
+    return [uid | (uid, inst) ← HM.toList instances, inRect inst]
 
 -- | Resolve which texture handle the unit displays for a given camera
 --   facing. Duplicated from Unit.Render so HitTest doesn't import the

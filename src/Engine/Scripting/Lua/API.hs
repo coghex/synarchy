@@ -194,6 +194,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getSelected" (unitGetSelectedFn env)
   registerLuaFunction "isSelected"  (unitIsSelectedFn env)
   registerLuaFunction "hitTestAt"   (unitHitTestAtFn env)
+  registerLuaFunction "hitTestInRect" (unitHitTestInRectFn env)
+  registerLuaFunction "setSelection" (unitSetSelectionFn env)
 
   Lua.setglobal (Lua.Name "unit")
 
