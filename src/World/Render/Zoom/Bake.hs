@@ -13,7 +13,7 @@ import Data.IORef (readIORef, writeIORef, IORef)
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
 import World.Types
 import World.Grid (gridToWorld)
 
@@ -48,10 +48,10 @@ bakeEntries facing cache texPicker lookupSlot defFmSlot =
             , bzeHeight  = h
             , bzeSortKey = fromIntegral (zceChunkY entry)
                          + fromIntegral (zceChunkX entry) * 0.0001
-            , bzeV0      = Vertex (Vec2 drawX drawY)            (Vec2 0 0) white actualSlot defFmSlot
-            , bzeV1      = Vertex (Vec2 (drawX + w) drawY)       (Vec2 1 0) white actualSlot defFmSlot
-            , bzeV2      = Vertex (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) white actualSlot defFmSlot
-            , bzeV3      = Vertex (Vec2 drawX (drawY + h))       (Vec2 0 1) white actualSlot defFmSlot
+            , bzeV0      = mkVertex (Vec2 drawX drawY)            (Vec2 0 0) white actualSlot defFmSlot
+            , bzeV1      = mkVertex (Vec2 (drawX + w) drawY)       (Vec2 1 0) white actualSlot defFmSlot
+            , bzeV2      = mkVertex (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) white actualSlot defFmSlot
+            , bzeV3      = mkVertex (Vec2 drawX (drawY + h))       (Vec2 0 1) white actualSlot defFmSlot
             , bzeTexture = texHandle
             , bzeIsOcean = zceIsOcean entry
             , bzeHasLava = zceHasLava entry
@@ -103,10 +103,10 @@ bakeEntriesAtlas facing cache atlasInfo lookupSlot defFmSlot =
             , bzeHeight  = h
             , bzeSortKey = fromIntegral (zceChunkY entry)
                          + fromIntegral (zceChunkX entry) * 0.0001
-            , bzeV0      = Vertex (Vec2 drawX drawY)            (Vec2 u0 v0) white atlasSlot defFmSlot
-            , bzeV1      = Vertex (Vec2 (drawX + w) drawY)       (Vec2 u1 v0) white atlasSlot defFmSlot
-            , bzeV2      = Vertex (Vec2 (drawX + w) (drawY + h)) (Vec2 u1 v1) white atlasSlot defFmSlot
-            , bzeV3      = Vertex (Vec2 drawX (drawY + h))       (Vec2 u0 v1) white atlasSlot defFmSlot
+            , bzeV0      = mkVertex (Vec2 drawX drawY)            (Vec2 u0 v0) white atlasSlot defFmSlot
+            , bzeV1      = mkVertex (Vec2 (drawX + w) drawY)       (Vec2 u1 v0) white atlasSlot defFmSlot
+            , bzeV2      = mkVertex (Vec2 (drawX + w) (drawY + h)) (Vec2 u1 v1) white atlasSlot defFmSlot
+            , bzeV3      = mkVertex (Vec2 drawX (drawY + h))       (Vec2 u0 v1) white atlasSlot defFmSlot
             , bzeTexture = atlasHandle
             , bzeIsOcean = zceIsOcean entry
             , bzeHasLava = zceHasLava entry

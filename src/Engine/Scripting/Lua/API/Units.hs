@@ -7,17 +7,24 @@ module Engine.Scripting.Lua.API.Units
     , unitMoveToFn
     , unitStopFn
     , unitGetPosFn
+    , unitGetInfoFn
     , unitListFn
+    , unitSelectFn
+    , unitDeselectAllFn
+    , unitGetSelectedFn
+    , unitIsSelectedFn
+    , unitHitTestAtFn
     ) where
 
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
-import Control.Monad (foldM)
+import Control.Monad (foldM, forM_)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
@@ -28,6 +35,8 @@ import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Direction (Direction(..))
+import qualified Unit.Selection as Sel
+import qualified Unit.HitTest as HitTest
 import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
                     LoadedChunk(..), ChunkCoord(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
@@ -293,6 +302,127 @@ unitListFn env = do
             ) entries
     Lua.pushstring (TE.encodeUtf8 (T.pack result))
     return 1
+
+-- | unit.getInfo(id) — returns a Lua table with the unit's render-visible
+--   attributes, or nil if the unit doesn't exist. Used by the info panel.
+unitGetInfoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetInfoFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mInst ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure (HM.lookup uid (umInstances um))
+            case mInst of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just inst → do
+                    Lua.newtable
+                    Lua.pushstring (TE.encodeUtf8 (uiDefName inst))
+                    Lua.setfield (-2) "defName"
+                    Lua.pushnumber (Lua.Number (realToFrac (uiGridX inst)))
+                    Lua.setfield (-2) "gridX"
+                    Lua.pushnumber (Lua.Number (realToFrac (uiGridY inst)))
+                    Lua.setfield (-2) "gridY"
+                    Lua.pushinteger (fromIntegral (uiGridZ inst))
+                    Lua.setfield (-2) "gridZ"
+                    Lua.pushstring (TE.encodeUtf8 (dirToText (uiFacing inst)))
+                    Lua.setfield (-2) "facing"
+                    Lua.pushnumber (Lua.Number (realToFrac (uiBaseWidth inst)))
+                    Lua.setfield (-2) "baseWidth"
+                    return 1
+
+dirToText ∷ Direction → Text
+dirToText DirS  = "S"
+dirToText DirSW = "SW"
+dirToText DirW  = "W"
+dirToText DirNW = "NW"
+dirToText DirN  = "N"
+dirToText DirNE = "NE"
+dirToText DirE  = "E"
+dirToText DirSE = "SE"
+
+-- * Selection
+
+-- | unit.select(id) — replace the selection with a single unit.
+--   Returns true if the unit exists, false if not.
+unitSelectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitSelectFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            ok ← Lua.liftIO $ Sel.selectUnit env uid
+            Lua.pushboolean ok
+            return 1
+
+-- | unit.deselectAll() — empty the selection. Always returns true.
+unitDeselectAllFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitDeselectAllFn env = do
+    Lua.liftIO $ Sel.clearSelection env
+    Lua.pushboolean True
+    return 1
+
+-- | unit.getSelected() — returns a Lua array of integer unit IDs.
+--   Filtered to only live units.
+unitGetSelectedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetSelectedFn env = do
+    selected ← Lua.liftIO $ Sel.getSelected env
+    let ids = HS.toList selected
+    Lua.newtable
+    forM_ (zip [1..] ids) $ \(i, uid) → do
+        Lua.pushinteger (fromIntegral (unUnitId uid))
+        Lua.rawseti (-2) i
+    return 1
+
+-- | unit.isSelected(id) — bool.
+unitIsSelectedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitIsSelectedFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            sel ← Lua.liftIO $ Sel.isSelected env uid
+            Lua.pushboolean sel
+            return 1
+
+-- | unit.hitTestAt(screenX, screenY) — returns the unit ID under the
+--   given framebuffer-pixel coordinates, or nil if no unit is hit.
+--
+--   Lua side passes the raw GLFW mouse position (window-space pixels,
+--   pre-DPI-scaling). `Unit.HitTest.hitTestUnitAt` does the projection
+--   and per-unit AABB test against the sprite quad.
+unitHitTestAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitHitTestAtFn env = do
+    xArg ← Lua.tonumber 1
+    yArg ← Lua.tonumber 2
+    case (xArg, yArg) of
+        (Just (Lua.Number x), Just (Lua.Number y)) → do
+            mUid ← Lua.liftIO $ HitTest.hitTestUnitAt env
+                                  (realToFrac x) (realToFrac y)
+            case mUid of
+                Just uid → do
+                    Lua.pushinteger (fromIntegral (unUnitId uid))
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- * Helpers
 
 parseDirKey ∷ Text → Maybe Direction
 parseDirKey "S"  = Just DirS

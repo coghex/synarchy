@@ -14,7 +14,7 @@ import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
 import World.Types
 import World.Grid (gridToWorld, worldToGrid, zoomMapLayer)
 
@@ -108,10 +108,10 @@ emitCursorQuad facing baseGX baseGY tex lookupSlot defFmSlot alpha sortKey =
         color = Vec4 1.0 1.0 1.0 alpha
     in V.singleton $ SortableQuad
         { sqSortKey = sortKey
-        , sqV0 = Vertex (Vec2 drawX drawY)             (Vec2 0 0) color slot defFmSlot
-        , sqV1 = Vertex (Vec2 (drawX + w) drawY)       (Vec2 1 0) color slot defFmSlot
-        , sqV2 = Vertex (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) color slot defFmSlot
-        , sqV3 = Vertex (Vec2 drawX (drawY + h))        (Vec2 0 1) color slot defFmSlot
+        , sqV0 = mkVertex (Vec2 drawX drawY)             (Vec2 0 0) color slot defFmSlot
+        , sqV1 = mkVertex (Vec2 (drawX + w) drawY)       (Vec2 1 0) color slot defFmSlot
+        , sqV2 = mkVertex (Vec2 (drawX + w) (drawY + h)) (Vec2 1 1) color slot defFmSlot
+        , sqV3 = mkVertex (Vec2 drawX (drawY + h))        (Vec2 0 1) color slot defFmSlot
         , sqTexture = tex
         , sqLayer   = zoomMapLayer
         }

@@ -17,7 +17,7 @@ import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM)
 import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Draw (layoutTextUI)
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..), fromBindlessHandle)
 import Engine.Scene.Base (LayerId(..))
@@ -311,10 +311,10 @@ makeQuadVertices x y w h (cr, cg, cb, ca) atlasId =
         col = Vec4 cr cg cb ca
         fmId = 0
         
-        v1' = Vertex (Vec2 x0 y0) (Vec2 0 0) col atlasId fmId
-        v2' = Vertex (Vec2 x1 y0) (Vec2 1 0) col atlasId fmId
-        v3' = Vertex (Vec2 x0 y1) (Vec2 0 1) col atlasId fmId
-        v4' = Vertex (Vec2 x1 y0) (Vec2 1 0) col atlasId fmId
-        v5' = Vertex (Vec2 x1 y1) (Vec2 1 1) col atlasId fmId
-        v6' = Vertex (Vec2 x0 y1) (Vec2 0 1) col atlasId fmId
+        v1' = mkVertex (Vec2 x0 y0) (Vec2 0 0) col atlasId fmId
+        v2' = mkVertex (Vec2 x1 y0) (Vec2 1 0) col atlasId fmId
+        v3' = mkVertex (Vec2 x0 y1) (Vec2 0 1) col atlasId fmId
+        v4' = mkVertex (Vec2 x1 y0) (Vec2 1 0) col atlasId fmId
+        v5' = mkVertex (Vec2 x1 y1) (Vec2 1 1) col atlasId fmId
+        v6' = mkVertex (Vec2 x0 y1) (Vec2 0 1) col atlasId fmId
     in V.fromList [v1', v2', v3', v4', v5', v6']

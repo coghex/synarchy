@@ -16,7 +16,7 @@ import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
 import World.Constants (seaLevel)
 import World.Material (matOcean, matLava, matIce, unMaterialId)
 import World.Fluids (FluidCell(..), FluidType(..))
@@ -73,10 +73,10 @@ tileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ tile zSl
 
         tint = Vec4 tintR tintG tintB finalAlpha
 
-        v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-        v3 = Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+        v0 = mkVertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = mkVertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = mkVertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = mkVertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
     in SortableQuad
         { sqSortKey  = sortKey
         , sqV0       = v0
@@ -110,10 +110,10 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
         b = 1.0 * (1.0 - hazeT) + 0.95 * hazeT
 
         tint = Vec4 r g b tileAlpha
-        v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-        v3 = Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+        v0 = mkVertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = mkVertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = mkVertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = mkVertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
     in SortableQuad
         { sqSortKey  = sortKey
         , sqV0       = v0
@@ -147,10 +147,10 @@ oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSl
         finalAlpha = tileAlpha
         tint = Vec4 0.7 0.8 1.0 finalAlpha
 
-        v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-        v3 = Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+        v0 = mkVertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = mkVertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = mkVertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = mkVertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
     in SortableQuad
         { sqSortKey  = sortKey
         , sqV0       = v0
@@ -186,10 +186,10 @@ iceTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY iceZ zSlice 
         -- No tinting — all color baked in texture
         tint = Vec4 1.0 1.0 1.0 finalAlpha
 
-        v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-        v3 = Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+        v0 = mkVertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = mkVertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = mkVertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = mkVertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
     in SortableQuad
         { sqSortKey  = sortKey
         , sqV0       = v0
@@ -218,10 +218,10 @@ lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSli
         fmSlot = lookupFmSlot (wtIsoFaceMap textures)
         finalAlpha = tileAlpha
         tint = Vec4 1.0 0.6 0.2 finalAlpha
-        v0 = Vertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-        v3 = Vertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
+        v0 = mkVertex (Vec2 drawX drawY)                              (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
+        v1 = mkVertex (Vec2 (drawX + tileWidth) drawY)                (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
+        v2 = mkVertex (Vec2 (drawX + tileWidth) (drawY + tileHeight)) (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
+        v3 = mkVertex (Vec2 drawX (drawY + tileHeight))               (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
     in SortableQuad
         { sqSortKey  = sortKey
         , sqV0       = v0
@@ -261,13 +261,13 @@ freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
             River → Vec4 0.6 0.85 0.95 finalAlpha
             _     → Vec4 0.7 0.8 1.0 finalAlpha
 
-        v0 = Vertex (Vec2 drawX drawY)
+        v0 = mkVertex (Vec2 drawX drawY)
                      (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)
+        v1 = mkVertex (Vec2 (drawX + tileWidth) drawY)
                      (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
+        v2 = mkVertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
                      (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-        v3 = Vertex (Vec2 drawX (drawY + tileHeight))
+        v3 = mkVertex (Vec2 drawX (drawY + tileHeight))
                      (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
     in SortableQuad
         { sqSortKey  = sortKey
@@ -311,13 +311,13 @@ worldCursorToQuad lookupSlot lookupFmSlot textures facing
 
         tint = Vec4 1.0 1.0 1.0 (tileAlpha * 0.7)
 
-        v0 = Vertex (Vec2 drawX drawY)
+        v0 = mkVertex (Vec2 drawX drawY)
                      (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)
+        v1 = mkVertex (Vec2 (drawX + tileWidth) drawY)
                      (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
+        v2 = mkVertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
                      (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-        v3 = Vertex (Vec2 drawX (drawY + tileHeight))
+        v3 = mkVertex (Vec2 drawX (drawY + tileHeight))
                      (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
     in SortableQuad
         { sqSortKey  = sortKey
@@ -357,13 +357,13 @@ worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
 
         tint = Vec4 1.0 1.0 1.0 (tileAlpha * 0.7)
 
-        v0 = Vertex (Vec2 drawX drawY)
+        v0 = mkVertex (Vec2 drawX drawY)
                      (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)
+        v1 = mkVertex (Vec2 (drawX + tileWidth) drawY)
                      (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
+        v2 = mkVertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
                      (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-        v3 = Vertex (Vec2 drawX (drawY + tileHeight))
+        v3 = mkVertex (Vec2 drawX (drawY + tileHeight))
                      (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
     in SortableQuad
         { sqSortKey  = sortKey
@@ -417,13 +417,13 @@ vegToQuad lookupSlot lookupFmSlot textures facing
 
         tint = Vec4 r g b tileAlpha
 
-        v0 = Vertex (Vec2 drawX drawY)
+        v0 = mkVertex (Vec2 drawX drawY)
                      (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-        v1 = Vertex (Vec2 (drawX + tileWidth) drawY)
+        v1 = mkVertex (Vec2 (drawX + tileWidth) drawY)
                      (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-        v2 = Vertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
+        v2 = mkVertex (Vec2 (drawX + tileWidth) (drawY + tileHeight))
                      (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-        v3 = Vertex (Vec2 drawX (drawY + tileHeight))
+        v3 = mkVertex (Vec2 drawX (drawY + tileHeight))
                      (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
     in Just $ SortableQuad
         { sqSortKey  = sortKey

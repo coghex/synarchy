@@ -20,6 +20,9 @@ data UnitYamlDef = UnitYamlDef
     , uydBaseWidth         ∷ !Float      -- ^ ground contact diameter in pixels (0 = point)
     , uydDirectionalSprites ∷ !(Map.Map Text Text)
       -- ^ optional: direction key ("S","SW",…) → texture path
+    , uydPortrait          ∷ !(Maybe Text)
+      -- ^ optional: path to portrait texture for info panel.
+      -- Reserved for future use — parsed and carried but not yet rendered.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -28,6 +31,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:  "sprite"
         ⊛ v .:? "base_width"          .!= 0.0
         ⊛ v .:? "directional_sprites" .!= Map.empty
+        ⊛ v .:? "portrait"
 
 newtype UnitYamlFile = UnitYamlFile
     { uyfUnits ∷ [UnitYamlDef]

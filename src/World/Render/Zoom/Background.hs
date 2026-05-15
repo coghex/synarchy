@@ -14,7 +14,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Types
@@ -95,8 +95,8 @@ emitQuadBg entry dx dy alpha layer zSlice =
         -- look like deep ocean.
         (tintR, tintG, tintB) = (1.0, 1.0, 1.0)
 
-        shiftV (Vertex (Vec2 px py) uv (Vec4 _ _ _ _) aid fid) =
-            Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 tintR tintG tintB alpha) aid fid
+        shiftV (Vertex (Vec2 px py) uv (Vec4 _ _ _ _) aid fid flags) =
+            Vertex (Vec2 (px + xShift) (py + yShift)) uv (Vec4 tintR tintG tintB alpha) aid fid flags
         v0 = shiftV (bzeV0 entry)
         v1 = shiftV (bzeV1 entry)
         v2 = shiftV (bzeV2 entry)

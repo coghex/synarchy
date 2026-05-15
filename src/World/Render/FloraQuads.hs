@@ -8,7 +8,7 @@ import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVertex)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , worldLayer, applyFacing, GridConfig(..), defaultGridConfig)
@@ -97,13 +97,13 @@ floraToQuad lookupSlot lookupFmSlot textures facing
 
             tint = Vec4 r g b tileAlpha
 
-            v0 = Vertex (Vec2 drawX drawY)
+            v0 = mkVertex (Vec2 drawX drawY)
                          (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-            v1 = Vertex (Vec2 (drawX + quadW) drawY)
+            v1 = mkVertex (Vec2 (drawX + quadW) drawY)
                          (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-            v2 = Vertex (Vec2 (drawX + quadW) (drawY + quadH))
+            v2 = mkVertex (Vec2 (drawX + quadW) (drawY + quadH))
                          (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-            v3 = Vertex (Vec2 drawX (drawY + quadH))
+            v3 = mkVertex (Vec2 drawX (drawY + quadH))
                          (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
 
         in Just SortableQuad

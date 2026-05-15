@@ -20,8 +20,24 @@ vertexAtlasIdOffset = 32
 vertexFaceMapIdOffset ∷ Int
 vertexFaceMapIdOffset = 36
 
+-- | Per-vertex render flags (Word32 bitset). Bit 0 = SELECTED_OUTLINE.
+-- See bindless fragment shader for outline logic.
+vertexRenderFlagsOffset ∷ Int
+vertexRenderFlagsOffset = 40
+
 vertexTotalSize ∷ Int
-vertexTotalSize = 40
+vertexTotalSize = 44
+
+-- | Bit 0 of renderFlags: when set, the fragment shader emits a 1-pixel
+-- white outline around alpha-cutout sprite edges. Used by selected units.
+renderFlagSelected ∷ Word32
+renderFlagSelected = 1
+
+-- | Backward-compatible Vertex constructor: takes the original 5 fields
+-- and defaults renderFlags to 0. Use the full `Vertex` constructor when
+-- you need to set flags (e.g. Unit.Render for selected units).
+mkVertex ∷ Vec2 → Vec2 → Vec4 → Float → Float → Vertex
+mkVertex p t c a f = Vertex p t c a f 0
 
 -- | 2D vector for positions and texture coordinates
 data Vec2 = Vec2 
@@ -64,11 +80,12 @@ instance Storable Vec4 where
         Storable.pokeElemOff (castPtr ptr ∷ Ptr Float) 3 a'
 
 data Vertex = Vertex
-    { pos       ∷ !Vec2  -- ^ Position (layout = 0)
-    , tex       ∷ !Vec2  -- ^ Texture coordinates (layout = 1)
-    , color     ∷ !Vec4  -- ^ Color (layout = 2)
-    , atlasId   ∷ !Float -- ^ Atlas ID (layout = 3)
-    , faceMapId ∷ !Float -- ^ Face map texture slot (layout = 4)
+    { pos         ∷ !Vec2   -- ^ Position (layout = 0)
+    , tex         ∷ !Vec2   -- ^ Texture coordinates (layout = 1)
+    , color       ∷ !Vec4   -- ^ Color (layout = 2)
+    , atlasId     ∷ !Float  -- ^ Atlas ID (layout = 3)
+    , faceMapId   ∷ !Float  -- ^ Face map texture slot (layout = 4)
+    , renderFlags ∷ !Word32 -- ^ Render-flag bitset, see renderFlag* (layout = 5)
     } deriving (Show, Eq)
 
 instance Storable Vertex where
@@ -80,10 +97,12 @@ instance Storable Vertex where
         c ← peek (ptr `plusPtr` vertexColorOffset)
         a ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexAtlasIdOffset) ∷ Ptr Float) 0
         f ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexFaceMapIdOffset) ∷ Ptr Float) 0
-        return $! Vertex p t c a f
-    poke ptr (Vertex p t c a f) = do
+        rf ← Storable.peekElemOff (castPtr (ptr `plusPtr` vertexRenderFlagsOffset) ∷ Ptr Word32) 0
+        return $! Vertex p t c a f rf
+    poke ptr (Vertex p t c a f rf) = do
         poke (ptr `plusPtr` vertexPositionOffset) p
         poke (ptr `plusPtr` vertexTexCoordOffset) t
         poke (ptr `plusPtr` vertexColorOffset) c
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexAtlasIdOffset) ∷ Ptr Float) 0 a
         Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexFaceMapIdOffset) ∷ Ptr Float) 0 f
+        Storable.pokeElemOff (castPtr (ptr `plusPtr` vertexRenderFlagsOffset) ∷ Ptr Word32) 0 rf

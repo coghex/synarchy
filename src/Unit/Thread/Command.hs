@@ -6,6 +6,7 @@ module Unit.Thread.Command
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
@@ -62,8 +63,13 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                 (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
 
 handleUnitCommand env utsRef (UnitDestroy uid) = do
+    -- Single atomic modify removes the unit from instances AND clears
+    -- it from the selection set, so no observer ever sees a "selected
+    -- but dead" state.
     atomicModifyIORef' (unitManagerRef env) $ \um →
-        (um { umInstances = HM.delete uid (umInstances um) }, ())
+        (um { umInstances = HM.delete uid (umInstances um)
+            , umSelected  = HS.delete uid (umSelected um)
+            }, ())
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.delete uid (utsSimStates uts) }, ())
 

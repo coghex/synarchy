@@ -5,6 +5,7 @@ module Unit.Render
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
@@ -12,7 +13,8 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
+                                          , renderFlagSelected)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
@@ -60,6 +62,7 @@ renderUnitQuads ∷ EngineEnv → CameraFacing → Int → Float → IO (V.Vecto
 renderUnitQuads env facing zSlice tileAlpha = do
     um ← readIORef (unitManagerRef env)
     let instances = umInstances um
+        selected  = umSelected um
     if HM.null instances
         then return V.empty
         else do
@@ -72,9 +75,10 @@ renderUnitQuads env facing zSlice tileAlpha = do
                     let lookupSlot h = getTextureSlotIndex h bts
                         defFmSlot = fromIntegral defFmSlotWord
                         quads = V.fromList
-                            $ HM.foldl' (\acc inst →
-                                case unitToQuad lookupSlot defFmSlot facing
-                                                zSlice tileAlpha inst texSizes of
+                            $ HM.foldlWithKey' (\acc uid inst →
+                                let isSel = HS.member uid selected
+                                in case unitToQuad lookupSlot defFmSlot facing
+                                                zSlice tileAlpha isSel inst texSizes of
                                     Just sq → sq : acc
                                     Nothing → acc
                               ) [] instances
@@ -86,10 +90,11 @@ unitToQuad
     → CameraFacing
     → Int
     → Float
+    → Bool                                 -- ^ selected (sets outline bit)
     → UnitInstance
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha inst texSizes =
+unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha isSel inst texSizes =
     let gridZ = uiGridZ inst
         relativeZ = gridZ - zSlice
     in if gridZ > zSlice ∨ gridZ < (zSlice - 25)
@@ -129,15 +134,16 @@ unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha inst texSizes =
 
             actualSlot = lookupSlot texHandle
             tint = Vec4 1.0 1.0 1.0 tileAlpha
+            flags = if isSel then renderFlagSelected else 0
 
             v0 = Vertex (Vec2 drawX drawY)
-                         (Vec2 0 0) tint (fromIntegral actualSlot) defFmSlot
+                         (Vec2 0 0) tint (fromIntegral actualSlot) defFmSlot flags
             v1 = Vertex (Vec2 (drawX + quadW) drawY)
-                         (Vec2 1 0) tint (fromIntegral actualSlot) defFmSlot
+                         (Vec2 1 0) tint (fromIntegral actualSlot) defFmSlot flags
             v2 = Vertex (Vec2 (drawX + quadW) (drawY + quadH))
-                         (Vec2 1 1) tint (fromIntegral actualSlot) defFmSlot
+                         (Vec2 1 1) tint (fromIntegral actualSlot) defFmSlot flags
             v3 = Vertex (Vec2 drawX (drawY + quadH))
-                         (Vec2 0 1) tint (fromIntegral actualSlot) defFmSlot
+                         (Vec2 0 1) tint (fromIntegral actualSlot) defFmSlot flags
 
         in Just SortableQuad
             { sqSortKey = sortKey

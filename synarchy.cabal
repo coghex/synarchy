@@ -356,6 +356,8 @@ library
                      UI.TextBuffer
                      Unit.Types
                      Unit.Render
+                     Unit.Selection
+                     Unit.HitTest
                      Unit.Command.Types
                      Unit.Direction
                      Unit.Sim.Types

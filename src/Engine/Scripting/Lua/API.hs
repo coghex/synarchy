@@ -180,13 +180,19 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
 
   Lua.newtable
 
-  registerLuaFunction "spawn"   (unitSpawnFn env)
-  registerLuaFunction "destroy" (unitDestroyFn env)
-  registerLuaFunction "setPos"  (unitSetPosFn env)
-  registerLuaFunction "getPos"  (unitGetPosFn env)
-  registerLuaFunction "list"    (unitListFn env)
-  registerLuaFunction "moveTo"  (unitMoveToFn env)
-  registerLuaFunction "stop"    (unitStopFn env)
+  registerLuaFunction "spawn"       (unitSpawnFn env)
+  registerLuaFunction "destroy"     (unitDestroyFn env)
+  registerLuaFunction "setPos"      (unitSetPosFn env)
+  registerLuaFunction "getPos"      (unitGetPosFn env)
+  registerLuaFunction "getInfo"     (unitGetInfoFn env)
+  registerLuaFunction "list"        (unitListFn env)
+  registerLuaFunction "moveTo"      (unitMoveToFn env)
+  registerLuaFunction "stop"        (unitStopFn env)
+  registerLuaFunction "select"      (unitSelectFn env)
+  registerLuaFunction "deselectAll" (unitDeselectAllFn env)
+  registerLuaFunction "getSelected" (unitGetSelectedFn env)
+  registerLuaFunction "isSelected"  (unitIsSelectedFn env)
+  registerLuaFunction "hitTestAt"   (unitHitTestAtFn env)
 
   Lua.setglobal (Lua.Name "unit")
 

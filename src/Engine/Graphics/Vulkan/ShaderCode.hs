@@ -98,6 +98,7 @@ bindlessVertexShaderCode = [vert|
     layout(location = 2) in vec4 inColor;
     layout(location = 3) in float inTexIndex;
     layout(location = 4) in float inFaceMapIndex;
+    layout(location = 5) in uint inRenderFlags;
 
     layout(set = 0, binding = 0) uniform UniformBufferObject {
         mat4 model;
@@ -122,6 +123,7 @@ bindlessVertexShaderCode = [vert|
     layout(location = 5) out float fragSunAngle;
     layout(location = 6) out float fragAmbientLight;
     layout(location = 7) out float fragCameraFacing;
+    layout(location = 8) out flat uint fragRenderFlags;
 
     void main() {
         vec4 worldPos = ubo.model * vec4(inPosition.xy, 0.0, 1.0);
@@ -143,6 +145,7 @@ bindlessVertexShaderCode = [vert|
         fragSunAngle = ubo.sunAngle;
         fragAmbientLight = ubo.ambientLight;
         fragCameraFacing = ubo.cameraFacing;
+        fragRenderFlags = inRenderFlags;
     }
 |]
 
@@ -162,6 +165,7 @@ bindlessFragmentShaderCode = [frag|
     layout(location = 5) in float fragSunAngle;
     layout(location = 6) in float fragAmbientLight;
     layout(location = 7) in float fragCameraFacing;
+    layout(location = 8) in flat uint fragRenderFlags;
 
     layout(set = 1, binding = 0) uniform sampler2D textures[16384];
 
@@ -169,7 +173,26 @@ bindlessFragmentShaderCode = [frag|
 
     void main() {
         vec4 texColor = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord);
-        
+
+        // Selection outline: bit 0 of renderFlags.
+        // For each fragment, sample the 4 cardinal neighbor texels (one
+        // texture-pixel away). If this fragment is transparent AND any
+        // neighbor is opaque, this is an edge — emit pure white.
+        // Otherwise fall through to normal shading.
+        if ((fragRenderFlags & 1u) != 0u) {
+            vec2 texSize = vec2(textureSize(textures[nonuniformEXT(fragTexIndex)], 0));
+            vec2 px = 1.0 / texSize;
+            float aN = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord + vec2(0.0, -px.y)).a;
+            float aS = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord + vec2(0.0,  px.y)).a;
+            float aW = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord + vec2(-px.x, 0.0)).a;
+            float aE = texture(textures[nonuniformEXT(fragTexIndex)], fragTexCoord + vec2( px.x, 0.0)).a;
+            float maxN = max(max(aN, aS), max(aW, aE));
+            if (texColor.a < 0.5 && maxN >= 0.5) {
+                outColor = vec4(1.0, 1.0, 1.0, 1.0);
+                return;
+            }
+        }
+
         vec4 faceMapSample = texture(textures[nonuniformEXT(fragFaceMapIndex)], fragTexCoord);
         vec3 faceRaw = faceMapSample.rgb;
         float faceAlpha = faceMapSample.a;

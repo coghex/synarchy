@@ -6,7 +6,7 @@ module Engine.Scene.Batch.Vertex
 import UPrelude
 import qualified Data.Vector as V
 import Engine.Scene.Types.Node (SceneNode(..), WorldTransform(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), mkVertex)
 
 generateQuadVertices ∷ SceneNode → WorldTransform → Float → Float → (Vertex, Vertex, Vertex, Vertex)
 generateQuadVertices node worldTrans atlasId faceMapSlot =
@@ -21,9 +21,9 @@ generateQuadVertices node worldTrans atlasId faceMapSlot =
         halfX = sizeX * 0.5
         halfY = sizeY * 0.5
         
-        v1 = Vertex (Vec2 (posX - halfX) (posY - halfY)) (Vec2 (x uvMin) (y uvMin)) color atlasId faceMapSlot
-        v2 = Vertex (Vec2 (posX + halfX) (posY - halfY)) (Vec2 (x uvMax) (y uvMin)) color atlasId faceMapSlot
-        v3 = Vertex (Vec2 (posX + halfX) (posY + halfY)) (Vec2 (x uvMax) (y uvMax)) color atlasId faceMapSlot
-        v4 = Vertex (Vec2 (posX - halfX) (posY + halfY)) (Vec2 (x uvMin) (y uvMax)) color atlasId faceMapSlot
+        v1 = mkVertex (Vec2 (posX - halfX) (posY - halfY)) (Vec2 (x uvMin) (y uvMin)) color atlasId faceMapSlot
+        v2 = mkVertex (Vec2 (posX + halfX) (posY - halfY)) (Vec2 (x uvMax) (y uvMin)) color atlasId faceMapSlot
+        v3 = mkVertex (Vec2 (posX + halfX) (posY + halfY)) (Vec2 (x uvMax) (y uvMax)) color atlasId faceMapSlot
+        v4 = mkVertex (Vec2 (posX - halfX) (posY + halfY)) (Vec2 (x uvMin) (y uvMax)) color atlasId faceMapSlot
         
     in (v1, v2, v3, v4)
