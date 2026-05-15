@@ -49,6 +49,125 @@ import World.Generate.Strata
     , buildColumnStrata
     )
 
+-- * Fluid composition (shared between detail world and zoom map)
+--
+-- composeFluidMap places all static fluid for a chunk:
+--   - rivers from geological events (priority 1)
+--   - lakes from persistent features  (priority 2)
+--   - lava from active volcanic features (priority 3)
+--   - ocean / inland water-table from the bilinear gradient (fallback)
+-- composed via unionFluidMap (first-Just wins).
+--
+-- The bilinear water-table layer types tiles as Ocean at or below
+-- seaLevel and Lake above (inland basins fed by groundwater).
+-- Tiles below seaLevel in chunks past the BFS reach still fill
+-- with Ocean at seaLevel (fallback for isolated basins).
+--
+-- Used by both `generateChunk` (detail world) and `generateZoomTerrain`
+-- (zoom cache) so the two views stay in sync.
+composeFluidMap ∷ WorldGenParams → ChunkCoord → VU.Vector Int
+                → V.Vector (Maybe FluidCell)
+composeFluidMap params coord terrainMap =
+    let seed       = wgpSeed params
+        worldSize  = wgpWorldSize params
+        plates     = wgpPlates params
+        timeline   = wgpGeoTimeline params
+        oceanDist  = wgpOceanDist params
+        climate    = wgpClimateState params
+        ChunkCoord cx cy = coord
+        chunkArea  = chunkSize * chunkSize
+
+        capDist d  = if d > 100 then -1.0 else fromIntegral d ∷ Float
+        d00 = capDist (oceanDistAt oceanDist (ChunkCoord cx cy))
+        d10 = capDist (oceanDistAt oceanDist (ChunkCoord (cx+1) cy))
+        d01 = capDist (oceanDistAt oceanDist (ChunkCoord cx (cy+1)))
+        d11 = capDist (oceanDistAt oceanDist (ChunkCoord (cx+1) (cy+1)))
+        dN0 = capDist (oceanDistAt oceanDist (ChunkCoord (cx-1) cy))
+        d0N = capDist (oceanDistAt oceanDist (ChunkCoord cx (cy-1)))
+        gradient = 0.5 ∷ Float
+
+        oceanFluid = V.generate chunkArea $ \idx →
+            let terrZ = terrainMap VU.! idx
+                lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+                tx = (fromIntegral lx + 0.5) / fromIntegral chunkSize ∷ Float
+                ty = (fromIntegral ly + 0.5) / fromIntegral chunkSize ∷ Float
+                (da, db, dc, dd, sx, sy) =
+                    if tx ≥ 0.5 ∧ ty ≥ 0.5
+                    then (d00, d10, d01, d11,
+                          tx - 0.5, ty - 0.5)
+                    else if tx < 0.5 ∧ ty ≥ 0.5
+                    then (dN0, d00,
+                          capDist (oceanDistAt oceanDist
+                                     (ChunkCoord (cx-1) (cy+1))),
+                          d01, tx + 0.5, ty - 0.5)
+                    else if tx ≥ 0.5 ∧ ty < 0.5
+                    then (d0N,
+                          capDist (oceanDistAt oceanDist
+                                     (ChunkCoord (cx+1) (cy-1))),
+                          d00, d10, tx - 0.5, ty + 0.5)
+                    else (capDist (oceanDistAt oceanDist
+                                     (ChunkCoord (cx-1) (cy-1))),
+                          d0N, dN0, d00, tx + 0.5, ty + 0.5)
+                validCorners = filter (≥ 0) [da, db, dc, dd]
+                fallback = if null validCorners then -1.0
+                           else sum validCorners
+                              / fromIntegral (length validCorners)
+                sa = if da < 0 then fallback else da
+                sb = if db < 0 then fallback else db
+                sc = if dc < 0 then fallback else dc
+                sd = if dd < 0 then fallback else dd
+                topRow  = sa + sx * (sb - sa)
+                botRow  = sc + sx * (sd - sc)
+                interpDist = topRow + sy * (botRow - topRow)
+                waterLevel
+                  | interpDist < 0 ∧ terrZ ≤ seaLevel = seaLevel
+                  | interpDist < 0                    = minBound
+                  | otherwise = round (fromIntegral seaLevel
+                                     + interpDist * gradient)
+                ftype = if waterLevel ≤ seaLevel then Ocean else Lake
+            in if terrZ > minBound ∧ waterLevel ≥ terrZ
+                  ∧ waterLevel > minBound
+               then Just (FluidCell ftype waterLevel)
+               else Nothing
+
+        eventRivers ∷ [RiverParams]
+        eventRivers = concatMap goP (gtPeriods timeline)
+          where
+            goP p = concatMap goE (gpEvents p)
+            goE (HydroEvent (RiverFeature rp)) = [rp]
+            goE _                              = []
+        riverFluid = computeChunkRiversStatic eventRivers worldSize coord
+                                              terrainMap
+
+        features = gtFeatures timeline
+        waterTableAt gx gy = fst (lookupWaterTable climate
+                                                  worldSize gx gy)
+        lakeFluid = computeChunkLakes features seed plates
+                                      worldSize coord
+                                      terrainMap waterTableAt
+
+        lavaFluid = computeChunkLava features seed plates
+                                     worldSize coord terrainMap
+
+    in riverFluid
+       `unionFluidMap` lakeFluid
+       `unionFluidMap` lavaFluid
+       `unionFluidMap` oceanFluid
+
+-- | Merge a river-flat surface rule into surface-map computation.
+-- For River fluid, surface = fluid surface (hides terrain protrusions).
+-- For other fluid types, surface = max(terrain, fluid).
+-- Same rule lives in Sim/Thread.hs and the chunk-load seeding paths.
+mkSurfaceMap ∷ VU.Vector Int → V.Vector (Maybe FluidCell) → VU.Vector Int
+mkSurfaceMap terrain fluid =
+    VU.imap (\idx surfZ →
+        case fluid V.! idx of
+            Just fc | fcType fc ≡ River → fcSurface fc
+            Just fc                     → max surfZ (fcSurface fc)
+            Nothing                     → surfZ
+      ) terrain
+
 -- * Chunk Generation
 
 -- | Generate a single chunk. Pure and deterministic.
@@ -192,134 +311,20 @@ generateChunk registry catalog params coord =
             then minBound
             else lookupElev (idx `mod` chunkSize) (idx `div` chunkSize)
 
-        -- Fluids: water level approach. Water appears where terrain
-        -- is below the local water level.
-        --
-        -- Water level per tile: bilinearly interpolated from
-        -- ocean distances of this chunk and its 4 neighbors.
-        -- This eliminates the zig-zag at chunk boundaries by
-        -- smoothly blending the water level across edges.
-        oceanDist = wgpOceanDist params
-        ChunkCoord cx cy = coord
-        capDist d = if d > 100 then -1.0 else fromIntegral d ∷ Float
-        -- Distances for this chunk and its cardinal neighbors.
-        -- Use the chunk center as the "sample point" for interpolation.
-        d00 = capDist (oceanDistAt oceanDist (ChunkCoord cx cy))
-        d10 = capDist (oceanDistAt oceanDist (ChunkCoord (cx+1) cy))
-        d01 = capDist (oceanDistAt oceanDist (ChunkCoord cx (cy+1)))
-        d11 = capDist (oceanDistAt oceanDist (ChunkCoord (cx+1) (cy+1)))
-        -- Also need the other two corners for full bilinear
-        dN0 = capDist (oceanDistAt oceanDist (ChunkCoord (cx-1) cy))
-        d0N = capDist (oceanDistAt oceanDist (ChunkCoord cx (cy-1)))
-
-        gradient = 0.5 ∷ Float
-
         finalTerrain = terrainSurfaceMap
 
-        -- Ocean / inland-water-table layer.
-        -- Tiles below the local water level fill with water. Type is
-        -- Ocean at or below seaLevel, Lake above (inland basins fed
-        -- by groundwater gradient).
-        --
-        -- Bug-2 fallback: if all 4 bilinear corners are unreachable
-        -- (chunk far past BFS cutoff), tiles at or below seaLevel
-        -- still fill with Ocean at seaLevel. Without this, isolated
-        -- inland basins stay dry.
-        oceanFluid = V.generate chunkArea $ \idx →
-            let terrZ = terrainSurfaceMap VU.! idx
-                lx = idx `mod` chunkSize
-                ly = idx `div` chunkSize
-                tx = (fromIntegral lx + 0.5) / fromIntegral chunkSize ∷ Float
-                ty = (fromIntegral ly + 0.5) / fromIntegral chunkSize ∷ Float
-                (da, db, dc, dd, sx, sy) =
-                    if tx ≥ 0.5 ∧ ty ≥ 0.5
-                    then (d00, d10, d01, d11,
-                          tx - 0.5, ty - 0.5)
-                    else if tx < 0.5 ∧ ty ≥ 0.5
-                    then (dN0, d00, capDist (oceanDistAt oceanDist (ChunkCoord (cx-1) (cy+1))), d01,
-                          tx + 0.5, ty - 0.5)
-                    else if tx ≥ 0.5 ∧ ty < 0.5
-                    then (d0N, capDist (oceanDistAt oceanDist (ChunkCoord (cx+1) (cy-1))), d00, d10,
-                          tx - 0.5, ty + 0.5)
-                    else (capDist (oceanDistAt oceanDist (ChunkCoord (cx-1) (cy-1))), d0N, dN0, d00,
-                          tx + 0.5, ty + 0.5)
-                validCorners = filter (≥ 0) [da, db, dc, dd]
-                fallback = if null validCorners then -1.0
-                           else sum validCorners / fromIntegral (length validCorners)
-                sa = if da < 0 then fallback else da
-                sb = if db < 0 then fallback else db
-                sc = if dc < 0 then fallback else dc
-                sd = if dd < 0 then fallback else dd
-                topRow  = sa + sx * (sb - sa)
-                botRow  = sc + sx * (sd - sc)
-                interpDist = topRow + sy * (botRow - topRow)
-                waterLevel
-                  | interpDist < 0 ∧ terrZ ≤ seaLevel = seaLevel
-                  | interpDist < 0                    = minBound
-                  | otherwise = round (fromIntegral seaLevel
-                                     + interpDist * gradient)
-                ftype = if waterLevel ≤ seaLevel then Ocean else Lake
-            in if terrZ > minBound ∧ waterLevel ≥ terrZ ∧ waterLevel > minBound
-               then Just (FluidCell ftype waterLevel)
-               else Nothing
-
-        -- Rivers from geological events. Each river contributes
-        -- segments that fill a carved valley with River fluid.
-        eventRivers ∷ [RiverParams]
-        eventRivers = concatMap goP (gtPeriods timeline)
-          where
-            goP p = concatMap goE (gpEvents p)
-            goE (HydroEvent (RiverFeature rp)) = [rp]
-            goE _                              = []
-
-        riverFluid = computeChunkRiversStatic eventRivers worldSize coord
-                                              terrainSurfaceMap
-
-        -- Lakes from persistent hydrological features.
-        features = gtFeatures timeline
-        waterTableAt gx gy = fst (lookupWaterTable
-                                    (wgpClimateState params)
-                                    worldSize gx gy)
-        lakeFluid = computeChunkLakes features seed plates
-                                      worldSize coord
-                                      terrainSurfaceMap waterTableAt
-
-        -- Lava from active volcanic features.
-        lavaFluid = computeChunkLava features seed plates
-                                     worldSize coord terrainSurfaceMap
-
-        -- Composite: priority is rivers > lakes > lava > ocean.
-        -- unionFluidMap keeps its first arg where present.
-        fluidMap = riverFluid
-                   `unionFluidMap` lakeFluid
-                   `unionFluidMap` lavaFluid
-                   `unionFluidMap` oceanFluid
+        -- All fluid placement (ocean/lake water-table fallback + rivers
+        -- + lakes + lava). Shared with generateZoomTerrain so the two
+        -- views agree about which tiles are water.
+        fluidMap = composeFluidMap params coord terrainSurfaceMap
 
         riverMask = emptyRiverMask
 
 
-        -- Surface map with fluids (ice is a visual overlay, does not
-        -- affect terrain column generation or surface-based logic).
-        --
-        -- For River fluid the surface is taken DIRECTLY from the
-        -- fluid cell, not max'd with terrain. The static-river
-        -- segment interpolation produces a smooth water surface,
-        -- but the carved channel terrain can have 1-2z protrusions
-        -- where carving was idempotent or where coastal flattening
-        -- dropped water below the rim. Using max() would expose
-        -- those protrusions as visible bumps mid-river. Taking the
-        -- fluid surface directly hides them under the water plane
-        -- — water bodies render flat, like real water.
-        --
-        -- For Ocean/Lake/Lava the max() rule still applies (water
-        -- can sit in a depression where terrain is below it, and
-        -- the surface is the higher of the two).
-        surfaceMap = VU.imap (\idx surfZ →
-            case fluidMap V.! idx of
-                Just fc | fcType fc ≡ River → fcSurface fc
-                Just fc                     → max surfZ (fcSurface fc)
-                Nothing                     → surfZ
-          ) finalTerrain
+        -- Surface map: rivers render flat (water surface hides any
+        -- minor terrain protrusions in the carved channel); other
+        -- fluids use max(terrain, water).
+        surfaceMap = mkSurfaceMap finalTerrain fluidMap
 
         -- Build per-column tile data directly, fusing stratigraphy
         -- computation with ColumnTiles construction to avoid an
@@ -525,9 +530,15 @@ generateZoomTerrain registry params coord =
                 (baseElevVec, baseMatVec)
 
         -- Coastal erosion with contour smoothing (same as detail)
-        (finalElevVec, finalMatVec) =
+        (postCoastElev, finalMatVec) =
             applyCoastalErosion seed worldSize plates registry timeline
                 oceanMap coord (timelineElevVec, timelineMatVec)
+
+        -- Despike: same as detail world, so single-tile elevation
+        -- outliers don't differ between the two views.
+        (finalElevVec, _) =
+            removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
+                                  (postCoastElev, finalMatVec)
 
         -- Extract interior 16×16 from bordered region
         chunkArea = chunkSize * chunkSize
@@ -549,46 +560,9 @@ generateZoomTerrain registry params coord =
                then unMaterialId (finalMatVec VU.! toIndex lx ly)
                else 1
 
-        -- Fluid: same water table as detail world, with bilinear
-        -- interpolation for smooth transitions.
-        oceanDist' = wgpOceanDist params
-        ChunkCoord zcx zcy = coord
-        zcapDist d = if d > 100 then -1.0 else fromIntegral d ∷ Float
-        zd00 = zcapDist (oceanDistAt oceanDist' (ChunkCoord zcx zcy))
-        zd10 = zcapDist (oceanDistAt oceanDist' (ChunkCoord (zcx+1) zcy))
-        zd01 = zcapDist (oceanDistAt oceanDist' (ChunkCoord zcx (zcy+1)))
-        zd11 = zcapDist (oceanDistAt oceanDist' (ChunkCoord (zcx+1) (zcy+1)))
-        zdN0 = zcapDist (oceanDistAt oceanDist' (ChunkCoord (zcx-1) zcy))
-        zd0N = zcapDist (oceanDistAt oceanDist' (ChunkCoord zcx (zcy-1)))
-        zGrad = 0.5 ∷ Float
-        zoomFluid = V.generate chunkArea $ \idx →
-            let terrZ = interiorElev VU.! idx
-                lx = idx `mod` chunkSize
-                ly = idx `div` chunkSize
-                tx = (fromIntegral lx + 0.5) / fromIntegral chunkSize ∷ Float
-                ty = (fromIntegral ly + 0.5) / fromIntegral chunkSize ∷ Float
-                (za, zb, zc, zd, zsx, zsy) =
-                    if tx ≥ 0.5 ∧ ty ≥ 0.5
-                    then (zd00, zd10, zd01, zd11, tx - 0.5, ty - 0.5)
-                    else if tx < 0.5 ∧ ty ≥ 0.5
-                    then (zdN0, zd00, zcapDist (oceanDistAt oceanDist' (ChunkCoord (zcx-1) (zcy+1))), zd01, tx + 0.5, ty - 0.5)
-                    else if tx ≥ 0.5 ∧ ty < 0.5
-                    then (zd0N, zcapDist (oceanDistAt oceanDist' (ChunkCoord (zcx+1) (zcy-1))), zd00, zd10, tx - 0.5, ty + 0.5)
-                    else (zcapDist (oceanDistAt oceanDist' (ChunkCoord (zcx-1) (zcy-1))), zd0N, zdN0, zd00, tx + 0.5, ty + 0.5)
-                zvalidCorners = filter (≥ 0) [za, zb, zc, zd]
-                zfallback = if null zvalidCorners then -1.0
-                            else sum zvalidCorners / fromIntegral (length zvalidCorners)
-                zsa = if za < 0 then zfallback else za
-                zsb = if zb < 0 then zfallback else zb
-                zsc = if zc < 0 then zfallback else zc
-                zsd = if zd < 0 then zfallback else zd
-                ztopRow = zsa + zsx * (zsb - zsa)
-                zbotRow = zsc + zsx * (zsd - zsc)
-                zinterp = ztopRow + zsy * (zbotRow - ztopRow)
-                zwl = if zinterp < 0 then minBound
-                      else round (fromIntegral seaLevel + zinterp * zGrad)
-            in if terrZ > minBound ∧ zwl > terrZ
-               then Just (FluidCell Ocean zwl)
-               else Nothing
+        -- All fluid placement — same composeFluidMap as the detail
+        -- world, so the zoom map shows rivers, lakes, and lava in the
+        -- same tiles where the world view shows them.
+        zoomFluid = composeFluidMap params coord interiorElev
 
     in (interiorElev, interiorMat, zoomFluid)
