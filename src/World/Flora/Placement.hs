@@ -15,6 +15,7 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Types
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidCell(..))
+import World.River.Types (RiverMask)
 import World.Vegetation (isBarrenMaterial)
 import World.Weather.Types (ClimateState(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
@@ -27,7 +28,7 @@ computeChunkFlora
     ∷ Word64 → Int → ChunkCoord
     → VU.Vector Int → VU.Vector Word8 → VU.Vector Word8
     → V.Vector (Maybe FluidCell)
-    → VU.Vector Bool             -- ^ river channel mask
+    → RiverMask                  -- ^ rich river channel mask
     → ClimateState → FloraCatalog
     → FloraChunkData
 computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
@@ -57,7 +58,7 @@ computeChunkFlora seed worldSize coord surfMap surfMats surfSlopes
                             lookupLocalClimate climate worldSize gx gy
 
                     occ ← VUM.read occupied idx
-                    let isRiver = riverMask VU.! idx
+                    let isRiver = isJust (riverMask V.! idx)
                     if occ /= 0 ∨ hasFluid ∨ isRiver ∨ isBarrenMaterial matId ∨ surfZ ≡ minBound
                     then go rest acc
                     else do

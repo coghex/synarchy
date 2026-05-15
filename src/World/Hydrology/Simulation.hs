@@ -421,7 +421,83 @@ fillDepressions grid =
                                then bestIdx  -- steepest descent
                                else floodParentV VU.! idx  -- flat: use flood parent
 
-        return (filledV, d8FlowDir)
+        -- Step 3: Ocean-proximity override. For land cells near the
+        -- coast, steer flow toward the nearest ocean cell to prevent
+        -- rivers from running parallel to the coastline. Only
+        -- overrides cells within forceRadius grid cells of ocean,
+        -- and only if the current flow direction moves AWAY from
+        -- the nearest ocean (dot product check).
+        let forceRadius = 3 ∷ Int
+            oceanDist = computeOceanDistance totalSamples gridW landVec forceRadius
+            d8Biased = VU.generate totalSamples $ \idx →
+                let natural = d8FlowDir VU.! idx
+                in if natural < 0 ∨ not (landVec VU.! idx)
+                   then natural
+                   else let dist = oceanDist VU.! idx
+                        in if dist > forceRadius ∨ dist ≡ 0
+                           then natural  -- too far or already at coast
+                           else
+                            -- Find the neighbor closest to ocean
+                            let nbrs = neighbors idx
+                                oceanNbrs = [ n
+                                    | n ← nbrs
+                                    , not (landVec VU.! n)
+                                    ]
+                            in case oceanNbrs of
+                                -- Direct ocean neighbor: force drain into it
+                                (oc:_) → oc
+                                -- No direct ocean neighbor but within radius:
+                                -- pick the neighbor with shortest ocean distance
+                                [] →
+                                    let scored = [ (n, oceanDist VU.! n)
+                                                 | n ← nbrs
+                                                 , landVec VU.! n
+                                                 , oceanDist VU.! n < dist
+                                                 ]
+                                    in case scored of
+                                        [] → natural
+                                        _  →
+                                            -- Pick the one with shortest ocean dist
+                                            let (bestN, _) = foldl'
+                                                    (\(bn, bd) (n, d) →
+                                                        if d < bd then (n, d) else (bn, bd))
+                                                    (head scored) (tail scored)
+                                            in bestN
+
+        return (filledV, d8Biased)
+
+-- | Compute BFS distance from each land cell to nearest ocean cell.
+--   Returns maxBound for cells beyond forceRadius.
+computeOceanDistance ∷ Int → Int → VU.Vector Bool → Int → VU.Vector Int
+computeOceanDistance totalSamples gridW landVec maxDist = runST $ do
+    distM ← VUM.replicate totalSamples (maxBound ∷ Int)
+    -- Seed: ocean cells at distance 0
+    let seeds = [ idx | idx ← [0 .. totalSamples - 1]
+                      , not (landVec VU.! idx) ]
+    forM_ seeds $ \idx → VUM.write distM idx 0
+    -- BFS layers
+    let wrapIX ix = ((ix `mod` gridW) + gridW) `mod` gridW
+        fromIdx idx = (idx `mod` gridW, idx `div` gridW)
+        toIdx ix iy = iy * gridW + ix
+        neighbors idx =
+            let (ix, iy) = fromIdx idx
+            in [ toIdx (wrapIX (ix + dx)) ny
+               | (dx, dy) ← [(-1,0),(1,0),(0,-1),(0,1)
+                             ,(-1,-1),(1,-1),(-1,1),(1,1)]
+               , let ny = iy + dy
+               , ny ≥ 0 ∧ ny < gridW
+               ]
+
+    forM_ [1 .. maxDist] $ \d →
+        forM_ [0 .. totalSamples - 1] $ \idx → do
+            curDist ← VUM.read distM idx
+            when (curDist ≡ d - 1) $
+                forM_ (neighbors idx) $ \nIdx → do
+                    nDist ← VUM.read distM nIdx
+                    when (nDist > d) $
+                        VUM.write distM nIdx d
+
+    VU.unsafeFreeze distM
 
 foldlM ∷ Monad m ⇒ (a → b → m a) → a → [b] → m a
 foldlM _ acc [] = return acc

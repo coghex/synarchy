@@ -15,7 +15,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
-import World.Fluids (fixupSegmentContinuity)
+import World.Fluid.River (fixupSegmentContinuity)
 import World.Plate (TectonicPlate)
 import World.Geology.Types
 import World.Geology.Hash

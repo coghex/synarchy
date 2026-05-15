@@ -21,6 +21,7 @@ import qualified Data.Vector as V
 import World.Material (MaterialId(..))
 import World.Fluid.Types (FluidCell(..), IceMap, emptyIceMap)
 import World.Flora.Types (FloraChunkData(..), emptyFloraChunkData)
+import World.River.Types (RiverMask, emptyRiverMask)
 
 data ChunkCoord = ChunkCoord !Int !Int
     deriving (Show, Eq, Ord, Generic, Serialize)
@@ -74,7 +75,7 @@ data LoadedChunk = LoadedChunk
     , lcIceMap     ∷ !IceMap               -- ^ Ice overlay (frozen ocean/lake/alpine)
     , lcFlora      ∷ !FloraChunkData
     , lcSideDeco   ∷ !(VU.Vector Word8)    -- ^ Side-face decorations per column
-    , lcRiverMask  ∷ !(VU.Vector Bool)     -- ^ River channel mask from worldgen
+    , lcRiverMask  ∷ !RiverMask           -- ^ River channel mask (surface + type per tile)
     , lcModified   ∷ !Bool
     } deriving (Show, Eq)
 

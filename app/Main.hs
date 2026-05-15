@@ -39,8 +39,8 @@ import World.Thread (startWorldThread)
 import World.Types
 import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), chunkSize)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..))
+import World.River.Types (RiverTileInfo(..))
 import World.Plate (isGlacierZone, isBeyondGlacier)
-import World.Thread.ChunkLoading (fillOrphanedSubseaTiles, drainOceanLakes)
 import World.Generate.Types (WorldGenParams(..))
 import World.Weather.Types (ClimateState, initClimateState)
 import World.Weather.Lookup (lookupWaterTable)
@@ -398,10 +398,16 @@ dumpTilesJSON layers worldSize climate td cx1 cy1 cx2 cy2 =
                   in ",\"matId\":" ⧺ show matId
               | otherwise = ""
             fluidFields
-              | dlFluid layers = case lcFluidMap lc V.! idx of
-                  Just fc → ",\"fluidType\":\"" ⧺ fluidTypeStr (fcType fc) ⧺ "\""
-                          ⧺ ",\"fluidSurf\":" ⧺ show (fcSurface fc)
-                  Nothing → ",\"fluidType\":null,\"fluidSurf\":null"
+              | dlFluid layers =
+                  let fluidStr = case lcFluidMap lc V.! idx of
+                        Just fc → ",\"fluidType\":\"" ⧺ fluidTypeStr (fcType fc) ⧺ "\""
+                                ⧺ ",\"fluidSurf\":" ⧺ show (fcSurface fc)
+                        Nothing → ",\"fluidType\":null,\"fluidSurf\":null"
+                      maskStr = case lcRiverMask lc V.! idx of
+                        Just rti → ",\"riverMask\":true"
+                                ⧺ ",\"maskSurf\":" ⧺ show (rtiWaterSurf rti)
+                        Nothing  → ",\"riverMask\":false"
+                  in fluidStr ⧺ maskStr
               | otherwise = ""
             iceFields
               | dlIce layers = case lcIceMap lc V.! idx of

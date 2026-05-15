@@ -307,16 +307,18 @@ writeDirtyFluids env ss = do
                                     let newFluid = if scsActive scs
                                             then deriveFluidMap scs
                                             else scsFluid scs
+                                        newTerrain = scsTerrain scs
                                         newSurfMap = VU.imap (\idx terrZ →
                                             case newFluid V.! idx of
                                                 Just fc → max terrZ (fcSurface fc)
                                                 Nothing → terrZ
-                                            ) (lcTerrainSurfaceMap lc)
+                                            ) newTerrain
                                         newSideDeco = scsSideDeco scs
-                                        lc' = lc { lcFluidMap   = newFluid
-                                                 , lcSurfaceMap = newSurfMap
-                                                 , lcSideDeco   = newSideDeco
-                                                 , lcModified   = True }
+                                        lc' = lc { lcFluidMap            = newFluid
+                                                 , lcTerrainSurfaceMap   = newTerrain
+                                                 , lcSurfaceMap          = newSurfMap
+                                                 , lcSideDeco            = newSideDeco
+                                                 , lcModified            = True }
                                     in w { wtdChunks = HM.insert cc lc' (wtdChunks w) }
                                 _ → w
                             ) wtd dirty

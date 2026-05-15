@@ -10,6 +10,7 @@ import UPrelude
 import Data.List (sort)
 import Data.Word (Word64)
 import qualified Data.HashSet as HS
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Mutable as MV
 import Data.Hashable (Hashable(..))
@@ -19,6 +20,7 @@ import Control.Monad (when, forM_)
 import Control.Monad.ST (ST)
 import World.Base
 import World.Types
+import World.Ocean.Types (OceanDistMap)
 import World.Material (MaterialId(..), matGlacier)
 import World.Plate (TectonicPlate(..), elevationAtGlobal
                    , isBeyondGlacier, wrapGlobalU)
@@ -29,7 +31,7 @@ import World.Fluid.Internal
 
 computeOceanMap ∷ Word64 → Int → Int → [TectonicPlate]
                → (Int → Int → (Int, MaterialId) → (Int, MaterialId))
-               → OceanMap
+               → (OceanMap, OceanDistMap)
 computeOceanMap seed worldSize plateCount plates applyTL =
     let halfSize = worldSize `div` 2
 
@@ -95,21 +97,49 @@ computeOceanMap seed worldSize plateCount plates applyTL =
             , cy' ≥ -halfSize ∧ cy' < halfSize
             ]
 
-        bfs ∷ Seq ChunkCoord → HS.HashSet ChunkCoord → HS.HashSet ChunkCoord
-        bfs Empty visited = visited
-        bfs (current :<| queue) visited =
-            let nextNeighbors = filter (\n →
+        -- BFS with distance tracking. Two phases:
+        -- Phase 1: standard ocean BFS (only ocean chunks, seaLevel check)
+        -- Phase 2: extend into land chunks for water table gradient
+        maxLandDist = 30 ∷ Int
+
+        -- Phase 1: ocean BFS (same as before)
+        oceanBfs ∷ Seq ChunkCoord → HS.HashSet ChunkCoord → HS.HashSet ChunkCoord
+        oceanBfs Empty visited = visited
+        oceanBfs (current :<| queue) visited =
+            let nextNbrs = filter (\n →
                     not (HS.member n visited)
                     ∧ chunkElev n ≤ seaLevel
                     ) (neighbors current)
-                visited' = foldl' (flip HS.insert) visited nextNeighbors
-                queue' = foldl' (:|>) queue nextNeighbors
-            in bfs queue' visited'
+                visited' = foldl' (flip HS.insert) visited nextNbrs
+                queue' = foldl' (:|>) queue nextNbrs
+            in oceanBfs queue' visited'
 
         initialVisited = HS.fromList oceanSeeds
         initialQueue = Seq.fromList oceanSeeds
+        oceanSet = oceanBfs initialQueue initialVisited
 
-    in bfs initialQueue initialVisited
+        -- Phase 2: distance BFS from ocean boundary into land.
+        -- Start from all ocean chunks at dist=0, propagate into ALL
+        -- neighbors (including land) tracking distance.
+        distBfs ∷ Seq (ChunkCoord, Int) → HM.HashMap ChunkCoord Int
+                → HM.HashMap ChunkCoord Int
+        distBfs Empty dm = dm
+        distBfs ((current, dist) :<| queue) dm =
+            if dist ≥ maxLandDist
+            then distBfs queue dm
+            else
+                let nextNbrs = filter (\n → not (HM.member n dm))
+                                      (neighbors current)
+                    dm' = foldl' (\m n → HM.insert n (dist + 1) m) dm nextNbrs
+                    queue' = foldl' (\q n → q :|> (n, dist + 1)) queue nextNbrs
+                in distBfs queue' dm'
+
+        distSeeds = [(c, 0) | c ← HS.toList oceanSet]
+        distInitial = HM.fromList distSeeds
+        distQueue = Seq.fromList distSeeds
+        distMap = distBfs distQueue distInitial
+
+    in (oceanSet, distMap)
 
 isOceanChunk ∷ OceanMap → ChunkCoord → Bool
 isOceanChunk = flip HS.member

@@ -10,7 +10,7 @@ import qualified Data.Vector.Unboxed as VU
 import World.Base (GeoCoord(..))
 import World.Constants (seaLevel)
 import World.Types
-import World.Fluids (fixupSegmentContinuity)
+import World.Fluid.River (fixupSegmentContinuity)
 import World.Geology.Hash
 import World.Hydrology.Types (RiverParams(..), RiverSegment(..))
 import World.Hydrology.Simulation (ElevGrid(..))
@@ -98,7 +98,7 @@ traceRiverFromSource seed worldSize elevGrid _filledElev flowDir
         -- below-sea-level terrain. Without this, the grid resolution
         -- (spacing tiles) can leave a gap of above-sea-level terrain
         -- between the river mouth and the actual ocean.
-        extendedPath = extendToCoast spacing unwrappedPath
+        extendedPath = extendToCoast spacing elevGrid unwrappedPath
 
         -- Prepend the actual source point if it differs from
         -- the first grid cell (source may be between grid points).
@@ -261,36 +261,59 @@ splitLongSegment maxLen seg =
 --     - Gorges at high coasts (30+: up to 10 steps)
 --   The carving system then cuts through the terrain along these
 --   segments, and fluid fill places water in the carved channel.
-extendToCoast ∷ Int → [(Int, Int, Int)] → [(Int, Int, Int)]
-extendToCoast _ [] = []
-extendToCoast _ [x] = [x]
-extendToCoast sp pts =
+extendToCoast ∷ Int → ElevGrid → [(Int, Int, Int)] → [(Int, Int, Int)]
+extendToCoast _ _ [] = []
+extendToCoast _ _ [x] = [x]
+extendToCoast sp eg pts =
     let n = length pts
         (x1, y1, _) = pts !! max 0 (n - 2)
         (x2, y2, e2) = pts !! (n - 1)
     -- Skip extension for inland/glacial dead-ends far above sea level.
-    -- The graduated logic below handles legitimate coastal rivers up to
-    -- ~80 above sea; anything higher is a flow-grid boundary artifact.
     in if e2 > seaLevel + 80
        then pts
        else
-        let -- Direction from second-to-last to last waypoint.
-            dx = x2 - x1
-            dy = y2 - y1
-            len = sqrt (fromIntegral (dx * dx + dy * dy) ∷ Float)
+        let -- Default direction: continuation of last segment
+            dxC = x2 - x1
+            dyC = y2 - y1
+            lenC = sqrt (fromIntegral (dxC * dxC + dyC * dyC) ∷ Float)
+
+            -- Ocean direction: find nearest ocean cell in the ElevGrid
+            -- and steer toward it. This prevents extensions that run
+            -- parallel to the coast from continuing parallel.
+            (dxO, dyO, oceanDist) = nearestOceanDir eg x2 y2
+            lenO = sqrt (fromIntegral (dxO * dxO + dyO * dyO) ∷ Float)
+
+            -- Blend: if ocean is close and we can compute both directions,
+            -- use 70% ocean direction + 30% continuation. If ocean direction
+            -- is unknown, fall back to continuation only.
             halfSp = max 2 (sp `div` 2)
-            (stepX, stepY) = if len < 1.0
-                then (halfSp, 0)
-                else ( round (fromIntegral dx / len * fromIntegral halfSp)
-                     , round (fromIntegral dy / len * fromIntegral halfSp) )
-            -- Elevation above sea level determines extension character.
+            (stepX, stepY)
+                | lenO > 0.5 ∧ oceanDist < 20 =
+                    -- Blend toward ocean
+                    let oceanW = 0.7 ∷ Float
+                        contW  = 0.3 ∷ Float
+                        blendX = contW * (if lenC > 0.5
+                                          then fromIntegral dxC / lenC
+                                          else 0.0)
+                               + oceanW * fromIntegral dxO / lenO
+                        blendY = contW * (if lenC > 0.5
+                                          then fromIntegral dyC / lenC
+                                          else 0.0)
+                               + oceanW * fromIntegral dyO / lenO
+                        blendLen = sqrt (blendX * blendX + blendY * blendY)
+                    in if blendLen < 0.1
+                       then (halfSp, 0)
+                       else ( round (blendX / blendLen * fromIntegral halfSp)
+                            , round (blendY / blendLen * fromIntegral halfSp) )
+                | lenC > 0.5 =
+                    ( round (fromIntegral dxC / lenC * fromIntegral halfSp)
+                    , round (fromIntegral dyC / lenC * fromIntegral halfSp) )
+                | otherwise = (halfSp, 0)
+
+            -- Elevation above sea level determines extension length.
             drop' = max 0 (e2 - seaLevel)
-            -- Low coast: 2 intermediate steps (similar to old behavior).
-            -- Moderate coast: 3–5 steps creating an inlet.
-            -- High coast: up to 10 steps creating a gorge/fjord.
             numSteps = if drop' ≤ 3 then 2
                        else min 10 (max 3 (drop' `div` 6 + 2))
-            -- Waypoints descending from mouth elevation to sea level.
             extensionPts =
                 [ ( x2 + stepX * i
                   , y2 + stepY * i
@@ -298,13 +321,43 @@ extendToCoast sp pts =
                   )
                 | i ← [1 .. numSteps]
                 ]
-            -- Final 2 points at/below sea level ensure carving punches
-            -- through to the ocean.
             lastX = x2 + stepX * numSteps
             lastY = y2 + stepY * numSteps
         in pts ⧺ extensionPts
                 ⧺ [ (lastX + stepX,     lastY + stepY,     seaLevel)
                   , (lastX + stepX * 2, lastY + stepY * 2, seaLevel - 1) ]
+
+-- | Find the direction toward the nearest ocean cell from (gx, gy).
+--   Scans the ElevGrid for the closest non-land cell.
+--   Returns (dx, dy, distance) where dx/dy point toward ocean.
+nearestOceanDir ∷ ElevGrid → Int → Int → (Int, Int, Int)
+nearestOceanDir eg gx gy =
+    let gridW = egGridW eg
+        sp    = egSpacing eg
+        landV = egLand eg
+        gxV   = egGX eg
+        gyV   = egGY eg
+        totalSamples = gridW * gridW
+        -- Search within a radius (in grid cells) for the nearest ocean
+        searchRadius = 10 ∷ Int
+        -- Find our approximate grid position
+        candidates =
+            [ (abs dxg + abs dyg, egGX eg VU.! idx - gx, egGY eg VU.! idx - gy)
+            | idx ← [0 .. totalSamples - 1]
+            , not (landV VU.! idx)
+            , let ogx = gxV VU.! idx
+                  ogy = gyV VU.! idx
+                  dxg = (ogx - gx) `div` max 1 sp
+                  dyg = (ogy - gy) `div` max 1 sp
+            , abs dxg + abs dyg ≤ searchRadius
+            ]
+    in case candidates of
+        [] → (0, 0, maxBound)
+        _  → let (dist, dx, dy) = foldl'
+                    (\(bd, bx, by) (d, x, y) →
+                        if d < bd then (d, x, y) else (bd, bx, by))
+                    (maxBound, 0, 0) candidates
+             in (dx, dy, dist)
 
 -- * Path noise
 

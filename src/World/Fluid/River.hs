@@ -532,7 +532,10 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
            py = fromIntegral pyi ∷ Float
            tRaw = (px * dx' + py * dy') / segLen2
        -- Small overlap at segment boundaries for gap prevention.
-       in if tRaw < -0.05 ∨ tRaw > 1.05
+       -- Wider overshoot (1.20) so the last segment covers
+       -- 2-3 tiles past its endpoint toward the coast. The old
+       -- 1.05 left a gap between the segment end and the ocean.
+       in if tRaw < -0.05 ∨ tRaw > 1.20
           then (Nothing, 9999.0)
           else
           let signedPerp = (px * dy' - py * dx') / segLen
@@ -595,8 +598,14 @@ riverFillFromSegmentWithDist worldSize gx gy surfZ seg =
                  inChannelRelaxed = inChannel ∧ surfZ ≤ refElev + 2
                                   ∧ surfZ ≥ refElev - maxFillDepth
 
+                 -- Relaxed waterSurface check: at river mouths
+                 -- the coastal flattening drops waterSurface to
+                 -- seaLevel (0), which fails vs surfZ (1-3). Allow
+                 -- tiles where terrain is within 3 of the water
+                 -- surface (coast transition) while still rejecting
+                 -- mountain tiles where terrain >> water surface.
                  shouldPlace = (inValley ∨ inChannelRelaxed)
-                             ∧ waterSurface > surfZ
+                             ∧ (waterSurface > surfZ ∨ surfZ ≤ waterSurface + 3)
 
              in if not shouldPlace
                 then (Nothing, effectivePerpDist)

@@ -10,6 +10,7 @@ import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize(..))
 import Data.Hashable (Hashable)
 import qualified Data.HashSet as HS
+import qualified Data.HashMap.Strict as HM
 import World.Plate.Types (TectonicPlate(..))
 import World.Time.Types
     ( CalendarConfig(..)
@@ -20,7 +21,7 @@ import World.Time.Types
     , defaultMoonConfig
     )
 import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
-import World.Ocean.Types (OceanMap)
+import World.Ocean.Types (OceanMap, OceanDistMap)
 import World.Flora.Types (FloraCatalog, emptyFloraCatalog)
 import World.Weather.Types (ClimateParams, ClimateState
                            , defaultClimateParams, initClimateState)
@@ -37,6 +38,7 @@ data WorldGenParams = WorldGenParams
     , wgpMoonConfig  ∷ !MoonConfig      -- ^ Moon configuration for lunar phases
     , wgpGeoTimeline ∷ !GeoTimeline      -- ^ Geological timeline for terrain evolution
     , wgpOceanMap   ∷ !OceanMap         -- ^ Pre-generated ocean map for worldgen
+    , wgpOceanDist  ∷ !OceanDistMap    -- ^ Distance from ocean per chunk (BFS)
     , wgpClimateParams ∷ !ClimateParams   -- ^ Climate parameters
     , wgpClimateState ∷ !ClimateState     -- ^ Initial climate state
     , wgpErosionIntensity ∷ !Float        -- ^ Global erosion intensity multiplier
@@ -58,6 +60,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpMoonConfig = defaultMoonConfig
     , wgpGeoTimeline = emptyTimeline
     , wgpOceanMap = HS.empty
+    , wgpOceanDist = HM.empty
     , wgpClimateParams = defaultClimateParams
     , wgpClimateState = initClimateState 128
     , wgpErosionIntensity = 0.7

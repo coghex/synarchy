@@ -109,7 +109,9 @@ segmentMatch worldSize gx gy surfZ seg =
            px = fromIntegral pxi ∷ Float
            py = fromIntegral pyi ∷ Float
            tRaw = (px * dx' + py * dy') / segLen2
-       in if tRaw < -0.05 ∨ tRaw > 1.05
+       -- Wider overshoot (1.20) so the last segment covers
+       -- 2-3 tiles past its endpoint toward the coast.
+       in if tRaw < -0.05 ∨ tRaw > 1.20
           then Nothing
           else
           let signedPerp = (px * dy' - py * dx') / sqrt segLen2
@@ -123,11 +125,22 @@ segmentMatch worldSize gx gy surfZ seg =
                  endW   = fromIntegral (rsWaterEnd seg) ∷ Float
                  axialWaterSurface = floor (startW + tClamped * (endW - startW)) ∷ Int
 
-                 -- No coastal flattening in the mask — the
-                 -- projection handles surface clamping.  The old
-                 -- blend dropped waterSurface to seaLevel near the
-                 -- mouth, causing shouldPlace to fail on tiles at
-                 -- terrain > seaLevel (the river-coast gap bug).
+                 -- Coastal flattening: when a segment ends at or
+                 -- below sea level, blend toward seaLevel. This
+                 -- ensures mask surfaces reach seaLevel at mouths
+                 -- for a seamless river-to-ocean transition.
+                 coastalFlat = seaLevel
+                 waterSurfaceRaw
+                   | rsEndElev seg ≤ seaLevel ∧ axialWaterSurface > coastalFlat =
+                       let blendStart = 0.5 ∷ Float
+                           coastT = max 0.0 ((tClamped - blendStart)
+                                            / (1.0 - blendStart))
+                           smoothT = coastT * coastT * (3.0 - 2.0 * coastT)
+                           blended = fromIntegral axialWaterSurface
+                                   * (1.0 - smoothT)
+                                   + fromIntegral coastalFlat * smoothT
+                       in max coastalFlat (floor blended ∷ Int)
+                   | otherwise = axialWaterSurface
 
                  startE = fromIntegral (rsStartElev seg) ∷ Float
                  endE   = fromIntegral (rsEndElev seg) ∷ Float
@@ -144,7 +157,7 @@ segmentMatch worldSize gx gy surfZ seg =
                  refElev = max (seaLevel + 1) rawRefElev
 
                  maxFillDepth = rsDepth seg + 4
-                 waterSurface = axialWaterSurface
+                 waterSurface = waterSurfaceRaw
                  channelHalfW = fromIntegral (rsWidth seg) / 2.0 ∷ Float
 
                  inValley = surfZ ≤ refElev

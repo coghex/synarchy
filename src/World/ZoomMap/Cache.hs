@@ -27,11 +27,12 @@ import World.Plate (TectonicPlate(..), elevationAtGlobal
                    , isBeyondGlacier, isGlacierZone, wrapGlobalU
                    , twoNearestPlates, BoundaryType(..), classifyBoundary)
 import qualified Data.Vector.Unboxed as VU
-import World.Fluids (isOceanChunk, hasAnyLavaQuick, hasAnyOceanFluid
-                    , hasAnyRiverQuick, hasAnyLakeQuick
-                    , computeChunkFluid, computeChunkRivers
-                    , computeChunkLakes, unionFluidMap
-                    , equilibrateFluidMap)
+import World.Fluids (isOceanChunk, hasAnyOceanFluid)
+import World.Fluid.Ocean (computeChunkFluid)
+import World.Fluid.River (computeChunkRivers, hasAnyRiverQuick)
+import World.Fluid.Lake (computeChunkLakes, hasAnyLakeQuick)
+import World.Fluid.Lava (hasAnyLavaQuick)
+import World.Fluid.Internal (unionFluidMap)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..), IceMap)
 import World.Fluid.IceLevel (lookupIceLevel)
 import World.Fluid.Internal (FluidMap, wrapChunkCoordU)

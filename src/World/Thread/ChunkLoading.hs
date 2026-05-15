@@ -4,8 +4,6 @@ module World.Thread.ChunkLoading
     ( updateChunkLoading
     , drainInitQueues
     , maxChunksPerTick
-    , fillOrphanedSubseaTiles
-    , drainOceanLakes
     ) where
 
 import UPrelude
@@ -22,20 +20,17 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashSet as HS
 import World.Types
-import World.Constants (seaLevel)
 import World.Chunk.Types (chunkSize)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Types (FluidCell(..))
+import Sim.River.Project (projectRiverSimple)
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
 import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes, patchEdgeStrata)
-import World.Fluids (sealCrossChunkRivers)
 import World.SideFace.Compute (computeChunkSideDecos)
 import World.Thread.Helpers (unWorldPageId)
-import World.Weather.Types (ClimateState(..))
-import World.Weather.Lookup (lookupWaterTable)
 import World.Generate.Types (WorldGenParams(..))
 import Sim.Command.Types (SimCommand(..))
 
@@ -98,21 +93,13 @@ updateChunkLoading env logger = do
                                         then map generateFlatChunk batch
                                         else parMap rdeepseq (\coord →
                                             let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, rmask) = generateChunk registry catalog params coord
-                                                -- Seed river tiles from mask: for each
-                                                -- masked tile without existing fluid,
-                                                -- place River at terrZ+1. The sim owns
-                                                -- these from here on.
-                                                seededFluid = V.imap (\idx mfc →
-                                                    case mfc of
-                                                        Just _  → mfc
-                                                        Nothing →
-                                                            if rmask VU.! idx
-                                                            then let terrZ = tMap VU.! idx
-                                                                 in if terrZ > minBound
-                                                                    then Just (FluidCell River (terrZ + 1))
-                                                                    else Nothing
-                                                            else Nothing
-                                                    ) fluidMap
+                                                -- Project river from rich mask: uses
+                                                -- precomputed water surfaces from
+                                                -- computeRiverMask (with coastal
+                                                -- flattening). No terrZ+1 — mask
+                                                -- surfaces are authoritative.
+                                                seededFluid = projectRiverSimple
+                                                    rmask tMap fluidMap
                                                 seededSurf = VU.imap (\idx surfZ →
                                                     case seededFluid V.! idx of
                                                         Just fc → max surfZ (fcSurface fc)
@@ -138,10 +125,13 @@ updateChunkLoading env logger = do
                                         td''' = recomputeNeighborSlopes seed
                                                   registry coords td''
                                         td3b   = patchEdgeStrata coords td'''
-                                        td'''' = sealCrossChunkRivers coords td3b
-                                        td''''' = stripCrossChunkLakeCliffs coords td''''
-                                        td'''''' = computeSideDecos seed coords td'''''
-                                    in (td'''''', evictedCoords)
+                                        -- sealCrossChunkRivers removed: mask-based
+                                        -- river seeding produces consistent edges
+                                        -- (both chunks use the same segments).
+                                        -- The old seal's orphan removal was stripping
+                                        -- ~50% of mask-seeded river tiles.
+                                        td''''' = computeSideDecos seed coords td3b
+                                    in (td''''', evictedCoords)
                                 -- Notify sim thread of loaded chunks
                                 forM_ newChunks $ \lc →
                                     Q.writeQueue (simQueue env) $
@@ -181,18 +171,9 @@ drainInitQueues env logger = do
 
                         let newChunks = parMap rdeepseq (\coord →
                                 let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, rmask) = generateChunk registry catalog params coord
-                                    -- Seed river tiles from mask
-                                    seededFluid = V.imap (\idx mfc →
-                                        case mfc of
-                                            Just _  → mfc
-                                            Nothing →
-                                                if rmask VU.! idx
-                                                then let terrZ = tMap VU.! idx
-                                                     in if terrZ > minBound
-                                                        then Just (FluidCell River (terrZ + 1))
-                                                        else Nothing
-                                                else Nothing
-                                        ) fluidMap
+                                    -- Project river from rich mask
+                                    seededFluid = projectRiverSimple
+                                        rmask tMap fluidMap
                                     seededSurf = VU.imap (\idx surfZ →
                                         case seededFluid V.! idx of
                                             Just fc → max surfZ (fcSurface fc)
@@ -220,10 +201,8 @@ drainInitQueues env logger = do
                                 td'' = recomputeNeighborSlopes seed registry
                                          coords td'
                                 td2b  = patchEdgeStrata coords td''
-                                td''' = sealCrossChunkRivers coords td2b
-                                td'''' = stripCrossChunkLakeCliffs coords td'''
-                                td''''' = computeSideDecos seed coords td''''
-                            in (td''''', ())
+                                td'''' = computeSideDecos seed coords td2b
+                            in (td'''', ())
 
                         -- Notify sim thread of loaded chunks
                         forM_ newChunks $ \lc →
@@ -237,32 +216,7 @@ drainInitQueues env logger = do
                         writeIORef (wsZoomQuadCacheRef worldState) Nothing
                         writeIORef (wsBgQuadCacheRef worldState) Nothing
 
-                        -- When all initial chunks are loaded, run a
-                        -- final cross-chunk river seal across the
-                        -- entire tile set. The per-batch seal may
-                        -- miss boundaries between different batches.
-                        -- Then defensively fill any tile with terrainZ
-                        -- ≤ seaLevel that ended up dry — these would
-                        -- otherwise show as 1-tile islands of dry land
-                        -- below sea level.
-                        --
-                        -- IMPORTANT: this must run BEFORE writing to
-                        -- wsInitQueueRef, because the dump path's
-                        -- waitForChunks polls that ref to know when
-                        -- loading is done. Updating the queue first
-                        -- creates a race where the dump reads stale
-                        -- tile data.
-                        when (null rest) $ do
-                            atomicModifyIORef' (wsTilesRef worldState) $ \td →
-                                let allCoords = HM.keys (wtdChunks td)
-                                    td'  = sealCrossChunkRivers allCoords td
-                                    td'' = sealCrossChunkRivers allCoords td'
-                                    td''' = drainOceanLakes
-                                          $ fillOrphanedSubseaTiles
-                                                (wgpClimateState params)
-                                                (wgpWorldSize params)
-                                                td''
-                                in (td''', ())
+                        when (null rest) $
                             logDebug logger CatWorld $
                                 "Initial chunk loading complete for: "
                                 <> unWorldPageId pageId
@@ -275,122 +229,6 @@ drainInitQueues env logger = do
                             (if null rest
                              then LoadDone
                              else LoadPhase2 (length rest) totalChunks)
-
--- | Defensive cleanup: fill any tile with terrainZ ≤ seaLevel that
---   ended up without fluid. These tiles slip through the multi-pass
---   fluid pipeline (the exact mechanism isn't pinned down — the seal
---   and strip passes interact in ways that occasionally drop river
---   tiles below sea level). Without this, they appear as 1-tile dry
---   "islands" with surfaceZ=-1 inside the ocean.
---
---   Strictly additive: only fills tiles that were Nothing. Never
---   removes existing fluid.
---
---   Uses the per-tile water table (from climate) instead of a flat
---   seaLevel cutoff.  Dry tiles below the local water table get
---   ocean; tiles above it stay dry even if below sea level (arid
---   inland basins).
-fillOrphanedSubseaTiles ∷ ClimateState → Int → WorldTileData → WorldTileData
-fillOrphanedSubseaTiles climate worldSize wtd =
-    wtd { wtdChunks = HM.mapWithKey fillChunk (wtdChunks wtd) }
-  where
-    area = chunkSize * chunkSize
-    fillChunk coord lc =
-        let fluidMap = lcFluidMap lc
-            terrMap  = lcTerrainSurfaceMap lc
-            ChunkCoord cx cy = coord
-            updates =
-                [ (idx, Just (FluidCell Ocean seaLevel))
-                | idx ← [0 .. area - 1]
-                , isNothing (fluidMap V.! idx)
-                , let terrZ = terrMap VU.! idx
-                , terrZ > minBound
-                , let lx = idx `mod` chunkSize
-                      ly = idx `div` chunkSize
-                      gx = cx * chunkSize + lx
-                      gy = cy * chunkSize + ly
-                      (wtSummer, _) = lookupWaterTable climate worldSize gx gy
-                , terrZ ≤ wtSummer
-                ]
-        in if null updates
-           then lc
-           else let newFluid = fluidMap V.// updates
-                    newSurf  = VU.imap (\idx oldSurf →
-                        case newFluid V.! idx of
-                            Just fc → max (terrMap VU.! idx) (fcSurface fc)
-                            Nothing → oldSurf
-                      ) (lcSurfaceMap lc)
-                in lc { lcFluidMap = newFluid, lcSurfaceMap = newSurf }
-
--- | Check if any cardinal neighbor (including cross-chunk) is ocean.
-hasAdjacentOceanTile ∷ HM.HashMap ChunkCoord LoadedChunk → ChunkCoord
-                     → Int → Int → Bool
-hasAdjacentOceanTile chunks (ChunkCoord cx cy) lx ly =
-    any checkDir [(lx-1,ly),(lx+1,ly),(lx,ly-1),(lx,ly+1)]
-  where
-    checkDir (nx, ny)
-      | nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize =
-          case HM.lookup (ChunkCoord cx cy) chunks of
-              Just lc → isOceanAt lc nx ny
-              Nothing → False
-      | otherwise =
-          let cx' = cx + (if nx < 0 then -1 else if nx ≥ chunkSize then 1 else 0)
-              cy' = cy + (if ny < 0 then -1 else if ny ≥ chunkSize then 1 else 0)
-              nlx = ((nx `mod` chunkSize) + chunkSize) `mod` chunkSize
-              nly = ((ny `mod` chunkSize) + chunkSize) `mod` chunkSize
-          in case HM.lookup (ChunkCoord cx' cy') chunks of
-              Just lc → isOceanAt lc nlx nly
-              Nothing → False
-    isOceanAt lc nx ny =
-        case lcFluidMap lc V.! (ny * chunkSize + nx) of
-            Just fc → fcType fc ≡ Ocean
-            Nothing → False
-
--- | Convert lake tiles to ocean in two cases:
---   1. Below sea level AND adjacent to ocean (the spillway miss case).
---   2. Extremely deep (depth > 15, terrain well below sea level).
---      These are enclosed basins the ocean BFS didn't reach but
---      that are clearly below the water table.
---   Iterates up to 8 passes so chains of connected tiles convert.
-drainOceanLakes ∷ WorldTileData → WorldTileData
-drainOceanLakes = iterDrain (8 ∷ Int)
-  where
-    iterDrain 0 wtd = wtd
-    iterDrain n wtd = iterDrain (n - 1) (drainPass wtd)
-
-    drainPass wtd =
-        let chunks = wtdChunks wtd
-            updateChunk coord lc =
-                let fm   = lcFluidMap lc
-                    terr = lcTerrainSurfaceMap lc
-                    area = chunkSize * chunkSize
-                    updates =
-                        [ (idx, Just (FluidCell Ocean seaLevel))
-                        | idx ← [0 .. area - 1]
-                        , Just fc ← [fm V.! idx]
-                        , fcType fc ≡ Lake
-                        , let terrZ = terr VU.! idx
-                              depth = fcSurface fc - terrZ
-                        , terrZ ≤ seaLevel
-                        , let lx = idx `mod` chunkSize
-                              ly = idx `div` chunkSize
-                          -- Case 1: adjacent to ocean (spillway miss)
-                          -- Case 2: extreme depth (enclosed deep basin)
-                        , hasAdjacentOceanTile chunks coord lx ly
-                          ∨ depth > 15
-                        ]
-                in if null updates
-                   then lc
-                   else let newFluid = fm V.// updates
-                            newSurf  = VU.imap (\idx oldSurf →
-                                case newFluid V.! idx of
-                                    Just fc → max (terr VU.! idx) (fcSurface fc)
-                                    Nothing → oldSurf
-                              ) (lcSurfaceMap lc)
-                        in lc { lcFluidMap = newFluid, lcSurfaceMap = newSurf }
-        in wtd { wtdChunks = HM.mapWithKey updateChunk chunks }
-
--- | Compute side-face decorations for newly loaded chunks.
 computeSideDecos ∷ Word64 → [ChunkCoord] → WorldTileData → WorldTileData
 computeSideDecos seed newCoords wtd =
     let chunks = wtdChunks wtd
@@ -406,90 +244,3 @@ computeSideDecos seed newCoords wtd =
                 Nothing → acc
             ) chunks newCoords
     in wtd { wtdChunks = updatedChunks }
-
--- | Strip lake tiles that are adjacent to river tiles with a much lower
---   surface, across chunk boundaries. Iterates to peel back multiple layers.
-stripCrossChunkLakeCliffs ∷ [ChunkCoord] → WorldTileData → WorldTileData
-stripCrossChunkLakeCliffs newCoords wtd =
-    let -- Affected chunks: new chunks + their neighbors
-        affected = HS.toList $ HS.fromList $
-            newCoords <>
-            [ ChunkCoord (cx + dx) (cy + dy)
-            | ChunkCoord cx cy ← newCoords
-            , dx ← [-1, 0, 1]
-            , dy ← [-1, 0, 1]
-            , dx ≠ 0 ∨ dy ≠ 0
-            , HM.member (ChunkCoord (cx+dx) (cy+dy)) (wtdChunks wtd)
-            ]
-    in go (10 ∷ Int) wtd affected
-  where
-    go 0 w _ = w
-    go n w coords =
-        let (w', anyChanged) = foldl' (\(acc, changed) cc →
-                case HM.lookup cc (wtdChunks acc) of
-                    Nothing → (acc, changed)
-                    Just lc →
-                        let (newFluid, didChange) = stripChunkLakeEdges acc cc lc
-                        in if didChange
-                           then let lc' = lc { lcFluidMap = newFluid
-                                             , lcSurfaceMap = recomputeSurfMap lc newFluid }
-                                in (acc { wtdChunks = HM.insert cc lc' (wtdChunks acc) }, True)
-                           else (acc, changed)
-                ) (w, False) coords
-        in if anyChanged then go (n - 1) w' coords else w'
-
-    stripChunkLakeEdges ∷ WorldTileData → ChunkCoord → LoadedChunk
-                        → (V.Vector (Maybe FluidCell), Bool)
-    stripChunkLakeEdges wtd' coord lc =
-        let fluidMap = lcFluidMap lc
-            ChunkCoord cx cy = coord
-            changed = V.ifoldl' (\acc idx mfc →
-                case mfc of
-                    Just fc | fcType fc ≡ Lake →
-                        let lx = idx `mod` chunkSize
-                            ly = idx `div` chunkSize
-                            lakeSurf = fcSurface fc
-                            -- Check cardinal neighbors including cross-chunk
-                            hasCliff = any (\(nx, ny) →
-                                let (cc', nlx, nly) = resolveNeighbor cx cy lx ly nx ny
-                                in case HM.lookup cc' (wtdChunks wtd') of
-                                    Nothing → False
-                                    Just nlc →
-                                        let nIdx = nly * chunkSize + nlx
-                                            nTerrZ = lcTerrainSurfaceMap nlc VU.! nIdx
-                                        in case lcFluidMap nlc V.! nIdx of
-                                            -- Adjacent to river with much lower surface
-                                            Just nfc | fcType nfc ≡ River →
-                                                lakeSurf - fcSurface nfc > 2
-                                            -- Adjacent to dry tile with terrain well
-                                            -- below lake surface (stripped or river valley)
-                                            Nothing →
-                                                lakeSurf - nTerrZ > 3
-                                            _ → False
-                                ) [(-1,0),(1,0),(0,-1),(0,1)]
-                        in if hasCliff then idx : acc else acc
-                    _ → acc
-                ) [] fluidMap
-        in if null changed
-           then (fluidMap, False)
-           else (V.imap (\idx v → if idx `elem` changed then Nothing else v) fluidMap, True)
-
-    resolveNeighbor ∷ Int → Int → Int → Int → Int → Int → (ChunkCoord, Int, Int)
-    resolveNeighbor cx cy lx ly dx dy =
-        let nlx = lx + dx
-            nly = ly + dy
-            (cx', nlx') = if nlx < 0 then (cx - 1, nlx + chunkSize)
-                          else if nlx ≥ chunkSize then (cx + 1, nlx - chunkSize)
-                          else (cx, nlx)
-            (cy', nly') = if nly < 0 then (cy - 1, nly + chunkSize)
-                          else if nly ≥ chunkSize then (cy + 1, nly - chunkSize)
-                          else (cy, nly)
-        in (ChunkCoord cx' cy', nlx', nly')
-
-    recomputeSurfMap ∷ LoadedChunk → V.Vector (Maybe FluidCell) → VU.Vector Int
-    recomputeSurfMap lc newFluid =
-        VU.imap (\idx terrZ →
-            case newFluid V.! idx of
-                Just fc → max terrZ (fcSurface fc)
-                Nothing → terrZ
-            ) (lcTerrainSurfaceMap lc)

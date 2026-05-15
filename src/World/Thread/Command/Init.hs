@@ -43,6 +43,7 @@ import World.Generate.Config (WorldGenConfig(..), ClimateYaml(..)
                              , applyConfigToParams)
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import World.Thread.ChunkLoading (maxChunksPerTick)
+import Sim.River.Project (projectRiverSimple)
 
 handleWorldInitCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Word64 → Int → Int → IO ()
@@ -87,8 +88,9 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
                                (mpHardness
                                  (getMaterialProps registry (snd base)))
                                base
-        oceanMap = computeOceanMap seed worldSize placeCount plates applyTL
+        (oceanMap, oceanDist) = computeOceanMap seed worldSize placeCount plates applyTL
     _ ← evaluate (force oceanMap)
+    _ ← evaluate (force oceanDist)
 
     sendGenLog env $ "Ocean flood fill complete: "
         <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
@@ -125,6 +127,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , wgpPlates      = plates
             , wgpGeoTimeline = timeline
             , wgpOceanMap    = oceanMap
+            , wgpOceanDist   = oceanDist
             , wgpClimateState = climateState'
             }
     
@@ -174,12 +177,18 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     catalog ← readIORef (floraCatalogRef env)
     let centerCoord = ChunkCoord 0 0
         (ct, cs, cterrain, cf, cice, cflora, crmask) = generateChunk registry catalog params centerCoord
+        seededFluid = projectRiverSimple crmask cterrain cf
+        seededSurf = VU.imap (\idx surfZ →
+            case seededFluid V.! idx of
+                Just fc → max surfZ (fcSurface fc)
+                Nothing → surfZ
+            ) cs
         centerChunk = LoadedChunk
             { lcCoord      = centerCoord
             , lcTiles      = ct
-            , lcSurfaceMap = cs
+            , lcSurfaceMap = seededSurf
             , lcTerrainSurfaceMap = cterrain
-            , lcFluidMap   = cf
+            , lcFluidMap   = seededFluid
             , lcIceMap     = cice
             , lcFlora      = cflora
             , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
@@ -262,7 +271,7 @@ handleWorldInitArenaCommand env logger pageId = do
             , lcIceMap            = emptyIceMap
             , lcFlora             = flatFlora
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
-            , lcRiverMask         = VU.replicate (chunkSize * chunkSize) False
+            , lcRiverMask         = V.replicate (chunkSize * chunkSize) Nothing
             , lcModified          = False
             }
 
