@@ -1,14 +1,19 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Unit.Render
     ( renderUnitQuads
+    , pickFrame
+    , screenDirOf
+    , resolveTexture
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
@@ -40,6 +45,13 @@ cameraRotSteps FaceWest  = 2
 cameraRotSteps FaceNorth = 4
 cameraRotSteps FaceEast  = 6
 
+-- | Apply camera rotation to a world-space facing to get the screen-space
+--   direction we should render. Used by both the T-pose picker and the
+--   animation frame picker.
+screenDirOf ∷ CameraFacing → Direction → Direction
+screenDirOf camFacing unitFacing =
+    indexToDir ((dirIndex unitFacing - cameraRotSteps camFacing) `mod` 8)
+
 -- | Pick the correct directional sprite for a unit given its world-space
 --   facing and the current camera rotation. Falls back to the default texture
 --   if no directional map or no entry for the computed screen direction.
@@ -52,20 +64,52 @@ resolveTexture
 resolveTexture camFacing unitFacing dirSprites fallback
     | Map.null dirSprites = fallback
     | otherwise =
-        let screenIdx = (dirIndex unitFacing - cameraRotSteps camFacing) `mod` 8
-            screenDir = indexToDir screenIdx
-        in case Map.lookup screenDir dirSprites of
+        case Map.lookup (screenDirOf camFacing unitFacing) dirSprites of
             Just h  → h
             Nothing → fallback
+
+-- | Choose a texture for a unit. If the unit has an active animation and
+--   the requested frames exist, pick by elapsed time; otherwise fall back
+--   to the T-pose. Used by the render path.
+pickFrame
+    ∷ Double            -- ^ now (POSIX seconds)
+    → CameraFacing
+    → UnitInstance
+    → UnitDef           -- ^ animation library + T-pose fallback
+    → TextureHandle
+pickFrame now cam inst def
+    | T.null (uiCurrentAnim inst) = tpose
+    | otherwise =
+        case HM.lookup (uiCurrentAnim inst) (udAnimations def) of
+            Nothing  → tpose
+            Just an  →
+                let dir = screenDirOf cam (uiFacing inst)
+                in case Map.lookup dir (aFrames an) of
+                    Nothing → tpose
+                    Just fs
+                        | V.null fs → tpose
+                        | otherwise →
+                            let elapsed = max 0 (now - uiAnimStart inst)
+                                raw     = floor (elapsed * realToFrac (aFps an)) ∷ Int
+                                n       = V.length fs
+                                idx     = if aLoop an
+                                          then raw `mod` n
+                                          else min raw (n - 1)
+                            in fs V.! idx
+  where
+    tpose = resolveTexture cam (uiFacing inst)
+                           (uiDirSprites inst) (uiTexture inst)
 
 renderUnitQuads ∷ EngineEnv → CameraFacing → Int → Float → IO (V.Vector SortableQuad)
 renderUnitQuads env facing zSlice tileAlpha = do
     um ← readIORef (unitManagerRef env)
     let instances = umInstances um
+        defs      = umDefs um
         selected  = umSelected um
     if HM.null instances
         then return V.empty
         else do
+            now ← realToFrac <$> getPOSIXTime
             texSizes ← readIORef (textureSizeRef env)
             mBts ← readIORef (textureSystemRef env)
             defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
@@ -77,8 +121,10 @@ renderUnitQuads env facing zSlice tileAlpha = do
                         quads = V.fromList
                             $ HM.foldlWithKey' (\acc uid inst →
                                 let isSel = HS.member uid selected
+                                    mDef  = HM.lookup (uiDefName inst) defs
                                 in case unitToQuad lookupSlot defFmSlot facing
-                                                zSlice tileAlpha isSel inst texSizes of
+                                                zSlice tileAlpha isSel inst
+                                                mDef now texSizes of
                                     Just sq → sq : acc
                                     Nothing → acc
                               ) [] instances
@@ -92,16 +138,20 @@ unitToQuad
     → Float
     → Bool                                 -- ^ selected (sets outline bit)
     → UnitInstance
+    → Maybe UnitDef                        -- ^ animation library (Nothing → T-pose only)
+    → Double                               -- ^ now (POSIX seconds)
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha isSel inst texSizes =
+unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha isSel inst mDef now texSizes =
     let gridZ = uiGridZ inst
         relativeZ = gridZ - zSlice
     in if gridZ > zSlice ∨ gridZ < (zSlice - 25)
        then Nothing
        else
-        let texHandle = resolveTexture facing (uiFacing inst)
-                                       (uiDirSprites inst) (uiTexture inst)
+        let texHandle = case mDef of
+                Just def → pickFrame now facing inst def
+                Nothing  → resolveTexture facing (uiFacing inst)
+                                          (uiDirSprites inst) (uiTexture inst)
 
             (texW, texH) = case HM.lookup texHandle texSizes of
                 Just (w, h) → (fromIntegral w, fromIntegral h)

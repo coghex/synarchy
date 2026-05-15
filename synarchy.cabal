@@ -139,6 +139,8 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.Geology
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.AStar
+                   Test.Headless.Unit.Render.PickFrame
+                   Test.Headless.Unit.Anim
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash
@@ -357,6 +359,7 @@ library
                      UI.Render
                      UI.TextBuffer
                      Unit.Types
+                     Unit.Anim
                      Unit.Render
                      Unit.Selection
                      Unit.HitTest

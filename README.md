@@ -8,7 +8,7 @@ to run you just need vulkan installed, for development you need the vulkan sdk, 
 
 ## Building
 
-for regular use, `cabal build synarchy`, for development use `cabal build -f dev all` and you will get validation layers and debug output
+`cabal build synarchy`
 
 ## Usage
 
@@ -55,7 +55,7 @@ to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev
 - [x] scene creation and switching
 - [x] UI
 - [x] basic world generation
-- [ ] animation
+- [x] animation
 - [ ] hotloading
 - [ ] game (working title: "Ecce Homo")
 
@@ -99,8 +99,6 @@ The debug console has access to the full Lua environment. Key namespaces:
 - `world` — world creation and queries (`init`, `show`, `getTerrainAt`, `getFluidAt`, `getSurfaceAt`, `getChunkInfo`, `getAreaFluid`, `getRivers`, `getInitProgress`)
 - `camera` — camera control (`goToTile`, `getPosition`)
 - `engine` — engine control (`quit`)
-
-Use `return` to get values back, e.g. `return world.getInitProgress()`.
 
 ### Configuration
 

@@ -47,6 +47,8 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , uiGridY      = gy
                     , uiGridZ      = gz
                     , uiFacing     = DirS -- Default facing south
+                    , uiCurrentAnim = ""  -- Phase 1: anim triggers wired in Phase 3
+                    , uiAnimStart   = 0
                     }
             atomicModifyIORef' (unitManagerRef env) $ \um' →
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())

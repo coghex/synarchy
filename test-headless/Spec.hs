@@ -6,6 +6,8 @@ import qualified Test.Headless.WorldGen as WorldGen
 import qualified Test.Headless.WorldGen.Geology as Geology
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
+import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
+import qualified Test.Headless.Unit.Anim as AnimTest
 
 main ∷ IO ()
 main = hspec $ do
@@ -13,3 +15,5 @@ main = hspec $ do
     describe "Geology" Geology.spec
     describe "Unit.Pathing.Cost" PathingCost.spec
     describe "Unit.Pathing.AStar" PathingAStar.spec
+    describe "Unit.Render.pickFrame" PickFrame.spec
+    describe "Unit.Anim" AnimTest.spec

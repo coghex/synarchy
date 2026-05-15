@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, OverloadedStrings #-}
 module Engine.Asset.YamlUnits
     ( UnitYamlDef(..)
+    , UnitYamlAnim(..)
     , UnitYamlFile(..)
     , loadUnitYaml
     ) where
@@ -13,6 +14,20 @@ import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 
+-- | One named animation as loaded from YAML. Per-direction frame paths;
+--   directions accept short ("S","SW") or long ("south","south-east").
+data UnitYamlAnim = UnitYamlAnim
+    { uyaFps    ∷ !Float
+    , uyaLoop   ∷ !Bool
+    , uyaFrames ∷ !(Map.Map Text [Text])
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON UnitYamlAnim where
+    parseJSON = withObject "UnitYamlAnim" $ \v → UnitYamlAnim
+        ⊚ v .:? "fps"    .!= 8.0
+        ⊛ v .:? "loop"   .!= True
+        ⊛ v .:? "frames" .!= Map.empty
+
 -- | Only @name@ and @sprite@ are mandatory; everything else has defaults
 data UnitYamlDef = UnitYamlDef
     { uydName              ∷ !Text       -- ^ unique identifier (e.g. "acolyte")
@@ -23,6 +38,10 @@ data UnitYamlDef = UnitYamlDef
     , uydPortrait          ∷ !(Maybe Text)
       -- ^ optional: path to portrait texture for info panel.
       -- Reserved for future use — parsed and carried but not yet rendered.
+    , uydStateAnimations   ∷ !(Map.Map Text Text)
+      -- ^ optional: state name → animation name (e.g. "idle" → "breathing-idle")
+    , uydAnimations        ∷ !(Map.Map Text UnitYamlAnim)
+      -- ^ optional: animation library
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -32,6 +51,8 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "base_width"          .!= 0.0
         ⊛ v .:? "directional_sprites" .!= Map.empty
         ⊛ v .:? "portrait"
+        ⊛ v .:? "state_animations"    .!= Map.empty
+        ⊛ v .:? "animations"          .!= Map.empty
 
 newtype UnitYamlFile = UnitYamlFile
     { uyfUnits ∷ [UnitYamlDef]

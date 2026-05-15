@@ -17,6 +17,7 @@ module Engine.Scripting.Lua.API.Units
     , unitHitTestAtFn
     , unitHitTestInRectFn
     , unitSetSelectionFn
+    , unitSetAnimFn
     ) where
 
 import UPrelude
@@ -24,16 +25,18 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import Control.Monad (foldM, forM_)
 import Data.IORef (readIORef, atomicModifyIORef')
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
-import Engine.Asset.YamlUnits (UnitYamlDef(..), loadUnitYaml)
+import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..), loadUnitYaml)
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Command.Types (UnitCommand(..))
@@ -84,11 +87,45 @@ loadUnitYamlFn env backendState = do
                                 return (Map.insert dir h acc)
                         ) Map.empty (Map.toList (uydDirectionalSprites def))
 
+                    -- Load animations (if any)
+                    animMap ← foldM (\accA (animName, animDef) → do
+                        frameMap ← foldM (\accF (dirKey, framePaths) →
+                            case parseDirKey dirKey of
+                                Nothing → do
+                                    logWarn logger CatAsset $
+                                        "Unknown direction '" <> dirKey
+                                        <> "' in anim '" <> animName
+                                        <> "' of unit " <> name <> ", skipping"
+                                    return accF
+                                Just dir → do
+                                    handles ← mapM (\(i, p) →
+                                        loadAndRegister env backendState lteq
+                                            ("unit_" <> name
+                                             <> "_" <> animName
+                                             <> "_" <> dirKey
+                                             <> "_" <> T.pack (show i))
+                                            (T.unpack p)
+                                        ) (zip [(0 ∷ Int)..] framePaths)
+                                    return (Map.insert dir
+                                              (V.fromList handles) accF)
+                            ) Map.empty (Map.toList (uyaFrames animDef))
+                        let anim = Animation
+                                { aFps    = uyaFps animDef
+                                , aLoop   = uyaLoop animDef
+                                , aFrames = frameMap
+                                }
+                        return (HM.insert animName anim accA)
+                        ) HM.empty (Map.toList (uydAnimations def))
+
+                    let stateAnims = HM.fromList (Map.toList (uydStateAnimations def))
+
                     let unitDef = UnitDef
                             { udName       = name
                             , udTexture    = handle
                             , udDirSprites = dirMap
                             , udBaseWidth  = uydBaseWidth def
+                            , udAnimations = animMap
+                            , udStateAnims = stateAnims
                             }
                     atomicModifyIORef' (unitManagerRef env) $ \um →
                         (um { umDefs = HM.insert name unitDef (umDefs um) }, ())
@@ -97,7 +134,9 @@ loadUnitYamlFn env backendState = do
                         "Registered unit def: " <> name
                         <> " (handle " <> T.pack (show handle) <> ")"
                         <> " (" <> T.pack (show (Map.size dirMap))
-                        <> " directional sprites)"
+                        <> " directional sprites, "
+                        <> T.pack (show (HM.size animMap))
+                        <> " animations)"
 
                     return (acc + 1)
                     ) (0 ∷ Int) defs
@@ -351,6 +390,10 @@ unitGetInfoFn env = do
                     Lua.setfield (-2) "facing"
                     Lua.pushnumber (Lua.Number (realToFrac (uiBaseWidth inst)))
                     Lua.setfield (-2) "baseWidth"
+                    Lua.pushstring (TE.encodeUtf8 (uiCurrentAnim inst))
+                    Lua.setfield (-2) "currentAnim"
+                    Lua.pushnumber (Lua.Number (realToFrac (uiAnimStart inst)))
+                    Lua.setfield (-2) "animStart"
                     return 1
 
 dirToText ∷ Direction → Text
@@ -482,15 +525,54 @@ unitSetSelectionFn env = do
     Lua.pushboolean True
     return 1
 
+-- | unit.setAnim(id, name) — sets the raw animation name on a unit and
+--   resets its start time to now. Empty string clears the animation back
+--   to T-pose. No state-name resolution; that's Phase 3's `setUnitAnim`.
+--   Returns true on success, false if the unit doesn't exist.
+unitSetAnimFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitSetAnimFn env = do
+    idArg   ← Lua.tointeger 1
+    nameArg ← Lua.tostring 2
+    case (idArg, nameArg) of
+        (Just n, Just nameBS) → do
+            let uid  = UnitId (fromIntegral n)
+                name = TE.decodeUtf8 nameBS
+            ok ← Lua.liftIO $ do
+                now ← realToFrac <$> getPOSIXTime
+                atomicModifyIORef' (unitManagerRef env) $ \um →
+                    case HM.lookup uid (umInstances um) of
+                        Nothing → (um, False)
+                        Just inst →
+                            let inst' = inst { uiCurrentAnim = name
+                                             , uiAnimStart   = now
+                                             }
+                            in (um { umInstances = HM.insert uid inst'
+                                                     (umInstances um) }, True)
+            Lua.pushboolean ok
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
 -- * Helpers
 
+-- | Accept short uppercase ("S","SW") or long lowercase ("south","south-east").
 parseDirKey ∷ Text → Maybe Direction
-parseDirKey "S"  = Just DirS
-parseDirKey "SW" = Just DirSW
-parseDirKey "W"  = Just DirW
-parseDirKey "NW" = Just DirNW
-parseDirKey "N"  = Just DirN
-parseDirKey "NE" = Just DirNE
-parseDirKey "E"  = Just DirE
-parseDirKey "SE" = Just DirSE
-parseDirKey _    = Nothing
+parseDirKey t = case T.toLower t of
+    "s"          → Just DirS
+    "sw"         → Just DirSW
+    "w"          → Just DirW
+    "nw"         → Just DirNW
+    "n"          → Just DirN
+    "ne"         → Just DirNE
+    "e"          → Just DirE
+    "se"         → Just DirSE
+    "south"      → Just DirS
+    "south-west" → Just DirSW
+    "west"       → Just DirW
+    "north-west" → Just DirNW
+    "north"      → Just DirN
+    "north-east" → Just DirNE
+    "east"       → Just DirE
+    "south-east" → Just DirSE
+    _            → Nothing

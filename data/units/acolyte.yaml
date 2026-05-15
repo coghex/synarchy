@@ -11,3 +11,114 @@ units:
       NE: "assets/textures/units/acolyte/ne.png"
       E:  "assets/textures/units/acolyte/e.png"
       SE: "assets/textures/units/acolyte/se.png"
+
+    state_animations:
+      idle: breathing-idle
+      walk: walk
+
+    animations:
+      breathing-idle:
+        fps: 4
+        loop: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/breathing-idle/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/south/frame_003.png"
+          south-west:
+            - "assets/textures/units/acolyte/animations/breathing-idle/south-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/south-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/south-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/south-west/frame_003.png"
+          west:
+            - "assets/textures/units/acolyte/animations/breathing-idle/west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/west/frame_003.png"
+          north-west:
+            - "assets/textures/units/acolyte/animations/breathing-idle/north-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/north-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/north-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/north-west/frame_003.png"
+          north:
+            - "assets/textures/units/acolyte/animations/breathing-idle/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/north/frame_003.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/breathing-idle/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/north-east/frame_003.png"
+          east:
+            - "assets/textures/units/acolyte/animations/breathing-idle/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/east/frame_003.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/breathing-idle/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/breathing-idle/south-east/frame_003.png"
+
+      walk:
+        fps: 8
+        loop: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/walk/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/walk/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/walk/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/walk/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/walk/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/walk/south/frame_005.png"
+          south-west:
+            - "assets/textures/units/acolyte/animations/walk/south-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/walk/south-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/walk/south-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/walk/south-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/walk/south-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/walk/south-west/frame_005.png"
+          west:
+            - "assets/textures/units/acolyte/animations/walk/west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/walk/west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/walk/west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/walk/west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/walk/west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/walk/west/frame_005.png"
+          north-west:
+            - "assets/textures/units/acolyte/animations/walk/north-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/walk/north-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/walk/north-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/walk/north-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/walk/north-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/walk/north-west/frame_005.png"
+          north:
+            - "assets/textures/units/acolyte/animations/walk/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/walk/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/walk/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/walk/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/walk/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/walk/north/frame_005.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/walk/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/walk/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/walk/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/walk/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/walk/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/walk/north-east/frame_005.png"
+          east:
+            - "assets/textures/units/acolyte/animations/walk/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/walk/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/walk/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/walk/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/walk/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/walk/east/frame_005.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/walk/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/walk/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/walk/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/walk/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/walk/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/walk/south-east/frame_005.png"

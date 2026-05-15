@@ -16,6 +16,7 @@ import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Sim.Types
+import Unit.Anim (activityToStateKey, resolveStateAnim)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (processAllUnitCommands)
 import Unit.Thread.Movement (tickAllMovement)
@@ -81,20 +82,37 @@ unitLoop env stateRef lastTimeRef utsRef = do
               )
 
 -- | Copy sim-thread positions/facing into the render-visible UnitManager.
+--   Also drives unit animations: the resolved anim for `usState` is
+--   stamped onto the instance, with `uiAnimStart` reset only when the
+--   anim name actually changes (so the frame index doesn't restart on
+--   every tick).
 publishToRender ∷ EngineEnv → IORef UnitThreadState → IO ()
 publishToRender env utsRef = do
     uts ← readIORef utsRef
     let simStates = utsSimStates uts
     if HM.null simStates
         then return ()
-        else atomicModifyIORef' (unitManagerRef env) $ \um →
-            let updated = HM.mapWithKey (\uid inst →
-                    case HM.lookup uid simStates of
-                        Nothing → inst
-                        Just ss → inst { uiGridX  = usRealX ss
-                                       , uiGridY  = usRealY ss
-                                       , uiGridZ  = usGridZ ss
-                                       , uiFacing = usFacing ss
-                                       }
-                  ) (umInstances um)
-            in (um { umInstances = updated }, ())
+        else do
+            now ← realToFrac <$> getPOSIXTime
+            atomicModifyIORef' (unitManagerRef env) $ \um →
+                let defs = umDefs um
+                    updated = HM.mapWithKey (\uid inst →
+                        case HM.lookup uid simStates of
+                            Nothing → inst
+                            Just ss →
+                                let targetAnim = case HM.lookup (uiDefName inst) defs of
+                                        Just def → resolveStateAnim def
+                                                       (activityToStateKey (usState ss))
+                                        Nothing  → uiCurrentAnim inst
+                                    sameAnim = targetAnim ≡ uiCurrentAnim inst
+                                in inst { uiGridX       = usRealX ss
+                                        , uiGridY       = usRealY ss
+                                        , uiGridZ       = usGridZ ss
+                                        , uiFacing      = usFacing ss
+                                        , uiCurrentAnim = targetAnim
+                                        , uiAnimStart   = if sameAnim
+                                                          then uiAnimStart inst
+                                                          else now
+                                        }
+                      ) (umInstances um)
+                in (um { umInstances = updated }, ())

@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Unit.Types
-    ( UnitDef(..)
+    ( Animation(..)
+    , UnitDef(..)
     , UnitInstance(..)
     , UnitManager(..)
     , UnitId(..)
@@ -14,8 +15,17 @@ import Data.Hashable (Hashable)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
+import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Unit.Direction (Direction(..))
+
+-- | A single animation: per-direction frame sequences.
+--   Missing directions fall back to T-pose at render time.
+data Animation = Animation
+    { aFps    ∷ !Float
+    , aLoop   ∷ !Bool
+    , aFrames ∷ !(Map.Map Direction (V.Vector TextureHandle))
+    } deriving (Show, Eq)
 
 -- | Unique identifier for a spawned unit instance.
 newtype UnitId = UnitId { unUnitId ∷ Word32 }
@@ -29,6 +39,10 @@ data UnitDef = UnitDef
     , udDirSprites ∷ !(Map.Map Direction TextureHandle)
       -- ^ directional sprite overrides (may be empty)
     , udBaseWidth  ∷ !Float                           -- ^ ground contact diameter
+    , udAnimations ∷ !(HM.HashMap Text Animation)
+      -- ^ named animation library (may be empty)
+    , udStateAnims ∷ !(HM.HashMap Text Text)
+      -- ^ state name → animation name (e.g. "idle" → "breathing-idle")
     } deriving (Show, Eq)
 
 -- | A spawned unit instance in the world.
@@ -43,6 +57,8 @@ data UnitInstance = UnitInstance
     , uiGridY      ∷ !Float
     , uiGridZ      ∷ !Int
     , uiFacing     ∷ !Direction      -- ^ world-space facing (from sim)
+    , uiCurrentAnim ∷ !Text          -- ^ resolved anim name; "" = T-pose
+    , uiAnimStart   ∷ !Double        -- ^ POSIX seconds when anim began
     } deriving (Show, Eq)
 
 -- | Holds all unit definitions and all spawned instances.
