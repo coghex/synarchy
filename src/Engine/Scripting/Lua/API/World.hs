@@ -28,6 +28,7 @@ module Engine.Scripting.Lua.API.World
     , worldSetWorldCursorSelectBgTextureFn
     , worldSetWorldCursorHoverBgTextureFn
     , worldSetToolModeFn
+    , worldGetToolModeFn
     , worldGetInitProgressFn
     , worldWaitForInitFn
     , worldDestroyFn
@@ -565,6 +566,26 @@ worldSetToolModeFn env = do
                 WorldSetToolMode pageId $ textToToolMode toolMode
         _ → pure ()
     return 0
+
+-- | world.getToolMode() → "info" | "default" | "mine" | nil
+--   Returns the current tool mode for the first visible world, or nil
+--   if no world is active. Reads `wsToolModeRef` directly so callers
+--   see the world thread's view of the tool state.
+worldGetToolModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetToolModeFn env = do
+    manager ← Lua.liftIO $ readIORef (worldManagerRef env)
+    case wmWorlds manager of
+        ((_, ws):_) → do
+            tm ← Lua.liftIO $ readIORef (wsToolModeRef ws)
+            let s = case tm of
+                    InfoTool    → "info"
+                    DefaultTool → "default"
+                    MineTool    → "mine"
+            Lua.pushstring s
+            return 1
+        [] → do
+            Lua.pushnil
+            return 1
 
 -- | world.getInitProgress() → (phase, current, total, stage)
 --   phase: 0=idle, 1=setup, 2=chunks, 3=done

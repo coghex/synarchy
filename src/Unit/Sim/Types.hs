@@ -14,12 +14,16 @@ import Unit.Types (UnitId(..))
 import Unit.Direction (Direction(..))
 
 data UnitSimState = UnitSimState
-    { usRealX   ∷ !Float
-    , usRealY   ∷ !Float
-    , usGridZ   ∷ !Int
-    , usTarget  ∷ !(Maybe MoveTarget)
-    , usState   ∷ !UnitActivity
-    , usFacing  ∷ !Direction
+    { usRealX     ∷ !Float
+    , usRealY     ∷ !Float
+    , usGridZ     ∷ !Int
+    , usTarget    ∷ !(Maybe MoveTarget)
+    , usState     ∷ !UnitActivity
+    , usFacing    ∷ !Direction
+    -- | Ordered waypoints (continuous tile-center coords) from a
+    --   local A* replan. Empty = greedy heading toward usTarget.
+    --   Each waypoint pops off the front as the unit arrives.
+    , usLocalPath ∷ ![(Float, Float)]
     } deriving (Show, Eq)
 
 data MoveTarget = MoveTarget

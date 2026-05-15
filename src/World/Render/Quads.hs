@@ -354,91 +354,91 @@ renderWorldCursorQuads env worldState tileAlpha = do
     mBindless    ← readIORef (textureSystemRef env)
     defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)
 
+    let lookupSlot texHandle = fromIntegral $ case mBindless of
+            Just bindless → getTextureSlotIndex texHandle bindless
+            Nothing       → 0
+        defFmSlot = fromIntegral defFmSlotWord
+        lookupFmSlot texHandle =
+            let s = lookupSlot texHandle
+            in if s ≡ 0 then defFmSlot else fromIntegral s
+        facing    = camFacing camera
+        zoom      = camZoom camera
+        zSlice    = camZSlice camera
+        (camX, camY) = camPosition camera
+        worldSize = case paramsM of
+                      Nothing     → 128
+                      Just params → wgpWorldSize params
+        effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
+        vb = computeViewBounds camera fbW fbH effectiveDepth
+
+    -- Hit-test: unproject screen pixel considering elevation.
+    -- For each Z from zSlice down, compute which (gx,gy) would place
+    -- a tile at that Z under the mouse, then check if that tile is solid.
+    -- Always runs (independent of toolMode) so unit-move, info, and any
+    -- other consumer of `worldHoverTile` can see the current tile.
+    let hitTest pixX pixY =
+            let aspect = fromIntegral fbW / fromIntegral fbH
+                vw     = zoom * aspect
+                vh     = zoom
+                normX  = fromIntegral pixX / fromIntegral winW
+                normY  = fromIntegral pixY / fromIntegral winH
+                viewX  = (normX * 2.0 - 1.0) * vw
+                viewY  = (normY * 2.0 - 1.0) * vh
+                worldX = viewX + camX
+                worldY = viewY + camY
+                zMin = zSlice - effectiveDepth
+
+                tryZ z
+                  | z < zMin  = Nothing
+                  | otherwise =
+                    let relZ = z - zSlice
+                        adjustedWorldY = worldY + fromIntegral relZ * tileSideHeight
+                                       - tileHeight * 0.5
+                        (gx, gy) = worldToGrid facing worldX adjustedWorldY
+                        (chunkCoord, (lx, ly)) = globalToChunk gx gy
+                    in case HM.lookup chunkCoord (wtdChunks tileData) of
+                        Nothing → tryZ (z - 1)
+                        Just lc →
+                            let idx = columnIndex lx ly
+                                col = lcTiles lc V.! idx
+                                colLen  = VU.length (ctMats col)
+                                colMinZ = ctStartZ col
+                                i = z - colMinZ
+                            in if i < 0 ∨ i >= colLen
+                               then tryZ (z - 1)
+                               else if ctMats col VU.! i ≠ 0
+                                    then case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
+                                           Just xOff → Just (gx, gy, z, xOff)
+                                           Nothing   → tryZ (z - 1)
+                                    else tryZ (z - 1)
+
+            in tryZ zSlice
+
+    -- Compute hover tile
+    let hoverResult = case worldCursorPos cs of
+            Nothing           → Nothing
+            Just (pixX, pixY) → hitTest pixX pixY
+
+    -- Persist the resolved hover tile so Lua callers (e.g. the
+    -- right-click → move path) can read tile coords instead of
+    -- pixel coords. Also snapshots selected tile when worldSelectNow.
+    let newHoverTile = case hoverResult of
+            Just (gx, gy, _, _) → Just (gx, gy)
+            Nothing             → Nothing
+        newSelected = if worldSelectNow cs
+            then case hoverResult of
+                Just (gx, gy, z, _) → Just (gx, gy, z)
+                Nothing             → worldSelectedTile cs
+            else worldSelectedTile cs
+        cs' = cs { worldHoverTile    = newHoverTile
+                 , worldSelectNow    = False
+                 , worldSelectedTile = newSelected
+                 }
+    writeIORef (wsCursorRef worldState) cs'
+
     if toolMode ≠ InfoTool
     then return V.empty
     else do
-        let lookupSlot texHandle = fromIntegral $ case mBindless of
-                Just bindless → getTextureSlotIndex texHandle bindless
-                Nothing       → 0
-            defFmSlot = fromIntegral defFmSlotWord
-            lookupFmSlot texHandle =
-                let s = lookupSlot texHandle
-                in if s ≡ 0 then defFmSlot else fromIntegral s
-            facing    = camFacing camera
-            zoom      = camZoom camera
-            zSlice    = camZSlice camera
-            (camX, camY) = camPosition camera
-            worldSize = case paramsM of
-                          Nothing     → 128
-                          Just params → wgpWorldSize params
-            effectiveDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
-            vb = computeViewBounds camera fbW fbH effectiveDepth
-
-        -- Hit-test: unproject screen pixel considering elevation.
-        -- For each Z from zSlice down, compute which (gx,gy) would place
-        -- a tile at that Z under the mouse, then check if that tile is solid.
-        let hitTest pixX pixY =
-                let aspect = fromIntegral fbW / fromIntegral fbH
-                    vw     = zoom * aspect
-                    vh     = zoom
-                    normX  = fromIntegral pixX / fromIntegral winW
-                    normY  = fromIntegral pixY / fromIntegral winH
-                    viewX  = (normX * 2.0 - 1.0) * vw
-                    viewY  = (normY * 2.0 - 1.0) * vh
-                    worldX = viewX + camX
-                    worldY = viewY + camY
-
-                    -- For a tile at elevation z, its screen Y is offset by
-                    -- (z - zSlice) * tileSideHeight upward.  So the world-space
-                    -- Y that would produce that screen position is:
-                    --   worldY = tileWorldY - (z - zSlice) * tileSideHeight
-                    --   tileWorldY = worldY + (z - zSlice) * tileSideHeight
-                    zMin = zSlice - effectiveDepth
-
-                    tryZ z
-                      | z < zMin  = Nothing
-                      | otherwise =
-                        let relZ = z - zSlice
-                            adjustedWorldY = worldY + fromIntegral relZ * tileSideHeight
-                                           - tileHeight * 0.5
-                            (gx, gy) = worldToGrid facing worldX adjustedWorldY
-                            (chunkCoord, (lx, ly)) = globalToChunk gx gy
-                        in case HM.lookup chunkCoord (wtdChunks tileData) of
-                            Nothing → tryZ (z - 1)
-                            Just lc →
-                                let idx = columnIndex lx ly
-                                    col = lcTiles lc V.! idx
-                                    colLen  = VU.length (ctMats col)
-                                    colMinZ = ctStartZ col
-                                    i = z - colMinZ
-                                in if i < 0 ∨ i >= colLen
-                                   then tryZ (z - 1)
-                                   else if ctMats col VU.! i ≠ 0
-                                        then case isChunkVisibleWrapped facing worldSize vb camX chunkCoord of
-                                               Just xOff → Just (gx, gy, z, xOff)
-                                               Nothing   → tryZ (z - 1)
-                                        else tryZ (z - 1)
-
-                in tryZ zSlice
-
-        -- Compute hover tile
-        let hoverResult = case worldCursorPos cs of
-                Nothing           → Nothing
-                Just (pixX, pixY) → hitTest pixX pixY
-
-        -- If select flag is set, snapshot hover → selected
-        -- If select flag is set, snapshot hover → selected (including Z)
-        cs' ← if worldSelectNow cs
-               then do
-                   let newCs = cs { worldSelectNow = False
-                                  , worldSelectedTile = case hoverResult of
-                                        Just (gx, gy, z, _) → Just (gx, gy, z)
-                                        Nothing             → worldSelectedTile cs
-                                  }
-                   writeIORef (wsCursorRef worldState) newCs
-                   return newCs
-               else return cs
-
         -- Build hover quads (bg + fg)
         let hoverQuads = case hoverResult of
                 Just (gx, gy, hz, xOff) →

@@ -231,6 +231,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setWorldCursorSelect" (worldSetWorldCursorSelectFn env)
   registerLuaFunction "clearWorldCursorSelect" (worldClearWorldCursorSelectFn env)
   registerLuaFunction "setToolMode" (worldSetToolModeFn env)
+  registerLuaFunction "getToolMode" (worldGetToolModeFn env)
   registerLuaFunction "getInitProgress" (worldGetInitProgressFn env)
   registerLuaFunction "waitForInit" (worldWaitForInitFn env)
   registerLuaFunction "destroy" (worldDestroyFn env)
@@ -243,6 +244,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getRivers" (worldGetRiversFn env)
   registerLuaFunction "loadChunksInRegion" (worldLoadChunksInRegionFn env)
   registerLuaFunction "waitForChunks" (worldWaitForChunksFn env)
+  registerLuaFunction "getHoverTile" (worldGetHoverTileFn env)
 
   Lua.setglobal (Lua.Name "world")
 

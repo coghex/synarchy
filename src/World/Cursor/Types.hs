@@ -12,7 +12,13 @@ data CursorState = CursorState
     , zoomHoverTexture ∷ Maybe TextureHandle
     , zoomSelectedPos ∷ Maybe (Int, Int)
     , zoomSelectNow   ∷ Bool
+    -- | Pixel-space mouse position from input events.
     , worldCursorPos ∷ Maybe (Int, Int)
+    -- | Tile-space hover result resolved by the render-thread hit test
+    --   (accounts for isometric tilt, camera facing, elevation, and the
+    --   u-wrap boundary). Written every frame by renderWorldCursorQuads;
+    --   read from Lua via world.getHoverTile().
+    , worldHoverTile ∷ Maybe (Int, Int)
     , worldCursorTexture ∷ Maybe TextureHandle
     , worldCursorBgTexture ∷ Maybe TextureHandle
     , worldHoverTexture ∷ Maybe TextureHandle
@@ -30,6 +36,7 @@ emptyCursorState =
         , zoomSelectedPos = Nothing
         , zoomSelectNow = False
         , worldCursorPos = Nothing
+        , worldHoverTile = Nothing
         , worldCursorTexture = Nothing
         , worldCursorBgTexture = Nothing
         , worldHoverTexture = Nothing

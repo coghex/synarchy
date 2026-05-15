@@ -65,7 +65,7 @@ unitLoop env stateRef lastTimeRef utsRef = do
                 writeIORef lastTimeRef tickStart
 
                 processAllUnitCommands env utsRef
-                tickAllMovement dt utsRef
+                tickAllMovement dt env utsRef
                 publishToRender env utsRef
 
                 tickEnd ← realToFrac ⊚ getPOSIXTime

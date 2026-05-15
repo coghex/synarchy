@@ -8,6 +8,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldGetRiversFn
     , worldLoadChunksInRegionFn
     , worldWaitForChunksFn
+    , worldGetHoverTileFn
     ) where
 
 import UPrelude
@@ -21,6 +22,7 @@ import Engine.Core.State (EngineEnv(..))
 import World.Types
 import World.Geology.Timeline.Types
 import World.Hydrology.Types
+import World.Cursor.Types (CursorState(..))
 
 import World.Generate (globalToChunk)
 
@@ -412,3 +414,26 @@ worldWaitForChunksFn env = do
         case wmWorlds manager of
             ((_, ws):_) → length <$> readIORef (wsInitQueueRef ws)
             []          → pure 0
+
+-- | world.getHoverTile() → gx, gy or nil
+--   Returns the tile coordinates currently under the mouse cursor in
+--   world-view mode. Reads the resolved tile that the render-thread
+--   hit-test wrote to worldHoverTile each frame — accounts for the
+--   isometric tilt, camera facing, elevation, and u-wrap boundary.
+worldGetHoverTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetHoverTileFn env = do
+    manager ← Lua.liftIO $ readIORef (worldManagerRef env)
+    case wmWorlds manager of
+        ((_, ws):_) → do
+            cs ← Lua.liftIO $ readIORef (wsCursorRef ws)
+            case worldHoverTile cs of
+                Just (gx, gy) → do
+                    Lua.pushinteger (fromIntegral gx)
+                    Lua.pushinteger (fromIntegral gy)
+                    return 2
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        [] → do
+            Lua.pushnil
+            return 1

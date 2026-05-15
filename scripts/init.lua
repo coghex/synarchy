@@ -52,6 +52,21 @@ function game.onMouseDown(button, x, y)
             -- that hit terrain instead of a unit.
             unit.deselectAll()
         end
+    elseif button == MOUSE_RIGHT then
+        -- Right-click is a move order when units are selected.
+        -- hud.onMouseDown also fires on right-click and clears the
+        -- tile cursor — that's fine, it doesn't touch unit selection.
+        local selected = unit.getSelected()
+        if selected and #selected > 0 then
+            local gx, gy = world.getHoverTile()
+            if gx and gy then
+                local tx = gx + 0.5
+                local ty = gy + 0.5
+                for _, uid in ipairs(selected) do
+                    unit.moveTo(uid, tx, ty, 2.0)
+                end
+            end
+        end
     end
 end
 

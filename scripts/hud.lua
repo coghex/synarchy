@@ -331,6 +331,21 @@ function hud.onMouseDown(button_num, mx, my)
         end
     elseif hud.currentView == "zoomed_in" then
         if button_num == 1 then
+            -- game.onMouseDown runs earlier in the broadcast and has
+            -- already settled the unit selection (synchronous, via
+            -- atomicModifyIORef). If a unit is selected now, the click
+            -- was a unit click — skip the tile-select so we don't
+            -- race-clobber the unit info panel.
+            if unit and unit.getSelected and #unit.getSelected() > 0 then
+                return
+            end
+            -- Tile-info popup only fires in info-tool mode. In other
+            -- tools, a click that misses a unit just clears any active
+            -- selection (game.onMouseDown already did that) and is
+            -- otherwise inert.
+            if world.getToolMode and world.getToolMode() ~= "info" then
+                return
+            end
             world.setWorldCursorSelect(hud.worldId)
         elseif button_num == 2 then
             world.clearWorldCursorSelect(hud.worldId)

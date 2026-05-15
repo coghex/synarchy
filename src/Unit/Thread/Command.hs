@@ -52,12 +52,13 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())
 
             let ss = UnitSimState
-                    { usRealX  = gx
-                    , usRealY  = gy
-                    , usGridZ  = gz
-                    , usTarget = Nothing
-                    , usState  = Idle
-                    , usFacing = DirS
+                    { usRealX     = gx
+                    , usRealY     = gy
+                    , usGridZ     = gz
+                    , usTarget    = Nothing
+                    , usState     = Idle
+                    , usFacing    = DirS
+                    , usLocalPath = []
                     }
             atomicModifyIORef' utsRef $ \uts →
                 (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
@@ -89,11 +90,12 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss →
-                let ss' = ss { usRealX  = gx
-                             , usRealY  = gy
-                             , usGridZ  = gz
-                             , usTarget = Nothing
-                             , usState  = Idle
+                let ss' = ss { usRealX     = gx
+                             , usRealY     = gy
+                             , usGridZ     = gz
+                             , usTarget    = Nothing
+                             , usState     = Idle
+                             , usLocalPath = []
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -114,8 +116,9 @@ handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss →
-                let ss' = ss { usTarget = Just (MoveTarget tx ty speed)
-                             , usState  = Walking
+                let ss' = ss { usTarget    = Just (MoveTarget tx ty speed)
+                             , usState     = Walking
+                             , usLocalPath = []
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -125,8 +128,9 @@ handleUnitCommand env utsRef (UnitStop uid) = do
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss →
-                let ss' = ss { usTarget = Nothing
-                             , usState  = Idle
+                let ss' = ss { usTarget    = Nothing
+                             , usState     = Idle
+                             , usLocalPath = []
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
