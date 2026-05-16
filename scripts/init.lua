@@ -9,6 +9,8 @@ local unitInfoPanelScriptId = nil
 local unitDragSelectScriptId = nil
 local unitResourcesScriptId = nil
 local unitAiScriptId = nil
+local buildToolScriptId = nil
+local buildingSpawnScriptId = nil
 
 function game.init(scriptId)
     -- Initialize debug
@@ -41,6 +43,18 @@ function game.init(scriptId)
     unitAiScriptId = engine.loadScript(
         "scripts/unit_ai.lua", 0.1)
 
+    -- Build tool: drives the popup picker + placement ghost preview.
+    -- 0.03s tick so the ghost tracks the mouse smoothly.
+    buildToolScriptId = engine.loadScript(
+        "scripts/build_tool.lua", 0.03)
+
+    -- Building spawn sequencer: watches placed buildings, spawns the
+    -- starting unit roster one-at-a-time after the appear anim
+    -- finishes. 0.2s tick (5Hz) — only needs to react fast enough to
+    -- feel snappy when the previous unit clears the spawn tile.
+    buildingSpawnScriptId = engine.loadScript(
+        "scripts/building_spawn.lua", 0.2)
+
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
 end
@@ -61,6 +75,14 @@ function game.onMouseDown(button, x, y)
     -- rect (spawn button / list entry) eats the click, we stop here
     -- so the click can't fall through into selection / tile-cursor.
     if debugOverlay.tryClaimClick(button, x, y) then
+        return
+    end
+
+    -- Build tool gets first crack at mouse clicks when in placement
+    -- mode, so the placement click doesn't fall through into unit
+    -- selection / tile-cursor.
+    local buildTool = require("scripts.build_tool")
+    if buildTool.onMouseDown(button, x, y) then
         return
     end
 
@@ -137,6 +159,12 @@ function game.onMouseUp(button, x, y)
 end
 
 function game.onKeyDown(key)
+    -- Build tool's Esc cancels placement before the default Esc
+    -- handler clears unit selection.
+    local buildTool = require("scripts.build_tool")
+    if buildTool.onKeyDown(key) then
+        return
+    end
     -- ESC clears any active unit selection.
     -- Doesn't conflict with shell/UI focus: those modes consume ESC
     -- earlier in the input thread (LuaFocusLost / LuaUIEscape) and

@@ -95,6 +95,8 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texToolInfoSelected    = engine.loadTexture("assets/textures/hud/tool_info_selected.png")
     hud.texToolMine            = engine.loadTexture("assets/textures/hud/tool_mine.png")
     hud.texToolMineSelected    = engine.loadTexture("assets/textures/hud/tool_mine_selected.png")
+    hud.texToolBuild           = engine.loadTexture("assets/textures/hud/tool_build.png")
+    hud.texToolBuildSelected   = engine.loadTexture("assets/textures/hud/tool_build_selected.png")
     hud.texZoomSelect          = engine.loadTexture("assets/textures/hud/utility/zoom_select.png")
     hud.texZoomHover           = engine.loadTexture("assets/textures/hud/utility/zoom_hover.png")
     hud.texWorldSelect         = engine.loadTexture("assets/textures/hud/utility/world_select.png")
@@ -205,10 +207,14 @@ function hud.createUI()
         name = "tool_mode_toggle",
         page = hud.world_page,
         items = {
+            -- Build tool sits above the default/info tool; replaces
+            -- the old `tool_mine` placeholder. Mine textures are still
+            -- loaded above so they stay available for a future mining
+            -- tool.
             {
-                name        = "tool_mine",
-                texDefault  = hud.texToolMine,
-                texSelected = hud.texToolMineSelected,
+                name        = "tool_build",
+                texDefault  = hud.texToolBuild,
+                texSelected = hud.texToolBuildSelected,
             },
             {
                 name        = "tool_default",
@@ -233,6 +239,26 @@ function hud.createUI()
         onChange = function(index, itemName)
             world.setToolMode(hud.worldId, itemName)
             engine.logDebug("Tool mode changed to: " .. tostring(itemName))
+            -- Route to the build tool so it can show/hide its picker.
+            local buildTool = require("scripts.build_tool")
+            buildTool.onToolMode(itemName)
+        end,
+    })
+
+    -- Pass HUD context to the build tool so its popup knows where to
+    -- anchor itself and how to switch back to the default tool.
+    local buildTool = require("scripts.build_tool")
+    buildTool.setup({
+        page       = hud.world_page,
+        fbW        = hud.fbW,
+        fbH        = hud.fbH,
+        boxTexSet  = hud.boxTexSet,
+        menuFont   = hud.menuFont,
+        buttonSize = hud.baseSizes.buttonSize,
+        selectDefaultTool = function()
+            -- Default tool is at index 2 in the items list above
+            -- (after tool_build at index 1).
+            toggle.select(hud.mapToggleId, 2)
         end,
     })
 

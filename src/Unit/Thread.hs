@@ -21,6 +21,7 @@ import Unit.Sim.Types (UnitActivity(..))
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (processAllUnitCommands)
 import Unit.Thread.Movement (tickAllMovement)
+import Building.Thread.Command (processAllBuildingCommands)
 
 -- | Unit thread tick rate in seconds (30 Hz).
 unitTickRate ∷ Double
@@ -69,6 +70,7 @@ unitLoop env stateRef lastTimeRef utsRef = do
                 processAllUnitCommands env utsRef
                 tickAllMovement dt env utsRef
                 publishToRender env utsRef
+                processAllBuildingCommands env
 
                 tickEnd ← realToFrac ⊚ getPOSIXTime
                 let elapsed = tickEnd - tickStart ∷ Double

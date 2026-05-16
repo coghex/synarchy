@@ -30,6 +30,7 @@ import Engine.Input.Types (defaultInputState)
 import UI.Focus (createFocusManager)
 import UI.Types (emptyUIPageManager)
 import Unit.Types (emptyUnitManager)
+import Building.Types (emptyBuildingManager)
 import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
 import World.Generate.Config (loadWorldGenConfig)
@@ -94,6 +95,9 @@ initializeEngine = do
   unitManagerRef ← newIORef emptyUnitManager
   unitQueue ← Q.newQueue
   statRNGRef ← Random.newStdGen >>= newIORef
+  buildingManagerRef ← newIORef emptyBuildingManager
+  buildingQueue ← Q.newQueue
+  buildingGhostRef ← newIORef Nothing
   worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
   worldGenConfigRef ← newIORef worldGenConfig
 
@@ -139,6 +143,9 @@ initializeEngine = do
         , unitManagerRef     = unitManagerRef
         , unitQueue          = unitQueue
         , statRNGRef         = statRNGRef
+        , buildingManagerRef = buildingManagerRef
+        , buildingQueue      = buildingQueue
+        , buildingGhostRef   = buildingGhostRef
         , worldGenConfigRef  = worldGenConfigRef
         , simQueue          = simQueue
         , frameCounterRef   = frameCounterRef

@@ -36,6 +36,7 @@ import World.Render.Quads (renderWorldQuads, renderWorldCursorQuads)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Render.ChunkCulling (isChunkRelevantForSlice)
 import Unit.Render (renderUnitQuads)
+import Building.Render (renderBuildingQuads, renderGhostQuad)
 
 -- * Surface Headroom
 
@@ -101,6 +102,22 @@ updateWorldTiles env = do
                 zSlice = camZSlice camera
             renderUnitQuads env facing zSlice tileAlpha
 
+    -- Buildings: same shape as units, simpler internals. Plus the
+    -- optional ghost preview while in placement mode.
+    buildingQuads ← if tileAlpha ≤ 0.001
+        then return V.empty
+        else do
+            let facing = camFacing camera
+                zSlice = camZSlice camera
+            renderBuildingQuads env facing zSlice tileAlpha
+
+    ghostQuads ← if tileAlpha ≤ 0.001
+        then return V.empty
+        else do
+            let facing = camFacing camera
+                zSlice = camZSlice camera
+            renderGhostQuad env facing zSlice
+
     zoomQuads ← generateZoomMapQuads env camera fbW fbH
 
     let shouldTrack = camZTracking camera
@@ -127,5 +144,6 @@ updateWorldTiles env = do
                         Nothing → return ()
                 Nothing → return ()
 
-    let allQuads = tileQuads <> worldCursorQuads <> unitQuads <> zoomQuads
+    let allQuads = tileQuads <> worldCursorQuads <> buildingQuads
+                <> unitQuads <> ghostQuads <> zoomQuads
     return allQuads

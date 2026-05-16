@@ -1,0 +1,52 @@
+buildings:
+  - name: "acolyte_portal"
+    sprite: "assets/textures/buildings/acolyte_portal/default.png"
+    tile_size: { x: 1, y: 1 }
+    placement: "flat_ground"
+    is_starting: true
+    race: "acolyte_cult"
+
+    state_animations:
+      appearing: portal-appear
+      built:     portal-idle
+
+    animations:
+      # 16 frames at 8fps = 2 seconds total. The unit auto-transitions
+      # to the "built" state once the appear anim completes.
+      portal-appear:
+        fps: 8
+        loop: false
+        frames:
+          default:
+            - "assets/textures/buildings/acolyte_portal/appear/frame_000.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_001.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_002.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_003.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_004.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_005.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_006.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_007.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_008.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_009.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_010.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_011.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_012.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_013.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_014.png"
+            - "assets/textures/buildings/acolyte_portal/appear/frame_015.png"
+
+      # 8 frames at 8fps = 1 second loop, matching the appear frame
+      # rate so there's no jitter on the appear→built handoff.
+      portal-idle:
+        fps: 8
+        loop: true
+        frames:
+          default:
+            - "assets/textures/buildings/acolyte_portal/idle/frame_000.png"
+            - "assets/textures/buildings/acolyte_portal/idle/frame_001.png"
+            - "assets/textures/buildings/acolyte_portal/idle/frame_002.png"
+            - "assets/textures/buildings/acolyte_portal/idle/frame_003.png"
+            - "assets/textures/buildings/acolyte_portal/idle/frame_004.png"
+            - "assets/textures/buildings/acolyte_portal/idle/frame_005.png"
+            - "assets/textures/buildings/acolyte_portal/idle/frame_006.png"
+            - "assets/textures/buildings/acolyte_portal/idle/frame_007.png"

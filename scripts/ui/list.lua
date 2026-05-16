@@ -73,6 +73,12 @@ function list.new(params)
     local items = params.items or {}
     local maxVisible = params.maxVisible or 10
 
+    -- Horizontal text alignment. Defaults to "left" (legacy behavior:
+    -- text sits at x + textPadding). "center" / "right" compute an
+    -- offset per-item using engine.getTextWidth so labels of varying
+    -- widths still align cleanly.
+    local textAlign = params.textAlign or "left"
+
     local visibleCount = math.min(#items, maxVisible)
     local listWidth = params.width or 300
     local listHeight = visibleCount * itemHeight
@@ -97,6 +103,7 @@ function list.new(params)
         hoveredSlot = nil,
         uiscale = uiscale,
         zIndex = params.zIndex or 1,
+        textAlign = textAlign,
         -- Colors
         textColor = textColor,
         highlightColor = highlightColor,
@@ -117,7 +124,13 @@ function list.new(params)
     ls.slotElements = {}
     for i = 1, visibleCount do
         local slotY = (i - 1) * itemHeight
-        local textY = slotY + (itemHeight / 2) + (fontSize / 3)
+        -- Vertical centering. Empirically, the text element's origin
+        -- is the baseline of a glyph row whose ascent is close to the
+        -- full fontSize (pixel font with little/no descender), so the
+        -- visual center of the glyphs sits about fontSize/2 above the
+        -- baseline. Centering the visual mid-line on the slot center
+        -- means baseline at slotCenter + fontSize/2.
+        local textY = slotY + (itemHeight + fontSize) / 2
 
         -- Highlight sprite (hidden by default)
         local hlId = UI.newSprite(
@@ -148,7 +161,19 @@ function list.new(params)
             textColor[1], textColor[2], textColor[3], textColor[4],
             ls.page
         )
-        UI.addToPage(ls.page, txtId, ls.x + textPadding, ls.y + textY)
+        -- Resolve horizontal position based on textAlign. For "center"
+        -- and "right" we need each item's pixel width to position
+        -- correctly; "left" is just a constant offset.
+        local textX = ls.x + textPadding
+        if textAlign == "center" or textAlign == "right" then
+            local tw = engine.getTextWidth(ls.font, itemText, fontSize)
+            if textAlign == "center" then
+                textX = ls.x + math.floor((listWidth - tw) / 2)
+            else
+                textX = ls.x + listWidth - tw - textPadding
+            end
+        end
+        UI.addToPage(ls.page, txtId, textX, ls.y + textY)
         UI.setZIndex(txtId, ls.zIndex + 2)
 
         -- Invisible hit-box sprite for click detection
@@ -520,7 +545,7 @@ function list.setPosition(id, x, y)
 
     for _, slot in ipairs(ls.slotElements) do
         local slotY = (slot.slot - 1) * ls.itemHeight
-        local textY = slotY + (ls.itemHeight / 2) + (ls.fontSize / 3)
+        local textY = slotY + (ls.itemHeight + ls.fontSize) / 2
 
         UI.setPosition(slot.highlightId, x, y + slotY)
         UI.setPosition(slot.textId, x + ls.textPadding, y + textY)

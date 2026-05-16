@@ -373,6 +373,13 @@ library
                      Unit.Thread
                      Unit.Thread.Command
                      Unit.Thread.Movement
+                     Building.Types
+                     Building.Command.Types
+                     Building.Thread.Command
+                     Building.Render
+                     Building.Placement
+                     Engine.Asset.YamlBuildings
+                     Engine.Scripting.Lua.API.Buildings
                      Sim.Thread
                      Sim.Command.Types
                      Sim.State.Types

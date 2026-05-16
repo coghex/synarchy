@@ -37,6 +37,7 @@ import Engine.Scripting.Lua.API.Save (saveListFn, saveWorldFn, loadSaveFn)
 import Engine.Scripting.Lua.API.World
 import Engine.Scripting.Lua.API.WorldQuery
 import Engine.Scripting.Lua.API.Units
+import Engine.Scripting.Lua.API.Buildings
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
@@ -96,6 +97,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadVegetationYaml" (loadVegetationYamlFn env backendState)
   registerLuaFunction "loadFloraYaml" (loadFloraYamlFn env backendState)
   registerLuaFunction "loadUnitYaml" (loadUnitYamlFn env backendState)
+  registerLuaFunction "loadBuildingYaml" (loadBuildingYamlFn env backendState)
   
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)
   registerLuaFunction "isActionDown"      (isActionDownFn env backendState)
@@ -210,11 +212,27 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getAllIds"   (unitGetAllIdsFn env)
   registerLuaFunction "getActivity" (unitGetActivityFn env)
   registerLuaFunction "getSkill"     (unitGetSkillFn env)
+  -- NB: skill functions follow; the building global is set up after
+  -- this `unit` table is finalized below.
   registerLuaFunction "setSkill"     (unitSetSkillFn env)
   registerLuaFunction "addXP"        (unitAddXPFn env)
   registerLuaFunction "getAllSkills" (unitGetAllSkillsFn env)
 
   Lua.setglobal (Lua.Name "unit")
+
+  -- Building global. Mirrors `unit` in shape.
+  Lua.newtable
+  registerLuaFunction "spawn"               (buildingSpawnFn env)
+  registerLuaFunction "destroy"             (buildingDestroyFn env)
+  registerLuaFunction "canPlaceAt"          (buildingCanPlaceAtFn env)
+  registerLuaFunction "setGhost"            (buildingSetGhostFn env)
+  registerLuaFunction "clearGhost"          (buildingClearGhostFn env)
+  registerLuaFunction "getStartingBuildings" (buildingGetStartingBuildingsFn env)
+  registerLuaFunction "getInfo"             (buildingGetInfoFn env)
+  registerLuaFunction "getActivity"         (buildingGetActivityFn env)
+  registerLuaFunction "list"                (buildingListFn env)
+  registerLuaFunction "listDefs"            (buildingListDefsFn env)
+  Lua.setglobal (Lua.Name "building")
 
   Lua.newtable
   registerLuaFunction "getGenDefaults" (worldGetGenDefaultsFn env)

@@ -38,6 +38,8 @@ import UI.Types (UIPageManager)
 import UI.Focus (FocusManager)
 import Unit.Types (UnitManager)
 import Unit.Command.Types (UnitCommand)
+import Building.Types (BuildingManager, BuildingGhost)
+import Building.Command.Types (BuildingCommand)
 import World.Types (WorldCommand, WorldManager, FloraCatalog)
 import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
@@ -87,6 +89,13 @@ data EngineEnv = EngineEnv
     -- ^ Runtime RNG for stat rolls. Seeded from system entropy at
     --   startup; not tied to the world seed (stats are non-deterministic
     --   across runs by design).
+  , buildingManagerRef  ∷ IORef BuildingManager
+  , buildingQueue       ∷ Q.Queue BuildingCommand
+  , buildingGhostRef    ∷ IORef (Maybe BuildingGhost)
+    -- ^ Single-slot ghost preview during placement mode. Lua sets and
+    --   clears via the build_tool module; the render path picks it up
+    --   each frame and draws an alpha-blended (and possibly red-tinted)
+    --   sprite at the hovered tile.
   , worldGenConfigRef   ∷ IORef WorldGenConfig
   , simQueue           ∷ Q.Queue SimCommand
   , frameCounterRef    ∷ IORef Word64  -- ^ Monotonic frame counter for animations
