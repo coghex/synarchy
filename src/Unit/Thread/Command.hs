@@ -51,7 +51,16 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                                 in (HM.insert name v acc, g''))
                             (HM.empty, g0)
                             (udStatTemplates def)
-                    in (g', rolled)
+                        -- Scale rolled strength by lean-mass ratio so
+                        -- bigger / leaner characters get a strength bump
+                        -- and skinny ones a penalty. Sub-linear (exp 0.7)
+                        -- because strength scales with muscle cross-
+                        -- section, not volume. The rolled value's
+                        -- variance (sigma = range/4) can still flip
+                        -- ordering — a small unit with a high roll can
+                        -- beat a large unit with a low roll.
+                        scaled = scaleStrengthByBody def rolled
+                    in (g', scaled)
                 else return HM.empty
             -- Skills always roll at spawn so they have a starting
             -- level for the addSkillXP formula to operate on.
@@ -226,6 +235,31 @@ handleUnitCommand env utsRef (UnitRevive uid) = do
                                  , usReviveUntil = Just (now + duration)
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
+-- | Multiply the rolled strength by `(leanMass / avgLeanMass) ^ 0.7`,
+--   where avgLeanMass comes from the def's body means and leanMass from
+--   this unit's rolled body. No-op if any body attr is missing — keeps
+--   units without a body block unchanged.
+scaleStrengthByBody ∷ UnitDef → HM.HashMap Text Float → HM.HashMap Text Float
+scaleStrengthByBody def rolled =
+    case (HM.lookup "strength" rolled
+         , HM.lookup "height"  rolled
+         , HM.lookup "bulk"    rolled
+         , HM.lookup "bodyfat" rolled
+         , statMean def "height"
+         , statMean def "bulk"
+         , statMean def "bodyfat") of
+        ( Just str, Just h, Just b, Just f
+         , Just hM, Just bM, Just fM ) →
+            let rolledLean = leanMassOf h b f
+                avgLean    = leanMassOf hM bM fM
+                ratio      = if avgLean > 0 then rolledLean / avgLean else 1
+                scaled     = str * (ratio ** 0.7)
+            in HM.insert "strength" scaled rolled
+        _ → rolled
+  where
+    leanMassOf h b f = 22 * h * h * b * (1 - f)
+    statMean d name  = fst <$> HM.lookup name (udStatTemplates d)
 
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
 lookupSurfaceZ env gx gy = do

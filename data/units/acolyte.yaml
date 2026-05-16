@@ -10,6 +10,11 @@ units:
       reflexes:     { base: 1.0, range: 1.0 }
       constitution: { base: 1.0, range: 1.0 }
 
+    body:
+      height:  { mean: 1.8, range: 1.0 }   # 1.3..2.3 m
+      bulk:    { mean: 1.0, range: 1.0 }   # 0.5..1.5
+      bodyfat: { mean: 0.2, range: 0.36 }  # 0.02..0.38
+
     skills:
       balance: { base: 1.0, range: 1.0 }
     directional_sprites:

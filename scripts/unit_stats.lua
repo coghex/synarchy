@@ -22,7 +22,15 @@ local stats = {}
 -- Derived formulas. Each entry takes a unit id and returns a number
 -- or nil (nil = "this unit type doesn't have the required inputs").
 -- Add new formulas here as the game needs them.
-local derived = {
+--
+-- Note: forward-declared as a local so the body-mass formulas
+-- (lean_mass, fat_mass, max_hydration) can call `derived.weight(uid)`
+-- internally. Without the forward declaration, the `local derived`
+-- scope doesn't begin until AFTER the table literal is evaluated, so
+-- those self-references would resolve to the global `derived` (nil)
+-- and crash on first call.
+local derived
+derived = {
     -- Stamina pool size = endurance * 10. Larger endurance means
     -- the unit can exert itself longer before stamina runs out.
     max_stamina = function(uid)
@@ -34,6 +42,43 @@ local derived = {
     carrying_capacity = function(uid)
         local s = unit.getStat(uid, "strength")
         return s and s * 5 or nil
+    end,
+
+    -- Body mass in kg. BMI=22 baseline, scaled by bulk.
+    --   weight = 22 * height² * bulk
+    -- Changes when bulk or bodyfat is modified (e.g. starvation),
+    -- recomputed every read.
+    weight = function(uid)
+        local h = unit.getStat(uid, "height")
+        local b = unit.getStat(uid, "bulk")
+        if not (h and b) then return nil end
+        return 22 * h * h * b
+    end,
+
+    -- Lean (non-fat) mass in kg. Muscle, bone, organs.
+    lean_mass = function(uid)
+        local w = derived.weight(uid)
+        local f = unit.getStat(uid, "bodyfat")
+        if not (w and f) then return nil end
+        return w * (1 - f)
+    end,
+
+    -- Fat mass in kg.
+    fat_mass = function(uid)
+        local w = derived.weight(uid)
+        local f = unit.getStat(uid, "bodyfat")
+        if not (w and f) then return nil end
+        return w * f
+    end,
+
+    -- Total body water capacity, in litres (≈ kg). Muscle holds ~72%
+    -- of its mass in water; fat holds ~15%. So a lean unit has more
+    -- hydration headroom than a fat unit of the same total weight.
+    max_hydration = function(uid)
+        local lean = derived.lean_mass(uid)
+        local fat  = derived.fat_mass(uid)
+        if not (lean and fat) then return nil end
+        return 0.72 * lean + 0.15 * fat
     end,
 }
 

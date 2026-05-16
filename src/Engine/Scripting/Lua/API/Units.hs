@@ -54,6 +54,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
 import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..),
                                UnitYamlStat(..), UnitYamlSkill(..),
+                               UnitYamlBody(..), UnitYamlBodyAttr(..),
                                loadUnitYaml)
 import qualified Engine.Core.Queue as Q
 import Unit.Types
@@ -137,7 +138,17 @@ loadUnitYamlFn env backendState = do
                         ) HM.empty (Map.toList (uydAnimations def))
 
                     let stateAnims = HM.fromList (Map.toList (uydStateAnimations def))
-                        statTemplates = HM.fromList
+                        body = uydBody def
+                        bodyEntries =
+                            [ ("height",  (uybaMean (uybHeight body),
+                                           uybaRange (uybHeight body)))
+                            , ("bulk",    (uybaMean (uybBulk body),
+                                           uybaRange (uybBulk body)))
+                            , ("bodyfat", (uybaMean (uybBodyfat body),
+                                           uybaRange (uybBodyfat body)))
+                            ]
+                        statTemplates = HM.fromList $
+                            bodyEntries ++
                             [ (sname, (uysBase s, uysRange s))
                             | (sname, s) ← Map.toList (uydStats def)
                             ]

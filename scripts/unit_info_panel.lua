@@ -48,6 +48,17 @@ local function formatStatus(uid, info)
     local gy = fmt2(info.gridY)
     local gz = info.gridZ or 0
     local activity = unit.getActivity(uid) or "?"
+
+    -- Body-derived: height fixed at spawn, weight recomputes from
+    -- current bulk/bodyfat (so a starving unit shows shrinking weight).
+    local height = unit.getStat(uid, "height")
+    local weight = stats.get(uid, "weight")
+    local heightLine = "Height: ?"
+    local weightLine = "Weight: ?"
+    if height then heightLine = string.format("Height: %s m", fmt2(height)) end
+    if weight then weightLine = string.format("Weight: %s kg", fmt2(weight)) end
+
+    -- Resources: cur / max display.
     local maxStam  = stats.get(uid, "max_stamina")
     local curStam  = unit.getStat(uid, "stamina")
     local staminaLine = "Stamina: ?"
@@ -55,11 +66,23 @@ local function formatStatus(uid, info)
         staminaLine = string.format("Stamina: %s / %s",
                                     fmt2(curStam), fmt2(maxStam))
     end
+
+    local maxHydr = stats.get(uid, "max_hydration")
+    local curHydr = unit.getStat(uid, "hydration")
+    local hydrationLine = "Hydration: ?"
+    if curHydr and maxHydr then
+        hydrationLine = string.format("Hydration: %s / %s",
+                                      fmt2(curHydr), fmt2(maxHydr))
+    end
+
     return (info.defName or "(unnamed)")
         .. "\nActivity: " .. activity
         .. "\nFacing: " .. (info.facing or "?")
         .. "\nAt (" .. gx .. ", " .. gy .. ", " .. tostring(gz) .. ")"
+        .. "\n" .. heightLine
+        .. "\n" .. weightLine
         .. "\n" .. staminaLine
+        .. "\n" .. hydrationLine
 end
 
 local function formatPhysical(uid)

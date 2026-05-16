@@ -47,6 +47,18 @@ local config = {
             -- borderline unit from flapping between states each tick.
             revive_threshold       = 0.5,
         },
+        hydration = {
+            max_from        = "max_hydration",
+            -- Constant per-second drain in any activity. ~0.05/s on a
+            -- ~43 L average pool empties in ~14 minutes — fast enough
+            -- to observe in testing, will be tuned (and made activity-
+            -- and temperature-dependent) in a later pass.
+            drain_constant  = 0.05,
+            -- No regen: hydration only restored by drinking events
+            -- (separate API, not yet wired).
+            -- No collapse/revive thresholds for hydration yet —
+            -- starvation/dehydration debuffs are a future slice.
+        },
     },
 }
 
@@ -86,8 +98,13 @@ local function tickResource(uid, defName, resourceName, params, activity, dt)
     local endurance = unit.getStat(uid, "endurance") or 0
     local regen = regenFactor * endurance
 
-    -- Drain is a constant per activity (only walking drains right now).
-    local drain = (activity == "walking" and params.drain_walking) or 0
+    -- Drain has two parts: an always-on constant (drain_constant) and
+    -- an activity-specific drain (currently only drain_walking).
+    -- Resources like hydration use the constant; stamina uses the
+    -- activity-specific.
+    local drainActivity = (activity == "walking" and params.drain_walking) or 0
+    local drainConstant = params.drain_constant or 0
+    local drain = drainActivity + drainConstant
 
     local next = current + (regen - drain) * dt
 
