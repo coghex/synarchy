@@ -32,6 +32,7 @@ module Engine.Scripting.Lua.API.World
     , worldGetInitProgressFn
     , worldWaitForInitFn
     , worldDestroyFn
+    , worldDeleteTileFn
     ) where
 
 import UPrelude
@@ -664,11 +665,32 @@ worldWaitForInitFn env = do
 worldDestroyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldDestroyFn env = do
     pageIdArg ← Lua.tostring 1
-    
+
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
             Q.writeQueue (worldQueue env) (WorldDestroy pageId)
         Nothing → pure ()
-    
+
     return 0
+
+-- | world.deleteTile(pageId, gx, gy) → bool
+-- Enqueues a dig-1-Z-down edit at the given tile. The actual mutation
+-- happens on the next world-thread tick, so this returns true once
+-- enqueued (not once applied).
+worldDeleteTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldDeleteTileFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg     ← Lua.tointeger 2
+    gyArg     ← Lua.tointeger 3
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gx, Just gy) → do
+            Lua.liftIO $ do
+                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                Q.writeQueue (worldQueue env)
+                    (WorldDeleteTile pageId (fromIntegral gx) (fromIntegral gy))
+            Lua.pushboolean True
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1

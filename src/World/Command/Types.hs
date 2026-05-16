@@ -40,5 +40,6 @@ data WorldCommand
     | WorldSetToolMode WorldPageId ToolMode
     | WorldSave WorldPageId Text
     | WorldLoadSave WorldPageId SaveData
+    | WorldDeleteTile WorldPageId Int Int      -- ^ worldId, gx, gy
     | WorldDestroy !WorldPageId
     deriving (Show)

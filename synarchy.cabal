@@ -405,6 +405,7 @@ library
                      World.Thread.Command.Cursor
                      World.Thread.Command.Texture
                      World.Thread.Command.UI
+                     World.Thread.Command.Edit
                      World.Grid
                      World.Render
                      World.Render.Camera

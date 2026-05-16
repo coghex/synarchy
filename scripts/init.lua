@@ -11,6 +11,7 @@ local unitResourcesScriptId = nil
 local unitAiScriptId = nil
 local buildToolScriptId = nil
 local buildingSpawnScriptId = nil
+local tileEditorScriptId = nil
 
 function game.init(scriptId)
     -- Initialize debug
@@ -54,6 +55,11 @@ function game.init(scriptId)
     -- feel snappy when the previous unit clears the spawn tile.
     buildingSpawnScriptId = engine.loadScript(
         "scripts/building_spawn.lua", 0.2)
+
+    -- Tile editor: arena-only delete-tile popup. Event-driven — its
+    -- per-tick update() is a no-op. We still loadScript so the engine
+    -- broadcasts (onSetInfoText) reach the module.
+    tileEditorScriptId = engine.loadScript("scripts/tile_editor.lua", 0.1)
 
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
@@ -198,6 +204,9 @@ function game.shutdown()
     end
     if uiScriptId then
         engine.killScript(uiScriptId)
+    end
+    if tileEditorScriptId then
+        engine.killScript(tileEditorScriptId)
     end
 end
 

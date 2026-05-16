@@ -242,6 +242,10 @@ function hud.createUI()
             -- Route to the build tool so it can show/hide its picker.
             local buildTool = require("scripts.build_tool")
             buildTool.onToolMode(itemName)
+            -- Route to the tile editor so its popup can hide on
+            -- non-info tools.
+            local tileEditor = require("scripts.tile_editor")
+            tileEditor.onToolMode(itemName)
         end,
     })
 
@@ -260,6 +264,19 @@ function hud.createUI()
             -- (after tool_build at index 1).
             toggle.select(hud.mapToggleId, 2)
         end,
+    })
+
+    -- Tile editor lives on the same world_page as the build tool.
+    -- It uses the same box texture set + menu font; worldId is used
+    -- as the WorldPageId target for the WorldDeleteTile command.
+    local tileEditor = require("scripts.tile_editor")
+    tileEditor.setup({
+        page      = hud.world_page,
+        fbW       = hud.fbW,
+        fbH       = hud.fbH,
+        boxTexSet = hud.boxTexSet,
+        menuFont  = hud.menuFont,
+        worldId   = hud.worldId,
     })
 
     ---------------------------------------------------------
@@ -373,6 +390,14 @@ function hud.onMouseDown(button_num, mx, my)
                 return
             end
             world.setWorldCursorSelect(hud.worldId)
+            -- Refresh the tile-editor popup at the just-selected
+            -- tile. Gated internally by arenaMode so non-arena worlds
+            -- silently no-op.
+            local gx, gy = world.getHoverTile()
+            if gx and gy then
+                local tileEditor = require("scripts.tile_editor")
+                tileEditor.onTileSelected(gx, gy)
+            end
         elseif button_num == 2 then
             world.clearWorldCursorSelect(hud.worldId)
         end

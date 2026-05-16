@@ -259,6 +259,10 @@ function uiManager.showMenu(menuName, params)
         world.show(testArena.arenaWorldId)
         hud.worldId = testArena.arenaWorldId
         hud.show()
+        -- Arm the tile-editor popup. Done here (not in testArena.show)
+        -- because showMenu calls testArena.hide() at the top of every
+        -- transition, which would otherwise disarm us.
+        require("scripts.tile_editor").setArenaActive(true)
         -- Re-show pause menu if returning from settings (opened via pause menu)
         if previousMenu == "settings" then
             if pauseMenu then pauseMenu.show() end

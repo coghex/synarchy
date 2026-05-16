@@ -27,7 +27,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Yaml as Yaml
-import Data.Aeson (FromJSON(..), (.:), withObject)
+import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
 import System.Directory (listDirectory, doesFileExist)
 import System.FilePath ((</>), takeExtension)
@@ -37,17 +37,23 @@ import Engine.Core.Log (LoggerState, logInfo, logWarn, logDebug, LogCategory(..)
 -- * Materials
 
 data MaterialDef = MaterialDef
-    { mdId   ∷ Word8
-    , mdName ∷ Text
-    , mdTile ∷ Text
-    , mdZoom ∷ Text
-    , mdBg   ∷ Text
+    { mdId       ∷ Word8
+    , mdName     ∷ Text
+    , mdHardness ∷ Float
+    , mdDensity  ∷ Float
+    , mdAlbedo   ∷ Float
+    , mdTile     ∷ Text
+    , mdZoom     ∷ Text
+    , mdBg       ∷ Text
     } deriving (Show, Eq, Generic)
 
 instance FromJSON MaterialDef where
     parseJSON = withObject "MaterialDef" $ \v → MaterialDef
         ⊚ v .: "id"
         ⊛ v .: "name"
+        ⊛ v .:? "hardness" .!= 0.5
+        ⊛ v .:? "density"  .!= 2.5
+        ⊛ v .:? "albedo"   .!= 0.5
         ⊛ v .: "tile"
         ⊛ v .: "zoom"
         ⊛ v .: "bg"

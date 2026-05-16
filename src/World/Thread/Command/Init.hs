@@ -240,10 +240,22 @@ handleWorldInitArenaCommand env logger pageId = do
 
     -- Arena parameters
     let arenaRadius = 2           -- 5×5 chunks
-        loamId     = 56 ∷ Word8  -- matLoam = MaterialId 56
-        grassId    = 5 ∷ Word8  -- matGrass = MaterialId 5
-        arenaZ     = seaLevel    -- z = 0
-        chunkArea  = chunkSize * chunkSize  -- 256
+        loamId     = 56 ∷ Word8  -- matLoam    = MaterialId 56
+        graniteId  = 1  ∷ Word8  -- matGranite = MaterialId 1
+        grassId    = 5  ∷ Word8  -- matGrass   = MaterialId 5
+        arenaZ     = seaLevel    -- z = 0 (surface)
+        loamLayers    = 4        -- top 4 tiles
+        graniteLayers = 12       -- 12 tiles below
+        arenaDepth    = loamLayers + graniteLayers
+        columnStartZ  = arenaZ - arenaDepth + 1   -- bottom of the column
+        chunkArea     = chunkSize * chunkSize     -- 256
+
+        -- Column material stack (shared across all columns): index 0 is
+        -- the bottom of the column, index (arenaDepth - 1) is the top.
+        -- Loam fills the top loamLayers; granite fills below.
+        columnMats   = VU.generate arenaDepth (\i →
+                         if i ≥ graniteLayers then loamId else graniteId)
+        columnSlopes = VU.replicate arenaDepth 0
 
         generateChunk ∷ Int → V.Vector ColumnTiles → StdGen → V.Vector ColumnTiles
         generateChunk 0    init g = init
@@ -251,11 +263,16 @@ handleWorldInitArenaCommand env logger pageId = do
                                       (V.cons newelem init) newg
             where (rand, newg) = randomR (0, 3) g
                   actualId = grassId + rand
+                  -- Vegetation only on the top tile (the visible surface);
+                  -- granite + lower loam tiles get 0 so the renderer
+                  -- doesn't sprout grass underground after a dig.
+                  columnVeg = VU.generate arenaDepth (\i →
+                                if i ≡ arenaDepth - 1 then actualId else 0)
                   newelem = (ColumnTiles
-                             { ctStartZ = arenaZ
-                             , ctMats   = VU.singleton loamId
-                             , ctSlopes = VU.singleton 0
-                             , ctVeg    = VU.singleton actualId
+                             { ctStartZ = columnStartZ
+                             , ctMats   = columnMats
+                             , ctSlopes = columnSlopes
+                             , ctVeg    = columnVeg
                              })
         flatSurfaceMap = VU.replicate chunkArea arenaZ
         flatFluidMap   = V.replicate chunkArea Nothing

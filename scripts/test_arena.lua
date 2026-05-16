@@ -31,6 +31,15 @@ function testArena.init(fbW, fbH)
     testArena.fbH = fbH
 
     local count = 0
+    -- Load materials from YAML. This populates the engine's
+    -- MaterialRegistry (name + physical props) AND queues texture loads,
+    -- so the info-tool readout shows the actual material name instead
+    -- of the "unknown" default. Mirrors world_view.init for the arena.
+    local materialLoader = require("scripts.material_loader")
+    local matCount = materialLoader.loadAll("data/materials")
+    testArena.materialTextureCount = matCount
+    count = count + matCount
+
     -- Load vegetation from YAML
     local vegetationLoader = require("scripts.vegetation_loader")
     local vegCount = vegetationLoader.loadAll("data/vegetation")
@@ -113,6 +122,16 @@ function testArena.sendTextures(worldId)
         loamHandle = engine.loadTexture("assets/textures/world/loam/loam.png")
         world.setTexture(worldId, "mat_tile_56", loamHandle)
     end
+
+    -- Granite tile texture (material ID 1) — revealed when the player
+    -- digs through the top 4 loam tiles.
+    local graniteHandle = engine.getTextureHandle("mat_tile_1")
+    if graniteHandle and graniteHandle >= 0 then
+        world.setTexture(worldId, "mat_tile_1", graniteHandle)
+    else
+        graniteHandle = engine.loadTexture("assets/textures/world/granite/granite.png")
+        world.setTexture(worldId, "mat_tile_1", graniteHandle)
+    end
     for vegId = 1, 64 do
         local h = engine.getTextureHandle("veg_tile_" .. vegId)
         if h and h >= 0 then
@@ -166,6 +185,10 @@ function testArena.show()
     UI.showPage(testArena.page)
     -- World won't be in wmVisible yet,
     -- so nothing renders — just blank + HUD
+
+    -- Note: tile-editor arena-mode is armed by ui_manager's
+    -- test_arena_view branch (after this loading screen finishes).
+    -- Arming here would be wiped by the mid-transition hide().
 end
 
 function testArena.hide()
@@ -174,6 +197,7 @@ function testArena.hide()
     if testArena.created then
         world.hide(testArena.arenaWorldId)
     end
+    require("scripts.tile_editor").setArenaActive(false)
 end
 
 -----------------------------------------------------------

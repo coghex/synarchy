@@ -23,6 +23,7 @@ import Engine.Asset.YamlTextures
 import Engine.Asset.YamlFlora
 import qualified Engine.Core.Queue as Q
 import World.Flora.Types
+import World.Material (MaterialProps(..), registerMaterial)
 
 -- | Parse a material YAML, load all referenced textures (tile/zoom/bg),
 --   register name-to-handle mappings, and queue load requests.
@@ -65,6 +66,21 @@ loadMaterialYamlFn env backendState = do
 
                     return (acc + 3)
                     ) (0 ∷ Int) defs
+
+                -- Register material properties (name + physical params)
+                -- in the world's MaterialRegistry. Without this the
+                -- info-tool readout falls back to "unknown" for every
+                -- tile, since the registry stays at defaults.
+                atomicModifyIORef' (materialRegistryRef env) $ \reg →
+                    let reg' = foldl' (\r def →
+                            registerMaterial (mdId def)
+                                (MaterialProps (mdName def)
+                                               (mdHardness def)
+                                               (mdDensity def)
+                                               (mdAlbedo def))
+                                r
+                            ) reg defs
+                    in (reg', ())
 
                 logInfo logger CatAsset $
                     "loadMaterialYaml: loaded " <> T.pack (show total)

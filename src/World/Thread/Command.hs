@@ -58,6 +58,7 @@ import World.Thread.Command.Save (handleWorldSaveCommand
 import World.Thread.Command.UI (handleWorldShowCommand, handleWorldHideCommand
                                , handleWorldSetMapModeCommand
                                , handleWorldSetToolModeCommand)
+import World.Thread.Command.Edit (handleWorldDeleteTileCommand)
 
 -- * Command Handler
 
@@ -116,6 +117,8 @@ handleWorldCommand env logger (WorldSave pageId saveName)
   = handleWorldSaveCommand env logger pageId saveName
 handleWorldCommand env logger (WorldLoadSave pageId saveName)
   = handleWorldLoadSaveCommand env logger pageId saveName
+handleWorldCommand env logger (WorldDeleteTile pageId gx gy)
+  = handleWorldDeleteTileCommand env logger pageId gx gy
 handleWorldCommand env logger (WorldDestroy pageId)
   = handleWorldDestroyCommand env logger pageId
 
