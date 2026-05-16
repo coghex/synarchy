@@ -75,6 +75,10 @@ data BuildingManager = BuildingManager
     { bmDefs      ∷ !(HM.HashMap Text BuildingDef)
     , bmInstances ∷ !(HM.HashMap BuildingId BuildingInstance)
     , bmNextId    ∷ !Word32
+    , bmSelected  ∷ !(Maybe BuildingId)
+      -- ^ Single-select for now. Units use a HashSet; buildings stay
+      --   single until there's a real multi-select use case. Cleared
+      --   automatically when the selected building is destroyed.
     } deriving (Show, Eq)
 
 emptyBuildingManager ∷ BuildingManager
@@ -82,6 +86,7 @@ emptyBuildingManager = BuildingManager
     { bmDefs      = HM.empty
     , bmInstances = HM.empty
     , bmNextId    = 1
+    , bmSelected  = Nothing
     }
 
 nextBuildingId ∷ BuildingManager → (BuildingId, BuildingManager)

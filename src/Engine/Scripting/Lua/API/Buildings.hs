@@ -11,6 +11,10 @@ module Engine.Scripting.Lua.API.Buildings
     , buildingGetActivityFn
     , buildingListFn
     , buildingListDefsFn
+    , buildingHitTestAtFn
+    , buildingSelectFn
+    , buildingDeselectFn
+    , buildingGetSelectedFn
     ) where
 
 import UPrelude
@@ -33,6 +37,7 @@ import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
 import Building.Placement (canPlaceAt, PlacementResult(..))
+import Building.HitTest (hitTestBuildingAt)
 import Unit.Direction (Direction(..))
 import Unit.Types (Animation(..))
 import Unit.Pathing.Cost (lookupTerrainZ)
@@ -379,3 +384,66 @@ floorZAt ∷ WorldTileData → Int → Int → Int
 floorZAt wtd gx gy = case lookupTerrainZ wtd gx gy of
     Just z  → z
     Nothing → 0
+
+-- * Selection
+
+-- | building.hitTestAt(pixelX, pixelY) → id|nil
+--   Topmost (highest gridZ) building whose sprite quad contains the
+--   click. Pixel coords are framebuffer pixels.
+buildingHitTestAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingHitTestAtFn env = do
+    xArg ← Lua.tonumber 1
+    yArg ← Lua.tonumber 2
+    case (xArg, yArg) of
+        (Just (Lua.Number x), Just (Lua.Number y)) → do
+            mBid ← Lua.liftIO $ hitTestBuildingAt env (realToFrac x) (realToFrac y)
+            case mBid of
+                Just (BuildingId n) → do
+                    Lua.pushinteger (fromIntegral n)
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- | building.select(id) — single-select; replaces any prior selection.
+buildingSelectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingSelectFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                -- Only select if the id actually exists; otherwise leave
+                -- the previous selection alone.
+                if HM.member bid (bmInstances bm)
+                then (bm { bmSelected = Just bid }, ())
+                else (bm, ())
+        Nothing → pure ()
+    return 0
+
+-- | building.deselect() — clear any selection.
+buildingDeselectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingDeselectFn env = do
+    Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+        (bm { bmSelected = Nothing }, ())
+    return 0
+
+-- | building.getSelected() → id|nil. Validates the selection still
+--   exists; returns nil if the building was destroyed.
+buildingGetSelectedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetSelectedFn env = do
+    mBid ← Lua.liftIO $ do
+        bm ← readIORef (buildingManagerRef env)
+        pure $ case bmSelected bm of
+            Just bid | HM.member bid (bmInstances bm) → Just bid
+            _ → Nothing
+    case mBid of
+        Just (BuildingId n) → do
+            Lua.pushinteger (fromIntegral n)
+            return 1
+        Nothing → do
+            Lua.pushnil
+            return 1

@@ -378,6 +378,7 @@ library
                      Building.Thread.Command
                      Building.Render
                      Building.Placement
+                     Building.HitTest
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
                      Sim.Thread

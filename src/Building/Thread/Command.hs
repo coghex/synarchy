@@ -53,4 +53,8 @@ handleBuildingCommand env (BuildingSpawn bid defName gx gy gz) = do
 
 handleBuildingCommand env (BuildingDestroy bid) =
     atomicModifyIORef' (buildingManagerRef env) $ \bm →
-        (bm { bmInstances = HM.delete bid (bmInstances bm) }, ())
+        let cleared = if bmSelected bm ≡ Just bid
+                      then Nothing
+                      else bmSelected bm
+        in (bm { bmInstances = HM.delete bid (bmInstances bm)
+               , bmSelected  = cleared }, ())

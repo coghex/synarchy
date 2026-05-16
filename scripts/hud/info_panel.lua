@@ -53,6 +53,9 @@ local schemas = {
         { key = "mental",   name = "Mental" },
         { key = "skills",   name = "Skills" },
     },
+    building = {
+        { key = "binfo", name = "Info" },
+    },
 }
 local weatherTabDef = { key = "weather", name = "Weather" }
 
@@ -61,6 +64,7 @@ local weatherTabDef = { key = "weather", name = "Weather" }
 local allKeys = {
     "basic", "advanced", "weather",
     "status", "physical", "mental", "skills",
+    "binfo",
 }
 
 -----------------------------------------------------------
@@ -447,6 +451,13 @@ function infoPanel.setUnitInfo(statusText, physicalText, mentalText, skillsText)
     infoPanel.setText("physical", physicalText or "")
     infoPanel.setText("mental",   mentalText   or "")
     infoPanel.setText("skills",   skillsText   or "")
+end
+
+-- Building-info push: switches to the building schema (one tab) and
+-- writes the info text. Empty string hides the panel.
+function infoPanel.setBuildingInfo(infoText)
+    infoPanel.useSchema("building")
+    infoPanel.setText("binfo", infoText or "")
 end
 
 -- Swap the tab schema in-place. Rebuilds the tabbar and labels.

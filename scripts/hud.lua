@@ -382,6 +382,12 @@ function hud.onMouseDown(button_num, mx, my)
             if unit and unit.getSelected and #unit.getSelected() > 0 then
                 return
             end
+            -- Same rule for buildings: a building click takes over the
+            -- info panel; don't also push tile info on top.
+            if building and building.getSelected
+               and building.getSelected() then
+                return
+            end
             -- Tile-info popup only fires in info-tool mode. In other
             -- tools, a click that misses a unit just clears any active
             -- selection (game.onMouseDown already did that) and is

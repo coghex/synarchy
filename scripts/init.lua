@@ -13,6 +13,7 @@ local buildToolScriptId = nil
 local buildingSpawnScriptId = nil
 local tileEditorScriptId = nil
 local pauseScriptId = nil
+local buildingInfoPanelScriptId = nil
 
 function game.init(scriptId)
     -- Initialize debug
@@ -66,6 +67,12 @@ function game.init(scriptId)
     -- snapshot. No per-tick work; loaded so engine broadcasts (none
     -- needed today) and require()s from game scripts share state.
     pauseScriptId = engine.loadScript("scripts/pause.lua", 1.0)
+
+    -- Building info watcher: mirrors unit_info_panel. Polls
+    -- building.getSelected each tick and pushes a building schema
+    -- to the HUD info panel.
+    buildingInfoPanelScriptId = engine.loadScript(
+        "scripts/building_info_panel.lua", 0.1)
 
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
@@ -132,12 +139,23 @@ function game.onMouseDown(button, x, y)
             else
                 unit.select(id)
             end
+            -- Selecting a unit takes over the info panel — deselect
+            -- any building so the panel doesn't flicker between schemas.
+            building.deselect()
         else
-            -- Click missed all units. With Shift held, keep the
-            -- current selection (so shift-dragging from empty terrain
-            -- can extend it). Otherwise deselect.
-            if not shift then
-                unit.deselectAll()
+            -- No unit hit. Try a building.
+            local bid = building.hitTestAt(x, y)
+            if bid then
+                building.select(bid)
+                if not shift then unit.deselectAll() end
+            else
+                -- Click missed everything. With Shift held, keep the
+                -- current selection (so shift-dragging from empty
+                -- terrain can extend it). Otherwise deselect.
+                if not shift then
+                    unit.deselectAll()
+                    building.deselect()
+                end
             end
         end
     elseif button == MOUSE_RIGHT then
@@ -223,6 +241,9 @@ function game.shutdown()
     end
     if pauseScriptId then
         engine.killScript(pauseScriptId)
+    end
+    if buildingInfoPanelScriptId then
+        engine.killScript(buildingInfoPanelScriptId)
     end
 end
 

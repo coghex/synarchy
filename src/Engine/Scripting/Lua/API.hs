@@ -234,6 +234,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getActivity"         (buildingGetActivityFn env)
   registerLuaFunction "list"                (buildingListFn env)
   registerLuaFunction "listDefs"            (buildingListDefsFn env)
+  registerLuaFunction "hitTestAt"           (buildingHitTestAtFn env)
+  registerLuaFunction "select"              (buildingSelectFn env)
+  registerLuaFunction "deselect"            (buildingDeselectFn env)
+  registerLuaFunction "getSelected"         (buildingGetSelectedFn env)
   Lua.setglobal (Lua.Name "building")
 
   Lua.newtable
