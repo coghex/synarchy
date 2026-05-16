@@ -18,6 +18,7 @@ module Engine.Scripting.Lua.API.Units
     , unitHitTestInRectFn
     , unitSetSelectionFn
     , unitSetAnimFn
+    , unitCollapseFn
     ) where
 
 import UPrelude
@@ -304,6 +305,23 @@ unitStopFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitStop uid
+            Lua.pushboolean True
+            return 1
+
+-- | unit.collapse(id) — transition the unit into the Collapsed state.
+--   The state's anim is resolved via udStateAnims ("collapsed" → name);
+--   a non-looping anim plays once and pickFrame holds the last frame.
+--   Collapsed units ignore subsequent UnitMoveTo commands.
+unitCollapseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitCollapseFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitCollapse uid
             Lua.pushboolean True
             return 1
 

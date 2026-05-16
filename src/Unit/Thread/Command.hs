@@ -117,12 +117,16 @@ handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
-            Just ss →
-                let ss' = ss { usTarget    = Just (MoveTarget tx ty speed)
-                             , usState     = Walking
-                             , usLocalPath = []
-                             }
-                in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+            Just ss
+                -- Collapsed units ignore move orders so right-click on
+                -- a selected collapsed unit doesn't snap them upright.
+                | usState ss ≡ Collapsed → (uts, ())
+                | otherwise →
+                    let ss' = ss { usTarget    = Just (MoveTarget tx ty speed)
+                                 , usState     = Walking
+                                 , usLocalPath = []
+                                 }
+                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
 handleUnitCommand env utsRef (UnitStop uid) = do
     atomicModifyIORef' utsRef $ \uts →
@@ -132,6 +136,18 @@ handleUnitCommand env utsRef (UnitStop uid) = do
             Just ss →
                 let ss' = ss { usTarget    = Nothing
                              , usState     = Idle
+                             , usLocalPath = []
+                             }
+                in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
+handleUnitCommand env utsRef (UnitCollapse uid) = do
+    atomicModifyIORef' utsRef $ \uts →
+        let simStates = utsSimStates uts
+        in case HM.lookup uid simStates of
+            Nothing → (uts, ())
+            Just ss →
+                let ss' = ss { usTarget    = Nothing
+                             , usState     = Collapsed
                              , usLocalPath = []
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())

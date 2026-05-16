@@ -32,7 +32,7 @@ data MoveTarget = MoveTarget
     , mtSpeed   ∷ !Float
     } deriving (Show, Eq)
 
-data UnitActivity = Idle | Walking
+data UnitActivity = Idle | Walking | Collapsed
     deriving (Show, Eq)
 
 data UnitThreadState = UnitThreadState

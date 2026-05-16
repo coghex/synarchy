@@ -15,4 +15,7 @@ data UnitCommand
     | UnitMoveTo !UnitId !Float !Float !Float
         -- ^ unitId, targetX, targetY, speed (tiles per second)
     | UnitStop !UnitId
+    | UnitCollapse !UnitId
+        -- ^ play the collapse anim and hold; unit cannot be moved
+        --   until further state changes are added
     deriving (Show)

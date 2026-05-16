@@ -28,6 +28,8 @@ spec = do
             activityToStateKey Idle `shouldBe` "idle"
         it "maps Walking to \"walk\"" $
             activityToStateKey Walking `shouldBe` "walk"
+        it "maps Collapsed to \"collapsed\"" $
+            activityToStateKey Collapsed `shouldBe` "collapsed"
 
     describe "resolveStateAnim" $ do
         it "uses udStateAnims mapping when present" $
