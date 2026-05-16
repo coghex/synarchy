@@ -8,6 +8,7 @@ local unitManagerScriptId = nil
 local unitInfoPanelScriptId = nil
 local unitDragSelectScriptId = nil
 local unitResourcesScriptId = nil
+local unitAiScriptId = nil
 
 function game.init(scriptId)
     -- Initialize debug
@@ -33,6 +34,12 @@ function game.init(scriptId)
     -- 0.1s tick is enough — stamina changes on the order of seconds.
     unitResourcesScriptId = engine.loadScript(
         "scripts/unit_resources.lua", 0.1)
+
+    -- Unit AI (utility-based decision loop). Same tick as resources;
+    -- per-unit nextActionAt gates actual decisions to ~1s cadence
+    -- with jitter, so this isn't doing meaningful work every tick.
+    unitAiScriptId = engine.loadScript(
+        "scripts/unit_ai.lua", 0.1)
 
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
@@ -114,8 +121,12 @@ function game.onMouseDown(button, x, y)
             if gx and gy then
                 local tx = gx + 0.5
                 local ty = gy + 0.5
+                local unitAi = require("scripts.unit_ai")
                 for _, uid in ipairs(selected) do
-                    unit.moveTo(uid, tx, ty, 2.0)
+                    -- Route through the AI so the command becomes a
+                    -- utility-scored candidate that high-priority
+                    -- needs (thirst, etc.) can interrupt and resume.
+                    unitAi.commandMove(uid, tx, ty, 2.0)
                 end
             end
         end
