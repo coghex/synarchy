@@ -21,6 +21,7 @@ module Unit.Thread.Movement
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, writeIORef)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
 import World.Types (WorldManager(..), WorldState(..))
 import World.Tile.Types (WorldTileData(..))
@@ -40,9 +41,10 @@ arrivalEpsilon = 0.1
 tickAllMovement ∷ Double → EngineEnv → IORef UnitThreadState → IO ()
 tickAllMovement dt env utsRef = do
     mWtd ← snapshotVisibleWorldTiles env
+    now  ← realToFrac <$> getPOSIXTime
     uts ← readIORef utsRef
     let simStates  = utsSimStates uts
-        simStates' = HM.map (tickUnit dt mWtd) simStates
+        simStates' = HM.map (tickUnit now dt mWtd) simStates
     writeIORef utsRef (uts { utsSimStates = simStates' })
 
 snapshotVisibleWorldTiles ∷ EngineEnv → IO (Maybe WorldTileData)
@@ -54,14 +56,24 @@ snapshotVisibleWorldTiles env = do
             Nothing → pure Nothing
             Just ws → Just <$> readIORef (wsTilesRef ws)
 
-tickUnit ∷ Double → Maybe WorldTileData → UnitSimState → UnitSimState
-tickUnit dt mWtd us = case usTarget us of
-    Nothing → us
-    Just mt →
-        let subGoal = case usLocalPath us of
-                (p : _) → p
-                []      → (mtTargetX mt, mtTargetY mt)
-        in stepTowardSubGoal dt mWtd us mt subGoal
+tickUnit ∷ Double → Double → Maybe WorldTileData → UnitSimState → UnitSimState
+tickUnit now dt mWtd us =
+    let us1 = handleReviveExpiry now us
+    in case usTarget us1 of
+        Nothing → us1
+        Just mt →
+            let subGoal = case usLocalPath us1 of
+                    (p : _) → p
+                    []      → (mtTargetX mt, mtTargetY mt)
+            in stepTowardSubGoal dt mWtd us1 mt subGoal
+
+-- | If the unit is Reviving and the revive's anim duration has
+--   elapsed, snap back to Idle. Otherwise leave the state alone.
+handleReviveExpiry ∷ Double → UnitSimState → UnitSimState
+handleReviveExpiry now us = case usReviveUntil us of
+    Just t | usState us ≡ Reviving ∧ now ≥ t →
+        us { usState = Idle, usReviveUntil = Nothing }
+    _ → us
 
 -- | Try to advance toward `subGoal`. If we arrive, pop the waypoint
 --   (or clear the final target). Otherwise, take one step.

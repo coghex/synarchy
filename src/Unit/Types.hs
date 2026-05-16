@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Unit.Types
     ( Animation(..)
+    , StatModifier(..)
     , UnitDef(..)
     , UnitInstance(..)
     , UnitManager(..)
@@ -27,6 +28,20 @@ data Animation = Animation
     , aFrames ∷ !(Map.Map Direction (V.Vector TextureHandle))
     } deriving (Show, Eq)
 
+-- | One additive modifier on a stat. Multiple modifiers on the same
+--   stat sum together (after expiry filtering). The (source, stat)
+--   pair is unique within a unit — re-adding the same source on the
+--   same stat overwrites the previous entry.
+data StatModifier = StatModifier
+    { smDelta  ∷ !Float
+      -- ^ added to the base; can be negative (debuff).
+    , smSource ∷ !Text
+      -- ^ logical owner: "poison-A", "age", "wounded-left-arm", etc.
+    , smExpiry ∷ !(Maybe Double)
+      -- ^ POSIX seconds when the modifier becomes inactive.
+      --   Nothing = permanent (removed only via removeModifier).
+    } deriving (Show, Eq)
+
 -- | Unique identifier for a spawned unit instance.
 newtype UnitId = UnitId { unUnitId ∷ Word32 }
     deriving (Show, Eq, Ord, Generic, Hashable)
@@ -43,6 +58,15 @@ data UnitDef = UnitDef
       -- ^ named animation library (may be empty)
     , udStateAnims ∷ !(HM.HashMap Text Text)
       -- ^ state name → animation name (e.g. "idle" → "breathing-idle")
+    , udEagerStats    ∷ !Bool
+      -- ^ if true, roll all stats at spawn; otherwise lazy on first read
+    , udStatTemplates ∷ !(HM.HashMap Text (Float, Float))
+      -- ^ stat name → (base, range). Empty means no rollable stats.
+    , udSkillTemplates ∷ !(HM.HashMap Text (Float, Float))
+      -- ^ skill name → (base, range). Always eager-rolled at spawn.
+      --   Skills are continuous floats; XP is applied via a closed-
+      --   form formula (see Unit.Stats.applySkillXP) — there's no
+      --   per-level threshold to store.
     } deriving (Show, Eq)
 
 -- | A spawned unit instance in the world.
@@ -59,6 +83,30 @@ data UnitInstance = UnitInstance
     , uiFacing     ∷ !Direction      -- ^ world-space facing (from sim)
     , uiCurrentAnim ∷ !Text          -- ^ resolved anim name; "" = T-pose
     , uiAnimStart   ∷ !Double        -- ^ POSIX seconds when anim began
+    , uiAnimReverse ∷ !Bool
+      -- ^ when True, pickFrame inverts the frame index — used by the
+      --   Reviving state to play the collapse anim in reverse. Set
+      --   by publishToRender from usState, not by the YAML.
+    , uiActivity    ∷ !Text
+      -- ^ Mirror of sim usState as a Text label: "idle" / "walking"
+      --   / "collapsed". Published by Unit.Thread.publishToRender each
+      --   tick so Lua scripts can read it without dipping into the
+      --   sim thread's private utsRef.
+    , uiStats       ∷ !(HM.HashMap Text Float)
+      -- ^ rolled stat values. May be empty if the def is lazy and no
+      --   stat has been queried yet; entries are filled on demand.
+    , uiModifiers   ∷ !(HM.HashMap Text [StatModifier])
+      -- ^ per-name list of active modifiers. The keys are stat OR
+      --   skill names — modifiers apply to whichever the unit has
+      --   under that name. Expired entries are filtered out at read
+      --   time, not on add — keep the list short (a few dozen
+      --   entries per unit max).
+    , uiSkills      ∷ !(HM.HashMap Text Float)
+      -- ^ skill level values. Rolled at spawn from udSkillTemplates.
+      --   XP is applied immediately via Unit.Stats.applySkillXP —
+      --   each call directly nudges the level by an amount that
+      --   shrinks quadratically with the current level. No XP
+      --   accumulator is stored.
     } deriving (Show, Eq)
 
 -- | Holds all unit definitions and all spawned instances.

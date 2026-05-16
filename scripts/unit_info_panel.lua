@@ -18,6 +18,7 @@
 
 local infoPanel = require("scripts.hud.info_panel")
 local hud       = require("scripts.hud")
+local stats     = require("scripts.unit_stats")
 
 local unitInfoWatch = {}
 
@@ -34,18 +35,79 @@ unitInfoWatch.tilePushed = false
 -----------------------------------------------------------
 -- Formatters
 -----------------------------------------------------------
-local function formatBasic(info)
-    local gx = math.floor((info.gridX or 0) * 10 + 0.5) / 10
-    local gy = math.floor((info.gridY or 0) * 10 + 0.5) / 10
-    local gz = info.gridZ or 0
-    return (info.defName or "(unnamed)")
-        .. "\nat (" .. tostring(gx) .. ", " .. tostring(gy)
-        .. ", " .. tostring(gz) .. ")"
-        .. "\nfacing " .. (info.facing or "?")
+-- Round-to-2-decimals for display. Returns "?" for nil so the layout
+-- doesn't shift when a value isn't available yet (e.g. a unit type
+-- that doesn't define endurance).
+local function fmt2(x)
+    if x == nil then return "?" end
+    return string.format("%.2f", x)
 end
 
-local function formatAdvanced(info)
-    return "baseWidth: " .. tostring(info.baseWidth or 0)
+local function formatStatus(uid, info)
+    local gx = fmt2(info.gridX)
+    local gy = fmt2(info.gridY)
+    local gz = info.gridZ or 0
+    local activity = unit.getActivity(uid) or "?"
+    local maxStam  = stats.get(uid, "max_stamina")
+    local curStam  = unit.getStat(uid, "stamina")
+    local staminaLine = "Stamina: ?"
+    if curStam and maxStam then
+        staminaLine = string.format("Stamina: %s / %s",
+                                    fmt2(curStam), fmt2(maxStam))
+    end
+    return (info.defName or "(unnamed)")
+        .. "\nActivity: " .. activity
+        .. "\nFacing: " .. (info.facing or "?")
+        .. "\nAt (" .. gx .. ", " .. gy .. ", " .. tostring(gz) .. ")"
+        .. "\n" .. staminaLine
+end
+
+local function formatPhysical(uid)
+    local lines = {}
+    local order = { "strength", "endurance", "reflexes", "constitution" }
+    for _, name in ipairs(order) do
+        local v = unit.getStat(uid, name)
+        if v ~= nil then
+            table.insert(lines,
+                name:sub(1,1):upper() .. name:sub(2) .. ": " .. fmt2(v))
+        end
+    end
+    if #lines == 0 then return "(none)" end
+    return table.concat(lines, "\n")
+end
+
+local function formatMental(uid)
+    -- Placeholder. As mental stats are added to YAML, mirror the
+    -- physical block: iterate over a known list of mental stat names.
+    return "(none yet)"
+end
+
+local function formatSkills(uid)
+    local all = unit.getAllSkills(uid)
+    if not all then return "(none)" end
+    local lines = {}
+    -- Iterate in name order for stable display.
+    local names = {}
+    for name, _ in pairs(all) do table.insert(names, name) end
+    table.sort(names)
+    for _, name in ipairs(names) do
+        local s = all[name]
+        local label = name:sub(1,1):upper() .. name:sub(2)
+        table.insert(lines, string.format("%s: %s", label, fmt2(s.level)))
+    end
+    if #lines == 0 then return "(none)" end
+    return table.concat(lines, "\n")
+end
+
+local function pushUnitInfo(uid)
+    local info = unit.getInfo(uid)
+    if not info then return false end
+    infoPanel.setUnitInfo(
+        formatStatus(uid, info),
+        formatPhysical(uid),
+        formatMental(uid),
+        formatSkills(uid))
+    return true
 end
 
 -----------------------------------------------------------
@@ -69,16 +131,12 @@ function unitInfoWatch.update(dt)
     if cur ~= unitInfoWatch.lastSelectedId then
         unitInfoWatch.lastSelectedId = cur
         if cur then
-            -- New unit just got selected. Push its info, override
-            -- any tile content in the panel, and clear the tile
-            -- cursor visual so it doesn't compete.
-            local info = unit.getInfo(cur)
-            if info then
-                infoPanel.setInfo(formatBasic(info), formatAdvanced(info))
+            -- New unit just got selected. Push its info — this swaps
+            -- the panel to the "unit" schema, overriding any tile
+            -- content. Clear the tile cursor visual so it doesn't
+            -- compete.
+            if pushUnitInfo(cur) then
                 unitInfoWatch.lastWasUnit = true
-                -- Our write replaces any tile content in the panel,
-                -- so reset the flag — a tile push from this point
-                -- forward is a new fact.
                 unitInfoWatch.tilePushed = false
                 if hud and hud.worldId then
                     world.clearWorldCursorSelect(hud.worldId)
@@ -94,22 +152,21 @@ function unitInfoWatch.update(dt)
             --   (b) Cleared via ESC or unit.destroy — no tile push is
             --       coming, so we should wipe our stale unit content.
             if unitInfoWatch.lastWasUnit and not unitInfoWatch.tilePushed then
-                infoPanel.setInfo("", "")
+                infoPanel.setUnitInfo("", "", "", "")
             end
             unitInfoWatch.lastWasUnit = false
         end
     elseif cur then
         -- Same unit selected as last tick. Refresh content so the
-        -- panel reflects movement (gridX/gridY change as units walk).
-        local info = unit.getInfo(cur)
-        if info then
-            infoPanel.setInfo(formatBasic(info), formatAdvanced(info))
+        -- panel reflects movement (gridX/gridY change as units walk)
+        -- and live values like stamina that tick over time.
+        if pushUnitInfo(cur) then
             unitInfoWatch.tilePushed = false  -- we own the panel again
         else
             -- Unit was destroyed between ticks; reset.
             unitInfoWatch.lastSelectedId = nil
             if unitInfoWatch.lastWasUnit and not unitInfoWatch.tilePushed then
-                infoPanel.setInfo("", "")
+                infoPanel.setUnitInfo("", "", "", "")
             end
             unitInfoWatch.lastWasUnit = false
         end

@@ -17,6 +17,7 @@ import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Sim.Types
 import Unit.Anim (activityToStateKey, resolveStateAnim)
+import Unit.Sim.Types (UnitActivity(..))
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (processAllUnitCommands)
 import Unit.Thread.Movement (tickAllMovement)
@@ -104,15 +105,40 @@ publishToRender env utsRef = do
                                         Just def → resolveStateAnim def
                                                        (activityToStateKey (usState ss))
                                         Nothing  → uiCurrentAnim inst
-                                    sameAnim = targetAnim ≡ uiCurrentAnim inst
+                                    newReverse = usState ss ≡ Reviving
+                                    -- "Same playback" requires both the anim
+                                    -- NAME and the reverse flag to match. A
+                                    -- Collapsed → Reviving transition keeps
+                                    -- the same anim name ("collapse") but
+                                    -- flips the reverse flag, so we must
+                                    -- treat it as a fresh playback and reset
+                                    -- uiAnimStart — otherwise pickFrame uses
+                                    -- a stale start time and immediately
+                                    -- snaps to frame 0 (standing), giving
+                                    -- the jolt instead of a smooth reverse.
+                                    samePlayback = targetAnim ≡ uiCurrentAnim inst
+                                                 ∧ newReverse ≡ uiAnimReverse inst
                                 in inst { uiGridX       = usRealX ss
                                         , uiGridY       = usRealY ss
                                         , uiGridZ       = usGridZ ss
                                         , uiFacing      = usFacing ss
                                         , uiCurrentAnim = targetAnim
-                                        , uiAnimStart   = if sameAnim
+                                        , uiAnimStart   = if samePlayback
                                                           then uiAnimStart inst
                                                           else now
+                                        , uiAnimReverse = newReverse
+                                        , uiActivity    = activityLabel (usState ss)
                                         }
                       ) (umInstances um)
                 in (um { umInstances = updated }, ())
+
+-- | Stable string labels for UnitActivity. Lua reads these via
+--   `unit.getActivity` and the resources tick uses them to decide
+--   drain vs regen. Keep in sync with `Unit.Anim.activityToStateKey`
+--   if the activity → state-anim mapping ever diverges from the
+--   activity → string mapping.
+activityLabel ∷ UnitActivity → Text
+activityLabel Idle      = "idle"
+activityLabel Walking   = "walking"
+activityLabel Collapsed = "collapsed"
+activityLabel Reviving  = "reviving"

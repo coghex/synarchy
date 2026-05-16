@@ -12,7 +12,7 @@ to run you just need vulkan installed, for development you need the vulkan sdk, 
 
 ## Usage
 
-to run the program, use `cabal run synarchy`, to run the tests use `cabal -f dev test`, or you can of course run the binary directly. use "ENGINE_DEBUG=Vulkan,Graphics,etc..." to get debug output from those modules.
+to run the program, use `cabal run synarchy`, to run the tests use `cabal test`, or you can of course run the binary directly. use "ENGINE_DEBUG=Vulkan,Graphics,etc..." to get debug output from those modules.
 
 ## Development
 

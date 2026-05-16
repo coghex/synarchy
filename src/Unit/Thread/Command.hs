@@ -7,13 +7,17 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Map.Strict as Map
+import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Sim.Types
+import Unit.Stats (rollStat)
 import Unit.Direction (Direction(..))
 import Unit.Command.Types (UnitCommand(..))
 import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
@@ -38,6 +42,27 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
             logWarn logger CatThread $
                 "UnitSpawn: unknown def '" <> defName <> "'"
         Just def → do
+            initialStats ←
+                if udEagerStats def
+                then atomicModifyIORef' (statRNGRef env) $ \g0 →
+                    let (rolled, g') = HM.foldlWithKey'
+                            (\(acc, g) name (b, r) →
+                                let (v, g'') = rollStat b r g
+                                in (HM.insert name v acc, g''))
+                            (HM.empty, g0)
+                            (udStatTemplates def)
+                    in (g', rolled)
+                else return HM.empty
+            -- Skills always roll at spawn so they have a starting
+            -- level for the addSkillXP formula to operate on.
+            initialSkills ← atomicModifyIORef' (statRNGRef env) $ \g0 →
+                let (rolled, g') = HM.foldlWithKey'
+                        (\(acc, g) name (b, r) →
+                            let (v, g'') = rollStat b r g
+                            in (HM.insert name v acc, g''))
+                        (HM.empty, g0)
+                        (udSkillTemplates def)
+                in (g', rolled)
             let inst = UnitInstance
                     { uiDefName    = defName
                     , uiTexture    = udTexture def
@@ -49,6 +74,11 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , uiFacing     = DirS -- Default facing south
                     , uiCurrentAnim = ""  -- Phase 1: anim triggers wired in Phase 3
                     , uiAnimStart   = 0
+                    , uiAnimReverse = False
+                    , uiActivity    = "idle"
+                    , uiStats       = initialStats
+                    , uiModifiers   = HM.empty
+                    , uiSkills      = initialSkills
                     }
             atomicModifyIORef' (unitManagerRef env) $ \um' →
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())
@@ -61,6 +91,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , usState     = Idle
                     , usFacing    = DirS
                     , usLocalPath = []
+                    , usReviveUntil = Nothing
                     }
             atomicModifyIORef' utsRef $ \uts →
                 (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
@@ -98,6 +129,7 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
                              , usTarget    = Nothing
                              , usState     = Idle
                              , usLocalPath = []
+                             , usReviveUntil = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -118,9 +150,11 @@ handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss
-                -- Collapsed units ignore move orders so right-click on
-                -- a selected collapsed unit doesn't snap them upright.
+                -- Collapsed and Reviving units ignore move orders so
+                -- right-click on a selected one doesn't snap them
+                -- upright mid-animation.
                 | usState ss ≡ Collapsed → (uts, ())
+                | usState ss ≡ Reviving  → (uts, ())
                 | otherwise →
                     let ss' = ss { usTarget    = Just (MoveTarget tx ty speed)
                                  , usState     = Walking
@@ -137,6 +171,7 @@ handleUnitCommand env utsRef (UnitStop uid) = do
                 let ss' = ss { usTarget    = Nothing
                              , usState     = Idle
                              , usLocalPath = []
+                             , usReviveUntil = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -149,8 +184,48 @@ handleUnitCommand env utsRef (UnitCollapse uid) = do
                 let ss' = ss { usTarget    = Nothing
                              , usState     = Collapsed
                              , usLocalPath = []
+                             , usReviveUntil = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
+handleUnitCommand env utsRef (UnitRevive uid) = do
+    -- Only acts on Collapsed units. Compute the reviving-state anim
+    -- duration up front so we know when to auto-transition back to
+    -- Idle. If the unit's def doesn't define a reviving anim, the
+    -- duration is 0 and the unit skips straight to Idle.
+    um ← readIORef (unitManagerRef env)
+    let duration = case HM.lookup uid (umInstances um) of
+            Nothing   → 0
+            Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
+                Nothing  → 0
+                Just def →
+                    let key      = "reviving" ∷ Text
+                        animName = HM.lookupDefault key key (udStateAnims def)
+                    in case HM.lookup animName (udAnimations def) of
+                        Nothing → 0
+                        Just a  →
+                            let counts = V.length <$> Map.elems (aFrames a)
+                                maxN   = if null counts then 0 else maximum counts
+                                fps    = aFps a
+                            in if fps > 0 ∧ maxN > 0
+                               then fromIntegral maxN / realToFrac fps ∷ Double
+                               else 0
+    now ← realToFrac <$> getPOSIXTime
+    atomicModifyIORef' utsRef $ \uts →
+        let simStates = utsSimStates uts
+        in case HM.lookup uid simStates of
+            Nothing → (uts, ())
+            Just ss
+                | usState ss ≢ Collapsed → (uts, ())
+                | duration ≤ 0 →
+                    -- No reviving anim defined; just snap to Idle.
+                    let ss' = ss { usState = Idle, usReviveUntil = Nothing }
+                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+                | otherwise →
+                    let ss' = ss { usState = Reviving
+                                 , usReviveUntil = Just (now + duration)
+                                 }
+                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
 lookupSurfaceZ env gx gy = do

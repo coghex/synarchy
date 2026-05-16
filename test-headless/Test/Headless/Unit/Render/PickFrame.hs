@@ -23,12 +23,15 @@ h = TextureHandle
 --   plus a directional S sprite (handle 1).
 mkDef ∷ HM.HashMap Text Animation → UnitDef
 mkDef anims = UnitDef
-    { udName       = "test-unit"
-    , udTexture    = h 0
-    , udDirSprites = Map.fromList [(DirS, h 1)]
-    , udBaseWidth  = 0
-    , udAnimations = anims
-    , udStateAnims = HM.empty
+    { udName          = "test-unit"
+    , udTexture       = h 0
+    , udDirSprites    = Map.fromList [(DirS, h 1)]
+    , udBaseWidth     = 0
+    , udAnimations    = anims
+    , udStateAnims    = HM.empty
+    , udEagerStats    = False
+    , udStatTemplates = HM.empty
+    , udSkillTemplates = HM.empty
     }
 
 -- | A UnitInstance facing south with the supplied anim name and start time.
@@ -44,6 +47,11 @@ mkInst animName start = UnitInstance
     , uiFacing      = DirS
     , uiCurrentAnim = animName
     , uiAnimStart   = start
+    , uiAnimReverse = False
+    , uiActivity    = "idle"
+    , uiStats       = HM.empty
+    , uiModifiers   = HM.empty
+    , uiSkills      = HM.empty
     }
 
 -- | An animation with frame handles 100,101,102,103 on DirS, fps 4, loop.

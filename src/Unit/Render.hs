@@ -92,9 +92,19 @@ pickFrame now cam inst def
                             let elapsed = max 0 (now - uiAnimStart inst)
                                 raw     = floor (elapsed * realToFrac (aFps an)) ∷ Int
                                 n       = V.length fs
-                                idx     = if aLoop an
+                                fwdIdx  = if aLoop an
                                           then raw `mod` n
                                           else min raw (n - 1)
+                                -- Reverse path: walk the frames from
+                                -- the last index toward 0. Mirrors the
+                                -- forward clamp so we hold frame 0
+                                -- when "elapsed" runs out — the unit
+                                -- stays in the standing pose after
+                                -- the revive anim completes (sim will
+                                -- transition Reviving→Idle next tick).
+                                idx     = if uiAnimReverse inst
+                                          then (n - 1) - fwdIdx
+                                          else fwdIdx
                             in fs V.! idx
   where
     tpose = resolveTexture cam (uiFacing inst)

@@ -6,6 +6,7 @@ import qualified Data.Map as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef)
+import System.Random (StdGen)
 import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Asset.Handle
@@ -82,6 +83,10 @@ data EngineEnv = EngineEnv
   , materialRegistryRef   ∷ IORef MaterialRegistry
   , unitManagerRef      ∷ IORef UnitManager
   , unitQueue           ∷ Q.Queue UnitCommand
+  , statRNGRef          ∷ IORef StdGen
+    -- ^ Runtime RNG for stat rolls. Seeded from system entropy at
+    --   startup; not tied to the world seed (stats are non-deterministic
+    --   across runs by design).
   , worldGenConfigRef   ∷ IORef WorldGenConfig
   , simQueue           ∷ Q.Queue SimCommand
   , frameCounterRef    ∷ IORef Word64  -- ^ Monotonic frame counter for animations

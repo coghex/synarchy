@@ -13,12 +13,15 @@ import Unit.Types
 
 mkDef ∷ HM.HashMap Text Text → UnitDef
 mkDef stateAnims = UnitDef
-    { udName       = "t"
-    , udTexture    = TextureHandle 0
-    , udDirSprites = Map.empty
-    , udBaseWidth  = 0
-    , udAnimations = HM.empty
-    , udStateAnims = stateAnims
+    { udName          = "t"
+    , udTexture       = TextureHandle 0
+    , udDirSprites    = Map.empty
+    , udBaseWidth     = 0
+    , udAnimations    = HM.empty
+    , udStateAnims    = stateAnims
+    , udEagerStats    = False
+    , udStatTemplates = HM.empty
+    , udSkillTemplates = HM.empty
     }
 
 spec ∷ Spec

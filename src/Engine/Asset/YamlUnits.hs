@@ -2,6 +2,8 @@
 module Engine.Asset.YamlUnits
     ( UnitYamlDef(..)
     , UnitYamlAnim(..)
+    , UnitYamlStat(..)
+    , UnitYamlSkill(..)
     , UnitYamlFile(..)
     , loadUnitYaml
     ) where
@@ -28,6 +30,33 @@ instance FromJSON UnitYamlAnim where
         ⊛ v .:? "loop"   .!= True
         ⊛ v .:? "frames" .!= Map.empty
 
+-- | One stat as declared in YAML: a base value and a range. At spawn
+--   time the engine rolls a value from a truncated-normal distribution
+--   centered on @base@ with sigma = @range@ / 4, clamped to the window
+--   [base - range/2, base + range/2].
+data UnitYamlStat = UnitYamlStat
+    { uysBase  ∷ !Float
+    , uysRange ∷ !Float
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON UnitYamlStat where
+    parseJSON = withObject "UnitYamlStat" $ \v → UnitYamlStat
+        ⊚ v .:  "base"
+        ⊛ v .:? "range" .!= 0.0
+
+-- | One skill as declared in YAML. Like a stat (base + range, rolled
+--   at spawn). Skills are continuous floats that grow via a closed-
+--   form XP formula — no per-level threshold to declare.
+data UnitYamlSkill = UnitYamlSkill
+    { uyskBase  ∷ !Float
+    , uyskRange ∷ !Float
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON UnitYamlSkill where
+    parseJSON = withObject "UnitYamlSkill" $ \v → UnitYamlSkill
+        ⊚ v .:  "base"
+        ⊛ v .:? "range" .!= 0.0
+
 -- | Only @name@ and @sprite@ are mandatory; everything else has defaults
 data UnitYamlDef = UnitYamlDef
     { uydName              ∷ !Text       -- ^ unique identifier (e.g. "acolyte")
@@ -42,6 +71,14 @@ data UnitYamlDef = UnitYamlDef
       -- ^ optional: state name → animation name (e.g. "idle" → "breathing-idle")
     , uydAnimations        ∷ !(Map.Map Text UnitYamlAnim)
       -- ^ optional: animation library
+    , uydEagerStats        ∷ !Bool
+      -- ^ if true, all stats are rolled at spawn; otherwise rolled
+      --   lazily on first getStat. Defaults to false (lazy).
+    , uydStats             ∷ !(Map.Map Text UnitYamlStat)
+      -- ^ optional: per-stat base/range schema
+    , uydSkills            ∷ !(Map.Map Text UnitYamlSkill)
+      -- ^ optional: per-skill base/range/xp_per_level schema.
+      --   Skills are always eager-rolled at spawn (no lazy mode).
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -53,6 +90,9 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "portrait"
         ⊛ v .:? "state_animations"    .!= Map.empty
         ⊛ v .:? "animations"          .!= Map.empty
+        ⊛ v .:? "eager_stats"         .!= False
+        ⊛ v .:? "stats"               .!= Map.empty
+        ⊛ v .:? "skills"              .!= Map.empty
 
 newtype UnitYamlFile = UnitYamlFile
     { uyfUnits ∷ [UnitYamlDef]

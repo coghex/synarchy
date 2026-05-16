@@ -34,37 +34,54 @@ infoPanel.baseSizes = {
 }
 
 -----------------------------------------------------------
--- Tab definitions
+-- Tab schemas
 -----------------------------------------------------------
-local tabDefs = {
-    { key = "basic",    name = "Basic" },
-    { key = "advanced", name = "Advanced" },
+-- The panel is shared between the tile-info system and the unit-info
+-- watcher; they need different tab layouts. The active schema is
+-- chosen via infoPanel.useSchema("tile" | "unit"), which destroys the
+-- existing tabbar and rebuilds with the new tab set. Tab keys must
+-- be globally unique across all schemas (we share one tabText map).
+local schemas = {
+    tile = {
+        { key = "basic",    name = "Basic" },
+        { key = "advanced", name = "Advanced" },
+        -- "weather" appears dynamically when there's weather text.
+    },
+    unit = {
+        { key = "status",   name = "Status" },
+        { key = "physical", name = "Physical" },
+        { key = "mental",   name = "Mental" },
+        { key = "skills",   name = "Skills" },
+    },
 }
 local weatherTabDef = { key = "weather", name = "Weather" }
+
+-- All tab keys we know about. Listed once so per-tab maps can be
+-- initialized with empty values for every key.
+local allKeys = {
+    "basic", "advanced", "weather",
+    "status", "physical", "mental", "skills",
+}
 
 -----------------------------------------------------------
 -- Module state
 -----------------------------------------------------------
 infoPanel.panelId    = nil
 infoPanel.tabBarId   = nil
+infoPanel.activeSchema = "tile"
 infoPanel.activeTab  = "basic"
 infoPanel.visible    = false
 infoPanel.page       = nil
 infoPanel.weatherTabActive = false  -- whether the weather tab exists
 
--- Per-tab text content (raw multi-line string)
-infoPanel.tabText = {
-    basic    = "",
-    weather  = "",
-    advanced = "",
-}
-
--- Per-tab line label IDs (arrays of label ids, one per visible line slot)
-infoPanel.tabLineIds = {
-    basic    = {},
-    weather  = {},
-    advanced = {},
-}
+-- Per-tab text content (raw multi-line string). Initialized lazily
+-- so any tab key from `allKeys` is safe to write to.
+infoPanel.tabText    = {}
+infoPanel.tabLineIds = {}
+for _, k in ipairs(allKeys) do
+    infoPanel.tabText[k]    = ""
+    infoPanel.tabLineIds[k] = {}
+end
 
 -- Max visible lines (computed at create time from panel height)
 infoPanel.maxLines = 0
@@ -96,16 +113,32 @@ function infoPanel.destroyOwned()
     infoPanel.ownedPanels  = {}
     infoPanel.panelId      = nil
     infoPanel.tabBarId     = nil
-    infoPanel.tabLineIds   = { basic = {}, weather = {}, advanced = {} }
+    for _, k in ipairs(allKeys) do
+        infoPanel.tabLineIds[k] = {}
+    end
 end
 
 -----------------------------------------------------------
 -- Visibility helpers
 -----------------------------------------------------------
+-- True if any tab in the ACTIVE schema has content. Tabs from the
+-- inactive schema (residual unit text while showing tile, etc.) do
+-- not count.
 local function hasContent()
-    return (infoPanel.tabText.basic    ~= "")
-        or (infoPanel.tabText.weather  ~= "")
-        or (infoPanel.tabText.advanced ~= "")
+    local defs = schemas[infoPanel.activeSchema]
+    if defs then
+        for _, def in ipairs(defs) do
+            if infoPanel.tabText[def.key] and infoPanel.tabText[def.key] ~= "" then
+                return true
+            end
+        end
+    end
+    -- Tile schema's weather tab is dynamic; counts if active.
+    if infoPanel.activeSchema == "tile" and infoPanel.weatherTabActive
+       and infoPanel.tabText.weather ~= "" then
+        return true
+    end
+    return false
 end
 
 -----------------------------------------------------------
@@ -125,13 +158,23 @@ end
 -----------------------------------------------------------
 local function currentTabDefs()
     local defs = {}
-    for _, def in ipairs(tabDefs) do
+    local schemaDefs = schemas[infoPanel.activeSchema] or schemas.tile
+    for _, def in ipairs(schemaDefs) do
         table.insert(defs, def)
     end
-    if infoPanel.weatherTabActive then
+    -- Weather is a special tile-schema add-on.
+    if infoPanel.activeSchema == "tile" and infoPanel.weatherTabActive then
         table.insert(defs, weatherTabDef)
     end
     return defs
+end
+
+-- Picks a sensible default active tab for the current schema (first
+-- tab). Used after a schema swap when the previous activeTab key may
+-- not exist in the new schema.
+local function defaultTabKey()
+    local defs = currentTabDefs()
+    return (defs[1] and defs[1].key) or "basic"
 end
 
 -----------------------------------------------------------
@@ -220,10 +263,15 @@ function infoPanel.create(params)
         end,
     }))
 
-    -- If the active tab was "weather" but weather tab is now gone,
-    -- fall back to "basic"
-    if infoPanel.activeTab == "weather" and not infoPanel.weatherTabActive then
-        infoPanel.activeTab = "basic"
+    -- If the active tab key isn't in the current schema's defs, fall
+    -- back to the first tab (covers schema-swap + weather-disappeared
+    -- cases in one rule).
+    local activeFound = false
+    for _, def in ipairs(defs) do
+        if def.key == infoPanel.activeTab then activeFound = true; break end
+    end
+    if not activeFound then
+        infoPanel.activeTab = defaultTabKey()
     end
     tabbar.selectByKey(infoPanel.tabBarId, infoPanel.activeTab)
 
@@ -377,8 +425,11 @@ function infoPanel.setText(tabKey, text)
     end
 end
 
--- Convenience: set both tabs at once
+-- Convenience: set tile-info both tabs at once. Switches to the tile
+-- schema first if needed so subsequent tile pushes land on visible
+-- basic/advanced tabs rather than living on (now-hidden) labels.
 function infoPanel.setInfo(basicText, advancedText)
+    infoPanel.useSchema("tile")
     infoPanel.setText("basic",    basicText    or "")
     infoPanel.setText("advanced", advancedText or "")
 end
@@ -387,11 +438,51 @@ function infoPanel.setWeatherInfo(weatherText)
     infoPanel.setText("weather", weatherText or "")
 end
 
--- Clear all text (hides the panel)
+-- Unit-info push: switches to the unit schema and writes the four
+-- per-tab strings at once. Any of them may be "" (the tab still
+-- exists but renders empty).
+function infoPanel.setUnitInfo(statusText, physicalText, mentalText, skillsText)
+    infoPanel.useSchema("unit")
+    infoPanel.setText("status",   statusText   or "")
+    infoPanel.setText("physical", physicalText or "")
+    infoPanel.setText("mental",   mentalText   or "")
+    infoPanel.setText("skills",   skillsText   or "")
+end
+
+-- Swap the tab schema in-place. Rebuilds the tabbar and labels.
+-- Clears any text from the previous schema's tabs so they don't
+-- linger if the panel is later switched back.
+function infoPanel.useSchema(name)
+    if name == infoPanel.activeSchema then return end
+    if not schemas[name] then return end
+
+    -- Wipe out the OUTGOING schema's text. The user-facing semantic is
+    -- "selecting a unit replaces the tile readout, and vice versa".
+    local prev = schemas[infoPanel.activeSchema]
+    if prev then
+        for _, def in ipairs(prev) do
+            infoPanel.tabText[def.key] = ""
+        end
+    end
+    if infoPanel.activeSchema == "tile" then
+        infoPanel.tabText.weather = ""
+        infoPanel.weatherTabActive = false
+    end
+
+    infoPanel.activeSchema = name
+    infoPanel.activeTab    = defaultTabKey()
+
+    if infoPanel.createParams then
+        infoPanel.create(infoPanel.createParams)
+    end
+end
+
+-- Clear all text in the active schema (hides the panel)
 function infoPanel.clear()
-    infoPanel.setText("basic",    "")
-    infoPanel.setText("advanced", "")
-    infoPanel.setText("weather",  "")
+    local defs = currentTabDefs()
+    for _, def in ipairs(defs) do
+        infoPanel.setText(def.key, "")
+    end
 end
 
 -----------------------------------------------------------

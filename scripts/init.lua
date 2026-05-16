@@ -7,6 +7,7 @@ local debugScriptId = nil
 local unitManagerScriptId = nil
 local unitInfoPanelScriptId = nil
 local unitDragSelectScriptId = nil
+local unitResourcesScriptId = nil
 
 function game.init(scriptId)
     -- Initialize debug
@@ -27,6 +28,11 @@ function game.init(scriptId)
     -- mouse smoothly without hammering every frame.
     unitDragSelectScriptId = engine.loadScript(
         "scripts/unit_drag_select.lua", 0.03)
+
+    -- Unit resources (stamina drain/regen, collapse-on-low-stamina).
+    -- 0.1s tick is enough — stamina changes on the order of seconds.
+    unitResourcesScriptId = engine.loadScript(
+        "scripts/unit_resources.lua", 0.1)
 
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)

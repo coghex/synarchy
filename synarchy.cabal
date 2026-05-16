@@ -141,6 +141,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Render.PickFrame
                    Test.Headless.Unit.Anim
+                   Test.Headless.Unit.Stats
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash
@@ -360,6 +361,7 @@ library
                      UI.TextBuffer
                      Unit.Types
                      Unit.Anim
+                     Unit.Stats
                      Unit.Render
                      Unit.Selection
                      Unit.HitTest

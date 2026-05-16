@@ -18,4 +18,8 @@ data UnitCommand
     | UnitCollapse !UnitId
         -- ^ play the collapse anim and hold; unit cannot be moved
         --   until further state changes are added
+    | UnitRevive !UnitId
+        -- ^ no-op unless the unit is Collapsed. Plays the reviving
+        --   state anim (typically the collapse anim in reverse) and
+        --   auto-transitions back to Idle when it finishes.
     deriving (Show)

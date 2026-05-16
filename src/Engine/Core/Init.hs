@@ -11,6 +11,7 @@ import Data.IORef (newIORef)
 import qualified Data.Map as Map
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
+import qualified System.Random as Random
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Asset.YamlTextures
 import Engine.Core.Defaults
@@ -92,6 +93,7 @@ initializeEngine = do
   materialRegistryRef ← newIORef emptyMaterialRegistry
   unitManagerRef ← newIORef emptyUnitManager
   unitQueue ← Q.newQueue
+  statRNGRef ← Random.newStdGen >>= newIORef
   worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
   worldGenConfigRef ← newIORef worldGenConfig
 
@@ -136,6 +138,7 @@ initializeEngine = do
         , materialRegistryRef = materialRegistryRef
         , unitManagerRef     = unitManagerRef
         , unitQueue          = unitQueue
+        , statRNGRef         = statRNGRef
         , worldGenConfigRef  = worldGenConfigRef
         , simQueue          = simQueue
         , frameCounterRef   = frameCounterRef

@@ -8,6 +8,7 @@ import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
 import qualified Test.Headless.Unit.Anim as AnimTest
+import qualified Test.Headless.Unit.Stats as StatsTest
 
 main ∷ IO ()
 main = hspec $ do
@@ -17,3 +18,4 @@ main = hspec $ do
     describe "Unit.Pathing.AStar" PathingAStar.spec
     describe "Unit.Render.pickFrame" PickFrame.spec
     describe "Unit.Anim" AnimTest.spec
+    describe "Unit.Stats" StatsTest.spec

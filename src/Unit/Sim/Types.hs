@@ -24,6 +24,10 @@ data UnitSimState = UnitSimState
     --   local A* replan. Empty = greedy heading toward usTarget.
     --   Each waypoint pops off the front as the unit arrives.
     , usLocalPath ∷ ![(Float, Float)]
+    -- | POSIX seconds when a Reviving state should auto-transition
+    --   back to Idle. Nothing in all other states. Set by the
+    --   UnitRevive handler from the def's reviving-anim duration.
+    , usReviveUntil ∷ !(Maybe Double)
     } deriving (Show, Eq)
 
 data MoveTarget = MoveTarget
@@ -32,7 +36,7 @@ data MoveTarget = MoveTarget
     , mtSpeed   ∷ !Float
     } deriving (Show, Eq)
 
-data UnitActivity = Idle | Walking | Collapsed
+data UnitActivity = Idle | Walking | Collapsed | Reviving
     deriving (Show, Eq)
 
 data UnitThreadState = UnitThreadState
