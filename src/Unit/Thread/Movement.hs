@@ -41,7 +41,11 @@ arrivalEpsilon = 0.1
 tickAllMovement ∷ Double → EngineEnv → IORef UnitThreadState → IO ()
 tickAllMovement dt env utsRef = do
     mWtd ← snapshotVisibleWorldTiles env
-    now  ← realToFrac <$> getPOSIXTime
+    -- Game-clock: `now` is compared against `usReviveUntil` (set in
+    -- game-time at revive-start). Using POSIX here would let the
+    -- revive timer expire while paused, which is exactly what we
+    -- don't want.
+    now  ← readIORef (gameTimeRef env)
     uts ← readIORef utsRef
     let simStates  = utsSimStates uts
         simStates' = HM.map (tickUnit now dt mWtd) simStates

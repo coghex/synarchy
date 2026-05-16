@@ -12,6 +12,7 @@ local unitAiScriptId = nil
 local buildToolScriptId = nil
 local buildingSpawnScriptId = nil
 local tileEditorScriptId = nil
+local pauseScriptId = nil
 
 function game.init(scriptId)
     -- Initialize debug
@@ -60,6 +61,11 @@ function game.init(scriptId)
     -- per-tick update() is a no-op. We still loadScript so the engine
     -- broadcasts (onSetInfoText) reach the module.
     tileEditorScriptId = engine.loadScript("scripts/tile_editor.lua", 0.1)
+
+    -- Pause: owns the engine.setPaused flag + world.setTimeScale
+    -- snapshot. No per-tick work; loaded so engine broadcasts (none
+    -- needed today) and require()s from game scripts share state.
+    pauseScriptId = engine.loadScript("scripts/pause.lua", 1.0)
 
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
@@ -165,6 +171,13 @@ function game.onMouseUp(button, x, y)
 end
 
 function game.onKeyDown(key)
+    -- Space toggles pause first — works regardless of tool mode or
+    -- selection state, and shouldn't be eaten by a tool's local
+    -- handler.
+    if key == "Space" then
+        require("scripts.pause").toggle()
+        return
+    end
     -- Build tool's Esc cancels placement before the default Esc
     -- handler clears unit selection.
     local buildTool = require("scripts.build_tool")
@@ -207,6 +220,9 @@ function game.shutdown()
     end
     if tileEditorScriptId then
         engine.killScript(tileEditorScriptId)
+    end
+    if pauseScriptId then
+        engine.killScript(pauseScriptId)
     end
 end
 

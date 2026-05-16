@@ -167,6 +167,7 @@ function buildingSpawn.init(scriptId)
 end
 
 function buildingSpawn.update(dt)
+    if require("scripts.pause").isPaused() then return end
     local ids = getAllBuildingIds()
     if #ids == 0 then return end
     for _, bid in ipairs(ids) do

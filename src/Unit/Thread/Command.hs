@@ -219,7 +219,10 @@ handleUnitCommand env utsRef (UnitRevive uid) = do
                             in if fps > 0 ∧ maxN > 0
                                then fromIntegral maxN / realToFrac fps ∷ Double
                                else 0
-    now ← realToFrac <$> getPOSIXTime
+    -- Game-clock: usReviveUntil is checked against gameTimeRef in
+    -- tickAllMovement, so the deadline has to be set in the same
+    -- clock or pause would either skip or stall it.
+    now ← readIORef (gameTimeRef env)
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of

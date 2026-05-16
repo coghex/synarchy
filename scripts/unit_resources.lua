@@ -141,6 +141,7 @@ end
 -- Update (called at tick interval by engine.loadScript)
 -----------------------------------------------------------
 function unitResources.update(dt)
+    if require("scripts.pause").isPaused() then return end
     local ids = unit.getAllIds()
     if not ids or #ids == 0 then return end
 

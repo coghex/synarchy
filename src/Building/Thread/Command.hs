@@ -36,7 +36,8 @@ handleBuildingCommand env (BuildingSpawn bid defName gx gy gz) = do
             logWarn logger CatThread $
                 "BuildingSpawn: unknown def '" <> defName <> "'"
         Just def → do
-            now ← realToFrac <$> getPOSIXTime
+            -- Game-clock so the appear-anim countdown freezes on pause.
+            now ← readIORef (gameTimeRef env)
             let inst = BuildingInstance
                     { biDefName   = defName
                     , biTexture   = bdTexture def

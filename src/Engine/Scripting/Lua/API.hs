@@ -5,10 +5,10 @@ module Engine.Scripting.Lua.API
 
 import UPrelude
 import Engine.Scripting.Lua.Types (LuaBackendState)
-import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn, 
-                                      setTickIntervalFn, pauseScriptFn, 
+import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn,
+                                      setTickIntervalFn, pauseScriptFn,
                                       resumeScriptFn, quitFn, getFPSFn,
-                                      listFilesFn)
+                                      listFilesFn, setPausedFn, isPausedFn)
 import Engine.Scripting.Lua.API.Camera
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
@@ -62,6 +62,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "hideDebug"         (hideDebugFn backendState)
   registerLuaFunction "toggleDebug"       (toggleDebugFn backendState)
   registerLuaFunction "getFPS"            (getFPSFn env)
+  registerLuaFunction "setPaused"         (setPausedFn env)
+  registerLuaFunction "isPaused"          (isPausedFn env)
   registerLuaFunction "loadScript"        (loadScriptFn env backendState lst)
   registerLuaFunction "killScript"        (killScriptFn env backendState lst)
   registerLuaFunction "pauseScript"       (pauseScriptFn backendState)

@@ -99,6 +99,18 @@ data EngineEnv = EngineEnv
   , worldGenConfigRef   ∷ IORef WorldGenConfig
   , simQueue           ∷ Q.Queue SimCommand
   , frameCounterRef    ∷ IORef Word64  -- ^ Monotonic frame counter for animations
+  , enginePausedRef    ∷ IORef Bool
+    -- ^ Global pause flag. When True, threads that advance simulated
+    --   state (unit movement, sim ticks) skip their work. Rendering,
+    --   input dispatch, command processing, and camera movement keep
+    --   running so the player can still interact while paused. Set via
+    --   `engine.setPaused` from Lua.
+  , gameTimeRef        ∷ IORef Double
+    -- ^ Monotonic game-clock in seconds. Advances by real-tick dt
+    --   only when `enginePausedRef` is False. All gameplay timestamps
+    --   that need to freeze on pause (uiAnimStart, biSpawnedAt,
+    --   usReviveUntil) reference this clock instead of POSIX wall-time.
+    --   Updated by Unit.Thread.unitLoop once per tick.
   } deriving (Eq)
 
 data EngineState = EngineState

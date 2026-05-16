@@ -285,6 +285,7 @@ function unitAi.init(scriptId)
 end
 
 function unitAi.update(dt)
+    if require("scripts.pause").isPaused() then return end
     local ids = unit.getAllIds()
     if not ids or #ids == 0 then return end
 

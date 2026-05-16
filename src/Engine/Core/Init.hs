@@ -102,6 +102,8 @@ initializeEngine = do
   worldGenConfigRef ← newIORef worldGenConfig
 
   frameCounterRef ← newIORef (0 ∷ Word64)
+  enginePausedRef ← newIORef False
+  gameTimeRef     ← newIORef (0 ∷ Double)
   let env = EngineEnv
         { engineConfig       = defaultEngineConfig
         , videoConfigRef     = videoConfigRef
@@ -149,6 +151,8 @@ initializeEngine = do
         , worldGenConfigRef  = worldGenConfigRef
         , simQueue          = simQueue
         , frameCounterRef   = frameCounterRef
+        , enginePausedRef   = enginePausedRef
+        , gameTimeRef       = gameTimeRef
         }
   
   envVar   ← atomically $ newVar env

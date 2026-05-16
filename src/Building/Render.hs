@@ -63,7 +63,10 @@ renderBuildingQuads env facing zSlice tileAlpha = do
     if HM.null instances
         then return V.empty
         else do
-            now ← realToFrac <$> getPOSIXTime
+            -- Game-clock matches biSpawnedAt's clock, so the
+            -- Appearing→Built transition derived from elapsed time
+            -- doesn't run while paused.
+            now ← readIORef (gameTimeRef env)
             texSizes ← readIORef (textureSizeRef env)
             mBts ← readIORef (textureSystemRef env)
             defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)

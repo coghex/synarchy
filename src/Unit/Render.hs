@@ -119,7 +119,10 @@ renderUnitQuads env facing zSlice tileAlpha = do
     if HM.null instances
         then return V.empty
         else do
-            now ← realToFrac <$> getPOSIXTime
+            -- Read the game-clock (advances only when not paused) so
+            -- the rendered frame index matches the uiAnimStart values
+            -- published in game-time.
+            now ← readIORef (gameTimeRef env)
             texSizes ← readIORef (textureSizeRef env)
             mBts ← readIORef (textureSystemRef env)
             defFmSlotWord ← readIORef (defaultFaceMapSlotRef env)

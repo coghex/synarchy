@@ -7,6 +7,8 @@ module Engine.Scripting.Lua.API.Core
   , pauseScriptFn
   , resumeScriptFn
   , listFilesFn
+  , setPausedFn
+  , isPausedFn
   ) where
 
 import UPrelude
@@ -40,6 +42,22 @@ getFPSFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getFPSFn env = do
   fps ← liftIO $ readIORef (fpsRef env)
   Lua.pushnumber (Lua.Number fps)
+  return 1
+
+-- | engine.setPaused(bool) — write the global pause flag.
+--   Side effects (timeScale, etc.) are handled Lua-side in
+--   scripts/pause.lua so the engine doesn't depend on world state.
+setPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+setPausedFn env = do
+  b ← Lua.toboolean 1
+  Lua.liftIO $ writeIORef (enginePausedRef env) b
+  return 0
+
+-- | engine.isPaused() → bool
+isPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+isPausedFn env = do
+  p ← Lua.liftIO $ readIORef (enginePausedRef env)
+  Lua.pushboolean p
   return 1
 
 setTickIntervalFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults

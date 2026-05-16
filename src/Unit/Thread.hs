@@ -6,7 +6,8 @@ module Unit.Thread
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
-import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef')
+import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef'
+                  , modifyIORef')
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (SomeException, catch)
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -68,7 +69,16 @@ unitLoop env stateRef lastTimeRef utsRef = do
                 writeIORef lastTimeRef tickStart
 
                 processAllUnitCommands env utsRef
-                tickAllMovement dt env utsRef
+                -- Command processing always runs so the player can
+                -- queue orders mid-pause. Movement is gated: when
+                -- paused, units freeze in place but pending commands
+                -- still process. Game-time also freezes — anything
+                -- reading gameTimeRef (animations, revive timers,
+                -- building appear → built transitions) holds still.
+                paused ← readIORef (enginePausedRef env)
+                unless paused $ do
+                    modifyIORef' (gameTimeRef env) (+ dt)
+                    tickAllMovement dt env utsRef
                 publishToRender env utsRef
                 processAllBuildingCommands env
 
@@ -96,7 +106,10 @@ publishToRender env utsRef = do
     if HM.null simStates
         then return ()
         else do
-            now ← realToFrac <$> getPOSIXTime
+            -- Game-clock, not POSIX: uiAnimStart needs to freeze on
+            -- pause so the frame index doesn't sprint forward when the
+            -- game resumes.
+            now ← readIORef (gameTimeRef env)
             atomicModifyIORef' (unitManagerRef env) $ \um →
                 let defs = umDefs um
                     updated = HM.mapWithKey (\uid inst →
