@@ -22,6 +22,7 @@ mkDef stateAnims = UnitDef
     , udEagerStats    = False
     , udStatTemplates = HM.empty
     , udSkillTemplates = HM.empty
+    , udStartingInventory = []
     }
 
 spec ∷ Spec

@@ -24,10 +24,20 @@ data UnitSimState = UnitSimState
     --   local A* replan. Empty = greedy heading toward usTarget.
     --   Each waypoint pops off the front as the unit arrives.
     , usLocalPath ∷ ![(Float, Float)]
-    -- | POSIX seconds when a Reviving state should auto-transition
-    --   back to Idle. Nothing in all other states. Set by the
-    --   UnitRevive handler from the def's reviving-anim duration.
+    -- | Game-time when a Reviving state should auto-transition back
+    --   to Idle. Nothing in all other states. Set by the UnitRevive
+    --   handler from the def's reviving-anim duration.
     , usReviveUntil ∷ !(Maybe Double)
+    -- | Game-time when a Drinking state should auto-transition back
+    --   to Idle. Nothing in all other states. Set by UnitDrink from
+    --   the def's drinking-anim duration. Effects (hydration +,
+    --   canteen fill -) are applied Lua-side at start; this clock
+    --   only gates how long the animation plays + movement is blocked.
+    , usDrinkUntil  ∷ !(Maybe Double)
+    -- | Game-time when a Picking state should auto-transition back to
+    --   Idle. Same shape as usDrinkUntil. Set by UnitPickup from the
+    --   def's pickup anim duration. Used for canteen refilling.
+    , usPickupUntil ∷ !(Maybe Double)
     } deriving (Show, Eq)
 
 data MoveTarget = MoveTarget
@@ -36,7 +46,7 @@ data MoveTarget = MoveTarget
     , mtSpeed   ∷ !Float
     } deriving (Show, Eq)
 
-data UnitActivity = Idle | Walking | Collapsed | Reviving
+data UnitActivity = Idle | Walking | Collapsed | Reviving | Drinking | Picking
     deriving (Show, Eq)
 
 data UnitThreadState = UnitThreadState

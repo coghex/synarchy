@@ -31,6 +31,7 @@ import UI.Focus (createFocusManager)
 import UI.Types (emptyUIPageManager)
 import Unit.Types (emptyUnitManager)
 import Building.Types (emptyBuildingManager)
+import Item.Types (emptyItemManager)
 import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
 import World.Generate.Config (loadWorldGenConfig)
@@ -104,6 +105,7 @@ initializeEngine = do
   frameCounterRef ← newIORef (0 ∷ Word64)
   enginePausedRef ← newIORef False
   gameTimeRef     ← newIORef (0 ∷ Double)
+  itemManagerRef  ← newIORef emptyItemManager
   let env = EngineEnv
         { engineConfig       = defaultEngineConfig
         , videoConfigRef     = videoConfigRef
@@ -153,6 +155,7 @@ initializeEngine = do
         , frameCounterRef   = frameCounterRef
         , enginePausedRef   = enginePausedRef
         , gameTimeRef       = gameTimeRef
+        , itemManagerRef    = itemManagerRef
         }
   
   envVar   ← atomically $ newVar env

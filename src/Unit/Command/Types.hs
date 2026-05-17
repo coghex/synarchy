@@ -22,4 +22,14 @@ data UnitCommand
         -- ^ no-op unless the unit is Collapsed. Plays the reviving
         --   state anim (typically the collapse anim in reverse) and
         --   auto-transitions back to Idle when it finishes.
+    | UnitDrink !UnitId
+        -- ^ no-op unless the unit is Idle. Plays the drinking anim,
+        --   blocks movement, and auto-transitions back to Idle after
+        --   the anim's duration. Stat/inventory effects are applied
+        --   Lua-side BEFORE issuing this command (see scripts/unit_ai
+        --   drink action) — the command is purely state + anim.
+    | UnitPickup !UnitId
+        -- ^ Same shape as UnitDrink, for the canteen-refill "picking
+        --   up" animation. Engine handles only state + anim; effect
+        --   (canteen fill) is applied Lua-side at action start.
     deriving (Show)

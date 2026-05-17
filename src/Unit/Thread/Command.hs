@@ -20,6 +20,9 @@ import Unit.Sim.Types
 import Unit.Stats (rollStat)
 import Unit.Direction (Direction(..))
 import Unit.Command.Types (UnitCommand(..))
+import Item.Types (ItemDef(..), ItemContainer(..), ItemInstance(..)
+                  , ItemManager(..), lookupItemDef)
+import Engine.Core.Log (LoggerState)
 import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
                     LoadedChunk(..), ChunkCoord(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
@@ -72,6 +75,14 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                         (HM.empty, g0)
                         (udSkillTemplates def)
                 in (g', rolled)
+            -- Starting inventory: look each entry up in the ItemManager
+            -- and build an ItemInstance. Unknown names are dropped
+            -- with a warning (load-order issue: items loaded after
+            -- units that reference them).
+            itemMgr ← readIORef (itemManagerRef env)
+            logger  ← readIORef (loggerRef env)
+            initialInventory ← buildStartingInventory logger itemMgr
+                                  (udStartingInventory def)
             let inst = UnitInstance
                     { uiDefName    = defName
                     , uiTexture    = udTexture def
@@ -88,6 +99,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , uiStats       = initialStats
                     , uiModifiers   = HM.empty
                     , uiSkills      = initialSkills
+                    , uiInventory   = initialInventory
                     }
             atomicModifyIORef' (unitManagerRef env) $ \um' →
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())
@@ -101,6 +113,8 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , usFacing    = DirS
                     , usLocalPath = []
                     , usReviveUntil = Nothing
+                    , usDrinkUntil  = Nothing
+                    , usPickupUntil = Nothing
                     }
             atomicModifyIORef' utsRef $ \uts →
                 (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
@@ -139,6 +153,8 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
                              , usState     = Idle
                              , usLocalPath = []
                              , usReviveUntil = Nothing
+                             , usDrinkUntil  = Nothing
+                             , usPickupUntil = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -181,6 +197,8 @@ handleUnitCommand env utsRef (UnitStop uid) = do
                              , usState     = Idle
                              , usLocalPath = []
                              , usReviveUntil = Nothing
+                             , usDrinkUntil  = Nothing
+                             , usPickupUntil = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -194,6 +212,8 @@ handleUnitCommand env utsRef (UnitCollapse uid) = do
                              , usState     = Collapsed
                              , usLocalPath = []
                              , usReviveUntil = Nothing
+                             , usDrinkUntil  = Nothing
+                             , usPickupUntil = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -239,6 +259,80 @@ handleUnitCommand env utsRef (UnitRevive uid) = do
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
+handleUnitCommand env utsRef (UnitDrink uid) = do
+    -- Only acts on Idle units. Drinking blocks movement; an explicit
+    -- precondition stops us from interrupting another animated state
+    -- (Walking moves are easy to interrupt, Collapsed/Reviving are
+    -- not, so we just require Idle for simplicity).
+    um ← readIORef (unitManagerRef env)
+    let duration = case HM.lookup uid (umInstances um) of
+            Nothing   → 0
+            Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
+                Nothing  → 0
+                Just def →
+                    let key      = "drinking" ∷ Text
+                        animName = HM.lookupDefault key key (udStateAnims def)
+                    in case HM.lookup animName (udAnimations def) of
+                        Nothing → 0
+                        Just a  →
+                            let counts = V.length <$> Map.elems (aFrames a)
+                                maxN   = if null counts then 0 else maximum counts
+                                fps    = aFps a
+                            in if fps > 0 ∧ maxN > 0
+                               then fromIntegral maxN / realToFrac fps ∷ Double
+                               else 0
+    now ← readIORef (gameTimeRef env)
+    atomicModifyIORef' utsRef $ \uts →
+        let simStates = utsSimStates uts
+        in case HM.lookup uid simStates of
+            Nothing → (uts, ())
+            Just ss
+                | usState ss ≢ Idle → (uts, ())
+                | duration ≤ 0 → (uts, ())  -- no anim → no-op
+                | otherwise →
+                    let ss' = ss { usState      = Drinking
+                                 , usTarget     = Nothing
+                                 , usLocalPath  = []
+                                 , usDrinkUntil = Just (now + duration)
+                                 }
+                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
+handleUnitCommand env utsRef (UnitPickup uid) = do
+    -- Same shape as UnitDrink. Plays the "pickup" state animation
+    -- briefly, then auto-reverts to Idle.
+    um ← readIORef (unitManagerRef env)
+    let duration = case HM.lookup uid (umInstances um) of
+            Nothing   → 0
+            Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
+                Nothing  → 0
+                Just def →
+                    let key      = "pickup" ∷ Text
+                        animName = HM.lookupDefault key key (udStateAnims def)
+                    in case HM.lookup animName (udAnimations def) of
+                        Nothing → 0
+                        Just a  →
+                            let counts = V.length <$> Map.elems (aFrames a)
+                                maxN   = if null counts then 0 else maximum counts
+                                fps    = aFps a
+                            in if fps > 0 ∧ maxN > 0
+                               then fromIntegral maxN / realToFrac fps ∷ Double
+                               else 0
+    now ← readIORef (gameTimeRef env)
+    atomicModifyIORef' utsRef $ \uts →
+        let simStates = utsSimStates uts
+        in case HM.lookup uid simStates of
+            Nothing → (uts, ())
+            Just ss
+                | usState ss ≢ Idle → (uts, ())
+                | duration ≤ 0 → (uts, ())
+                | otherwise →
+                    let ss' = ss { usState       = Picking
+                                 , usTarget      = Nothing
+                                 , usLocalPath   = []
+                                 , usPickupUntil = Just (now + duration)
+                                 }
+                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
 -- | Multiply the rolled strength by `(leanMass / avgLeanMass) ^ 0.7`,
 --   where avgLeanMass comes from the def's body means and leanMass from
 --   this unit's rolled body. No-op if any body attr is missing — keeps
@@ -263,6 +357,33 @@ scaleStrengthByBody def rolled =
   where
     leanMassOf h b f = 22 * h * h * b * (1 - f)
     statMean d name  = fst <$> HM.lookup name (udStatTemplates d)
+
+-- | Resolve a unit def's starting_inventory into concrete ItemInstance
+--   list. Unknown item names log a warning and are dropped. Fill is
+--   clamped to the container's capacity; non-container items ignore
+--   the fill arg and get 0.
+buildStartingInventory ∷ LoggerState → ItemManager
+                       → [(Text, Maybe Float)] → IO [ItemInstance]
+buildStartingInventory logger itemMgr entries = do
+    mInsts ← mapM resolve entries
+    return [i | Just i ← mInsts]
+  where
+    resolve (name, mFill) =
+        case lookupItemDef name itemMgr of
+            Nothing → do
+                logWarn logger CatThread $
+                    "Unit starting_inventory: unknown item '" <> name
+                      <> "' — skipping"
+                return Nothing
+            Just def →
+                let fill = case (mFill, idContainer def) of
+                        (Just f,  Just c) → max 0 (min f (icCapacity c))
+                        (Nothing, _     ) → 0
+                        (Just _,  Nothing) → 0
+                in return $ Just ItemInstance
+                    { iiDefName     = name
+                    , iiCurrentFill = fill
+                    }
 
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
 lookupSurfaceZ env gx gy = do

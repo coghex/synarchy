@@ -48,10 +48,11 @@ local schemas = {
         -- "weather" appears dynamically when there's weather text.
     },
     unit = {
-        { key = "status",   name = "Status" },
-        { key = "physical", name = "Physical" },
-        { key = "mental",   name = "Mental" },
-        { key = "skills",   name = "Skills" },
+        { key = "status",    name = "Status" },
+        { key = "physical",  name = "Physical" },
+        { key = "mental",    name = "Mental" },
+        { key = "skills",    name = "Skills" },
+        { key = "inventory", name = "Inventory" },
     },
     building = {
         { key = "binfo", name = "Info" },
@@ -63,7 +64,7 @@ local weatherTabDef = { key = "weather", name = "Weather" }
 -- initialized with empty values for every key.
 local allKeys = {
     "basic", "advanced", "weather",
-    "status", "physical", "mental", "skills",
+    "status", "physical", "mental", "skills", "inventory",
     "binfo",
 }
 
@@ -442,15 +443,17 @@ function infoPanel.setWeatherInfo(weatherText)
     infoPanel.setText("weather", weatherText or "")
 end
 
--- Unit-info push: switches to the unit schema and writes the four
+-- Unit-info push: switches to the unit schema and writes the five
 -- per-tab strings at once. Any of them may be "" (the tab still
 -- exists but renders empty).
-function infoPanel.setUnitInfo(statusText, physicalText, mentalText, skillsText)
+function infoPanel.setUnitInfo(statusText, physicalText, mentalText,
+                                skillsText, inventoryText)
     infoPanel.useSchema("unit")
-    infoPanel.setText("status",   statusText   or "")
-    infoPanel.setText("physical", physicalText or "")
-    infoPanel.setText("mental",   mentalText   or "")
-    infoPanel.setText("skills",   skillsText   or "")
+    infoPanel.setText("status",    statusText    or "")
+    infoPanel.setText("physical",  physicalText  or "")
+    infoPanel.setText("mental",    mentalText    or "")
+    infoPanel.setText("skills",    skillsText    or "")
+    infoPanel.setText("inventory", inventoryText or "")
 end
 
 -- Building-info push: switches to the building schema (one tab) and

@@ -1,0 +1,8 @@
+items:
+  - name: "canteen_steel_2l"
+    display_name: "Stainless Steel Canteen (2L)"
+    sprite: "assets/textures/items/canteen_steel_2l.png"
+    weight: 0.2        # empty kg; full mass = weight + fill (water density ≈ 1 kg/L)
+    container:
+      capacity: 2.0    # litres
+      holds: "water"

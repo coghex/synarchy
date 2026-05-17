@@ -33,6 +33,7 @@ module Engine.Scripting.Lua.API.World
     , worldWaitForInitFn
     , worldDestroyFn
     , worldDeleteTileFn
+    , worldSetFluidTileFn
     ) where
 
 import UPrelude
@@ -47,6 +48,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import World.Types
+import World.Fluid.Types (FluidType(..))
 import World.Tool.Types (ToolMode(..), textToToolMode)
 import World.Render.Zoom.Types (ZoomMapMode(..), textToMapMode)
 import World.Generate.Config
@@ -689,6 +691,37 @@ worldDeleteTileFn env = do
                 let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
                 Q.writeQueue (worldQueue env)
                     (WorldDeleteTile pageId (fromIntegral gx) (fromIntegral gy))
+            Lua.pushboolean True
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+-- | world.setFluidTile(pageId, gx, gy, kind) → bool
+-- Places one tile of fluid on top of the column at (gx, gy). `kind` is
+-- "water" (Lake) or "lava" (Lava); other values fall back to "water".
+-- Debug-tool affordance: lets the arena have water sources without
+-- waiting for procedural generation.
+worldSetFluidTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSetFluidTileFn env = do
+    pageIdArg ← Lua.tostring 1
+    gxArg     ← Lua.tointeger 2
+    gyArg     ← Lua.tointeger 3
+    kindArg   ← Lua.tostring 4
+    case (pageIdArg, gxArg, gyArg) of
+        (Just pageIdBS, Just gx, Just gy) → do
+            let fluidType = case kindArg of
+                    Just kBS → case TE.decodeUtf8 kBS of
+                        "lava"  → Lava
+                        "river" → River
+                        "ocean" → Ocean
+                        _       → Lake     -- "water" / default
+                    Nothing → Lake
+            Lua.liftIO $ do
+                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+                Q.writeQueue (worldQueue env) $
+                    WorldSetFluidTile pageId
+                        (fromIntegral gx) (fromIntegral gy) fluidType
             Lua.pushboolean True
             return 1
         _ → do

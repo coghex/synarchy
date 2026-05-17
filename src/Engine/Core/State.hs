@@ -40,6 +40,7 @@ import Unit.Types (UnitManager)
 import Unit.Command.Types (UnitCommand)
 import Building.Types (BuildingManager, BuildingGhost)
 import Building.Command.Types (BuildingCommand)
+import Item.Types (ItemManager)
 import World.Types (WorldCommand, WorldManager, FloraCatalog)
 import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
@@ -111,6 +112,10 @@ data EngineEnv = EngineEnv
     --   that need to freeze on pause (uiAnimStart, biSpawnedAt,
     --   usReviveUntil) reference this clock instead of POSIX wall-time.
     --   Updated by Unit.Thread.unitLoop once per tick.
+  , itemManagerRef     ∷ IORef ItemManager
+    -- ^ Registry of all item defs loaded from data/items/*.yaml.
+    --   Lua's item.loadYaml writes into this; unit spawn reads from
+    --   it to materialise starting_inventory entries.
   } deriving (Eq)
 
 data EngineState = EngineState

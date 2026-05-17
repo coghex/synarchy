@@ -6,6 +6,7 @@ module Engine.Asset.YamlUnits
     , UnitYamlSkill(..)
     , UnitYamlBodyAttr(..)
     , UnitYamlBody(..)
+    , UnitYamlInventoryEntry(..)
     , UnitYamlFile(..)
     , defaultUnitYamlBody
     , loadUnitYaml
@@ -83,6 +84,18 @@ instance FromJSON UnitYamlBody where
         ⊛ v .:? "bulk"    .!= uybBulk    defaultUnitYamlBody
         ⊛ v .:? "bodyfat" .!= uybBodyfat defaultUnitYamlBody
 
+-- | One starting-inventory entry: which item def to give the unit
+--   and, optionally, how much fill it has (for containers).
+data UnitYamlInventoryEntry = UnitYamlInventoryEntry
+    { uyieItem ∷ !Text         -- ^ ItemDef name (e.g. "canteen_steel_2l")
+    , uyieFill ∷ !(Maybe Float) -- ^ initial fill in litres; nil = empty
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON UnitYamlInventoryEntry where
+    parseJSON = withObject "UnitYamlInventoryEntry" $ \v → UnitYamlInventoryEntry
+        ⊚ v .:  "item"
+        ⊛ v .:? "fill"
+
 -- | One skill as declared in YAML. Like a stat (base + range, rolled
 --   at spawn). Skills are continuous floats that grow via a closed-
 --   form XP formula — no per-level threshold to declare.
@@ -123,6 +136,10 @@ data UnitYamlDef = UnitYamlDef
     , uydSkills            ∷ !(Map.Map Text UnitYamlSkill)
       -- ^ optional: per-skill base/range/xp_per_level schema.
       --   Skills are always eager-rolled at spawn (no lazy mode).
+    , uydStartingInventory ∷ ![UnitYamlInventoryEntry]
+      -- ^ optional: items every freshly spawned unit of this type
+      --   starts with. Looked up against the ItemManager at spawn time;
+      --   missing item names log a warning and are skipped.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -138,6 +155,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "stats"               .!= Map.empty
         ⊛ v .:? "body"                .!= defaultUnitYamlBody
         ⊛ v .:? "skills"              .!= Map.empty
+        ⊛ v .:? "starting_inventory"  .!= []
 
 newtype UnitYamlFile = UnitYamlFile
     { uyfUnits ∷ [UnitYamlDef]

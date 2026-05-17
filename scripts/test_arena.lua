@@ -132,6 +132,29 @@ function testArena.sendTextures(worldId)
         graniteHandle = engine.loadTexture("assets/textures/world/granite/granite.png")
         world.setTexture(worldId, "mat_tile_1", graniteHandle)
     end
+
+    -- Fluid surface textures. The freshwater render path
+    -- (Lake/River, via freshwaterTileToQuad) and the ocean path both
+    -- look up `mat_tile_255` (matOcean). Lava (lavaTileToQuad) looks
+    -- up `mat_tile_100` (matLava). Without these the WorldSetFluidTile
+    -- debug tool succeeds but produces no visible water surface — the
+    -- renderer falls back to wtNoTexture and the quad blends into the
+    -- terrain below.
+    local oceanHandle = engine.getTextureHandle("mat_tile_255")
+    if oceanHandle and oceanHandle >= 0 then
+        world.setTexture(worldId, "mat_tile_255", oceanHandle)
+    else
+        oceanHandle = engine.loadTexture("assets/textures/world/ocean/ocean.png")
+        world.setTexture(worldId, "mat_tile_255", oceanHandle)
+    end
+
+    local lavaHandle = engine.getTextureHandle("mat_tile_100")
+    if lavaHandle and lavaHandle >= 0 then
+        world.setTexture(worldId, "mat_tile_100", lavaHandle)
+    else
+        lavaHandle = engine.loadTexture("assets/textures/world/lava/lava.png")
+        world.setTexture(worldId, "mat_tile_100", lavaHandle)
+    end
     for vegId = 1, 64 do
         local h = engine.getTextureHandle("veg_tile_" .. vegId)
         if h and h >= 0 then

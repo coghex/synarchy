@@ -32,6 +32,7 @@ mkDef anims = UnitDef
     , udEagerStats    = False
     , udStatTemplates = HM.empty
     , udSkillTemplates = HM.empty
+    , udStartingInventory = []
     }
 
 -- | A UnitInstance facing south with the supplied anim name and start time.
@@ -52,6 +53,7 @@ mkInst animName start = UnitInstance
     , uiStats       = HM.empty
     , uiModifiers   = HM.empty
     , uiSkills      = HM.empty
+    , uiInventory   = []
     }
 
 -- | An animation with frame handles 100,101,102,103 on DirS, fps 4, loop.

@@ -49,15 +49,21 @@ local config = {
         },
         hydration = {
             max_from        = "max_hydration",
-            -- Constant per-second drain in any activity. ~0.05/s on a
-            -- ~43 L average pool empties in ~14 minutes — fast enough
-            -- to observe in testing, will be tuned (and made activity-
-            -- and temperature-dependent) in a later pass.
-            drain_constant  = 0.05,
+            -- Constant per-second drain in any activity. Tuned so an
+            -- average pool (~43 L) empties in 3 game-days. At
+            -- timeScale 1.0 (1 game-minute per real-second), 3 days =
+            -- 4320 real-seconds → 43 / 4320 ≈ 0.01 L/s. Real-world
+            -- baseline metabolism + sweat is ~2.5 L/day; here we run
+            -- a bit higher to make the gameplay loop visible without
+            -- accelerating into the "constantly drinking" zone.
+            drain_constant  = 0.01,
             -- No regen: hydration only restored by drinking events
             -- (separate API, not yet wired).
-            -- No collapse/revive thresholds for hydration yet —
-            -- starvation/dehydration debuffs are a future slice.
+            collapse_threshold = 0.2,
+            -- Revive requires drinking to bring hydration back up to
+            -- 50% — phase 3 work. Until drinking exists, a collapsed-
+            -- from-thirst unit stays collapsed.
+            revive_threshold   = 0.5,
         },
     },
 }
@@ -127,14 +133,39 @@ local function tickResource(uid, defName, resourceName, params, activity, dt)
         unit.collapse(uid)
     end
 
-    -- Auto-revive trigger. Fires only on Collapsed units once their
-    -- resource ratio climbs back past revive_threshold. The hysteresis
-    -- gap (collapse < 0.1, revive > 0.5) prevents flapping.
-    if activity == "collapsed"
-       and params.revive_threshold and params.revive_threshold > 0
-       and next / maxVal >= params.revive_threshold then
-        unit.revive(uid)
+    -- NOTE: auto-revive is checked once per unit in checkRevive after
+    -- all resources for that unit have ticked, not here. The per-
+    -- resource version would race-revive a unit collapsed from thirst
+    -- as soon as stamina recovered, even if hydration was still low.
+end
+
+-----------------------------------------------------------
+-- Cross-resource revive check (called once per unit per tick).
+-- Only revives if EVERY resource with a revive_threshold > 0 is
+-- at-or-above its own threshold. Resources with revive_threshold = 0
+-- don't gate revive.
+-----------------------------------------------------------
+local function checkRevive(uid, defConfig)
+    -- Re-read activity here: a tickResource earlier in this update
+    -- pass may have just called unit.collapse, so the activity passed
+    -- into the per-resource loop is stale.
+    local activity = unit.getActivity(uid)
+    if activity ~= "collapsed" then return end
+
+    for resourceName, params in pairs(defConfig) do
+        local rt = params.revive_threshold
+        if rt and rt > 0 then
+            local maxVal = stats.get(uid, params.max_from)
+            local cur    = unit.getStat(uid, resourceName)
+            if not maxVal or maxVal <= 0 or not cur then
+                return    -- can't evaluate; play it safe, no revive
+            end
+            if cur / maxVal < rt then
+                return    -- at least one resource still below threshold
+            end
+        end
     end
+    unit.revive(uid)
 end
 
 -----------------------------------------------------------
@@ -155,6 +186,7 @@ function unitResources.update(dt)
                     tickResource(uid, info.defName, resourceName,
                                  params, activity, dt)
                 end
+                checkRevive(uid, defConfig)
             end
         end
     end

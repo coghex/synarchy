@@ -39,6 +39,13 @@ debugOverlay.spawnButtonId = nil
 debugOverlay.spawnEntries = {}        -- array of { id, defName }
 debugOverlay.spawnListVisible = false
 debugOverlay.armedDef = nil
+-- Fluid spawn mode. Same UX as unit spawn but armed value is a string
+-- ("water" / "lava") passed to world.setFluidTile.
+debugOverlay.fluidButtonId = nil
+debugOverlay.fluidEntries = {}
+debugOverlay.fluidListVisible = false
+debugOverlay.armedFluidType = nil
+debugOverlay.fluidKinds = { "water", "lava" }
 debugOverlay.debugFont = nil
 debugOverlay.visible = false
 debugOverlay.uiCreated = false
@@ -72,6 +79,13 @@ local function destroySpawnList()
     debugOverlay.spawnEntries = {}
 end
 
+local function destroyFluidList()
+    for _, entry in ipairs(debugOverlay.fluidEntries) do
+        if entry.id then label.destroy(entry.id) end
+    end
+    debugOverlay.fluidEntries = {}
+end
+
 local function formatEntry(defName, isArmed)
     if isArmed then return "> " .. defName
     else            return "  " .. defName end
@@ -81,6 +95,11 @@ local function refreshEntries()
     for _, entry in ipairs(debugOverlay.spawnEntries) do
         local isArmed = (entry.defName == debugOverlay.armedDef)
         label.setText(entry.id, formatEntry(entry.defName, isArmed))
+        label.setColor(entry.id, isArmed and COLOR_BRIGHT or COLOR_DIM)
+    end
+    for _, entry in ipairs(debugOverlay.fluidEntries) do
+        local isArmed = (entry.kind == debugOverlay.armedFluidType)
+        label.setText(entry.id, formatEntry(entry.kind, isArmed))
         label.setColor(entry.id, isArmed and COLOR_BRIGHT or COLOR_DIM)
     end
 end
@@ -96,6 +115,21 @@ local function rowRect(s, baselineY, text)
         w = w + s.fontSize,            -- a bit of slack on the right
         h = s.fontSize + s.rowSpacing, -- full row height
     }
+end
+
+-- Returns the Y baseline of the fluid button, which sits below the
+-- spawn button + (if open) the spawn list. Lets rebuild and createUI
+-- agree on layout without duplicating arithmetic.
+local function fluidButtonY(s)
+    local y = s.margin + 2 * (s.fontSize + s.rowSpacing)  -- spawn baseline
+    -- One row below spawn baseline. When the spawn list is open, push
+    -- below that too so the lists don't overlap.
+    y = y + (s.fontSize + s.rowSpacing)
+    if debugOverlay.spawnListVisible then
+        local listRows = math.max(1, #debugOverlay.spawnEntries)
+        y = y + listRows * (s.fontSize + s.rowSpacing)
+    end
+    return y
 end
 
 -- Rebuild clickable rects from current label state. Called whenever
@@ -119,7 +153,7 @@ local function rebuildClickableRects()
     end
     table.insert(debugOverlay.clickableRects, r)
 
-    -- List entry rects (only if list is open)
+    -- Spawn list entry rects (only if list is open)
     if debugOverlay.spawnListVisible then
         local baseY = s.margin + 2 * (s.fontSize + s.rowSpacing) + s.fontSize
         for i, entry in ipairs(debugOverlay.spawnEntries) do
@@ -134,6 +168,57 @@ local function rebuildClickableRects()
                 table.insert(debugOverlay.clickableRects, rect)
             end
         end
+    end
+
+    -- Fluid button rect
+    local fbY = fluidButtonY(s)
+    local fr = rowRect(s, fbY, "fluid")
+    fr.action = function()
+        if debugOverlay.fluidListVisible or debugOverlay.armedFluidType then
+            debugOverlay.clearArmedFluid()
+            debugOverlay.closeFluidList()
+        else
+            debugOverlay.openFluidList()
+        end
+    end
+    table.insert(debugOverlay.clickableRects, fr)
+
+    -- Fluid list entry rects (only if list is open)
+    if debugOverlay.fluidListVisible then
+        local baseY = fbY + s.fontSize
+        for i, entry in ipairs(debugOverlay.fluidEntries) do
+            local rowY = baseY + (i - 1) * (s.fontSize + s.rowSpacing)
+            local rect = rowRect(s, rowY, formatEntry(entry.kind, false))
+            local kind = entry.kind
+            rect.action = function()
+                debugOverlay.setArmedFluid(kind)
+            end
+            table.insert(debugOverlay.clickableRects, rect)
+        end
+    end
+end
+
+local function buildFluidList()
+    destroyFluidList()
+    local s = scale.applyAll(debugOverlay.baseSizes)
+    local uiscale = scale.get()
+    local baseY = fluidButtonY(s) + s.fontSize
+    for i, kind in ipairs(debugOverlay.fluidKinds) do
+        local isArmed = (kind == debugOverlay.armedFluidType)
+        local lblId = label.new({
+            name     = "fluid_entry_" .. kind,
+            text     = formatEntry(kind, isArmed),
+            font     = debugOverlay.debugFont,
+            fontSize = debugOverlay.baseSizes.fontSize,
+            color    = isArmed and COLOR_BRIGHT or COLOR_DIM,
+            page     = debugOverlay.page,
+            uiscale  = uiscale,
+            x        = s.margin,
+            y        = baseY + (i - 1) * (s.fontSize + s.rowSpacing),
+            zIndex   = 1000,
+        })
+        table.insert(debugOverlay.fluidEntries,
+            { id = lblId, kind = kind })
     end
 end
 
@@ -193,7 +278,12 @@ function debugOverlay.createUI()
             label.destroy(debugOverlay.spawnButtonId)
             debugOverlay.spawnButtonId = nil
         end
+        if debugOverlay.fluidButtonId then
+            label.destroy(debugOverlay.fluidButtonId)
+            debugOverlay.fluidButtonId = nil
+        end
         destroySpawnList()
+        destroyFluidList()
     end
 
     local s = scale.applyAll(debugOverlay.baseSizes)
@@ -230,6 +320,27 @@ function debugOverlay.createUI()
         buildSpawnList()
     end
 
+    -- Fluid button — placed below the spawn button (and its open list
+    -- if any). The label position is computed by fluidButtonY so a
+    -- single source of truth handles the shifting layout.
+    local s2 = scale.applyAll(debugOverlay.baseSizes)
+    debugOverlay.fluidButtonId = label.new({
+        name     = "fluid_button",
+        text     = "fluid",
+        font     = debugOverlay.debugFont,
+        fontSize = debugOverlay.baseSizes.fontSize,
+        color    = COLOR_DIM,
+        page     = debugOverlay.page,
+        uiscale  = uiscale,
+        x        = s2.margin,
+        y        = fluidButtonY(s2),
+        zIndex   = 1000,
+    })
+
+    if debugOverlay.fluidListVisible then
+        buildFluidList()
+    end
+
     debugOverlay.uiCreated = true
     rebuildClickableRects()
 end
@@ -253,7 +364,9 @@ end
 function debugOverlay.hide()
     debugOverlay.visible = false
     debugOverlay.clearArmed()
+    debugOverlay.clearArmedFluid()
     debugOverlay.closeSpawnList()
+    debugOverlay.closeFluidList()
     debugOverlay.clickableRects = {}
     if debugOverlay.page then UI.hidePage(debugOverlay.page) end
 end
@@ -267,10 +380,34 @@ function debugOverlay.isVisible() return debugOverlay.visible end
 -----------------------------------------------------------
 -- Spawn UI state
 -----------------------------------------------------------
+-- Reposition the fluid button + its open list (if any) so it sits
+-- below the spawn list. Called whenever the spawn list opens/closes
+-- so the fluid section follows the layout shift. fluidButtonY already
+-- knows about spawnListVisible, so this is just label.setPosition
+-- calls — no recomputation.
+local function repositionFluidUI()
+    if not debugOverlay.uiCreated then return end
+    local s = scale.applyAll(debugOverlay.baseSizes)
+    local fbY = fluidButtonY(s)
+    if debugOverlay.fluidButtonId then
+        label.setPosition(debugOverlay.fluidButtonId, s.margin, fbY)
+    end
+    if debugOverlay.fluidListVisible then
+        local baseY = fbY + s.fontSize
+        for i, entry in ipairs(debugOverlay.fluidEntries) do
+            if entry.id then
+                label.setPosition(entry.id, s.margin,
+                    baseY + (i - 1) * (s.fontSize + s.rowSpacing))
+            end
+        end
+    end
+end
+
 function debugOverlay.openSpawnList()
     if debugOverlay.spawnListVisible then return end
     debugOverlay.spawnListVisible = true
     buildSpawnList()
+    repositionFluidUI()
     rebuildClickableRects()
 end
 
@@ -278,17 +415,49 @@ function debugOverlay.closeSpawnList()
     if not debugOverlay.spawnListVisible then return end
     debugOverlay.spawnListVisible = false
     destroySpawnList()
+    repositionFluidUI()
     rebuildClickableRects()
 end
 
 function debugOverlay.setArmed(defName)
     debugOverlay.armedDef = defName
+    -- Mutually exclusive with fluid arming.
+    debugOverlay.armedFluidType = nil
     refreshEntries()
 end
 
 function debugOverlay.clearArmed()
     if debugOverlay.armedDef == nil then return end
     debugOverlay.armedDef = nil
+    refreshEntries()
+end
+
+function debugOverlay.openFluidList()
+    if debugOverlay.fluidListVisible then return end
+    debugOverlay.fluidListVisible = true
+    buildFluidList()
+    -- Spawn list moves around when fluid opens? No — fluid sits BELOW
+    -- spawn. Spawn list layout doesn't change. But we still need to
+    -- rebuild rects so fluid entries become clickable.
+    rebuildClickableRects()
+end
+
+function debugOverlay.closeFluidList()
+    if not debugOverlay.fluidListVisible then return end
+    debugOverlay.fluidListVisible = false
+    destroyFluidList()
+    rebuildClickableRects()
+end
+
+function debugOverlay.setArmedFluid(kind)
+    debugOverlay.armedFluidType = kind
+    debugOverlay.armedDef = nil
+    refreshEntries()
+end
+
+function debugOverlay.clearArmedFluid()
+    if debugOverlay.armedFluidType == nil then return end
+    debugOverlay.armedFluidType = nil
     refreshEntries()
 end
 
@@ -338,8 +507,11 @@ end
 function debugOverlay.onKeyDown(key)
     if key == "F8" then
         debugOverlay.toggle()
-    elseif key == "Escape" and debugOverlay.armedDef then
-        debugOverlay.clearArmed()
+    elseif key == "Escape" then
+        if debugOverlay.armedDef then debugOverlay.clearArmed() end
+        if debugOverlay.armedFluidType then
+            debugOverlay.clearArmedFluid()
+        end
     end
 end
 
@@ -355,9 +527,14 @@ end
 -----------------------------------------------------------
 function debugOverlay.shutdown()
     destroySpawnList()
+    destroyFluidList()
     if debugOverlay.spawnButtonId then
         label.destroy(debugOverlay.spawnButtonId)
         debugOverlay.spawnButtonId = nil
+    end
+    if debugOverlay.fluidButtonId then
+        label.destroy(debugOverlay.fluidButtonId)
+        debugOverlay.fluidButtonId = nil
     end
     if debugOverlay.fpsLabelId then
         label.destroy(debugOverlay.fpsLabelId)

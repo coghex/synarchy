@@ -365,6 +365,7 @@ library
                      Unit.Render
                      Unit.Selection
                      Unit.HitTest
+                     Unit.LineOfSight
                      Unit.Pathing.Cost
                      Unit.Pathing.AStar
                      Unit.Command.Types
@@ -381,6 +382,9 @@ library
                      Building.HitTest
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
+                     Item.Types
+                     Engine.Asset.YamlItems
+                     Engine.Scripting.Lua.API.Items
                      Sim.Thread
                      Sim.Command.Types
                      Sim.State.Types

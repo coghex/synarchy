@@ -116,6 +116,19 @@ function game.onMouseDown(button, x, y)
             return
         end
 
+        -- Debug fluid-spawn mode: arms a kind ("water" / "lava"); the
+        -- click places one tile of that fluid on top of the column.
+        if debugOverlay.armedFluidType then
+            local gx, gy = world.getHoverTile()
+            if gx and gy then
+                local hud = require("scripts.hud")
+                local worldId = (hud and hud.worldId) or "test_arena"
+                world.setFluidTile(worldId, math.floor(gx), math.floor(gy),
+                                   debugOverlay.armedFluidType)
+            end
+            return
+        end
+
         local id = unit.hitTestAt(x, y)
         local shift = engine.isKeyDown("LeftShift")
                       or engine.isKeyDown("RightShift")

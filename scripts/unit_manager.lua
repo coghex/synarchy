@@ -2,6 +2,7 @@
 -- Loaded as an engine script from init.lua with its own tick interval.
 local unitLoader = require("scripts.unit_loader")
 local buildingLoader = require("scripts.building_loader")
+local itemLoader = require("scripts.item_loader")
 
 local unitManager = {}
 
@@ -30,8 +31,16 @@ function unitManager.init(scriptId)
     local buildingCount = buildingLoader.loadAll("data/buildings")
     unitManager.buildingDefCount = buildingCount
 
+    -- Items load BEFORE the first unit spawns; unit spawn looks up
+    -- starting_inventory item names against the registry, so they must
+    -- exist by then. (Boot order: this init runs before any menu is
+    -- shown, so we're safe.)
+    local itemCount = itemLoader.loadAll("data/items")
+    unitManager.itemDefCount = itemCount
+
     engine.logInfo("Unit manager initialized: " .. count
-        .. " unit defs, " .. buildingCount .. " building defs")
+        .. " unit defs, " .. buildingCount .. " building defs, "
+        .. itemCount .. " item defs")
 end
 
 -----------------------------------------------------------

@@ -20,6 +20,8 @@ activityToStateKey Idle      = "idle"
 activityToStateKey Walking   = "walk"
 activityToStateKey Collapsed = "collapsed"
 activityToStateKey Reviving  = "reviving"
+activityToStateKey Drinking  = "drinking"
+activityToStateKey Picking   = "pickup"
 
 -- | Resolve a state key (e.g. "idle") to an animation name (e.g.
 --   "breathing-idle") using the unit's `udStateAnims` map. If no

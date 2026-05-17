@@ -34,6 +34,11 @@ module Engine.Scripting.Lua.API.Units
     , unitSetSkillFn
     , unitAddXPFn
     , unitGetAllSkillsFn
+    , unitGetInventoryFn
+    , unitDrinkFn
+    , unitPickupFn
+    , unitModifyItemFillFn
+    , unitGetVisibleTilesFn
     ) where
 
 import UPrelude
@@ -55,11 +60,15 @@ import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
 import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..),
                                UnitYamlStat(..), UnitYamlSkill(..),
                                UnitYamlBody(..), UnitYamlBodyAttr(..),
+                               UnitYamlInventoryEntry(..),
                                loadUnitYaml)
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Direction (Direction(..))
+import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
+                  , ItemManager(..), lookupItemDef)
+import Unit.LineOfSight (unitVisibleTiles)
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 import qualified Unit.Selection as Sel
 import qualified Unit.HitTest as HitTest
@@ -157,7 +166,11 @@ loadUnitYamlFn env backendState = do
                             | (sname, s) ← Map.toList (uydSkills def)
                             ]
 
-                    let unitDef = UnitDef
+                    let startingInv =
+                            [ (uyieItem e, uyieFill e)
+                            | e ← uydStartingInventory def
+                            ]
+                        unitDef = UnitDef
                             { udName          = name
                             , udTexture       = handle
                             , udDirSprites    = dirMap
@@ -167,6 +180,7 @@ loadUnitYamlFn env backendState = do
                             , udEagerStats    = uydEagerStats def
                             , udStatTemplates = statTemplates
                             , udSkillTemplates = skillTemplates
+                            , udStartingInventory = startingInv
                             }
                     atomicModifyIORef' (unitManagerRef env) $ \um →
                         (um { umDefs = HM.insert name unitDef (umDefs um) }, ())
@@ -381,6 +395,94 @@ unitReviveFn env = do
             Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitRevive uid
             Lua.pushboolean True
             return 1
+
+-- | unit.drink(uid) — start the drinking animation on an Idle unit.
+--   Engine handles the auto-revert to Idle when the anim finishes.
+--   Stat / canteen effects are applied Lua-side BEFORE calling this
+--   (see scripts/unit_ai drink action); the engine doesn't know about
+--   sip amounts.
+unitDrinkFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitDrinkFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitDrink uid
+            Lua.pushboolean True
+            return 1
+
+-- | unit.pickup(uid) — start the "picking up" animation on an Idle
+--   unit. Same shape as drink; used for canteen refilling.
+unitPickupFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitPickupFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitPickup uid
+            Lua.pushboolean True
+            return 1
+
+-- | unit.modifyItemFill(uid, defName, delta) → actual applied delta
+--   (after clamp to [0, capacity]). Adjusts the fill of the FIRST item
+--   matching defName. Returns 0 if no such item / no container / unit
+--   missing.
+unitModifyItemFillFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitModifyItemFillFn env = do
+    idArg    ← Lua.tointeger 1
+    nameArg  ← Lua.tostring 2
+    deltaArg ← Lua.tonumber 3
+    case (idArg, nameArg, deltaArg) of
+        (Just n, Just nameBS, Just (Lua.Number d)) → do
+            let uid     = UnitId (fromIntegral n)
+                defName = TE.decodeUtf8 nameBS
+                delta   = realToFrac d ∷ Float
+            applied ← Lua.liftIO $ do
+                itemMgr ← readIORef (itemManagerRef env)
+                atomicModifyIORef' (unitManagerRef env) $ \um →
+                    case HM.lookup uid (umInstances um) of
+                        Nothing → (um, 0 ∷ Float)
+                        Just inst →
+                            let (newInv, app) =
+                                    adjustFirstFill itemMgr defName delta
+                                        (uiInventory inst)
+                                inst' = inst { uiInventory = newInv }
+                            in (um { umInstances = HM.insert uid inst'
+                                                     (umInstances um) }, app)
+            Lua.pushnumber (Lua.Number (realToFrac applied))
+            return 1
+        _ → do
+            Lua.pushnumber 0
+            return 1
+
+-- | Helper: adjust the fill of the first ItemInstance matching defName.
+--   Clamps to [0, capacity] looked up via the ItemManager. Returns the
+--   resulting inventory and the actual applied delta (post-clamp).
+adjustFirstFill
+    ∷ ItemManager → Text → Float → [ItemInstance] → ([ItemInstance], Float)
+adjustFirstFill itemMgr defName delta = go
+  where
+    go [] = ([], 0)
+    go (x : xs)
+      | iiDefName x ≡ defName =
+          let cap = case lookupItemDef defName itemMgr of
+                  Just d  → case idContainer d of
+                      Just c  → icCapacity c
+                      Nothing → iiCurrentFill x   -- no container → no headroom
+                  Nothing → iiCurrentFill x
+              newFill = max 0 (min cap (iiCurrentFill x + delta))
+              applied = newFill - iiCurrentFill x
+              x'      = x { iiCurrentFill = newFill }
+          in (x' : xs, applied)
+      | otherwise =
+          let (xs', applied) = go xs
+          in (x : xs', applied)
 
 unitGetPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetPosFn env = do
@@ -1209,3 +1311,92 @@ parseDirKey t = case T.toLower t of
     "east"       → Just DirE
     "south-east" → Just DirSE
     _            → Nothing
+
+-- | unit.getInventory(uid) → array of item tables, or nil if the unit
+--   doesn't exist. Each table has:
+--     defName        — ItemDef key (e.g. "canteen_steel_2l")
+--     displayName    — UI-facing name from YAML
+--     weight         — empty kg
+--     currentFill    — litres held (0 for non-containers)
+--     capacity       — litres max (nil for non-containers)
+--     holds          — fluid kind (nil for non-containers)
+unitGetInventoryFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetInventoryFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mInv ← Lua.liftIO $ do
+                um      ← readIORef (unitManagerRef env)
+                itemMgr ← readIORef (itemManagerRef env)
+                pure $ case HM.lookup uid (umInstances um) of
+                    Nothing   → Nothing
+                    Just inst → Just (uiInventory inst, itemMgr)
+            case mInv of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just (insts, itemMgr) → do
+                    Lua.newtable
+                    -- Use 1-based Lua indexing for a real array.
+                    forM_ (zip [1 ..] insts) $ \(i, inst) → do
+                        Lua.newtable
+                        let name = iiDefName inst
+                            mDef = lookupItemDef name itemMgr
+                            displayName = case mDef of
+                                Just d  → idDisplayName d
+                                Nothing → name
+                            weight = case mDef of
+                                Just d  → idWeight d
+                                Nothing → 0
+                            mContainer = mDef >>= idContainer
+                        Lua.pushstring (TE.encodeUtf8 name)
+                        Lua.setfield (-2) "defName"
+                        Lua.pushstring (TE.encodeUtf8 displayName)
+                        Lua.setfield (-2) "displayName"
+                        Lua.pushnumber (Lua.Number (realToFrac weight))
+                        Lua.setfield (-2) "weight"
+                        Lua.pushnumber (Lua.Number (realToFrac (iiCurrentFill inst)))
+                        Lua.setfield (-2) "currentFill"
+                        case mContainer of
+                            Just c → do
+                                Lua.pushnumber (Lua.Number (realToFrac (icCapacity c)))
+                                Lua.setfield (-2) "capacity"
+                                Lua.pushstring (TE.encodeUtf8 (icHolds c))
+                                Lua.setfield (-2) "holds"
+                            Nothing → pure ()
+                        Lua.rawseti (-2) (fromIntegral (i ∷ Int))
+                    return 1
+
+-- | unit.getVisibleTiles(uid) → array of {x, y} tables, or nil if the
+--   unit doesn't exist. Includes the unit's own tile.
+unitGetVisibleTilesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetVisibleTilesFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            tiles ← Lua.liftIO $ unitVisibleTiles env uid
+            -- Return nil specifically when the unit is missing
+            -- (distinct from "exists but sees nothing", which is []).
+            um ← Lua.liftIO $ readIORef (unitManagerRef env)
+            if not (HM.member uid (umInstances um))
+                then do
+                    Lua.pushnil
+                    return 1
+                else do
+                    Lua.newtable
+                    forM_ (zip [1 ..] tiles) $ \(i, (gx, gy)) → do
+                        Lua.newtable
+                        Lua.pushinteger (fromIntegral gx)
+                        Lua.setfield (-2) "x"
+                        Lua.pushinteger (fromIntegral gy)
+                        Lua.setfield (-2) "y"
+                        Lua.rawseti (-2) (fromIntegral (i ∷ Int))
+                    return 1

@@ -11,6 +11,7 @@ import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Save.Types (SaveData(..))
 import World.Texture.Types (WorldTextureType(..))
+import World.Fluid.Types (FluidType(..))
 
 data WorldCommand
     = WorldInit WorldPageId Word64 Int Int
@@ -41,5 +42,9 @@ data WorldCommand
     | WorldSave WorldPageId Text
     | WorldLoadSave WorldPageId SaveData
     | WorldDeleteTile WorldPageId Int Int      -- ^ worldId, gx, gy
+    | WorldSetFluidTile WorldPageId Int Int FluidType
+        -- ^ worldId, gx, gy, fluid kind. Sets one tile of fluid at
+        --   surfaceZ + 1 on the given column. Idempotent; replaces any
+        --   existing fluid cell. Currently a debug-tool affordance.
     | WorldDestroy !WorldPageId
     deriving (Show)

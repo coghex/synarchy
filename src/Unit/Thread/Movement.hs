@@ -62,14 +62,19 @@ snapshotVisibleWorldTiles env = do
 
 tickUnit ∷ Double → Double → Maybe WorldTileData → UnitSimState → UnitSimState
 tickUnit now dt mWtd us =
-    let us1 = handleReviveExpiry now us
-    in case usTarget us1 of
-        Nothing → us1
-        Just mt →
-            let subGoal = case usLocalPath us1 of
-                    (p : _) → p
-                    []      → (mtTargetX mt, mtTargetY mt)
-            in stepTowardSubGoal dt mWtd us1 mt subGoal
+    let us1 = handlePickupExpiry now
+              (handleDrinkExpiry now (handleReviveExpiry now us))
+    in case usState us1 of
+        -- Stationary anim states — auto-expiry handles transition back.
+        Drinking → us1
+        Picking  → us1
+        _ → case usTarget us1 of
+            Nothing → us1
+            Just mt →
+                let subGoal = case usLocalPath us1 of
+                        (p : _) → p
+                        []      → (mtTargetX mt, mtTargetY mt)
+                in stepTowardSubGoal dt mWtd us1 mt subGoal
 
 -- | If the unit is Reviving and the revive's anim duration has
 --   elapsed, snap back to Idle. Otherwise leave the state alone.
@@ -77,6 +82,20 @@ handleReviveExpiry ∷ Double → UnitSimState → UnitSimState
 handleReviveExpiry now us = case usReviveUntil us of
     Just t | usState us ≡ Reviving ∧ now ≥ t →
         us { usState = Idle, usReviveUntil = Nothing }
+    _ → us
+
+-- | Same shape as handleReviveExpiry but for the Drinking state.
+handleDrinkExpiry ∷ Double → UnitSimState → UnitSimState
+handleDrinkExpiry now us = case usDrinkUntil us of
+    Just t | usState us ≡ Drinking ∧ now ≥ t →
+        us { usState = Idle, usDrinkUntil = Nothing }
+    _ → us
+
+-- | Same shape as handleDrinkExpiry but for the Picking state.
+handlePickupExpiry ∷ Double → UnitSimState → UnitSimState
+handlePickupExpiry now us = case usPickupUntil us of
+    Just t | usState us ≡ Picking ∧ now ≥ t →
+        us { usState = Idle, usPickupUntil = Nothing }
     _ → us
 
 -- | Try to advance toward `subGoal`. If we arrive, pop the waypoint

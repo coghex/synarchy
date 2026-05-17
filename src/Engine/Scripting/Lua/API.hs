@@ -38,6 +38,7 @@ import Engine.Scripting.Lua.API.World
 import Engine.Scripting.Lua.API.WorldQuery
 import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Buildings
+import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
@@ -100,6 +101,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadFloraYaml" (loadFloraYamlFn env backendState)
   registerLuaFunction "loadUnitYaml" (loadUnitYamlFn env backendState)
   registerLuaFunction "loadBuildingYaml" (loadBuildingYamlFn env backendState)
+  registerLuaFunction "loadItemYaml" (loadItemYamlFn env backendState)
   
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)
   registerLuaFunction "isActionDown"      (isActionDownFn env backendState)
@@ -207,6 +209,11 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getStatBase" (unitGetStatBaseFn env)
   registerLuaFunction "setStat"     (unitSetStatFn env)
   registerLuaFunction "getAllStats" (unitGetAllStatsFn env)
+  registerLuaFunction "getInventory" (unitGetInventoryFn env)
+  registerLuaFunction "drink"        (unitDrinkFn env)
+  registerLuaFunction "pickup"       (unitPickupFn env)
+  registerLuaFunction "modifyItemFill" (unitModifyItemFillFn env)
+  registerLuaFunction "getVisibleTiles" (unitGetVisibleTilesFn env)
   registerLuaFunction "addModifier"    (unitAddModifierFn env)
   registerLuaFunction "removeModifier" (unitRemoveModifierFn env)
   registerLuaFunction "getModifiers"   (unitGetModifiersFn env)
@@ -280,6 +287,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "waitForInit" (worldWaitForInitFn env)
   registerLuaFunction "destroy" (worldDestroyFn env)
   registerLuaFunction "deleteTile" (worldDeleteTileFn env)
+  registerLuaFunction "setFluidTile" (worldSetFluidTileFn env)
 
   registerLuaFunction "getTerrainAt" (worldGetTerrainAtFn env)
   registerLuaFunction "getFluidAt" (worldGetFluidAtFn env)

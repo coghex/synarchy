@@ -100,9 +100,17 @@ local function formatPhysical(uid)
 end
 
 local function formatMental(uid)
-    -- Placeholder. As mental stats are added to YAML, mirror the
-    -- physical block: iterate over a known list of mental stat names.
-    return "(none yet)"
+    local lines = {}
+    local order = { "perception" }
+    for _, name in ipairs(order) do
+        local v = unit.getStat(uid, name)
+        if v ~= nil then
+            table.insert(lines,
+                name:sub(1,1):upper() .. name:sub(2) .. ": " .. fmt2(v))
+        end
+    end
+    if #lines == 0 then return "(none)" end
+    return table.concat(lines, "\n")
 end
 
 local function formatSkills(uid)
@@ -122,6 +130,23 @@ local function formatSkills(uid)
     return table.concat(lines, "\n")
 end
 
+local function formatInventory(uid)
+    local items = unit.getInventory(uid)
+    if not items or #items == 0 then return "(empty)" end
+    local lines = {}
+    for _, it in ipairs(items) do
+        if it.capacity then
+            -- Container line: "Stainless Steel Canteen (2L): 2.00 / 2.00 L water"
+            table.insert(lines, string.format("%s: %s / %s L %s",
+                it.displayName, fmt2(it.currentFill),
+                fmt2(it.capacity), it.holds or ""))
+        else
+            table.insert(lines, it.displayName)
+        end
+    end
+    return table.concat(lines, "\n")
+end
+
 local function pushUnitInfo(uid)
     local info = unit.getInfo(uid)
     if not info then return false end
@@ -129,7 +154,8 @@ local function pushUnitInfo(uid)
         formatStatus(uid, info),
         formatPhysical(uid),
         formatMental(uid),
-        formatSkills(uid))
+        formatSkills(uid),
+        formatInventory(uid))
     return true
 end
 

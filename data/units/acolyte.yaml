@@ -9,6 +9,8 @@ units:
       endurance:    { base: 1.0, range: 1.0 }
       reflexes:     { base: 1.0, range: 1.0 }
       constitution: { base: 1.0, range: 1.0 }
+      # Mental — display category only; engine treats it as a regular stat.
+      perception:   { base: 1.0, range: 0.4 }
 
     body:
       height:  { mean: 1.8, range: 1.0 }   # 1.3..2.3 m
@@ -17,6 +19,9 @@ units:
 
     skills:
       balance: { base: 1.0, range: 1.0 }
+
+    starting_inventory:
+      - { item: "canteen_steel_2l", fill: 2.0 }
     directional_sprites:
       S:  "assets/textures/units/acolyte/default.png"
       SW: "assets/textures/units/acolyte/sw.png"
@@ -32,6 +37,8 @@ units:
       walk: walk
       collapsed: collapse
       reviving: collapse
+      drinking: drinking
+      pickup: picking-up
 
     animations:
       breathing-idle:
@@ -224,3 +231,117 @@ units:
             - "assets/textures/units/acolyte/animations/collapse/south-east/frame_006.png"
             - "assets/textures/units/acolyte/animations/collapse/south-east/frame_007.png"
             - "assets/textures/units/acolyte/animations/collapse/south-east/frame_008.png"
+
+      drinking:
+        fps: 4
+        loop: false
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/drinking/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/drinking/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/drinking/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/drinking/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/drinking/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/drinking/south/frame_005.png"
+          south-west:
+            - "assets/textures/units/acolyte/animations/drinking/south-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/drinking/south-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/drinking/south-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/drinking/south-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/drinking/south-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/drinking/south-west/frame_005.png"
+          west:
+            - "assets/textures/units/acolyte/animations/drinking/west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/drinking/west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/drinking/west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/drinking/west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/drinking/west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/drinking/west/frame_005.png"
+          north-west:
+            - "assets/textures/units/acolyte/animations/drinking/north-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/drinking/north-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/drinking/north-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/drinking/north-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/drinking/north-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/drinking/north-west/frame_005.png"
+          north:
+            - "assets/textures/units/acolyte/animations/drinking/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/drinking/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/drinking/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/drinking/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/drinking/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/drinking/north/frame_005.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/drinking/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/drinking/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/drinking/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/drinking/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/drinking/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/drinking/north-east/frame_005.png"
+          east:
+            - "assets/textures/units/acolyte/animations/drinking/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/drinking/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/drinking/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/drinking/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/drinking/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/drinking/east/frame_005.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/drinking/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/drinking/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/drinking/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/drinking/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/drinking/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/drinking/south-east/frame_005.png"
+
+      picking-up:
+        fps: 4
+        loop: false
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/picking-up/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south/frame_004.png"
+          south-west:
+            - "assets/textures/units/acolyte/animations/picking-up/south-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south-west/frame_004.png"
+          west:
+            - "assets/textures/units/acolyte/animations/picking-up/west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/picking-up/west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/picking-up/west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/picking-up/west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/picking-up/west/frame_004.png"
+          north-west:
+            - "assets/textures/units/acolyte/animations/picking-up/north-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north-west/frame_004.png"
+          north:
+            - "assets/textures/units/acolyte/animations/picking-up/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north/frame_004.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/picking-up/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/picking-up/north-east/frame_004.png"
+          east:
+            - "assets/textures/units/acolyte/animations/picking-up/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/picking-up/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/picking-up/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/picking-up/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/picking-up/east/frame_004.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/picking-up/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/picking-up/south-east/frame_004.png"

@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Thread.Command.Edit
     ( handleWorldDeleteTileCommand
+    , handleWorldSetFluidTileCommand
     ) where
 
 import UPrelude
@@ -12,6 +13,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
+import World.Fluid.Types (FluidType(..), FluidCell(..))
 import World.Tile.Types (lookupChunk, insertChunk)
 import World.Generate.Coordinates (globalToChunk)
 import World.Thread.Helpers (unWorldPageId)
@@ -75,3 +77,49 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                         logDebug logger CatWorld $
                             "Deleted tile at " <> T.pack (show gx) <> ","
                               <> T.pack (show gy) <> " z=" <> T.pack (show oldTopZ)
+
+-- | Place one tile of fluid on top of the column at (gx, gy). The
+--   fluid's surface sits at surfaceZ + 1; lcSurfaceMap is bumped so the
+--   renderer treats this as the new top. Replaces any existing fluid
+--   cell on this column (idempotent for repeated clicks).
+handleWorldSetFluidTileCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → FluidType → IO ()
+handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing →
+            logWarn logger CatWorld $
+                "World not found for set fluid: " <> unWorldPageId pageId
+        Just ws → do
+            let (coord, (lx, ly)) = globalToChunk gx gy
+                idx = columnIndex lx ly
+            td ← readIORef (wsTilesRef ws)
+            case lookupChunk coord td of
+                Nothing →
+                    logWarn logger CatWorld $
+                        "Chunk not loaded for set fluid at "
+                          <> T.pack (show gx) <> "," <> T.pack (show gy)
+                Just lc → do
+                    let surfZ      = lcTerrainSurfaceMap lc VU.! idx
+                        newSurface = surfZ + 1
+                        cell       = FluidCell { fcType = fluidType
+                                               , fcSurface = newSurface
+                                               }
+                        fluid'     = lcFluidMap lc V.// [(idx, Just cell)]
+                        oldTop     = lcSurfaceMap lc VU.! idx
+                        surf'      = lcSurfaceMap lc
+                                       VU.// [(idx, max oldTop newSurface)]
+                        lc'        = lc { lcFluidMap   = fluid'
+                                        , lcSurfaceMap = surf'
+                                        , lcModified   = True
+                                        }
+                    atomicModifyIORef' (wsTilesRef ws) $ \w →
+                        (insertChunk lc' w, ())
+                    writeIORef (wsQuadCacheRef ws)     Nothing
+                    writeIORef (wsZoomQuadCacheRef ws) Nothing
+                    writeIORef (wsBgQuadCacheRef ws)   Nothing
+                    logDebug logger CatWorld $
+                        "Placed fluid " <> T.pack (show fluidType)
+                          <> " at " <> T.pack (show gx) <> ","
+                          <> T.pack (show gy)
+                          <> " surface=" <> T.pack (show newSurface)

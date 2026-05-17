@@ -18,6 +18,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
+import Item.Types (ItemInstance(..))
 import Unit.Direction (Direction(..))
 
 -- | A single animation: per-direction frame sequences.
@@ -67,6 +68,10 @@ data UnitDef = UnitDef
       --   Skills are continuous floats; XP is applied via a closed-
       --   form formula (see Unit.Stats.applySkillXP) — there's no
       --   per-level threshold to store.
+    , udStartingInventory ∷ ![(Text, Maybe Float)]
+      -- ^ ItemDef name + optional initial fill. Materialised into
+      --   `uiInventory` at spawn by looking each entry up in the
+      --   ItemManager; unknown names are dropped with a log warning.
     } deriving (Show, Eq)
 
 -- | A spawned unit instance in the world.
@@ -107,6 +112,11 @@ data UnitInstance = UnitInstance
       --   each call directly nudges the level by an amount that
       --   shrinks quadratically with the current level. No XP
       --   accumulator is stored.
+    , uiInventory   ∷ ![ItemInstance]
+      -- ^ Item instances carried by the unit. Populated at spawn from
+      --   the def's starting_inventory. Mutable: drinking decrements
+      --   a canteen's fill, refilling tops it up. Order is preserved
+      --   for stable UI display.
     } deriving (Show, Eq)
 
 -- | Holds all unit definitions and all spawned instances.
