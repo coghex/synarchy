@@ -49,6 +49,9 @@ loadItemYamlFn env backendState = do
                                 , icHolds    = iycHolds c
                                 })
                             (iydContainer def)
+                        food = fmap
+                            (\f → ItemFood { ifNutrition = iyfNutrition f })
+                            (iydFood def)
                         itemDef = ItemDef
                             { idName        = iydName def
                             , idDisplayName = if T.null (iydDisplayName def)
@@ -57,6 +60,7 @@ loadItemYamlFn env backendState = do
                             , idTexture     = handle
                             , idWeight      = iydWeight def
                             , idContainer   = container
+                            , idFood        = food
                             }
 
                     atomicModifyIORef' (itemManagerRef env) $ \im →

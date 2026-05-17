@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module Unit.Thread.Command
     ( processAllUnitCommands
+    , recomputeBodyDerivedStats
     ) where
 
 import UPrelude
@@ -49,22 +50,28 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
             initialStats ←
                 if udEagerStats def
                 then atomicModifyIORef' (statRNGRef env) $ \g0 →
-                    let (rolled, g') = HM.foldlWithKey'
+                    let (rolled, g')   = HM.foldlWithKey'
                             (\(acc, g) name (b, r) →
                                 let (v, g'') = rollStat b r g
                                 in (HM.insert name v acc, g''))
                             (HM.empty, g0)
                             (udStatTemplates def)
-                        -- Scale rolled strength by lean-mass ratio so
-                        -- bigger / leaner characters get a strength bump
-                        -- and skinny ones a penalty. Sub-linear (exp 0.7)
-                        -- because strength scales with muscle cross-
-                        -- section, not volume. The rolled value's
-                        -- variance (sigma = range/4) can still flip
-                        -- ordering — a small unit with a high roll can
-                        -- beat a large unit with a low roll.
-                        scaled = scaleStrengthByBody def rolled
-                    in (g', scaled)
+                        -- Roll bulk + bodyfat from the body templates.
+                        -- Merge them in so seedBodyComposition can see
+                        -- all three of height/bulk/bodyfat; it then
+                        -- drops bulk + bodyfat from the result so they
+                        -- never end up in uiStats (a getStat for
+                        -- "bulk" later returns nil — the plan's
+                        -- contract).
+                        (rolledB, g'') = HM.foldlWithKey'
+                            (\(acc, g) name (b, r) →
+                                let (v, gn) = rollStat b r g
+                                in (HM.insert name v acc, gn))
+                            (HM.empty, g')
+                            (udBodyTemplates def)
+                        merged = HM.union rolled rolledB
+                        seeded = seedBodyComposition merged
+                    in (g'', seeded)
                 else return HM.empty
             -- Skills always roll at spawn so they have a starting
             -- level for the addSkillXP formula to operate on.
@@ -117,6 +124,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , usLocalPath = []
                     , usPose         = Standing
                     , usDrinkUntil   = Nothing
+                    , usEatUntil     = Nothing
                     , usPickupUntil  = Nothing
                     , usTransitionUntil  = Nothing
                     , usTransitionStride = 1
@@ -158,6 +166,7 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
                              , usState     = Idle
                              , usLocalPath = []
                              , usDrinkUntil      = Nothing
+                             , usEatUntil        = Nothing
                              , usPickupUntil     = Nothing
                              , usTransitionUntil = Nothing
                              }
@@ -204,6 +213,7 @@ handleUnitCommand env utsRef (UnitStop uid) = do
                              , usState     = Idle
                              , usLocalPath = []
                              , usDrinkUntil      = Nothing
+                             , usEatUntil        = Nothing
                              , usPickupUntil     = Nothing
                              , usTransitionUntil = Nothing
                              }
@@ -223,8 +233,31 @@ handleUnitCommand env utsRef (UnitCollapse uid) = do
                              , usState     = Idle
                              , usLocalPath = []
                              , usDrinkUntil      = Nothing
+                             , usEatUntil        = Nothing
                              , usPickupUntil     = Nothing
                              , usTransitionUntil = Nothing
+                             }
+                in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
+handleUnitCommand env utsRef (UnitKill uid) = do
+    -- Terminal: snap to Dead pose and clear all in-flight state.
+    -- No animation chain — just an instant transition. Dead units
+    -- are filtered out by AI / movement / drink / pickup via the
+    -- non-Standing guards and the Lua-side dead-pose short-circuit.
+    atomicModifyIORef' utsRef $ \uts →
+        let simStates = utsSimStates uts
+        in case HM.lookup uid simStates of
+            Nothing → (uts, ())
+            Just ss →
+                let ss' = ss { usPose             = Dead
+                             , usState            = Idle
+                             , usTarget           = Nothing
+                             , usLocalPath        = []
+                             , usDrinkUntil       = Nothing
+                             , usEatUntil         = Nothing
+                             , usPickupUntil      = Nothing
+                             , usTransitionUntil  = Nothing
+                             , usTransitionStride = 1
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -243,6 +276,7 @@ handleUnitCommand env utsRef (UnitRevive uid) = do
                     let ss' = ss { usPose            = Standing
                                  , usState           = Idle
                                  , usDrinkUntil      = Nothing
+                                 , usEatUntil        = Nothing
                                  , usPickupUntil     = Nothing
                                  , usTransitionUntil = Nothing
                                  }
@@ -283,6 +317,45 @@ handleUnitCommand env utsRef (UnitDrink uid) = do
                                  , usTarget     = Nothing
                                  , usLocalPath  = []
                                  , usDrinkUntil = Just (now + duration)
+                                 }
+                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
+handleUnitCommand env utsRef (UnitEat uid) = do
+    -- Same shape as UnitDrink. Plays the "eat" state animation and
+    -- auto-reverts to Idle when the timer expires. Nutrition/inventory
+    -- changes are applied Lua-side before this command is issued.
+    um ← readIORef (unitManagerRef env)
+    uts0 ← readIORef utsRef
+    let mPose = usPose <$> HM.lookup uid (utsSimStates uts0)
+        duration = case (HM.lookup uid (umInstances um), mPose) of
+            (Just inst, Just curPose) → case HM.lookup (uiDefName inst) (umDefs um) of
+                Nothing  → 0
+                Just def →
+                    let key      = stateKey curPose Eating
+                        animName = HM.lookupDefault key key (udStateAnims def)
+                    in case HM.lookup animName (udAnimations def) of
+                        Nothing → 0
+                        Just a  →
+                            let counts = V.length <$> Map.elems (aFrames a)
+                                maxN   = if null counts then 0 else maximum counts
+                                fps    = aFps a
+                            in if fps > 0 ∧ maxN > 0
+                               then fromIntegral maxN / realToFrac fps ∷ Double
+                               else 0
+            _ → 0
+    now ← readIORef (gameTimeRef env)
+    atomicModifyIORef' utsRef $ \uts →
+        let simStates = utsSimStates uts
+        in case HM.lookup uid simStates of
+            Nothing → (uts, ())
+            Just ss
+                | usState ss ≢ Idle → (uts, ())
+                | duration ≤ 0 → (uts, ())
+                | otherwise →
+                    let ss' = ss { usState      = Eating
+                                 , usTarget     = Nothing
+                                 , usLocalPath  = []
+                                 , usEatUntil   = Just (now + duration)
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -370,30 +443,79 @@ isTransitioning ∷ UnitActivity → Bool
 isTransitioning (TransitioningTo _) = True
 isTransitioning _                   = False
 
--- | Multiply the rolled strength by `(leanMass / avgLeanMass) ^ 0.7`,
---   where avgLeanMass comes from the def's body means and leanMass from
---   this unit's rolled body. No-op if any body attr is missing — keeps
---   units without a body block unchanged.
-scaleStrengthByBody ∷ UnitDef → HM.HashMap Text Float → HM.HashMap Text Float
-scaleStrengthByBody def rolled =
-    case (HM.lookup "strength" rolled
-         , HM.lookup "height"  rolled
-         , HM.lookup "bulk"    rolled
-         , HM.lookup "bodyfat" rolled
-         , statMean def "height"
-         , statMean def "bulk"
-         , statMean def "bodyfat") of
-        ( Just str, Just h, Just b, Just f
-         , Just hM, Just bM, Just fM ) →
-            let rolledLean = leanMassOf h b f
-                avgLean    = leanMassOf hM bM fM
-                ratio      = if avgLean > 0 then rolledLean / avgLean else 1
-                scaled     = str * (ratio ** 0.7)
-            in HM.insert "strength" scaled rolled
+-- | Spawn-time body composition. Reads rolled height/bulk/bodyfat,
+--   computes body_mass / lean_mass (skeletal muscle only) / fat_mass,
+--   clamps lean/fat at the viability floors so a tall thin combo can't
+--   spawn at or below the death thresholds, then drops bulk/bodyfat
+--   from the map (they're spawn-time inputs, not live stats).
+--
+--   Finally re-runs `recomputeBodyDerivedStats` to fill in strength /
+--   max_hydration / max_hunger / carrying_capacity / strength_base.
+--   No-op if any of height/bulk/bodyfat is missing (e.g. for unit
+--   types that don't declare a body block).
+seedBodyComposition ∷ HM.HashMap Text Float → HM.HashMap Text Float
+seedBodyComposition rolled =
+    case (HM.lookup "height" rolled, HM.lookup "bulk" rolled,
+          HM.lookup "bodyfat" rolled) of
+        (Just h, Just b, Just f) →
+            let bodyMass  = 22 * h * h * b
+                fatMass0  = bodyMass * f
+                -- Skeletal muscle is ~50 % of non-fat tissue in real
+                -- adult composition; the rest is bones / organs /
+                -- water / skin (lumped together as implicit organ
+                -- mass, never tracked separately).
+                leanMass0 = bodyMass * (1 - f) * 0.5
+                -- Viability clamps: a tall-thin spawn (h=2.2,
+                -- bulk=0.5, bodyfat=0.05) sits right at min_lean(h);
+                -- +1 kg keeps it above the death floor with margin.
+                minFat    = 0.44 * h * h
+                minLean   = 4.4 * h * h
+                fatMass   = max (minFat + 1) fatMass0
+                leanMass  = max (minLean + 1) leanMass0
+                withBody  = HM.insert "body_mass" bodyMass
+                          $ HM.insert "lean_mass" leanMass
+                          $ HM.insert "fat_mass"  fatMass
+                          $ HM.delete "bulk"
+                          $ HM.delete "bodyfat" rolled
+            in recomputeBodyDerivedStats withBody
         _ → rolled
-  where
-    leanMassOf h b f = 22 * h * h * b * (1 - f)
-    statMean d name  = fst <$> HM.lookup name (udStatTemplates d)
+
+-- | Recompute body-driven derived stats from live body composition.
+--   Reads height + body_mass + lean_mass + strength_base, writes
+--   strength / max_hydration / max_hunger / carrying_capacity.
+--
+--   strength_base is the un-scaled potential rolled at spawn; on the
+--   first call (no strength_base yet) we promote the rolled "strength"
+--   into "strength_base" so future re-computes don't compound. This
+--   is what makes "a wasted unit physically weakens" emergent —
+--   Phase 4 catabolism shrinks lean_mass, this recompute drops the
+--   strength derived from it, and carrying_capacity follows.
+--
+--   avg_skeletal_muscle_at_height(h) = 22 · h² · 0.8 · 0.5 = 8.8 · h²
+--   assumes acolyte-like means (bulk=1, bodyfat=0.2). Different
+--   species would want a species-specific average; punt until then.
+recomputeBodyDerivedStats ∷ HM.HashMap Text Float → HM.HashMap Text Float
+recomputeBodyDerivedStats s =
+    case (HM.lookup "height" s, HM.lookup "body_mass" s,
+          HM.lookup "lean_mass" s) of
+        (Just h, Just bm, Just lm) →
+            let avgLean    = 8.8 * h * h
+                ratio      = if avgLean > 0 then lm / avgLean else 1
+                -- First call: no strength_base yet — promote the
+                -- rolled "strength" into the base slot, then derive.
+                strBase    = case HM.lookup "strength_base" s of
+                                 Just b  → b
+                                 Nothing → HM.lookupDefault 0 "strength" s
+                strength   = strBase * (ratio ** 0.7)
+                maxHydration = bm * 0.6
+                maxHunger    = bm * 20
+                carryCap     = strength * 5
+            in HM.insert "strength_base"     strBase
+             $ HM.insert "strength"          strength
+             $ HM.insert "max_hydration"     maxHydration
+             $ HM.insert "max_hunger"        maxHunger
+             $ HM.insert "carrying_capacity" carryCap s
+        _ → s
 
 -- | Resolve a unit def's starting_inventory into concrete ItemInstance
 --   list. Unknown item names log a warning and are dropped. Fill is

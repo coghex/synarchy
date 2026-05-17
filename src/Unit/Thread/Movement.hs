@@ -63,10 +63,12 @@ tickUnit ∷ Double → Double → Maybe WorldTileData → UnitSimState → Unit
 tickUnit now dt mWtd us =
     let us1 = handleTransitionExpiry now
             $ handlePickupExpiry now
+            $ handleEatExpiry now
             $ handleDrinkExpiry now us
     in case usState us1 of
         -- Stationary anim states block movement.
         Drinking            → us1
+        Eating              → us1
         Picking             → us1
         TransitioningTo _   → us1
         _ → case usTarget us1 of
@@ -82,6 +84,13 @@ handleDrinkExpiry ∷ Double → UnitSimState → UnitSimState
 handleDrinkExpiry now us = case usDrinkUntil us of
     Just t | usState us ≡ Drinking ∧ now ≥ t →
         us { usState = Idle, usDrinkUntil = Nothing }
+    _ → us
+
+-- | When an Eating timer expires, snap back to Idle.
+handleEatExpiry ∷ Double → UnitSimState → UnitSimState
+handleEatExpiry now us = case usEatUntil us of
+    Just t | usState us ≡ Eating ∧ now ≥ t →
+        us { usState = Idle, usEatUntil = Nothing }
     _ → us
 
 -- | When a Picking timer expires, snap back to Idle.

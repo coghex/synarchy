@@ -21,16 +21,22 @@ local stats = {}
 
 -- Derived formulas. Each entry takes a unit id and returns a number
 -- or nil (nil = "this unit type doesn't have the required inputs").
--- Add new formulas here as the game needs them.
 --
--- Note: forward-declared as a local so the body-mass formulas
--- (lean_mass, fat_mass, max_hydration) can call `derived.weight(uid)`
--- internally. Without the forward declaration, the `local derived`
--- scope doesn't begin until AFTER the table literal is evaluated, so
--- those self-references would resolve to the global `derived` (nil)
--- and crash on first call.
-local derived
-derived = {
+-- Phase 2 of the survival plan promoted body composition to live
+-- mutable stats: body_mass, lean_mass (skeletal muscle), and fat_mass
+-- are now seeded into uiStats at spawn (and mutated by Phase 3/4
+-- regrowth/catabolism). The engine recomputes the body-driven derived
+-- stats (strength, max_hydration, max_hunger, carrying_capacity) and
+-- writes them back into uiStats — so those are now attribute reads,
+-- not derived formulas. Only stats that depend on live non-body inputs
+-- live in this table.
+-- Real-time seconds in one game-day at timeScale 1.0 (1 game-minute
+-- per real-second). The metabolism formula yields kcal-per-game-day;
+-- dividing by this gives the per-real-second drain rate that
+-- unit_resources expects.
+local DAY_SECONDS = 1440
+
+local derived = {
     -- Stamina pool size = endurance * 10. Larger endurance means
     -- the unit can exert itself longer before stamina runs out.
     max_stamina = function(uid)
@@ -38,47 +44,35 @@ derived = {
         return e and e * 10 or nil
     end,
 
-    -- How much weight a unit can carry before encumbrance kicks in.
-    carrying_capacity = function(uid)
-        local s = unit.getStat(uid, "strength")
-        return s and s * 5 or nil
-    end,
-
-    -- Body mass in kg. BMI=22 baseline, scaled by bulk.
-    --   weight = 22 * height² * bulk
-    -- Changes when bulk or bodyfat is modified (e.g. starvation),
-    -- recomputed every read.
-    weight = function(uid)
-        local h = unit.getStat(uid, "height")
-        local b = unit.getStat(uid, "bulk")
-        if not (h and b) then return nil end
-        return 22 * h * h * b
-    end,
-
-    -- Lean (non-fat) mass in kg. Muscle, bone, organs.
-    lean_mass = function(uid)
-        local w = derived.weight(uid)
-        local f = unit.getStat(uid, "bodyfat")
-        if not (w and f) then return nil end
-        return w * (1 - f)
-    end,
-
-    -- Fat mass in kg.
-    fat_mass = function(uid)
-        local w = derived.weight(uid)
-        local f = unit.getStat(uid, "bodyfat")
-        if not (w and f) then return nil end
-        return w * f
-    end,
-
-    -- Total body water capacity, in litres (≈ kg). Muscle holds ~72%
-    -- of its mass in water; fat holds ~15%. So a lean unit has more
-    -- hydration headroom than a fat unit of the same total weight.
-    max_hydration = function(uid)
-        local lean = derived.lean_mass(uid)
-        local fat  = derived.fat_mass(uid)
-        if not (lean and fat) then return nil end
-        return 0.72 * lean + 0.15 * fat
+    -- Current metabolic burn rate, kcal per real-second. Activity-
+    -- AWARE — the walking 1.5× multiplier is folded in here so every
+    -- downstream consumer (hunger drain, Phase 4 catabolism deficit,
+    -- info-panel display) reads one authoritative "burn rate" rather
+    -- than reapplying activity multipliers in three places.
+    --
+    -- Base formula: BMR_kcal_per_day = 22 · (body − fat) + 4.5 · fat,
+    -- scaled by the per-unit metabolism multiplier. Uses the FULL
+    -- non-fat mass (lean + organ = body − fat) as the metabolically
+    -- active tissue — lean alone is skeletal muscle, which is only
+    -- half of non-fat tissue and would give the wrong BMR.
+    --
+    -- Activity multipliers (rough real-world physical-activity-level
+    -- ratios for unloaded effort):
+    --   walking = 1.5
+    --   everything else (idle/drinking/picking/transitioning/
+    --                    collapsed) = 1.0
+    --
+    -- A default acolyte (body=71.3 kg, fat=14.3 kg, metabolism=1.0)
+    -- at idle burns ≈ 1318 kcal/day = 0.92 kcal/real-sec — emptying
+    -- the ~1426 kcal hunger pool in ~26 game-hours of idle.
+    metabolism_rate = function(uid)
+        local body = unit.getStat(uid, "body_mass")
+        local fat  = unit.getStat(uid, "fat_mass")
+        local m    = unit.getStat(uid, "metabolism")
+        if not (body and fat and m) then return nil end
+        local activity = unit.getActivity(uid) or "idle"
+        local actMult  = (activity == "walking") and 1.5 or 1.0
+        return (22 * (body - fat) + 4.5 * fat) * m * actMult / DAY_SECONDS
     end,
 }
 

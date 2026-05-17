@@ -9,6 +9,10 @@ units:
       endurance:    { base: 1.0, range: 1.0 }
       reflexes:     { base: 1.0, range: 1.0 }
       constitution: { base: 1.0, range: 1.0 }
+      # Per-unit multiplier on the body-derived BMR. Range 0.4 → sigma
+      # 0.1 → ~95% of units roll in [0.8, 1.2], so individuals differ
+      # by up to ±20% in baseline calorie burn at rest.
+      metabolism:   { base: 1.0, range: 0.4 }
       # Mental — display category only; engine treats it as a regular stat.
       perception:   { base: 1.0, range: 0.4 }
 
@@ -42,10 +46,18 @@ units:
       standing-idle:         idle-standing
       standing-walk:         walk
       standing-drink:        drinking
+      # Eating reuses the drinking anim for v1 — same "head-down,
+      # raise something to the mouth" motion. A dedicated eat anim
+      # can be authored later and swapped in here.
+      standing-eat:          drinking
       standing-pickup:       picking-up
       crouching-idle:        idle-crouching
       crawling-idle:         idle-crawling
       collapsed-idle:        idle-collapsed
+      # Dead reuses the collapsed corpse frame — no decomposition anim
+      # yet. The pose differs (Dead, not Collapsed) so AI / revive
+      # logic can distinguish them, but visually they're identical.
+      dead-idle:             idle-collapsed
       # Pose transitions. The forward asset is reused for the reverse
       # direction — publishToRender flips uiAnimReverse when the
       # target pose has lower depth than the current pose.

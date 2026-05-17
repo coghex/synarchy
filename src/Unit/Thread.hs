@@ -148,5 +148,6 @@ activityLabel ∷ UnitActivity → Text
 activityLabel Idle              = "idle"
 activityLabel Walking           = "walking"
 activityLabel Drinking          = "drinking"
+activityLabel Eating            = "eating"
 activityLabel Picking           = "pickup"
 activityLabel (TransitioningTo _) = "transitioning"

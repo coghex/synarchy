@@ -20,6 +20,7 @@ poseTag Standing  = "standing"
 poseTag Crouching = "crouching"
 poseTag Crawling  = "crawling"
 poseTag Collapsed = "collapsed"
+poseTag Dead      = "dead"
 
 -- | State key for a pose + activity, used to look up the animation
 --   in `udStateAnims`. The convention is `<pose>-<activity>` for
@@ -28,6 +29,7 @@ stateKey ∷ Pose → UnitActivity → Text
 stateKey p Idle               = poseTag p <> "-idle"
 stateKey p Walking            = poseTag p <> "-walk"
 stateKey p Drinking           = poseTag p <> "-drink"
+stateKey p Eating             = poseTag p <> "-eat"
 stateKey p Picking            = poseTag p <> "-pickup"
 stateKey p (TransitioningTo q) = poseTag p <> "-to-" <> poseTag q
 

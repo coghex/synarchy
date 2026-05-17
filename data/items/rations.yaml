@@ -1,0 +1,11 @@
+items:
+  - name: "rations"
+    display_name: "Rations"
+    sprite: "assets/textures/items/rations.png"
+    weight: 0.1        # kg per ration
+    food:
+      # kcal restored per ration. 250 ≈ a small meal — about 19 % of a
+      # default acolyte's daily metabolism (~1318 kcal/day) and a hair
+      # below 18 % of max_hunger (~1426 kcal). Five rations roughly
+      # cover a day of idle metabolism.
+      nutrition: 250

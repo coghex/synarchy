@@ -21,6 +21,7 @@ mkDef stateAnims = UnitDef
     , udStateAnims    = stateAnims
     , udEagerStats    = False
     , udStatTemplates = HM.empty
+    , udBodyTemplates = HM.empty
     , udSkillTemplates = HM.empty
     , udStartingInventory = []
     }
@@ -33,6 +34,7 @@ spec = do
             stateKey Crouching Idle `shouldBe` "crouching-idle"
             stateKey Crawling  Idle `shouldBe` "crawling-idle"
             stateKey Collapsed Idle `shouldBe` "collapsed-idle"
+            stateKey Dead      Idle `shouldBe` "dead-idle"
         it "composes <pose>-walk for Walking" $
             stateKey Standing Walking `shouldBe` "standing-walk"
         it "composes <pose>-drink for Drinking" $ do

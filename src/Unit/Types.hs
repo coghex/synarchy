@@ -63,6 +63,12 @@ data UnitDef = UnitDef
       -- ^ if true, roll all stats at spawn; otherwise lazy on first read
     , udStatTemplates ∷ !(HM.HashMap Text (Float, Float))
       -- ^ stat name → (base, range). Empty means no rollable stats.
+    , udBodyTemplates ∷ !(HM.HashMap Text (Float, Float))
+      -- ^ bulk / bodyfat → (mean, range). Rolled at spawn ONLY,
+      --   consumed by seedBodyComposition, then dropped. Kept off
+      --   `udStatTemplates` so `unit.getStat(uid, "bulk")` never
+      --   lazy-rolls a fresh value disconnected from the body
+      --   composition the unit was actually spawned with.
     , udSkillTemplates ∷ !(HM.HashMap Text (Float, Float))
       -- ^ skill name → (base, range). Always eager-rolled at spawn.
       --   Skills are continuous floats; XP is applied via a closed-

@@ -31,6 +31,7 @@ mkDef anims = UnitDef
     , udStateAnims    = HM.empty
     , udEagerStats    = False
     , udStatTemplates = HM.empty
+    , udBodyTemplates = HM.empty
     , udSkillTemplates = HM.empty
     , udStartingInventory = []
     }

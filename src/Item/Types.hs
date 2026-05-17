@@ -2,6 +2,7 @@
 module Item.Types
     ( ItemDef(..)
     , ItemContainer(..)
+    , ItemFood(..)
     , ItemInstance(..)
     , ItemManager(..)
     , emptyItemManager
@@ -20,6 +21,13 @@ data ItemContainer = ItemContainer
     , icHolds    ∷ !Text    -- ^ what fluid it holds: "water" / etc.
     } deriving (Show, Eq)
 
+-- | Food properties — items with a Just here restore hunger when
+--   eaten. ifNutrition is the kcal value, clamped against the eater's
+--   max_hunger (excess is wasted, item is still consumed).
+data ItemFood = ItemFood
+    { ifNutrition ∷ !Float   -- ^ kcal restored per item consumed
+    } deriving (Show, Eq)
+
 -- | Immutable item definition — one per type loaded from YAML.
 data ItemDef = ItemDef
     { idName        ∷ !Text             -- ^ unique key, e.g. "canteen_steel_2l"
@@ -27,6 +35,7 @@ data ItemDef = ItemDef
     , idTexture     ∷ !TextureHandle    -- ^ inventory sprite (UI use)
     , idWeight      ∷ !Float            -- ^ empty weight in kg
     , idContainer   ∷ !(Maybe ItemContainer)
+    , idFood        ∷ !(Maybe ItemFood)
     } deriving (Show, Eq)
 
 -- | Per-unit instance. References its def by name; currentFill is the

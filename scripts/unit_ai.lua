@@ -59,6 +59,13 @@ local config = {
         -- average max_hydration (~43 L), matching the design target
         -- "a full canteen should refill an average acolyte by ~50%".
         drink_hydration_per_litre = 11.0,
+        -- Eating. Mirror of drink_from_canteen: only fires when hunger
+        -- drops below eat_max_fraction of max_hunger; utility scales
+        -- linearly with how empty the meter is, weighted to beat
+        -- wander/command. Currently inventory-only — search_for_food
+        -- (foraging from flora) is Phase 6.
+        eat_max_fraction        = 0.25,
+        eat_weight              = 10.0,
         -- Refilling. Utility ramps quadratically above the threshold:
         --   25% empty (threshold): ~0.85 — beats wander, stays below
         --                          follow_command (1.0). Tops off when
@@ -268,6 +275,53 @@ local function drinkExecute(uid, s, params)
     unit.modifyItemFill(uid, params.drink_canteen_def, -sip)
     unit.setStat(uid, "hydration", hyd + sip * k)
     unit.drink(uid)
+end
+
+-----------------------------------------------------------
+-- Action: eat_from_inventory
+--
+-- Mirror of drink_from_canteen: utility scales linearly with how empty
+-- the hunger meter is, fires only when hunger < eat_max_fraction of
+-- max_hunger AND inventory has at least one item with a `food` block.
+-- The drink anim is reused for v1 (see acolyte.yaml standing-eat).
+-----------------------------------------------------------
+local function findFoodInInventory(uid)
+    local inv = unit.getInventory(uid)
+    if not inv then return nil end
+    local best, bestN = nil, -math.huge
+    for _, it in ipairs(inv) do
+        if it.food and it.food.nutrition and it.food.nutrition > bestN then
+            best, bestN = it, it.food.nutrition
+        end
+    end
+    return best
+end
+
+local function eatUtility(uid, s, params)
+    local hun    = unit.getStat(uid, "hunger")
+    local maxHun = unit.getStat(uid, "max_hunger")
+    if not hun or not maxHun or maxHun <= 0 then return -math.huge end
+    local hungerFrac = hun / maxHun
+    if hungerFrac >= params.eat_max_fraction then return -math.huge end
+    if not findFoodInInventory(uid) then return -math.huge end
+    return (1 - hungerFrac) * params.eat_weight
+end
+
+local function eatExecute(uid, s, params)
+    -- Already eating? Don't re-issue the anim mid-bite.
+    if unit.getActivity(uid) == "eating" then return end
+
+    local food = findFoodInInventory(uid)
+    if not food then return end
+
+    local hun    = unit.getStat(uid, "hunger")    or 0
+    local maxHun = unit.getStat(uid, "max_hunger") or 0
+    -- Stomach overflow is wasted (clamp to max_hunger). Item is
+    -- consumed regardless — over-feeding loses calories, by design.
+    local newHun = math.min(maxHun, hun + food.food.nutrition)
+    unit.setStat(uid, "hunger", newHun)
+    unit.removeItem(uid, food.defName)
+    unit.eat(uid)
 end
 
 -----------------------------------------------------------
@@ -598,6 +652,8 @@ local actions = {
           execute = followCommandExecute },
         { name = "drink_from_canteen", utility = drinkUtility,
           execute = drinkExecute },
+        { name = "eat_from_inventory", utility = eatUtility,
+          execute = eatExecute },
         { name = "refill_canteen", utility = refillUtility,
           execute = refillExecute },
         { name = "search_for_water", utility = searchUtility,
@@ -669,15 +725,16 @@ local function tickOne(uid, defName)
     -- Short-circuit:
     --   * Collapsed pose: the unit is unconscious. Auto-revive lives
     --     in unit_resources; AI doesn't run.
+    --   * Dead pose: terminal. No AI, no resources, no revival.
     --   * Transitioning / drinking / pickup: engine is mid-animation,
     --     we'd clobber the state by issuing new commands.
     -- Crouching/Crawling pose with idle activity DOES run AI — that's
     -- how multi-phase actions (e.g. source-drink) advance.
     local pose     = unit.getPose(uid)
     local activity = unit.getActivity(uid)
-    if pose == "collapsed" then return end
-    if activity == "drinking" or activity == "pickup"
-       or activity == "transitioning" then return end
+    if pose == "collapsed" or pose == "dead" then return end
+    if activity == "drinking" or activity == "eating"
+       or activity == "pickup" or activity == "transitioning" then return end
 
     local s = ensureState(uid)
     maintainTask(uid, s)

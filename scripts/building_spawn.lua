@@ -40,6 +40,11 @@ local config = {
         -- portal-spawned units get whatever's listed here.
         starting_items = {
             { def = "canteen_steel_2l", fill = 2.0 },
+            -- Two rations per acolyte — enough emergency food to last
+            -- ~10 game-hours of idle BMR (500 kcal / 0.92 kcal/sec ≈
+            -- 9 minutes real time at timeScale 1).
+            { def = "rations" },
+            { def = "rations" },
         },
         -- Walk two tiles south so the unit clears the spawn tile
         -- before its commandedTask resolves (the AI's "arrived"

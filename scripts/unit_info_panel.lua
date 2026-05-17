@@ -49,14 +49,23 @@ local function formatStatus(uid, info)
     local gz = info.gridZ or 0
     local activity = unit.getActivity(uid) or "?"
 
-    -- Body-derived: height fixed at spawn, weight recomputes from
-    -- current bulk/bodyfat (so a starving unit shows shrinking weight).
-    local height = unit.getStat(uid, "height")
-    local weight = stats.get(uid, "weight")
-    local heightLine = "Height: ?"
-    local weightLine = "Weight: ?"
-    if height then heightLine = string.format("Height: %s m", fmt2(height)) end
-    if weight then weightLine = string.format("Weight: %s kg", fmt2(weight)) end
+    -- Body composition: height is fixed at spawn; body_mass /
+    -- lean_mass (skeletal muscle) / fat_mass are live and shrink under
+    -- Phase 4 catabolism. The wasting visibly cascades to strength /
+    -- max_hydration / carrying_capacity via the engine-side
+    -- recomputeBodyDerivedStats, but those show up under Physical etc.
+    local height   = unit.getStat(uid, "height")
+    local bodyMass = unit.getStat(uid, "body_mass")
+    local leanMass = unit.getStat(uid, "lean_mass")
+    local fatMass  = unit.getStat(uid, "fat_mass")
+    local heightLine   = "Height: ?"
+    local bodyMassLine = "Body Mass: ?"
+    local leanMassLine = "Lean Mass: ?"
+    local fatMassLine  = "Fat Mass: ?"
+    if height   then heightLine   = string.format("Height: %s m",      fmt2(height))   end
+    if bodyMass then bodyMassLine = string.format("Body Mass: %s kg", fmt2(bodyMass)) end
+    if leanMass then leanMassLine = string.format("Lean Mass: %s kg", fmt2(leanMass)) end
+    if fatMass  then fatMassLine  = string.format("Fat Mass: %s kg",  fmt2(fatMass))  end
 
     -- Resources: cur / max display.
     local maxStam  = stats.get(uid, "max_stamina")
@@ -75,14 +84,25 @@ local function formatStatus(uid, info)
                                       fmt2(curHydr), fmt2(maxHydr))
     end
 
+    local maxHun = stats.get(uid, "max_hunger")
+    local curHun = unit.getStat(uid, "hunger")
+    local hungerLine = "Hunger: ?"
+    if curHun and maxHun then
+        hungerLine = string.format("Hunger: %s / %s",
+                                   fmt2(curHun), fmt2(maxHun))
+    end
+
     return (info.defName or "(unnamed)")
         .. "\nActivity: " .. activity
         .. "\nFacing: " .. (info.facing or "?")
         .. "\nAt (" .. gx .. ", " .. gy .. ", " .. tostring(gz) .. ")"
         .. "\n" .. heightLine
-        .. "\n" .. weightLine
+        .. "\n" .. bodyMassLine
+        .. "\n" .. leanMassLine
+        .. "\n" .. fatMassLine
         .. "\n" .. staminaLine
         .. "\n" .. hydrationLine
+        .. "\n" .. hungerLine
 end
 
 local function formatPhysical(uid)

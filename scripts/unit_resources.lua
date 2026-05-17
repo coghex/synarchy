@@ -23,6 +23,50 @@ local stats = require("scripts.unit_stats")
 
 local unitResources = {}
 
+-----------------------------------------------------------
+-- Tuning constants — Phase 3+ survival math
+-----------------------------------------------------------
+-- Real kcal/kg energy densities for body tissue. Used by the regrowth
+-- branch here (Phase 3) and the catabolism branch in Phase 4.
+local KCAL_PER_KG_FAT  = 7700
+local KCAL_PER_KG_LEAN = 1800
+
+-- Surplus regrowth: while hunger > 75% of max, divert this much
+-- energy per real-second from the hunger pool into body mass at the
+-- activity-dependent split (idle stores mostly fat, walking builds
+-- mostly muscle). Tunable — at 0.1 kcal/sec ≈ 0.017 kg fat/game-day
+-- at idle, which is slow; raise if regrowth feels imperceptible in
+-- testing.
+local REGROWTH_RATE_KCAL_PER_SEC = 0.1
+
+-- Phase 4 catabolism / organ failure constants.
+--
+-- Starvation eats body in two regimes. While fat reserves are above
+-- min_fat(h), the deficit is paid mostly from fat with a small muscle
+-- toll — MUSCLE_CATABOLISM_FRACTION of the kcal deficit comes from
+-- lean tissue, the rest from fat. Once fat hits min_fat, catabolism
+-- switches to pure muscle.
+local MUSCLE_CATABOLISM_FRACTION = 0.05
+
+-- When fat ≤ min_fat(h), the organ-failure branch fires in the
+-- stamina tick: regen is overridden to 0 and this constant drain
+-- runs regardless of activity/pose. With max_stamina ≈ 10 the unit
+-- runs out of stamina in 16–20 real-seconds, then Phase 1's universal
+-- "stamina == 0 → die" rule fires. The other death path is
+-- respiratory failure (lean ≤ min_lean) handled directly in
+-- tickStarvation.
+local ORGAN_FAILURE_DRAIN_PER_SEC = 0.5
+
+-- Tolerance for fat-at-floor comparisons. Engine stores uiStats as
+-- Float32; Lua reads them as Float64. The round-trip pushes a
+-- clamped fat value slightly ABOVE the Lua-computed min_fat
+-- (e.g. 1.21916652 stored vs 1.21916647 recomputed). Without this
+-- tolerance, `fat <= min_fat` stays false even when fat is clamped
+-- exactly to the floor, and the organ-failure branch never fires.
+-- 1e-4 kg = 0.1 g — orders of magnitude above the ~1e-7 Float32
+-- noise but biologically negligible.
+local FAT_FLOOR_TOL = 1e-4
+
 -- Per-def resource config. Drain is a per-second constant. Regen
 -- factors are multiplied by endurance: a high-endurance unit recovers
 -- much faster than a weak one (and may net-regen even while walking).
@@ -47,6 +91,18 @@ local config = {
             -- auto-revives. Hysteresis vs collapse_threshold keeps a
             -- borderline unit from flapping between states each tick.
             revive_threshold       = 0.5,
+            -- Universal kill rule: any path that drains stamina to 0
+            -- ends the unit. Phase 4 reuses this via the organ-failure
+            -- stamina drain — exhaustion death falls out of the same
+            -- mechanism rather than needing its own kill check.
+            kill_on_zero           = true,
+            -- Phase 4 organ failure: when fat_mass ≤ min_fat(h), the
+            -- body has spent its reserves and biology can't keep up.
+            -- tickResource overrides regen to 0 and adds
+            -- ORGAN_FAILURE_DRAIN_PER_SEC on top of any other drains,
+            -- regardless of activity or pose. The unit ends via the
+            -- kill_on_zero rule above ~16-20 real-sec later.
+            organ_failure_check    = true,
         },
         hydration = {
             max_from        = "max_hydration",
@@ -71,6 +127,29 @@ local config = {
             -- 50% — phase 3 work. Until drinking exists, a collapsed-
             -- from-thirst unit stays collapsed.
             revive_threshold   = 0.5,
+            -- Snap-kill below 5 % — total dehydration is fatal long
+            -- before stamina would catch it. Direct path, no stamina
+            -- mediation. The collapse trigger at 20 % fires first;
+            -- this is the floor below which the unit doesn't recover.
+            death_threshold    = 0.05,
+        },
+        hunger = {
+            max_from         = "max_hunger",
+            -- Drain at metabolism_rate × activity_multiplier rather
+            -- than a fixed constant. Walking burns ~1.5× idle BMR.
+            -- The hunger meter alone doesn't collapse the unit —
+            -- fasting is energizing; weakness only kicks in after
+            -- Phase 4 catabolism exhausts the fat reserves and the
+            -- organ-failure stamina drain takes over.
+            drain_metabolic  = true,
+            -- Surplus storage. While hunger > 75 % of max, divert
+            -- REGROWTH_RATE_KCAL_PER_SEC from the food pool into
+            -- body mass at the activity-dependent split. Both the
+            -- divert AND the metabolic drain run in the same tick,
+            -- so a well-fed unit empties its hunger pool a bit
+            -- faster than the BMR alone — that's the food being
+            -- stored.
+            surplus_regrowth = true,
         },
     },
 }
@@ -80,6 +159,127 @@ local config = {
 -----------------------------------------------------------
 function unitResources.init(scriptId)
     engine.logInfo("Unit resources tick initializing...")
+end
+
+-----------------------------------------------------------
+-- Surplus regrowth (hunger > 75 %): divert REGROWTH_RATE_KCAL_PER_SEC
+-- from the hunger pool into body mass.
+--
+-- Split varies with activity:
+--   idle:    90 % fat / 10 % muscle (stored as reserve)
+--   walking: 30 % fat / 70 % muscle (exercise builds muscle)
+-- Walking ALSO burns half a regrowth's worth from fat directly — so
+-- the net fat delta on a walking surplus tick is negative, modeling
+-- "exercise reshapes body composition toward muscle even under
+-- caloric surplus".
+--
+-- After mutating body_mass / lean_mass / fat_mass we MUST call
+-- unit.recomputeBody so the engine refreshes strength / max_hydration
+-- / max_hunger / carrying_capacity from the new composition.
+-- Otherwise a fattening unit would have a stale strength stat.
+-----------------------------------------------------------
+local function applyRegrowth(uid, activity, dt)
+    local body   = unit.getStat(uid, "body_mass")
+    local lean   = unit.getStat(uid, "lean_mass")
+    local fat    = unit.getStat(uid, "fat_mass")
+    local hunger = unit.getStat(uid, "hunger")
+    if not (body and lean and fat and hunger) then return end
+
+    local fatFrac, muscleFrac, exerciseBurn
+    if activity == "walking" then
+        fatFrac, muscleFrac, exerciseBurn = 0.3, 0.7, REGROWTH_RATE_KCAL_PER_SEC * 0.5
+    else
+        fatFrac, muscleFrac, exerciseBurn = 0.9, 0.1, 0
+    end
+
+    local fatKcal  = fatFrac    * REGROWTH_RATE_KCAL_PER_SEC * dt - exerciseBurn * dt
+    local leanKcal = muscleFrac * REGROWTH_RATE_KCAL_PER_SEC * dt
+    local fatDelta  = fatKcal  / KCAL_PER_KG_FAT
+    local leanDelta = leanKcal / KCAL_PER_KG_LEAN
+
+    local newFat    = math.max(0, fat  + fatDelta)
+    local newLean   = math.max(0, lean + leanDelta)
+    local newBody   = math.max(0, body + fatDelta + leanDelta)
+    local newHunger = math.max(0, hunger - REGROWTH_RATE_KCAL_PER_SEC * dt)
+
+    unit.setStat(uid, "fat_mass",  newFat)
+    unit.setStat(uid, "lean_mass", newLean)
+    unit.setStat(uid, "body_mass", newBody)
+    unit.setStat(uid, "hunger",    newHunger)
+    unit.recomputeBody(uid)
+end
+
+-----------------------------------------------------------
+-- Starvation tick (Phase 4). Runs once per unit per update, AFTER
+-- the hunger resource has been drained, so it sees the post-drain
+-- hunger value.
+--
+-- Three outcomes per tick:
+--   1. lean ≤ min_lean → respiratory failure: unit.kill, return.
+--      (Lungs and heart are skeletal-or-cardiac muscle; once those
+--       waste below the floor, biology ends.)
+--   2. hunger > 0 → no catabolism (the meter has slack).
+--   3. hunger ≤ 0 → eat body mass to cover the kcal deficit:
+--      - fat > min_fat: 95% from fat, 5% from muscle (slow shrink,
+--        visibly losing fat first).
+--      - fat ≤ min_fat: pure muscle catabolism (sharp wasting).
+--
+-- After any mass change, call unit.recomputeBody so the engine
+-- refreshes strength/max_hydration/max_hunger/carrying_capacity.
+-- Without that, a starving unit's strength wouldn't drop.
+-----------------------------------------------------------
+local function tickStarvation(uid, dt)
+    if unit.getPose(uid) == "dead" then return end
+
+    local body = unit.getStat(uid, "body_mass")
+    local lean = unit.getStat(uid, "lean_mass")
+    local fat  = unit.getStat(uid, "fat_mass")
+    local h    = unit.getStat(uid, "height")
+    if not (body and lean and fat and h) then return end
+
+    local minFat  = 0.44 * h * h
+    local minLean = 4.4  * h * h
+
+    -- Respiratory failure: sharp death when skeletal muscle (which
+    -- includes the diaphragm) hits its floor.
+    if lean <= minLean then
+        unit.kill(uid)
+        return
+    end
+
+    -- No deficit if hunger pool isn't empty yet.
+    local hunger = unit.getStat(uid, "hunger")
+    if not hunger or hunger > 0 then return end
+
+    -- metabolism_rate is already activity-aware (Phase 3 refactor),
+    -- so deficit is just rate × dt.
+    local rate = stats.get(uid, "metabolism_rate")
+    if not rate or rate <= 0 then return end
+    local deficit = rate * dt
+
+    local fatEaten, muscleEaten
+    if fat > minFat + FAT_FLOOR_TOL then
+        fatEaten    = deficit * (1 - MUSCLE_CATABOLISM_FRACTION) / KCAL_PER_KG_FAT
+        muscleEaten = deficit *      MUSCLE_CATABOLISM_FRACTION  / KCAL_PER_KG_LEAN
+    else
+        fatEaten    = 0
+        muscleEaten = deficit / KCAL_PER_KG_LEAN
+    end
+
+    local newFat  = math.max(minFat,  fat  - fatEaten)
+    local newLean = math.max(minLean, lean - muscleEaten)
+    -- body_mass tracks the actual deltas (not clamped values) so
+    -- it stays consistent with fat + lean + organ_mass after the
+    -- clamps fire. The lean clamp here is belt-and-suspenders —
+    -- the respiratory check above should have killed us first.
+    local actualFatDelta  = fat  - newFat
+    local actualLeanDelta = lean - newLean
+    local newBody = math.max(0, body - actualFatDelta - actualLeanDelta)
+
+    unit.setStat(uid, "fat_mass",  newFat)
+    unit.setStat(uid, "lean_mass", newLean)
+    unit.setStat(uid, "body_mass", newBody)
+    unit.recomputeBody(uid)
 end
 
 -----------------------------------------------------------
@@ -96,11 +296,27 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
         return
     end
 
+    -- Organ failure (Phase 4): when a unit's fat reserves have run
+    -- out, biology can't sustain itself. Bypass all the usual
+    -- pose/activity regen logic and let the fixed organ-failure
+    -- drain run unopposed. Only stamina opts into this via the
+    -- organ_failure_check flag.
+    local inOrganFailure = false
+    if params.organ_failure_check then
+        local fat = unit.getStat(uid, "fat_mass")
+        local h   = unit.getStat(uid, "height")
+        if fat and h then
+            inOrganFailure = fat <= (0.44 * h * h) + FAT_FLOOR_TOL
+        end
+    end
+
     -- Pose-keyed factors override activity-keyed ones. Collapsed +
     -- crouching are pose states (orthogonal to whatever activity the
     -- unit is doing inside that pose).
     local regenFactor
-    if     pose     == "collapsed" then regenFactor = params.regen_factor_collapsed
+    if inOrganFailure then
+        regenFactor = 0
+    elseif pose     == "collapsed" then regenFactor = params.regen_factor_collapsed
     elseif pose     == "crawling"  then regenFactor = params.regen_factor_crawling
     elseif pose     == "crouching" then regenFactor = params.regen_factor_crouching
     elseif activity == "walking"   then regenFactor = params.regen_factor_walking
@@ -113,13 +329,24 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
     local endurance = unit.getStat(uid, "endurance") or 0
     local regen = regenFactor * endurance
 
-    -- Drain has two parts: an always-on constant (drain_constant) and
-    -- an activity-specific drain (currently only drain_walking).
-    -- Resources like hydration use the constant; stamina uses the
-    -- activity-specific.
+    -- Drain has three parts: an always-on constant (drain_constant), an
+    -- activity-specific drain (currently only drain_walking), and a
+    -- body-driven metabolic drain (drain_metabolic = true, used by
+    -- hunger). All three are additive, so a future resource can mix
+    -- them — e.g. a "fatigue" stat could combine drain_constant with
+    -- drain_metabolic.
+    --
+    -- metabolism_rate is already activity-aware (Lua-derived applies
+    -- the walking multiplier internally), so the drain code just
+    -- reads the authoritative burn rate.
     local drainActivity = (activity == "walking" and params.drain_walking) or 0
     local drainConstant = params.drain_constant or 0
-    local drain = drainActivity + drainConstant
+    local drainMetabolic = 0
+    if params.drain_metabolic then
+        drainMetabolic = stats.get(uid, "metabolism_rate") or 0
+    end
+    local drainOrganFailure = inOrganFailure and ORGAN_FAILURE_DRAIN_PER_SEC or 0
+    local drain = drainActivity + drainConstant + drainMetabolic + drainOrganFailure
 
     local next = current + (regen - drain) * dt
 
@@ -132,13 +359,45 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
         unit.setStat(uid, resourceName, next)
     end
 
+    -- Death triggers run BEFORE collapse so a unit that crosses the
+    -- death threshold this tick doesn't also get a collapse queued
+    -- behind the kill (the engine processes commands in order; the
+    -- kill snap to Dead would be clobbered by the collapse).
+    --
+    -- We compare against BOTH current (pre-regen) and next (post-regen).
+    -- Without the current check, a debug-forced setStat(0) on stamina
+    -- regenerates above zero on the same tick and never fires the kill
+    -- — making the "force stamina to 0" playtest impossible.
+    if pose ~= "dead" then
+        if params.death_threshold and params.death_threshold > 0
+           and (current / maxVal < params.death_threshold
+                or next / maxVal < params.death_threshold) then
+            unit.kill(uid)
+            return
+        end
+        if params.kill_on_zero and (current <= 0 or next <= 0) then
+            unit.kill(uid)
+            return
+        end
+    end
+
     -- Collapse trigger. Only fires on non-collapsed units (a unit
     -- regenerating slowly through the threshold would otherwise
-    -- re-stamp the collapse every tick).
-    if pose ~= "collapsed"
+    -- re-stamp the collapse every tick). Dead units are excluded so
+    -- a corpse never gets re-collapsed by ongoing drain.
+    if pose ~= "collapsed" and pose ~= "dead"
        and params.collapse_threshold and params.collapse_threshold > 0
        and next / maxVal < params.collapse_threshold then
         unit.collapse(uid)
+    end
+
+    -- Surplus regrowth (hunger only via params.surplus_regrowth).
+    -- Runs AFTER the death/collapse triggers so a unit on the edge
+    -- of those doesn't also try to regrow body mass in the same
+    -- tick. Dead units don't regrow.
+    if params.surplus_regrowth and pose ~= "dead"
+       and next > 0.75 * maxVal then
+        applyRegrowth(uid, activity, dt)
     end
 
     -- NOTE: auto-revive is checked once per unit in checkRevive after
@@ -195,6 +454,12 @@ function unitResources.update(dt)
                     tickResource(uid, info.defName, resourceName,
                                  params, activity, pose, dt)
                 end
+                -- After resources have ticked (and hunger has drained),
+                -- catabolism eats body mass if hunger is empty.
+                -- Respiratory failure (lean ≤ min_lean) is the direct
+                -- kill path here; the gradual organ-failure path lives
+                -- in the stamina branch of tickResource above.
+                tickStarvation(uid, dt)
                 checkRevive(uid, defConfig)
             end
         end

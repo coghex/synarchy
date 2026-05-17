@@ -2,6 +2,7 @@
 module Engine.Asset.YamlItems
     ( ItemYamlDef(..)
     , ItemYamlContainer(..)
+    , ItemYamlFood(..)
     , ItemYamlFile(..)
     , loadItemYaml
     ) where
@@ -24,12 +25,22 @@ instance FromJSON ItemYamlContainer where
         ⊚ v .:  "capacity"
         ⊛ v .:? "holds" .!= "water"
 
+-- | Optional food block. Items without this can't be eaten.
+data ItemYamlFood = ItemYamlFood
+    { iyfNutrition ∷ !Float    -- ^ kcal restored per item
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON ItemYamlFood where
+    parseJSON = withObject "ItemYamlFood" $ \v → ItemYamlFood
+        ⊚ v .: "nutrition"
+
 data ItemYamlDef = ItemYamlDef
     { iydName        ∷ !Text
     , iydDisplayName ∷ !Text
     , iydSprite      ∷ !Text                       -- ^ texture path
     , iydWeight      ∷ !Float                      -- ^ empty weight (kg)
     , iydContainer   ∷ !(Maybe ItemYamlContainer)
+    , iydFood        ∷ !(Maybe ItemYamlFood)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlDef where
@@ -39,6 +50,7 @@ instance FromJSON ItemYamlDef where
         ⊛ v .:  "sprite"
         ⊛ v .:? "weight"       .!= 0.0
         ⊛ v .:? "container"
+        ⊛ v .:? "food"
 
 newtype ItemYamlFile = ItemYamlFile
     { iyfItems ∷ [ItemYamlDef]

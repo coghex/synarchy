@@ -20,6 +20,8 @@ module Engine.Scripting.Lua.API.Units
     , unitSetAnimFn
     , unitCollapseFn
     , unitReviveFn
+    , unitKillFn
+    , unitRecomputeBodyFn
     , unitGetStatFn
     , unitGetStatBaseFn
     , unitSetStatFn
@@ -36,7 +38,9 @@ module Engine.Scripting.Lua.API.Units
     , unitGetAllSkillsFn
     , unitGetInventoryFn
     , unitDrinkFn
+    , unitEatFn
     , unitPickupFn
+    , unitRemoveItemFn
     , unitTransitionToFn
     , unitGetPoseFn
     , unitModifyItemFillFn
@@ -68,10 +72,11 @@ import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..),
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Command.Types (UnitCommand(..))
+import Unit.Thread.Command (recomputeBodyDerivedStats)
 import Unit.Direction (Direction(..))
 import Unit.Sim.Types (Pose(..))
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
-                  , ItemManager(..), lookupItemDef)
+                  , ItemFood(..), ItemManager(..), lookupItemDef)
 import Unit.LineOfSight (unitVisibleTiles)
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 import qualified Unit.Selection as Sel
@@ -152,18 +157,24 @@ loadUnitYamlFn env backendState = do
 
                     let stateAnims = HM.fromList (Map.toList (uydStateAnimations def))
                         body = uydBody def
-                        bodyEntries =
-                            [ ("height",  (uybaMean (uybHeight body),
-                                           uybaRange (uybHeight body)))
-                            , ("bulk",    (uybaMean (uybBulk body),
+                        -- height goes into the live-stat layer (it's
+                        -- immutable post-spawn but readable forever).
+                        -- bulk + bodyfat are spawn-only inputs — they
+                        -- live in `udBodyTemplates` so the lazy-roll
+                        -- in `getOrRollStat` can't surface them later
+                        -- as fresh rolls divorced from the unit's
+                        -- actual body composition.
+                        statTemplates = HM.fromList $
+                            ("height", (uybaMean (uybHeight body),
+                                        uybaRange (uybHeight body))) :
+                            [ (sname, (uysBase s, uysRange s))
+                            | (sname, s) ← Map.toList (uydStats def)
+                            ]
+                        bodyTemplates = HM.fromList
+                            [ ("bulk",    (uybaMean (uybBulk body),
                                            uybaRange (uybBulk body)))
                             , ("bodyfat", (uybaMean (uybBodyfat body),
                                            uybaRange (uybBodyfat body)))
-                            ]
-                        statTemplates = HM.fromList $
-                            bodyEntries ++
-                            [ (sname, (uysBase s, uysRange s))
-                            | (sname, s) ← Map.toList (uydStats def)
                             ]
                         skillTemplates = HM.fromList
                             [ (sname, (uyskBase s, uyskRange s))
@@ -183,6 +194,7 @@ loadUnitYamlFn env backendState = do
                             , udStateAnims    = stateAnims
                             , udEagerStats    = uydEagerStats def
                             , udStatTemplates = statTemplates
+                            , udBodyTemplates = bodyTemplates
                             , udSkillTemplates = skillTemplates
                             , udStartingInventory = startingInv
                             }
@@ -400,6 +412,49 @@ unitReviveFn env = do
             Lua.pushboolean True
             return 1
 
+-- | unit.recomputeBody(uid) — re-derive strength / max_hydration /
+--   max_hunger / carrying_capacity from the unit's current body_mass /
+--   lean_mass / fat_mass. Call this from Lua after directly mutating
+--   any body-composition stat (Phase 3 regrowth, Phase 4 catabolism).
+--   Returns true if the unit exists, false otherwise. No-op if the
+--   unit's stat map is missing body_mass / lean_mass / height.
+unitRecomputeBodyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitRecomputeBodyFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                case HM.lookup uid (umInstances um) of
+                    Nothing → (um, False)
+                    Just inst →
+                        let inst' = inst { uiStats =
+                                recomputeBodyDerivedStats (uiStats inst) }
+                        in (um { umInstances = HM.insert uid inst'
+                                                 (umInstances um) }, True)
+            Lua.pushboolean ok
+            return 1
+
+-- | unit.kill(uid) — terminal. Snaps the unit to the Dead pose and
+--   clears all in-flight state. Dead units are filtered out of AI,
+--   ignore further commands, and never revive. Issued by the Lua
+--   survival code when hydration drops below 5 % or stamina hits 0.
+unitKillFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitKillFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitKill uid
+            Lua.pushboolean True
+            return 1
+
 -- | unit.drink(uid) — start the drinking animation on an Idle unit.
 --   Engine handles the auto-revert to Idle when the anim finishes.
 --   Stat / canteen effects are applied Lua-side BEFORE calling this
@@ -415,6 +470,23 @@ unitDrinkFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitDrink uid
+            Lua.pushboolean True
+            return 1
+
+-- | unit.eat(uid) — start the eating animation on an Idle unit.
+--   Mirror of unit.drink. Nutrition + inventory mutation happen
+--   Lua-side BEFORE this call (see scripts/unit_ai's eat_from_inventory
+--   action) — the engine only owns the state/anim/timer.
+unitEatFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitEatFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitEat uid
             Lua.pushboolean True
             return 1
 
@@ -562,6 +634,43 @@ unitAddItemFn env = do
         _ → do
             Lua.pushboolean False
             return 1
+
+-- | unit.removeItem(uid, defName) → bool. Removes the FIRST inventory
+--   instance with the matching defName. Returns true if something was
+--   removed, false if the unit doesn't exist or has no such item.
+--   Used by Phase 5 eat_from_inventory to consume food after the
+--   nutrition is applied.
+unitRemoveItemFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitRemoveItemFn env = do
+    idArg   ← Lua.tointeger 1
+    nameArg ← Lua.tostring 2
+    case (idArg, nameArg) of
+        (Just n, Just nameBS) → do
+            let uid     = UnitId (fromIntegral n)
+                defName = TE.decodeUtf8 nameBS
+            removed ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                case HM.lookup uid (umInstances um) of
+                    Nothing → (um, False)
+                    Just u  →
+                        case removeFirstByName defName (uiInventory u) of
+                            Nothing      → (um, False)
+                            Just newInv  →
+                                let u' = u { uiInventory = newInv }
+                                in (um { umInstances = HM.insert uid u'
+                                                        (umInstances um) }, True)
+            Lua.pushboolean removed
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+-- | Drop the first ItemInstance whose defName matches. Returns Nothing
+--   if no match (caller can distinguish "removed" from "not found").
+removeFirstByName ∷ Text → [ItemInstance] → Maybe [ItemInstance]
+removeFirstByName _ [] = Nothing
+removeFirstByName name (x:xs)
+    | iiDefName x ≡ name = Just xs
+    | otherwise          = (x :) <$> removeFirstByName name xs
 
 -- | Helper: adjust the fill of the first ItemInstance matching defName.
 --   Clamps to [0, capacity] looked up via the ItemManager. Returns the
@@ -1469,6 +1578,13 @@ unitGetInventoryFn env = do
                                 Lua.setfield (-2) "capacity"
                                 Lua.pushstring (TE.encodeUtf8 (icHolds c))
                                 Lua.setfield (-2) "holds"
+                            Nothing → pure ()
+                        case mDef >>= idFood of
+                            Just f → do
+                                Lua.newtable
+                                Lua.pushnumber (Lua.Number (realToFrac (ifNutrition f)))
+                                Lua.setfield (-2) "nutrition"
+                                Lua.setfield (-2) "food"
                             Nothing → pure ()
                         Lua.rawseti (-2) (fromIntegral (i ∷ Int))
                     return 1

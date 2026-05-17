@@ -30,6 +30,9 @@ data UnitSimState = UnitSimState
     -- | Game-time when a Drinking state should auto-transition back
     --   to Idle. Nothing in all other states.
     , usDrinkUntil  ∷ !(Maybe Double)
+    -- | Game-time when an Eating state should auto-transition back to
+    --   Idle. Nothing in all other states.
+    , usEatUntil    ∷ !(Maybe Double)
     -- | Game-time when a Picking state should auto-transition back to
     --   Idle. Used for canteen refilling.
     , usPickupUntil ∷ !(Maybe Double)
@@ -52,8 +55,9 @@ data MoveTarget = MoveTarget
     } deriving (Show, Eq)
 
 -- | What pose the unit is currently *in*. Orthogonal to UnitActivity.
---   Transitions between poses are driven by `TransitioningTo`.
-data Pose = Standing | Crouching | Crawling | Collapsed
+--   Transitions between poses are driven by `TransitioningTo`. `Dead`
+--   is terminal — entered only via `UnitKill`, never via a transition.
+data Pose = Standing | Crouching | Crawling | Collapsed | Dead
     deriving (Show, Eq)
 
 -- | Depth ordering used to derive reverse playback for shared
@@ -65,8 +69,9 @@ poseDepth Standing  = 0
 poseDepth Crouching = 1
 poseDepth Crawling  = 2
 poseDepth Collapsed = 3
+poseDepth Dead      = 4
 
-data UnitActivity = Idle | Walking | Drinking | Picking | TransitioningTo !Pose
+data UnitActivity = Idle | Walking | Drinking | Eating | Picking | TransitioningTo !Pose
     deriving (Show, Eq)
 
 data UnitThreadState = UnitThreadState
