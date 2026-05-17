@@ -40,7 +40,6 @@ local config = {
             regen_factor_walking   = 0.12,
             regen_factor_idle      = 0.5,
             regen_factor_collapsed = 0.3,
-            regen_factor_reviving  = 0.3,
             -- Stationary at a water source — treat as resting.
             regen_factor_crouching = 0.5,
             collapse_threshold     = 0.1,
@@ -51,12 +50,12 @@ local config = {
         },
         hydration = {
             max_from        = "max_hydration",
-            -- During Crouching (source-drinking), regen tops up
-            -- hydration fast — ~5 L/s * endurance ≈ 5 L/s for a
-            -- typical unit. Over the 8-second crouch session that's
-            -- ~40 L, enough to fill most pools in one cycle.
-            -- Other activities have no regen for hydration.
-            regen_factor_crouching = 5.0,
+            -- When on all fours at a water source (pose == "crawling"),
+            -- regen tops up hydration fast — ~5 L/s × endurance ≈ 5 L/s
+            -- for a typical unit. Other poses/activities don't regen
+            -- hydration; canteen-drinking is a separate (Lua-side)
+            -- bolus.
+            regen_factor_crawling = 5.0,
             -- Constant per-second drain in any activity. Tuned so an
             -- average pool (~43 L) empties in 3 game-days. At
             -- timeScale 1.0 (1 game-minute per real-second), 3 days =
@@ -86,7 +85,7 @@ end
 -----------------------------------------------------------
 -- Per-resource tick. Returns nothing; side-effects on the unit.
 -----------------------------------------------------------
-local function tickResource(uid, defName, resourceName, params, activity, dt)
+local function tickResource(uid, defName, resourceName, params, activity, pose, dt)
     local maxVal = stats.get(uid, params.max_from)
     if not maxVal or maxVal <= 0 then return end
 
@@ -97,14 +96,15 @@ local function tickResource(uid, defName, resourceName, params, activity, dt)
         return
     end
 
-    -- Pick the regen factor for the current activity. Unknown activities
-    -- contribute zero — safe fallback if a new state appears later.
+    -- Pose-keyed factors override activity-keyed ones. Collapsed +
+    -- crouching are pose states (orthogonal to whatever activity the
+    -- unit is doing inside that pose).
     local regenFactor
-    if     activity == "walking"   then regenFactor = params.regen_factor_walking
+    if     pose     == "collapsed" then regenFactor = params.regen_factor_collapsed
+    elseif pose     == "crawling"  then regenFactor = params.regen_factor_crawling
+    elseif pose     == "crouching" then regenFactor = params.regen_factor_crouching
+    elseif activity == "walking"   then regenFactor = params.regen_factor_walking
     elseif activity == "idle"      then regenFactor = params.regen_factor_idle
-    elseif activity == "collapsed" then regenFactor = params.regen_factor_collapsed
-    elseif activity == "reviving"  then regenFactor = params.regen_factor_reviving
-    elseif activity == "crouching" then regenFactor = params.regen_factor_crouching
     end
     regenFactor = regenFactor or 0
 
@@ -132,11 +132,10 @@ local function tickResource(uid, defName, resourceName, params, activity, dt)
         unit.setStat(uid, resourceName, next)
     end
 
-    -- Collapse trigger. Only fires on non-collapsed/non-reviving
-    -- units (otherwise a unit regenerating slowly through the
-    -- threshold would re-stamp the collapse anim every tick, or
-    -- interrupt an in-progress revive).
-    if activity ~= "collapsed" and activity ~= "reviving"
+    -- Collapse trigger. Only fires on non-collapsed units (a unit
+    -- regenerating slowly through the threshold would otherwise
+    -- re-stamp the collapse every tick).
+    if pose ~= "collapsed"
        and params.collapse_threshold and params.collapse_threshold > 0
        and next / maxVal < params.collapse_threshold then
         unit.collapse(uid)
@@ -155,11 +154,11 @@ end
 -- don't gate revive.
 -----------------------------------------------------------
 local function checkRevive(uid, defConfig)
-    -- Re-read activity here: a tickResource earlier in this update
-    -- pass may have just called unit.collapse, so the activity passed
-    -- into the per-resource loop is stale.
-    local activity = unit.getActivity(uid)
-    if activity ~= "collapsed" then return end
+    -- Re-read pose here: a tickResource earlier in this update pass
+    -- may have just called unit.collapse, so the pose snapshot taken
+    -- before the per-resource loop is stale.
+    local pose = unit.getPose(uid)
+    if pose ~= "collapsed" then return end
 
     for resourceName, params in pairs(defConfig) do
         local rt = params.revive_threshold
@@ -191,9 +190,10 @@ function unitResources.update(dt)
             local defConfig = config[info.defName]
             if defConfig then
                 local activity = unit.getActivity(uid) or "idle"
+                local pose     = unit.getPose(uid) or "standing"
                 for resourceName, params in pairs(defConfig) do
                     tickResource(uid, info.defName, resourceName,
-                                 params, activity, dt)
+                                 params, activity, pose, dt)
                 end
                 checkRevive(uid, defConfig)
             end

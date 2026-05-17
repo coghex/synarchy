@@ -120,7 +120,7 @@ data UnitYamlDef = UnitYamlDef
       -- ^ optional: path to portrait texture for info panel.
       -- Reserved for future use — parsed and carried but not yet rendered.
     , uydStateAnimations   ∷ !(Map.Map Text Text)
-      -- ^ optional: state name → animation name (e.g. "idle" → "breathing-idle")
+      -- ^ optional: state name → animation name (e.g. "idle" → "idle-standing")
     , uydAnimations        ∷ !(Map.Map Text UnitYamlAnim)
       -- ^ optional: animation library
     , uydEagerStats        ∷ !Bool

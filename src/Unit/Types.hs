@@ -58,7 +58,7 @@ data UnitDef = UnitDef
     , udAnimations ∷ !(HM.HashMap Text Animation)
       -- ^ named animation library (may be empty)
     , udStateAnims ∷ !(HM.HashMap Text Text)
-      -- ^ state name → animation name (e.g. "idle" → "breathing-idle")
+      -- ^ state name → animation name (e.g. "idle" → "idle-standing")
     , udEagerStats    ∷ !Bool
       -- ^ if true, roll all stats at spawn; otherwise lazy on first read
     , udStatTemplates ∷ !(HM.HashMap Text (Float, Float))
@@ -89,14 +89,23 @@ data UnitInstance = UnitInstance
     , uiCurrentAnim ∷ !Text          -- ^ resolved anim name; "" = T-pose
     , uiAnimStart   ∷ !Double        -- ^ POSIX seconds when anim began
     , uiAnimReverse ∷ !Bool
-      -- ^ when True, pickFrame inverts the frame index — used by the
-      --   Reviving state to play the collapse anim in reverse. Set
-      --   by publishToRender from usState, not by the YAML.
+      -- ^ when True, pickFrame inverts the frame index. Set by
+      --   publishToRender for transition activities that move from a
+      --   higher-depth pose to a lower-depth one (the same asset is
+      --   shared with the forward direction).
     , uiActivity    ∷ !Text
-      -- ^ Mirror of sim usState as a Text label: "idle" / "walking"
-      --   / "collapsed". Published by Unit.Thread.publishToRender each
-      --   tick so Lua scripts can read it without dipping into the
-      --   sim thread's private utsRef.
+      -- ^ Mirror of sim usState as a Text label: "idle" / "walking" /
+      --   "drinking" / "pickup" / "transitioning". Pose is published
+      --   separately as `uiPose`.
+    , uiPose        ∷ !Text
+      -- ^ Mirror of sim usPose: "standing" / "crouching" / "crawling"
+      --   / "collapsed". Read by Lua via `unit.getPose`.
+    , uiAnimStride  ∷ !Int
+      -- ^ Frame stride for the current anim. 1 = play all frames.
+      --   N>1 = skip frames (render every Nth), making the anim
+      --   complete in 1/N of its normal duration. Set by
+      --   publishToRender from the sim-side `usTransitionStride`
+      --   while transitioning; otherwise 1.
     , uiStats       ∷ !(HM.HashMap Text Float)
       -- ^ rolled stat values. May be empty if the def is lazy and no
       --   stat has been queried yet; entries are filled on demand.

@@ -13,7 +13,7 @@ import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
-import Unit.Thread.Movement (crouchDuration)
+import Unit.Anim (stateKey)
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
@@ -97,6 +97,8 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , uiAnimStart   = 0
                     , uiAnimReverse = False
                     , uiActivity    = "idle"
+                    , uiPose        = "standing"
+                    , uiAnimStride  = 1
                     , uiStats       = initialStats
                     , uiModifiers   = HM.empty
                     , uiSkills      = initialSkills
@@ -113,12 +115,11 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , usState     = Idle
                     , usFacing    = DirS
                     , usLocalPath = []
-                    , usReviveUntil = Nothing
-                    , usDrinkUntil  = Nothing
-                    , usPickupUntil = Nothing
-                    , usBowingUntil    = Nothing
-                    , usCrouchingUntil = Nothing
-                    , usStandingUntil  = Nothing
+                    , usPose         = Standing
+                    , usDrinkUntil   = Nothing
+                    , usPickupUntil  = Nothing
+                    , usTransitionUntil  = Nothing
+                    , usTransitionStride = 1
                     }
             atomicModifyIORef' utsRef $ \uts →
                 (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
@@ -156,12 +157,9 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
                              , usTarget    = Nothing
                              , usState     = Idle
                              , usLocalPath = []
-                             , usReviveUntil = Nothing
-                             , usDrinkUntil  = Nothing
-                             , usPickupUntil = Nothing
-                             , usBowingUntil    = Nothing
-                             , usCrouchingUntil = Nothing
-                             , usStandingUntil  = Nothing
+                             , usDrinkUntil      = Nothing
+                             , usPickupUntil     = Nothing
+                             , usTransitionUntil = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -182,11 +180,13 @@ handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss
-                -- Collapsed and Reviving units ignore move orders so
-                -- right-click on a selected one doesn't snap them
-                -- upright mid-animation.
-                | usState ss ≡ Collapsed → (uts, ())
-                | usState ss ≡ Reviving  → (uts, ())
+                -- Only Standing units can move. Crouching / Crawling /
+                -- Collapsed all refuse moves until they transition back
+                -- up. (Will relax when per-pose walk assets exist.)
+                -- In-progress transitions also ignore moves so a
+                -- right-click can't yank a unit out of mid-transition.
+                | usPose ss ≢ Standing → (uts, ())
+                | isTransitioning (usState ss) → (uts, ())
                 | otherwise →
                     let ss' = ss { usTarget    = Just (MoveTarget tx ty speed)
                                  , usState     = Walking
@@ -203,72 +203,48 @@ handleUnitCommand env utsRef (UnitStop uid) = do
                 let ss' = ss { usTarget    = Nothing
                              , usState     = Idle
                              , usLocalPath = []
-                             , usReviveUntil = Nothing
-                             , usDrinkUntil  = Nothing
-                             , usPickupUntil = Nothing
-                             , usBowingUntil    = Nothing
-                             , usCrouchingUntil = Nothing
-                             , usStandingUntil  = Nothing
+                             , usDrinkUntil      = Nothing
+                             , usPickupUntil     = Nothing
+                             , usTransitionUntil = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
 handleUnitCommand env utsRef (UnitCollapse uid) = do
+    -- Snap to Collapsed pose. Fall animation is deferred — when the
+    -- standing→collapsed composite is authored, this handler will
+    -- instead queue a TransitioningTo Collapsed.
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss →
                 let ss' = ss { usTarget    = Nothing
-                             , usState     = Collapsed
+                             , usPose      = Collapsed
+                             , usState     = Idle
                              , usLocalPath = []
-                             , usReviveUntil = Nothing
-                             , usDrinkUntil  = Nothing
-                             , usPickupUntil = Nothing
-                             , usBowingUntil    = Nothing
-                             , usCrouchingUntil = Nothing
-                             , usStandingUntil  = Nothing
+                             , usDrinkUntil      = Nothing
+                             , usPickupUntil     = Nothing
+                             , usTransitionUntil = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
 handleUnitCommand env utsRef (UnitRevive uid) = do
-    -- Only acts on Collapsed units. Compute the reviving-state anim
-    -- duration up front so we know when to auto-transition back to
-    -- Idle. If the unit's def doesn't define a reviving anim, the
-    -- duration is 0 and the unit skips straight to Idle.
-    um ← readIORef (unitManagerRef env)
-    let duration = case HM.lookup uid (umInstances um) of
-            Nothing   → 0
-            Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
-                Nothing  → 0
-                Just def →
-                    let key      = "reviving" ∷ Text
-                        animName = HM.lookupDefault key key (udStateAnims def)
-                    in case HM.lookup animName (udAnimations def) of
-                        Nothing → 0
-                        Just a  →
-                            let counts = V.length <$> Map.elems (aFrames a)
-                                maxN   = if null counts then 0 else maximum counts
-                                fps    = aFps a
-                            in if fps > 0 ∧ maxN > 0
-                               then fromIntegral maxN / realToFrac fps ∷ Double
-                               else 0
-    -- Game-clock: usReviveUntil is checked against gameTimeRef in
-    -- tickAllMovement, so the deadline has to be set in the same
-    -- clock or pause would either skip or stall it.
-    now ← readIORef (gameTimeRef env)
+    -- Snap to Standing pose. Per the orthogonal-pose plan, a real
+    -- revive eventually chains Collapsed → Crawling → Crouching →
+    -- Standing reverse transitions; for now (no transition assets yet)
+    -- it just snaps. Only acts on Collapsed units.
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss
-                | usState ss ≢ Collapsed → (uts, ())
-                | duration ≤ 0 →
-                    -- No reviving anim defined; just snap to Idle.
-                    let ss' = ss { usState = Idle, usReviveUntil = Nothing }
-                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+                | usPose ss ≢ Collapsed → (uts, ())
                 | otherwise →
-                    let ss' = ss { usState = Reviving
-                                 , usReviveUntil = Just (now + duration)
+                    let ss' = ss { usPose            = Standing
+                                 , usState           = Idle
+                                 , usDrinkUntil      = Nothing
+                                 , usPickupUntil     = Nothing
+                                 , usTransitionUntil = Nothing
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -346,52 +322,53 @@ handleUnitCommand env utsRef (UnitPickup uid) = do
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
-handleUnitCommand env utsRef (UnitBowDown uid) = do
-    -- Kicks off the source-drinking sequence. Computes ALL THREE
-    -- timers up front from the def's bow_down anim length (used for
-    -- both bow and stand, since stand reuses the anim in reverse)
-    -- plus a fixed crouch duration. The expiry handlers in
-    -- Unit.Thread.Movement then transition between states without
-    -- needing def lookup.
-    um ← readIORef (unitManagerRef env)
-    let bowDur = case HM.lookup uid (umInstances um) of
-            Nothing   → 0
-            Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
-                Nothing  → 0
-                Just def →
-                    let key      = "bow_down" ∷ Text
-                        animName = HM.lookupDefault key key (udStateAnims def)
-                    in case HM.lookup animName (udAnimations def) of
-                        Nothing → 0
-                        Just a  →
-                            let counts = V.length <$> Map.elems (aFrames a)
-                                maxN   = if null counts then 0 else maximum counts
-                                fps    = aFps a
-                            in if fps > 0 ∧ maxN > 0
-                               then fromIntegral maxN / realToFrac fps ∷ Double
-                               else 0
+handleUnitCommand env utsRef (UnitTransitionTo uid target stride) = do
+    -- Initiate a pose transition. Stride ≥ 2 skips frames at render
+    -- time and proportionally shortens the duration — used by the AI
+    -- when chaining multiple transitions back-to-back.
+    let s = max 1 stride
+    um  ← readIORef (unitManagerRef env)
+    uts0 ← readIORef utsRef
+    let mCurrentPose = usPose <$> HM.lookup uid (utsSimStates uts0)
+        duration = case (HM.lookup uid (umInstances um), mCurrentPose) of
+            (Just inst, Just curPose) →
+                case HM.lookup (uiDefName inst) (umDefs um) of
+                    Nothing  → 0
+                    Just def →
+                        let key      = stateKey curPose (TransitioningTo target)
+                            animName = HM.lookupDefault key key (udStateAnims def)
+                        in case HM.lookup animName (udAnimations def) of
+                            Nothing → 0
+                            Just a  →
+                                let counts = V.length <$> Map.elems (aFrames a)
+                                    maxN   = if null counts then 0 else maximum counts
+                                    fps    = aFps a
+                                    -- frames shown when stride S = ((n-1) `div` S) + 1
+                                    visible = (maxN - 1) `div` s + 1
+                                in if fps > 0 ∧ maxN > 0
+                                   then fromIntegral visible / realToFrac fps ∷ Double
+                                   else 0
+            _ → 0
     now ← readIORef (gameTimeRef env)
-    -- Schedule: bow ends at +bowDur, crouch ends at +bowDur+crouchDur,
-    -- stand ends at +bowDur+crouchDur+bowDur (stand reuses bow anim).
-    let bowEnd    = now + bowDur
-        crouchEnd = bowEnd + crouchDuration
-        standEnd  = crouchEnd + bowDur
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss
-                | usState ss ≢ Idle → (uts, ())
-                | bowDur ≤ 0 → (uts, ())   -- no anim defined → no-op
+                | usPose ss ≡ target → (uts, ())  -- already there
+                | isTransitioning (usState ss) → (uts, ())  -- already mid-transition
                 | otherwise →
-                    let ss' = ss { usState          = BowingDown
-                                 , usTarget         = Nothing
-                                 , usLocalPath      = []
-                                 , usBowingUntil    = Just bowEnd
-                                 , usCrouchingUntil = Just crouchEnd
-                                 , usStandingUntil  = Just standEnd
+                    let ss' = ss { usState             = TransitioningTo target
+                                 , usTarget            = Nothing
+                                 , usLocalPath         = []
+                                 , usTransitionUntil   = Just (now + duration)
+                                 , usTransitionStride  = s
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
+isTransitioning ∷ UnitActivity → Bool
+isTransitioning (TransitioningTo _) = True
+isTransitioning _                   = False
 
 -- | Multiply the rolled strength by `(leanMass / avgLeanMass) ^ 0.7`,
 --   where avgLeanMass comes from the def's body means and leanMass from

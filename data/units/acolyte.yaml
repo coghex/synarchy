@@ -36,61 +36,71 @@ units:
       SE: "assets/textures/units/acolyte/se.png"
 
     state_animations:
-      idle: breathing-idle
-      walk: walk
-      collapsed: collapse
-      reviving: collapse
-      drinking: drinking
-      pickup: picking-up
-      bow_down: bowing-down
-      crouching: idle_crawl
-      stand_up: bowing-down
+      # Pose-keyed; key format is "<pose>-<activity>" or
+      # "<from>-to-<to>" for transitions. Unmatched keys fall back to
+      # T-pose, so omitting a (pose, activity) pair is safe.
+      standing-idle:         idle-standing
+      standing-walk:         walk
+      standing-drink:        drinking
+      standing-pickup:       picking-up
+      crouching-idle:        idle-crouching
+      crawling-idle:         idle-crawling
+      collapsed-idle:        idle-collapsed
+      # Pose transitions. The forward asset is reused for the reverse
+      # direction — publishToRender flips uiAnimReverse when the
+      # target pose has lower depth than the current pose.
+      standing-to-crouching: standing-to-crouching
+      crouching-to-standing: standing-to-crouching
+      crouching-to-crawling: crouching-to-crawling
+      crawling-to-crouching: crouching-to-crawling
+      crawling-to-collapsed: crawling-to-collapsed
+      collapsed-to-crawling: crawling-to-collapsed
 
     animations:
-      breathing-idle:
+      idle-standing:
         fps: 4
         loop: true
         frames:
           south:
-            - "assets/textures/units/acolyte/animations/breathing-idle/south/frame_000.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/south/frame_001.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/south/frame_002.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south/frame_003.png"
           south-west:
-            - "assets/textures/units/acolyte/animations/breathing-idle/south-west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/south-west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/south-west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/south-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south-west/frame_003.png"
           west:
-            - "assets/textures/units/acolyte/animations/breathing-idle/west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/west/frame_003.png"
           north-west:
-            - "assets/textures/units/acolyte/animations/breathing-idle/north-west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/north-west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/north-west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/north-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north-west/frame_003.png"
           north:
-            - "assets/textures/units/acolyte/animations/breathing-idle/north/frame_000.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/north/frame_001.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/north/frame_002.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north/frame_003.png"
           north-east:
-            - "assets/textures/units/acolyte/animations/breathing-idle/north-east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/north-east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/north-east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/north-east/frame_003.png"
           east:
-            - "assets/textures/units/acolyte/animations/breathing-idle/east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/east/frame_003.png"
           south-east:
-            - "assets/textures/units/acolyte/animations/breathing-idle/south-east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/south-east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/south-east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/breathing-idle/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-standing/south-east/frame_003.png"
 
       walk:
         fps: 8
@@ -152,91 +162,6 @@ units:
             - "assets/textures/units/acolyte/animations/walk/south-east/frame_003.png"
             - "assets/textures/units/acolyte/animations/walk/south-east/frame_004.png"
             - "assets/textures/units/acolyte/animations/walk/south-east/frame_005.png"
-
-      collapse:
-        fps: 8
-        loop: false
-        frames:
-          south:
-            - "assets/textures/units/acolyte/animations/collapse/south/frame_000.png"
-            - "assets/textures/units/acolyte/animations/collapse/south/frame_001.png"
-            - "assets/textures/units/acolyte/animations/collapse/south/frame_002.png"
-            - "assets/textures/units/acolyte/animations/collapse/south/frame_003.png"
-            - "assets/textures/units/acolyte/animations/collapse/south/frame_004.png"
-            - "assets/textures/units/acolyte/animations/collapse/south/frame_005.png"
-            - "assets/textures/units/acolyte/animations/collapse/south/frame_006.png"
-            - "assets/textures/units/acolyte/animations/collapse/south/frame_007.png"
-            - "assets/textures/units/acolyte/animations/collapse/south/frame_008.png"
-          south-west:
-            - "assets/textures/units/acolyte/animations/collapse/south-west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-west/frame_003.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-west/frame_004.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-west/frame_005.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-west/frame_006.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-west/frame_007.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-west/frame_008.png"
-          west:
-            - "assets/textures/units/acolyte/animations/collapse/west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/collapse/west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/collapse/west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/collapse/west/frame_003.png"
-            - "assets/textures/units/acolyte/animations/collapse/west/frame_004.png"
-            - "assets/textures/units/acolyte/animations/collapse/west/frame_005.png"
-            - "assets/textures/units/acolyte/animations/collapse/west/frame_006.png"
-            - "assets/textures/units/acolyte/animations/collapse/west/frame_007.png"
-            - "assets/textures/units/acolyte/animations/collapse/west/frame_008.png"
-          north-west:
-            - "assets/textures/units/acolyte/animations/collapse/north-west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-west/frame_003.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-west/frame_004.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-west/frame_005.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-west/frame_006.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-west/frame_007.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-west/frame_008.png"
-          north:
-            - "assets/textures/units/acolyte/animations/collapse/north/frame_000.png"
-            - "assets/textures/units/acolyte/animations/collapse/north/frame_001.png"
-            - "assets/textures/units/acolyte/animations/collapse/north/frame_002.png"
-            - "assets/textures/units/acolyte/animations/collapse/north/frame_003.png"
-            - "assets/textures/units/acolyte/animations/collapse/north/frame_004.png"
-            - "assets/textures/units/acolyte/animations/collapse/north/frame_005.png"
-            - "assets/textures/units/acolyte/animations/collapse/north/frame_006.png"
-            - "assets/textures/units/acolyte/animations/collapse/north/frame_007.png"
-            - "assets/textures/units/acolyte/animations/collapse/north/frame_008.png"
-          north-east:
-            - "assets/textures/units/acolyte/animations/collapse/north-east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-east/frame_003.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-east/frame_004.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-east/frame_005.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-east/frame_006.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-east/frame_007.png"
-            - "assets/textures/units/acolyte/animations/collapse/north-east/frame_008.png"
-          east:
-            - "assets/textures/units/acolyte/animations/collapse/east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/collapse/east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/collapse/east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/collapse/east/frame_003.png"
-            - "assets/textures/units/acolyte/animations/collapse/east/frame_004.png"
-            - "assets/textures/units/acolyte/animations/collapse/east/frame_005.png"
-            - "assets/textures/units/acolyte/animations/collapse/east/frame_006.png"
-            - "assets/textures/units/acolyte/animations/collapse/east/frame_007.png"
-            - "assets/textures/units/acolyte/animations/collapse/east/frame_008.png"
-          south-east:
-            - "assets/textures/units/acolyte/animations/collapse/south-east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-east/frame_003.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-east/frame_004.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-east/frame_005.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-east/frame_006.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-east/frame_007.png"
-            - "assets/textures/units/acolyte/animations/collapse/south-east/frame_008.png"
 
       drinking:
         fps: 4
@@ -352,172 +277,408 @@ units:
             - "assets/textures/units/acolyte/animations/picking-up/south-east/frame_003.png"
             - "assets/textures/units/acolyte/animations/picking-up/south-east/frame_004.png"
 
-      bowing-down:
-        fps: 4
-        loop: false
-        frames:
-          south:
-            - "assets/textures/units/acolyte/animations/bowing-down/south/frame_000.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south/frame_001.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south/frame_002.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south/frame_003.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south/frame_004.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south/frame_005.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south/frame_006.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south/frame_007.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south/frame_008.png"
-          south-west:
-            - "assets/textures/units/acolyte/animations/bowing-down/south-west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-west/frame_003.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-west/frame_004.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-west/frame_005.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-west/frame_006.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-west/frame_007.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-west/frame_008.png"
-          west:
-            - "assets/textures/units/acolyte/animations/bowing-down/west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/west/frame_003.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/west/frame_004.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/west/frame_005.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/west/frame_006.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/west/frame_007.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/west/frame_008.png"
-          north-west:
-            - "assets/textures/units/acolyte/animations/bowing-down/north-west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-west/frame_003.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-west/frame_004.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-west/frame_005.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-west/frame_006.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-west/frame_007.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-west/frame_008.png"
-          north:
-            - "assets/textures/units/acolyte/animations/bowing-down/north/frame_000.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north/frame_001.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north/frame_002.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north/frame_003.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north/frame_004.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north/frame_005.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north/frame_006.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north/frame_007.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north/frame_008.png"
-          north-east:
-            - "assets/textures/units/acolyte/animations/bowing-down/north-east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-east/frame_003.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-east/frame_004.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-east/frame_005.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-east/frame_006.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-east/frame_007.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/north-east/frame_008.png"
-          east:
-            - "assets/textures/units/acolyte/animations/bowing-down/east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/east/frame_003.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/east/frame_004.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/east/frame_005.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/east/frame_006.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/east/frame_007.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/east/frame_008.png"
-          south-east:
-            - "assets/textures/units/acolyte/animations/bowing-down/south-east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-east/frame_003.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-east/frame_004.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-east/frame_005.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-east/frame_006.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-east/frame_007.png"
-            - "assets/textures/units/acolyte/animations/bowing-down/south-east/frame_008.png"
-
-      idle_crawl:
+      idle-crawling:
         fps: 4
         loop: true
         frames:
           south:
-            - "assets/textures/units/acolyte/animations/idle_crawl/south/frame_000.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south/frame_001.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south/frame_002.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south/frame_003.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south/frame_004.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south/frame_005.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south/frame_006.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south/frame_007.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south/frame_008.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south/frame_005.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south/frame_006.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south/frame_007.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south/frame_008.png"
           south-west:
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-west/frame_003.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-west/frame_004.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-west/frame_005.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-west/frame_006.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-west/frame_007.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-west/frame_008.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-west/frame_008.png"
           west:
-            - "assets/textures/units/acolyte/animations/idle_crawl/west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/west/frame_003.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/west/frame_004.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/west/frame_005.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/west/frame_006.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/west/frame_007.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/west/frame_008.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/west/frame_008.png"
           north-west:
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-west/frame_000.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-west/frame_001.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-west/frame_002.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-west/frame_003.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-west/frame_004.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-west/frame_005.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-west/frame_006.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-west/frame_007.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-west/frame_008.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-west/frame_008.png"
           north:
-            - "assets/textures/units/acolyte/animations/idle_crawl/north/frame_000.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north/frame_001.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north/frame_002.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north/frame_003.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north/frame_004.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north/frame_005.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north/frame_006.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north/frame_007.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north/frame_008.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north/frame_005.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north/frame_006.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north/frame_007.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north/frame_008.png"
           north-east:
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-east/frame_003.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-east/frame_004.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-east/frame_005.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-east/frame_006.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-east/frame_007.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/north-east/frame_008.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/north-east/frame_008.png"
           east:
-            - "assets/textures/units/acolyte/animations/idle_crawl/east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/east/frame_003.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/east/frame_004.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/east/frame_005.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/east/frame_006.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/east/frame_007.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/east/frame_008.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/east/frame_008.png"
           south-east:
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-east/frame_000.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-east/frame_001.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-east/frame_002.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-east/frame_003.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-east/frame_004.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-east/frame_005.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-east/frame_006.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-east/frame_007.png"
-            - "assets/textures/units/acolyte/animations/idle_crawl/south-east/frame_008.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/idle-crawling/south-east/frame_008.png"
+
+      idle-crouching:
+        fps: 4
+        loop: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/idle-crouching/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south/frame_004.png"
+          south-west:
+            - "assets/textures/units/acolyte/animations/idle-crouching/south-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south-west/frame_004.png"
+          west:
+            - "assets/textures/units/acolyte/animations/idle-crouching/west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/west/frame_004.png"
+          north-west:
+            - "assets/textures/units/acolyte/animations/idle-crouching/north-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north-west/frame_004.png"
+          north:
+            - "assets/textures/units/acolyte/animations/idle-crouching/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north/frame_004.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/idle-crouching/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/north-east/frame_004.png"
+          east:
+            - "assets/textures/units/acolyte/animations/idle-crouching/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/east/frame_004.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/idle-crouching/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/idle-crouching/south-east/frame_004.png"
+
+      idle-collapsed:
+        fps: 1
+        loop: true
+        frames:
+          south:      ["assets/textures/units/acolyte/animations/crawling-to-collapsed/south/frame_008.png"]
+          south-west: ["assets/textures/units/acolyte/animations/crawling-to-collapsed/south-west/frame_008.png"]
+          west:       ["assets/textures/units/acolyte/animations/crawling-to-collapsed/west/frame_008.png"]
+          north-west: ["assets/textures/units/acolyte/animations/crawling-to-collapsed/north-west/frame_008.png"]
+          north:      ["assets/textures/units/acolyte/animations/crawling-to-collapsed/north/frame_008.png"]
+          north-east: ["assets/textures/units/acolyte/animations/crawling-to-collapsed/north-east/frame_008.png"]
+          east:       ["assets/textures/units/acolyte/animations/crawling-to-collapsed/east/frame_008.png"]
+          south-east: ["assets/textures/units/acolyte/animations/crawling-to-collapsed/south-east/frame_008.png"]
+
+      standing-to-crouching:
+        fps: 4
+        loop: false
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south/frame_008.png"
+          south-west:
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-west/frame_008.png"
+          west:
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/west/frame_008.png"
+          north-west:
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-west/frame_008.png"
+          north:
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north/frame_008.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/north-east/frame_008.png"
+          east:
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/east/frame_008.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/standing-to-crouching/south-east/frame_008.png"
+
+      crouching-to-crawling:
+        fps: 4
+        loop: false
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south/frame_008.png"
+          south-west:
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-west/frame_008.png"
+          west:
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/west/frame_008.png"
+          north-west:
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-west/frame_008.png"
+          north:
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north/frame_008.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/north-east/frame_008.png"
+          east:
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/east/frame_008.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crouching-to-crawling/south-east/frame_008.png"
+
+      crawling-to-collapsed:
+        fps: 4
+        loop: false
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south/frame_008.png"
+          south-west:
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-west/frame_008.png"
+          west:
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/west/frame_008.png"
+          north-west:
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-west/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-west/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-west/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-west/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-west/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-west/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-west/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-west/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-west/frame_008.png"
+          north:
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north/frame_008.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/north-east/frame_008.png"
+          east:
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/east/frame_008.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/crawling-to-collapsed/south-east/frame_008.png"

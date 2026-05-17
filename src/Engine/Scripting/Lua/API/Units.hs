@@ -37,7 +37,8 @@ module Engine.Scripting.Lua.API.Units
     , unitGetInventoryFn
     , unitDrinkFn
     , unitPickupFn
-    , unitBowDownFn
+    , unitTransitionToFn
+    , unitGetPoseFn
     , unitModifyItemFillFn
     , unitAddItemFn
     , unitGetVisibleTilesFn
@@ -68,6 +69,7 @@ import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Direction (Direction(..))
+import Unit.Sim.Types (Pose(..))
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
                   , ItemManager(..), lookupItemDef)
 import Unit.LineOfSight (unitVisibleTiles)
@@ -431,22 +433,60 @@ unitPickupFn env = do
             Lua.pushboolean True
             return 1
 
--- | unit.bowDown(uid) — start the source-drinking sequence on an
---   Idle unit. Engine chains BowingDown → Crouching → StandingUp →
---   Idle automatically; total duration is `2*bowAnimDuration +
---   crouchDuration`. No Lua follow-up needed.
-unitBowDownFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-unitBowDownFn env = do
+-- | unit.transitionTo(uid, poseName, stride?) — initiate a pose
+--   transition. poseName is one of "standing", "crouching", "crawling",
+--   "collapsed". Optional stride defaults to 1; pass 2 (or higher) to
+--   skip frames when chaining transitions back-to-back.
+--   No-op if the unit is already in that pose or mid-transition.
+unitTransitionToFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitTransitionToFn env = do
+    idArg     ← Lua.tointeger 1
+    mPoseBS   ← Lua.tostring 2
+    mStrideArg ← Lua.tointeger 3
+    let stride = case mStrideArg of
+            Just s | s ≥ 1 → fromIntegral s
+            _              → 1
+    case (idArg, mPoseBS >>= parsePose . TE.decodeUtf8) of
+        (Just n, Just target) → do
+            let uid = UnitId (fromIntegral n)
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $
+                UnitTransitionTo uid target stride
+            Lua.pushboolean True
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+parsePose ∷ Text → Maybe Pose
+parsePose "standing"  = Just Standing
+parsePose "crouching" = Just Crouching
+parsePose "crawling"  = Just Crawling
+parsePose "collapsed" = Just Collapsed
+parsePose _           = Nothing
+
+-- | unit.getPose(uid) — returns the unit's current pose as a string:
+--   "standing" / "crouching" / "crawling" / "collapsed". nil if the
+--   unit doesn't exist. Reads `uiPose`, mirrored from `usPose` by
+--   Unit.Thread.publishToRender every tick.
+unitGetPoseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetPoseFn env = do
     idArg ← Lua.tointeger 1
     case idArg of
         Nothing → do
-            Lua.pushboolean False
+            Lua.pushnil
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitBowDown uid
-            Lua.pushboolean True
-            return 1
+            mPose ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure (uiPose <$> HM.lookup uid (umInstances um))
+            case mPose of
+                Just label → do
+                    Lua.pushstring (TE.encodeUtf8 label)
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
 
 -- | unit.modifyItemFill(uid, defName, delta) → actual applied delta
 --   (after clamp to [0, capacity]). Adjusts the fill of the FIRST item

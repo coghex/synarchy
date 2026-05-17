@@ -17,8 +17,7 @@ import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Sim.Types
-import Unit.Anim (activityToStateKey, resolveStateAnim)
-import Unit.Sim.Types (UnitActivity(..))
+import Unit.Anim (stateKey, resolveStateAnim, poseTag)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (processAllUnitCommands)
 import Unit.Thread.Movement (tickAllMovement)
@@ -69,12 +68,6 @@ unitLoop env stateRef lastTimeRef utsRef = do
                 writeIORef lastTimeRef tickStart
 
                 processAllUnitCommands env utsRef
-                -- Command processing always runs so the player can
-                -- queue orders mid-pause. Movement is gated: when
-                -- paused, units freeze in place but pending commands
-                -- still process. Game-time also freezes — anything
-                -- reading gameTimeRef (animations, revive timers,
-                -- building appear → built transitions) holds still.
                 paused ← readIORef (enginePausedRef env)
                 unless paused $ do
                     modifyIORef' (gameTimeRef env) (+ dt)
@@ -95,10 +88,10 @@ unitLoop env stateRef lastTimeRef utsRef = do
               )
 
 -- | Copy sim-thread positions/facing into the render-visible UnitManager.
---   Also drives unit animations: the resolved anim for `usState` is
---   stamped onto the instance, with `uiAnimStart` reset only when the
---   anim name actually changes (so the frame index doesn't restart on
---   every tick).
+--   Also drives unit animations: the resolved anim for (usPose, usState)
+--   is stamped onto the instance. uiAnimStart resets only when the
+--   anim name OR the reverse flag changes (so refacing or re-entering
+--   the same activity doesn't restart frame 0).
 publishToRender ∷ EngineEnv → IORef UnitThreadState → IO ()
 publishToRender env utsRef = do
     uts ← readIORef utsRef
@@ -106,9 +99,6 @@ publishToRender env utsRef = do
     if HM.null simStates
         then return ()
         else do
-            -- Game-clock, not POSIX: uiAnimStart needs to freeze on
-            -- pause so the frame index doesn't sprint forward when the
-            -- game resumes.
             now ← readIORef (gameTimeRef env)
             atomicModifyIORef' (unitManagerRef env) $ \um →
                 let defs = umDefs um
@@ -118,26 +108,24 @@ publishToRender env utsRef = do
                             Just ss →
                                 let targetAnim = case HM.lookup (uiDefName inst) defs of
                                         Just def → resolveStateAnim def
-                                                       (activityToStateKey (usState ss))
+                                                       (stateKey (usPose ss) (usState ss))
                                         Nothing  → uiCurrentAnim inst
-                                    -- Reviving plays the collapse anim
-                                    -- in reverse; StandingUp plays the
-                                    -- bow_down anim in reverse. Same
-                                    -- flag, same idea.
-                                    newReverse = usState ss ≡ Reviving
-                                              ∨ usState ss ≡ StandingUp
-                                    -- "Same playback" requires both the anim
-                                    -- NAME and the reverse flag to match. A
-                                    -- Collapsed → Reviving transition keeps
-                                    -- the same anim name ("collapse") but
-                                    -- flips the reverse flag, so we must
-                                    -- treat it as a fresh playback and reset
-                                    -- uiAnimStart — otherwise pickFrame uses
-                                    -- a stale start time and immediately
-                                    -- snaps to frame 0 (standing), giving
-                                    -- the jolt instead of a smooth reverse.
+                                    -- Transition assets are shared between
+                                    -- forward and reverse: standing-to-crouching
+                                    -- plays normally for Standing→Crouching, and
+                                    -- the same asset reversed for Crouching→
+                                    -- Standing. Reverse is detected by depth:
+                                    -- moving toward lower depth = reverse.
+                                    newReverse = case usState ss of
+                                        TransitioningTo target →
+                                            poseDepth (usPose ss) > poseDepth target
+                                        _ → False
+                                    newStride = case usState ss of
+                                        TransitioningTo _ → usTransitionStride ss
+                                        _                 → 1
                                     samePlayback = targetAnim ≡ uiCurrentAnim inst
                                                  ∧ newReverse ≡ uiAnimReverse inst
+                                                 ∧ newStride  ≡ uiAnimStride  inst
                                 in inst { uiGridX       = usRealX ss
                                         , uiGridY       = usRealY ss
                                         , uiGridZ       = usGridZ ss
@@ -148,22 +136,17 @@ publishToRender env utsRef = do
                                                           else now
                                         , uiAnimReverse = newReverse
                                         , uiActivity    = activityLabel (usState ss)
+                                        , uiPose        = poseTag (usPose ss)
+                                        , uiAnimStride  = newStride
                                         }
                       ) (umInstances um)
                 in (um { umInstances = updated }, ())
 
 -- | Stable string labels for UnitActivity. Lua reads these via
---   `unit.getActivity` and the resources tick uses them to decide
---   drain vs regen. Keep in sync with `Unit.Anim.activityToStateKey`
---   if the activity → state-anim mapping ever diverges from the
---   activity → string mapping.
+--   `unit.getActivity`. Pose is exposed separately via `unit.getPose`.
 activityLabel ∷ UnitActivity → Text
-activityLabel Idle       = "idle"
-activityLabel Walking    = "walking"
-activityLabel Collapsed  = "collapsed"
-activityLabel Reviving   = "reviving"
-activityLabel Drinking   = "drinking"
-activityLabel Picking    = "pickup"
-activityLabel BowingDown = "bow_down"
-activityLabel Crouching  = "crouching"
-activityLabel StandingUp = "stand_up"
+activityLabel Idle              = "idle"
+activityLabel Walking           = "walking"
+activityLabel Drinking          = "drinking"
+activityLabel Picking           = "pickup"
+activityLabel (TransitioningTo _) = "transitioning"

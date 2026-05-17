@@ -92,16 +92,20 @@ pickFrame now cam inst def
                             let elapsed = max 0 (now - uiAnimStart inst)
                                 raw     = floor (elapsed * realToFrac (aFps an)) ∷ Int
                                 n       = V.length fs
+                                -- Stride > 1 skips frames: stride 2
+                                -- shows frames 0, 2, 4, … so a 9-frame
+                                -- transition completes in half the time.
+                                stride  = max 1 (uiAnimStride inst)
+                                strided = raw * stride
                                 fwdIdx  = if aLoop an
-                                          then raw `mod` n
-                                          else min raw (n - 1)
+                                          then strided `mod` n
+                                          else min strided (n - 1)
                                 -- Reverse path: walk the frames from
                                 -- the last index toward 0. Mirrors the
                                 -- forward clamp so we hold frame 0
-                                -- when "elapsed" runs out — the unit
-                                -- stays in the standing pose after
-                                -- the revive anim completes (sim will
-                                -- transition Reviving→Idle next tick).
+                                -- when "elapsed" runs out — for a
+                                -- reverse-direction pose transition,
+                                -- frame 0 is the "destination" pose.
                                 idx     = if uiAnimReverse inst
                                           then (n - 1) - fwdIdx
                                           else fwdIdx

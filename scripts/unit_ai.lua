@@ -396,13 +396,23 @@ end
 -----------------------------------------------------------
 -- Action: drink_from_source
 --
--- Used when the unit is thirsty but has no canteen-with-water (either
--- no canteen at all, or canteen is empty) and knows where water is.
--- Walks to a dry tile at the water's edge, calls unit.bowDown, and
--- the engine handles the bow → crouch → stand chain automatically.
--- Hydration regens fast during Crouching via unit_resources.
+-- No-canteen path. Three-phase sequence driven from Lua via a
+-- per-unit phase flag (s.sourcePhase ∈ {"descending","drinking",
+-- "ascending", nil}). Lock-in: utility returns math.huge while the
+-- phase is non-nil so a half-completed sequence can't be pre-empted.
+--
+-- Pose descent + ascent are chained two-step (standing↔crouching↔
+-- crawling) and use stride=2 so the visible duration is halved — the
+-- player doesn't sit through every frame of two 9-frame transitions.
+-- Hydration regen happens at pose == "crawling" (on all fours at the
+-- water), keyed by regen_factor_crawling in unit_resources.
 -----------------------------------------------------------
+local STRIDE_DESCEND = 2
+local STRIDE_ASCEND  = 2
+
 local function drinkFromSourceUtility(uid, s, params)
+    if s.sourcePhase then return math.huge end
+
     local hyd = unit.getStat(uid, "hydration")
     local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration")
     if not hyd or not maxHyd or maxHyd <= 0 then return -math.huge end
@@ -411,8 +421,7 @@ local function drinkFromSourceUtility(uid, s, params)
     if thirst < params.drink_min_thirst then return -math.huge end
     if not s.knownWaterLocation then return -math.huge end
 
-    -- Mutually exclusive with drink_from_canteen — if a canteen
-    -- already has water, take the fast route instead.
+    -- Mutually exclusive with drink_from_canteen.
     if findCanteenWithWater(uid, params.drink_canteen_def) then
         return -math.huge
     end
@@ -421,6 +430,49 @@ local function drinkFromSourceUtility(uid, s, params)
 end
 
 local function drinkFromSourceExecute(uid, s, params)
+    local pose = unit.getPose(uid) or "standing"
+
+    -- Descending: step one pose down per AI tick (between ticks, the
+    -- engine plays the transition anim with stride 2).
+    if s.sourcePhase == "descending" then
+        if     pose == "standing"  then
+            unit.transitionTo(uid, "crouching", STRIDE_DESCEND)
+        elseif pose == "crouching" then
+            unit.transitionTo(uid, "crawling", STRIDE_DESCEND)
+        elseif pose == "crawling"  then
+            s.sourcePhase = "drinking"
+        end
+        return
+    end
+
+    -- Drinking: at the water on all fours. unit_resources regens
+    -- hydration. When mostly full, kick off the ascent.
+    if s.sourcePhase == "drinking" then
+        local hyd    = unit.getStat(uid, "hydration") or 0
+        local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration") or 0
+        if maxHyd > 0 and hyd / maxHyd >= 0.95 then
+            s.sourcePhase = "ascending"
+            unit.transitionTo(uid, "crouching", STRIDE_ASCEND)
+        end
+        return
+    end
+
+    -- Ascending: step one pose up per tick. When we hit standing,
+    -- we're done.
+    if s.sourcePhase == "ascending" then
+        if     pose == "crawling"  then
+            unit.transitionTo(uid, "crouching", STRIDE_ASCEND)
+        elseif pose == "crouching" then
+            unit.transitionTo(uid, "standing", STRIDE_ASCEND)
+        elseif pose == "standing"  then
+            s.sourcePhase        = nil
+            s.knownWaterLocation = nil
+        end
+        return
+    end
+
+    -- No phase active: standing entry. Walk to the bank or kick off
+    -- the descent if already adjacent.
     local loc = s.knownWaterLocation
     if not loc then return end
     local info = unit.getInfo(uid)
@@ -432,12 +484,10 @@ local function drinkFromSourceExecute(uid, s, params)
     local onFluid = world.getFluidAt(utx, uty) ~= nil
 
     if cheb == 1 and not onFluid then
-        -- Adjacent + dry → start the bow→crouch→stand sequence. Engine
-        -- handles the chain; the AI won't tick this unit again until
-        -- it's back to Idle (tickOne short-circuits the three states).
         local fluidType = world.getFluidAt(loc.x, loc.y)
         if fluidType == "lake" or fluidType == "river" then
-            unit.bowDown(uid)
+            s.sourcePhase = "descending"
+            unit.transitionTo(uid, "crouching", STRIDE_DESCEND)
         else
             s.knownWaterLocation = nil
         end
@@ -616,14 +666,18 @@ local function tickOne(uid, defName)
     local actList = actions[defName]
     if not params or not actList then return end
 
-    -- Short-circuit for transient states: collapsed/reviving/drinking/
-    -- pickup/bow_down/crouching/stand_up units can't act, and we don't
-    -- want to clobber their anim by issuing new commands.
+    -- Short-circuit:
+    --   * Collapsed pose: the unit is unconscious. Auto-revive lives
+    --     in unit_resources; AI doesn't run.
+    --   * Transitioning / drinking / pickup: engine is mid-animation,
+    --     we'd clobber the state by issuing new commands.
+    -- Crouching/Crawling pose with idle activity DOES run AI — that's
+    -- how multi-phase actions (e.g. source-drink) advance.
+    local pose     = unit.getPose(uid)
     local activity = unit.getActivity(uid)
-    if activity == "collapsed" or activity == "reviving"
-       or activity == "drinking" or activity == "pickup"
-       or activity == "bow_down" or activity == "crouching"
-       or activity == "stand_up" then return end
+    if pose == "collapsed" then return end
+    if activity == "drinking" or activity == "pickup"
+       or activity == "transitioning" then return end
 
     local s = ensureState(uid)
     maintainTask(uid, s)

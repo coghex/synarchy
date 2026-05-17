@@ -5,6 +5,7 @@ module Unit.Command.Types
 
 import UPrelude
 import Unit.Types (UnitId(..))
+import Unit.Sim.Types (Pose(..))
 
 data UnitCommand
     = UnitSpawn !UnitId !Text !Float !Float !Int
@@ -16,26 +17,30 @@ data UnitCommand
         -- ^ unitId, targetX, targetY, speed (tiles per second)
     | UnitStop !UnitId
     | UnitCollapse !UnitId
-        -- ^ play the collapse anim and hold; unit cannot be moved
-        --   until further state changes are added
+        -- ^ Snap pose to Collapsed (no fall animation yet — deferred).
     | UnitRevive !UnitId
-        -- ^ no-op unless the unit is Collapsed. Plays the reviving
-        --   state anim (typically the collapse anim in reverse) and
-        --   auto-transitions back to Idle when it finishes.
+        -- ^ No-op unless the unit is in Collapsed pose. Snaps pose to
+        --   Standing. Will eventually chain reverse transitions
+        --   Collapsed → Crawling → Crouching → Standing once those
+        --   assets exist.
     | UnitDrink !UnitId
-        -- ^ no-op unless the unit is Idle. Plays the drinking anim,
-        --   blocks movement, and auto-transitions back to Idle after
-        --   the anim's duration. Stat/inventory effects are applied
-        --   Lua-side BEFORE issuing this command (see scripts/unit_ai
-        --   drink action) — the command is purely state + anim.
+        -- ^ no-op unless the unit is Idle. Plays the drinking anim
+        --   (currently keyed on the standing-drink state), blocks
+        --   movement, and auto-transitions back to Idle. Stat/inventory
+        --   effects are applied Lua-side BEFORE issuing this command.
     | UnitPickup !UnitId
-        -- ^ Same shape as UnitDrink, for the canteen-refill "picking
-        --   up" animation. Engine handles only state + anim; effect
-        --   (canteen fill) is applied Lua-side at action start.
-    | UnitBowDown !UnitId
-        -- ^ Begin the source-drinking sequence: BowingDown →
-        --   Crouching → StandingUp → Idle. Engine pre-computes all
-        --   three timers from the def's bow_down anim length and a
-        --   fixed crouch duration. During Crouching, the Lua-side
-        --   unit_resources script regens hydration at a high rate.
+        -- ^ Same shape as UnitDrink, for the canteen-refill pickup
+        --   animation. Engine handles state + anim only; the fill
+        --   effect is applied Lua-side at action start.
+    | UnitTransitionTo !UnitId !Pose !Int
+        -- ^ Initiate a pose transition. The Int is the frame stride
+        --   (1 = normal, 2 = every-other-frame, etc.) — used when
+        --   chaining multi-pose descents so the player doesn't wait
+        --   through every frame of every transition. Duration scales
+        --   inversely with stride.
+        --
+        --   Resolves the state key <currentPose>-to-<targetPose>
+        --   against state_animations to pick the anim; missing assets
+        --   yield a 0-duration transition that completes on the next
+        --   tick. While transitioning, movement orders are ignored.
     deriving (Show)

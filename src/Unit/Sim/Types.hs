@@ -3,6 +3,8 @@ module Unit.Sim.Types
     ( UnitSimState(..)
     , MoveTarget(..)
     , UnitActivity(..)
+    , Pose(..)
+    , poseDepth
     , Direction(..)          -- re-exported from Unit.Direction
     , UnitThreadState(..)
     , emptyUnitThreadState
@@ -18,35 +20,29 @@ data UnitSimState = UnitSimState
     , usRealY     ∷ !Float
     , usGridZ     ∷ !Int
     , usTarget    ∷ !(Maybe MoveTarget)
+    , usPose      ∷ !Pose
     , usState     ∷ !UnitActivity
     , usFacing    ∷ !Direction
     -- | Ordered waypoints (continuous tile-center coords) from a
     --   local A* replan. Empty = greedy heading toward usTarget.
     --   Each waypoint pops off the front as the unit arrives.
     , usLocalPath ∷ ![(Float, Float)]
-    -- | Game-time when a Reviving state should auto-transition back
-    --   to Idle. Nothing in all other states. Set by the UnitRevive
-    --   handler from the def's reviving-anim duration.
-    , usReviveUntil ∷ !(Maybe Double)
     -- | Game-time when a Drinking state should auto-transition back
-    --   to Idle. Nothing in all other states. Set by UnitDrink from
-    --   the def's drinking-anim duration. Effects (hydration +,
-    --   canteen fill -) are applied Lua-side at start; this clock
-    --   only gates how long the animation plays + movement is blocked.
+    --   to Idle. Nothing in all other states.
     , usDrinkUntil  ∷ !(Maybe Double)
     -- | Game-time when a Picking state should auto-transition back to
-    --   Idle. Same shape as usDrinkUntil. Set by UnitPickup from the
-    --   def's pickup anim duration. Used for canteen refilling.
+    --   Idle. Used for canteen refilling.
     , usPickupUntil ∷ !(Maybe Double)
-    -- | Source-drinking sequence: three timers driving the chained
-    --   transitions BowingDown → Crouching → StandingUp → Idle.
-    --   - usBowingUntil: when BowingDown expires (anim length).
-    --   - usCrouchingUntil: when Crouching expires (fixed duration,
-    --     during which the unit_resources hydration regen ticks).
-    --   - usStandingUntil: when StandingUp expires (anim length).
-    , usBowingUntil    ∷ !(Maybe Double)
-    , usCrouchingUntil ∷ !(Maybe Double)
-    , usStandingUntil  ∷ !(Maybe Double)
+    -- | Game-time when a TransitioningTo state should commit the pose
+    --   change and return to Idle. Set by UnitTransitionTo from the
+    --   resolved transition anim's duration; missing/T-pose anim → 0,
+    --   so the transition completes on the next tick.
+    , usTransitionUntil ∷ !(Maybe Double)
+    -- | Frame stride for the active transition anim. 1 = normal speed.
+    --   N>1 = play every Nth frame (faster, fewer visible frames). Set
+    --   by UnitTransitionTo. Reset implicitly when the transition
+    --   completes (the next state isn't a transition).
+    , usTransitionStride ∷ !Int
     } deriving (Show, Eq)
 
 data MoveTarget = MoveTarget
@@ -55,8 +51,22 @@ data MoveTarget = MoveTarget
     , mtSpeed   ∷ !Float
     } deriving (Show, Eq)
 
-data UnitActivity = Idle | Walking | Collapsed | Reviving | Drinking | Picking
-                  | BowingDown | Crouching | StandingUp
+-- | What pose the unit is currently *in*. Orthogonal to UnitActivity.
+--   Transitions between poses are driven by `TransitioningTo`.
+data Pose = Standing | Crouching | Crawling | Collapsed
+    deriving (Show, Eq)
+
+-- | Depth ordering used to derive reverse playback for shared
+--   transition assets. Going from a lower-depth pose to a higher-depth
+--   pose is "forward" (plays the asset normally); the reverse direction
+--   plays the same asset flipped via uiAnimReverse.
+poseDepth ∷ Pose → Int
+poseDepth Standing  = 0
+poseDepth Crouching = 1
+poseDepth Crawling  = 2
+poseDepth Collapsed = 3
+
+data UnitActivity = Idle | Walking | Drinking | Picking | TransitioningTo !Pose
     deriving (Show, Eq)
 
 data UnitThreadState = UnitThreadState

@@ -16,7 +16,6 @@
 -- tick and tries again next tick — the "never gives up" rule.
 module Unit.Thread.Movement
     ( tickAllMovement
-    , crouchDuration
     ) where
 
 import UPrelude
@@ -42,10 +41,9 @@ arrivalEpsilon = 0.1
 tickAllMovement ∷ Double → EngineEnv → IORef UnitThreadState → IO ()
 tickAllMovement dt env utsRef = do
     mWtd ← snapshotVisibleWorldTiles env
-    -- Game-clock: `now` is compared against `usReviveUntil` (set in
-    -- game-time at revive-start). Using POSIX here would let the
-    -- revive timer expire while paused, which is exactly what we
-    -- don't want.
+    -- Game-clock: timers (drink, pickup, transition) are set in
+    -- game-time at command-handler time. Using POSIX here would let
+    -- timers expire while paused, which is exactly what we don't want.
     now  ← readIORef (gameTimeRef env)
     uts ← readIORef utsRef
     let simStates  = utsSimStates uts
@@ -61,28 +59,16 @@ snapshotVisibleWorldTiles env = do
             Nothing → pure Nothing
             Just ws → Just <$> readIORef (wsTilesRef ws)
 
--- | Source-drink crouch duration in game-seconds. Hydration regen
---   while Crouching is configured in scripts/unit_resources.lua;
---   8 s @ ~5 L/s regen ≈ 40 L recovered per crouch session, enough to
---   top up an average pool in one cycle.
-crouchDuration ∷ Double
-crouchDuration = 8.0
-
 tickUnit ∷ Double → Double → Maybe WorldTileData → UnitSimState → UnitSimState
 tickUnit now dt mWtd us =
-    let us1 = handleStandExpiry now
-            $ handleCrouchExpiry now
-            $ handleBowExpiry now
+    let us1 = handleTransitionExpiry now
             $ handlePickupExpiry now
-            $ handleDrinkExpiry now
-            $ handleReviveExpiry now us
+            $ handleDrinkExpiry now us
     in case usState us1 of
-        -- Stationary anim states — auto-expiry handles transitions.
-        Drinking   → us1
-        Picking    → us1
-        BowingDown → us1
-        Crouching  → us1
-        StandingUp → us1
+        -- Stationary anim states block movement.
+        Drinking            → us1
+        Picking             → us1
+        TransitioningTo _   → us1
         _ → case usTarget us1 of
             Nothing → us1
             Just mt →
@@ -91,53 +77,30 @@ tickUnit now dt mWtd us =
                         []      → (mtTargetX mt, mtTargetY mt)
                 in stepTowardSubGoal dt mWtd us1 mt subGoal
 
--- | If the unit is Reviving and the revive's anim duration has
---   elapsed, snap back to Idle. Otherwise leave the state alone.
-handleReviveExpiry ∷ Double → UnitSimState → UnitSimState
-handleReviveExpiry now us = case usReviveUntil us of
-    Just t | usState us ≡ Reviving ∧ now ≥ t →
-        us { usState = Idle, usReviveUntil = Nothing }
-    _ → us
-
--- | Same shape as handleReviveExpiry but for the Drinking state.
+-- | When a Drinking timer expires, snap back to Idle.
 handleDrinkExpiry ∷ Double → UnitSimState → UnitSimState
 handleDrinkExpiry now us = case usDrinkUntil us of
     Just t | usState us ≡ Drinking ∧ now ≥ t →
         us { usState = Idle, usDrinkUntil = Nothing }
     _ → us
 
--- | Same shape as handleDrinkExpiry but for the Picking state.
+-- | When a Picking timer expires, snap back to Idle.
 handlePickupExpiry ∷ Double → UnitSimState → UnitSimState
 handlePickupExpiry now us = case usPickupUntil us of
     Just t | usState us ≡ Picking ∧ now ≥ t →
         us { usState = Idle, usPickupUntil = Nothing }
     _ → us
 
--- | Source-drink chain. The UnitBowDown command sets ALL THREE timers
---   up front (it has access to the def's anim durations). Each expiry
---   handler then just transitions the state when its timer is reached.
---   The timers don't get cleared on transition — we leave them set so
---   the chain is self-describing, and the unit's state guards prevent
---   double-transitions.
-handleBowExpiry ∷ Double → UnitSimState → UnitSimState
-handleBowExpiry now us = case usBowingUntil us of
-    Just t | usState us ≡ BowingDown ∧ now ≥ t →
-        us { usState = Crouching }
-    _ → us
-
-handleCrouchExpiry ∷ Double → UnitSimState → UnitSimState
-handleCrouchExpiry now us = case usCrouchingUntil us of
-    Just t | usState us ≡ Crouching ∧ now ≥ t →
-        us { usState = StandingUp }
-    _ → us
-
-handleStandExpiry ∷ Double → UnitSimState → UnitSimState
-handleStandExpiry now us = case usStandingUntil us of
-    Just t | usState us ≡ StandingUp ∧ now ≥ t →
-        us { usState         = Idle
-           , usBowingUntil    = Nothing
-           , usCrouchingUntil = Nothing
-           , usStandingUntil  = Nothing
+-- | When a pose transition timer expires, commit the target pose and
+--   return to Idle. AI-side logic is responsible for chaining the next
+--   transition if more steps are needed (e.g. source-drinking unit
+--   transitions to Crouching, drinks, then issues TransitionTo Standing).
+handleTransitionExpiry ∷ Double → UnitSimState → UnitSimState
+handleTransitionExpiry now us = case (usState us, usTransitionUntil us) of
+    (TransitioningTo target, Just t) | now ≥ t →
+        us { usPose            = target
+           , usState           = Idle
+           , usTransitionUntil = Nothing
            }
     _ → us
 
