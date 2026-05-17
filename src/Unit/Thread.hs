@@ -120,7 +120,12 @@ publishToRender env utsRef = do
                                         Just def → resolveStateAnim def
                                                        (activityToStateKey (usState ss))
                                         Nothing  → uiCurrentAnim inst
+                                    -- Reviving plays the collapse anim
+                                    -- in reverse; StandingUp plays the
+                                    -- bow_down anim in reverse. Same
+                                    -- flag, same idea.
                                     newReverse = usState ss ≡ Reviving
+                                              ∨ usState ss ≡ StandingUp
                                     -- "Same playback" requires both the anim
                                     -- NAME and the reverse flag to match. A
                                     -- Collapsed → Reviving transition keeps
@@ -153,9 +158,12 @@ publishToRender env utsRef = do
 --   if the activity → state-anim mapping ever diverges from the
 --   activity → string mapping.
 activityLabel ∷ UnitActivity → Text
-activityLabel Idle      = "idle"
-activityLabel Walking   = "walking"
-activityLabel Collapsed = "collapsed"
-activityLabel Reviving  = "reviving"
-activityLabel Drinking  = "drinking"
-activityLabel Picking   = "pickup"
+activityLabel Idle       = "idle"
+activityLabel Walking    = "walking"
+activityLabel Collapsed  = "collapsed"
+activityLabel Reviving   = "reviving"
+activityLabel Drinking   = "drinking"
+activityLabel Picking    = "pickup"
+activityLabel BowingDown = "bow_down"
+activityLabel Crouching  = "crouching"
+activityLabel StandingUp = "stand_up"

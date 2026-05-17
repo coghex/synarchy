@@ -16,12 +16,15 @@ import Unit.Types (UnitDef(..))
 --   animations. These keys are the contract between sim and YAML: a
 --   unit YAML may map them to any animation name via `state_animations`.
 activityToStateKey ∷ UnitActivity → Text
-activityToStateKey Idle      = "idle"
-activityToStateKey Walking   = "walk"
-activityToStateKey Collapsed = "collapsed"
-activityToStateKey Reviving  = "reviving"
-activityToStateKey Drinking  = "drinking"
-activityToStateKey Picking   = "pickup"
+activityToStateKey Idle       = "idle"
+activityToStateKey Walking    = "walk"
+activityToStateKey Collapsed  = "collapsed"
+activityToStateKey Reviving   = "reviving"
+activityToStateKey Drinking   = "drinking"
+activityToStateKey Picking    = "pickup"
+activityToStateKey BowingDown = "bow_down"
+activityToStateKey Crouching  = "crouching"
+activityToStateKey StandingUp = "stand_up"
 
 -- | Resolve a state key (e.g. "idle") to an animation name (e.g.
 --   "breathing-idle") using the unit's `udStateAnims` map. If no

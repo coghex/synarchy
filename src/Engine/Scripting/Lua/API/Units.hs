@@ -37,7 +37,9 @@ module Engine.Scripting.Lua.API.Units
     , unitGetInventoryFn
     , unitDrinkFn
     , unitPickupFn
+    , unitBowDownFn
     , unitModifyItemFillFn
+    , unitAddItemFn
     , unitGetVisibleTilesFn
     ) where
 
@@ -429,6 +431,23 @@ unitPickupFn env = do
             Lua.pushboolean True
             return 1
 
+-- | unit.bowDown(uid) — start the source-drinking sequence on an
+--   Idle unit. Engine chains BowingDown → Crouching → StandingUp →
+--   Idle automatically; total duration is `2*bowAnimDuration +
+--   crouchDuration`. No Lua follow-up needed.
+unitBowDownFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitBowDownFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            Lua.liftIO $ Q.writeQueue (unitQueue env) $ UnitBowDown uid
+            Lua.pushboolean True
+            return 1
+
 -- | unit.modifyItemFill(uid, defName, delta) → actual applied delta
 --   (after clamp to [0, capacity]). Adjusts the fill of the FIRST item
 --   matching defName. Returns 0 if no such item / no container / unit
@@ -459,6 +478,49 @@ unitModifyItemFillFn env = do
             return 1
         _ → do
             Lua.pushnumber 0
+            return 1
+
+-- | unit.addItem(uid, defName, fill) → bool. Adds a new ItemInstance
+--   to the unit's inventory. Fill is clamped to the def's container
+--   capacity (or zeroed for non-containers). Returns false if the
+--   unit or item def doesn't exist.
+unitAddItemFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitAddItemFn env = do
+    idArg    ← Lua.tointeger 1
+    nameArg  ← Lua.tostring 2
+    fillArg  ← Lua.tonumber 3
+    case (idArg, nameArg) of
+        (Just n, Just nameBS) → do
+            let uid     = UnitId (fromIntegral n)
+                defName = TE.decodeUtf8 nameBS
+                fillIn  = case fillArg of
+                    Just (Lua.Number d) → realToFrac d ∷ Float
+                    _ → 0
+            ok ← Lua.liftIO $ do
+                itemMgr ← readIORef (itemManagerRef env)
+                case lookupItemDef defName itemMgr of
+                    Nothing → return False
+                    Just def → do
+                        let clampedFill = case idContainer def of
+                                Just c  → max 0 (min fillIn (icCapacity c))
+                                Nothing → 0
+                            inst' = ItemInstance
+                                { iiDefName     = defName
+                                , iiCurrentFill = clampedFill
+                                }
+                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                            case HM.lookup uid (umInstances um) of
+                                Nothing → (um, False)
+                                Just u  →
+                                    let u' = u { uiInventory =
+                                                  uiInventory u ++ [inst'] }
+                                    in (um { umInstances = HM.insert uid u'
+                                                            (umInstances um) },
+                                        True)
+            Lua.pushboolean ok
+            return 1
+        _ → do
+            Lua.pushboolean False
             return 1
 
 -- | Helper: adjust the fill of the first ItemInstance matching defName.

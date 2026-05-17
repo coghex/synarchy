@@ -13,6 +13,7 @@ import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
+import Unit.Thread.Movement (crouchDuration)
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Types
@@ -115,6 +116,9 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , usReviveUntil = Nothing
                     , usDrinkUntil  = Nothing
                     , usPickupUntil = Nothing
+                    , usBowingUntil    = Nothing
+                    , usCrouchingUntil = Nothing
+                    , usStandingUntil  = Nothing
                     }
             atomicModifyIORef' utsRef $ \uts →
                 (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
@@ -155,6 +159,9 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
                              , usReviveUntil = Nothing
                              , usDrinkUntil  = Nothing
                              , usPickupUntil = Nothing
+                             , usBowingUntil    = Nothing
+                             , usCrouchingUntil = Nothing
+                             , usStandingUntil  = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -199,6 +206,9 @@ handleUnitCommand env utsRef (UnitStop uid) = do
                              , usReviveUntil = Nothing
                              , usDrinkUntil  = Nothing
                              , usPickupUntil = Nothing
+                             , usBowingUntil    = Nothing
+                             , usCrouchingUntil = Nothing
+                             , usStandingUntil  = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -214,6 +224,9 @@ handleUnitCommand env utsRef (UnitCollapse uid) = do
                              , usReviveUntil = Nothing
                              , usDrinkUntil  = Nothing
                              , usPickupUntil = Nothing
+                             , usBowingUntil    = Nothing
+                             , usCrouchingUntil = Nothing
+                             , usStandingUntil  = Nothing
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -330,6 +343,53 @@ handleUnitCommand env utsRef (UnitPickup uid) = do
                                  , usTarget      = Nothing
                                  , usLocalPath   = []
                                  , usPickupUntil = Just (now + duration)
+                                 }
+                    in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
+
+handleUnitCommand env utsRef (UnitBowDown uid) = do
+    -- Kicks off the source-drinking sequence. Computes ALL THREE
+    -- timers up front from the def's bow_down anim length (used for
+    -- both bow and stand, since stand reuses the anim in reverse)
+    -- plus a fixed crouch duration. The expiry handlers in
+    -- Unit.Thread.Movement then transition between states without
+    -- needing def lookup.
+    um ← readIORef (unitManagerRef env)
+    let bowDur = case HM.lookup uid (umInstances um) of
+            Nothing   → 0
+            Just inst → case HM.lookup (uiDefName inst) (umDefs um) of
+                Nothing  → 0
+                Just def →
+                    let key      = "bow_down" ∷ Text
+                        animName = HM.lookupDefault key key (udStateAnims def)
+                    in case HM.lookup animName (udAnimations def) of
+                        Nothing → 0
+                        Just a  →
+                            let counts = V.length <$> Map.elems (aFrames a)
+                                maxN   = if null counts then 0 else maximum counts
+                                fps    = aFps a
+                            in if fps > 0 ∧ maxN > 0
+                               then fromIntegral maxN / realToFrac fps ∷ Double
+                               else 0
+    now ← readIORef (gameTimeRef env)
+    -- Schedule: bow ends at +bowDur, crouch ends at +bowDur+crouchDur,
+    -- stand ends at +bowDur+crouchDur+bowDur (stand reuses bow anim).
+    let bowEnd    = now + bowDur
+        crouchEnd = bowEnd + crouchDuration
+        standEnd  = crouchEnd + bowDur
+    atomicModifyIORef' utsRef $ \uts →
+        let simStates = utsSimStates uts
+        in case HM.lookup uid simStates of
+            Nothing → (uts, ())
+            Just ss
+                | usState ss ≢ Idle → (uts, ())
+                | bowDur ≤ 0 → (uts, ())   -- no anim defined → no-op
+                | otherwise →
+                    let ss' = ss { usState          = BowingDown
+                                 , usTarget         = Nothing
+                                 , usLocalPath      = []
+                                 , usBowingUntil    = Just bowEnd
+                                 , usCrouchingUntil = Just crouchEnd
+                                 , usStandingUntil  = Just standEnd
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 

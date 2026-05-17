@@ -41,6 +41,8 @@ local config = {
             regen_factor_idle      = 0.5,
             regen_factor_collapsed = 0.3,
             regen_factor_reviving  = 0.3,
+            -- Stationary at a water source — treat as resting.
+            regen_factor_crouching = 0.5,
             collapse_threshold     = 0.1,
             -- When current/max climbs past this, a Collapsed unit
             -- auto-revives. Hysteresis vs collapse_threshold keeps a
@@ -49,6 +51,12 @@ local config = {
         },
         hydration = {
             max_from        = "max_hydration",
+            -- During Crouching (source-drinking), regen tops up
+            -- hydration fast — ~5 L/s * endurance ≈ 5 L/s for a
+            -- typical unit. Over the 8-second crouch session that's
+            -- ~40 L, enough to fill most pools in one cycle.
+            -- Other activities have no regen for hydration.
+            regen_factor_crouching = 5.0,
             -- Constant per-second drain in any activity. Tuned so an
             -- average pool (~43 L) empties in 3 game-days. At
             -- timeScale 1.0 (1 game-minute per real-second), 3 days =
@@ -96,6 +104,7 @@ local function tickResource(uid, defName, resourceName, params, activity, dt)
     elseif activity == "idle"      then regenFactor = params.regen_factor_idle
     elseif activity == "collapsed" then regenFactor = params.regen_factor_collapsed
     elseif activity == "reviving"  then regenFactor = params.regen_factor_reviving
+    elseif activity == "crouching" then regenFactor = params.regen_factor_crouching
     end
     regenFactor = regenFactor or 0
 

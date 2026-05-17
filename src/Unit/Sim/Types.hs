@@ -38,6 +38,15 @@ data UnitSimState = UnitSimState
     --   Idle. Same shape as usDrinkUntil. Set by UnitPickup from the
     --   def's pickup anim duration. Used for canteen refilling.
     , usPickupUntil ∷ !(Maybe Double)
+    -- | Source-drinking sequence: three timers driving the chained
+    --   transitions BowingDown → Crouching → StandingUp → Idle.
+    --   - usBowingUntil: when BowingDown expires (anim length).
+    --   - usCrouchingUntil: when Crouching expires (fixed duration,
+    --     during which the unit_resources hydration regen ticks).
+    --   - usStandingUntil: when StandingUp expires (anim length).
+    , usBowingUntil    ∷ !(Maybe Double)
+    , usCrouchingUntil ∷ !(Maybe Double)
+    , usStandingUntil  ∷ !(Maybe Double)
     } deriving (Show, Eq)
 
 data MoveTarget = MoveTarget
@@ -47,6 +56,7 @@ data MoveTarget = MoveTarget
     } deriving (Show, Eq)
 
 data UnitActivity = Idle | Walking | Collapsed | Reviving | Drinking | Picking
+                  | BowingDown | Crouching | StandingUp
     deriving (Show, Eq)
 
 data UnitThreadState = UnitThreadState

@@ -76,6 +76,9 @@ local config = {
         refill_urgency_scale     = 0.5,   -- added on top, scaled by (x²)
         refill_arrival_tiles     = 1.5,
         refill_speed             = 1.5,
+        -- Source-drinking. Used when the unit has no canteen-with-
+        -- water but knows where water is. Speed matches refill.
+        source_drink_speed    = 1.5,
         -- Searching. Fires when canteen has headroom but no water is
         -- known. Walks a rosette: 8 compass waypoints per ring,
         -- distance = ring_index * search_spacing. Spacing roughly
@@ -391,6 +394,71 @@ local function refillExecute(uid, s, params)
 end
 
 -----------------------------------------------------------
+-- Action: drink_from_source
+--
+-- Used when the unit is thirsty but has no canteen-with-water (either
+-- no canteen at all, or canteen is empty) and knows where water is.
+-- Walks to a dry tile at the water's edge, calls unit.bowDown, and
+-- the engine handles the bow → crouch → stand chain automatically.
+-- Hydration regens fast during Crouching via unit_resources.
+-----------------------------------------------------------
+local function drinkFromSourceUtility(uid, s, params)
+    local hyd = unit.getStat(uid, "hydration")
+    local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration")
+    if not hyd or not maxHyd or maxHyd <= 0 then return -math.huge end
+
+    local thirst = 1 - hyd / maxHyd
+    if thirst < params.drink_min_thirst then return -math.huge end
+    if not s.knownWaterLocation then return -math.huge end
+
+    -- Mutually exclusive with drink_from_canteen — if a canteen
+    -- already has water, take the fast route instead.
+    if findCanteenWithWater(uid, params.drink_canteen_def) then
+        return -math.huge
+    end
+
+    return thirst * params.drink_weight
+end
+
+local function drinkFromSourceExecute(uid, s, params)
+    local loc = s.knownWaterLocation
+    if not loc then return end
+    local info = unit.getInfo(uid)
+    if not info then return end
+
+    local utx = math.floor(info.gridX)
+    local uty = math.floor(info.gridY)
+    local cheb = math.max(math.abs(utx - loc.x), math.abs(uty - loc.y))
+    local onFluid = world.getFluidAt(utx, uty) ~= nil
+
+    if cheb == 1 and not onFluid then
+        -- Adjacent + dry → start the bow→crouch→stand sequence. Engine
+        -- handles the chain; the AI won't tick this unit again until
+        -- it's back to Idle (tickOne short-circuits the three states).
+        local fluidType = world.getFluidAt(loc.x, loc.y)
+        if fluidType == "lake" or fluidType == "river" then
+            unit.bowDown(uid)
+        else
+            s.knownWaterLocation = nil
+        end
+        return
+    end
+
+    -- Walk to the water edge. Same geometry as refill — push 45%
+    -- toward water so the unit stops right at the bank.
+    local nx, ny = nearestNonFluidNeighbor(loc.x, loc.y,
+                                           info.gridX, info.gridY)
+    if not nx then
+        s.knownWaterLocation = nil
+        return
+    end
+    local alpha = 0.45
+    local tx = nx + 0.5 + alpha * (loc.x - nx)
+    local ty = ny + 0.5 + alpha * (loc.y - ny)
+    unit.moveTo(uid, tx, ty, params.source_drink_speed)
+end
+
+-----------------------------------------------------------
 -- Action: search_for_water
 --
 -- Fires when canteen has headroom AND no water is known. Walks the
@@ -484,6 +552,8 @@ local actions = {
           execute = refillExecute },
         { name = "search_for_water", utility = searchUtility,
           execute = searchExecute },
+        { name = "drink_from_source", utility = drinkFromSourceUtility,
+          execute = drinkFromSourceExecute },
     },
 }
 
@@ -546,12 +616,14 @@ local function tickOne(uid, defName)
     local actList = actions[defName]
     if not params or not actList then return end
 
-    -- Short-circuit for transient states: collapsed/reviving/drinking
-    -- units can't act, and we don't want to clobber their anim by
-    -- issuing new commands.
+    -- Short-circuit for transient states: collapsed/reviving/drinking/
+    -- pickup/bow_down/crouching/stand_up units can't act, and we don't
+    -- want to clobber their anim by issuing new commands.
     local activity = unit.getActivity(uid)
     if activity == "collapsed" or activity == "reviving"
-       or activity == "drinking" then return end
+       or activity == "drinking" or activity == "pickup"
+       or activity == "bow_down" or activity == "crouching"
+       or activity == "stand_up" then return end
 
     local s = ensureState(uid)
     maintainTask(uid, s)

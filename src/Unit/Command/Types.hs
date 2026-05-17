@@ -32,4 +32,10 @@ data UnitCommand
         -- ^ Same shape as UnitDrink, for the canteen-refill "picking
         --   up" animation. Engine handles only state + anim; effect
         --   (canteen fill) is applied Lua-side at action start.
+    | UnitBowDown !UnitId
+        -- ^ Begin the source-drinking sequence: BowingDown →
+        --   Crouching → StandingUp → Idle. Engine pre-computes all
+        --   three timers from the def's bow_down anim length and a
+        --   fixed crouch duration. During Crouching, the Lua-side
+        --   unit_resources script regens hydration at a high rate.
     deriving (Show)

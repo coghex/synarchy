@@ -34,6 +34,13 @@ local config = {
         unit_type      = "acolyte",
         count          = 3,
         spawn_offset   = { x = 0.5, y = 0.5 },
+        -- Items handed out to each spawned unit immediately after
+        -- spawn, via unit.addItem. The unit YAML carries no
+        -- starting_inventory; debug-spawned units come out bare,
+        -- portal-spawned units get whatever's listed here.
+        starting_items = {
+            { def = "canteen_steel_2l", fill = 2.0 },
+        },
         -- Walk two tiles south so the unit clears the spawn tile
         -- before its commandedTask resolves (the AI's "arrived"
         -- threshold is 0.6 tiles, so a 1-tile walk barely makes it
@@ -121,6 +128,15 @@ local function tickOne(bid, info)
         engine.logWarn("BuildingSpawn: unit.spawn failed at "
             .. spawnX .. "," .. spawnY)
         return
+    end
+
+    -- Hand out per-building starting items. Unit YAML carries no
+    -- inventory now, so this is what differentiates a portal-spawned
+    -- unit from a debug-spawned one.
+    if params.starting_items then
+        for _, entry in ipairs(params.starting_items) do
+            unit.addItem(newUid, entry.def, entry.fill or 0)
+        end
     end
 
     -- Route through the AI so the walk-out is a commanded task (beats
