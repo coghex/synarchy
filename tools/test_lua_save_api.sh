@@ -87,14 +87,25 @@ lua "world.init('test', 42, 64, 1)" > /dev/null
 INIT_RESULT=$(lua "return world.waitForInit(120)" 120)
 echo "  world.waitForInit returned: [$INIT_RESULT]"
 lua "world.show('test')" > /dev/null
+# Ensure unpaused starting state for the pause-on-save check below.
+lua "engine.setPaused(false)" > /dev/null
+assert_eq "engine starts unpaused"  "false" "engine.isPaused()"
 
 echo "[3] saveWorld accepts a valid name on an initialized world"
 assert_eq "good save"             "true"  "engine.saveWorld('test', '${TEST_SAVE_NAME}')"
+assert_eq "engine paused after save" "true" "engine.isPaused()"
+# Reset before the next save assertion so we can re-verify the pause-flip.
+lua "engine.setPaused(false)" > /dev/null
 assert_eq "good save can repeat"  "true"  "engine.saveWorld('test', '${TEST_SAVE_NAME}')"
+assert_eq "engine paused after repeat" "true" "engine.isPaused()"
 
 echo "[4] saveWorld still rejects bad inputs on an initialized world"
+# Validation failures should NOT pause the engine (no side effects on reject).
+lua "engine.setPaused(false)" > /dev/null
 assert_eq "bad name post-init"    "false" "engine.saveWorld('test', '../still_bad')"
+assert_eq "no pause on bad name"  "false" "engine.isPaused()"
 assert_eq "wrong page post-init"  "false" "engine.saveWorld('nonexistent', '${TEST_SAVE_NAME}_x')"
+assert_eq "no pause on wrong page" "false" "engine.isPaused()"
 
 # ── Report ───────────────────────────────────────────────────────────
 echo ""

@@ -18,7 +18,7 @@ import World.Save.Types (SaveMetadata(..), SaveData(..))
 import World.Types (WorldCommand(..), WorldManager(..), WorldState(..))
 import World.Page.Types (WorldPageId(..))
 import World.Thread.Helpers (unWorldPageId)
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, writeIORef)
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
 saveListFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -80,6 +80,20 @@ saveWorldFn env = do
                                         \params: " <> unWorldPageId pageId
                                     Lua.pushboolean False
                                 Just _ → do
+                                    -- Pause the engine BEFORE collecting
+                                    -- Lua state. Other threads (world,
+                                    -- unit) early-return on this flag, so
+                                    -- their state stops drifting before
+                                    -- we snapshot Lua-side. Without this,
+                                    -- the Lua snapshot references engine
+                                    -- ids whose fields can change before
+                                    -- the world thread runs WorldSave.
+                                    -- handleWorldSaveCommand also writes
+                                    -- this flag (defense for non-Lua
+                                    -- callers); the double-write is
+                                    -- harmless and intentional.
+                                    Lua.liftIO $ writeIORef
+                                        (enginePausedRef env) True
                                     blobs ← collectLuaBlobs logger
                                     Lua.liftIO $ Q.writeQueue
                                         (worldQueue env)
