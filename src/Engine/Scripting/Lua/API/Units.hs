@@ -59,7 +59,6 @@ import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import Control.Monad (foldM, forM_)
 import Data.IORef (readIORef, atomicModifyIORef')
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
@@ -736,7 +735,7 @@ unitGetSkillFn env = do
                     Just inst → case HM.lookup name (uiSkills inst) of
                         Nothing → pure Nothing
                         Just base → do
-                            now ← realToFrac <$> getPOSIXTime
+                            now ← readIORef (gameTimeRef env)
                             let mods = HM.lookupDefault [] name
                                           (uiModifiers inst)
                             pure (Just (effectiveStat now base mods))
@@ -850,7 +849,7 @@ unitGetAllSkillsFn env = do
             let uid = UnitId (fromIntegral n)
             mEntries ← Lua.liftIO $ do
                 um  ← readIORef (unitManagerRef env)
-                now ← realToFrac <$> getPOSIXTime
+                now ← readIORef (gameTimeRef env)
                 pure $ do
                     inst ← HM.lookup uid (umInstances um)
                     def  ← HM.lookup (uiDefName inst) (umDefs um)
@@ -1127,7 +1126,7 @@ unitSetAnimFn env = do
             let uid  = UnitId (fromIntegral n)
                 name = TE.decodeUtf8 nameBS
             ok ← Lua.liftIO $ do
-                now ← realToFrac <$> getPOSIXTime
+                now ← readIORef (gameTimeRef env)
                 atomicModifyIORef' (unitManagerRef env) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, False)
@@ -1251,7 +1250,9 @@ unitGetAllStatsFn env = do
 --   add or replace an additive modifier on a stat. Same @source@ on
 --   the same @name@ overwrites the previous entry; different sources
 --   stack. @durationSec@ is optional (nil = permanent); when given it
---   is added to the current POSIX time to produce smExpiry.
+--   is added to the current gameTimeRef value to produce smExpiry,
+--   so modifier expiries survive save/load (gameTimeRef is restored
+--   on load; POSIX wall-clock isn't).
 --   Returns true on success, false if the unit doesn't exist.
 unitAddModifierFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitAddModifierFn env = do
@@ -1270,7 +1271,7 @@ unitAddModifierFn env = do
             ok ← Lua.liftIO $ do
                 expiry ← case durMaybe of
                     Just (Lua.Number dur) → do
-                        now ← realToFrac <$> getPOSIXTime
+                        now ← readIORef (gameTimeRef env)
                         pure (Just (now + realToFrac dur))
                     _ → pure Nothing
                 let mod' = StatModifier
@@ -1465,14 +1466,14 @@ rollAllDefinedStats env uid = do
 
 -- | Read a stat through the full Phase-C pipeline: lazy-roll the base
 --   if needed, then apply this unit's active modifiers at the current
---   POSIX time. Returns Nothing if undefined.
+--   game time (gameTimeRef). Returns Nothing if undefined.
 getEffectiveStat ∷ EngineEnv → UnitId → Text → IO (Maybe Float)
 getEffectiveStat env uid name = do
     mBase ← getOrRollStat env uid name
     case mBase of
         Nothing   → pure Nothing
         Just base → do
-            now ← realToFrac <$> getPOSIXTime
+            now ← readIORef (gameTimeRef env)
             um ← readIORef (unitManagerRef env)
             case HM.lookup uid (umInstances um) of
                 Nothing   → pure (Just base)   -- destroyed mid-call
@@ -1489,7 +1490,7 @@ effectiveAllStats env uid = do
     case mBases of
         Nothing    → pure Nothing
         Just bases → do
-            now ← realToFrac <$> getPOSIXTime
+            now ← readIORef (gameTimeRef env)
             um ← readIORef (unitManagerRef env)
             case HM.lookup uid (umInstances um) of
                 Nothing   → pure (Just bases)  -- destroyed mid-call

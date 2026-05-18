@@ -40,8 +40,10 @@ data StatModifier = StatModifier
     , smSource ∷ !Text
       -- ^ logical owner: "poison-A", "age", "wounded-left-arm", etc.
     , smExpiry ∷ !(Maybe Double)
-      -- ^ POSIX seconds when the modifier becomes inactive.
-      --   Nothing = permanent (removed only via removeModifier).
+      -- ^ Game-time seconds (gameTimeRef value) when the modifier
+      --   becomes inactive. Nothing = permanent (removed only via
+      --   removeModifier). Anchored to gameTimeRef rather than POSIX
+      --   so the expiry survives save/load.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | Unique identifier for a spawned unit instance.
