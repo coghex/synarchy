@@ -47,6 +47,12 @@ handleBuildingCommand env (BuildingSpawn bid defName gx gy gz) = do
                     , biSpawnedAt = now
                     , biTileW     = bdTileW def
                     , biTileH     = bdTileH def
+                    , biSpawnRemaining = -1  -- sentinel: "Lua hasn't seeded
+                                            -- this from a spawn-config yet."
+                                            -- ensureState in building_spawn.lua
+                                            -- treats -1 as fresh, 0+ as
+                                            -- a real (possibly depleted)
+                                            -- count from a prior save.
                     }
             atomicModifyIORef' (buildingManagerRef env) $ \bm' →
                 (bm' { bmInstances = HM.insert bid inst (bmInstances bm') }, ())

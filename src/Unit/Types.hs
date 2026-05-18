@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module Unit.Types
     ( Animation(..)
     , StatModifier(..)
@@ -13,6 +13,7 @@ module Unit.Types
 import UPrelude
 import GHC.Generics (Generic)
 import Data.Hashable (Hashable)
+import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
@@ -41,11 +42,11 @@ data StatModifier = StatModifier
     , smExpiry ∷ !(Maybe Double)
       -- ^ POSIX seconds when the modifier becomes inactive.
       --   Nothing = permanent (removed only via removeModifier).
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | Unique identifier for a spawned unit instance.
 newtype UnitId = UnitId { unUnitId ∷ Word32 }
-    deriving (Show, Eq, Ord, Generic, Hashable)
+    deriving (Show, Eq, Ord, Generic, Hashable, Serialize)
 
 -- | A unit definition (loaded from YAML, immutable after init).
 --   This is the "template" — one per unit type.

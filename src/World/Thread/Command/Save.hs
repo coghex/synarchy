@@ -32,6 +32,12 @@ import World.ZoomMap (buildZoomCacheWithPixels)
 import World.ZoomMap.ColorPalette (buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.Save.Serialize (saveWorld)
+import World.Save.Types (toBuildingSnapshot, fromBuildingSnapshot
+                        , toUnitSnapshot, fromUnitSnapshot)
+import World.Edit.Apply (replayEdits)
+import Building.Types (BuildingManager(..), unBuildingId)
+import Unit.Types (UnitManager(..), unUnitId)
+import Unit.Sim.Types (UnitThreadState(..))
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import World.Thread.ChunkLoading (maxChunksPerTick)
@@ -39,14 +45,19 @@ import Sim.River.Project (projectRiverSimple)
 
 
 -- | Save: snapshot the live WorldState and write to disk ──logInfo logger CatWorld $ "Saving world: " <> unWorldPageId pageId
-handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text → IO ()
-handleWorldSaveCommand env logger pageId saveName = do
+handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
+                       → HM.HashMap Text Text → IO ()
+handleWorldSaveCommand env logger pageId saveName luaBlobs = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
             logWarn logger CatWorld $
                 "World not found for save: " <> unWorldPageId pageId
         Just worldState → do
+            -- Auto-pause BEFORE reading state so the snapshot
+            -- captures pause = True (DF convention — saved worlds
+            -- load paused so the player can plan the next move).
+            writeIORef (enginePausedRef env) True
             -- Read every IORef we care about (we're on the
             -- world thread, so no races with worldLoop writes)
             mParams   ← readIORef (wsGenParamsRef worldState)
@@ -59,6 +70,19 @@ handleWorldSaveCommand env logger pageId saveName = do
             toolMode  ← readIORef (wsToolModeRef worldState)
             climate   ← readIORef (wsClimateRef worldState)
             riverFlow ← readIORef (wsRiverFlowRef worldState)
+            -- v2 (Phase 1) additions
+            gameTime  ← readIORef (gameTimeRef env)
+            paused    ← readIORef (enginePausedRef env)
+            -- v3 (Phase 2) additions
+            edits     ← readIORef (wsEditsRef worldState)
+            -- v4 (Phase 3) additions
+            bm        ← readIORef (buildingManagerRef env)
+            let buildings = toBuildingSnapshot bm
+            -- v5 (Phase 4) additions
+            um        ← readIORef (unitManagerRef env)
+            uts       ← readIORef (utsRef env)
+            let units     = toUnitSnapshot um
+                simStates = utsSimStates uts
 
             case mParams of
                 Nothing →
@@ -89,6 +113,13 @@ handleWorldSaveCommand env logger pageId saveName = do
                             , sdToolMode   = toolMode
                             , sdClimate    = climate
                             , sdRiverFlow  = riverFlow
+                            , sdGameTime     = gameTime
+                            , sdEnginePaused = paused
+                            , sdEdits        = edits
+                            , sdBuildings    = buildings
+                            , sdUnits        = units
+                            , sdUnitSimStates = simStates
+                            , sdLuaModules   = luaBlobs
                             }
                     result ← saveWorld saveName sd
                     case result of
@@ -145,6 +176,18 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     writeIORef (wsToolModeRef worldState) (sdToolMode saveData)
     writeIORef (wsClimateRef worldState)  (sdClimate saveData)
     writeIORef (wsRiverFlowRef worldState) (sdRiverFlow saveData)
+    -- v2 (Phase 1): engine-level refs. enginePaused is normally True
+    -- here (auto-pause-on-save), so the loaded world starts paused
+    -- and the player has to explicitly resume. gameTime restoration
+    -- keeps every saved *Until timer coherent — without it, anim
+    -- expiries computed against gameTimeRef would all fire instantly
+    -- after load.
+    writeIORef (gameTimeRef env)     (sdGameTime saveData)
+    writeIORef (enginePausedRef env) (sdEnginePaused saveData)
+    -- v3 (Phase 2): restore edit log BEFORE chunk generation so the
+    -- synchronous center chunk + every chunk pulled off the init queue
+    -- replay any edits the player had made.
+    writeIORef (wsEditsRef worldState) (sdEdits saveData)
 
     -- 3. Rebuild zoom cache with per-chunk textures (matches init path)
     writeIORef phaseRef (LoadPhase1 2 totalSteps)
@@ -187,7 +230,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
                 Just fc → max surfZ (fcSurface fc)
                 Nothing → surfZ
             ) cs
-        centerChunk = LoadedChunk
+        centerChunkRaw = LoadedChunk
             { lcCoord             = centerCoord
             , lcTiles             = ct
             , lcSurfaceMap        = seededSurf
@@ -197,8 +240,13 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             , lcFlora             = cflora
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
             , lcRiverMask         = crmask
-            , lcModified          = False
             }
+    -- Replay edits onto the freshly-generated center chunk. The edit
+    -- log was restored from sdEdits earlier in this handler; if the
+    -- player edited tiles in this chunk before saving, those edits
+    -- need to show up immediately on load.
+    edits ← readIORef (wsEditsRef worldState)
+    let centerChunk = replayEdits edits centerChunkRaw
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
         (WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
                        , wtdMaxChunks = 200 }, ())
@@ -212,6 +260,44 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             , not (cx ≡ camCX ∧ cy ≡ camCY)
             ]
     writeIORef (wsInitQueueRef worldState) remainingCoords
+
+    -- v4 (Phase 3): restore buildings AFTER edits + center-chunk regen.
+    -- Buildings store their biGridZ (the Z they were placed on, which
+    -- reflects post-edit terrain). The chunk replay above ensures the
+    -- center chunk's terrain matches what the player saw at save time;
+    -- buildings landing in not-yet-loaded chunks will simply not render
+    -- until those chunks come in via drainInitQueues.
+    do
+        currentBm ← readIORef (buildingManagerRef env)
+        let (restored, orphans) =
+                fromBuildingSnapshot (bmDefs currentBm) (sdBuildings saveData)
+        writeIORef (buildingManagerRef env) restored
+        forM_ orphans $ \bid →
+            logWarn logger CatWorld $
+                "Save load: dropping building id="
+                  <> T.pack (show (unBuildingId bid))
+                  <> " — its def is no longer registered"
+
+    -- v5 (Phase 4): restore units + sim state. Same orphan handling as
+    -- buildings; sim states for orphaned uids are dropped. The unit
+    -- thread reads utsRef directly each tick — atomic IORef writes are
+    -- safe here even though the thread is concurrently consuming.
+    do
+        currentUm ← readIORef (unitManagerRef env)
+        let (restoredUm, orphanUnits) =
+                fromUnitSnapshot (umDefs currentUm) (sdUnits saveData)
+            liveUids = HM.keysSet (umInstances restoredUm)
+            -- Drop sim states whose owning unit was orphaned.
+            simStates' = HM.filterWithKey (\uid _ → uid `HS.member` liveUids)
+                                          (sdUnitSimStates saveData)
+        writeIORef (unitManagerRef env) restoredUm
+        atomicModifyIORef' (utsRef env) $ \_ →
+            (UnitThreadState { utsSimStates = simStates' }, ())
+        forM_ orphanUnits $ \uid →
+            logWarn logger CatWorld $
+                "Save load: dropping unit id="
+                  <> T.pack (show (unUnitId uid))
+                  <> " — its def is no longer registered"
 
     -- 6. Set camera z-slice from saved camera position
     let camGX = round (sdCameraX saveData) ∷ Int

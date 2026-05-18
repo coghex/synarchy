@@ -27,6 +27,7 @@ import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, default
 import World.Flora.Types (FloraCatalog(..), emptyFloraCatalog)
 import World.Region.Types (RegionCoord(..))
 import World.Weather.Types (RegionClimate(..))
+import World.Edit.Types (WorldEdits, emptyWorldEdits)
 
 data WorldState = WorldState
     { wsTilesRef     ∷ IORef WorldTileData
@@ -51,6 +52,11 @@ data WorldState = WorldState
     , wsCursorSnapshotRef ∷ IORef CursorSnapshot
     , wsLoadPhaseRef ∷ IORef LoadPhase
     , wsZoomAtlasRef ∷ IORef (Maybe ZoomAtlasInfo)  -- ^ Atlas info once uploaded to GPU
+    , wsEditsRef    ∷ IORef WorldEdits
+      -- ^ Player edits accumulated this session. Per-chunk so eviction
+      --   doesn't lose them — chunks regenerate, edits replay onto the
+      --   fresh chunk. Saved verbatim; restored before any chunk
+      --   regeneration on load.
     }
 
 emptyWorldState ∷ IO WorldState
@@ -77,13 +83,14 @@ emptyWorldState = do
     wsCursorSnapshotRef ← newIORef emptyCursorSnapshot
     wsLoadPhaseRef ← newIORef LoadIdle
     wsZoomAtlasRef ← newIORef Nothing
+    wsEditsRef     ← newIORef emptyWorldEdits
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
                         wsClimateRef wsRiverFlowRef wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
-                        wsLoadPhaseRef wsZoomAtlasRef
+                        wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
 
 data WorldManager = WorldManager
     { wmWorlds  ∷ [(WorldPageId, WorldState)]

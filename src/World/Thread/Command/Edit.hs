@@ -13,14 +13,18 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
-import World.Fluid.Types (FluidType(..), FluidCell(..))
+import World.Fluid.Types (FluidType(..))
 import World.Tile.Types (lookupChunk, insertChunk)
 import World.Generate.Coordinates (globalToChunk)
+import World.Edit.Types (WorldEdit(..), appendEdit)
+import World.Edit.Apply (applyEdit)
 import World.Thread.Helpers (unWorldPageId)
 
 -- | Dig the top of the column at (gx, gy) down by 1 Z.
---   Lowers both surface maps by 1 and zeros the material at the old top
---   in the column's tile storage so the renderer skips it on the next tick.
+--   Records the edit in the world's edit log so it survives chunk
+--   eviction + save/load. The in-memory chunk is mutated via the
+--   same `applyEdit` function that replays the log on chunk reload —
+--   single source of truth.
 handleWorldDeleteTileCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → IO ()
 handleWorldDeleteTileCommand env logger pageId gx gy = do
@@ -32,6 +36,7 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
         Just ws → do
             let (coord, (lx, ly)) = globalToChunk gx gy
                 idx = columnIndex lx ly
+                edit = WeDeleteTile gx gy
             td ← readIORef (wsTilesRef ws)
             case lookupChunk coord td of
                 Nothing →
@@ -39,12 +44,15 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                         "Chunk not loaded for delete tile at "
                           <> T.pack (show gx) <> "," <> T.pack (show gy)
                 Just lc → do
+                    -- Pre-check the column bounds so we can warn on
+                    -- invalid edits before appending. applyEdit is
+                    -- silent on out-of-bounds (it has to be — replay
+                    -- has no logger), but live edits should fail loud.
                     let oldTopZ = lcSurfaceMap lc VU.! idx
                         col     = lcTiles lc V.! idx
                         colLen  = VU.length (ctMats col)
                         i       = oldTopZ - ctStartZ col
-                        canEdit = i ≥ 0 ∧ i < colLen
-                    if not canEdit
+                    if i < 0 ∨ i ≥ colLen
                       then logWarn logger CatWorld $
                              "Delete tile out of column range at "
                                <> T.pack (show gx) <> "," <> T.pack (show gy)
@@ -52,23 +60,11 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                                <> " startZ=" <> T.pack (show (ctStartZ col))
                                <> " len=" <> T.pack (show colLen)
                       else do
-                        let mats'   = ctMats col   VU.// [(i, 0)]
-                            slopes' = ctSlopes col VU.// [(i, 0)]
-                            veg'    = ctVeg col    VU.// [(i, 0)]
-                            col'    = col { ctMats = mats'
-                                          , ctSlopes = slopes'
-                                          , ctVeg = veg'
-                                          }
-                            tiles'  = lcTiles lc V.// [(idx, col')]
-                            surf'   = lcSurfaceMap lc        VU.// [(idx, oldTopZ - 1)]
-                            tsurf'  = lcTerrainSurfaceMap lc VU.// [(idx, oldTopZ - 1)]
-                            lc'     = lc { lcTiles             = tiles'
-                                         , lcSurfaceMap        = surf'
-                                         , lcTerrainSurfaceMap = tsurf'
-                                         , lcModified          = True
-                                         }
+                        let lc' = applyEdit edit lc
                         atomicModifyIORef' (wsTilesRef ws) $ \w →
                             (insertChunk lc' w, ())
+                        atomicModifyIORef' (wsEditsRef ws) $ \es →
+                            (appendEdit coord edit es, ())
                         -- Invalidate all three render caches so the next
                         -- tick rebuilds quads from the modified chunk.
                         writeIORef (wsQuadCacheRef ws)     Nothing
@@ -78,10 +74,9 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
                             "Deleted tile at " <> T.pack (show gx) <> ","
                               <> T.pack (show gy) <> " z=" <> T.pack (show oldTopZ)
 
--- | Place one tile of fluid on top of the column at (gx, gy). The
---   fluid's surface sits at surfaceZ + 1; lcSurfaceMap is bumped so the
---   renderer treats this as the new top. Replaces any existing fluid
---   cell on this column (idempotent for repeated clicks).
+-- | Place one tile of fluid on top of the column at (gx, gy). Records
+--   the edit in the world's log; in-memory mutation uses the same
+--   `applyEdit` helper.
 handleWorldSetFluidTileCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → FluidType → IO ()
 handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
@@ -91,8 +86,8 @@ handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
             logWarn logger CatWorld $
                 "World not found for set fluid: " <> unWorldPageId pageId
         Just ws → do
-            let (coord, (lx, ly)) = globalToChunk gx gy
-                idx = columnIndex lx ly
+            let (coord, _) = globalToChunk gx gy
+                edit = WeSetFluidTile gx gy fluidType
             td ← readIORef (wsTilesRef ws)
             case lookupChunk coord td of
                 Nothing →
@@ -100,21 +95,11 @@ handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
                         "Chunk not loaded for set fluid at "
                           <> T.pack (show gx) <> "," <> T.pack (show gy)
                 Just lc → do
-                    let surfZ      = lcTerrainSurfaceMap lc VU.! idx
-                        newSurface = surfZ + 1
-                        cell       = FluidCell { fcType = fluidType
-                                               , fcSurface = newSurface
-                                               }
-                        fluid'     = lcFluidMap lc V.// [(idx, Just cell)]
-                        oldTop     = lcSurfaceMap lc VU.! idx
-                        surf'      = lcSurfaceMap lc
-                                       VU.// [(idx, max oldTop newSurface)]
-                        lc'        = lc { lcFluidMap   = fluid'
-                                        , lcSurfaceMap = surf'
-                                        , lcModified   = True
-                                        }
+                    let lc' = applyEdit edit lc
                     atomicModifyIORef' (wsTilesRef ws) $ \w →
                         (insertChunk lc' w, ())
+                    atomicModifyIORef' (wsEditsRef ws) $ \es →
+                        (appendEdit coord edit es, ())
                     writeIORef (wsQuadCacheRef ws)     Nothing
                     writeIORef (wsZoomQuadCacheRef ws) Nothing
                     writeIORef (wsBgQuadCacheRef ws)   Nothing
@@ -122,4 +107,3 @@ handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
                         "Placed fluid " <> T.pack (show fluidType)
                           <> " at " <> T.pack (show gx) <> ","
                           <> T.pack (show gy)
-                          <> " surface=" <> T.pack (show newSurface)

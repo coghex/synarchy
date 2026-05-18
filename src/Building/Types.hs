@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module Building.Types
     ( BuildingId(..)
     , BuildingActivity(..)
@@ -14,6 +14,7 @@ module Building.Types
 import UPrelude
 import GHC.Generics (Generic)
 import Data.Hashable (Hashable)
+import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
@@ -25,7 +26,7 @@ import Unit.Types (Animation(..))
 --   "direction" key — DirS by convention — since they don't rotate.
 
 newtype BuildingId = BuildingId { unBuildingId ∷ Word32 }
-    deriving (Show, Eq, Ord, Generic, Hashable)
+    deriving (Show, Eq, Ord, Generic, Hashable, Serialize)
 
 -- | Derived from elapsed time, NOT stored on the instance:
 --   elapsed < appear-anim duration → Appearing.
@@ -56,9 +57,16 @@ data BuildingInstance = BuildingInstance
     , biAnchorX    ∷ !Int                -- ^ tile coords (footprint origin)
     , biAnchorY    ∷ !Int
     , biGridZ      ∷ !Int                -- ^ vertical layer (terrain Z at place time)
-    , biSpawnedAt  ∷ !Double             -- ^ POSIX seconds when placed
+    , biSpawnedAt  ∷ !Double             -- ^ game-time seconds when placed
     , biTileW      ∷ !Int                -- ^ cached from def for cheap iteration
     , biTileH      ∷ !Int
+    , biSpawnRemaining ∷ !Int
+      -- ^ Roster countdown for the spawn sequencer. 0 = no more units to
+      --   spawn (or building doesn't spawn anything). Engine doesn't
+      --   interpret this — it's set + decremented by Lua's
+      --   building_spawn module. Lives here (not in Lua module state)
+      --   so it survives save/load and chunk-eviction without a
+      --   separate Lua serializer.
     } deriving (Show, Eq)
 
 -- | Singleton ghost preview: one optional def + tile + valid flag.

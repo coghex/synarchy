@@ -20,11 +20,17 @@
 -- Per-building runtime state lives on the module table so reloads /
 -- package.loaded singleton-ness preserves it through script changes:
 --   buildingState[bid] = {
---     remaining   = N,
 --     lastUid     = uid | nil,
 --     lastSpawnX  = x,
 --     lastSpawnY  = y,
+--     lastSpawnedAt = posix,
 --   }
+--
+-- The countdown ("how many units left to spawn from this building")
+-- lives on the engine side as biSpawnRemaining so it survives chunk
+-- eviction + save/load without a Lua serializer. Lua only owns the
+-- per-spawn sequencing state, which is transient (re-derivable from
+-- "is a fresh-spawned unit still on the spawn tile?").
 
 local buildingSpawn = package.loaded["scripts.building_spawn"] or {}
 package.loaded["scripts.building_spawn"] = buildingSpawn
@@ -87,13 +93,24 @@ local function previousUnitCleared(s, params)
     return false
 end
 
--- Ensure a state entry exists for this building. New entries start at
--- the configured roster size; the count decrements with each spawn.
+-- Ensure a state entry exists for this building, and seed the
+-- engine-side biSpawnRemaining countdown the first time we see this
+-- bid. Engine sets biSpawnRemaining = -1 (sentinel) at spawn; Lua
+-- seeds it to params.count on first sight. Loaded-from-save buildings
+-- already have a real count (which may be 0 if the spawn finished
+-- before save) — we leave those alone.
 local function ensureState(bid, params)
     local s = state[bid]
     if not s then
+        local engineRem = building.getSpawnRemaining(bid)
+        if engineRem == nil or engineRem < 0 then
+            -- Fresh placement, never seeded. Apply config.
+            building.setSpawnRemaining(bid, params.count)
+        end
+        -- engineRem == 0 means "previously depleted by spawns" — load
+        -- branch, don't re-seed. engineRem > 0 means "in progress" —
+        -- also load branch.
         s = {
-            remaining  = params.count,
             lastUid    = nil,
             lastSpawnX = 0,
             lastSpawnY = 0,
@@ -117,7 +134,8 @@ local function tickOne(bid, info)
     if building.getActivity(bid) ~= "built" then return end
 
     local s = ensureState(bid, params)
-    if s.remaining <= 0 then return end
+    local remaining = building.getSpawnRemaining(bid) or 0
+    if remaining <= 0 then return end
     if not previousUnitCleared(s, params) then return end
 
     -- Spawn at the portal tile's center plus offset. The anchor is
@@ -150,7 +168,7 @@ local function tickOne(bid, info)
     local unitAi = require("scripts.unit_ai")
     unitAi.commandMove(newUid, walkX, walkY, 2.0)
 
-    s.remaining     = s.remaining - 1
+    local newRemaining = building.consumeSpawn(bid) or 0
     s.lastUid       = newUid
     s.lastSpawnX    = spawnX
     s.lastSpawnY    = spawnY
@@ -158,7 +176,7 @@ local function tickOne(bid, info)
 
     engine.logInfo(string.format(
         "BuildingSpawn: portal=%d spawned %s id=%d at (%.2f, %.2f) -> walk to (%.2f, %.2f), remaining=%d",
-        bid, params.unit_type, newUid, spawnX, spawnY, walkX, walkY, s.remaining))
+        bid, params.unit_type, newUid, spawnX, spawnY, walkX, walkY, newRemaining))
 end
 
 -----------------------------------------------------------
@@ -185,6 +203,20 @@ end
 
 function buildingSpawn.init(scriptId)
     engine.logInfo("Building spawn sequencer initializing...")
+    -- Save hook for per-building transient sequencer state
+    -- (lastUid/lastSpawnX/Y/lastSpawnedAt). The roster countdown
+    -- itself lives on the BuildingInstance and persists via the
+    -- building snapshot — this hook only covers the spawn-rate
+    -- gating data.
+    local saveLib  = require("scripts.lib.serialize")
+    local saveMods = require("scripts.lib.save_modules")
+    saveMods.register("building_spawn",
+        function() return saveLib.serialize(state) end,
+        function(blob)
+            local restored = saveLib.deserialize(blob) or {}
+            for k in pairs(state) do state[k] = nil end
+            for k, v in pairs(restored) do state[k] = v end
+        end)
 end
 
 function buildingSpawn.update(dt)

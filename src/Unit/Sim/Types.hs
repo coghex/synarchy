@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module Unit.Sim.Types
     ( UnitSimState(..)
     , MoveTarget(..)
@@ -12,6 +12,8 @@ module Unit.Sim.Types
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize)
 import Unit.Types (UnitId(..))
 import Unit.Direction (Direction(..))
 
@@ -46,19 +48,19 @@ data UnitSimState = UnitSimState
     --   by UnitTransitionTo. Reset implicitly when the transition
     --   completes (the next state isn't a transition).
     , usTransitionStride ∷ !Int
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 data MoveTarget = MoveTarget
     { mtTargetX ∷ !Float
     , mtTargetY ∷ !Float
     , mtSpeed   ∷ !Float
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | What pose the unit is currently *in*. Orthogonal to UnitActivity.
 --   Transitions between poses are driven by `TransitioningTo`. `Dead`
 --   is terminal — entered only via `UnitKill`, never via a transition.
 data Pose = Standing | Crouching | Crawling | Collapsed | Dead
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize)
 
 -- | Depth ordering used to derive reverse playback for shared
 --   transition assets. Going from a lower-depth pose to a higher-depth
@@ -72,7 +74,7 @@ poseDepth Collapsed = 3
 poseDepth Dead      = 4
 
 data UnitActivity = Idle | Walking | Drinking | Eating | Picking | TransitioningTo !Pose
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize)
 
 data UnitThreadState = UnitThreadState
     { utsSimStates ∷ !(HM.HashMap UnitId UnitSimState)

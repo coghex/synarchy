@@ -396,6 +396,8 @@ library
                      World.Command.Types
                      World.Chunk.Types
                      World.Cursor.Types
+                     World.Edit.Types
+                     World.Edit.Apply
                      World.Types
                      World.Thread
                      World.Thread.Helpers

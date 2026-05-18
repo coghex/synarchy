@@ -15,6 +15,9 @@ module Engine.Scripting.Lua.API.Buildings
     , buildingSelectFn
     , buildingDeselectFn
     , buildingGetSelectedFn
+    , buildingSetSpawnRemainingFn
+    , buildingGetSpawnRemainingFn
+    , buildingConsumeSpawnFn
     ) where
 
 import UPrelude
@@ -303,6 +306,82 @@ buildingGetInfoFn env = do
                     Lua.setfield (-2) "tileH"
                     Lua.pushnumber (Lua.Number (realToFrac (biSpawnedAt inst)))
                     Lua.setfield (-2) "spawnedAt"
+                    return 1
+
+-- | building.setSpawnRemaining(bid, n) — initialize the spawn-roster
+--   countdown on a building. Called once by Lua spawn sequencers when
+--   they first see a built building. Engine-owned because the value
+--   needs to survive save/load and chunk eviction without a Lua
+--   serializer (Phase 5 work).
+buildingSetSpawnRemainingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingSetSpawnRemainingFn env = do
+    idArg ← Lua.tointeger 1
+    nArg  ← Lua.tointeger 2
+    case (idArg, nArg) of
+        (Just n, Just count) → do
+            let bid = BuildingId (fromIntegral n)
+                rem = max 0 (fromIntegral count)
+            Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                case HM.lookup bid (bmInstances bm) of
+                    Nothing → (bm, ())
+                    Just inst →
+                        let inst' = inst { biSpawnRemaining = rem }
+                        in (bm { bmInstances = HM.insert bid inst' (bmInstances bm) }, ())
+            Lua.pushboolean True
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+-- | building.getSpawnRemaining(bid) → Int. Number of units still to
+--   spawn from this building's roster. 0 = done (or building has no
+--   spawn sequencer attached). nil if the bid doesn't exist.
+buildingGetSpawnRemainingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetSpawnRemainingFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            mRem ← Lua.liftIO $ do
+                bm ← readIORef (buildingManagerRef env)
+                pure (biSpawnRemaining <$> HM.lookup bid (bmInstances bm))
+            case mRem of
+                Just r → do
+                    Lua.pushinteger (fromIntegral r)
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+
+-- | building.consumeSpawn(bid) → Int (new remaining). Decrement by 1,
+--   clamped at 0. Returns the value AFTER the decrement so the caller
+--   can branch on "still more to spawn" cheaply.
+buildingConsumeSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingConsumeSpawnFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            mRem ← Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                case HM.lookup bid (bmInstances bm) of
+                    Nothing → (bm, Nothing)
+                    Just inst →
+                        let newRem = max 0 (biSpawnRemaining inst - 1)
+                            inst'  = inst { biSpawnRemaining = newRem }
+                        in (bm { bmInstances = HM.insert bid inst' (bmInstances bm) }
+                           , Just newRem)
+            case mRem of
+                Just r → do
+                    Lua.pushinteger (fromIntegral r)
+                    return 1
+                Nothing → do
+                    Lua.pushnil
                     return 1
 
 -- | building.getActivity(id) — returns "appearing" while the appear

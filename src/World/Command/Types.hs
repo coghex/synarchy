@@ -5,6 +5,7 @@ module World.Command.Types
     ) where
 
 import UPrelude
+import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Page.Types (WorldPageId(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
@@ -39,7 +40,10 @@ data WorldCommand
     | WorldSetWorldCursorSelect WorldPageId
     | WorldSetWorldCursorDeselect WorldPageId
     | WorldSetToolMode WorldPageId ToolMode
-    | WorldSave WorldPageId Text
+    | WorldSave WorldPageId Text (HM.HashMap Text Text)
+        -- ^ pageId, save-name, Lua-module blobs. The Lua side calls
+        --   saveModules.serializeAll() before queueing this command
+        --   so the world thread can stuff the blobs into SaveData.
     | WorldLoadSave WorldPageId SaveData
     | WorldDeleteTile WorldPageId Int Int      -- ^ worldId, gx, gy
     | WorldSetFluidTile WorldPageId Int Int FluidType

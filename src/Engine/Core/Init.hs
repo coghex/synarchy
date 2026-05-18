@@ -30,6 +30,7 @@ import Engine.Input.Types (defaultInputState)
 import UI.Focus (createFocusManager)
 import UI.Types (emptyUIPageManager)
 import Unit.Types (emptyUnitManager)
+import Unit.Sim.Types (emptyUnitThreadState)
 import Building.Types (emptyBuildingManager)
 import Item.Types (emptyItemManager)
 import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
@@ -95,6 +96,7 @@ initializeEngine = do
   materialRegistryRef ← newIORef emptyMaterialRegistry
   unitManagerRef ← newIORef emptyUnitManager
   unitQueue ← Q.newQueue
+  utsRef ← newIORef emptyUnitThreadState
   statRNGRef ← Random.newStdGen >>= newIORef
   buildingManagerRef ← newIORef emptyBuildingManager
   buildingQueue ← Q.newQueue
@@ -146,6 +148,7 @@ initializeEngine = do
         , materialRegistryRef = materialRegistryRef
         , unitManagerRef     = unitManagerRef
         , unitQueue          = unitQueue
+        , utsRef             = utsRef
         , statRNGRef         = statRNGRef
         , buildingManagerRef = buildingManagerRef
         , buildingQueue      = buildingQueue

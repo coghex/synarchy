@@ -35,5 +35,4 @@ generateFlatChunk coord =
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.replicate chunkArea 0
         , lcRiverMask         = V.replicate chunkArea Nothing
-        , lcModified          = False
         }

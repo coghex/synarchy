@@ -37,6 +37,7 @@ import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
 import UI.Types (UIPageManager)
 import UI.Focus (FocusManager)
 import Unit.Types (UnitManager)
+import Unit.Sim.Types (UnitThreadState)
 import Unit.Command.Types (UnitCommand)
 import Building.Types (BuildingManager, BuildingGhost)
 import Building.Command.Types (BuildingCommand)
@@ -86,6 +87,12 @@ data EngineEnv = EngineEnv
   , materialRegistryRef   ∷ IORef MaterialRegistry
   , unitManagerRef      ∷ IORef UnitManager
   , unitQueue           ∷ Q.Queue UnitCommand
+  , utsRef              ∷ IORef UnitThreadState
+    -- ^ Sim-side per-unit state (position, pose, activity, target,
+    --   path, *Until timers). Lives on EngineEnv (not encapsulated in
+    --   the unit thread) so the save/load handler can snapshot and
+    --   restore it; the unit thread treats it as the sole authority
+    --   for movement and timed states.
   , statRNGRef          ∷ IORef StdGen
     -- ^ Runtime RNG for stat rolls. Seeded from system entropy at
     --   startup; not tied to the world seed (stats are non-deterministic

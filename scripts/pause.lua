@@ -25,7 +25,14 @@ pause.paused      = pause.paused      or false
 pause.prevTimeScale = pause.prevTimeScale or 1.0
 
 function pause.isPaused()
-    return pause.paused
+    -- Defer to the engine flag rather than our local mirror. Avoids
+    -- Lua/engine desync after a save load: the load handler flips
+    -- enginePausedRef directly (auto-pause-on-save) without going
+    -- through pause.set(), so our local `pause.paused` mirror would
+    -- be stale. The engine flag is the source of truth; this
+    -- module's pause.paused is now just a hint used during set/toggle
+    -- to detect transitions for the timeScale side-effect.
+    return engine.isPaused()
 end
 
 function pause.set(b)
@@ -52,6 +59,24 @@ end
 -- Engine script hooks
 function pause.init(scriptId)
     engine.logInfo("Pause module initializing...")
+    -- Register save hook so the player's prevTimeScale and the local
+    -- `paused` mirror survive a save/load. Without this the load
+    -- handler restores `enginePausedRef` directly but Lua's
+    -- pause.paused mirror stays stale until the next manual toggle.
+    local saveLib  = require("scripts.lib.serialize")
+    local saveMods = require("scripts.lib.save_modules")
+    saveMods.register("pause",
+        function()
+            return saveLib.serialize({
+                paused        = pause.paused,
+                prevTimeScale = pause.prevTimeScale,
+            })
+        end,
+        function(blob)
+            local t = saveLib.deserialize(blob) or {}
+            pause.paused        = t.paused        or false
+            pause.prevTimeScale = t.prevTimeScale or 1.0
+        end)
 end
 
 function pause.shutdown()

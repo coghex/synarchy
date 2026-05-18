@@ -76,11 +76,14 @@ data LoadedChunk = LoadedChunk
     , lcFlora      ∷ !FloraChunkData
     , lcSideDeco   ∷ !(VU.Vector Word8)    -- ^ Side-face decorations per column
     , lcRiverMask  ∷ !RiverMask           -- ^ River channel mask (surface + type per tile)
-    , lcModified   ∷ !Bool
     } deriving (Show, Eq)
+-- Removed: lcModified :: Bool. The world's edit log
+-- (WorldState.wsEditsRef) is now the source of truth for "this chunk
+-- has been edited". Eviction is purely distance-based; edits survive
+-- via replay on regeneration.
 
 instance NFData LoadedChunk where
-    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco rmask modified) =
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco rmask) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
         rnf terrainMap `seq` rnf fluidMap `seq` rnf iceMap `seq`
-        rnf flora `seq` rnf sideDeco `seq` rnf rmask `seq` rnf modified
+        rnf flora `seq` rnf sideDeco `seq` rnf rmask

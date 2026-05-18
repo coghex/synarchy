@@ -35,8 +35,9 @@ startUnitThread env = do
         (do
             logInfo logger CatThread "Starting unit thread..."
             lastTimeRef ← getPOSIXTime ⌦ newIORef . realToFrac
-            utsRef ← newIORef emptyUnitThreadState
-            tid ← forkIO $ unitLoop env stateRef lastTimeRef utsRef
+            -- utsRef now lives on EngineEnv (Phase 4 of save/load v2) so
+            -- the world thread can read+write sim state at save/load.
+            tid ← forkIO $ unitLoop env stateRef lastTimeRef (utsRef env)
             logInfo logger CatThread "Unit thread started"
             return tid
         )

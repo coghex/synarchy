@@ -325,7 +325,7 @@ writeDirtyFluids env ss = do
                                                  , lcTerrainSurfaceMap   = newTerrain
                                                  , lcSurfaceMap          = newSurfMap
                                                  , lcSideDeco            = newSideDeco
-                                                 , lcModified            = True }
+                                                 }
                                     in w { wtdChunks = HM.insert cc lc' (wtdChunks w) }
                                 _ → w
                             ) wtd dirty

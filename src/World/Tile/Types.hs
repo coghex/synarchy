@@ -46,7 +46,8 @@ chunkCount = HM.size . wtdChunks
 
 -- | Evict chunks that are far from the camera, keeping at most wtdMaxChunks.
 --   Keeps all chunks within the keep radius, evicts furthest-first beyond that.
---   Never evicts modified chunks (future-proofing for when chunks can be edited).
+--   Edited chunks evict freely now — the world's edit log preserves their
+--   changes, and replay on regeneration restores them.
 evictDistantChunks ∷ ChunkCoord → Int → WorldTileData → WorldTileData
 evictDistantChunks (ChunkCoord camCX camCY) keepRadius wtd =
     let chunks = wtdChunks wtd
@@ -54,16 +55,13 @@ evictDistantChunks (ChunkCoord camCX camCY) keepRadius wtd =
     in if HM.size chunks ≤ maxC
        then wtd
        else
-         let -- Must-keep: modified or within keep radius
-             keep = HM.filterWithKey (\coord lc →
+         let keep = HM.filterWithKey (\coord _ →
                  let ChunkCoord cx cy = coord
                      dx = abs (cx - camCX)
                      dy = abs (cy - camCY)
-                 in lcModified lc ∨ (dx ≤ keepRadius ∧ dy ≤ keepRadius)
+                 in dx ≤ keepRadius ∧ dy ≤ keepRadius
                  ) chunks
-             -- Everything else is a candidate for eviction
              candidates = HM.filterWithKey (\coord _ → not (HM.member coord keep)) chunks
-             -- Sort candidates by distance (furthest first), keep only what fits
              candidateList = sortOn (\lc →
                  let ChunkCoord cx cy = lcCoord lc
                  in negate (abs (cx - camCX) + abs (cy - camCY))
@@ -76,17 +74,17 @@ evictDistantChunks (ChunkCoord camCX camCY) keepRadius wtd =
 -- | Like evictDistantChunks but also returns the coords of evicted chunks.
 evictDistantChunksWithReport ∷ ChunkCoord → Int → WorldTileData
                              → (WorldTileData, [ChunkCoord])
-evictDistantChunksWithReport cam@(ChunkCoord camCX camCY) keepRadius wtd =
+evictDistantChunksWithReport (ChunkCoord camCX camCY) keepRadius wtd =
     let chunks = wtdChunks wtd
         maxC   = wtdMaxChunks wtd
     in if HM.size chunks ≤ maxC
        then (wtd, [])
        else
-         let keep = HM.filterWithKey (\coord lc →
+         let keep = HM.filterWithKey (\coord _ →
                  let ChunkCoord cx cy = coord
                      dx = abs (cx - camCX)
                      dy = abs (cy - camCY)
-                 in lcModified lc ∨ (dx ≤ keepRadius ∧ dy ≤ keepRadius)
+                 in dx ≤ keepRadius ∧ dy ≤ keepRadius
                  ) chunks
              candidates = HM.filterWithKey (\coord _ → not (HM.member coord keep)) chunks
              candidateList = sortOn (\lc →

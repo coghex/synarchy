@@ -32,6 +32,7 @@ import World.Slope (recomputeNeighborSlopes, patchEdgeStrata)
 import World.SideFace.Compute (computeChunkSideDecos)
 import World.Thread.Helpers (unWorldPageId)
 import World.Generate.Types (WorldGenParams(..))
+import World.Edit.Apply (replayEdits)
 import Sim.Command.Types (SimCommand(..))
 
 -- | Maximum chunks to generate per world loop iteration.
@@ -115,13 +116,18 @@ updateChunkLoading env logger = do
                                                 , lcFlora      = flora
                                                 , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
                                                 , lcRiverMask  = rmask
-                                                , lcModified   = False
                                                 }) batch
+                                -- Replay player edits onto the fresh chunks
+                                -- before inserting. Chunks evicted earlier
+                                -- in this session and now coming back will
+                                -- carry their saved edits this way.
+                                edits ← readIORef (wsEditsRef worldState)
+                                let newChunks' = map (replayEdits edits) newChunks
                                 evicted ← atomicModifyIORef' (wsTilesRef worldState) $ \td →
-                                    let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
+                                    let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks'
                                         (td'', evictedCoords) = evictDistantChunksWithReport
                                                                   camChunk chunkLoadRadius td'
-                                        coords = map lcCoord newChunks
+                                        coords = map lcCoord newChunks'
                                         td''' = recomputeNeighborSlopes seed
                                                   registry coords td''
                                         td3b   = patchEdgeStrata coords td'''
@@ -132,8 +138,10 @@ updateChunkLoading env logger = do
                                         -- ~50% of mask-seeded river tiles.
                                         td''''' = computeSideDecos seed coords td3b
                                     in (td''''', evictedCoords)
-                                -- Notify sim thread of loaded chunks
-                                forM_ newChunks $ \lc →
+                                -- Notify sim thread of loaded chunks. Use
+                                -- newChunks' so the sim sees post-replay
+                                -- fluid + terrain (player edits matter).
+                                forM_ newChunks' $ \lc →
                                     Q.writeQueue (simQueue env) $
                                         SimChunkLoaded (lcCoord lc)
                                             (lcFluidMap lc)
@@ -189,23 +197,29 @@ drainInitQueues env logger = do
                                     , lcFlora      = flora
                                     , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
                                     , lcRiverMask  = rmask
-                                    , lcModified   = False
                                     }) batch
+
+                        -- Replay player edits onto the fresh chunks
+                        -- before inserting. On load, edits restored from
+                        -- the save apply here; on first-time world init
+                        -- the edits map is empty and this is a no-op.
+                        edits ← readIORef (wsEditsRef worldState)
+                        let newChunks' = map (replayEdits edits) newChunks
 
                         -- Insert new chunks, then recompute slopes
                         -- for the new chunks + their existing neighbors,
                         -- then seal cross-chunk river boundaries.
                         atomicModifyIORef' (wsTilesRef worldState) $ \td →
-                            let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks
-                                coords = map lcCoord newChunks
+                            let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks'
+                                coords = map lcCoord newChunks'
                                 td'' = recomputeNeighborSlopes seed registry
                                          coords td'
                                 td2b  = patchEdgeStrata coords td''
                                 td'''' = computeSideDecos seed coords td2b
                             in (td'''', ())
 
-                        -- Notify sim thread of loaded chunks
-                        forM_ newChunks $ \lc →
+                        -- Notify sim thread of loaded chunks (post-replay)
+                        forM_ newChunks' $ \lc →
                             Q.writeQueue (simQueue env) $
                                 SimChunkLoaded (lcCoord lc)
                                     (lcFluidMap lc)

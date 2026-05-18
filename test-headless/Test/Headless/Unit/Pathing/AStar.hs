@@ -32,7 +32,6 @@ flatChunk terrZ =
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.empty
         , lcRiverMask         = emptyRiverMask
-        , lcModified          = False
         }
 
 customChunk ∷ ((Int, Int) → (Int, Maybe FluidType)) → LoadedChunk
@@ -57,7 +56,6 @@ customChunk f =
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.empty
         , lcRiverMask         = emptyRiverMask
-        , lcModified          = False
         }
 
 worldWith ∷ LoadedChunk → WorldTileData

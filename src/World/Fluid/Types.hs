@@ -19,7 +19,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
 data FluidType = Ocean | Lake | River | Lava
-    deriving (Show, Eq)
+    deriving (Show, Eq, Generic, Serialize)
 instance NFData FluidType where
     rnf Ocean = ()
     rnf Lake  = ()

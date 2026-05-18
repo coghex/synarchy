@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module Item.Types
     ( ItemDef(..)
     , ItemContainer(..)
@@ -11,6 +11,8 @@ module Item.Types
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize)
 import Engine.Asset.Handle (TextureHandle(..))
 
 -- | Container properties — items with a Just here can hold a fluid
@@ -19,14 +21,14 @@ import Engine.Asset.Handle (TextureHandle(..))
 data ItemContainer = ItemContainer
     { icCapacity ∷ !Float   -- ^ max volume (litres for water-class)
     , icHolds    ∷ !Text    -- ^ what fluid it holds: "water" / etc.
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | Food properties — items with a Just here restore hunger when
 --   eaten. ifNutrition is the kcal value, clamped against the eater's
 --   max_hunger (excess is wasted, item is still consumed).
 data ItemFood = ItemFood
     { ifNutrition ∷ !Float   -- ^ kcal restored per item consumed
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | Immutable item definition — one per type loaded from YAML.
 data ItemDef = ItemDef
@@ -44,7 +46,7 @@ data ItemDef = ItemDef
 data ItemInstance = ItemInstance
     { iiDefName     ∷ !Text
     , iiCurrentFill ∷ !Float    -- ^ litres held; 0 for non-containers
-    } deriving (Show, Eq)
+    } deriving (Show, Eq, Generic, Serialize)
 
 -- | Engine-wide registry of all loaded item defs.
 newtype ItemManager = ItemManager

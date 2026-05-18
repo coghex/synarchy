@@ -804,6 +804,20 @@ end
 -----------------------------------------------------------
 function unitAi.init(scriptId)
     engine.logInfo("Unit AI initializing...")
+    -- Save hook: persist aiState (knownWaterLocation, commandedTask,
+    -- currentAction, source-drink phase, search-spiral progress, etc.).
+    -- Without this, units load with empty AI state and lose their
+    -- water memory + any in-flight player commands.
+    local saveLib  = require("scripts.lib.serialize")
+    local saveMods = require("scripts.lib.save_modules")
+    saveMods.register("unit_ai",
+        function() return saveLib.serialize(aiState) end,
+        function(blob)
+            local restored = saveLib.deserialize(blob) or {}
+            -- Replace in-place so the package.loaded singleton sees it
+            for k in pairs(aiState) do aiState[k] = nil end
+            for k, v in pairs(restored) do aiState[k] = v end
+        end)
 end
 
 function unitAi.update(dt)

@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, DeriveGeneric, DeriveAnyClass #-}
 module Unit.Direction
     ( Direction(..)
     , dirIndex
@@ -7,11 +7,13 @@ module Unit.Direction
     ) where
 
 import UPrelude
+import GHC.Generics (Generic)
+import Data.Serialize (Serialize)
 
 -- | Eight compass directions, ordered clockwise from South.
 --   The index order matters for the rotation arithmetic.
 data Direction = DirS | DirSW | DirW | DirNW | DirN | DirNE | DirE | DirSE
-    deriving (Show, Eq, Ord, Enum, Bounded)
+    deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
 
 -- | Map a Direction to its clockwise index (S=0, SW=1, … SE=7)
 dirIndex ∷ Direction → Int

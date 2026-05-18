@@ -193,7 +193,6 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , lcFlora      = cflora
             , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
             , lcRiverMask  = crmask
-            , lcModified   = False
             }
 
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
@@ -289,7 +288,6 @@ handleWorldInitArenaCommand env logger pageId = do
             , lcFlora             = flatFlora
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
             , lcRiverMask         = V.replicate (chunkSize * chunkSize) Nothing
-            , lcModified          = False
             }
 
         allChunks = [ mkChunk cx cy
