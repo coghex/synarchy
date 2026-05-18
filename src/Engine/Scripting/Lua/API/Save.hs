@@ -8,11 +8,10 @@ module Engine.Scripting.Lua.API.Save
 import UPrelude
 import qualified HsLua as Lua
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (LogCategory(..), logWarn)
+import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import World.Save.Serialize (listSaves, saveWorld, loadWorld)
 import World.Save.Types (SaveMetadata(..), SaveData(..))
 import World.Types (WorldCommand(..))
@@ -47,7 +46,8 @@ saveWorldFn env = do
     nameArg   ← Lua.tostring 2
     case (pageIdArg, nameArg) of
         (Just pageIdBS, Just nameBS) → do
-            blobs ← collectLuaBlobs
+            logger ← Lua.liftIO $ readIORef (loggerRef env)
+            blobs ← collectLuaBlobs logger
             Lua.liftIO $ do
                 let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
                     saveName = TE.decodeUtf8 nameBS
@@ -71,7 +71,8 @@ loadSaveFn env = do
             result ← Lua.liftIO $ loadWorld saveName
             case result of
                 Right saveData → do
-                    restoreLuaBlobs (sdLuaModules saveData)
+                    logger ← Lua.liftIO $ readIORef (loggerRef env)
+                    restoreLuaBlobs logger (sdLuaModules saveData)
                     let pageId = WorldPageId "main_world"
                     Lua.liftIO $ Q.writeQueue (worldQueue env)
                         (WorldLoadSave pageId saveData)
@@ -87,36 +88,90 @@ loadSaveFn env = do
             Lua.pushboolean False
             return 1
 
+-- | Pop the Lua error message at the top of the stack and log it
+--   via the engine logger. Used by collectLuaBlobs / restoreLuaBlobs
+--   to surface pcall failures that would otherwise be silent.
+luaLogPcallError ∷ LoggerState → Text → Lua.LuaE Lua.Exception ()
+luaLogPcallError logger ctx = do
+    err ← Lua.tostring (-1)
+    Lua.pop 1
+    Lua.liftIO $ logWarn logger CatLua $
+        ctx <> ": " <> maybe "<no message>" TE.decodeUtf8 err
+
 -- | Invoke `require("scripts.lib.save_modules").serializeAll()` and
 --   read the resulting `{ name → blob }` table into a HashMap.
---   Returns empty on any error (already-failed save_modules registry,
---   missing lib file, etc.) — the engine save still proceeds, just
---   without Lua blobs.
-collectLuaBlobs ∷ Lua.LuaE Lua.Exception (HM.HashMap Text Text)
-collectLuaBlobs = do
+--   Returns empty on any error (require failing, serializeAll missing
+--   or not a function, serializeAll crashing) and logs via the engine
+--   logger — the engine save still proceeds, just without Lua blobs.
+collectLuaBlobs ∷ LoggerState
+                → Lua.LuaE Lua.Exception (HM.HashMap Text Text)
+collectLuaBlobs logger = do
     -- require("scripts.lib.save_modules")
     _ ← Lua.getglobal "require"
     Lua.pushstring "scripts.lib.save_modules"
-    _ ← Lua.pcall 1 1 Nothing
-    -- module table on top; call serializeAll
-    _ ← Lua.getfield (-1) "serializeAll"
-    _ ← Lua.pcall 0 1 Nothing
-    -- blobs table on top
-    blobs ← readStringTable
-    Lua.pop 2  -- blobs table + module table
-    return blobs
+    requireStatus ← Lua.pcall 1 1 Nothing
+    case requireStatus of
+        Lua.OK → do
+            -- module table on top; look up serializeAll
+            _ ← Lua.getfield (-1) "serializeAll"
+            isFun ← Lua.isfunction (-1)
+            if not isFun
+                then do
+                    Lua.pop 2  -- non-function value + module table
+                    Lua.liftIO $ logWarn logger CatLua
+                        "collectLuaBlobs: save_modules.serializeAll \
+                        \is not a function"
+                    return HM.empty
+                else do
+                    serStatus ← Lua.pcall 0 1 Nothing
+                    case serStatus of
+                        Lua.OK → do
+                            -- blobs table on top
+                            blobs ← readStringTable
+                            Lua.pop 2  -- blobs table + module table
+                            return blobs
+                        _ → do
+                            luaLogPcallError logger
+                                "collectLuaBlobs: serializeAll crashed"
+                            Lua.pop 1  -- module table
+                            return HM.empty
+        _ → do
+            luaLogPcallError logger
+                "collectLuaBlobs: require scripts.lib.save_modules failed"
+            return HM.empty
 
 -- | Push the blobs back to Lua and call
 --   `require("scripts.lib.save_modules").deserializeAll(blobs)`.
-restoreLuaBlobs ∷ HM.HashMap Text Text → Lua.LuaE Lua.Exception ()
-restoreLuaBlobs blobs = do
+--   Logs and continues on any error (require failing, deserializeAll
+--   missing or not a function, deserializeAll crashing) so the engine
+--   load can still proceed — Lua module state will simply be missing.
+restoreLuaBlobs ∷ LoggerState → HM.HashMap Text Text
+                → Lua.LuaE Lua.Exception ()
+restoreLuaBlobs logger blobs = do
     _ ← Lua.getglobal "require"
     Lua.pushstring "scripts.lib.save_modules"
-    _ ← Lua.pcall 1 1 Nothing
-    _ ← Lua.getfield (-1) "deserializeAll"
-    pushStringTable blobs
-    _ ← Lua.pcall 1 0 Nothing
-    Lua.pop 1  -- module table
+    requireStatus ← Lua.pcall 1 1 Nothing
+    case requireStatus of
+        Lua.OK → do
+            _ ← Lua.getfield (-1) "deserializeAll"
+            isFun ← Lua.isfunction (-1)
+            if not isFun
+                then do
+                    Lua.pop 2  -- non-function + module table
+                    Lua.liftIO $ logWarn logger CatLua
+                        "restoreLuaBlobs: save_modules.deserializeAll \
+                        \is not a function"
+                else do
+                    pushStringTable blobs
+                    desStatus ← Lua.pcall 1 0 Nothing
+                    case desStatus of
+                        Lua.OK → Lua.pop 1  -- module table
+                        _      → do
+                            luaLogPcallError logger
+                                "restoreLuaBlobs: deserializeAll crashed"
+                            Lua.pop 1  -- module table
+        _ → luaLogPcallError logger
+              "restoreLuaBlobs: require scripts.lib.save_modules failed"
 
 -- | Iterate the Lua table at top of stack as { string → string }.
 --   Non-string keys or values are skipped silently — the registry on
