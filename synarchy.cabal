@@ -142,6 +142,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Render.PickFrame
                    Test.Headless.Unit.Anim
                    Test.Headless.Unit.Stats
+                   Test.Headless.World.Save.Sanitize
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash

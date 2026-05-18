@@ -4,19 +4,48 @@ module World.Save.Serialize
     , loadWorld
     , listSaves
     , savesDirectory
+    , sanitizeSaveName
     ) where
 
 import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.Serialize as S
 import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
+import Data.Char (isControl)
 import Control.Monad (when)
 import System.Directory (createDirectoryIfMissing, listDirectory
                         , doesFileExist, doesDirectoryExist)
 import System.FilePath ((</>), takeExtension, dropExtension)
 import World.Save.Types
 import World.Generate.Config (saveWorldGenYaml)
+
+-- | Validate a user-supplied save name before it touches the filesystem.
+--   Returns 'Right' with the name unchanged when it's safe to use as a
+--   single path component under @saves/@; returns 'Left' with a short
+--   reason otherwise.
+--
+--   Closes:
+--     - empty names (would resolve to the saves dir itself)
+--     - traversal sequences (@..@)
+--     - path separators (@/@, @\\@) — note that @System.FilePath.\</\>@
+--       silently discards the left operand when the right is absolute,
+--       so a name like @/etc/passwd@ would escape without this guard.
+--     - control characters (would break filesystem operations or
+--       produce surprising shell behaviour)
+--     - leading @.@ (hidden files)
+--     - over-long names (filesystem limits vary; 64 is a safe cap)
+sanitizeSaveName ∷ Text → Either Text Text
+sanitizeSaveName name
+    | T.null name           = Left "Save name cannot be empty"
+    | T.length name > 64    = Left "Save name too long (max 64 chars)"
+    | ".." `T.isInfixOf` name
+                            = Left "Save name cannot contain '..'"
+    | T.any isPathSep name  = Left "Save name cannot contain '/' or '\\'"
+    | T.any isControl name  = Left "Save name cannot contain control characters"
+    | T.head name ≡ '.'     = Left "Save name cannot start with '.'"
+    | otherwise             = Right name
+  where
+    isPathSep c = c ≡ '/' ∨ c ≡ '\\'
 
 savesDirectory ∷ FilePath
 savesDirectory = "saves"
@@ -40,18 +69,20 @@ yamlFileName = "world_gen.yaml"
 --   files before attempting to parse the body — which would fail with
 --   a cryptic cereal error if the schema diverges.
 saveWorld ∷ Text → SaveData → IO (Either Text ())
-saveWorld name saveData = do
-    let saveDir = savesDirectory </> T.unpack name
-    createDirectoryIfMissing True saveDir
-    let binaryPath = saveDir </> binaryFileName
-        yamlPath   = saveDir </> yamlFileName
-        header     = SaveHeader { shMagic   = saveMagic
-                                , shVersion = currentSaveVersion
-                                }
-        encoded    = S.encode header <> S.encode saveData
-    BS.writeFile binaryPath encoded
-    saveWorldGenYaml yamlPath (sdGenParams saveData)
-    return (Right ())
+saveWorld rawName saveData = case sanitizeSaveName rawName of
+    Left err   → return (Left ("Invalid save name: " <> err))
+    Right name → do
+        let saveDir = savesDirectory </> T.unpack name
+        createDirectoryIfMissing True saveDir
+        let binaryPath = saveDir </> binaryFileName
+            yamlPath   = saveDir </> yamlFileName
+            header     = SaveHeader { shMagic   = saveMagic
+                                    , shVersion = currentSaveVersion
+                                    }
+            encoded    = S.encode header <> S.encode saveData
+        BS.writeFile binaryPath encoded
+        saveWorldGenYaml yamlPath (sdGenParams saveData)
+        return (Right ())
 
 -- | Load a world from disk.
 --   Tries directory format first (saves/{name}/world.synworld),
@@ -59,18 +90,20 @@ saveWorld name saveData = do
 --   Rejects pre-v2 saves (no header) and any version mismatch with
 --   a clear error — the user must start fresh after a schema bump.
 loadWorld ∷ Text → IO (Either Text SaveData)
-loadWorld name = do
-    let dirPath    = savesDirectory </> T.unpack name
-        newPath    = dirPath </> binaryFileName
-        legacyPath = savesDirectory </> T.unpack name <> saveExtension
-    newExists ← doesFileExist newPath
-    if newExists
-        then decodeFile newPath
-        else do
-            legacyExists ← doesFileExist legacyPath
-            if not legacyExists
-                then return (Left $ "Save not found: " <> name)
-                else decodeFile legacyPath
+loadWorld rawName = case sanitizeSaveName rawName of
+    Left err   → return (Left ("Invalid save name: " <> err))
+    Right name → do
+        let dirPath    = savesDirectory </> T.unpack name
+            newPath    = dirPath </> binaryFileName
+            legacyPath = savesDirectory </> T.unpack name <> saveExtension
+        newExists ← doesFileExist newPath
+        if newExists
+            then decodeFile newPath
+            else do
+                legacyExists ← doesFileExist legacyPath
+                if not legacyExists
+                    then return (Left $ "Save not found: " <> name)
+                    else decodeFile legacyPath
   where
     decodeFile path = do
         bytes ← BS.readFile path
