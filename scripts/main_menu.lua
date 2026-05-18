@@ -25,6 +25,11 @@ mainMenu.ownedPanels  = {}
 mainMenu.saves = {}
 mainMenu.latestSave = nil
 
+-- Sticky error message rendered below the menu panel. Set on a failed
+-- operation (e.g. loadAndShowSave), cleared at the start of the next
+-- attempt or when the menu transitions to a different page.
+mainMenu.lastError = nil
+
 -- Callback to switch menus (set by ui_manager)
 mainMenu.showMenuCallback = nil
 
@@ -264,6 +269,27 @@ function mainMenu.createUI()
         }
     )
 
+    -- Optional sticky error from a previous failed operation. Rendered
+    -- below the panel in soft red. The label is registered with
+    -- ownedLabels so the next createUI rebuild cleans it up.
+    if mainMenu.lastError then
+        local errLabelId = label.new({
+            name     = "menu_error",
+            text     = mainMenu.lastError,
+            font     = mainMenu.menuFont,
+            fontSize = s.fontSize,
+            color    = {1.0, 0.5, 0.5, 1.0},
+            page     = mainMenu.page,
+            uiscale  = uiscale,
+        })
+        table.insert(mainMenu.ownedLabels, errLabelId)
+        local errW, _ = label.getSize(errLabelId)
+        local errX = (mainMenu.fbW - errW) / 2
+        local errY = menuY + menuHeight + (24 * uiscale)
+        UI.addToPage(mainMenu.page,
+            label.getElementHandle(errLabelId), errX, errY)
+    end
+
     mainMenu.uiCreated = true
     engine.logDebug("Main menu created with " .. #menuItems .. " items")
 end
@@ -327,9 +353,14 @@ function mainMenu.loadAndShowSave(saveName)
     local worldView = require("scripts.world_view")
     local worldManager = require("scripts.world_manager")
 
+    -- Clear any sticky error from a previous attempt before retrying.
+    mainMenu.lastError = nil
+
     local ok = engine.loadSave(saveName)
     if not ok then
         engine.logError("Failed to load save: " .. saveName)
+        mainMenu.lastError = "Failed to load save: " .. saveName
+        mainMenu.createUI()  -- re-render with the error label
         return
     end
 

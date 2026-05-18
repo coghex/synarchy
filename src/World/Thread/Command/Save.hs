@@ -294,11 +294,31 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
                 "Save load: dropping building id="
                   <> T.pack (show (unBuildingId bid))
                   <> " — its def is no longer registered"
+        -- Player-facing summary via the existing onWorldGenLog pathway.
+        -- Per-id detail stays in the engine log; one toast per category
+        -- is enough for the player to notice "something dropped".
+        case length orphans of
+            0 → pure ()
+            n → sendGenLog env $
+                    "Save load: dropped " <> T.pack (show n)
+                    <> " building" <> (if n == 1 then "" else "s")
+                    <> " (def no longer registered)"
 
     -- v5 (Phase 4): restore units + sim state. Same orphan handling as
-    -- buildings; sim states for orphaned uids are dropped. The unit
-    -- thread reads utsRef directly each tick — atomic IORef writes are
-    -- safe here even though the thread is concurrently consuming.
+    -- buildings; sim states for orphaned uids are dropped.
+    --
+    -- Race note: there's a window between writing unitManagerRef (next
+    -- line) and writing utsRef (line below). The unit thread keeps
+    -- running publishToRender every tick during load — it only gates
+    -- tickAllMovement on enginePausedRef, not the publish step. If
+    -- publishToRender reads in between our two writes, it sees post-
+    -- load instances with pre-load simStates, but its `Nothing → inst`
+    -- fallback (Unit/Thread.hs:107-108) keeps any uid not in the
+    -- simStates map unchanged. So the visible result is one frame of
+    -- the loaded animation state without sim-driven overrides —
+    -- imperceptible. A future reader that requires stricter consistency
+    -- (e.g. asserts simStates ⊆ umInstances) would need either an
+    -- explicit lock or merging both refs into a single IORef.
     do
         currentUm ← readIORef (unitManagerRef env)
         let (restoredUm, orphanUnits) =
@@ -315,6 +335,12 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
                 "Save load: dropping unit id="
                   <> T.pack (show (unUnitId uid))
                   <> " — its def is no longer registered"
+        case length orphanUnits of
+            0 → pure ()
+            n → sendGenLog env $
+                    "Save load: dropped " <> T.pack (show n)
+                    <> " unit" <> (if n == 1 then "" else "s")
+                    <> " (def no longer registered)"
 
     -- 6. Set camera z-slice from saved camera position. elevationAtGlobal
     -- takes grid coords (gx, gy), not world coords — go through
@@ -326,12 +352,26 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
         (surfaceElev, _mat) =
             elevationAtGlobal seed (wgpPlates params) worldSize camGX camGY
         startZSlice = surfaceElev + surfaceHeadroom
-    atomicModifyIORef' (cameraRef env) $ \cam →
-        (cam { camPosition = (sdCameraX saveData, sdCameraY saveData)
-             , camZoom     = sdCameraZoom saveData
-             , camFacing   = sdCameraFacing saveData
-             , camZSlice   = startZSlice
-             , camZTracking = True }, ())
+    -- Use record-construction (not record-update) so every Camera2D
+    -- field is set explicitly. Record-update would silently preserve
+    -- the prior camera's transient state — non-zero pan/zoom velocity,
+    -- mid-drag flag with stale drag origin — which the next render
+    -- frame would then act on. Construction also makes the compiler
+    -- error if Camera2D gains a new field, forcing a deliberate
+    -- decision at load time.
+    atomicModifyIORef' (cameraRef env) $ \_ →
+        (Camera2D
+            { camPosition     = (sdCameraX saveData, sdCameraY saveData)
+            , camVelocity     = (0, 0)
+            , camZoom         = sdCameraZoom saveData
+            , camZoomVelocity = 0
+            , camRotation     = 0
+            , camFacing       = sdCameraFacing saveData
+            , camDragging     = False
+            , camDragOrigin   = (0, 0)
+            , camZSlice       = startZSlice
+            , camZTracking    = True
+            }, ())
 
     let totalInitialChunks =
             (2 * chunkLoadRadius + 1) * (2 * chunkLoadRadius + 1)

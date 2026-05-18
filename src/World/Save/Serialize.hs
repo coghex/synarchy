@@ -12,12 +12,15 @@ import qualified Data.ByteString as BS
 import qualified Data.Serialize as S
 import qualified Data.Text as T
 import Data.Char (isControl)
+import Data.List (sortBy)
+import Data.Ord (comparing, Down(..))
 import Control.Monad (when)
 import System.Directory (createDirectoryIfMissing, listDirectory
                         , doesFileExist, doesDirectoryExist)
 import System.FilePath ((</>), takeExtension, dropExtension)
 import World.Save.Types
 import World.Generate.Config (saveWorldGenYaml)
+import Engine.Core.Log (LoggerState, LogCategory(..), logWarn)
 
 -- | Validate a user-supplied save name before it touches the filesystem.
 --   Returns 'Right' with the name unchanged when it's safe to use as a
@@ -127,12 +130,18 @@ mapLeft (Right b) _ = Right b
 
 -- | List available saves (returns metadata only).
 --   Checks both directory-based saves and legacy flat files.
-listSaves ∷ IO [(Text, SaveMetadata)]
-listSaves = do
+--   Results are sorted newest-first by timestamp (ISO 8601
+--   lexicographic descending), tiebreak by name ascending.
+--   Corrupt / wrong-version saves are logged and dropped from the
+--   list — the dev sees the reason; players still need #6's HUD
+--   bridge before that message is visible in-game.
+listSaves ∷ LoggerState → IO [(Text, SaveMetadata)]
+listSaves logger = do
     createDirectoryIfMissing True savesDirectory
     entries ← listDirectory savesDirectory
     results ← mapM tryEntry entries
-    return $ concat results
+    let oks = concat results
+    pure $ sortBy (comparing (Down . smTimestamp . snd) <> comparing fst) oks
   where
     tryEntry entry = do
         let fullPath = savesDirectory </> entry
@@ -152,9 +161,14 @@ listSaves = do
     loadMetadata name path = do
         bytes ← BS.readFile path
         -- Header-aware: skip files whose magic/version doesn't match.
-        -- Legacy v1 saves (no header) silently disappear from listings.
+        -- Legacy v1 saves (no header) hit "bad magic" and are skipped
+        -- with a logged warning so the user has a chance of noticing.
         case S.runGet decodeListingMeta bytes of
-            Left _   → return []
+            Left err → do
+                logWarn logger CatWorld $
+                    "listSaves: skipping " <> T.pack path
+                    <> ": " <> T.pack err
+                return []
             Right sd → return [(name, sdMetadata sd)]
     decodeListingMeta = do
         h ← S.get

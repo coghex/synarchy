@@ -15,6 +15,7 @@ set -u
 PORT=9008
 LOG=/tmp/test_lua_save_engine.log
 TEST_SAVE_NAME=smoke_test_save_$$  # PID-suffixed so concurrent runs don't clash
+SECOND_SAVE_NAME=${TEST_SAVE_NAME}_two
 
 # ── Setup ────────────────────────────────────────────────────────────
 HPID=""
@@ -23,7 +24,7 @@ cleanup() {
         echo 'engine.quit()' | nc -w 2 localhost $PORT >/dev/null 2>&1 || true
         wait $HPID 2>/dev/null || true
     fi
-    rm -rf "saves/${TEST_SAVE_NAME}" 2>/dev/null
+    rm -rf "saves/${TEST_SAVE_NAME}" "saves/${SECOND_SAVE_NAME}" 2>/dev/null
 }
 trap cleanup EXIT
 
@@ -116,6 +117,47 @@ echo "[5] saved file has ISO 8601 timestamp populated"
 # matches the YYYY-MM-DDTHH:MM:SSZ pattern produced at save time.
 assert_eq "timestamp is ISO 8601" "true" \
     "(function() for _, s in ipairs(engine.listSaves()) do if s.name == '${TEST_SAVE_NAME}' then return s.timestamp:match('^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ\$') ~= nil end end return false end)()"
+
+echo "[6] pause.toggle works on first press after a direct setPaused"
+# Simulate the auto-pause-on-save desync condition: engine flag flipped
+# directly (without going through pause.set), Lua mirror untouched.
+# Pre-fix: the mirror is false while engine is true, so pause.toggle's
+# first call is a no-op visually. Post-fix: pause.set/toggle check the
+# engine flag, so first toggle correctly unpauses.
+lua "engine.setPaused(true)" > /dev/null
+sleep 0.3
+assert_eq "engine is paused"          "true"  "engine.isPaused()"
+lua "require('scripts.pause').toggle()" > /dev/null
+assert_eq "first toggle unpauses"     "false" "engine.isPaused()"
+lua "require('scripts.pause').toggle()" > /dev/null
+assert_eq "second toggle re-pauses"   "true"  "engine.isPaused()"
+
+echo "[7] listSaves returns saves newest-first"
+# Create a second save 1.1s after the first so its ISO 8601 second-
+# precision timestamp is strictly greater. Pre-fix, listSaves returned
+# filesystem order; post-fix, sortBy (Down . timestamp) <> name puts
+# the newer one first regardless of inode layout.
+lua "engine.setPaused(false)" > /dev/null
+sleep 1.1
+assert_eq "second save created"   "true" "engine.saveWorld('test', '${SECOND_SAVE_NAME}')"
+assert_eq "newer save sorts first" "true" \
+    "(function() local list = engine.listSaves(); local n_idx, o_idx = -1, -1; for i, s in ipairs(list) do if s.name == '${SECOND_SAVE_NAME}' then n_idx = i end; if s.name == '${TEST_SAVE_NAME}' then o_idx = i end; end; return n_idx > 0 and o_idx > 0 and n_idx < o_idx end)()"
+
+echo "[8] camera transients reset on load"
+# Set a non-zero zoom velocity, then loadSave the test save. The fix
+# uses Camera2D record-construction (vs record-update) so every
+# transient field is explicitly initialized. Pre-fix, the loaded
+# camera would inherit the prior camera's zoom velocity / drag state.
+# Only camZoomVelocity is exposed via Lua, but it's a representative
+# witness for the whole class of transients.
+lua "camera.setZoomVelocity(5.0)" > /dev/null
+assert_eq "zoom velocity pre-load"   "5"     "math.floor(camera.getZoomVelocity())"
+assert_eq "loadSave returns true"    "true"  "engine.loadSave('${TEST_SAVE_NAME}')"
+# Load handler is async — block on the load progress phaseRef instead of
+# sleeping (it's shared with init's phaseRef; phase=3 means "done").
+LOAD_RESULT=$(lua "return world.waitForInit(60)" 60)
+echo "  waitForInit (post-load) returned: [$LOAD_RESULT]"
+assert_eq "zoom velocity post-load"  "0"     "math.floor(camera.getZoomVelocity())"
 
 # ── Report ───────────────────────────────────────────────────────────
 echo ""

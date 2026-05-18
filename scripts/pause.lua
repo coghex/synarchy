@@ -37,7 +37,12 @@ end
 
 function pause.set(b)
     b = b and true or false
-    if b == pause.paused then return end
+    -- Check against the engine flag (source of truth), not the local
+    -- mirror. The mirror can be stale after a path that flips
+    -- enginePausedRef directly (auto-pause-on-save in saveWorldFn
+    -- and Save.hs:60). The mirror below is kept as a cache so the
+    -- save hook doesn't need an extra engine.isPaused() call.
+    if b == engine.isPaused() then return end
     pause.paused = b
     engine.setPaused(b)
     if b then
@@ -53,7 +58,9 @@ function pause.set(b)
 end
 
 function pause.toggle()
-    pause.set(not pause.paused)
+    -- Toggle off the engine flag, not the local mirror. See pause.set
+    -- for why — the mirror can be stale after auto-pause-on-save.
+    pause.set(not engine.isPaused())
 end
 
 -- Engine script hooks
@@ -74,7 +81,11 @@ function pause.init(scriptId)
         end,
         function(blob)
             local t = saveLib.deserialize(blob) or {}
-            pause.paused        = t.paused        or false
+            -- Ignore t.paused: the engine flag is authoritative at this
+            -- point (engine restored enginePausedRef from sdEnginePaused
+            -- before this Lua hook fires). The blob field is kept for
+            -- forward-compat with v6 saves but is no longer load-bearing.
+            pause.paused        = engine.isPaused()
             pause.prevTimeScale = t.prevTimeScale or 1.0
         end)
 end

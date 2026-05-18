@@ -21,9 +21,11 @@ import World.Thread.Helpers (unWorldPageId)
 import Data.IORef (readIORef, writeIORef)
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
+--   sorted newest-first by timestamp.
 saveListFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-saveListFn _env = do
-    saves ← Lua.liftIO listSaves
+saveListFn env = do
+    logger ← Lua.liftIO $ readIORef (loggerRef env)
+    saves ← Lua.liftIO $ listSaves logger
     Lua.newtable
     forM_ (zip [1..] saves) $ \(i, (name, meta)) → do
         Lua.newtable
