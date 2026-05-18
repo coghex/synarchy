@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Smoke-test the engine.saveWorld / engine.loadSave Lua API for correct
+# error reporting. Boots a headless engine on a non-default port, runs
+# assertions over the TCP debug console, tears down. Exits 0 on all-pass.
+#
+# Usage:  tools/test_lua_save_api.sh
+#
+# Why this exists: hspec covers pure code, but the Lua API surface
+# spans the Lua thread, world thread, and disk. End-to-end behaviour
+# (does saveWorld actually return false when validation fails?) is
+# only testable by driving the running engine, which is exactly what
+# the headless debug console is for.
+
+set -u
+PORT=9008
+LOG=/tmp/test_lua_save_engine.log
+TEST_SAVE_NAME=smoke_test_save_$$  # PID-suffixed so concurrent runs don't clash
+
+# ── Setup ────────────────────────────────────────────────────────────
+HPID=""
+cleanup() {
+    if [ -n "$HPID" ]; then
+        echo 'engine.quit()' | nc -w 2 localhost $PORT >/dev/null 2>&1 || true
+        wait $HPID 2>/dev/null || true
+    fi
+    rm -rf "saves/${TEST_SAVE_NAME}" 2>/dev/null
+}
+trap cleanup EXIT
+
+cabal run -v0 exe:synarchy -- --headless --port $PORT > $LOG 2>&1 &
+HPID=$!
+
+# Wait for READY (printed by Engine.Core.Loop when TCP listener is up)
+until grep -q "READY" $LOG 2>/dev/null; do
+    sleep 0.2
+    if ! kill -0 $HPID 2>/dev/null; then
+        echo "FAIL: engine died during startup. Log:"
+        cat $LOG
+        exit 1
+    fi
+done
+
+# ── Assertion helper ─────────────────────────────────────────────────
+FAIL=0
+PASS=0
+lua() {
+    # Send one Lua line, return its single-line stdout response with the
+    # debug-console prompt prefix and trailing next-prompt suffix stripped.
+    #   raw: "synarchy debug console> false> "
+    #   cleaned: "false"
+    # Optional second arg = nc timeout in seconds (default 5).
+    local cmd="$1" timeout="${2:-5}"
+    echo "$cmd" | nc -w "$timeout" localhost $PORT \
+        | tr -d '\r\n' \
+        | sed -E 's/synarchy debug console>[[:space:]]*//g; s/[[:space:]]*>[[:space:]]*$//; s/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+assert_eq() {
+    local desc="$1" expected="$2" cmd="$3"
+    local got
+    got=$(lua "return $cmd")
+    if [ "$got" = "$expected" ]; then
+        echo "  PASS: $desc"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL: $desc"
+        echo "        cmd:      $cmd"
+        echo "        expected: [$expected]"
+        echo "        got:      [$got]"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+# ── Tests ────────────────────────────────────────────────────────────
+echo "[1] saveWorld validation rejects bad inputs (no world initialized)"
+assert_eq "missing page"          "false" "engine.saveWorld('nonexistent_page', 'test')"
+assert_eq "empty save name"       "false" "engine.saveWorld('any', '')"
+assert_eq "traversal in name"     "false" "engine.saveWorld('any', '../injected')"
+assert_eq "absolute path in name" "false" "engine.saveWorld('any', '/tmp/owned')"
+assert_eq "backslash in name"     "false" "engine.saveWorld('any', 'bad\\\\name')"
+assert_eq "leading dot"           "false" "engine.saveWorld('any', '.hidden')"
+assert_eq "65 char name"          "false" \
+    "engine.saveWorld('any', string.rep('a', 65))"
+
+echo "[2] Initialize a small world for the success path"
+lua "world.init('test', 42, 64, 1)" > /dev/null
+INIT_RESULT=$(lua "return world.waitForInit(120)" 120)
+echo "  world.waitForInit returned: [$INIT_RESULT]"
+lua "world.show('test')" > /dev/null
+
+echo "[3] saveWorld accepts a valid name on an initialized world"
+assert_eq "good save"             "true"  "engine.saveWorld('test', '${TEST_SAVE_NAME}')"
+assert_eq "good save can repeat"  "true"  "engine.saveWorld('test', '${TEST_SAVE_NAME}')"
+
+echo "[4] saveWorld still rejects bad inputs on an initialized world"
+assert_eq "bad name post-init"    "false" "engine.saveWorld('test', '../still_bad')"
+assert_eq "wrong page post-init"  "false" "engine.saveWorld('nonexistent', '${TEST_SAVE_NAME}_x')"
+
+# ── Report ───────────────────────────────────────────────────────────
+echo ""
+echo "=========================================="
+echo "Passed: $PASS   Failed: $FAIL"
+echo "=========================================="
+exit $FAIL

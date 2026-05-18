@@ -12,10 +12,12 @@ import qualified Data.Text.Encoding as TE
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
-import World.Save.Serialize (listSaves, saveWorld, loadWorld)
+import World.Save.Serialize (listSaves, saveWorld, loadWorld
+                            , sanitizeSaveName)
 import World.Save.Types (SaveMetadata(..), SaveData(..))
-import World.Types (WorldCommand(..))
+import World.Types (WorldCommand(..), WorldManager(..), WorldState(..))
 import World.Page.Types (WorldPageId(..))
+import World.Thread.Helpers (unWorldPageId)
 import Data.IORef (readIORef)
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
@@ -36,23 +38,53 @@ saveListFn _env = do
         Lua.rawseti (-2) i
     return 1
 
--- | engine.saveWorld(pageId, saveName). Calls Lua-side
---   `scripts.lib.save_modules.serializeAll()` to collect each
---   registered module's state into a blob table, then enqueues
---   a `WorldSave` command carrying the blobs to the world thread.
+-- | engine.saveWorld(pageId, saveName). Validates the request
+--   synchronously (name, world-exists, gen-params present), then
+--   collects each registered Lua module's state via
+--   `scripts.lib.save_modules.serializeAll()` and enqueues a
+--   `WorldSave` command carrying the blobs to the world thread.
+--
+--   Returns false on any validation failure (with a logged reason);
+--   true once the command is queued. Disk-write failures are
+--   inherently async and surface via the engine→Lua `onWorldGenLog`
+--   broadcast (see `Save.hs:128-135`).
 saveWorldFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveWorldFn env = do
     pageIdArg ← Lua.tostring 1
     nameArg   ← Lua.tostring 2
     case (pageIdArg, nameArg) of
         (Just pageIdBS, Just nameBS) → do
+            let saveName = TE.decodeUtf8 nameBS
+                pageId   = WorldPageId (TE.decodeUtf8 pageIdBS)
             logger ← Lua.liftIO $ readIORef (loggerRef env)
-            blobs ← collectLuaBlobs logger
-            Lua.liftIO $ do
-                let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
-                    saveName = TE.decodeUtf8 nameBS
-                Q.writeQueue (worldQueue env) (WorldSave pageId saveName blobs)
-            Lua.pushboolean True
+            case sanitizeSaveName saveName of
+                Left err → do
+                    Lua.liftIO $ logWarn logger CatLua $
+                        "saveWorld rejected: " <> err
+                    Lua.pushboolean False
+                Right name → do
+                    mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+                    case lookup pageId (wmWorlds mgr) of
+                        Nothing → do
+                            Lua.liftIO $ logWarn logger CatLua $
+                                "saveWorld: world not found: "
+                                  <> unWorldPageId pageId
+                            Lua.pushboolean False
+                        Just worldState → do
+                            mParams ← Lua.liftIO $ readIORef
+                                        (wsGenParamsRef worldState)
+                            case mParams of
+                                Nothing → do
+                                    Lua.liftIO $ logWarn logger CatLua $
+                                        "saveWorld: world has no gen \
+                                        \params: " <> unWorldPageId pageId
+                                    Lua.pushboolean False
+                                Just _ → do
+                                    blobs ← collectLuaBlobs logger
+                                    Lua.liftIO $ Q.writeQueue
+                                        (worldQueue env)
+                                        (WorldSave pageId name blobs)
+                                    Lua.pushboolean True
         _ → Lua.pushboolean False
     return 1
 
