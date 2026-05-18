@@ -11,6 +11,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.Time.Clock (getCurrentTime)
+import Data.Time.Format (formatTime, defaultTimeLocale)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
@@ -19,7 +21,8 @@ import Engine.Core.Log (logInfo, logDebug, logError, logWarn
 import Engine.Graphics.Camera (Camera2D(..))
 import World.Types
 import World.Constants (seaLevel)
-import World.Generate (generateChunk)
+import World.Generate (generateChunk, cameraChunkCoord)
+import World.Grid (worldToGrid)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Generate.Timeline (applyTimelineFast)
 import World.Geology (buildTimeline)
@@ -89,12 +92,19 @@ handleWorldSaveCommand env logger pageId saveName luaBlobs = do
                     logWarn logger CatWorld
                         "Cannot save: world has no gen params"
                 Just params → do
-                    let meta = SaveMetadata
+                    -- UTC ISO 8601, second precision. Lexicographic sort
+                    -- by this string is chronologically correct, so the
+                    -- Lua-side `a.timestamp > b.timestamp` in main_menu
+                    -- works without further wrapping.
+                    now ← getCurrentTime
+                    let timestampTxt = T.pack
+                            (formatTime defaultTimeLocale "%FT%TZ" now)
+                        meta = SaveMetadata
                             { smName       = saveName
                             , smSeed       = wgpSeed params
                             , smWorldSize  = wgpWorldSize params
                             , smPlateCount = wgpPlateCount params
-                            , smTimestamp  = ""  -- filled below
+                            , smTimestamp  = timestampTxt
                             }
                         sd = SaveData
                             { sdMetadata   = meta
@@ -220,9 +230,16 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     writeIORef phaseRef (LoadPhase1 3 totalSteps)
     sendGenLog env "Generating initial chunks..."
     catalog ← readIORef (floraCatalogRef env)
-    let camCX = floor (sdCameraX saveData) `div` chunkSize
-        camCY = floor (sdCameraY saveData) `div` chunkSize
-        centerCoord = ChunkCoord camCX camCY
+    -- Use the canonical screen→grid→chunk conversion. The bug-version
+    -- (floor camX `div` chunkSize) treated world coords as grid coords,
+    -- skipping both the isometric projection inverse and the facing
+    -- rotation — under FaceWest/North/East, this targets a totally
+    -- wrong chunk for synchronous regen, producing a blank center tile
+    -- on load until the async queue catches up.
+    let centerCoord@(ChunkCoord camCX camCY) =
+            cameraChunkCoord (sdCameraFacing saveData)
+                             (sdCameraX saveData)
+                             (sdCameraY saveData)
         (ct, cs, cterrain, cf, cice, cflora, crmask) = generateChunk registry catalog params centerCoord
         seededFluid = projectRiverSimple crmask cterrain cf
         seededSurf = VU.imap (\idx surfZ →
@@ -299,9 +316,13 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
                   <> T.pack (show (unUnitId uid))
                   <> " — its def is no longer registered"
 
-    -- 6. Set camera z-slice from saved camera position
-    let camGX = round (sdCameraX saveData) ∷ Int
-        camGY = round (sdCameraY saveData) ∷ Int
+    -- 6. Set camera z-slice from saved camera position. elevationAtGlobal
+    -- takes grid coords (gx, gy), not world coords — go through
+    -- worldToGrid so this matches the convention used everywhere else
+    -- (Render.hs:136, Quads.hs:397, etc.).
+    let (camGX, camGY) = worldToGrid (sdCameraFacing saveData)
+                                     (sdCameraX saveData)
+                                     (sdCameraY saveData)
         (surfaceElev, _mat) =
             elevationAtGlobal seed (wgpPlates params) worldSize camGX camGY
         startZSlice = surfaceElev + surfaceHeadroom

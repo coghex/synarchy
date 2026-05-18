@@ -101,11 +101,21 @@ assert_eq "engine paused after repeat" "true" "engine.isPaused()"
 
 echo "[4] saveWorld still rejects bad inputs on an initialized world"
 # Validation failures should NOT pause the engine (no side effects on reject).
+# Drain any pending WorldSave from [3] — the world thread's defense-in-depth
+# pause-write at Save.hs:60 lands async and would otherwise race with our
+# setPaused(false). 0.5s is plenty for a 64-tile-world's save handler.
+sleep 0.5
 lua "engine.setPaused(false)" > /dev/null
 assert_eq "bad name post-init"    "false" "engine.saveWorld('test', '../still_bad')"
 assert_eq "no pause on bad name"  "false" "engine.isPaused()"
 assert_eq "wrong page post-init"  "false" "engine.saveWorld('nonexistent', '${TEST_SAVE_NAME}_x')"
 assert_eq "no pause on wrong page" "false" "engine.isPaused()"
+
+echo "[5] saved file has ISO 8601 timestamp populated"
+# Iterate engine.listSaves(), find our test save, verify its timestamp
+# matches the YYYY-MM-DDTHH:MM:SSZ pattern produced at save time.
+assert_eq "timestamp is ISO 8601" "true" \
+    "(function() for _, s in ipairs(engine.listSaves()) do if s.name == '${TEST_SAVE_NAME}' then return s.timestamp:match('^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ\$') ~= nil end end return false end)()"
 
 # ── Report ───────────────────────────────────────────────────────────
 echo ""
