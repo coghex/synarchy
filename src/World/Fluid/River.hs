@@ -93,45 +93,43 @@ containPass mv surfaceMap = do
             Just fc | fcType fc ≡ River → do
                 let lx = idx `mod` chunkSize
                     ly = idx `div` chunkSize
-                    myWater = fcSurface fc
                     surfZ = surfaceMap VU.! idx
-                -- Find lowest terrain among dry cardinal neighbors.
-                -- Edge tiles (at chunk boundary) skip this — they may
-                -- connect to water in adjacent chunks.
-                let isEdge = lx ≡ 0 ∨ lx ≡ chunkSize - 1
+                    myWater0 = fcSurface fc
+                    isEdge = lx ≡ 0 ∨ lx ≡ chunkSize - 1
                            ∨ ly ≡ 0 ∨ ly ≡ chunkSize - 1
-                if isEdge then pure ()
-                else do
+                -- Pass 1: cliff-lowering. Find lowest terrain among dry
+                -- cardinal neighbors; if water floats >5 above it, lower
+                -- to dryTerrZ+1. Edge tiles skip — they may connect to
+                -- water in adjacent chunks. Returns the post-Pass-1
+                -- surface so Pass 2's guards see fresh state without a
+                -- second MV.read.
+                myWater1 ← if isEdge then pure myWater0 else do
                     lowestDry ← lowestDryNeighborTerrain mv surfaceMap lx ly
                     case lowestDry of
-                        Nothing → pure ()  -- no dry neighbors (interior tile)
+                        Nothing → pure myWater0  -- no dry neighbors (interior)
                         Just dryTerrZ → do
-                            -- If water is floating >5 above dry terrain,
-                            -- lower to dry terrain + 1.
-                            let cliff = myWater - dryTerrZ
-                            when (cliff > 5) $ do
-                                let target = max (surfZ + 1) (dryTerrZ + 1)
-                                when (target < myWater) $ do
-                                    MV.write mv idx (Just (fc { fcSurface = target }))
-                                    writeSTRef changedRef True
-                -- Also check: if any WATER neighbor was lowered and is now
-                -- much lower than us, we should lower too (inward propagation).
+                            let cliff  = myWater0 - dryTerrZ
+                                target = max (surfZ + 1) (dryTerrZ + 1)
+                            if cliff > 5 ∧ target < myWater0
+                               then do
+                                   MV.write mv idx (Just (fc { fcSurface = target }))
+                                   writeSTRef changedRef True
+                                   pure target
+                               else pure myWater0
+                -- Pass 2: inward propagation. If our (post-Pass-1) surface
+                -- is >5 above our lowest water neighbor, lower toward them
+                -- (but not below terrain+1). Using myWater1 in the outer
+                -- guards means Pass 1's earlier lowering correctly skips
+                -- Pass 2 work when no further drop is warranted.
                 minNbr ← minRiverNeighborSurface mv lx ly
                 case minNbr of
                     Nothing → pure ()
-                    Just nMin → do
-                        -- If we're >5 above our lowest water neighbor,
-                        -- lower toward them (but not below terrain+1).
-                        when (myWater > nMin + 5) $ do
+                    Just nMin →
+                        when (myWater1 > nMin + 5) $ do
                             let target = max (surfZ + 1) (nMin + 3)
-                            when (target < myWater) $ do
-                                val' ← MV.read mv idx
-                                case val' of
-                                    Just fc' | fcType fc' ≡ River →
-                                        when (target < fcSurface fc') $ do
-                                            MV.write mv idx (Just (fc' { fcSurface = target }))
-                                            writeSTRef changedRef True
-                                    _ → pure ()
+                            when (target < myWater1) $ do
+                                MV.write mv idx (Just (fc { fcSurface = target }))
+                                writeSTRef changedRef True
             _ → pure ()
     readSTRef changedRef
 
