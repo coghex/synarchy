@@ -13,6 +13,7 @@ module World.Geology.Hash
 import UPrelude
 import Data.Bits (xor, shiftR, (.&.))
 import Data.Word (Word32, Word64)
+import World.Chunk.Types (chunkSize)
 
 -- * Hash Utilities
 
@@ -46,7 +47,7 @@ smoothstepGeo t = t * t * (3.0 - 2.0 * t)
 {-# INLINE wrappedDeltaXGeo #-}
 wrappedDeltaXGeo ∷ Int → Int → Int → Int
 wrappedDeltaXGeo worldSize x1 x2 =
-    let w = worldSize * 16
+    let w = worldSize * chunkSize
         raw = x2 - x1
         halfW = w `div` 2
     in ((raw + halfW) `mod` w + w) `mod` w - halfW
@@ -57,7 +58,7 @@ wrappedDeltaXGeo worldSize x1 x2 =
 {-# INLINE wrappedDeltaUV #-}
 wrappedDeltaUV ∷ Int → Int → Int → Int → Int → (Int, Int)
 wrappedDeltaUV worldSize gx1 gy1 gx2 gy2 =
-    let w = worldSize * 16
+    let w = worldSize * chunkSize
         halfW = w `div` 2
         du = (gx1 - gy1) - (gx2 - gy2)
         dv = (gx1 + gy1) - (gx2 + gy2)

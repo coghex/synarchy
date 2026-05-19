@@ -26,9 +26,17 @@ end
 -- Init (called once from ui_manager.checkReady)
 -----------------------------------------------------------
 
-function testArena.init(fbW, fbH)
-    testArena.fbW = fbW
-    testArena.fbH = fbH
+-- Signature mirrors loading_screen.init / pause_menu.init shape:
+-- (boxTex, font, titleFont, fbW, fbH). The texture / font args are
+-- stored even though the arena doesn't currently render menu chrome
+-- — keeps the surface consistent so a future overlay can pull them
+-- from the module without re-plumbing ui_manager.
+function testArena.init(boxTex, font, titleFont, fbW, fbH)
+    testArena.boxTexSet = boxTex
+    testArena.menuFont  = font
+    testArena.titleFont = titleFont
+    testArena.fbW       = fbW
+    testArena.fbH       = fbH
 
     local count = 0
     -- Load materials from YAML. This populates the engine's
