@@ -9,7 +9,7 @@ import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn,
                                       setTickIntervalFn, pauseScriptFn,
                                       resumeScriptFn, quitFn, getFPSFn,
                                       listFilesFn, setPausedFn, isPausedFn,
-                                      realTimeFn)
+                                      realTimeFn, gameTimeFn)
 import Engine.Scripting.Lua.API.Camera
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
@@ -71,6 +71,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setPaused"         (setPausedFn env)
   registerLuaFunction "isPaused"          (isPausedFn env)
   registerLuaFunction "realTime"          realTimeFn
+  registerLuaFunction "gameTime"          (gameTimeFn env)
   registerLuaFunction "loadScript"        (loadScriptFn env backendState lst)
   registerLuaFunction "killScript"        (killScriptFn env backendState lst)
   registerLuaFunction "pauseScript"       (pauseScriptFn backendState)

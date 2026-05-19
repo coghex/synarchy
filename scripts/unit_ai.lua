@@ -144,7 +144,7 @@ local function ensureState(uid)
     if not s then
         s = {
             currentAction   = "idle",
-            actionStartedAt = os.time(),
+            actionStartedAt = engine.gameTime(),
             nextActionAt    = 0,      -- decide on first sight
             commandedTask   = nil,
         }
@@ -156,7 +156,7 @@ end
 -- Schedule the next decision: interval + ±jitter, in seconds.
 local function scheduleNext(s, params)
     local jitter = (math.random() * 2 - 1) * params.thought_jitter
-    s.nextActionAt = os.time() + params.thought_interval * (1 + jitter)
+    s.nextActionAt = engine.gameTime() + params.thought_interval * (1 + jitter)
 end
 
 local function distance(ax, ay, bx, by)
@@ -192,7 +192,7 @@ local function wanderUtility(uid, s, params)
 
     local timeInSession = 0
     if s.currentAction == "wander" then
-        timeInSession = os.time() - s.actionStartedAt
+        timeInSession = engine.gameTime() - s.actionStartedAt
     end
 
     return params.base_wander_utility
@@ -709,7 +709,7 @@ local function maintainTask(uid, s)
     end
 
     -- Timeout check (handles unreachable destinations).
-    if os.time() - task.startedAt > TASK_TIMEOUT_SEC then
+    if engine.gameTime() - task.startedAt > TASK_TIMEOUT_SEC then
         s.commandedTask = nil
     end
 end
@@ -740,7 +740,7 @@ local function tickOne(uid, defName)
     maintainTask(uid, s)
     scanForWater(uid, s, params)
 
-    if os.time() < s.nextActionAt then return end
+    if engine.gameTime() < s.nextActionAt then return end
 
     -- Score every action; pick the highest. Ties → first in list.
     local bestAction, bestScore = nil, -math.huge
@@ -756,7 +756,7 @@ local function tickOne(uid, defName)
         local switching = bestAction.name ~= s.currentAction
         if switching then
             s.currentAction   = bestAction.name
-            s.actionStartedAt = os.time()
+            s.actionStartedAt = engine.gameTime()
         end
         -- Re-execute conditions:
         --   * On a switch: always (need to set up the new action).
@@ -785,7 +785,7 @@ function unitAi.commandMove(uid, tx, ty, speed)
         x         = tx,
         y         = ty,
         speed     = speed,
-        startedAt = os.time(),
+        startedAt = engine.gameTime(),
     }
     -- Force a fresh decision on the next tick rather than waiting
     -- for the unit's natural cadence — feels more responsive.

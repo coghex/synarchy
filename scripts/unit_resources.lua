@@ -155,6 +155,126 @@ local config = {
 }
 
 -----------------------------------------------------------
+-- Player-events alert tracking
+-----------------------------------------------------------
+--
+-- Survival emits three player-events flavours:
+--   * survival_critical "X died of <cause>" on every unit.kill site
+--     (no debouncing — each unit dies once).
+--   * survival_warning "X is starving"   when hunger hits 0
+--   * survival_warning "X is dehydrated" when hydration < 25%
+--
+-- Warnings are debounced with hysteresis to avoid spamming the popup
+-- when a unit oscillates around the threshold (e.g. drinks a sip,
+-- drains back below 25%, drinks again …). Each unit carries a
+-- per-alert "active" flag; the alert fires only on the OFF→ON
+-- transition, and the flag clears only when the resource recovers
+-- above a higher "rearm" threshold (well clear of the trigger).
+--
+-- Entries are keyed by unit id. They linger after a unit is
+-- destroyed via unit.destroy, which is fine — they're tiny (two
+-- booleans) and bounded by total units ever spawned. Death
+-- explicitly clears the entry.
+
+local unitAlertState = {}  -- uid → { starvation = bool, dehydration = bool }
+
+-- Rearm thresholds (as fractions of max). Trigger thresholds are
+-- "hunger ≤ 0" (the floor) and "hydration < 25%" per the design.
+local STARVATION_REARM_FRAC   = 0.25  -- clear flag when hunger > 25%
+local DEHYDRATION_TRIGGER_FRAC = 0.25  -- fire flag when hydration < 25%
+local DEHYDRATION_REARM_FRAC   = 0.50  -- clear flag when hydration > 50%
+
+-- "acolyte" → "Acolyte". Unit defNames are all lower-snake_case
+-- today; this is enough to make alert text presentable. If
+-- individual unit names land later this becomes <name>.
+local function unitLabel(info)
+    local n = (info and info.defName) or "Unit"
+    return n:sub(1, 1):upper() .. n:sub(2)
+end
+
+local function unitCoords(info)
+    if not info then return nil, nil end
+    return math.floor(info.gridX or 0), math.floor(info.gridY or 0)
+end
+
+local function emitDeathAlert(uid, cause)
+    local info = unit.getInfo(uid)
+    if not info then return end
+    local gx, gy = unitCoords(info)
+    local msg = unitLabel(info) .. " died of " .. cause
+    if gx and gy then
+        engine.emitEventAt("survival_critical", msg, gx, gy)
+    else
+        engine.emitEvent("survival_critical", msg)
+    end
+    -- Death clears any pending warning flags so a future re-use of
+    -- the same uid (engine reassigns ids on destroy/spawn) doesn't
+    -- inherit stale state.
+    unitAlertState[uid] = nil
+end
+
+local function emitWarningAlert(uid, info, msg)
+    if not info then info = unit.getInfo(uid) end
+    if not info then return end
+    local gx, gy = unitCoords(info)
+    local fullMsg = unitLabel(info) .. " " .. msg
+    if gx and gy then
+        engine.emitEventAt("survival_warning", fullMsg, gx, gy)
+    else
+        engine.emitEvent("survival_warning", fullMsg)
+    end
+end
+
+-- Called after a resource tick has written the new value. Looks at
+-- the current value (post-write), compares against this resource's
+-- alert thresholds, and fires/clears the per-unit flag accordingly.
+-- pose check skips dead units — they don't get warnings.
+local function checkSurvivalAlerts(uid, resourceName, value, maxVal, pose, info)
+    if pose == "dead" or not maxVal or maxVal <= 0 then return end
+    local state = unitAlertState[uid] or {}
+
+    if resourceName == "hunger" then
+        local rearm = maxVal * STARVATION_REARM_FRAC
+        if not state.starvation then
+            if value <= 0 then
+                emitWarningAlert(uid, info, "is starving")
+                state.starvation = true
+            end
+        else
+            if value > rearm then
+                state.starvation = false
+            end
+        end
+    elseif resourceName == "hydration" then
+        local trigger = maxVal * DEHYDRATION_TRIGGER_FRAC
+        local rearm   = maxVal * DEHYDRATION_REARM_FRAC
+        if not state.dehydration then
+            if value < trigger then
+                emitWarningAlert(uid, info, "is dehydrated")
+                state.dehydration = true
+            end
+        else
+            if value > rearm then
+                state.dehydration = false
+            end
+        end
+    end
+
+    unitAlertState[uid] = state
+end
+
+-- Translate the resourceName that triggered a kill into a
+-- player-visible cause. The two real kill paths in tickResource are
+-- hydration (death_threshold) and stamina (kill_on_zero from organ
+-- failure when fat reserves hit min_fat). tickStarvation's
+-- respiratory-failure path passes "starvation" explicitly.
+local function deathCauseFor(resourceName)
+    if resourceName == "hydration" then return "dehydration"  end
+    if resourceName == "stamina"   then return "starvation"   end
+    return "exhaustion"
+end
+
+-----------------------------------------------------------
 -- Init
 -----------------------------------------------------------
 function unitResources.init(scriptId)
@@ -243,6 +363,7 @@ local function tickStarvation(uid, dt)
     -- Respiratory failure: sharp death when skeletal muscle (which
     -- includes the diaphragm) hits its floor.
     if lean <= minLean then
+        emitDeathAlert(uid, "starvation")
         unit.kill(uid)
         return
     end
@@ -359,6 +480,15 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
         unit.setStat(uid, resourceName, next)
     end
 
+    -- Survival warnings (player events). Debounced per-unit with
+    -- hysteresis so a unit drifting around the threshold doesn't
+    -- spam popups. See checkSurvivalAlerts for the trigger /
+    -- rearm contract. This runs against `next` (post-write) so
+    -- the threshold check matches what the engine just stored.
+    if resourceName == "hunger" or resourceName == "hydration" then
+        checkSurvivalAlerts(uid, resourceName, next, maxVal, pose, nil)
+    end
+
     -- Death triggers run BEFORE collapse so a unit that crosses the
     -- death threshold this tick doesn't also get a collapse queued
     -- behind the kill (the engine processes commands in order; the
@@ -372,10 +502,12 @@ local function tickResource(uid, defName, resourceName, params, activity, pose, 
         if params.death_threshold and params.death_threshold > 0
            and (current / maxVal < params.death_threshold
                 or next / maxVal < params.death_threshold) then
+            emitDeathAlert(uid, deathCauseFor(resourceName))
             unit.kill(uid)
             return
         end
         if params.kill_on_zero and (current <= 0 or next <= 0) then
+            emitDeathAlert(uid, deathCauseFor(resourceName))
             unit.kill(uid)
             return
         end

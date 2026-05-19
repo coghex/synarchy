@@ -10,6 +10,7 @@ module Engine.Scripting.Lua.API.Core
   , setPausedFn
   , isPausedFn
   , realTimeFn
+  , gameTimeFn
   ) where
 
 import UPrelude
@@ -72,6 +73,19 @@ realTimeFn = do
   now ← Lua.liftIO getCurrentTime
   let secs = realToFrac (utcTimeToPOSIXSeconds now) ∷ Double
   Lua.pushnumber (Lua.Number secs)
+  return 1
+
+-- | engine.gameTime() → number
+--   Monotonic game-clock in seconds. Advances by real-tick dt only
+--   when the engine is NOT paused; survives save/load (persisted to
+--   sdGameTime in v6+). Use this for in-game elapsed-time
+--   heuristics — AI session timing, building stuck-timeouts,
+--   anything that should freeze when the player pauses or that
+--   should NOT include real-world save→load gap time.
+gameTimeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+gameTimeFn env = do
+  t ← Lua.liftIO $ readIORef (gameTimeRef env)
+  Lua.pushnumber (Lua.Number t)
   return 1
 
 setTickIntervalFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults

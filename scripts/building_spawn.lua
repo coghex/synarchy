@@ -87,7 +87,7 @@ local function previousUnitCleared(s, params)
     end
     -- Stuck-timeout fallback. Without this a single bad-terrain spawn
     -- locks the portal forever.
-    if s.lastSpawnedAt and (os.time() - s.lastSpawnedAt) > params.stuck_timeout then
+    if s.lastSpawnedAt and (engine.gameTime() - s.lastSpawnedAt) > params.stuck_timeout then
         return true
     end
     return false
@@ -172,7 +172,7 @@ local function tickOne(bid, info)
     s.lastUid       = newUid
     s.lastSpawnX    = spawnX
     s.lastSpawnY    = spawnY
-    s.lastSpawnedAt = os.time()
+    s.lastSpawnedAt = engine.gameTime()
 
     engine.logInfo(string.format(
         "BuildingSpawn: portal=%d spawned %s id=%d at (%.2f, %.2f) -> walk to (%.2f, %.2f), remaining=%d",
