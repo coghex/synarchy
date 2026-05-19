@@ -14,6 +14,8 @@ module Engine.Scripting.Lua.API.World
     , worldSetTimeFn
     , worldSetDateFn
     , worldSetTimeScaleFn
+    , worldGetTimeScaleFn
+    , worldGetActiveWorldIdFn
     , worldSetMapModeFn
     , worldSetZoomCursorHoverFn
     , worldSetZoomCursorSelectFn
@@ -388,6 +390,46 @@ worldSetTimeScaleFn env = do
         _ → pure ()
 
     return 0
+
+-- | world.getTimeScale(pageId) → number
+-- Reads the named world's current time scale directly from
+-- 'wsTimeScaleRef'. Returns 1.0 if the pageId isn't registered
+-- (matches the engine's default scale).
+worldGetTimeScaleFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetTimeScaleFn env = do
+    pageIdArg ← Lua.tostring 1
+    case pageIdArg of
+        Just pageIdBS → do
+            let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
+            mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+            case lookup pageId (wmWorlds mgr) of
+                Just ws → do
+                    s ← Lua.liftIO $ readIORef (wsTimeScaleRef ws)
+                    Lua.pushnumber (Lua.Number (realToFrac s))
+                Nothing →
+                    Lua.pushnumber (Lua.Number 1.0)
+        Nothing →
+            Lua.pushnumber (Lua.Number 1.0)
+    return 1
+
+-- | world.getActiveWorldId() → string | nil
+-- Returns the pageId of the first visible world, falling back to the
+-- first world in 'wmWorlds' if none are marked visible (e.g. mid-
+-- transition). Returns nil when no worlds are registered (main menu).
+-- Lua callers use this to target "the current world" without
+-- hardcoding "main_world" or "test_arena".
+worldGetActiveWorldIdFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetActiveWorldIdFn env = do
+    mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
+    let active = case wmVisible mgr of
+            (pageId:_) → Just pageId
+            []         → case wmWorlds mgr of
+                ((pageId, _):_) → Just pageId
+                []              → Nothing
+    case active of
+        Just (WorldPageId t) → Lua.pushstring (TE.encodeUtf8 t)
+        Nothing              → Lua.pushnil
+    return 1
 
 -- | world.setMapMode(pageId, mode)
 worldSetMapModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

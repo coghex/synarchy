@@ -286,6 +286,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setTime" (worldSetTimeFn env)
   registerLuaFunction "setDate" (worldSetDateFn env)
   registerLuaFunction "setTimeScale" (worldSetTimeScaleFn env)
+  registerLuaFunction "getTimeScale" (worldGetTimeScaleFn env)
+  registerLuaFunction "getActiveWorldId" (worldGetActiveWorldIdFn env)
   registerLuaFunction "setMapMode" (worldSetMapModeFn env)
   registerLuaFunction "setZoomCursorHover" (worldSetZoomCursorHoverFn env)
   registerLuaFunction "setZoomCursorSelect" (worldSetZoomCursorSelectFn env)

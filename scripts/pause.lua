@@ -45,14 +45,25 @@ function pause.set(b)
     if b == engine.isPaused() then return end
     pause.paused = b
     engine.setPaused(b)
-    if b then
-        -- Snapshot the current world time-scale so we can restore the
-        -- player's chosen speed on resume. world.getTimeScale() is not
-        -- currently exposed; default to 1.0 if a getter is added later
-        -- it can fill this in.
-        world.setTimeScale(0)
-    else
-        world.setTimeScale(pause.prevTimeScale)
+
+    -- world.setTimeScale needs a pageId. Resolve "the current world"
+    -- once and pass it through. If no world is active (main menu,
+    -- mid-transition) the time-scale dance is a no-op — pausing the
+    -- menu doesn't need to freeze a world's clock.
+    local wid = world.getActiveWorldId()
+    if wid then
+        if b then
+            -- Snapshot the player's chosen time-scale BEFORE zeroing
+            -- so a fast-forward (e.g. setTimeScale 10) survives the
+            -- pause cycle. Pre-fix this was a documented-but-broken
+            -- promise: `world.setTimeScale(0)` was being called with
+            -- no pageId and silently no-op'd, and prevTimeScale was
+            -- never read from the engine.
+            pause.prevTimeScale = world.getTimeScale(wid)
+            world.setTimeScale(wid, 0)
+        else
+            world.setTimeScale(wid, pause.prevTimeScale)
+        end
     end
     engine.logInfo("Game " .. (b and "paused" or "resumed"))
 end
