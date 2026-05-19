@@ -25,12 +25,25 @@ local label = require("scripts.ui.label")
 local scale = require("scripts.ui.scale")
 
 -- Module state. Hung off the module table so it survives reloads.
+--
+-- Save/load contract: this state is intentionally NOT registered with
+-- saveModules. It represents an in-progress UI action ("I am picking /
+-- positioning a building right now"), not a durable player decision.
+-- Within-session loads keep the state via the package.loaded singleton;
+-- update() re-establishes the engine-side ghost on the next tick.
+-- Fresh-session loads start at the default {mode="off"} — the player
+-- re-enters the build tool via the toolbar. The Haskell-side
+-- `buildingGhostRef` mirrors this: not in SaveData, defaults to Nothing
+-- in a fresh engine. See [[project-bugs-open]] item 6 for context.
 buildTool.state = buildTool.state or {
     mode          = "off",   -- "off" / "picker" / "placement"
     selectedDef   = nil,     -- when in placement
     panelId       = nil,     -- popup panel id
     listId        = nil,     -- list element id
-    lastHoverTile = nil,     -- {gx, gy}; to skip redundant setGhost calls
+    lastHoverTile = nil,     -- {gx, gy}; last hover seen by update().
+                             -- Kept up-to-date but NOT used as a dedup
+                             -- guard — update() calls setGhost every
+                             -- tick while in placement mode.
 }
 
 -- Render-config passed in from hud.lua at boot.

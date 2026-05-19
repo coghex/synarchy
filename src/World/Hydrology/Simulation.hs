@@ -19,6 +19,7 @@ import qualified Data.Vector.Unboxed.Mutable as VUM
 import qualified Data.Vector.Algorithms.Intro as VA
 import Control.Monad.ST (runST, ST)
 import Control.Monad (forM_, when)
+import Data.STRef (newSTRef, readSTRef, modifySTRef')
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Constants (seaLevel)
 import World.Types
@@ -486,11 +487,6 @@ fillDepressions grid =
 computeOceanDistance ∷ Int → Int → VU.Vector Bool → Int → VU.Vector Int
 computeOceanDistance totalSamples gridW landVec maxDist = runST $ do
     distM ← VUM.replicate totalSamples (maxBound ∷ Int)
-    -- Seed: ocean cells at distance 0
-    let seeds = [ idx | idx ← [0 .. totalSamples - 1]
-                      , not (landVec VU.! idx) ]
-    forM_ seeds $ \idx → VUM.write distM idx 0
-    -- BFS layers
     let wrapIX ix = ((ix `mod` gridW) + gridW) `mod` gridW
         fromIdx idx = (idx `mod` gridW, idx `div` gridW)
         toIdx ix iy = iy * gridW + ix
@@ -503,14 +499,31 @@ computeOceanDistance totalSamples gridW landVec maxDist = runST $ do
                , ny ≥ 0 ∧ ny < gridW
                ]
 
-    forM_ [1 .. maxDist] $ \d →
-        forM_ [0 .. totalSamples - 1] $ \idx → do
-            curDist ← VUM.read distM idx
-            when (curDist ≡ d - 1) $
-                forM_ (neighbors idx) $ \nIdx → do
-                    nDist ← VUM.read distM nIdx
-                    when (nDist > d) $
-                        VUM.write distM nIdx d
+    -- Seed layer 0: every ocean cell at distance 0.
+    let seeds = [ idx | idx ← [0 .. totalSamples - 1]
+                      , not (landVec VU.! idx) ]
+    forM_ seeds $ \idx → VUM.write distM idx 0
+
+    -- Layered BFS: expand the current frontier into the next layer,
+    -- assigning distance d to every newly-reached tile and capturing
+    -- them as the next frontier. Each tile is visited at most once
+    -- (the `nDist ≡ maxBound` guard fires only on first assignment),
+    -- giving O(N) total work — vs. the prior O(maxDist × N) scan that
+    -- re-read every tile per layer. Stops at maxDist or when the
+    -- frontier empties, whichever comes first.
+    let go d current
+          | d > maxDist ∨ null current = return ()
+          | otherwise = do
+              nextRef ← newSTRef []
+              forM_ current $ \idx →
+                  forM_ (neighbors idx) $ \nIdx → do
+                      nDist ← VUM.read distM nIdx
+                      when (nDist ≡ maxBound) $ do
+                          VUM.write distM nIdx d
+                          modifySTRef' nextRef (nIdx :)
+              nextLayer ← readSTRef nextRef
+              go (d + 1) nextLayer
+    go 1 seeds
 
     VU.unsafeFreeze distM
 
