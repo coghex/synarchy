@@ -70,8 +70,6 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
             tScale    ← readIORef (wsTimeScaleRef worldState)
             mapMode   ← readIORef (wsMapModeRef worldState)
             toolMode  ← readIORef (wsToolModeRef worldState)
-            climate   ← readIORef (wsClimateRef worldState)
-            riverFlow ← readIORef (wsRiverFlowRef worldState)
             -- v2 (Phase 1) additions
             gameTime  ← readIORef (gameTimeRef env)
             paused    ← readIORef (enginePausedRef env)
@@ -121,8 +119,6 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
                             , sdTimeScale  = tScale
                             , sdMapMode    = mapMode
                             , sdToolMode   = toolMode
-                            , sdClimate    = climate
-                            , sdRiverFlow  = riverFlow
                             , sdGameTime     = gameTime
                             , sdEnginePaused = paused
                             , sdEdits        = edits
@@ -184,8 +180,6 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     writeIORef (wsTimeScaleRef worldState) (sdTimeScale saveData)
     writeIORef (wsMapModeRef worldState) (sdMapMode saveData)
     writeIORef (wsToolModeRef worldState) (sdToolMode saveData)
-    writeIORef (wsClimateRef worldState)  (sdClimate saveData)
-    writeIORef (wsRiverFlowRef worldState) (sdRiverFlow saveData)
     -- v2 (Phase 1): engine-level refs. enginePaused is normally True
     -- here (auto-pause-on-save), so the loaded world starts paused
     -- and the player has to explicitly resume. gameTime restoration

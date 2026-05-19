@@ -13,7 +13,6 @@ import Data.IORef (IORef, newIORef)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import Engine.Graphics.Camera (CameraFacing(..))
-import World.Base (GeoFeatureId(..))
 import World.Cursor.Types (CursorState(..), emptyCursorState)
 import World.Page.Types (WorldPageId(..))
 import World.Chunk.Types (ChunkCoord(..))
@@ -25,8 +24,6 @@ import World.Tool.Types (ToolMode(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, defaultWorldDate)
 import World.Flora.Types (FloraCatalog(..), emptyFloraCatalog)
-import World.Region.Types (RegionCoord(..))
-import World.Weather.Types (RegionClimate(..))
 import World.Edit.Types (WorldEdits, emptyWorldEdits)
 
 data WorldState = WorldState
@@ -44,8 +41,6 @@ data WorldState = WorldState
     , wsBakedZoomRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)  -- ^ Pre-baked
     , wsBakedBgRef ∷ IORef (V.Vector BakedZoomEntry, WorldTextures, CameraFacing)    -- ^ Pre-baked background entries with resolved textures and vertices
     , wsInitQueueRef ∷ IORef [ChunkCoord]  -- ^ Queue of chunks to generate at world init (for progress tracking)
-    , wsClimateRef ∷ IORef (HM.HashMap RegionCoord RegionClimate)  -- ^ Regional climate data (temperature, humidity)
-    , wsRiverFlowRef ∷ IORef (HM.HashMap GeoFeatureId Float)
     , wsMapModeRef ∷ IORef ZoomMapMode
     , wsCursorRef ∷ IORef CursorState
     , wsToolModeRef ∷ IORef ToolMode
@@ -75,8 +70,6 @@ emptyWorldState = do
     bakedZoomRef ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
     bakedBgRef   ← newIORef (V.empty, defaultWorldTextures, FaceSouth)
     wsInitQueueRef ← newIORef []
-    wsClimateRef ← newIORef HM.empty
-    wsRiverFlowRef ← newIORef HM.empty
     wsMapModeRef ← newIORef ZMDefault
     wsCursorRef ← newIORef emptyCursorState
     wsToolModeRef ← newIORef DefaultTool
@@ -88,7 +81,7 @@ emptyWorldState = do
                         timeRef dateRef timeScaleRef zoomCacheRef
                         quadCacheRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef
-                        wsClimateRef wsRiverFlowRef wsMapModeRef
+                        wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
 

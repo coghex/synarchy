@@ -22,9 +22,6 @@ import qualified Data.HashMap.Strict as HM
 import World.Generate.Types (WorldGenParams(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
-import World.Region.Types (RegionCoord(..))
-import World.Weather.Types (RegionClimate(..))
-import World.Base (GeoFeatureId(..))
 import World.Edit.Types (WorldEdits)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -49,8 +46,11 @@ saveMagic = 0x53595241
 --   v5 (Phase 4) added units + sim state.
 --   v6 (Phase 5) adds Lua module blobs (aiState, building_spawn state,
 --       pause state).
+--   v7 drops sdClimate + sdRiverFlow. Both fields round-tripped empty
+--       HashMaps every save (no producer code ever wrote to the backing
+--       IORefs); live climate state lives inside sdGenParams.
 currentSaveVersion ∷ Int
-currentSaveVersion = 6
+currentSaveVersion = 7
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects
@@ -89,8 +89,6 @@ data SaveData = SaveData
     , sdTimeScale  ∷ !Float
     , sdMapMode    ∷ !ZoomMapMode
     , sdToolMode   ∷ !ToolMode
-    , sdClimate    ∷ !(HM.HashMap RegionCoord RegionClimate)
-    , sdRiverFlow  ∷ !(HM.HashMap GeoFeatureId Float)
     -- v2 fields (Phase 1):
     , sdGameTime     ∷ !Double   -- ^ gameTimeRef value (game-clock seconds).
     , sdEnginePaused ∷ !Bool     -- ^ enginePausedRef value. Auto-pause-on-save
