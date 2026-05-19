@@ -22,7 +22,7 @@ import Control.Monad (forM_, when)
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Constants (seaLevel)
 import World.Types
-import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
+import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU, worldWidthTiles)
 import World.Geology.Types
 import World.Geology.Hash (hashGeo, hashToFloatGeo, wrappedDeltaUV)
 import World.Hydrology.Types
@@ -123,8 +123,8 @@ buildInitialElevGrid seed worldSize plates =
             else let gx = gxV VU.! idx
                      gy = gyV VU.! idx
                      -- Two octaves of coherent noise at different scales
-                     n1 = meanderNoise seed gx gy 40 1300
-                     n2 = meanderNoise seed gx gy 18 1301
+                     n1 = meanderNoise seed worldSize gx gy 40 1300
+                     n2 = meanderNoise seed worldSize gx gy 18 1301
                      noise = n1 * 0.6 + n2 * 0.4
                      -- Local slope: max elevation diff to any neighbor
                      (ix, iy) = (idx `mod` gridW, idx `div` gridW)
@@ -152,29 +152,44 @@ buildInitialElevGrid seed worldSize plates =
     in ElevGrid gridW spacing elevV gxV gyV landV
 
 -- | 2D coherent noise for meander induction. Returns [-1, 1].
---   Uses a simple value noise approach: hash at grid points,
---   bilinear interpolation with smoothstep.
-meanderNoise ∷ Word64 → Int → Int → Int → Int → Float
-meanderNoise seed gx gy wavelength prop =
-    let -- Grid coordinates in noise space
-        fx = fromIntegral gx / fromIntegral wavelength ∷ Float
-        fy = fromIntegral gy / fromIntegral wavelength ∷ Float
-        ix = floor fx ∷ Int
-        iy = floor fy ∷ Int
-        fracX = fx - fromIntegral ix
-        fracY = fy - fromIntegral iy
+--   Value noise: hash at integer lattice points, bilinear interp with
+--   smoothstep. Operates in (u, v) space so the lattice can be made
+--   periodic on the u-axis — the world is a cylinder along u, and the
+--   raw (gx, gy) hash was discontinuous across that seam, producing
+--   uncorrelated noise on physically adjacent tiles. The u-axis lattice
+--   index is wrapped modulo `latU = w / wavelength`, where w is the
+--   u-axis tile period. If `wavelength` doesn't divide w evenly, the
+--   effective u-axis wavelength drifts by `(w / latU - wavelength)` —
+--   <1% at typical world sizes, visually indistinguishable.
+meanderNoise ∷ Word64 → Int → Int → Int → Int → Int → Float
+meanderNoise seed worldSize gx gy wavelength prop =
+    let (gx', gy') = wrapGlobalU worldSize gx gy
+        w  = worldWidthTiles worldSize
+        u  = gx' - gy'
+        v  = gx' + gy'
+        fu = fromIntegral u / fromIntegral wavelength ∷ Float
+        fv = fromIntegral v / fromIntegral wavelength ∷ Float
+        iu = floor fu ∷ Int
+        iv = floor fv ∷ Int
+        fracU = fu - fromIntegral iu
+        fracV = fv - fromIntegral iv
         -- Smoothstep for C1 continuity
-        sx = fracX * fracX * (3.0 - 2.0 * fracX)
-        sy = fracY * fracY * (3.0 - 2.0 * fracY)
+        su = fracU * fracU * (3.0 - 2.0 * fracU)
+        sv = fracV * fracV * (3.0 - 2.0 * fracV)
+        -- Periodic lattice on u-axis (v-axis doesn't wrap)
+        latU = max 1 (w `div` wavelength)
+        wrapU k = ((k `mod` latU) + latU) `mod` latU
+        i0 = wrapU iu
+        i1 = wrapU (iu + 1)
         -- Hash at four corners
-        h00 = hashToFloatGeo (hashGeo seed (ix * 7919 + iy * 6271) prop) * 2.0 - 1.0
-        h10 = hashToFloatGeo (hashGeo seed ((ix+1) * 7919 + iy * 6271) prop) * 2.0 - 1.0
-        h01 = hashToFloatGeo (hashGeo seed (ix * 7919 + (iy+1) * 6271) prop) * 2.0 - 1.0
-        h11 = hashToFloatGeo (hashGeo seed ((ix+1) * 7919 + (iy+1) * 6271) prop) * 2.0 - 1.0
+        h00 = hashToFloatGeo (hashGeo seed (i0 * 7919 + iv * 6271) prop) * 2.0 - 1.0
+        h10 = hashToFloatGeo (hashGeo seed (i1 * 7919 + iv * 6271) prop) * 2.0 - 1.0
+        h01 = hashToFloatGeo (hashGeo seed (i0 * 7919 + (iv+1) * 6271) prop) * 2.0 - 1.0
+        h11 = hashToFloatGeo (hashGeo seed (i1 * 7919 + (iv+1) * 6271) prop) * 2.0 - 1.0
         -- Bilinear interpolation
-        top    = h00 * (1.0 - sx) + h10 * sx
-        bottom = h01 * (1.0 - sx) + h11 * sx
-    in top * (1.0 - sy) + bottom * sy
+        top    = h00 * (1.0 - su) + h10 * su
+        bottom = h01 * (1.0 - su) + h11 * su
+    in top * (1.0 - sv) + bottom * sv
 
 -- * Incremental Update
 

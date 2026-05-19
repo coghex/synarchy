@@ -16,6 +16,7 @@ module World.Plate
       -- * wrapping
     , wrapGlobalX
     , wrapGlobalU
+    , worldWidthTiles
     ) where
 
 import UPrelude
