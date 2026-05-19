@@ -188,7 +188,7 @@ fillRiverHoles mv surfaceMap = do
                             uniform = nMin ≡ nMax ∧ nCount ≥ 3
                                     ∧ surfZ ≤ nMax + 2 ∧ nMax > seaLevel
                             bridge = nCount ≡ 2 ∧ nMax - nMin ≤ 2
-                                   ∧ nMin > surfZ ∧ nMin > seaLevel
+                                   ∧ nMin ≥ surfZ ∧ nMin > seaLevel
                         when (standard ∨ uniform ∨ bridge) $ do
                             let fillZ | standard ∨ bridge = min nMax (surfZ + 3)
                                       | otherwise         = nMax

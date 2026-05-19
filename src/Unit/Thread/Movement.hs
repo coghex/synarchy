@@ -184,7 +184,26 @@ moveToward us mt mWtd dx dy dist step =
         mCost
             | srcTile ≡ dstTile = Just 0  -- sub-tile motion, no boundary cross
             | otherwise = case mWtd of
-                Just wtd → stepCost wtd srcTile dstTile
+                Just wtd → case stepCost wtd srcTile dstTile of
+                    Nothing → Nothing
+                    Just c  →
+                        -- No-corner-cutting: a diagonal step grazes the
+                        -- two axis-aligned neighbors of srcTile. Reject
+                        -- the step if either neighbor is impassable
+                        -- (Ocean/Lava/unloaded chunk), so units can't
+                        -- slip diagonally past a wall. Endpoint cost is
+                        -- preserved; only the passability gate widens.
+                        let (sx, sy)   = srcTile
+                            (dgx, dgy) = dstTile
+                            isDiagonal = sx ≢ dgx ∧ sy ≢ dgy
+                            cornerOk =
+                                case ( stepCost wtd srcTile (dgx, sy)
+                                     , stepCost wtd srcTile (sx, dgy) ) of
+                                    (Just _, Just _) → True
+                                    _                → False
+                        in if isDiagonal ∧ not cornerOk
+                           then Nothing
+                           else Just c
                 Nothing  → Just 0  -- no world snapshot: don't block
         followingPath = not (null (usLocalPath us))
     in case mCost of
