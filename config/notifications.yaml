@@ -1,0 +1,33 @@
+categories:
+  building:
+    log: true
+    pause: false
+    popup: false
+  combat:
+    log: true
+    pause: false
+    popup: true
+  debug:
+    log: false
+    pause: false
+    popup: false
+  save_load:
+    log: true
+    pause: false
+    popup: true
+  survival_critical:
+    log: true
+    pause: true
+    popup: true
+  survival_warning:
+    log: true
+    pause: false
+    popup: true
+  unit_status:
+    log: true
+    pause: false
+    popup: false
+  weather:
+    log: true
+    pause: false
+    popup: false

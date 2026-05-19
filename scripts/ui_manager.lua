@@ -35,6 +35,8 @@ local uiList = nil
 local loadingScreen = nil
 local testArena = nil
 local pauseMenu = nil
+local popup = nil
+local eventLog = nil
 
 local hoveredElement = nil
 local hoveredCallback = nil
@@ -67,6 +69,8 @@ function uiManager.init(scriptId)
     toggle = require("scripts.ui.toggle")
     uiList = require("scripts.ui.list")
     loadingScreen = require("scripts.loading_screen")
+    popup = require("scripts.popup")
+    eventLog = require("scripts.event_log")
 
     button.init()
     scrollbar.init()
@@ -157,6 +161,8 @@ function uiManager.checkReady()
             loadingScreen.init(boxTexSet, menuFont, titleFont, fbW, fbH)
             testArena.init(boxTexSet, menuFont, titleFont, fbW, fbH)
             pauseMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
+            popup.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+            eventLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             uiManager.showMenu("main")
             initialized = true
         else
@@ -181,6 +187,8 @@ function uiManager.onFramebufferResize(width, height)
     if hud then hud.onFramebufferResize(width, height) end
     if saveBrowser then saveBrowser.onFramebufferResize(width, height) end
     if loadingScreen then loadingScreen.onFramebufferResize(width, height) end
+    if popup then popup.onFramebufferResize(width, height) end
+    if eventLog then eventLog.onFramebufferResize(width, height) end
     if pauseMenu then pauseMenu.onFramebufferResize(width, height) end
     
     if currentMenu == "main" then
@@ -495,6 +503,8 @@ function uiManager.shutdown()
     if loadingScreen then loadingScreen.shutdown() end
     if testArena then testArena.shutdown() end
     if pauseMenu then pauseMenu.shutdown() end
+    if popup then popup.shutdown() end
+    if eventLog then eventLog.shutdown() end
 end
 
 function uiManager.onTextBoxClick(elemHandle)
@@ -515,6 +525,33 @@ function uiManager.onButtonClick(elemHandle)
     handleNonTextBoxClick()
     if button then
         return button.handleClickByElement(elemHandle)
+    end
+    return false
+end
+
+-- Dispatched by the engine when the HUD event-log toggle sprite is
+-- clicked. See hud.lua's EVENT_LOG_CALLBACK wiring.
+function uiManager.onEventLogToggleClick(elemHandle)
+    if hud and hud.onEventLogToggleClick then
+        return hud.onEventLogToggleClick(elemHandle)
+    end
+    return false
+end
+
+-- Dispatched when a row in the event-log panel is clicked. Routes
+-- to event_log.onRowClick which re-pops the popup for that entry.
+function uiManager.onEventLogRowClick(elemHandle)
+    if eventLog and eventLog.onRowClick then
+        return eventLog.onRowClick(elemHandle)
+    end
+    return false
+end
+
+-- Dispatched when a popup line is clicked. Routes to popup.onLineClick
+-- which cycles the camera through the line's stored coords.
+function uiManager.onPopupLineClick(elemHandle)
+    if popup and popup.onLineClick then
+        return popup.onLineClick(elemHandle)
     end
     return false
 end

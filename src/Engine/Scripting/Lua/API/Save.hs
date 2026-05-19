@@ -10,12 +10,17 @@ import qualified HsLua as Lua
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import qualified Engine.Core.Queue as Q
+import Data.Time.Clock (getCurrentTime)
+import Data.Time.Format (formatTime, defaultTimeLocale)
+import qualified Data.Text as T
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
+import Engine.PlayerEvent.Emit (emitEvent)
 import World.Save.Serialize (listSaves, saveWorld, loadWorld
                             , sanitizeSaveName)
 import World.Save.Types (SaveMetadata(..), SaveData(..))
-import World.Types (WorldCommand(..), WorldManager(..), WorldState(..))
+import World.Types (WorldCommand(..), WorldManager(..), WorldState(..)
+                   , LoadPhase(..))
 import World.Page.Types (WorldPageId(..))
 import World.Thread.Helpers (unWorldPageId)
 import Data.IORef (readIORef, writeIORef)
@@ -61,25 +66,39 @@ saveWorldFn env = do
             logger ← Lua.liftIO $ readIORef (loggerRef env)
             case sanitizeSaveName saveName of
                 Left err → do
-                    Lua.liftIO $ logWarn logger CatLua $
-                        "saveWorld rejected: " <> err
+                    Lua.liftIO $ do
+                        logWarn logger CatLua $
+                            "saveWorld rejected: " <> err
+                        emitEvent env "save_load" "World.Save" $
+                            "Save failed: " <> err
                     Lua.pushboolean False
                 Right name → do
                     mgr ← Lua.liftIO $ readIORef (worldManagerRef env)
                     case lookup pageId (wmWorlds mgr) of
                         Nothing → do
-                            Lua.liftIO $ logWarn logger CatLua $
-                                "saveWorld: world not found: "
-                                  <> unWorldPageId pageId
+                            Lua.liftIO $ do
+                                logWarn logger CatLua $
+                                    "saveWorld: world not found: "
+                                      <> unWorldPageId pageId
+                                emitEvent env "save_load" "World.Save" $
+                                    "Save failed: world '"
+                                      <> unWorldPageId pageId
+                                      <> "' not found"
                             Lua.pushboolean False
                         Just worldState → do
                             mParams ← Lua.liftIO $ readIORef
                                         (wsGenParamsRef worldState)
                             case mParams of
                                 Nothing → do
-                                    Lua.liftIO $ logWarn logger CatLua $
-                                        "saveWorld: world has no gen \
-                                        \params: " <> unWorldPageId pageId
+                                    Lua.liftIO $ do
+                                        logWarn logger CatLua $
+                                            "saveWorld: world has no gen \
+                                            \params: "
+                                              <> unWorldPageId pageId
+                                        emitEvent env "save_load"
+                                            "World.Save" $
+                                            "Save failed: world has no \
+                                            \gen params"
                                     Lua.pushboolean False
                                 Just _ → do
                                     -- Pause the engine BEFORE collecting
@@ -97,9 +116,21 @@ saveWorldFn env = do
                                     Lua.liftIO $ writeIORef
                                         (enginePausedRef env) True
                                     blobs ← collectLuaBlobs logger
+                                    -- Capture the timestamp at API
+                                    -- (request) time so two saves
+                                    -- queued back-to-back get
+                                    -- distinct ISO timestamps even
+                                    -- when the world thread later
+                                    -- processes them in the same
+                                    -- wall second.
+                                    nowText ← Lua.liftIO $ do
+                                        t ← getCurrentTime
+                                        return $ T.pack $ formatTime
+                                            defaultTimeLocale "%FT%TZ" t
                                     Lua.liftIO $ Q.writeQueue
                                         (worldQueue env)
-                                        (WorldSave pageId name blobs)
+                                        (WorldSave pageId name
+                                            nowText blobs)
                                     Lua.pushboolean True
         _ → Lua.pushboolean False
     return 1
@@ -122,6 +153,16 @@ loadSaveFn env = do
                     logger ← Lua.liftIO $ readIORef (loggerRef env)
                     restoreLuaBlobs logger (sdLuaModules saveData)
                     let pageId = WorldPageId "main_world"
+                    -- Synchronously flip the current head world's
+                    -- phaseRef so a follow-up world.waitForInit
+                    -- doesn't read stale LoadDone from the previous
+                    -- gen and return immediately. The real handler
+                    -- creates its own WorldState and prepends it to
+                    -- wmWorlds; once that lands, waitForInit polls
+                    -- the new head and follows it through to
+                    -- LoadDone. This write is shadowed by the new
+                    -- WorldState as soon as the handler runs.
+                    Lua.liftIO $ markHeadWorldLoading env
                     Lua.liftIO $ Q.writeQueue (worldQueue env)
                         (WorldLoadSave pageId saveData)
                     Lua.pushboolean True
@@ -135,6 +176,17 @@ loadSaveFn env = do
         Nothing → do
             Lua.pushboolean False
             return 1
+
+-- | Set the head world's loading phase to "in progress" so
+--   'world.waitForInit' will block correctly even though the actual
+--   load handler hasn't run yet. No-op when wmWorlds is empty
+--   (waitForInit already handles that case by polling).
+markHeadWorldLoading ∷ EngineEnv → IO ()
+markHeadWorldLoading env = do
+    mgr ← readIORef (worldManagerRef env)
+    case wmWorlds mgr of
+        ((_, ws):_) → writeIORef (wsLoadPhaseRef ws) (LoadPhase1 1 1)
+        []          → return ()
 
 -- | Pop the Lua error message at the top of the stack and log it
 --   via the engine logger. Used by collectLuaBlobs / restoreLuaBlobs

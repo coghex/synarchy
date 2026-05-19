@@ -40,10 +40,15 @@ data WorldCommand
     | WorldSetWorldCursorSelect WorldPageId
     | WorldSetWorldCursorDeselect WorldPageId
     | WorldSetToolMode WorldPageId ToolMode
-    | WorldSave WorldPageId Text (HM.HashMap Text Text)
-        -- ^ pageId, save-name, Lua-module blobs. The Lua side calls
-        --   saveModules.serializeAll() before queueing this command
-        --   so the world thread can stuff the blobs into SaveData.
+    | WorldSave WorldPageId Text Text (HM.HashMap Text Text)
+        -- ^ pageId, save-name, request-timestamp (ISO 8601 second
+        --   precision), Lua-module blobs. The Lua side captures the
+        --   timestamp at request time (so two saves queued close
+        --   together get distinct timestamps reflecting when the
+        --   player asked, not whenever the world thread happened to
+        --   process them) and calls saveModules.serializeAll()
+        --   before queueing this command so the world thread can
+        --   stuff the blobs into SaveData.
     | WorldLoadSave WorldPageId SaveData
     | WorldDeleteTile WorldPageId Int Int      -- ^ worldId, gx, gy
     | WorldSetFluidTile WorldPageId Int Int FluidType

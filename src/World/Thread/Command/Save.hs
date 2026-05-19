@@ -11,8 +11,6 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Data.Time.Clock (getCurrentTime)
-import Data.Time.Format (formatTime, defaultTimeLocale)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
@@ -43,14 +41,15 @@ import Unit.Types (UnitManager(..), unUnitId)
 import Unit.Sim.Types (UnitThreadState(..))
 import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
+import Engine.PlayerEvent.Emit (emitEvent)
 import World.Thread.ChunkLoading (maxChunksPerTick)
 import Sim.River.Project (projectRiverSimple)
 
 
 -- | Save: snapshot the live WorldState and write to disk ──logInfo logger CatWorld $ "Saving world: " <> unWorldPageId pageId
 handleWorldSaveCommand ∷ EngineEnv → LoggerState → WorldPageId → Text
-                       → HM.HashMap Text Text → IO ()
-handleWorldSaveCommand env logger pageId saveName luaBlobs = do
+                       → Text → HM.HashMap Text Text → IO ()
+handleWorldSaveCommand env logger pageId saveName timestampTxt luaBlobs = do
     mgr ← readIORef (worldManagerRef env)
     case lookup pageId (wmWorlds mgr) of
         Nothing →
@@ -92,14 +91,15 @@ handleWorldSaveCommand env logger pageId saveName luaBlobs = do
                     logWarn logger CatWorld
                         "Cannot save: world has no gen params"
                 Just params → do
-                    -- UTC ISO 8601, second precision. Lexicographic sort
-                    -- by this string is chronologically correct, so the
-                    -- Lua-side `a.timestamp > b.timestamp` in main_menu
-                    -- works without further wrapping.
-                    now ← getCurrentTime
-                    let timestampTxt = T.pack
-                            (formatTime defaultTimeLocale "%FT%TZ" now)
-                        meta = SaveMetadata
+                    -- UTC ISO 8601 second precision, captured at the
+                    -- API request time (see saveWorldFn) — NOT here,
+                    -- so two saves queued back-to-back don't get the
+                    -- same wall-second timestamp from world-thread
+                    -- processing latency. Lexicographic sort by this
+                    -- string is chronologically correct, so the
+                    -- Lua-side `a.timestamp > b.timestamp` in
+                    -- main_menu works without further wrapping.
+                    let meta = SaveMetadata
                             { smName       = saveName
                             , smSeed       = wgpSeed params
                             , smWorldSize  = wgpWorldSize params
@@ -136,12 +136,12 @@ handleWorldSaveCommand env logger pageId saveName luaBlobs = do
                         Right () → do
                             logInfo logger CatWorld $
                                 "World saved successfully: " <> saveName
-                            sendGenLog env $
+                            emitEvent env "save_load" "World.Save" $
                                 "Game saved: " <> saveName
                         Left err → do
                             logError logger CatWorld $
                                 "Failed to save world: " <> err
-                            sendGenLog env $
+                            emitEvent env "save_load" "World.Save" $
                                 "Save failed: " <> err
 
 -- | Load: reconstruct WorldState from SaveData ──

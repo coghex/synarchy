@@ -8,7 +8,8 @@ import Engine.Scripting.Lua.Types (LuaBackendState)
 import Engine.Scripting.Lua.API.Core (loadScriptFn, killScriptFn,
                                       setTickIntervalFn, pauseScriptFn,
                                       resumeScriptFn, quitFn, getFPSFn,
-                                      listFilesFn, setPausedFn, isPausedFn)
+                                      listFilesFn, setPausedFn, isPausedFn,
+                                      realTimeFn)
 import Engine.Scripting.Lua.API.Camera
 import Engine.Scripting.Lua.API.Debug (showDebugFn, hideDebugFn, toggleDebugFn)
 import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
@@ -34,6 +35,10 @@ import Engine.Scripting.Lua.API.Focus (registerFocusableFn, requestFocusFn,
                                         releaseFocusFn, getFocusIdFn)
 import Engine.Scripting.Lua.API.Shell (shellExecuteFn)
 import Engine.Scripting.Lua.API.Save (saveListFn, saveWorldFn, loadSaveFn)
+import Engine.Scripting.Lua.API.PlayerEvent (emitEventFn, emitEventAtFn
+                                            , getEventLogFn
+                                            , getNotificationCfgFn
+                                            , setNotificationOverridesFn)
 import Engine.Scripting.Lua.API.World
 import Engine.Scripting.Lua.API.WorldQuery
 import Engine.Scripting.Lua.API.Units
@@ -65,6 +70,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getFPS"            (getFPSFn env)
   registerLuaFunction "setPaused"         (setPausedFn env)
   registerLuaFunction "isPaused"          (isPausedFn env)
+  registerLuaFunction "realTime"          realTimeFn
   registerLuaFunction "loadScript"        (loadScriptFn env backendState lst)
   registerLuaFunction "killScript"        (killScriptFn env backendState lst)
   registerLuaFunction "pauseScript"       (pauseScriptFn backendState)
@@ -126,7 +132,14 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "listSaves" (saveListFn env)
   registerLuaFunction "saveWorld" (saveWorldFn env)
   registerLuaFunction "loadSave"  (loadSaveFn env)
-  
+
+  registerLuaFunction "emitEvent"   (emitEventFn env)
+  registerLuaFunction "emitEventAt" (emitEventAtFn env)
+  registerLuaFunction "getEventLog" (getEventLogFn env)
+  registerLuaFunction "getNotificationCfg"      (getNotificationCfgFn env)
+  registerLuaFunction "setNotificationOverrides"
+    (setNotificationOverridesFn env)
+
   Lua.setglobal (Lua.Name "engine")
   
   Lua.newtable

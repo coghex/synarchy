@@ -7,9 +7,13 @@ local toggle    = require("scripts.ui.toggle")
 local infoPanel = require("scripts.hud.info_panel")
 local hud = {}
 
-hud.world_page = nil
-hud.zoom_page = nil
-hud.info_page = nil   -- dedicated page for the info panel
+-- Click-callback name routed by ui_manager.onEventLogToggleClick.
+local EVENT_LOG_CALLBACK = "onEventLogToggleClick"
+
+hud.world_page  = nil
+hud.zoom_page   = nil
+hud.info_page   = nil   -- dedicated page for the info panel
+hud.global_page = nil   -- always-on gameplay UI (e.g. event-log button)
 hud.visible = false
 hud.uiCreated = false
 hud.fbW = 0
@@ -18,6 +22,12 @@ hud.currentView = "none"  -- "zoomed_in", "zoomed_out", or "none"
 hud.worldId = "main_world" -- default overridden per-context
 
 hud.mapToggleId = nil
+
+-- Event-log toggle (top-left HUD button).
+hud.logSpriteId       = nil    -- UI element handle
+hud.logSelected       = false  -- current visual state (matches event_log open)
+hud.texEventLog       = nil    -- default sprite
+hud.texEventLogSelected = nil  -- "open" sprite
 
 -- Assets passed in from ui_manager
 hud.boxTexSet = nil
@@ -103,6 +113,11 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texWorldSelectBg       = engine.loadTexture("assets/textures/hud/utility/world_select_bg.png")
     hud.texWorldHover          = engine.loadTexture("assets/textures/hud/utility/world_hover.png")
     hud.texWorldHoverBg        = engine.loadTexture("assets/textures/hud/utility/world_hover_bg.png")
+
+    -- Event-log toggle (top-left). Two states: default and selected
+    -- (drawn while the event log panel is open).
+    hud.texEventLog         = engine.loadTexture("assets/textures/hud/event_log.png")
+    hud.texEventLogSelected = engine.loadTexture("assets/textures/hud/event_log_selected.png")
     engine.logDebug("HUD initialized")
 end
 
@@ -125,13 +140,50 @@ function hud.createUI()
         infoPanel.destroyOwned()
         UI.deletePage(hud.info_page)
     end
+    if hud.uiCreated and hud.global_page then
+        if hud.logSpriteId then
+            UI.deleteElement(hud.logSpriteId)
+            hud.logSpriteId = nil
+        end
+        UI.deletePage(hud.global_page)
+    end
 
     local uiscale = scale.get()
     local s = scale.applyAll(hud.baseSizes)
 
-    hud.world_page = UI.newPage("world_hud_overlay", "overlay")
-    hud.zoom_page = UI.newPage("zoom_hud_overlay", "overlay")
-    hud.info_page = UI.newPage("hud_info_overlay", "overlay")
+    hud.world_page  = UI.newPage("world_hud_overlay", "overlay")
+    hud.zoom_page   = UI.newPage("zoom_hud_overlay", "overlay")
+    hud.info_page   = UI.newPage("hud_info_overlay", "overlay")
+    hud.global_page = UI.newPage("hud_global_overlay", "overlay")
+
+    ---------------------------------------------------------
+    -- Event-log toggle button (top-left). Two-state sprite —
+    -- default while the panel is closed, "selected" while it's
+    -- open. Click is dispatched through ui_manager via the
+    -- EVENT_LOG_CALLBACK name; hud.update polls event_log state
+    -- each tick to keep the texture in sync if the player closes
+    -- the panel through its own X button.
+    ---------------------------------------------------------
+    local btnSize = math.floor(hud.baseSizes.buttonSize * uiscale)
+    -- Reset visual state on rebuild to match the current panel.
+    local elIsOpen = false
+    pcall(function()
+        elIsOpen = require("scripts.event_log").isVisible()
+    end)
+    hud.logSelected = elIsOpen
+    local initTex = elIsOpen and hud.texEventLogSelected
+                              or hud.texEventLog
+
+    hud.logSpriteId = UI.newSprite(
+        "hud_event_log_toggle",
+        btnSize, btnSize,
+        initTex,
+        1.0, 1.0, 1.0, 1.0,
+        hud.global_page)
+    UI.addToPage(hud.global_page, hud.logSpriteId, s.margin, s.margin)
+    UI.setClickable(hud.logSpriteId, true)
+    UI.setOnClick(hud.logSpriteId, EVENT_LOG_CALLBACK)
+    UI.setZIndex(hud.logSpriteId, 100)
 
     if hud.texZoomSelect and hud.texZoomHover then
         world.setZoomCursorSelectTexture(hud.worldId, hud.texZoomSelect)
@@ -346,6 +398,12 @@ function hud.show()
     -- info_page visibility is managed by infoPanel itself;
     -- if it has content it will already be shown.
 
+    -- The global page (log toggle button) is always visible during
+    -- gameplay regardless of zoom level.
+    if hud.global_page then
+        UI.showPage(hud.global_page)
+    end
+
     engine.logDebug("HUD shown")
 end
 
@@ -361,6 +419,13 @@ function hud.hide()
     if hud.info_page then
         UI.hidePage(hud.info_page)
     end
+    if hud.global_page then
+        UI.hidePage(hud.global_page)
+    end
+    -- If the log panel happens to be open when the HUD hides
+    -- (e.g. world-view exits to main menu), hide it too so it
+    -- doesn't leak into the next screen.
+    pcall(function() require("scripts.event_log").hide() end)
 
     engine.logDebug("HUD hidden")
 end
@@ -460,6 +525,37 @@ function hud.update(dt)
             world.setWorldCursorHover(hud.worldId, mx, my)
         end
     end
+
+    -- Keep the event-log toggle sprite's texture in sync with the
+    -- panel's visibility. The player can close the panel via the X
+    -- button (bypassing our click handler), so we poll here rather
+    -- than rely solely on toggle events.
+    if hud.logSpriteId then
+        local open = false
+        pcall(function()
+            open = require("scripts.event_log").isVisible()
+        end)
+        if open ~= hud.logSelected then
+            hud.logSelected = open
+            local tex = open and hud.texEventLogSelected
+                              or hud.texEventLog
+            if tex then
+                UI.setSpriteTexture(hud.logSpriteId, tex)
+            end
+        end
+    end
+end
+
+-- Click dispatch entry point. Called by ui_manager.onEventLogToggleClick
+-- (which is itself dispatched by the engine when the sprite is clicked).
+function hud.onEventLogToggleClick(elemHandle)
+    if elemHandle ~= hud.logSpriteId then return false end
+    require("scripts.event_log").toggle()
+    -- Don't update the sprite texture here — let hud.update poll
+    -- the panel's actual visibility and sync. That keeps the
+    -- texture-state machine in one place and avoids drift if the
+    -- panel chooses not to open for any reason.
+    return true
 end
 
 -----------------------------------------------------------
@@ -516,6 +612,10 @@ function hud.shutdown()
         toggle.destroy(hud.mapToggleId)
         hud.mapToggleId = nil
     end
+    if hud.logSpriteId then
+        UI.deleteElement(hud.logSpriteId)
+        hud.logSpriteId = nil
+    end
     if hud.info_page then
         UI.hidePage(hud.info_page)
         UI.deletePage(hud.info_page)
@@ -530,6 +630,11 @@ function hud.shutdown()
         UI.hidePage(hud.world_page)
         UI.deletePage(hud.world_page)
         hud.world_page = nil
+    end
+    if hud.global_page then
+        UI.hidePage(hud.global_page)
+        UI.deletePage(hud.global_page)
+        hud.global_page = nil
     end
 end
 

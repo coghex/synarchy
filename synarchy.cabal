@@ -228,8 +228,11 @@ library
                      Engine.Asset.YamlTextures
                      Engine.Asset.YamlFlora
                      Engine.Asset.YamlUnits
+                     Engine.Asset.YamlNotifications
                      Engine.Event.Base
                      Engine.Event.Types
+                     Engine.PlayerEvent
+                     Engine.PlayerEvent.Emit
                      Engine.Graphics.Base
                      Engine.Graphics.Camera
                      Engine.Graphics.Types
@@ -303,6 +306,7 @@ library
                      Engine.Scripting.Lua.API.Log
                      Engine.Scripting.Lua.API.Config
                      Engine.Scripting.Lua.API.Save
+                     Engine.Scripting.Lua.API.PlayerEvent
                      Engine.Scripting.Lua.API.Graphics
                      Engine.Scripting.Lua.API.Input
                      Engine.Scripting.Lua.API.Text

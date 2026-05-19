@@ -358,7 +358,11 @@ function mainMenu.loadAndShowSave(saveName)
 
     local ok = engine.loadSave(saveName)
     if not ok then
+        -- Inline label kept for the menu's local error display;
+        -- emitEvent also fires so the failure lands in the event log
+        -- history and (per save_load category defaults) pops a popup.
         engine.logError("Failed to load save: " .. saveName)
+        engine.emitEvent("save_load", "Failed to load save: " .. saveName)
         mainMenu.lastError = "Failed to load save: " .. saveName
         mainMenu.createUI()  -- re-render with the error label
         return

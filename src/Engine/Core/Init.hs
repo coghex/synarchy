@@ -11,8 +11,11 @@ import Data.IORef (newIORef)
 import qualified Data.Map as Map
 import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Sequence as Seq
+import Control.Concurrent.STM (newTVarIO)
 import qualified System.Random as Random
 import Engine.Asset.Types (defaultAssetPool)
+import Engine.Asset.YamlNotifications (loadNotificationCfg)
 import Engine.Asset.YamlTextures
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
@@ -108,6 +111,17 @@ initializeEngine = do
   enginePausedRef ← newIORef False
   gameTimeRef     ← newIORef (0 ∷ Double)
   itemManagerRef  ← newIORef emptyItemManager
+  -- Player Events: load the notification registry (data/) merged
+  -- with player overrides (config/), allocate the ring buffer and
+  -- popup queue. Both TVars are multi-writer (world/unit/Lua threads
+  -- can all push via Engine.PlayerEvent.emitEvent). The cfg IORef
+  -- is updated at runtime by the Phase 2 notifications settings tab.
+  (notificationCfg0, notificationOrder) ← loadNotificationCfg logger
+                        "data/notification_categories.yaml"
+                        "config/notifications.yaml"
+  notificationCfgRef ← newIORef notificationCfg0
+  eventStoreRef ← newTVarIO Seq.empty
+  popupQueueRef ← newTVarIO Seq.empty
   let env = EngineEnv
         { engineConfig       = defaultEngineConfig
         , videoConfigRef     = videoConfigRef
@@ -159,6 +173,10 @@ initializeEngine = do
         , enginePausedRef   = enginePausedRef
         , gameTimeRef       = gameTimeRef
         , itemManagerRef    = itemManagerRef
+        , eventStoreRef      = eventStoreRef
+        , notificationCfgRef = notificationCfgRef
+        , notificationOrder  = notificationOrder
+        , popupQueueRef      = popupQueueRef
         }
   
   envVar   ← atomically $ newVar env

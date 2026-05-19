@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.Core
   , listFilesFn
   , setPausedFn
   , isPausedFn
+  , realTimeFn
   ) where
 
 import UPrelude
@@ -29,6 +30,7 @@ import Control.Monad (when, filterM, zipWithM_)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (LogLevel(..), toLogStr, defaultLoc)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import System.Directory (listDirectory, doesDirectoryExist)
 import System.FilePath (takeExtension)
 
@@ -58,6 +60,18 @@ isPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 isPausedFn env = do
   p ← Lua.liftIO $ readIORef (enginePausedRef env)
   Lua.pushboolean p
+  return 1
+
+-- | engine.realTime() → number
+--   POSIX wall-clock seconds (sub-second precision). Doesn't freeze
+--   when the engine is paused — use this when timing events that
+--   should respect real time regardless of in-game pause state
+--   (e.g. popup-coalescing windows).
+realTimeFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
+realTimeFn = do
+  now ← Lua.liftIO getCurrentTime
+  let secs = realToFrac (utcTimeToPOSIXSeconds now) ∷ Double
+  Lua.pushnumber (Lua.Number secs)
   return 1
 
 setTickIntervalFn ∷ EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception Lua.NumResults

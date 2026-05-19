@@ -14,6 +14,8 @@ local buildingSpawnScriptId = nil
 local tileEditorScriptId = nil
 local pauseScriptId = nil
 local buildingInfoPanelScriptId = nil
+local popupScriptId = nil
+local eventLogScriptId = nil
 
 function game.init(scriptId)
     -- Initialize debug
@@ -73,6 +75,20 @@ function game.init(scriptId)
     -- to the HUD info panel.
     buildingInfoPanelScriptId = engine.loadScript(
         "scripts/building_info_panel.lua", 0.1)
+
+    -- Popup: receives engine.emitEvent broadcasts (onShowPopup) and
+    -- renders OK-dismissable popups. Slow tick (1.0s) — render work
+    -- is event-driven on click/broadcast, the tick is just here so
+    -- the script is registered with the Lua thread for broadcast
+    -- delivery. ui_manager calls popup.bootstrap once fonts/textures
+    -- load.
+    popupScriptId = engine.loadScript("scripts/popup.lua", 1.0)
+
+    -- Event log panel: large modal-layer history view, opened via the
+    -- top-left HUD button. No broadcasts subscribed yet; the slow
+    -- tick keeps the module registered for future use (e.g. live
+    -- refresh on new events).
+    eventLogScriptId = engine.loadScript("scripts/event_log.lua", 1.0)
 
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
@@ -209,6 +225,41 @@ function game.onKeyDown(key)
         require("scripts.pause").toggle()
         return
     end
+
+    -- Player-events Escape cascade. Hardcoded to Escape (not
+    -- routed through engine.isActionDown) because the user said
+    -- the escape binding is fixed; only alphanumerics are
+    -- rebindable.
+    --   Shift+Esc  → dismiss every active popup + flush pending
+    --   Esc        → dismiss topmost popup, OR close event log,
+    --                OR fall through to selection-clear below
+    if key == "Escape" then
+        local popup = require("scripts.popup")
+        local shift = engine.isKeyDown("LeftShift")
+                      or engine.isKeyDown("RightShift")
+        if shift then
+            if popup.dismissAll() > 0 then return end
+        else
+            if popup.dismissTopmost() then return end
+        end
+        local eventLog = require("scripts.event_log")
+        if eventLog.isVisible() then
+            eventLog.hide()
+            return
+        end
+        -- (fall through to the existing unit-deselect path below)
+    end
+
+    -- User-rebindable: toggle the event log panel. Default is L.
+    -- engine.isActionDown reports true when the action's bound
+    -- key is currently down; since this fires during the
+    -- press-transition broadcast, "currently down" coincides with
+    -- "just pressed" for the duration of this handler.
+    if engine.isActionDown("toggleEventLog") then
+        require("scripts.event_log").toggle()
+        return
+    end
+
     -- Build tool's Esc cancels placement before the default Esc
     -- handler clears unit selection.
     local buildTool = require("scripts.build_tool")
@@ -257,6 +308,12 @@ function game.shutdown()
     end
     if buildingInfoPanelScriptId then
         engine.killScript(buildingInfoPanelScriptId)
+    end
+    if popupScriptId then
+        engine.killScript(popupScriptId)
+    end
+    if eventLogScriptId then
+        engine.killScript(eventLogScriptId)
     end
 end
 

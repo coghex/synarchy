@@ -94,6 +94,8 @@ data LogCategory
   | CatState
   | CatGeneral
   | CatTest
+  | CatEvent  -- ^ Player Events subsystem (registry load, unknown
+              --   category warnings from 'Engine.PlayerEvent.emitEvent').
   deriving (Show, Eq, Ord, Enum, Bounded)
 
 parseCategory ∷ Text → Maybe LogCategory
@@ -119,6 +121,7 @@ parseCategory t = case T.toLower t of
   "state"       → Just CatState
   "general"     → Just CatGeneral
   "test"        → Just CatTest
+  "event"       → Just CatEvent
   _             → Nothing
 
 data LogBackend
@@ -249,7 +252,7 @@ loadDebugCategoriesFromEnv defaults = do
                                       (CatLua, True), (CatScript, True), (CatInput, True),
                                       (CatScene, True), (CatUI, True), (CatThread, True),
                                       (CatSystem, True), (CatInit, True), (CatState, True),
-                                      (CatGeneral, True), (CatTest, True)]
+                                      (CatGeneral, True), (CatTest, True), (CatEvent, True)]
                     _      → do
                                 let catNames = map T.strip $ T.splitOn "," (T.pack str)
                                     cats = mapMaybe parseCategory catNames

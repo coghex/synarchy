@@ -551,4 +551,37 @@ processLuaMsg env ls stateRef msg = case msg of
   LuaWorldPreviewReady handleInt →
     broadcastToModules ls "onWorldPreviewReady"
       [ScriptNumber (fromIntegral handleInt)]
+  LuaShowPopup category msg r g b a buttons mCoords →
+    broadcastToModules ls "onShowPopup"
+      [ ScriptString category
+      , ScriptString msg
+      , ScriptNumber (realToFrac r)
+      , ScriptNumber (realToFrac g)
+      , ScriptNumber (realToFrac b)
+      , ScriptNumber (realToFrac a)
+      , buttonsToScriptValue buttons
+      , coordsToScriptValue mCoords
+      ]
   _ → return ()
+
+-- | Build a Lua array @{ {label=..., action=...}, ... }@ from the
+--   button list carried by 'LuaShowPopup'. Lua-side popup module
+--   iterates with @ipairs@ and reads @b.label@ / @b.action@.
+buttonsToScriptValue ∷ [(Text, Text)] → ScriptValue
+buttonsToScriptValue btns = ScriptTable $
+    zipWith (\i (lbl, act) →
+        (ScriptNumber (fromIntegral (i ∷ Int))
+        , ScriptTable
+            [ (ScriptString "label",  ScriptString lbl)
+            , (ScriptString "action", ScriptString act)
+            ]))
+        [1..] btns
+
+-- | Encode the optional payload as either @{x=gx, y=gy}@ or 'nil'.
+--   Lua-side popup module checks for nil before allowing 'go_to'.
+coordsToScriptValue ∷ Maybe (Int, Int) → ScriptValue
+coordsToScriptValue Nothing = ScriptNil
+coordsToScriptValue (Just (gx, gy)) = ScriptTable
+    [ (ScriptString "x", ScriptNumber (fromIntegral gx))
+    , (ScriptString "y", ScriptNumber (fromIntegral gy))
+    ]

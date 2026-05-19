@@ -4,7 +4,12 @@ keybinds:
   moveDown: S
   moveLeft: A
   moveRight: D
-  
+
   # System
+  # `escape` is intentionally hardcoded to Escape in the engine —
+  # rebinding the entry here has no effect.
   escape: Escape
-  openShell:  Grave
+  openShell: Grave
+
+  # UI panels (alphanumeric, rebind freely)
+  toggleEventLog: L

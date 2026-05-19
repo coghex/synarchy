@@ -1,0 +1,98 @@
+# Registry of player-facing event categories.
+# Loaded once at engine boot. Cannot be modified at runtime.
+#
+# id           — unique snake_case identifier, used by engine.emitEvent
+# display_name — user-visible label in the notifications settings tab
+# description  — longer text for the future settings-tab tooltip
+# text_color   — RGBA list [r, g, b, a] floats 0.0–1.0; applies to BOTH
+#                popup text AND event-log entry
+# default_settings:
+#   log   — default value of "event log"  checkbox
+#   popup — default value of "popup"      checkbox
+#   pause — default value of "pause"      checkbox
+# buttons        — optional list of {label, action} pairs. Defaults to
+#                  [{OK, dismiss}] if omitted. Action tags:
+#                    dismiss   — close the popup
+#                    go_to     — pan camera to the event's (gx, gy)
+#                                payload (set by engine.emitEventAt).
+#                                Skipped if the event was emitted
+#                                without coordinates.
+# coalesce_window — wall-seconds (sub-second OK). When >0, events of
+#                   this category arriving within the window collapse
+#                   into a single popup line with an (xN) count and
+#                   replace the body text with the most recent
+#                   event's text. Events outside the window add a
+#                   new line to the same popup (up to 10 lines).
+#                   0 or absent = no coalescing (every event spawns
+#                   its own popup).
+
+categories:
+  - id: save_load
+    display_name: Save / Load
+    description: Save and load operations succeeded or failed.
+    text_color: [1.0, 1.0, 1.0, 1.0]
+    default_settings: { log: true,  popup: true,  pause: false }
+
+  - id: survival_critical
+    display_name: Survival (Critical)
+    description: Unit death, organ failure, dying of thirst or hunger.
+    text_color: [1.0, 0.3, 0.3, 1.0]
+    default_settings: { log: true,  popup: true,  pause: true  }
+    # Mass-death events tend to cluster; collapse same-second
+    # bursts into a single popup line with an (xN) counter.
+    coalesce_window: 1.0
+    buttons:
+      - { label: "Go To", action: "go_to" }
+      - { label: "OK",    action: "dismiss" }
+
+  - id: survival_warning
+    display_name: Survival (Warning)
+    description: Unit hungry, thirsty, or low health.
+    text_color: [1.0, 0.8, 0.4, 1.0]
+    default_settings: { log: true,  popup: true,  pause: false }
+    coalesce_window: 1.0
+    buttons:
+      - { label: "Go To", action: "go_to" }
+      - { label: "OK",    action: "dismiss" }
+
+  - id: combat
+    display_name: Combat
+    description: Combat events between units.
+    text_color: [1.0, 0.6, 0.6, 1.0]
+    default_settings: { log: true,  popup: true,  pause: false }
+    # Combat ticks rapidly; 2-second window keeps the popup
+    # readable without losing the burst signal.
+    coalesce_window: 2.0
+    buttons:
+      - { label: "Go To", action: "go_to" }
+      - { label: "OK",    action: "dismiss" }
+
+  - id: building
+    display_name: Building / Construction
+    description: Construction progress and completion events.
+    text_color: [0.8, 0.9, 1.0, 1.0]
+    default_settings: { log: true,  popup: false, pause: false }
+    buttons:
+      - { label: "Go To", action: "go_to" }
+      - { label: "OK",    action: "dismiss" }
+
+  - id: weather
+    display_name: Weather
+    description: Significant weather changes (storms, seasonal shifts).
+    text_color: [0.7, 0.9, 1.0, 1.0]
+    default_settings: { log: true,  popup: false, pause: false }
+
+  - id: unit_status
+    display_name: Unit Status
+    description: Spawning, recruitment, idle state changes.
+    text_color: [1.0, 1.0, 1.0, 1.0]
+    default_settings: { log: true,  popup: false, pause: false }
+    buttons:
+      - { label: "Go To", action: "go_to" }
+      - { label: "OK",    action: "dismiss" }
+
+  - id: debug
+    display_name: Debug
+    description: Development events surfaced to the in-game log.
+    text_color: [0.6, 0.6, 0.6, 1.0]
+    default_settings: { log: false, popup: false, pause: false }

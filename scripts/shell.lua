@@ -9,12 +9,26 @@ local myScriptId = nil
 local shellvisible = false
 local focusId = nil
 local inputBuffer = ""
+-- `history` is the visible scrollback: per-entry {command, result,
+-- isError}, rebuilt as 9-box-anchored text elements by
+-- rebuildHistoryDisplay. Cleared by the `clear` command. NOT
+-- persisted — fresh on each session.
 local history = {}
 local historyTextObjects = {}
 local lineHeight = 40
 local historyPadding = 10
 local historyIndex = 0
 local savedInputBuffer = ""
+
+-- `arrowHistory` is the up/down navigation list of command strings.
+-- Persisted to config/shell_history.txt across sessions (one
+-- command per line, oldest first). Dedup'd on push so repeating a
+-- command doesn't clutter the buffer — earlier occurrences are
+-- pruned and the most recent stays in position. Survives the
+-- `clear` command; only `clear-history` wipes it (and the file).
+local arrowHistory = {}
+local historyFilePath = "config/shell_history.txt"
+local historyMaxLines = 1000
 local marginLeft = 40
 local marginBottom = 40
 local marginTop = 40
@@ -75,9 +89,77 @@ local uiscale = 1.0
 local currentCompletions = {}
 local ghostText = nil
 
+-----------------------------------------------------------
+-- Arrow-key history persistence
+-----------------------------------------------------------
+
+-- Read the on-disk command history into `arrowHistory`. Silent on
+-- missing file (first run). Trims to historyMaxLines just in case
+-- the file was hand-edited above the cap.
+local function loadArrowHistoryFromDisk()
+    local f = io.open(historyFilePath, "r")
+    if not f then return end
+    arrowHistory = {}
+    for line in f:lines() do
+        if line ~= "" then
+            table.insert(arrowHistory, line)
+        end
+    end
+    f:close()
+    while #arrowHistory > historyMaxLines do
+        table.remove(arrowHistory, 1)
+    end
+end
+
+-- Append a command to the navigation history. Dedup'd: any prior
+-- occurrence is removed so the same command never appears twice in
+-- arrow-up. Caps at historyMaxLines (oldest dropped). Rewrites the
+-- whole file each call — cheap at this scale (~50KB max).
+local function pushArrowHistory(cmd)
+    if not cmd or cmd == "" then return end
+    for i = #arrowHistory, 1, -1 do
+        if arrowHistory[i] == cmd then
+            table.remove(arrowHistory, i)
+        end
+    end
+    table.insert(arrowHistory, cmd)
+    while #arrowHistory > historyMaxLines do
+        table.remove(arrowHistory, 1)
+    end
+    local f = io.open(historyFilePath, "w")
+    if f then
+        for _, c in ipairs(arrowHistory) do
+            f:write(c)
+            f:write("\n")
+        end
+        f:close()
+    end
+    -- If the open failed (e.g. config/ missing or no write perm)
+    -- we silently skip persistence — the in-memory list still
+    -- works for the current session.
+end
+
+-- Wipe the arrow-key navigation history AND the on-disk file.
+-- Does not touch the visible scrollback — that's what `clear`
+-- handles. After this, arrow-up yields nothing until the user
+-- enters a new command.
+local function clearArrowHistory()
+    arrowHistory = {}
+    os.remove(historyFilePath)
+    historyIndex = 0
+    savedInputBuffer = ""
+end
+
 function shell.init(scriptId)
     myScriptId = scriptId
     engine.logInfo("Shell initializing...")
+
+    loadArrowHistoryFromDisk()
+    if #arrowHistory > 0 then
+        engine.logInfo("Shell history loaded: "
+            .. tostring(#arrowHistory) .. " entries from "
+            .. historyFilePath)
+    end
 
     uiscale = engine.getUIScale()
     tileSize = math.floor(tileSize * uiscale)
@@ -233,12 +315,19 @@ function shell.onSubmit()
     historyIndex = 0
     savedInputBuffer = ""
     inputScrollOffset = 0
+    -- Push onto the navigation history before dispatching the
+    -- command — even commands that error should appear in arrow-up
+    -- so the user can edit and re-run.
+    pushArrowHistory(inputBuffer)
     local cmd = string.lower(string.match(inputBuffer, "^%s*(%S+)") or "")
     if cmd == "help" then
         shell.addHistory(inputBuffer, shell.cmdHelp(), false)
     elseif cmd == "clear" then
         shell.addHistory(inputBuffer, "OK", false)
         shell.cmdClear()
+    elseif cmd == "clear-history" then
+        shell.cmdClearHistory()
+        shell.addHistory(inputBuffer, "OK", false)
     elseif cmd == "exit" or cmd == "quit" then
         shell.addHistory(inputBuffer, "OK", false)
         shell.cmdQuit()
@@ -266,7 +355,8 @@ function shell.onSubmit()
 end
 
 function shell.cmdHelp()
-    return "Commands: help, clear, quit/exit\nOr enter Lua code to execute"
+    return "Commands: help, clear, clear-history, quit/exit\n"
+        .. "Or enter Lua code to execute"
 end
 
 function shell.cmdClear()
@@ -279,6 +369,15 @@ function shell.cmdClear()
     if shellvisible then
         shell.rebuildBox()
     end
+end
+
+-- Wipe the arrow-key navigation history AND the persisted file.
+-- Doesn't touch the visible scrollback (use `clear` for that).
+-- Useful when accumulated history gets noisy or contains sensitive
+-- state you don't want to keep across sessions.
+function shell.cmdClearHistory()
+    clearArrowHistory()
+    engine.logInfo("Shell history cleared")
 end
 
 function shell.cmdQuit()
@@ -828,18 +927,17 @@ end
 
 function shell.onCursorUp(fid)
     if fid ~= focusId then return end
-    if #history == 0 then return end
-    
+    if #arrowHistory == 0 then return end
+
     -- Save current input when starting to browse
     if historyIndex == 0 then
         savedInputBuffer = inputBuffer
     end
-    
+
     -- Move up in history (towards older commands)
-    if historyIndex < #history then
+    if historyIndex < #arrowHistory then
         historyIndex = historyIndex + 1
-        local entry = history[#history - historyIndex + 1]
-        inputBuffer = entry.command
+        inputBuffer = arrowHistory[#arrowHistory - historyIndex + 1]
         cursorPos = #inputBuffer
         shell.updateDisplay()
     end
@@ -847,12 +945,11 @@ end
 
 function shell.onCursorDown(fid)
     if fid ~= focusId then return end
-    
+
     if historyIndex > 1 then
         -- Move down in history (towards newer commands)
         historyIndex = historyIndex - 1
-        local entry = history[#history - historyIndex + 1]
-        inputBuffer = entry.command
+        inputBuffer = arrowHistory[#arrowHistory - historyIndex + 1]
         cursorPos = #inputBuffer
         shell.updateDisplay()
     elseif historyIndex == 1 then

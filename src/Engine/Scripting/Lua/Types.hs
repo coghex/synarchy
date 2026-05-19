@@ -134,6 +134,18 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
             | LuaHudLogInfo Text Text
             | LuaHudLogWeatherInfo Text
             | LuaWorldPreviewReady Int
+            | LuaShowPopup Text Text Float Float Float Float
+                           [(Text, Text)] (Maybe (Int, Int))
+              -- ^ Player-events popup. Fields, in order:
+              --     1. category id (e.g. "save_load")
+              --     2. body text
+              --     3-6. text color r,g,b,a
+              --     7. buttons — list of (label, actionTag) pairs;
+              --        actionTag is one of "dismiss" / "go_to" (see
+              --        'Engine.PlayerEvent.popupActionTag').
+              --     8. optional (gx, gy) grid coords for 'go_to'.
+              --        'Nothing' means buttons that need coords are
+              --        suppressed by the Lua popup module.
             deriving (Eq, Show)
 
 data LuaResult = LuaSuccess

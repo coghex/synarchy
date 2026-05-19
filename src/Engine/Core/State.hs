@@ -6,6 +6,8 @@ import qualified Data.Map as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef)
+import Data.Sequence (Seq)
+import Control.Concurrent.STM.TVar (TVar)
 import System.Random (StdGen)
 import Engine.Asset.Base
 import Engine.Asset.Types
@@ -14,6 +16,7 @@ import Engine.Asset.YamlTextures
 import Engine.Core.Log
 import Engine.Core.Types
 import Engine.Core.Queue as Q
+import Engine.PlayerEvent (PlayerEvent, NotificationCfg)
 import Engine.Scripting.Lua.Types
 import Engine.Event.Types
 import Engine.Graphics.Types
@@ -123,6 +126,32 @@ data EngineEnv = EngineEnv
     -- ^ Registry of all item defs loaded from data/items/*.yaml.
     --   Lua's item.loadYaml writes into this; unit spawn reads from
     --   it to materialise starting_inventory entries.
+  , eventStoreRef      ∷ TVar (Seq PlayerEvent)
+    -- ^ Ring buffer of player-facing events (~1000 entries; oldest
+    --   dropped). Per-session only — not serialized to save files.
+    --   Multi-writer: world, unit, and Lua threads all push via
+    --   'Engine.PlayerEvent.emitEvent'. Read atomically by Lua-side
+    --   queries (e.g. the event-log panel).
+  , notificationCfgRef ∷ IORef NotificationCfg
+    -- ^ Resolved notification settings keyed by category id. Loaded
+    --   at boot from 'data/notification_categories.yaml' merged with
+    --   'config/notifications.yaml'. Wrapped in an IORef so the
+    --   Phase 2 settings tab can update it at runtime (each checkbox
+    --   toggle writes both the IORef and the overrides YAML). The
+    --   emitEvent read path takes a single 'readIORef' per call —
+    --   negligible overhead even from the world thread.
+  , notificationOrder  ∷ ![Text]
+    -- ^ Registry-order list of category ids, captured at boot from
+    --   'data/notification_categories.yaml'. Immutable for the
+    --   session — categories can't be added/removed at runtime, only
+    --   their flags toggled. The settings tab uses this to render
+    --   rows in the YAML order rather than HashMap iteration order.
+  , popupQueueRef      ∷ TVar (Seq PlayerEvent)
+    -- ^ Events with popup display enabled, waiting to be picked up
+    --   by the Lua popup module. The Lua side drains this via the
+    --   'LuaShowPopup' broadcast; this TVar exists for inspection /
+    --   debug querying and as a Phase 2 stable source for the
+    --   notifications panel.
   } deriving (Eq)
 
 data EngineState = EngineState

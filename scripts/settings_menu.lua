@@ -13,8 +13,9 @@ local tabbar         = require("scripts.ui.tabbar")
 local scrollbar      = require("scripts.ui.scrollbar")
 local slider         = require("scripts.ui.slider")
 local data           = require("scripts.settings.data")
-local graphicsTab    = require("scripts.settings.graphics_tab")
-local placeholderTab = require("scripts.settings.placeholder_tab")
+local graphicsTab      = require("scripts.settings.graphics_tab")
+local notificationsTab = require("scripts.settings.notifications_tab")
+local placeholderTab   = require("scripts.settings.placeholder_tab")
 
 local settingsMenu = {}
 
@@ -127,6 +128,9 @@ local tabDefs = {
             contentX = p.contentX, contentY = p.contentY,
             zContent = Z_CONTENT,
         })
+    end },
+    { key = "notifications", name = "Notifications", create = function(p)
+        return notificationsTab.create(p)
     end },
 }
 

@@ -415,17 +415,18 @@ function worldView.saveGame(saveName)
     local worldId = worldManager.getCurrentWorld()
     if worldId then
         local name = saveName or "quicksave"
+        -- Synchronous validation only — disk-write success/failure is
+        -- async and lands via emitEvent("save_load", ...) from
+        -- World.Thread.Command.Save.handleWorldSaveCommand.
         if engine.saveWorld(worldId, name) then
-            engine.logInfo("Game saved: " .. name)
+            -- Don't emitEvent here: the world thread fires the
+            -- "Game saved" event when the file is actually written.
+            -- Logging here would double-notify on success.
+            engine.logDebug("Save queued for: " .. name)
         else
-            -- saveWorld returned false from synchronous validation
-            -- (bad name, missing page, missing gen params). The specific
-            -- reason is in the engine log via saveWorldFn's logWarn.
-            -- Async disk-IO failures aren't in this return value;
-            -- they're broadcast via onWorldGenLog and would need a
-            -- separate subscriber.
-            engine.logWarn("Save failed: " .. name
-                .. " (see engine log for reason)")
+            -- Validation rejected — saveWorldFn already emitted the
+            -- specific reason. Nothing more to do here.
+            engine.logDebug("Save validation failed for: " .. name)
         end
     end
 end
