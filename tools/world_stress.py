@@ -23,7 +23,11 @@ from typing import Any
 
 # Reuse audit and dump utilities
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from world_audit import audit_dump  # type: ignore
+from world_audit import (  # type: ignore
+    audit_dump,
+    severity_of,
+    QUALITY_THRESHOLDS,
+)
 from world_determinism import run_dump  # type: ignore
 
 
@@ -33,7 +37,10 @@ DEFAULT_WORLD_SIZES = [32, 64]
 DEFAULT_REGION = (-2, -2, 2, 2)
 DEFAULT_SEED_COUNT = 30
 
-# A seed is "interesting" if any single category exceeds this many issues
+# Stress-test outlier threshold for QUALITY categories: a count >= this
+# value is flagged as informational ("outlier") even when still inside
+# the QUALITY_THRESHOLDS budget. BUG categories use 1 (any nonzero is a
+# real find) regardless of this value.
 INTERESTING_THRESHOLD = 10
 
 
@@ -62,15 +69,51 @@ def run_one(seed: int, world_size: int,
     }
 
 
+def classify_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Bucket a record's findings by severity (mirrors world_check.py).
+
+    Returns three category-keyed dicts:
+      bugs     — BUG-category occurrences (any nonzero is a real defect).
+      exceeded — QUALITY-category counts strictly over their
+                 QUALITY_THRESHOLDS budget; value is (count, threshold).
+      outliers — QUALITY-category counts at/over INTERESTING_THRESHOLD
+                 but still inside the QUALITY_THRESHOLDS budget — high
+                 but not a failure, surfaced as a tuning signal.
+    """
+    if "error" in record:
+        return {"bugs": {}, "exceeded": {}, "outliers": {}}
+    bugs: dict[str, int] = {}
+    exceeded: dict[str, tuple[int, int]] = {}
+    outliers: dict[str, int] = {}
+    for cat, count in record["summary"].items():
+        if count == 0:
+            continue
+        sev = severity_of(cat)
+        if sev == "BUG":
+            bugs[cat] = count
+            continue
+        threshold = QUALITY_THRESHOLDS.get(cat)
+        if threshold is not None and count > threshold:
+            exceeded[cat] = (count, threshold)
+        elif count >= INTERESTING_THRESHOLD:
+            outliers[cat] = count
+    return {"bugs": bugs, "exceeded": exceeded, "outliers": outliers}
+
+
 def is_interesting(record: dict[str, Any]) -> bool:
     if "error" in record:
         return True
-    return any(count >= INTERESTING_THRESHOLD
-               for count in record["summary"].values())
+    cls = classify_record(record)
+    return bool(cls["bugs"] or cls["exceeded"] or cls["outliers"])
 
 
 def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute summary statistics across all records."""
+    """Compute summary statistics across all records.
+
+    Issue totals are split by severity: BUG counts and QUALITY counts
+    aggregate into separate dicts so a glance at the report tells the
+    reader which signals are real defects and which are quality drift.
+    """
     successful = [r for r in records if "error" not in r]
     errors = [r for r in records if "error" in r]
 
@@ -79,13 +122,24 @@ def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
     for r in successful:
         by_size[r["world_size"]].append(r)
 
-    # Aggregate issue counts per category
-    all_categories: Counter[str] = Counter()
+    # Aggregate issue counts per category, partitioned by severity.
+    bug_totals: Counter[str] = Counter()
+    quality_totals: Counter[str] = Counter()
     issue_per_record: list[int] = []
+    runs_with_bugs = 0
+    runs_with_exceeded = 0
     for r in successful:
         for cat, count in r["summary"].items():
-            all_categories[cat] += count
+            if severity_of(cat) == "BUG":
+                bug_totals[cat] += count
+            else:
+                quality_totals[cat] += count
         issue_per_record.append(r["total_issues"])
+        cls = classify_record(r)
+        if cls["bugs"]:
+            runs_with_bugs += 1
+        if cls["exceeded"]:
+            runs_with_exceeded += 1
 
     # Per-size aggregates
     size_stats = {}
@@ -107,12 +161,16 @@ def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
         "total_runs": len(records),
         "successful": len(successful),
         "errors": len(errors),
+        "runs_with_bugs": runs_with_bugs,
+        "runs_with_exceeded": runs_with_exceeded,
         "total_issues": sum(issue_per_record),
         "median_issues": int(statistics.median(issue_per_record)) if issue_per_record else 0,
         "max_issues": max(issue_per_record) if issue_per_record else 0,
         "by_world_size": size_stats,
-        "by_category": dict(sorted(all_categories.items(),
-                                    key=lambda kv: -kv[1])),
+        "bug_totals": dict(sorted(bug_totals.items(),
+                                   key=lambda kv: -kv[1])),
+        "quality_totals": dict(sorted(quality_totals.items(),
+                                       key=lambda kv: -kv[1])),
     }
 
 
@@ -125,12 +183,18 @@ def format_report(records: list[dict[str, Any]],
     lines.append("World gen stress test report")
     lines.append("=" * 60)
     lines.append("")
-    lines.append(f"Total runs:    {agg['total_runs']}")
-    lines.append(f"Successful:    {agg['successful']}")
-    lines.append(f"Errors:        {agg['errors']}")
-    lines.append(f"Total issues:  {agg['total_issues']}")
-    lines.append(f"Median issues: {agg['median_issues']} per run")
-    lines.append(f"Max issues:    {agg['max_issues']} (single run)")
+    lines.append("Legend:  [BUG]      = must be 0 (real defect)")
+    lines.append("         [EXCEEDED] = quality count over its budget threshold")
+    lines.append("         [outlier]  = quality count high, inside threshold")
+    lines.append("")
+    lines.append(f"Total runs:         {agg['total_runs']}")
+    lines.append(f"Successful:         {agg['successful']}")
+    lines.append(f"Errors:             {agg['errors']}")
+    lines.append(f"Runs with bugs:     {agg['runs_with_bugs']}")
+    lines.append(f"Runs over quality:  {agg['runs_with_exceeded']}")
+    lines.append(f"Total issues:       {agg['total_issues']}")
+    lines.append(f"Median issues:      {agg['median_issues']} per run")
+    lines.append(f"Max issues:         {agg['max_issues']} (single run)")
     lines.append("")
     lines.append("By world size:")
     for sz, stats in agg["by_world_size"].items():
@@ -142,10 +206,19 @@ def format_report(records: list[dict[str, Any]],
             cat_str = ", ".join(f"{c}={n}" for c, n in top_cats)
             lines.append(f"    top: {cat_str}")
     lines.append("")
-    lines.append("By category (all sizes):")
-    for cat, count in agg["by_category"].items():
-        lines.append(f"  {cat}: {count}")
-    lines.append("")
+    if agg["bug_totals"]:
+        lines.append("BUG categories (totals across all sizes):")
+        for cat, count in agg["bug_totals"].items():
+            lines.append(f"  [BUG] {cat}: {count}")
+        lines.append("")
+    else:
+        lines.append("BUG categories: clean across all runs.")
+        lines.append("")
+    if agg["quality_totals"]:
+        lines.append("QUALITY categories (totals across all sizes):")
+        for cat, count in agg["quality_totals"].items():
+            lines.append(f"  {cat}: {count}")
+        lines.append("")
 
     interesting = [r for r in records if is_interesting(r)]
     if interesting:
@@ -154,14 +227,20 @@ def format_report(records: list[dict[str, Any]],
             if "error" in r:
                 lines.append(f"  ERROR seed={r['seed']} size={r['world_size']}: "
                              f"{r['error']}")
-            else:
-                top_cats = sorted(r["summary"].items(),
-                                  key=lambda kv: -kv[1])[:3]
-                cat_str = ", ".join(f"{c}={n}" for c, n in top_cats)
-                lines.append(f"  seed={r['seed']:6d} size={r['world_size']:3d} "
-                             f"total={r['total_issues']:4d}  {cat_str}")
+                continue
+            cls = classify_record(r)
+            tagged: list[str] = []
+            for cat, count in cls["bugs"].items():
+                tagged.append(f"[BUG]{cat}={count}")
+            for cat, (count, threshold) in cls["exceeded"].items():
+                tagged.append(f"[EXCEEDED]{cat}={count}>{threshold}")
+            for cat, count in cls["outliers"].items():
+                tagged.append(f"[outlier]{cat}={count}")
+            tag_str = " ".join(tagged) if tagged else "-"
+            lines.append(f"  seed={r['seed']:6d} size={r['world_size']:3d} "
+                         f"total={r['total_issues']:4d}  {tag_str}")
     else:
-        lines.append("No interesting runs (all under threshold).")
+        lines.append("No interesting runs.")
 
     return "\n".join(lines)
 
@@ -248,8 +327,13 @@ def main() -> int:
     else:
         print(output)
 
-    # Exit code: 0 if no errors, 1 if any errors
-    return 0 if agg["errors"] == 0 else 1
+    # Exit code: 1 if any run errored, hit a BUG category, or exceeded
+    # a QUALITY threshold (matches world_check.py semantics). Outliers
+    # alone do not fail the run — they are informational.
+    fail = (agg["errors"] > 0
+            or agg["runs_with_bugs"] > 0
+            or agg["runs_with_exceeded"] > 0)
+    return 1 if fail else 0
 
 
 if __name__ == "__main__":

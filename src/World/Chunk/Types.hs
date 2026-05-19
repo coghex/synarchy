@@ -21,7 +21,6 @@ import qualified Data.Vector as V
 import World.Material (MaterialId(..))
 import World.Fluid.Types (FluidCell(..), IceMap, emptyIceMap)
 import World.Flora.Types (FloraChunkData(..), emptyFloraChunkData)
-import World.River.Types (RiverMask, emptyRiverMask)
 
 data ChunkCoord = ChunkCoord !Int !Int
     deriving (Show, Eq, Ord, Generic, Serialize)
@@ -75,7 +74,6 @@ data LoadedChunk = LoadedChunk
     , lcIceMap     ∷ !IceMap               -- ^ Ice overlay (frozen ocean/lake/alpine)
     , lcFlora      ∷ !FloraChunkData
     , lcSideDeco   ∷ !(VU.Vector Word8)    -- ^ Side-face decorations per column
-    , lcRiverMask  ∷ !RiverMask           -- ^ River channel mask (surface + type per tile)
     } deriving (Show, Eq)
 -- Removed: lcModified :: Bool. The world's edit log
 -- (WorldState.wsEditsRef) is now the source of truth for "this chunk
@@ -83,7 +81,7 @@ data LoadedChunk = LoadedChunk
 -- via replay on regeneration.
 
 instance NFData LoadedChunk where
-    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco rmask) =
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
         rnf terrainMap `seq` rnf fluidMap `seq` rnf iceMap `seq`
-        rnf flora `seq` rnf sideDeco `seq` rnf rmask
+        rnf flora `seq` rnf sideDeco

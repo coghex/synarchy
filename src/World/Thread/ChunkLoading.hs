@@ -22,7 +22,6 @@ import qualified Data.HashSet as HS
 import World.Types
 import World.Chunk.Types (chunkSize)
 import World.Fluid.Types (FluidCell(..))
-import Sim.River.Project (projectRiverSimple)
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
@@ -93,16 +92,9 @@ updateChunkLoading env logger = do
                                 let !newChunks = if isArena
                                         then map generateFlatChunk batch
                                         else parMap rdeepseq (\coord →
-                                            let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, rmask) = generateChunk registry catalog params coord
-                                                -- Project river from rich mask: uses
-                                                -- precomputed water surfaces from
-                                                -- computeRiverMask (with coastal
-                                                -- flattening). No terrZ+1 — mask
-                                                -- surfaces are authoritative.
-                                                seededFluid = projectRiverSimple
-                                                    rmask tMap fluidMap
+                                            let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora) = generateChunk registry catalog params coord
                                                 seededSurf = VU.imap (\idx surfZ →
-                                                    case seededFluid V.! idx of
+                                                    case fluidMap V.! idx of
                                                         Just fc → max surfZ (fcSurface fc)
                                                         Nothing → surfZ
                                                     ) surfMap
@@ -111,11 +103,10 @@ updateChunkLoading env logger = do
                                                 , lcTiles      = chunkTiles
                                                 , lcSurfaceMap = seededSurf
                                                 , lcTerrainSurfaceMap = tMap
-                                                , lcFluidMap   = seededFluid
+                                                , lcFluidMap   = fluidMap
                                                 , lcIceMap     = iceMap
                                                 , lcFlora      = flora
                                                 , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
-                                                , lcRiverMask  = rmask
                                                 }) batch
                                 -- Replay player edits onto the fresh chunks
                                 -- before inserting. Chunks evicted earlier
@@ -178,12 +169,9 @@ drainInitQueues env logger = do
                             seed  = wgpSeed params
 
                         let newChunks = parMap rdeepseq (\coord →
-                                let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, rmask) = generateChunk registry catalog params coord
-                                    -- Project river from rich mask
-                                    seededFluid = projectRiverSimple
-                                        rmask tMap fluidMap
+                                let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora) = generateChunk registry catalog params coord
                                     seededSurf = VU.imap (\idx surfZ →
-                                        case seededFluid V.! idx of
+                                        case fluidMap V.! idx of
                                             Just fc → max surfZ (fcSurface fc)
                                             Nothing → surfZ
                                         ) surfMap
@@ -192,11 +180,10 @@ drainInitQueues env logger = do
                                     , lcTiles      = chunkTiles
                                     , lcSurfaceMap = seededSurf
                                     , lcTerrainSurfaceMap = tMap
-                                    , lcFluidMap   = seededFluid
+                                    , lcFluidMap   = fluidMap
                                     , lcIceMap     = iceMap
                                     , lcFlora      = flora
                                     , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
-                                    , lcRiverMask  = rmask
                                     }) batch
 
                         -- Replay player edits onto the fresh chunks

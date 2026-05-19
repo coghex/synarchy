@@ -43,7 +43,6 @@ import World.Weather (initEarlyClimate, formatWeather, defaultClimateParams)
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import Engine.PlayerEvent.Emit (emitEvent)
 import World.Thread.ChunkLoading (maxChunksPerTick)
-import Sim.River.Project (projectRiverSimple)
 
 
 -- | Save: snapshot the live WorldState and write to disk ──logInfo logger CatWorld $ "Saving world: " <> unWorldPageId pageId
@@ -234,10 +233,9 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             cameraChunkCoord (sdCameraFacing saveData)
                              (sdCameraX saveData)
                              (sdCameraY saveData)
-        (ct, cs, cterrain, cf, cice, cflora, crmask) = generateChunk registry catalog params centerCoord
-        seededFluid = projectRiverSimple crmask cterrain cf
+        (ct, cs, cterrain, cf, cice, cflora) = generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →
-            case seededFluid V.! idx of
+            case cf V.! idx of
                 Just fc → max surfZ (fcSurface fc)
                 Nothing → surfZ
             ) cs
@@ -246,11 +244,10 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             , lcTiles             = ct
             , lcSurfaceMap        = seededSurf
             , lcTerrainSurfaceMap = cterrain
-            , lcFluidMap          = seededFluid
+            , lcFluidMap          = cf
             , lcIceMap            = cice
             , lcFlora             = cflora
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
-            , lcRiverMask         = crmask
             }
     -- Replay edits onto the freshly-generated center chunk. The edit
     -- log was restored from sdEdits earlier in this handler; if the

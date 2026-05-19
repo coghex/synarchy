@@ -13,7 +13,6 @@ import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
 import World.Tile.Types (WorldTileData(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..), emptyIceMap)
 import World.Flora.Types (emptyFloraChunkData)
-import World.River.Types (emptyRiverMask)
 import Unit.Pathing.AStar
 
 flatChunk ∷ Int → LoadedChunk
@@ -31,7 +30,6 @@ flatChunk terrZ =
         , lcIceMap            = emptyIceMap
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.empty
-        , lcRiverMask         = emptyRiverMask
         }
 
 customChunk ∷ ((Int, Int) → (Int, Maybe FluidType)) → LoadedChunk
@@ -55,7 +53,6 @@ customChunk f =
         , lcIceMap            = emptyIceMap
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.empty
-        , lcRiverMask         = emptyRiverMask
         }
 
 worldWith ∷ LoadedChunk → WorldTileData

@@ -472,10 +472,6 @@ library
                      World.Hydrology.River.Tributary
                      World.Hydrology.River.Carving
                      World.Hydrology.River.Common
-                     World.River.Types
-                     World.River.Mask
-                     Sim.River.Project
-                     Sim.River.State
                      World.Hydrology.Glacier
                      World.Hydrology.Glacier.Common
                      World.Hydrology.Glacier.Generation

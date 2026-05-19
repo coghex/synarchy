@@ -42,7 +42,6 @@ import World.Generate.Config (WorldGenConfig(..), ClimateYaml(..)
                              , applyConfigToParams)
 import World.Thread.Helpers (sendGenLog, unWorldPageId)
 import World.Thread.ChunkLoading (maxChunksPerTick)
-import Sim.River.Project (projectRiverSimple)
 
 handleWorldInitCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Word64 → Int → Int → IO ()
@@ -175,10 +174,9 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     
     catalog ← readIORef (floraCatalogRef env)
     let centerCoord = ChunkCoord 0 0
-        (ct, cs, cterrain, cf, cice, cflora, crmask) = generateChunk registry catalog params centerCoord
-        seededFluid = projectRiverSimple crmask cterrain cf
+        (ct, cs, cterrain, cf, cice, cflora) = generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →
-            case seededFluid V.! idx of
+            case cf V.! idx of
                 Just fc → max surfZ (fcSurface fc)
                 Nothing → surfZ
             ) cs
@@ -187,11 +185,10 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , lcTiles      = ct
             , lcSurfaceMap = seededSurf
             , lcTerrainSurfaceMap = cterrain
-            , lcFluidMap   = seededFluid
+            , lcFluidMap   = cf
             , lcIceMap     = cice
             , lcFlora      = cflora
             , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
-            , lcRiverMask  = crmask
             }
 
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
@@ -286,7 +283,6 @@ handleWorldInitArenaCommand env logger pageId = do
             , lcIceMap            = emptyIceMap
             , lcFlora             = flatFlora
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
-            , lcRiverMask         = V.replicate (chunkSize * chunkSize) Nothing
             }
 
         allChunks = [ mkChunk cx cy

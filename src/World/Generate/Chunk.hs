@@ -37,7 +37,6 @@ import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
 import World.Geology.Timeline.Types (GeoEvent(..), GeoPeriod(..))
 import World.Weather.Lookup (lookupWaterTable)
 import World.Fluid.Types (emptyIceMap)
-import World.River.Types (RiverMask, emptyRiverMask)
 import World.Vegetation (computeChunkVegetation, vegSnow, vegHash)
 import World.Flora.Placement (computeChunkFlora)
 import World.Generate.Constants (chunkBorder)
@@ -182,8 +181,7 @@ mkSurfaceMap terrain fluid =
 --   chunk edges has valid neighbor data.
 generateChunk ∷ MaterialRegistry → FloraCatalog → WorldGenParams
   → ChunkCoord → (Chunk, VU.Vector Int, VU.Vector Int
-                 , V.Vector (Maybe FluidCell), IceMap, FloraChunkData
-                 , RiverMask)  -- ^ rich river mask (surface + type per tile)
+                 , V.Vector (Maybe FluidCell), IceMap, FloraChunkData)
 generateChunk registry catalog params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -318,9 +316,6 @@ generateChunk registry catalog params coord =
         -- views agree about which tiles are water.
         fluidMap = composeFluidMap params coord terrainSurfaceMap
 
-        riverMask = emptyRiverMask
-
-
         -- Surface map: rivers render flat (water surface hides any
         -- minor terrain protrusions in the carved channel); other
         -- fluids use max(terrain, water).
@@ -431,7 +426,7 @@ generateChunk registry catalog params coord =
         -- Flora sprites (trees, shrubs, wildflowers)
         floraData = computeChunkFlora seed worldSize coord
                         terrainSurfaceMap surfaceMats surfaceSlopes
-                        fluidMap riverMask (wgpClimateState params) catalog
+                        fluidMap (wgpClimateState params) catalog
 
         -- Inject veg IDs into column tiles
         finalTiles = V.imap (\idx col →
@@ -452,7 +447,7 @@ generateChunk registry catalog params coord =
                                  worldSize coord (gtIceLevel timeline)
                                  terrainSurfaceMap fluidMap
 
-    in (finalTiles, surfaceMap, finalTerrain, fluidMap, iceMap, floraData, riverMask)
+    in (finalTiles, surfaceMap, finalTerrain, fluidMap, iceMap, floraData)
 
 -- | Generate only the exposed tiles for a column.
 --   Skips air tiles (MaterialId 0) to create caves and overhangs.

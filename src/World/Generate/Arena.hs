@@ -34,5 +34,4 @@ generateFlatChunk coord =
         , lcIceMap            = emptyIceMap
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.replicate chunkArea 0
-        , lcRiverMask         = V.replicate chunkArea Nothing
         }

@@ -14,7 +14,6 @@ import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize, columnInde
 import World.Tile.Types (WorldTileData(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..), emptyIceMap)
 import World.Flora.Types (emptyFloraChunkData)
-import World.River.Types (emptyRiverMask)
 import Unit.Pathing.Cost
 
 -- | Build a single chunk at the origin with uniform terrain z and
@@ -34,7 +33,6 @@ flatChunk terrZ =
         , lcIceMap            = emptyIceMap
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.empty
-        , lcRiverMask         = emptyRiverMask
         }
 
 -- | Build a single chunk with per-tile terrain/fluid set by a function.
@@ -60,7 +58,6 @@ customChunk f =
         , lcIceMap            = emptyIceMap
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.empty
-        , lcRiverMask         = emptyRiverMask
         }
 
 worldWith ∷ LoadedChunk → WorldTileData
