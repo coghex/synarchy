@@ -11,7 +11,14 @@ import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 
 -- | Eight compass directions, ordered clockwise from South.
---   The index order matters for the rotation arithmetic.
+--
+--   APPEND-ONLY. The constructor order is load-bearing in two ways:
+--   (1) `Enum`-derived `fromEnum`/`toEnum` drive the rotation arithmetic
+--   in `dirIndex`/`indexToDir`, and (2) `Generic`-derived `Serialize` is
+--   positional by constructor tag, so reordering or inserting a
+--   constructor silently maps existing saved `usFacing` values to the
+--   wrong direction. If the geometry ever needs different cardinality
+--   (16-way etc.), bump `currentSaveVersion` in `World.Save.Types`.
 data Direction = DirS | DirSW | DirW | DirNW | DirN | DirNE | DirE | DirSE
     deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
 

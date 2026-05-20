@@ -59,6 +59,11 @@ data MoveTarget = MoveTarget
 -- | What pose the unit is currently *in*. Orthogonal to UnitActivity.
 --   Transitions between poses are driven by `TransitioningTo`. `Dead`
 --   is terminal — entered only via `UnitKill`, never via a transition.
+--
+--   APPEND-ONLY. `Generic Serialize` is positional by constructor tag,
+--   so inserting or reordering constructors silently shifts every saved
+--   unit's `usPose`. If the pose set legitimately needs to change, bump
+--   `currentSaveVersion` in `World.Save.Types`.
 data Pose = Standing | Crouching | Crawling | Collapsed | Dead
     deriving (Show, Eq, Generic, Serialize)
 
@@ -73,6 +78,10 @@ poseDepth Crawling  = 2
 poseDepth Collapsed = 3
 poseDepth Dead      = 4
 
+-- | The current activity the unit is doing. Drives anim selection and
+--   movement gating. APPEND-ONLY for the same reason as `Pose` and
+--   `Direction` — `Generic Serialize` is positional. New activities go
+--   at the end; replacements bump `currentSaveVersion`.
 data UnitActivity = Idle | Walking | Drinking | Eating | Picking | TransitioningTo !Pose
     deriving (Show, Eq, Generic, Serialize)
 

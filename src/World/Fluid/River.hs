@@ -298,8 +298,12 @@ removeDisconnectedWater mv _surfaceMap = do
                         modifySTRef' acc (idx :)
                 _ → pure ()
         readSTRef acc
-    let bfs [] = pure ()
-        bfs (idx : queue) = do
+    -- Flood-fill from `seeds`. Uses list-cons (LIFO), making this DFS
+    -- in shape; for a reach-set computation the visit order doesn't
+    -- matter — the `reached` flag ensures each tile is processed once,
+    -- and the connected set is the same regardless of traversal order.
+    let flood [] = pure ()
+        flood (idx : queue) = do
             val ← MV.read mv idx
             case val of
                 Just _fc → do
@@ -319,9 +323,9 @@ removeDisconnectedWater mv _surfaceMap = do
                                             modifySTRef' acc (nIdx :)
                                         _ → pure ()
                         readSTRef acc
-                    bfs newQueue
-                _ → bfs queue
-    bfs seeds
+                    flood newQueue
+                _ → flood queue
+    flood seeds
     forM_ [0 .. area - 1] $ \idx → do
         r ← MV.read reached idx
         when (r ≡ 0) $ do

@@ -33,6 +33,18 @@ popup.fbW           = popup.fbW           or 0
 popup.fbH           = popup.fbH           or 0
 popup.bootstrapped  = popup.bootstrapped  or false
 
+-- Mute-toggle icon textures (a checkbox sitting in the title bar, to
+-- the left of the X close button). Loaded lazily in bootstrap. If
+-- either file is missing, renderPopup silently skips the icon — the
+-- rest of the popup still works.
+popup.texPopupEnabled  = popup.texPopupEnabled  or nil
+popup.texPopupDisabled = popup.texPopupDisabled or nil
+
+-- Reverse lookup: mute-toggle sprite handle → popup record. Populated
+-- when the sprite is created in renderPopup; cleared in destroyVisuals.
+-- Read by popup.onMuteToggleClick to resolve which popup was clicked.
+popup.muteToggleByHandle = popup.muteToggleByHandle or {}
+
 popup.queue   = popup.queue  or {}  -- pending entries waiting for a slot
 popup.active  = popup.active or {}  -- currently-rendered popups
 
@@ -82,6 +94,16 @@ popup.maxWidthFrac = 0.55
 
 -- Click callback name routed by ui_manager.onPopupLineClick.
 local LINE_CLICK_CALLBACK = "onPopupLineClick"
+
+-- Click callback name for the mute-toggle icon, routed by
+-- ui_manager.onPopupMuteToggleClick.
+local MUTE_TOGGLE_CALLBACK = "onPopupMuteToggleClick"
+
+-- Mute-toggle icon texture paths. The checkbox flips the category's
+-- persistent `popup` notification setting via setNotificationOverrides
+-- (same backend as the settings tab). Loaded in bootstrap; nil-safe.
+local POPUP_TEX_ENABLED  = "assets/textures/hud/popup_enabled.png"
+local POPUP_TEX_DISABLED = "assets/textures/hud/popup_disabled.png"
 
 -----------------------------------------------------------
 -- Forward declarations
@@ -182,6 +204,11 @@ end
 destroyVisuals = function(p)
     if p.okBtnId    then button.destroy(p.okBtnId);    p.okBtnId    = nil end
     if p.closeBtnId then button.destroy(p.closeBtnId); p.closeBtnId = nil end
+    if p.muteToggleId then
+        popup.muteToggleByHandle[p.muteToggleId] = nil
+        UI.deleteElement(p.muteToggleId)
+        p.muteToggleId = nil
+    end
     if p.titleLblId then label.destroy(p.titleLblId);  p.titleLblId = nil end
     for _, line in ipairs(p.lines) do
         if line.labelId then
@@ -223,9 +250,16 @@ renderPopup = function(p)
 
     -- Title width: display name fits if we leave room for the X
     -- button (closeBtnSize + small gap) on the right of the title.
+    -- When the mute-toggle icon is available, reserve room for it too
+    -- (sits to the left of the X with a small gap).
     local titleRawW = engine.getTextWidth(popup.font, p.displayName,
                                           s.titleSize)
-    local titleReservedRight = s.closeBtnSize + math.floor(12 * uiscale)
+    local hasMuteToggle = popup.texPopupEnabled and popup.texPopupDisabled
+    local muteToggleGap = math.floor(6 * uiscale)
+    local muteToggleReserved = hasMuteToggle
+        and (s.closeBtnSize + muteToggleGap) or 0
+    local titleReservedRight = muteToggleReserved + s.closeBtnSize
+                             + math.floor(12 * uiscale)
     local titleNeededW = titleRawW + titleReservedRight
 
     local okText = "OK"
@@ -300,6 +334,35 @@ renderPopup = function(p)
         uiscale    = uiscale,
         zIndex     = baseZ + 2,
     })
+
+    -- Mute-toggle icon (sits to the left of the X close button, same
+    -- size + Y). Acts as a checkbox for the category's `popup`
+    -- notification setting: clicking flips the persistent flag via
+    -- setNotificationOverrides (same backend as the settings tab) and
+    -- swaps the sprite texture to reflect the new state. The popup
+    -- itself stays open after a toggle — the player closes it with
+    -- OK or X. If either icon texture is missing the whole control
+    -- is skipped (renderable popup still works during asset bring-up).
+    if hasMuteToggle then
+        local catCfg0 = findCategoryCfg(p.category)
+        local popupOn = catCfg0 and catCfg0.popup or false
+        local muteTex = popupOn
+            and popup.texPopupEnabled or popup.texPopupDisabled
+        local muteX = px + panelW - s.padX - s.closeBtnSize
+                    - muteToggleGap - s.closeBtnSize
+        local muteY = py + s.padY
+        p.muteToggleId = UI.newSprite(
+            "popup_mute_toggle_" .. tostring(p.id),
+            s.closeBtnSize, s.closeBtnSize,
+            muteTex,
+            1.0, 1.0, 1.0, 1.0,
+            popup.pageId)
+        UI.addToPage(popup.pageId, p.muteToggleId, muteX, muteY)
+        UI.setClickable(p.muteToggleId, true)
+        UI.setOnClick(p.muteToggleId, MUTE_TOGGLE_CALLBACK)
+        UI.setZIndex(p.muteToggleId, baseZ + 2)
+        popup.muteToggleByHandle[p.muteToggleId] = p
+    end
 
     -- Lines start below the title bar + headerGap.
     local linesStartY = py + s.padY + s.headerH + s.headerGap
@@ -439,18 +502,19 @@ spawnFromEntry = function(entry)
     local displayName = (catCfg and catCfg.displayName) or entry.category
 
     local p = {
-        id          = id,
-        category    = entry.category,
-        displayName = displayName,
-        slot        = slot,
-        baseZ       = baseZ,
-        color       = entry.color,
-        spawnTime   = now,
-        lines       = {},
-        okBtnId     = nil,
-        closeBtnId  = nil,
-        titleLblId  = nil,
-        panelId     = nil,
+        id           = id,
+        category     = entry.category,
+        displayName  = displayName,
+        slot         = slot,
+        baseZ        = baseZ,
+        color        = entry.color,
+        spawnTime    = now,
+        lines        = {},
+        okBtnId      = nil,
+        closeBtnId   = nil,
+        muteToggleId = nil,
+        titleLblId   = nil,
+        panelId      = nil,
     }
 
     local initialLine = {
@@ -555,6 +619,34 @@ function popup.onLineClick(elemHandle)
 end
 
 -----------------------------------------------------------
+-- Mute-toggle click handler — flips the category's `popup` setting
+-----------------------------------------------------------
+
+-- Called by ui_manager.onPopupMuteToggleClick when the in-title-bar
+-- checkbox icon is clicked. Looks up the popup via the reverse map,
+-- toggles the category's `popup` notification setting through the
+-- existing setNotificationOverrides path (which writes through to
+-- config/notifications.yaml on the next persist), and swaps the
+-- sprite texture to reflect the new state. The popup stays open so
+-- the player can still read or interact with the current event.
+function popup.onMuteToggleClick(elemHandle)
+    local p = popup.muteToggleByHandle[elemHandle]
+    if not p then return false end
+    local catCfg = findCategoryCfg(p.category)
+    local currentlyEnabled = (catCfg and catCfg.popup) or false
+    local newValue = not currentlyEnabled
+    local overrides = {}
+    overrides[p.category] = { popup = newValue }
+    engine.setNotificationOverrides(overrides)
+    local newTex = newValue
+        and popup.texPopupEnabled or popup.texPopupDisabled
+    if newTex then
+        UI.setSpriteTexture(elemHandle, newTex)
+    end
+    return true
+end
+
+-----------------------------------------------------------
 -- Engine broadcast handler
 -----------------------------------------------------------
 
@@ -603,6 +695,16 @@ function popup.bootstrap(boxTex, btnTex, font, w, h)
     popup.font      = font
     popup.fbW       = w
     popup.fbH       = h
+    -- Load the mute-toggle icon textures once. If either file is
+    -- missing engine.loadTexture returns 0 (or a nil-equivalent); the
+    -- renderPopup branch is gated on both being truthy, so a missing
+    -- asset just means the icon is skipped.
+    if not popup.texPopupEnabled then
+        popup.texPopupEnabled = engine.loadTexture(POPUP_TEX_ENABLED)
+    end
+    if not popup.texPopupDisabled then
+        popup.texPopupDisabled = engine.loadTexture(POPUP_TEX_DISABLED)
+    end
     if popup.pageId == nil then
         popup.pageId = UI.newPage("popups", "modal")
     end

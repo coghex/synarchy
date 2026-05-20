@@ -556,6 +556,16 @@ function uiManager.onPopupLineClick(elemHandle)
     return false
 end
 
+-- Dispatched when a popup's title-bar mute-toggle icon is clicked.
+-- Routes to popup.onMuteToggleClick, which toggles the category's
+-- `popup` notification setting via setNotificationOverrides.
+function uiManager.onPopupMuteToggleClick(elemHandle)
+    if popup and popup.onMuteToggleClick then
+        return popup.onMuteToggleClick(elemHandle)
+    end
+    return false
+end
+
 function uiManager.onTabClick(elemHandle)
     if tabbar then
         return tabbar.handleCallback("onTabClick", elemHandle)

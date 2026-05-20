@@ -31,11 +31,12 @@ notificationsTab.checkboxes = {}
 -- Column geometry
 -----------------------------------------------------------
 
--- Given the row's right edge (cx + cw) and the scaled checkbox size,
--- compute the X position for each of the three column checkboxes.
--- The columns are evenly stepped right-to-left from the row edge.
-local function columnXs(cx, cw, cbSize, colStep)
-    local pauseX = cx + cw - cbSize
+-- Given the row's right edge (cx + cw), the scaled checkbox size, the
+-- inter-column step, and a right-side padding (room for label
+-- overhang past the rightmost checkbox), compute the X position for
+-- each of the three column checkboxes. Columns step right-to-left.
+local function columnXs(cx, cw, cbSize, colStep, rightPad)
+    local pauseX = cx + cw - cbSize - rightPad
     local popupX = pauseX - colStep
     local logX   = popupX - colStep
     return logX, popupX, pauseX
@@ -89,9 +90,32 @@ function notificationsTab.create(params)
     end
 
     local cbSize = math.floor(base.checkboxSize * uiscale)
-    -- Step between columns: a checkbox-width of slack so labels read
-    -- cleanly and don't run into each other.
-    local colStep = cbSize + math.floor(48 * uiscale)
+    -- Step between columns: measure the actual header label widths so
+    -- the longest one ("Event Log") still has visible gap to its
+    -- neighbours. The 24-px pad is the minimum slack between adjacent
+    -- centred labels; we additionally enforce a floor of cbSize + 48
+    -- so columns never collapse below the original spacing on very
+    -- short labels.
+    local headerFontSize = base.fontSize
+    local headerMinPad   = math.floor(24 * uiscale)
+    local maxHeaderW = 0
+    for _, t in ipairs({ "Event Log", "Popup", "Pause" }) do
+        local w = engine.getTextWidth(font, t, headerFontSize)
+        if w > maxHeaderW then maxHeaderW = w end
+    end
+    local colStep = math.max(cbSize + math.floor(48 * uiscale),
+                             maxHeaderW + headerMinPad)
+
+    -- Right-side padding: the rightmost header ("Pause") is centred
+    -- over its checkbox, so when the label is wider than the
+    -- checkbox the label overhangs to the right by (labelW-cbSize)/2.
+    -- Without padding that overhang runs past the panel edge. Shift
+    -- the columns left by exactly the overhang plus a small breathing
+    -- gap so the rightmost label sits inside the content area.
+    local pauseLabelW   = engine.getTextWidth(font, "Pause", headerFontSize)
+    local rightOverhang = math.max(0,
+        math.floor((pauseLabelW - cbSize) / 2))
+    local rightPad = rightOverhang + math.floor(8 * uiscale)
 
     -- Helper: compute Y position for row N (0-based)
     local function rowY(n)
@@ -101,10 +125,9 @@ function notificationsTab.create(params)
     ---------------------------------------------------------
     -- Row 0: column headers
     ---------------------------------------------------------
-    local logX, popupX, pauseX = columnXs(cx, cw, cbSize, colStep)
+    local logX, popupX, pauseX = columnXs(cx, cw, cbSize, colStep, rightPad)
 
     local headerColor = {0.85, 0.85, 0.85, 1.0}
-    local headerFontSize = base.fontSize  -- same as row label
 
     -- Helper to make + position one column header
     local function makeHeader(name, text, colX)
