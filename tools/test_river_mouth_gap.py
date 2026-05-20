@@ -16,8 +16,11 @@ A fillable gap is a sim/mask bug (water should exist).
 A blocked gap is a carving bug (terrain should be lower).
 
 Usage:
+  python3 tools/test_river_mouth_gap.py [path]
+    path defaults to /tmp/dump.json; '-' reads from stdin.
+
   cabal run exe:synarchy -- --dump=terrain,fluid --seed N --worldSize 32 \\
-      --region -3,-3,3,3 2>/dev/null | python3 tools/test_river_mouth_gap.py
+      --region -3,-3,3,3 2>/dev/null | python3 tools/test_river_mouth_gap.py -
 """
 
 import json
@@ -26,7 +29,12 @@ from collections import Counter
 
 
 def main():
-    data = json.load(sys.stdin)
+    path = sys.argv[1] if len(sys.argv) > 1 else "/tmp/dump.json"
+    if path == "-":
+        data = json.load(sys.stdin)
+    else:
+        with open(path) as f:
+            data = json.load(f)
     tile_map = {(t['x'], t['y']): t for t in data}
     river_set = set((t['x'], t['y']) for t in data if t.get('fluidType') == 'river')
     ocean_set = set((t['x'], t['y']) for t in data if t.get('fluidType') == 'ocean')

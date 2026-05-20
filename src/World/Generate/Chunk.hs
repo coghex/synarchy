@@ -27,7 +27,7 @@ import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
 import World.Fluids (hasAnyOceanFluid)
 import World.Ocean.Types (oceanDistAt)
-import World.Fluid.Internal (emptyFluidMap, unionFluidMap)
+import World.Fluid.Internal (emptyFluidMap, preferFluidMap)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Fluid.River (computeChunkRiversStatic)
 import World.Fluid.Lake (computeChunkLakes)
@@ -55,7 +55,7 @@ import World.Generate.Strata
 --   - lakes from persistent features  (priority 2)
 --   - lava from active volcanic features (priority 3)
 --   - ocean / inland water-table from the bilinear gradient (fallback)
--- composed via unionFluidMap (first-Just wins).
+-- composed via preferFluidMap (leftmost layer wins).
 --
 -- The bilinear water-table layer types tiles as Ocean at or below
 -- seaLevel and Lake above (inland basins fed by groundwater).
@@ -85,6 +85,16 @@ composeFluidMap params coord terrainMap =
         d0N = capDist (oceanDistAt oceanDist (ChunkCoord cx (cy-1)))
         gradient = 0.5 ∷ Float
 
+        -- The bilinear is C0 but not C1 at chunk centerlines — adjacent
+        -- quadrants of the same chunk use different corner pairs, so the
+        -- distance-field gradient kinks at tx=0.5 / ty=0.5 and the
+        -- rounded waterLevel produces 1-Z stairsteps. Bicubic and B-spline
+        -- alternatives were tried (Chunk.hs history): both smooth the
+        -- gradient but fail to preserve a chunk's own sample at its center
+        -- (they average with neighbors), which raises inland water tables
+        -- enough to triple the FLOATING_LAKE worst-case. For this integer
+        -- BFS distance field, own-sample preservation is load-bearing —
+        -- the C1 stairstep is the smaller artifact, so the bilinear stays.
         oceanFluid = V.generate chunkArea $ \idx →
             let terrZ = terrainMap VU.! idx
                 lx = idx `mod` chunkSize
@@ -122,6 +132,11 @@ composeFluidMap params coord terrainMap =
                 waterLevel
                   | interpDist < 0 ∧ terrZ ≤ seaLevel = seaLevel
                   | interpDist < 0                    = minBound
+                  -- Below sea level + BFS-reachable: the chunk's median put
+                  -- it on the land side, but this individual tile is in a
+                  -- trench. Treat as Ocean at sea level, not a floating Lake
+                  -- pinned to the inland water-table gradient.
+                  | terrZ ≤ seaLevel                  = seaLevel
                   | otherwise = round (fromIntegral seaLevel
                                      + interpDist * gradient)
                 ftype = if waterLevel ≤ seaLevel then Ocean else Lake
@@ -150,9 +165,9 @@ composeFluidMap params coord terrainMap =
                                      worldSize coord terrainMap
 
     in riverFluid
-       `unionFluidMap` lakeFluid
-       `unionFluidMap` lavaFluid
-       `unionFluidMap` oceanFluid
+       `preferFluidMap` lakeFluid
+       `preferFluidMap` lavaFluid
+       `preferFluidMap` oceanFluid
 
 -- | Merge a river-flat surface rule into surface-map computation.
 -- For River fluid, surface = fluid surface (hides terrain protrusions).

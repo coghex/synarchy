@@ -81,8 +81,10 @@ After an intentional change that improves (or legitimately alters) world
 generation output, re-capture baselines:
 ```bash
 python3 tools/world_baseline.py --runs 10
-git add tools/baselines/
 ```
+
+Baselines are per-machine and gitignored (`tools/baselines/` in `.gitignore`).
+Each developer re-runs `world_baseline.py` locally after intentional changes.
 
 ## Directory layout
 ```

@@ -13,8 +13,10 @@ Checks:
   6. Coastal parallels: rivers running alongside ocean at high elevation
 
 Usage:
-    python3 tools/test_river_pour.py [--seed N] [--worldSize N] [--region cx1,cy1,cx2,cy2]
-    python3 tools/test_river_pour.py --json-file /path/to/dump.json
+    python3 tools/test_river_pour.py [path]
+        path defaults to /tmp/dump.json; '-' reads from stdin.
+    python3 tools/test_river_pour.py --seed N [--worldSize N] [--region cx1,cy1,cx2,cy2]
+        Runs cabal --dump itself when --seed/--worldSize/--region are passed without a path.
 """
 import json
 import subprocess
@@ -26,13 +28,15 @@ CHUNK_SIZE = 16
 
 def parse_args():
     p = argparse.ArgumentParser(description="River placement regression test")
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--worldSize", type=int, default=64)
-    p.add_argument("--region", type=str, default="-4,-4,4,4",
-                   help="chunk region cx1,cy1,cx2,cy2")
+    p.add_argument("path", nargs="?", default=None,
+                   help="JSON dump file (default /tmp/dump.json; '-' for stdin)")
+    p.add_argument("--seed", type=int, default=None,
+                   help="If set without a path, runs cabal --dump with this seed")
+    p.add_argument("--worldSize", type=int, default=None,
+                   help="If set without a path, runs cabal --dump with this worldSize")
+    p.add_argument("--region", type=str, default=None,
+                   help="chunk region cx1,cy1,cx2,cy2 (triggers cabal --dump when set without a path)")
     p.add_argument("--verbose", "-v", action="store_true")
-    p.add_argument("--json-file", type=str, default=None,
-                   help="Read from a pre-dumped JSON file instead of running cabal")
     # Thresholds for pass/fail
     p.add_argument("--max-visible-drops", type=int, default=0)
     p.add_argument("--max-dry-gaps", type=int, default=15)
@@ -281,12 +285,21 @@ def summarize(results, total_river, total_body, args):
 def main():
     args = parse_args()
 
-    if args.json_file:
-        print(f"Reading from {args.json_file}...", file=sys.stderr)
-        with open(args.json_file) as f:
-            tiles = json.load(f)
+    if args.path is not None:
+        if args.path == "-":
+            print("Reading from stdin...", file=sys.stderr)
+            tiles = json.load(sys.stdin)
+        else:
+            print(f"Reading from {args.path}...", file=sys.stderr)
+            with open(args.path) as f:
+                tiles = json.load(f)
+    elif args.seed is not None or args.worldSize is not None or args.region is not None:
+        tiles = run_dump(args.seed or 42, args.worldSize or 64,
+                         args.region or "-4,-4,4,4")
     else:
-        tiles = run_dump(args.seed, args.worldSize, args.region)
+        print("Reading from /tmp/dump.json...", file=sys.stderr)
+        with open("/tmp/dump.json") as f:
+            tiles = json.load(f)
 
     print(f"Loaded {len(tiles)} tiles", file=sys.stderr)
     grid = build_grid(tiles)

@@ -7,7 +7,7 @@ module World.Fluid.Internal
     , wrappedDeltaUVFluid
     , wrapChunkCoordU
     , floorDiv'
-    , unionFluidMap
+    , preferFluidMap
     ) where
 
 import UPrelude
@@ -76,11 +76,18 @@ wrapChunkCoordU worldSize (ChunkCoord cx cy) =
 floorDiv' ∷ Int → Int → Int
 floorDiv' a b = floor (fromIntegral a / fromIntegral b ∷ Double)
 
--- | joins all fluid maps, overwrite priority occurs here
-unionFluidMap ∷ FluidMap → FluidMap → FluidMap
-unionFluidMap = V.zipWith (\a b → case a of
-    Just _  → a
-    Nothing → b
+-- | Element-wise merge of two fluid maps. The /first/ argument's cell wins
+--   when both are @Just@; @Nothing@ in the first falls back to the second.
+--
+--   This is asymmetric: call as @preferFluidMap preferred fallback@.
+--   Chained left-associatively, the leftmost layer has highest priority:
+--
+--   > river `preferFluidMap` lake `preferFluidMap` ocean
+--   >   -- river wins over lake, which wins over ocean
+preferFluidMap ∷ FluidMap → FluidMap → FluidMap
+preferFluidMap = V.zipWith (\preferred fallback → case preferred of
+    Just _  → preferred
+    Nothing → fallback
   )
 
 -- * Fluid Equilibration
