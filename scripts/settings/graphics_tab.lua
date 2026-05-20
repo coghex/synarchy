@@ -518,6 +518,7 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
+        tooltip  = "Snaps sprites to integer pixel positions for a sharper, retro look",
     }))
     local psLabelHandle = label.getElementHandle(psLabelId)
     UI.addToPage(page, psLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -564,6 +565,10 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
+        tooltipRich = {
+            text = "How textures are sampled when scaled",
+            hint = "Nearest: pixel-perfect, crisp art    Linear: smooth bilinear blur",
+        },
     }))
     local tfLabelHandle = label.getElementHandle(tfLabelId)
     UI.addToPage(page, tfLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -619,6 +624,7 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
+        tooltip  = "How long the cursor must rest on an element before its tooltip appears",
     }))
     local tdLabelHandle = label.getElementHandle(tdLabelId)
     UI.addToPage(page, tdLabelHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -671,6 +677,7 @@ function graphicsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
+        tooltip  = "Extra delay after the tooltip appears before the hint section transitions in",
     }))
     local hdLabelHandle = label.getElementHandle(hdLabelId)
     UI.addToPage(page, hdLabelHandle, cx, rowY(rowIndex) + s.fontSize)
