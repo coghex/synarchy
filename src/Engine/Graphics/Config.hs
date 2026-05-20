@@ -126,6 +126,11 @@ data VideoConfig = VideoConfig
     , vcBrightness    ∷ Int
     , vcPixelSnap     ∷ Bool
     , vcTextureFilter ∷ TextureFilter
+    , vcTooltipDwellMs ∷ Int
+      -- ^ Milliseconds the cursor must rest on a tooltip-bearing
+      --   element before the tooltip appears. Player-tunable from
+      --   the settings menu; persisted with the rest of the video
+      --   config so it survives restarts.
     } deriving (Show, Eq)
 
 -- | Default video configuration fallback
@@ -141,6 +146,7 @@ defaultVideoConfig = VideoConfig
     , vcBrightness    = 100
     , vcPixelSnap     = False
     , vcTextureFilter = FilterNearest
+    , vcTooltipDwellMs = 400
     }
 
 -- | Yaml structure for video configuration
@@ -154,6 +160,7 @@ data VideoConfigFile = VideoConfigFile
     , vfBrightness    ∷ Int
     , vfPixelSnap     ∷ Bool
     , vfTextureFilter ∷ TextureFilter
+    , vfTooltipDwellMs ∷ Int
     } deriving (Show, Eq)
 
 data Resolution = Resolution
@@ -187,6 +194,7 @@ instance FromJSON VideoConfigFile where
         <*> videoObj .: "brightness" .!= 100
         <*> videoObj .: "pixel_snap" .!= False
         <*> videoObj .: "texture_filter" .!= FilterNearest
+        <*> videoObj .: "tooltip_dwell_ms" .!= 400
     parseJSON _ = fail "Expected an object for VideoConfigFile"
 
 instance ToJSON Resolution where
@@ -196,7 +204,7 @@ instance ToJSON Resolution where
         ]
 
 instance ToJSON VideoConfigFile where
-    toJSON (VideoConfigFile res wm uis vs fl msaa b ps tf) = Yaml.object
+    toJSON (VideoConfigFile res wm uis vs fl msaa b ps tf dwell) = Yaml.object
         [ "video" .= Yaml.object
             [ "resolution"  .= res
             , "window_mode" .= wm
@@ -207,6 +215,7 @@ instance ToJSON VideoConfigFile where
             , "brightness"  .= b
             , "pixel_snap"  .= ps
             , "texture_filter" .= textureFilterToText tf
+            , "tooltip_dwell_ms" .= dwell
             ]
         ]
 
@@ -233,6 +242,7 @@ loadVideoConfig logger path = do
             , vcBrightness  = vfBrightness vf
             , vcPixelSnap   = vfPixelSnap vf
             , vcTextureFilter = vfTextureFilter vf
+            , vcTooltipDwellMs = vfTooltipDwellMs vf
             }
 
 -- | Save video configuration to a YAML file
@@ -251,6 +261,7 @@ saveVideoConfig logger path config = do
           , vfBrightness = vcBrightness config
           , vfPixelSnap = vcPixelSnap config
           , vfTextureFilter = vcTextureFilter config
+          , vfTooltipDwellMs = vcTooltipDwellMs config
           }
     Yaml.encodeFile path videoFile
     logInfo logger CatInit $ "Video config saved to " <> T.pack path

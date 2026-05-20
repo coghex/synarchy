@@ -14,6 +14,8 @@ data.frameLimitMax = 240
 data.brightnessMin = 50
 data.brightnessMax = 300
 data.savedBrightness = nil
+data.tooltipDwellMin = 0
+data.tooltipDwellMax = 1000
 
 -- Standard resolutions
 data.resolutions = {
@@ -71,6 +73,7 @@ data.current = {
     brightness    = 100,
     pixelSnap     = false,
     textureFilter = "nearest",     -- "nearest" or "linear"
+    tooltipDwellMs = 400,
 }
 
 data.pending = {}
@@ -129,7 +132,8 @@ function data.loadDefaults()
     data.current.brightness    = brightness or 100
     data.current.pixelSnap     = pixelSnap or false
     data.current.textureFilter = textureFilter or "nearest"
-    
+    data.current.tooltipDwellMs = engine.getTooltipDwellMs() or 400
+
     -- Snapshot brightness for revert
     data.savedBrightness = data.current.brightness
 
@@ -143,6 +147,7 @@ function data.loadDefaults()
     engine.setBrightness(data.current.brightness)
     engine.setPixelSnap(data.current.pixelSnap)
     engine.setTextureFilter(data.current.textureFilter)
+    engine.setTooltipDwellMs(data.current.tooltipDwellMs)
 
     -- Reset pending to match current
     data.resetPending()
@@ -199,6 +204,7 @@ function data.resetPending()
         brightness    = data.current.brightness,
         pixelSnap     = data.current.pixelSnap,
         textureFilter = data.current.textureFilter,
+        tooltipDwellMs = data.current.tooltipDwellMs,
     }
 end
 
@@ -213,7 +219,7 @@ function data.reload()
     local w, h, wm, uiScale, vs, frameLimit, msaa, brightness,
           pixelSnap, textureFilter = engine.getVideoConfig()
     -- DEBUG: Log what we're loading
-    engine.logInfo("reload() got resolution: " .. w .. "x" .. h 
+    engine.logInfo("reload() got resolution: " .. w .. "x" .. h
                   .. ", uiScale: " .. tostring(uiScale))
     data.current.width         = w
     data.current.height        = h
@@ -225,6 +231,7 @@ function data.reload()
     data.current.brightness    = brightness or 100
     data.current.pixelSnap     = pixelSnap or false
     data.current.textureFilter = textureFilter or "nearest"
+    data.current.tooltipDwellMs = engine.getTooltipDwellMs() or 400
     data.savedBrightness = data.current.brightness
 end
 
@@ -331,6 +338,19 @@ function data.apply(widgetValues)
         end
     end
 
+    -- Tooltip dwell delay (live-previewed; commit to current + persist)
+    if widgetValues.tooltipDwellMs then
+        local dw = math.floor(widgetValues.tooltipDwellMs)
+        dw = math.max(data.tooltipDwellMin,
+            math.min(data.tooltipDwellMax, dw))
+        if data.current.tooltipDwellMs ~= dw then
+            data.current.tooltipDwellMs = dw
+            data.pending.tooltipDwellMs = dw
+            engine.setTooltipDwellMs(dw)
+            engine.logInfo("Tooltip dwell applied: " .. tostring(dw) .. "ms")
+        end
+    end
+
     if result.resolutionChanged then
         engine.setResolution(data.current.width, data.current.height)
     end
@@ -384,6 +404,11 @@ function data.revert()
         engine.setTextureFilter(savedTextureFilter)
     end
 
+    local savedDwell = engine.getTooltipDwellMs() or 400
+    if data.current.tooltipDwellMs ~= savedDwell then
+        engine.setTooltipDwellMs(savedDwell)
+    end
+
     data.current.width         = w
     data.current.height        = h
     data.current.windowMode    = wm
@@ -394,6 +419,7 @@ function data.revert()
     data.current.brightness    = savedBrightness
     data.current.pixelSnap     = savedPixelSnap
     data.current.textureFilter = savedTextureFilter
+    data.current.tooltipDwellMs = savedDwell
 end
 
 -----------------------------------------------------------

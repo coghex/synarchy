@@ -40,6 +40,7 @@ import Engine.Scene.Base
 import Engine.Scene.Types
 import Engine.Scene.Types.Batch
 import UI.Render (renderUIPages)
+import UI.Tooltip (updateTooltipState)
 import World.Render (updateWorldTiles)
 import World.Grid (worldLayer)
 import Vulkan.Core10
@@ -134,7 +135,13 @@ drawFrame = do
                     (\batch → V.singleton (SpriteItem batch))
                     perLayerBatches
             
-            -- 5. Render UI
+            -- 5. Tick tooltip subsystem (resolves hover, builds/destroys
+            --    the transient tooltip page on LayerTooltip). Must run
+            --    BEFORE renderUIPages so this frame's UI pass picks up
+            --    the tooltip elements.
+            updateTooltipState
+
+            -- 6. Render UI
             (_uiBatches, uiLayeredBatches) ← renderUIPages
             
             -- 6. Final merge: world + UI

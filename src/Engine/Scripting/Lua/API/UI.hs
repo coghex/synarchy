@@ -14,6 +14,8 @@ module Engine.Scripting.Lua.API.UI
   , module Engine.Scripting.Lua.API.UI.TextInput
     -- * Property setters / getters
   , module Engine.Scripting.Lua.API.UI.Property
+    -- * Tooltips
+  , module Engine.Scripting.Lua.API.UI.Tooltip
   ) where
 
 import Engine.Scripting.Lua.API.UI.Page
@@ -22,3 +24,4 @@ import Engine.Scripting.Lua.API.UI.Hierarchy
 import Engine.Scripting.Lua.API.UI.Focus
 import Engine.Scripting.Lua.API.UI.TextInput
 import Engine.Scripting.Lua.API.UI.Property
+import Engine.Scripting.Lua.API.UI.Tooltip

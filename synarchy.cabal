@@ -319,6 +319,7 @@ library
                      Engine.Scripting.Lua.API.UI.Focus
                      Engine.Scripting.Lua.API.UI.TextInput
                      Engine.Scripting.Lua.API.UI.Property
+                     Engine.Scripting.Lua.API.UI.Tooltip
                      Engine.Scripting.Lua.API.Units
                      Engine.Scripting.Lua.API.World
                      Engine.Scripting.Lua.API.WorldQuery
@@ -364,6 +365,7 @@ library
                      UI.Manager
                      UI.Render
                      UI.TextBuffer
+                     UI.Tooltip
                      Unit.Types
                      Unit.Anim
                      Unit.Stats

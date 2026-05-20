@@ -14,6 +14,8 @@ module Engine.Scripting.Lua.API.Config
   , setBrightnessFn
   , setPixelSnapFn
   , setTextureFilterFn
+  , getTooltipDwellMsFn
+  , setTooltipDwellMsFn
   ) where
 
 import UPrelude
@@ -21,12 +23,13 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logWarn, LogCategory(..))
 import Engine.Graphics.Config
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scripting.Lua.Types (LuaToEngineMsg(..))
+import UI.Types (UIPageManager(..), TooltipState(..), TooltipStyle(..))
 
 getVideoConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 getVideoConfigFn env = do
@@ -243,4 +246,30 @@ setTextureFilterFn env = do
                     Q.writeQueue lteq (LuaSetTextureFilter tf)
                 Nothing → pure ()
         Nothing → pure ()
+    return 0
+
+-- | engine.getTooltipDwellMs() -> integer
+getTooltipDwellMsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getTooltipDwellMsFn env = do
+    config ← Lua.liftIO $ readIORef (videoConfigRef env)
+    Lua.pushinteger (fromIntegral $ vcTooltipDwellMs config)
+    return 1
+
+-- | engine.setTooltipDwellMs(ms) — clamped to [0, 1000]. Persists into
+--   the video config AND updates the live tooltip style atomically so
+--   the change takes effect on the very next hover (no restart needed).
+setTooltipDwellMsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+setTooltipDwellMsFn env = do
+    arg ← Lua.tointeger 1
+    let dwell = case arg of
+            Just n  → max 0 (min 1000 (fromIntegral n))
+            Nothing → 400
+    Lua.liftIO $ do
+        oldConfig ← readIORef (videoConfigRef env)
+        writeIORef (videoConfigRef env) $
+            oldConfig { vcTooltipDwellMs = dwell }
+        atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            let tts = upmTooltip mgr
+                newStyle = (ttsStyle tts) { tsDwellMs = fromIntegral dwell }
+            in (mgr { upmTooltip = tts { ttsStyle = newStyle } }, ())
     return 0

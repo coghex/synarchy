@@ -52,6 +52,11 @@ module UI.Manager
   , removeFromPage
   , getElementChildren
   , findElementAt
+  , findElementAtExcept
+    -- * Tooltips
+  , setElementTooltip
+  , clearElementTooltip
+  , getElementTooltip
     -- * Box Textures
   , registerBoxTextures
   , getBoxTextureSet
@@ -173,6 +178,7 @@ createElementInternal name width height pageHandle renderData mgr =
           , ueOnClick    = Nothing
           , ueOnRightClick = Nothing
           , ueTextBuffer  = Nothing
+          , ueTooltip     = Nothing
           }
     in (handle, mgr
           { upmElements   = Map.insert handle element (upmElements mgr)
@@ -499,9 +505,67 @@ findElementAt pos mgr =
                         thisHit = if inBounds then [handle] else []
                     in childHits ⧺ thisHit
 
+-- | Like 'findElementAt', but skips elements that belong to any page
+--   in the given ignore set. Used by the tooltip subsystem to avoid
+--   hit-testing its own transient page (which would otherwise hijack
+--   the hover and create flicker).
+findElementAtExcept ∷ Set.Set PageHandle → (Float, Float) → UIPageManager
+                    → Maybe ElementHandle
+findElementAtExcept ignored pos mgr =
+    let visiblePages = filter (`Set.notMember` ignored)
+                              (Set.toList (upmVisiblePages mgr))
+        allRootHandles = concatMap (\ph →
+            case Map.lookup ph (upmPages mgr) of
+                Just page → upRootElements page
+                Nothing → []
+            ) visiblePages
+        sortedRoots = sortOn (\h →
+            case Map.lookup h (upmElements mgr) of
+                Just e  → negate (ueZIndex e)
+                Nothing → 0
+            ) allRootHandles
+        hitElements = concatMap (findInTree pos) sortedRoots
+    in listToMaybe hitElements
+  where
+    findInTree ∷ (Float, Float) → ElementHandle → [ElementHandle]
+    findInTree point handle =
+        case Map.lookup handle (upmElements mgr) of
+            Nothing → []
+            Just elem
+                | not (ueVisible elem) → []
+                | otherwise →
+                    let (w, h) = ueSize elem
+                        hasSize = w > 0 ∧ h > 0
+                        inBounds = hasSize ∧ isPointInElement point elem mgr
+                        shouldRecurse = inBounds ∨ not hasSize
+                        sortedChildren = if shouldRecurse
+                            then sortOn (\ch →
+                                    case Map.lookup ch (upmElements mgr) of
+                                        Just c  → negate (ueZIndex c)
+                                        Nothing → 0
+                                    ) (ueChildren elem)
+                            else []
+                        childHits = concatMap (findInTree point) sortedChildren
+                        thisHit = if inBounds then [handle] else []
+                    in childHits ⧺ thisHit
+
+setElementTooltip ∷ ElementHandle → TooltipContent → UIPageManager → UIPageManager
+setElementTooltip handle content = modifyElement handle `flip`
+    (\elem → elem { ueTooltip = Just content })
+
+clearElementTooltip ∷ ElementHandle → UIPageManager → UIPageManager
+clearElementTooltip handle = modifyElement handle `flip`
+    (\elem → elem { ueTooltip = Nothing })
+
+getElementTooltip ∷ ElementHandle → UIPageManager → Maybe TooltipContent
+getElementTooltip handle mgr =
+    case Map.lookup handle (upmElements mgr) of
+        Nothing → Nothing
+        Just elem → ueTooltip elem
+
 -- | Set the right-click callback on an element
 setElementOnRightClick ∷ ElementHandle → Text → UIPageManager → UIPageManager
-setElementOnRightClick handle callbackName = modifyElement handle `flip` 
+setElementOnRightClick handle callbackName = modifyElement handle `flip`
     (\elem → elem { ueOnRightClick = Just callbackName })
 
 -- | Remove an element from its page's root list (without deleting it).

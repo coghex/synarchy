@@ -163,6 +163,20 @@ function uiManager.checkReady()
             pauseMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
             popup.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             eventLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+            local persistedDwell = engine.getTooltipDwellMs()
+            UI.setTooltipStyle({
+                font         = menuFont,
+                fontSize     = 14,
+                textColor    = {1.0, 1.0, 1.0, 1.0},
+                bgColor      = {1.0, 1.0, 1.0, 1.0},
+                padding      = 16,
+                boxTextures  = boxTexSet,
+                boxTileSize  = 32,
+                mouseOffsetX = 14,
+                mouseOffsetY = 18,
+                dwellMs      = persistedDwell,
+                spriteGap    = 4,
+            })
             uiManager.showMenu("main")
             initialized = true
         else

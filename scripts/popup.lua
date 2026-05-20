@@ -361,6 +361,7 @@ renderPopup = function(p)
         UI.setClickable(p.muteToggleId, true)
         UI.setOnClick(p.muteToggleId, MUTE_TOGGLE_CALLBACK)
         UI.setZIndex(p.muteToggleId, baseZ + 2)
+        UI.setTooltip(p.muteToggleId, "Pause on notification")
         popup.muteToggleByHandle[p.muteToggleId] = p
     end
 

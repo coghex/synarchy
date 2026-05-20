@@ -608,6 +608,58 @@ function graphicsTab.create(params)
     })
     rowIndex = rowIndex + 1
 
+    ---------------------------------------------------------
+    -- Row 10: Tooltip Dwell (slider, 0-1000 ms)
+    ---------------------------------------------------------
+    local tdLabelId = params.trackLabel(label.new({
+        name     = "tooltip_dwell_label",
+        text     = "Tooltip Delay (ms)",
+        font     = font,
+        fontSize = base.fontSize,
+        color    = {1.0, 1.0, 1.0, 1.0},
+        page     = page,
+        uiscale  = uiscale,
+    }))
+    local tdLabelHandle = label.getElementHandle(tdLabelId)
+    UI.addToPage(page, tdLabelHandle, cx, rowY(rowIndex) + s.fontSize)
+    UI.setZIndex(tdLabelHandle, zContent)
+
+    graphicsTab.tooltipDwellSlider = slider.new({
+        name     = "tooltip_dwell",
+        width    = base.sliderWidth or 200,
+        height   = base.sliderHeight or 24,
+        min      = data.tooltipDwellMin,
+        max      = data.tooltipDwellMax,
+        default  = data.current.tooltipDwellMs,
+        page     = page,
+        x        = cx + cw - slW,
+        y        = rowY(rowIndex),
+        uiscale  = uiscale,
+        zIndex   = zWidgets,
+        onChange = function(value, id, name)
+            local clamped = math.floor(value)
+            pending.tooltipDwellMs = clamped
+            -- Live preview: persists config + updates tooltip style.
+            engine.setTooltipDwellMs(clamped)
+        end,
+    })
+    local tdSliderId = graphicsTab.tooltipDwellSlider
+
+    table.insert(rows, {
+        labelHandle = tdLabelHandle,
+        widgetHandles = {
+            slider.getElementHandle(tdSliderId),
+            slider.getKnobHandle(tdSliderId),
+        },
+        widgetSetPosition = function(ry)
+            slider.setPosition(tdSliderId, cx + cw - slW, ry)
+        end,
+        widgetSetVisible = function(vis)
+            slider.setVisible(tdSliderId, vis)
+        end,
+    })
+    rowIndex = rowIndex + 1
+
     return rows
 end
 
@@ -625,6 +677,9 @@ function graphicsTab.getWidgetValues()
     end
     if graphicsTab.brightnessSlider then
         vals.brightness = slider.getValue(graphicsTab.brightnessSlider)
+    end
+    if graphicsTab.tooltipDwellSlider then
+        vals.tooltipDwellMs = slider.getValue(graphicsTab.tooltipDwellSlider)
     end
     return vals
 end

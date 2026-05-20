@@ -184,6 +184,7 @@ function hud.createUI()
     UI.setClickable(hud.logSpriteId, true)
     UI.setOnClick(hud.logSpriteId, EVENT_LOG_CALLBACK)
     UI.setZIndex(hud.logSpriteId, 100)
+    UI.setTooltip(hud.logSpriteId, "Event log")
 
     if hud.texZoomSelect and hud.texZoomHover then
         world.setZoomCursorSelectTexture(hud.worldId, hud.texZoomSelect)

@@ -18,6 +18,13 @@ module UI.Types
   , UISpriteStyle(..)
     -- * Box Textures
   , BoxTextureSet(..)
+    -- * Tooltips
+  , TooltipContent(..)
+  , TooltipSprite(..)
+  , TooltipStyle(..)
+  , TooltipState(..)
+  , defaultTooltipStyle
+  , emptyTooltipState
     -- * Manager
   , UIPageManager(..)
   , emptyUIPageManager
@@ -27,6 +34,7 @@ import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Set as Set
+import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..), FontHandle(..))
 
 -- | Handle to a UI page
@@ -73,6 +81,10 @@ data UIElement = UIElement
   , ueOnClick    ∷ Maybe Text
   , ueOnRightClick ∷ Maybe Text
   , ueTextBuffer  ∷ Maybe TextBuffer
+  , ueTooltip     ∷ Maybe TooltipContent
+    -- ^ Optional hover tooltip. When set and the cursor lingers over
+    --   the element for the configured dwell time, a small floating
+    --   panel appears next to the cursor showing this content.
   } deriving (Show)
 
 -- | What an element renders as
@@ -132,6 +144,110 @@ data UISpriteStyle = UISpriteStyle
   , ussColor   ∷ (Float, Float, Float, Float)
   } deriving (Show)
 
+-- | Visual content for a tooltip. A tooltip can carry any combination
+--   of an optional text line plus zero or more sprites; each sprite
+--   can be static (one frame) or animated (multiple frames cycled at
+--   'tsFrameDurMs').
+data TooltipContent = TooltipContent
+  { ttText     ∷ Maybe Text
+  , ttSprites  ∷ [TooltipSprite]
+  , ttMaxWidth ∷ Maybe Float
+    -- ^ Optional max content width in pixels (sprite row is laid out
+    --   left-to-right beneath the text; values below the natural
+    --   width are ignored).
+  } deriving (Show, Eq)
+
+data TooltipSprite = TooltipSprite
+  { tsFrames     ∷ V.Vector TextureHandle
+    -- ^ One entry = static sprite; more than one = animated.
+  , tsFrameDurMs ∷ Int
+    -- ^ Per-frame duration in milliseconds (ignored when one frame).
+  , tsSize       ∷ (Float, Float)
+  } deriving (Show, Eq)
+
+-- | Visual style for tooltips. Configurable from Lua via
+--   UI.setTooltipStyle so games can pick a font / box look that
+--   matches the rest of their UI. Handles default to 0 (unset);
+--   the runtime degrades gracefully when a resource is missing
+--   (text won't render without a font, box backdrop won't render
+--   without a box-texture set).
+data TooltipStyle = TooltipStyle
+  { tsFont          ∷ FontHandle
+  , tsFontSize      ∷ Float
+  , tsTextColor     ∷ (Float, Float, Float, Float)
+  , tsBgColor       ∷ (Float, Float, Float, Float)
+  , tsPadding       ∷ Float
+  , tsBoxTextures   ∷ BoxTextureHandle
+  , tsBoxTileSize   ∷ Float
+  , tsMouseOffsetX  ∷ Float
+  , tsMouseOffsetY  ∷ Float
+  , tsDwellMs       ∷ Float
+    -- ^ How long the cursor must rest before the tooltip appears.
+  , tsSpriteGap     ∷ Float
+    -- ^ Horizontal gap between sprites in the sprite row.
+  } deriving (Show)
+
+defaultTooltipStyle ∷ TooltipStyle
+defaultTooltipStyle = TooltipStyle
+  { tsFont         = FontHandle 0
+  , tsFontSize     = 16
+  , tsTextColor    = (1.0, 1.0, 1.0, 1.0)
+  , tsBgColor      = (1.0, 1.0, 1.0, 1.0)
+  , tsPadding      = 8
+  , tsBoxTextures  = BoxTextureHandle 0
+  , tsBoxTileSize  = 32
+  , tsMouseOffsetX = 14
+  , tsMouseOffsetY = 18
+  , tsDwellMs      = 400
+  , tsSpriteGap    = 4
+  }
+
+-- | Per-frame runtime state for the tooltip subsystem. Owned by the
+--   UI page manager so it lives behind the existing uiManagerRef
+--   without needing a new top-level IORef.
+data TooltipState = TooltipState
+  { ttsStyle           ∷ TooltipStyle
+  , ttsHoveredElem     ∷ Maybe ElementHandle
+    -- ^ Element the cursor is currently resting on (may not yet have
+    --   triggered a show; see 'ttsDwellRemaining').
+  , ttsDwellRemaining  ∷ Float
+    -- ^ Milliseconds remaining before the tooltip appears. Reset to
+    --   the style's dwell every time the hover target changes.
+  , ttsActivePage      ∷ Maybe PageHandle
+    -- ^ Transient tooltip page (lazily created on first show; reused
+    --   across subsequent shows).
+  , ttsActiveContent   ∷ Maybe TooltipContent
+    -- ^ Snapshot of the content currently being rendered. Used to
+    --   detect when the content changed and the visuals need rebuilding.
+  , ttsActiveElem      ∷ Maybe ElementHandle
+    -- ^ The element whose content is currently being shown. Distinct
+    --   from 'ttsHoveredElem' because the content can outlive the
+    --   hover for an animation frame.
+  , ttsAnimTimeMs      ∷ Float
+    -- ^ Monotonic ms counter used to derive animation frame indices
+    --   for animated sprites.
+  , ttsSpriteHandles   ∷ [ElementHandle]
+    -- ^ Sprite element handles for the current shown tooltip, in the
+    --   same order as 'ttSprites' on the active content. Tracked so
+    --   the per-frame tick can cheaply swap textures without rebuilding.
+  , ttsBoxHandle       ∷ Maybe ElementHandle
+  , ttsTextHandle      ∷ Maybe ElementHandle
+  } deriving (Show)
+
+emptyTooltipState ∷ TooltipState
+emptyTooltipState = TooltipState
+  { ttsStyle          = defaultTooltipStyle
+  , ttsHoveredElem    = Nothing
+  , ttsDwellRemaining = 0
+  , ttsActivePage     = Nothing
+  , ttsActiveContent  = Nothing
+  , ttsActiveElem     = Nothing
+  , ttsAnimTimeMs     = 0
+  , ttsSpriteHandles  = []
+  , ttsBoxHandle      = Nothing
+  , ttsTextHandle     = Nothing
+  }
+
 -- | Manager for all UI pages and elements
 data UIPageManager = UIPageManager
   { upmPages         ∷ Map.Map PageHandle UIPage
@@ -142,7 +258,8 @@ data UIPageManager = UIPageManager
   , upmHovered       ∷ Maybe ElementHandle
   , upmBoxTextures   ∷ Map.Map BoxTextureHandle BoxTextureSet
   , upmNextBoxTexId  ∷ Word32
-  , upmGlobalFocus ∷ Maybe ElementHandle       
+  , upmGlobalFocus ∷ Maybe ElementHandle
+  , upmTooltip     ∷ TooltipState
   } deriving (Show)
 
 emptyUIPageManager ∷ UIPageManager
@@ -156,4 +273,5 @@ emptyUIPageManager = UIPageManager
   , upmBoxTextures  = Map.empty
   , upmNextBoxTexId = 1
   , upmGlobalFocus = Nothing
+  , upmTooltip     = emptyTooltipState
   }
