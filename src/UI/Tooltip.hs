@@ -10,6 +10,13 @@
 module UI.Tooltip
   ( updateTooltipState
   , setTooltipStyle
+    -- * Lock control
+  , lockActiveTooltip
+  , clearTooltipLock
+  , toggleTooltipLock
+  , isTooltipLocked
+  , isTooltipVisible
+  , isPointInLockedTooltip
   ) where
 
 import UPrelude
@@ -21,8 +28,6 @@ import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Asset.Handle (FontHandle(..), TextureHandle(..), toInt)
 import Engine.Core.Monad
 import Engine.Core.State (EngineEnv(..), EngineState(..), TimingState(..))
-import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logInfoM)
 import Engine.Graphics.Font.Data (FontCache(..), fcFonts)
 import Engine.Graphics.Font.Util (calculateTextWidthScaled)
 import Engine.Input.Types (InputState(..))
@@ -54,20 +59,8 @@ updateTooltipState = do
         mouse = ( realToFrac mxD * scaleX
                 , realToFrac myD * scaleY ) ∷ (Float, Float)
         fbSize = (fromIntegral fbW, fromIntegral fbH) ∷ (Float, Float)
-    (wasShowing, isShowing, hoveredName) ← liftIO $
-        atomicModifyIORef' (uiManagerRef env) $ \mgr →
-            let mgr' = tickTooltip mouse fbSize dtMs fontCache mgr
-                was  = isJust (ttsActiveContent (upmTooltip mgr))
-                is_  = isJust (ttsActiveContent (upmTooltip mgr'))
-                nm   = case ttsActiveElem (upmTooltip mgr') of
-                         Just h → maybe "?" ueName
-                                    (Map.lookup h (upmElements mgr'))
-                         Nothing → ""
-            in (mgr', (was, is_, nm))
-    when (isShowing /= wasShowing) $
-        if isShowing
-          then logInfoM CatUI ("Tooltip shown on: " <> hoveredName)
-          else logInfoM CatUI "Tooltip hidden"
+    liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        (tickTooltip mouse fbSize dtMs fontCache mgr, ())
 
 -- | Replace the active tooltip style. Exposed to Lua via
 --   UI.setTooltipStyle so games can plug their own font + box-textures.
@@ -81,7 +74,9 @@ setTooltipStyle style mgr =
 
 tickTooltip ∷ (Float, Float) → (Float, Float) → Float → FontCache
             → UIPageManager → UIPageManager
-tickTooltip mouse fbSize dtMs fontCache mgr =
+tickTooltip mouse fbSize dtMs fontCache mgr
+  | ttsLocked (upmTooltip mgr) = tickLocked dtMs mgr
+  | otherwise =
     let tts = upmTooltip mgr
         ignored = maybe Set.empty Set.singleton (ttsActivePage tts)
         -- The hovered element is what the cursor is over, ignoring the
@@ -108,6 +103,25 @@ tickTooltip mouse fbSize dtMs fontCache mgr =
                     showTooltip eh content mouse fbSize fontCache mgr1
                 _ → hideTooltip mgr1
          else hideTooltip mgr1
+
+-- | Tick for a locked tooltip: position is frozen, hover/dwell are
+--   ignored, but animation time still advances and per-sprite frame
+--   textures are updated so animated icons keep playing.
+tickLocked ∷ Float → UIPageManager → UIPageManager
+tickLocked dtMs mgr =
+    let tts = upmTooltip mgr
+        animTime' = ttsAnimTimeMs tts + dtMs
+        tts1 = tts { ttsAnimTimeMs = animTime' }
+        mgr1 = mgr { upmTooltip = tts1 }
+    in case ttsActiveContent tts of
+        Nothing → mgr1  -- locked with nothing shown — defensive no-op
+        Just content →
+            foldl' (animateSprite animTime')
+                   mgr1
+                   (zip (ttsSpriteHandles tts) (ttSprites content))
+  where
+    animateSprite animTime acc (h, s) =
+        setSpriteTexture h (pickFrame animTime s) acc
 
 ------------------------------------------------------------
 -- Show / hide
@@ -396,3 +410,67 @@ isFontSet h = toInt h /= 0
 
 isBoxTextureSet ∷ BoxTextureHandle → Bool
 isBoxTextureSet (BoxTextureHandle n) = n /= 0
+
+------------------------------------------------------------
+-- Lock control
+------------------------------------------------------------
+
+-- | True when the tooltip is currently locked (frozen) in place.
+isTooltipLocked ∷ UIPageManager → Bool
+isTooltipLocked mgr = ttsLocked (upmTooltip mgr)
+
+-- | True when a tooltip is currently being shown (locked or not).
+isTooltipVisible ∷ UIPageManager → Bool
+isTooltipVisible mgr = isJust (ttsActiveContent (upmTooltip mgr))
+
+-- | Bounds (x, y, w, h) of the locked tooltip's background box.
+--   Returns Nothing when the tooltip isn't locked, or when it's
+--   locked without a background box (style with no box-textures set).
+lockedTooltipBox ∷ UIPageManager → Maybe (Float, Float, Float, Float)
+lockedTooltipBox mgr =
+    let tts = upmTooltip mgr
+    in if not (ttsLocked tts)
+         then Nothing
+         else case ttsBoxHandle tts of
+                Nothing → Nothing
+                Just bh → case Map.lookup bh (upmElements mgr) of
+                    Nothing → Nothing
+                    Just elem →
+                        let (x, y) = uePosition elem
+                            (w, h) = ueSize elem
+                        in Just (x, y, w, h)
+
+-- | True iff the point lies inside the currently locked tooltip's box.
+--   False whenever the tooltip isn't locked (so callers can use it as
+--   a guarded "should I treat this click as in-tooltip?").
+isPointInLockedTooltip ∷ (Float, Float) → UIPageManager → Bool
+isPointInLockedTooltip (px, py) mgr =
+    case lockedTooltipBox mgr of
+        Nothing → False
+        Just (bx, by, bw, bh) →
+            px ≥ bx ∧ px ≤ bx + bw ∧ py ≥ by ∧ py ≤ by + bh
+
+-- | Lock the active tooltip in place. No-op if no tooltip is showing.
+lockActiveTooltip ∷ UIPageManager → UIPageManager
+lockActiveTooltip mgr =
+    let tts = upmTooltip mgr
+    in if isJust (ttsActiveContent tts)
+         then mgr { upmTooltip = tts { ttsLocked = True } }
+         else mgr
+
+-- | Unlock and hide. Combines releasing the lock with the standard
+--   hide path so the visuals tear down cleanly.
+clearTooltipLock ∷ UIPageManager → UIPageManager
+clearTooltipLock mgr =
+    let tts = upmTooltip mgr
+        tts' = tts { ttsLocked = False }
+        mgr' = mgr { upmTooltip = tts' }
+    in hideTooltip mgr'
+
+-- | Toggle: lock if a tooltip is showing and unlocked, otherwise
+--   unlock + hide.
+toggleTooltipLock ∷ UIPageManager → UIPageManager
+toggleTooltipLock mgr =
+    if isTooltipLocked mgr
+       then clearTooltipLock mgr
+       else lockActiveTooltip mgr

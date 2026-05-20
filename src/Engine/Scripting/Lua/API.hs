@@ -200,10 +200,14 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setBoxTextures" (uiSetBoxTexturesFn env)
   registerLuaFunction "loadBoxTextures" (uiLoadBoxTexturesFn env)
 
-  registerLuaFunction "setTooltip"      (uiSetTooltipFn env)
-  registerLuaFunction "setTooltipRich"  (uiSetTooltipRichFn env)
-  registerLuaFunction "clearTooltip"    (uiClearTooltipFn env)
-  registerLuaFunction "setTooltipStyle" (uiSetTooltipStyleFn env)
+  registerLuaFunction "setTooltip"        (uiSetTooltipFn env)
+  registerLuaFunction "setTooltipRich"    (uiSetTooltipRichFn env)
+  registerLuaFunction "clearTooltip"      (uiClearTooltipFn env)
+  registerLuaFunction "setTooltipStyle"   (uiSetTooltipStyleFn env)
+  registerLuaFunction "lockTooltip"       (uiLockTooltipFn env)
+  registerLuaFunction "unlockTooltip"     (uiUnlockTooltipFn env)
+  registerLuaFunction "toggleTooltipLock" (uiToggleTooltipLockFn env)
+  registerLuaFunction "isTooltipLocked"   (uiIsTooltipLockedFn env)
 
   Lua.setglobal (Lua.Name "UI")
 

@@ -12,18 +12,23 @@ module Engine.Scripting.Lua.API.UI.Tooltip
   , uiSetTooltipRichFn
   , uiClearTooltipFn
   , uiSetTooltipStyleFn
+  , uiLockTooltipFn
+  , uiUnlockTooltipFn
+  , uiToggleTooltipLockFn
+  , uiIsTooltipLockedFn
   ) where
 
 import UPrelude
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import qualified HsLua as Lua
-import Data.IORef (atomicModifyIORef')
+import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Asset.Handle (FontHandle(..), TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import UI.Types
 import UI.Manager (setElementTooltip, clearElementTooltip)
-import UI.Tooltip (setTooltipStyle)
+import UI.Tooltip (setTooltipStyle, lockActiveTooltip, clearTooltipLock
+                  , toggleTooltipLock, isTooltipLocked)
 
 ------------------------------------------------------------
 -- UI.setTooltip(handle, text)
@@ -263,3 +268,37 @@ getOptString tbl name = do
     ms ← Lua.tostring Lua.top
     Lua.pop 1
     return (TE.decodeUtf8 <$> ms)
+
+------------------------------------------------------------
+-- Lock control
+------------------------------------------------------------
+
+-- | UI.lockTooltip() — freeze the currently-shown tooltip in place.
+--   No-op if no tooltip is visible.
+uiLockTooltipFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiLockTooltipFn env = do
+    Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        (lockActiveTooltip mgr, ())
+    return 0
+
+-- | UI.unlockTooltip() — release the lock and hide the tooltip.
+uiUnlockTooltipFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiUnlockTooltipFn env = do
+    Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        (clearTooltipLock mgr, ())
+    return 0
+
+-- | UI.toggleTooltipLock() — lock if showing+unlocked, unlock+hide
+--   otherwise.
+uiToggleTooltipLockFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiToggleTooltipLockFn env = do
+    Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        (toggleTooltipLock mgr, ())
+    return 0
+
+-- | UI.isTooltipLocked() -> boolean
+uiIsTooltipLockedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiIsTooltipLockedFn env = do
+    mgr ← Lua.liftIO $ readIORef (uiManagerRef env)
+    Lua.pushboolean (isTooltipLocked mgr)
+    return 1

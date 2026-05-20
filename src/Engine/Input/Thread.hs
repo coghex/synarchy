@@ -20,6 +20,8 @@ import Engine.Scripting.Lua.Types
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Core.Queue as Q
 import UI.Manager (findClickableElementAt, findRightClickableElementAt)
+import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip
+                  , clearTooltipLock, toggleTooltipLock)
 import UI.Types (ElementHandle(..), UIPageManager(..), upmGlobalFocus)
 import UI.Focus (FocusManager, getInputMode, InputMode(..), clearFocus
                 , FocusId(..), fmCurrentFocus)
@@ -208,28 +210,65 @@ processInput env inpSt event = case event of
                 mouseY = realToFrac y * scaleY
             
             logDebug logger CatUI $ "Click at (" <> T.pack (show mouseX) <> ", " <> T.pack (show mouseY) <> ")"
-            
+
             uiMgr ← readIORef (uiManagerRef env)
-            
+            let mousePos = (mouseX, mouseY)
+
             case btn of
-              GLFW.MouseButton'1 →
-                case findClickableElementAt (mouseX, mouseY) uiMgr of
-                    Just (elemHandle, callback) → do
-                        Q.writeQueue lq (LuaUIClickEvent elemHandle callback)
-                        logDebug logger CatUI $ "UI element left-clicked: " <> callback
-                    Nothing → do
-                        Q.writeQueue lq LuaUIFocusLost
-                        Q.writeQueue lq (LuaMouseDownEvent btn x y)
-              
-              GLFW.MouseButton'2 →
-                case findRightClickableElementAt (mouseX, mouseY) uiMgr of
-                    Just (elemHandle, callback) → do
-                        Q.writeQueue lq (LuaUIRightClickEvent elemHandle callback)
-                        logDebug logger CatUI $ "UI element right-clicked: " <> callback
-                    Nothing →
-                        Q.writeQueue lq (LuaMouseDownEvent btn x y)
-              
-              _ → Q.writeQueue lq (LuaMouseDownEvent btn x y)
+              -- Middle button: toggle tooltip lock when a tooltip is up.
+              -- Falls through to a normal mouse-down event when nothing
+              -- is shown, so other middle-click behavior (panning, etc.)
+              -- still reaches Lua.
+              GLFW.MouseButton'3 →
+                if isTooltipVisible uiMgr
+                  then atomicModifyIORef' (uiManagerRef env) $ \m →
+                           (toggleTooltipLock m, ())
+                  else Q.writeQueue lq (LuaMouseDownEvent btn x y)
+
+              -- All other buttons: if a tooltip is locked, intercept the
+              -- click. Inside the locked box → swallow (the locked
+              -- tooltip is the topmost UI and consumes clicks on itself).
+              -- Outside → release the lock + hide, then dispatch the
+              -- click normally so the user-perceivable behavior is
+              -- "first click anywhere off the tooltip dismisses it AND
+              -- still does whatever it would have done."
+              _ → do
+                let locked      = isTooltipLocked uiMgr
+                    clickInside = locked ∧ isPointInLockedTooltip mousePos uiMgr
+                if clickInside
+                  then return ()
+                  else do
+                    when locked $
+                        atomicModifyIORef' (uiManagerRef env) $ \m →
+                            (clearTooltipLock m, ())
+                    -- Re-read manager after the unlock mutation so we
+                    -- don't hit-test against the now-hidden tooltip page.
+                    uiMgr' ← if locked
+                                then readIORef (uiManagerRef env)
+                                else return uiMgr
+                    case btn of
+                      GLFW.MouseButton'1 →
+                        case findClickableElementAt mousePos uiMgr' of
+                            Just (elemHandle, callback) → do
+                                Q.writeQueue lq
+                                    (LuaUIClickEvent elemHandle callback)
+                                logDebug logger CatUI $
+                                    "UI element left-clicked: " <> callback
+                            Nothing → do
+                                Q.writeQueue lq LuaUIFocusLost
+                                Q.writeQueue lq (LuaMouseDownEvent btn x y)
+
+                      GLFW.MouseButton'2 →
+                        case findRightClickableElementAt mousePos uiMgr' of
+                            Just (elemHandle, callback) → do
+                                Q.writeQueue lq
+                                    (LuaUIRightClickEvent elemHandle callback)
+                                logDebug logger CatUI $
+                                    "UI element right-clicked: " <> callback
+                            Nothing →
+                                Q.writeQueue lq (LuaMouseDownEvent btn x y)
+
+                      _ → Q.writeQueue lq (LuaMouseDownEvent btn x y)
         
         when (state ≡ GLFW.MouseButtonState'Released) $ do
             logDebug logger CatInput $ "Mouse button released: button=" <> T.pack (show btn)

@@ -232,6 +232,11 @@ data TooltipState = TooltipState
     --   the per-frame tick can cheaply swap textures without rebuilding.
   , ttsBoxHandle       ∷ Maybe ElementHandle
   , ttsTextHandle      ∷ Maybe ElementHandle
+  , ttsLocked          ∷ Bool
+    -- ^ When True, the tooltip is frozen in place: hover changes are
+    --   ignored, dwell timing is paused, and the tooltip stays visible
+    --   until something explicitly unlocks it. Animation frames still
+    --   advance so animated sprites keep playing while locked.
   } deriving (Show)
 
 emptyTooltipState ∷ TooltipState
@@ -246,6 +251,7 @@ emptyTooltipState = TooltipState
   , ttsSpriteHandles  = []
   , ttsBoxHandle      = Nothing
   , ttsTextHandle     = Nothing
+  , ttsLocked         = False
   }
 
 -- | Manager for all UI pages and elements
