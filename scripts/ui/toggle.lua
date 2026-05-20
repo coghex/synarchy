@@ -97,6 +97,29 @@ local function createSprite(grp, label, tex, x, y, callback)
     return spriteId
 end
 
+--- Apply the tooltip configuration to the in-slot sprite of `btnIdx`.
+--- Buttons whose slot has alternative options get a rich tooltip
+--- ("title" + small grey hint from grp.expandHintText) so the right-
+--- click affordance is discoverable. Buttons with no options get the
+--- plain title. Buttons with no `tooltip` field get nothing.
+local function applyButtonTooltip(grp, btnIdx)
+    local btn = grp.buttons[btnIdx]
+    if not btn or not btn.spriteId then return end
+    if not btn.tooltip then
+        UI.clearTooltip(btn.spriteId)
+        return
+    end
+    local hasOptions = btn.options and #btn.options > 0
+    if hasOptions and grp.expandHintText then
+        UI.setTooltipRich(btn.spriteId, {
+            text = btn.tooltip,
+            hint = grp.expandHintText,
+        })
+    else
+        UI.setTooltip(btn.spriteId, btn.tooltip)
+    end
+end
+
 -----------------------------------------------------------
 -- Options popup management
 -----------------------------------------------------------
@@ -146,6 +169,14 @@ local function openOptions(grp, btnIdx)
         UI.setClickable(spriteId, true)
         UI.setOnClick(spriteId, OPTION_CALLBACK)
         UI.setZIndex(spriteId, grp.zIndex + 1)  -- above toggle buttons
+        -- Plain tooltip on options: the user has already chosen to
+        -- expand and is looking at alternatives, so the "right click to
+        -- expand" hint isn't relevant here. Tooltip on the in-slot
+        -- button conveys discoverability; tooltips on options just name
+        -- the alternative.
+        if opt.tooltip then
+            UI.setTooltip(spriteId, opt.tooltip)
+        end
 
         popup.sprites[rank] = {
             spriteId    = spriteId,
@@ -212,6 +243,12 @@ function toggle.new(params)
         onOptionSelect   = params.onOptionSelect,
         buttons          = {},
         openPopup        = nil,   -- { btnIdx, sprites[] }
+        -- Tooltip hint shown beneath the title on slot buttons that
+        -- have at least one alternative option. Set to `false` (not
+        -- nil) to disable the hint per-group.
+        expandHintText   = params.expandHintText == nil
+                              and "Right click to expand"
+                              or params.expandHintText,
     }
 
     local count = #items
@@ -235,6 +272,7 @@ function toggle.new(params)
                     name        = o.name,
                     texDefault  = o.texDefault,
                     texSelected = o.texSelected,
+                    tooltip     = o.tooltip,
                 }
             end
         end
@@ -244,8 +282,11 @@ function toggle.new(params)
             spriteId    = spriteId,
             texDefault  = item.texDefault,
             texSelected = item.texSelected,
+            tooltip     = item.tooltip,
             options     = opts,
         }
+
+        applyButtonTooltip(grp, i)
     end
 
     groups[id] = grp
@@ -326,6 +367,7 @@ local function applyOption(grp, btnIdx, optionIndex)
         name        = btn.name,
         texDefault  = btn.texDefault,
         texSelected = btn.texSelected,
+        tooltip     = btn.tooltip,
     }
 
     -- Remove the chosen option from the list.
@@ -340,6 +382,12 @@ local function applyOption(grp, btnIdx, optionIndex)
     btn.name        = opt.name
     btn.texDefault  = opt.texDefault
     btn.texSelected = opt.texSelected
+    btn.tooltip     = opt.tooltip
+
+    -- Update the in-slot tooltip to reflect the new identity. The button
+    -- still has options (the displaced item is now one), so the rich
+    -- form with the expand-hint is appropriate.
+    applyButtonTooltip(grp, btnIdx)
 
     -- Select this button in the group (making it the active toggle).
     toggle.select(grp.id, btnIdx)

@@ -44,6 +44,7 @@ uiSetTooltipFn env = do
                 txt    = TE.decodeUtf8 txtBS
                 content = TooltipContent
                   { ttText     = Just txt
+                  , ttHint     = Nothing
                   , ttSprites  = []
                   , ttMaxWidth = Nothing
                   }
@@ -87,13 +88,21 @@ uiSetTooltipRichFn env = do
     isTab   ← Lua.istable 2
     case (elemArg, isTab) of
         (Just e, True) → do
-            let contentIdx = Lua.nth 2
+            -- 'Lua.nth N' counts from the TOP (StackIndex = -N), so with
+            -- two args on the stack 'Lua.nth 1' is the top — i.e. the
+            -- second (content) argument. Using positive index 2 directly
+            -- (counting from the bottom) would also work; 'Lua.nth 1'
+            -- mirrors how the rest of this codebase addresses the most-
+            -- recently-pushed value.
+            let contentIdx = Lua.nth 1
             mText    ← getOptString contentIdx "text"
+            mHint    ← getOptString contentIdx "hint"
             mMaxW    ← getOptNumber contentIdx "maxWidth"
             sprites  ← readSprites contentIdx
             let elemH = ElementHandle (fromIntegral e)
                 content = TooltipContent
                   { ttText     = mText
+                  , ttHint     = mHint
                   , ttSprites  = sprites
                   , ttMaxWidth = realToFrac <$> mMaxW
                   }
@@ -195,9 +204,15 @@ uiSetTooltipStyleFn env = do
           mOffX      ← getOptNumber styleIdx "mouseOffsetX"
           mOffY      ← getOptNumber styleIdx "mouseOffsetY"
           mDwellMs   ← getOptNumber styleIdx "dwellMs"
+          mHintDelay ← getOptNumber styleIdx "hintDelayMs"
           mSpriteGap ← getOptNumber styleIdx "spriteGap"
           mTextCol   ← readColor styleIdx "textColor"
           mBgCol     ← readColor styleIdx "bgColor"
+          mHintSize  ← getOptNumber styleIdx "hintFontSize"
+          mHintCol   ← readColor    styleIdx "hintColor"
+          mSepCol    ← readColor    styleIdx "separatorColor"
+          mSepThick  ← getOptNumber styleIdx "separatorThickness"
+          mSepTex    ← getOptInt    styleIdx "separatorTexture"
           Lua.liftIO $ atomicModifyIORef' (uiManagerRef env) $ \mgr →
               let cur = ttsStyle (upmTooltip mgr)
                   new = cur
@@ -211,9 +226,17 @@ uiSetTooltipStyleFn env = do
                     , tsMouseOffsetX = maybe (tsMouseOffsetX cur) realToFrac mOffX
                     , tsMouseOffsetY = maybe (tsMouseOffsetY cur) realToFrac mOffY
                     , tsDwellMs     = maybe (tsDwellMs cur) realToFrac mDwellMs
+                    , tsHintDelayMs = maybe (tsHintDelayMs cur) realToFrac mHintDelay
                     , tsSpriteGap   = maybe (tsSpriteGap cur) realToFrac mSpriteGap
                     , tsTextColor   = maybe (tsTextColor cur) id mTextCol
                     , tsBgColor     = maybe (tsBgColor cur) id mBgCol
+                    , tsHintFontSize = maybe (tsHintFontSize cur) realToFrac mHintSize
+                    , tsHintColor    = maybe (tsHintColor cur) id mHintCol
+                    , tsSeparatorColor = maybe (tsSeparatorColor cur) id mSepCol
+                    , tsSeparatorThickness = maybe (tsSeparatorThickness cur)
+                                              realToFrac mSepThick
+                    , tsSeparatorTexture = maybe (tsSeparatorTexture cur)
+                                            (TextureHandle . fromIntegral) mSepTex
                     }
               in (setTooltipStyle new mgr, ())
           return 0

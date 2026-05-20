@@ -150,6 +150,10 @@ data UISpriteStyle = UISpriteStyle
 --   'tsFrameDurMs').
 data TooltipContent = TooltipContent
   { ttText     ∷ Maybe Text
+  , ttHint     ∷ Maybe Text
+    -- ^ Optional secondary line rendered beneath a thin horizontal
+    --   separator in a smaller, dimmer font. Used for "Right click
+    --   to expand"-style affordance hints under the main title.
   , ttSprites  ∷ [TooltipSprite]
   , ttMaxWidth ∷ Maybe Float
     -- ^ Optional max content width in pixels (sprite row is laid out
@@ -183,8 +187,26 @@ data TooltipStyle = TooltipStyle
   , tsMouseOffsetY  ∷ Float
   , tsDwellMs       ∷ Float
     -- ^ How long the cursor must rest before the tooltip appears.
+  , tsHintDelayMs   ∷ Float
+    -- ^ Additional delay (cumulative with 'tsDwellMs') before the
+    --   hint + separator section transitions in. The tooltip first
+    --   appears with title only; after the cursor lingers another
+    --   'tsHintDelayMs', the rich form fades in.
   , tsSpriteGap     ∷ Float
     -- ^ Horizontal gap between sprites in the sprite row.
+  , tsHintFontSize  ∷ Float
+    -- ^ Font size for the hint line beneath the separator.
+  , tsHintColor     ∷ (Float, Float, Float, Float)
+  , tsSeparatorColor ∷ (Float, Float, Float, Float)
+  , tsSeparatorThickness ∷ Float
+    -- ^ Height of the horizontal separator between title and hint.
+  , tsSeparatorTexture ∷ TextureHandle
+    -- ^ Texture used for the separator strip. Set this to a 1×1 white
+    --   pixel (or any flat fill) so the colour tint above produces the
+    --   exact requested colour. When unset (handle 0), the renderer
+    --   falls back to the centre tile of the configured box-texture
+    --   set, which makes the separator look like a sliver of the box
+    --   fill — usually too low-contrast to read as a divider.
   } deriving (Show)
 
 defaultTooltipStyle ∷ TooltipStyle
@@ -199,7 +221,13 @@ defaultTooltipStyle = TooltipStyle
   , tsMouseOffsetX = 14
   , tsMouseOffsetY = 18
   , tsDwellMs      = 400
+  , tsHintDelayMs  = 400
   , tsSpriteGap    = 4
+  , tsHintFontSize = 11
+  , tsHintColor    = (0.7, 0.7, 0.7, 1.0)
+  , tsSeparatorColor = (1.0, 1.0, 1.0, 1.0)
+  , tsSeparatorThickness = 1.0
+  , tsSeparatorTexture = TextureHandle 0
   }
 
 -- | Per-frame runtime state for the tooltip subsystem. Owned by the
@@ -226,12 +254,21 @@ data TooltipState = TooltipState
   , ttsAnimTimeMs      ∷ Float
     -- ^ Monotonic ms counter used to derive animation frame indices
     --   for animated sprites.
+  , ttsHintRemainingMs ∷ Float
+    -- ^ Countdown (ms) until the hint + separator stage of the
+    --   tooltip transitions in. Reset to 'tsHintDelayMs' when the
+    --   tooltip first appears for a new element; decremented while
+    --   the same tooltip remains showing. Once it hits 0, the
+    --   displayed content swaps to the rich (text + separator + hint)
+    --   form on the next frame.
   , ttsSpriteHandles   ∷ [ElementHandle]
     -- ^ Sprite element handles for the current shown tooltip, in the
     --   same order as 'ttSprites' on the active content. Tracked so
     --   the per-frame tick can cheaply swap textures without rebuilding.
   , ttsBoxHandle       ∷ Maybe ElementHandle
   , ttsTextHandle      ∷ Maybe ElementHandle
+  , ttsHintHandle      ∷ Maybe ElementHandle
+  , ttsSeparatorHandle ∷ Maybe ElementHandle
   , ttsLocked          ∷ Bool
     -- ^ When True, the tooltip is frozen in place: hover changes are
     --   ignored, dwell timing is paused, and the tooltip stays visible
@@ -248,9 +285,12 @@ emptyTooltipState = TooltipState
   , ttsActiveContent  = Nothing
   , ttsActiveElem     = Nothing
   , ttsAnimTimeMs     = 0
+  , ttsHintRemainingMs = 0
   , ttsSpriteHandles  = []
   , ttsBoxHandle      = Nothing
   , ttsTextHandle     = Nothing
+  , ttsHintHandle     = Nothing
+  , ttsSeparatorHandle = Nothing
   , ttsLocked         = False
   }
 

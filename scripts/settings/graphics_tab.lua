@@ -660,6 +660,57 @@ function graphicsTab.create(params)
     })
     rowIndex = rowIndex + 1
 
+    ---------------------------------------------------------
+    -- Row 11: Hint Delay (slider, 0-1000 ms, cumulative with Tooltip Delay)
+    ---------------------------------------------------------
+    local hdLabelId = params.trackLabel(label.new({
+        name     = "tooltip_hint_delay_label",
+        text     = "Hint Delay (ms)",
+        font     = font,
+        fontSize = base.fontSize,
+        color    = {1.0, 1.0, 1.0, 1.0},
+        page     = page,
+        uiscale  = uiscale,
+    }))
+    local hdLabelHandle = label.getElementHandle(hdLabelId)
+    UI.addToPage(page, hdLabelHandle, cx, rowY(rowIndex) + s.fontSize)
+    UI.setZIndex(hdLabelHandle, zContent)
+
+    graphicsTab.tooltipHintDelaySlider = slider.new({
+        name     = "tooltip_hint_delay",
+        width    = base.sliderWidth or 200,
+        height   = base.sliderHeight or 24,
+        min      = data.tooltipHintDelayMin,
+        max      = data.tooltipHintDelayMax,
+        default  = data.current.tooltipHintDelayMs,
+        page     = page,
+        x        = cx + cw - slW,
+        y        = rowY(rowIndex),
+        uiscale  = uiscale,
+        zIndex   = zWidgets,
+        onChange = function(value, id, name)
+            local clamped = math.floor(value)
+            pending.tooltipHintDelayMs = clamped
+            engine.setTooltipHintDelayMs(clamped)
+        end,
+    })
+    local hdSliderId = graphicsTab.tooltipHintDelaySlider
+
+    table.insert(rows, {
+        labelHandle = hdLabelHandle,
+        widgetHandles = {
+            slider.getElementHandle(hdSliderId),
+            slider.getKnobHandle(hdSliderId),
+        },
+        widgetSetPosition = function(ry)
+            slider.setPosition(hdSliderId, cx + cw - slW, ry)
+        end,
+        widgetSetVisible = function(vis)
+            slider.setVisible(hdSliderId, vis)
+        end,
+    })
+    rowIndex = rowIndex + 1
+
     return rows
 end
 
@@ -680,6 +731,9 @@ function graphicsTab.getWidgetValues()
     end
     if graphicsTab.tooltipDwellSlider then
         vals.tooltipDwellMs = slider.getValue(graphicsTab.tooltipDwellSlider)
+    end
+    if graphicsTab.tooltipHintDelaySlider then
+        vals.tooltipHintDelayMs = slider.getValue(graphicsTab.tooltipHintDelaySlider)
     end
     return vals
 end

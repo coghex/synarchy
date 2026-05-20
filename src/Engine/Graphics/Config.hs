@@ -131,6 +131,10 @@ data VideoConfig = VideoConfig
       --   element before the tooltip appears. Player-tunable from
       --   the settings menu; persisted with the rest of the video
       --   config so it survives restarts.
+    , vcTooltipHintDelayMs ∷ Int
+      -- ^ Additional delay (after the dwell) before the rich
+      --   tooltip (title + separator + hint) replaces the
+      --   title-only form. Cumulative with 'vcTooltipDwellMs'.
     } deriving (Show, Eq)
 
 -- | Default video configuration fallback
@@ -147,6 +151,7 @@ defaultVideoConfig = VideoConfig
     , vcPixelSnap     = False
     , vcTextureFilter = FilterNearest
     , vcTooltipDwellMs = 400
+    , vcTooltipHintDelayMs = 400
     }
 
 -- | Yaml structure for video configuration
@@ -161,6 +166,7 @@ data VideoConfigFile = VideoConfigFile
     , vfPixelSnap     ∷ Bool
     , vfTextureFilter ∷ TextureFilter
     , vfTooltipDwellMs ∷ Int
+    , vfTooltipHintDelayMs ∷ Int
     } deriving (Show, Eq)
 
 data Resolution = Resolution
@@ -184,17 +190,25 @@ instance FromJSON VideoConfigFile where
           Nothing → do
               fs ← videoObj .: "fullscreen" .!= False
               pure $ if fs then Fullscreen else Windowed
+      -- '.:? key .!= def' is the correct idiom for *optional* fields
+      -- with a fallback: '.:' would fail the entire parse when a key
+      -- is missing (and the .!= would never get a chance to run),
+      -- which crashes loadVideoConfig back to 'defaultVideoConfig' —
+      -- silently resetting resolution / ui_scale on the very first
+      -- launch after any new field is added. Use '.:?' uniformly so
+      -- adding fields later doesn't invalidate older saved files.
       VideoConfigFile
-        ⊚ videoObj .: "resolution"
+        ⊚ videoObj .:  "resolution"
         <*> pure windowMode
-        <*> videoObj .: "ui_scale" .!= 1.0
-        <*> videoObj .: "vsync" .!= True
-        <*> videoObj .: "frame_limit" .!= Nothing
-        <*> videoObj .: "msaa" .!= 1
-        <*> videoObj .: "brightness" .!= 100
-        <*> videoObj .: "pixel_snap" .!= False
-        <*> videoObj .: "texture_filter" .!= FilterNearest
-        <*> videoObj .: "tooltip_dwell_ms" .!= 400
+        <*> videoObj .:? "ui_scale" .!= 1.0
+        <*> videoObj .:? "vsync" .!= True
+        <*> videoObj .:? "frame_limit" .!= Nothing
+        <*> videoObj .:? "msaa" .!= 1
+        <*> videoObj .:? "brightness" .!= 100
+        <*> videoObj .:? "pixel_snap" .!= False
+        <*> videoObj .:? "texture_filter" .!= FilterNearest
+        <*> videoObj .:? "tooltip_dwell_ms" .!= 400
+        <*> videoObj .:? "tooltip_hint_delay_ms" .!= 400
     parseJSON _ = fail "Expected an object for VideoConfigFile"
 
 instance ToJSON Resolution where
@@ -204,7 +218,7 @@ instance ToJSON Resolution where
         ]
 
 instance ToJSON VideoConfigFile where
-    toJSON (VideoConfigFile res wm uis vs fl msaa b ps tf dwell) = Yaml.object
+    toJSON (VideoConfigFile res wm uis vs fl msaa b ps tf dwell hintDelay) = Yaml.object
         [ "video" .= Yaml.object
             [ "resolution"  .= res
             , "window_mode" .= wm
@@ -216,6 +230,7 @@ instance ToJSON VideoConfigFile where
             , "pixel_snap"  .= ps
             , "texture_filter" .= textureFilterToText tf
             , "tooltip_dwell_ms" .= dwell
+            , "tooltip_hint_delay_ms" .= hintDelay
             ]
         ]
 
@@ -243,6 +258,7 @@ loadVideoConfig logger path = do
             , vcPixelSnap   = vfPixelSnap vf
             , vcTextureFilter = vfTextureFilter vf
             , vcTooltipDwellMs = vfTooltipDwellMs vf
+            , vcTooltipHintDelayMs = vfTooltipHintDelayMs vf
             }
 
 -- | Save video configuration to a YAML file
@@ -262,6 +278,7 @@ saveVideoConfig logger path config = do
           , vfPixelSnap = vcPixelSnap config
           , vfTextureFilter = vcTextureFilter config
           , vfTooltipDwellMs = vcTooltipDwellMs config
+          , vfTooltipHintDelayMs = vcTooltipHintDelayMs config
           }
     Yaml.encodeFile path videoFile
     logInfo logger CatInit $ "Video config saved to " <> T.pack path

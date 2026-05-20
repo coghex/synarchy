@@ -16,6 +16,8 @@ data.brightnessMax = 300
 data.savedBrightness = nil
 data.tooltipDwellMin = 0
 data.tooltipDwellMax = 1000
+data.tooltipHintDelayMin = 0
+data.tooltipHintDelayMax = 1000
 
 -- Standard resolutions
 data.resolutions = {
@@ -74,6 +76,7 @@ data.current = {
     pixelSnap     = false,
     textureFilter = "nearest",     -- "nearest" or "linear"
     tooltipDwellMs = 400,
+    tooltipHintDelayMs = 400,
 }
 
 data.pending = {}
@@ -133,6 +136,7 @@ function data.loadDefaults()
     data.current.pixelSnap     = pixelSnap or false
     data.current.textureFilter = textureFilter or "nearest"
     data.current.tooltipDwellMs = engine.getTooltipDwellMs() or 400
+    data.current.tooltipHintDelayMs = engine.getTooltipHintDelayMs() or 400
 
     -- Snapshot brightness for revert
     data.savedBrightness = data.current.brightness
@@ -148,6 +152,7 @@ function data.loadDefaults()
     engine.setPixelSnap(data.current.pixelSnap)
     engine.setTextureFilter(data.current.textureFilter)
     engine.setTooltipDwellMs(data.current.tooltipDwellMs)
+    engine.setTooltipHintDelayMs(data.current.tooltipHintDelayMs)
 
     -- Reset pending to match current
     data.resetPending()
@@ -205,6 +210,7 @@ function data.resetPending()
         pixelSnap     = data.current.pixelSnap,
         textureFilter = data.current.textureFilter,
         tooltipDwellMs = data.current.tooltipDwellMs,
+        tooltipHintDelayMs = data.current.tooltipHintDelayMs,
     }
 end
 
@@ -232,6 +238,7 @@ function data.reload()
     data.current.pixelSnap     = pixelSnap or false
     data.current.textureFilter = textureFilter or "nearest"
     data.current.tooltipDwellMs = engine.getTooltipDwellMs() or 400
+    data.current.tooltipHintDelayMs = engine.getTooltipHintDelayMs() or 400
     data.savedBrightness = data.current.brightness
 end
 
@@ -351,6 +358,20 @@ function data.apply(widgetValues)
         end
     end
 
+    -- Tooltip hint delay (live-previewed; commit to current + persist)
+    if widgetValues.tooltipHintDelayMs then
+        local hd = math.floor(widgetValues.tooltipHintDelayMs)
+        hd = math.max(data.tooltipHintDelayMin,
+            math.min(data.tooltipHintDelayMax, hd))
+        if data.current.tooltipHintDelayMs ~= hd then
+            data.current.tooltipHintDelayMs = hd
+            data.pending.tooltipHintDelayMs = hd
+            engine.setTooltipHintDelayMs(hd)
+            engine.logInfo("Tooltip hint delay applied: "
+                .. tostring(hd) .. "ms")
+        end
+    end
+
     if result.resolutionChanged then
         engine.setResolution(data.current.width, data.current.height)
     end
@@ -409,6 +430,11 @@ function data.revert()
         engine.setTooltipDwellMs(savedDwell)
     end
 
+    local savedHintDelay = engine.getTooltipHintDelayMs() or 400
+    if data.current.tooltipHintDelayMs ~= savedHintDelay then
+        engine.setTooltipHintDelayMs(savedHintDelay)
+    end
+
     data.current.width         = w
     data.current.height        = h
     data.current.windowMode    = wm
@@ -420,6 +446,7 @@ function data.revert()
     data.current.pixelSnap     = savedPixelSnap
     data.current.textureFilter = savedTextureFilter
     data.current.tooltipDwellMs = savedDwell
+    data.current.tooltipHintDelayMs = savedHintDelay
 end
 
 -----------------------------------------------------------

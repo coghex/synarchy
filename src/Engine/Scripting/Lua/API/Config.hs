@@ -16,6 +16,8 @@ module Engine.Scripting.Lua.API.Config
   , setTextureFilterFn
   , getTooltipDwellMsFn
   , setTooltipDwellMsFn
+  , getTooltipHintDelayMsFn
+  , setTooltipHintDelayMsFn
   ) where
 
 import UPrelude
@@ -271,5 +273,31 @@ setTooltipDwellMsFn env = do
         atomicModifyIORef' (uiManagerRef env) $ \mgr →
             let tts = upmTooltip mgr
                 newStyle = (ttsStyle tts) { tsDwellMs = fromIntegral dwell }
+            in (mgr { upmTooltip = tts { ttsStyle = newStyle } }, ())
+    return 0
+
+-- | engine.getTooltipHintDelayMs() -> integer
+getTooltipHintDelayMsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+getTooltipHintDelayMsFn env = do
+    config ← Lua.liftIO $ readIORef (videoConfigRef env)
+    Lua.pushinteger (fromIntegral $ vcTooltipHintDelayMs config)
+    return 1
+
+-- | engine.setTooltipHintDelayMs(ms) — clamped to [0, 1000]. Mirrors
+--   setTooltipDwellMs: writes both the persisted video config and the
+--   live tooltip style.
+setTooltipHintDelayMsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+setTooltipHintDelayMsFn env = do
+    arg ← Lua.tointeger 1
+    let delay = case arg of
+            Just n  → max 0 (min 1000 (fromIntegral n))
+            Nothing → 400
+    Lua.liftIO $ do
+        oldConfig ← readIORef (videoConfigRef env)
+        writeIORef (videoConfigRef env) $
+            oldConfig { vcTooltipHintDelayMs = delay }
+        atomicModifyIORef' (uiManagerRef env) $ \mgr →
+            let tts = upmTooltip mgr
+                newStyle = (ttsStyle tts) { tsHintDelayMs = fromIntegral delay }
             in (mgr { upmTooltip = tts { ttsStyle = newStyle } }, ())
     return 0

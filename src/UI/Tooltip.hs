@@ -91,18 +91,37 @@ tickTooltip mouse fbSize dtMs fontCache mgr
         shouldShow = case hoveredContent of
             Just _  → dwellRemaining' ≤ 0
             Nothing → False
+        -- Hint-stage timer: counts down only while the SAME tooltip
+        -- continues to be shown. Resets to 'tsHintDelayMs' whenever the
+        -- tooltip isn't showing or the hovered element changed, so a
+        -- fresh element always starts at stage 1 (title only) and has
+        -- to wait for the full hint delay before the rich form appears.
+        sameAsLast = shouldShow ∧ ttsActiveElem tts ≡ hovered
+        hintRemaining'
+          | sameAsLast = max 0 (ttsHintRemainingMs tts - dtMs)
+          | otherwise  = tsHintDelayMs (ttsStyle tts)
         animTime' = ttsAnimTimeMs tts + dtMs
-        tts1 = tts { ttsHoveredElem    = hovered
-                   , ttsDwellRemaining = dwellRemaining'
-                   , ttsAnimTimeMs     = animTime'
+        tts1 = tts { ttsHoveredElem     = hovered
+                   , ttsDwellRemaining  = dwellRemaining'
+                   , ttsHintRemainingMs = hintRemaining'
+                   , ttsAnimTimeMs      = animTime'
                    }
         mgr1 = mgr { upmTooltip = tts1 }
     in if shouldShow
          then case (hovered, hoveredContent) of
                 (Just eh, Just content) →
-                    showTooltip eh content mouse fbSize fontCache mgr1
+                    let display = stageContent hintRemaining' content
+                    in showTooltip eh display mouse fbSize fontCache mgr1
                 _ → hideTooltip mgr1
          else hideTooltip mgr1
+
+-- | Stage 1 (still waiting for hint delay) strips the hint, so only
+--   the title (+ sprites) renders. Stage 2 (hint timer at 0) returns
+--   the full content. Empty / hint-less content is unchanged.
+stageContent ∷ Float → TooltipContent → TooltipContent
+stageContent hintRemainingMs content
+  | hintRemainingMs ≤ 0 = content
+  | otherwise           = content { ttHint = Nothing }
 
 -- | Tick for a locked tooltip: position is frozen, hover/dwell are
 --   ignored, but animation time still advances and per-sprite frame
@@ -183,12 +202,16 @@ destroyVisuals mgr =
     let tts = upmTooltip mgr
         handles = maybeToList (ttsBoxHandle tts)
                 ⧺ maybeToList (ttsTextHandle tts)
+                ⧺ maybeToList (ttsHintHandle tts)
+                ⧺ maybeToList (ttsSeparatorHandle tts)
                 ⧺ ttsSpriteHandles tts
         mgr1 = foldr deleteElement mgr handles
         tts' = (upmTooltip mgr1)
-                 { ttsBoxHandle     = Nothing
-                 , ttsTextHandle    = Nothing
-                 , ttsSpriteHandles = []
+                 { ttsBoxHandle       = Nothing
+                 , ttsTextHandle      = Nothing
+                 , ttsHintHandle      = Nothing
+                 , ttsSeparatorHandle = Nothing
+                 , ttsSpriteHandles   = []
                  }
     in mgr1 { upmTooltip = tts' }
 
@@ -217,8 +240,8 @@ rebuildVisuals pageH content fontCache mgr0 =
                     m2 = addElementToPage pageH h 0 0 m1
                     m3 = setElementZIndex h 0 m2
                 in (Just h, m3)
-        -- Text element above sprites; created only when both text and
-        -- a valid font are present.
+        -- Title text; created only when both text and a valid font
+        -- are present.
         (textHandle, mgr3) = case ttText content of
             Nothing → (Nothing, mgr2)
             Just txt | not (isFontSet (tsFont style)) → (Nothing, mgr2)
@@ -231,18 +254,56 @@ rebuildVisuals pageH content fontCache mgr0 =
                     m2 = addElementToPage pageH h 0 0 m1
                     m3 = setElementZIndex h 1 m2
                 in (Just h, m3)
+        -- Separator between title and hint. Rendered as a thin sprite.
+        -- Prefers an explicit `tsSeparatorTexture` (typically a 1×1
+        -- white pixel so the colour tint produces the exact requested
+        -- colour); falls back to the centre tile of the configured
+        -- box-texture set when no separator texture is configured.
+        -- Skipped entirely when there's nothing to separate.
+        (sepHandle, mgr4) = case (ttText content, ttHint content) of
+            (Just _, Just _) | isFontSet (tsFont style) →
+                let sepTex = pickSeparatorTexture style mgr3
+                in if toInt sepTex ≡ 0
+                     then (Nothing, mgr3)
+                     else
+                       let (h, m1) = createSprite "__tooltip_sep"
+                                        1.0  -- placeholder; reposition sets real width
+                                        (tsSeparatorThickness style)
+                                        sepTex
+                                        (tsSeparatorColor style)
+                                        pageH mgr3
+                           m2 = addElementToPage pageH h 0 0 m1
+                           m3 = setElementZIndex h 1 m2
+                       in (Just h, m3)
+            _ → (Nothing, mgr3)
+        -- Hint text beneath the separator. Uses the same font as the
+        -- title but at the hint's smaller size and dimmer colour.
+        (hintHandle, mgr5) = case ttHint content of
+            Nothing → (Nothing, mgr4)
+            Just hintTxt | not (isFontSet (tsFont style)) → (Nothing, mgr4)
+                         | otherwise →
+                let (h, m1) = createText "__tooltip_hint" hintTxt
+                                 (tsFont style)
+                                 (tsHintFontSize style)
+                                 (tsHintColor style)
+                                 pageH mgr4
+                    m2 = addElementToPage pageH h 0 0 m1
+                    m3 = setElementZIndex h 1 m2
+                in (Just h, m3)
         -- Sprite elements, one per TooltipSprite. Texture is set to the
         -- first frame; reposition/animate handles cycling animated frames.
-        (spriteHandles, mgr4) =
+        (spriteHandles, mgr6) =
             foldl' (createSpriteElem pageH style)
-                   ([], mgr3)
+                   ([], mgr5)
                    (zip [(0 ∷ Int)..] (ttSprites content))
-        tts' = (upmTooltip mgr4)
-                 { ttsBoxHandle     = boxHandle
-                 , ttsTextHandle    = textHandle
-                 , ttsSpriteHandles = reverse spriteHandles
+        tts' = (upmTooltip mgr6)
+                 { ttsBoxHandle       = boxHandle
+                 , ttsTextHandle      = textHandle
+                 , ttsHintHandle      = hintHandle
+                 , ttsSeparatorHandle = sepHandle
+                 , ttsSpriteHandles   = reverse spriteHandles
                  }
-    in mgr4 { upmTooltip = tts' }
+    in mgr6 { upmTooltip = tts' }
 
 createSpriteElem ∷ PageHandle → TooltipStyle
                  → ([ElementHandle], UIPageManager)
@@ -279,43 +340,90 @@ repositionAndAnimate _pageH content (mx, my) (fbW, fbH) fontCache mgr =
         mgr1 = case ttsBoxHandle tts of
             Nothing → mgr
             Just bh → setElementPosition bh boxX boxY mgr
-        -- Content layout: stack text on top of sprite row, then center
-        -- the whole stack vertically in the box. Single-line text uses
-        -- a baseline offset of ~0.25 * fontSize past the line center so
-        -- the visible glyph mass sits where the eye expects (typical
-        -- ascender / descender split is ~75 / 25).
-        textH = case ttText content of
+
+        -- Section dimensions. Anything with a 0 height is treated as
+        -- "missing" and skipped from the stack.
+        titleH = case ttText content of
             Just _ | isFontSet (tsFont style) → tsFontSize style + 4
             _ → 0
+        hintH = case ttHint content of
+            Just _ | isFontSet (tsFont style) → tsHintFontSize style + 3
+            _ → 0
+        hasSep = isJust (ttsSeparatorHandle tts)
+        sepH = if hasSep then tsSeparatorThickness style else 0
         spriteRowH = case ttSprites content of
             [] → 0
             xs → maximum (map (snd . tsSize) xs)
-        innerGap = if textH > 0 ∧ spriteRowH > 0 then 4 else 0
-        stackH = textH + spriteRowH + innerGap
+        -- Lay out sections from top, inserting per-boundary gaps
+        -- between consecutive non-empty sections. Each returned Y is
+        -- the top edge of that section within the content stack.
+        (titleY0, sepY0, hintY0, spriteY0, stackH) =
+            stackSections defaultSectionGaps titleH sepH hintH spriteRowH
         stackTop = boxY + (boxH - stackH) / 2
-        textBaseY = stackTop + tsFontSize style * 0.85
-        -- Horizontally center the text inside the box. Centering keeps
-        -- padding symmetric whether the box ended up at its natural
-        -- width or got bumped to the 9-patch minimum, and degrades
-        -- gracefully if the measured text width turns out to be a
-        -- slight under-estimate (overflow appears on both sides
-        -- equally, not lopsided to the right).
-        textW = realToFrac (textPixelWidth fontCache style content) ∷ Float
-        textX = boxX + max pad ((boxW - textW) / 2)
+
+        -- Title (baseline offset ~0.85 * fontSize past the top accounts
+        -- for typical ascender/descender split).
+        titleBaseY = stackTop + titleY0 + tsFontSize style * 0.85
+        titleW = textPixelWidth fontCache style content
+        titleX = boxX + max pad ((boxW - titleW) / 2)
         mgr2 = case ttsTextHandle tts of
             Nothing → mgr1
-            Just th → setElementPosition th textX textBaseY mgr1
-        -- Sprite row, also horizontally centered as a group.
+            Just th → setElementPosition th titleX titleBaseY mgr1
+
+        -- Separator: spans (boxW - 2*pad), positioned by top-left. The
+        -- sprite element's size is set here (rebuildVisuals creates it
+        -- with a placeholder width since the actual width depends on
+        -- the box that the layout settles on this frame).
+        sepW = boxW - 2 * pad
+        mgr3 = case ttsSeparatorHandle tts of
+            Nothing → mgr2
+            Just sh →
+                let m' = setElementSize sh sepW (tsSeparatorThickness style) mgr2
+                in setElementPosition sh (boxX + pad) (stackTop + sepY0) m'
+
+        -- Hint text under the separator.
+        hintBaseY = stackTop + hintY0 + tsHintFontSize style * 0.85
+        hintW = hintPixelWidth fontCache style content
+        hintX = boxX + max pad ((boxW - hintW) / 2)
+        mgr4 = case ttsHintHandle tts of
+            Nothing → mgr3
+            Just hh → setElementPosition hh hintX hintBaseY mgr3
+
+        -- Sprite row, horizontally centred as a group.
         spriteRowW = case ttSprites content of
             [] → 0
             xs → sum (map (fst . tsSize) xs)
                  + fromIntegral (length xs - 1) * tsSpriteGap style
         spriteRowX = boxX + max pad ((boxW - spriteRowW) / 2)
-        spriteRowY = stackTop + textH + innerGap
-        mgr3 = layoutSprites spriteRowX spriteRowY
+        mgr5 = layoutSprites spriteRowX (stackTop + spriteY0)
                              (ttsSpriteHandles tts) (ttSprites content)
-                             (tsSpriteGap style) (ttsAnimTimeMs tts) mgr2
-    in mgr3
+                             (tsSpriteGap style) (ttsAnimTimeMs tts) mgr4
+    in mgr5
+
+-- | Stack four optional sections (title, separator, hint, sprite-row)
+--   vertically, inserting a per-boundary gap between consecutive
+--   non-empty ones. Gaps are @(titleSep, sepHint, hintSprite)@.
+--   Empty sections are skipped and don't trigger their adjacent gaps.
+--   Returns each section's top-Y within the stack plus the total height.
+stackSections ∷ (Float, Float, Float) → Float → Float → Float → Float
+              → (Float, Float, Float, Float, Float)
+stackSections (gTSep, gSepH, gHSpr) titleH sepH hintH spriteH =
+    let advance prevHadContent gapHere y h
+          | h ≤ 0 = (y, y, False ∨ prevHadContent)
+          | prevHadContent = (y + gapHere, y + gapHere + h, True)
+          | otherwise = (y, y + h, True)
+        (titleY, after1, h1) = advance False 0     0      titleH
+        (sepY,   after2, h2) = advance h1    gTSep after1 sepH
+        (hintY,  after3, h3) = advance h2    gSepH after2 hintH
+        (sprY,   after4, _h4) = advance h3   gHSpr after3 spriteH
+    in (titleY, sepY, hintY, sprY, after4)
+
+-- | Default per-boundary gaps for the content stack. The sep→hint gap
+--   is intentionally larger so the rule reads as a separator between
+--   the title block and the hint line, not as a thin element glued
+--   to the hint.
+defaultSectionGaps ∷ (Float, Float, Float)
+defaultSectionGaps = (4, 10, 4)
 
 layoutSprites ∷ Float → Float → [ElementHandle] → [TooltipSprite] → Float
               → Float → UIPageManager → UIPageManager
@@ -350,10 +458,24 @@ pickFrame animMs sprite =
 
 computeBoxSize ∷ FontCache → TooltipStyle → TooltipContent → (Float, Float)
 computeBoxSize fontCache style content =
-    let textW = textPixelWidth fontCache style content
-        textH = case ttText content of
+    let titleW = textPixelWidth fontCache style content
+        titleH = case ttText content of
             Just _ | isFontSet (tsFont style) → tsFontSize style + 4
             _ → 0
+        hintW = hintPixelWidth fontCache style content
+        hintH = case ttHint content of
+            Just _ | isFontSet (tsFont style) → tsHintFontSize style + 3
+            _ → 0
+        -- Separator only renders when there's both a title and a hint
+        -- AND we have *some* texture to render it with (either a
+        -- dedicated 'separatorTexture' or the centre tile of a
+        -- configured box-texture set).
+        hasSep = isJust (ttText content)
+              ∧ isJust (ttHint content)
+              ∧ isFontSet (tsFont style)
+              ∧ (toInt (tsSeparatorTexture style) /= 0
+                   ∨ isBoxTextureSet (tsBoxTextures style))
+        sepH = if hasSep then tsSeparatorThickness style else 0
         sprites = ttSprites content
         spriteRowW = case sprites of
             [] → 0
@@ -367,12 +489,13 @@ computeBoxSize fontCache style content =
         -- fontSize because larger fonts tend to have proportionally
         -- larger glyph-extent overshoot. ~1.5x fontSize covers most
         -- arcade-style fonts I've tested.
-        textWBuffer = case ttText content of
-            Just _ | isFontSet (tsFont style) → tsFontSize style * 1.5
-            _ → 0
-        contentW = max (textW + textWBuffer) spriteRowW
-        contentH = textH + spriteRowH
-                 + (if textH > 0 ∧ spriteRowH > 0 then 4 else 0)
+        textWBuffer = if isFontSet (tsFont style)
+                         ∧ (isJust (ttText content) ∨ isJust (ttHint content))
+                        then tsFontSize style * 1.5
+                        else 0
+        contentW = max (max titleW hintW + textWBuffer) spriteRowW
+        (_, _, _, _, contentH) =
+            stackSections defaultSectionGaps titleH sepH hintH spriteRowH
         pad = tsPadding style
         rawW = contentW + 2 * pad
         rawH = contentH + 2 * pad
@@ -391,15 +514,21 @@ computeBoxSize fontCache style content =
     in (max minDim cappedW, max minDim rawH)
 
 textPixelWidth ∷ FontCache → TooltipStyle → TooltipContent → Float
-textPixelWidth fontCache style content = case ttText content of
-    Nothing → 0
-    Just txt → case Map.lookup (tsFont style) (fcFonts fontCache) of
+textPixelWidth fontCache style content =
+    measureText fontCache (tsFont style) (tsFontSize style) (ttText content)
+
+hintPixelWidth ∷ FontCache → TooltipStyle → TooltipContent → Float
+hintPixelWidth fontCache style content =
+    measureText fontCache (tsFont style) (tsHintFontSize style) (ttHint content)
+
+measureText ∷ FontCache → FontHandle → Float → Maybe Text → Float
+measureText _ _ _ Nothing = 0
+measureText fontCache fontH size (Just txt) =
+    case Map.lookup fontH (fcFonts fontCache) of
         Nothing    → 0  -- font not loaded yet; text won't render either
         Just atlas →
             realToFrac
-              (calculateTextWidthScaled atlas
-                                        (tsFontSize style)
-                                        (T.unpack txt))
+              (calculateTextWidthScaled atlas size (T.unpack txt))
 
 ------------------------------------------------------------
 -- Small helpers
@@ -410,6 +539,17 @@ isFontSet h = toInt h /= 0
 
 isBoxTextureSet ∷ BoxTextureHandle → Bool
 isBoxTextureSet (BoxTextureHandle n) = n /= 0
+
+-- | Pick the texture used for the separator strip. Explicit
+--   'tsSeparatorTexture' wins; otherwise fall back to the centre tile
+--   of the box-texture set. Returns 'TextureHandle 0' when neither is
+--   available (in which case the separator is skipped).
+pickSeparatorTexture ∷ TooltipStyle → UIPageManager → TextureHandle
+pickSeparatorTexture style mgr
+    | toInt (tsSeparatorTexture style) /= 0 = tsSeparatorTexture style
+    | otherwise = case getBoxTextureSet (tsBoxTextures style) mgr of
+        Just bts → btsCenter bts
+        Nothing  → TextureHandle 0
 
 ------------------------------------------------------------
 -- Lock control

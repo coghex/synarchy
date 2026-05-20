@@ -20,7 +20,9 @@ import Engine.Scripting.Lua.API.Config (getVideoConfigFn, setVideoConfigFn
                                        , setPixelSnapFn, setTextureFilterFn
                                        , loadDefaultConfigFn
                                        , getTooltipDwellMsFn
-                                       , setTooltipDwellMsFn)
+                                       , setTooltipDwellMsFn
+                                       , getTooltipHintDelayMsFn
+                                       , setTooltipHintDelayMsFn)
 import Engine.Scripting.Lua.API.Graphics (loadTextureFn, spawnSpriteFn, setPosFn,
                                            setColorFn, setSizeFn, setVisibleFn
                                            , destroyFn, getUIScaleFn)
@@ -94,8 +96,10 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "setBrightness"     (setBrightnessFn env)
   registerLuaFunction "setPixelSnap"      (setPixelSnapFn env)
   registerLuaFunction "setTextureFilter"  (setTextureFilterFn env)
-  registerLuaFunction "getTooltipDwellMs" (getTooltipDwellMsFn env)
-  registerLuaFunction "setTooltipDwellMs" (setTooltipDwellMsFn env)
+  registerLuaFunction "getTooltipDwellMs"     (getTooltipDwellMsFn env)
+  registerLuaFunction "setTooltipDwellMs"     (setTooltipDwellMsFn env)
+  registerLuaFunction "getTooltipHintDelayMs" (getTooltipHintDelayMsFn env)
+  registerLuaFunction "setTooltipHintDelayMs" (setTooltipHintDelayMsFn env)
   
   registerLuaFunction "loadTexture"   (loadTextureFn backendState)
   registerLuaFunction "getTextureHandle" (getTextureHandleFn env)

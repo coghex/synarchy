@@ -164,18 +164,32 @@ function uiManager.checkReady()
             popup.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             eventLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             local persistedDwell = engine.getTooltipDwellMs()
+            local persistedHintDelay = engine.getTooltipHintDelayMs()
+            -- engine.loadTexture caches by path, so this returns the
+            -- same handle that drag_select etc. already use for the
+            -- 1×1 white pixel — letting the separator render in the
+            -- exact colour we tint it, instead of inheriting the box
+            -- centre tile.
+            local whitePixelTex = engine.loadTexture(
+                "assets/textures/hud/utility/white.png")
             UI.setTooltipStyle({
-                font         = menuFont,
-                fontSize     = 14,
-                textColor    = {1.0, 1.0, 1.0, 1.0},
-                bgColor      = {1.0, 1.0, 1.0, 1.0},
-                padding      = 16,
-                boxTextures  = boxTexSet,
-                boxTileSize  = 32,
-                mouseOffsetX = 14,
-                mouseOffsetY = 18,
-                dwellMs      = persistedDwell,
-                spriteGap    = 4,
+                font               = menuFont,
+                fontSize           = 14,
+                textColor          = {1.0, 1.0, 1.0, 1.0},
+                bgColor            = {1.0, 1.0, 1.0, 1.0},
+                padding            = 24,
+                boxTextures        = boxTexSet,
+                boxTileSize        = 32,
+                mouseOffsetX       = 14,
+                mouseOffsetY       = 18,
+                dwellMs            = persistedDwell,
+                hintDelayMs        = persistedHintDelay,
+                spriteGap          = 4,
+                hintFontSize       = 11,
+                hintColor          = {0.7, 0.7, 0.7, 1.0},
+                separatorTexture   = whitePixelTex,
+                separatorColor     = {0.7, 0.7, 0.7, 1.0},
+                separatorThickness = 2,
             })
             uiManager.showMenu("main")
             initialized = true
