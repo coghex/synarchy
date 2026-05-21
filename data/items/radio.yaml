@@ -1,0 +1,13 @@
+items:
+  - name: "radio"
+    display_name: "Field Radio"
+    sprite: "assets/textures/items/radio.png"
+    weight: 0.3
+    category: Supplies
+    # Lets the AI broadcast water-source locations (and, later, other
+    # intel) to every other radio-bearer at unlimited range — see
+    # scripts/unit_ai.lua notify_allies action. Acolytes without a
+    # radio fall back to walk-notify in person. The item itself has
+    # no inventory affordances beyond existing; the AI keys off the
+    # presence of an instance whose def name is "radio".
+    unequippable: true

@@ -9,6 +9,7 @@ module Building.Types
     , emptyBuildingManager
     , nextBuildingId
     , currentActivity
+    , materialsSatisfied
     ) where
 
 import UPrelude
@@ -21,6 +22,7 @@ import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle(..))
 import Unit.Direction (Direction(..))
 import Unit.Types (Animation(..))
+import Item.Types (ItemInstance)
 
 -- | Buildings reuse the unit Animation type. They only need one
 --   "direction" key — DirS by convention — since they don't rotate.
@@ -39,12 +41,36 @@ data BuildingActivity = Appearing | Built
 --   that buildings don't have.
 data BuildingDef = BuildingDef
     { bdName        ∷ !Text
+    , bdDisplayName ∷ !Text               -- ^ shown in build menu + tooltips
+    , bdCategory    ∷ !Text               -- ^ build-menu tab key ("Starting", "Cargo", ...)
+    , bdDescription ∷ !Text               -- ^ build-menu tooltip hint body
     , bdTexture     ∷ !TextureHandle      -- ^ static fallback
     , bdTileW       ∷ !Int                -- ^ footprint width in tiles
     , bdTileH       ∷ !Int                -- ^ footprint height in tiles
     , bdPlacement   ∷ !Text               -- ^ "flat_ground" / future kinds
     , bdIsStarting  ∷ !Bool
     , bdRace        ∷ !Text
+    , bdSpriteAnchor∷ !Text
+      -- ^ Where the sprite's bottom edge lands relative to the tile:
+      --   "diamond_bottom" (default) — south point of the top face;
+      --   "tile_bottom"    — bottom of the side face (= cube's lowest
+      --   point). Use "tile_bottom" when the texture draws its own
+      --   side-face below the diamond, so the side face lines up with
+      --   the world tile's side face instead of dangling into the
+      --   tile below.
+    , bdBuildWork   ∷ !Float
+      -- ^ Worker-seconds needed to finish construction at the single-
+      --   worker base rate. 0 = instant-built (portal-style: the
+      --   building flips to Built as soon as the appearing animation
+      --   completes, with no acolyte assignment needed). When > 0,
+      --   Appearing→Built and the appearing-anim frame are derived
+      --   from biBuildProgress / bdBuildWork instead of elapsed time.
+    , bdMaterials   ∷ !(HM.HashMap Text Int)
+      -- ^ Materials required to start construction. Item def name →
+      --   integer count. Empty (default) = no materials gate: progress
+      --   ticks as soon as workers arrive. Non-empty: building shows
+      --   as ghost until all required counts have been delivered (see
+      --   biMaterialsDelivered), then construction begins.
     , bdAnimations  ∷ !(HM.HashMap Text Animation)
     , bdStateAnims  ∷ !(HM.HashMap Text Text)
       -- ^ "appearing" / "built" → animation name in bdAnimations.
@@ -67,6 +93,17 @@ data BuildingInstance = BuildingInstance
       --   building_spawn module. Lives here (not in Lua module state)
       --   so it survives save/load and chunk-eviction without a
       --   separate Lua serializer.
+    , biBuildProgress  ∷ !Float
+      -- ^ Accumulated worker-seconds toward bdBuildWork. Reaches
+      --   bdBuildWork → Appearing flips to Built. Driven by Lua's
+      --   construction tick via building.addBuildProgress; engine
+      --   only reads it via currentActivity / pickBuildingFrame.
+    , biMaterialsDelivered ∷ !(HM.HashMap Text [ItemInstance])
+      -- ^ Actual items consumed into the build. Keyed by item def
+      --   name; each list preserves the full ItemInstance (so the
+      --   electric motors that built this cargo hold come back out
+      --   with their then-current condition when it's deconstructed).
+      --   The construction tick is gated on this satisfying bdMaterials.
     } deriving (Show, Eq)
 
 -- | Singleton ghost preview: one optional def + tile + valid flag.
@@ -102,21 +139,38 @@ nextBuildingId bm =
     let bid = BuildingId (bmNextId bm)
     in (bid, bm { bmNextId = bmNextId bm + 1 })
 
--- | Pure derivation of activity from elapsed time + the def's appear
---   animation duration. If no appearing anim is defined, the building
---   is Built from the moment it spawns.
+-- | Pure derivation of activity. Two modes:
+--
+--   * bdBuildWork > 0 (worker-driven): Appearing while biBuildProgress
+--     < bdBuildWork. The portal and other instant-build defs leave
+--     bdBuildWork at 0 and use the time-based fallback.
+--
+--   * bdBuildWork == 0 (time-based, legacy): Appearing while elapsed
+--     game-time < appearing-anim duration. If no appearing anim is
+--     defined, the building is Built from the moment it spawns.
+-- | True iff every entry in bdMaterials has at least the required
+--   count delivered. Empty bdMaterials trivially satisfies (the
+--   portal and other legacy defs).
+materialsSatisfied ∷ BuildingInstance → BuildingDef → Bool
+materialsSatisfied inst def =
+    all (\(t, n) → length (HM.lookupDefault [] t (biMaterialsDelivered inst)) >= n)
+        (HM.toList (bdMaterials def))
+
 currentActivity ∷ Double → BuildingInstance → BuildingDef → BuildingActivity
-currentActivity now inst def =
-    let elapsed = now - biSpawnedAt inst
-        appearDuration = case HM.lookup "appearing" (bdStateAnims def) of
-            Nothing       → 0
-            Just animName → case HM.lookup animName (bdAnimations def) of
-                Nothing  → 0
-                Just a   →
-                    let counts = V.length <$> Map.elems (aFrames a)
-                        maxN   = if null counts then 0 else maximum counts
-                        fps    = aFps a
-                    in if fps > 0 ∧ maxN > 0
-                       then fromIntegral maxN / realToFrac fps ∷ Double
-                       else 0
-    in if elapsed < appearDuration then Appearing else Built
+currentActivity now inst def
+    | bdBuildWork def > 0 =
+        if biBuildProgress inst < bdBuildWork def then Appearing else Built
+    | otherwise =
+        let elapsed = now - biSpawnedAt inst
+            appearDuration = case HM.lookup "appearing" (bdStateAnims def) of
+                Nothing       → 0
+                Just animName → case HM.lookup animName (bdAnimations def) of
+                    Nothing  → 0
+                    Just a   →
+                        let counts = V.length <$> Map.elems (aFrames a)
+                            maxN   = if null counts then 0 else maximum counts
+                            fps    = aFps a
+                        in if fps > 0 ∧ maxN > 0
+                           then fromIntegral maxN / realToFrac fps ∷ Double
+                           else 0
+        in if elapsed < appearDuration then Appearing else Built

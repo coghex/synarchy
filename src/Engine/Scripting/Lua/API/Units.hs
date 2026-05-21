@@ -41,6 +41,7 @@ module Engine.Scripting.Lua.API.Units
     , unitEatFn
     , unitPickupFn
     , unitRemoveItemFn
+    , unitTransferItemToBuildingFn
     , unitTransitionToFn
     , unitGetPoseFn
     , unitModifyItemFillFn
@@ -78,6 +79,8 @@ import Unit.Render (pickFrame)
 import Unit.Sim.Types (Pose(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
+import Building.Types (BuildingId(..), BuildingInstance(..), BuildingManager(..))
+import Item.Types (ItemInstance(..))
 import Item.Roll (rollItemSpec)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
                   , ItemFood(..), ItemWeapon(..), ItemBuff(..)
@@ -186,9 +189,14 @@ loadUnitYamlFn env backendState = do
                             | (sname, s) ← Map.toList (uydSkills def)
                             ]
 
+                    -- Expand each entry by its count so the rest of
+                    -- the spawn pipeline can stay (Text, Maybe Float).
+                    -- Each repetition becomes a distinct ItemInstance
+                    -- (quality / condition rolls fire per copy).
                     let startingInv =
                             [ (uyieItem e, uyieFill e)
                             | e ← uydStartingInventory def
+                            , _ ← [1 .. max 1 (uyieCount e)]
                             ]
                         unitDef = UnitDef
                             { udName          = name
@@ -686,6 +694,80 @@ removeFirstByName _ [] = Nothing
 removeFirstByName name (x:xs)
     | iiDefName x ≡ name = Just xs
     | otherwise          = (x :) <$> removeFirstByName name xs
+
+-- | Like removeFirstByName but EXTRACTS the popped instance so the
+--   caller can route it somewhere else (e.g. into a building's
+--   biMaterialsDelivered).
+popFirstByName ∷ Text → [ItemInstance] → Maybe (ItemInstance, [ItemInstance])
+popFirstByName _ [] = Nothing
+popFirstByName name (x:xs)
+    | iiDefName x ≡ name = Just (x, xs)
+    | otherwise          = fmap (\(it, rest) → (it, x:rest))
+                                (popFirstByName name xs)
+
+-- | unit.transferItemToBuilding(uid, bid, defName) → bool. Atomic
+--   move of one ItemInstance from the unit's inventory to the
+--   building's biMaterialsDelivered list for that defName. Preserves
+--   quality / condition / currentFill on the instance so a delivered
+--   electric motor at 100% comes back out at 100% (or its degraded
+--   state) on a future deconstruction.
+--
+--   Returns true on success. If the unit lacks a matching item OR
+--   the building has vanished between pop and deliver, returns false
+--   and logs a warning (the latter case is a tiny race window — the
+--   AI just queried the building one tick prior).
+unitTransferItemToBuildingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitTransferItemToBuildingFn env = do
+    uidArg  ← Lua.tointeger 1
+    bidArg  ← Lua.tointeger 2
+    nameArg ← Lua.tostring 3
+    case (uidArg, bidArg, nameArg) of
+        (Just nU, Just nB, Just nameBS) → do
+            let uid     = UnitId (fromIntegral nU)
+                bid     = BuildingId (fromIntegral nB)
+                defName = TE.decodeUtf8 nameBS
+            mItem ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                case HM.lookup uid (umInstances um) of
+                    Nothing → (um, Nothing)
+                    Just u →
+                        case popFirstByName defName (uiInventory u) of
+                            Nothing → (um, Nothing)
+                            Just (item, newInv) →
+                                let u' = u { uiInventory = newInv }
+                                in (um { umInstances = HM.insert uid u'
+                                                                (umInstances um) }
+                                   , Just item)
+            case mItem of
+                Nothing → do
+                    Lua.pushboolean False
+                    return 1
+                Just item → do
+                    delivered ← Lua.liftIO $
+                        atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                            case HM.lookup bid (bmInstances bm) of
+                                Nothing → (bm, False)
+                                Just inst →
+                                    let current = HM.lookupDefault [] defName
+                                                    (biMaterialsDelivered inst)
+                                        newMap  = HM.insert defName (item : current)
+                                                    (biMaterialsDelivered inst)
+                                        inst'   = inst
+                                            { biMaterialsDelivered = newMap }
+                                    in (bm { bmInstances = HM.insert bid inst'
+                                                            (bmInstances bm) }
+                                       , True)
+                    unless delivered $ do
+                        logger ← Lua.liftIO $ readIORef (loggerRef env)
+                        Lua.liftIO $ logWarn logger CatThread $
+                            "transferItemToBuilding: building "
+                            <> T.pack (show nB)
+                            <> " gone between pop and deliver — "
+                            <> defName <> " lost"
+                    Lua.pushboolean delivered
+                    return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
 
 -- | Helper: adjust the fill of the first ItemInstance matching defName.
 --   Clamps to [0, capacity] looked up via the ItemManager. Returns the

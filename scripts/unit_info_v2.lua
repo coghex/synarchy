@@ -57,7 +57,8 @@ unitInfoV2.lastContentUid = nil   -- (uid, subtab) we last built content for
 unitInfoV2.lastContentTab = nil
 
 -- Header
-unitInfoV2.headerTypeLabelId = nil  -- the "acolyte" row; refreshed per active unit
+unitInfoV2.headerTypeLabelId   = nil  -- the "acolyte" row; refreshed per active unit
+unitInfoV2.headerActionLabelId = nil  -- the action row; refreshed per active unit from unit_ai
 
 -- Equipment section. equipRect is the section rect; equipElements is
 -- the list of sprites/labels rebuilt on unit change (and torn down
@@ -104,7 +105,7 @@ local SECTION_PAD   = 18      -- horizontal padding around section text (clears 
 local SECTION_GAP   = 10      -- vertical gap between section content and divider
 
 local TABS_H    = 88   -- room for extra top padding above the tab row
-local HEADER_H  = 64
+local HEADER_H  = 84   -- 4 rows × ~21px (Name / Type / Role / Action)
 local STATS_H   = 280
 local EQUIP_H   = 272   -- fits a 256-tall humanoid silhouette + 8px top/bot
 -- Inventory section takes remaining vertical room.
@@ -242,7 +243,8 @@ local function clearOwned()
     unitInfoV2.invRows         = {}
     unitInfoV2.lastInvKey      = nil
 
-    unitInfoV2.headerTypeLabelId = nil
+    unitInfoV2.headerTypeLabelId   = nil
+    unitInfoV2.headerActionLabelId = nil
 
     if unitInfoV2.scrollLeftId then
         UI.deleteElement(unitInfoV2.scrollLeftId)
@@ -1615,6 +1617,44 @@ local function collectInventoryAndEquipment(uid)
     return out
 end
 
+-- Build the per-row stacking key. Returns nil for equipped items so
+-- they never collapse into a stack (each occupies a distinct slot).
+-- Non-equipped items only merge when their defName + quality +
+-- condition all match exactly — a 100% motor and a 99% motor stay
+-- on two rows so the player sees the real spread of conditions.
+local function stackKey(it)
+    if it.equipped then return nil end
+    return table.concat({
+        it.defName,
+        tostring(it.quality   or "_"),
+        tostring(it.condition or "_"),
+    }, "|")
+end
+
+-- Collapse identical non-equipped entries into single rows tagged
+-- with stackCount. The representative instance carries the visible
+-- fields (icon, quality, condition); per-tooltip data uses it too.
+-- Total-weight aggregation uses the RAW item list rather than this
+-- one, so the footer stays accurate.
+local function groupForDisplay(items)
+    local groups = {}
+    local seen   = {}    -- stackKey → index in groups
+    for _, it in ipairs(items) do
+        local key = stackKey(it)
+        if key and seen[key] then
+            groups[seen[key]].stackCount =
+                groups[seen[key]].stackCount + 1
+        else
+            local copy = {}
+            for k, v in pairs(it) do copy[k] = v end
+            copy.stackCount = 1
+            groups[#groups + 1] = copy
+            if key then seen[key] = #groups end
+        end
+    end
+    return groups
+end
+
 -- Compute the tab strip: "All" first, then per-category in the order
 -- categories first appear in the merged list. Each tab carries its
 -- count. The All tab counts everything.
@@ -1668,7 +1708,11 @@ local function rebuildInventorySection()
     local rect = unitInfoV2.invRect
     local uid  = unitInfoV2.activeUid
 
-    local items = uid and collectInventoryAndEquipment(uid) or {}
+    local rawItems = uid and collectInventoryAndEquipment(uid) or {}
+    -- For display purposes we collapse identical non-equipped entries
+    -- into stacks. RAW list still drives the total-weight footer so a
+    -- "Steel Plate ×5" row contributes 5×1.2 kg to the total.
+    local items = groupForDisplay(rawItems)
     local key = computeInvKey(uid, unitInfoV2.activeInvTab, items)
     if key == unitInfoV2.lastInvKey then return end
 
@@ -1835,8 +1879,10 @@ local function rebuildInventorySection()
 
         -- Weight (right-aligned) — built FIRST so we can measure its
         -- pixel width and use that to bound the name's available
-        -- horizontal space below.
-        local wText = string.format("%.2f kg", it.weight or 0)
+        -- horizontal space below. Stacked rows multiply by stackCount
+        -- so the line reads "Steel Plate ×5 ... 6.00 kg".
+        local rowWeight = (it.weight or 0) * (it.stackCount or 1)
+        local wText = string.format("%.2f kg", rowWeight)
         local wLbl = label.new({
             name     = "unit_info_v2_inv_w_" .. i,
             text     = wText,
@@ -1861,7 +1907,11 @@ local function rebuildInventorySection()
         local nameX = listX + textPad + iconSz + textPad
         local nameMaxPx = (listX + listW - textPad - wW) - nameX
                         - math.floor(4 * uiscale)
-        local nameText = truncateToWidth(it.displayName, hud.menuFont,
+        local rawName = it.displayName
+        if (it.stackCount or 1) > 1 then
+            rawName = string.format("%s ×%d", rawName, it.stackCount)
+        end
+        local nameText = truncateToWidth(rawName, hud.menuFont,
                                           14, nameMaxPx)
         local nameLbl = label.new({
             name     = "unit_info_v2_inv_name_" .. i,
@@ -1911,10 +1961,11 @@ local function rebuildInventorySection()
         }
     end
 
-    -- 3. Footer: total weight across the FULL item set (not just the
-    -- active tab) so the player always sees their carry total.
+    -- 3. Footer: total weight across the FULL raw item set (not just
+    -- the active tab; not the stacked groups). A row reading
+    -- "Steel Plate ×5 = 6.00 kg" still contributes 6 kg to the total.
     local total = 0
-    for _, it in ipairs(items) do total = total + (it.weight or 0) end
+    for _, it in ipairs(rawItems) do total = total + (it.weight or 0) end
     local footerLbl = label.new({
         name     = "unit_info_v2_inv_footer",
         text     = string.format("Total: %.2f kg", total),
@@ -2191,25 +2242,45 @@ function unitInfoV2.handleAccessoryRowRightClick(elemHandle)
 end
 
 -----------------------------------------------------------
--- Header: stacks Name / Type / Role rows in a virtual rect. No box
--- around it; section boundaries are marked by horizontal rules.
--- All three are placeholder labels for now; "Type" is the only one
--- with real-ish content ("acolyte") since names + roles aren't
--- implemented yet.
+-- Header: stacks Name / Type / Role / Action rows in a virtual rect.
+-- No box around it; section boundaries are marked by horizontal rules.
+-- Name + Role are placeholders (real values aren't implemented yet);
+-- Type and Action are live — Type shows the unit's def name, Action
+-- shows the current AI action mapped through ACTION_DISPLAY below.
 -----------------------------------------------------------
 
+-- Map unit_ai action names → human-readable display strings.
+-- Anything missing falls back to the raw action name so a new action
+-- shows up visibly instead of disappearing.
+local ACTION_DISPLAY = {
+    idle               = "Idling",
+    wander             = "Wandering",
+    follow_command     = "Following order",
+    drink_from_canteen = "Drinking",
+    eat_from_inventory = "Eating",
+    refill_canteen     = "Refilling canteen",
+    search_for_water   = "Searching for water",
+    drink_from_source  = "Drinking from source",
+    notify_allies      = "Notifying allies",
+    build_nearby       = "Working",
+    deliver_to_build_site = "Delivering materials",
+}
+
 local function placeHeader(x, y, w, h)
-    local rows = { "Name", "acolyte", "Role" }
+    -- Row 4 starts as a dash; the tick refresh fills it in from the
+    -- selected unit's currentAction.
+    local rows = { "Name", "acolyte", "Role", "—" }
     local rowH = math.floor(h / #rows)
     local fontSize = 16
     for i, text in ipairs(rows) do
+        local isLive = (i == 2 or i == 4)   -- type + action are real content
         local lblId = label.new({
             name     = "unit_info_v2_header_row" .. i,
             text     = text,
             font     = hud.menuFont,
             fontSize = fontSize,
-            color    = (i == 2)
-                          and {1.0, 1.0, 1.0, 1.0}      -- type: bright
+            color    = isLive
+                          and {1.0, 1.0, 1.0, 1.0}      -- bright
                           or  {0.75, 0.75, 0.75, 1.0},  -- placeholders: dim
             page     = unitInfoV2.page,
             uiscale  = 1.0,
@@ -2220,10 +2291,10 @@ local function placeHeader(x, y, w, h)
                      + math.floor(fontSize * 0.3)
         UI.addToPage(unitInfoV2.page, lblHandle, x + SECTION_PAD, rowY)
         UI.setZIndex(lblHandle, 12)
-        -- The middle row is the unit's type — refreshed each tick from
-        -- the active unit so it can show whatever def name the unit has.
         if i == 2 then
             unitInfoV2.headerTypeLabelId = lblId
+        elseif i == 4 then
+            unitInfoV2.headerActionLabelId = lblId
         end
     end
 end
@@ -2429,6 +2500,17 @@ function unitInfoV2.update(dt)
         local info = unit.getInfo(unitInfoV2.activeUid)
         local typeName = info and info.defName or "?"
         label.setText(unitInfoV2.headerTypeLabelId, typeName)
+    end
+
+    -- Header action row: pull currentAction from unit_ai and map it
+    -- through ACTION_DISPLAY. Unmapped names show raw so unknown
+    -- actions are visible rather than blank.
+    if unitInfoV2.activeUid and unitInfoV2.headerActionLabelId then
+        local unitAi = require("scripts.unit_ai")
+        local aiSt = unitAi.getState and unitAi.getState(unitInfoV2.activeUid)
+        local action = aiSt and aiSt.currentAction
+        local text = (action and (ACTION_DISPLAY[action] or action)) or "—"
+        label.setText(unitInfoV2.headerActionLabelId, text)
     end
 
     -- Refresh every visible tab's texture from its unit's current

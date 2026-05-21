@@ -40,25 +40,37 @@ instance FromJSON BuildingYamlTileSize where
         ⊛ v .:? "y" .!= 1
 
 data BuildingYamlDef = BuildingYamlDef
-    { bydName        ∷ !Text
-    , bydSprite      ∷ !Text
-    , bydTileSize    ∷ !BuildingYamlTileSize
-    , bydPlacement   ∷ !Text
+    { bydName         ∷ !Text
+    , bydDisplayName  ∷ !Text
+    , bydCategory     ∷ !Text
+    , bydDescription  ∷ !Text
+    , bydSprite       ∷ !Text
+    , bydTileSize     ∷ !BuildingYamlTileSize
+    , bydPlacement    ∷ !Text
       -- ^ "flat_ground" / other constraint kinds in the future
-    , bydIsStarting  ∷ !Bool
-    , bydRace        ∷ !Text
-    , bydStateAnims  ∷ !(Map.Map Text Text)
-    , bydAnimations  ∷ !(Map.Map Text BuildingYamlAnim)
+    , bydIsStarting   ∷ !Bool
+    , bydRace         ∷ !Text
+    , bydSpriteAnchor ∷ !Text
+    , bydBuildWork    ∷ !Float
+    , bydMaterials    ∷ !(Map.Map Text Int)
+    , bydStateAnims   ∷ !(Map.Map Text Text)
+    , bydAnimations   ∷ !(Map.Map Text BuildingYamlAnim)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON BuildingYamlDef where
     parseJSON = withObject "BuildingYamlDef" $ \v → BuildingYamlDef
         ⊚ v .:  "name"
+        ⊛ v .:? "display_name"     .!= ""
+        ⊛ v .:? "category"         .!= "Misc"
+        ⊛ v .:? "description"      .!= ""
         ⊛ v .:  "sprite"
         ⊛ v .:? "tile_size"        .!= BuildingYamlTileSize 1 1
         ⊛ v .:? "placement"        .!= "flat_ground"
         ⊛ v .:? "is_starting"      .!= False
         ⊛ v .:? "race"             .!= ""
+        ⊛ v .:? "sprite_anchor"    .!= "diamond_bottom"
+        ⊛ v .:? "build_work"       .!= 0.0
+        ⊛ v .:? "materials"        .!= Map.empty
         ⊛ v .:? "state_animations" .!= Map.empty
         ⊛ v .:? "animations"       .!= Map.empty
 

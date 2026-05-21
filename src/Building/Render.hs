@@ -40,20 +40,49 @@ pickBuildingFrame now inst def =
         stateKey   = case activity of
                        Appearing → "appearing" ∷ Text
                        Built     → "built"
-        animName   = HM.lookupDefault stateKey stateKey (bdStateAnims def)
-    in case HM.lookup animName (bdAnimations def) of
+        -- Find the animation for the current state. If we're Built
+        -- and no "built" animation is defined, fall back to the LAST
+        -- frame of "appearing" so the visible sprite doesn't snap
+        -- back to bdTexture (which may differ from the final
+        -- construction frame). pinLastFrame flags that mode.
+        (mAnim, pinLastFrame) =
+            case HM.lookup stateKey (bdStateAnims def) of
+                Just animName
+                    | Just a ← HM.lookup animName (bdAnimations def)
+                    → (Just a, False)
+                _ → case activity of
+                    Built → case HM.lookup "appearing" (bdStateAnims def) of
+                        Just animName →
+                            (HM.lookup animName (bdAnimations def), True)
+                        Nothing → (Nothing, False)
+                    _ → (Nothing, False)
+    in case mAnim of
         Nothing → bdTexture def
         Just a  → case Map.lookup DirS (aFrames a) of
             Nothing → bdTexture def
             Just fs
                 | V.null fs → bdTexture def
                 | otherwise →
-                    let elapsed = max 0 (now - biSpawnedAt inst)
-                        raw     = floor (elapsed * realToFrac (aFps a)) ∷ Int
-                        n       = V.length fs
-                        idx     = if aLoop a
-                                  then raw `mod` n
-                                  else min raw (n - 1)
+                    let n = V.length fs
+                        -- Worker-driven construction: while Appearing
+                        -- and bdBuildWork > 0, the visible frame tracks
+                        -- progress directly. No workers → frac stays
+                        -- put → animation freezes mid-build.
+                        progressIdx =
+                            let frac = realToFrac (biBuildProgress inst)
+                                     / realToFrac (bdBuildWork def) ∷ Double
+                                raw  = floor (frac * fromIntegral n) ∷ Int
+                            in max 0 (min (n - 1) raw)
+                        timeIdx =
+                            let elapsed = max 0 (now - biSpawnedAt inst)
+                                raw     = floor (elapsed * realToFrac (aFps a)) ∷ Int
+                            in if aLoop a
+                               then raw `mod` n
+                               else min raw (n - 1)
+                        idx
+                          | pinLastFrame                              = n - 1
+                          | activity ≡ Appearing ∧ bdBuildWork def > 0 = progressIdx
+                          | otherwise                                  = timeIdx
                     in fs V.! idx
 
 renderBuildingQuads ∷ EngineEnv → CameraFacing → Int → Float → IO (V.Vector SortableQuad)
@@ -107,9 +136,21 @@ buildingToQuad lookupSlot defFmSlot facing zSlice tileAlpha isSel inst mDef now 
     in if gridZ > zSlice ∨ gridZ < (zSlice - 25)
        then Nothing
        else
-        let texHandle = case mDef of
-                Just def → pickBuildingFrame now inst def
-                Nothing  → biTexture inst
+        let -- Pre-delivery ghost: building was placed but its materials
+            -- gate hasn't been satisfied yet. Render the final form
+            -- with 0.6 alpha (matches the placement-time ghost) so
+            -- the player sees a translucent silhouette of what'll
+            -- land here once delivery completes.
+            isGhost = case mDef of
+                Just d  → bdBuildWork d > 0
+                       ∧ not (HM.null (bdMaterials d))
+                       ∧ not (materialsSatisfied inst d)
+                Nothing → False
+            texHandle = case mDef of
+                Just def
+                    | isGhost   → bdTexture def
+                    | otherwise → pickBuildingFrame now inst def
+                Nothing → biTexture inst
 
             (texW, texH) = case HM.lookup texHandle texSizes of
                 Just (w, h) → (fromIntegral w, fromIntegral h)
@@ -132,21 +173,36 @@ buildingToQuad lookupSlot defFmSlot facing zSlice tileAlpha isSel inst mDef now 
 
             heightOffset = fromIntegral relativeZ * tileSideHeight
 
+            -- bdSpriteAnchor = "tile_bottom" lets the texture include
+            -- the cube's side face (16 px on the standard 96×64 tile).
+            -- We then push the quad DOWN by tileSideHeight so the
+            -- texture's bottom edge lines up with the world tile's
+            -- side-face bottom instead of dangling past it.
+            anchorOffset = case mDef of
+                Just d  | bdSpriteAnchor d ≡ "tile_bottom" → tileSideHeight
+                _                                          → 0
+
             drawX = rawX + (tileWidth - quadW) * 0.5
             drawY = rawY - heightOffset
-                  + tileHalfDiamondHeight - quadH
+                  + tileHalfDiamondHeight - quadH + anchorOffset
 
-            spriteRowSpan = quadH / tileHalfDiamondHeight * 0.5
+            -- Sort by the iso depth of the GROUND TILE, not the sprite
+            -- top. Adding spriteRowSpan (the sprite's vertical extent)
+            -- to the sort key as units do made tall buildings — e.g.
+            -- a 96×96 cargo hold has spriteRowSpan ≈ 2.0 — outrank
+            -- units at the same tile, drawing the building on top of
+            -- a unit standing in front of it. Keeping just the iso
+            -- bottom plus the +0.0005 tiebreaker means a unit at the
+            -- same row sorts in front (their key has +0.0006), and
+            -- units north of the building still get obscured because
+            -- their key is lower (north = smaller faF + fbF).
             sortKey = (faF + fbF)
-                    + spriteRowSpan
                     + fromIntegral relativeZ * 0.001
-                    + 0.0005   -- slightly less than units so a unit at
-                               -- the same tile sorts in front of the
-                               -- building's lower half (intuitive
-                               -- depth ordering)
+                    + 0.0005
 
             actualSlot = lookupSlot texHandle
-            tint = Vec4 1.0 1.0 1.0 tileAlpha
+            ghostFactor = if isGhost then 0.6 else 1.0
+            tint = Vec4 1.0 1.0 1.0 (tileAlpha * ghostFactor)
             flags = if isSel then renderFlagSelected else 0
 
             v0 = Vertex (Vec2 drawX drawY)
@@ -209,9 +265,17 @@ renderGhostQuad env facing zSlice = do
                                 -- intentional — we want the player to
                                 -- see the building flat on the active
                                 -- camera slice.
+                                -- Same anchor logic as the placed-building
+                                -- path: tile_bottom textures get pushed
+                                -- down by tileSideHeight so their drawn
+                                -- side face matches the world tile's.
+                                anchorOffset =
+                                    if bdSpriteAnchor def ≡ "tile_bottom"
+                                    then tileSideHeight else 0
                                 drawX = rawX + (tileWidth - quadW) * 0.5
                                 drawY = rawY
                                       + tileHalfDiamondHeight - quadH
+                                      + anchorOffset
                                 tint = if bgValid ghost
                                        then Vec4 1.0 1.0 1.0 0.6
                                        else Vec4 1.0 0.4 0.4 0.6

@@ -53,6 +53,8 @@ handleBuildingCommand env (BuildingSpawn bid defName gx gy gz) = do
                                             -- treats -1 as fresh, 0+ as
                                             -- a real (possibly depleted)
                                             -- count from a prior save.
+                    , biBuildProgress      = 0
+                    , biMaterialsDelivered = HM.empty
                     }
             atomicModifyIORef' (buildingManagerRef env) $ \bm' →
                 (bm' { bmInstances = HM.insert bid inst (bmInstances bm') }, ())

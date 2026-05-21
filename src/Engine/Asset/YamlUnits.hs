@@ -84,17 +84,22 @@ instance FromJSON UnitYamlBody where
         ⊛ v .:? "bulk"    .!= uybBulk    defaultUnitYamlBody
         ⊛ v .:? "bodyfat" .!= uybBodyfat defaultUnitYamlBody
 
--- | One starting-inventory entry: which item def to give the unit
---   and, optionally, how much fill it has (for containers).
+-- | One starting-inventory entry: which item def to give the unit,
+--   optionally how much fill it has (for containers), and how many
+--   copies to grant. Each copy is a distinct ItemInstance (quality /
+--   condition are rolled per instance), so a count: 5 entry rolls
+--   five independent items rather than a stacked one.
 data UnitYamlInventoryEntry = UnitYamlInventoryEntry
-    { uyieItem ∷ !Text         -- ^ ItemDef name (e.g. "canteen_steel_2l")
-    , uyieFill ∷ !(Maybe Float) -- ^ initial fill in litres; nil = empty
+    { uyieItem  ∷ !Text         -- ^ ItemDef name (e.g. "canteen_steel_2l")
+    , uyieFill  ∷ !(Maybe Float) -- ^ initial fill in litres; nil = empty
+    , uyieCount ∷ !Int           -- ^ number of copies; defaults to 1
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlInventoryEntry where
     parseJSON = withObject "UnitYamlInventoryEntry" $ \v → UnitYamlInventoryEntry
         ⊚ v .:  "item"
         ⊛ v .:? "fill"
+        ⊛ v .:? "count" .!= 1
 
 -- | One skill as declared in YAML. Like a stat (base + range, rolled
 --   at spawn). Skills are continuous floats that grow via a closed-

@@ -687,6 +687,24 @@ function uiManager.onInventoryTabClick(elemHandle)
     return false
 end
 
+-- Build-menu tab strip + icon clicks. See scripts/build_tool.lua's
+-- handleTabClick / handleIconClick for dispatch.
+function uiManager.onBuildMenuTabClick(elemHandle)
+    local mod = package.loaded["scripts.build_tool"]
+    if mod and mod.handleTabClick then
+        return mod.handleTabClick(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onBuildMenuIconClick(elemHandle)
+    local mod = package.loaded["scripts.build_tool"]
+    if mod and mod.handleIconClick then
+        return mod.handleIconClick(elemHandle)
+    end
+    return false
+end
+
 function uiManager.onInventoryItemRightClick(elemHandle)
     local mod = package.loaded["scripts.unit_info_v2"]
     if mod and mod.handleInvItemRightClick then

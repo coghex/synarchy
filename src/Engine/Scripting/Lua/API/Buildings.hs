@@ -18,6 +18,12 @@ module Engine.Scripting.Lua.API.Buildings
     , buildingSetSpawnRemainingFn
     , buildingGetSpawnRemainingFn
     , buildingConsumeSpawnFn
+    , buildingGetBuildProgressFn
+    , buildingGetBuildRequiredFn
+    , buildingAddBuildProgressFn
+    , buildingGetMaterialNeedFn
+    , buildingGetMaterialDeliveredFn
+    , buildingAreMaterialsSatisfiedFn
     ) where
 
 import UPrelude
@@ -39,6 +45,7 @@ import Engine.Asset.YamlBuildings (BuildingYamlDef(..), BuildingYamlAnim(..),
 import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
+import Engine.Asset.Handle (TextureHandle(..))
 import Building.Placement (canPlaceAt, PlacementResult(..))
 import Building.HitTest (hitTestBuildingAt)
 import Unit.Direction (Direction(..))
@@ -97,16 +104,28 @@ loadBuildingYamlFn env backendState = do
 
                     let stateAnims = HM.fromList (Map.toList (bydStateAnims def))
 
+                    -- Default display_name to the raw name if YAML
+                    -- didn't supply one — keeps older defs renderable
+                    -- in the build menu without forcing a YAML edit.
+                    let displayName = if T.null (bydDisplayName def)
+                                      then name
+                                      else bydDisplayName def
                     let bdef = BuildingDef
-                            { bdName       = name
-                            , bdTexture    = handle
-                            , bdTileW      = bytsX (bydTileSize def)
-                            , bdTileH      = bytsY (bydTileSize def)
-                            , bdPlacement  = bydPlacement def
-                            , bdIsStarting = bydIsStarting def
-                            , bdRace       = bydRace def
-                            , bdAnimations = animMap
-                            , bdStateAnims = stateAnims
+                            { bdName         = name
+                            , bdDisplayName  = displayName
+                            , bdCategory     = bydCategory def
+                            , bdDescription  = bydDescription def
+                            , bdTexture      = handle
+                            , bdTileW        = bytsX (bydTileSize def)
+                            , bdTileH        = bytsY (bydTileSize def)
+                            , bdPlacement    = bydPlacement def
+                            , bdIsStarting   = bydIsStarting def
+                            , bdRace         = bydRace def
+                            , bdSpriteAnchor = bydSpriteAnchor def
+                            , bdBuildWork    = bydBuildWork def
+                            , bdMaterials    = HM.fromList (Map.toList (bydMaterials def))
+                            , bdAnimations   = animMap
+                            , bdStateAnims   = stateAnims
                             }
                     atomicModifyIORef' (buildingManagerRef env) $ \bm →
                         (bm { bmDefs = HM.insert name bdef (bmDefs bm) }, ())
@@ -291,9 +310,18 @@ buildingGetInfoFn env = do
                     Lua.pushnil
                     return 1
                 Just inst → do
+                    -- Resolve def once for display fields that come
+                    -- from the def rather than the instance.
+                    mDef ← Lua.liftIO $ do
+                        bm ← readIORef (buildingManagerRef env)
+                        pure (HM.lookup (biDefName inst) (bmDefs bm))
                     Lua.newtable
                     Lua.pushstring (TE.encodeUtf8 (biDefName inst))
                     Lua.setfield (-2) "defName"
+                    Lua.pushstring (TE.encodeUtf8 $ case mDef of
+                        Just d  → bdDisplayName d
+                        Nothing → biDefName inst)
+                    Lua.setfield (-2) "displayName"
                     Lua.pushinteger (fromIntegral (biAnchorX inst))
                     Lua.setfield (-2) "gridX"
                     Lua.pushinteger (fromIntegral (biAnchorY inst))
@@ -384,6 +412,170 @@ buildingConsumeSpawnFn env = do
                     Lua.pushnil
                     return 1
 
+-- | building.getBuildProgress(bid) → Float (accumulated worker-seconds).
+--   nil if the bid doesn't exist.
+buildingGetBuildProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetBuildProgressFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            mProg ← Lua.liftIO $ do
+                bm ← readIORef (buildingManagerRef env)
+                pure (biBuildProgress <$> HM.lookup bid (bmInstances bm))
+            case mProg of
+                Just p → do
+                    Lua.pushnumber (Lua.Number (realToFrac p))
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+
+-- | building.getBuildRequired(bid) → Float (bdBuildWork from the def).
+--   0 means instant-build (legacy time-based, no worker assignment).
+--   nil if the bid doesn't exist or its def is missing.
+buildingGetBuildRequiredFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetBuildRequiredFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            mReq ← Lua.liftIO $ do
+                bm ← readIORef (buildingManagerRef env)
+                pure $ do
+                    inst ← HM.lookup bid (bmInstances bm)
+                    def  ← HM.lookup (biDefName inst) (bmDefs bm)
+                    pure (bdBuildWork def)
+            case mReq of
+                Just w → do
+                    Lua.pushnumber (Lua.Number (realToFrac w))
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+
+-- | building.addBuildProgress(bid, delta) → Float (new progress) | nil.
+--   Clamps the result at [0, ∞). Currently called by the Lua
+--   construction tick once per frame with delta = R(workers) * dt.
+buildingAddBuildProgressFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingAddBuildProgressFn env = do
+    idArg    ← Lua.tointeger 1
+    deltaArg ← Lua.tonumber   2
+    case (idArg, deltaArg) of
+        (Just n, Just (Lua.Number d)) → do
+            let bid   = BuildingId (fromIntegral n)
+                delta = realToFrac d ∷ Float
+            mNew ← Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                case HM.lookup bid (bmInstances bm) of
+                    Nothing → (bm, Nothing)
+                    Just inst →
+                        let newProg = max 0 (biBuildProgress inst + delta)
+                            inst'   = inst { biBuildProgress = newProg }
+                        in (bm { bmInstances = HM.insert bid inst' (bmInstances bm) }
+                           , Just newProg)
+            case mNew of
+                Just p → do
+                    Lua.pushnumber (Lua.Number (realToFrac p))
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+        _ → do
+            Lua.pushnil
+            return 1
+
+-- | building.getMaterialNeed(bid) → table {[defName] = count}. The
+--   def-declared requirement map. nil if the bid or its def is gone.
+buildingGetMaterialNeedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetMaterialNeedFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            mMat ← Lua.liftIO $ do
+                bm ← readIORef (buildingManagerRef env)
+                pure $ do
+                    inst ← HM.lookup bid (bmInstances bm)
+                    def  ← HM.lookup (biDefName inst) (bmDefs bm)
+                    pure (bdMaterials def)
+            case mMat of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just mats → do
+                    Lua.newtable
+                    forM_ (HM.toList mats) $ \(name, count) → do
+                        Lua.pushinteger (fromIntegral count)
+                        Lua.setfield (-2) (Lua.Name (TE.encodeUtf8 name))
+                    return 1
+
+-- | building.getMaterialDelivered(bid) → table {[defName] = count}.
+--   Just the count per type — the actual ItemInstances stay engine-
+--   side until deconstruction recovery surfaces them. nil if the bid
+--   doesn't exist.
+buildingGetMaterialDeliveredFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetMaterialDeliveredFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            mMap ← Lua.liftIO $ do
+                bm ← readIORef (buildingManagerRef env)
+                pure (biMaterialsDelivered <$> HM.lookup bid (bmInstances bm))
+            case mMap of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just mats → do
+                    Lua.newtable
+                    forM_ (HM.toList mats) $ \(name, items) → do
+                        Lua.pushinteger (fromIntegral (length items))
+                        Lua.setfield (-2) (Lua.Name (TE.encodeUtf8 name))
+                    return 1
+
+-- | building.areMaterialsSatisfied(bid) → bool. True iff for every
+--   material type in bdMaterials the delivered count meets the need.
+--   Empty bdMaterials (default for legacy defs like the portal)
+--   trivially satisfies. nil if the bid is gone.
+buildingAreMaterialsSatisfiedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingAreMaterialsSatisfiedFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            mOk ← Lua.liftIO $ do
+                bm ← readIORef (buildingManagerRef env)
+                pure $ do
+                    inst ← HM.lookup bid (bmInstances bm)
+                    def  ← HM.lookup (biDefName inst) (bmDefs bm)
+                    let need = bdMaterials def
+                        delivered = biMaterialsDelivered inst
+                    pure $ all (\(t, n') →
+                                  length (HM.lookupDefault [] t delivered) >= n')
+                               (HM.toList need)
+            case mOk of
+                Just ok → do
+                    Lua.pushboolean ok
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+
 -- | building.getActivity(id) — returns "appearing" while the appear
 --   animation is still playing, "built" afterwards. nil if the
 --   building doesn't exist. Computed from elapsed time vs the def's
@@ -437,14 +629,33 @@ buildingListFn env = do
     Lua.pushstring (TE.encodeUtf8 (T.pack result))
     return 1
 
+-- | building.listDefs() — Lua array of tables, one per registered
+--   building def. Each entry: {name, displayName, category, description,
+--   iconTex, isStarting}. Used by the build menu to populate icons +
+--   tooltips with categorisation.
 buildingListDefsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 buildingListDefsFn env = do
-    names ← Lua.liftIO $ do
+    defs ← Lua.liftIO $ do
         bm ← readIORef (buildingManagerRef env)
-        return $ HM.keys (bmDefs bm)
+        return $ HM.elems (bmDefs bm)
     Lua.newtable
-    forM_ (zip [1..] names) $ \(i, name) → do
-        Lua.pushstring (TE.encodeUtf8 name)
+    forM_ (zip [1..] defs) $ \(i, d) → do
+        Lua.newtable
+        Lua.pushstring (TE.encodeUtf8 (bdName d))
+        Lua.setfield (-2) "name"
+        Lua.pushstring (TE.encodeUtf8 (bdDisplayName d))
+        Lua.setfield (-2) "displayName"
+        Lua.pushstring (TE.encodeUtf8 (bdCategory d))
+        Lua.setfield (-2) "category"
+        Lua.pushstring (TE.encodeUtf8 (bdDescription d))
+        Lua.setfield (-2) "description"
+        let TextureHandle texInt = bdTexture d
+        Lua.pushinteger (fromIntegral texInt)
+        Lua.setfield (-2) "iconTex"
+        Lua.pushboolean (bdIsStarting d)
+        Lua.setfield (-2) "isStarting"
+        Lua.pushnumber (Lua.Number (realToFrac (bdBuildWork d)))
+        Lua.setfield (-2) "buildWork"
         Lua.rawseti (-2) i
     return 1
 

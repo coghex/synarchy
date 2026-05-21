@@ -1,0 +1,11 @@
+items:
+  - name: "processing_unit"
+    display_name: "Processing Unit"
+    sprite: "assets/textures/items/processing_unit.png"
+    weight: 0.4
+    category: Materials
+    make: factory
+    # Brand-new at spawn; condition persists through building lifespan.
+    condition:
+      min: 100
+      max: 100

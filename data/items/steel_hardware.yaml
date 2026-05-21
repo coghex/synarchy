@@ -1,0 +1,8 @@
+items:
+  - name: "steel_hardware"
+    display_name: "Steel Hardware"
+    sprite: "assets/textures/items/hardware_steel.png"
+    weight: 0.2
+    category: Materials
+    make: foundry
+    material: steel

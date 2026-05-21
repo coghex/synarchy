@@ -58,8 +58,18 @@ saveMagic = 0x53595241
 --   v10 adds uisAccessories to UnitInstanceSnapshot — items worn off
 --       the silhouette (robes, goggles, rings…). Empty list is legal
 --       for units without any accessory slots.
+--   v11 adds bisBuildProgress to BuildingInstanceSnapshot — accumulated
+--       worker-seconds toward bdBuildWork. Required so a save mid-
+--       construction restores at the same progress fraction (otherwise
+--       the building would either reset to 0 or skip to Built depending
+--       on the new currentActivity branch).
+--   v12 adds bisMaterialsDelivered to BuildingInstanceSnapshot — the
+--       full ItemInstance list for each material type consumed into
+--       the build. Required so an electric motor that went in at
+--       100% condition comes back out at its then-current condition
+--       on a future deconstruction recovery.
 currentSaveVersion ∷ Int
-currentSaveVersion = 10
+currentSaveVersion = 12
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects
@@ -155,6 +165,8 @@ data BuildingInstanceSnapshot = BuildingInstanceSnapshot
     , bisTileW      ∷ !Int
     , bisTileH      ∷ !Int
     , bisSpawnRemaining ∷ !Int
+    , bisBuildProgress ∷ !Float
+    , bisMaterialsDelivered ∷ !(HM.HashMap Text [ItemInstance])
     } deriving (Show, Serialize, Generic)
 
 -- | Build a snapshot from a live BuildingManager. Strips `bmDefs`
@@ -176,6 +188,8 @@ toBuildingInstanceSnapshot bi = BuildingInstanceSnapshot
     , bisTileW         = biTileW bi
     , bisTileH         = biTileH bi
     , bisSpawnRemaining = biSpawnRemaining bi
+    , bisBuildProgress = biBuildProgress bi
+    , bisMaterialsDelivered = biMaterialsDelivered bi
     }
 
 -- | Restore a BuildingManager from a snapshot. `defs` come from the
@@ -219,6 +233,8 @@ fromBuildingInstanceSnapshot def s = BuildingInstance
     , biTileW          = bisTileW s
     , biTileH          = bisTileH s
     , biSpawnRemaining = bisSpawnRemaining s
+    , biBuildProgress  = bisBuildProgress s
+    , biMaterialsDelivered = bisMaterialsDelivered s
     }
 
 -- Unit snapshots ---------------------------------------------------

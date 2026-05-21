@@ -226,6 +226,46 @@ function buildingSpawn.init(scriptId)
         end)
 end
 
+-- Construction progress curve. Solo workers build at 1× the base
+-- rate (R(1)=1 worker-second per real second); coordination bonus
+-- ramps as n² up to 3 workers, then tapers logarithmically so the
+-- 5th+ helper still adds something but with diminishing returns.
+--   R(1) = 1,  R(2) = 4,  R(3) = 9
+--   R(4) ≈ 12, R(5) ≈ 13.75, R(6) = 15, R(8) ≈ 16.75, R(10) = 18
+local function workerRate(n)
+    if n <= 0 then return 0 end
+    if n <= 3 then return n * n end
+    return 9 + 3 * (math.log(n - 2) / math.log(2))
+end
+
+-- Tick the construction progress for one Appearing building. Only
+-- fires if the def has bdBuildWork > 0 (legacy time-based defs like
+-- the portal are untouched). Counts acolytes physically adjacent
+-- with currentAction == "build_nearby", scales by R(n) * dt, and
+-- bumps biBuildProgress via the engine API. The engine's
+-- currentActivity check flips the building to Built once
+-- biBuildProgress ≥ bdBuildWork — no explicit "complete" needed.
+local function constructionTickOne(bid, dt)
+    if building.getActivity(bid) ~= "appearing" then return end
+    local required = building.getBuildRequired(bid)
+    if not required or required <= 0 then return end
+
+    -- Materials gate: don't advance progress until every required
+    -- material has been fully delivered. While unsatisfied the
+    -- building renders as a ghost; once satisfied it flips to the
+    -- first construction frame and progresses normally.
+    if not building.areMaterialsSatisfied(bid) then return end
+
+    local unitAi = require("scripts.unit_ai")
+    local workers = unitAi.countAdjacentBuilders(bid)
+    if workers <= 0 then return end
+
+    local delta = workerRate(workers) * dt
+    if delta > 0 then
+        building.addBuildProgress(bid, delta)
+    end
+end
+
 function buildingSpawn.update(dt)
     if require("scripts.pause").isPaused() then return end
     local ids = getAllBuildingIds()
@@ -234,6 +274,7 @@ function buildingSpawn.update(dt)
         local info = building.getInfo(bid)
         if info and info.defName then
             tickOne(bid, info)
+            constructionTickOne(bid, dt)
         end
     end
 end

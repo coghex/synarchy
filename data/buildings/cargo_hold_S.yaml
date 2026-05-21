@@ -1,0 +1,47 @@
+buildings:
+  - name: "cargo_hold_S"
+    display_name: "Cargo Hold (Small)"
+    category: "Cargo"
+    description: "Storage for supplies and equipment. The smallest of the cargo holds; larger sizes will follow."
+    sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    tile_size: { x: 1, y: 1 }
+    placement: "flat_ground"
+    race: "acolyte_cult"
+    # Texture draws its own side-face below the diamond, so anchor the
+    # sprite at the cube's bottom instead of the diamond's south point.
+    sprite_anchor: "tile_bottom"
+    # Worker-seconds needed to finish at the solo rate. With one
+    # acolyte this is wall-time. The construction rate scales with
+    # workers (n² up to 3, log taper above), so for 240 s of work:
+    #   1 builder → ~240 s, 2 → ~60 s, 3 → ~27 s, 4 → ~20 s.
+    build_work: 240.0
+
+    # Required materials — gated before any progress can accrue.
+    # Half of each spawns on every acolyte, so any two acolytes with
+    # a complete inventory between them can finish the build.
+    materials:
+      steel_plate:     10
+      steel_bar:       24
+      steel_hardware:  10
+      electric_motor:   2
+      processing_unit:  2
+
+    # While materials aren't satisfied the building renders as a
+    # translucent ghost (uses default.png with 0.6 alpha). Once they
+    # arrive, the construction anim plays through these 4 frames at
+    # whatever pace the workers drive. With no "built" anim defined,
+    # the engine pins frame 4 as the built sprite — same picture, no
+    # snap.
+    state_animations:
+      appearing: cargo-construct
+
+    animations:
+      cargo-construct:
+        fps: 4
+        loop: false
+        frames:
+          default:
+            - "assets/textures/buildings/cargo_hold_S/construct/frame_001.png"
+            - "assets/textures/buildings/cargo_hold_S/construct/frame_002.png"
+            - "assets/textures/buildings/cargo_hold_S/construct/frame_003.png"
+            - "assets/textures/buildings/cargo_hold_S/construct/frame_004.png"

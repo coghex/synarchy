@@ -1,5 +1,8 @@
 buildings:
   - name: "acolyte_portal"
+    display_name: "Acolyte Portal"
+    category: "Starting"
+    description: "The cult's planar gate. Channels acolytes into the world; the only structure available before the first arrives."
     sprite: "assets/textures/buildings/acolyte_portal/default.png"
     tile_size: { x: 1, y: 1 }
     placement: "flat_ground"

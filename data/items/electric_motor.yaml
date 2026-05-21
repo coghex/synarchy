@@ -1,0 +1,14 @@
+items:
+  - name: "electric_motor"
+    display_name: "Electric Motor"
+    sprite: "assets/textures/items/electric_motor.png"
+    weight: 2.5
+    category: Materials
+    make: factory
+    # No quality spec — motors are mass-produced and uniform; only
+    # condition degrades. Brand-new units spawn at 100% and survive
+    # being built into structures (recovered on deconstruction with
+    # their then-current condition).
+    condition:
+      min: 100
+      max: 100

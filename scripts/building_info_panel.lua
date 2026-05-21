@@ -34,12 +34,26 @@ end
 local function formatInfo(bid, info)
     local activity = building.getActivity(bid) or "?"
     local footprint = string.format("%dx%d", info.tileW or 1, info.tileH or 1)
-    return (info.defName or "(unnamed)")
-        .. "\nActivity: " .. activity
-        .. "\nAt (" .. tostring(info.gridX or "?")
-                  .. ", " .. tostring(info.gridY or "?")
-                  .. ", " .. tostring(info.gridZ or "?") .. ")"
-        .. "\nFootprint: " .. footprint
+    local lines = {}
+    table.insert(lines, info.displayName or info.defName or "(unnamed)")
+    table.insert(lines, "Activity: " .. activity)
+    -- Worker-driven construction progress (only while Appearing and
+    -- the def has a non-zero work cost — instant-build defs like the
+    -- portal show no progress line).
+    if activity == "appearing" then
+        local required = building.getBuildRequired(bid)
+        local progress = building.getBuildProgress(bid)
+        if required and required > 0 and progress then
+            local pct = math.floor((progress / required) * 100 + 0.5)
+            if pct > 100 then pct = 100 end
+            table.insert(lines, string.format("Construction: %d%%", pct))
+        end
+    end
+    table.insert(lines, "At (" .. tostring(info.gridX or "?")
+                              .. ", " .. tostring(info.gridY or "?")
+                              .. ", " .. tostring(info.gridZ or "?") .. ")")
+    table.insert(lines, "Footprint: " .. footprint)
+    return table.concat(lines, "\n")
 end
 
 local function pushBuildingInfo(bid)
