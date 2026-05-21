@@ -41,17 +41,12 @@ local config = {
         count          = 3,
         spawn_offset   = { x = 0.5, y = 0.5 },
         -- Items handed out to each spawned unit immediately after
-        -- spawn, via unit.addItem. The unit YAML carries no
-        -- starting_inventory; debug-spawned units come out bare,
-        -- portal-spawned units get whatever's listed here.
-        starting_items = {
-            { def = "canteen_steel_2l", fill = 2.0 },
-            -- Two rations per acolyte — enough emergency food to last
-            -- ~10 game-hours of idle BMR (500 kcal / 0.92 kcal/sec ≈
-            -- 9 minutes real time at timeScale 1).
-            { def = "rations" },
-            { def = "rations" },
-        },
+        -- spawn, via unit.addItem. Empty now — the acolyte def's
+        -- starting_inventory carries the canteen + rations baseline so
+        -- the unit-info v2 inventory panel can see them on debug-
+        -- spawned units too. Add portal-specific extras here if any
+        -- ever appear (e.g. a sigil only the portal grants).
+        starting_items = {},
         -- Walk two tiles south so the unit clears the spawn tile
         -- before its commandedTask resolves (the AI's "arrived"
         -- threshold is 0.6 tiles, so a 1-tile walk barely makes it

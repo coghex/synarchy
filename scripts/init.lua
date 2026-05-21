@@ -216,6 +216,48 @@ function game.onMouseDown(button, x, y)
                     unitAi.commandMove(uid, tx, ty, 2.0)
                 end
             end
+        else
+            -- No selection → open the tile context menu. Capture the
+            -- right-clicked tile NOW (the cursor moves once the menu
+            -- opens) and stash it in the callbacks. Currently a one-
+            -- item menu ("Info") as a smoke test of the right-click +
+            -- context-menu plumbing; per-target providers replace
+            -- this hardcoded list later.
+            local gx, gy = world.getHoverTile()
+            if gx and gy then
+                local hud = require("scripts.hud")
+                local contextMenu = require("scripts.ui.context_menu")
+                local fbW, fbH = engine.getFramebufferSize()
+                local ww, wh = engine.getWindowSize()
+                local mx, my = x, y
+                if ww and wh and ww > 0 and wh > 0 then
+                    mx = x * (fbW / ww)
+                    my = y * (fbH / wh)
+                end
+                local tileX, tileY = gx, gy
+                contextMenu.show({
+                    { label = "Info",
+                      callback = function()
+                          -- Drive the HUD toolbar widget so the bottom-
+                          -- left icon flips to the info tool. The
+                          -- toggle's onChange runs world.setToolMode +
+                          -- the build/tile_editor side effects, so this
+                          -- single call replaces a manual setToolMode.
+                          local toggle = require("scripts.ui.toggle")
+                          toggle.applyOptionByName(
+                              hud.mapToggleId, "tool_info")
+                          -- selectTile uses the direct tile-coord
+                          -- select API — the cursor's pixel-hover state
+                          -- has already moved to the menu, so the
+                          -- usual hover+select would pick the wrong
+                          -- tile.
+                          world.selectTile(hud.worldId, tileX, tileY)
+                          local tileEditor =
+                              require("scripts.tile_editor")
+                          tileEditor.onTileSelected(tileX, tileY)
+                      end },
+                }, mx, my)
+            end
         end
     end
 end
@@ -240,6 +282,12 @@ function game.onKeyDown(key)
     --   Esc        → dismiss topmost popup, OR close event log,
     --                OR fall through to selection-clear below
     if key == "Escape" then
+        -- Context menu takes priority — close it before any popup /
+        -- selection-cleanup runs. Matches "Escape cancels the topmost
+        -- transient UI thing" intuition.
+        local contextMenu = require("scripts.ui.context_menu")
+        if contextMenu.handleEscape() then return end
+
         local popup = require("scripts.popup")
         local shift = engine.isKeyDown("LeftShift")
                       or engine.isKeyDown("RightShift")

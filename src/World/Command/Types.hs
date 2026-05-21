@@ -39,6 +39,12 @@ data WorldCommand
     | WorldSetWorldCursorHover WorldPageId Int Int
     | WorldSetWorldCursorSelect WorldPageId
     | WorldSetWorldCursorDeselect WorldPageId
+    | WorldSelectTileByCoord WorldPageId Int Int
+        -- ^ Atomically set worldSelectedTile to the column at (gx, gy)
+        --   using the loaded chunk's surface z. Bypasses the hover-
+        --   then-select dance so the caller doesn't have to fight the
+        --   continuous mouse-hover overwrites for one-shot selections
+        --   (e.g. context-menu "Info" on a tile).
     | WorldSetToolMode WorldPageId ToolMode
     | WorldSave WorldPageId Text Text (HM.HashMap Text Text)
         -- ^ pageId, save-name, request-timestamp (ISO 8601 second

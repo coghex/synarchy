@@ -199,7 +199,15 @@ end
 -- Update (called at tick interval)
 -----------------------------------------------------------
 function unitInfoWatch.update(dt)
-    if unitInfoWatch.suppressed then return end
+    -- Re-check the suppress flag every tick rather than only at
+    -- module load. engine.loadScript uses dofile (not require), so
+    -- unit_info_v2's init.lua-time attempt to flip
+    -- oldWatch.suppressed directly can't reach this module's local
+    -- table. The package.loaded sentinel is the reliable signal.
+    if unitInfoWatch.suppressed
+       or package.loaded.__unit_info_v2_suppress then
+        return
+    end
     local sel = unit.getSelected()
     local cur = sel and sel[1] or nil
 

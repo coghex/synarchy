@@ -1,7 +1,7 @@
 items:
   - name: "leather_gloves"
     display_name: "Leather Gloves"
-    sprite: "assets/textures/equipment/leather_gloves.png"
+    sprite: "assets/textures/equipment/gloves_leather.png"
     weight: 0.3
     kind: gauntlets
     category: Armor

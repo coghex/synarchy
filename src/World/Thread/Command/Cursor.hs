@@ -11,6 +11,7 @@ module World.Thread.Command.Cursor
     , handleWorldSetWorldCursorHoverTextureCommand
     , handleWorldSetWorldCursorSelectBgTextureCommand
     , handleWorldSetWorldCursorHoverBgTextureCommand
+    , handleWorldSelectTileByCoordCommand
     ) where
 
 import UPrelude
@@ -26,9 +27,12 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
+import qualified Data.Vector.Unboxed as VU
 import World.Types
+import World.Chunk.Types (LoadedChunk(..), columnIndex)
+import World.Tile.Types (lookupChunk)
 import World.Constants (seaLevel)
-import World.Generate (generateChunk)
+import World.Generate (generateChunk, globalToChunk)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Generate.Timeline (applyTimelineFast)
 import World.Geology (buildTimeline)
@@ -164,7 +168,28 @@ handleWorldSetWorldCursorHoverBgTextureCommand env logger pageId tid = do
         Just worldState → do
             atomicModifyIORef' (wsCursorRef worldState) $ \cs →
               (cs { worldHoverBgTexture = Just tid }, ())
-        Nothing → 
-            logWarn logger CatWorld $ 
+        Nothing →
+            logWarn logger CatWorld $
                 "World not found for cursor hover texture update: "
                     <> unWorldPageId pageId
+
+-- | Directly select the column at (gx, gy) on the given world, using
+--   the loaded chunk's surface z. Used by the context-menu "Info" path
+--   so a tile can be selected without going through the hover-then-
+--   select cursor flow (which races with the per-tick mouse-hover
+--   updates from hud.update). No-op if the chunk isn't loaded.
+handleWorldSelectTileByCoordCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → IO ()
+handleWorldSelectTileByCoordCommand env _logger pageId gx gy = do
+    mgr ← readIORef (worldManagerRef env)
+    case lookup pageId (wmWorlds mgr) of
+        Nothing → pure ()
+        Just worldState → do
+            tileData ← readIORef (wsTilesRef worldState)
+            let (chunkCoord, (lx, ly)) = globalToChunk gx gy
+            case lookupChunk chunkCoord tileData of
+                Nothing → pure ()
+                Just lc → do
+                    let z = lcSurfaceMap lc VU.! columnIndex lx ly
+                    atomicModifyIORef' (wsCursorRef worldState) $ \cs →
+                        (cs { worldSelectedTile = Just (gx, gy, z) }, ())

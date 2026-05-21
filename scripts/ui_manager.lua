@@ -33,6 +33,7 @@ local randbox = nil
 local toggle = nil
 local uiList = nil
 local loadingScreen = nil
+local contextMenu = require("scripts.ui.context_menu")
 local testArena = nil
 local pauseMenu = nil
 local popup = nil
@@ -498,6 +499,8 @@ function uiManager.onHoverEnter(elemHandle, callbackName)
         randbox.onHoverEnter(elemHandle)
     elseif uiList and uiList.isListCallback(callbackName) then
         uiList.onHoverEnter(elemHandle)
+    elseif contextMenu and contextMenu.isContextMenuCallback(callbackName) then
+        contextMenu.onHoverEnter(elemHandle)
     end
 end
 
@@ -518,6 +521,8 @@ function uiManager.onHoverLeave(elemHandle, callbackName)
         randbox.onHoverLeave(elemHandle)
     elseif uiList and uiList.isListCallback(callbackName) then
         uiList.onHoverLeave(elemHandle)
+    elseif contextMenu and contextMenu.isContextMenuCallback(callbackName) then
+        contextMenu.onHoverLeave(elemHandle)
     end
 end
 
@@ -681,6 +686,26 @@ function uiManager.onInventoryTabClick(elemHandle)
     end
     return false
 end
+
+-- Context menu click routes. Both fire as broadcast callbacks named in
+-- scripts.ui.context_menu — items run the row's callback, backdrop
+-- closes the menu without doing anything else.
+function uiManager.onContextMenuItemClick(elemHandle)
+    if contextMenu then
+        return contextMenu.handleItemClick(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onContextMenuBackdrop(elemHandle)
+    if contextMenu then
+        return contextMenu.handleBackdropClick(elemHandle)
+    end
+    return false
+end
+-- Note: "onEventLogRightClick" is broadcast to every loaded script —
+-- hud.onEventLogRightClick handles it directly. No uiManager delegate
+-- needed (and adding one would cause the menu to open twice).
 
 function uiManager.onToggleRightClick(elemHandle)
     if toggle then

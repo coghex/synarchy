@@ -9,7 +9,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.Maybe (isJust)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
@@ -419,22 +419,37 @@ renderWorldCursorQuads env worldState tileAlpha = do
             Nothing           → Nothing
             Just (pixX, pixY) → hitTest pixX pixY
 
-    -- Persist the resolved hover tile so Lua callers (e.g. the
-    -- right-click → move path) can read tile coords instead of
-    -- pixel coords. Also snapshots selected tile when worldSelectNow.
+    -- Persist the resolved hover tile so Lua callers can read tile
+    -- coords (right-click → move uses this), and snapshot the selected
+    -- tile when worldSelectNow is set.
+    --
+    -- This uses atomicModifyIORef' AND returns the merged state for
+    -- the rest of this frame to use. Two reasons it must be atomic:
+    --
+    --   1. The world command thread can update wsCursorRef between our
+    --      earlier readIORef and this writeback (e.g. a freshly
+    --      processed WorldSelectTileByCoord). A plain writeIORef of a
+    --      stale-cs-derived value would silently clobber that update.
+    --
+    --   2. Using the merged result downstream (instead of a cs' built
+    --      from the stale initial cs) lets the highlight render on the
+    --      SAME frame the selection landed, not the next one — which
+    --      matters for one-shot selections triggered from Lua: there's
+    --      no continuous hover to pick the tile up on the next tick.
     let newHoverTile = case hoverResult of
             Just (gx, gy, _, _) → Just (gx, gy)
             Nothing             → Nothing
-        newSelected = if worldSelectNow cs
-            then case hoverResult of
-                Just (gx, gy, z, _) → Just (gx, gy, z)
-                Nothing             → worldSelectedTile cs
-            else worldSelectedTile cs
-        cs' = cs { worldHoverTile    = newHoverTile
-                 , worldSelectNow    = False
-                 , worldSelectedTile = newSelected
-                 }
-    writeIORef (wsCursorRef worldState) cs'
+    cs' ← atomicModifyIORef' (wsCursorRef worldState) $ \current →
+        let mergedSelected = if worldSelectNow current
+                then case hoverResult of
+                    Just (gx, gy, z, _) → Just (gx, gy, z)
+                    Nothing             → worldSelectedTile current
+                else worldSelectedTile current
+            merged = current { worldHoverTile    = newHoverTile
+                             , worldSelectNow    = False
+                             , worldSelectedTile = mergedSelected
+                             }
+        in (merged, merged)
 
     if toolMode ≠ InfoTool
     then return V.empty

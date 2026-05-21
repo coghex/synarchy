@@ -1,7 +1,7 @@
 items:
   - name: "wool_gambeson"
     display_name: "Wool Gambeson"
-    sprite: "assets/textures/equipment/wool_gambeson.png"
+    sprite: "assets/textures/equipment/gambeson_wool.png"
     weight: 3.5
     kind: armor
     category: Armor

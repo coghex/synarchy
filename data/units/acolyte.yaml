@@ -25,10 +25,16 @@ units:
     skills:
       balance: { base: 1.0, range: 1.0 }
 
-    # No starting_inventory: bare acolytes spawn empty so debug-spawn
-    # produces a clean unit. Items are granted at the caller's
-    # discretion via unit.addItem — see scripts/building_spawn.lua
-    # which hands out a canteen when a portal spawns each acolyte.
+    # Default supplies every acolyte spawns with — full canteen and
+    # two rations. building_spawn.lua used to grant these per-portal-
+    # spawn via unit.addItem; since the unit-info v2 inventory tab
+    # needs to actually SHOW them for debug-spawned units too, the
+    # baseline lives on the def now. Adjust if you want bare debug
+    # spawns again.
+    starting_inventory:
+      - { item: "canteen_steel_2l", fill: 2.0 }
+      - { item: "rations" }
+      - { item: "rations" }
 
     # Combat equipment seeded into the matching slots at spawn. Each
     # entry's item kind must match the slot's accepted kind (see

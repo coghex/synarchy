@@ -404,6 +404,39 @@ local function applyOption(grp, btnIdx, optionIndex)
     end
 end
 
+--- Find an option (by name) on any of the group's buttons and apply
+--- it, mirroring the right-click-then-pick-option UX. Fires the same
+--- onOptionSelect + onChange callbacks as a user pick. Returns true if
+--- found and applied, false otherwise.
+---
+--- Two hit-paths in priority order:
+---  1. The name already matches a slot button — just re-select it.
+---  2. The name appears in some button's `options` list — swap it in.
+function toggle.applyOptionByName(groupId, name)
+    local grp = groups[groupId]
+    if not grp then return false end
+
+    for i, btn in ipairs(grp.buttons) do
+        if btn.name == name then
+            toggle.select(groupId, i)
+            if grp.onChange then grp.onChange(i, btn.name) end
+            return true
+        end
+    end
+
+    for btnIdx, btn in ipairs(grp.buttons) do
+        if btn.options then
+            for optIdx, opt in ipairs(btn.options) do
+                if opt.name == name then
+                    applyOption(grp, btnIdx, optIdx)
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
 -----------------------------------------------------------
 -- Click Handling
 -----------------------------------------------------------
