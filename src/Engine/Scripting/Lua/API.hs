@@ -291,12 +291,15 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "consumeSpawn"        (buildingConsumeSpawnFn env)
   Lua.setglobal (Lua.Name "building")
 
-  -- Equipment global — read-only Phase 1 API for fetching equipment
-  -- class layouts (slot positions, silhouette texture). Phase 2 will
-  -- add equip/unequip and per-unit loadout queries here.
+  -- Equipment global.
+  -- Read: getClass / getClassNames / getLoadout.
+  -- Write: equip / unequip (with kind validation against slot's accepted kind).
   Lua.newtable
   registerLuaFunction "getClass"      (equipmentGetClassFn env)
   registerLuaFunction "getClassNames" (equipmentGetClassNamesFn env)
+  registerLuaFunction "getLoadout"    (equipmentGetLoadoutFn env)
+  registerLuaFunction "equip"         (equipmentEquipFn env)
+  registerLuaFunction "unequip"       (equipmentUnequipFn env)
   Lua.setglobal (Lua.Name "equipment")
 
   Lua.newtable

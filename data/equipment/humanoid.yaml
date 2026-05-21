@@ -5,32 +5,37 @@
 # the numbers below assume the texture is drawn at its native pixel
 # size. Boxes are 32x32 (matches the engine's item icon size).
 #
-# Layout is anatomical against a 160x256 silhouette: three columns
-# (viewer-left, center, viewer-right; L/R names follow viewer
-# perspective) over five vertical levels:
+# Combat-only slots. Layered clothing (headwear/bodywear/handwear/
+# legwear/footwear), rings, amulets, etc. go in the right-side
+# accessory list, not into named slots.
+#
+# L/R uses ANATOMICAL convention — "right_hand" is the figure's right
+# hand, which appears on the VIEWER's LEFT side of the panel.
+#
+# Layout against a 160x256 silhouette:
 #
 #                       x= 14    x= 64    x=114
-#   y=  8  (head)                 head
-#   y= 56  (chest)                body
-#   y=104  (hands)     L_hand              R_hand
-#   y=148  (waist)     L_weapon            R_weapon
-#   y=148  (thighs)               legs       ↑ same row, but center
-#   y=216  (feet)                 feet         column so no overlap
+#   y=  8  (head)                 helmet
+#   y= 56  (chest)                armor
+#   y=104  (forearm)   gauntlets
+#   y=148  (waist)     R weapon   greaves    L weapon
+#   y=216  (feet)                 boots
 #
-# All boxes are 32x32 with ≥12px gaps between adjacent boxes. Symmetric
-# 14px side padding leaves the hand/weapon columns sitting just over
-# the figure's hand and hip positions in the silhouette.
+# Gauntlets sit ABOVE the right-hand weapon in their own box (the
+# silhouette paints two stacked boxes at the character's right hand
+# position). Both weapon slots share the same Y (y=140) so the hand-
+# weapon row reads as one horizontal level. Greaves moved down from
+# y=148 to y=180 to clear the weapons row.
 classes:
   - name: humanoid
     silhouette:   assets/textures/equipment/humanoid_silhouette.png
     silhouette_w: 160
     silhouette_h: 256
     slots:
-      - { id: head,         name: "Headwear",     kind: headwear, x:  64, y:   8 }
-      - { id: body,         name: "Bodywear",     kind: bodywear, x:  64, y:  56 }
-      - { id: left_hand,    name: "Handwear (L)", kind: handwear, x:  14, y: 104 }
-      - { id: right_hand,   name: "Handwear (R)", kind: handwear, x: 114, y: 104 }
-      - { id: left_weapon,  name: "Weapon (L)",   kind: weapon,   x:  14, y: 148 }
-      - { id: right_weapon, name: "Weapon (R)",   kind: weapon,   x: 114, y: 148 }
-      - { id: legs,         name: "Legwear",      kind: legwear,  x:  64, y: 148 }
-      - { id: feet,         name: "Footwear",     kind: footwear, x:  64, y: 216 }
+      - { id: helmet,     name: "Helmet",     kind: helmet,    x:  64, y:   8 }
+      - { id: armor,      name: "Armor",      kind: armor,     x:  64, y:  56 }
+      - { id: gauntlets,  name: "Gauntlets",  kind: gauntlets, x:  14, y: 104 }
+      - { id: right_hand, name: "Weapon (R)", kind: weapon,    x:  14, y: 148 }
+      - { id: left_hand,  name: "Weapon (L)", kind: weapon,    x: 114, y: 148 }
+      - { id: greaves,    name: "Greaves",    kind: greaves,   x:  64, y: 148 }
+      - { id: boots,      name: "Boots",      kind: boots,     x:  64, y: 216 }

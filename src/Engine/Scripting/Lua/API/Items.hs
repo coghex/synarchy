@@ -1,4 +1,4 @@
-{-# LANGUAGE Strict, UnicodeSyntax #-}
+{-# LANGUAGE Strict, UnicodeSyntax, OverloadedStrings #-}
 module Engine.Scripting.Lua.API.Items
     ( loadItemYamlFn
     ) where
@@ -10,12 +10,31 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Control.Monad (foldM)
 import Data.IORef (readIORef, atomicModifyIORef')
+import System.Directory (doesFileExist)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (LogCategory(..), logInfo)
+import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
 import Engine.Asset.YamlItems
 import Item.Types
+
+-- | If the preferred path doesn't exist on disk, swap in the equipment
+--   missing-texture placeholder so loadAndRegister has *something* to
+--   queue. Logged so missing assets are visible during iteration.
+--   The fallback path itself isn't checked — if you delete it too,
+--   you'll get the usual broken-texture behaviour at draw time.
+missingEquipmentTexture ∷ FilePath
+missingEquipmentTexture = "assets/textures/equipment/missing_equipment.png"
+
+resolveSpritePath ∷ EngineEnv → FilePath → IO FilePath
+resolveSpritePath env preferred = do
+    exists ← doesFileExist preferred
+    if exists then return preferred else do
+        logger ← readIORef (loggerRef env)
+        logWarn logger CatAsset $
+            "Item sprite missing: " <> T.pack preferred
+            <> " — substituting " <> T.pack missingEquipmentTexture
+        return missingEquipmentTexture
 
 -- | item.loadYaml(path) — parses a YAML file of item defs, loads each
 --   item's sprite, and registers the defs into the ItemManager.
@@ -40,8 +59,9 @@ loadItemYamlFn env backendState = do
                     -- future inventory grid UI. Register under
                     -- "item_<defName>" so other systems can fetch it.
                     let regName = "item_" <> iydName def
+                    spritePath ← resolveSpritePath env (T.unpack (iydSprite def))
                     handle ← loadAndRegister env backendState lteq
-                                regName (T.unpack (iydSprite def))
+                                regName spritePath
 
                     let container = fmap
                             (\c → ItemContainer

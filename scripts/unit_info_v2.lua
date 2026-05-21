@@ -67,6 +67,7 @@ unitInfoV2.equipRect       = nil
 unitInfoV2.equipElements   = {}
 unitInfoV2.lastEquipClass  = nil
 unitInfoV2.lastEquipUid    = nil
+unitInfoV2.lastEquipKey    = nil   -- hash of the rendered loadout
 
 -- Sprite tabs: one entry per selected unit, in selection order.
 -- Each entry: { uid, boxId, spriteId, lastTex }.
@@ -195,6 +196,7 @@ local function clearOwned()
     unitInfoV2.equipElements   = {}
     unitInfoV2.lastEquipClass  = nil
     unitInfoV2.lastEquipUid    = nil
+    unitInfoV2.lastEquipKey    = nil
 
     unitInfoV2.headerTypeLabelId = nil
 
@@ -1051,6 +1053,21 @@ end
 -- the equipped item's icon inside each slot rect.
 -----------------------------------------------------------
 
+-- Stable hash of (uid, class, slot→defName pairs). When this changes
+-- we rebuild; otherwise the previous frame's sprites are correct.
+local function computeEquipKey(uid, clsName, loadout)
+    local parts = { tostring(uid or ""), clsName or "" }
+    if loadout then
+        local pairsT = {}
+        for slotId, item in pairs(loadout) do
+            pairsT[#pairsT + 1] = slotId .. "=" .. (item.defName or "?")
+        end
+        table.sort(pairsT)
+        parts[#parts + 1] = table.concat(pairsT, ";")
+    end
+    return table.concat(parts, "|")
+end
+
 local function rebuildEquipmentSection()
     if not unitInfoV2.equipRect then return end
     local rect = unitInfoV2.equipRect
@@ -1061,15 +1078,14 @@ local function rebuildEquipmentSection()
     local info = uid and unit.getInfo(uid) or nil
     local clsName = info and info.equipmentClass or nil
     local cls = clsName and equipment.getClass(clsName) or nil
+    local loadout = uid and equipment.getLoadout(uid) or nil
 
-    -- Skip rebuild if the (uid, class) tuple hasn't changed. Slot
-    -- positions are immutable per class, so once placed they're stable.
-    if unitInfoV2.lastEquipUid == uid
-       and unitInfoV2.lastEquipClass == clsName then
-        return
-    end
+    -- Skip if nothing relevant changed since the last build. The hash
+    -- folds in uid + class + every (slot, equipped-item) pair, so any
+    -- equip/unequip from Lua invalidates it on the next tick.
+    local key = computeEquipKey(uid, clsName, loadout)
+    if key == unitInfoV2.lastEquipKey then return end
 
-    -- Tear down anything from a previous build.
     for _, e in ipairs(unitInfoV2.equipElements) do
         if e.kind == "label" then label.destroy(e.id)
         else                       UI.deleteElement(e.id)
@@ -1078,6 +1094,7 @@ local function rebuildEquipmentSection()
     unitInfoV2.equipElements   = {}
     unitInfoV2.lastEquipUid    = uid
     unitInfoV2.lastEquipClass  = clsName
+    unitInfoV2.lastEquipKey    = key
 
     if not cls then
         -- No class for this unit — show a quiet placeholder. The
@@ -1124,8 +1141,10 @@ local function rebuildEquipmentSection()
 
     -- Slot overlays — transparent hit-zones positioned over the boxes
     -- painted into the silhouette texture. Each carries a tooltip with
-    -- the slot's name + the item kind it accepts. Phase 2 will swap the
-    -- transparent sprite for an item icon when something is equipped.
+    -- the slot's name + the item kind it accepts. When an item is
+    -- equipped in the slot, its icon renders on top of the hit-zone
+    -- with a richer tooltip (item display name + kind).
+    loadout = loadout or {}
     if cls.slots then
         for i, s in ipairs(cls.slots) do
             local slotW = math.floor(s.w * uiscale)
@@ -1146,6 +1165,28 @@ local function rebuildEquipmentSection()
             })
             table.insert(unitInfoV2.equipElements,
                 { kind = "sprite", id = slotId })
+
+            -- Draw the equipped item's icon on top of the slot if
+            -- present. Z+1 keeps it above the transparent hit-zone so
+            -- icon clicks still register on the slot for popup wiring
+            -- in the next phase.
+            local eq = loadout[s.id]
+            if eq and eq.iconTex then
+                local iconId = UI.newSprite(
+                    "unit_info_v2_equip_icon_" .. i,
+                    slotW, slotH,
+                    eq.iconTex,
+                    1.0, 1.0, 1.0, 1.0,
+                    unitInfoV2.page)
+                UI.addToPage(unitInfoV2.page, iconId, slotX, slotY)
+                UI.setZIndex(iconId, 13)
+                UI.setTooltipRich(iconId, {
+                    text = eq.displayName or eq.defName or s.name,
+                    hint = s.name .. " — kind: " .. (eq.kind or "?"),
+                })
+                table.insert(unitInfoV2.equipElements,
+                    { kind = "sprite", id = iconId })
+            end
         end
     end
 

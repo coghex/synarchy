@@ -143,6 +143,10 @@ data UnitYamlDef = UnitYamlDef
     , uydEquipmentClass    ∷ !(Maybe Text)
       -- ^ optional: name of the EquipmentClass this unit uses
       --   (e.g. "humanoid"). Nothing → no equipment UI for this unit.
+    , uydStartingEquipment ∷ !(Map.Map Text Text)
+      -- ^ optional: slot id → item def name. Each item is equipped
+      --   into the named slot at spawn time, validating that the
+      --   item's kind matches the slot's accepted kind.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -160,6 +164,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "skills"              .!= Map.empty
         ⊛ v .:? "starting_inventory"  .!= []
         ⊛ v .:? "equipment_class"
+        ⊛ v .:? "starting_equipment"  .!= Map.empty
 
 newtype UnitYamlFile = UnitYamlFile
     { uyfUnits ∷ [UnitYamlDef]

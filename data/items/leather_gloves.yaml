@@ -1,0 +1,6 @@
+items:
+  - name: "leather_gloves"
+    display_name: "Leather Gloves"
+    sprite: "assets/textures/equipment/leather_gloves.png"
+    weight: 0.3
+    kind: gauntlets

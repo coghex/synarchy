@@ -86,6 +86,12 @@ data UnitDef = UnitDef
       --   "humanoid"). Nothing means the unit has no equipment UI
       --   at all (e.g. a wandering animal). Resolved against the
       --   EquipmentClassManager at UI-build time, not at spawn.
+    , udStartingEquipment ∷ !(HM.HashMap Text Text)
+      -- ^ slot id → item def name. Materialised into `uiEquipment`
+      --   at spawn, validating each item's `idKind` against the
+      --   slot's `esKind`. Mismatches log a warning and are dropped.
+      --   Empty unless the unit type ships pre-equipped (acolytes
+      --   start with armor, gauntlets, boots, dagger).
     } deriving (Show, Eq)
 
 -- | A spawned unit instance in the world.
@@ -140,6 +146,11 @@ data UnitInstance = UnitInstance
       --   the def's starting_inventory. Mutable: drinking decrements
       --   a canteen's fill, refilling tops it up. Order is preserved
       --   for stable UI display.
+    , uiEquipment   ∷ !(HM.HashMap Text ItemInstance)
+      -- ^ Slot id → equipped item. Populated at spawn from the def's
+      --   `udStartingEquipment` (kind-validated). Mutated by
+      --   equipment.equip / equipment.unequip from Lua. Slots not
+      --   present in the map are empty. Save/load roundtrips.
     } deriving (Show, Eq)
 
 -- | Holds all unit definitions and all spawned instances.

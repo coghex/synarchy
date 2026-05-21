@@ -201,6 +201,8 @@ loadUnitYamlFn env backendState = do
                             , udSkillTemplates = skillTemplates
                             , udStartingInventory = startingInv
                             , udEquipmentClass    = uydEquipmentClass def
+                            , udStartingEquipment = HM.fromList
+                                (Map.toList (uydStartingEquipment def))
                             }
                     atomicModifyIORef' (unitManagerRef env) $ \um →
                         (um { umDefs = HM.insert name unitDef (umDefs um) }, ())

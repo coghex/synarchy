@@ -22,6 +22,8 @@ import Unit.Sim.Types
 import Unit.Stats (rollStat)
 import Unit.Direction (Direction(..))
 import Unit.Command.Types (UnitCommand(..))
+import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
+                        EquipmentClassManager, lookupEquipmentClass)
 import Item.Types (ItemDef(..), ItemContainer(..), ItemInstance(..)
                   , ItemManager(..), lookupItemDef)
 import Engine.Core.Log (LoggerState)
@@ -91,6 +93,13 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
             logger  ← readIORef (loggerRef env)
             initialInventory ← buildStartingInventory logger itemMgr
                                   (udStartingInventory def)
+            -- Pre-equipped items declared by the unit def's
+            -- starting_equipment. Resolved against the EquipmentClass
+            -- so each item's kind can be validated against the slot.
+            ecMgr ← readIORef (equipmentClassManagerRef env)
+            let mClass = udEquipmentClass def >>= (`lookupEquipmentClass` ecMgr)
+            initialEquipment ← buildStartingEquipment logger itemMgr mClass
+                                  (udStartingEquipment def)
             let inst = UnitInstance
                     { uiDefName    = defName
                     , uiTexture    = udTexture def
@@ -110,6 +119,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , uiModifiers   = HM.empty
                     , uiSkills      = initialSkills
                     , uiInventory   = initialInventory
+                    , uiEquipment   = initialEquipment
                     }
             atomicModifyIORef' (unitManagerRef env) $ \um' →
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())
@@ -543,6 +553,63 @@ buildStartingInventory logger itemMgr entries = do
                     { iiDefName     = name
                     , iiCurrentFill = fill
                     }
+
+-- | Resolve a unit def's starting_equipment into a slot→ItemInstance
+--   map, validating each item's `idKind` against the slot's accepted
+--   `esKind`. Unknown items / kind mismatches / unknown slots log a
+--   warning and are dropped. Containers in equipment slots get fill=0
+--   (Phase 2 doesn't bother seeding canteens-as-equipment).
+buildStartingEquipment ∷ LoggerState → ItemManager
+                       → Maybe EquipmentClass
+                       → HM.HashMap Text Text
+                       → IO (HM.HashMap Text ItemInstance)
+buildStartingEquipment logger itemMgr mClass entries =
+    case mClass of
+        Nothing
+            | HM.null entries → return HM.empty
+            | otherwise → do
+                logWarn logger CatThread $
+                    "Unit has starting_equipment but no equipment_class"
+                    <> " — skipping all entries"
+                return HM.empty
+        Just cls → do
+            let slotIndex = HM.fromList
+                    [ (esId s, s) | s ← ecSlots cls ]
+            HM.foldlWithKey'
+                (\acc slotId itemName → do
+                    m ← acc
+                    case HM.lookup slotId slotIndex of
+                        Nothing → do
+                            logWarn logger CatThread $
+                                "starting_equipment: unknown slot '"
+                                <> slotId <> "' on class '"
+                                <> ecName cls <> "' — skipping"
+                            return m
+                        Just slot → case lookupItemDef itemName itemMgr of
+                            Nothing → do
+                                logWarn logger CatThread $
+                                    "starting_equipment: unknown item '"
+                                    <> itemName <> "' for slot '"
+                                    <> slotId <> "' — skipping"
+                                return m
+                            Just iDef
+                                | idKind iDef ≢ esKind slot → do
+                                    logWarn logger CatThread $
+                                        "starting_equipment: item '"
+                                        <> itemName <> "' (kind="
+                                        <> idKind iDef
+                                        <> ") doesn't match slot '"
+                                        <> slotId <> "' (kind="
+                                        <> esKind slot <> ") — skipping"
+                                    return m
+                                | otherwise → return $
+                                    HM.insert slotId
+                                        ItemInstance
+                                          { iiDefName     = itemName
+                                          , iiCurrentFill = 0
+                                          }
+                                        m
+                ) (return HM.empty) entries
 
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
 lookupSurfaceZ env gx gy = do

@@ -30,6 +30,16 @@ units:
     # discretion via unit.addItem — see scripts/building_spawn.lua
     # which hands out a canteen when a portal spawns each acolyte.
 
+    # Combat equipment seeded into the matching slots at spawn. Each
+    # entry's item kind must match the slot's accepted kind (see
+    # data/equipment/humanoid.yaml). Other slots (helmet, greaves,
+    # left_hand) start empty.
+    starting_equipment:
+      armor:      "wool_gambeson"
+      gauntlets:  "leather_gloves"
+      boots:      "leather_boots"
+      right_hand: "steel_dagger"
+
     directional_sprites:
       S:  "assets/textures/units/acolyte/default.png"
       SW: "assets/textures/units/acolyte/sw.png"

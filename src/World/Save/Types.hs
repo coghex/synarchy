@@ -49,8 +49,10 @@ saveMagic = 0x53595241
 --   v7 drops sdClimate + sdRiverFlow. Both fields round-tripped empty
 --       HashMaps every save (no producer code ever wrote to the backing
 --       IORefs); live climate state lives inside sdGenParams.
+--   v8 (Phase 2 equipment) adds uisEquipped to UnitInstanceSnapshot:
+--       a slot id → ItemInstance map persisting equipped gear.
 currentSaveVersion ∷ Int
-currentSaveVersion = 7
+currentSaveVersion = 8
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects
@@ -243,6 +245,10 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
     , uisModifiers   ∷ !(HM.HashMap Text [StatModifier])
     , uisSkills      ∷ !(HM.HashMap Text Float)
     , uisInventory   ∷ ![ItemInstance]
+    , uisEquipped    ∷ !(HM.HashMap Text ItemInstance)
+      -- ^ v8: slot id → equipped item. Empty map is legal (no gear).
+      --   Serialize roundtrip is positional, not name-keyed, so any
+      --   future addition must go after this field; bump again if so.
     } deriving (Show, Serialize, Generic)
 
 toUnitSnapshot ∷ UnitManager → UnitSnapshot
@@ -269,6 +275,7 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
     , uisModifiers   = uiModifiers ui
     , uisSkills      = uiSkills ui
     , uisInventory   = uiInventory ui
+    , uisEquipped    = uiEquipment ui
     }
 
 -- | Restore a UnitManager from a snapshot. Like buildings: instances
@@ -314,4 +321,5 @@ fromUnitInstanceSnapshot def s = UnitInstance
     , uiModifiers   = uisModifiers s
     , uiSkills      = uisSkills s
     , uiInventory   = uisInventory s
+    , uiEquipment   = uisEquipped s
     }
