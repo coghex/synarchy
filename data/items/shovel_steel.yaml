@@ -1,0 +1,26 @@
+items:
+  - name: "shovel_steel"
+    display_name: "Steel Shovel"
+    sprite: "assets/textures/items/shovel_steel.png"
+    weight: 2.0
+    kind: weapon
+    category: Tools
+    make: acolyte
+    material: steel
+
+    quality:
+      min: 50
+      max: 75
+    condition:
+      min: 80
+      max: 100
+
+    # Second heaviest. Broad blade with a dull edge — the corner can
+    # be thrust into a soft target, the flat is a serviceable cudgel,
+    # but it doesn't cut cleanly.
+    weapon:
+      blade_length:       30
+      base_sharpness:     400
+      stab_effectiveness:  0.30
+      slash_effectiveness: 0.20
+      blunt_effectiveness: 0.40

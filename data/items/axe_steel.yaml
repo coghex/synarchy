@@ -1,0 +1,26 @@
+items:
+  - name: "axe_steel"
+    display_name: "Steel Axe"
+    sprite: "assets/textures/items/axe_steel.png"
+    weight: 1.0
+    kind: weapon
+    category: Tools
+    make: acolyte
+    material: steel
+
+    quality:
+      min: 50
+      max: 75
+    condition:
+      min: 80
+      max: 100
+
+    # Lightest of the three tools. A proper cutting edge that bites
+    # into flesh and wood alike; the point is too short to thrust
+    # with, but the head still delivers solid percussive force.
+    weapon:
+      blade_length:       18
+      base_sharpness:     150
+      stab_effectiveness:  0.05
+      slash_effectiveness: 0.70
+      blunt_effectiveness: 0.50

@@ -1,0 +1,26 @@
+items:
+  - name: "pick_steel"
+    display_name: "Steel Pick"
+    sprite: "assets/textures/items/pick_steel.png"
+    weight: 3.0
+    kind: weapon
+    category: Tools
+    make: acolyte
+    material: steel
+
+    quality:
+      min: 50
+      max: 75
+    condition:
+      min: 80
+      max: 100
+
+    # Heaviest of the three tools. A spike on a haft — vicious at
+    # puncturing armor, almost no cutting edge, mass gives it some
+    # crushing weight when swung flat.
+    weapon:
+      blade_length:       25
+      base_sharpness:     100
+      stab_effectiveness:  0.70
+      slash_effectiveness: 0.10
+      blunt_effectiveness: 0.50

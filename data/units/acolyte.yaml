@@ -35,6 +35,9 @@ units:
       - { item: "canteen_steel_2l", fill: 2.0 }
       - { item: "rations" }
       - { item: "rations" }
+      - { item: "pick_steel" }
+      - { item: "shovel_steel" }
+      - { item: "axe_steel" }
 
     # Combat equipment seeded into the matching slots at spawn. Each
     # entry's item kind must match the slot's accepted kind (see
