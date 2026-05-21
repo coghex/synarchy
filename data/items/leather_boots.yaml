@@ -4,3 +4,4 @@ items:
     sprite: "assets/textures/equipment/leather_boots.png"
     weight: 0.9
     kind: boots
+    category: Armor

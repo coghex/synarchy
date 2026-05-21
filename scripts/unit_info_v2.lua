@@ -69,6 +69,16 @@ unitInfoV2.lastEquipClass  = nil
 unitInfoV2.lastEquipUid    = nil
 unitInfoV2.lastEquipKey    = nil   -- hash of the rendered loadout
 
+-- Inventory section state. invTabs are the per-category tab buttons
+-- in a strip across the top of the section; invListElements are the
+-- per-row icon+text+highlight sprites. activeInvTab persists across
+-- unit selections so the player stays on whichever tab they picked.
+unitInfoV2.invRect         = nil
+unitInfoV2.invTabs         = {}    -- { {name, count, bgId, labelId}, … }
+unitInfoV2.activeInvTab    = "All"
+unitInfoV2.invListElements = {}
+unitInfoV2.lastInvKey      = nil   -- hash of the rendered (uid, tab, items)
+
 -- Sprite tabs: one entry per selected unit, in selection order.
 -- Each entry: { uid, boxId, spriteId, lastTex }.
 unitInfoV2.tabs           = {}
@@ -102,6 +112,22 @@ local EQUIP_H   = 272   -- fits a 256-tall humanoid silhouette + 8px top/bot
 -- silhouette from the right-side accessory list.
 local SILHOUETTE_PAD = 8
 local ACCESSORY_GAP  = 12
+
+-- Inventory section layout. Tab strip on top (re-uses the menu tab
+-- 9-patch like the stats sub-tabs), scrollable item list below, total
+-- weight footer at the bottom.
+local INV_TAB_FONT_SIZE  = 13
+local INV_TAB_TEXT_PAD   = 8     -- horizontal padding inside each tab
+local INV_TAB_H          = 26
+local INV_TAB_GAP        = 0     -- flush like the sub-tabs
+local INV_TAB_TOP_PAD    = 6
+local INV_TAB_BOTTOM_PAD = 6
+local INV_ROW_H          = 32    -- one row per item (matches icon size)
+local INV_ROW_PAD        = 2
+local INV_ICON_SIZE      = 28
+local INV_FOOTER_H       = 22
+local INV_TEXT_PAD       = 8     -- horizontal pad inside a row
+local INV_EQUIP_TINT     = { 1.0, 0.95, 0.55, 0.18 }  -- soft amber bg for equipped rows
 
 local TAB_GAP          = 4    -- horizontal gap between adjacent tabs
 local TAB_INNER_PAD    = 4    -- padding inside a tab around its sprite
@@ -197,6 +223,19 @@ local function clearOwned()
     unitInfoV2.lastEquipClass  = nil
     unitInfoV2.lastEquipUid    = nil
     unitInfoV2.lastEquipKey    = nil
+
+    for _, t in ipairs(unitInfoV2.invTabs) do
+        if t.labelId then label.destroy(t.labelId) end
+        if t.bgId    then UI.deleteElement(t.bgId)  end
+    end
+    unitInfoV2.invTabs = {}
+    for _, e in ipairs(unitInfoV2.invListElements) do
+        if e.kind == "label" then label.destroy(e.id)
+        else                       UI.deleteElement(e.id)
+        end
+    end
+    unitInfoV2.invListElements = {}
+    unitInfoV2.lastInvKey      = nil
 
     unitInfoV2.headerTypeLabelId = nil
 
@@ -759,8 +798,11 @@ local function rebuildSubTabs()
             local lblH = label.getElementHandle(lblId)
             local lblW = select(1, label.getSize(lblId))
             local labelX = cx + math.floor((tw - lblW) / 2)
+            -- +2 baseline nudge — the 0.3 fontSize offset alone lands
+            -- the text visually above center; the extra 2px brings it
+            -- onto the box's vertical midline.
             local labelY = cursorY + math.floor(SUB_TAB_ROW_H / 2)
-                         + math.floor(SUB_TAB_FONT_SIZE * 0.3)
+                         + math.floor(SUB_TAB_FONT_SIZE * 0.3) + 2
             UI.addToPage(unitInfoV2.page, lblH, labelX, labelY)
             UI.setZIndex(lblH, 12)
 
@@ -1216,6 +1258,347 @@ local function rebuildEquipmentSection()
 end
 
 -----------------------------------------------------------
+-- Inventory section: dynamic tab strip (All + one per category) on
+-- top, item rows in the middle, total-weight footer at the bottom.
+-- Equipped items are merged into the All view (and into their
+-- category) with a soft amber tint behind the row so the player sees
+-- everything the unit owns regardless of slot state.
+-----------------------------------------------------------
+
+-- Pull inventory + equipment, tag each entry with equipped state, and
+-- return a flat list in insertion order (inventory first, then
+-- equipped slots in EquipmentClass slot order so the player sees a
+-- stable layout). Each entry: { defName, displayName, weight,
+--                               category, kind, iconTex, currentFill,
+--                               equipped, equippedSlot }
+local function collectInventoryAndEquipment(uid)
+    local inv = unit.getInventory(uid) or {}
+    local lo  = equipment.getLoadout(uid)  or {}
+    local out = {}
+    for _, it in ipairs(inv) do
+        out[#out + 1] = {
+            defName     = it.defName,
+            displayName = it.displayName or it.defName,
+            weight      = it.weight or 0,
+            category    = it.category or "Misc",
+            kind        = it.kind or "misc",
+            iconTex     = it.iconTex,
+            currentFill = it.currentFill or 0,
+            equipped    = false,
+        }
+    end
+    -- Walk equipment in the unit's class slot order so the equipped
+    -- block reads predictably (helmet, armor, gauntlets, weapons, …).
+    local info = unit.getInfo(uid)
+    local cls  = info and info.equipmentClass
+                 and equipment.getClass(info.equipmentClass) or nil
+    local slotIds = {}
+    if cls and cls.slots then
+        for _, s in ipairs(cls.slots) do
+            slotIds[#slotIds + 1] = s.id
+        end
+    end
+    for _, slotId in ipairs(slotIds) do
+        local it = lo[slotId]
+        if it then
+            out[#out + 1] = {
+                defName       = it.defName,
+                displayName   = it.displayName or it.defName,
+                weight        = it.weight or 0,
+                category      = it.category or "Misc",
+                kind          = it.kind or "misc",
+                iconTex       = it.iconTex,
+                currentFill   = it.currentFill or 0,
+                equipped      = true,
+                equippedSlot  = slotId,
+            }
+        end
+    end
+    return out
+end
+
+-- Compute the tab strip: "All" first, then per-category in the order
+-- categories first appear in the merged list. Each tab carries its
+-- count. The All tab counts everything.
+local function computeInvTabs(items)
+    local tabs = { { name = "All", count = #items } }
+    local seen = { All = true }
+    for _, it in ipairs(items) do
+        if not seen[it.category] then
+            seen[it.category] = true
+            tabs[#tabs + 1] = { name = it.category, count = 0 }
+        end
+    end
+    for _, it in ipairs(items) do
+        for _, t in ipairs(tabs) do
+            if t.name == it.category then
+                t.count = t.count + 1
+            end
+        end
+    end
+    return tabs
+end
+
+local function applyInvTabStyling()
+    local selSet   = unitInfoV2.subTabSelectedTexSet
+    local unselSet = unitInfoV2.subTabUnselectedTexSet
+    for _, t in ipairs(unitInfoV2.invTabs) do
+        local active = (t.name == unitInfoV2.activeInvTab)
+        if selSet and unselSet then
+            UI.setBoxTextures(t.bgId, active and selSet or unselSet)
+        end
+        local c = active and SUB_TAB_SEL_TEXT_COLOR or SUB_TAB_TEXT_COLOR
+        local lblH = label.getElementHandle(t.labelId)
+        UI.setColor(lblH, c[1], c[2], c[3], c[4])
+    end
+end
+
+-- Stable hash of (uid, activeTab, items signature) so we only rebuild
+-- the list when something actually changed. Fill is included so a
+-- depleting canteen redraws when its label needs to change.
+local function computeInvKey(uid, activeTab, items)
+    local parts = { tostring(uid or ""), activeTab or "" }
+    for _, it in ipairs(items) do
+        parts[#parts + 1] = it.defName .. "/" .. tostring(it.currentFill)
+            .. "/" .. (it.equipped and "e" or "i")
+    end
+    return table.concat(parts, "|")
+end
+
+local function rebuildInventorySection()
+    if not unitInfoV2.invRect then return end
+    local rect = unitInfoV2.invRect
+    local uid  = unitInfoV2.activeUid
+
+    local items = uid and collectInventoryAndEquipment(uid) or {}
+    local key = computeInvKey(uid, unitInfoV2.activeInvTab, items)
+    if key == unitInfoV2.lastInvKey then return end
+
+    -- Tear down previous build.
+    for _, t in ipairs(unitInfoV2.invTabs) do
+        if t.labelId then label.destroy(t.labelId) end
+        if t.bgId    then UI.deleteElement(t.bgId)  end
+    end
+    unitInfoV2.invTabs = {}
+    for _, e in ipairs(unitInfoV2.invListElements) do
+        if e.kind == "label" then label.destroy(e.id)
+        else                       UI.deleteElement(e.id)
+        end
+    end
+    unitInfoV2.invListElements = {}
+    unitInfoV2.lastInvKey      = key
+
+    if not uid then return end
+
+    local uiscale = scale.get()
+    local tabH    = math.floor(INV_TAB_H * uiscale)
+    local topPad  = math.floor(INV_TAB_TOP_PAD * uiscale)
+    local botPad  = math.floor(INV_TAB_BOTTOM_PAD * uiscale)
+    local rowH    = math.floor(INV_ROW_H * uiscale)
+    local rowPad  = math.floor(INV_ROW_PAD * uiscale)
+    local iconSz  = math.floor(INV_ICON_SIZE * uiscale)
+    local footerH = math.floor(INV_FOOTER_H * uiscale)
+    local textPad = math.floor(INV_TEXT_PAD * uiscale)
+    local sectPad = math.floor(SECTION_PAD * uiscale)
+
+    -- 1. Tab strip
+    local tabDefs = computeInvTabs(items)
+    -- If the persisted active tab no longer exists (e.g. last weapon
+    -- got dropped), fall back to All so the list isn't blank.
+    local activeStillPresent = false
+    for _, t in ipairs(tabDefs) do
+        if t.name == unitInfoV2.activeInvTab then
+            activeStillPresent = true; break
+        end
+    end
+    if not activeStillPresent then
+        unitInfoV2.activeInvTab = "All"
+    end
+
+    local tabY = rect.y + topPad
+    local cx   = rect.x + sectPad
+    for i, td in ipairs(tabDefs) do
+        local label_text = td.name .. " (" .. td.count .. ")"
+        local tw = engine.getTextWidth(hud.menuFont, label_text,
+                                       INV_TAB_FONT_SIZE)
+        local tabW = math.floor(tw) + 2 * INV_TAB_TEXT_PAD
+
+        local bgId = UI.newBox(
+            "unit_info_v2_invtab_bg_" .. i,
+            tabW, tabH,
+            unitInfoV2.subTabUnselectedTexSet,
+            SUB_TAB_TILE,
+            1.0, 1.0, 1.0, 1.0, 0,
+            unitInfoV2.page)
+        UI.addToPage(unitInfoV2.page, bgId, cx, tabY)
+        UI.setZIndex(bgId, 11)
+        UI.setClickable(bgId, true)
+        UI.setOnClick(bgId, "onInventoryTabClick")
+
+        local lblId = label.new({
+            name     = "unit_info_v2_invtab_lbl_" .. i,
+            text     = label_text,
+            font     = hud.menuFont,
+            fontSize = INV_TAB_FONT_SIZE,
+            color    = SUB_TAB_TEXT_COLOR,
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        local lblH = label.getElementHandle(lblId)
+        local lblW = select(1, label.getSize(lblId))
+        UI.addToPage(unitInfoV2.page, lblH,
+            cx + math.floor((tabW - lblW) / 2),
+            tabY + math.floor(tabH / 2)
+                 + math.floor(INV_TAB_FONT_SIZE * 0.3) + 2)
+        UI.setZIndex(lblH, 12)
+
+        unitInfoV2.invTabs[#unitInfoV2.invTabs + 1] = {
+            name = td.name, count = td.count,
+            bgId = bgId, labelId = lblId,
+        }
+        cx = cx + tabW + INV_TAB_GAP
+    end
+    applyInvTabStyling()
+
+    -- 2. Item rows for the active tab
+    local listX = rect.x + sectPad
+    local listW = rect.w - 2 * sectPad
+    local listY = rect.y + topPad + tabH + botPad
+    local maxRows = math.max(0, math.floor(
+        (rect.y + rect.h - listY - footerH) / (rowH + rowPad)))
+
+    local visibleItems = {}
+    for _, it in ipairs(items) do
+        if unitInfoV2.activeInvTab == "All"
+           or it.category == unitInfoV2.activeInvTab then
+            visibleItems[#visibleItems + 1] = it
+        end
+    end
+
+    for i = 1, math.min(#visibleItems, maxRows) do
+        local it    = visibleItems[i]
+        local rowY  = listY + (i - 1) * (rowH + rowPad)
+
+        -- Equipped highlight backdrop — a soft amber rect behind the
+        -- whole row so equipped items pop without an extra icon.
+        if it.equipped then
+            local bgId = UI.newSprite(
+                "unit_info_v2_inv_eqbg_" .. i,
+                listW, rowH,
+                unitInfoV2.whitePixelTex,
+                INV_EQUIP_TINT[1], INV_EQUIP_TINT[2],
+                INV_EQUIP_TINT[3], INV_EQUIP_TINT[4],
+                unitInfoV2.page)
+            UI.addToPage(unitInfoV2.page, bgId, listX, rowY)
+            UI.setZIndex(bgId, 11)
+            table.insert(unitInfoV2.invListElements,
+                { kind = "sprite", id = bgId })
+        end
+
+        -- Icon (or transparent slot if texture missing)
+        if it.iconTex then
+            local iconY = rowY + math.floor((rowH - iconSz) / 2)
+            local iconId = UI.newSprite(
+                "unit_info_v2_inv_icon_" .. i,
+                iconSz, iconSz,
+                it.iconTex,
+                1.0, 1.0, 1.0, 1.0,
+                unitInfoV2.page)
+            UI.addToPage(unitInfoV2.page, iconId, listX + textPad, iconY)
+            UI.setZIndex(iconId, 12)
+            -- Hovering the icon shows item details — name + weight,
+            -- plus "equipped: <slotId>" when relevant.
+            local hint = string.format("%.2f kg", it.weight or 0)
+            if it.equipped then
+                hint = hint .. "  ·  equipped: " .. (it.equippedSlot or "?")
+            end
+            UI.setTooltipRich(iconId, {
+                text = it.displayName, hint = hint,
+            })
+            table.insert(unitInfoV2.invListElements,
+                { kind = "sprite", id = iconId })
+        end
+
+        -- Display name
+        local nameLbl = label.new({
+            name     = "unit_info_v2_inv_name_" .. i,
+            text     = it.displayName,
+            font     = hud.menuFont,
+            fontSize = 14,
+            color    = it.equipped and {1.0, 0.95, 0.7, 1.0}
+                                    or {1.0, 1.0, 1.0, 1.0},
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        local nameH = label.getElementHandle(nameLbl)
+        UI.addToPage(unitInfoV2.page, nameH,
+            listX + textPad + iconSz + textPad,
+            rowY + math.floor(rowH / 2) + math.floor(14 * 0.3))
+        UI.setZIndex(nameH, 12)
+        table.insert(unitInfoV2.invListElements,
+            { kind = "label", id = nameLbl })
+
+        -- Weight (right-aligned)
+        local wText = string.format("%.2f kg", it.weight or 0)
+        local wLbl = label.new({
+            name     = "unit_info_v2_inv_w_" .. i,
+            text     = wText,
+            font     = hud.menuFont,
+            fontSize = 14,
+            color    = {0.85, 0.85, 0.85, 1.0},
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        local wH = label.getElementHandle(wLbl)
+        local wW = select(1, label.getSize(wLbl))
+        UI.addToPage(unitInfoV2.page, wH,
+            listX + listW - textPad - wW,
+            rowY + math.floor(rowH / 2) + math.floor(14 * 0.3))
+        UI.setZIndex(wH, 12)
+        table.insert(unitInfoV2.invListElements,
+            { kind = "label", id = wLbl })
+    end
+
+    -- 3. Footer: total weight across the FULL item set (not just the
+    -- active tab) so the player always sees their carry total.
+    local total = 0
+    for _, it in ipairs(items) do total = total + (it.weight or 0) end
+    local footerLbl = label.new({
+        name     = "unit_info_v2_inv_footer",
+        text     = string.format("Total: %.2f kg", total),
+        font     = hud.menuFont,
+        fontSize = 14,
+        color    = {0.85, 0.85, 0.85, 1.0},
+        page     = unitInfoV2.page,
+        uiscale  = 1.0,
+    })
+    local fH = label.getElementHandle(footerLbl)
+    local fW = select(1, label.getSize(footerLbl))
+    local footerY = rect.y + rect.h - footerH
+                  + math.floor(footerH / 2) + math.floor(14 * 0.3)
+    UI.addToPage(unitInfoV2.page, fH,
+        listX + listW - textPad - fW, footerY)
+    UI.setZIndex(fH, 12)
+    table.insert(unitInfoV2.invListElements,
+        { kind = "label", id = footerLbl })
+end
+
+-- Public click handler for the inventory tab strip. Mirrors the
+-- pattern used by sub-tabs / scroll arrows.
+function unitInfoV2.handleInvTabClick(elemHandle)
+    for _, t in ipairs(unitInfoV2.invTabs) do
+        if t.bgId == elemHandle then
+            if unitInfoV2.activeInvTab ~= t.name then
+                unitInfoV2.activeInvTab = t.name
+                unitInfoV2.lastInvKey = nil  -- force rebuild next tick
+            end
+            return true
+        end
+    end
+    return false
+end
+
+-----------------------------------------------------------
 -- Header: stacks Name / Type / Role rows in a virtual rect. No box
 -- around it; section boundaries are marked by horizontal rules.
 -- All three are placeholder labels for now; "Type" is the only one
@@ -1373,11 +1756,13 @@ local function rebuildLayout()
         unitInfoV2.equipRect = { x = x, y = y, w = w, h = h }
     end, equipH, true)
 
-    -- Inventory: remaining height, no divider after
+    -- Inventory: remaining height, no divider after. Just record the
+    -- rect; rebuildInventorySection (driven by update()) populates the
+    -- tab strip + item list + total-weight footer inside it.
     local invH = (panelY + panelH - outerPad) - cursorY
     if invH > 0 then
-        placePlaceholder("inv", contentX, cursorY, contentW, invH,
-            "[ inventory ]", 14)
+        unitInfoV2.invRect = { x = contentX, y = cursorY,
+                               w = contentW, h = invH }
     end
 end
 
@@ -1439,6 +1824,11 @@ function unitInfoV2.update(dt)
     -- Equipment section: rebuild when the active unit changes
     -- (silhouette + slot overlays per the unit's equipment class).
     rebuildEquipmentSection()
+
+    -- Inventory section: dynamic tab strip + per-tab item list. Cached
+    -- by a content-hash so the per-tick redraw is cheap when nothing
+    -- has changed.
+    rebuildInventorySection()
 
     -- Header type row: rewrite each tick from the active unit's def.
     -- All units are "acolyte" right now so this is effectively a no-op

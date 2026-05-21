@@ -4,3 +4,4 @@ items:
     sprite: "assets/textures/equipment/wool_gambeson.png"
     weight: 3.5
     kind: armor
+    category: Armor

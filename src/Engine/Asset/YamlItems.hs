@@ -41,6 +41,8 @@ data ItemYamlDef = ItemYamlDef
     , iydWeight      ∷ !Float                      -- ^ empty weight (kg)
     , iydKind        ∷ !Text                       -- ^ equipment slot kind;
                                                    --   defaults to "misc"
+    , iydCategory    ∷ !Text                       -- ^ inventory tab;
+                                                   --   defaults to "Misc"
     , iydContainer   ∷ !(Maybe ItemYamlContainer)
     , iydFood        ∷ !(Maybe ItemYamlFood)
     } deriving (Show, Eq, Generic)
@@ -52,6 +54,7 @@ instance FromJSON ItemYamlDef where
         ⊛ v .:  "sprite"
         ⊛ v .:? "weight"       .!= 0.0
         ⊛ v .:? "kind"         .!= "misc"
+        ⊛ v .:? "category"     .!= "Misc"
         ⊛ v .:? "container"
         ⊛ v .:? "food"
 

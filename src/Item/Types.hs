@@ -41,6 +41,16 @@ data ItemDef = ItemDef
                                         --   non-equippable items. Matched
                                         --   against EquipmentSlot.esKind
                                         --   when equipping.
+    , idCategory    ∷ !Text             -- ^ inventory-tab category
+                                        --   ("Weapons", "Armor",
+                                        --   "Supplies", "Misc"). Drives
+                                        --   which dynamic tab the item
+                                        --   appears under in the unit
+                                        --   info inventory list. Default
+                                        --   "Misc" — distinct from kind
+                                        --   so a category can contain
+                                        --   multiple kinds (Armor =
+                                        --   helmet + gauntlets + …).
     , idContainer   ∷ !(Maybe ItemContainer)
     , idFood        ∷ !(Maybe ItemFood)
     } deriving (Show, Eq)

@@ -4,3 +4,4 @@ items:
     sprite: "assets/textures/equipment/steel_dagger.png"
     weight: 0.4
     kind: weapon
+    category: Weapons

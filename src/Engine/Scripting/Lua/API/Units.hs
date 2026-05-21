@@ -1590,6 +1590,23 @@ unitGetInventoryFn env = do
                         Lua.setfield (-2) "weight"
                         Lua.pushnumber (Lua.Number (realToFrac (iiCurrentFill inst)))
                         Lua.setfield (-2) "currentFill"
+                        -- Display-side fields the inventory UI needs.
+                        -- Defaulted when the def is missing so the
+                        -- renderer always sees a complete row.
+                        case mDef of
+                            Just d → do
+                                Lua.pushstring (TE.encodeUtf8 (idKind d))
+                                Lua.setfield (-2) "kind"
+                                Lua.pushstring (TE.encodeUtf8 (idCategory d))
+                                Lua.setfield (-2) "category"
+                                let TextureHandle tex = idTexture d
+                                Lua.pushinteger (fromIntegral tex)
+                                Lua.setfield (-2) "iconTex"
+                            Nothing → do
+                                Lua.pushstring "misc"
+                                Lua.setfield (-2) "kind"
+                                Lua.pushstring "Misc"
+                                Lua.setfield (-2) "category"
                         case mContainer of
                             Just c → do
                                 Lua.pushnumber (Lua.Number (realToFrac (icCapacity c)))

@@ -80,6 +80,7 @@ loadItemYamlFn env backendState = do
                             , idTexture     = handle
                             , idWeight      = iydWeight def
                             , idKind        = iydKind def
+                            , idCategory    = iydCategory def
                             , idContainer   = container
                             , idFood        = food
                             }

@@ -674,6 +674,14 @@ function uiManager.onUnitInfoSubTabClick(elemHandle)
     return false
 end
 
+function uiManager.onInventoryTabClick(elemHandle)
+    local mod = package.loaded["scripts.unit_info_v2"]
+    if mod and mod.handleInvTabClick then
+        return mod.handleInvTabClick(elemHandle)
+    end
+    return false
+end
+
 function uiManager.onToggleRightClick(elemHandle)
     if toggle then
         return toggle.handleRightClickByElement(elemHandle)

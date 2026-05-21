@@ -309,6 +309,9 @@ equipmentGetLoadoutFn env = do
                                 Lua.setfield (-2) "displayName"
                                 Lua.pushstring (TE.encodeUtf8 (idKind iDef))
                                 Lua.setfield (-2) "kind"
+                                Lua.pushstring
+                                    (TE.encodeUtf8 (idCategory iDef))
+                                Lua.setfield (-2) "category"
                                 Lua.pushnumber
                                     (Lua.Number (realToFrac (idWeight iDef)))
                                 Lua.setfield (-2) "weight"
