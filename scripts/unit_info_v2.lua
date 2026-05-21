@@ -65,6 +65,7 @@ unitInfoV2.headerTypeLabelId = nil  -- the "acolyte" row; refreshed per active u
 -- rebuilds when nothing relevant has changed.
 unitInfoV2.equipRect       = nil
 unitInfoV2.equipElements   = {}
+unitInfoV2.equipSlots      = {}    -- per-slot right-click metadata
 unitInfoV2.lastEquipClass  = nil
 unitInfoV2.lastEquipUid    = nil
 unitInfoV2.lastEquipKey    = nil   -- hash of the rendered loadout
@@ -77,6 +78,7 @@ unitInfoV2.invRect         = nil
 unitInfoV2.invTabs         = {}    -- { {name, count, bgId, labelId}, … }
 unitInfoV2.activeInvTab    = "All"
 unitInfoV2.invListElements = {}
+unitInfoV2.invRows         = {}    -- per-row right-click metadata
 unitInfoV2.lastInvKey      = nil   -- hash of the rendered (uid, tab, items)
 
 -- Sprite tabs: one entry per selected unit, in selection order.
@@ -220,6 +222,7 @@ local function clearOwned()
         end
     end
     unitInfoV2.equipElements   = {}
+    unitInfoV2.equipSlots      = {}
     unitInfoV2.lastEquipClass  = nil
     unitInfoV2.lastEquipUid    = nil
     unitInfoV2.lastEquipKey    = nil
@@ -235,6 +238,7 @@ local function clearOwned()
         end
     end
     unitInfoV2.invListElements = {}
+    unitInfoV2.invRows         = {}
     unitInfoV2.lastInvKey      = nil
 
     unitInfoV2.headerTypeLabelId = nil
@@ -1134,6 +1138,7 @@ local function rebuildEquipmentSection()
         end
     end
     unitInfoV2.equipElements   = {}
+    unitInfoV2.equipSlots      = {}
     unitInfoV2.lastEquipUid    = uid
     unitInfoV2.lastEquipClass  = clsName
     unitInfoV2.lastEquipKey    = key
@@ -1193,42 +1198,59 @@ local function rebuildEquipmentSection()
             local slotH = math.floor(s.h * uiscale)
             local slotX = silX + math.floor(s.x * uiscale)
             local slotY = silY + math.floor(s.y * uiscale)
-            local slotId = UI.newSprite(
+            local slotElemId = UI.newSprite(
                 "unit_info_v2_equip_slot_" .. i,
                 slotW, slotH,
                 unitInfoV2.whitePixelTex,
                 1.0, 1.0, 1.0, 0.0,  -- transparent — silhouette art shows
                 unitInfoV2.page)
-            UI.addToPage(unitInfoV2.page, slotId, slotX, slotY)
-            UI.setZIndex(slotId, 12)
-            UI.setTooltipRich(slotId, {
+            UI.addToPage(unitInfoV2.page, slotElemId, slotX, slotY)
+            UI.setZIndex(slotElemId, 12)
+            UI.setTooltipRich(slotElemId, {
                 text = s.name,
                 hint = "Accepts: " .. (s.kind or "?"),
             })
+            UI.setClickable(slotElemId, true)
+            UI.setOnRightClick(slotElemId, "onEquipSlotRightClick")
             table.insert(unitInfoV2.equipElements,
-                { kind = "sprite", id = slotId })
+                { kind = "sprite", id = slotElemId })
 
             -- Draw the equipped item's icon on top of the slot if
             -- present. Z+1 keeps it above the transparent hit-zone so
-            -- icon clicks still register on the slot for popup wiring
-            -- in the next phase.
+            -- the icon catches the right-click (right-click hit-test
+            -- picks the topmost clickable element at the cursor).
             local eq = loadout[s.id]
+            local iconElemId = nil
             if eq and eq.iconTex then
-                local iconId = UI.newSprite(
+                iconElemId = UI.newSprite(
                     "unit_info_v2_equip_icon_" .. i,
                     slotW, slotH,
                     eq.iconTex,
                     1.0, 1.0, 1.0, 1.0,
                     unitInfoV2.page)
-                UI.addToPage(unitInfoV2.page, iconId, slotX, slotY)
-                UI.setZIndex(iconId, 13)
-                UI.setTooltipRich(iconId, {
+                UI.addToPage(unitInfoV2.page, iconElemId, slotX, slotY)
+                UI.setZIndex(iconElemId, 13)
+                UI.setTooltipRich(iconElemId, {
                     text = eq.displayName or eq.defName or s.name,
                     hint = s.name .. " — kind: " .. (eq.kind or "?"),
                 })
+                UI.setClickable(iconElemId, true)
+                UI.setOnRightClick(iconElemId, "onEquipSlotRightClick")
                 table.insert(unitInfoV2.equipElements,
-                    { kind = "sprite", id = iconId })
+                    { kind = "sprite", id = iconElemId })
             end
+
+            -- Per-slot right-click metadata. Two element handles map
+            -- to one slot id: the transparent slot rect (always there)
+            -- and the icon (only present when filled). The handler
+            -- searches by either.
+            unitInfoV2.equipSlots[#unitInfoV2.equipSlots + 1] = {
+                slotId       = s.id,
+                slot         = s,
+                slotElemId   = slotElemId,
+                iconElemId   = iconElemId,
+                equippedItem = eq,
+            }
         end
     end
 
@@ -1386,6 +1408,7 @@ local function rebuildInventorySection()
         end
     end
     unitInfoV2.invListElements = {}
+    unitInfoV2.invRows         = {}
     unitInfoV2.lastInvKey      = key
 
     if not uid then return end
@@ -1495,7 +1518,10 @@ local function rebuildInventorySection()
                 { kind = "sprite", id = bgId })
         end
 
-        -- Icon (or transparent slot if texture missing)
+        -- Icon (or transparent slot if texture missing). Tooltip + the
+        -- right-click hit-zone go on a separate full-row sprite (below)
+        -- so the whole row is a click target, not just the 28-pixel
+        -- icon square.
         if it.iconTex then
             local iconY = rowY + math.floor((rowH - iconSz) / 2)
             local iconId = UI.newSprite(
@@ -1506,15 +1532,6 @@ local function rebuildInventorySection()
                 unitInfoV2.page)
             UI.addToPage(unitInfoV2.page, iconId, listX + textPad, iconY)
             UI.setZIndex(iconId, 12)
-            -- Hovering the icon shows item details — name + weight,
-            -- plus "equipped: <slotId>" when relevant.
-            local hint = string.format("%.2f kg", it.weight or 0)
-            if it.equipped then
-                hint = hint .. "  ·  equipped: " .. (it.equippedSlot or "?")
-            end
-            UI.setTooltipRich(iconId, {
-                text = it.displayName, hint = hint,
-            })
             table.insert(unitInfoV2.invListElements,
                 { kind = "sprite", id = iconId })
         end
@@ -1557,6 +1574,39 @@ local function rebuildInventorySection()
         UI.setZIndex(wH, 12)
         table.insert(unitInfoV2.invListElements,
             { kind = "label", id = wLbl })
+
+        -- Full-row right-click hit-zone. Transparent sprite at z=14
+        -- so it's above the icon + labels but doesn't visually
+        -- intrude. Owns the row's tooltip too — since it sits on top
+        -- of the icon, the icon's hover tooltip would otherwise be
+        -- blocked. Click hit-test only fires for callbacks that are
+        -- registered, so left-click on the row stays a no-op (no
+        -- onClick registered).
+        local hitId = UI.newSprite(
+            "unit_info_v2_inv_hit_" .. i,
+            listW, rowH,
+            unitInfoV2.whitePixelTex,
+            1.0, 1.0, 1.0, 0.0,
+            unitInfoV2.page)
+        UI.addToPage(unitInfoV2.page, hitId, listX, rowY)
+        UI.setZIndex(hitId, 14)
+        UI.setClickable(hitId, true)
+        UI.setOnRightClick(hitId, "onInventoryItemRightClick")
+
+        local hint = string.format("%.2f kg", it.weight or 0)
+        if it.equipped then
+            hint = hint .. "  ·  equipped: " .. (it.equippedSlot or "?")
+        end
+        UI.setTooltipRich(hitId, {
+            text = it.displayName, hint = hint,
+        })
+
+        table.insert(unitInfoV2.invListElements,
+            { kind = "sprite", id = hitId })
+        unitInfoV2.invRows[#unitInfoV2.invRows + 1] = {
+            hitId = hitId,
+            item  = it,
+        }
     end
 
     -- 3. Footer: total weight across the FULL item set (not just the
@@ -1596,6 +1646,179 @@ function unitInfoV2.handleInvTabClick(elemHandle)
         end
     end
     return false
+end
+
+-- All slots on the unit's equipment class that accept items of the
+-- given kind. Used by the right-click "Equip" path: if exactly one
+-- slot matches we equip into it directly; if multiple match we surface
+-- a submenu so the player picks. Returns a list of slot tables.
+local function findEquipSlotsForKind(uid, itemKind)
+    local info = uid and unit.getInfo(uid) or nil
+    if not info or not info.equipmentClass then return {} end
+    local cls = equipment.getClass(info.equipmentClass)
+    if not cls or not cls.slots then return {} end
+    local out = {}
+    for _, s in ipairs(cls.slots) do
+        if s.kind == itemKind then out[#out + 1] = s end
+    end
+    return out
+end
+
+-- For single-slot cases (or when the caller picks a specific slot),
+-- choose between "empty matching" and "first matching" — preferring
+-- empty when possible. Returns the chosen slot id.
+local function preferredEmptySlot(uid, slots)
+    local lo = equipment.getLoadout(uid) or {}
+    for _, s in ipairs(slots) do
+        if not lo[s.id] then return s.id end
+    end
+    return slots[1] and slots[1].id or nil
+end
+
+-- Right-click on an inventory row → context menu with Equip / Unequip.
+-- Routed via uiManager.onInventoryItemRightClick (set by the row's
+-- hit-zone in rebuildInventorySection).
+function unitInfoV2.handleInvItemRightClick(elemHandle)
+    local row
+    for _, r in ipairs(unitInfoV2.invRows) do
+        if r.hitId == elemHandle then row = r; break end
+    end
+    if not row then return false end
+
+    local uid = unitInfoV2.activeUid
+    if not uid then return false end
+    local item = row.item
+
+    local items = {}
+    if item.equipped then
+        items[1] = {
+            label    = "Unequip",
+            callback = function()
+                equipment.unequip(uid, item.equippedSlot)
+                unitInfoV2.lastInvKey   = nil
+                unitInfoV2.lastEquipKey = nil
+            end,
+        }
+    else
+        local matching = findEquipSlotsForKind(uid, item.kind)
+        if #matching == 0 then
+            items[1] = {
+                label   = "Equip",
+                enabled = false,
+            }
+        elseif #matching == 1 then
+            local slotId = matching[1].id
+            items[1] = {
+                label    = "Equip",
+                callback = function()
+                    equipment.equip(uid, slotId, item.defName)
+                    unitInfoV2.lastInvKey   = nil
+                    unitInfoV2.lastEquipKey = nil
+                end,
+            }
+        else
+            -- Multiple matching slots — surface each as a submenu item
+            -- so the player picks. Slot display names (e.g. "Weapon
+            -- (R)") come from the equipment class YAML.
+            local sub = {}
+            for _, s in ipairs(matching) do
+                sub[#sub + 1] = {
+                    label    = s.name,
+                    callback = function()
+                        equipment.equip(uid, s.id, item.defName)
+                        unitInfoV2.lastInvKey   = nil
+                        unitInfoV2.lastEquipKey = nil
+                    end,
+                }
+            end
+            items[1] = { label = "Equip", submenu = sub }
+        end
+    end
+
+    -- Open the context menu at the current mouse position, in the
+    -- same framebuffer-pixel space the widget expects.
+    local contextMenu = require("scripts.ui.context_menu")
+    local mx, my = engine.getMousePosition()
+    local fbW, fbH = engine.getFramebufferSize()
+    local ww, wh = engine.getWindowSize()
+    if ww and wh and ww > 0 and wh > 0 then
+        mx = mx * (fbW / ww)
+        my = my * (fbH / wh)
+    end
+    contextMenu.show(items, mx, my)
+    return true
+end
+
+-- Right-click on a silhouette slot (or its equipped icon) → context
+-- menu with Equip / Unequip. The Equip path lists matching-kind items
+-- from the unit's inventory as a submenu; clicking one calls
+-- equipment.equip into THIS slot (the swap-on-equip semantics in the
+-- engine handle any currently-equipped item by returning it to the
+-- inventory).
+function unitInfoV2.handleEquipSlotRightClick(elemHandle)
+    local rec
+    for _, s in ipairs(unitInfoV2.equipSlots) do
+        if s.slotElemId == elemHandle or s.iconElemId == elemHandle then
+            rec = s; break
+        end
+    end
+    if not rec then return false end
+
+    local uid = unitInfoV2.activeUid
+    if not uid then return false end
+
+    -- Build the inventory-side picklist for "Equip into this slot":
+    -- every inventory item whose kind matches this slot's accepted
+    -- kind. Equipped items aren't included (they're already in a slot
+    -- — the user would unequip first).
+    local equipSubmenu = {}
+    local inv = unit.getInventory(uid) or {}
+    for _, it in ipairs(inv) do
+        if it.kind == rec.slot.kind then
+            local defName    = it.defName
+            local displayNm  = it.displayName or it.defName
+            equipSubmenu[#equipSubmenu + 1] = {
+                label    = displayNm,
+                icon     = it.iconTex,
+                callback = function()
+                    equipment.equip(uid, rec.slotId, defName)
+                    unitInfoV2.lastInvKey   = nil
+                    unitInfoV2.lastEquipKey = nil
+                end,
+            }
+        end
+    end
+
+    local items = {}
+    if rec.equippedItem then
+        items[#items + 1] = {
+            label    = "Unequip",
+            callback = function()
+                equipment.unequip(uid, rec.slotId)
+                unitInfoV2.lastInvKey   = nil
+                unitInfoV2.lastEquipKey = nil
+            end,
+        }
+    end
+    if #equipSubmenu > 0 then
+        items[#items + 1] = { label = "Equip", submenu = equipSubmenu }
+    else
+        items[#items + 1] = {
+            label   = "Equip",
+            enabled = false,
+        }
+    end
+
+    local contextMenu = require("scripts.ui.context_menu")
+    local mx, my = engine.getMousePosition()
+    local fbW, fbH = engine.getFramebufferSize()
+    local ww, wh = engine.getWindowSize()
+    if ww and wh and ww > 0 and wh > 0 then
+        mx = mx * (fbW / ww)
+        my = my * (fbH / wh)
+    end
+    contextMenu.show(items, mx, my)
+    return true
 end
 
 -----------------------------------------------------------

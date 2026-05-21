@@ -5,27 +5,28 @@
 -- on hover) so right-click menus visually belong with the settings
 -- and create-world panels.
 --
+-- Supports one level of submenus — items with a `submenu = { … }`
+-- field open a child panel to the right (or to the left if the parent
+-- is too close to the screen's right edge) on hover OR click.
+--
 -- Usage:
 --   local cm = require("scripts.ui.context_menu")
 --   cm.show({
---       { label = "Equip",  callback = function() equipItem() end },
---       { separator = true },
---       { label = "Drop",   callback = function() dropItem() end },
+--       { label = "Equip", submenu = {
+--           { label = "Right hand", callback = function() … end },
+--           { label = "Left hand",  callback = function() … end },
+--       }},
+--       { label = "Drop", callback = function() … end },
 --   }, mouseX, mouseY)
 --
 -- Item shape:
 --   { label    = string,
 --     icon     = optional textureHandle,
 --     enabled  = optional bool (default true),
---     callback = function() … end,
---     submenu  = optional { item, item, … },  -- v2, not yet implemented
+--     callback = function() … end,           -- ignored when submenu is set
+--     submenu  = optional { item, item, … }, -- one level deep
 --   }
 --   or: { separator = true }
---
--- Lifecycle:
---   show() builds the page + backdrop + row elements at the click site.
---   hide() tears everything down.
---   ESC, click outside the menu, or clicking a leaf item all close it.
 
 local boxTextures = require("scripts.ui.box_textures")
 local scale       = require("scripts.ui.scale")
@@ -37,42 +38,57 @@ local cm = {}
 -----------------------------------------------------------
 
 local ROW_H        = 26
-local ROW_PAD_X    = 10   -- horizontal pad inside a row around label/icon
-local ROW_GAP      = 0    -- gap between adjacent rows (0 = flush)
+local ROW_PAD_X    = 10
+local ROW_GAP      = 0
 local SEPARATOR_H  = 1
-local SEPARATOR_PAD_Y = 4 -- vertical space above + below a separator
+local SEPARATOR_PAD_Y = 4
 local ICON_SIZE    = 16
-local ICON_GAP     = 6    -- gap between icon and label
-local MENU_PAD     = 6    -- inner pad inside the 9-patch box
-local TILE_SIZE    = 8    -- 9-patch corner size for the textbox tex set
+local ICON_GAP     = 6
+local MENU_PAD     = 6
+local TILE_SIZE    = 8
 local FONT_SIZE    = 14
 local MIN_WIDTH    = 120
+local ARROW_GAP    = 8   -- room reserved at the right edge of rows that
+                         -- have a submenu (for the ▶ indicator)
+local SUBMENU_GAP  = 2   -- horizontal offset between parent panel right
+                         -- edge and the child panel left edge
 
-local TEXT_COLOR_ON      = { 0.0, 0.0, 0.0, 1.0 }  -- enabled, not hovered
-local TEXT_COLOR_HOVER   = { 1.0, 1.0, 1.0, 1.0 }  -- enabled, hovered
-local TEXT_COLOR_OFF     = { 0.4, 0.4, 0.4, 1.0 }  -- disabled
-local HIGHLIGHT_COLOR    = { 0.3, 0.5, 0.8, 0.8 }  -- matches dropdown
+local TEXT_COLOR_ON      = { 0.0, 0.0, 0.0, 1.0 }
+local TEXT_COLOR_HOVER   = { 1.0, 1.0, 1.0, 1.0 }
+local TEXT_COLOR_OFF     = { 0.4, 0.4, 0.4, 1.0 }
+local HIGHLIGHT_COLOR    = { 0.3, 0.5, 0.8, 0.8 }
 local SEPARATOR_COLOR    = { 0.5, 0.5, 0.5, 0.6 }
-local BACKDROP_COLOR     = { 0.0, 0.0, 0.0, 0.0 }  -- fully transparent
+local BACKDROP_COLOR     = { 0.0, 0.0, 0.0, 0.0 }
 
 local ITEM_CALLBACK     = "onContextMenuItemClick"
 local BACKDROP_CALLBACK = "onContextMenuBackdrop"
 
 -----------------------------------------------------------
--- Module state (singleton — only one menu open at a time)
+-- Module state
 -----------------------------------------------------------
 
-cm.assetsLoaded     = false
-cm.boxTexSet        = nil
-cm.highlightTex     = nil
-cm.whitePixelTex    = nil   -- for separators + backdrop
-cm.font             = nil
+cm.assetsLoaded  = false
+cm.boxTexSet     = nil
+cm.highlightTex  = nil
+cm.whitePixelTex = nil
+cm.font          = nil
 
-cm.page             = nil   -- UI page handle while open; nil when closed
-cm.backdropId       = nil
-cm.boxId            = nil
-cm.rows             = {}    -- per-row: {kind="row"/"sep", bgId, hlId, iconId, lblId, callback, enabled}
-cm.hoveredIndex     = nil
+-- Page + backdrop are owned by the root menu. Submenus reuse the same
+-- page so a single hide() teardown covers everything.
+cm.page          = nil
+cm.backdropId    = nil
+
+-- Root panel state. nil when the menu isn't open.
+cm.rootPanel     = nil   -- { boxId, rows, x, y, m, items }
+
+-- Optional submenu panel. nil when no submenu is open.
+cm.subPanel       = nil  -- { boxId, rows, x, y, m, items }
+cm.subParentIndex = nil  -- which root row owns the current sub
+
+-- Hover index per panel. Both can be active simultaneously while the
+-- mouse is moving from parent → sub (parent stays highlighted).
+cm.rootHovered = nil
+cm.subHovered  = nil
 
 -----------------------------------------------------------
 -- Initialization
@@ -83,15 +99,11 @@ function cm.init()
     cm.boxTexSet     = boxTextures.load("assets/textures/ui/textbox", "textbox")
     cm.highlightTex  = engine.loadTexture("assets/textures/ui/highlight.png")
     cm.whitePixelTex = engine.loadTexture("assets/textures/hud/utility/white.png")
-    -- Use the menu font already loaded by the HUD (avoids redundant loads).
-    -- Caller is expected to have hud bootstrapped before opening menus.
     local hud = package.loaded["scripts.hud"]
     cm.font = hud and hud.menuFont or nil
     cm.assetsLoaded = true
 end
 
--- A separate ensureReady() check defends against opening a menu before
--- the HUD has loaded its font — rare in practice but cheap to guard.
 local function ensureReady()
     if not cm.assetsLoaded then cm.init() end
     if not cm.font then
@@ -102,11 +114,9 @@ local function ensureReady()
 end
 
 -----------------------------------------------------------
--- Geometry — measure rows once so the menu box can size itself
+-- Geometry
 -----------------------------------------------------------
 
--- Returns { totalW, totalH, rowYs } describing how the menu lays out.
--- rowYs[i] is the top-Y of row i relative to the menu's inner area.
 local function measure(items, uiscale)
     local rowH    = math.floor(ROW_H * uiscale)
     local sepH    = math.floor(SEPARATOR_H * uiscale)
@@ -117,19 +127,27 @@ local function measure(items, uiscale)
     local iconGap = math.floor(ICON_GAP * uiscale)
     local fs      = math.floor(FONT_SIZE * uiscale)
     local menuPad = math.floor(MENU_PAD * uiscale)
+    local arrowGap = math.floor(ARROW_GAP * uiscale)
 
-    -- Widest row decides menu width. Width = padX + (icon + iconGap)? + text + padX.
     local maxTextW = 0
     local anyIcon  = false
+    local anySub   = false
     for _, it in ipairs(items) do
         if not it.separator then
             if it.icon then anyIcon = true end
-            local tw = engine.getTextWidth(cm.font,
-                                           it.label or "", fs)
+            if it.submenu then anySub = true end
+            local tw = engine.getTextWidth(cm.font, it.label or "", fs)
             if tw > maxTextW then maxTextW = tw end
         end
     end
-    local rowContentW = maxTextW + (anyIcon and (iconSz + iconGap) or 0)
+    -- Rows with submenus reserve an arrow column at the right edge so
+    -- the arrow doesn't collide with the label. The whole panel uses
+    -- the wider sizing whenever ANY row has a submenu (otherwise the
+    -- column width would visibly shift between hovers).
+    local arrowCol = anySub and arrowGap or 0
+    local rowContentW = maxTextW
+                      + (anyIcon and (iconSz + iconGap) or 0)
+                      + arrowCol
     local innerW = math.max(rowContentW + 2 * padX,
                             math.floor(MIN_WIDTH * uiscale))
     local totalW = innerW + 2 * menuPad
@@ -144,23 +162,173 @@ local function measure(items, uiscale)
             cursorY = cursorY + rowH + rowGap
         end
     end
-    local totalH = cursorY - rowGap + menuPad  -- trim trailing gap
+    local totalH = cursorY - rowGap + menuPad
 
     return {
-        totalW   = totalW,
-        totalH   = totalH,
-        innerW   = innerW,
-        rowYs    = rowYs,
-        rowH     = rowH,
-        sepH     = sepH,
-        sepPad   = sepPad,
-        padX     = padX,
-        iconSz   = iconSz,
-        iconGap  = iconGap,
-        fs       = fs,
-        menuPad  = menuPad,
-        anyIcon  = anyIcon,
+        totalW = totalW, totalH = totalH, innerW = innerW,
+        rowYs  = rowYs,
+        rowH   = rowH, sepH = sepH, sepPad = sepPad,
+        padX   = padX, iconSz = iconSz, iconGap = iconGap,
+        fs     = fs,   menuPad = menuPad,
+        anyIcon = anyIcon, anySub = anySub,
+        arrowGap = arrowGap,
     }
+end
+
+-----------------------------------------------------------
+-- Panel builder — used for both root and submenu
+-----------------------------------------------------------
+
+-- Position the panel at (anchorX, anchorY), clamped to the screen.
+-- `namePrefix` distinguishes element names so root and sub don't
+-- collide (sprite names need to be unique within a page).
+local function buildPanel(items, anchorX, anchorY, namePrefix)
+    local uiscale = scale.get()
+    local m = measure(items, uiscale)
+
+    local fbW, fbH = engine.getFramebufferSize()
+    local x = math.max(0, math.min(anchorX, fbW - m.totalW))
+    local y = math.max(0, math.min(anchorY, fbH - m.totalH))
+
+    local boxId = UI.newBox(
+        namePrefix .. "_box", m.totalW, m.totalH,
+        cm.boxTexSet, TILE_SIZE,
+        1.0, 1.0, 1.0, 1.0, 0,
+        cm.page)
+    UI.addToPage(cm.page, boxId, x, y)
+    UI.setZIndex(boxId, 11)
+
+    local rows = {}
+    for i, it in ipairs(items) do
+        local rowY = y + m.rowYs[i]
+        if it.separator then
+            local sepId = UI.newSprite(
+                namePrefix .. "_sep_" .. i,
+                m.innerW, m.sepH,
+                cm.whitePixelTex,
+                SEPARATOR_COLOR[1], SEPARATOR_COLOR[2],
+                SEPARATOR_COLOR[3], SEPARATOR_COLOR[4],
+                cm.page)
+            UI.addToPage(cm.page, sepId, x + m.menuPad, rowY + m.sepPad)
+            UI.setZIndex(sepId, 12)
+            rows[i] = { kind = "sep", spriteId = sepId }
+        else
+            local enabled = (it.enabled ~= false)
+            local hasSub  = (it.submenu ~= nil and #it.submenu > 0)
+
+            local hlId = UI.newSprite(
+                namePrefix .. "_hl_" .. i,
+                m.innerW, m.rowH,
+                cm.highlightTex,
+                HIGHLIGHT_COLOR[1], HIGHLIGHT_COLOR[2],
+                HIGHLIGHT_COLOR[3], HIGHLIGHT_COLOR[4],
+                cm.page)
+            UI.addToPage(cm.page, hlId, x + m.menuPad, rowY)
+            UI.setZIndex(hlId, 12)
+            UI.setVisible(hlId, false)
+
+            local iconId = nil
+            if it.icon then
+                iconId = UI.newSprite(
+                    namePrefix .. "_icon_" .. i,
+                    m.iconSz, m.iconSz,
+                    it.icon,
+                    1.0, 1.0, 1.0, enabled and 1.0 or 0.5,
+                    cm.page)
+                UI.addToPage(cm.page, iconId,
+                    x + m.menuPad + m.padX,
+                    rowY + math.floor((m.rowH - m.iconSz) / 2))
+                UI.setZIndex(iconId, 13)
+            end
+
+            local labelX = x + m.menuPad + m.padX
+                         + (m.anyIcon and (m.iconSz + m.iconGap) or 0)
+            local labelY = rowY + math.floor(m.rowH / 2)
+                         + math.floor(m.fs * 0.3) + 2
+            local lblId = UI.newText(
+                namePrefix .. "_lbl_" .. i,
+                it.label or "",
+                cm.font, m.fs,
+                enabled and TEXT_COLOR_ON[1] or TEXT_COLOR_OFF[1],
+                enabled and TEXT_COLOR_ON[2] or TEXT_COLOR_OFF[2],
+                enabled and TEXT_COLOR_ON[3] or TEXT_COLOR_OFF[3],
+                enabled and TEXT_COLOR_ON[4] or TEXT_COLOR_OFF[4],
+                cm.page)
+            UI.addToPage(cm.page, lblId, labelX, labelY)
+            UI.setZIndex(lblId, 13)
+
+            -- Submenu indicator arrow. Right-aligned inside the row.
+            local arrowId = nil
+            if hasSub then
+                arrowId = UI.newText(
+                    namePrefix .. "_arrow_" .. i,
+                    ">",
+                    cm.font, m.fs,
+                    enabled and TEXT_COLOR_ON[1] or TEXT_COLOR_OFF[1],
+                    enabled and TEXT_COLOR_ON[2] or TEXT_COLOR_OFF[2],
+                    enabled and TEXT_COLOR_ON[3] or TEXT_COLOR_OFF[3],
+                    enabled and TEXT_COLOR_ON[4] or TEXT_COLOR_OFF[4],
+                    cm.page)
+                UI.addToPage(cm.page, arrowId,
+                    x + m.totalW - m.menuPad - m.padX
+                      - math.floor(m.arrowGap * 0.6),
+                    labelY)
+                UI.setZIndex(arrowId, 13)
+            end
+
+            local bgId = UI.newSprite(
+                namePrefix .. "_row_" .. i,
+                m.innerW, m.rowH,
+                cm.whitePixelTex,
+                1.0, 1.0, 1.0, 0.0,
+                cm.page)
+            UI.addToPage(cm.page, bgId, x + m.menuPad, rowY)
+            UI.setZIndex(bgId, 14)
+            UI.setClickable(bgId, true)
+            UI.setOnClick(bgId, ITEM_CALLBACK)
+
+            rows[i] = {
+                kind     = "row",
+                bgId     = bgId,
+                hlId     = hlId,
+                iconId   = iconId,
+                lblId    = lblId,
+                arrowId  = arrowId,
+                callback = it.callback,
+                enabled  = enabled,
+                hasSub   = hasSub,
+                submenu  = it.submenu,
+            }
+        end
+    end
+
+    return {
+        boxId = boxId,
+        rows  = rows,
+        x     = x,
+        y     = y,
+        m     = m,
+        items = items,
+    }
+end
+
+-- Tear down a panel (boxId + per-row elements). Page deletion would
+-- handle this too, but we need finer control to dispose of just the
+-- submenu without taking the root down.
+local function destroyPanel(panel)
+    if not panel then return end
+    for _, r in ipairs(panel.rows) do
+        if r.kind == "sep" then
+            UI.deleteElement(r.spriteId)
+        else
+            UI.deleteElement(r.bgId)
+            UI.deleteElement(r.hlId)
+            if r.iconId  then UI.deleteElement(r.iconId)  end
+            if r.lblId   then UI.deleteElement(r.lblId)   end
+            if r.arrowId then UI.deleteElement(r.arrowId) end
+        end
+    end
+    UI.deleteElement(panel.boxId)
 end
 
 -----------------------------------------------------------
@@ -173,13 +341,14 @@ end
 
 function cm.hide()
     if not cm.page then return end
-    -- Page deletion cleans up every element / sprite registered to it.
     UI.deletePage(cm.page)
-    cm.page         = nil
-    cm.backdropId   = nil
-    cm.boxId        = nil
-    cm.rows         = {}
-    cm.hoveredIndex = nil
+    cm.page           = nil
+    cm.backdropId     = nil
+    cm.rootPanel      = nil
+    cm.subPanel       = nil
+    cm.subParentIndex = nil
+    cm.rootHovered    = nil
+    cm.subHovered     = nil
 end
 
 function cm.show(items, x, y)
@@ -189,30 +358,11 @@ function cm.show(items, x, y)
     end
     if not items or #items == 0 then return end
 
-    -- Close any previously open menu before opening a new one. This is
-    -- also the path for "user right-clicked again on something else" —
-    -- the old menu vanishes and the new one takes its place.
     if cm.page then cm.hide() end
 
-    local uiscale = scale.get()
-    local m = measure(items, uiscale)
-
-    -- Clamp the menu so it stays fully on-screen — shift left / up if
-    -- the click site would push the bottom-right corner off-edge.
-    local fbW, fbH = engine.getFramebufferSize()
-    local mx = math.max(0, math.min(x, fbW - m.totalW))
-    local my = math.max(0, math.min(y, fbH - m.totalH))
-
-    -- Dedicated page so hide() can wipe everything in a single call,
-    -- and so the menu can sit above other UI without juggling z's.
-    -- "modal" layer keeps it above HUD/menu pages (info panel, etc.)
-    -- while staying below tooltips. UI.newPage does NOT auto-show — we
-    -- need an explicit UI.showPage after we've built our elements.
     cm.page = UI.newPage("context_menu", "modal")
 
-    -- Full-screen backdrop catches clicks outside the menu. Transparent
-    -- so it doesn't visually intrude; clickable so the click is eaten
-    -- by the UI hit-test (and never reaches game.onMouseDown).
+    local fbW, fbH = engine.getFramebufferSize()
     cm.backdropId = UI.newSprite(
         "context_menu_backdrop", fbW, fbH,
         cm.whitePixelTex,
@@ -223,152 +373,143 @@ function cm.show(items, x, y)
     UI.setZIndex(cm.backdropId, 10)
     UI.setClickable(cm.backdropId, true)
     UI.setOnClick(cm.backdropId, BACKDROP_CALLBACK)
-    -- Right-clicks on the backdrop close too (matches "any click
-    -- outside closes" UX).
     UI.setOnRightClick(cm.backdropId, BACKDROP_CALLBACK)
 
-    -- 9-patch box behind all rows.
-    cm.boxId = UI.newBox(
-        "context_menu_box", m.totalW, m.totalH,
-        cm.boxTexSet, TILE_SIZE,
-        1.0, 1.0, 1.0, 1.0, 0,
-        cm.page)
-    UI.addToPage(cm.page, cm.boxId, mx, my)
-    UI.setZIndex(cm.boxId, 11)
+    cm.rootPanel = buildPanel(items, x, y, "context_menu_root")
 
-    -- Build rows
-    cm.rows = {}
-    for i, it in ipairs(items) do
-        local rowY = my + m.rowYs[i]
-        if it.separator then
-            local sepId = UI.newSprite(
-                "context_menu_sep_" .. i,
-                m.innerW, m.sepH,
-                cm.whitePixelTex,
-                SEPARATOR_COLOR[1], SEPARATOR_COLOR[2],
-                SEPARATOR_COLOR[3], SEPARATOR_COLOR[4],
-                cm.page)
-            UI.addToPage(cm.page, sepId,
-                mx + m.menuPad, rowY + m.sepPad)
-            UI.setZIndex(sepId, 12)
-            cm.rows[i] = { kind = "sep", spriteId = sepId }
-        else
-            local enabled = (it.enabled ~= false)
-
-            -- Hover highlight (hidden until enter)
-            local hlId = UI.newSprite(
-                "context_menu_hl_" .. i,
-                m.innerW, m.rowH,
-                cm.highlightTex,
-                HIGHLIGHT_COLOR[1], HIGHLIGHT_COLOR[2],
-                HIGHLIGHT_COLOR[3], HIGHLIGHT_COLOR[4],
-                cm.page)
-            UI.addToPage(cm.page, hlId, mx + m.menuPad, rowY)
-            UI.setZIndex(hlId, 12)
-            UI.setVisible(hlId, false)
-
-            -- Optional icon
-            local iconId = nil
-            if it.icon then
-                iconId = UI.newSprite(
-                    "context_menu_icon_" .. i,
-                    m.iconSz, m.iconSz,
-                    it.icon,
-                    1.0, 1.0, 1.0, enabled and 1.0 or 0.5,
-                    cm.page)
-                UI.addToPage(cm.page, iconId,
-                    mx + m.menuPad + m.padX,
-                    rowY + math.floor((m.rowH - m.iconSz) / 2))
-                UI.setZIndex(iconId, 13)
-            end
-
-            -- Label
-            local labelX = mx + m.menuPad + m.padX
-                         + (m.anyIcon and (m.iconSz + m.iconGap) or 0)
-            local labelY = rowY + math.floor(m.rowH / 2)
-                         + math.floor(m.fs * 0.3) + 2
-            local lblId = UI.newText(
-                "context_menu_lbl_" .. i,
-                it.label or "",
-                cm.font, m.fs,
-                enabled and TEXT_COLOR_ON[1] or TEXT_COLOR_OFF[1],
-                enabled and TEXT_COLOR_ON[2] or TEXT_COLOR_OFF[2],
-                enabled and TEXT_COLOR_ON[3] or TEXT_COLOR_OFF[3],
-                enabled and TEXT_COLOR_ON[4] or TEXT_COLOR_OFF[4],
-                cm.page)
-            UI.addToPage(cm.page, lblId, labelX, labelY)
-            UI.setZIndex(lblId, 13)
-
-            -- Hit-zone box on top — receives clicks + hover. Disabled
-            -- rows still get the click handler so the menu doesn't
-            -- accidentally close from a "missed click" through them.
-            local bgId = UI.newSprite(
-                "context_menu_row_" .. i,
-                m.innerW, m.rowH,
-                cm.whitePixelTex,
-                1.0, 1.0, 1.0, 0.0,
-                cm.page)
-            UI.addToPage(cm.page, bgId, mx + m.menuPad, rowY)
-            UI.setZIndex(bgId, 14)
-            UI.setClickable(bgId, true)
-            UI.setOnClick(bgId, ITEM_CALLBACK)
-
-            cm.rows[i] = {
-                kind     = "row",
-                bgId     = bgId,
-                hlId     = hlId,
-                iconId   = iconId,
-                lblId    = lblId,
-                callback = it.callback,
-                enabled  = enabled,
-            }
-        end
-    end
-
-    -- Nothing renders until the page is explicitly shown.
     UI.showPage(cm.page)
 end
 
 -----------------------------------------------------------
--- Hover handling — toggle highlight + text color on enter / leave
+-- Submenu management
 -----------------------------------------------------------
 
-local function setRowHovered(i, hovered)
-    local r = cm.rows[i]
+local function closeSubMenu()
+    if not cm.subPanel then return end
+    destroyPanel(cm.subPanel)
+    cm.subPanel       = nil
+    cm.subParentIndex = nil
+    cm.subHovered     = nil
+end
+
+-- Open a submenu adjacent to the parent row at `parentIndex` in the
+-- root panel. The submenu opens to the right of the root by default;
+-- if that would clip the screen, it flips and opens to the left.
+local function openSubMenu(parentIndex)
+    if not cm.rootPanel then return end
+    local r = cm.rootPanel.rows[parentIndex]
+    if not r or r.kind ~= "row" or not r.hasSub then return end
+    if cm.subParentIndex == parentIndex then return end  -- already open
+
+    closeSubMenu()
+
+    local rootM = cm.rootPanel.m
+    local rootRowYTop = cm.rootPanel.y + rootM.rowYs[parentIndex]
+    -- Try right of root first
+    local subX = cm.rootPanel.x + rootM.totalW + SUBMENU_GAP
+    local subY = rootRowYTop - rootM.menuPad  -- align sub's top with parent row
+
+    -- If the submenu's preferred position would push it off the right
+    -- edge, flip to open on the left side of the root panel.
+    local items = r.submenu
+    local uiscale = scale.get()
+    local subM = measure(items, uiscale)
+    local fbW, _ = engine.getFramebufferSize()
+    if subX + subM.totalW > fbW then
+        subX = cm.rootPanel.x - subM.totalW - SUBMENU_GAP
+    end
+
+    cm.subPanel = buildPanel(items, subX, subY, "context_menu_sub")
+    cm.subParentIndex = parentIndex
+end
+
+-----------------------------------------------------------
+-- Hover handling
+-----------------------------------------------------------
+
+local function setRowHovered(panel, i, hovered)
+    if not panel then return end
+    local r = panel.rows[i]
     if not r or r.kind ~= "row" then return end
     UI.setVisible(r.hlId, hovered and r.enabled)
     local c = (hovered and r.enabled) and TEXT_COLOR_HOVER
               or (r.enabled and TEXT_COLOR_ON or TEXT_COLOR_OFF)
     UI.setColor(r.lblId, c[1], c[2], c[3], c[4])
+    if r.arrowId then
+        UI.setColor(r.arrowId, c[1], c[2], c[3], c[4])
+    end
+end
+
+-- Look up an elemHandle in either panel. Returns (panel, index) or nil.
+local function findPanelRow(elemHandle)
+    if cm.rootPanel then
+        for i, r in ipairs(cm.rootPanel.rows) do
+            if r.bgId == elemHandle then
+                return "root", cm.rootPanel, i
+            end
+        end
+    end
+    if cm.subPanel then
+        for i, r in ipairs(cm.subPanel.rows) do
+            if r.bgId == elemHandle then
+                return "sub", cm.subPanel, i
+            end
+        end
+    end
+    return nil
 end
 
 function cm.onHoverEnter(elemHandle)
     if not cm.page then return end
-    for i, r in ipairs(cm.rows) do
-        if r.bgId == elemHandle then
-            if cm.hoveredIndex and cm.hoveredIndex ~= i then
-                setRowHovered(cm.hoveredIndex, false)
-            end
-            cm.hoveredIndex = i
-            setRowHovered(i, true)
-            return
+    local which, panel, i = findPanelRow(elemHandle)
+    if not which then return end
+
+    if which == "root" then
+        -- Unhighlight any previous root row UNLESS the previous row
+        -- owns the currently-open submenu (we want the parent of an
+        -- open sub to keep its highlight while the user moves into the
+        -- sub).
+        if cm.rootHovered and cm.rootHovered ~= i
+           and cm.rootHovered ~= cm.subParentIndex then
+            setRowHovered(cm.rootPanel, cm.rootHovered, false)
         end
+        cm.rootHovered = i
+        setRowHovered(cm.rootPanel, i, true)
+        local row = panel.rows[i]
+        if row.hasSub and row.enabled then
+            openSubMenu(i)
+        else
+            closeSubMenu()
+        end
+    else
+        -- Hovering inside the sub. Keep the sub open. Highlight the
+        -- sub row.
+        if cm.subHovered and cm.subHovered ~= i then
+            setRowHovered(cm.subPanel, cm.subHovered, false)
+        end
+        cm.subHovered = i
+        setRowHovered(cm.subPanel, i, true)
     end
 end
 
 function cm.onHoverLeave(elemHandle)
     if not cm.page then return end
-    for i, r in ipairs(cm.rows) do
-        if r.bgId == elemHandle and cm.hoveredIndex == i then
-            setRowHovered(i, false)
-            cm.hoveredIndex = nil
-            return
-        end
+    local which, panel, i = findPanelRow(elemHandle)
+    if not which then return end
+
+    if which == "root" then
+        -- Don't unhighlight the parent of an open submenu — the user
+        -- is likely moving toward the sub. The sub-or-elsewhere hover
+        -- will reset the visual state when it lands.
+        if i == cm.subParentIndex then return end
+        setRowHovered(cm.rootPanel, i, false)
+        if cm.rootHovered == i then cm.rootHovered = nil end
+    else
+        setRowHovered(cm.subPanel, i, false)
+        if cm.subHovered == i then cm.subHovered = nil end
     end
 end
 
--- Routing hook for ui_manager — answers "is this callback name one of
--- ours?" so the dispatcher knows to forward hover events to us.
 function cm.isContextMenuCallback(name)
     return name == ITEM_CALLBACK or name == BACKDROP_CALLBACK
 end
@@ -377,28 +518,28 @@ end
 -- Click + ESC handling
 -----------------------------------------------------------
 
--- ui_manager routes "onContextMenuItemClick" here.
 function cm.handleItemClick(elemHandle)
     if not cm.page then return false end
-    for _, r in ipairs(cm.rows) do
-        if r.kind == "row" and r.bgId == elemHandle then
-            if not r.enabled then
-                -- Disabled rows swallow the click but don't close the
-                -- menu — lets the player retry without re-opening.
-                return true
-            end
-            local cb = r.callback
-            cm.hide()
-            -- Callback fires AFTER hide() so the callback can re-open
-            -- a different menu without colliding with the current one.
-            if cb then cb() end
-            return true
-        end
+    local which, panel, i = findPanelRow(elemHandle)
+    if not which then return false end
+    local row = panel.rows[i]
+    if not row.enabled then return true end
+
+    if row.hasSub then
+        -- Clicking a parent that owns a submenu opens (or refocuses)
+        -- the sub, but doesn't fire a callback — submenus are for
+        -- picking among options, not for executing the parent's
+        -- intent directly.
+        openSubMenu(i)
+        return true
     end
-    return false
+
+    local cb = row.callback
+    cm.hide()
+    if cb then cb() end
+    return true
 end
 
--- ui_manager routes "onContextMenuBackdrop" here.
 function cm.handleBackdropClick(elemHandle)
     if not cm.page then return false end
     if elemHandle == cm.backdropId then
@@ -408,9 +549,15 @@ function cm.handleBackdropClick(elemHandle)
     return false
 end
 
--- ESC closes the menu. Wire from init.lua's game.onKeyDown.
 function cm.handleEscape()
     if not cm.page then return false end
+    -- If a submenu is open, ESC closes only the sub (leaves root open
+    -- so the user can pick a different item). Second ESC closes the
+    -- root.
+    if cm.subPanel then
+        closeSubMenu()
+        return true
+    end
     cm.hide()
     return true
 end

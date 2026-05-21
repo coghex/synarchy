@@ -687,6 +687,22 @@ function uiManager.onInventoryTabClick(elemHandle)
     return false
 end
 
+function uiManager.onInventoryItemRightClick(elemHandle)
+    local mod = package.loaded["scripts.unit_info_v2"]
+    if mod and mod.handleInvItemRightClick then
+        return mod.handleInvItemRightClick(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onEquipSlotRightClick(elemHandle)
+    local mod = package.loaded["scripts.unit_info_v2"]
+    if mod and mod.handleEquipSlotRightClick then
+        return mod.handleEquipSlotRightClick(elemHandle)
+    end
+    return false
+end
+
 -- Context menu click routes. Both fire as broadcast callbacks named in
 -- scripts.ui.context_menu — items run the row's callback, backdrop
 -- closes the menu without doing anything else.
