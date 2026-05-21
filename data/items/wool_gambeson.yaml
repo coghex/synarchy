@@ -5,3 +5,5 @@ items:
     weight: 3.5
     kind: armor
     category: Armor
+    material: pleated_wool  # combat resistance lives in
+                            # data/substances/textiles.yaml

@@ -78,8 +78,10 @@ import Unit.Render (pickFrame)
 import Unit.Sim.Types (Pose(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
+import Item.Roll (rollItemSpec)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
-                  , ItemFood(..), ItemManager(..), lookupItemDef)
+                  , ItemFood(..), ItemWeapon(..), ItemManager(..)
+                  , lookupItemDef)
 import Unit.LineOfSight (unitVisibleTiles)
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 import qualified Unit.Selection as Sel
@@ -622,9 +624,15 @@ unitAddItemFn env = do
                         let clampedFill = case idContainer def of
                                 Just c  → max 0 (min fillIn (icCapacity c))
                                 Nothing → 0
-                            inst' = ItemInstance
+                        qual ← rollItemSpec (idQualitySpec def)
+                                            (statRNGRef env)
+                        cond ← rollItemSpec (idConditionSpec def)
+                                            (statRNGRef env)
+                        let inst' = ItemInstance
                                 { iiDefName     = defName
                                 , iiCurrentFill = clampedFill
+                                , iiQuality     = qual
+                                , iiCondition   = cond
                                 }
                         atomicModifyIORef' (unitManagerRef env) $ \um →
                             case HM.lookup uid (umInstances um) of
@@ -1590,6 +1598,10 @@ unitGetInventoryFn env = do
                         Lua.setfield (-2) "weight"
                         Lua.pushnumber (Lua.Number (realToFrac (iiCurrentFill inst)))
                         Lua.setfield (-2) "currentFill"
+                        Lua.pushnumber (Lua.Number (realToFrac (iiQuality inst)))
+                        Lua.setfield (-2) "quality"
+                        Lua.pushnumber (Lua.Number (realToFrac (iiCondition inst)))
+                        Lua.setfield (-2) "condition"
                         -- Display-side fields the inventory UI needs.
                         -- Defaulted when the def is missing so the
                         -- renderer always sees a complete row.
@@ -1599,6 +1611,10 @@ unitGetInventoryFn env = do
                                 Lua.setfield (-2) "kind"
                                 Lua.pushstring (TE.encodeUtf8 (idCategory d))
                                 Lua.setfield (-2) "category"
+                                Lua.pushstring (TE.encodeUtf8 (idMake d))
+                                Lua.setfield (-2) "make"
+                                Lua.pushstring (TE.encodeUtf8 (idMaterial d))
+                                Lua.setfield (-2) "material"
                                 let TextureHandle tex = idTexture d
                                 Lua.pushinteger (fromIntegral tex)
                                 Lua.setfield (-2) "iconTex"
@@ -1620,6 +1636,26 @@ unitGetInventoryFn env = do
                                 Lua.pushnumber (Lua.Number (realToFrac (ifNutrition f)))
                                 Lua.setfield (-2) "nutrition"
                                 Lua.setfield (-2) "food"
+                            Nothing → pure ()
+                        case mDef >>= idWeapon of
+                            Just w → do
+                                Lua.newtable
+                                Lua.pushnumber
+                                    (Lua.Number (realToFrac (iwBladeLength w)))
+                                Lua.setfield (-2) "bladeLength"
+                                Lua.pushnumber
+                                    (Lua.Number (realToFrac (iwBaseSharpness w)))
+                                Lua.setfield (-2) "baseSharpness"
+                                Lua.pushnumber
+                                    (Lua.Number (realToFrac (iwStabEff w)))
+                                Lua.setfield (-2) "stabEffectiveness"
+                                Lua.pushnumber
+                                    (Lua.Number (realToFrac (iwSlashEff w)))
+                                Lua.setfield (-2) "slashEffectiveness"
+                                Lua.pushnumber
+                                    (Lua.Number (realToFrac (iwBluntEff w)))
+                                Lua.setfield (-2) "bluntEffectiveness"
+                                Lua.setfield (-2) "weapon"
                             Nothing → pure ()
                         Lua.rawseti (-2) (fromIntegral (i ∷ Int))
                     return 1

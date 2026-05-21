@@ -46,6 +46,7 @@ import Building.Types (BuildingManager, BuildingGhost)
 import Building.Command.Types (BuildingCommand)
 import Item.Types (ItemManager)
 import Equipment.Types (EquipmentClassManager)
+import Substance.Types (SubstanceManager)
 import World.Types (WorldCommand, WorldManager, FloraCatalog)
 import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
@@ -131,6 +132,12 @@ data EngineEnv = EngineEnv
     -- ^ Registry of equipment classes loaded from data/equipment/*.yaml.
     --   Lua's equipment.loadYaml writes into this; the unit-info v2
     --   equipment section reads it to lay out slot boxes per class.
+  , substanceManagerRef ∷ IORef SubstanceManager
+    -- ^ Registry of worked-material substances (steel, bronze, leather,
+    --   etc.) loaded from data/substances/*.yaml. Carries physical
+    --   properties (density, tensile strength, fracture toughness, …)
+    --   that the future combat system will consume. Distinct from the
+    --   tile-rendering material system (`World.Material`).
   , eventStoreRef      ∷ TVar (Seq PlayerEvent)
     -- ^ Ring buffer of player-facing events (~1000 entries; oldest
     --   dropped). Per-session only — not serialized to save files.

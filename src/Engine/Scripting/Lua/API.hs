@@ -49,6 +49,7 @@ import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Buildings
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Equipment
+import Engine.Scripting.Lua.API.Substance
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
@@ -119,6 +120,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadBuildingYaml" (loadBuildingYamlFn env backendState)
   registerLuaFunction "loadItemYaml" (loadItemYamlFn env backendState)
   registerLuaFunction "loadEquipmentYaml" (loadEquipmentYamlFn env backendState)
+  registerLuaFunction "loadSubstanceYaml" (loadSubstanceYamlFn env)
   
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)
   registerLuaFunction "isActionDown"      (isActionDownFn env backendState)
@@ -301,6 +303,14 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "equip"         (equipmentEquipFn env)
   registerLuaFunction "unequip"       (equipmentUnequipFn env)
   Lua.setglobal (Lua.Name "equipment")
+
+  -- Substance global — read-only access to material physical
+  -- properties (density, tensile, fracture toughness, …). Loaded
+  -- from data/substances/*.yaml via engine.loadSubstanceYaml.
+  Lua.newtable
+  registerLuaFunction "get"      (substanceGetFn env)
+  registerLuaFunction "getNames" (substanceGetNamesFn env)
+  Lua.setglobal (Lua.Name "substance")
 
   Lua.newtable
   registerLuaFunction "getGenDefaults" (worldGetGenDefaultsFn env)

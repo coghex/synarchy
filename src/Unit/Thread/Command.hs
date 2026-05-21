@@ -24,6 +24,7 @@ import Unit.Direction (Direction(..))
 import Unit.Command.Types (UnitCommand(..))
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
                         EquipmentClassManager, lookupEquipmentClass)
+import Item.Roll (rollItemSpec)
 import Item.Types (ItemDef(..), ItemContainer(..), ItemInstance(..)
                   , ItemManager(..), lookupItemDef)
 import Engine.Core.Log (LoggerState)
@@ -91,14 +92,14 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
             -- units that reference them).
             itemMgr ← readIORef (itemManagerRef env)
             logger  ← readIORef (loggerRef env)
-            initialInventory ← buildStartingInventory logger itemMgr
+            initialInventory ← buildStartingInventory env logger itemMgr
                                   (udStartingInventory def)
             -- Pre-equipped items declared by the unit def's
             -- starting_equipment. Resolved against the EquipmentClass
             -- so each item's kind can be validated against the slot.
             ecMgr ← readIORef (equipmentClassManagerRef env)
             let mClass = udEquipmentClass def >>= (`lookupEquipmentClass` ecMgr)
-            initialEquipment ← buildStartingEquipment logger itemMgr mClass
+            initialEquipment ← buildStartingEquipment env logger itemMgr mClass
                                   (udStartingEquipment def)
             let inst = UnitInstance
                     { uiDefName    = defName
@@ -530,10 +531,11 @@ recomputeBodyDerivedStats s =
 -- | Resolve a unit def's starting_inventory into concrete ItemInstance
 --   list. Unknown item names log a warning and are dropped. Fill is
 --   clamped to the container's capacity; non-container items ignore
---   the fill arg and get 0.
-buildStartingInventory ∷ LoggerState → ItemManager
+--   the fill arg and get 0. Quality + condition are rolled from the
+--   def's spec (defaults to 100 when unset).
+buildStartingInventory ∷ EngineEnv → LoggerState → ItemManager
                        → [(Text, Maybe Float)] → IO [ItemInstance]
-buildStartingInventory logger itemMgr entries = do
+buildStartingInventory env logger itemMgr entries = do
     mInsts ← mapM resolve entries
     return [i | Just i ← mInsts]
   where
@@ -544,26 +546,31 @@ buildStartingInventory logger itemMgr entries = do
                     "Unit starting_inventory: unknown item '" <> name
                       <> "' — skipping"
                 return Nothing
-            Just def →
+            Just def → do
                 let fill = case (mFill, idContainer def) of
                         (Just f,  Just c) → max 0 (min f (icCapacity c))
                         (Nothing, _     ) → 0
                         (Just _,  Nothing) → 0
-                in return $ Just ItemInstance
+                qual ← rollItemSpec (idQualitySpec def)   (statRNGRef env)
+                cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
+                return $ Just ItemInstance
                     { iiDefName     = name
                     , iiCurrentFill = fill
+                    , iiQuality     = qual
+                    , iiCondition   = cond
                     }
 
 -- | Resolve a unit def's starting_equipment into a slot→ItemInstance
 --   map, validating each item's `idKind` against the slot's accepted
 --   `esKind`. Unknown items / kind mismatches / unknown slots log a
 --   warning and are dropped. Containers in equipment slots get fill=0
---   (Phase 2 doesn't bother seeding canteens-as-equipment).
-buildStartingEquipment ∷ LoggerState → ItemManager
+--   (Phase 2 doesn't bother seeding canteens-as-equipment). Quality +
+--   condition rolled from the def's spec like starting_inventory.
+buildStartingEquipment ∷ EngineEnv → LoggerState → ItemManager
                        → Maybe EquipmentClass
                        → HM.HashMap Text Text
                        → IO (HM.HashMap Text ItemInstance)
-buildStartingEquipment logger itemMgr mClass entries =
+buildStartingEquipment env logger itemMgr mClass entries =
     case mClass of
         Nothing
             | HM.null entries → return HM.empty
@@ -602,11 +609,19 @@ buildStartingEquipment logger itemMgr mClass entries =
                                         <> slotId <> "' (kind="
                                         <> esKind slot <> ") — skipping"
                                     return m
-                                | otherwise → return $
-                                    HM.insert slotId
+                                | otherwise → do
+                                    qual ← rollItemSpec
+                                             (idQualitySpec iDef)
+                                             (statRNGRef env)
+                                    cond ← rollItemSpec
+                                             (idConditionSpec iDef)
+                                             (statRNGRef env)
+                                    return $ HM.insert slotId
                                         ItemInstance
                                           { iiDefName     = itemName
                                           , iiCurrentFill = 0
+                                          , iiQuality     = qual
+                                          , iiCondition   = cond
                                           }
                                         m
                 ) (return HM.empty) entries

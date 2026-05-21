@@ -1099,6 +1099,43 @@ end
 -- the equipped item's icon inside each slot rect.
 -----------------------------------------------------------
 
+-- Build the rich tooltip hint shown for an item — same content for
+-- inventory rows AND silhouette slot icons. `it` accepts both shapes
+-- (from unit.getInventory / equipment.getLoadout); equippedSlot is
+-- the slot id string when the item lives in a slot, nil otherwise.
+local function buildItemHint(it, equippedSlot)
+    local hintLines = { string.format("%.2f kg", it.weight or 0) }
+    if it.make and it.make ~= "" then
+        hintLines[#hintLines + 1] = "make: " .. it.make
+    end
+    if it.material and it.material ~= "" then
+        hintLines[#hintLines + 1] = "material: " .. it.material
+    end
+    if it.quality then
+        hintLines[#hintLines + 1] =
+            string.format("quality: %d%%", math.floor(it.quality + 0.5))
+    end
+    if it.condition then
+        hintLines[#hintLines + 1] =
+            string.format("condition: %d%%", math.floor(it.condition + 0.5))
+    end
+    if it.weapon then
+        hintLines[#hintLines + 1] = string.format(
+            "length %.0fcm  ·  sharpness %d",
+            it.weapon.bladeLength or 0,
+            math.floor((it.weapon.baseSharpness or 0) + 0.5))
+        hintLines[#hintLines + 1] = string.format(
+            "stab %.2f  ·  slash %.2f  ·  blunt %.2f",
+            it.weapon.stabEffectiveness or 0,
+            it.weapon.slashEffectiveness or 0,
+            it.weapon.bluntEffectiveness or 0)
+    end
+    if equippedSlot then
+        hintLines[#hintLines + 1] = "equipped: " .. equippedSlot
+    end
+    return table.concat(hintLines, "\n")
+end
+
 -- Stable hash of (uid, class, slot→defName pairs). When this changes
 -- we rebuild; otherwise the previous frame's sprites are correct.
 local function computeEquipKey(uid, clsName, loadout)
@@ -1230,9 +1267,13 @@ local function rebuildEquipmentSection()
                     unitInfoV2.page)
                 UI.addToPage(unitInfoV2.page, iconElemId, slotX, slotY)
                 UI.setZIndex(iconElemId, 13)
+                -- Reuse the inventory's hint builder so equipped items
+                -- surface the same details (make / material / quality /
+                -- condition / weapon stats / equipped slot) here as
+                -- they do in the inventory list.
                 UI.setTooltipRich(iconElemId, {
                     text = eq.displayName or eq.defName or s.name,
-                    hint = s.name .. " — kind: " .. (eq.kind or "?"),
+                    hint = buildItemHint(eq, s.id),
                 })
                 UI.setClickable(iconElemId, true)
                 UI.setOnRightClick(iconElemId, "onEquipSlotRightClick")
@@ -1304,8 +1345,13 @@ local function collectInventoryAndEquipment(uid)
             weight      = it.weight or 0,
             category    = it.category or "Misc",
             kind        = it.kind or "misc",
+            make        = it.make or "",
+            material    = it.material or "",
             iconTex     = it.iconTex,
             currentFill = it.currentFill or 0,
+            quality     = it.quality,
+            condition   = it.condition,
+            weapon      = it.weapon,
             equipped    = false,
         }
     end
@@ -1329,8 +1375,12 @@ local function collectInventoryAndEquipment(uid)
                 weight        = it.weight or 0,
                 category      = it.category or "Misc",
                 kind          = it.kind or "misc",
+                make          = it.make or "",
                 iconTex       = it.iconTex,
                 currentFill   = it.currentFill or 0,
+                quality       = it.quality,
+                condition     = it.condition,
+                weapon        = it.weapon,
                 equipped      = true,
                 equippedSlot  = slotId,
             }
@@ -1593,12 +1643,9 @@ local function rebuildInventorySection()
         UI.setClickable(hitId, true)
         UI.setOnRightClick(hitId, "onInventoryItemRightClick")
 
-        local hint = string.format("%.2f kg", it.weight or 0)
-        if it.equipped then
-            hint = hint .. "  ·  equipped: " .. (it.equippedSlot or "?")
-        end
         UI.setTooltipRich(hitId, {
-            text = it.displayName, hint = hint,
+            text = it.displayName,
+            hint = buildItemHint(it, it.equipped and it.equippedSlot or nil),
         })
 
         table.insert(unitInfoV2.invListElements,

@@ -1,7 +1,31 @@
 items:
   - name: "steel_dagger"
     display_name: "Steel Dagger"
-    sprite: "assets/textures/equipment/dagger_steel.png"
+    sprite: "assets/textures/equipment/dagger_steel_acolyte.png"
     weight: 0.4
     kind: weapon
     category: Weapons
+    make: acolyte      # design family / crafting tradition
+    material: steel    # blade material — physical props live in
+                       # data/substances/metals.yaml under "steel"
+
+    # Rolled once per spawned instance. min/max define a normal
+    # distribution clamped to [min, max] (mean = midpoint, σ ≈ range/6
+    # so ~99.7% of rolls land inside the band).
+    quality:
+      min: 50
+      max: 75
+    condition:
+      min: 80
+      max: 100
+
+    # Weapon block — geometry + per-attack-type effectiveness. The
+    # weapon's substance lives at the top-level `material` field (so
+    # armor can reference materials too without a "weapon" block).
+    # Combat math joins effectiveness × (1 − target_material.resistance).
+    weapon:
+      blade_length:       22     # cm
+      base_sharpness:     200    # lower = sharper (engineering scale)
+      stab_effectiveness:  0.5
+      slash_effectiveness: 0.5
+      blunt_effectiveness: 0.01

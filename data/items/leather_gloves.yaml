@@ -5,3 +5,5 @@ items:
     weight: 0.3
     kind: gauntlets
     category: Armor
+    material: leather  # combat resistance lives in
+                       # data/substances/leathers.yaml under "leather"

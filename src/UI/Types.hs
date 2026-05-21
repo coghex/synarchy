@@ -267,7 +267,10 @@ data TooltipState = TooltipState
     --   the per-frame tick can cheaply swap textures without rebuilding.
   , ttsBoxHandle       ∷ Maybe ElementHandle
   , ttsTextHandle      ∷ Maybe ElementHandle
-  , ttsHintHandle      ∷ Maybe ElementHandle
+  , ttsHintHandles     ∷ [ElementHandle]
+    -- ^ One text element per line in the hint (split on '\n'). Empty
+    --   list when there's no hint. Stacked vertically by
+    --   repositionVisuals at a small interline gap.
   , ttsSeparatorHandle ∷ Maybe ElementHandle
   , ttsLocked          ∷ Bool
     -- ^ When True, the tooltip is frozen in place: hover changes are
@@ -289,7 +292,7 @@ emptyTooltipState = TooltipState
   , ttsSpriteHandles  = []
   , ttsBoxHandle      = Nothing
   , ttsTextHandle     = Nothing
-  , ttsHintHandle     = Nothing
+  , ttsHintHandles    = []
   , ttsSeparatorHandle = Nothing
   , ttsLocked         = False
   }

@@ -390,11 +390,15 @@ library
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
                      Item.Types
+                     Item.Roll
                      Engine.Asset.YamlItems
                      Engine.Scripting.Lua.API.Items
                      Equipment.Types
                      Engine.Asset.YamlEquipment
                      Engine.Scripting.Lua.API.Equipment
+                     Substance.Types
+                     Engine.Asset.YamlSubstance
+                     Engine.Scripting.Lua.API.Substance
                      Sim.Thread
                      Sim.Command.Types
                      Sim.State.Types

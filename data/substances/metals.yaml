@@ -1,0 +1,26 @@
+# Metallic substances used by combat items. Properties are real-world
+# values for typical hardened forms — leave the "exotic" stats (yield,
+# shear, hardness) at 0 to mean "not yet specified" so combat formulas
+# can fall back to approximations until more data lands.
+#
+# Units:
+#   density            g/cm³
+#   tensile_strength   MPa  (ultimate tensile, peak stress before failure)
+#   yield_strength     MPa  (elastic limit; below this, elastic deformation)
+#   shear_strength     MPa  (resistance to in-plane shearing forces)
+#   fracture_toughness MPa·√m (resistance to crack propagation; Griffith)
+#   hardness           Brinell (HBN); 0 = unspecified
+substances:
+  - name: steel
+    density:            7.87
+    tensile_strength:   1000
+    yield_strength:     500    # rough — hardened tool steel
+    shear_strength:     800    # ≈ 0.6–0.8 × tensile for steels
+    fracture_toughness: 100
+    hardness:           600    # Brinell-ish for hardened carbon steel
+    # Per-attack-type resistance, 0..1. Steel resists everything well;
+    # blunt still deforms it locally but it doesn't yield as easily as
+    # softer materials.
+    stab_resistance:    0.95
+    slash_resistance:   0.95
+    blunt_resistance:   0.60

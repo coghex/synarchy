@@ -72,6 +72,15 @@ loadItemYamlFn env backendState = do
                         food = fmap
                             (\f → ItemFood { ifNutrition = iyfNutrition f })
                             (iydFood def)
+                        weapon = fmap
+                            (\w → ItemWeapon
+                                { iwBladeLength   = iywBladeLength w
+                                , iwBaseSharpness = iywBaseSharpness w
+                                , iwStabEff       = iywStabEff w
+                                , iwSlashEff      = iywSlashEff w
+                                , iwBluntEff      = iywBluntEff w
+                                })
+                            (iydWeapon def)
                         itemDef = ItemDef
                             { idName        = iydName def
                             , idDisplayName = if T.null (iydDisplayName def)
@@ -81,8 +90,15 @@ loadItemYamlFn env backendState = do
                             , idWeight      = iydWeight def
                             , idKind        = iydKind def
                             , idCategory    = iydCategory def
+                            , idMake        = iydMake def
+                            , idMaterial    = iydMaterial def
+                            , idQualitySpec   = (\r → (iyrsMin r, iyrsMax r))
+                                              <$> iydQuality def
+                            , idConditionSpec = (\r → (iyrsMin r, iyrsMax r))
+                                              <$> iydCondition def
                             , idContainer   = container
                             , idFood        = food
+                            , idWeapon      = weapon
                             }
 
                     atomicModifyIORef' (itemManagerRef env) $ \im →

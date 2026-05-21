@@ -1,0 +1,19 @@
+# Textile substances. Pleated/quilted wool here is a specifically
+# armoured weave — distinct from loose wool used for clothing (which
+# we'll add as a separate "wool" substance once cold-weather clothing
+# matters). Historically a gambeson's pleated wool was effective vs.
+# blunt force because the trapped air pockets and fibres absorb impact
+# energy; slashing fares worse than against leather because the woven
+# fibres separate more easily under a sliding edge.
+substances:
+  - name: pleated_wool
+    density:            0.20    # g/cm³ — air-rich quilted weave
+    tensile_strength:   5       # MPa — wool is weak in tension
+    yield_strength:     2
+    shear_strength:     3
+    fracture_toughness: 2       # MPa·√m — fibrous, splits easily
+    hardness:           5       # arbitrary low
+    stab_resistance:    0.20    # same as leather — point splits fibres
+    slash_resistance:   0.60    # slightly worse than leather (0.70)
+    blunt_resistance:   0.25    # slightly better than leather (0.10);
+                                # the padding spreads impact energy

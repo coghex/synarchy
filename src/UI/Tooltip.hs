@@ -34,6 +34,25 @@ import Engine.Input.Types (InputState(..))
 import UI.Types
 import UI.Manager
 
+-- | Per-line interline gap below the title-baseline rule. Picked to
+--   match the visual rhythm of body-text in a 14px font; recompute if
+--   the hint font ever scales.
+hintLineGap ∷ Float
+hintLineGap = 2
+
+-- | Split the hint on '\n' so multi-line hints render as a stack of
+--   text elements instead of a single overflow line. Empty Maybe ⇒
+--   no lines.
+hintLines ∷ TooltipContent → [Text]
+hintLines content = case ttHint content of
+    Nothing → []
+    Just t  → T.splitOn "\n" t
+
+-- | Per-line height (cap + leading). Used both for layout (computing
+--   total hint section height) and for the per-line Y stepping.
+hintLineHeight ∷ TooltipStyle → Float
+hintLineHeight style = tsHintFontSize style + 3
+
 -- | Run one frame of the tooltip subsystem. Called from the render
 --   loop after input has been applied and before 'renderUIPages'.
 updateTooltipState ∷ EngineM ε σ ()
@@ -202,14 +221,14 @@ destroyVisuals mgr =
     let tts = upmTooltip mgr
         handles = maybeToList (ttsBoxHandle tts)
                 ⧺ maybeToList (ttsTextHandle tts)
-                ⧺ maybeToList (ttsHintHandle tts)
+                ⧺ ttsHintHandles tts
                 ⧺ maybeToList (ttsSeparatorHandle tts)
                 ⧺ ttsSpriteHandles tts
         mgr1 = foldr deleteElement mgr handles
         tts' = (upmTooltip mgr1)
                  { ttsBoxHandle       = Nothing
                  , ttsTextHandle      = Nothing
-                 , ttsHintHandle      = Nothing
+                 , ttsHintHandles     = []
                  , ttsSeparatorHandle = Nothing
                  , ttsSpriteHandles   = []
                  }
@@ -276,20 +295,28 @@ rebuildVisuals pageH content fontCache mgr0 =
                            m3 = setElementZIndex h 1 m2
                        in (Just h, m3)
             _ → (Nothing, mgr3)
-        -- Hint text beneath the separator. Uses the same font as the
-        -- title but at the hint's smaller size and dimmer colour.
-        (hintHandle, mgr5) = case ttHint content of
-            Nothing → (Nothing, mgr4)
-            Just hintTxt | not (isFontSet (tsFont style)) → (Nothing, mgr4)
-                         | otherwise →
-                let (h, m1) = createText "__tooltip_hint" hintTxt
-                                 (tsFont style)
-                                 (tsHintFontSize style)
-                                 (tsHintColor style)
-                                 pageH mgr4
-                    m2 = addElementToPage pageH h 0 0 m1
-                    m3 = setElementZIndex h 1 m2
-                in (Just h, m3)
+        -- Hint text beneath the separator. Split on '\n' so multi-line
+        -- hints render as a stack of text elements; each line gets its
+        -- own ElementHandle and positions independently.
+        (hintHandles, mgr5) =
+            if not (isFontSet (tsFont style))
+              then ([], mgr4)
+              else
+                let lns = hintLines content
+                    step (acc, m) (i, lineTxt) =
+                        let (h, m1) = createText
+                                ("__tooltip_hint_" <> T.pack (show i))
+                                lineTxt
+                                (tsFont style)
+                                (tsHintFontSize style)
+                                (tsHintColor style)
+                                pageH m
+                            m2 = addElementToPage pageH h 0 0 m1
+                            m3 = setElementZIndex h 1 m2
+                        in (h : acc, m3)
+                    (rev, mFinal) =
+                        foldl' step ([], mgr4) (zip [(0 ∷ Int)..] lns)
+                in (reverse rev, mFinal)
         -- Sprite elements, one per TooltipSprite. Texture is set to the
         -- first frame; reposition/animate handles cycling animated frames.
         (spriteHandles, mgr6) =
@@ -299,7 +326,7 @@ rebuildVisuals pageH content fontCache mgr0 =
         tts' = (upmTooltip mgr6)
                  { ttsBoxHandle       = boxHandle
                  , ttsTextHandle      = textHandle
-                 , ttsHintHandle      = hintHandle
+                 , ttsHintHandles     = hintHandles
                  , ttsSeparatorHandle = sepHandle
                  , ttsSpriteHandles   = reverse spriteHandles
                  }
@@ -346,9 +373,11 @@ repositionAndAnimate _pageH content (mx, my) (fbW, fbH) fontCache mgr =
         titleH = case ttText content of
             Just _ | isFontSet (tsFont style) → tsFontSize style + 4
             _ → 0
-        hintH = case ttHint content of
-            Just _ | isFontSet (tsFont style) → tsHintFontSize style + 3
-            _ → 0
+        hintLineN = length (hintLines content)
+        hintH = if hintLineN > 0 ∧ isFontSet (tsFont style)
+                  then fromIntegral hintLineN * hintLineHeight style
+                       + fromIntegral (max 0 (hintLineN - 1)) * hintLineGap
+                  else 0
         hasSep = isJust (ttsSeparatorHandle tts)
         sepH = if hasSep then tsSeparatorThickness style else 0
         spriteRowH = case ttSprites content of
@@ -381,13 +410,23 @@ repositionAndAnimate _pageH content (mx, my) (fbW, fbH) fontCache mgr =
                 let m' = setElementSize sh sepW (tsSeparatorThickness style) mgr2
                 in setElementPosition sh (boxX + pad) (stackTop + sepY0) m'
 
-        -- Hint text under the separator.
-        hintBaseY = stackTop + hintY0 + tsHintFontSize style * 0.85
-        hintW = hintPixelWidth fontCache style content
-        hintX = boxX + max pad ((boxW - hintW) / 2)
-        mgr4 = case ttsHintHandle tts of
-            Nothing → mgr3
-            Just hh → setElementPosition hh hintX hintBaseY mgr3
+        -- Hint text under the separator. One element per line, each
+        -- horizontally centred against ITS OWN width (not the panel's
+        -- max-line width) so the block reads as a ragged column rather
+        -- than a single fat centred run.
+        hintBaseY0 = stackTop + hintY0 + tsHintFontSize style * 0.85
+        lineStep   = hintLineHeight style + hintLineGap
+        positionHint (m, i) lineTxt h =
+            let lineW = measureText fontCache (tsFont style)
+                                    (tsHintFontSize style) (Just lineTxt)
+                lineX = boxX + max pad ((boxW - lineW) / 2)
+                lineY = hintBaseY0 + fromIntegral i * lineStep
+                m'    = setElementPosition h lineX lineY m
+            in (m', i + 1)
+        mgr4 = fst $ foldl
+                 (\acc (lineTxt, h) → positionHint acc lineTxt h)
+                 (mgr3, 0 ∷ Int)
+                 (zip (hintLines content) (ttsHintHandles tts))
 
         -- Sprite row, horizontally centred as a group.
         spriteRowW = case ttSprites content of
@@ -463,9 +502,11 @@ computeBoxSize fontCache style content =
             Just _ | isFontSet (tsFont style) → tsFontSize style + 4
             _ → 0
         hintW = hintPixelWidth fontCache style content
-        hintH = case ttHint content of
-            Just _ | isFontSet (tsFont style) → tsHintFontSize style + 3
-            _ → 0
+        hintLineN = length (hintLines content)
+        hintH = if hintLineN > 0 ∧ isFontSet (tsFont style)
+                  then fromIntegral hintLineN * hintLineHeight style
+                       + fromIntegral (max 0 (hintLineN - 1)) * hintLineGap
+                  else 0
         -- Separator only renders when there's both a title and a hint
         -- AND we have *some* texture to render it with (either a
         -- dedicated 'separatorTexture' or the centre tile of a
@@ -517,9 +558,17 @@ textPixelWidth ∷ FontCache → TooltipStyle → TooltipContent → Float
 textPixelWidth fontCache style content =
     measureText fontCache (tsFont style) (tsFontSize style) (ttText content)
 
+-- | Hint width = widest line. Multi-line hints would otherwise pack
+--   the whole '\n'-joined string into a single measureText call, which
+--   the font renderer doesn't split — so we measure each line and take
+--   the max.
 hintPixelWidth ∷ FontCache → TooltipStyle → TooltipContent → Float
 hintPixelWidth fontCache style content =
-    measureText fontCache (tsFont style) (tsHintFontSize style) (ttHint content)
+    case hintLines content of
+        [] → 0
+        ls → maximum (map (\l →
+                measureText fontCache (tsFont style)
+                            (tsHintFontSize style) (Just l)) ls)
 
 measureText ∷ FontCache → FontHandle → Float → Maybe Text → Float
 measureText _ _ _ Nothing = 0

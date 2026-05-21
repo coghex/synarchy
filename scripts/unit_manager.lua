@@ -4,6 +4,7 @@ local unitLoader = require("scripts.unit_loader")
 local buildingLoader = require("scripts.building_loader")
 local itemLoader = require("scripts.item_loader")
 local equipmentLoader = require("scripts.equipment_loader")
+local substanceLoader = require("scripts.substance_loader")
 
 local unitManager = {}
 
@@ -44,6 +45,12 @@ function unitManager.init(scriptId)
     -- name reference; the actual class data lives here.
     local equipmentCount = equipmentLoader.loadAll("data/equipment")
     unitManager.equipmentClassCount = equipmentCount
+
+    -- Substances (steel, bronze, leather, …). Items that reference a
+    -- material name need this registry populated before any combat or
+    -- inventory lookup hits substance.get().
+    local substanceCount = substanceLoader.loadAll("data/substances")
+    unitManager.substanceCount = substanceCount
 
     engine.logInfo("Unit manager initialized: " .. count
         .. " unit defs, " .. buildingCount .. " building defs, "

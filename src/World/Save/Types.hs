@@ -51,8 +51,12 @@ saveMagic = 0x53595241
 --       IORefs); live climate state lives inside sdGenParams.
 --   v8 (Phase 2 equipment) adds uisEquipped to UnitInstanceSnapshot:
 --       a slot id → ItemInstance map persisting equipped gear.
+--   v9 adds iiQuality + iiCondition to ItemInstance (per-item rolled
+--       state). Positional Serialize means any field added to
+--       ItemInstance bumps the format; can't be reverse-compatible
+--       without a migration shim.
 currentSaveVersion ∷ Int
-currentSaveVersion = 8
+currentSaveVersion = 9
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects

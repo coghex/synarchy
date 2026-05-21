@@ -1,0 +1,18 @@
+# Leather substances. Properties for dry tanned cattle hide; densities
+# and tensile values drop dramatically for thinner/softer leathers.
+#
+# Combat profile: leather's fibrous structure resists slashing well
+# (the fibres redirect the cutting edge), but it offers little defence
+# against a concentrated stabbing point that splits the fibres, and
+# transmits blunt impact through to whatever's behind it.
+substances:
+  - name: leather
+    density:            0.86    # g/cm³
+    tensile_strength:   25      # MPa (tanned cattle hide, ~10–30 typical)
+    yield_strength:     10      # rough
+    shear_strength:     15      # MPa
+    fracture_toughness: 5       # MPa·√m — low; fibres pull apart at points
+    hardness:           50      # arbitrary low number
+    stab_resistance:    0.20    # cuts through with concentrated force
+    slash_resistance:   0.70    # fibres resist a sliding edge
+    blunt_resistance:   0.10    # almost nothing — energy passes through

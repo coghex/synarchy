@@ -3,6 +3,8 @@ module Engine.Asset.YamlItems
     ( ItemYamlDef(..)
     , ItemYamlContainer(..)
     , ItemYamlFood(..)
+    , ItemYamlRollSpec(..)
+    , ItemYamlWeapon(..)
     , ItemYamlFile(..)
     , loadItemYaml
     ) where
@@ -34,6 +36,38 @@ instance FromJSON ItemYamlFood where
     parseJSON = withObject "ItemYamlFood" $ \v → ItemYamlFood
         ⊚ v .: "nutrition"
 
+-- | (min, max) range for a rolled spec — used by both quality and
+--   condition. Interpreted as a normal distribution clamped to the
+--   range. Reads as `{ min: 50, max: 75 }` in YAML.
+data ItemYamlRollSpec = ItemYamlRollSpec
+    { iyrsMin ∷ !Float
+    , iyrsMax ∷ !Float
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON ItemYamlRollSpec where
+    parseJSON = withObject "ItemYamlRollSpec" $ \v → ItemYamlRollSpec
+        ⊚ v .: "min"
+        ⊛ v .: "max"
+
+-- | Optional weapon block on an item def. Geometric + material
+--   reference; material physical properties live in the
+--   SubstanceManager and get joined at use time.
+data ItemYamlWeapon = ItemYamlWeapon
+    { iywBladeLength    ∷ !Float
+    , iywBaseSharpness  ∷ !Float
+    , iywStabEff        ∷ !Float
+    , iywSlashEff       ∷ !Float
+    , iywBluntEff       ∷ !Float
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON ItemYamlWeapon where
+    parseJSON = withObject "ItemYamlWeapon" $ \v → ItemYamlWeapon
+        ⊚ v .:  "blade_length"
+        ⊛ v .:  "base_sharpness"
+        ⊛ v .:? "stab_effectiveness"   .!= 0
+        ⊛ v .:? "slash_effectiveness"  .!= 0
+        ⊛ v .:? "blunt_effectiveness"  .!= 0
+
 data ItemYamlDef = ItemYamlDef
     { iydName        ∷ !Text
     , iydDisplayName ∷ !Text
@@ -43,8 +77,15 @@ data ItemYamlDef = ItemYamlDef
                                                    --   defaults to "misc"
     , iydCategory    ∷ !Text                       -- ^ inventory tab;
                                                    --   defaults to "Misc"
+    , iydMake        ∷ !Text                       -- ^ crafting tradition;
+                                                   --   defaults to ""
+    , iydMaterial    ∷ !Text                       -- ^ substance name;
+                                                   --   defaults to ""
+    , iydQuality     ∷ !(Maybe ItemYamlRollSpec)   -- ^ quality roll range
+    , iydCondition   ∷ !(Maybe ItemYamlRollSpec)   -- ^ condition roll range
     , iydContainer   ∷ !(Maybe ItemYamlContainer)
     , iydFood        ∷ !(Maybe ItemYamlFood)
+    , iydWeapon      ∷ !(Maybe ItemYamlWeapon)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlDef where
@@ -55,8 +96,13 @@ instance FromJSON ItemYamlDef where
         ⊛ v .:? "weight"       .!= 0.0
         ⊛ v .:? "kind"         .!= "misc"
         ⊛ v .:? "category"     .!= "Misc"
+        ⊛ v .:? "make"         .!= ""
+        ⊛ v .:? "material"     .!= ""
+        ⊛ v .:? "quality"
+        ⊛ v .:? "condition"
         ⊛ v .:? "container"
         ⊛ v .:? "food"
+        ⊛ v .:? "weapon"
 
 newtype ItemYamlFile = ItemYamlFile
     { iyfItems ∷ [ItemYamlDef]

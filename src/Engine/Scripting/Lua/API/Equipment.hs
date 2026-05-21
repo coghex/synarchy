@@ -22,8 +22,8 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
 import Engine.Asset.YamlEquipment
 import Equipment.Types
-import Item.Types (ItemInstance(..), ItemDef(..), ItemManager(..),
-                   lookupItemDef)
+import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..),
+                   ItemManager(..), lookupItemDef)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..),
                    UnitDef(..))
 
@@ -301,6 +301,12 @@ equipmentGetLoadoutFn env = do
                         Lua.pushnumber
                             (Lua.Number (realToFrac (iiCurrentFill inst)))
                         Lua.setfield (-2) "currentFill"
+                        Lua.pushnumber
+                            (Lua.Number (realToFrac (iiQuality inst)))
+                        Lua.setfield (-2) "quality"
+                        Lua.pushnumber
+                            (Lua.Number (realToFrac (iiCondition inst)))
+                        Lua.setfield (-2) "condition"
                         case lookupItemDef (iiDefName inst) itemMgr of
                             Nothing → pure ()
                             Just iDef → do
@@ -312,11 +318,41 @@ equipmentGetLoadoutFn env = do
                                 Lua.pushstring
                                     (TE.encodeUtf8 (idCategory iDef))
                                 Lua.setfield (-2) "category"
+                                Lua.pushstring (TE.encodeUtf8 (idMake iDef))
+                                Lua.setfield (-2) "make"
+                                Lua.pushstring
+                                    (TE.encodeUtf8 (idMaterial iDef))
+                                Lua.setfield (-2) "material"
                                 Lua.pushnumber
                                     (Lua.Number (realToFrac (idWeight iDef)))
                                 Lua.setfield (-2) "weight"
                                 let TextureHandle texInt = idTexture iDef
                                 Lua.pushinteger (fromIntegral texInt)
                                 Lua.setfield (-2) "iconTex"
+                                case idWeapon iDef of
+                                    Just w → do
+                                        Lua.newtable
+                                        Lua.pushnumber
+                                            (Lua.Number
+                                                (realToFrac (iwBladeLength w)))
+                                        Lua.setfield (-2) "bladeLength"
+                                        Lua.pushnumber
+                                            (Lua.Number
+                                                (realToFrac (iwBaseSharpness w)))
+                                        Lua.setfield (-2) "baseSharpness"
+                                        Lua.pushnumber
+                                            (Lua.Number
+                                                (realToFrac (iwStabEff w)))
+                                        Lua.setfield (-2) "stabEffectiveness"
+                                        Lua.pushnumber
+                                            (Lua.Number
+                                                (realToFrac (iwSlashEff w)))
+                                        Lua.setfield (-2) "slashEffectiveness"
+                                        Lua.pushnumber
+                                            (Lua.Number
+                                                (realToFrac (iwBluntEff w)))
+                                        Lua.setfield (-2) "bluntEffectiveness"
+                                        Lua.setfield (-2) "weapon"
+                                    Nothing → pure ()
                         Lua.setfield (-2) (Lua.Name (TE.encodeUtf8 slotId))
                     return 1
