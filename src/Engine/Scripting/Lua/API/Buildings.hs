@@ -404,7 +404,10 @@ buildingGetActivityFn env = do
                     Just inst → case HM.lookup (biDefName inst) (bmDefs bm) of
                         Nothing  → pure Nothing
                         Just def → do
-                            now ← realToFrac <$> getPOSIXTime
+                            -- Game-clock matches biSpawnedAt, so the
+                            -- Appearing→Built transition freezes on
+                            -- pause and doesn't drift against POSIX.
+                            now ← readIORef (gameTimeRef env)
                             pure $ Just $ case currentActivity now inst def of
                                 Appearing → "appearing" ∷ Text
                                 Built     → "built"

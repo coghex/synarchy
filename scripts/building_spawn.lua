@@ -38,7 +38,7 @@ package.loaded["scripts.building_spawn"] = buildingSpawn
 local config = {
     acolyte_portal = {
         unit_type      = "acolyte",
-        count          = 3,
+        count          = 5,
         spawn_offset   = { x = 0.5, y = 0.5 },
         -- Items handed out to each spawned unit immediately after
         -- spawn, via unit.addItem. Empty now — the acolyte def's
@@ -52,6 +52,11 @@ local config = {
         -- threshold is 0.6 tiles, so a 1-tile walk barely makes it
         -- off the portal). 2 tiles gives breathing room.
         walk_to_offset = { x = 0.5, y = 2.5 },
+        -- Minimum seconds between spawns. Acts on top of the
+        -- previous-unit-cleared check: even if the previous acolyte
+        -- has walked off the spawn tile, we hold the next spawn for
+        -- this long so the procession paces out evenly.
+        spawn_interval = 2.0,
         -- Fallback timeout: if a spawned unit gets terrain-stuck and
         -- never clears its tile, don't gridlock the spawn forever.
         -- After this many seconds, spawn the next unit anyway.
@@ -132,6 +137,13 @@ local function tickOne(bid, info)
     local remaining = building.getSpawnRemaining(bid) or 0
     if remaining <= 0 then return end
     if not previousUnitCleared(s, params) then return end
+    -- Inter-spawn cooldown. Even if the previous acolyte cleared the
+    -- spawn tile quickly, hold the next one until spawn_interval has
+    -- elapsed so the line emerges at a steady cadence.
+    if s.lastSpawnedAt
+       and (engine.gameTime() - s.lastSpawnedAt) < (params.spawn_interval or 0) then
+        return
+    end
 
     -- Spawn at the portal tile's center plus offset. The anchor is
     -- the building's bottom-left tile (integer coords); offset is
