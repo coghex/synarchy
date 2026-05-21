@@ -46,6 +46,7 @@ module Engine.Scripting.Lua.API.Units
     , unitModifyItemFillFn
     , unitAddItemFn
     , unitGetVisibleTilesFn
+    , unitGetFrameTextureFn
     ) where
 
 import UPrelude
@@ -73,7 +74,10 @@ import Unit.Types
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Thread.Command (recomputeBodyDerivedStats)
 import Unit.Direction (Direction(..))
+import Unit.Render (pickFrame)
 import Unit.Sim.Types (Pose(..))
+import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Graphics.Camera (Camera2D(..))
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
                   , ItemFood(..), ItemManager(..), lookupItemDef)
 import Unit.LineOfSight (unitVisibleTiles)
@@ -1619,3 +1623,31 @@ unitGetVisibleTilesFn env = do
                         Lua.setfield (-2) "y"
                         Lua.rawseti (-2) (fromIntegral (i ∷ Int))
                     return 1
+
+-- | unit.getFrameTexture(uid) → texture handle integer (0 if missing).
+--   Returns the texture for the unit's current animation frame at the
+--   active camera facing — re-query each tick to follow the animation.
+--   Used by the v2 info pane to mirror the unit's sprite as a portrait.
+unitGetFrameTextureFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetFrameTextureFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushinteger 0
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mTex ← Lua.liftIO $ do
+                um  ← readIORef (unitManagerRef env)
+                cam ← readIORef (cameraRef env)
+                now ← readIORef (gameTimeRef env)
+                pure $ case HM.lookup uid (umInstances um) of
+                    Nothing → Nothing
+                    Just inst →
+                        case HM.lookup (uiDefName inst) (umDefs um) of
+                            Nothing  → Nothing
+                            Just def → Just (pickFrame now (camFacing cam) inst def)
+            case mTex of
+                Just (TextureHandle k) → Lua.pushinteger (fromIntegral k)
+                Nothing → Lua.pushinteger 0
+            return 1

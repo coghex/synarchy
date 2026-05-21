@@ -141,6 +141,7 @@ function settingsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
+        tooltip  = "Random seed for world generation. The same seed always produces the same world. Use the dice button to randomise.",
     }))
     local seedLabelHandle = label.getElementHandle(seedLabelId)
     UI.addToPage(page, seedLabelHandle,
@@ -186,6 +187,7 @@ function settingsTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
+        tooltip  = "World size in chunks. Larger worlds take significantly longer to generate and stream.",
     }))
     local sizeLabelHandle = label.getElementHandle(sizeLabelId)
     UI.addToPage(page, sizeLabelHandle,

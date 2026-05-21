@@ -32,6 +32,12 @@ function game.init(scriptId)
     -- responsive when selection changes via click.
     unitInfoPanelScriptId = engine.loadScript("scripts/unit_info_panel.lua", 0.1)
 
+    -- Unit info v2 (the new full-height right-edge pane). Owns unit
+    -- info display while active; unit_info_panel above auto-suppresses
+    -- its push path when this module is loaded. 30 Hz tick — needed
+    -- for the portrait sprite to track the unit's animation smoothly.
+    unitInfoV2ScriptId = engine.loadScript("scripts/unit_info_v2.lua", 0.03)
+
     -- Drag-box selection: ticks at 0.03s so the rect tracks the
     -- mouse smoothly without hammering every frame.
     unitDragSelectScriptId = engine.loadScript(

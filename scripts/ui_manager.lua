@@ -640,6 +640,40 @@ function uiManager.onToggleClick(elemHandle)
     return false
 end
 
+-- Unit-info v2 sprite-tab strip. Each tab's box has this callback
+-- registered via UI.setOnClick; clicks make that unit the active one.
+function uiManager.onUnitInfoTabClick(elemHandle)
+    local mod = package.loaded["scripts.unit_info_v2"]
+    if mod and mod.handleTabClick then
+        return mod.handleTabClick(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onUnitInfoScrollLeft(elemHandle)
+    local mod = package.loaded["scripts.unit_info_v2"]
+    if mod and mod.handleScrollLeft then
+        return mod.handleScrollLeft(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onUnitInfoScrollRight(elemHandle)
+    local mod = package.loaded["scripts.unit_info_v2"]
+    if mod and mod.handleScrollRight then
+        return mod.handleScrollRight(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onUnitInfoSubTabClick(elemHandle)
+    local mod = package.loaded["scripts.unit_info_v2"]
+    if mod and mod.handleSubTabClick then
+        return mod.handleSubTabClick(elemHandle)
+    end
+    return false
+end
+
 function uiManager.onToggleRightClick(elemHandle)
     if toggle then
         return toggle.handleRightClickByElement(elemHandle)

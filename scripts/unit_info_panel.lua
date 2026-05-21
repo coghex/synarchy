@@ -25,6 +25,11 @@ local unitInfoWatch = {}
 unitInfoWatch.lastSelectedId = nil
 unitInfoWatch.lastWasUnit    = false  -- did we last push unit info?
 
+-- When unit_info_v2 is enabled it owns the unit-info display. We skip
+-- our push path so the shared HUD info panel doesn't compete. The new
+-- module sets this flag during its init.
+unitInfoWatch.suppressed = package.loaded.__unit_info_v2_suppress or false
+
 -- True if a non-empty tile-info push has arrived since we last wrote
 -- unit content. Used to suppress our deselect-clear when a tile click
 -- is the cause of deselection (the tile-info push has already taken
@@ -194,6 +199,7 @@ end
 -- Update (called at tick interval)
 -----------------------------------------------------------
 function unitInfoWatch.update(dt)
+    if unitInfoWatch.suppressed then return end
     local sel = unit.getSelected()
     local cur = sel and sel[1] or nil
 

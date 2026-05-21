@@ -49,7 +49,7 @@ function climateTab.create(params)
         return cy + s.rowSpacing * n
     end
 
-    local function addRow(labelText, name, pendingKey, textType, widgetIdSetter)
+    local function addRow(labelText, name, pendingKey, textType, widgetIdSetter, tooltip)
         local lblId = params.trackLabel(label.new({
             name     = name .. "_label",
             text     = labelText,
@@ -58,6 +58,7 @@ function climateTab.create(params)
             color    = {1.0, 1.0, 1.0, 1.0},
             page     = page,
             uiscale  = uiscale,
+            tooltip  = tooltip,
         }))
         local lblHandle = label.getElementHandle(lblId)
         UI.addToPage(page, lblHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -86,21 +87,29 @@ function climateTab.create(params)
     end
 
     addRow("Iterations",    "iterations",       "climateIterations",  textbox.Type.NUMBER,
-        function(id) climateTab.iterationsId = id end)
+        function(id) climateTab.iterationsId = id end,
+        "Number of simulation passes during climate generation. More iterations are more accurate but slower.")
     addRow("Coriolis",      "coriolis_scale",   "coriolisScale",      textbox.Type.DECIMAL,
-        function(id) climateTab.coriolisScaleId = id end)
+        function(id) climateTab.coriolisScaleId = id end,
+        "Strength of the Coriolis effect that bends wind patterns. Higher values create stronger trade winds and gyres.")
     addRow("Wind Drag",     "wind_drag",        "windDrag",           textbox.Type.DECIMAL,
-        function(id) climateTab.windDragId = id end)
+        function(id) climateTab.windDragId = id end,
+        "Friction applied to atmospheric winds each step. Higher values dampen wind movement.")
     addRow("Thermal Inertia","thermal_inertia", "thermalInertia",     textbox.Type.DECIMAL,
-        function(id) climateTab.thermalInertiaId = id end)
+        function(id) climateTab.thermalInertiaId = id end,
+        "How slowly surface temperatures respond to forcing. Higher values smooth out day/night and seasonal swings.")
     addRow("Orographic",    "orographic_scale", "orographicScale",    textbox.Type.DECIMAL,
-        function(id) climateTab.orographicScaleId = id end)
+        function(id) climateTab.orographicScaleId = id end,
+        "Strength of the mountain rain-shadow effect on precipitation. Higher values exaggerate wet/dry contrasts across ranges.")
     addRow("Evaporation",   "evap_scale",       "evapScale",          textbox.Type.DECIMAL,
-        function(id) climateTab.evapScaleId = id end)
+        function(id) climateTab.evapScaleId = id end,
+        "Rate of water evaporation from oceans and lakes. Drives the precipitation budget.")
     addRow("Albedo Feedback","albedo_feedback",  "albedoFeedback",    textbox.Type.DECIMAL,
-        function(id) climateTab.albedoFeedbackId = id end)
+        function(id) climateTab.albedoFeedbackId = id end,
+        "How strongly surface reflectivity (ice, snow) couples back to temperature. Drives ice-age runaway feedback.")
     addRow("THC Threshold", "thc_threshold",    "thcThreshold",       textbox.Type.DECIMAL,
-        function(id) climateTab.thcThresholdId = id end)
+        function(id) climateTab.thcThresholdId = id end,
+        "Thermohaline circulation cutoff. Controls when deep-ocean currents shut down due to salinity / temperature.")
 
     return elements
 end

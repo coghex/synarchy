@@ -53,7 +53,7 @@ function generalTab.create(params)
         return cy + s.rowSpacing * n
     end
 
-    local function addRow(labelText, name, pendingKey, textType, widgetIdSetter)
+    local function addRow(labelText, name, pendingKey, textType, widgetIdSetter, tooltip)
         local lblId = params.trackLabel(label.new({
             name     = name .. "_label",
             text     = labelText,
@@ -62,6 +62,7 @@ function generalTab.create(params)
             color    = {1.0, 1.0, 1.0, 1.0},
             page     = page,
             uiscale  = uiscale,
+            tooltip  = tooltip,
         }))
         local lblHandle = label.getElementHandle(lblId)
         UI.addToPage(page, lblHandle, cx, rowY(rowIndex) + s.fontSize)
@@ -105,13 +106,16 @@ function generalTab.create(params)
     -- Astronomy
     ---------------------------------------------------------
     addRow("Axial Tilt",      "tilt_angle",   "tiltAngle",   textbox.Type.DECIMAL,
-        function(id) generalTab.tiltAngleId = id end)
+        function(id) generalTab.tiltAngleId = id end,
+        "Planet's axial tilt in degrees. Larger values produce more extreme seasons.")
     addRow("Day/Night Ratio", "day_length",   "dayLength",   textbox.Type.DECIMAL,
-        function(id) generalTab.dayLengthId = id end)
+        function(id) generalTab.dayLengthId = id end,
+        "Proportion of the day spent in daylight. 0.5 = equal day and night.")
     addRow("Lunar Cycle",     "cycle_days",   "cycleDays",   textbox.Type.NUMBER,
         function(id) generalTab.cycleDaysId = id end)
     addRow("Moon Phase",      "phase_offset", "phaseOffset", textbox.Type.DECIMAL,
-        function(id) generalTab.phaseOffsetId = id end)
+        function(id) generalTab.phaseOffsetId = id end,
+        "Initial moon phase at world creation. 0.0 = new moon, 0.5 = full moon, 1.0 = new again.")
 
     return elements
 end

@@ -350,13 +350,18 @@ function hud.createUI()
     -- boxes, frame, labels) without fighting the tabbar
     -- module's internal structure.
     ---------------------------------------------------------
-    infoPanel.create({
-        page      = hud.info_page,
-        boxTexSet = hud.boxTexSet,
-        menuFont  = hud.menuFont,
-        fbW       = hud.fbW,
-        fbH       = hud.fbH,
-    })
+    -- DISABLED while unit_info_v2 is the active info display. The
+    -- shared HUD info panel re-shows itself whenever content gets
+    -- pushed (tile / building / unit), so hiding it once isn't
+    -- enough — we skip creating it entirely. Re-enable when the
+    -- legacy info-panel display is needed again.
+    -- infoPanel.create({
+    --     page      = hud.info_page,
+    --     boxTexSet = hud.boxTexSet,
+    --     menuFont  = hud.menuFont,
+    --     fbW       = hud.fbW,
+    --     fbH       = hud.fbH,
+    -- })
 
     local zoom = camera.getZoom()
     local zoomFadeStart = camera.getZoomFadeStart()

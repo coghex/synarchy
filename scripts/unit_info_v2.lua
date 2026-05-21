@@ -1,0 +1,1369 @@
+-- Unit Info v2 — full-height right-edge pane
+--
+-- Step 1 (this file): layout skeleton only. Sections are placeholder
+-- boxes / placeholder text. Real content (sprite tabs, header values,
+-- stats, equipment, inventory) gets wired in subsequent passes.
+--
+-- The old unit_info_panel.lua is suppressed while this module is
+-- active (sets unitInfoWatch.suppressed = true on init). The current
+-- HUD info panel still handles tile info; only the unit-info push is
+-- skipped.
+--
+-- Lifecycle: loaded via engine.loadScript from init.lua. Polls
+-- unit.getSelected() each tick; shows the page when >=1 unit is
+-- selected, hides on deselect. All section content rebuilds when the
+-- selection identity changes.
+
+local hud         = require("scripts.hud")
+local label       = require("scripts.ui.label")
+local scale       = require("scripts.ui.scale")
+local boxTextures = require("scripts.ui.box_textures")
+local stats       = require("scripts.unit_stats")
+
+-- Singleton via package.loaded so ui_manager's click handlers (which
+-- look us up via require / package.loaded) get the same module table
+-- that engine.loadScript loaded with dofile. Without this, dofile
+-- and require produce two different module instances and clicks fail
+-- silently because uiManager.onUnitInfo* sees an empty table.
+local unitInfoV2 = package.loaded["scripts.unit_info_v2"] or {}
+package.loaded["scripts.unit_info_v2"] = unitInfoV2
+
+-----------------------------------------------------------
+-- Module state
+-----------------------------------------------------------
+
+unitInfoV2.scriptId      = nil
+unitInfoV2.bootstrapped  = false
+unitInfoV2.page          = nil
+unitInfoV2.outerBoxId    = nil
+unitInfoV2.dividerIds    = {}   -- thin sprite handles for inter-section rules
+unitInfoV2.ownedLabels   = {}   -- label.* IDs to clean up
+unitInfoV2.lastSelCount  = 0
+unitInfoV2.whitePixelTex = nil  -- 1×1 white texture for dividers
+unitInfoV2.tabSelectedTex = nil -- shaped backdrop drawn behind the active tab's sprite
+unitInfoV2.subTabSelectedTexSet   = nil  -- 9-patch box set for active sub-tab
+unitInfoV2.subTabUnselectedTexSet = nil  -- 9-patch box set for inactive sub-tab
+
+-- Sub-tabs inside the stats section. Each entry: {name, bgId, labelId}.
+-- The active sub-tab persists across unit switches so comparisons
+-- between units stay on the same panel.
+unitInfoV2.subTabs        = {}
+unitInfoV2.activeSubTab   = "Status"
+unitInfoV2.statsRect      = nil   -- whole stats section rect
+unitInfoV2.statsContentRect = nil -- below the sub-tab rows
+unitInfoV2.statsContentElements = {}  -- elements created by the active panel
+unitInfoV2.statsRefresh   = nil   -- per-panel "refresh values" callback
+unitInfoV2.lastContentUid = nil   -- (uid, subtab) we last built content for
+unitInfoV2.lastContentTab = nil
+
+-- Header
+unitInfoV2.headerTypeLabelId = nil  -- the "acolyte" row; refreshed per active unit
+
+-- Sprite tabs: one entry per selected unit, in selection order.
+-- Each entry: { uid, boxId, spriteId, lastTex }.
+unitInfoV2.tabs           = {}
+unitInfoV2.activeUid      = nil   -- whose info the lower sections show
+unitInfoV2.scrollOffset   = 0     -- how many tabs scrolled past on the left
+unitInfoV2.lastSelKey     = ""    -- stable identity of the current selection
+unitInfoV2.tabsRect       = nil   -- { x, y, w, h } of the tab strip area
+unitInfoV2.tabLayout      = nil   -- last result of computeTabLayout
+unitInfoV2.scrollLeftId   = nil
+unitInfoV2.scrollRightId  = nil
+unitInfoV2.ownedScrollLbls = {}   -- arrow text labels (label.* IDs)
+
+-----------------------------------------------------------
+-- Layout constants (base size; multiplied by uiscale)
+-----------------------------------------------------------
+
+local PANEL_W       = 340     -- pane width
+local PANEL_PAD     = 12      -- outer padding inside the pane
+local SECTION_PAD   = 18      -- horizontal padding around section text (clears the 9-patch border)
+local SECTION_GAP   = 10      -- vertical gap between section content and divider
+
+local TABS_H    = 88   -- room for extra top padding above the tab row
+local HEADER_H  = 64
+local STATS_H   = 280
+local EQUIP_H   = 160
+-- Inventory section takes remaining vertical room.
+
+local TAB_GAP          = 4    -- horizontal gap between adjacent tabs
+local TAB_INNER_PAD    = 4    -- padding inside a tab around its sprite
+local TAB_TOP_PAD      = 12   -- extra space between section top and the tab row
+local TAB_BOTTOM_PAD   = 4    -- space between the tab row and the bottom of the strip
+local ARROW_W          = 24   -- scroll-arrow button width
+local ARROW_GAP        = 4    -- gap between arrows and tab strip
+local ARROW_PANEL_INSET = 12  -- extra inset so arrows sit visibly inside the pane's 9-patch border
+-- Active tab's backdrop is a shaped sprite (assets/.../unittabselected.png).
+-- Inactive tabs hide the backdrop entirely (alpha 0). The portrait
+-- sprite is the click target and renders on top.
+local ACTIVE_BG      = { 1.0, 1.0, 1.0, 1.0 }   -- show the texture untinted
+local INACTIVE_BG    = { 1.0, 1.0, 1.0, 0.0 }
+local ACTIVE_TINT    = { 1.0, 1.0, 1.0, 1.0 }
+local INACTIVE_TINT  = { 1.0, 1.0, 1.0, 1.0 }
+-- Arrows are click-only — no visible background. The chevron label
+-- supplies the visual.
+local ARROW_BG       = { 1.0, 1.0, 1.0, 0.0 }
+
+local OUTER_TILE = 64           -- tile size for the big outer pane (uses bigger 9-patch corners)
+local DIVIDER_THICKNESS = 2     -- horizontal rule between sections
+local DIVIDER_INSET     = 24    -- horizontal gap between divider and pane edge
+local DIVIDER_COLOR     = { 0.7, 0.7, 0.7, 1.0 }   -- same grey as tooltip separator
+
+-- Sub-tabs (Status, Stats, Mental, …) inside the stats section.
+-- Styled to match scripts/ui/tabbar.lua (settings + create-world menus):
+-- 9-patch box, dark text on unselected, white text on selected.
+local SUB_TAB_LIST       = { "Status", "Stats", "Mental", "Skill", "Attributes", "Effects" }
+local SUB_TAB_FONT_SIZE  = 14
+local SUB_TAB_TEXT_PAD   = 10   -- horizontal padding inside each sub-tab around the label
+local SUB_TAB_ROW_H      = 32   -- per-row height — matches settingsMenu.baseSizes.tabHeight
+local SUB_TAB_TILE       = 16   -- 9-patch corner size for the tab box textures
+local SUB_TAB_GAP        = 0    -- menu-style tabs sit flush against each other
+local SUB_TAB_ROW_GAP    = 4    -- vertical gap between wrapped rows
+local SUB_TAB_TOP_PAD    = 6    -- gap below the section's top divider before the first row
+local SUB_TAB_TEXT_COLOR     = { 0.0, 0.0, 0.0, 1.0 }
+local SUB_TAB_SEL_TEXT_COLOR = { 1.0, 1.0, 1.0, 1.0 }
+
+-- Content rows inside a stats panel (icon on the left, value on the right).
+-- Hovering the icon brings up the stat's tooltip (name + description).
+local CONTENT_ROW_H      = 48
+local CONTENT_FONT_SIZE  = 20
+local CONTENT_LEFT_PAD   = 16
+local CONTENT_RIGHT_PAD  = 16
+local CONTENT_DIM_COLOR  = { 0.78, 0.78, 0.78, 1.0 }
+local CONTENT_VAL_COLOR  = { 1.0, 1.0, 1.0, 1.0 }
+local CONTENT_TOP_PAD    = 8
+local ICON_SIZE          = 40
+
+-----------------------------------------------------------
+-- Cleanup
+-----------------------------------------------------------
+
+local function clearOwned()
+    for _, lblId in ipairs(unitInfoV2.ownedLabels) do
+        label.destroy(lblId)
+    end
+    unitInfoV2.ownedLabels = {}
+
+    for _, divId in ipairs(unitInfoV2.dividerIds) do
+        UI.deleteElement(divId)
+    end
+    unitInfoV2.dividerIds = {}
+
+    for _, t in ipairs(unitInfoV2.tabs) do
+        if t.spriteId then UI.deleteElement(t.spriteId) end
+        if t.boxId    then UI.deleteElement(t.boxId)    end
+    end
+    unitInfoV2.tabs = {}
+
+    for _, t in ipairs(unitInfoV2.subTabs) do
+        if t.labelId then label.destroy(t.labelId) end
+        if t.bgId    then UI.deleteElement(t.bgId)  end
+    end
+    unitInfoV2.subTabs = {}
+
+    for _, e in ipairs(unitInfoV2.statsContentElements) do
+        if e.kind == "label" then label.destroy(e.id)
+        else                       UI.deleteElement(e.id)
+        end
+    end
+    unitInfoV2.statsContentElements = {}
+    unitInfoV2.statsRefresh = nil
+    unitInfoV2.lastContentUid = nil
+    unitInfoV2.lastContentTab = nil
+
+    unitInfoV2.headerTypeLabelId = nil
+
+    if unitInfoV2.scrollLeftId then
+        UI.deleteElement(unitInfoV2.scrollLeftId)
+        unitInfoV2.scrollLeftId = nil
+    end
+    if unitInfoV2.scrollRightId then
+        UI.deleteElement(unitInfoV2.scrollRightId)
+        unitInfoV2.scrollRightId = nil
+    end
+    for _, lblId in ipairs(unitInfoV2.ownedScrollLbls) do
+        label.destroy(lblId)
+    end
+    unitInfoV2.ownedScrollLbls = {}
+
+    if unitInfoV2.outerBoxId then
+        UI.deleteElement(unitInfoV2.outerBoxId)
+        unitInfoV2.outerBoxId = nil
+    end
+end
+
+-----------------------------------------------------------
+-- Multi-unit sprite tabs
+-----------------------------------------------------------
+
+-- Stable identity for a selection — used to detect when the tab
+-- strip needs rebuilding. Order-insensitive (sort uids first) so
+-- box-select order quirks don't trigger spurious rebuilds.
+local function selectionKey(sel)
+    if not sel or #sel == 0 then return "" end
+    local copy = {}
+    for _, u in ipairs(sel) do copy[#copy + 1] = u end
+    table.sort(copy)
+    return table.concat(copy, ",")
+end
+
+-- Compute tab dimensions and visibility for N units in a strip of
+-- `contentW` × `tabH`. Tabs divide the available width up to their
+-- square size; beyond that, they stay square and the surplus tabs
+-- scroll. Returns:
+--   { tabW, tabH, fitsAll, visibleCount, scrollAreaX, scrollAreaW }
+-- where scrollAreaX is the local offset where the visible row starts
+-- (0 when no scroll, ARROW_W + ARROW_GAP when scroll arrows present).
+local function computeTabLayout(n, contentW, tabH, gap)
+    if n <= 0 then return nil end
+    local tabSquareW = tabH
+    local naturalW = math.floor((contentW - (n - 1) * gap) / n)
+    if naturalW >= tabSquareW then
+        return {
+            tabW         = naturalW,
+            tabH         = tabH,
+            fitsAll      = true,
+            visibleCount = n,
+            scrollAreaX  = 0,
+            scrollAreaW  = contentW,
+        }
+    end
+    -- Arrows are inset from the pane edge so they don't sit on top
+    -- of the 9-patch border. The total "arrow column" on each side
+    -- consumes the inset + the arrow width + the gap to the tab row.
+    local arrowColumn = ARROW_PANEL_INSET + ARROW_W + ARROW_GAP
+    local availableW = math.max(0, contentW - 2 * arrowColumn)
+    local vis = math.floor((availableW + gap) / (tabSquareW + gap))
+    vis = math.max(1, math.min(vis, n))
+    return {
+        tabW         = tabSquareW,
+        tabH         = tabH,
+        fitsAll      = false,
+        visibleCount = vis,
+        scrollAreaX  = arrowColumn,
+        scrollAreaW  = availableW,
+    }
+end
+
+-- Position / show / hide every tab + arrow based on activeUid and
+-- scrollOffset. Called after rebuildTabs and after any state change
+-- that affects visibility (tab click, scroll click).
+local function applyTabPositions()
+    if not unitInfoV2.tabsRect or not unitInfoV2.tabLayout then return end
+    local rect    = unitInfoV2.tabsRect
+    local layout  = unitInfoV2.tabLayout
+    local tabW    = layout.tabW
+    local tabH    = layout.tabH
+    local visible = layout.visibleCount
+    local nTabs   = #unitInfoV2.tabs
+    if nTabs == 0 then return end
+
+    -- Top-biased vertical placement so the active tab's white box
+    -- has visible space above it (rather than sitting right against
+    -- the pane's 9-patch border).
+    local tabY = rect.y + TAB_TOP_PAD
+
+    -- Row centring within the visible / scroll-area.
+    local rowW       = visible * tabW + (visible - 1) * TAB_GAP
+    local rowStartX  = rect.x + layout.scrollAreaX
+                     + math.floor((layout.scrollAreaW - rowW) / 2)
+
+    local startIdx = unitInfoV2.scrollOffset + 1
+    local endIdx   = math.min(startIdx + visible - 1, nTabs)
+
+    -- Both box and sprite are sprite-sized and stacked at the same
+    -- centered position within each tab cell. Box is purely visual
+    -- (white when active, transparent otherwise); sprite is the
+    -- portrait and the click target.
+    local spriteSize = math.min(tabW, tabH) - 2 * TAB_INNER_PAD
+    for i, tab in ipairs(unitInfoV2.tabs) do
+        if i >= startIdx and i <= endIdx then
+            local visIdx = i - startIdx
+            local tx = rowStartX + visIdx * (tabW + TAB_GAP)
+            local sx = tx + math.floor((tabW - spriteSize) / 2)
+            local sy = tabY + math.floor((tabH - spriteSize) / 2)
+            UI.setVisible(tab.boxId,    true)
+            UI.setVisible(tab.spriteId, true)
+            UI.setSize(tab.boxId,    spriteSize, spriteSize)
+            UI.setSize(tab.spriteId, spriteSize, spriteSize)
+            UI.setPosition(tab.boxId,    sx, sy)
+            UI.setPosition(tab.spriteId, sx, sy)
+            if tab.uid == unitInfoV2.activeUid then
+                UI.setColor(tab.boxId, ACTIVE_BG[1], ACTIVE_BG[2],
+                                       ACTIVE_BG[3], ACTIVE_BG[4])
+                UI.setColor(tab.spriteId, ACTIVE_TINT[1], ACTIVE_TINT[2],
+                                          ACTIVE_TINT[3], ACTIVE_TINT[4])
+            else
+                UI.setColor(tab.boxId, INACTIVE_BG[1], INACTIVE_BG[2],
+                                       INACTIVE_BG[3], INACTIVE_BG[4])
+                UI.setColor(tab.spriteId, INACTIVE_TINT[1], INACTIVE_TINT[2],
+                                          INACTIVE_TINT[3], INACTIVE_TINT[4])
+            end
+        else
+            UI.setVisible(tab.boxId,    false)
+            UI.setVisible(tab.spriteId, false)
+        end
+    end
+
+    -- Scroll arrows — visible only when there's somewhere to scroll
+    -- in that direction. Each chevron label is shown / hidden in
+    -- lockstep with its arrow background.
+    local maxOffset = math.max(0, nTabs - visible)
+    if unitInfoV2.scrollLeftId then
+        local atStart = unitInfoV2.scrollOffset <= 0
+        UI.setVisible(unitInfoV2.scrollLeftId, not atStart)
+        UI.setPosition(unitInfoV2.scrollLeftId, rect.x + ARROW_PANEL_INSET, tabY)
+        UI.setSize(unitInfoV2.scrollLeftId, ARROW_W, tabH)
+        UI.setColor(unitInfoV2.scrollLeftId,
+            ARROW_BG[1], ARROW_BG[2], ARROW_BG[3], ARROW_BG[4])
+        if unitInfoV2.ownedScrollLbls[1] then
+            label.setVisible(unitInfoV2.ownedScrollLbls[1], not atStart)
+        end
+    end
+    if unitInfoV2.scrollRightId then
+        local atEnd = unitInfoV2.scrollOffset >= maxOffset
+        local arrowX = rect.x + rect.w - ARROW_W - ARROW_PANEL_INSET
+        UI.setVisible(unitInfoV2.scrollRightId, not atEnd)
+        UI.setPosition(unitInfoV2.scrollRightId, arrowX, tabY)
+        UI.setSize(unitInfoV2.scrollRightId, ARROW_W, tabH)
+        UI.setColor(unitInfoV2.scrollRightId,
+            ARROW_BG[1], ARROW_BG[2], ARROW_BG[3], ARROW_BG[4])
+        if unitInfoV2.ownedScrollLbls[2] then
+            label.setVisible(unitInfoV2.ownedScrollLbls[2], not atEnd)
+        end
+    end
+end
+
+-- Wipe tabs + arrows so rebuildTabs can repopulate without leaks.
+local function clearTabs()
+    for _, t in ipairs(unitInfoV2.tabs) do
+        if t.spriteId then UI.deleteElement(t.spriteId) end
+        if t.boxId    then UI.deleteElement(t.boxId)    end
+    end
+    unitInfoV2.tabs = {}
+    if unitInfoV2.scrollLeftId then
+        UI.deleteElement(unitInfoV2.scrollLeftId)
+        unitInfoV2.scrollLeftId = nil
+    end
+    if unitInfoV2.scrollRightId then
+        UI.deleteElement(unitInfoV2.scrollRightId)
+        unitInfoV2.scrollRightId = nil
+    end
+    for _, lblId in ipairs(unitInfoV2.ownedScrollLbls) do
+        label.destroy(lblId)
+    end
+    unitInfoV2.ownedScrollLbls = {}
+end
+
+-- Build tab elements for the current selection. Preserves activeUid
+-- across rebuilds when the previously-active unit is still selected;
+-- otherwise falls back to the first selected unit.
+local function rebuildTabs(sel)
+    clearTabs()
+    if not sel or #sel == 0 then return end
+    if not unitInfoV2.tabsRect then return end
+
+    local rect   = unitInfoV2.tabsRect
+    local tabH   = rect.h - TAB_TOP_PAD - TAB_BOTTOM_PAD
+    local layout = computeTabLayout(#sel, rect.w, tabH, TAB_GAP)
+    if not layout then return end
+    unitInfoV2.tabLayout = layout
+
+    -- Selection-identity change always resets the active tab to the
+    -- first unit. Previously-active state across selection changes
+    -- caused the highlight to land on whichever tab the carried-over
+    -- unit happened to occupy (often a middle one).
+    unitInfoV2.activeUid = sel[1]
+
+    -- Reset scroll offset (the previous offset isn't meaningful for
+    -- a new selection composition).
+    unitInfoV2.scrollOffset = 0
+
+    -- Tab elements: a sprite-sized shaped backdrop that becomes
+    -- visible when active, plus the unit portrait on top. The
+    -- portrait sprite is the click target — sizing the click area to
+    -- the visible sprite (rather than the full divided-tab cell) means
+    -- the visual and the hit area agree, which matters most for the
+    -- wide tabs of 1- or 2-unit selections.
+    local spriteSize = math.min(layout.tabW, layout.tabH) - 2 * TAB_INNER_PAD
+    local backdropTex = unitInfoV2.tabSelectedTex or unitInfoV2.whitePixelTex
+    for i, uid in ipairs(sel) do
+        local boxId = UI.newSprite(
+            "unit_info_v2_tab_box_" .. i,
+            spriteSize, spriteSize,
+            backdropTex,
+            INACTIVE_BG[1], INACTIVE_BG[2], INACTIVE_BG[3], INACTIVE_BG[4],
+            unitInfoV2.page
+        )
+        UI.addToPage(unitInfoV2.page, boxId, 0, 0)
+        UI.setZIndex(boxId, 11)
+
+        local spriteId = UI.newSprite(
+            "unit_info_v2_tab_sprite_" .. i,
+            spriteSize, spriteSize,
+            0,                                 -- texture filled on next update tick
+            INACTIVE_TINT[1], INACTIVE_TINT[2],
+            INACTIVE_TINT[3], INACTIVE_TINT[4],
+            unitInfoV2.page
+        )
+        UI.addToPage(unitInfoV2.page, spriteId, 0, 0)
+        UI.setZIndex(spriteId, 12)
+        UI.setClickable(spriteId, true)
+        UI.setOnClick(spriteId, "onUnitInfoTabClick")
+
+        unitInfoV2.tabs[#unitInfoV2.tabs + 1] = {
+            uid      = uid,
+            boxId    = boxId,
+            spriteId = spriteId,
+            lastTex  = 0,
+        }
+    end
+
+    -- Scroll arrows when the row doesn't fit. Plain coloured boxes
+    -- with a "<" / ">" label on top; clickable.
+    if not layout.fitsAll then
+        unitInfoV2.scrollLeftId = UI.newSprite(
+            "unit_info_v2_scroll_left",
+            ARROW_W, tabH,
+            unitInfoV2.whitePixelTex,
+            ARROW_BG[1], ARROW_BG[2], ARROW_BG[3], ARROW_BG[4],
+            unitInfoV2.page
+        )
+        UI.addToPage(unitInfoV2.page, unitInfoV2.scrollLeftId, 0, 0)
+        UI.setZIndex(unitInfoV2.scrollLeftId, 12)
+        UI.setClickable(unitInfoV2.scrollLeftId, true)
+        UI.setOnClick(unitInfoV2.scrollLeftId, "onUnitInfoScrollLeft")
+
+        unitInfoV2.scrollRightId = UI.newSprite(
+            "unit_info_v2_scroll_right",
+            ARROW_W, tabH,
+            unitInfoV2.whitePixelTex,
+            ARROW_BG[1], ARROW_BG[2], ARROW_BG[3], ARROW_BG[4],
+            unitInfoV2.page
+        )
+        UI.addToPage(unitInfoV2.page, unitInfoV2.scrollRightId, 0, 0)
+        UI.setZIndex(unitInfoV2.scrollRightId, 12)
+        UI.setClickable(unitInfoV2.scrollRightId, true)
+        UI.setOnClick(unitInfoV2.scrollRightId, "onUnitInfoScrollRight")
+
+        -- Arrow chevrons. Labels are positioned roughly in the
+        -- middle of each arrow box; centred by eye since label.getSize
+        -- gives the text width.
+        local leftLbl = label.new({
+            name     = "unit_info_v2_scroll_left_chev",
+            text     = "<",
+            font     = hud.menuFont,
+            fontSize = 20,
+            color    = {0.9, 0.9, 0.9, 1.0},
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        unitInfoV2.ownedScrollLbls[#unitInfoV2.ownedScrollLbls + 1] = leftLbl
+        local lH = label.getElementHandle(leftLbl)
+        UI.addToPage(unitInfoV2.page, lH, 0, 0)
+        UI.setZIndex(lH, 13)
+
+        local rightLbl = label.new({
+            name     = "unit_info_v2_scroll_right_chev",
+            text     = ">",
+            font     = hud.menuFont,
+            fontSize = 20,
+            color    = {0.9, 0.9, 0.9, 1.0},
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        unitInfoV2.ownedScrollLbls[#unitInfoV2.ownedScrollLbls + 1] = rightLbl
+        local rH = label.getElementHandle(rightLbl)
+        UI.addToPage(unitInfoV2.page, rH, 0, 0)
+        UI.setZIndex(rH, 13)
+    end
+
+    applyTabPositions()
+
+    -- Reposition the chevron labels now that arrow positions exist.
+    if not layout.fitsAll then
+        local tabY = rect.y + TAB_TOP_PAD
+        local baselineOffset = math.floor(tabH * 0.5) + math.floor(20 * 0.35)
+        local function placeChev(lblId, arrowX)
+            local h = label.getElementHandle(lblId)
+            local w = select(1, label.getSize(lblId))
+            UI.setPosition(h,
+                arrowX + math.floor((ARROW_W - w) / 2),
+                tabY + baselineOffset)
+        end
+        placeChev(unitInfoV2.ownedScrollLbls[1], rect.x + ARROW_PANEL_INSET)
+        placeChev(unitInfoV2.ownedScrollLbls[2],
+                  rect.x + rect.w - ARROW_W - ARROW_PANEL_INSET)
+    end
+end
+
+-- Place a centred placeholder label inside a virtual section rect.
+-----------------------------------------------------------
+-- Stats sub-tabs + per-panel content
+-----------------------------------------------------------
+
+-- Format a number for stat display: "?" when nil, 2 decimal places.
+local function fmtNum(x)
+    if x == nil then return "?" end
+    return string.format("%.2f", x)
+end
+
+-----------------------------------------------------------
+-- Stat metadata + icon cache
+--
+-- Per-stat name, icon basename (file in assets/textures/icons/),
+-- and a one-line description shown as the tooltip hint. Hover the icon
+-- to see name + description; the value text on the right is the live
+-- number. Add new stats by appending here — the panels look entries
+-- up by key, so the same key flows into icon/tooltip/value lookups.
+-----------------------------------------------------------
+
+local STAT_DEFS = {
+    stamina      = { icon = "stamina",      name = "Stamina",
+        desc = "Drives sustained physical effort. Drops with action, regenerates with rest." },
+    hunger       = { icon = "hunger",       name = "Hunger",
+        desc = "Need for food. High hunger reduces stamina regen and eventually starves the unit." },
+    hydration    = { icon = "hydration",    name = "Hydration",
+        desc = "Need for water. Drops faster than hunger; critical in hot climates." },
+    strength     = { icon = "strength",     name = "Strength",
+        desc = "Affects melee damage, carry capacity, and heavy-tool work speed." },
+    endurance    = { icon = "endurance",    name = "Endurance",
+        desc = "Sets the ceiling for stamina and slows its drain under load." },
+    reflexes     = { icon = "reflexes",     name = "Reflexes",
+        desc = "Affects dodge, parry, and the reaction window for ranged attacks." },
+    constitution = { icon = "constitution", name = "Constitution",
+        desc = "Resistance to injury, illness, and environmental damage." },
+    metabolism   = { icon = "metabolism",   name = "Metabolism",
+        desc = "How quickly the unit burns calories. High metabolism eats more but recovers faster." },
+    perception   = { icon = "perception",   name = "Perception",
+        desc = "Sight range, hearing, and chance to spot hidden things." },
+    height       = { icon = "height",       name = "Height",
+        desc = "Affects reach, line of sight, and the cap for skeletal lean mass." },
+    weight       = { icon = "weight",       name = "Weight",
+        desc = "Total body mass. Heavier units move slower and apply more force in melee." },
+    balance      = { icon = "balance",      name = "Balance",
+        desc = "Footing on uneven terrain. Reduces falls, slips, and stagger from impacts." },
+}
+
+-- engine.loadTexture caches by path, but we keep a per-key map so each
+-- key resolves to a (texture, def) pair once and we don't re-hit the
+-- engine each rebuild. Missing icons silently fall back to text.
+local iconCache = {}
+
+local function loadIconFor(iconKey)
+    if not iconKey then return nil end
+    if iconCache[iconKey] ~= nil then
+        return iconCache[iconKey] or nil
+    end
+    local tex = engine.loadTexture(
+        "assets/textures/icons/" .. iconKey .. ".png")
+    iconCache[iconKey] = tex or false
+    return tex
+end
+
+-- Place a single content row: stat icon on the left, bright value on
+-- the right. The icon owns the tooltip (name + description from
+-- STAT_DEFS, or `tooltipOverride` when caller supplies its own rich
+-- hint). Returns the value-label id and its baseline-y so per-panel
+-- refresh closures can re-rightalign the value on update.
+local function placeIconStatRow(rect, rowIndex, statKey, valueText,
+                                  tooltipOverride)
+    local rowTop = rect.y + CONTENT_TOP_PAD + rowIndex * CONTENT_ROW_H
+    local y      = rowTop + CONTENT_FONT_SIZE
+                 + math.floor((CONTENT_ROW_H - CONTENT_FONT_SIZE) / 2)
+                 - math.floor(CONTENT_FONT_SIZE * 0.3)
+
+    local def     = STAT_DEFS[statKey]
+    local iconTex = loadIconFor(def and def.icon or statKey)
+    if iconTex then
+        local iconY = rowTop + math.floor((CONTENT_ROW_H - ICON_SIZE) / 2)
+        local iconId = UI.newSprite(
+            "unit_info_v2_stat_icon_" .. rowIndex,
+            ICON_SIZE, ICON_SIZE, iconTex,
+            1.0, 1.0, 1.0, 1.0,
+            unitInfoV2.page)
+        UI.addToPage(unitInfoV2.page, iconId,
+            rect.x + CONTENT_LEFT_PAD, iconY)
+        UI.setZIndex(iconId, 12)
+        local tt = tooltipOverride or (def and
+            { text = def.name, hint = def.desc })
+        if tt then UI.setTooltipRich(iconId, tt) end
+        table.insert(unitInfoV2.statsContentElements,
+            { kind = "sprite", id = iconId })
+    else
+        -- No icon on disk for this stat yet — fall back to the old
+        -- dim text label so the row isn't visually empty.
+        local nameLbl = label.new({
+            name     = "unit_info_v2_stat_lbl_" .. rowIndex,
+            text     = (def and def.name) or statKey,
+            font     = hud.menuFont,
+            fontSize = CONTENT_FONT_SIZE,
+            color    = CONTENT_DIM_COLOR,
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        local nameH = label.getElementHandle(nameLbl)
+        UI.addToPage(unitInfoV2.page, nameH, rect.x + CONTENT_LEFT_PAD, y)
+        UI.setZIndex(nameH, 12)
+        table.insert(unitInfoV2.statsContentElements,
+            { kind = "label", id = nameLbl })
+    end
+
+    local valLbl = label.new({
+        name     = "unit_info_v2_stat_val_" .. rowIndex,
+        text     = valueText,
+        font     = hud.menuFont,
+        fontSize = CONTENT_FONT_SIZE,
+        color    = CONTENT_VAL_COLOR,
+        page     = unitInfoV2.page,
+        uiscale  = 1.0,
+    })
+    local valH = label.getElementHandle(valLbl)
+    local valW = select(1, label.getSize(valLbl))
+    UI.addToPage(unitInfoV2.page, valH,
+        rect.x + rect.w - CONTENT_RIGHT_PAD - valW, y)
+    UI.setZIndex(valH, 12)
+    table.insert(unitInfoV2.statsContentElements, { kind = "label", id = valLbl })
+
+    return valLbl, y
+end
+
+-- Format a "cur / max" pair: "0 / 10" with stat lookup. Returns "?"
+-- when either value is missing. Uses the unit_stats wrapper so derived
+-- stats (e.g. max_stamina = endurance * 10) resolve through the same
+-- call as raw attributes.
+local function fmtCurMax(uid, curName, maxName)
+    local cur = stats.get(uid, curName)
+    local mx  = stats.get(uid, maxName)
+    if cur == nil or mx == nil then return "?" end
+    return string.format("%.1f / %.1f", cur, mx)
+end
+
+-- Compute and capture sub-tab row breakdown given the section rect.
+-- Returns a list of rows: { {start, end, totalW, count}, ... } using
+-- pre-measured tab widths.
+local function planSubTabRows(rect, tabWidths)
+    local availW = rect.w - 2 * SECTION_PAD
+    local rows = {}
+    local cur = { startIdx = 1, totalW = 0, count = 0 }
+    for i = 1, #tabWidths do
+        local tw = tabWidths[i]
+        local extra = (cur.count > 0) and SUB_TAB_GAP or 0
+        if cur.count > 0 and cur.totalW + extra + tw > availW then
+            cur.endIdx = i - 1
+            rows[#rows + 1] = cur
+            cur = { startIdx = i, totalW = tw, count = 1 }
+        else
+            cur.totalW = cur.totalW + extra + tw
+            cur.count = cur.count + 1
+        end
+    end
+    cur.endIdx = #tabWidths
+    rows[#rows + 1] = cur
+    return rows
+end
+
+local function applySubTabStyling()
+    local selSet   = unitInfoV2.subTabSelectedTexSet
+    local unselSet = unitInfoV2.subTabUnselectedTexSet
+    for _, t in ipairs(unitInfoV2.subTabs) do
+        local isActive = (t.name == unitInfoV2.activeSubTab)
+        if selSet and unselSet then
+            UI.setBoxTextures(t.bgId, isActive and selSet or unselSet)
+        end
+        local c = isActive and SUB_TAB_SEL_TEXT_COLOR or SUB_TAB_TEXT_COLOR
+        local lblH = label.getElementHandle(t.labelId)
+        UI.setColor(lblH, c[1], c[2], c[3], c[4])
+    end
+end
+
+local rebuildStatsContent  -- forward declaration
+
+-- Create the sub-tab strip inside the stats section. Tabs wrap when
+-- the row would exceed the available width — typical layout is two
+-- rows of three for six text-labelled tabs. Returns the Y position
+-- below the last row so the content area can start there.
+local function rebuildSubTabs()
+    if not unitInfoV2.statsRect then return end
+    local rect = unitInfoV2.statsRect
+
+    -- Measure each tab text once so wrapping can be planned without
+    -- having to instantiate elements first.
+    local tabWidths = {}
+    for i, name in ipairs(SUB_TAB_LIST) do
+        local tw = engine.getTextWidth(hud.menuFont, name, SUB_TAB_FONT_SIZE)
+        tabWidths[i] = math.floor(tw) + 2 * SUB_TAB_TEXT_PAD
+    end
+
+    local rows = planSubTabRows(rect, tabWidths)
+
+    -- Lay each row out centred horizontally within the section.
+    local cursorY = rect.y + SUB_TAB_TOP_PAD
+    for _, r in ipairs(rows) do
+        local rowStartX = rect.x + math.floor((rect.w - r.totalW) / 2)
+        local cx = rowStartX
+        for i = r.startIdx, r.endIdx do
+            local name = SUB_TAB_LIST[i]
+            local tw = tabWidths[i]
+
+            local bgId = UI.newBox(
+                "unit_info_v2_subtab_bg_" .. i,
+                tw, SUB_TAB_ROW_H,
+                unitInfoV2.subTabUnselectedTexSet,
+                SUB_TAB_TILE,
+                1.0, 1.0, 1.0, 1.0,
+                0,
+                unitInfoV2.page
+            )
+            UI.addToPage(unitInfoV2.page, bgId, cx, cursorY)
+            UI.setZIndex(bgId, 11)
+            UI.setClickable(bgId, true)
+            UI.setOnClick(bgId, "onUnitInfoSubTabClick")
+
+            local lblId = label.new({
+                name     = "unit_info_v2_subtab_lbl_" .. i,
+                text     = name,
+                font     = hud.menuFont,
+                fontSize = SUB_TAB_FONT_SIZE,
+                color    = SUB_TAB_TEXT_COLOR,
+                page     = unitInfoV2.page,
+                uiscale  = 1.0,
+            })
+            local lblH = label.getElementHandle(lblId)
+            local lblW = select(1, label.getSize(lblId))
+            local labelX = cx + math.floor((tw - lblW) / 2)
+            local labelY = cursorY + math.floor(SUB_TAB_ROW_H / 2)
+                         + math.floor(SUB_TAB_FONT_SIZE * 0.3)
+            UI.addToPage(unitInfoV2.page, lblH, labelX, labelY)
+            UI.setZIndex(lblH, 12)
+
+            unitInfoV2.subTabs[#unitInfoV2.subTabs + 1] = {
+                name    = name,
+                bgId    = bgId,
+                labelId = lblId,
+            }
+            cx = cx + tw + SUB_TAB_GAP
+        end
+        cursorY = cursorY + SUB_TAB_ROW_H + SUB_TAB_ROW_GAP
+    end
+
+    -- Content area: from below the last row to the bottom of the section.
+    unitInfoV2.statsContentRect = {
+        x = rect.x,
+        y = cursorY + SUB_TAB_ROW_GAP,
+        w = rect.w,
+        h = rect.y + rect.h - (cursorY + SUB_TAB_ROW_GAP),
+    }
+
+    applySubTabStyling()
+end
+
+-----------------------------------------------------------
+-- Panel renderers
+-- Each builds elements + returns a refresh(uid) closure that updates
+-- text values without recreating the labels.
+-----------------------------------------------------------
+
+-- Generic builder for stat-list panels (all of Status/Stats/Mental/
+-- Attributes use this; Skill is similar but its row list is dynamic).
+-- Each rowDef entry: { key = "<STAT_DEFS key>", value = function(uid) end,
+--                      tooltip = optional { text=..., hint=... } override }
+-- Rows whose value() returns nil are skipped so the layout stays compact.
+local function buildIconStatPanel(rect, uid, rowDefs)
+    local visibleRows = {}
+    for _, r in ipairs(rowDefs) do
+        if r.value(uid) ~= nil then
+            visibleRows[#visibleRows + 1] = r
+        end
+    end
+    local refs = {}
+    for i, r in ipairs(visibleRows) do
+        local tt = r.tooltip
+        if type(tt) == "function" then tt = tt(uid) end
+        local valLbl, y = placeIconStatRow(rect, i - 1, r.key,
+            r.value(uid) or "?", tt)
+        refs[i] = { valLbl = valLbl, fn = r.value, y = y }
+    end
+    return function (newUid)
+        if not newUid then return end
+        for _, ref in ipairs(refs) do
+            label.setText(ref.valLbl, ref.fn(newUid) or "?")
+            local valH = label.getElementHandle(ref.valLbl)
+            local valW = select(1, label.getSize(ref.valLbl))
+            UI.setPosition(valH,
+                rect.x + rect.w - CONTENT_RIGHT_PAD - valW, ref.y)
+        end
+    end
+end
+
+local function buildStatusPanel(rect, uid)
+    return buildIconStatPanel(rect, uid, {
+        { key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end },
+        { key = "hunger",    value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end },
+        { key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end },
+    })
+end
+
+local function buildStatsPanel(rect, uid)
+    return buildIconStatPanel(rect, uid, {
+        { key = "strength",     value = function(u) return fmtNum(unit.getStat(u, "strength"))     end },
+        { key = "endurance",    value = function(u) return fmtNum(unit.getStat(u, "endurance"))    end },
+        { key = "reflexes",     value = function(u) return fmtNum(unit.getStat(u, "reflexes"))     end },
+        { key = "constitution", value = function(u) return fmtNum(unit.getStat(u, "constitution")) end },
+        { key = "metabolism",   value = function(u) return fmtNum(unit.getStat(u, "metabolism"))   end },
+    })
+end
+
+local function buildMentalPanel(rect, uid)
+    return buildIconStatPanel(rect, uid, {
+        { key = "perception", value = function(u) return fmtNum(unit.getStat(u, "perception")) end },
+    })
+end
+
+local function buildSkillPanel(rect, uid)
+    -- Skills are dynamic — list whatever the unit has, sorted. Each
+    -- skill name doubles as the icon basename and the STAT_DEFS key,
+    -- so adding a skill icon makes it pick up automatically.
+    local all = unit.getAllSkills(uid) or {}
+    local names = {}
+    for n, _ in pairs(all) do names[#names + 1] = n end
+    table.sort(names)
+    local rows = {}
+    for _, n in ipairs(names) do
+        rows[#rows + 1] = {
+            key   = n,
+            value = function(u)
+                local s = (unit.getAllSkills(u) or {})[n]
+                return s and fmtNum(s.level) or "?"
+            end,
+            tooltip = (not STAT_DEFS[n]) and {
+                text = n:sub(1,1):upper() .. n:sub(2),
+                hint = "Skill level. Improves with practice.",
+            } or nil,
+        }
+    end
+    return buildIconStatPanel(rect, uid, rows)
+end
+
+-- Compose the weight tooltip from the body-composition stats. body_mass
+-- is the total; lean_mass is skeletal muscle only; fat_mass is body fat.
+-- The remainder (bones, organs, water, viscera) goes into "Other" so
+-- the four lines add up to body_mass. Recomputed per hover so values
+-- track the unit's current composition.
+local function weightHint(uid)
+    local body = unit.getStat(uid, "body_mass")
+    local lean = unit.getStat(uid, "lean_mass")
+    local fat  = unit.getStat(uid, "fat_mass")
+    if not (body and lean and fat) then
+        return "(body composition not yet computed)"
+    end
+    local other = body - lean - fat
+    return string.format(
+        "Lean (muscle):  %.1f kg\n"
+     .. "Fat:            %.1f kg\n"
+     .. "Other (bone, organs, water): %.1f kg",
+        lean, fat, other)
+end
+
+local function buildAttributesPanel(rect, uid)
+    return buildIconStatPanel(rect, uid, {
+        { key = "height", value = function(u)
+            local h = unit.getStat(u, "height")
+            return h and string.format("%.2f m", h) or "?"
+        end },
+        { key   = "weight",
+          value = function(u)
+              local m = unit.getStat(u, "body_mass")
+              return m and string.format("%.1f kg", m) or "?"
+          end,
+          tooltip = function(u)
+              return {
+                  text = STAT_DEFS.weight.name,
+                  hint = STAT_DEFS.weight.desc .. "\n\n" .. weightHint(u),
+              }
+          end,
+        },
+    })
+end
+
+local function buildEffectsPanel(rect, uid)
+    -- Placeholder. unit.getModifiers requires (uid, statName) — there's
+    -- no API yet for "all active effects on a unit", so this always
+    -- falls through to the empty message. When that API lands, the
+    -- iteration below already handles the {name=..., delta=...} shape.
+    local mods = unit.getModifiers(uid) or {}
+    if #mods == 0 then
+        local lblId = label.new({
+            name     = "unit_info_v2_effects_empty",
+            text     = "(no active effects)",
+            font     = hud.menuFont,
+            fontSize = CONTENT_FONT_SIZE,
+            color    = {0.6, 0.6, 0.6, 1.0},
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        local h = label.getElementHandle(lblId)
+        UI.addToPage(unitInfoV2.page, h,
+            rect.x + CONTENT_LEFT_PAD,
+            rect.y + CONTENT_TOP_PAD + CONTENT_FONT_SIZE)
+        UI.setZIndex(h, 12)
+        table.insert(unitInfoV2.statsContentElements, { kind = "label", id = lblId })
+        return function () end
+    end
+    for i, m in ipairs(mods) do
+        local y = rect.y + CONTENT_TOP_PAD + (i - 1) * CONTENT_ROW_H + CONTENT_FONT_SIZE
+        local lblId = label.new({
+            name     = "unit_info_v2_effect_" .. i,
+            text     = tostring(m.name or "?"),
+            font     = hud.menuFont,
+            fontSize = CONTENT_FONT_SIZE,
+            color    = CONTENT_VAL_COLOR,
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        local h = label.getElementHandle(lblId)
+        UI.addToPage(unitInfoV2.page, h, rect.x + CONTENT_LEFT_PAD, y)
+        UI.setZIndex(h, 12)
+        table.insert(unitInfoV2.statsContentElements, { kind = "label", id = lblId })
+    end
+    return function () end
+end
+
+local PANEL_BUILDERS = {
+    Status     = buildStatusPanel,
+    Stats      = buildStatsPanel,
+    Mental     = buildMentalPanel,
+    Skill      = buildSkillPanel,
+    Attributes = buildAttributesPanel,
+    Effects    = buildEffectsPanel,
+}
+
+-- Forward-declared above. Clears the current panel's elements and
+-- builds the new one for (activeUid, activeSubTab). Cheap when the
+-- active selection hasn't changed because we cache (uid, subtab) and
+-- only refresh values via the panel's refresh callback.
+rebuildStatsContent = function ()
+    if not unitInfoV2.statsContentRect then return end
+    local uid = unitInfoV2.activeUid
+    if not uid then return end
+
+    -- Skill / Effects panels are content-shaped (their row count
+    -- depends on the unit's state), so always rebuild for those.
+    local panel = unitInfoV2.activeSubTab
+    local dynamicShape = (panel == "Skill" or panel == "Effects")
+    local sameContext = (not dynamicShape)
+                      and unitInfoV2.lastContentUid == uid
+                      and unitInfoV2.lastContentTab == panel
+    if sameContext then return end
+
+    -- Clear current
+    for _, e in ipairs(unitInfoV2.statsContentElements) do
+        if e.kind == "label" then label.destroy(e.id)
+        else                       UI.deleteElement(e.id)
+        end
+    end
+    unitInfoV2.statsContentElements = {}
+    unitInfoV2.statsRefresh = nil
+
+    local builder = PANEL_BUILDERS[panel]
+    if not builder then return end
+    unitInfoV2.statsRefresh = builder(unitInfoV2.statsContentRect, uid)
+    unitInfoV2.lastContentUid = uid
+    unitInfoV2.lastContentTab = panel
+end
+
+local function placePlaceholder(name, x, y, w, h, text, fontSize)
+    local lblId = label.new({
+        name     = "unit_info_v2_" .. name,
+        text     = text,
+        font     = hud.menuFont,
+        fontSize = fontSize or 14,
+        color    = {0.65, 0.65, 0.65, 1.0},
+        page     = unitInfoV2.page,
+        uiscale  = 1.0,
+    })
+    table.insert(unitInfoV2.ownedLabels, lblId)
+    local lblHandle = label.getElementHandle(lblId)
+    local lblW = select(1, label.getSize(lblId))
+    local lblFs = label.getFontSize(lblId)
+    local lx = x + math.floor((w - lblW) / 2)
+    local ly = y + math.floor(h / 2) + math.floor(lblFs * 0.3)
+    UI.addToPage(unitInfoV2.page, lblHandle, lx, ly)
+    UI.setZIndex(lblHandle, 12)
+end
+
+-- Horizontal rule between sections. Drawn as a thin tinted sprite
+-- using the same 1×1 white pixel + grey tint pattern as the tooltip
+-- separator, so the visual language matches. Inset on each side so
+-- the rule visibly stops short of the pane's inner border instead of
+-- running right up to (or through) the 9-patch corner pixels.
+local function placeDivider(x, y, w, uiscale)
+    if not unitInfoV2.whitePixelTex then return end
+    local inset = math.floor(DIVIDER_INSET * uiscale)
+    local sprId = UI.newSprite(
+        "unit_info_v2_div_" .. tostring(#unitInfoV2.dividerIds + 1),
+        w - 2 * inset, DIVIDER_THICKNESS,
+        unitInfoV2.whitePixelTex,
+        DIVIDER_COLOR[1], DIVIDER_COLOR[2],
+        DIVIDER_COLOR[3], DIVIDER_COLOR[4],
+        unitInfoV2.page
+    )
+    UI.addToPage(unitInfoV2.page, sprId, x + inset, y)
+    UI.setZIndex(sprId, 11)
+    table.insert(unitInfoV2.dividerIds, sprId)
+end
+
+-----------------------------------------------------------
+-- Header: stacks Name / Type / Role rows in a virtual rect. No box
+-- around it; section boundaries are marked by horizontal rules.
+-- All three are placeholder labels for now; "Type" is the only one
+-- with real-ish content ("acolyte") since names + roles aren't
+-- implemented yet.
+-----------------------------------------------------------
+
+local function placeHeader(x, y, w, h)
+    local rows = { "Name", "acolyte", "Role" }
+    local rowH = math.floor(h / #rows)
+    local fontSize = 16
+    for i, text in ipairs(rows) do
+        local lblId = label.new({
+            name     = "unit_info_v2_header_row" .. i,
+            text     = text,
+            font     = hud.menuFont,
+            fontSize = fontSize,
+            color    = (i == 2)
+                          and {1.0, 1.0, 1.0, 1.0}      -- type: bright
+                          or  {0.75, 0.75, 0.75, 1.0},  -- placeholders: dim
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        table.insert(unitInfoV2.ownedLabels, lblId)
+        local lblHandle = label.getElementHandle(lblId)
+        local rowY = y + (i - 1) * rowH + math.floor(rowH * 0.5)
+                     + math.floor(fontSize * 0.3)
+        UI.addToPage(unitInfoV2.page, lblHandle, x + SECTION_PAD, rowY)
+        UI.setZIndex(lblHandle, 12)
+        -- The middle row is the unit's type — refreshed each tick from
+        -- the active unit so it can show whatever def name the unit has.
+        if i == 2 then
+            unitInfoV2.headerTypeLabelId = lblId
+        end
+    end
+end
+
+-----------------------------------------------------------
+-- Bootstrap: create the page + layout once HUD assets are ready.
+-----------------------------------------------------------
+
+local function bootstrap()
+    if unitInfoV2.bootstrapped then return end
+    if not (hud and hud.boxTexSet and hud.menuFont
+            and hud.fbW and hud.fbW > 0) then
+        return  -- HUD not ready yet, retry next tick
+    end
+
+    unitInfoV2.bootstrapped = true
+    unitInfoV2.page = UI.newPage("unit_info_v2", "overlay")
+
+    -- engine.loadTexture caches by path so this returns the same
+    -- handle that drag_select / tooltip separators already use.
+    unitInfoV2.whitePixelTex = engine.loadTexture(
+        "assets/textures/hud/utility/white.png")
+    unitInfoV2.tabSelectedTex = engine.loadTexture(
+        "assets/textures/ui/unittabselected.png")
+
+    -- Sub-tab look (Status / Stats / Mental / …) re-uses the menu
+    -- tab textures so it visually matches the settings + create-world
+    -- panels. boxTextures.load caches by path so we're sharing the
+    -- same texture set those menus loaded earlier.
+    unitInfoV2.subTabSelectedTexSet =
+        boxTextures.load("assets/textures/ui/tabselected", "tabselected")
+    unitInfoV2.subTabUnselectedTexSet =
+        boxTextures.load("assets/textures/ui/tabunselected", "tabunselected")
+
+    -- Take over the unit-info display: hide the shared HUD info panel
+    -- entirely while v2 is alive. Tile / building info also stop
+    -- showing until those flows get migrated into v2 too.
+    if hud.info_page then
+        UI.hidePage(hud.info_page)
+    end
+end
+
+-----------------------------------------------------------
+-- Rebuild the layout. Called on bootstrap and on every selection
+-- change (because content per-section will eventually depend on the
+-- selected unit). For the skeleton, layout is constant.
+-----------------------------------------------------------
+
+local function rebuildLayout()
+    clearOwned()
+
+    local uiscale  = scale.get()
+    local panelW   = math.floor(PANEL_W * uiscale)
+    local outerPad = math.floor(PANEL_PAD * uiscale)
+    local sectGap  = math.floor(SECTION_GAP * uiscale)
+
+    local fbW = hud.fbW
+    local fbH = hud.fbH
+    local panelX = fbW - panelW
+    local panelY = 0
+    local panelH = fbH
+
+    -- Outer pane
+    unitInfoV2.outerBoxId = UI.newBox(
+        "unit_info_v2_outer",
+        panelW, panelH,
+        hud.boxTexSet,
+        OUTER_TILE,
+        1.0, 1.0, 1.0, 1.0,
+        0,
+        unitInfoV2.page
+    )
+    UI.addToPage(unitInfoV2.page, unitInfoV2.outerBoxId, panelX, panelY)
+    UI.setZIndex(unitInfoV2.outerBoxId, 10)
+
+    -- Section sizes (scaled)
+    local contentX = panelX + outerPad
+    local contentW = panelW - 2 * outerPad
+    local cursorY  = panelY + outerPad
+
+    local tabsH   = math.floor(TABS_H   * uiscale)
+    local headerH = math.floor(HEADER_H * uiscale)
+    local statsH  = math.floor(STATS_H  * uiscale)
+    local equipH  = math.floor(EQUIP_H  * uiscale)
+    local dThick  = math.floor(DIVIDER_THICKNESS * uiscale)
+
+    -- Helper: lay down a section's content, then a divider beneath it.
+    -- The cursorY ends up below the divider, ready for the next
+    -- section. The last section in the panel skips its divider.
+    local function nextSection(content, h, drawDivider)
+        content(contentX, cursorY, contentW, h)
+        cursorY = cursorY + h + sectGap
+        if drawDivider then
+            placeDivider(contentX, cursorY, contentW, uiscale)
+            cursorY = cursorY + dThick + sectGap
+        end
+    end
+
+    -- Sprite tab strip. We just record the section's rect here;
+    -- rebuildTabs() (driven by update() on selection-identity change)
+    -- creates the actual tab + arrow elements inside this rect.
+    nextSection(function(x, y, w, h)
+        unitInfoV2.tabsRect = { x = x, y = y, w = w, h = h }
+    end, tabsH, true)
+
+    -- Header (Name / Type / Role rows)
+    nextSection(function(x, y, w, h)
+        placeHeader(x, y, w, h)
+    end, headerH, true)
+
+    -- Stats / Physical / Mental / Skills sub-tabs section. We just
+    -- record the section's rect; rebuildSubTabs (driven by update())
+    -- populates the sub-tab strip + content area inside it.
+    nextSection(function(x, y, w, h)
+        unitInfoV2.statsRect = { x = x, y = y, w = w, h = h }
+    end, statsH, true)
+
+    -- Equipment
+    nextSection(function(x, y, w, h)
+        placePlaceholder("equip", x, y, w, h,
+            "Equipment slots here...", 14)
+    end, equipH, true)
+
+    -- Inventory: remaining height, no divider after
+    local invH = (panelY + panelH - outerPad) - cursorY
+    if invH > 0 then
+        placePlaceholder("inv", contentX, cursorY, contentW, invH,
+            "[ inventory ]", 14)
+    end
+end
+
+-----------------------------------------------------------
+-- Public lifecycle
+-----------------------------------------------------------
+
+function unitInfoV2.init(scriptId)
+    unitInfoV2.scriptId = scriptId
+    engine.logInfo("Unit info v2 initialising...")
+
+    -- Suppress the old unit_info_panel push so the existing HUD info
+    -- panel stays empty for unit selections (the new pane owns it).
+    local oldWatch = package.loaded["scripts.unit_info_panel"]
+    if oldWatch then
+        oldWatch.suppressed = true
+    else
+        -- Old module hasn't been required yet; tag it through a
+        -- pending flag the old module will check during its own init.
+        -- We don't load it here because that'd start its update loop.
+        package.loaded.__unit_info_v2_suppress = true
+    end
+end
+
+function unitInfoV2.update(dt)
+    bootstrap()
+    if not unitInfoV2.page then return end
+
+    -- Rebuild on first show. For now layout is static so we only need
+    -- to build it once, but we re-call on selection-identity change
+    -- in later passes so leave the hook here.
+    if not unitInfoV2.outerBoxId then
+        rebuildLayout()
+        rebuildSubTabs()
+        UI.hidePage(unitInfoV2.page)
+    end
+
+    local sel = unit.getSelected()
+    local count = (sel and #sel) or 0
+
+    -- Selection-identity change → rebuild the tab strip. selectionKey
+    -- is order-insensitive so picking the same units in a different
+    -- click order doesn't churn.
+    local key = selectionKey(sel)
+    if key ~= unitInfoV2.lastSelKey then
+        rebuildTabs(sel)
+        unitInfoV2.lastSelKey = key
+    end
+
+    -- Stats sub-panel: rebuild content when the active unit OR sub-tab
+    -- changes; otherwise just refresh in-place values.
+    if unitInfoV2.activeUid then
+        rebuildStatsContent()
+        if unitInfoV2.statsRefresh then
+            unitInfoV2.statsRefresh(unitInfoV2.activeUid)
+        end
+    end
+
+    -- Header type row: rewrite each tick from the active unit's def.
+    -- All units are "acolyte" right now so this is effectively a no-op
+    -- until other unit types exist, but the wiring is in place.
+    if unitInfoV2.activeUid and unitInfoV2.headerTypeLabelId then
+        local info = unit.getInfo(unitInfoV2.activeUid)
+        local typeName = info and info.defName or "?"
+        label.setText(unitInfoV2.headerTypeLabelId, typeName)
+    end
+
+    -- Refresh every visible tab's texture from its unit's current
+    -- animation frame. Skip setSpriteTexture when the handle hasn't
+    -- changed to avoid needless mutations. We only animate VISIBLE
+    -- tabs — scrolled-off tabs would just thrash invisibly.
+    if unitInfoV2.tabLayout and #unitInfoV2.tabs > 0 then
+        local visible = unitInfoV2.tabLayout.visibleCount
+        local first   = unitInfoV2.scrollOffset + 1
+        local last    = math.min(first + visible - 1, #unitInfoV2.tabs)
+        for i = first, last do
+            local tab = unitInfoV2.tabs[i]
+            if tab then
+                local tex = unit.getFrameTexture(tab.uid)
+                if tex and tex > 0 and tex ~= tab.lastTex then
+                    UI.setSpriteTexture(tab.spriteId, tex)
+                    tab.lastTex = tex
+                end
+            end
+        end
+    end
+
+    if count > 0 and unitInfoV2.lastSelCount == 0 then
+        UI.showPage(unitInfoV2.page)
+    elseif count == 0 and unitInfoV2.lastSelCount > 0 then
+        UI.hidePage(unitInfoV2.page)
+    end
+    unitInfoV2.lastSelCount = count
+end
+
+function unitInfoV2.onFramebufferResize(width, height)
+    -- Layout depends on framebuffer dimensions, so rebuild on resize.
+    if unitInfoV2.page then
+        rebuildLayout()
+        -- Tabs got cleared by clearOwned in rebuildLayout. Re-create
+        -- them for the current selection (lastSelKey reset so the next
+        -- update tick will see "new" selection and rebuild).
+        unitInfoV2.lastSelKey = ""
+        if unitInfoV2.lastSelCount > 0 then
+            UI.showPage(unitInfoV2.page)
+        else
+            UI.hidePage(unitInfoV2.page)
+        end
+    end
+end
+
+-----------------------------------------------------------
+-- Click callbacks (routed via ui_manager)
+-----------------------------------------------------------
+
+-- Clicking a tab makes that unit the active one (highlight + drives
+-- the lower data sections in subsequent steps). The portrait sprite
+-- is the clickable element; we match by spriteId.
+function unitInfoV2.handleTabClick(elemHandle)
+    for _, tab in ipairs(unitInfoV2.tabs) do
+        if tab.spriteId == elemHandle then
+            if unitInfoV2.activeUid ~= tab.uid then
+                unitInfoV2.activeUid = tab.uid
+                applyTabPositions()
+            end
+            return true
+        end
+    end
+    return false
+end
+
+function unitInfoV2.handleScrollLeft(elemHandle)
+    if elemHandle ~= unitInfoV2.scrollLeftId then return false end
+    if unitInfoV2.scrollOffset > 0 then
+        unitInfoV2.scrollOffset = unitInfoV2.scrollOffset - 1
+        applyTabPositions()
+    end
+    return true
+end
+
+function unitInfoV2.handleScrollRight(elemHandle)
+    if elemHandle ~= unitInfoV2.scrollRightId then return false end
+    if not unitInfoV2.tabLayout then return false end
+    local maxOffset = math.max(0,
+        #unitInfoV2.tabs - unitInfoV2.tabLayout.visibleCount)
+    if unitInfoV2.scrollOffset < maxOffset then
+        unitInfoV2.scrollOffset = unitInfoV2.scrollOffset + 1
+        applyTabPositions()
+    end
+    return true
+end
+
+-- Clicking a sub-tab (Status / Stats / Mental / …) switches which
+-- panel content is visible. The active sub-tab persists across unit
+-- switches so comparisons stay on the same panel.
+function unitInfoV2.handleSubTabClick(elemHandle)
+    for _, t in ipairs(unitInfoV2.subTabs) do
+        if t.bgId == elemHandle then
+            if unitInfoV2.activeSubTab ~= t.name then
+                unitInfoV2.activeSubTab = t.name
+                applySubTabStyling()
+                rebuildStatsContent()
+            end
+            return true
+        end
+    end
+    return false
+end
+
+function unitInfoV2.shutdown()
+    -- Re-enable the old watcher in case we're being unloaded.
+    local oldWatch = package.loaded["scripts.unit_info_panel"]
+    if oldWatch then
+        oldWatch.suppressed = false
+    end
+
+    -- Restore the shared HUD info panel's visibility — we hid it on
+    -- bootstrap so v2 could own the unit-info display.
+    if hud and hud.info_page then
+        UI.showPage(hud.info_page)
+    end
+
+    clearOwned()
+    if unitInfoV2.page then
+        UI.deletePage(unitInfoV2.page)
+        unitInfoV2.page = nil
+    end
+    unitInfoV2.bootstrapped = false
+    unitInfoV2.lastSelCount = 0
+end
+
+return unitInfoV2

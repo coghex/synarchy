@@ -57,6 +57,7 @@ function advancedTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
+        tooltip  = "Number of tectonic plates the world starts with. Fewer plates produce larger continents and longer mountain ranges.",
     }))
     local plateLabelHandle = label.getElementHandle(plateLabelId)
     UI.addToPage(page, plateLabelHandle,
@@ -94,6 +95,7 @@ function advancedTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
+        tooltip  = "How aggressively rivers and weathering wear down terrain. Higher values produce flatter, smoother landscapes.",
     }))
     local erosionLabelHandle = label.getElementHandle(erosionLabelId)
     UI.addToPage(page, erosionLabelHandle,
@@ -130,6 +132,7 @@ function advancedTab.create(params)
         color    = {1.0, 1.0, 1.0, 1.0},
         page     = page,
         uiscale  = uiscale,
+        tooltip  = "Frequency of volcanic uplift during geological evolution. Higher values create more mountain ranges and lava features.",
     }))
     local volcanicLabelHandle = label.getElementHandle(volcanicLabelId)
     UI.addToPage(page, volcanicLabelHandle,
