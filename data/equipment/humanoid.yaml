@@ -1,0 +1,36 @@
+# Equipment layout for humanoid units (acolytes, future humans).
+#
+# Slot positions are pixel offsets inside the silhouette texture
+# (top-left origin). The UI multiplies by uiscale at draw time, so
+# the numbers below assume the texture is drawn at its native pixel
+# size. Boxes are 32x32 (matches the engine's item icon size).
+#
+# Layout is anatomical against a 160x256 silhouette: three columns
+# (viewer-left, center, viewer-right; L/R names follow viewer
+# perspective) over five vertical levels:
+#
+#                       x= 14    x= 64    x=114
+#   y=  8  (head)                 head
+#   y= 56  (chest)                body
+#   y=104  (hands)     L_hand              R_hand
+#   y=148  (waist)     L_weapon            R_weapon
+#   y=148  (thighs)               legs       ↑ same row, but center
+#   y=216  (feet)                 feet         column so no overlap
+#
+# All boxes are 32x32 with ≥12px gaps between adjacent boxes. Symmetric
+# 14px side padding leaves the hand/weapon columns sitting just over
+# the figure's hand and hip positions in the silhouette.
+classes:
+  - name: humanoid
+    silhouette:   assets/textures/equipment/humanoid_silhouette.png
+    silhouette_w: 160
+    silhouette_h: 256
+    slots:
+      - { id: head,         name: "Headwear",     kind: headwear, x:  64, y:   8 }
+      - { id: body,         name: "Bodywear",     kind: bodywear, x:  64, y:  56 }
+      - { id: left_hand,    name: "Handwear (L)", kind: handwear, x:  14, y: 104 }
+      - { id: right_hand,   name: "Handwear (R)", kind: handwear, x: 114, y: 104 }
+      - { id: left_weapon,  name: "Weapon (L)",   kind: weapon,   x:  14, y: 148 }
+      - { id: right_weapon, name: "Weapon (R)",   kind: weapon,   x: 114, y: 148 }
+      - { id: legs,         name: "Legwear",      kind: legwear,  x:  64, y: 148 }
+      - { id: feet,         name: "Footwear",     kind: footwear, x:  64, y: 216 }

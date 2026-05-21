@@ -200,6 +200,7 @@ loadUnitYamlFn env backendState = do
                             , udBodyTemplates = bodyTemplates
                             , udSkillTemplates = skillTemplates
                             , udStartingInventory = startingInv
+                            , udEquipmentClass    = uydEquipmentClass def
                             }
                     atomicModifyIORef' (unitManagerRef env) $ \um →
                         (um { umDefs = HM.insert name unitDef (umDefs um) }, ())
@@ -961,14 +962,17 @@ unitGetInfoFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-            mInst ← Lua.liftIO $ do
+            mPair ← Lua.liftIO $ do
                 um ← readIORef (unitManagerRef env)
-                pure (HM.lookup uid (umInstances um))
-            case mInst of
+                pure $ do
+                    inst ← HM.lookup uid (umInstances um)
+                    let mDef = HM.lookup (uiDefName inst) (umDefs um)
+                    pure (inst, mDef)
+            case mPair of
                 Nothing → do
                     Lua.pushnil
                     return 1
-                Just inst → do
+                Just (inst, mDef) → do
                     Lua.newtable
                     Lua.pushstring (TE.encodeUtf8 (uiDefName inst))
                     Lua.setfield (-2) "defName"
@@ -986,6 +990,13 @@ unitGetInfoFn env = do
                     Lua.setfield (-2) "currentAnim"
                     Lua.pushnumber (Lua.Number (realToFrac (uiAnimStart inst)))
                     Lua.setfield (-2) "animStart"
+                    -- equipmentClass is per-def, not per-instance. Only
+                    -- present in the table when the def declares one.
+                    case mDef >>= udEquipmentClass of
+                        Just cls → do
+                            Lua.pushstring (TE.encodeUtf8 cls)
+                            Lua.setfield (-2) "equipmentClass"
+                        Nothing → pure ()
                     return 1
 
 dirToText ∷ Direction → Text

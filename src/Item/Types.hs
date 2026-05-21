@@ -36,6 +36,11 @@ data ItemDef = ItemDef
     , idDisplayName ∷ !Text             -- ^ shown in UI
     , idTexture     ∷ !TextureHandle    -- ^ inventory sprite (UI use)
     , idWeight      ∷ !Float            -- ^ empty weight in kg
+    , idKind        ∷ !Text             -- ^ equipment-slot kind ("weapon",
+                                        --   "headwear", …). "misc" for
+                                        --   non-equippable items. Matched
+                                        --   against EquipmentSlot.esKind
+                                        --   when equipping.
     , idContainer   ∷ !(Maybe ItemContainer)
     , idFood        ∷ !(Maybe ItemFood)
     } deriving (Show, Eq)

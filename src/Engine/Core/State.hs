@@ -45,6 +45,7 @@ import Unit.Command.Types (UnitCommand)
 import Building.Types (BuildingManager, BuildingGhost)
 import Building.Command.Types (BuildingCommand)
 import Item.Types (ItemManager)
+import Equipment.Types (EquipmentClassManager)
 import World.Types (WorldCommand, WorldManager, FloraCatalog)
 import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
@@ -126,6 +127,10 @@ data EngineEnv = EngineEnv
     -- ^ Registry of all item defs loaded from data/items/*.yaml.
     --   Lua's item.loadYaml writes into this; unit spawn reads from
     --   it to materialise starting_inventory entries.
+  , equipmentClassManagerRef ∷ IORef EquipmentClassManager
+    -- ^ Registry of equipment classes loaded from data/equipment/*.yaml.
+    --   Lua's equipment.loadYaml writes into this; the unit-info v2
+    --   equipment section reads it to lay out slot boxes per class.
   , eventStoreRef      ∷ TVar (Seq PlayerEvent)
     -- ^ Ring buffer of player-facing events (~1000 entries; oldest
     --   dropped). Per-session only — not serialized to save files.

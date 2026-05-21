@@ -3,6 +3,7 @@
 local unitLoader = require("scripts.unit_loader")
 local buildingLoader = require("scripts.building_loader")
 local itemLoader = require("scripts.item_loader")
+local equipmentLoader = require("scripts.equipment_loader")
 
 local unitManager = {}
 
@@ -38,9 +39,16 @@ function unitManager.init(scriptId)
     local itemCount = itemLoader.loadAll("data/items")
     unitManager.itemDefCount = itemCount
 
+    -- Equipment classes — must load before any unit-info v2 panel
+    -- queries equipment.getClass(). UnitDef.udEquipmentClass is just a
+    -- name reference; the actual class data lives here.
+    local equipmentCount = equipmentLoader.loadAll("data/equipment")
+    unitManager.equipmentClassCount = equipmentCount
+
     engine.logInfo("Unit manager initialized: " .. count
         .. " unit defs, " .. buildingCount .. " building defs, "
-        .. itemCount .. " item defs")
+        .. itemCount .. " item defs, "
+        .. equipmentCount .. " equipment classes")
 end
 
 -----------------------------------------------------------

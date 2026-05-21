@@ -36,6 +36,7 @@ import Unit.Types (emptyUnitManager)
 import Unit.Sim.Types (emptyUnitThreadState)
 import Building.Types (emptyBuildingManager)
 import Item.Types (emptyItemManager)
+import Equipment.Types (emptyEquipmentClassManager)
 import World.Types (WorldCommand, emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
 import World.Generate.Config (loadWorldGenConfig)
@@ -111,6 +112,7 @@ initializeEngine = do
   enginePausedRef ← newIORef False
   gameTimeRef     ← newIORef (0 ∷ Double)
   itemManagerRef  ← newIORef emptyItemManager
+  equipmentClassManagerRef ← newIORef emptyEquipmentClassManager
   -- Player Events: load the notification registry (data/) merged
   -- with player overrides (config/), allocate the ring buffer and
   -- popup queue. Both TVars are multi-writer (world/unit/Lua threads
@@ -173,6 +175,7 @@ initializeEngine = do
         , enginePausedRef   = enginePausedRef
         , gameTimeRef       = gameTimeRef
         , itemManagerRef    = itemManagerRef
+        , equipmentClassManagerRef = equipmentClassManagerRef
         , eventStoreRef      = eventStoreRef
         , notificationCfgRef = notificationCfgRef
         , notificationOrder  = notificationOrder

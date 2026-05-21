@@ -59,6 +59,7 @@ loadItemYamlFn env backendState = do
                                               else iydDisplayName def
                             , idTexture     = handle
                             , idWeight      = iydWeight def
+                            , idKind        = iydKind def
                             , idContainer   = container
                             , idFood        = food
                             }

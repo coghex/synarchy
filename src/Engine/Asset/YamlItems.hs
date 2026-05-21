@@ -39,6 +39,8 @@ data ItemYamlDef = ItemYamlDef
     , iydDisplayName ∷ !Text
     , iydSprite      ∷ !Text                       -- ^ texture path
     , iydWeight      ∷ !Float                      -- ^ empty weight (kg)
+    , iydKind        ∷ !Text                       -- ^ equipment slot kind;
+                                                   --   defaults to "misc"
     , iydContainer   ∷ !(Maybe ItemYamlContainer)
     , iydFood        ∷ !(Maybe ItemYamlFood)
     } deriving (Show, Eq, Generic)
@@ -49,6 +51,7 @@ instance FromJSON ItemYamlDef where
         ⊛ v .:? "display_name" .!= ""
         ⊛ v .:  "sprite"
         ⊛ v .:? "weight"       .!= 0.0
+        ⊛ v .:? "kind"         .!= "misc"
         ⊛ v .:? "container"
         ⊛ v .:? "food"
 

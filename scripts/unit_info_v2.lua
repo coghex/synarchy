@@ -59,6 +59,15 @@ unitInfoV2.lastContentTab = nil
 -- Header
 unitInfoV2.headerTypeLabelId = nil  -- the "acolyte" row; refreshed per active unit
 
+-- Equipment section. equipRect is the section rect; equipElements is
+-- the list of sprites/labels rebuilt on unit change (and torn down
+-- before the rebuild). lastEquipClass / lastEquipUid let us skip
+-- rebuilds when nothing relevant has changed.
+unitInfoV2.equipRect       = nil
+unitInfoV2.equipElements   = {}
+unitInfoV2.lastEquipClass  = nil
+unitInfoV2.lastEquipUid    = nil
+
 -- Sprite tabs: one entry per selected unit, in selection order.
 -- Each entry: { uid, boxId, spriteId, lastTex }.
 unitInfoV2.tabs           = {}
@@ -83,8 +92,15 @@ local SECTION_GAP   = 10      -- vertical gap between section content and divide
 local TABS_H    = 88   -- room for extra top padding above the tab row
 local HEADER_H  = 64
 local STATS_H   = 280
-local EQUIP_H   = 160
+local EQUIP_H   = 272   -- fits a 256-tall humanoid silhouette + 8px top/bot
 -- Inventory section takes remaining vertical room.
+
+-- Equipment section layout. Silhouette + slot grid on the left,
+-- accessory list on the right. SILHOUETTE_PAD is the gap between the
+-- pane border and the silhouette; ACCESSORY_GAP separates the
+-- silhouette from the right-side accessory list.
+local SILHOUETTE_PAD = 8
+local ACCESSORY_GAP  = 12
 
 local TAB_GAP          = 4    -- horizontal gap between adjacent tabs
 local TAB_INNER_PAD    = 4    -- padding inside a tab around its sprite
@@ -170,6 +186,15 @@ local function clearOwned()
     unitInfoV2.statsRefresh = nil
     unitInfoV2.lastContentUid = nil
     unitInfoV2.lastContentTab = nil
+
+    for _, e in ipairs(unitInfoV2.equipElements) do
+        if e.kind == "label" then label.destroy(e.id)
+        else                       UI.deleteElement(e.id)
+        end
+    end
+    unitInfoV2.equipElements   = {}
+    unitInfoV2.lastEquipClass  = nil
+    unitInfoV2.lastEquipUid    = nil
 
     unitInfoV2.headerTypeLabelId = nil
 
@@ -1014,6 +1039,142 @@ local function placeDivider(x, y, w, uiscale)
 end
 
 -----------------------------------------------------------
+-- Equipment section: silhouette on the left with clickable slot
+-- overlays, accessory list on the right. The silhouette and slot
+-- positions both come from the active unit's equipment class (looked
+-- up via equipment.getClass), so changing the YAML re-lays out the
+-- section with no Lua changes.
+--
+-- Phase 1 is read-only: slots are transparent hit-zones with tooltips,
+-- there are no item icons yet, and the accessory list is a placeholder.
+-- Phase 2 will hang equip popups off the slot click callbacks and draw
+-- the equipped item's icon inside each slot rect.
+-----------------------------------------------------------
+
+local function rebuildEquipmentSection()
+    if not unitInfoV2.equipRect then return end
+    local rect = unitInfoV2.equipRect
+    local uid  = unitInfoV2.activeUid
+
+    -- Look up the unit's equipment class. Skip silently when the unit
+    -- has no class (e.g. a wandering animal) or no active selection.
+    local info = uid and unit.getInfo(uid) or nil
+    local clsName = info and info.equipmentClass or nil
+    local cls = clsName and equipment.getClass(clsName) or nil
+
+    -- Skip rebuild if the (uid, class) tuple hasn't changed. Slot
+    -- positions are immutable per class, so once placed they're stable.
+    if unitInfoV2.lastEquipUid == uid
+       and unitInfoV2.lastEquipClass == clsName then
+        return
+    end
+
+    -- Tear down anything from a previous build.
+    for _, e in ipairs(unitInfoV2.equipElements) do
+        if e.kind == "label" then label.destroy(e.id)
+        else                       UI.deleteElement(e.id)
+        end
+    end
+    unitInfoV2.equipElements   = {}
+    unitInfoV2.lastEquipUid    = uid
+    unitInfoV2.lastEquipClass  = clsName
+
+    if not cls then
+        -- No class for this unit — show a quiet placeholder. The
+        -- section divider above already separates this from stats.
+        local lblId = label.new({
+            name     = "unit_info_v2_equip_none",
+            text     = "(no equipment)",
+            font     = hud.menuFont,
+            fontSize = 14,
+            color    = {0.6, 0.6, 0.6, 1.0},
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        local h = label.getElementHandle(lblId)
+        local lblW = select(1, label.getSize(lblId))
+        UI.addToPage(unitInfoV2.page, h,
+            rect.x + math.floor((rect.w - lblW) / 2),
+            rect.y + math.floor(rect.h / 2))
+        UI.setZIndex(h, 12)
+        table.insert(unitInfoV2.equipElements,
+            { kind = "label", id = lblId })
+        return
+    end
+
+    local uiscale = scale.get()
+    local silPad  = math.floor(SILHOUETTE_PAD * uiscale)
+    local silW    = math.floor(cls.silhouetteW * uiscale)
+    local silH    = math.floor(cls.silhouetteH * uiscale)
+    local silX    = rect.x + silPad
+    local silY    = rect.y + math.floor((rect.h - silH) / 2)
+
+    -- Silhouette background. Untinted — the texture provides the art
+    -- (grey humanoid outline with painted slot boxes).
+    local silId = UI.newSprite(
+        "unit_info_v2_equip_silhouette",
+        silW, silH,
+        cls.silhouette,
+        1.0, 1.0, 1.0, 1.0,
+        unitInfoV2.page)
+    UI.addToPage(unitInfoV2.page, silId, silX, silY)
+    UI.setZIndex(silId, 11)
+    table.insert(unitInfoV2.equipElements,
+        { kind = "sprite", id = silId })
+
+    -- Slot overlays — transparent hit-zones positioned over the boxes
+    -- painted into the silhouette texture. Each carries a tooltip with
+    -- the slot's name + the item kind it accepts. Phase 2 will swap the
+    -- transparent sprite for an item icon when something is equipped.
+    if cls.slots then
+        for i, s in ipairs(cls.slots) do
+            local slotW = math.floor(s.w * uiscale)
+            local slotH = math.floor(s.h * uiscale)
+            local slotX = silX + math.floor(s.x * uiscale)
+            local slotY = silY + math.floor(s.y * uiscale)
+            local slotId = UI.newSprite(
+                "unit_info_v2_equip_slot_" .. i,
+                slotW, slotH,
+                unitInfoV2.whitePixelTex,
+                1.0, 1.0, 1.0, 0.0,  -- transparent — silhouette art shows
+                unitInfoV2.page)
+            UI.addToPage(unitInfoV2.page, slotId, slotX, slotY)
+            UI.setZIndex(slotId, 12)
+            UI.setTooltipRich(slotId, {
+                text = s.name,
+                hint = "Accepts: " .. (s.kind or "?"),
+            })
+            table.insert(unitInfoV2.equipElements,
+                { kind = "sprite", id = slotId })
+        end
+    end
+
+    -- Accessory list on the right. Placeholder until Phase 2 wires
+    -- the per-unit equipped-accessories collection.
+    local listX = silX + silW + math.floor(ACCESSORY_GAP * uiscale)
+    local listW = rect.x + rect.w - listX - silPad
+    if listW > 0 then
+        local lblId = label.new({
+            name     = "unit_info_v2_equip_accessories",
+            text     = "(no accessories)",
+            font     = hud.menuFont,
+            fontSize = 14,
+            color    = {0.6, 0.6, 0.6, 1.0},
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        local h = label.getElementHandle(lblId)
+        local lblW = select(1, label.getSize(lblId))
+        UI.addToPage(unitInfoV2.page, h,
+            listX + math.floor((listW - lblW) / 2),
+            rect.y + math.floor(rect.h / 2))
+        UI.setZIndex(h, 12)
+        table.insert(unitInfoV2.equipElements,
+            { kind = "label", id = lblId })
+    end
+end
+
+-----------------------------------------------------------
 -- Header: stacks Name / Type / Role rows in a virtual rect. No box
 -- around it; section boundaries are marked by horizontal rules.
 -- All three are placeholder labels for now; "Type" is the only one
@@ -1164,10 +1325,11 @@ local function rebuildLayout()
         unitInfoV2.statsRect = { x = x, y = y, w = w, h = h }
     end, statsH, true)
 
-    -- Equipment
+    -- Equipment. Only record the rect here; rebuildEquipmentSection
+    -- (driven by update() on selection-identity change) populates the
+    -- silhouette + slot overlays + accessory list inside it.
     nextSection(function(x, y, w, h)
-        placePlaceholder("equip", x, y, w, h,
-            "Equipment slots here...", 14)
+        unitInfoV2.equipRect = { x = x, y = y, w = w, h = h }
     end, equipH, true)
 
     -- Inventory: remaining height, no divider after
@@ -1232,6 +1394,10 @@ function unitInfoV2.update(dt)
             unitInfoV2.statsRefresh(unitInfoV2.activeUid)
         end
     end
+
+    -- Equipment section: rebuild when the active unit changes
+    -- (silhouette + slot overlays per the unit's equipment class).
+    rebuildEquipmentSection()
 
     -- Header type row: rewrite each tick from the active unit's def.
     -- All units are "acolyte" right now so this is effectively a no-op

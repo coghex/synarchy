@@ -48,6 +48,7 @@ import Engine.Scripting.Lua.API.WorldQuery
 import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Buildings
 import Engine.Scripting.Lua.API.Items
+import Engine.Scripting.Lua.API.Equipment
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.UI
 import Engine.Core.State (EngineEnv)
@@ -117,6 +118,7 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "loadUnitYaml" (loadUnitYamlFn env backendState)
   registerLuaFunction "loadBuildingYaml" (loadBuildingYamlFn env backendState)
   registerLuaFunction "loadItemYaml" (loadItemYamlFn env backendState)
+  registerLuaFunction "loadEquipmentYaml" (loadEquipmentYamlFn env backendState)
   
   registerLuaFunction "isKeyDown"         (isKeyDownFn backendState)
   registerLuaFunction "isActionDown"      (isActionDownFn env backendState)
@@ -288,6 +290,14 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getSpawnRemaining"   (buildingGetSpawnRemainingFn env)
   registerLuaFunction "consumeSpawn"        (buildingConsumeSpawnFn env)
   Lua.setglobal (Lua.Name "building")
+
+  -- Equipment global — read-only Phase 1 API for fetching equipment
+  -- class layouts (slot positions, silhouette texture). Phase 2 will
+  -- add equip/unequip and per-unit loadout queries here.
+  Lua.newtable
+  registerLuaFunction "getClass"      (equipmentGetClassFn env)
+  registerLuaFunction "getClassNames" (equipmentGetClassNamesFn env)
+  Lua.setglobal (Lua.Name "equipment")
 
   Lua.newtable
   registerLuaFunction "getGenDefaults" (worldGetGenDefaultsFn env)

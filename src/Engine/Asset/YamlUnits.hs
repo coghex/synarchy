@@ -140,6 +140,9 @@ data UnitYamlDef = UnitYamlDef
       -- ^ optional: items every freshly spawned unit of this type
       --   starts with. Looked up against the ItemManager at spawn time;
       --   missing item names log a warning and are skipped.
+    , uydEquipmentClass    ∷ !(Maybe Text)
+      -- ^ optional: name of the EquipmentClass this unit uses
+      --   (e.g. "humanoid"). Nothing → no equipment UI for this unit.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -156,6 +159,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "body"                .!= defaultUnitYamlBody
         ⊛ v .:? "skills"              .!= Map.empty
         ⊛ v .:? "starting_inventory"  .!= []
+        ⊛ v .:? "equipment_class"
 
 newtype UnitYamlFile = UnitYamlFile
     { uyfUnits ∷ [UnitYamlDef]

@@ -81,6 +81,11 @@ data UnitDef = UnitDef
       -- ^ ItemDef name + optional initial fill. Materialised into
       --   `uiInventory` at spawn by looking each entry up in the
       --   ItemManager; unknown names are dropped with a log warning.
+    , udEquipmentClass ∷ !(Maybe Text)
+      -- ^ Name of the EquipmentClass this unit type uses (e.g.
+      --   "humanoid"). Nothing means the unit has no equipment UI
+      --   at all (e.g. a wandering animal). Resolved against the
+      --   EquipmentClassManager at UI-build time, not at spawn.
     } deriving (Show, Eq)
 
 -- | A spawned unit instance in the world.
