@@ -55,8 +55,11 @@ saveMagic = 0x53595241
 --       state). Positional Serialize means any field added to
 --       ItemInstance bumps the format; can't be reverse-compatible
 --       without a migration shim.
+--   v10 adds uisAccessories to UnitInstanceSnapshot — items worn off
+--       the silhouette (robes, goggles, rings…). Empty list is legal
+--       for units without any accessory slots.
 currentSaveVersion ∷ Int
-currentSaveVersion = 9
+currentSaveVersion = 10
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects
@@ -253,6 +256,9 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
       -- ^ v8: slot id → equipped item. Empty map is legal (no gear).
       --   Serialize roundtrip is positional, not name-keyed, so any
       --   future addition must go after this field; bump again if so.
+    , uisAccessories ∷ ![ItemInstance]
+      -- ^ v10: items worn off the silhouette (robes, goggles, rings…).
+      --   Order preserved.
     } deriving (Show, Serialize, Generic)
 
 toUnitSnapshot ∷ UnitManager → UnitSnapshot
@@ -280,6 +286,7 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
     , uisSkills      = uiSkills ui
     , uisInventory   = uiInventory ui
     , uisEquipped    = uiEquipment ui
+    , uisAccessories = uiAccessories ui
     }
 
 -- | Restore a UnitManager from a snapshot. Like buildings: instances
@@ -326,4 +333,5 @@ fromUnitInstanceSnapshot def s = UnitInstance
     , uiSkills      = uisSkills s
     , uiInventory   = uisInventory s
     , uiEquipment   = uisEquipped s
+    , uiAccessories = uisAccessories s
     }

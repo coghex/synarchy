@@ -12,6 +12,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
+import Data.List (foldl')
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.State (EngineEnv(..))
 import Unit.Anim (stateKey)
@@ -26,7 +27,7 @@ import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
                         EquipmentClassManager, lookupEquipmentClass)
 import Item.Roll (rollItemSpec)
 import Item.Types (ItemDef(..), ItemContainer(..), ItemInstance(..)
-                  , ItemManager(..), lookupItemDef)
+                  , ItemBuff(..), ItemManager(..), lookupItemDef)
 import Engine.Core.Log (LoggerState)
 import World.Types (WorldManager(..), WorldState(..), WorldTileData(..),
                     LoadedChunk(..), ChunkCoord(..), columnIndex, lookupChunk)
@@ -101,6 +102,8 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
             let mClass = udEquipmentClass def >>= (`lookupEquipmentClass` ecMgr)
             initialEquipment ← buildStartingEquipment env logger itemMgr mClass
                                   (udStartingEquipment def)
+            initialAccessories ← buildStartingAccessories env logger itemMgr
+                                  (udStartingAccessories def)
             let inst = UnitInstance
                     { uiDefName    = defName
                     , uiTexture    = udTexture def
@@ -117,10 +120,15 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , uiPose        = "standing"
                     , uiAnimStride  = 1
                     , uiStats       = initialStats
-                    , uiModifiers   = HM.empty
+                    -- Seed modifiers from the just-built accessories so
+                    -- their buffs are active at spawn (same effect as
+                    -- if the player had right-click-equipped each).
+                    , uiModifiers   = foldl' (applyAccessoryBuffs itemMgr)
+                                             HM.empty initialAccessories
                     , uiSkills      = initialSkills
                     , uiInventory   = initialInventory
                     , uiEquipment   = initialEquipment
+                    , uiAccessories = initialAccessories
                     }
             atomicModifyIORef' (unitManagerRef env) $ \um' →
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())
@@ -625,6 +633,59 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                           }
                                         m
                 ) (return HM.empty) entries
+
+-- | Fold an accessory's buffs into a modifier map. Mirrors
+--   Engine.Scripting.Lua.API.Equipment.applyItemBuffs but kept here to
+--   avoid the import cycle between Unit.Thread.Command and Equipment.
+--   Source string = item display_name; same-source entries collapse.
+applyAccessoryBuffs ∷ ItemManager
+                    → HM.HashMap Text [StatModifier]
+                    → ItemInstance
+                    → HM.HashMap Text [StatModifier]
+applyAccessoryBuffs itemMgr mods inst =
+    case lookupItemDef (iiDefName inst) itemMgr of
+        Nothing → mods
+        Just iDef → foldl' (applyOne iDef) mods (idBuffs iDef)
+  where
+    applyOne iDef acc b =
+        let cond  = iiCondition inst
+            delta = if ibScalesWithCondition b
+                      then ibAmount b * (cond / 100)
+                      else ibAmount b
+            src   = idDisplayName iDef
+            m     = StatModifier { smDelta = delta
+                                 , smSource = src
+                                 , smExpiry = Nothing }
+            existing = HM.lookupDefault [] (ibStat b) acc
+            others   = filter (\x → smSource x ≢ src) existing
+        in HM.insert (ibStat b) (m : others) acc
+
+-- | Resolve a unit def's starting_accessories into ItemInstances.
+--   Unknown items log a warning and are dropped. Quality + condition
+--   roll from the def's spec; defaults to 100 when absent (matches
+--   "no roll" — robes / habits etc. typically don't have a quality
+--   distribution at all).
+buildStartingAccessories ∷ EngineEnv → LoggerState → ItemManager
+                         → [Text] → IO [ItemInstance]
+buildStartingAccessories env logger itemMgr names = do
+    mInsts ← mapM resolve names
+    return [i | Just i ← mInsts]
+  where
+    resolve name = case lookupItemDef name itemMgr of
+        Nothing → do
+            logWarn logger CatThread $
+                "starting_accessories: unknown item '" <> name
+                <> "' — skipping"
+            return Nothing
+        Just def → do
+            qual ← rollItemSpec (idQualitySpec def)   (statRNGRef env)
+            cond ← rollItemSpec (idConditionSpec def) (statRNGRef env)
+            return $ Just ItemInstance
+                { iiDefName     = name
+                , iiCurrentFill = 0
+                , iiQuality     = qual
+                , iiCondition   = cond
+                }
 
 lookupSurfaceZ ∷ EngineEnv → Int → Int → IO (Maybe Int)
 lookupSurfaceZ env gx gy = do

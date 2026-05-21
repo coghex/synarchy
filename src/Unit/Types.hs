@@ -92,6 +92,9 @@ data UnitDef = UnitDef
       --   slot's `esKind`. Mismatches log a warning and are dropped.
       --   Empty unless the unit type ships pre-equipped (acolytes
       --   start with armor, gauntlets, boots, dagger).
+    , udStartingAccessories ∷ ![Text]
+      -- ^ Item def names to materialise into `uiAccessories` at
+      --   spawn — robes, goggles, etc. Order preserved.
     } deriving (Show, Eq)
 
 -- | A spawned unit instance in the world.
@@ -151,6 +154,12 @@ data UnitInstance = UnitInstance
       --   `udStartingEquipment` (kind-validated). Mutated by
       --   equipment.equip / equipment.unequip from Lua. Slots not
       --   present in the map are empty. Save/load roundtrips.
+    , uiAccessories ∷ ![ItemInstance]
+      -- ^ Items the unit is wearing that don't fit a specific slot —
+      --   robes, goggles, rings, amulets, etc. Order preserved for
+      --   stable UI display. Populated at spawn from the def's
+      --   `udStartingAccessories`. Mutated by equipment.equipAccessory
+      --   / unequipAccessory.
     } deriving (Show, Eq)
 
 -- | Holds all unit definitions and all spawned instances.

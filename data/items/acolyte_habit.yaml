@@ -1,0 +1,11 @@
+items:
+  - name: "acolyte_habit"
+    display_name: "Acolyte's Habit"
+    sprite: "assets/textures/items/acolyte_habit.png"
+    weight: 1.2
+    kind: accessory     # not slot-equipment; lives on uiAccessories
+    category: Armor     # appears under the Armor inventory tab
+    # No material / make / quality / condition by design — the habit
+    # is a ritual garment, not protective gear. Once donned it stays:
+    # the unequip API refuses to remove it.
+    unequippable: true

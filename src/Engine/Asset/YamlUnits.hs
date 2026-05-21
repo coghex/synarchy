@@ -147,6 +147,9 @@ data UnitYamlDef = UnitYamlDef
       -- ^ optional: slot id → item def name. Each item is equipped
       --   into the named slot at spawn time, validating that the
       --   item's kind matches the slot's accepted kind.
+    , uydStartingAccessories ∷ ![Text]
+      -- ^ optional: list of item def names to be equipped as
+      --   accessories (no slot) at spawn time. Order preserved.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -165,6 +168,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "starting_inventory"  .!= []
         ⊛ v .:? "equipment_class"
         ⊛ v .:? "starting_equipment"  .!= Map.empty
+        ⊛ v .:? "starting_accessories".!= []
 
 newtype UnitYamlFile = UnitYamlFile
     { uyfUnits ∷ [UnitYamlDef]

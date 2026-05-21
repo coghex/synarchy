@@ -4,6 +4,7 @@ module Item.Types
     , ItemContainer(..)
     , ItemFood(..)
     , ItemWeapon(..)
+    , ItemBuff(..)
     , ItemInstance(..)
     , ItemManager(..)
     , emptyItemManager
@@ -23,6 +24,21 @@ data ItemContainer = ItemContainer
     { icCapacity ∷ !Float   -- ^ max volume (litres for water-class)
     , icHolds    ∷ !Text    -- ^ what fluid it holds: "water" / etc.
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | A single stat-modifier conferred by wearing/holding this item.
+--   The combat system applies these as engine-side StatModifiers when
+--   the item is equipped, and removes them on unequip. Source is the
+--   item's display name so the player can trace the bonus.
+data ItemBuff = ItemBuff
+    { ibStat                ∷ !Text
+      -- ^ stat name, e.g. "perception", "strength".
+    , ibAmount              ∷ !Float
+      -- ^ base bonus amount. Positive for buff, negative for debuff.
+    , ibScalesWithCondition ∷ !Bool
+      -- ^ when True, the applied bonus = amount × (condition/100). A
+      --   100%-condition technogoggles confers the full +1; a 50%
+      --   pair confers +0.5. When False the bonus is flat.
+    } deriving (Show, Eq)
 
 -- | Weapon-specific stats. Combined with the item's `idMaterial`
 --   substance properties at combat-time. Material lives at the top
@@ -95,6 +111,15 @@ data ItemDef = ItemDef
     , idWeapon      ∷ !(Maybe ItemWeapon)
       -- ^ Weapon stats for items with kind="weapon". Nothing for
       --   everything else.
+    , idUnequippable ∷ !Bool
+      -- ^ When True, the unequip API refuses to remove this item once
+      --   it's been put on. Used for ritual gear (acolyte's habit)
+      --   that the player chose to commit to. Has no effect on items
+      --   sitting in the inventory.
+    , idBuffs       ∷ ![ItemBuff]
+      -- ^ Stat modifiers conferred while the item is equipped.
+      --   Applied via the existing uiModifiers system at equip time;
+      --   removed on unequip. Empty list = no buffs.
     } deriving (Show, Eq)
 
 -- | Per-unit instance. References its def by name; currentFill is for

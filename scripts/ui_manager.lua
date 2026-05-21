@@ -703,6 +703,14 @@ function uiManager.onEquipSlotRightClick(elemHandle)
     return false
 end
 
+function uiManager.onAccessoryRowRightClick(elemHandle)
+    local mod = package.loaded["scripts.unit_info_v2"]
+    if mod and mod.handleAccessoryRowRightClick then
+        return mod.handleAccessoryRowRightClick(elemHandle)
+    end
+    return false
+end
+
 -- Context menu click routes. Both fire as broadcast callbacks named in
 -- scripts.ui.context_menu — items run the row's callback, backdrop
 -- closes the menu without doing anything else.

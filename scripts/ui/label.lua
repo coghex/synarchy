@@ -143,6 +143,26 @@ function label.getText(id)
     return lbl.text
 end
 
+-- Attach (or update) a rich tooltip on the label's hit-box. The hit-
+-- box is created on first call if it doesn't exist yet; subsequent
+-- calls just update the tooltip content. Used by per-tick refresh
+-- closures that want to keep the modifier-source list live without
+-- destroying / recreating the label.
+function label.setTooltipRich(id, content)
+    local lbl = labels[id]
+    if not lbl then return end
+    if not lbl.hitBoxId then
+        local hitH = math.floor(lbl.fontSize * 1.25)
+        lbl.hitBoxId = UI.newElement(
+            lbl.name .. "_hit",
+            lbl.width, hitH,
+            lbl.page
+        )
+        UI.addChild(lbl.textId, lbl.hitBoxId, 0, -lbl.fontSize)
+    end
+    UI.setTooltipRich(lbl.hitBoxId, content)
+end
+
 function label.setColor(id, color)
     local lbl = labels[id]
     if not lbl then return end

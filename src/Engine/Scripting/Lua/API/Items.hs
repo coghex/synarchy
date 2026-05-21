@@ -99,6 +99,15 @@ loadItemYamlFn env backendState = do
                             , idContainer   = container
                             , idFood        = food
                             , idWeapon      = weapon
+                            , idUnequippable = iydUnequippable def
+                            , idBuffs       = map
+                                (\b → ItemBuff
+                                    { ibStat = iybStat b
+                                    , ibAmount = iybAmount b
+                                    , ibScalesWithCondition =
+                                        iybScalesWithCondition b
+                                    })
+                                (iydBuffs def)
                             }
 
                     atomicModifyIORef' (itemManagerRef env) $ \im →

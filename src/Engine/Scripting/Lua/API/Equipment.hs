@@ -6,6 +6,9 @@ module Engine.Scripting.Lua.API.Equipment
     , equipmentEquipFn
     , equipmentUnequipFn
     , equipmentGetLoadoutFn
+    , equipmentEquipAccessoryFn
+    , equipmentUnequipAccessoryFn
+    , equipmentGetAccessoriesFn
     ) where
 
 import UPrelude
@@ -13,7 +16,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Control.Monad (foldM, forM_)
+import Control.Monad (foldM, forM_, unless)
+import Data.List (foldl')
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo)
@@ -23,9 +27,10 @@ import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister)
 import Engine.Asset.YamlEquipment
 import Equipment.Types
 import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..),
+                   ItemBuff(..), ItemContainer(..),
                    ItemManager(..), lookupItemDef)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..),
-                   UnitDef(..))
+                   UnitDef(..), StatModifier(..))
 
 -- | equipment.loadYaml(path) — parses a YAML file describing one or
 --   more equipment classes, loads each class's silhouette texture, and
@@ -165,6 +170,41 @@ removeFirstFromInventory defName = go []
         | iiDefName x ≡ defName = (reverse acc ++ xs, Just x)
         | otherwise             = go (x : acc) xs
 
+-- | Effective buff delta after applying condition scaling.
+buffEffectiveDelta ∷ ItemBuff → Float → Float
+buffEffectiveDelta b cond
+    | ibScalesWithCondition b = ibAmount b * (cond / 100)
+    | otherwise               = ibAmount b
+
+-- | Apply every buff on an item to the unit's `uiModifiers`. Source
+--   string is the item's display_name; identical sources on the same
+--   stat collapse via the existing dedup-by-source rule.
+applyItemBuffs ∷ ItemInstance → ItemDef
+               → HM.HashMap Text [StatModifier]
+               → HM.HashMap Text [StatModifier]
+applyItemBuffs inst iDef mods = foldl' applyOne mods (idBuffs iDef)
+  where
+    src   = idDisplayName iDef
+    cond  = iiCondition inst
+    applyOne acc b =
+        let delta = buffEffectiveDelta b cond
+            m     = StatModifier
+                      { smDelta  = delta
+                      , smSource = src
+                      , smExpiry = Nothing
+                      }
+            existing = HM.lookupDefault [] (ibStat b) acc
+            others   = filter (\x → smSource x ≢ src) existing
+        in HM.insert (ibStat b) (m : others) acc
+
+-- | Remove every modifier with @source@ across all stats. Mirrors
+--   `unit.removeModifier` exactly so equip/unequip stay symmetric.
+removeModifiersBySource ∷ Text
+                        → HM.HashMap Text [StatModifier]
+                        → HM.HashMap Text [StatModifier]
+removeModifiersBySource src =
+    HM.map (filter (\m → smSource m ≢ src))
+
 -- | equipment.equip(uid, slotId, itemDefName) → bool. Moves the first
 --   inventory item matching @itemDefName@ into the named slot,
 --   validating that its kind matches the slot's accepted kind. If the
@@ -301,13 +341,23 @@ equipmentGetLoadoutFn env = do
                         Lua.pushnumber
                             (Lua.Number (realToFrac (iiCurrentFill inst)))
                         Lua.setfield (-2) "currentFill"
-                        Lua.pushnumber
-                            (Lua.Number (realToFrac (iiQuality inst)))
-                        Lua.setfield (-2) "quality"
-                        Lua.pushnumber
-                            (Lua.Number (realToFrac (iiCondition inst)))
-                        Lua.setfield (-2) "condition"
-                        case lookupItemDef (iiDefName inst) itemMgr of
+                        -- Gate quality / condition on def specs so
+                        -- canteens / rations don't show "100%" they
+                        -- never had.
+                        let mDef = lookupItemDef (iiDefName inst) itemMgr
+                        case mDef >>= idQualitySpec of
+                            Just _ → do
+                                Lua.pushnumber
+                                    (Lua.Number (realToFrac (iiQuality inst)))
+                                Lua.setfield (-2) "quality"
+                            Nothing → pure ()
+                        case mDef >>= idConditionSpec of
+                            Just _ → do
+                                Lua.pushnumber
+                                    (Lua.Number (realToFrac (iiCondition inst)))
+                                Lua.setfield (-2) "condition"
+                            Nothing → pure ()
+                        case mDef of
                             Nothing → pure ()
                             Just iDef → do
                                 Lua.pushstring
@@ -355,4 +405,215 @@ equipmentGetLoadoutFn env = do
                                         Lua.setfield (-2) "weapon"
                                     Nothing → pure ()
                         Lua.setfield (-2) (Lua.Name (TE.encodeUtf8 slotId))
+                    return 1
+
+-- | Push an item-instance's render-side fields onto a freshly-created
+--   Lua table at the top of the stack. Used by both getLoadout's slot
+--   tables and getAccessories' list entries — same shape, so the Lua
+--   side's hint-builder doesn't have to branch.
+pushItemInstance ∷ ItemInstance → ItemManager → Lua.LuaE Lua.Exception ()
+pushItemInstance inst itemMgr = do
+    Lua.pushstring (TE.encodeUtf8 (iiDefName inst))
+    Lua.setfield (-2) "defName"
+    Lua.pushnumber (Lua.Number (realToFrac (iiCurrentFill inst)))
+    Lua.setfield (-2) "currentFill"
+    -- Quality / condition only surface when the def declares them —
+    -- items like canteens / rations don't have these qualities and
+    -- shouldn't show "100%" in tooltips.
+    let mDef = lookupItemDef (iiDefName inst) itemMgr
+    case mDef >>= idQualitySpec of
+        Just _ → do
+            Lua.pushnumber (Lua.Number (realToFrac (iiQuality inst)))
+            Lua.setfield (-2) "quality"
+        Nothing → pure ()
+    case mDef >>= idConditionSpec of
+        Just _ → do
+            Lua.pushnumber (Lua.Number (realToFrac (iiCondition inst)))
+            Lua.setfield (-2) "condition"
+        Nothing → pure ()
+    case mDef of
+        Nothing → pure ()
+        Just iDef → do
+            Lua.pushstring (TE.encodeUtf8 (idDisplayName iDef))
+            Lua.setfield (-2) "displayName"
+            Lua.pushstring (TE.encodeUtf8 (idKind iDef))
+            Lua.setfield (-2) "kind"
+            Lua.pushstring (TE.encodeUtf8 (idCategory iDef))
+            Lua.setfield (-2) "category"
+            Lua.pushstring (TE.encodeUtf8 (idMake iDef))
+            Lua.setfield (-2) "make"
+            Lua.pushstring (TE.encodeUtf8 (idMaterial iDef))
+            Lua.setfield (-2) "material"
+            Lua.pushnumber (Lua.Number (realToFrac (idWeight iDef)))
+            Lua.setfield (-2) "weight"
+            let TextureHandle texInt = idTexture iDef
+            Lua.pushinteger (fromIntegral texInt)
+            Lua.setfield (-2) "iconTex"
+            Lua.pushboolean (idUnequippable iDef)
+            Lua.setfield (-2) "unequippable"
+            case idContainer iDef of
+                Just c → do
+                    Lua.pushnumber (Lua.Number (realToFrac (icCapacity c)))
+                    Lua.setfield (-2) "capacity"
+                    Lua.pushstring (TE.encodeUtf8 (icHolds c))
+                    Lua.setfield (-2) "holds"
+                Nothing → pure ()
+            case idWeapon iDef of
+                Just w → do
+                    Lua.newtable
+                    Lua.pushnumber (Lua.Number (realToFrac (iwBladeLength w)))
+                    Lua.setfield (-2) "bladeLength"
+                    Lua.pushnumber (Lua.Number (realToFrac (iwBaseSharpness w)))
+                    Lua.setfield (-2) "baseSharpness"
+                    Lua.pushnumber (Lua.Number (realToFrac (iwStabEff w)))
+                    Lua.setfield (-2) "stabEffectiveness"
+                    Lua.pushnumber (Lua.Number (realToFrac (iwSlashEff w)))
+                    Lua.setfield (-2) "slashEffectiveness"
+                    Lua.pushnumber (Lua.Number (realToFrac (iwBluntEff w)))
+                    Lua.setfield (-2) "bluntEffectiveness"
+                    Lua.setfield (-2) "weapon"
+                Nothing → pure ()
+            -- Buffs: pushed as an array of { stat, amount, scalesWithCondition }
+            unless (null (idBuffs iDef)) $ do
+                Lua.newtable
+                forM_ (zip [1 ∷ Int ..] (idBuffs iDef)) $ \(i, b) → do
+                    Lua.newtable
+                    Lua.pushstring (TE.encodeUtf8 (ibStat b))
+                    Lua.setfield (-2) "stat"
+                    Lua.pushnumber (Lua.Number (realToFrac (ibAmount b)))
+                    Lua.setfield (-2) "amount"
+                    Lua.pushboolean (ibScalesWithCondition b)
+                    Lua.setfield (-2) "scalesWithCondition"
+                    Lua.rawseti (-2) (fromIntegral i)
+                Lua.setfield (-2) "buffs"
+
+-- | equipment.equipAccessory(uid, itemDefName) → bool. Moves the
+--   first matching inventory item to the end of the unit's accessory
+--   list. Returns false if the unit or item doesn't exist.
+equipmentEquipAccessoryFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+equipmentEquipAccessoryFn env = do
+    uidArg  ← Lua.tointeger 1
+    nameArg ← Lua.tostring 2
+    case (uidArg, nameArg) of
+        (Just n, Just nameBS) → do
+            let uid    = UnitId (fromIntegral n)
+                defName = TE.decodeUtf8 nameBS
+            ok ← Lua.liftIO $ do
+                itemMgr ← readIORef (itemManagerRef env)
+                atomicModifyIORef' (unitManagerRef env) $ \um →
+                    case HM.lookup uid (umInstances um) of
+                        Nothing → (um, False)
+                        Just inst →
+                            case removeFirstFromInventory defName
+                                                           (uiInventory inst) of
+                                (_, Nothing) → (um, False)
+                                (newInv, Just newI) →
+                                    -- Apply the accessory's buffs to the
+                                    -- unit's modifier list so combat /
+                                    -- stat display sees them immediately.
+                                    let mods' = case lookupItemDef
+                                                  (iiDefName newI) itemMgr of
+                                          Just d  → applyItemBuffs newI d
+                                                       (uiModifiers inst)
+                                          Nothing → uiModifiers inst
+                                        inst' = inst
+                                          { uiInventory   = newInv
+                                          , uiAccessories =
+                                              uiAccessories inst ++ [newI]
+                                          , uiModifiers   = mods'
+                                          }
+                                    in (um { umInstances = HM.insert uid inst'
+                                                             (umInstances um) },
+                                        True)
+            Lua.pushboolean ok
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+-- | equipment.unequipAccessory(uid, index) → bool. Pops the accessory
+--   at the given 1-based index and appends it to the unit's
+--   inventory. Returns false on missing unit, out-of-range index, or
+--   if the accessory's def is flagged `unequippable`.
+equipmentUnequipAccessoryFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+equipmentUnequipAccessoryFn env = do
+    uidArg ← Lua.tointeger 1
+    idxArg ← Lua.tointeger 2
+    case (uidArg, idxArg) of
+        (Just n, Just i) → do
+            let uid    = UnitId (fromIntegral n)
+                idx0   = fromIntegral i - 1
+            ok ← Lua.liftIO $ do
+                itemMgr ← readIORef (itemManagerRef env)
+                atomicModifyIORef' (unitManagerRef env) $ \um →
+                    case HM.lookup uid (umInstances um) of
+                        Nothing → (um, False)
+                        Just inst →
+                            let xs = uiAccessories inst
+                            in if idx0 < 0 ∨ idx0 >= length xs
+                                 then (um, False)
+                                 else
+                                   let target = xs !! idx0
+                                       mDef = lookupItemDef
+                                                (iiDefName target) itemMgr
+                                       defLocked = case mDef of
+                                           Just d  → idUnequippable d
+                                           Nothing → False
+                                   in if defLocked
+                                       then (um, False)
+                                       else
+                                         let xs' = take idx0 xs
+                                                 ++ drop (idx0 + 1) xs
+                                             -- Remove the accessory's
+                                             -- buffs from the unit's
+                                             -- modifier list (by source =
+                                             -- item display_name).
+                                             mods' = case mDef of
+                                                Just d  → removeModifiersBySource
+                                                            (idDisplayName d)
+                                                            (uiModifiers inst)
+                                                Nothing → uiModifiers inst
+                                             inst' = inst
+                                               { uiAccessories = xs'
+                                               , uiInventory   =
+                                                   uiInventory inst ++ [target]
+                                               , uiModifiers   = mods'
+                                               }
+                                         in (um { umInstances =
+                                                    HM.insert uid inst'
+                                                      (umInstances um) },
+                                             True)
+            Lua.pushboolean ok
+            return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+-- | equipment.getAccessories(uid) → array of item-instance tables (in
+--   wear order) or nil if the unit doesn't exist.
+equipmentGetAccessoriesFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+equipmentGetAccessoriesFn env = do
+    uidArg ← Lua.tointeger 1
+    case uidArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mPair ← Lua.liftIO $ do
+                um      ← readIORef (unitManagerRef env)
+                itemMgr ← readIORef (itemManagerRef env)
+                pure $ do
+                    inst ← HM.lookup uid (umInstances um)
+                    pure (uiAccessories inst, itemMgr)
+            case mPair of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just (acc, itemMgr) → do
+                    Lua.newtable
+                    forM_ (zip [1 ∷ Int ..] acc) $ \(i, inst) → do
+                        Lua.newtable
+                        pushItemInstance inst itemMgr
+                        Lua.rawseti (-2) (fromIntegral i)
                     return 1

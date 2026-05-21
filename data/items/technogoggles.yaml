@@ -1,0 +1,19 @@
+items:
+  - name: "technogoggles"
+    display_name: "Technogoggles"
+    sprite: "assets/textures/items/technogoggles.png"
+    weight: 0.3
+    kind: accessory
+    category: Armor
+    # No quality — these are factory-tuned, not crafted with variance.
+    # Condition degrades with wear; starts in good-to-mint range.
+    condition:
+      min: 80
+      max: 100
+    # +1 perception, scaled by current condition. A 100%-condition
+    # pair gives +1.00; a 50% pair gives +0.50. Source name shown in
+    # the stat tooltip = item display_name ("Technogoggles").
+    buffs:
+      - stat: perception
+        amount: 1.0
+        scales_with_condition: true

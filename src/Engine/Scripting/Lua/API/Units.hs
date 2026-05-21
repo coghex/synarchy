@@ -58,7 +58,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
-import Control.Monad (foldM, forM_)
+import Control.Monad (foldM, forM_, unless)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
@@ -80,8 +80,8 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Item.Roll (rollItemSpec)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
-                  , ItemFood(..), ItemWeapon(..), ItemManager(..)
-                  , lookupItemDef)
+                  , ItemFood(..), ItemWeapon(..), ItemBuff(..)
+                  , ItemManager(..), lookupItemDef)
 import Unit.LineOfSight (unitVisibleTiles)
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 import qualified Unit.Selection as Sel
@@ -205,6 +205,7 @@ loadUnitYamlFn env backendState = do
                             , udEquipmentClass    = uydEquipmentClass def
                             , udStartingEquipment = HM.fromList
                                 (Map.toList (uydStartingEquipment def))
+                            , udStartingAccessories = uydStartingAccessories def
                             }
                     atomicModifyIORef' (unitManagerRef env) $ \um →
                         (um { umDefs = HM.insert name unitDef (umDefs um) }, ())
@@ -1598,10 +1599,23 @@ unitGetInventoryFn env = do
                         Lua.setfield (-2) "weight"
                         Lua.pushnumber (Lua.Number (realToFrac (iiCurrentFill inst)))
                         Lua.setfield (-2) "currentFill"
-                        Lua.pushnumber (Lua.Number (realToFrac (iiQuality inst)))
-                        Lua.setfield (-2) "quality"
-                        Lua.pushnumber (Lua.Number (realToFrac (iiCondition inst)))
-                        Lua.setfield (-2) "condition"
+                        -- Only surface quality / condition when the def
+                        -- actually declares a spec for them — otherwise
+                        -- callers (e.g. inventory tooltip) would show
+                        -- "100%" for items like canteens / rations that
+                        -- conceptually don't have these qualities.
+                        case mDef >>= idQualitySpec of
+                            Just _ → do
+                                Lua.pushnumber
+                                    (Lua.Number (realToFrac (iiQuality inst)))
+                                Lua.setfield (-2) "quality"
+                            Nothing → pure ()
+                        case mDef >>= idConditionSpec of
+                            Just _ → do
+                                Lua.pushnumber
+                                    (Lua.Number (realToFrac (iiCondition inst)))
+                                Lua.setfield (-2) "condition"
+                            Nothing → pure ()
                         -- Display-side fields the inventory UI needs.
                         -- Defaulted when the def is missing so the
                         -- renderer always sees a complete row.
@@ -1615,6 +1629,25 @@ unitGetInventoryFn env = do
                                 Lua.setfield (-2) "make"
                                 Lua.pushstring (TE.encodeUtf8 (idMaterial d))
                                 Lua.setfield (-2) "material"
+                                Lua.pushboolean (idUnequippable d)
+                                Lua.setfield (-2) "unequippable"
+                                unless (null (idBuffs d)) $ do
+                                    Lua.newtable
+                                    forM_ (zip [1 ∷ Int ..] (idBuffs d))
+                                        $ \(j, b) → do
+                                            Lua.newtable
+                                            Lua.pushstring
+                                                (TE.encodeUtf8 (ibStat b))
+                                            Lua.setfield (-2) "stat"
+                                            Lua.pushnumber (Lua.Number
+                                                (realToFrac (ibAmount b)))
+                                            Lua.setfield (-2) "amount"
+                                            Lua.pushboolean
+                                                (ibScalesWithCondition b)
+                                            Lua.setfield (-2)
+                                                "scalesWithCondition"
+                                            Lua.rawseti (-2) (fromIntegral j)
+                                    Lua.setfield (-2) "buffs"
                                 let TextureHandle tex = idTexture d
                                 Lua.pushinteger (fromIntegral tex)
                                 Lua.setfield (-2) "iconTex"

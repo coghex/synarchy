@@ -5,6 +5,7 @@ module Engine.Asset.YamlItems
     , ItemYamlFood(..)
     , ItemYamlRollSpec(..)
     , ItemYamlWeapon(..)
+    , ItemYamlBuff(..)
     , ItemYamlFile(..)
     , loadItemYaml
     ) where
@@ -49,6 +50,20 @@ instance FromJSON ItemYamlRollSpec where
         ⊚ v .: "min"
         ⊛ v .: "max"
 
+-- | One stat-modifier conferred by equipping an item.
+--   YAML shape: `{ stat: perception, amount: 1, scales_with_condition: true }`.
+data ItemYamlBuff = ItemYamlBuff
+    { iybStat                ∷ !Text
+    , iybAmount              ∷ !Float
+    , iybScalesWithCondition ∷ !Bool
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON ItemYamlBuff where
+    parseJSON = withObject "ItemYamlBuff" $ \v → ItemYamlBuff
+        ⊚ v .:  "stat"
+        ⊛ v .:  "amount"
+        ⊛ v .:? "scales_with_condition" .!= False
+
 -- | Optional weapon block on an item def. Geometric + material
 --   reference; material physical properties live in the
 --   SubstanceManager and get joined at use time.
@@ -86,6 +101,8 @@ data ItemYamlDef = ItemYamlDef
     , iydContainer   ∷ !(Maybe ItemYamlContainer)
     , iydFood        ∷ !(Maybe ItemYamlFood)
     , iydWeapon      ∷ !(Maybe ItemYamlWeapon)
+    , iydUnequippable ∷ !Bool
+    , iydBuffs       ∷ ![ItemYamlBuff]
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlDef where
@@ -103,6 +120,8 @@ instance FromJSON ItemYamlDef where
         ⊛ v .:? "container"
         ⊛ v .:? "food"
         ⊛ v .:? "weapon"
+        ⊛ v .:? "unequippable" .!= False
+        ⊛ v .:? "buffs"        .!= []
 
 newtype ItemYamlFile = ItemYamlFile
     { iyfItems ∷ [ItemYamlDef]

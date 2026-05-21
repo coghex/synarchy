@@ -66,6 +66,7 @@ unitInfoV2.headerTypeLabelId = nil  -- the "acolyte" row; refreshed per active u
 unitInfoV2.equipRect       = nil
 unitInfoV2.equipElements   = {}
 unitInfoV2.equipSlots      = {}    -- per-slot right-click metadata
+unitInfoV2.accessoryRows   = {}    -- per-accessory-row right-click metadata
 unitInfoV2.lastEquipClass  = nil
 unitInfoV2.lastEquipUid    = nil
 unitInfoV2.lastEquipKey    = nil   -- hash of the rendered loadout
@@ -578,6 +579,27 @@ local function fmtNum(x)
     return string.format("%.2f", x)
 end
 
+-- Truncate `text` to fit within `maxPx` of horizontal space at the
+-- given font + size, appending ".." when truncated. Binary-searches
+-- the prefix so this stays O(log n) per call even for long strings.
+-- Returns the original text unchanged if it already fits.
+local function truncateToWidth(text, font, fontSize, maxPx)
+    if not text or text == "" or maxPx <= 0 then return text end
+    local full = engine.getTextWidth(font, text, fontSize)
+    if full <= maxPx then return text end
+    local ellipsis = ".."
+    local ellW = engine.getTextWidth(font, ellipsis, fontSize)
+    if ellW > maxPx then return "" end  -- not even the dots fit
+    local lo, hi = 0, #text
+    while lo < hi do
+        local mid = math.floor((lo + hi + 1) / 2)
+        local sub = text:sub(1, mid)
+        local w = engine.getTextWidth(font, sub, fontSize) + ellW
+        if w <= maxPx then lo = mid else hi = mid - 1 end
+    end
+    return text:sub(1, lo) .. ellipsis
+end
+
 -----------------------------------------------------------
 -- Stat metadata + icon cache
 --
@@ -632,12 +654,14 @@ local function loadIconFor(iconKey)
 end
 
 -- Place a single content row: stat icon on the left, bright value on
--- the right. The icon owns the tooltip (name + description from
--- STAT_DEFS, or `tooltipOverride` when caller supplies its own rich
--- hint). Returns the value-label id and its baseline-y so per-panel
--- refresh closures can re-rightalign the value on update.
+-- the right. The icon owns the description tooltip (from STAT_DEFS or
+-- `tooltipOverride`). The value gets its OWN tooltip via
+-- `valueTooltip` (a {text, hint} table) — used to surface how the
+-- effective stat was computed (e.g. base + modifier sources). Returns
+-- the value-label id and its baseline-y so per-panel refresh closures
+-- can re-rightalign the value on update.
 local function placeIconStatRow(rect, rowIndex, statKey, valueText,
-                                  tooltipOverride)
+                                  tooltipOverride, valueTooltip)
     local rowTop = rect.y + CONTENT_TOP_PAD + rowIndex * CONTENT_ROW_H
     local y      = rowTop + CONTENT_FONT_SIZE
                  + math.floor((CONTENT_ROW_H - CONTENT_FONT_SIZE) / 2)
@@ -680,13 +704,14 @@ local function placeIconStatRow(rect, rowIndex, statKey, valueText,
     end
 
     local valLbl = label.new({
-        name     = "unit_info_v2_stat_val_" .. rowIndex,
-        text     = valueText,
-        font     = hud.menuFont,
-        fontSize = CONTENT_FONT_SIZE,
-        color    = CONTENT_VAL_COLOR,
-        page     = unitInfoV2.page,
-        uiscale  = 1.0,
+        name        = "unit_info_v2_stat_val_" .. rowIndex,
+        text        = valueText,
+        font        = hud.menuFont,
+        fontSize    = CONTENT_FONT_SIZE,
+        color       = CONTENT_VAL_COLOR,
+        page        = unitInfoV2.page,
+        uiscale     = 1.0,
+        tooltipRich = valueTooltip,
     })
     local valH = label.getElementHandle(valLbl)
     local valW = select(1, label.getSize(valLbl))
@@ -837,10 +862,67 @@ end
 -- text values without recreating the labels.
 -----------------------------------------------------------
 
+-- Format a stat as "base (+bonus)" when modifiers are active for that
+-- stat, else just "base". Bonus = sum of modifier deltas. Reads
+-- live each tick so accessory equip/unequip updates the display
+-- without a panel rebuild.
+local function fmtStatLive(uid, statName)
+    local base = unit.getStatBase(uid, statName)
+    if base == nil then return nil end
+    local mods = unit.getModifiers(uid, statName) or {}
+    local bonus = 0
+    for _, m in ipairs(mods) do bonus = bonus + (m.delta or 0) end
+    if math.abs(bonus) < 0.005 then
+        return string.format("%.2f", base)
+    end
+    return string.format("%.2f (%+.2f)", base, bonus)
+end
+
+-- Build the icon tooltip for a stat row — name + base description.
+-- Modifier sources don't go here; the player can find them on the
+-- value tooltip (statValueTooltip).
+local function statHoverTooltip(_uid, statKey)
+    local def = STAT_DEFS[statKey]
+    if not def then return nil end
+    return { text = def.name, hint = def.desc }
+end
+
+-- Build the value tooltip for a stat row — title is the *effective*
+-- total (base + sum of bonuses), hint multilines each active modifier
+-- ("Technogoggles + 0.85"). The number shown in the row is the base
+-- with the bonus in parens, so the tooltip title adds new info
+-- (the total) rather than just repeating what's already on screen.
+local function statValueTooltip(uid, statKey)
+    local base = unit.getStatBase(uid, statKey)
+    if base == nil then return nil end
+    local mods = unit.getModifiers(uid, statKey) or {}
+    if #mods == 0 then
+        -- Nothing to explain; suppress the tooltip entirely so a
+        -- bonus-less stat doesn't show an empty popup.
+        return nil
+    end
+    local bonus = 0
+    for _, m in ipairs(mods) do bonus = bonus + (m.delta or 0) end
+    local effective = base + bonus
+    local lines = {}
+    for _, m in ipairs(mods) do
+        lines[#lines + 1] = string.format("%s %+.2f",
+            m.source or "?", m.delta or 0)
+    end
+    return {
+        text = string.format("%.2f", effective),
+        hint = table.concat(lines, "\n"),
+    }
+end
+
 -- Generic builder for stat-list panels (all of Status/Stats/Mental/
 -- Attributes use this; Skill is similar but its row list is dynamic).
--- Each rowDef entry: { key = "<STAT_DEFS key>", value = function(uid) end,
---                      tooltip = optional { text=..., hint=... } override }
+-- Each rowDef entry:
+--   { key = "<STAT_DEFS key>",
+--     value = function(uid) end,
+--     tooltip = optional icon-tooltip ({text,hint} or function),
+--     valueTooltip = optional value-tooltip (function(uid) → {text,hint}),
+--   }
 -- Rows whose value() returns nil are skipped so the layout stays compact.
 local function buildIconStatPanel(rect, uid, rowDefs)
     local visibleRows = {}
@@ -853,9 +935,16 @@ local function buildIconStatPanel(rect, uid, rowDefs)
     for i, r in ipairs(visibleRows) do
         local tt = r.tooltip
         if type(tt) == "function" then tt = tt(uid) end
+        local vtt = nil
+        if r.valueTooltip then vtt = r.valueTooltip(uid) end
         local valLbl, y = placeIconStatRow(rect, i - 1, r.key,
-            r.value(uid) or "?", tt)
-        refs[i] = { valLbl = valLbl, fn = r.value, y = y }
+            r.value(uid) or "?", tt, vtt)
+        refs[i] = {
+            valLbl     = valLbl,
+            fn         = r.value,
+            y          = y,
+            tooltipFn  = r.valueTooltip,
+        }
     end
     return function (newUid)
         if not newUid then return end
@@ -865,6 +954,13 @@ local function buildIconStatPanel(rect, uid, rowDefs)
             local valW = select(1, label.getSize(ref.valLbl))
             UI.setPosition(valH,
                 rect.x + rect.w - CONTENT_RIGHT_PAD - valW, ref.y)
+            -- Keep the value tooltip live so modifier-source changes
+            -- (e.g. equipping a buff item) show up without waiting
+            -- for a sub-tab swap.
+            if ref.tooltipFn then
+                local tt = ref.tooltipFn(newUid)
+                if tt then label.setTooltipRich(ref.valLbl, tt) end
+            end
         end
     end
 end
@@ -877,19 +973,32 @@ local function buildStatusPanel(rect, uid)
     })
 end
 
+-- Row spec helper for engine-side stats. Icon tooltip = stat name +
+-- description (no modifier sources). Value tooltip = base value as
+-- title + modifier source list as hint — appears only when there are
+-- active modifiers, so unmodified stats hover plainly.
+local function statRow(key)
+    return {
+        key          = key,
+        value        = function(u) return fmtStatLive(u, key) end,
+        tooltip      = function(u) return statHoverTooltip(u, key) end,
+        valueTooltip = function(u) return statValueTooltip(u, key) end,
+    }
+end
+
 local function buildStatsPanel(rect, uid)
     return buildIconStatPanel(rect, uid, {
-        { key = "strength",     value = function(u) return fmtNum(unit.getStat(u, "strength"))     end },
-        { key = "endurance",    value = function(u) return fmtNum(unit.getStat(u, "endurance"))    end },
-        { key = "reflexes",     value = function(u) return fmtNum(unit.getStat(u, "reflexes"))     end },
-        { key = "constitution", value = function(u) return fmtNum(unit.getStat(u, "constitution")) end },
-        { key = "metabolism",   value = function(u) return fmtNum(unit.getStat(u, "metabolism"))   end },
+        statRow("strength"),
+        statRow("endurance"),
+        statRow("reflexes"),
+        statRow("constitution"),
+        statRow("metabolism"),
     })
 end
 
 local function buildMentalPanel(rect, uid)
     return buildIconStatPanel(rect, uid, {
-        { key = "perception", value = function(u) return fmtNum(unit.getStat(u, "perception")) end },
+        statRow("perception"),
     })
 end
 
@@ -1099,10 +1208,31 @@ end
 -- the equipped item's icon inside each slot rect.
 -----------------------------------------------------------
 
+-- Capitalize the first letter of a stat name for display
+-- ("perception" → "Perception"). Used by the buff line and the stats
+-- panel.
+local function capitalizeStat(name)
+    if not name or #name == 0 then return name or "" end
+    return name:sub(1, 1):upper() .. name:sub(2)
+end
+
+-- Effective buff amount given the item's condition. For buffs with
+-- `scalesWithCondition`, the amount is multiplied by condition/100;
+-- otherwise it's the flat amount.
+local function effectiveBuffAmount(buff, condition)
+    local amt = buff.amount or 0
+    if buff.scalesWithCondition then
+        local cond = condition or 100
+        return amt * (cond / 100)
+    end
+    return amt
+end
+
 -- Build the rich tooltip hint shown for an item — same content for
 -- inventory rows AND silhouette slot icons. `it` accepts both shapes
--- (from unit.getInventory / equipment.getLoadout); equippedSlot is
--- the slot id string when the item lives in a slot, nil otherwise.
+-- (from unit.getInventory / equipment.getLoadout / getAccessories);
+-- equippedSlot is the slot id string when the item lives in a slot,
+-- "(worn)" for accessories, nil for inventory items.
 local function buildItemHint(it, equippedSlot)
     local hintLines = { string.format("%.2f kg", it.weight or 0) }
     if it.make and it.make ~= "" then
@@ -1110,6 +1240,13 @@ local function buildItemHint(it, equippedSlot)
     end
     if it.material and it.material ~= "" then
         hintLines[#hintLines + 1] = "material: " .. it.material
+    end
+    -- Container fill: shown for items that have a capacity (canteens
+    -- etc.). Format is "(currentFill/capacity unit)" where unit
+    -- defaults to L for fluids — fits most starting items.
+    if it.capacity and it.capacity > 0 then
+        hintLines[#hintLines + 1] = string.format("(%.1f/%.1f L)",
+            it.currentFill or 0, it.capacity)
     end
     if it.quality then
         hintLines[#hintLines + 1] =
@@ -1130,6 +1267,16 @@ local function buildItemHint(it, equippedSlot)
             it.weapon.slashEffectiveness or 0,
             it.weapon.bluntEffectiveness or 0)
     end
+    if it.buffs then
+        for _, b in ipairs(it.buffs) do
+            local line = string.format("%s + %g",
+                capitalizeStat(b.stat), b.amount)
+            if b.scalesWithCondition and it.condition then
+                line = line .. string.format(" (x%.2f)", it.condition / 100)
+            end
+            hintLines[#hintLines + 1] = line
+        end
+    end
     if equippedSlot then
         hintLines[#hintLines + 1] = "equipped: " .. equippedSlot
     end
@@ -1138,7 +1285,7 @@ end
 
 -- Stable hash of (uid, class, slot→defName pairs). When this changes
 -- we rebuild; otherwise the previous frame's sprites are correct.
-local function computeEquipKey(uid, clsName, loadout)
+local function computeEquipKey(uid, clsName, loadout, accessories)
     local parts = { tostring(uid or ""), clsName or "" }
     if loadout then
         local pairsT = {}
@@ -1147,6 +1294,14 @@ local function computeEquipKey(uid, clsName, loadout)
         end
         table.sort(pairsT)
         parts[#parts + 1] = table.concat(pairsT, ";")
+    end
+    if accessories then
+        local accPart = {}
+        for i, it in ipairs(accessories) do
+            accPart[#accPart + 1] = i .. ":" .. (it.defName or "?")
+                                    .. "@" .. tostring(it.condition or 0)
+        end
+        parts[#parts + 1] = table.concat(accPart, ";")
     end
     return table.concat(parts, "|")
 end
@@ -1161,12 +1316,14 @@ local function rebuildEquipmentSection()
     local info = uid and unit.getInfo(uid) or nil
     local clsName = info and info.equipmentClass or nil
     local cls = clsName and equipment.getClass(clsName) or nil
-    local loadout = uid and equipment.getLoadout(uid) or nil
+    local loadout    = uid and equipment.getLoadout(uid)    or nil
+    local accessories = uid and equipment.getAccessories(uid) or nil
 
     -- Skip if nothing relevant changed since the last build. The hash
-    -- folds in uid + class + every (slot, equipped-item) pair, so any
-    -- equip/unequip from Lua invalidates it on the next tick.
-    local key = computeEquipKey(uid, clsName, loadout)
+    -- folds in uid + class + every (slot, equipped-item) pair + each
+    -- accessory's def/condition, so any equip/unequip — slot or
+    -- accessory — invalidates it on the next tick.
+    local key = computeEquipKey(uid, clsName, loadout, accessories)
     if key == unitInfoV2.lastEquipKey then return end
 
     for _, e in ipairs(unitInfoV2.equipElements) do
@@ -1176,6 +1333,7 @@ local function rebuildEquipmentSection()
     end
     unitInfoV2.equipElements   = {}
     unitInfoV2.equipSlots      = {}
+    unitInfoV2.accessoryRows   = {}
     unitInfoV2.lastEquipUid    = uid
     unitInfoV2.lastEquipClass  = clsName
     unitInfoV2.lastEquipKey    = key
@@ -1295,11 +1453,17 @@ local function rebuildEquipmentSection()
         end
     end
 
-    -- Accessory list on the right. Placeholder until Phase 2 wires
-    -- the per-unit equipped-accessories collection.
-    local listX = silX + silW + math.floor(ACCESSORY_GAP * uiscale)
-    local listW = rect.x + rect.w - listX - silPad
-    if listW > 0 then
+    -- Accessory list on the right. Each row: 28×28 icon + display
+    -- name. Hover surfaces the full item hint (buffs included);
+    -- right-click opens the inventory's Equip / Unequip menu via the
+    -- same handler. Empty list shows a quiet placeholder.
+    local listX  = silX + silW + math.floor(ACCESSORY_GAP * uiscale)
+    local listW  = rect.x + rect.w - listX - silPad
+    local accSz  = math.floor(28 * uiscale)
+    local accGap = math.floor(2  * uiscale)
+    local accRowH = accSz + accGap
+    local accs = equipment.getAccessories(uid) or {}
+    if listW > 0 and #accs == 0 then
         local lblId = label.new({
             name     = "unit_info_v2_equip_accessories",
             text     = "(no accessories)",
@@ -1317,6 +1481,38 @@ local function rebuildEquipmentSection()
         UI.setZIndex(h, 12)
         table.insert(unitInfoV2.equipElements,
             { kind = "label", id = lblId })
+    elseif listW > 0 then
+        -- Icons only — no name labels. The item's name + full hint
+        -- comes through on hover. Keeps the list compact and avoids
+        -- text running off the panel edge.
+        for i, it in ipairs(accs) do
+            local rowY = rect.y + math.floor(SILHOUETTE_PAD * uiscale)
+                       + (i - 1) * accRowH
+            if it.iconTex then
+                local iconId = UI.newSprite(
+                    "unit_info_v2_acc_icon_" .. i,
+                    accSz, accSz,
+                    it.iconTex,
+                    1.0, 1.0, 1.0, 1.0,
+                    unitInfoV2.page)
+                UI.addToPage(unitInfoV2.page, iconId, listX, rowY)
+                UI.setZIndex(iconId, 13)
+                UI.setClickable(iconId, true)
+                UI.setOnRightClick(iconId, "onAccessoryRowRightClick")
+                UI.setTooltipRich(iconId, {
+                    text = it.displayName or it.defName,
+                    hint = buildItemHint(it, "(worn)"),
+                })
+                table.insert(unitInfoV2.equipElements,
+                    { kind = "sprite", id = iconId })
+                unitInfoV2.accessoryRows = unitInfoV2.accessoryRows or {}
+                unitInfoV2.accessoryRows[#unitInfoV2.accessoryRows + 1] = {
+                    elemId        = iconId,
+                    accessoryIndex = i,
+                    item          = it,
+                }
+            end
+        end
     end
 end
 
@@ -1340,19 +1536,22 @@ local function collectInventoryAndEquipment(uid)
     local out = {}
     for _, it in ipairs(inv) do
         out[#out + 1] = {
-            defName     = it.defName,
-            displayName = it.displayName or it.defName,
-            weight      = it.weight or 0,
-            category    = it.category or "Misc",
-            kind        = it.kind or "misc",
-            make        = it.make or "",
-            material    = it.material or "",
-            iconTex     = it.iconTex,
-            currentFill = it.currentFill or 0,
-            quality     = it.quality,
-            condition   = it.condition,
-            weapon      = it.weapon,
-            equipped    = false,
+            defName      = it.defName,
+            displayName  = it.displayName or it.defName,
+            weight       = it.weight or 0,
+            category     = it.category or "Misc",
+            kind         = it.kind or "misc",
+            make         = it.make or "",
+            material     = it.material or "",
+            iconTex      = it.iconTex,
+            currentFill  = it.currentFill or 0,
+            capacity     = it.capacity,
+            quality      = it.quality,
+            condition    = it.condition,
+            weapon       = it.weapon,
+            buffs        = it.buffs,
+            unequippable = it.unequippable,
+            equipped     = false,
         }
     end
     -- Walk equipment in the unit's class slot order so the equipped
@@ -1376,8 +1575,10 @@ local function collectInventoryAndEquipment(uid)
                 category      = it.category or "Misc",
                 kind          = it.kind or "misc",
                 make          = it.make or "",
+                material      = it.material or "",
                 iconTex       = it.iconTex,
                 currentFill   = it.currentFill or 0,
+                capacity      = it.capacity,
                 quality       = it.quality,
                 condition     = it.condition,
                 weapon        = it.weapon,
@@ -1385,6 +1586,31 @@ local function collectInventoryAndEquipment(uid)
                 equippedSlot  = slotId,
             }
         end
+    end
+    -- Accessories — worn items that don't sit on the silhouette.
+    -- Each carries its 1-based index (for unequipAccessory).
+    local accs = equipment.getAccessories(uid) or {}
+    for i, it in ipairs(accs) do
+        out[#out + 1] = {
+            defName        = it.defName,
+            displayName    = it.displayName or it.defName,
+            weight         = it.weight or 0,
+            category       = it.category or "Misc",
+            kind           = it.kind or "misc",
+            make           = it.make or "",
+            material       = it.material or "",
+            iconTex        = it.iconTex,
+            currentFill    = it.currentFill or 0,
+            capacity       = it.capacity,
+            quality        = it.quality,
+            condition      = it.condition,
+            weapon         = it.weapon,
+            buffs          = it.buffs,
+            unequippable   = it.unequippable,
+            equipped       = true,
+            equippedSlot   = "(worn)",
+            accessoryIndex = i,
+        }
     end
     return out
 end
@@ -1488,55 +1714,76 @@ local function rebuildInventorySection()
         unitInfoV2.activeInvTab = "All"
     end
 
-    local tabY = rect.y + topPad
-    local cx   = rect.x + sectPad
+    -- Pre-measure tab widths so we can plan row wraps without
+    -- instantiating elements. Mirrors the sub-tab layout above.
+    local tabTexts  = {}
+    local tabWidths = {}
     for i, td in ipairs(tabDefs) do
-        local label_text = td.name .. " (" .. td.count .. ")"
-        local tw = engine.getTextWidth(hud.menuFont, label_text,
-                                       INV_TAB_FONT_SIZE)
-        local tabW = math.floor(tw) + 2 * INV_TAB_TEXT_PAD
-
-        local bgId = UI.newBox(
-            "unit_info_v2_invtab_bg_" .. i,
-            tabW, tabH,
-            unitInfoV2.subTabUnselectedTexSet,
-            SUB_TAB_TILE,
-            1.0, 1.0, 1.0, 1.0, 0,
-            unitInfoV2.page)
-        UI.addToPage(unitInfoV2.page, bgId, cx, tabY)
-        UI.setZIndex(bgId, 11)
-        UI.setClickable(bgId, true)
-        UI.setOnClick(bgId, "onInventoryTabClick")
-
-        local lblId = label.new({
-            name     = "unit_info_v2_invtab_lbl_" .. i,
-            text     = label_text,
-            font     = hud.menuFont,
-            fontSize = INV_TAB_FONT_SIZE,
-            color    = SUB_TAB_TEXT_COLOR,
-            page     = unitInfoV2.page,
-            uiscale  = 1.0,
-        })
-        local lblH = label.getElementHandle(lblId)
-        local lblW = select(1, label.getSize(lblId))
-        UI.addToPage(unitInfoV2.page, lblH,
-            cx + math.floor((tabW - lblW) / 2),
-            tabY + math.floor(tabH / 2)
-                 + math.floor(INV_TAB_FONT_SIZE * 0.3) + 2)
-        UI.setZIndex(lblH, 12)
-
-        unitInfoV2.invTabs[#unitInfoV2.invTabs + 1] = {
-            name = td.name, count = td.count,
-            bgId = bgId, labelId = lblId,
-        }
-        cx = cx + tabW + INV_TAB_GAP
+        local s = td.name .. " (" .. td.count .. ")"
+        tabTexts[i]  = s
+        local tw     = engine.getTextWidth(hud.menuFont, s, INV_TAB_FONT_SIZE)
+        tabWidths[i] = math.floor(tw) + 2 * INV_TAB_TEXT_PAD
     end
+
+    -- Wrap plan: rows have (startIdx, endIdx, totalW). Reuses the
+    -- sub-tab wrapper since the inv tabs share the same gap=0
+    -- flush-tab styling.
+    local rowGap    = math.floor(SUB_TAB_ROW_GAP * uiscale)
+    local tabPlan   = planSubTabRows(rect, tabWidths)
+    local cursorY   = rect.y + topPad
+    for _, r in ipairs(tabPlan) do
+        local rowStartX = rect.x + math.floor((rect.w - r.totalW) / 2)
+        local cx = rowStartX
+        for i = r.startIdx, r.endIdx do
+            local label_text = tabTexts[i]
+            local td         = tabDefs[i]
+            local tabW       = tabWidths[i]
+
+            local bgId = UI.newBox(
+                "unit_info_v2_invtab_bg_" .. i,
+                tabW, tabH,
+                unitInfoV2.subTabUnselectedTexSet,
+                SUB_TAB_TILE,
+                1.0, 1.0, 1.0, 1.0, 0,
+                unitInfoV2.page)
+            UI.addToPage(unitInfoV2.page, bgId, cx, cursorY)
+            UI.setZIndex(bgId, 11)
+            UI.setClickable(bgId, true)
+            UI.setOnClick(bgId, "onInventoryTabClick")
+
+            local lblId = label.new({
+                name     = "unit_info_v2_invtab_lbl_" .. i,
+                text     = label_text,
+                font     = hud.menuFont,
+                fontSize = INV_TAB_FONT_SIZE,
+                color    = SUB_TAB_TEXT_COLOR,
+                page     = unitInfoV2.page,
+                uiscale  = 1.0,
+            })
+            local lblH = label.getElementHandle(lblId)
+            local lblW = select(1, label.getSize(lblId))
+            UI.addToPage(unitInfoV2.page, lblH,
+                cx + math.floor((tabW - lblW) / 2),
+                cursorY + math.floor(tabH / 2)
+                       + math.floor(INV_TAB_FONT_SIZE * 0.3) + 2)
+            UI.setZIndex(lblH, 12)
+
+            unitInfoV2.invTabs[#unitInfoV2.invTabs + 1] = {
+                name = td.name, count = td.count,
+                bgId = bgId, labelId = lblId,
+            }
+            cx = cx + tabW + INV_TAB_GAP
+        end
+        cursorY = cursorY + tabH + rowGap
+    end
+    -- Item-list area starts below the LAST tab row.
+    local tabsBottomY = cursorY - rowGap
     applyInvTabStyling()
 
     -- 2. Item rows for the active tab
     local listX = rect.x + sectPad
     local listW = rect.w - 2 * sectPad
-    local listY = rect.y + topPad + tabH + botPad
+    local listY = tabsBottomY + botPad
     local maxRows = math.max(0, math.floor(
         (rect.y + rect.h - listY - footerH) / (rowH + rowPad)))
 
@@ -1586,26 +1833,9 @@ local function rebuildInventorySection()
                 { kind = "sprite", id = iconId })
         end
 
-        -- Display name
-        local nameLbl = label.new({
-            name     = "unit_info_v2_inv_name_" .. i,
-            text     = it.displayName,
-            font     = hud.menuFont,
-            fontSize = 14,
-            color    = it.equipped and {1.0, 0.95, 0.7, 1.0}
-                                    or {1.0, 1.0, 1.0, 1.0},
-            page     = unitInfoV2.page,
-            uiscale  = 1.0,
-        })
-        local nameH = label.getElementHandle(nameLbl)
-        UI.addToPage(unitInfoV2.page, nameH,
-            listX + textPad + iconSz + textPad,
-            rowY + math.floor(rowH / 2) + math.floor(14 * 0.3))
-        UI.setZIndex(nameH, 12)
-        table.insert(unitInfoV2.invListElements,
-            { kind = "label", id = nameLbl })
-
-        -- Weight (right-aligned)
+        -- Weight (right-aligned) — built FIRST so we can measure its
+        -- pixel width and use that to bound the name's available
+        -- horizontal space below.
         local wText = string.format("%.2f kg", it.weight or 0)
         local wLbl = label.new({
             name     = "unit_info_v2_inv_w_" .. i,
@@ -1624,6 +1854,31 @@ local function rebuildInventorySection()
         UI.setZIndex(wH, 12)
         table.insert(unitInfoV2.invListElements,
             { kind = "label", id = wLbl })
+
+        -- Display name. Truncated with ".." when the name would
+        -- otherwise run into the weight column. Available width =
+        -- (weight's left edge) − (name's left edge) − a small gap.
+        local nameX = listX + textPad + iconSz + textPad
+        local nameMaxPx = (listX + listW - textPad - wW) - nameX
+                        - math.floor(4 * uiscale)
+        local nameText = truncateToWidth(it.displayName, hud.menuFont,
+                                          14, nameMaxPx)
+        local nameLbl = label.new({
+            name     = "unit_info_v2_inv_name_" .. i,
+            text     = nameText,
+            font     = hud.menuFont,
+            fontSize = 14,
+            color    = it.equipped and {1.0, 0.95, 0.7, 1.0}
+                                    or {1.0, 1.0, 1.0, 1.0},
+            page     = unitInfoV2.page,
+            uiscale  = 1.0,
+        })
+        local nameH = label.getElementHandle(nameLbl)
+        UI.addToPage(unitInfoV2.page, nameH, nameX,
+            rowY + math.floor(rowH / 2) + math.floor(14 * 0.3))
+        UI.setZIndex(nameH, 12)
+        table.insert(unitInfoV2.invListElements,
+            { kind = "label", id = nameLbl })
 
         -- Full-row right-click hit-zone. Transparent sprite at z=14
         -- so it's above the icon + labels but doesn't visually
@@ -1738,10 +1993,39 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
 
     local items = {}
     if item.equipped then
+        -- Three flavours of "equipped":
+        --  - slot equipment (item.accessoryIndex == nil, item.equippedSlot is a slot id)
+        --  - accessory (item.accessoryIndex set; uses unequipAccessory)
+        --  - either may be flagged `unequippable` — grey out instead.
+        if item.unequippable then
+            items[1] = { label = "Unequip", enabled = false }
+        elseif item.accessoryIndex then
+            local idx = item.accessoryIndex
+            items[1] = {
+                label    = "Unequip",
+                callback = function()
+                    equipment.unequipAccessory(uid, idx)
+                    unitInfoV2.lastInvKey   = nil
+                    unitInfoV2.lastEquipKey = nil
+                end,
+            }
+        else
+            items[1] = {
+                label    = "Unequip",
+                callback = function()
+                    equipment.unequip(uid, item.equippedSlot)
+                    unitInfoV2.lastInvKey   = nil
+                    unitInfoV2.lastEquipKey = nil
+                end,
+            }
+        end
+    elseif item.kind == "accessory" then
+        -- Accessories don't go in a silhouette slot — they append to
+        -- the unit's accessory list. No submenu, no slot matching.
         items[1] = {
-            label    = "Unequip",
+            label    = "Equip",
             callback = function()
-                equipment.unequip(uid, item.equippedSlot)
+                equipment.equipAccessory(uid, item.defName)
                 unitInfoV2.lastInvKey   = nil
                 unitInfoV2.lastEquipKey = nil
             end,
@@ -1854,6 +2138,44 @@ function unitInfoV2.handleEquipSlotRightClick(elemHandle)
             label   = "Equip",
             enabled = false,
         }
+    end
+
+    local contextMenu = require("scripts.ui.context_menu")
+    local mx, my = engine.getMousePosition()
+    local fbW, fbH = engine.getFramebufferSize()
+    local ww, wh = engine.getWindowSize()
+    if ww and wh and ww > 0 and wh > 0 then
+        mx = mx * (fbW / ww)
+        my = my * (fbH / wh)
+    end
+    contextMenu.show(items, mx, my)
+    return true
+end
+
+-- Right-click on an accessory row icon (right side of equipment
+-- section) → Unequip menu. Greyed out for unequippable items.
+function unitInfoV2.handleAccessoryRowRightClick(elemHandle)
+    local row
+    for _, r in ipairs(unitInfoV2.accessoryRows) do
+        if r.elemId == elemHandle then row = r; break end
+    end
+    if not row then return false end
+    local uid = unitInfoV2.activeUid
+    if not uid then return false end
+
+    local items
+    if row.item.unequippable then
+        items = { { label = "Unequip", enabled = false } }
+    else
+        local idx = row.accessoryIndex
+        items = { {
+            label    = "Unequip",
+            callback = function()
+                equipment.unequipAccessory(uid, idx)
+                unitInfoV2.lastInvKey   = nil
+                unitInfoV2.lastEquipKey = nil
+            end,
+        } }
     end
 
     local contextMenu = require("scripts.ui.context_menu")

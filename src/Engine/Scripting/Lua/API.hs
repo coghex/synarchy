@@ -300,8 +300,11 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getClass"      (equipmentGetClassFn env)
   registerLuaFunction "getClassNames" (equipmentGetClassNamesFn env)
   registerLuaFunction "getLoadout"    (equipmentGetLoadoutFn env)
-  registerLuaFunction "equip"         (equipmentEquipFn env)
-  registerLuaFunction "unequip"       (equipmentUnequipFn env)
+  registerLuaFunction "equip"           (equipmentEquipFn env)
+  registerLuaFunction "unequip"         (equipmentUnequipFn env)
+  registerLuaFunction "equipAccessory"  (equipmentEquipAccessoryFn env)
+  registerLuaFunction "unequipAccessory"(equipmentUnequipAccessoryFn env)
+  registerLuaFunction "getAccessories"  (equipmentGetAccessoriesFn env)
   Lua.setglobal (Lua.Name "equipment")
 
   -- Substance global — read-only access to material physical

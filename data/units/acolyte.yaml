@@ -46,6 +46,12 @@ units:
       boots:      "leather_boots"
       right_hand: "steel_dagger"
 
+    # Accessories — items worn off the silhouette grid. Order matters
+    # only for tooltip ordering; equipment.equipAccessory appends.
+    starting_accessories:
+      - "acolyte_habit"
+      - "technogoggles"
+
     directional_sprites:
       S:  "assets/textures/units/acolyte/default.png"
       SW: "assets/textures/units/acolyte/sw.png"
