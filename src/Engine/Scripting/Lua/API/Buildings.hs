@@ -24,6 +24,9 @@ module Engine.Scripting.Lua.API.Buildings
     , buildingGetMaterialNeedFn
     , buildingGetMaterialDeliveredFn
     , buildingAreMaterialsSatisfiedFn
+    , buildingGetStorageFn
+    , buildingGetStorageCapacityFn
+    , buildingGetStorageWeightFn
     ) where
 
 import UPrelude
@@ -46,6 +49,8 @@ import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
 import Engine.Asset.Handle (TextureHandle(..))
+import Item.Types (ItemInstance(..), ItemDef(..), ItemManager(..), lookupItemDef)
+import Engine.Scripting.Lua.API.Equipment (pushItemInstance)
 import Building.Placement (canPlaceAt, PlacementResult(..))
 import Building.HitTest (hitTestBuildingAt)
 import Unit.Direction (Direction(..))
@@ -111,21 +116,22 @@ loadBuildingYamlFn env backendState = do
                                       then name
                                       else bydDisplayName def
                     let bdef = BuildingDef
-                            { bdName         = name
-                            , bdDisplayName  = displayName
-                            , bdCategory     = bydCategory def
-                            , bdDescription  = bydDescription def
-                            , bdTexture      = handle
-                            , bdTileW        = bytsX (bydTileSize def)
-                            , bdTileH        = bytsY (bydTileSize def)
-                            , bdPlacement    = bydPlacement def
-                            , bdIsStarting   = bydIsStarting def
-                            , bdRace         = bydRace def
-                            , bdSpriteAnchor = bydSpriteAnchor def
-                            , bdBuildWork    = bydBuildWork def
-                            , bdMaterials    = HM.fromList (Map.toList (bydMaterials def))
-                            , bdAnimations   = animMap
-                            , bdStateAnims   = stateAnims
+                            { bdName            = name
+                            , bdDisplayName     = displayName
+                            , bdCategory        = bydCategory def
+                            , bdDescription     = bydDescription def
+                            , bdTexture         = handle
+                            , bdTileW           = bytsX (bydTileSize def)
+                            , bdTileH           = bytsY (bydTileSize def)
+                            , bdPlacement       = bydPlacement def
+                            , bdIsStarting      = bydIsStarting def
+                            , bdRace            = bydRace def
+                            , bdSpriteAnchor    = bydSpriteAnchor def
+                            , bdBuildWork       = bydBuildWork def
+                            , bdMaterials       = HM.fromList (Map.toList (bydMaterials def))
+                            , bdStorageCapacity = bydStorageCapacity def
+                            , bdAnimations      = animMap
+                            , bdStateAnims      = stateAnims
                             }
                     atomicModifyIORef' (buildingManagerRef env) $ \bm →
                         (bm { bmDefs = HM.insert name bdef (bmDefs bm) }, ())
@@ -571,6 +577,92 @@ buildingAreMaterialsSatisfiedFn env = do
             case mOk of
                 Just ok → do
                     Lua.pushboolean ok
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+
+-- | building.getStorage(bid) → array of item-instance tables (same
+--   shape as unit.getInventory entries: defName, displayName, weight,
+--   quality / condition when applicable, iconTex, category, …). nil
+--   if the bid is unknown. Empty array for buildings with storage
+--   capacity but nothing deposited yet.
+buildingGetStorageFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetStorageFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            mInst ← Lua.liftIO $ do
+                bm ← readIORef (buildingManagerRef env)
+                pure (HM.lookup bid (bmInstances bm))
+            case mInst of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just inst → do
+                    itemMgr ← Lua.liftIO $ readIORef (itemManagerRef env)
+                    Lua.newtable
+                    forM_ (zip [1 ∷ Int ..] (biStorage inst)) $ \(i, item) → do
+                        Lua.newtable
+                        pushItemInstance item itemMgr
+                        Lua.rawseti (-2) (fromIntegral i)
+                    return 1
+
+-- | building.getStorageCapacity(bid) → Float kg (def-declared cap).
+--   0 means "no storage". nil if the bid is gone.
+buildingGetStorageCapacityFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetStorageCapacityFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            mCap ← Lua.liftIO $ do
+                bm ← readIORef (buildingManagerRef env)
+                pure $ do
+                    inst ← HM.lookup bid (bmInstances bm)
+                    def  ← HM.lookup (biDefName inst) (bmDefs bm)
+                    pure (bdStorageCapacity def)
+            case mCap of
+                Just c → do
+                    Lua.pushnumber (Lua.Number (realToFrac c))
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+
+-- | building.getStorageWeight(bid) → Float kg currently stored. Sums
+--   the def-declared weight of each ItemInstance in biStorage.
+--   Doesn't account for container fills inside the storage (a stored
+--   canteen counts as the empty canteen weight, not full weight) —
+--   keep it simple for v1. nil if the bid is gone.
+buildingGetStorageWeightFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+buildingGetStorageWeightFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let bid = BuildingId (fromIntegral n)
+            mW ← Lua.liftIO $ do
+                bm      ← readIORef (buildingManagerRef env)
+                itemMgr ← readIORef (itemManagerRef env)
+                pure $ do
+                    inst ← HM.lookup bid (bmInstances bm)
+                    pure $ sum
+                        [ maybe 0 idWeight (lookupItemDef (iiDefName it) itemMgr)
+                        | it ← biStorage inst
+                        ]
+            case mW of
+                Just w → do
+                    Lua.pushnumber (Lua.Number (realToFrac w))
                     return 1
                 Nothing → do
                     Lua.pushnil

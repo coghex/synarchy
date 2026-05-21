@@ -53,6 +53,17 @@ local function formatInfo(bid, info)
                               .. ", " .. tostring(info.gridY or "?")
                               .. ", " .. tostring(info.gridZ or "?") .. ")")
     table.insert(lines, "Footprint: " .. footprint)
+    -- Storage line for any building that can hold cargo. Shown
+    -- regardless of construction state so the player sees the cap
+    -- they're working toward.
+    local cap = building.getStorageCapacity(bid)
+    if cap and cap > 0 then
+        local used = building.getStorageWeight(bid) or 0
+        table.insert(lines, string.format("Storage: %.2f / %.2f kg",
+                                          used, cap))
+        -- Itemised view lives in the floating cargo inventory popup,
+        -- opened via right-click → "Contents" on the cargo.
+    end
     return table.concat(lines, "\n")
 end
 

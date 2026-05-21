@@ -705,6 +705,24 @@ function uiManager.onBuildMenuIconClick(elemHandle)
     return false
 end
 
+-- Cargo inventory popup tab strip + per-row right-click. The popup
+-- is triggered from init.lua's right-click handler (Contents menu).
+function uiManager.onCargoInventoryTabClick(elemHandle)
+    local mod = package.loaded["scripts.cargo_inventory_panel"]
+    if mod and mod.handleTabClick then
+        return mod.handleTabClick(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onCargoInventoryItemRightClick(elemHandle)
+    local mod = package.loaded["scripts.cargo_inventory_panel"]
+    if mod and mod.handleItemRightClick then
+        return mod.handleItemRightClick(elemHandle)
+    end
+    return false
+end
+
 function uiManager.onInventoryItemRightClick(elemHandle)
     local mod = package.loaded["scripts.unit_info_v2"]
     if mod and mod.handleInvItemRightClick then

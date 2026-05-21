@@ -343,6 +343,17 @@ function hud.createUI()
         worldId   = hud.worldId,
     })
 
+    -- Cargo inventory popup: shares the world_page so it z-orders
+    -- above standard HUD overlays and follows the same lifecycle.
+    local cargoInventoryPanel = require("scripts.cargo_inventory_panel")
+    cargoInventoryPanel.setup({
+        page      = hud.world_page,
+        fbW       = hud.fbW,
+        fbH       = hud.fbH,
+        boxTexSet = hud.boxTexSet,
+        menuFont  = hud.menuFont,
+    })
+
     ---------------------------------------------------------
     -- Info panel on its own dedicated page.
     -- This page is shown/hidden independently so we can

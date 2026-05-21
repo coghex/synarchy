@@ -2001,6 +2001,50 @@ function unitInfoV2.handleInvTabClick(elemHandle)
     return false
 end
 
+-- Built storage-capable buildings adjacent (Chebyshev ≤ 1) to the
+-- unit. Used by the right-click "Store" path so the menu only offers
+-- the player real, reachable targets.
+local function findAdjacentStorageBuildings(uid)
+    local info = unit.getInfo(uid)
+    if not info then return {} end
+    local utx = math.floor(info.gridX)
+    local uty = math.floor(info.gridY)
+    local listStr = building.list()
+    if not listStr or listStr == "No buildings placed" then return {} end
+    local result = {}
+    for id in listStr:gmatch("id=(%d+)") do
+        local bid = tonumber(id)
+        if bid and building.getActivity(bid) == "built" then
+            local cap = building.getStorageCapacity(bid)
+            if cap and cap > 0 then
+                local binfo = building.getInfo(bid)
+                if binfo then
+                    local tw = binfo.tileW or 1
+                    local th = binfo.tileH or 1
+                    local dx, dy = 0, 0
+                    if utx < binfo.gridX then
+                        dx = binfo.gridX - utx
+                    elseif utx >= binfo.gridX + tw then
+                        dx = utx - (binfo.gridX + tw - 1)
+                    end
+                    if uty < binfo.gridY then
+                        dy = binfo.gridY - uty
+                    elseif uty >= binfo.gridY + th then
+                        dy = uty - (binfo.gridY + th - 1)
+                    end
+                    if math.max(dx, dy) <= 1 then
+                        result[#result + 1] = {
+                            bid = bid,
+                            displayName = binfo.displayName or binfo.defName,
+                        }
+                    end
+                end
+            end
+        end
+    end
+    return result
+end
+
 -- All slots on the unit's equipment class that accept items of the
 -- given kind. Used by the right-click "Equip" path: if exactly one
 -- slot matches we equip into it directly; if multiple match we surface
@@ -2114,6 +2158,23 @@ function unitInfoV2.handleInvItemRightClick(elemHandle)
                 }
             end
             items[1] = { label = "Equip", submenu = sub }
+        end
+    end
+
+    -- Storage: append "Store in <cargo>" entries for each adjacent
+    -- built cargo. Equipped/accessory items can't be deposited
+    -- directly (player must unequip first). The deposit API enforces
+    -- capacity; menu entries don't pre-check, so a deposit that
+    -- overflows the cargo will return false and the item stays put.
+    if not item.equipped then
+        for _, c in ipairs(findAdjacentStorageBuildings(uid)) do
+            items[#items + 1] = {
+                label    = "Store in " .. c.displayName,
+                callback = function()
+                    unit.depositToCargo(uid, c.bid, item.defName)
+                    unitInfoV2.lastInvKey = nil
+                end,
+            }
         end
     end
 
@@ -2264,6 +2325,7 @@ local ACTION_DISPLAY = {
     notify_allies      = "Notifying allies",
     build_nearby       = "Working",
     deliver_to_build_site = "Delivering materials",
+    store_materials       = "Storing materials",
 }
 
 local function placeHeader(x, y, w, h)

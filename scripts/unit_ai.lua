@@ -132,6 +132,15 @@ local config = {
         deliver_scan_range     = 30.0,
         deliver_walk_speed     = 1.6,
         deliver_utility        = 4.0,
+        -- Auto-store materials. Utility curve = base · fill³ where
+        -- fill = carrying_weight / carrying_capacity. Below ~65 %
+        -- full the action sits under wander (0.8); past that it
+        -- climbs to base at 100 %. Acolytes only auto-deposit items
+        -- in the "Materials" category — supplies, tools, and worn
+        -- equipment stay on them.
+        store_scan_range       = 30.0,
+        store_walk_speed       = 1.6,
+        store_base_utility     = 3.0,
     },
 }
 
@@ -1237,6 +1246,147 @@ local function deliverExecute(uid, s, params)
 end
 
 -----------------------------------------------------------
+-- Action: store_materials
+--
+-- Auto-deposit excess Materials-category items into the nearest
+-- built cargo. Utility scales with how full the unit is — a barely-
+-- loaded acolyte holds onto their plates, a 90 %-full one walks
+-- them over to the cargo. Only Materials category items go in;
+-- food, weapons, and worn gear stay on the unit.
+--
+-- State on s:
+--   storeTarget  = bid (cached during the walk so utility re-scans
+--                  cheaply on subsequent ticks)
+-----------------------------------------------------------
+
+-- Count items in the inventory whose def category is "Materials".
+local function countMaterialsInInventory(uid)
+    local inv = unit.getInventory(uid)
+    if not inv then return 0 end
+    local n = 0
+    for _, it in ipairs(inv) do
+        if it.category == "Materials" then n = n + 1 end
+    end
+    return n
+end
+
+-- Nearest built building with non-zero storage capacity AND room for
+-- at least one more item (current weight < capacity). Returns
+-- {bid, gridX, gridY, tileW, tileH, distance} or nil.
+local function findStorageTarget(fromX, fromY, maxRange)
+    local listStr = building.list()
+    if not listStr or listStr == "No buildings placed" then return nil end
+    local best, bestD = nil, maxRange
+    for id in listStr:gmatch("id=(%d+)") do
+        local bid = tonumber(id)
+        if bid and building.getActivity(bid) == "built" then
+            local cap = building.getStorageCapacity(bid)
+            local used = building.getStorageWeight(bid) or 0
+            if cap and cap > 0 and used < cap then
+                local info = building.getInfo(bid)
+                if info then
+                    local tw = info.tileW or 1
+                    local th = info.tileH or 1
+                    local cx = info.gridX + tw / 2
+                    local cy = info.gridY + th / 2
+                    local d = distance(fromX, fromY, cx, cy)
+                    if d <= bestD then
+                        best = {
+                            bid = bid, gridX = info.gridX, gridY = info.gridY,
+                            tileW = tw, tileH = th, distance = d,
+                        }
+                        bestD = d
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function storeMaterialsUtility(uid, s, params)
+    if countMaterialsInInventory(uid) <= 0 then return -math.huge end
+
+    local info = unit.getInfo(uid)
+    if not info then return -math.huge end
+
+    local target = findStorageTarget(info.gridX, info.gridY,
+                                     params.store_scan_range)
+    if not target then return -math.huge end
+
+    -- Fill fraction. carrying_capacity is a derived stat (body-mass
+    -- driven); guard against zero in case eager-stats hasn't fired.
+    local carried = unit.getCarryingWeight(uid) or 0
+    local maxW = unit.getStat(uid, "carrying_capacity")
+    if not maxW or maxW <= 0 then return -math.huge end
+    local fill = math.min(1.0, carried / maxW)
+
+    s.storeTarget = target.bid
+    return params.store_base_utility * fill * fill * fill
+end
+
+local function storeMaterialsExecute(uid, s, params)
+    local info = unit.getInfo(uid)
+    if not info then return end
+
+    -- Re-resolve target each tick we execute; cheap and self-heals
+    -- if the cached cargo got destroyed or filled up.
+    local target = findStorageTarget(info.gridX, info.gridY,
+                                     params.store_scan_range)
+    if not target then return end
+    s.storeTarget = target.bid
+
+    local utx  = math.floor(info.gridX)
+    local uty  = math.floor(info.gridY)
+    local cheb = chebToFootprint(utx, uty, target.gridX, target.gridY,
+                                 target.tileW, target.tileH)
+
+    if cheb > 1 then
+        local bestX, bestY, bestD = nil, nil, math.huge
+        for dx = -1, target.tileW do
+            for dy = -1, target.tileH do
+                if dx == -1 or dx == target.tileW
+                   or dy == -1 or dy == target.tileH then
+                    local nx = target.gridX + dx + 0.5
+                    local ny = target.gridY + dy + 0.5
+                    local d  = distance(info.gridX, info.gridY, nx, ny)
+                    if d < bestD then
+                        bestX, bestY, bestD = nx, ny, d
+                    end
+                end
+            end
+        end
+        if bestX then
+            unit.moveTo(uid, bestX, bestY, params.store_walk_speed)
+        end
+        return
+    end
+
+    -- Arrived. Deposit every Materials item in inventory one at a
+    -- time. Stop on the first reject (cargo full) — next tick the
+    -- utility may pick a different target if one has room.
+    local inv = unit.getInventory(uid) or {}
+    -- Build a unique list of material defNames (each one might
+    -- have multiple instances; the API pops the first matching).
+    local seen = {}
+    local mats = {}
+    for _, it in ipairs(inv) do
+        if it.category == "Materials" and not seen[it.defName] then
+            seen[it.defName] = true
+            mats[#mats + 1] = it.defName
+        end
+    end
+    for _, defName in ipairs(mats) do
+        while true do
+            local ok = unit.depositToCargo(uid, target.bid, defName)
+            if not ok then break end
+        end
+    end
+
+    s.storeTarget = nil
+end
+
+-----------------------------------------------------------
 -- Action: build_nearby
 --
 -- Fires when an under-construction building (Appearing activity,
@@ -1411,6 +1561,8 @@ local actions = {
           execute = buildNearbyExecute },
         { name = "deliver_to_build_site", utility = deliverUtility,
           execute = deliverExecute },
+        { name = "store_materials", utility = storeMaterialsUtility,
+          execute = storeMaterialsExecute },
     },
 }
 

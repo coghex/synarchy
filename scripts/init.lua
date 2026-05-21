@@ -82,6 +82,14 @@ function game.init(scriptId)
     buildingInfoPanelScriptId = engine.loadScript(
         "scripts/building_info_panel.lua", 0.1)
 
+    -- Cargo inventory popup: floating tabbed list shown by
+    -- right-click → "Contents" on a storage-capable building.
+    -- 0.2s tick — only refreshes on content-hash change (deposits
+    -- / withdrawals), and the cargo's auto-deposit cadence is
+    -- already ~1s, so polling cheaper than this is wasted.
+    cargoInventoryPanelScriptId = engine.loadScript(
+        "scripts/cargo_inventory_panel.lua", 0.2)
+
     -- Popup: receives engine.emitEvent broadcasts (onShowPopup) and
     -- renders OK-dismissable popups. Slow tick (1.0s) — render work
     -- is event-driven on click/broadcast, the tick is just here so
@@ -199,6 +207,37 @@ function game.onMouseDown(button, x, y)
             debugOverlay.clearArmed()
             return
         end
+        -- Storage building right-click → "Contents" menu, regardless
+        -- of unit selection. Move commands still work on non-cargo
+        -- tiles. building.hitTestAt takes framebuffer pixel coords
+        -- via the same conversion the tile-menu branch uses below.
+        do
+            local cargoBid = building.hitTestAt(x, y)
+            if cargoBid then
+                local cap = building.getStorageCapacity(cargoBid)
+                local activity = building.getActivity(cargoBid)
+                if cap and cap > 0 and activity == "built" then
+                    local fbW, fbH = engine.getFramebufferSize()
+                    local ww, wh   = engine.getWindowSize()
+                    local mx, my   = x, y
+                    if ww and wh and ww > 0 and wh > 0 then
+                        mx = x * (fbW / ww)
+                        my = y * (fbH / wh)
+                    end
+                    local contextMenu =
+                        require("scripts.ui.context_menu")
+                    local cargoPanel =
+                        require("scripts.cargo_inventory_panel")
+                    contextMenu.show({
+                        { label = "Contents",
+                          callback = function()
+                              cargoPanel.openFor(cargoBid, mx, my)
+                          end },
+                    }, mx, my)
+                    return
+                end
+            end
+        end
         -- Right-click is a move order when units are selected.
         -- hud.onMouseDown also fires on right-click and clears the
         -- tile cursor — that's fine, it doesn't touch unit selection.
@@ -287,6 +326,10 @@ function game.onKeyDown(key)
         -- transient UI thing" intuition.
         local contextMenu = require("scripts.ui.context_menu")
         if contextMenu.handleEscape() then return end
+
+        -- Cargo inventory popup is next-most-transient.
+        local cargoPanel = require("scripts.cargo_inventory_panel")
+        if cargoPanel.onKeyDown(key) then return end
 
         local popup = require("scripts.popup")
         local shift = engine.isKeyDown("LeftShift")

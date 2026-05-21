@@ -252,6 +252,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "pickup"       (unitPickupFn env)
   registerLuaFunction "removeItem"   (unitRemoveItemFn env)
   registerLuaFunction "transferItemToBuilding" (unitTransferItemToBuildingFn env)
+  registerLuaFunction "depositToCargo"     (unitDepositToCargoFn env)
+  registerLuaFunction "withdrawFromCargo"  (unitWithdrawFromCargoFn env)
+  registerLuaFunction "getCarryingWeight"  (unitGetCarryingWeightFn env)
   registerLuaFunction "transitionTo" (unitTransitionToFn env)
   registerLuaFunction "getPose"      (unitGetPoseFn env)
   registerLuaFunction "modifyItemFill" (unitModifyItemFillFn env)
@@ -298,6 +301,9 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getMaterialNeed"     (buildingGetMaterialNeedFn env)
   registerLuaFunction "getMaterialDelivered" (buildingGetMaterialDeliveredFn env)
   registerLuaFunction "areMaterialsSatisfied" (buildingAreMaterialsSatisfiedFn env)
+  registerLuaFunction "getStorage"          (buildingGetStorageFn env)
+  registerLuaFunction "getStorageCapacity"  (buildingGetStorageCapacityFn env)
+  registerLuaFunction "getStorageWeight"    (buildingGetStorageWeightFn env)
   Lua.setglobal (Lua.Name "building")
 
   -- Equipment global.

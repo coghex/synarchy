@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.Equipment
     , equipmentEquipAccessoryFn
     , equipmentUnequipAccessoryFn
     , equipmentGetAccessoriesFn
+    , pushItemInstance
     ) where
 
 import UPrelude

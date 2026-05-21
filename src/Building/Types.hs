@@ -71,6 +71,14 @@ data BuildingDef = BuildingDef
       --   ticks as soon as workers arrive. Non-empty: building shows
       --   as ghost until all required counts have been delivered (see
       --   biMaterialsDelivered), then construction begins.
+    , bdStorageCapacity ∷ !Float
+      -- ^ Maximum total weight (kg) the building's storage can hold.
+      --   0 (default) = no storage; the building doesn't show an
+      --   inventory panel. Non-zero = built-state buildings can be
+      --   deposited into / withdrawn from. Storage is separate from
+      --   biMaterialsDelivered: materials consumed into the build are
+      --   locked for future deconstruction recovery; storage items
+      --   are free-floating cargo the player and AI move around.
     , bdAnimations  ∷ !(HM.HashMap Text Animation)
     , bdStateAnims  ∷ !(HM.HashMap Text Text)
       -- ^ "appearing" / "built" → animation name in bdAnimations.
@@ -104,6 +112,11 @@ data BuildingInstance = BuildingInstance
       --   electric motors that built this cargo hold come back out
       --   with their then-current condition when it's deconstructed).
       --   The construction tick is gated on this satisfying bdMaterials.
+    , biStorage          ∷ ![ItemInstance]
+      -- ^ Cargo currently stored in this building. Each entry is a
+      --   full ItemInstance, so per-item quality / condition / fill
+      --   round-trip through deposit→withdraw exactly. Capacity is
+      --   bdStorageCapacity (kg); the deposit API enforces it.
     } deriving (Show, Eq)
 
 -- | Singleton ghost preview: one optional def + tile + valid flag.

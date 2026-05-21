@@ -50,11 +50,12 @@ data BuildingYamlDef = BuildingYamlDef
       -- ^ "flat_ground" / other constraint kinds in the future
     , bydIsStarting   ∷ !Bool
     , bydRace         ∷ !Text
-    , bydSpriteAnchor ∷ !Text
-    , bydBuildWork    ∷ !Float
-    , bydMaterials    ∷ !(Map.Map Text Int)
-    , bydStateAnims   ∷ !(Map.Map Text Text)
-    , bydAnimations   ∷ !(Map.Map Text BuildingYamlAnim)
+    , bydSpriteAnchor    ∷ !Text
+    , bydBuildWork       ∷ !Float
+    , bydMaterials       ∷ !(Map.Map Text Int)
+    , bydStorageCapacity ∷ !Float
+    , bydStateAnims      ∷ !(Map.Map Text Text)
+    , bydAnimations      ∷ !(Map.Map Text BuildingYamlAnim)
     } deriving (Show, Eq, Generic)
 
 instance FromJSON BuildingYamlDef where
@@ -71,6 +72,7 @@ instance FromJSON BuildingYamlDef where
         ⊛ v .:? "sprite_anchor"    .!= "diamond_bottom"
         ⊛ v .:? "build_work"       .!= 0.0
         ⊛ v .:? "materials"        .!= Map.empty
+        ⊛ v .:? "storage_capacity" .!= 0.0
         ⊛ v .:? "state_animations" .!= Map.empty
         ⊛ v .:? "animations"       .!= Map.empty
 

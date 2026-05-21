@@ -16,6 +16,12 @@ buildings:
     #   1 builder → ~240 s, 2 → ~60 s, 3 → ~27 s, 4 → ~20 s.
     build_work: 240.0
 
+    # Total weight (kg) the built cargo hold can store. ~166 plates,
+    # or 1000 hardware, or any mix. Larger sizes (M, L) will scale this
+    # up. Acolytes with full inventories auto-deposit excess Materials
+    # here once one is built.
+    storage_capacity: 200.0
+
     # Required materials — gated before any progress can accrue.
     # Half of each spawns on every acolyte, so any two acolytes with
     # a complete inventory between them can finish the build.

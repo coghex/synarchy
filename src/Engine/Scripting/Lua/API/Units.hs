@@ -42,6 +42,9 @@ module Engine.Scripting.Lua.API.Units
     , unitPickupFn
     , unitRemoveItemFn
     , unitTransferItemToBuildingFn
+    , unitDepositToCargoFn
+    , unitWithdrawFromCargoFn
+    , unitGetCarryingWeightFn
     , unitTransitionToFn
     , unitGetPoseFn
     , unitModifyItemFillFn
@@ -61,6 +64,7 @@ import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import Control.Monad (foldM, forM_, unless)
 import Data.IORef (readIORef, atomicModifyIORef')
+import Data.Maybe (fromMaybe)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (LogCategory(..), logInfo, logDebug, logWarn)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
@@ -79,7 +83,8 @@ import Unit.Render (pickFrame)
 import Unit.Sim.Types (Pose(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (Camera2D(..))
-import Building.Types (BuildingId(..), BuildingInstance(..), BuildingManager(..))
+import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
+                      , BuildingManager(..))
 import Item.Types (ItemInstance(..))
 import Item.Roll (rollItemSpec)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemContainer(..)
@@ -768,6 +773,168 @@ unitTransferItemToBuildingFn env = do
         _ → do
             Lua.pushboolean False
             return 1
+
+-- | unit.depositToCargo(uid, bid, defName) → bool. Moves one matching
+--   ItemInstance from the unit's loose inventory into the building's
+--   biStorage. Capacity-checked (rejects if the new total weight
+--   would exceed bdStorageCapacity). Quality / condition / fill on
+--   the instance are preserved exactly. No adjacency check — that
+--   lives in the Lua caller (AI walks the unit close first; the
+--   right-click menu only enables when the unit is adjacent).
+unitDepositToCargoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitDepositToCargoFn env = do
+    uidArg  ← Lua.tointeger 1
+    bidArg  ← Lua.tointeger 2
+    nameArg ← Lua.tostring 3
+    case (uidArg, bidArg, nameArg) of
+        (Just nU, Just nB, Just nameBS) → do
+            let uid     = UnitId (fromIntegral nU)
+                bid     = BuildingId (fromIntegral nB)
+                defName = TE.decodeUtf8 nameBS
+            -- Capacity pre-check: read-only snapshot.
+            okFits ← Lua.liftIO $ do
+                bm      ← readIORef (buildingManagerRef env)
+                itemMgr ← readIORef (itemManagerRef env)
+                pure $ fromMaybe False $ do
+                    inst    ← HM.lookup bid (bmInstances bm)
+                    def     ← HM.lookup (biDefName inst) (bmDefs bm)
+                    itemDef ← lookupItemDef defName itemMgr
+                    let cap     = bdStorageCapacity def
+                        current = sum
+                            [ maybe 0 idWeight
+                                (lookupItemDef (iiDefName it) itemMgr)
+                            | it ← biStorage inst
+                            ]
+                    pure (cap > 0 ∧ current + idWeight itemDef <= cap)
+            if not okFits then do
+                Lua.pushboolean False
+                return 1
+            else do
+                mItem ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                    case HM.lookup uid (umInstances um) of
+                        Nothing → (um, Nothing)
+                        Just u →
+                            case popFirstByName defName (uiInventory u) of
+                                Nothing → (um, Nothing)
+                                Just (item, newInv) →
+                                    let u' = u { uiInventory = newInv }
+                                    in (um { umInstances = HM.insert uid u'
+                                                            (umInstances um) }
+                                       , Just item)
+                case mItem of
+                    Nothing → do
+                        Lua.pushboolean False
+                        return 1
+                    Just item → do
+                        ok ← Lua.liftIO $
+                            atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                                case HM.lookup bid (bmInstances bm) of
+                                    Nothing → (bm, False)
+                                    Just inst →
+                                        let inst' = inst
+                                                { biStorage = item : biStorage inst }
+                                        in (bm { bmInstances =
+                                                    HM.insert bid inst'
+                                                        (bmInstances bm) }
+                                           , True)
+                        unless ok $ do
+                            logger ← Lua.liftIO $ readIORef (loggerRef env)
+                            Lua.liftIO $ logWarn logger CatThread $
+                                "depositToCargo: building "
+                                <> T.pack (show nB)
+                                <> " gone between pop and deposit — "
+                                <> defName <> " lost"
+                        Lua.pushboolean ok
+                        return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+-- | unit.withdrawFromCargo(uid, bid, defName) → bool. Reverse of
+--   depositToCargo: pops one matching ItemInstance from biStorage,
+--   appends to the unit's loose inventory. Not gated by unit
+--   carrying-capacity — units can hold above their cap (with stat
+--   penalties handled elsewhere). Adjacency check lives in the Lua
+--   caller, same as deposit.
+unitWithdrawFromCargoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitWithdrawFromCargoFn env = do
+    uidArg  ← Lua.tointeger 1
+    bidArg  ← Lua.tointeger 2
+    nameArg ← Lua.tostring 3
+    case (uidArg, bidArg, nameArg) of
+        (Just nU, Just nB, Just nameBS) → do
+            let uid     = UnitId (fromIntegral nU)
+                bid     = BuildingId (fromIntegral nB)
+                defName = TE.decodeUtf8 nameBS
+            mItem ← Lua.liftIO $ atomicModifyIORef' (buildingManagerRef env) $ \bm →
+                case HM.lookup bid (bmInstances bm) of
+                    Nothing → (bm, Nothing)
+                    Just inst →
+                        case popFirstByName defName (biStorage inst) of
+                            Nothing → (bm, Nothing)
+                            Just (item, newStorage) →
+                                let inst' = inst { biStorage = newStorage }
+                                in (bm { bmInstances = HM.insert bid inst'
+                                                          (bmInstances bm) }
+                                   , Just item)
+            case mItem of
+                Nothing → do
+                    Lua.pushboolean False
+                    return 1
+                Just item → do
+                    ok ← Lua.liftIO $
+                        atomicModifyIORef' (unitManagerRef env) $ \um →
+                            case HM.lookup uid (umInstances um) of
+                                Nothing → (um, False)
+                                Just u →
+                                    let u' = u
+                                            { uiInventory = uiInventory u ++ [item] }
+                                    in (um { umInstances = HM.insert uid u'
+                                                            (umInstances um) }
+                                       , True)
+                    unless ok $ do
+                        logger ← Lua.liftIO $ readIORef (loggerRef env)
+                        Lua.liftIO $ logWarn logger CatThread $
+                            "withdrawFromCargo: unit "
+                            <> T.pack (show nU)
+                            <> " gone between pop and append — "
+                            <> defName <> " lost"
+                    Lua.pushboolean ok
+                    return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+
+-- | unit.getCarryingWeight(uid) → Float kg. Sum of def-declared
+--   weight across loose inventory + equipped slot items + accessories.
+--   Used by the auto-store AI utility (fill_fraction = this / cap).
+unitGetCarryingWeightFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetCarryingWeightFn env = do
+    uidArg ← Lua.tointeger 1
+    case uidArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mW ← Lua.liftIO $ do
+                um      ← readIORef (unitManagerRef env)
+                itemMgr ← readIORef (itemManagerRef env)
+                let weightOf it = maybe 0 idWeight
+                                    (lookupItemDef (iiDefName it) itemMgr)
+                pure $ do
+                    u ← HM.lookup uid (umInstances um)
+                    let invW = sum (map weightOf (uiInventory u))
+                        eqW  = sum (map weightOf (HM.elems (uiEquipment u)))
+                        accW = sum (map weightOf (uiAccessories u))
+                    pure (invW + eqW + accW ∷ Float)
+            case mW of
+                Just w → do
+                    Lua.pushnumber (Lua.Number (realToFrac w))
+                    return 1
+                Nothing → do
+                    Lua.pushnil
+                    return 1
 
 -- | Helper: adjust the fill of the first ItemInstance matching defName.
 --   Clamps to [0, capacity] looked up via the ItemManager. Returns the

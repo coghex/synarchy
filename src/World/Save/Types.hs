@@ -68,8 +68,13 @@ saveMagic = 0x53595241
 --       the build. Required so an electric motor that went in at
 --       100% condition comes back out at its then-current condition
 --       on a future deconstruction recovery.
+--   v13 adds bisStorage to BuildingInstanceSnapshot — cargo currently
+--       deposited in the building (separate from delivered build
+--       materials). Same ItemInstance preservation rule so deposited
+--       items retain their quality/condition through save/load and
+--       through deposit→withdraw round-trips.
 currentSaveVersion ∷ Int
-currentSaveVersion = 12
+currentSaveVersion = 13
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects
@@ -167,6 +172,7 @@ data BuildingInstanceSnapshot = BuildingInstanceSnapshot
     , bisSpawnRemaining ∷ !Int
     , bisBuildProgress ∷ !Float
     , bisMaterialsDelivered ∷ !(HM.HashMap Text [ItemInstance])
+    , bisStorage           ∷ ![ItemInstance]
     } deriving (Show, Serialize, Generic)
 
 -- | Build a snapshot from a live BuildingManager. Strips `bmDefs`
@@ -190,6 +196,7 @@ toBuildingInstanceSnapshot bi = BuildingInstanceSnapshot
     , bisSpawnRemaining = biSpawnRemaining bi
     , bisBuildProgress = biBuildProgress bi
     , bisMaterialsDelivered = biMaterialsDelivered bi
+    , bisStorage           = biStorage bi
     }
 
 -- | Restore a BuildingManager from a snapshot. `defs` come from the
@@ -235,6 +242,7 @@ fromBuildingInstanceSnapshot def s = BuildingInstance
     , biSpawnRemaining = bisSpawnRemaining s
     , biBuildProgress  = bisBuildProgress s
     , biMaterialsDelivered = bisMaterialsDelivered s
+    , biStorage            = bisStorage s
     }
 
 -- Unit snapshots ---------------------------------------------------
