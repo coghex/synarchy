@@ -13,9 +13,11 @@
 --   cross-chunk continuity achieved through the bordered region's
 --   overlap with neighbor chunks.
 --
---   Phase A scope: oceans + climate-driven default depth + flow-direction
---   propagation. Channel pinning, lake classification, and the
---   river-width-dilated channel mask all land in Phase B.
+--   Implements oceans, channel pinning (from `channelMask`), sink-fill,
+--   ascending-terrain descent propagation, and a single-tile gap-fill
+--   pass that connects rivers to adjacent lakes/oceans across flat
+--   1-step terrain. The fluid composer in `World.Generate.Chunk` reads
+--   the resulting wt and classifies tiles as river / lake / ocean / dry.
 module World.Hydrology.WaterTable
     ( computeWaterTable
     , depthFromClimate
@@ -24,7 +26,7 @@ module World.Hydrology.WaterTable
     ) where
 
 import UPrelude
-import Control.Monad.ST (ST, runST)
+import Control.Monad.ST (runST)
 import Data.List (sortBy)
 import Data.Ord (comparing)
 import qualified Data.Vector.Unboxed as VU
@@ -129,24 +131,44 @@ computeWaterTable climate worldSize coord borderedTerrain channelMask =
         -- surface water of an actively flowing river); this then
         -- propagates upstream during the sweep so lakes naturally form
         -- where drainage paths cross terrain depressions.
+        -- Cap on how far the water surface may sit above local terrain
+        -- at any pinned tile. Without it, two failure modes produce
+        -- isolated water columns:
+        --   * Sink-fill: a 1-tile-wide deep pit on a plateau spillways
+        --     up to its rim height (e.g. terr=70, rim=78 ⇒ 8-tile column).
+        --   * Channel mask: natural terrain inside the mask zone dips
+        --     below the segment's channelFloor (terr=34, cf=38), pinning
+        --     wt 4 above terrain.
+        -- Capping wt to t+columnCap keeps the tile classified as wet (the
+        -- sweep can still propagate the lake/river surface across the
+        -- basin via cardinal neighbors), but limits the visible water
+        -- stack on any one tile to a natural-looking ~2 tiles.
+        columnCap = 2 ∷ Int
+
         wt0 = VU.generate area $ \idx →
             let t = borderedTerrain VU.! idx
                 cf = channelMask VU.! idx
             in if t ≤ seaLevel
                then seaLevel
                else if cf ≠ maxBound
-               then cf   -- channel tile: pin to segment's interpolated
-                         -- channel-floor, NOT to this tile's terrain.
-                         -- Same value across the cross-section ⇒ flat
-                         -- water surface even though banks slope up.
+               then min cf (t + columnCap)
+                         -- channel tile: pin to segment's interpolated
+                         -- channel-floor, capped to terrain+columnCap so
+                         -- natural dips below cf show as shallow water
+                         -- rather than tall columns.
                else
                  let spill = spillwayElev borderedTerrain bSize idx t
                  in if spill > t + 2
-                    then spill   -- real sink (≥3-tile rim): flood to spillway
-                                 -- Tighter than the original @spill > t@ which
-                                 -- treated every 1-tile depression as a basin,
-                                 -- producing dozens of single-tile pools per
-                                 -- chunk.
+                    then min spill (t + columnCap)
+                                 -- real sink (≥3-tile rim): flood to
+                                 -- spillway, capped to columnCap so
+                                 -- narrow deep pits don't render as
+                                 -- water towers. Wider basins fill up
+                                 -- via the sweep phase, which lifts
+                                 -- neighbors to match — that respects
+                                 -- the cap implicitly because each
+                                 -- pinned tile only contributes its
+                                 -- own capped value.
                     else
                       let (gx, gy) = bToGlobal idx
                           c = lookupLocalClimate climate worldSize gx gy
@@ -197,7 +219,7 @@ computeWaterTable climate worldSize coord borderedTerrain channelMask =
                     myWTinit = wtSnapshot VU.! idx
                 when (myWTinit < myT) $ do
                     -- A neighbor donates iff BOTH:
-                    --   1. Its terrain is close to ours (|Δ| ≤ 1) —
+                    --   1. Its terrain is close to ours (|Δ| ≤ 2) —
                     --      this restricts donation to truly flat
                     --      connectors. Without this, any low-lying
                     --      tile near a river gets flooded to the
@@ -211,14 +233,20 @@ computeWaterTable climate worldSize coord borderedTerrain channelMask =
                         by = idx `div` bSize
                         donorIfFloods nIdx ok
                           | not ok = minBound
-                          | abs (borderedTerrain VU.! nIdx - myT) > 1 = minBound
+                          | abs (borderedTerrain VU.! nIdx - myT) > 2 = minBound
                           | wtSnapshot VU.! nIdx ≤ myT = minBound
                           | otherwise = wtSnapshot VU.! nIdx
                         n = donorIfFloods (idx - bSize) (by > 0)
                         s = donorIfFloods (idx + bSize) (by < bSize - 1)
                         w = donorIfFloods (idx - 1)     (bx > 0)
                         e = donorIfFloods (idx + 1)     (bx < bSize - 1)
-                        donor = max (max n s) (max w e)
+                        rawDonor = max (max n s) (max w e)
+                        -- Same column cap as the pinning step. Without
+                        -- this, a flat-terrain connector adjacent to a
+                        -- capped sink can still inherit a wt above its
+                        -- own terrain+columnCap when the donor's terrain
+                        -- happened to be 2 higher than ours.
+                        donor = min rawDonor (myT + columnCap)
                     when (donor > myWTinit) $ VUM.write wtM idx donor
             VU.unsafeFreeze wtM
 
@@ -293,34 +321,6 @@ steepestDescent terrain bSize idx myT =
         (bestIdx3, _) =
             if eT < bestT2 then (eIdx, eT) else (bestIdx2, bestT2)
     in bestIdx3
-
--- | Max water-table value among the four cardinal neighbors whose
---   terrain is at or below this tile's terrain. Used by the flat-spread
---   propagation pass to lift wt across same-elevation connectors
---   (e.g., a flat between a river and a lake). Strictly-higher-terrain
---   neighbors are excluded so we never pull water uphill.
---
---   Top-level (not inlined into the sweep) for the same GHC 9.12
---   Strict + Maybe panic-dodge reason as `steepestDescent`.
-maxFlatDonorWt ∷ VU.Vector Int → VUM.MVector s Int → Int → Int → Int
-               → ST s Int
-maxFlatDonorWt terrain wtM bSize idx myT =
-    let bx = idx `mod` bSize
-        by = idx `div` bSize
-        nIdx = idx - bSize
-        sIdx = idx + bSize
-        wIdx = idx - 1
-        eIdx = idx + 1
-        readDonor nIdx' ok =
-            if not ok then pure minBound
-            else if terrain VU.! nIdx' > myT then pure minBound
-                 else VUM.read wtM nIdx'
-    in do
-        n ← readDonor nIdx (by > 0)
-        s ← readDonor sIdx (by < bSize - 1)
-        w ← readDonor wIdx (bx > 0)
-        e ← readDonor eIdx (bx < bSize - 1)
-        pure (max (max n s) (max w e))
 
 -- * Subsurface query
 

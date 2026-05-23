@@ -120,18 +120,22 @@ fillPool ∷ MV.MVector s (Maybe FluidCell)
 fillPool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lavaSurface baseElev surfaceMap =
     let pr = fromIntegral poolRadius ∷ Float
         rimSamples = 32 ∷ Int
+        -- Sample the rim ALWAYS using elevationAtGlobal (pre-erosion
+        -- plate elevation). Earlier this branched between surfaceMap
+        -- and elevationAtGlobal depending on whether the sample fell
+        -- inside the current chunk — which made the spillway
+        -- chunk-dependent: two chunks computing lava for the same
+        -- volcano would derive different spillway heights and place
+        -- lava at different surface elevations, causing visible
+        -- seams. Lava placement is determined at world init and
+        -- shouldn't shift with later erosion of the rim anyway, so
+        -- globally-deterministic plate elevation is the right input.
         spillway = foldl' (\minElev i →
             let angle = fromIntegral i * 2.0 * π / fromIntegral rimSamples
                 rimGX = fx + round (pr * cos angle)
                 rimGY = fy + round (pr * sin angle)
-                rimLX = rimGX - chunkGX
-                rimLY = rimGY - chunkGY
-                rimElev =
-                    if rimLX ≥ 0 ∧ rimLX < chunkSize ∧ rimLY ≥ 0 ∧ rimLY < chunkSize
-                    then surfaceMap VU.! columnIndex rimLX rimLY
-                    else
-                        let (e, _) = elevationAtGlobal seed plates worldSize rimGX rimGY
-                        in e
+                (rimElev, _) = elevationAtGlobal seed plates worldSize
+                                   rimGX rimGY
             in min minElev rimElev
             ) lavaSurface [0 .. rimSamples - 1]
 
@@ -170,6 +174,9 @@ fillFissurePool mv seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth l
         perpX = negate (fromIntegral (ey - sy)) / lineLen ∷ Float
         perpY = fromIntegral (ex - sx) / lineLen ∷ Float
 
+        -- Edge sampling uses globally-deterministic plate elevation
+        -- so two chunks computing the same fissure agree on the
+        -- spillway. See note in `fillPool`.
         spillway = foldl' (\minElev i →
             let t = fromIntegral i / fromIntegral (edgeSamples - 1) ∷ Float
                 mx = fromIntegral sx + t * fromIntegral (ex - sx)
@@ -178,20 +185,8 @@ fillFissurePool mv seed plates worldSize chunkGX chunkGY sx sy ex ey halfWidth l
                 e1gy = round (my + perpY * hw) ∷ Int
                 e2gx = round (mx - perpX * hw) ∷ Int
                 e2gy = round (my - perpY * hw) ∷ Int
-
-                e1lx = e1gx - chunkGX
-                e1ly = e1gy - chunkGY
-                elev1 =
-                    if e1lx ≥ 0 ∧ e1lx < chunkSize ∧ e1ly ≥ 0 ∧ e1ly < chunkSize
-                    then surfaceMap VU.! columnIndex e1lx e1ly
-                    else fst (elevationAtGlobal seed plates worldSize e1gx e1gy)
-
-                e2lx = e2gx - chunkGX
-                e2ly = e2gy - chunkGY
-                elev2 =
-                    if e2lx ≥ 0 ∧ e2lx < chunkSize ∧ e2ly ≥ 0 ∧ e2ly < chunkSize
-                    then surfaceMap VU.! columnIndex e2lx e2ly
-                    else fst (elevationAtGlobal seed plates worldSize e2gx e2gy)
+                elev1 = fst (elevationAtGlobal seed plates worldSize e1gx e1gy)
+                elev2 = fst (elevationAtGlobal seed plates worldSize e2gx e2gy)
             in min minElev (min elev1 elev2)
             ) lavaSurface [0 .. edgeSamples - 1]
 

@@ -5,7 +5,6 @@ import UPrelude
 import Control.Exception (displayException)
 import Control.Concurrent (threadDelay)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Data.Word (Word8, Word64)
 import Data.Char (toLower)
 import System.Environment (setEnv, getArgs)
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
@@ -13,7 +12,6 @@ import Data.List (intercalate, isPrefixOf)
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import qualified Data.HashMap.Strict as HM
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngine, initializeEngineHeadless
                         , EngineInitResult(..))
@@ -37,10 +35,7 @@ import Engine.Loop.Shutdown (shutdownEngine, checkStatus)
 import Engine.Scripting.Lua.Backend (startLuaThread)
 import World.Thread (startWorldThread)
 import World.Types
-import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), chunkSize)
-import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..))
 import World.Plate (isGlacierZone, isBeyondGlacier, defaultPlatesFor)
-import World.Generate.Types (WorldGenParams(..))
 import World.Weather.Types (ClimateState, initClimateState)
 import World.Weather.Lookup (lookupWaterTable)
 import Unit.Thread (startUnitThread)

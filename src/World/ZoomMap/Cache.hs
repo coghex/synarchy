@@ -27,7 +27,6 @@ import World.Plate (TectonicPlate(..), elevationAtGlobal
                    , twoNearestPlates, BoundaryType(..), classifyBoundary)
 import qualified Data.Vector.Unboxed as VU
 import World.Fluids (isOceanChunk, hasAnyOceanFluid)
-import World.Fluid.Ocean (computeChunkFluid)
 import World.Fluid.River (hasAnyRiverQuick)
 import World.Fluid.Lake (hasAnyLakeQuick)
 import World.Fluid.Lava (hasAnyLavaQuick)

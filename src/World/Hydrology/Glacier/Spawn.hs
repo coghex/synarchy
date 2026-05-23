@@ -8,6 +8,7 @@ import UPrelude
 import Data.Word (Word64)
 import qualified Data.Vector as V
 import World.Base (GeoCoord(..), GeoFeatureId(..))
+import World.Constants (seaLevel)
 import World.Types
 import World.Hydrology.Types
 import World.Geology.Types
@@ -73,9 +74,36 @@ spawnMeltwaterRiver seed periodIdx parentFid pf (events, tbs) =
                           wy = round (baseY + perpY * noiseVal)
                       in GeoCoord wx wy
                     | i ← [0 .. numSegs] ]
+        -- Elevation of the river: starts at the glacier's terminus
+        -- (= glFootElev, sampled at generation) and descends gently
+        -- along its length. Without this — i.e. with rsStartElev/EndElev
+        -- both at 0 — the carving pipeline treats the entire river as
+        -- coastal (because `isCoastalSeg = rsEndElev ≤ seaLevel + 5` is
+        -- vacuously true) and gouges terrain all the way down to
+        -- seaLevel − 1, regardless of how high up the actual glacier is.
+        -- This was the original "rivers carve deep cliffs into mountains"
+        -- bug — Phase C fixed the lateral bank slope but not this
+        -- elevation bug, because rivers from the regular tracing path
+        -- have correct rsEndElev values and never hit it.
+        glFoot = glFootElev glacier
+        glHead = glStartElev glacier
+        -- Estimate the river's descent slope from the glacier's drop.
+        -- If the glacier ran from glStartElev to glFootElev over
+        -- glLength tiles, the river continues at a similar rate.
+        glacierSlope ∷ Float
+        glacierSlope =
+            if glacierLen > 0.001
+            then fromIntegral (glHead - glFoot) / glacierLen
+            else 0.0
+        -- Elevation along the meltwater river at parametric position t
+        -- (t=0 at terminus, t=1 at river end). Clamped non-negative
+        -- so we don't dip below seaLevel by accident.
+        elevAtT t = max seaLevel
+                        (glFoot - round (glacierSlope * t * fromIntegral riverLen))
         segments = V.fromList $ zipWith (\i (s, e) →
-            let t = fromIntegral (i + 1) / fromIntegral numSegs ∷ Float
-                flow = 0.2 + t * 0.3
+            let t0 = fromIntegral i       / fromIntegral numSegs ∷ Float
+                t1 = fromIntegral (i + 1) / fromIntegral numSegs ∷ Float
+                flow = 0.2 + t1 * 0.3
             in RiverSegment
                 { rsStart       = s
                 , rsEnd         = e
@@ -83,8 +111,8 @@ spawnMeltwaterRiver seed periodIdx parentFid pf (events, tbs) =
                 , rsValleyWidth = segValleyW
                 , rsDepth       = segDepth
                 , rsFlowRate    = flow
-                , rsStartElev   = 0
-                , rsEndElev     = 0
+                , rsStartElev   = elevAtT t0
+                , rsEndElev     = elevAtT t1
                 }
             ) [0∷Int ..] (zip waypoints (drop 1 waypoints))
 

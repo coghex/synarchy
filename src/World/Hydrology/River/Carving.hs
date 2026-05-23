@@ -142,7 +142,21 @@ carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
            -- (which controls channel width/depth, not bank steepness).
            slopeRate = 0.5 ∷ Float
 
-       in if alongT < -0.05 ∨ alongT > 1.05 ∨ effectivePerpDist > valleyHalfW
+           -- Coastal segments (ending near or below sea level) carry
+           -- the carve past the segment endpoint to match the channel
+           -- mask's extended reach. Without this, mask claims tiles
+           -- past the endpoint as river but their terrain is not
+           -- lowered — the wt pin (= channelFloor ≈ seaLevel-1) sits
+           -- below the un-carved sandbar terrain, and no fluid is
+           -- placed. Visible symptom: rivers "stop short" of the ocean.
+           -- Formula matches `tileInChannelMask`'s downstreamOver.
+           isCoastalSeg = rsEndElev seg ≤ seaLevel + 5
+           downstreamOver = if isCoastalSeg
+                            then min 2.0 (12.0 / segLen)
+                            else 0.05
+
+       in if alongT < -0.05 ∨ alongT > 1.0 + downstreamOver
+            ∨ effectivePerpDist > valleyHalfW
           then noModification
           else
           let -- Unified target: flat channel bottom, sloped banks beyond.
@@ -166,17 +180,6 @@ carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
                  , gmMaterialOverride = Just (unMaterialId matSandstone)
                  , gmIntrusionDepth   = min thisAlluvium carve
                  }
-
--- * Delta Deposit — original version (takes full RiverParams)
-
--- | Compute delta deposit from a full RiverParams.
---   Delegates to computeDeltaDeposit' using the last segment.
-computeDeltaDeposit ∷ RiverParams → Int → Int → Int → Int → GeoModification
-computeDeltaDeposit river worldSize gx gy baseElev =
-    if V.null (rpSegments river)
-    then noModification
-    else computeDeltaDeposit' (V.last (rpSegments river))
-                              (rpFlowRate river) worldSize gx gy baseElev
 
 -- * Target-Based Delta Deposit
 

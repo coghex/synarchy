@@ -5,7 +5,6 @@ module World.Geology.Hash
     , hashToRangeGeo
     , smoothstepGeo
     , valueNoise2D
---    , wrappedDeltaXGeo
     , wrappedDeltaUV
     , scaleCount
     ) where
@@ -41,16 +40,6 @@ hashToRangeGeo h lo hi =
 
 smoothstepGeo ∷ Float → Float
 smoothstepGeo t = t * t * (3.0 - 2.0 * t)
-
--- | Wrapped X distance for cylindrical world (OLD — wraps gx only).
---   Produces diagonal seam. Use wrappedDeltaUV for correct u-axis wrapping.
-{-# INLINE wrappedDeltaXGeo #-}
-wrappedDeltaXGeo ∷ Int → Int → Int → Int
-wrappedDeltaXGeo worldSize x1 x2 =
-    let w = worldSize * chunkSize
-        raw = x2 - x1
-        halfW = w `div` 2
-    in ((raw + halfW) `mod` w + w) `mod` w - halfW
 
 -- | Wrapped distance between two points in the isometric u-wrapped world.
 --   Returns (dx, dy) where dx and dy are the shortest-path deltas

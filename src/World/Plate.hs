@@ -659,24 +659,6 @@ plateJitter seed worldSize gx gy plateCX plateCY =
 
 -- * Noise & Hash
 
-valueNoise2D ∷ Word64 → Int → Int → Int → Float
-valueNoise2D seed x y scale =
-    let fx = fromIntegral x / fromIntegral scale ∷ Float
-        fy = fromIntegral y / fromIntegral scale ∷ Float
-        ix = floor fx ∷ Int
-        iy = floor fy ∷ Int
-        tx = fx - fromIntegral ix
-        ty = fy - fromIntegral iy
-        sx = smoothstep tx
-        sy = smoothstep ty
-        v00 = hashToFloat' (hashCoord seed ix       iy)
-        v10 = hashToFloat' (hashCoord seed (ix + 1) iy)
-        v01 = hashToFloat' (hashCoord seed ix       (iy + 1))
-        v11 = hashToFloat' (hashCoord seed (ix + 1) (iy + 1))
-        top    = lerp sx v00 v10
-        bottom = lerp sx v01 v11
-    in lerp sy top bottom
-
 plateHash ∷ Word64 → Int → Int → Word32
 plateHash seed plateIdx propIdx =
     hashCoord (seed + fromIntegral propIdx * 7919) plateIdx propIdx

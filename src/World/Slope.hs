@@ -81,15 +81,30 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles neighborLook
 
         passesHardness = hardness < slopeHardnessThreshold
 
+        -- If THIS tile is a wet tile (river / lake / ocean / lava), it's
+        -- a river bed or basin floor and should slope toward lower-by-1
+        -- neighbors even if those neighbors are wet too. Without this,
+        -- a river that descends a z-level renders as a sloped water
+        -- surface over a stepped terrain top — the upstream block's
+        -- corner pokes through the water. Sloping the bed matches the
+        -- water surface and hides the corner.
+        --
+        -- Dry tiles still keep the bank rule: they don't slope into wet
+        -- neighbors, which would otherwise look like land dipping into
+        -- the water.
+        myHasFluid = case fluidMap V.! columnIndex lx ly of
+            Just _  → True
+            Nothing → False
+
         neighN = neighborElev coord lx (ly - 1) surfMap neighborLookup
         neighE = neighborElev coord (lx + 1) ly surfMap neighborLookup
         neighS = neighborElev coord lx (ly + 1) surfMap neighborLookup
         neighW = neighborElev coord (lx - 1) ly surfMap neighborLookup
 
-        bitN = slopeBit z neighN lx (ly - 1) coord fluidMap neighborLookup
-        bitE = slopeBit z neighE (lx + 1) ly coord fluidMap neighborLookup
-        bitS = slopeBit z neighS lx (ly + 1) coord fluidMap neighborLookup
-        bitW = slopeBit z neighW (lx - 1) ly coord fluidMap neighborLookup
+        bitN = slopeBit myHasFluid z neighN lx (ly - 1) coord fluidMap neighborLookup
+        bitE = slopeBit myHasFluid z neighE (lx + 1) ly coord fluidMap neighborLookup
+        bitS = slopeBit myHasFluid z neighS lx (ly + 1) coord fluidMap neighborLookup
+        bitW = slopeBit myHasFluid z neighW (lx - 1) ly coord fluidMap neighborLookup
 
         rawSlope = (if bitN then 1 else 0)
                .|. (if bitE then 2 else 0)
@@ -99,11 +114,11 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles neighborLook
        then 0
        else applyRoughness seed coord lx ly hardness rawSlope
 
-slopeBit ∷ Int → Int → Int → Int → ChunkCoord
+slopeBit ∷ Bool → Int → Int → Int → Int → ChunkCoord
          → V.Vector (Maybe FluidCell)
          → (ChunkCoord → Maybe (VU.Vector Int))
          → Bool
-slopeBit myZ neighborZ nlx nly coord fluidMap neighborLookup =
+slopeBit myHasFluid myZ neighborZ nlx nly coord fluidMap neighborLookup =
     let diff = myZ - neighborZ
         validDiff = diff ≡ 1
 
@@ -114,7 +129,7 @@ slopeBit myZ neighborZ nlx nly coord fluidMap neighborLookup =
                     Just _  → True
                     Nothing → False
             _ → False
-    in validDiff ∧ not hasFluid
+    in validDiff ∧ (myHasFluid ∨ not hasFluid)
 
 neighborElev ∷ ChunkCoord → Int → Int
              → VU.Vector Int

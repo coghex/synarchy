@@ -27,7 +27,7 @@ import World.Scale (computeWorldScale, WorldScale(..))
 import World.Slope (computeChunkSlopes)
 import World.Fluids (hasAnyOceanFluid)
 import World.Ocean.Types (oceanDistAt)
-import World.Fluid.Internal (emptyFluidMap, preferFluidMap
+import World.Fluid.Internal (emptyFluidMap, lavaOverrides
                             , wrapChunkCoordU, wrappedDeltaUVFluid)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Fluid.River (riverNearChunk)
@@ -100,7 +100,7 @@ composeFluidMap params coord terrainMap waterTableMap channelMask =
         lavaFluid = computeChunkLava features seed plates
                                      worldSize coord terrainMap
 
-    in lavaFluid `preferFluidMap` waterFluid
+    in lavaFluid `lavaOverrides` waterFluid
 
 -- | Sentinel for "this tile is not in any channel" in the channel-floor
 --   map. Picked so it's an obviously-impossible elevation and easy to

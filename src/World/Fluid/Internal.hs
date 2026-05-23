@@ -8,6 +8,7 @@ module World.Fluid.Internal
     , wrapChunkCoordU
     , floorDiv'
     , preferFluidMap
+    , lavaOverrides
     ) where
 
 import UPrelude
@@ -89,6 +90,18 @@ preferFluidMap = V.zipWith (\preferred fallback → case preferred of
     Just _  → preferred
     Nothing → fallback
   )
+
+-- | Layer lava on top of any water-class fluid. Lava cells overwrite
+--   river / lake / ocean cells at the same tile; water cells fill in
+--   wherever lava is absent. This is the user-stated invariant for
+--   the world's fluid system — wrapping it in a named function so
+--   the call site reads as the intent, and so flipping the argument
+--   order requires an explicit rename instead of silently inverting
+--   the priority.
+lavaOverrides ∷ FluidMap  -- ^ lava cells
+              → FluidMap  -- ^ water (river / lake / ocean) cells
+              → FluidMap
+lavaOverrides = preferFluidMap
 
 -- * Fluid Equilibration
 
