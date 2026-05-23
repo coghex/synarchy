@@ -52,26 +52,27 @@ instance NFData RiverParams where
         rnf s `seq` rnf m `seq` rnf segs `seq` rnf f `seq` rnf ms `seq` ()
 
 -- | A single segment of a river between two waypoints.
---   At chunk generation time, each segment applies a
---   V-shaped valley carve as a pure elevation transform.
+--
+--   Segments describe channel geometry only. The water-surface
+--   elevation is no longer carried here; it is computed per chunk
+--   from the segment's channel-floor (rsEndElev / rsStartElev minus
+--   rsDepth) by the water-table compute. See
+--   @src\/World\/Hydrology\/DESIGN.md@.
 data RiverSegment = RiverSegment
-    { rsStart      ∷ !GeoCoord   -- ^ Segment start (global tile coords)
-    , rsEnd        ∷ !GeoCoord   -- ^ Segment end
-    , rsWidth      ∷ !Int        -- ^ River channel width in tiles
+    { rsStart       ∷ !GeoCoord  -- ^ Segment start (global tile coords)
+    , rsEnd         ∷ !GeoCoord  -- ^ Segment end
+    , rsWidth       ∷ !Int       -- ^ River channel width in tiles
     , rsValleyWidth ∷ !Int       -- ^ Total valley width (channel + slopes)
-    , rsDepth      ∷ !Int        -- ^ Channel depth below surrounding terrain
-    , rsFlowRate   ∷ !Float      -- ^ Flow at this segment (increases downstream)
-    , rsStartElev  ∷ !Int        -- ^ Elevation at start (for carving reference)
-    , rsEndElev    ∷ !Int        -- ^ Elevation at end (for carving reference)
-    , rsWaterStart ∷ !Int        -- ^ Precomputed water surface at start (for fill)
-    , rsWaterEnd   ∷ !Int        -- ^ Precomputed water surface at end (for fill)
+    , rsDepth       ∷ !Int       -- ^ Channel depth below surrounding terrain
+    , rsFlowRate    ∷ !Float     -- ^ Flow at this segment (increases downstream)
+    , rsStartElev   ∷ !Int       -- ^ Reference terrain elevation at start
+    , rsEndElev     ∷ !Int       -- ^ Reference terrain elevation at end
     } deriving (Show, Eq, Generic, Serialize, Hashable)
 
 instance NFData RiverSegment where
-    rnf (RiverSegment s e w vw d f se ee ws we) =
+    rnf (RiverSegment s e w vw d f se ee) =
         rnf s `seq` rnf e `seq` rnf w `seq` rnf vw `seq`
-        rnf d `seq` rnf f `seq` rnf se `seq` rnf ee `seq`
-        rnf ws `seq` rnf we `seq` ()
+        rnf d `seq` rnf f `seq` rnf se `seq` rnf ee `seq` ()
 
 data RiverActivity
     = Flowing          -- ^ Active river
@@ -97,6 +98,8 @@ data GlacierParams = GlacierParams
     , glCarveDepth  ∷ !Int        -- ^ U-valley depth
     , glMoraineSize ∷ !Int        -- ^ Sediment pile at terminus
     , glIsIceSheet  ∷ !Bool       -- ^ True = polar ice sheet edge, False = alpine
+    , glStartElev   ∷ !Int        -- ^ Terrain elevation at glCenter (head), sampled at generation
+    , glFootElev    ∷ !Int        -- ^ Terrain elevation at the foot (glCenter + flowDir × glLength)
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
 data GlacierActivity

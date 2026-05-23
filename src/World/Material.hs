@@ -196,10 +196,15 @@ data MaterialProps = MaterialProps
     , mpHardness ∷ !Float
     , mpDensity  ∷ !Float
     , mpAlbedo   ∷ !Float
+    , mpDrainage ∷ !Float
+      -- ^ Hydraulic drainage 0.0 (impermeable bedrock — water sits on
+      --   top) to 1.0 (ultra-permeable, e.g. karst — water table dives
+      --   deep). 0.4 is the neutral baseline; used by the water-table
+      --   compute in @World.Hydrology.WaterTable@.
     } deriving (Show)
 
 defaultMaterialProps ∷ MaterialProps
-defaultMaterialProps = MaterialProps "unknown" 0.5 2.5 0.5
+defaultMaterialProps = MaterialProps "unknown" 0.5 2.5 0.5 0.4
 
 -- | 256-slot vector indexed by 'Word8'; starts as defaults, filled by YAML.
 newtype MaterialRegistry = MaterialRegistry (V.Vector MaterialProps)

@@ -128,9 +128,18 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                              + (if hashToFloatGeo h2 < 0.5 then 1.0 else -1.0)
                              * (0.5 + hashToFloatGeo h3 * 0.5)
                  -- Starts partway down the parent glacier
-                 startDist = fromIntegral (glLength parentGlacier) * (0.3 + hashToFloatGeo h4 * 0.4)
+                 branchT = 0.3 + hashToFloatGeo h4 * 0.4 ∷ Float
+                 startDist = fromIntegral (glLength parentGlacier) * branchT
                  branchX = cx + round (startDist * cos parentDir)
                  branchY = cy + round (startDist * sin parentDir)
+                 -- Inherit reference elevations from parent at the
+                 -- branch point. Without plate access here we can't
+                 -- sample the branch's own foot terrain, so we
+                 -- approximate as flat — the branch carves a U-valley
+                 -- floor at branchStartElev - carveDepth. Re-applied
+                 -- carves are still idempotent (audit #6).
+                 branchStartElev = round (fromIntegral (glStartElev parentGlacier)
+                     + branchT * fromIntegral (glFootElev parentGlacier - glStartElev parentGlacier)) ∷ Int
                  childGlacier = GlacierParams
                      { glCenter      = GeoCoord branchX branchY
                      , glFlowDir     = branchAngle
@@ -140,6 +149,8 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                      , glCarveDepth  = max 5 (glCarveDepth parentGlacier * 2 `div` 3)
                      , glMoraineSize = hashToRangeGeo h6 3 8
                      , glIsIceSheet  = False  -- branches are always alpine
+                     , glStartElev   = branchStartElev
+                     , glFootElev    = branchStartElev
                      }
                  childPf = PersistentFeature
                      { pfId               = childId
@@ -236,6 +247,9 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                  startDist = fromIntegral (glLength parentGlacier) * 0.5
                  branchX = cx + round (startDist * cos parentDir)
                  branchY = cy + round (startDist * sin parentDir)
+                 -- Inherit reference elevations from parent at the
+                 -- midpoint. See cold-world branch above for details.
+                 branchStartElev = (glStartElev parentGlacier + glFootElev parentGlacier) `div` 2
                  childGlacier = GlacierParams
                      { glCenter      = GeoCoord branchX branchY
                      , glFlowDir     = branchAngle
@@ -245,6 +259,8 @@ evolveFActiveGlacier seed periodIdx gs roll temp fid fidInt pf (events, tbs)
                      , glCarveDepth  = max 3 (glCarveDepth parentGlacier `div` 2)
                      , glMoraineSize = hashToRangeGeo h4 2 6
                      , glIsIceSheet  = False
+                     , glStartElev   = branchStartElev
+                     , glFootElev    = branchStartElev
                      }
                  childPf = PersistentFeature
                      { pfId               = childId

@@ -21,16 +21,15 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import World.Types
 import World.Constants (seaLevel)
-import World.Material (MaterialId(..), matGlacier, MaterialRegistry(..)
-                      , MaterialProps(..), getMaterialProps)
+import World.Material (MaterialId(..), matGlacier, MaterialRegistry(..))
 import World.Plate (TectonicPlate(..), elevationAtGlobal
                    , isBeyondGlacier, isGlacierZone, wrapGlobalU
                    , twoNearestPlates, BoundaryType(..), classifyBoundary)
 import qualified Data.Vector.Unboxed as VU
 import World.Fluids (isOceanChunk, hasAnyOceanFluid)
 import World.Fluid.Ocean (computeChunkFluid)
-import World.Fluid.River (computeChunkRivers, hasAnyRiverQuick)
-import World.Fluid.Lake (computeChunkLakes, hasAnyLakeQuick)
+import World.Fluid.River (hasAnyRiverQuick)
+import World.Fluid.Lake (hasAnyLakeQuick)
 import World.Fluid.Lava (hasAnyLavaQuick)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..), IceMap)
 import World.Fluid.IceLevel (lookupIceLevel)
@@ -97,13 +96,12 @@ buildZoomCache params registry =
                                 gy = baseGY + oy
                                 (gx', gy') = wrapGlobalU worldSize gx gy
                                 (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx' gy'
-                                hardness = mpHardness (getMaterialProps registry baseMat)
                             in if baseMat ≡ matGlacier
                                then (baseElev, unMaterialId baseMat)
                                else if baseElev < -100 then (baseElev, 0)
-                               else let (e, m) = applyTimelineFast timeline
+                               else let (e, m) = applyTimelineFast timeline plates
                                                      worldSize gx' gy'
-                                                     hardness
+                                                     registry
                                                      (baseElev, baseMat)
                                     in (e, unMaterialId m)
                           | (ox, oy) ← sampleOffsets

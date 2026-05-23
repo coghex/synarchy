@@ -1,40 +1,39 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
+
+-- | Lake-related helpers for zoom-map rendering.
+--
+--   The chunk-level lake fluid placement that used to live here has
+--   been replaced by the water-table-driven pipeline in
+--   `World.Generate.Chunk` — lakes now emerge automatically from the
+--   sink-fill step in `World.Hydrology.WaterTable` (see
+--   @src\/World\/Hydrology\/DESIGN.md@). What remains is a fast
+--   "is there a lake near this chunk?" predicate used by the zoom
+--   cache to draw indicators without computing the full chunk.
 module World.Fluid.Lake
-    ( computeChunkLakes
-    , hasAnyLakeQuick
+    ( hasAnyLakeQuick
     ) where
 
 import UPrelude
-import Data.Word (Word64)
-import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as MV
-import qualified Data.Vector.Unboxed as VU
-import Control.Monad (forM_, when)
-import Control.Monad.ST (ST)
 import World.Base
 import World.Types
-import World.Plate (TectonicPlate(..), elevationAtGlobal)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
-import World.Fluid.Internal
-import World.Hydrology.Types (HydroFeature(..), LakeParams(..))
+import World.Fluid.Internal (wrappedDeltaUVFluid)
+import World.Hydrology.Types
+import World.Geology.Types
 
--- * Chunk-Level Lake Computation
-
-computeChunkLakes ∷ [PersistentFeature] → Word64 → [TectonicPlate]
-                  → Int → ChunkCoord
-                  → VU.Vector Int
-                  → (Int → Int → Int)  -- ^ water table lookup (gx, gy → summer WT level)
-                  → FluidMap
-computeChunkLakes features seed plates worldSize coord surfaceMap waterTableAt =
+-- | Quick boolean check: does this chunk have any persistent-feature
+--   lake near it? Used for zoom-map water indicators. Note that this
+--   only sees lakes from the geological simulation's persistent
+--   feature list — water-table-fill lakes (where the wt rises into a
+--   depression with no explicit feature) are not detected here. Good
+--   enough for the zoom-map indicator since the zoom view also pulls
+--   fluid placement from `World.Generate.Chunk.generateZoomTerrain`,
+--   which uses the full water-table compute.
+hasAnyLakeQuick ∷ [PersistentFeature] → Int → ChunkCoord → Bool
+hasAnyLakeQuick features worldSize coord =
     let ChunkCoord cx cy = coord
         chunkMinGX = cx * chunkSize
         chunkMinGY = cy * chunkSize
-        nearbyLakes = filter (isNearbyLake worldSize chunkMinGX chunkMinGY) features
-    in withFluidMap $ \mv →
-        forM_ nearbyLakes $ \pf →
-            fillLakeFromFeature mv pf seed plates worldSize chunkMinGX chunkMinGY surfaceMap waterTableAt
-
--- * Lake Proximity
+    in any (isNearbyLake worldSize chunkMinGX chunkMinGY) features
 
 isNearbyLake ∷ Int → Int → Int → PersistentFeature → Bool
 isNearbyLake worldSize chunkGX chunkGY pf =
@@ -54,111 +53,3 @@ checkLakeRange worldSize chunkGX chunkGY lk =
         dx = abs dxi
         dy = abs dyi
     in dx < maxR + chunkSize ∧ dy < maxR + chunkSize
-
--- | Quick boolean check: does this chunk have any lake?
-hasAnyLakeQuick ∷ [PersistentFeature] → Int → ChunkCoord → Bool
-hasAnyLakeQuick features worldSize coord =
-    let ChunkCoord cx cy = coord
-        chunkMinGX = cx * chunkSize
-        chunkMinGY = cy * chunkSize
-    in any (isNearbyLake worldSize chunkMinGX chunkMinGY) features
-
--- * Lake Fill
-
-fillLakeFromFeature ∷ MV.MVector s (Maybe FluidCell)
-                    → PersistentFeature → Word64 → [TectonicPlate]
-                    → Int → Int → Int
-                    → VU.Vector Int
-                    → (Int → Int → Int)
-                    → ST s ()
-fillLakeFromFeature mv pf seed plates worldSize chunkGX chunkGY surfaceMap waterTableAt =
-    case pfFeature pf of
-        HydroShape (LakeFeature lk) →
-            let GeoCoord fx fy = lkCenter lk
-                poolRadius = lkRadius lk
-                lakeSurface = lkSurface lk
-                wtAtCenter = waterTableAt fx fy
-            in fillLakePool mv seed plates worldSize chunkGX chunkGY
-                   fx fy poolRadius lakeSurface wtAtCenter surfaceMap
-        _ → pure ()
-
-fillLakePool ∷ MV.MVector s (Maybe FluidCell)
-             → Word64 → [TectonicPlate] → Int → Int → Int
-             → Int → Int → Int → Int → Int
-             → VU.Vector Int
-             → ST s ()
-fillLakePool mv seed plates worldSize chunkGX chunkGY fx fy poolRadius lakeSurface waterTable surfaceMap =
-    let -- Expand fill radius by 25% to cover perturbed basin boundary.
-        -- The carving in Event.hs uses angular noise that can extend
-        -- the basin up to ~20% beyond the nominal radius. The surfZ
-        -- check ensures we only fill tiles actually carved below water.
-        pr = fromIntegral poolRadius * 1.25 ∷ Float
-        rimSamples = 32 ∷ Int
-
-        -- Always use elevationAtGlobal for rim samples so every chunk
-        -- computes the same spillway height deterministically.
-        spillway = foldl' (\minElev i →
-            let angle = fromIntegral i * 2.0 * π / fromIntegral rimSamples
-                rimGX = fx + round (pr * cos angle)
-                rimGY = fy + round (pr * sin angle)
-                (e, _) = elevationAtGlobal seed plates worldSize rimGX rimGY
-            in min minElev e
-            ) lakeSurface [0 .. rimSamples - 1]
-
-        clampedSurface = min lakeSurface spillway
-
-        -- Lakes only fill above the water table. Below the water
-        -- table, the basin would be filled by groundwater (ocean).
-        -- Above the water table, the lake must be sustained by
-        -- precipitation/rivers via the spillway mechanism.
-    in if clampedSurface ≤ waterTable
-       then pure ()
-       else do
-            -- Pass 1: fill tiles within radius that are at/below lake surface
-            forEachSurface surfaceMap $ \idx lx ly surfZ →
-                let gx = chunkGX + lx
-                    gy = chunkGY + ly
-                    (dxi, dyi) = wrappedDeltaUVFluid worldSize gx gy fx fy
-                    dx = fromIntegral dxi ∷ Float
-                    dy = fromIntegral dyi ∷ Float
-                    dist = sqrt (dx * dx + dy * dy)
-                in when (dist < pr ∧ surfZ ≤ clampedSurface ∧ surfZ > minBound) $ do
-                    existing ← MV.read mv idx
-                    case existing of
-                        -- When two lakes overlap, keep the LOWER surface.
-                        -- Lakes are flat water bodies; the lowest surface
-                        -- wins because water seeks its level.
-                        Just old | fcType old ≡ Lake ∧ fcSurface old < clampedSurface
-                            → pure ()
-                        _ → MV.write mv idx (Just (FluidCell Lake clampedSurface))
-            -- Pass 2: extend one tile to adjacent empty tiles whose terrain
-            -- is strictly BELOW the water surface. This covers exposed
-            -- side-faces at the shoreline without jumping over ridges
-            -- (ridges have terrain above the water surface).
-            forM_ [0 .. chunkSize * chunkSize - 1] $ \idx → do
-                val ← MV.read mv idx
-                when (isNothing val) $ do
-                    let surfZ = surfaceMap VU.! idx
-                    when (surfZ < clampedSurface ∧ surfZ > minBound) $ do
-                        let lx = idx `mod` chunkSize
-                            ly = idx `div` chunkSize
-                        adj ← adjacentHasFluid mv lx ly
-                        when adj $ do
-                            existing' ← MV.read mv idx
-                            case existing' of
-                                Just old | fcType old ≡ Lake
-                                           ∧ fcSurface old < clampedSurface
-                                    → pure ()
-                                _ → MV.write mv idx
-                                        (Just (FluidCell Lake clampedSurface))
-
-adjacentHasFluid ∷ MV.MVector s (Maybe FluidCell) → Int → Int → ST s Bool
-adjacentHasFluid mv lx ly = do
-    let check x y
-          | x < 0 ∨ x ≥ chunkSize ∨ y < 0 ∨ y ≥ chunkSize = return False
-          | otherwise = isJust ⊚ MV.read mv (y * chunkSize + x)
-    n ← check lx (ly - 1)
-    s ← check lx (ly + 1)
-    e ← check (lx + 1) ly
-    w ← check (lx - 1) ly
-    return (n ∨ s ∨ e ∨ w)

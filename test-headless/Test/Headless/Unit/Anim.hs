@@ -24,6 +24,9 @@ mkDef stateAnims = UnitDef
     , udBodyTemplates = HM.empty
     , udSkillTemplates = HM.empty
     , udStartingInventory = []
+    , udEquipmentClass = Nothing
+    , udStartingEquipment = HM.empty
+    , udStartingAccessories = []
     }
 
 spec ∷ Spec

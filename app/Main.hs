@@ -39,7 +39,7 @@ import World.Thread (startWorldThread)
 import World.Types
 import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), chunkSize)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..))
-import World.Plate (isGlacierZone, isBeyondGlacier)
+import World.Plate (isGlacierZone, isBeyondGlacier, defaultPlatesFor)
 import World.Generate.Types (WorldGenParams(..))
 import World.Weather.Types (ClimateState, initClimateState)
 import World.Weather.Lookup (lookupWaterTable)
@@ -92,12 +92,21 @@ main = do
       port = parseArg "--port" args
       seed = parseArg "--seed" args
       worldSz = parseArg "--worldSize" args
-      ages = parseArg "--ages" args
+      -- `--plates` is the canonical flag; `--ages` is a legacy alias
+      -- (its original name was misleading — the value is the plate
+      -- count, not number of geological ages, which is rolled
+      -- randomly inside buildTimeline).
+      plates  = parseArg "--plates" args
+      agesLeg = parseArg "--ages" args
       region = parseRegion args
+      worldSize = fromMaybe 256 worldSz
+      plateCount = case plates of
+          Just p  → p
+          Nothing → fromMaybe (defaultPlatesFor worldSize) agesLeg
 
   case mDump of
-    Just layers → runDump layers (fromMaybe 42 seed) (fromMaybe 256 worldSz)
-                                 (fromMaybe 5 ages) region
+    Just layers → runDump layers (fromMaybe 42 seed) worldSize
+                                 plateCount region
     Nothing
       | headless  → runHeadless (Just (fromMaybe 8008 port))
       | otherwise → runGraphical (Just (fromMaybe 8008 port))
@@ -218,10 +227,10 @@ runHeadless mPort = do
 -- | Run engine in dump mode: generate world, load chunks, dump tile
 --   data as JSON to stdout, and exit. No TCP server, no loop.
 runDump ∷ DumpLayers → Int → Int → Int → (Int, Int, Int, Int) → IO ()
-runDump layers seed worldSize ages (cx1, cy1, cx2, cy2) = do
+runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
   hPutStrLn stderr $ "dump: seed=" ⧺ show seed
                    ⧺ " worldSize=" ⧺ show worldSize
-                   ⧺ " ages=" ⧺ show ages
+                   ⧺ " plates=" ⧺ show plateCount
                    ⧺ " region=(" ⧺ show cx1 ⧺ ","
                    ⧺ show cy1 ⧺ "," ⧺ show cx2 ⧺ ","
                    ⧺ show cy2 ⧺ ")"
@@ -255,8 +264,11 @@ runDump layers seed worldSize ages (cx1, cy1, cx2, cy2) = do
         liftIO $ Q.writeQueue (worldQueue env')
             (WorldInit (WorldPageId "dump")
                        (fromIntegral seed ∷ Word64)
-                       worldSize ages)
-        liftIO $ waitForInit env' (ages * 120)
+                       worldSize plateCount)
+        -- Timeout scales with worldSize (gen time grows ~ quadratic
+        -- with worldSize, not with plate count). Min 300s for tiny
+        -- worlds, plenty of headroom for the largest practical sizes.
+        liftIO $ waitForInit env' (max 300 (worldSize * 4))
 
         liftIO $ Q.writeQueue (worldQueue env')
             (WorldShow (WorldPageId "dump"))
@@ -381,11 +393,13 @@ dumpTilesJSON layers worldSize climate td cx1 cy1 cx2 cy2 =
                  ⧺ ",\"v\":" ⧺ show v
             terrainZ = lcTerrainSurfaceMap lc VU.! idx
             surfZ    = lcSurfaceMap lc VU.! idx
+            waterTableZ = lcWaterTableMap lc VU.! idx
             (wtSummer, wtWinter) = lookupWaterTable climate worldSize gx gy
             terrainFields
               | dlTerrain layers =
                   ",\"terrainZ\":" ⧺ show terrainZ
                   ⧺ ",\"surfaceZ\":" ⧺ show surfZ
+                  ⧺ ",\"waterTableZ\":" ⧺ show waterTableZ
                   ⧺ ",\"waterTableSummer\":" ⧺ show wtSummer
                   ⧺ ",\"waterTableWinter\":" ⧺ show wtWinter
               | otherwise = ""

@@ -44,9 +44,11 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text as T
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
+import Control.Monad (when)
 import Control.Concurrent (threadDelay)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Material (parseTextureType)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
@@ -55,6 +57,7 @@ import World.Fluid.Types (FluidType(..))
 import World.Tool.Types (ToolMode(..), textToToolMode)
 import World.Render.Zoom.Types (ZoomMapMode(..), textToMapMode)
 import World.Generate.Config
+import World.Plate (defaultPlatesFor)
 
 -- | world.getGenDefaults() → table
 --   Returns the world generation config as a Lua table.
@@ -230,16 +233,32 @@ worldInitFn env = do
     seedArg   ← Lua.tointeger 2
     sizeArg   ← Lua.tointeger 3
     platesArg ← Lua.tointeger 4
-    
+
     case pageIdArg of
         Just pageIdBS → Lua.liftIO $ do
             let pageId = WorldPageId (TE.decodeUtf8 pageIdBS)
                 seed   = maybe 42 fromIntegral seedArg
-                size   = maybe 64 fromIntegral sizeArg
-                plates = maybe 10 fromIntegral platesArg
+                rawSize = maybe 64 fromIntegral sizeArg
+                -- worldSize must be even so wrapChunkCoordU
+                -- (Fluid/Internal.hs) has an integer period that
+                -- matches wrapGlobalU's tile-level period. Odd
+                -- values silently alias chunks at the cylindrical
+                -- seam (audit #9). Round up and warn.
+                size = if even rawSize then rawSize else rawSize + 1
+                -- Plate count scales with worldSize when caller
+                -- doesn't supply one — fixes the "10 plates for any
+                -- world" issue (audit #17). Explicit user values
+                -- still honored.
+                plates = maybe (defaultPlatesFor size) fromIntegral platesArg
+            when (size /= rawSize) $ do
+                logger ← readIORef (loggerRef env)
+                logWarn logger CatWorld $
+                    "world.init: worldSize " <> T.pack (show rawSize)
+                    <> " is odd; rounded up to " <> T.pack (show size)
+                    <> " (chunk-coord wrap requires even worldSize)."
             Q.writeQueue (worldQueue env) (WorldInit pageId seed size plates)
         Nothing → pure ()
-    
+
     return 0
 
 -- | world.initArena(pageId) — create flat test arena, no geology

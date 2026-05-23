@@ -77,16 +77,14 @@ spawnMeltwaterRiver seed periodIdx parentFid pf (events, tbs) =
             let t = fromIntegral (i + 1) / fromIntegral numSegs ∷ Float
                 flow = 0.2 + t * 0.3
             in RiverSegment
-                { rsStart      = s
-                , rsEnd        = e
-                , rsWidth      = segWidth
+                { rsStart       = s
+                , rsEnd         = e
+                , rsWidth       = segWidth
                 , rsValleyWidth = segValleyW
-                , rsDepth      = segDepth
-                , rsFlowRate   = flow
-                , rsStartElev  = 0
-                , rsEndElev    = 0
-                , rsWaterStart = 0
-                , rsWaterEnd   = 0
+                , rsDepth       = segDepth
+                , rsFlowRate    = flow
+                , rsStartElev   = 0
+                , rsEndElev     = 0
                 }
             ) [0∷Int ..] (zip waypoints (drop 1 waypoints))
 

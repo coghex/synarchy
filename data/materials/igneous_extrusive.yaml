@@ -4,6 +4,7 @@ materials:
     hardness: 0.7
     density: 3.0
     albedo: 0.10
+    drainage: 0.1
     tile: "assets/textures/world/basalt/basalt.png"
     zoom: "assets/textures/world/zoommap/basalt_chunk.png"
     bg:   "assets/textures/world/zoommap/basalt_chunk_background.png"
@@ -12,6 +13,7 @@ materials:
     hardness: 0.95
     density: 2.4
     albedo: 0.05
+    drainage: 0.05
     tile: "assets/textures/world/obsidian/obsidian.png"
     zoom: "assets/textures/world/zoommap/obsidian_chunk.png"
     bg:   "assets/textures/world/zoommap/obsidian_chunk_background.png"
@@ -20,6 +22,7 @@ materials:
     hardness: 0.75
     density: 2.5
     albedo: 0.40
+    drainage: 0.1
     tile: "assets/textures/world/rhyolite/rhyolite.png"
     zoom: "assets/textures/world/zoommap/rhyolite_chunk.png"
     bg:   "assets/textures/world/zoommap/rhyolite_chunk_background.png"
@@ -28,6 +31,7 @@ materials:
     hardness: 0.7
     density: 2.6
     albedo: 0.25
+    drainage: 0.1
     tile: "assets/textures/world/andesite/andesite.png"
     zoom: "assets/textures/world/zoommap/andesite_chunk.png"
     bg:   "assets/textures/world/zoommap/andesite_chunk_background.png"
@@ -36,6 +40,7 @@ materials:
     hardness: 0.5
     density: 1.8
     albedo: 0.35
+    drainage: 0.4
     tile: "assets/textures/world/tuff/tuff.png"
     zoom: "assets/textures/world/zoommap/tuff_chunk.png"
     bg:   "assets/textures/world/zoommap/tuff_chunk_background.png"
@@ -44,6 +49,7 @@ materials:
     hardness: 0.3
     density: 0.9
     albedo: 0.55
+    drainage: 0.65
     tile: "assets/textures/world/pumice/pumice.png"
     zoom: "assets/textures/world/zoommap/pumice_chunk.png"
     bg:   "assets/textures/world/zoommap/pumice_chunk_background.png"
@@ -52,6 +58,7 @@ materials:
     hardness: 0.5
     density: 1.8
     albedo: 0.12
+    drainage: 0.65
     tile: "assets/textures/world/scoria/scoria.png"
     zoom: "assets/textures/world/zoommap/scoria_chunk.png"
     bg:   "assets/textures/world/zoommap/scoria_chunk_background.png"

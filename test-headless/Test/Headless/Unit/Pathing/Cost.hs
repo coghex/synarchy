@@ -33,6 +33,7 @@ flatChunk terrZ =
         , lcIceMap            = emptyIceMap
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.empty
+        , lcWaterTableMap     = VU.empty
         }
 
 -- | Build a single chunk with per-tile terrain/fluid set by a function.
@@ -58,6 +59,7 @@ customChunk f =
         , lcIceMap            = emptyIceMap
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.empty
+        , lcWaterTableMap     = VU.empty
         }
 
 worldWith ∷ LoadedChunk → WorldTileData

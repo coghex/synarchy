@@ -132,13 +132,21 @@ applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, 
            --   Each mode contributes independently so a wet + cold
            --   world gets both hydraulic valleys AND thermal peaks.
            ---------------------------------------------------------
-           combinedRate = (hydraulicRate + windRate + thermalRate + chemicalRate)
-                        * durationScale
-                        * scaleFactor
-                        * epIntensity params
+           linearRate = (hydraulicRate + windRate + thermalRate + chemicalRate)
+                      * durationScale
+                      * scaleFactor
+                      * epIntensity params
 
-           -- Clamp rate to prevent over-smoothing past the average
-           clampedRate = min 1.0 combinedRate
+           -- Saturating curve: K*(1 - exp(-r/K)).
+           --   • Short periods (Ages, r << K): clampedRate ≈ linearRate.
+           --   • Long periods (Bombardment / Era, r >> K): clampedRate → K.
+           -- This replaces a hard `min 1.0` clamp, which collapsed any
+           -- long-duration period to "smooth fully to neighbor average"
+           -- in a single pass. With K=0.3 the worst case is "smooth 30%
+           -- of the way to neighbor average", so Tier-1 ridges survive
+           -- through bombardment + Era periods into the Age loop.
+           maxSmoothing = 0.3 ∷ Float
+           clampedRate = maxSmoothing * (1.0 - exp (negate (linearRate / maxSmoothing)))
 
            -- Raw delta: fraction of the difference we close
            rawDelta = diff * clampedRate
@@ -206,14 +214,18 @@ truncateTowardZero x
     | otherwise = 0
 
 -- | Determine what material results from erosion/deposition.
---   Climate-aware: uses temperature, precipitation, humidity
---   baked into ErosionParams at world-gen time.
+--   Climate-aware: uses temperature, precipitation, humidity baked
+--   into ErosionParams at world-gen time.
 --
 --   For non-final ages: produces geological sedimentary rocks.
 --   For the final age (epIsLastAge): produces soils (0-5 tile veneer).
 --
---   The seed field in ErosionParams provides deterministic variation
---   so adjacent tiles don't all produce identical materials.
+--   A Phase 2 attempt added slope + water-table-depth gating here
+--   (only place muck on flat tiles near groundwater, etc.) but the
+--   underlying wt depth was miscalibrated and the result was muck
+--   becoming vanishingly rare. Reverted; soil classification is back
+--   to climate-only. The `mpDrainage` field on `MaterialProps` is
+--   still present and parsed from YAML for future use.
 erosionSediment ∷ ErosionParams → Word8 → Int → Bool → Word8
 erosionSediment params matId elev isDeposition =
     let temp  = epTemperature params
@@ -224,9 +236,6 @@ erosionSediment params matId elev isDeposition =
         lastAge = epIsLastAge params
 
         -- Hash for local variation (cheap: xor + shift).
-        -- Interpolate between adjacent elevation buckets to prevent
-        -- both fine-grained checkerboard (from per-tile hashing) and
-        -- coarse 8-tile banding (from hard quantization).
         bucket = elev `div` 8
         bucketFrac = fromIntegral (elev `mod` 8) / 8.0 ∷ Float
         hashBucket b = fromIntegral (seed `xor` fromIntegral matId
@@ -303,9 +312,6 @@ soilFromClimate temp precip humid snow _srcMat roll
         else if precip > blur 0.3 then 56     -- loam
         else 53                                -- sandy loam
   where
-    -- Shift threshold by ±0.02 based on roll to blur material
-    -- boundaries.  Creates a natural transition zone instead of
-    -- a hard line where the climate gradient crosses each threshold.
     blur threshold = threshold + (roll - 0.5) * 0.04
 
 -- | Non-final-age sedimentary rock from source material.

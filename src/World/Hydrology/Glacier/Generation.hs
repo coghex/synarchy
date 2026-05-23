@@ -57,8 +57,9 @@ generateIceSheetTongues ∷ Word64 → Int → [TectonicPlate] → GeoState → 
 generateIceSheetTongues seed worldSize plates gs periodIdx tbs =
     let halfTiles = (worldSize * 16) `div` 2
         temp = gsCO2 gs
-        -- More candidates: base 8 instead of 4
-        baseCount = scaleCount worldSize 4
+        -- Halved from 4 to 2 so ice sheets + alpine total respects
+        -- the outer glacierCap = scaleCount worldSize 4 (audit #7).
+        baseCount = scaleCount worldSize 2
         maxGlaciers = if temp < 0.8 then baseCount
                       else if temp ≤ 1.2 then baseCount `div` 2
                       else baseCount `div` 4
@@ -134,6 +135,17 @@ tryIceSheetGlacier seed worldSize plates temp gx gy isNorth attemptIdx =
                 carveD    = hashToRangeGeo h5 15 50
                 moraine   = hashToRangeGeo h6 8 20
 
+                -- Stable reference elevations sampled at generation
+                -- time so applyGlacierCarve can be target-based
+                -- (audit #6). Re-applying the same carve event in
+                -- later Ages then becomes idempotent — terrain
+                -- already at target is left alone.
+                footGx = gx + round (cos flowDir * fromIntegral baseLength)
+                footGy = gy + round (sin flowDir * fromIntegral baseLength)
+                footElev = if isBeyondGlacier worldSize footGx footGy
+                           then elev
+                           else fst (elevationAtGlobal seed plates worldSize footGx footGy)
+
             in Just GlacierParams
                 { glCenter      = GeoCoord gx gy
                 , glFlowDir     = flowDir
@@ -143,6 +155,8 @@ tryIceSheetGlacier seed worldSize plates temp gx gy isNorth attemptIdx =
                 , glCarveDepth  = carveD
                 , glMoraineSize = moraine
                 , glIsIceSheet  = True
+                , glStartElev   = elev
+                , glFootElev    = footElev
                 }
 
 -- | Check if a point is within a few chunks of the glacier zone.
@@ -171,10 +185,11 @@ generateAlpineGlaciers ∷ Word64 → Int → [TectonicPlate] → GeoState → I
 generateAlpineGlaciers seed worldSize plates gs periodIdx tbs =
     let halfTiles = (worldSize * 16) `div` 2
         temp = gsCO2 gs
-        -- More alpine glaciers: base 8 instead of 4
-        maxGlaciers = if temp < 0.8 then scaleCount worldSize 4
-                      else if temp ≤ 1.2 then scaleCount worldSize 2
-                      else scaleCount worldSize 1  -- even warm worlds get a few high-altitude ones
+        -- Halved (was 4/2/1) so ice sheets + alpine total respects
+        -- the outer glacierCap = scaleCount worldSize 4 (audit #7).
+        maxGlaciers = if temp < 0.8 then scaleCount worldSize 2
+                      else if temp ≤ 1.2 then scaleCount worldSize 1
+                      else max 1 (scaleCount worldSize 1 `div` 2)
         maxAttempts = maxGlaciers * 6
         -- Lower threshold: 80 above sea level (was 150)
         -- This lets glaciers form on moderate highlands, not just extreme peaks
@@ -216,6 +231,13 @@ generateAlpineGlaciers seed worldSize plates gs periodIdx tbs =
                                   carveD     = hashToRangeGeo h6 12 30  -- was 8-20
                                   moraine    = hashToRangeGeo h7 5 15   -- was 3-10
 
+                                  -- Foot elevation for target-based carving (audit #6).
+                                  footGx = gx + round (cos flowDir * fromIntegral glacierLen)
+                                  footGy = gy + round (sin flowDir * fromIntegral glacierLen)
+                                  footElev = if isBeyondGlacier worldSize footGx footGy
+                                             then elev
+                                             else fst (elevationAtGlobal seed plates worldSize footGx footGy)
+
                                   glacier = GlacierParams
                                       { glCenter      = GeoCoord gx gy
                                       , glFlowDir     = flowDir
@@ -225,6 +247,8 @@ generateAlpineGlaciers seed worldSize plates gs periodIdx tbs =
                                       , glCarveDepth  = carveD
                                       , glMoraineSize = moraine
                                       , glIsIceSheet  = False
+                                      , glStartElev   = elev
+                                      , glFootElev    = footElev
                                       }
 
                                   (fid, tbs'') = allocFeatureId tbs'

@@ -30,6 +30,7 @@ flatChunk terrZ =
         , lcIceMap            = emptyIceMap
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.empty
+        , lcWaterTableMap     = VU.empty
         }
 
 customChunk ∷ ((Int, Int) → (Int, Maybe FluidType)) → LoadedChunk
@@ -53,6 +54,7 @@ customChunk f =
         , lcIceMap            = emptyIceMap
         , lcFlora             = emptyFloraChunkData
         , lcSideDeco          = VU.empty
+        , lcWaterTableMap     = VU.empty
         }
 
 worldWith ∷ LoadedChunk → WorldTileData

@@ -11,7 +11,6 @@ module World.Generate
       -- * Constants
     , viewDepth
       -- * Timeline application
-    , applyTimeline
     , applyTimelineFast
       -- * Types re-export
     , ChunkCoord(..)
@@ -29,7 +28,6 @@ import World.Generate.Constants
     , viewDepth
     )
 import World.Generate.Timeline
-    ( applyTimeline
-    , applyTimelineFast
+    ( applyTimelineFast
     )
 import World.Types (ChunkCoord(..))

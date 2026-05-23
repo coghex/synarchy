@@ -4,6 +4,7 @@ materials:
     hardness: 0.55
     density: 2.55
     albedo: 0.52
+    drainage: 0.6
     tile: "assets/textures/world/limestone/limestone.png"
     zoom: "assets/textures/world/zoommap/limestone_chunk.png"
     bg:   "assets/textures/world/zoommap/limestone_chunk_background.png"
@@ -12,6 +13,7 @@ materials:
     hardness: 0.3
     density: 2.2
     albedo: 0.70
+    drainage: 0.5
     tile: "assets/textures/world/chalk/chalk.png"
     zoom: "assets/textures/world/zoommap/chalk_chunk.png"
     bg:   "assets/textures/world/zoommap/chalk_chunk_background.png"
@@ -20,6 +22,7 @@ materials:
     hardness: 0.85
     density: 2.6
     albedo: 0.28
+    drainage: 0.1
     tile: "assets/textures/world/chert/chert.png"
     zoom: "assets/textures/world/zoommap/chert_chunk.png"
     bg:   "assets/textures/world/zoommap/chert_chunk_background.png"
@@ -28,6 +31,7 @@ materials:
     hardness: 0.3
     density: 2.16
     albedo: 0.50
+    drainage: 0.45
     tile: "assets/textures/world/rock_salt/rock_salt.png"
     zoom: "assets/textures/world/zoommap/rock_salt_chunk.png"
     bg:   "assets/textures/world/zoommap/rock_salt_chunk_background.png"
@@ -36,6 +40,7 @@ materials:
     hardness: 0.2
     density: 2.3
     albedo: 0.55
+    drainage: 0.5
     tile: "assets/textures/world/gypsum/gypsum.png"
     zoom: "assets/textures/world/zoommap/gypsum_chunk.png"
     bg:   "assets/textures/world/zoommap/gypsum_chunk_background.png"
@@ -44,6 +49,7 @@ materials:
     hardness: 0.6
     density: 2.85
     albedo: 0.48
+    drainage: 0.6
     tile: "assets/textures/world/dolomite/dolomite.png"
     zoom: "assets/textures/world/zoommap/dolomite_chunk.png"
     bg:   "assets/textures/world/zoommap/dolomite_chunk_background.png"

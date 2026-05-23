@@ -233,7 +233,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             cameraChunkCoord (sdCameraFacing saveData)
                              (sdCameraX saveData)
                              (sdCameraY saveData)
-        (ct, cs, cterrain, cf, cice, cflora) = generateChunk registry catalog params centerCoord
+        (ct, cs, cterrain, cf, cice, cflora, cwt) = generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →
             case cf V.! idx of
                 Just fc → max surfZ (fcSurface fc)
@@ -248,6 +248,7 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
             , lcIceMap            = cice
             , lcFlora             = cflora
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
+            , lcWaterTableMap    = cwt
             }
     -- Replay edits onto the freshly-generated center chunk. The edit
     -- log was restored from sdEdits earlier in this handler; if the

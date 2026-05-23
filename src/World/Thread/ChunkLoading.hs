@@ -92,7 +92,7 @@ updateChunkLoading env logger = do
                                 let !newChunks = if isArena
                                         then map generateFlatChunk batch
                                         else parMap rdeepseq (\coord →
-                                            let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora) = generateChunk registry catalog params coord
+                                            let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap) = generateChunk registry catalog params coord
                                                 seededSurf = VU.imap (\idx surfZ →
                                                     case fluidMap V.! idx of
                                                         Just fc → max surfZ (fcSurface fc)
@@ -107,6 +107,7 @@ updateChunkLoading env logger = do
                                                 , lcIceMap     = iceMap
                                                 , lcFlora      = flora
                                                 , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
+                                                , lcWaterTableMap = wtMap
                                                 }) batch
                                 -- Replay player edits onto the fresh chunks
                                 -- before inserting. Chunks evicted earlier
@@ -169,7 +170,7 @@ drainInitQueues env logger = do
                             seed  = wgpSeed params
 
                         let newChunks = parMap rdeepseq (\coord →
-                                let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora) = generateChunk registry catalog params coord
+                                let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap) = generateChunk registry catalog params coord
                                     seededSurf = VU.imap (\idx surfZ →
                                         case fluidMap V.! idx of
                                             Just fc → max surfZ (fcSurface fc)
@@ -184,6 +185,7 @@ drainInitQueues env logger = do
                                     , lcIceMap     = iceMap
                                     , lcFlora      = flora
                                     , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
+                                    , lcWaterTableMap = wtMap
                                     }) batch
 
                         -- Replay player edits onto the fresh chunks

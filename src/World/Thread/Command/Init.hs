@@ -15,11 +15,14 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import System.Random
+import Engine.Asset.YamlTextures (MaterialDef(..), loadMaterialDirectory)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn
                        , LogCategory(..), LoggerState)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Scripting.Lua.Types (LuaMsg(..))
+import World.Material (MaterialProps(..), registerMaterial
+                      , emptyMaterialRegistry)
 import World.Types
 import World.Constants (seaLevel)
 import World.Generate (generateChunk)
@@ -27,7 +30,6 @@ import World.Generate.Constants (chunkLoadRadius)
 import World.Generate.Timeline (applyTimelineFast)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatTimeline, formatPlatesSummary)
-import World.Material (getMaterialProps, MaterialProps(..))
 import World.Fluids (computeOceanMap, isOceanChunk)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Preview (buildPreviewFromPixels, PreviewImage(..))
@@ -61,6 +63,25 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     atomicModifyIORef' (worldManagerRef env) $ \mgr →
         (mgr { wmWorlds = (pageId, worldState) : wmWorlds mgr }, ())
     
+    -- Step 0.5: Populate the material registry from data/materials/*.yaml.
+    -- The registry was initialized empty at engine startup; without this
+    -- pass every material would use defaultMaterialProps (uniform
+    -- hardness/density/drainage), making per-material differentiation
+    -- in erosion / water-table / etc. a no-op. Idempotent — reloading on
+    -- successive world inits just rewrites the same data.
+    sendGenLog env "Loading material registry from data/materials..."
+    matDefs ← loadMaterialDirectory logger "data/materials"
+    let populatedReg = foldl' (\r def →
+            registerMaterial (mdId def)
+                (MaterialProps (mdName def)
+                               (mdHardness def)
+                               (mdDensity def)
+                               (mdAlbedo def)
+                               (mdDrainage def))
+                r
+            ) emptyMaterialRegistry matDefs
+    writeIORef (materialRegistryRef env) populatedReg
+
     -- Step 1: Timeline (now co-evolves climate)
     writeIORef phaseRef (LoadPhase1 1 totalSteps)
     sendGenLog env "Building geological timeline..."
@@ -82,10 +103,8 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     sendGenLog env "Computing ocean map..."
     let plates = generatePlates seed worldSize placeCount
     _ ← evaluate (force plates)
-    let applyTL gx gy base = applyTimelineFast timeline worldSize gx gy
-                               (mpHardness
-                                 (getMaterialProps registry (snd base)))
-                               base
+    let applyTL gx gy base = applyTimelineFast timeline plates worldSize gx gy
+                               registry base
         (oceanMap, oceanDist) = computeOceanMap seed worldSize placeCount plates applyTL
     _ ← evaluate (force oceanMap)
     _ ← evaluate (force oceanDist)
@@ -174,7 +193,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     
     catalog ← readIORef (floraCatalogRef env)
     let centerCoord = ChunkCoord 0 0
-        (ct, cs, cterrain, cf, cice, cflora) = generateChunk registry catalog params centerCoord
+        (ct, cs, cterrain, cf, cice, cflora, cwt) = generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →
             case cf V.! idx of
                 Just fc → max surfZ (fcSurface fc)
@@ -189,6 +208,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , lcIceMap     = cice
             , lcFlora      = cflora
             , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
+            , lcWaterTableMap = cwt
             }
 
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
@@ -283,6 +303,7 @@ handleWorldInitArenaCommand env logger pageId = do
             , lcIceMap            = emptyIceMap
             , lcFlora             = flatFlora
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
+            , lcWaterTableMap    = VU.replicate (chunkSize * chunkSize) (arenaZ - 2)
             }
 
         allChunks = [ mkChunk cx cy

@@ -114,12 +114,16 @@ oceanRegionsFromGrid grid worldSize =
 -- * Public: lightweight climate update during timeline
 
 -- | Update climate from the current ElevGrid's ocean distribution.
---   Called at each Era/Period boundary inside buildTimeline.
---   
---   Takes the previous ClimateState to carry forward CO2, solar
---   constant, and global temperature offset. Recomputes maritime
---   index, temperatures, ocean cells, and regional climate from
---   the new ocean set.
+--   Called at each Age boundary inside buildTimeline.
+--
+--   Carries forward CO2 (driver of temperature evolution) and solar
+--   constant. Temperature is *recomputed* from CO2 + ocean shape
+--   each call; we deliberately pass 0.0 as the globalTempOffset
+--   parameter rather than threading csGlobalTemp back through —
+--   csGlobalTemp stores the computed *mean* temperature, not an
+--   offset, so feeding it back in would double-count and drift up
+--   exponentially with call frequency. The latent bug only mattered
+--   at low (Era) cadence; per-Age updates surface it sharply.
 updateClimateFromGrid ∷ Int                        -- ^ worldSize
                       → HS.HashSet ClimateCoord    -- ^ coarse ocean regions
                       → [PersistentFeature]        -- ^ current persistent features
@@ -129,7 +133,7 @@ updateClimateFromGrid worldSize coarseOcean features prevClimate =
     let freshwater = extractFreshwaterSources worldSize features
     in buildClimateFromOceanSet worldSize coarseOcean freshwater
         (csGlobalCO2  prevClimate)
-        (csGlobalTemp prevClimate)
+        0.0
         (csSolarConst prevClimate)
 
 -- * Internal: shared climate builder

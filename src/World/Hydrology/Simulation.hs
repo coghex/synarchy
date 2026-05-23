@@ -27,7 +27,9 @@ import World.Plate (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGloba
 import World.Geology.Types
 import World.Geology.Hash (hashGeo, hashToFloatGeo, wrappedDeltaUV)
 import World.Hydrology.Types
-import World.Weather.Types (ClimateState(..))
+import qualified Data.HashMap.Strict as HM
+import World.Weather.Types (ClimateState(..), ClimateGrid(..)
+                           , RegionClimate(..), SeasonalClimate(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 
 -- * Configuration
@@ -35,13 +37,33 @@ import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 baseSampleSpacing ∷ Int
 baseSampleSpacing = 4
 
--- | Minimum flow accumulation to qualify as a river.
---   Calibrated for precipitation-weighted accumulation where
---   each cell contributes ~1-10 units based on rainfall + snowmelt
---   (×10 scale). Average wet cell ≈ 5 units, so 80 ≈ 16 wet cells
---   of drainage area — similar to the old threshold of 15 flat cells.
-minRiverTotalFlow ∷ Int
-minRiverTotalFlow = 80
+-- | Drainage-area target (cells of average-wetness) to qualify as a
+--   river. The actual flow threshold is derived per-world from
+--   climate (see `effRiverThreshold`) so river density per area
+--   stays consistent across arid / balanced / wet climates rather
+--   than scaling with per-cell water input (audit #15).
+minRiverDrainageCells ∷ Int
+minRiverDrainageCells = 16
+
+-- | World-specific river threshold scaled by climate. Uses the same
+--   per-cell water formula as `accumVec`: avg-cell water units ≈
+--   avgPrecip * 10 (ignoring snowmelt for the average). For a
+--   balanced world (avgPrecip ≈ 0.5) this gives 80 — the constant
+--   the old `minRiverTotalFlow` was calibrated for. Floor at 16
+--   matches the per-cell `max 1` floor — even extreme deserts can't
+--   form rivers from <16 cells of drainage.
+effRiverThreshold ∷ ClimateState → Int
+effRiverThreshold climate =
+    let regions = cgRegions (csClimate climate)
+        avgPrecip = if HM.null regions
+                    then 0.5
+                    else HM.foldl' (\acc rc →
+                              let SeasonalClimate s w = rcPrecipitation rc
+                              in acc + (s + w) / 2.0
+                              ) 0.0 regions
+                         / fromIntegral (HM.size regions)
+    in max minRiverDrainageCells
+         $ round (fromIntegral minRiverDrainageCells * avgPrecip * 10.0 ∷ Float)
 
 minRiverLength ∷ Int
 minRiverLength = 2
@@ -656,10 +678,16 @@ simulateHydrology seed worldSize ageIdx grid climate =
         -- Step 5: River sources
         -- A cell is a headwater if:
         --   1. It's land
-        --   2. It has accumulation >= minRiverTotalFlow
-        --   3. No upstream neighbor has accumulation >= minRiverTotalFlow
+        --   2. It has accumulation >= riverThreshold
+        --   3. No upstream neighbor has accumulation >= riverThreshold
         --      (i.e., this is where significant flow begins)
+        --
+        -- riverThreshold scales with the world's avg precipitation so
+        -- the drainage-area requirement (in cells) stays consistent
+        -- across arid / balanced / wet climates (audit #15).
         ---------------------------------------------------
+
+        riverThreshold = effRiverThreshold climate
 
         -- Pre-compute which cells have a qualified upstream contributor.
         -- For each cell with sufficient flow, mark its downstream target
@@ -668,7 +696,7 @@ simulateHydrology seed worldSize ageIdx grid climate =
         hasQualifiedUpstream = runST $ do
             mv ← VUM.replicate totalSamples False
             forM_ [0 .. totalSamples - 1] $ \idx →
-                when (accumVec VU.! idx ≥ minRiverTotalFlow) $ do
+                when (accumVec VU.! idx ≥ riverThreshold) $ do
                     let downstream = flowDirVec VU.! idx
                     when (downstream ≥ 0 ∧ downstream < totalSamples) $
                         VUM.write mv downstream True
@@ -676,7 +704,7 @@ simulateHydrology seed worldSize ageIdx grid climate =
 
         headwaters = filter (\idx →
             landVec VU.! idx
-            ∧ accumVec VU.! idx ≥ minRiverTotalFlow
+            ∧ accumVec VU.! idx ≥ riverThreshold
             ∧ not (hasQualifiedUpstream VU.! idx)
             ) [0 .. totalSamples - 1]
 

@@ -90,12 +90,24 @@ computeOceanMap seed worldSize plateCount plates applyTL =
                            (c:_) → [c]
                            []    → candidates (r + 1)
             in candidates 0
+        -- Canonicalize seeds via wrapChunkU. Seeds come from plate
+        -- centers whose chunk coords can have u (= cx-cy) outside
+        -- the canonical [-halfSize, halfSize) range — they're in the
+        -- playable square but not on the canonical side of the wrap.
+        -- Post-wrap entries from `neighbors` are always canonical, so
+        -- without this step the visited set would mix canonical and
+        -- non-canonical keys for the same physical chunk and
+        -- canonical lookups (after #10) would miss seam-adjacent
+        -- ocean (audit #11).
+        canonChunk (ChunkCoord ccx ccy) =
+            let (cx', cy') = wrapChunkU (ccx, ccy)
+            in ChunkCoord cx' cy'
         oceanSeeds = concatMap (\plate →
             if plateIsLand plate
             then []
             else let cx = floorDiv' (plateCenterX plate) chunkSize
                      cy = floorDiv' (plateCenterY plate) chunkSize
-                 in findOceanSeed cx cy
+                 in map canonChunk (findOceanSeed cx cy)
             ) plates
 
         -- Wrap chunk coords in u-space (consistent with the isometric world)

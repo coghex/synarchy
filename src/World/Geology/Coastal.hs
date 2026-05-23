@@ -109,6 +109,18 @@ isNearRiverMouth worldSize mouths gx gy =
         in d2 ≤ riverMouthRadius * riverMouthRadius
         ) mouths
 
+-- | Like `isNearRiverMouth` but with an explicit radius. Used for the
+--   tighter "channel-carve-through" zone that lowers terrain to sea
+--   level at the actual mouth (vs the wider classification zone that
+--   uses `riverMouthRadius`).
+isNearRiverMouth' ∷ Int → [(Int, Int)] → Int → Int → Int → Bool
+isNearRiverMouth' worldSize mouths radius gx gy =
+    let r2 = radius * radius
+    in any (\(mx, my) →
+        let (dx, dy) = wrappedDeltaUV worldSize gx gy mx my
+        in dx * dx + dy * dy ≤ r2
+        ) mouths
+
 -- * Sand Profile
 
 sandProfile ∷ Int → Int

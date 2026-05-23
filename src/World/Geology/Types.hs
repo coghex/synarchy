@@ -31,6 +31,7 @@ module World.Geology.Types
 import UPrelude
 import Data.List (find)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import Data.Hashable (Hashable(..))
 import World.Base (GeoFeatureId(..), GeoCoord(..))
 import World.Region.Types (RegionCoord(..), RegionalData(..)
@@ -42,7 +43,7 @@ import World.Geology.Timeline.Types (PersistentFeature(..), GeoPeriod(..)
                                     , ShieldParams(..))
 import World.Plate (TectonicPlate(..), twoNearestPlates, isBeyondGlacier)
 import World.Material (matBasalt, matObsidian)
-import World.Weather.Types (ClimateState)
+import World.Weather.Types (ClimateState, ClimateCoord)
 
 -- * GeoModification
 
@@ -258,6 +259,14 @@ data TimelineBuildState = TimelineBuildState
     , tbsClimateState ∷ !ClimateState
     , tbsErosionIntensity ∷ !Float
     , tbsVolcanicActivity ∷ !Float
+    , tbsCoarseOcean ∷ !(HS.HashSet ClimateCoord)
+      -- ^ Cached coarse ocean classification for climate updates.
+      --   Refreshed at Era boundaries from the current ElevGrid;
+      --   reused by per-Age climate updates inside buildAge.
+      --   Holding the ocean shape stable within an Era avoids a
+      --   feedback loop (erosion → wetter climate → more erosion)
+      --   while still letting CO2 / freshwater / temperature
+      --   evolve every Age.
     }
 
 allocFeatureId ∷ TimelineBuildState → (GeoFeatureId, TimelineBuildState)

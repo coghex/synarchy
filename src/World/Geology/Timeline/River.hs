@@ -255,6 +255,12 @@ evolveExistingRiver seed ageIdx periodIdx worldSize pf tbs =
 -- | Deepen — updates persistent state but emits NO events.
 --   The deeper channel will be reflected next time the river
 --   is emitted (meander or new creation).
+--
+--   Channel deepens toward a per-segment target derived from the
+--   segment's flow rate (audit #14). Previously a flat cap of 20
+--   meant old rivers monotonically reached 20 regardless of flow,
+--   while late-formed rivers stayed shallow. Now small rivers
+--   converge to shallow targets, big rivers to deep ones.
 evolveDeepen ∷ Word64 → Int → Int
              → PersistentFeature → RiverParams
              → TimelineBuildState
@@ -264,11 +270,19 @@ evolveDeepen seed ageIdx periodIdx pf river tbs =
         GeoFeatureId fidInt = fid
         h2 = hashGeo seed fidInt (930 + ageIdx)
         deepenAmt = hashToRangeGeo h2 1 3
-        maxDepth = 20
-        newSegs = fixupSegmentContinuity $ V.map (\seg → seg
-            { rsDepth = min maxDepth (rsDepth seg + deepenAmt)
-            , rsValleyWidth = rsValleyWidth seg + 1
-            }) (rpSegments river)
+        -- Flow-driven target depth. Flow rates come from
+        -- Simulation.hs as `accum * 0.005 + 0.1`: a small river
+        -- (flow ≈ 0.5) targets depth 3; a large river (flow ≈ 5)
+        -- targets 20. After merges (audit #12), downstream segments
+        -- inherit the combined flow and can deepen further.
+        targetDepth seg = min 20
+                        $ max 3
+                        $ floor (rsFlowRate seg * 4.0 ∷ Float)
+        newSegs = fixupSegmentContinuity $ V.map (\seg →
+            let cap = targetDepth seg
+            in seg { rsDepth = min cap (rsDepth seg + deepenAmt)
+                   , rsValleyWidth = rsValleyWidth seg + 1
+                   }) (rpSegments river)
         newRiver = river { rpSegments = newSegs }
         updatedPf = pf
             { pfFeature          = HydroShape $ RiverFeature newRiver
@@ -282,9 +296,15 @@ evolveDeepen seed ageIdx periodIdx pf river tbs =
 
 mergeConvergingRivers ∷ Int → Int → TimelineBuildState → TimelineBuildState
 mergeConvergingRivers worldSize periodIdx tbs =
+    -- A river that has already been merged into another (has a parent)
+    -- is no longer a merge SOURCE candidate — otherwise it keeps
+    -- merging into the same main every Age and inflates the main's
+    -- flow rate unboundedly (audit #12 sub-bug C). It can still be a
+    -- merge TARGET, so chains like C→B→A are allowed.
     let activeRiverIds = map pfId
             $ filter (\pf → isActiveRiver (pfFeature pf)
-                          ∧ pfActivity pf ≡ FActive)
+                          ∧ pfActivity pf ≡ FActive
+                          ∧ isNothing (pfParentId pf))
                      (tbsFeatures tbs)
         mergeThreshold = 24
 
@@ -379,9 +399,21 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
                         then error "performMerge: empty tributary"
                         else V.last tribSegs
 
+        -- Junction segment's end elevation: use the main river's
+        -- elevation at the junction (midpoint of its segment) so the
+        -- tributary's last segment slopes down properly to meet the
+        -- main. Clamped to ≤ rsStartElev cutSeg so we never produce
+        -- an uphill segment in pathological topology
+        -- (audit #12 sub-bug B).
+        mainSegs0 = rpSegments mainRiver
+        mainSeg = if segIdx < V.length mainSegs0
+                  then mainSegs0 V.! segIdx
+                  else V.last mainSegs0
+        mainMidElev = (rsStartElev mainSeg + rsEndElev mainSeg) `div` 2
+        junctionElev = min (rsStartElev cutSeg) mainMidElev
         junctionSeg = cutSeg
             { rsEnd     = junctionCoord
-            , rsEndElev = rsStartElev cutSeg
+            , rsEndElev = junctionElev
             }
 
         truncatedSegs = V.snoc keptSegs junctionSeg
@@ -391,16 +423,20 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
             , rpSegments    = truncatedSegs
             }
 
+        -- Mass conservation: tributary's full flow is added to main
+        -- at the river level and to every downstream segment. The
+        -- previous 0.6 / 0.5 factors lost 40-50% of flow per merge
+        -- and disagreed with each other (audit #12 sub-bug A).
         newMainSegs = V.imap (\idx seg →
             if idx ≥ segIdx
-            then seg { rsFlowRate = rsFlowRate seg + rpFlowRate tribRiver * 0.6
+            then seg { rsFlowRate = rsFlowRate seg + rpFlowRate tribRiver
                      , rsWidth = min 16 (rsWidth seg + 1)
                      }
             else seg
-            ) (rpSegments mainRiver)
+            ) mainSegs0
         newMainRiver = mainRiver
             { rpSegments = newMainSegs
-            , rpFlowRate = rpFlowRate mainRiver + rpFlowRate tribRiver * 0.5
+            , rpFlowRate = rpFlowRate mainRiver + rpFlowRate tribRiver
             }
 
         tbs' = updateFeature tribId (\p → p

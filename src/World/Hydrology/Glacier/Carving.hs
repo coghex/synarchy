@@ -9,22 +9,35 @@ import Data.Word (Word64)
 import World.Base (GeoCoord(..))
 import World.Geology.Hash (wrappedDeltaUV, valueNoise2D)
 import World.Material (matSandstone, unMaterialId)
+import World.Constants (seaLevel)
 import World.Hydrology.Types
 import World.Geology.Types
 
 -- * Glacier Carving
 
 -- | Apply a glacier's U-shaped valley carving to a single column.
---   Uses multi-scale noise to perturb the glacier width along its
---   length, breaking the rectangular footprint into a natural shape.
+--
+--   TARGET-BASED: the floor elevation and moraine ridge height are
+--   computed from stable per-glacier reference elevations
+--   (glStartElev at the head, glFootElev at the foot) sampled at
+--   generation time. Re-applying the same event in later Ages
+--   produces no further delta — terrain already at target is left
+--   alone. This mirrors the river carving idempotency pattern
+--   and fixes the unbounded compounding flagged by audit #6.
+--
+--   Width noise still perturbs the glacier edges and the cross-
+--   sectional U-profile is unchanged; only the absolute reference
+--   surface has been added.
 applyGlacierCarve ∷ GlacierParams → Int → Int → Int → Int → GeoModification
-applyGlacierCarve glacier worldSize gx gy _baseElev =
+applyGlacierCarve glacier worldSize gx gy baseElev =
     let GeoCoord cx cy = glCenter glacier
         flowDir = glFlowDir glacier
         glacierLen = fromIntegral (glLength glacier) ∷ Float
         halfW = fromIntegral (glWidth glacier) ∷ Float
         carveD = fromIntegral (glCarveDepth glacier) ∷ Float
         moraineH = fromIntegral (glMoraineSize glacier) ∷ Float
+        startElev = fromIntegral (glStartElev glacier) ∷ Float
+        footElev  = fromIntegral (glFootElev glacier) ∷ Float
 
         (dxi, dyi) = wrappedDeltaUV worldSize gx gy cx cy
         dx = fromIntegral dxi ∷ Float
@@ -36,6 +49,14 @@ applyGlacierCarve glacier worldSize gx gy _baseElev =
         perpDist = abs (dx * (-flowY) + dy * flowX)
 
         alongT = alongDist / glacierLen
+
+        -- Reference surface interpolated head→foot. At alongT=0 the
+        -- glacier sits on terrain of elevation startElev; at alongT=1
+        -- the foot is at footElev. Subtracting the depth profile from
+        -- this gives an absolute target floor — re-applications hit
+        -- the same target and become no-ops.
+        tClamped = max 0.0 (min 1.0 alongT)
+        refSurface = startElev + tClamped * (footElev - startElev)
 
         -- Width noise: perturb the effective half-width using spatially
         -- coherent noise keyed to position along the glacier. Two octaves
@@ -56,17 +77,22 @@ applyGlacierCarve glacier worldSize gx gy _baseElev =
     in if alongT < -0.05 ∨ alongT > 1.15 ∨ perpDist > outerLimit
        then noModification
 
-       -- Terminal moraine
+       -- Terminal moraine: deposit a ridge above the reference
+       -- surface near the foot of the glacier. Target-based using
+       -- footElev so re-deposit is idempotent.
        else if alongT > 0.90 ∧ alongT ≤ 1.15 ∧ perpDist < noisyHalfW * 1.2
        then let moraineT = (alongT - 0.90) / 0.25
                 ridgeProfile = sin (moraineT * π)
                 perpFade = max 0.0 (1.0 - (perpDist / (noisyHalfW * 1.2)) ** 2.0)
-                deposit = round (moraineH * ridgeProfile * perpFade)
+                ridgeAmount = moraineH * ridgeProfile * perpFade
+                moraineTarget = floor (footElev + ridgeAmount) ∷ Int
+                deposit = moraineTarget - baseElev
             in if deposit ≤ 0
                then noModification
                else GeoModification deposit (Just (unMaterialId matSandstone)) deposit
 
-       -- Valley carving zone
+       -- Valley carving zone: lower terrain toward an absolute
+       -- target floor derived from refSurface − depth profile.
        else if alongT ≥ -0.05 ∧ alongT ≤ 0.95
        then let endTaper = min 1.0 (min (alongT * 5.0 + 0.25)
                                        ((0.95 - alongT) * 4.0))
@@ -84,7 +110,12 @@ applyGlacierCarve glacier worldSize gx gy _baseElev =
 
                 sheetBoost = if glIsIceSheet glacier then 1.3 else 1.0
 
-                carve = round (carveD * crossProfile * endTaper * edgeFade * sheetBoost)
+                depthHere = carveD * crossProfile * endTaper * edgeFade * sheetBoost
+                rawTarget = floor (refSurface - depthHere) ∷ Int
+                -- Clamp to seaLevel - 1 so glaciers can't carve trenches
+                -- below the ocean surface (same convention as rivers).
+                targetFloor = max (seaLevel - 1) rawTarget
+                carve = baseElev - targetFloor
 
             in if carve ≤ 0
                then noModification

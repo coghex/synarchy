@@ -243,8 +243,6 @@ splitLongSegment maxLen seg =
                       , rsEnd       = GeoCoord (lerp sx ex t1) (lerp sy ey t1)
                       , rsStartElev = lerp (rsStartElev seg) (rsEndElev seg) t0
                       , rsEndElev   = lerp (rsStartElev seg) (rsEndElev seg) t1
-                      , rsWaterStart = lerp (rsWaterStart seg) (rsWaterEnd seg) t0
-                      , rsWaterEnd   = lerp (rsWaterStart seg) (rsWaterEnd seg) t1
                       }
                 | i ← [0 .. n - 1]
                 , let t0 = fromIntegral i / fromIntegral n ∷ Float
@@ -330,25 +328,44 @@ extendToCoast sp eg pts =
 -- | Find the direction toward the nearest ocean cell from (gx, gy).
 --   Scans the ElevGrid for the closest non-land cell.
 --   Returns (dx, dy, distance) where dx/dy point toward ocean.
+--
+--   The grid is a (u, v) lattice with `egSpacing` between samples.
+--   Algebra: at the target's nearest grid index `(ixC, iyC)`, a
+--   grid cell `(ix, iy)`'s `(dxg, dyg) = (Δix+Δiy, Δiy-Δix) / 2`,
+--   so `|dxg|+|dyg| = max(|Δix|, |Δiy|)`. The Manhattan-≤-radius
+--   predicate is therefore a square in `(ix, iy)` of half-side
+--   `searchRadius`. We bound iteration to a 25×25 window (radius+2
+--   buffer for integer-div edge cases) instead of scanning all
+--   147K grid cells (audit #16). Predicate inside the loop is
+--   unchanged, so candidates are identical.
 nearestOceanDir ∷ ElevGrid → Int → Int → (Int, Int, Int)
 nearestOceanDir eg gx gy =
     let gridW = egGridW eg
-        sp    = egSpacing eg
+        sp    = max 1 (egSpacing eg)
         landV = egLand eg
         gxV   = egGX eg
         gyV   = egGY eg
-        totalSamples = gridW * gridW
-        -- Search within a radius (in grid cells) for the nearest ocean
+        halfGrid = gridW `div` 2
+        u = gx - gy
+        v = gx + gy
+        ixC = (u `div` sp) + halfGrid
+        iyC = (v `div` sp) + halfGrid
         searchRadius = 10 ∷ Int
-        -- Find our approximate grid position
+        windowR = searchRadius + 2  -- safety buffer for integer-div rounding
+        ix0 = max 0 (ixC - windowR)
+        ix1 = min (gridW - 1) (ixC + windowR)
+        iy0 = max 0 (iyC - windowR)
+        iy1 = min (gridW - 1) (iyC + windowR)
         candidates =
-            [ (abs dxg + abs dyg, egGX eg VU.! idx - gx, egGY eg VU.! idx - gy)
-            | idx ← [0 .. totalSamples - 1]
+            [ (abs dxg + abs dyg, ogx - gx, ogy - gy)
+            | iy ← [iy0 .. iy1]
+            , ix ← [ix0 .. ix1]
+            , let idx = iy * gridW + ix
             , not (landV VU.! idx)
             , let ogx = gxV VU.! idx
                   ogy = gyV VU.! idx
-                  dxg = (ogx - gx) `div` max 1 sp
-                  dyg = (ogy - gy) `div` max 1 sp
+                  dxg = (ogx - gx) `div` sp
+                  dyg = (ogy - gy) `div` sp
             , abs dxg + abs dyg ≤ searchRadius
             ]
     in case candidates of
@@ -498,12 +515,11 @@ buildRiverFromPath seed worldSize gridSpacing riverIdx baseFlow climate path =
                                zipWith (buildSegFromWaypoints seed worldSize
                                             numWP baseFlow climate)
                                        [0..] (zip decimated (drop 1 decimated))
-                        segments1 = poolWaterSurface segments0
                         -- Split any segment longer than maxSegLen into
-                        -- sub-segments by linear interpolation. This is
-                        -- the final safety net — catches long segments
-                        -- regardless of their origin.
-                        segments = V.concatMap (splitLongSegment maxSegLen) segments1
+                        -- sub-segments by linear interpolation. Final
+                        -- safety net — catches long segments regardless
+                        -- of their origin.
+                        segments = V.concatMap (splitLongSegment maxSegLen) segments0
                         totalFlow = case V.null segments of
                             True  → baseFlow
                             False → rsFlowRate (V.last segments)
@@ -620,39 +636,4 @@ buildSegFromWaypoints seed worldSize totalSegs baseFlow climate segIdx
         , rsFlowRate    = flow
         , rsStartElev   = se
         , rsEndElev     = ee
-        -- Water surface = reference elevation (no freeboard). Every
-        -- tile carved below refElev gets water; uncarved tiles at
-        -- refElev don't. The carved terrain provides the depth profile.
-        , rsWaterStart  = max seaLevel se
-        , rsWaterEnd    = max seaLevel ee
         }
-
--- * Water surface pooling
-
--- | Pool water surfaces: where terrain forms depressions,
---   water should fill to the level of the outflow point.
---   Walk from mouth to source, propagating the downstream
---   water level upstream through any depressions. This
---   creates level pools in flat areas.
-poolWaterSurface ∷ V.Vector RiverSegment → V.Vector RiverSegment
-poolWaterSurface segs
-    | V.length segs ≤ 1 = segs
-    | otherwise =
-        let segList = V.toList segs
-            -- Extract n+1 water levels: [waterStart_0, waterEnd_0, waterEnd_1, ...]
-            waterLevels = case segList of
-                (s:_) → rsWaterStart s : map rsWaterEnd segList
-                []    → []
-            -- Pool: walk from mouth (last) to source (first).
-            -- Any depression gets filled to the outflow level.
-            pooled = reverse $ poolFill $ reverse waterLevels
-            -- Write back into segments as (start, end) pairs
-            pairs = zip pooled (drop 1 pooled)
-        in V.fromList $ zipWith (\seg (ws, we) →
-            seg { rsWaterStart = ws, rsWaterEnd = we }
-            ) segList pairs
-  where
-    poolFill [] = []
-    poolFill (x:xs) = x : goPool x xs
-    goPool _ [] = []
-    goPool lvl (x:xs) = let x' = max x lvl in x' : goPool x' xs

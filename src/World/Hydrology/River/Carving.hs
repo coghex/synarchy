@@ -68,29 +68,30 @@ findDeepestCarve worldSize gx gy mSeed baseElev segs = go noModification 0
               carve = carveFromSegment worldSize gx gy mSeed seg baseElev
           in go (pickDeepest acc carve) (i + 1)
 
--- * Target-Based Segment Carving
+-- * Target-Based Segment Carving (sloped banks)
 
 -- | Compute the carving modification from a single river segment.
 --
---   TARGET-BASED: computes the absolute channel floor elevation
---   by interpolating the segment's reference surface
---   (rsStartElev → rsEndElev) and subtracting the geometric
---   depth profile. Returns only the delta needed to bring
---   baseElev down to that floor. If baseElev is already at
---   or below the floor, returns noModification.
+--   TARGET-BASED with a LATERAL SLOPE: the target elevation at each
+--   tile is computed as channelFloor + slopeRate × (perpDist − channelHalfW),
+--   producing a flat-bottomed channel that rises with a constant slope
+--   on either side. We only LOWER terrain — if natural terrain is
+--   already below the target, no carve. This means:
 --
---   This is the same pattern used by applyLavaFlow, which
---   computes an absolute lava surface and only deposits the
---   difference above baseElev.
+--     * Flat terrain near the channel gets gently sloped banks
+--       (natural cliffs only form if terrain rises faster than slopeRate).
+--     * Steep terrain (mountain riversides) keeps its natural slope above
+--       the channel, since the slope-based target is below the natural
+--       terrain there.
+--     * The water table fills up to channelFloor, so the visible water
+--       surface and the carved bank are co-designed.
 --
---   The geometric profile is:
---     Channel (perpDist < channelHalfW):
---       floor = refSurface − depth × (1 − channelT×0.1) × endTaper
---     Valley wall (channelHalfW ≤ perpDist < valleyHalfW):
---       floor = refSurface − depth × (1 − wallT) × endTaper × 0.7
+--   slopeRate is chosen so the bank rises ~1 tile vertically per 2 tiles
+--   horizontal — gentle enough to walk up, steep enough to feel like a
+--   river valley.
 --
---   Where refSurface = lerp(rsStartElev, rsEndElev, clampedT)
---   and clampedT is the parametric position along the segment.
+--   refSurface = lerp(rsStartElev, rsEndElev, clampedT) and
+--   channelFloor = max(seaLevel − 1, floor(refSurface − rsDepth)).
 carveFromSegment ∷ Int → Int → Int → Word64 → RiverSegment → Int → GeoModification
 carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
     let GeoCoord sx sy = rsStart seg
@@ -128,61 +129,43 @@ carveFromSegment worldSize gx gy _meanderSeed seg baseElev =
            depthI       = rsDepth seg
 
            -- Interpolated channel floor along the segment.
-           -- Uses floor() to avoid checkerboard from round().
-           -- With fixupSegmentContinuity, adjacent segments share
-           -- endpoint elevations so the floor is continuous at junctions.
            tClamped = max 0.0 (min 1.0 alongT) ∷ Float
            startE = fromIntegral (rsStartElev seg) ∷ Float
            endE   = fromIntegral (rsEndElev seg) ∷ Float
            interpElev = startE + tClamped * (endE - startE)
-           -- Clamp channel floor to seaLevel - 1 so rivers don't
-           -- carve deep canyons below the ocean surface at their mouths.
            rawFloor = floor (interpElev - fromIntegral depthI) ∷ Int
            channelFloor = max (seaLevel - 1) rawFloor
 
+           -- Lateral slope: 1 vertical per 2 horizontal. Gentle enough
+           -- to walk, steep enough to feel like a river valley. Constant
+           -- across segments — slope shape doesn't depend on flow rate
+           -- (which controls channel width/depth, not bank steepness).
+           slopeRate = 0.5 ∷ Float
+
        in if alongT < -0.05 ∨ alongT > 1.05 ∨ effectivePerpDist > valleyHalfW
           then noModification
-
-          -- Inside the channel proper
-          else if effectivePerpDist < channelHalfW
-          then let carve = baseElev - channelFloor
-                   alluviumDepth = max 1 (depthI * 2 `div` 5)
-               in if carve ≤ 0
-                  then noModification
-                  else GeoModification
-                      { gmElevDelta        = negate carve
-                      , gmMaterialOverride = Just (unMaterialId matSandstone)
-                      , gmIntrusionDepth   = min alluviumDepth carve
-                      }
-
-          -- Valley walls: smooth slope from rim to channel edge.
-          -- wallT goes from 0 (at channel edge) to 1 (at valley rim).
-          -- Uses smoothstep cubic (3t²−2t³) for gradual transitions
-          -- at both the channel edge and the valley rim, avoiding
-          -- sharp cliff angles.
-          else let wallT = (effectivePerpDist - channelHalfW)
-                         / (valleyHalfW - channelHalfW)
-                   -- Smoothstep: smooth cubic ease-in/ease-out
-                   smoothT = let t' = max 0.0 (min 1.0 wallT)
-                             in t' * t' * (3.0 - 2.0 * t')
-                   -- Wall carve depth: decreases from 50% of channel
-                   -- depth at channel edge to 0 at valley rim, with
-                   -- smooth cubic profile to avoid cliff faces.
-                   wallCarveDepth = floor (fromIntegral depthI * 0.5
-                                         * (1.0 - smoothT)) ∷ Int
-                   -- Interpolated reference surface (rim elevation)
-                   refSurface = floor interpElev ∷ Int
-                   rawTarget = refSurface - wallCarveDepth
-                   targetElev = max (seaLevel - 1) rawTarget
-                   carve = baseElev - targetElev
-                   wallAlluvium = max 1 (wallCarveDepth * 3 `div` 10)
-               in if carve ≤ 0 ∨ wallCarveDepth ≤ 0
-                  then noModification
-                  else GeoModification
-                      { gmElevDelta        = negate carve
-                      , gmMaterialOverride = Just (unMaterialId matSandstone)
-                      , gmIntrusionDepth   = min wallAlluvium carve
-                      }
+          else
+          let -- Unified target: flat channel bottom, sloped banks beyond.
+              distOutsideChannel = max 0.0
+                  (effectivePerpDist - channelHalfW)
+              rawTarget = channelFloor
+                        + floor (slopeRate * distOutsideChannel ∷ Float)
+              targetElev = max (seaLevel - 1) rawTarget
+              carve = baseElev - targetElev
+              -- Alluvium thickness scales with how much we actually
+              -- carved at this tile (channel center deepest, banks shallow).
+              alluviumDepth = max 1 (depthI * 2 `div` 5)
+              thisAlluvium
+                | effectivePerpDist < channelHalfW = alluviumDepth
+                | otherwise = max 1 ((depthI * 3 `div` 10)
+                                   - floor (slopeRate * distOutsideChannel))
+          in if carve ≤ 0
+             then noModification
+             else GeoModification
+                 { gmElevDelta        = negate carve
+                 , gmMaterialOverride = Just (unMaterialId matSandstone)
+                 , gmIntrusionDepth   = min thisAlluvium carve
+                 }
 
 -- * Delta Deposit — original version (takes full RiverParams)
 

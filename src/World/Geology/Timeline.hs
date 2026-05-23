@@ -10,6 +10,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Plate (generatePlates, TectonicPlate)
@@ -24,7 +25,7 @@ import World.Hydrology.Simulation (simulateHydrology, FlowResult(..)
                                   , updateElevGrid)
 import World.Geology.Timeline.Helpers
     ( mkGeoPeriod, erosionFromGeoState, regionalErosionMap
-    , isGlacierFeature, evolveGlacierCapped )
+    , isGlacierFeature, evolveGlacierCapped, updateLakeSpillways )
 import World.Geology.Timeline.Volcanism
     ( applyPeriodVolcanism, applyVolcanicEvolution, generateEruption )
 import World.Geology.Timeline.River
@@ -52,26 +53,37 @@ buildTimeline seed worldSize plateCount erosionIntensity volcanicActivity =
             , tbsClimateState = initClimateState worldSize
             , tbsErosionIntensity = erosionIntensity
             , tbsVolcanicActivity = volcanicActivity
+            , tbsCoarseOcean = HS.empty
             }
 
         grid0 = buildInitialElevGrid seed worldSize plates
         (s1, grid1) = buildPrimordialBombardment seed worldSize plates tbs0 grid0
 
         -- After bombardment: first climate snapshot from the
-        -- initial plate-derived elevation grid
+        -- initial plate-derived elevation grid. Cache the coarse
+        -- ocean shape so per-Age climate updates can reuse it
+        -- without re-deriving from the evolving grid.
         ocean1 = oceanRegionsFromGrid grid1 worldSize
         climate1 = updateClimateFromGrid worldSize ocean1 (tbsFeatures s1) (tbsClimateState s1)
-        s1' = s1 { tbsClimateState = climate1 }
+        s1' = s1 { tbsClimateState = climate1, tbsCoarseOcean = ocean1 }
 
         (s2, finalGrid) = buildEon seed worldSize plates s1' grid1
 
-        -- Mark the final period for soil generation
-        finalPeriods = case tbsPeriods s2 of
-            []     → []
-            (p:ps) → p { gpErosion = (gpErosion p) { epIsLastAge = True }
-                        , gpRegionalErosion = HM.map (\ep → ep { epIsLastAge = True })
-                                                     (gpRegionalErosion p)
-                        } : ps
+        -- Mark the most recent Age period for soil generation.
+        -- Walk from head until we find a period with gpScale = Age,
+        -- so the invariant is enforced explicitly instead of
+        -- relying on "head of tbsPeriods is always an Age" being
+        -- true by construction (audit #24).
+        markAsLastAge p = p
+            { gpErosion = (gpErosion p) { epIsLastAge = True }
+            , gpRegionalErosion = HM.map (\ep → ep { epIsLastAge = True })
+                                         (gpRegionalErosion p)
+            }
+        markFirstAge [] = []
+        markFirstAge (p:ps)
+            | gpScale p ≡ Age = markAsLastAge p : ps
+            | otherwise       = p : markFirstAge ps
+        finalPeriods = markFirstAge (tbsPeriods s2)
 
         periods = reverse finalPeriods
 
@@ -84,11 +96,16 @@ buildTimeline seed worldSize plateCount erosionIntensity volcanicActivity =
             | p ← periods
             ]
 
+        -- Lakes were created from the raw filledElev pre-timeline;
+        -- post-process them so their lkSurface reflects post-carve
+        -- spillway (audit #13).
+        finalFeatures = updateLakeSpillways worldSize finalGrid (tbsFeatures s2)
+
         rawTimeline = GeoTimeline
             { gtSeed      = seed
             , gtWorldSize = worldSize
             , gtPeriods   = periods
-            , gtFeatures  = tbsFeatures s2
+            , gtFeatures  = finalFeatures
             , gtRiverExplodedEvents = riverExploded
             , gtIceLevel  = computeIceLevelGrid seed worldSize plates
                                                  (tbsClimateState s2) finalGrid
@@ -154,15 +171,13 @@ buildEra seed worldSize plates eraIdx tbs grid =
         currentDate = gdMillionYears (gsDate gs)
         gs' = gs { gsDate = advanceGeoDate 100.0 (gsDate gs) }
 
-        -- === CLIMATE UPDATE AT ERA BOUNDARY ===
-        -- Derive coarse ocean from current ElevGrid and recompute
-        -- the full climate model. This captures continent drift,
-        -- ocean basin changes, and CO2 evolution from prior eras.
+        -- === ERA-BOUNDARY OCEAN REFRESH ===
+        -- Refresh the cached coarse ocean shape from the current
+        -- ElevGrid. This is what per-Age climate updates use (see
+        -- buildAge). Per-Era cadence keeps it stable enough that
+        -- intra-Era erosion can't feed back into climate, but loose
+        -- enough that long-term ocean shape changes are captured.
         coarseOcean = oceanRegionsFromGrid grid worldSize
-        prevClimate = tbsClimateState tbs
-        -- Sync CO2 from GeoState into climate before recomputing
-        prevClimate' = prevClimate { csGlobalCO2 = gsCO2 gs' }
-        climate' = updateClimateFromGrid worldSize coarseOcean (tbsFeatures tbs) prevClimate'
 
         eraPeriod = mkGeoPeriod worldSize
             ("Era " <> T.pack (show eraIdx) <> " Events")
@@ -170,8 +185,8 @@ buildEra seed worldSize plates eraIdx tbs grid =
             (ErosionParams (tbsErosionIntensity tbs) 0.5 0.5 0.3 0.2 (seed + 3000 + fromIntegral eraIdx)
                            15.0 0.5 0.5 0.0 False)
             HM.empty
-        s1 = addPeriod eraPeriod (tbs { tbsGeoState  = gs'
-                                       , tbsClimateState = climate' })
+        s1 = addPeriod eraPeriod (tbs { tbsGeoState = gs'
+                                       , tbsCoarseOcean = coarseOcean })
         (s2, grid2) = buildPeriodLoop eraSeed worldSize plates 0 2 4 s1 grid
     in (s2, grid2)
 
@@ -220,10 +235,10 @@ buildEpoch ∷ Word64 → Int → [TectonicPlate] → Int
            → (TimelineBuildState, ElevGrid)
 buildEpoch seed worldSize plates epochIdx tbs grid =
     let epochSeed = seed `xor` (fromIntegral epochIdx * 0xA1A2)
-        gs = tbsGeoState tbs
-        gs' = gs { gsDate = advanceGeoDate 20.0 (gsDate gs) }
-        s1 = tbs { tbsGeoState = gs' }
-        (s2, grid') = buildAgeLoop epochSeed worldSize plates 0 1 8 s1 grid
+        -- Epoch is purely structural — no period is created here, so
+        -- no gsDate advance. Time accumulates from the Ages below
+        -- (audit #5: keep gsDate in lockstep with gpDuration sums).
+        (s2, grid') = buildAgeLoop epochSeed worldSize plates 0 1 8 tbs grid
     in (s2, grid')
 
 buildAgeLoop ∷ Word64 → Int → [TectonicPlate]
@@ -244,14 +259,34 @@ buildAgeLoop seed worldSize plates ageIdx minAges maxAges tbs grid
 buildAge ∷ Word64 → Int → [TectonicPlate] → Int
          → TimelineBuildState → ElevGrid
          → (TimelineBuildState, ElevGrid)
-buildAge seed worldSize plates ageIdx tbs elevGrid =
+buildAge seed worldSize plates ageIdx tbs0 elevGrid =
     let ageSeed = seed `xor` (fromIntegral ageIdx * 0xF0F1)
-        gs = tbsGeoState tbs
-        climate = tbsClimateState tbs
+        gs = tbsGeoState tbs0
         currentDate = gdMillionYears (gsDate gs)
         durationHash = hashGeo ageSeed ageIdx 610
         duration = 1.0 + hashToFloatGeo durationHash * 14.0 ∷ Float
-        gs1 = gs { gsDate = advanceGeoDate duration (gsDate gs) }
+        -- Round once and use for BOTH the gsDate advance and the
+        -- period's gpDuration so the geological clock and the
+        -- erosion-time integer stay in lockstep (audit #26). Rate
+        -- calculations below (meteoriteChance, weatheringRate)
+        -- still use the unrounded Float for sub-Myr precision in
+        -- their probability/rate inputs.
+        durationI = round duration ∷ Int
+        gs1 = gs { gsDate = advanceGeoDate (fromIntegral durationI) (gsDate gs) }
+
+        -- === FRESH CLIMATE AT AGE BOUNDARY ===
+        -- Recompute climate using the cached coarse ocean (refreshed
+        -- at Era boundary) plus the current CO2 and persistent
+        -- features. The CO2 sync absorbs any Period-tier volcanism
+        -- that bumped gsCO2 without going through climate (audit #3).
+        -- Holding the ocean shape stable within an Era avoids the
+        -- erosion→wetter-climate→more-erosion feedback loop, while
+        -- CO2-derived temperature and freshwater-moisture corridors
+        -- still track per-Age evolution.
+        prevClimateSynced = (tbsClimateState tbs0) { csGlobalCO2 = gsCO2 gs }
+        climate = updateClimateFromGrid worldSize (tbsCoarseOcean tbs0)
+                      (tbsFeatures tbs0) prevClimateSynced
+        tbs = tbs0 { tbsClimateState = climate }
 
         meteoriteRoll = hashToFloatGeo (hashGeo ageSeed ageIdx 620)
         meteoriteChance = min 0.85 (duration / 15.0)
@@ -364,7 +399,7 @@ buildAge seed worldSize plates ageIdx tbs elevGrid =
             ("Age " <> T.pack (show (tbsPeriodIdx tbs))
              <> " [grid=" <> T.pack (show _debugGridW)
              <> " land=" <> T.pack (show _debugLandCount) <> "]")
-            Age (round duration) currentDate
+            Age durationI currentDate
             allEvents erosion regErosion
 
         -- Update climate's CO2 to stay in sync

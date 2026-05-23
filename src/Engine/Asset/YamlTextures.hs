@@ -42,6 +42,9 @@ data MaterialDef = MaterialDef
     , mdHardness ∷ Float
     , mdDensity  ∷ Float
     , mdAlbedo   ∷ Float
+    , mdDrainage ∷ Float
+      -- ^ Hydraulic drainage 0.0–1.0. See @World.Material.MaterialProps@
+      --   for semantics. Defaults to 0.4 (neutral) when omitted in YAML.
     , mdTile     ∷ Text
     , mdZoom     ∷ Text
     , mdBg       ∷ Text
@@ -54,6 +57,7 @@ instance FromJSON MaterialDef where
         ⊛ v .:? "hardness" .!= 0.5
         ⊛ v .:? "density"  .!= 2.5
         ⊛ v .:? "albedo"   .!= 0.5
+        ⊛ v .:? "drainage" .!= 0.4
         ⊛ v .: "tile"
         ⊛ v .: "zoom"
         ⊛ v .: "bg"

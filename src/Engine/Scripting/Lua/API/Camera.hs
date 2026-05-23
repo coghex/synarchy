@@ -28,10 +28,9 @@ import Engine.Core.Log (logInfo, LogCategory(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
 import World.Grid
 import World.Types
-import World.Material (MaterialId(..), MaterialProps(..), getMaterialProps)
 import World.Plate (generatePlates, elevationAtGlobal)
 import World.Render (surfaceHeadroom)
-import World.Generate (globalToChunk, applyTimeline, viewDepth)
+import World.Generate (globalToChunk, applyTimelineFast, viewDepth)
 import World.Generate.Coordinates (globalToChunk)
 import World.ZoomMap (buildZoomCache)
 import qualified Data.HashMap.Strict as HM
@@ -182,8 +181,7 @@ cameraGotoTileFn env = do
                                     timeline  = wgpGeoTimeline params
                                     plates    = generatePlates seed worldSize (wgpPlateCount params)
                                     (baseElev, baseMat) = elevationAtGlobal seed plates worldSize gx gy
-                                    hardness = mpHardness $ getMaterialProps registry baseMat
-                                    (finalElev, _) = applyTimeline timeline worldSize gx gy hardness (baseElev, baseMat)
+                                    (finalElev, _) = applyTimelineFast timeline plates worldSize gx gy registry (baseElev, baseMat)
                                     targetZ = finalElev + surfaceHeadroom
                                 atomicModifyIORef' (cameraRef env) $ \cam →
                                     (cam { camZSlice = targetZ, camZTracking = True }, ())

@@ -67,8 +67,12 @@ applyPeriodVolcanism seed worldSize plates periodIdx tbs grid =
         allNew = shields <> fissures <> cinders <> vents <> supers
         events = map (\pf → VolcanicEvent (pfFeature pf)) allNew
 
+        -- Advance gsDate by the period's gpDuration so the
+        -- geological clock stays in sync with the sum of
+        -- created periods' durations (audit #5).
         gs' = (tbsGeoState tbs5)
             { gsCO2 = gsCO2 (tbsGeoState tbs5) + fromIntegral (length allNew) * 0.01
+            , gsDate = advanceGeoDate 50.0 (gsDate (tbsGeoState tbs5))
             }
 
         period = mkGeoPeriod worldSize
@@ -148,7 +152,12 @@ applyVolcanicEvolution seed worldSize plates tbs grid =
                            200.0 0.0 0.0 0.0 False)
             HM.empty
     in if null allEvents then (tbs1, grid)
-       else let tbs2 = addPeriod period tbs1
+       else let -- Advance gsDate to match the period's gpDuration
+                -- (audit #5: keep geological clock and erosion-time
+                -- in sync).
+                gs' = (tbsGeoState tbs1)
+                    { gsDate = advanceGeoDate 30.0 (gsDate (tbsGeoState tbs1)) }
+                tbs2 = addPeriod period (tbs1 { tbsGeoState = gs' })
                 grid' = updateElevGrid worldSize grid period
             in (tbs2, grid')
 

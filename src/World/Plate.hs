@@ -4,6 +4,7 @@ module World.Plate
     ( -- * Plate data
       TectonicPlate(..)
     , generatePlates
+    , defaultPlatesFor
       -- * Queries
     , plateAt
     , twoNearestPlates
@@ -25,7 +26,7 @@ import Data.Word (Word32, Word64)
 import Data.List (sortBy)
 import Data.Ord (comparing)
 import World.Material (MaterialId(..), matGranite, matDiorite, matGabbro, matGlacier)
-import World.Scale (WorldScale(..), computeWorldScale, scaleElev, scaleDist)
+import World.Scale (WorldScale(..), computeWorldScale, scaleElev, scaleDist, scaleElevI)
 import World.Constants (seaLevel)
 import World.Chunk.Types (chunkSize)
 import World.Plate.Types (TectonicPlate(..))
@@ -42,6 +43,18 @@ data BoundarySide = SidePlateA | SidePlateB
     deriving (Show, Eq)
 
 -- * Plate Generation
+
+-- | Default plate count scaled to worldSize. Linear in side length
+--   (sub-linear in area), so plates get bigger with larger worlds
+--   but not as fast as the area itself — preventing 10 fixed plates
+--   from producing tiny noisy plates at worldSize=64 or huge
+--   featureless continents at worldSize=512 (audit #17).
+--
+--   Calibrated so worldSize=128 yields ~10 plates (the legacy
+--   default). Floor at 4 keeps even tiny worlds from collapsing
+--   to a single landmass.
+defaultPlatesFor ∷ Int → Int
+defaultPlatesFor worldSize = max 4 (worldSize `div` 13)
 
 generatePlates ∷ Word64 → Int → Int → [TectonicPlate]
 generatePlates seed worldSize plateCount =
@@ -67,12 +80,24 @@ generateOnePlate seed worldSize plateIndex =
 
         -- Raw values are in meters. Convert to tiles at 10m/tile,
         -- then apply world-size scaling.
-        --   Land:  0–1000m  → 0–100 tiles
+        --   Land:  200–1000m  → 20–100 tiles (200m floor keeps small worlds
+        --                       above sea level — see plateBaseScale below)
         --   Ocean: -6000– -3000m → -600– -300 tiles
+        --
+        -- Base elevation scales sub-linearly with world size (sqrt) so a
+        -- w32 world's plate sits at ~25 tiles rather than ~6, giving each
+        -- plate a recognizable plateau above sea level. Mountains still
+        -- shrink (see boundaryHeightScale in convergentEffect/divergentEffect)
+        -- but plate baselines stay perceptible.
         metersPerTile = 10.0 ∷ Float
+        plateBaseScale = sqrt (wsScale wsc) ∷ Float
         baseElev = if isLand
-                   then round (scaleElev wsc (fromIntegral (hashToRange h4 0 1000) / metersPerTile))
-                   else round (scaleElev wsc (fromIntegral (hashToRange h4 (-6000) (-3000)) / metersPerTile))
+                   then round (plateBaseScale
+                              * fromIntegral (hashToRange h4 200 1000)
+                              / metersPerTile)
+                   else round (scaleElev wsc
+                              (fromIntegral (hashToRange h4 (-6000) (-3000))
+                               / metersPerTile))
 
         matChoice = hashToRange h5 0 2
         material = case matChoice of
@@ -109,30 +134,54 @@ plateAt seed worldSize plates gx gy =
 twoNearestPlates ∷ Word64 → Int → [TectonicPlate] → Int → Int
                  → ((TectonicPlate, Float), (TectonicPlate, Float))
 twoNearestPlates seed worldSize plates gx gy =
-    let dist plate =
+    let -- Cheap raw distance: 2 mults + 1 sqrt, no noise lookups.
+        rawDist plate =
             let du = fromIntegral (wrappedDeltaU worldSize gx gy
                         (plateCenterX plate) (plateCenterY plate)) ∷ Float
                 dv = fromIntegral ((gx + gy) - (plateCenterX plate + plateCenterY plate)) ∷ Float
-                jitter = plateJitter seed worldSize gx gy
-                             (plateCenterX plate) (plateCenterY plate)
-            in sqrt (du * du + dv * dv) + jitter
+            in sqrt (du * du + dv * dv)
+
+        -- plateJitter outputs in [-40, +40]. A plate's actual
+        -- distance is at least rawDist - 40, so any plate with
+        -- rawDist - 40 > best2.dist cannot beat the runner-up —
+        -- we skip its expensive jitter computation (audit #18,
+        -- which was the hot path: 2 noise lookups per plate per
+        -- elevationAtGlobal call).
+        jitterMax = 40.0 ∷ Float
+
+        jitter plate =
+            plateJitter seed worldSize gx gy
+                (plateCenterX plate) (plateCenterY plate)
+
+        -- best2Real flag tracks whether best2 holds a real plate or
+        -- the initial placeholder. The skip predicate only fires once
+        -- best2 is real — otherwise the placeholder distance (matching
+        -- the original `maxDist = fromIntegral worldSize`) is a small
+        -- finite "infinity" specifically chosen to feed downstream
+        -- boundary calculations correctly when the first plate has no
+        -- competitor. Preserving that placeholder keeps elevation
+        -- bit-identical to the pre-optimization output.
+        go !best1 !best2 !best2Real [] = (best1, best2)
+        go !best1 !best2 !best2Real (p:rest) =
+            let !raw = rawDist p
+            in if best2Real ∧ raw - jitterMax > snd best2
+               then go best1 best2 best2Real rest
+               else let !d = raw + jitter p
+                        !cand = (p, d)
+                    in if d < snd best1
+                       then go cand best1 True rest
+                       else if d < snd best2
+                            then go best1 cand True rest
+                            else go best1 best2 best2Real rest
+
+        maxDist = fromIntegral worldSize ∷ Float
     in case plates of
         (p:ps) →
-            let d0 = dist p
-                go !best1 !d1 !best2 !d2 [] = (best1, best2)
-                go !best1 !d1 !best2 !d2 (q:qs) =
-                    let dq = dist q
-                    in if dq < d1
-                       then go (q, dq) dq best1 d1 qs
-                       else if dq < d2
-                            then go best1 d1 (q, dq) dq qs
-                            else go best1 d1 best2 d2 qs
-                -- When only one plate exists, use it for both with
-                -- a large but finite second distance to avoid NaN
-                -- propagation through boundary calculations.
-                maxDist = fromIntegral worldSize ∷ Float
-                ((a, da), (b, db)) = go (p, d0) d0 (p, maxDist) maxDist ps
-            in ((a, da), (b, db))
+            let !raw0 = rawDist p
+                !d0   = raw0 + jitter p
+                first  = (p, d0)
+                second = (p, maxDist)
+            in go first second False ps
         _ → error "no plates"
 
 rankPlates seed worldSize plates gx gy =
@@ -241,10 +290,20 @@ wrappedDeltaU worldSize gx1 gy1 gx2 gy2 =
 wrappedValueNoise2D ∷ Word64 → Int → Int → Int → Int → Float
 wrappedValueNoise2D seed worldSize gx gy scale =
     let w = worldWidthTiles worldSize
-        -- Work in u-space for wrapping
+        -- Work in u-space for wrapping. To make the cell grid tile
+        -- exactly across the cylindrical seam, snap cellsInU to the
+        -- nearest integer count and derive an effectiveScale that
+        -- divides w cleanly — otherwise `w mod scale` tiles at the
+        -- seam fall into a defective zone whose lerp pairs don't
+        -- match the deep-interior wrap (audit #8). The shift in
+        -- noise feature size is at most one tile per `scale`, ≪1%
+        -- for the scales used here.
         u = gx - gy
         v = gx + gy
-        fu = fromIntegral u / fromIntegral scale ∷ Float
+        cellsInU = max 1 (round (fromIntegral w / fromIntegral scale ∷ Float))
+        effectiveScale = fromIntegral w / fromIntegral cellsInU ∷ Float
+        fu = fromIntegral u / effectiveScale ∷ Float
+        -- v doesn't wrap, so the integer scale is fine there.
         fv = fromIntegral v / fromIntegral scale ∷ Float
         iu = floor fu ∷ Int
         iv = floor fv ∷ Int
@@ -252,7 +311,6 @@ wrappedValueNoise2D seed worldSize gx gy scale =
         tv = fv - fromIntegral iv
         su = smoothstep tu
         sv = smoothstep tv
-        cellsInU = w `div` scale
         wrapIu i = ((i `mod` cellsInU) + cellsInU) `mod` cellsInU
         iu0 = wrapIu iu
         iu1 = wrapIu (iu + 1)
@@ -266,6 +324,121 @@ wrappedValueNoise2D seed worldSize gx gy scale =
 
 -- * Global Elevation Query
 
+-- | Land elevation pipeline (RTS-friendly):
+--
+--   1. Smooth trend:   baseElev + shelfEffect + boundaryEffect
+--   2. Ridge noise:    jagged peaks near plate boundaries (mountainness > 0)
+--   3. Value noise:    mountain-side texture only; lowlands get zero noise
+--   4. Plateau snap:   lowland tiles quantize to step bands of the plate
+--                      base elevation, turning each plate into a plateau
+--
+--   `mountainness` blends in the noise/ridge contributions and gates the
+--   plateau snap: 1.0 right at a plate boundary, 0.0 once we're more than
+--   `mountainReach` tiles into the plate interior. Below ~0.3 we treat the
+--   tile as lowland and snap; above ~0.3 we keep the smooth peak silhouette.
+--
+--   Ocean uses standard value noise (organic seabed); no terracing.
+
+-- | Reach over which a plate boundary is felt for the purposes of
+--   mountain shaping. Smaller than the boundary-elevation fadeRange (200)
+--   on purpose — we want the ridge texture concentrated near the actual
+--   peak, not spread out over the foothills.
+mountainReach ∷ WorldScale → Float
+mountainReach wsc = scaleDist wsc 80.0
+
+-- | Super-linear vertical scaling for boundary effects (mountain peaks,
+--   trench depths, ridge heights). Uses `wsScale^1.5` rather than the
+--   linear `wsScale` used by `scaleElev`, so a w512 world keeps its full
+--   1000m+ mountains but a w32 world (whose plates are only 256 tiles
+--   wide) gets much smaller peaks — preventing single-tile-wide tower
+--   walls that fragment the playable lowland.
+--
+--   At reference scale this returns 1.0 (no change). It shrinks faster
+--   than `wsScale` for any worldSize < 512 and amplifies for any
+--   worldSize > 512 (unlikely in practice but consistent).
+boundaryHeightScale ∷ WorldScale → Float
+boundaryHeightScale wsc =
+    let s = wsScale wsc
+    in s * sqrt s   -- == s ** 1.5
+
+-- | Like `scaleElev` but for boundary peak/trench magnitudes. Combines
+--   the standard linear `scaleElev` with the super-linear factor so
+--   small worlds get gentler mountains while keeping reference values
+--   recognizable in the source (still expressed as raw meters).
+scaleBoundaryElev ∷ WorldScale → Float → Float
+scaleBoundaryElev wsc v = v * boundaryHeightScale wsc
+
+-- | How likely a tile is to be "in the mountains".
+--   1.0 right at the boundary, 0.0 once boundaryDist ≥ mountainReach.
+--   Smoothstepped so the transition into the plateau is gradual rather
+--   than a hard ring at the threshold.
+mountainness ∷ WorldScale → Float → Float
+mountainness wsc boundaryDist =
+    let t = 1.0 - clamp01 (abs boundaryDist / mountainReach wsc)
+    in t * t * (3.0 - 2.0 * t)
+
+-- | Tiles with mountainness above this threshold keep their raw elevation
+--   (no plateau snap). Below it, lowland-style quantization applies.
+plateauCutoff ∷ Float
+plateauCutoff = 0.30
+
+-- | Snap a lowland elevation onto step bands so each plate forms a flat
+--   plateau at its `plateBaseElev` level. Step size scales with the world
+--   so small worlds get shallower terraces (preserving differentiation
+--   between adjacent plates) and large worlds get visible landings — at
+--   scale=1.0 we land on ~4-tile bands.
+plateauSnap ∷ WorldScale → Int → Int
+plateauSnap wsc e =
+    let step = max 2 (scaleElevI wsc 4)
+        -- Round to nearest rather than `div` toward zero, which would
+        -- bias negative elevations (rare on land, but coastal lowlands
+        -- can dip slightly below sea level after shelf softening).
+        halfStep = step `div` 2
+        snapped  = if e ≥ 0
+                   then ((e + halfStep) `div` step) * step
+                   else negate (((negate e + halfStep) `div` step) * step)
+    in snapped
+
+-- | Sharp-ridged noise in [0,1]. Standard value noise produces rounded
+--   peaks; ridge noise produces sharp creases where the underlying
+--   value-noise crosses 0.5. Used as the mountain-peak silhouette.
+wrappedRidgeNoise2D ∷ Word64 → Int → Int → Int → Int → Float
+wrappedRidgeNoise2D seed worldSize gx gy scale =
+    let n = wrappedValueNoise2D seed worldSize gx gy scale
+    in 1.0 - 2.0 * abs (n - 0.5)
+
+-- | Per-tile ridge contribution at land mountains.
+--   Two octaves so the ridges have both broad backbone (scale 18) and
+--   fine crenellation (scale 7). Weighted toward the larger features so
+--   peaks read as connected ranges rather than scattered spikes.
+ridgeContribution ∷ Word64 → Int → Int → Int → WorldScale → Float → Int
+ridgeContribution seed worldSize gx gy wsc mness
+    | mness ≤ 0.0 = 0
+    | otherwise =
+        let r1 = wrappedRidgeNoise2D (seed + 20) worldSize gx gy 18
+            r2 = wrappedRidgeNoise2D (seed + 21) worldSize gx gy 7
+            -- Power-curve the blend to sharpen the peaks further: r^1.5
+            -- pushes mid-values down and keeps the highest crest tiles
+            -- near 1.0, producing jagged silhouettes instead of smooth domes.
+            ridge = (r1 * 0.65 + r2 * 0.35) ** 1.5
+            -- Mountainness gates both the magnitude and the existence —
+            -- foothills get a fraction of the amplitude so the ridge fades
+            -- naturally into the plateau.
+            amp = scaleElev wsc 40.0 * mness
+        in round (ridge * amp)
+
+-- | Per-tile value-noise contribution (the soft +/- texture).
+--   Zero in lowland zones (so plateaus stay flat). Modest in mountain
+--   zones to break up the ridge geometry. Full strength in oceans.
+valueContribution ∷ Word64 → Int → Int → Int → WorldScale → Bool → Float → Int
+valueContribution seed worldSize gx gy wsc isLand mness =
+    let raw = elevationNoise seed worldSize gx gy  -- integer in [-2, 2]
+        amp
+          | not isLand   = scaleElev wsc 20.0
+          | mness > 0.0  = scaleElev wsc 6.0 * mness
+          | otherwise    = 0.0
+    in raw * round amp
+
 elevationAtGlobal ∷ Word64 → [TectonicPlate] → Int → Int → Int → (Int, MaterialId)
 elevationAtGlobal seed plates worldSize gx gy =
     let (gx', gy') = wrapGlobalU worldSize gx gy
@@ -273,9 +446,6 @@ elevationAtGlobal seed plates worldSize gx gy =
     in if isBeyondGlacier worldSize gx' gy' then (0, matGlacier)
     else if isGlacierZone worldSize gx' gy' then
         -- Glacier zone: natural plate terrain, matGlacier material.
-        -- The material marks the world boundary (impassable). Terrain
-        -- is unmodified so ice (from computeChunkIce) sits naturally
-        -- using the same basin/drape logic as everywhere else.
         let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy'
             myPlate = plateA
             baseElev = plateBaseElev myPlate
@@ -284,16 +454,17 @@ elevationAtGlobal seed plates worldSize gx gy =
             side = SidePlateA
             boundaryEffect = boundaryElevation wsc boundary side plateA plateB boundaryDist
             shelfEffect = continentalShelf wsc plateA plateB boundaryDist
-            localNoise = elevationNoise seed worldSize gx' gy'
-            noiseScale = if plateIsLand myPlate
-                         then let mountainNoise = scaleElev wsc 50.0
-                                  plainsNoise   = scaleElev wsc 8.0
-                                  interiorFade = clamp01 (abs boundaryDist / scaleDist wsc 200.0)
-                              in round (lerp interiorFade mountainNoise plainsNoise)
-                         else round (scaleElev wsc 20.0)
-            terrainElev = baseElev + shelfEffect + boundaryEffect
-                        + localNoise * noiseScale
-        in (terrainElev, matGlacier)
+            mness = mountainness wsc boundaryDist
+            ridge = ridgeContribution seed worldSize gx' gy' wsc mness
+            valN  = valueContribution seed worldSize gx' gy' wsc
+                        (plateIsLand myPlate) mness
+            rawElev = baseElev + shelfEffect + boundaryEffect + ridge + valN
+            -- Plateau snap on lowland glacier zone tiles so the polar
+            -- shelf reads as flat ice rather than rolling tundra.
+            finalElev = if plateIsLand myPlate ∧ mness < plateauCutoff
+                        then plateauSnap wsc rawElev
+                        else rawElev
+        in (finalElev, matGlacier)
     else
     let ((plateA, distA), (plateB, distB)) = twoNearestPlates seed worldSize plates gx' gy'
 
@@ -302,26 +473,25 @@ elevationAtGlobal seed plates worldSize gx gy =
         baseElev = plateBaseElev myPlate
 
         boundaryDist = (distB - distA) / 2.0
-
         boundary = classifyBoundary worldSize plateA plateB
-
         side = SidePlateA
-
         boundaryEffect = boundaryElevation wsc boundary side
                            plateA plateB boundaryDist
-
-        -- Continental shelf: smooth the base elevation gap between
-        -- land and ocean plates. Without this, elevation jumps from
-        -- land (~0-6) to deep ocean (~-20 to -40) in a single tile.
         shelfEffect = continentalShelf wsc plateA plateB boundaryDist
 
-        localNoise = elevationNoise seed worldSize gx' gy'
-        noiseScale = if plateIsLand myPlate
-                     then round (scaleElev wsc 50.0)
-                     else round (scaleElev wsc 20.0)
+        mness = mountainness wsc boundaryDist
+        ridge = ridgeContribution seed worldSize gx' gy' wsc mness
+        valN  = valueContribution seed worldSize gx' gy' wsc
+                    (plateIsLand myPlate) mness
 
-        finalElev = baseElev + shelfEffect + boundaryEffect
-                  + localNoise * noiseScale
+        rawElev = baseElev + shelfEffect + boundaryEffect + ridge + valN
+
+        -- Plateau snap on land tiles in lowland zones (mountainness below
+        -- threshold). Mountains keep their raw, jagged silhouette;
+        -- oceans are never snapped (organic seabed).
+        finalElev = if plateIsLand myPlate ∧ mness < plateauCutoff
+                    then plateauSnap wsc rawElev
+                    else rawElev
 
     in (finalElev, material)
 
@@ -366,26 +536,26 @@ convergentEffect wsc aIsLand bIsLand bothLand bothOcean
     in if bothLand then
         -- Land-land convergent: mountain range (Himalayas)
         -- Reference: 3000–13000m → 300–1300 tiles at scale 1.0
-        let peakElev = scaleElev wsc ((3000.0 + 5000.0 * s) / metersPerTile)
+        let peakElev = scaleBoundaryElev wsc ((3000.0 + 5000.0 * s) / metersPerTile)
         in round (peakElev * t')
 
     else if bothOcean then
         let isSubducting = densityA > densityB
         in if isSubducting
            -- Trench: reference -2000 to -8000m → -200 to -800 tiles
-           then let trenchDepth = scaleElev wsc ((2000.0 + 3000.0 * s) / metersPerTile)
+           then let trenchDepth = scaleBoundaryElev wsc ((2000.0 + 3000.0 * s) / metersPerTile)
                 in round (negate trenchDepth * t')
            -- Island arc: reference 500m → 50 tiles
-           else round (scaleElev wsc (500.0 * s / metersPerTile) * t')
+           else round (scaleBoundaryElev wsc (500.0 * s / metersPerTile) * t')
 
     else if aIsLand ∧ not bIsLand then
         -- Andes-style: reference 2000–10000m → 200–1000 tiles
-        let peakElev = scaleElev wsc ((2000.0 + 4000.0 * s) / metersPerTile)
+        let peakElev = scaleBoundaryElev wsc ((2000.0 + 4000.0 * s) / metersPerTile)
         in round (peakElev * t')
 
     else
         -- Mariana-style trench: reference -3000 to -13000m → -300 to -1300 tiles
-        let trenchDepth = scaleElev wsc ((3000.0 + 5000.0 * s) / metersPerTile)
+        let trenchDepth = scaleBoundaryElev wsc ((3000.0 + 5000.0 * s) / metersPerTile)
         in round (negate trenchDepth * t')
 
 divergentEffect ∷ WorldScale → Bool → Bool → Float → Float → Int
@@ -398,15 +568,15 @@ divergentEffect wsc aIsLand bothOcean strength boundaryDist =
         metersPerTile = 10.0
     in if bothOcean then
         -- Mid-ocean ridge: reference 500–2500m → 50–250 tiles
-        let ridgeHeight = scaleElev wsc ((500.0 + 1000.0 * s) / metersPerTile)
+        let ridgeHeight = scaleBoundaryElev wsc ((500.0 + 1000.0 * s) / metersPerTile)
         in round (ridgeHeight * t')
     else if aIsLand then
         -- Continental rift: reference -500 to -2500m → -50 to -250 tiles
-        let riftDepth = scaleElev wsc ((500.0 + 2000.0 * s) / metersPerTile)
+        let riftDepth = scaleBoundaryElev wsc ((500.0 + 2000.0 * s) / metersPerTile)
         in round (negate riftDepth * t')
     else
         -- Ocean side of rift: reference -200 to -1000m → -20 to -100 tiles
-        let depth = scaleElev wsc ((200.0 + 800.0 * s) / metersPerTile)
+        let depth = scaleBoundaryElev wsc ((200.0 + 800.0 * s) / metersPerTile)
         in round (negate depth * t')
 
 transformEffect ∷ WorldScale → Float → Int
@@ -415,7 +585,7 @@ transformEffect wsc boundaryDist =
         t = max 0.0 (1.0 - abs boundaryDist / fadeRange)
         t' = t * t * (3.0 - 2.0 * t)
         metersPerTile = 10.0
-    in round (scaleElev wsc (100.0 / metersPerTile) * t' * (if boundaryDist > 0 then 1.0 else -1.0))
+    in round (scaleBoundaryElev wsc (100.0 / metersPerTile) * t' * (if boundaryDist > 0 then 1.0 else -1.0))
 
 -- * Continental Shelf
 

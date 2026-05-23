@@ -89,7 +89,7 @@ buildStrataCache timeline worldSize wsc gx gy registry (baseElev, baseMat)
                        relevantEvents
 
             eventsVec = V.fromList (reverse eventDeltas)
-            hardness = mpHardness (getMaterialProps registry surfMat')
+            hardness  = mpHardness (getMaterialProps registry surfMat')
             -- Use pre-computed final neighbor elevations directly.
             -- No advanceNeighbor calls needed — eliminates ~4 × events
             -- applyGeoEvent calls per period per column.

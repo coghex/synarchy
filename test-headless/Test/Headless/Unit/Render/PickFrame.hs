@@ -34,6 +34,9 @@ mkDef anims = UnitDef
     , udBodyTemplates = HM.empty
     , udSkillTemplates = HM.empty
     , udStartingInventory = []
+    , udEquipmentClass = Nothing
+    , udStartingEquipment = HM.empty
+    , udStartingAccessories = []
     }
 
 -- | A UnitInstance facing south with the supplied anim name and start time.
@@ -57,6 +60,8 @@ mkInst animName start = UnitInstance
     , uiModifiers   = HM.empty
     , uiSkills      = HM.empty
     , uiInventory   = []
+    , uiEquipment   = HM.empty
+    , uiAccessories = []
     }
 
 -- | An animation with frame handles 100,101,102,103 on DirS, fps 4, loop.

@@ -74,6 +74,12 @@ data LoadedChunk = LoadedChunk
     , lcIceMap     ∷ !IceMap               -- ^ Ice overlay (frozen ocean/lake/alpine)
     , lcFlora      ∷ !FloraChunkData
     , lcSideDeco   ∷ !(VU.Vector Word8)    -- ^ Side-face decorations per column
+    , lcWaterTableMap ∷ !(VU.Vector Int)
+      -- ^ Per-tile water-table elevation. Below this z value the ground
+      --   is saturated. When wt ≥ terrain[t] the tile shows surface
+      --   water; subsurface query for digging: position (lx, ly, z) is
+      --   wet iff z ≤ lcWaterTableMap[ly*chunkSize+lx]. Computed by
+      --   World.Hydrology.WaterTable, see DESIGN.md in that folder.
     } deriving (Show, Eq)
 -- Removed: lcModified :: Bool. The world's edit log
 -- (WorldState.wsEditsRef) is now the source of truth for "this chunk
@@ -81,7 +87,7 @@ data LoadedChunk = LoadedChunk
 -- via replay on regeneration.
 
 instance NFData LoadedChunk where
-    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco) =
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco wtMap) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
         rnf terrainMap `seq` rnf fluidMap `seq` rnf iceMap `seq`
-        rnf flora `seq` rnf sideDeco
+        rnf flora `seq` rnf sideDeco `seq` rnf wtMap

@@ -4,6 +4,7 @@ materials:
     hardness: 0.7
     density: 2.5
     albedo: 0.15
+    drainage: 0.2
     tile: "assets/textures/world/impactite/impactite.png"
     zoom: "assets/textures/world/zoommap/impactite_chunk.png"
     bg:   "assets/textures/world/zoommap/impactite_chunk_background.png"
@@ -12,6 +13,7 @@ materials:
     hardness: 0.6
     density: 2.4
     albedo: 0.06
+    drainage: 0.2
     tile: "assets/textures/world/tektite/tektite.png"
     zoom: "assets/textures/world/zoommap/tektite_chunk.png"
     bg:   "assets/textures/world/zoommap/tektite_chunk_background.png"

@@ -4,12 +4,10 @@ module World.Hydrology.River.Tributary
     ) where
 
 import UPrelude
-import Data.Word (Word64)
 import qualified Data.Vector as V
 import World.Base (GeoCoord(..))
 import World.Hydrology.Types
 import World.Geology.Hash
-import World.Constants (seaLevel)
 
 -- * Tributary Segment Builder
 
@@ -43,10 +41,6 @@ buildTributarySegments seed fidInt srcX srcY bx by numSegs branchElev =
           , rsFlowRate    = flow
           , rsStartElev   = se
           , rsEndElev     = ee
-          -- Water surface = reference elevation (no freeboard),
-          -- matching the main river fill convention.
-          , rsWaterStart  = max seaLevel se
-          , rsWaterEnd    = max seaLevel ee
           }
       ) [0..] (zip waypoints (drop 1 waypoints))
     where -- Interpolate waypoints along the line with coherent noise offsets.

@@ -4,6 +4,7 @@ materials:
     hardness: 0.7
     density: 2.7
     albedo: 0.60
+    drainage: 0.15
     tile: "assets/textures/world/marble/marble.png"
     zoom: "assets/textures/world/zoommap/marble_chunk.png"
     bg:   "assets/textures/world/zoommap/marble_chunk_background.png"
@@ -12,6 +13,7 @@ materials:
     hardness: 0.95
     density: 2.65
     albedo: 0.42
+    drainage: 0.1
     tile: "assets/textures/world/quartzite/quartzite.png"
     zoom: "assets/textures/world/zoommap/quartzite_chunk.png"
     bg:   "assets/textures/world/zoommap/quartzite_chunk_background.png"
@@ -20,6 +22,7 @@ materials:
     hardness: 0.65
     density: 2.75
     albedo: 0.12
+    drainage: 0.05
     tile: "assets/textures/world/slate/slate.png"
     zoom: "assets/textures/world/zoommap/slate_chunk.png"
     bg:   "assets/textures/world/zoommap/slate_chunk_background.png"
@@ -28,6 +31,7 @@ materials:
     hardness: 0.55
     density: 2.8
     albedo: 0.18
+    drainage: 0.1
     tile: "assets/textures/world/schist/schist.png"
     zoom: "assets/textures/world/zoommap/schist_chunk.png"
     bg:   "assets/textures/world/zoommap/schist_chunk_background.png"
@@ -36,6 +40,7 @@ materials:
     hardness: 0.8
     density: 2.7
     albedo: 0.28
+    drainage: 0.05
     tile: "assets/textures/world/gneiss/gneiss.png"
     zoom: "assets/textures/world/zoommap/gneiss_chunk.png"
     bg:   "assets/textures/world/zoommap/gneiss_chunk_background.png"
@@ -44,6 +49,7 @@ materials:
     hardness: 0.5
     density: 2.7
     albedo: 0.16
+    drainage: 0.1
     tile: "assets/textures/world/phyllite/phyllite.png"
     zoom: "assets/textures/world/zoommap/phyllite_chunk.png"
     bg:   "assets/textures/world/zoommap/phyllite_chunk_background.png"

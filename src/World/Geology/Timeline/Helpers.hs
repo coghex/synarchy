@@ -23,13 +23,13 @@ module World.Geology.Timeline.Helpers
     , filledElevFromGrid
       -- * Lake reconciliation
     , reconcileLakes
+      -- * Lake spillway post-carve adjustment
+    , updateLakeSpillways
     ) where
 import UPrelude
 import Data.List (foldl')
-import Data.Ord (comparing)
 import Data.Word (Word64)
 import qualified Data.Vector as V
-import qualified Data.Vector.Algorithms.Intro as VA
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashMap.Strict as HM
 import World.Base (GeoCoord(..), GeoFeatureId(..))
@@ -278,8 +278,16 @@ mkGeoPeriod worldSize name scale duration date events erosion regErosion =
             let evts = explodeRiverEvent evt
             in map (\e → (e, eventBBox e worldSize)) evts
             ) tagged
-        explodedVec = V.modify (VA.sortBy (comparing (bbMinY . snd)))
-                               (V.fromList exploded)
+        -- Preserve input concatenation order. The input encodes
+        -- causal sequence (meteorites → eruptions → hydro → glaciers
+        -- within an Age period), and downstream consumers iterate
+        -- linearly with no spatial early-break — so sorting by
+        -- bbMinY only scrambled the causal order without enabling
+        -- any optimization (audit #22). Material override (last-wins
+        -- in the per-tile foldl') now means "youngest geological
+        -- process wins" — meaningful — instead of "northernmost
+        -- bbox wins."
+        explodedVec = V.fromList exploded
         periodBB = if V.null explodedVec
                    then EventBBox maxBound maxBound minBound minBound
                    else V.foldl' (\(EventBBox ax ay bx by) (_, EventBBox cx cy dx dy) →
@@ -359,3 +367,42 @@ reconcileLakes _seed _ageIdx periodIdx worldSize existingLakes simLakes tbs =
             ) ([], [], tbs) newLakes
 
     in (pfs, evts, tbs')
+
+-- * Lake spillway post-carve adjustment
+
+-- | Walk each lake feature and clamp its `lkSurface` down to the
+--   minimum post-carve elevation around its rim. Lakes are created
+--   from the depression-filled raw elevation grid, but river carving
+--   later in the timeline can lower spillway points along drainage
+--   routes — leaving the lake's water surface "floating" above an
+--   open channel (audit #13).
+--
+--   `finalGrid` reflects all periods' events + erosion at simulation
+--   resolution (~5-11 tile spacing). Sample 16 rim points; the min
+--   approximates the post-carve spillway.
+updateLakeSpillways ∷ Int → ElevGrid → [PersistentFeature] → [PersistentFeature]
+updateLakeSpillways worldSize grid = map updateOne
+  where
+    rimSamples = 16 ∷ Int
+    updateOne pf = case pfFeature pf of
+        HydroShape (LakeFeature lp) →
+            let GeoCoord cx cy = lkCenter lp
+                -- 25% rim expansion past the nominal radius — same
+                -- spillway-search behavior the legacy Fluid/Lake.hs
+                -- spillway clamp used, kept here so persistent-feature
+                -- lake spillways still match what the geo timeline expects.
+                r = fromIntegral (lkRadius lp) * 1.25 ∷ Float
+                spillway = foldl' (\acc i →
+                    let angle = fromIntegral i * 2.0 * pi
+                              / fromIntegral rimSamples ∷ Float
+                        rimGX = cx + round (r * cos angle)
+                        rimGY = cy + round (r * sin angle)
+                        e = elevFromGrid grid worldSize rimGX rimGY
+                    in min acc e
+                    ) maxBound [0 .. rimSamples - 1]
+                newSurface = if spillway ≡ maxBound
+                             then lkSurface lp
+                             else min (lkSurface lp) spillway
+                newLp = lp { lkSurface = newSurface }
+            in pf { pfFeature = HydroShape (LakeFeature newLp) }
+        _ → pf

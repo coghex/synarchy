@@ -268,7 +268,11 @@ getWorldGenParams env = do
 -- | world.getRivers() → array of river tables
 --   Each river: { source={x,y}, mouth={x,y}, flowRate=N, segments={...} }
 --   Each segment: { sx,sy, ex,ey, width, valleyWidth, depth, flowRate,
---                   startElev, endElev, waterStart, waterEnd }
+--                   startElev, endElev }
+--
+--   Water surface elevation is no longer carried on the segment — it
+--   is derived per-tile from the water-table compute at chunk gen.
+--   Scripts that need surface heights should call world.getSurfaceAt.
 worldGetRiversFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetRiversFn env = do
     mParams ← Lua.liftIO $ getWorldGenParams env
@@ -331,10 +335,6 @@ worldGetRiversFn env = do
                     Lua.setfield (Lua.nth 2) "startElev"
                     Lua.pushinteger (fromIntegral (rsEndElev seg))
                     Lua.setfield (Lua.nth 2) "endElev"
-                    Lua.pushinteger (fromIntegral (rsWaterStart seg))
-                    Lua.setfield (Lua.nth 2) "waterStart"
-                    Lua.pushinteger (fromIntegral (rsWaterEnd seg))
-                    Lua.setfield (Lua.nth 2) "waterEnd"
                     Lua.rawseti (Lua.nth 2) (fromIntegral sIdx + 1)
                 Lua.setfield (Lua.nth 2) "segments"
                 Lua.rawseti (Lua.nth 2) rIdx

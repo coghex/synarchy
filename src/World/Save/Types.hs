@@ -73,8 +73,13 @@ saveMagic = 0x53595241
 --       materials). Same ItemInstance preservation rule so deposited
 --       items retain their quality/condition through save/load and
 --       through deposit→withdraw round-trips.
+--   v15 adds lcWaterTableMap to LoadedChunk for the water-table river
+--       rework (Phase A). Chunks are transient so the field itself
+--       doesn't round-trip via saves, but other shape/field deletions
+--       on RiverSegment in Phase B will. Bumping now so any pre-rework
+--       saves are clearly rejected before Phase B lands.
 currentSaveVersion ∷ Int
-currentSaveVersion = 13
+currentSaveVersion = 15
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects

@@ -21,9 +21,10 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
-import World.Fluid.Types (FluidCell(..))
+import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Generate.Coordinates (globalToChunk)
+import World.Hydrology.WaterTable (waterTableAtTile)
 
 -- | Apply one edit to a chunk. Out-of-bounds edits (the column index
 --   doesn't fall in this chunk, or a delete pops an already-empty
@@ -33,8 +34,13 @@ applyEdit ∷ WorldEdit → LoadedChunk → LoadedChunk
 applyEdit (WeDeleteTile gx gy) lc
     | not (edgeBelongsTo gx gy lc) = lc
     | otherwise =
-        let idx     = columnIdx gx gy
-            oldTopZ = lcSurfaceMap lc VU.! idx
+        let (_, (lx, ly)) = globalToChunk gx gy
+            idx     = columnIndex lx ly
+            -- Dig operates on TERRAIN top, not surface top, so that
+            -- successive digs through revealed water continue to
+            -- advance terrain instead of no-oping against the water
+            -- column we just exposed.
+            oldTopZ = lcTerrainSurfaceMap lc VU.! idx
             col     = lcTiles lc V.! idx
             colLen  = VU.length (ctMats col)
             i       = oldTopZ - ctStartZ col
@@ -46,10 +52,27 @@ applyEdit (WeDeleteTile gx gy) lc
                        , ctSlopes = ctSlopes col VU.// [(i, 0)]
                        , ctVeg    = ctVeg    col VU.// [(i, 0)]
                        }
+                   newTopZ  = oldTopZ - 1
+                   wt       = waterTableAtTile lc lx ly
+                   curFluid = lcFluidMap lc V.! idx
+                   -- If the newly exposed surface is at or below the
+                   -- water table and the column has no fluid yet,
+                   -- reveal groundwater. The fluid surface sits at the
+                   -- water table — successive digs further down expose
+                   -- more space beneath the same flat water surface.
+                   newFluid = case curFluid of
+                       Just _                        → curFluid
+                       Nothing | newTopZ ≤ wt        →
+                           Just (FluidCell Lake wt)
+                       _                             → Nothing
+                   newSurface = case newFluid of
+                       Just fc → max newTopZ (fcSurface fc)
+                       Nothing → newTopZ
                in lc
                    { lcTiles             = lcTiles lc V.// [(idx, col')]
-                   , lcSurfaceMap        = lcSurfaceMap        lc VU.// [(idx, oldTopZ - 1)]
-                   , lcTerrainSurfaceMap = lcTerrainSurfaceMap lc VU.// [(idx, oldTopZ - 1)]
+                   , lcSurfaceMap        = lcSurfaceMap        lc VU.// [(idx, newSurface)]
+                   , lcTerrainSurfaceMap = lcTerrainSurfaceMap lc VU.// [(idx, newTopZ)]
+                   , lcFluidMap          = lcFluidMap lc V.// [(idx, newFluid)]
                    }
 applyEdit (WeSetFluidTile gx gy ft) lc
     | not (edgeBelongsTo gx gy lc) = lc

@@ -137,6 +137,7 @@ test-suite synarchy-test-headless
     other-modules: Test.Headless.Harness
                    Test.Headless.WorldGen
                    Test.Headless.WorldGen.Geology
+                   Test.Headless.WorldGen.Parity
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Render.PickFrame
@@ -476,6 +477,7 @@ library
                      World.Hydrology.Types
                      World.Hydrology.Event
                      World.Hydrology.Simulation
+                     World.Hydrology.WaterTable
                      World.Hydrology.River
                      World.Hydrology.River.Meander
                      World.Hydrology.River.Tributary
@@ -524,7 +526,6 @@ library
                      World.Weather.Generate
                      World.Weather.Lookup
                      World.Material
-                     World.Material.Yaml
                      World.Preview
                      World.ZoomMap
                      World.ZoomMap.Cache
