@@ -102,6 +102,11 @@ loadBuildingYamlFn env backendState = do
                         let anim = Animation
                                 { aFps    = byaFps animDef
                                 , aLoop   = byaLoop animDef
+                                , aFlip   = False  -- buildings have a
+                                                   -- single direction
+                                                   -- (DirS); the mirror
+                                                   -- path never fires
+                                                   -- for them.
                                 , aFrames = frameMap
                                 }
                         return (HM.insert animName anim accA)

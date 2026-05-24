@@ -163,6 +163,7 @@ loadUnitYamlFn env backendState = do
                         let anim = Animation
                                 { aFps    = uyaFps animDef
                                 , aLoop   = uyaLoop animDef
+                                , aFlip   = uyaFlip animDef
                                 , aFrames = frameMap
                                 }
                         return (HM.insert animName anim accA)
@@ -1994,7 +1995,10 @@ unitGetFrameTextureFn env = do
                     Just inst →
                         case HM.lookup (uiDefName inst) (umDefs um) of
                             Nothing  → Nothing
-                            Just def → Just (pickFrame now (camFacing cam) inst def)
+                            -- Lua only needs the texture handle; the flipX
+                            -- flag from `pickFrame` is consumed by the
+                            -- renderer at draw time, not here.
+                            Just def → Just (fst (pickFrame now (camFacing cam) inst def))
             case mTex of
                 Just (TextureHandle k) → Lua.pushinteger (fromIntegral k)
                 Nothing → Lua.pushinteger 0

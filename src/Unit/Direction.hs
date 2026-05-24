@@ -4,6 +4,7 @@ module Unit.Direction
     , dirIndex
     , indexToDir
     , allDirections
+    , mirrorDir
     ) where
 
 import UPrelude
@@ -33,3 +34,22 @@ indexToDir n = toEnum (n `mod` 8)
 -- | All eight directions in clockwise order
 allDirections ∷ [Direction]
 allDirections = [minBound .. maxBound]
+
+-- | The "western half" of the compass (SW, W, NW) can be obtained by
+--   horizontally mirroring their eastern counterparts (SE, E, NE). This
+--   lets bilaterally-symmetric animations ship 5 directional sprites
+--   instead of 8 — the renderer flips UVs at draw time for the western
+--   directions. Returns @Nothing@ for directions that are their own
+--   canonical (S, N, NE, E, SE) — those use their own asset, no flip.
+--
+--   Used by `Unit.Render.resolveTexture` / `pickFrame` to fall back to
+--   the mirror direction's sprite + a flipX flag when the requested
+--   direction has no entry. Per-animation opt-in is governed by which
+--   directions get authored — if an animation needs an asymmetric prop
+--   (e.g. weapon in the right hand) the asset author simply provides
+--   all 8 sprites and the mirror fallback never triggers.
+mirrorDir ∷ Direction → Maybe Direction
+mirrorDir DirSW = Just DirSE
+mirrorDir DirW  = Just DirE
+mirrorDir DirNW = Just DirNE
+mirrorDir _     = Nothing

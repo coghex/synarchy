@@ -22,9 +22,18 @@ import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 
 -- | One named animation as loaded from YAML. Per-direction frame paths;
 --   directions accept short ("S","SW") or long ("south","south-east").
+--
+--   `flip: true` declares the animation is bilaterally symmetric, so the
+--   author only has to supply the 5 eastern-half directions (S, SE, E,
+--   NE, N) and the renderer mirrors SW/W/NW from SE/E/NE at draw time.
+--   Default is `false` — author must supply all 8 explicitly; missing
+--   directions fall back to the unit's static T-pose, not to a flipped
+--   sibling (this is the safe choice for anims that show an asymmetric
+--   prop like a weapon in the right hand).
 data UnitYamlAnim = UnitYamlAnim
     { uyaFps    ∷ !Float
     , uyaLoop   ∷ !Bool
+    , uyaFlip   ∷ !Bool
     , uyaFrames ∷ !(Map.Map Text [Text])
     } deriving (Show, Eq, Generic)
 
@@ -32,6 +41,7 @@ instance FromJSON UnitYamlAnim where
     parseJSON = withObject "UnitYamlAnim" $ \v → UnitYamlAnim
         ⊚ v .:? "fps"    .!= 8.0
         ⊛ v .:? "loop"   .!= True
+        ⊛ v .:? "flip"   .!= False
         ⊛ v .:? "frames" .!= Map.empty
 
 -- | One stat as declared in YAML: a base value and a range. At spawn

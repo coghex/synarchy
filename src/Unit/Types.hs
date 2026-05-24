@@ -23,10 +23,17 @@ import Item.Types (ItemInstance(..))
 import Unit.Direction (Direction(..))
 
 -- | A single animation: per-direction frame sequences.
---   Missing directions fall back to T-pose at render time.
+--
+--   Missing directions either fall back to T-pose (`aFlip = False`) or
+--   are mirrored from their eastern-half counterpart (`aFlip = True` —
+--   SW/W/NW pull from SE/E/NE with horizontally swapped UVs). The flag
+--   is set per animation in YAML; default is False so an asset author
+--   who forgets the flag and lists only 5 dirs sees obvious T-pose
+--   fallbacks rather than silently-mirrored weapon hands.
 data Animation = Animation
     { aFps    ∷ !Float
     , aLoop   ∷ !Bool
+    , aFlip   ∷ !Bool
     , aFrames ∷ !(Map.Map Direction (V.Vector TextureHandle))
     } deriving (Show, Eq)
 
