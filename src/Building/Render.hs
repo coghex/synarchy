@@ -259,12 +259,17 @@ renderGhostQuad env facing zSlice = do
                                 (faF, fbF) = applyFacingF facing gxF gyF
                                 rawX = (faF - fbF) * tileHalfWidth - tileHalfWidth
                                 rawY = (faF + fbF) * tileHalfDiamondHeight
-                                -- Ghost sits at zSlice so relativeZ = 0,
-                                -- meaning we draw it at the current
-                                -- slice level. Heightless preview is
-                                -- intentional — we want the player to
-                                -- see the building flat on the active
-                                -- camera slice.
+                                -- Lift the ghost to the terrain Z that
+                                -- the placed building will land at,
+                                -- mirroring `buildingToQuad`. Without
+                                -- this the ghost stays glued to the
+                                -- camera slice while the cursor + the
+                                -- about-to-be-placed building both sit
+                                -- at terrainZ, producing a visible
+                                -- offset on non-flat terrain.
+                                relativeZ = bgGridZ ghost - zSlice
+                                heightOffset =
+                                    fromIntegral relativeZ * tileSideHeight
                                 -- Same anchor logic as the placed-building
                                 -- path: tile_bottom textures get pushed
                                 -- down by tileSideHeight so their drawn
@@ -273,7 +278,7 @@ renderGhostQuad env facing zSlice = do
                                     if bdSpriteAnchor def ≡ "tile_bottom"
                                     then tileSideHeight else 0
                                 drawX = rawX + (tileWidth - quadW) * 0.5
-                                drawY = rawY
+                                drawY = rawY - heightOffset
                                       + tileHalfDiamondHeight - quadH
                                       + anchorOffset
                                 tint = if bgValid ghost

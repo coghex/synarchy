@@ -126,6 +126,15 @@ data BuildingGhost = BuildingGhost
     { bgDefName ∷ !Text
     , bgGridX   ∷ !Int
     , bgGridY   ∷ !Int
+    , bgGridZ   ∷ !Int
+      -- ^ Terrain surface Z at the ghost tile, sampled by setGhost.
+      --   Render pass uses this to apply the same height offset placed
+      --   buildings get, so the ghost previews where the building will
+      --   actually land. Without it the ghost sits at zSlice while the
+      --   placed building sits at terrainZ — visible as a vertical
+      --   offset between cursor + ghost on non-flat terrain (arena
+      --   testing didn't reveal this because every arena tile is at
+      --   the same Z).
     , bgValid   ∷ !Bool
     } deriving (Show, Eq)
 

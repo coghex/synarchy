@@ -264,12 +264,26 @@ buildingSetGhostFn env = do
     case (nameArg, xArg, yArg) of
         (Just nameBS, Just x, Just y) → do
             let name = TE.decodeUtf8 nameBS
-            Lua.liftIO $ writeIORef (buildingGhostRef env) $ Just BuildingGhost
-                { bgDefName = name
-                , bgGridX   = fromIntegral x
-                , bgGridY   = fromIntegral y
-                , bgValid   = validArg
-                }
+                gx   = fromIntegral x
+                gy   = fromIntegral y
+            Lua.liftIO $ do
+                -- Sample the terrain Z at the ghost tile so the
+                -- render pass can elevate the preview to where the
+                -- building will actually land. Matches the spawn
+                -- path's `floorZAt`; falls back to 0 if the chunk
+                -- isn't loaded.
+                gz ← do
+                    mWtd ← snapshotVisibleWorldTiles env
+                    case mWtd of
+                        Just wtd → pure (floorZAt wtd gx gy)
+                        Nothing  → pure 0
+                writeIORef (buildingGhostRef env) $ Just BuildingGhost
+                    { bgDefName = name
+                    , bgGridX   = gx
+                    , bgGridY   = gy
+                    , bgGridZ   = gz
+                    , bgValid   = validArg
+                    }
             Lua.pushboolean True
             return 1
         _ → do
