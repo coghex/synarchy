@@ -93,15 +93,10 @@ updateChunkLoading env logger = do
                                         then map generateFlatChunk batch
                                         else parMap rdeepseq (\coord →
                                             let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap) = generateChunk registry catalog params coord
-                                                seededSurf = VU.imap (\idx surfZ →
-                                                    case fluidMap V.! idx of
-                                                        Just fc → max surfZ (fcSurface fc)
-                                                        Nothing → surfZ
-                                                    ) surfMap
                                             in LoadedChunk
                                                 { lcCoord      = coord
                                                 , lcTiles      = chunkTiles
-                                                , lcSurfaceMap = seededSurf
+                                                , lcSurfaceMap = surfMap
                                                 , lcTerrainSurfaceMap = tMap
                                                 , lcFluidMap   = fluidMap
                                                 , lcIceMap     = iceMap
@@ -171,15 +166,10 @@ drainInitQueues env logger = do
 
                         let newChunks = parMap rdeepseq (\coord →
                                 let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap) = generateChunk registry catalog params coord
-                                    seededSurf = VU.imap (\idx surfZ →
-                                        case fluidMap V.! idx of
-                                            Just fc → max surfZ (fcSurface fc)
-                                            Nothing → surfZ
-                                        ) surfMap
                                 in LoadedChunk
                                     { lcCoord      = coord
                                     , lcTiles      = chunkTiles
-                                    , lcSurfaceMap = seededSurf
+                                    , lcSurfaceMap = surfMap
                                     , lcTerrainSurfaceMap = tMap
                                     , lcFluidMap   = fluidMap
                                     , lcIceMap     = iceMap

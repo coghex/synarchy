@@ -188,8 +188,35 @@ evolveExistingRiver seed ageIdx periodIdx worldSize pf tbs =
 
                 numTribSegs = hashToRangeGeo h6 2 4
                 branchElev = rsStartElev branchSeg
-                tribSegs = buildTributarySegments seed fidInt
-                               srcX srcY bx by numTribSegs branchElev
+                rawTribSegs = buildTributarySegments seed fidInt
+                                  srcX srcY bx by numTribSegs branchElev
+
+                -- Force the trib's LAST segment to terminate at an
+                -- elevation that makes its channel-floor match the main
+                -- at the branch point. Without this, a shallow trib
+                -- (depth ≈ 2-3) joining a deep main (depth ≈ 9) leaves
+                -- a vertical water cliff of (mainDepth - tribDepth)
+                -- tiles at the confluence — visible as a multi-tile
+                -- waterfall the renderer draws as a straight drop.
+                --
+                --   target = branchElev − mainDepth + tribLastDepth
+                --     ↳ trib cf at end = target − tribLastDepth
+                --                       = branchElev − mainDepth
+                --                       = main cf at branch
+                --
+                -- Clamped to ≤ rsStartElev of the last seg so we never
+                -- ask the trib to flow uphill (audit #12 sub-bug B's
+                -- monotonic-descent invariant). When the clamp bites,
+                -- the residual mismatch is unavoidable without
+                -- truncating the trib further upstream.
+                tribSegs =
+                    if V.null rawTribSegs then rawTribSegs
+                    else let lastIdx = V.length rawTribSegs - 1
+                             lastSeg = rawTribSegs V.! lastIdx
+                             mainDepth = rsDepth branchSeg
+                             target = branchElev - mainDepth + rsDepth lastSeg
+                             clamped = min target (rsStartElev lastSeg)
+                         in rawTribSegs V.// [(lastIdx, lastSeg { rsEndElev = clamped })]
 
                 tributaryParams = RiverParams
                     { rpSourceRegion = GeoCoord srcX srcY
@@ -399,18 +426,30 @@ performMerge worldSize periodIdx tributaryPf mainPf junctionCoord segIdx tbs =
                         then error "performMerge: empty tributary"
                         else V.last tribSegs
 
-        -- Junction segment's end elevation: use the main river's
-        -- elevation at the junction (midpoint of its segment) so the
-        -- tributary's last segment slopes down properly to meet the
-        -- main. Clamped to ≤ rsStartElev cutSeg so we never produce
-        -- an uphill segment in pathological topology
-        -- (audit #12 sub-bug B).
+        -- Junction segment's end elevation must put the tributary's
+        -- *channel-floor* (rsEndElev - rsDepth) at the same z as the
+        -- main river's channel-floor at the junction. Otherwise the
+        -- two water surfaces meet at different elevations and the
+        -- renderer draws a vertical water cliff at the confluence
+        -- — typically 4-7 tiles tall when a shallow tributary
+        -- (depth ≈ 3) meets a deep main (depth ≈ 9).
+        --
+        -- mainCfAtJunction = mainMidElev − mainDepth
+        -- desiredJunctionElev = mainCfAtJunction + tribDepth
+        --
+        -- Clamped to ≤ cutSeg.rsStartElev to preserve the
+        -- monotonic-descent invariant on the trib's last segment
+        -- (audit #12 sub-bug B). When this clamp bites, the
+        -- mismatch is the residual cliff — unavoidable without
+        -- truncating the trib further upstream.
         mainSegs0 = rpSegments mainRiver
         mainSeg = if segIdx < V.length mainSegs0
                   then mainSegs0 V.! segIdx
                   else V.last mainSegs0
         mainMidElev = (rsStartElev mainSeg + rsEndElev mainSeg) `div` 2
-        junctionElev = min (rsStartElev cutSeg) mainMidElev
+        mainCfAtJunction = mainMidElev - rsDepth mainSeg
+        desiredJunctionElev = mainCfAtJunction + rsDepth cutSeg
+        junctionElev = min (rsStartElev cutSeg) desiredJunctionElev
         junctionSeg = cutSeg
             { rsEnd     = junctionCoord
             , rsEndElev = junctionElev

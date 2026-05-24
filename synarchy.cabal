@@ -454,6 +454,7 @@ library
                      World.Generate.Coordinates
                      World.Generate.Chunk
                      World.Generate.Timeline
+                     World.Generate.Timeline.Fast
                      World.Generate.Strata
                      World.Generate.Types
                      World.Generate.Config

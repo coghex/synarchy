@@ -81,7 +81,7 @@ composeFluidMap params coord terrainMap waterTableMap channelMask =
         -- Lake even though their wt happens to equal seaLevel.
         chunkIsOceanic =
             oceanDistAt oceanDist
-                (wrapChunkCoordU worldSize coord) < maxBound
+                (wrapChunkCoordU worldSize coord) ≡ 0
 
         -- Water-table-driven fluid placement.
         waterFluid = V.generate chunkArea $ \idx →
@@ -229,7 +229,9 @@ tileInChannelMask worldSize gx gy terrainHere seg =
 -- | Merge a river-flat surface rule into surface-map computation.
 -- For River fluid, surface = fluid surface (hides terrain protrusions).
 -- For other fluid types, surface = max(terrain, fluid).
--- Same rule lives in Sim/Thread.hs and the chunk-load seeding paths.
+-- Same rule lives in Sim/Thread.hs::writeDirtyFluids (sim writeback)
+-- and World/Edit/Apply.hs::applyEdit (player edits). ChunkLoading
+-- uses mkSurfaceMap's output directly — no re-derivation.
 mkSurfaceMap ∷ VU.Vector Int → V.Vector (Maybe FluidCell) → VU.Vector Int
 mkSurfaceMap terrain fluid =
     VU.imap (\idx surfZ →

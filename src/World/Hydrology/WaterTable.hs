@@ -158,7 +158,7 @@ computeWaterTable climate worldSize coord borderedTerrain channelMask =
                          -- rather than tall columns.
                else
                  let spill = spillwayElev borderedTerrain bSize idx t
-                 in if spill > t + 2
+                 in if spill > t + columnCap
                     then min spill (t + columnCap)
                                  -- real sink (≥3-tile rim): flood to
                                  -- spillway, capped to columnCap so

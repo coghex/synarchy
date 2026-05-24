@@ -82,9 +82,15 @@ applyEdit (WeSetFluidTile gx gy ft) lc
             newSurface = surfZ + 1
             cell       = FluidCell { fcType = ft, fcSurface = newSurface }
             oldTop     = lcSurfaceMap lc VU.! idx
+            -- River renders flat at fcSurface to hide protrusions; other
+            -- fluid types use max(terrain/old, fluid). Mirrors the rule in
+            -- World.Generate.Chunk.mkSurfaceMap and Sim.Thread.
+            renderedSurf = case ft of
+                River → newSurface
+                _     → max oldTop newSurface
         in lc
             { lcFluidMap   = lcFluidMap lc V.// [(idx, Just cell)]
-            , lcSurfaceMap = lcSurfaceMap lc VU.// [(idx, max oldTop newSurface)]
+            , lcSurfaceMap = lcSurfaceMap lc VU.// [(idx, renderedSurf)]
             }
 
 -- | Replay every edit recorded for this chunk, in stored order.

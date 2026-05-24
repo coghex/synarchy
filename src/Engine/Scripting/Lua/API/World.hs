@@ -781,9 +781,10 @@ worldDeleteTileFn env = do
 
 -- | world.setFluidTile(pageId, gx, gy, kind) → bool
 -- Places one tile of fluid on top of the column at (gx, gy). `kind` is
--- "water" (Lake) or "lava" (Lava); other values fall back to "water".
--- Debug-tool affordance: lets the arena have water sources without
--- waiting for procedural generation.
+-- one of "water" (Lake) / "lava" (Lava) / "river" (River) / "ocean"
+-- (Ocean); unknown values fall back to "water". Debug-tool affordance:
+-- lets the arena have water sources without waiting for procedural
+-- generation.
 worldSetFluidTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetFluidTileFn env = do
     pageIdArg ← Lua.tostring 1
