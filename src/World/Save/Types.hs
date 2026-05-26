@@ -363,4 +363,7 @@ fromUnitInstanceSnapshot def s = UnitInstance
     , uiInventory   = uisInventory s
     , uiEquipment   = uisEquipped s
     , uiAccessories = uisAccessories s
+    -- Runtime-only debug flags — always False on load.
+    , uiFrozen      = False
+    , uiForceLoop   = False
     }

@@ -129,6 +129,8 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , uiInventory   = initialInventory
                     , uiEquipment   = initialEquipment
                     , uiAccessories = initialAccessories
+                    , uiFrozen      = False
+                    , uiForceLoop   = False
                     }
             atomicModifyIORef' (unitManagerRef env) $ \um' →
                 (um' { umInstances = HM.insert uid inst (umInstances um') }, ())

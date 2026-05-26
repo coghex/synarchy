@@ -21,6 +21,12 @@ function game.init(scriptId)
     -- Initialize debug
     debugScriptId = engine.loadScript("scripts/debug.lua", 0.1)
 
+    -- Debug anim panel — pops a green-text overlay listing the
+    -- selected unit's animations. 0.1s tick is enough to react to
+    -- selection changes without burning CPU.
+    debugAnimPanelScriptId = engine.loadScript(
+        "scripts/debug_anim_panel.lua", 0.1)
+
     -- Initialize shell
     shellScriptId = engine.loadScript("scripts/shell.lua", 0.5)
 
@@ -124,6 +130,15 @@ function game.onMouseDown(button, x, y)
     -- rect (spawn button / list entry) eats the click, we stop here
     -- so the click can't fall through into selection / tile-cursor.
     if debugOverlay.tryClaimClick(button, x, y) then
+        return
+    end
+
+    -- Debug anim panel (per-selection). Sits to the LEFT of the
+    -- info-v2 pane and lists clickable animation names. Same
+    -- parallel hit-test pattern as debug.lua so clicks on anim rows
+    -- don't fall through into deselect-on-empty.
+    local debugAnimPanel = require("scripts.debug_anim_panel")
+    if debugAnimPanel.tryClaimClick(button, x, y) then
         return
     end
 

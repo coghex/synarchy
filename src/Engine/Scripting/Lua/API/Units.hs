@@ -10,6 +10,7 @@ module Engine.Scripting.Lua.API.Units
     , unitGetInfoFn
     , unitListFn
     , unitListDefsFn
+    , unitListAnimationsFn
     , unitSelectFn
     , unitDeselectAllFn
     , unitGetSelectedFn
@@ -18,6 +19,9 @@ module Engine.Scripting.Lua.API.Units
     , unitHitTestInRectFn
     , unitSetSelectionFn
     , unitSetAnimFn
+    , unitSetFacingFn
+    , unitSetFrozenFn
+    , unitSetForceLoopFn
     , unitCollapseFn
     , unitReviveFn
     , unitKillFn
@@ -1212,6 +1216,36 @@ unitListDefsFn env = do
         Lua.rawseti (-2) i
     return 1
 
+-- | unit.listAnimations(uid) — Lua array of animation names declared
+--   for the unit's def. Used by the debug anim panel to enumerate
+--   playable animations for the selected unit. Returns nil if the
+--   unit or its def can't be found.
+unitListAnimationsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitListAnimationsFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → do
+            Lua.pushnil
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mNames ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure $ do
+                    inst ← HM.lookup uid (umInstances um)
+                    def  ← HM.lookup (uiDefName inst) (umDefs um)
+                    pure (HM.keys (udAnimations def))
+            case mNames of
+                Nothing → do
+                    Lua.pushnil
+                    return 1
+                Just names → do
+                    Lua.newtable
+                    forM_ (zip [1..] names) $ \(i, name) → do
+                        Lua.pushstring (TE.encodeUtf8 name)
+                        Lua.rawseti (-2) i
+                    return 1
+
 -- | unit.getInfo(id) — returns a Lua table with the unit's render-visible
 --   attributes, or nil if the unit doesn't exist. Used by the info panel.
 unitGetInfoFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -1416,6 +1450,122 @@ unitSetAnimFn env = do
             return 1
         _ → do
             Lua.pushboolean False
+            return 1
+
+-- | unit.setFacing(uid, dirStr) — force the unit's facing direction.
+--   `dirStr` is one of "S", "SW", "W", "NW", "N", "NE", "E", "SE"
+--   (case-insensitive; long forms "south", "south-east" also accepted).
+--   Used by the debug anim panel to cycle a unit through all 8
+--   directions while previewing an animation. Returns true on
+--   success, false on unknown direction or missing unit.
+unitSetFacingFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitSetFacingFn env = do
+    idArg  ← Lua.tointeger 1
+    dirArg ← Lua.tostring 2
+    case (idArg, dirArg) of
+        (Just n, Just dirBS) → do
+            let uid    = UnitId (fromIntegral n)
+                dirTxt = T.toUpper (TE.decodeUtf8 dirBS)
+            case parseDir dirTxt of
+                Nothing → do
+                    Lua.pushboolean False
+                    return 1
+                Just dir → do
+                    ok ← Lua.liftIO $ atomicModifyIORef'
+                                        (unitManagerRef env) $ \um →
+                        case HM.lookup uid (umInstances um) of
+                            Nothing → (um, False)
+                            Just inst →
+                                let inst' = inst { uiFacing = dir }
+                                in (um { umInstances = HM.insert uid inst'
+                                                         (umInstances um) }
+                                   , True)
+                    Lua.pushboolean ok
+                    return 1
+        _ → do
+            Lua.pushboolean False
+            return 1
+  where
+    parseDir t = case t of
+        "S"           → Just DirS
+        "SOUTH"       → Just DirS
+        "SW"          → Just DirSW
+        "SOUTH-WEST"  → Just DirSW
+        "SOUTH_WEST"  → Just DirSW
+        "W"           → Just DirW
+        "WEST"        → Just DirW
+        "NW"          → Just DirNW
+        "NORTH-WEST"  → Just DirNW
+        "NORTH_WEST"  → Just DirNW
+        "N"           → Just DirN
+        "NORTH"       → Just DirN
+        "NE"          → Just DirNE
+        "NORTH-EAST"  → Just DirNE
+        "NORTH_EAST"  → Just DirNE
+        "E"           → Just DirE
+        "EAST"        → Just DirE
+        "SE"          → Just DirSE
+        "SOUTH-EAST"  → Just DirSE
+        "SOUTH_EAST"  → Just DirSE
+        _             → Nothing
+
+-- | unit.setFrozen(uid, on) — toggle the debug freeze flag. While
+--   frozen, the unit thread's `publishToRender` does NOT update the
+--   unit's position / facing / anim / activity / pose from sim state
+--   — Lua scripts hold full control of those via setAnim / setFacing
+--   / setPos. AI keeps ticking but its commands have no visible effect
+--   until the flag is cleared.
+--
+--   Used by the debug anim panel so previewed animations aren't
+--   stomped between frames by the still-running AI / sim loop. Don't
+--   leave units frozen in saved worlds — the flag is runtime-only
+--   (defaults to False on load) but a frozen unit ignores its own AI.
+unitSetFrozenFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitSetFrozenFn env = do
+    idArg ← Lua.tointeger 1
+    onArg ← Lua.toboolean 2
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+                on  = onArg
+            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                case HM.lookup uid (umInstances um) of
+                    Nothing → (um, False)
+                    Just inst →
+                        let inst' = inst { uiFrozen = on }
+                        in (um { umInstances = HM.insert uid inst'
+                                                 (umInstances um) }, True)
+            Lua.pushboolean ok
+            return 1
+
+-- | unit.setForceLoop(uid, on) — debug-only override that makes the
+--   renderer loop the current animation even when its YAML
+--   `loop: false`. Used by the anim panel so one-shot animations
+--   (attacks, transitions, death) play continuously while previewed
+--   inside a direction window. Clear when leaving preview to restore
+--   normal one-shot behaviour.
+unitSetForceLoopFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitSetForceLoopFn env = do
+    idArg ← Lua.tointeger 1
+    onArg ← Lua.toboolean 2
+    case idArg of
+        Nothing → do
+            Lua.pushboolean False
+            return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+                on  = onArg
+            ok ← Lua.liftIO $ atomicModifyIORef' (unitManagerRef env) $ \um →
+                case HM.lookup uid (umInstances um) of
+                    Nothing → (um, False)
+                    Just inst →
+                        let inst' = inst { uiForceLoop = on }
+                        in (um { umInstances = HM.insert uid inst'
+                                                 (umInstances um) }, True)
+            Lua.pushboolean ok
             return 1
 
 -- * Stats

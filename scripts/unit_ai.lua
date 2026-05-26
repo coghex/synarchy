@@ -1770,10 +1770,19 @@ function unitAi.update(dt)
     local ids = unit.getAllIds()
     if not ids or #ids == 0 then return end
 
+    -- Dispatch by defName. Acolytes (and any other utility-AI unit)
+    -- tick through the local `tickOne`; bears have their own
+    -- state-machine module. Future units register here too.
+    local bearAi = require("scripts.bear_ai")
+
     for _, uid in ipairs(ids) do
         local info = unit.getInfo(uid)
         if info and info.defName then
-            tickOne(uid, info.defName)
+            if info.defName == "bear_brown" then
+                bearAi.tickOne(uid)
+            else
+                tickOne(uid, info.defName)
+            end
         end
     end
 end

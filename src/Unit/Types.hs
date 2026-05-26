@@ -167,6 +167,22 @@ data UnitInstance = UnitInstance
       --   stable UI display. Populated at spawn from the def's
       --   `udStartingAccessories`. Mutated by equipment.equipAccessory
       --   / unequipAccessory.
+    , uiFrozen      ∷ !Bool
+      -- ^ Debug-only freeze flag. When True, `publishToRender` skips
+      --   updating uiGridX/Y/Z, uiFacing, uiCurrentAnim, uiAnimStart,
+      --   uiAnimReverse, uiAnimStride, uiActivity, uiPose from the
+      --   sim state — Lua scripts hold full control of these fields
+      --   via setAnim / setFacing / setPos. Used by the debug anim
+      --   panel so previewed animations aren't stomped by the
+      --   running AI / sim loop. Runtime state only, NOT in SaveData.
+    , uiForceLoop   ∷ !Bool
+      -- ^ Debug-only force-loop flag. When True, the renderer's
+      --   `pickFrame` treats every animation as if its `aLoop` were
+      --   True — non-looping anims (attacks, transitions, death) cycle
+      --   continuously instead of holding their last frame. Used by
+      --   the debug anim panel so previewed one-shot animations loop
+      --   within a direction window. Runtime state only, NOT in
+      --   SaveData.
     } deriving (Show, Eq)
 
 -- | Holds all unit definitions and all spawned instances.

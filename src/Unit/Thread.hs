@@ -106,7 +106,13 @@ publishToRender env utsRef = do
                     updated = HM.mapWithKey (\uid inst →
                         case HM.lookup uid simStates of
                             Nothing → inst
-                            Just ss →
+                            Just ss
+                              -- Debug freeze: skip the sim-derived
+                              -- update so Lua's setAnim / setFacing /
+                              -- setPos aren't stomped. Used by the
+                              -- debug anim panel's preview-cycle.
+                              | uiFrozen inst → inst
+                              | otherwise →
                                 let targetAnim = case HM.lookup (uiDefName inst) defs of
                                         Just def → resolveStateAnim def
                                                        (stateKey (usPose ss) (usState ss))

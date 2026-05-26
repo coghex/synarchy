@@ -110,7 +110,15 @@ pickFrame now cam inst def
                                 -- transition completes in half the time.
                                 stride  = max 1 (uiAnimStride inst)
                                 strided = raw * stride
-                                fwdIdx  = if aLoop an
+                                -- `uiForceLoop` is the debug
+                                -- anim-panel hook: when set, treat
+                                -- the anim as if `aLoop` were True
+                                -- so one-shots (attacks, transitions,
+                                -- death) cycle continuously during
+                                -- preview instead of holding their
+                                -- last frame.
+                                doLoop  = aLoop an ∨ uiForceLoop inst
+                                fwdIdx  = if doLoop
                                           then strided `mod` n
                                           else min strided (n - 1)
                                 -- Reverse path: walk the frames from
