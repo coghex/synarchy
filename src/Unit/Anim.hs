@@ -28,6 +28,7 @@ poseTag Dead      = "dead"
 stateKey ∷ Pose → UnitActivity → Text
 stateKey p Idle               = poseTag p <> "-idle"
 stateKey p Walking            = poseTag p <> "-walk"
+stateKey p Running            = poseTag p <> "-run"
 stateKey p Drinking           = poseTag p <> "-drink"
 stateKey p Eating             = poseTag p <> "-eat"
 stateKey p Picking            = poseTag p <> "-pickup"

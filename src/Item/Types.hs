@@ -53,6 +53,14 @@ data ItemWeapon = ItemWeapon
                                   --   delivers stabbing attacks.
     , iwSlashEff       ∷ !Float   -- ^ 0..1; slashing effectiveness.
     , iwBluntEff       ∷ !Float   -- ^ 0..1; blunt effectiveness.
+    , iwWeaponClass    ∷ !Text    -- ^ skill name the wielder uses
+                                  --   ("dagger", "unarmed", "sword"…).
+                                  --   Combat resolution reads
+                                  --   uiSkills[iwWeaponClass] for the
+                                  --   hit-roll skill contribution.
+    , iwAttackCooldown ∷ !Float   -- ^ seconds between swings. Read by
+                                  --   the AI's attack candidate to
+                                  --   gate continuous attacks.
     } deriving (Show, Eq)
 
 -- | Food properties — items with a Just here restore hunger when

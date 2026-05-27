@@ -7,8 +7,12 @@ module Engine.Asset.YamlUnits
     , UnitYamlBodyAttr(..)
     , UnitYamlBody(..)
     , UnitYamlInventoryEntry(..)
+    , UnitYamlBodyPart(..)
+    , UnitYamlNaturalWeapon(..)
+    , UnitYamlNaturalResistance(..)
     , UnitYamlFile(..)
     , defaultUnitYamlBody
+    , defaultUnitYamlNaturalResistance
     , loadUnitYaml
     ) where
 
@@ -124,11 +128,80 @@ instance FromJSON UnitYamlSkill where
         ⊚ v .:  "base"
         ⊛ v .:? "range" .!= 0.0
 
+-- | One body part as declared in YAML. Mirrors the runtime
+--   `Unit.Types.BodyPart`; loaded into `udBodyParts` and consumed
+--   by Combat.Resolution's body-part picker + reach filter.
+data UnitYamlBodyPart = UnitYamlBodyPart
+    { uybpId              ∷ !Text
+    , uybpParent          ∷ !(Maybe Text)
+    , uybpVital           ∷ !Bool
+    , uybpAreaWeight      ∷ !Float
+    , uybpTacticalValue   ∷ !Float
+    , uybpMaxHealthFactor ∷ !Float
+    , uybpBleedFactor     ∷ !Float
+    , uybpHeightLow       ∷ !Float
+    , uybpHeightHigh      ∷ !Float
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON UnitYamlBodyPart where
+    parseJSON = withObject "UnitYamlBodyPart" $ \v → UnitYamlBodyPart
+        ⊚ v .:  "id"
+        ⊛ v .:? "parent"
+        ⊛ v .:? "vital"               .!= False
+        ⊛ v .:  "area_weight"
+        ⊛ v .:? "tactical_value"      .!= 0.5
+        ⊛ v .:  "max_health_factor"
+        ⊛ v .:? "bleed_factor"        .!= 1.0
+        ⊛ v .:  "height_low"
+        ⊛ v .:  "height_high"
+
+-- | Natural (innate) weapon block — claws/fangs/fists. Optional on
+--   the unit YAML. When present, Combat.Resolution falls back to
+--   this when no equipped weapon is found.
+data UnitYamlNaturalWeapon = UnitYamlNaturalWeapon
+    { uynwWeaponClass          ∷ !Text
+    , uynwEffectiveBladeLength ∷ !Float   -- cm
+    , uynwAttackCooldown       ∷ !Float   -- seconds
+    , uynwStabEff              ∷ !Float
+    , uynwSlashEff             ∷ !Float
+    , uynwBluntEff             ∷ !Float
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON UnitYamlNaturalWeapon where
+    parseJSON = withObject "UnitYamlNaturalWeapon" $ \v →
+        UnitYamlNaturalWeapon
+        ⊚ v .:  "weapon_class"
+        ⊛ v .:? "effective_blade_length" .!= 0.0
+        ⊛ v .:? "attack_cooldown"        .!= 2.0
+        ⊛ v .:? "stab_eff"               .!= 0.0
+        ⊛ v .:? "slash_eff"              .!= 0.0
+        ⊛ v .:? "blunt_eff"              .!= 0.5
+
+-- | Innate per-kind damage resistance. Defaults to all zeros
+--   (humans). Bears declare slash 0.5, stab 0.1, blunt 0.3.
+data UnitYamlNaturalResistance = UnitYamlNaturalResistance
+    { uynrSlash ∷ !Float
+    , uynrStab  ∷ !Float
+    , uynrBlunt ∷ !Float
+    } deriving (Show, Eq, Generic)
+
+defaultUnitYamlNaturalResistance ∷ UnitYamlNaturalResistance
+defaultUnitYamlNaturalResistance =
+    UnitYamlNaturalResistance 0.0 0.0 0.0
+
+instance FromJSON UnitYamlNaturalResistance where
+    parseJSON = withObject "UnitYamlNaturalResistance" $ \v →
+        UnitYamlNaturalResistance
+        ⊚ v .:? "slash" .!= 0.0
+        ⊛ v .:? "stab"  .!= 0.0
+        ⊛ v .:? "blunt" .!= 0.0
+
 -- | Only @name@ and @sprite@ are mandatory; everything else has defaults
 data UnitYamlDef = UnitYamlDef
     { uydName              ∷ !Text       -- ^ unique identifier (e.g. "acolyte")
     , uydSprite            ∷ !Text       -- ^ path to default sprite texture
     , uydBaseWidth         ∷ !Float      -- ^ ground contact diameter in pixels (0 = point)
+    , uydMaxSpeed          ∷ !Float      -- ^ tiles/sec at a full sprint (default 3.0)
     , uydDirectionalSprites ∷ !(Map.Map Text Text)
       -- ^ optional: direction key ("S","SW",…) → texture path
     , uydPortrait          ∷ !(Maybe Text)
@@ -165,6 +238,18 @@ data UnitYamlDef = UnitYamlDef
     , uydStartingAccessories ∷ ![Text]
       -- ^ optional: list of item def names to be equipped as
       --   accessories (no slot) at spawn time. Order preserved.
+    , uydBodyParts          ∷ ![UnitYamlBodyPart]
+      -- ^ optional: targetable body parts. Empty list = no combat
+      --   targeting (resolver bails). Acolyte ships 12-part humanoid,
+      --   bear ships 8-part quadruped.
+    , uydNaturalResistance  ∷ !UnitYamlNaturalResistance
+      -- ^ optional: innate hide/skin resistance per attack kind.
+      --   Defaults to all zeros (humans). Bears: slash 0.5, stab 0.1,
+      --   blunt 0.3.
+    , uydNaturalWeapon      ∷ !(Maybe UnitYamlNaturalWeapon)
+      -- ^ optional: innate weapon (claws/fangs/fists). Used by combat
+      --   when no equipped weapon is found. Acolytes omit (rely on
+      --   equipment); bears declare an "unarmed" natural weapon.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -172,6 +257,7 @@ instance FromJSON UnitYamlDef where
         ⊚ v .:  "name"
         ⊛ v .:  "sprite"
         ⊛ v .:? "base_width"          .!= 0.0
+        ⊛ v .:? "max_speed"           .!= 3.0
         ⊛ v .:? "directional_sprites" .!= Map.empty
         ⊛ v .:? "portrait"
         ⊛ v .:? "state_animations"    .!= Map.empty
@@ -184,6 +270,9 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "equipment_class"
         ⊛ v .:? "starting_equipment"  .!= Map.empty
         ⊛ v .:? "starting_accessories".!= []
+        ⊛ v .:? "body_parts"          .!= []
+        ⊛ v .:? "natural_resistance"  .!= defaultUnitYamlNaturalResistance
+        ⊛ v .:? "natural_weapon"
 
 newtype UnitYamlFile = UnitYamlFile
     { uyfUnits ∷ [UnitYamlDef]

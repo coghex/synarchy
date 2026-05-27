@@ -14,6 +14,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import Control.Concurrent.STM (newTVarIO)
 import qualified System.Random as Random
+import qualified Combat.Types
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Asset.YamlNotifications (loadNotificationCfg)
 import Engine.Asset.YamlTextures
@@ -106,6 +107,8 @@ initializeEngine = do
   buildingManagerRef ← newIORef emptyBuildingManager
   buildingQueue ← Q.newQueue
   buildingGhostRef ← newIORef Nothing
+  combatQueue ← Q.newQueue
+  combatEventsRef ← newIORef Combat.Types.emptyEventQueue
   worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
   worldGenConfigRef ← newIORef worldGenConfig
 
@@ -170,6 +173,8 @@ initializeEngine = do
         , statRNGRef         = statRNGRef
         , buildingManagerRef = buildingManagerRef
         , buildingQueue      = buildingQueue
+        , combatQueue        = combatQueue
+        , combatEventsRef    = combatEventsRef
         , buildingGhostRef   = buildingGhostRef
         , worldGenConfigRef  = worldGenConfigRef
         , simQueue          = simQueue

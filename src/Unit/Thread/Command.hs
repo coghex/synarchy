@@ -43,7 +43,7 @@ processAllUnitCommands env utsRef = do
         Nothing → return ()
 
 handleUnitCommand ∷ EngineEnv → IORef UnitThreadState → UnitCommand → IO ()
-handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
+handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
     um ← readIORef (unitManagerRef env)
     case HM.lookup defName (umDefs um) of
         Nothing → do
@@ -129,6 +129,12 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz) = do
                     , uiInventory   = initialInventory
                     , uiEquipment   = initialEquipment
                     , uiAccessories = initialAccessories
+                    , uiFactionId   = factionId
+                    , uiWounds      = []
+                    , uiBlood       = bloodSeedFromStats initialStats
+                    , uiLastAttackerUid = Nothing
+                    , uiLastAttackerAt  = 0
+                    , uiAnimOverride = ""
                     , uiFrozen      = False
                     , uiForceLoop   = False
                     }
@@ -205,6 +211,22 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
                 in (um { umInstances = HM.insert uid inst' insts }, ())
 
 handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
+    -- Apply the injury speed multiplier on receipt so EVERY move
+    -- command — commanded, wander, attack-pursuit, retreat — gets
+    -- scaled the same way without the AI caller having to know.
+    -- The unit instance carries wounds + blood; we read it here
+    -- separately from the sim-state update to avoid threading
+    -- another IORef through this clause.
+    um ← readIORef (unitManagerRef env)
+    let (effSpeed, isRunning) = case HM.lookup uid (umInstances um) of
+            Nothing   → (speed, False)
+            Just inst →
+                let sp     = speed * injurySpeedMult inst
+                    maxSp  = case HM.lookup (uiDefName inst) (umDefs um) of
+                        Just d  → udMaxSpeed d
+                        Nothing → 3.0
+                    runCut = maxSp * 0.6   -- run-anim threshold
+                in (sp, sp > runCut)
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of
@@ -218,8 +240,9 @@ handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
                 | usPose ss ≢ Standing → (uts, ())
                 | isTransitioning (usState ss) → (uts, ())
                 | otherwise →
-                    let ss' = ss { usTarget    = Just (MoveTarget tx ty speed)
-                                 , usState     = Walking
+                    let activity = if isRunning then Running else Walking
+                        ss' = ss { usTarget    = Just (MoveTarget tx ty effSpeed)
+                                 , usState     = activity
                                  , usLocalPath = []
                                  }
                     in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
@@ -474,6 +497,50 @@ isTransitioning _                   = False
 --   max_hydration / max_hunger / carrying_capacity / strength_base.
 --   No-op if any of height/bulk/bodyfat is missing (e.g. for unit
 --   types that don't declare a body block).
+-- | Spawn-time blood-volume seed in litres. Real-world ratio is
+--   ~7.5 % of body_mass — applied via the rolled stats map so units
+--   without a body block (no body_mass) start at 0 and won't bleed.
+--   The wound-tick code computes max_blood lazily from current
+--   body_mass on each read, so wasting/regrowth carries through.
+bloodSeedFromStats ∷ HM.HashMap Text Float → Float
+bloodSeedFromStats s = case HM.lookup "body_mass" s of
+    Just bm → bm * 0.075
+    Nothing → 0.0
+
+-- | Movement-speed multiplier derived from the unit's wounds + blood.
+--
+--   Three terms compose multiplicatively:
+--     * leg/foot wound severity × 0.6 — wounds on legs/feet hit
+--       harder because that's literally what walks.
+--     * torso wound severity × 0.3 — concussive / vital-area damage
+--       slows the unit too but less than a leg.
+--     * blood fraction → 0.5 + 0.5 × frac — at full blood we're 1.0,
+--       at 0 blood we're 0.5 (matches "unconscious bleeding out is
+--       still capable of some movement before collapse").
+--   Result clamped to [0.1, 1.0] so a unit never literally stops.
+--   Applied to UnitMoveTo's speed parameter so all movement gets
+--   scaled the same way.
+injurySpeedMult ∷ UnitInstance → Float
+injurySpeedMult inst =
+    let isLegPart p = p == "l_leg" || p == "r_leg"
+                   || p == "l_foot" || p == "r_foot"
+                   || p == "l_fore_leg" || p == "r_fore_leg"
+                   || p == "l_hind_leg" || p == "r_hind_leg"
+        legSev = sum [ woundSeverity w
+                     | w ← uiWounds inst, isLegPart (woundPart w) ]
+        torsoSev = sum [ woundSeverity w
+                       | w ← uiWounds inst, woundPart w == "torso" ]
+        bodyMass = HM.lookupDefault 70.0 "body_mass" (uiStats inst)
+        maxBlood = bodyMass * 0.075
+        bloodFrac = if maxBlood > 0
+                    then max 0 (min 1 (uiBlood inst / maxBlood))
+                    else 1
+        legCut   = min 1.0 (legSev   * 0.6)
+        torsoCut = min 1.0 (torsoSev * 0.3)
+        bloodMul = 0.5 + 0.5 * bloodFrac
+        raw      = (1 - legCut) * (1 - torsoCut) * bloodMul
+    in max 0.1 (min 1.0 raw)
+
 seedBodyComposition ∷ HM.HashMap Text Float → HM.HashMap Text Float
 seedBodyComposition rolled =
     case (HM.lookup "height" rolled, HM.lookup "bulk" rolled,

@@ -7,8 +7,10 @@ local toggle    = require("scripts.ui.toggle")
 local infoPanel = require("scripts.hud.info_panel")
 local hud = {}
 
--- Click-callback name routed by ui_manager.onEventLogToggleClick.
-local EVENT_LOG_CALLBACK = "onEventLogToggleClick"
+-- The log icon is a 1-item toggle group (same widget the map/tool
+-- icons use). Right-click expands an option strip with the other
+-- log; clicking the option swaps the log mode and opens that panel.
+-- Left-click on the slot toggles the active log's panel open/closed.
 
 hud.world_page  = nil
 hud.zoom_page   = nil
@@ -23,11 +25,15 @@ hud.worldId = "main_world" -- default overridden per-context
 
 hud.mapToggleId = nil
 
--- Event-log toggle (top-left HUD button).
-hud.logSpriteId       = nil    -- UI element handle
-hud.logSelected       = false  -- current visual state (matches event_log open)
-hud.texEventLog       = nil    -- default sprite
-hud.texEventLogSelected = nil  -- "open" sprite
+-- Log icon (top-left HUD button). The slot icon shows the current
+-- log mode; expanded option strip shows the alternate mode.
+hud.logToggleId       = nil    -- toggle group handle
+hud.logMode           = "event" -- "event" or "combat" — kept in sync
+                                -- with the toggle's slot item name.
+hud.texEventLog          = nil  -- option-strip (unselected) texture
+hud.texEventLogSelected  = nil  -- slot (selected) texture
+hud.texCombatLog         = nil
+hud.texCombatLogSelected = nil
 
 -- Assets passed in from ui_manager
 hud.boxTexSet = nil
@@ -115,9 +121,13 @@ function hud.init(boxTexSet, menuFont, width, height)
     hud.texWorldHoverBg        = engine.loadTexture("assets/textures/hud/utility/world_hover_bg.png")
 
     -- Event-log toggle (top-left). Two states: default and selected
-    -- (drawn while the event log panel is open).
+    -- (drawn while the event log panel is open). The combat-log
+    -- variants are loaded here too so the step-5 icon swap (right-
+    -- click picker) can flip between them without re-loading.
     hud.texEventLog         = engine.loadTexture("assets/textures/hud/event_log.png")
     hud.texEventLogSelected = engine.loadTexture("assets/textures/hud/event_log_selected.png")
+    hud.texCombatLog         = engine.loadTexture("assets/textures/hud/combat_log.png")
+    hud.texCombatLogSelected = engine.loadTexture("assets/textures/hud/combat_log_selected.png")
     engine.logDebug("HUD initialized")
 end
 
@@ -141,9 +151,9 @@ function hud.createUI()
         UI.deletePage(hud.info_page)
     end
     if hud.uiCreated and hud.global_page then
-        if hud.logSpriteId then
-            UI.deleteElement(hud.logSpriteId)
-            hud.logSpriteId = nil
+        if hud.logToggleId then
+            toggle.destroy(hud.logToggleId)
+            hud.logToggleId = nil
         end
         UI.deletePage(hud.global_page)
     end
@@ -157,34 +167,63 @@ function hud.createUI()
     hud.global_page = UI.newPage("hud_global_overlay", "overlay")
 
     ---------------------------------------------------------
-    -- Event-log toggle button (top-left). Two-state sprite —
-    -- default while the panel is closed, "selected" while it's
-    -- open. Click is dispatched through ui_manager via the
-    -- EVENT_LOG_CALLBACK name; hud.update polls event_log state
-    -- each tick to keep the texture in sync if the player closes
-    -- the panel through its own X button.
+    -- Log-mode toggle (top-left). 1-item toggle group with the
+    -- alternate log in `options`, mirroring the map/tool toggle
+    -- pattern: right-click expands the option strip, click the
+    -- option to swap which log is in the slot. Left-click on the
+    -- slot toggles that log's panel open/closed.
     ---------------------------------------------------------
-    local btnSize = math.floor(hud.baseSizes.buttonSize * uiscale)
-    -- Reset visual state on rebuild to match the current panel.
-    local elIsOpen = false
-    pcall(function()
-        elIsOpen = require("scripts.event_log").isVisible()
-    end)
-    hud.logSelected = elIsOpen
-    local initTex = elIsOpen and hud.texEventLogSelected
-                              or hud.texEventLog
+    local function logItem(mode)
+        if mode == "combat" then
+            return {
+                name        = "combat",
+                texDefault  = hud.texCombatLog,
+                texSelected = hud.texCombatLogSelected,
+                tooltip     = "Combat log",
+            }
+        end
+        return {
+            name        = "event",
+            texDefault  = hud.texEventLog,
+            texSelected = hud.texEventLogSelected,
+            tooltip     = "Event log",
+        }
+    end
+    local otherMode = (hud.logMode == "combat") and "event" or "combat"
 
-    hud.logSpriteId = UI.newSprite(
-        "hud_event_log_toggle",
-        btnSize, btnSize,
-        initTex,
-        1.0, 1.0, 1.0, 1.0,
-        hud.global_page)
-    UI.addToPage(hud.global_page, hud.logSpriteId, s.margin, s.margin)
-    UI.setClickable(hud.logSpriteId, true)
-    UI.setOnClick(hud.logSpriteId, EVENT_LOG_CALLBACK)
-    UI.setZIndex(hud.logSpriteId, 100)
-    UI.setTooltip(hud.logSpriteId, "Event log")
+    hud.logToggleId = toggle.new({
+        name = "log_mode_toggle",
+        page = hud.global_page,
+        items = {
+            (function()
+                local it = logItem(hud.logMode)
+                it.options = { logItem(otherMode) }
+                return it
+            end)(),
+        },
+        selectedIndex    = 1,
+        direction        = "right",
+        optionsDirection = "right",
+        size    = hud.baseSizes.buttonSize,
+        padding = hud.baseSizes.padding,
+        x       = s.margin,
+        y       = s.margin,
+        zIndex  = 100,
+        uiscale = uiscale,
+        onChange = function(_idx, itemName)
+            if itemName == hud.logMode then
+                -- Same-mode click: toggle that log's panel.
+                if itemName == "combat" then
+                    require("scripts.combat_log").toggle()
+                else
+                    require("scripts.event_log").toggle()
+                end
+            else
+                -- Option-swap: switch modes and open the new panel.
+                hud.setLogMode(itemName)
+            end
+        end,
+    })
 
     if hud.texZoomSelect and hud.texZoomHover then
         world.setZoomCursorSelectTexture(hud.worldId, hud.texZoomSelect)
@@ -554,36 +593,30 @@ function hud.update(dt)
         end
     end
 
-    -- Keep the event-log toggle sprite's texture in sync with the
-    -- panel's visibility. The player can close the panel via the X
-    -- button (bypassing our click handler), so we poll here rather
-    -- than rely solely on toggle events.
-    if hud.logSpriteId then
-        local open = false
-        pcall(function()
-            open = require("scripts.event_log").isVisible()
-        end)
-        if open ~= hud.logSelected then
-            hud.logSelected = open
-            local tex = open and hud.texEventLogSelected
-                              or hud.texEventLog
-            if tex then
-                UI.setSpriteTexture(hud.logSpriteId, tex)
-            end
-        end
-    end
 end
 
--- Click dispatch entry point. Called by ui_manager.onEventLogToggleClick
--- (which is itself dispatched by the engine when the sprite is clicked).
-function hud.onEventLogToggleClick(elemHandle)
-    if elemHandle ~= hud.logSpriteId then return false end
-    require("scripts.event_log").toggle()
-    -- Don't update the sprite texture here — let hud.update poll
-    -- the panel's actual visibility and sync. That keeps the
-    -- texture-state machine in one place and avoids drift if the
-    -- panel chooses not to open for any reason.
-    return true
+-- Switch the HUD log mode. The toggle widget already updates the
+-- in-slot icon when an option is picked (it's how the map/tool
+-- toggles work); this helper only handles the side effects we
+-- want on top of the visual swap: hide the outgoing log and show
+-- the incoming one so the picker always lands the player on a
+-- visible panel. Called from the toggle's onChange after a swap,
+-- and from the `toggleEventLog` keybind path when needed.
+function hud.setLogMode(mode)
+    if mode ~= "event" and mode ~= "combat" then return end
+    if mode ~= hud.logMode then
+        if hud.logMode == "combat" then
+            pcall(function() require("scripts.combat_log").hide() end)
+        else
+            pcall(function() require("scripts.event_log").hide() end)
+        end
+        hud.logMode = mode
+    end
+    if mode == "combat" then
+        require("scripts.combat_log").show()
+    else
+        require("scripts.event_log").show()
+    end
 end
 
 -----------------------------------------------------------
@@ -640,9 +673,9 @@ function hud.shutdown()
         toggle.destroy(hud.mapToggleId)
         hud.mapToggleId = nil
     end
-    if hud.logSpriteId then
-        UI.deleteElement(hud.logSpriteId)
-        hud.logSpriteId = nil
+    if hud.logToggleId then
+        toggle.destroy(hud.logToggleId)
+        hud.logToggleId = nil
     end
     if hud.info_page then
         UI.hidePage(hud.info_page)

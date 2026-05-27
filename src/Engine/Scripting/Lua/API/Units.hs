@@ -19,6 +19,8 @@ module Engine.Scripting.Lua.API.Units
     , unitHitTestInRectFn
     , unitSetSelectionFn
     , unitSetAnimFn
+    , unitSetAnimOverrideFn
+    , unitClearAnimOverrideFn
     , unitSetFacingFn
     , unitSetFrozenFn
     , unitSetForceLoopFn
@@ -51,6 +53,16 @@ module Engine.Scripting.Lua.API.Units
     , unitGetCarryingWeightFn
     , unitTransitionToFn
     , unitGetPoseFn
+    , unitGetFactionFn
+    , unitExistsFn
+    , unitGetAttackRangeFn
+    , unitGetAttackCooldownFn
+    , unitGetMaxSpeedFn
+    , unitGetWoundsFn
+    , unitGetBloodFn
+    , unitGetPainFn
+    , unitGetLastAttackerFn
+    , unitGetWeaponClassFn
     , unitModifyItemFillFn
     , unitAddItemFn
     , unitGetVisibleTilesFn
@@ -77,6 +89,9 @@ import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim(..),
                                UnitYamlStat(..), UnitYamlSkill(..),
                                UnitYamlBody(..), UnitYamlBodyAttr(..),
                                UnitYamlInventoryEntry(..),
+                               UnitYamlBodyPart(..),
+                               UnitYamlNaturalWeapon(..),
+                               UnitYamlNaturalResistance(..),
                                loadUnitYaml)
 import qualified Engine.Core.Queue as Q
 import Unit.Types
@@ -208,11 +223,41 @@ loadUnitYamlFn env backendState = do
                             | e ← uydStartingInventory def
                             , _ ← [1 .. max 1 (uyieCount e)]
                             ]
+                        bodyParts =
+                            [ BodyPart
+                                { bpId              = uybpId p
+                                , bpParent          = uybpParent p
+                                , bpVital           = uybpVital p
+                                , bpAreaWeight      = uybpAreaWeight p
+                                , bpTacticalValue   = uybpTacticalValue p
+                                , bpMaxHealthFactor = uybpMaxHealthFactor p
+                                , bpBleedFactor     = uybpBleedFactor p
+                                , bpHeightLow       = uybpHeightLow p
+                                , bpHeightHigh      = uybpHeightHigh p
+                                }
+                            | p ← uydBodyParts def
+                            ]
+                        natRes = NaturalResistance
+                            { nrSlash = uynrSlash (uydNaturalResistance def)
+                            , nrStab  = uynrStab  (uydNaturalResistance def)
+                            , nrBlunt = uynrBlunt (uydNaturalResistance def)
+                            }
+                        natWeapon = case uydNaturalWeapon def of
+                            Nothing → Nothing
+                            Just nw → Just NaturalWeapon
+                                { nwWeaponClass          = uynwWeaponClass nw
+                                , nwEffectiveBladeLength = uynwEffectiveBladeLength nw
+                                , nwAttackCooldown       = uynwAttackCooldown nw
+                                , nwStabEff              = uynwStabEff nw
+                                , nwSlashEff             = uynwSlashEff nw
+                                , nwBluntEff             = uynwBluntEff nw
+                                }
                         unitDef = UnitDef
                             { udName          = name
                             , udTexture       = handle
                             , udDirSprites    = dirMap
                             , udBaseWidth     = uydBaseWidth def
+                            , udMaxSpeed      = uydMaxSpeed def
                             , udAnimations    = animMap
                             , udStateAnims    = stateAnims
                             , udEagerStats    = uydEagerStats def
@@ -224,6 +269,9 @@ loadUnitYamlFn env backendState = do
                             , udStartingEquipment = HM.fromList
                                 (Map.toList (uydStartingEquipment def))
                             , udStartingAccessories = uydStartingAccessories def
+                            , udBodyParts        = bodyParts
+                            , udNaturalResistance = natRes
+                            , udNaturalWeapon    = natWeapon
                             }
                     atomicModifyIORef' (unitManagerRef env) $ \um →
                         (um { umDefs = HM.insert name unitDef (umDefs um) }, ())
@@ -265,12 +313,21 @@ lookupSurfaceZ env gx gy = do
 
 -- | Spawn a unit. If gridZ is omitted, looks up surface elevation.
 --   Falls back to Z=0 if chunk isn't loaded. Returns unit ID or -1.
+--
+--   Signature: unit.spawn(defName, gx, gy, [gz], [factionId])
+--   factionId is the spawn-time faction tag — "player" for player-
+--   controlled, "wildlife" for everything else. Defaults to
+--   "wildlife" when omitted. The arg can sit at slot 4 (when gz is
+--   omitted) or slot 5 (when both are supplied); both shapes work
+--   so callers don't have to pass an explicit nil for gz.
 unitSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitSpawnFn env = do
-    nameArg ← Lua.tostring 1
-    xArg    ← Lua.tonumber 2
-    yArg    ← Lua.tonumber 3
-    zArg    ← Lua.tointeger 4   -- optional
+    nameArg    ← Lua.tostring 1
+    xArg       ← Lua.tonumber 2
+    yArg       ← Lua.tonumber 3
+    zArg       ← Lua.tointeger 4
+    factionArg4 ← Lua.tostring 4   -- when gz is omitted, faction lands here
+    factionArg5 ← Lua.tostring 5   -- when both gz+faction supplied
 
     case nameArg of
         Nothing → do
@@ -284,6 +341,16 @@ unitSpawnFn env = do
                 gy = case yArg of
                          Just (Lua.Number n) → realToFrac n
                          _                   → 0.0
+                -- Resolve faction: slot 5 wins if present; else slot 4
+                -- (only when it isn't actually the gz integer); else
+                -- "wildlife". `tointeger` returns Just for slot 4 when
+                -- the caller passed a Z, so this avoids confusing a Z
+                -- with a faction.
+                factionId = case factionArg5 of
+                    Just fbs → TE.decodeUtf8 fbs
+                    Nothing → case (zArg, factionArg4) of
+                        (Nothing, Just fbs) → TE.decodeUtf8 fbs
+                        _                   → "wildlife"
 
             result ← Lua.liftIO $ do
                 -- Check def exists
@@ -316,7 +383,7 @@ unitSpawnFn env = do
 
                         -- Enqueue spawn command
                         Q.writeQueue (unitQueue env) $
-                            UnitSpawn uid name gx gy gz
+                            UnitSpawn uid name gx gy gz factionId
 
                         return (fromIntegral (unUnitId uid) ∷ Int)
 
@@ -586,6 +653,325 @@ unitGetPoseFn env = do
                 Nothing → do
                     Lua.pushnil
                     return 1
+
+-- | unit.getFaction(uid) → string | nil
+--   Returns the spawn-time-assigned faction tag ("player", "wildlife",
+--   etc.). Used by the right-click menu's hostile/friendly check.
+unitGetFactionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetFactionFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mFac ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure (uiFactionId <$> HM.lookup uid (umInstances um))
+            case mFac of
+                Just f  → Lua.pushstring (TE.encodeUtf8 f) >> return 1
+                Nothing → Lua.pushnil >> return 1
+
+-- | unit.exists(uid) → bool
+--   True iff the engine still has a UnitInstance for this id. Used by
+--   the AI to drop attack/move goals when their target is destroyed.
+unitExistsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitExistsFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushboolean False >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            exists ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure (HM.member uid (umInstances um))
+            Lua.pushboolean exists
+            return 1
+
+-- | unit.getAttackRange(uid) → float (tiles) | nil
+--
+--   Computes melee reach as `(height / 2.4) + (blade_length / 100)`
+--   where height is in metres (read from `uiStats["height"]`) and
+--   blade_length is in centimetres. Looks up the blade length from
+--   (in priority order):
+--     1. equipped right_hand weapon
+--     2. equipped left_hand weapon
+--     3. unit-def's natural_weapon.effective_blade_length
+--     4. 0 (bare arm reach only)
+--   Returns nil if the unit doesn't exist OR has no rolled height
+--   stat.
+unitGetAttackRangeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetAttackRangeFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mRange ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                im ← readIORef (itemManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst → case HM.lookup "height" (uiStats inst) of
+                        Nothing → return Nothing
+                        Just h  →
+                            let armReach = h / 2.4
+                                blade    = resolveBladeLength im um inst
+                            in return (Just (armReach + blade / 100.0))
+            case mRange of
+                Just r  → Lua.pushnumber (Lua.Number (realToFrac r))
+                                >> return 1
+                Nothing → Lua.pushnil >> return 1
+
+-- | unit.getAttackCooldown(uid) → float seconds | nil
+--
+--   Cooldown between swings. Read from the equipped weapon
+--   (right_hand → left_hand) or natural_weapon, with a 1.5s fallback.
+unitGetAttackCooldownFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetAttackCooldownFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mCD ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                im ← readIORef (itemManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst → return $ Just (resolveCooldown im um inst)
+            case mCD of
+                Just c  → Lua.pushnumber (Lua.Number (realToFrac c))
+                                >> return 1
+                Nothing → Lua.pushnil >> return 1
+
+-- | unit.getMaxSpeed(uid) → float (tiles/sec) | nil
+--
+--   Per-species top speed at a full sprint, read from the unit-def's
+--   udMaxSpeed. AI candidates derive their per-action speed as a
+--   fraction of this. Stat-based modulation (agility, injuries) lives
+--   elsewhere — this returns the raw def-level cap.
+unitGetMaxSpeedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetMaxSpeedFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mSpeed ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst → case HM.lookup (uiDefName inst)
+                                              (umDefs um) of
+                        Just d  → return (Just (udMaxSpeed d))
+                        Nothing → return Nothing
+            case mSpeed of
+                Just s  → Lua.pushnumber (Lua.Number (realToFrac s))
+                                >> return 1
+                Nothing → Lua.pushnil >> return 1
+
+-- | Walk slot priority for an equipped weapon's blade length; fall
+--   back to the unit-def's natural_weapon; finally 0.
+resolveBladeLength
+    ∷ ItemManager → UnitManager → UnitInstance → Float
+resolveBladeLength im um inst =
+    case firstEquippedWeapon im (uiEquipment inst) of
+        Just w  → iwBladeLength w
+        Nothing → case HM.lookup (uiDefName inst) (umDefs um) of
+            Just d  → maybe 0.0 nwEffectiveBladeLength (udNaturalWeapon d)
+            Nothing → 0.0
+
+-- | Same priority chain for cooldown; default 1.5 s if nothing
+--   useful is found.
+resolveCooldown
+    ∷ ItemManager → UnitManager → UnitInstance → Float
+resolveCooldown im um inst =
+    case firstEquippedWeapon im (uiEquipment inst) of
+        Just w  → iwAttackCooldown w
+        Nothing → case HM.lookup (uiDefName inst) (umDefs um) of
+            Just d  → maybe 1.5 nwAttackCooldown (udNaturalWeapon d)
+            Nothing → 1.5
+
+firstEquippedWeapon
+    ∷ ItemManager → HM.HashMap Text ItemInstance → Maybe ItemWeapon
+firstEquippedWeapon im eq = go ["right_hand", "left_hand"]
+  where
+    go [] = Nothing
+    go (slot:rest) = case HM.lookup slot eq of
+        Nothing → go rest
+        Just it → case lookupItemDef (iiDefName it) im of
+            Just d | Just w ← idWeapon d → Just w
+            _ → go rest
+
+-- | unit.getWounds(uid) → array of { part, kind, severity, at } | nil
+--
+--   Newest-first. Sub-cleanup-threshold wounds are removed by the
+--   per-tick wound subsystem so this only returns currently-active
+--   wounds. Returns nil if unit doesn't exist.
+unitGetWoundsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetWoundsFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mWounds ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                pure (uiWounds <$> HM.lookup uid (umInstances um))
+            case mWounds of
+                Nothing → Lua.pushnil >> return 1
+                Just ws → do
+                    Lua.newtable
+                    forM_ (zip [1..] ws) $ \(i, w) → do
+                        Lua.newtable
+                        Lua.pushstring (TE.encodeUtf8 (woundPart w))
+                        Lua.setfield (-2) "part"
+                        Lua.pushstring (TE.encodeUtf8 (woundKind w))
+                        Lua.setfield (-2) "kind"
+                        Lua.pushnumber (Lua.Number
+                            (realToFrac (woundSeverity w)))
+                        Lua.setfield (-2) "severity"
+                        Lua.pushnumber (Lua.Number
+                            (realToFrac (woundAt w)))
+                        Lua.setfield (-2) "at"
+                        Lua.rawseti (-2) i
+                    return 1
+
+-- | unit.getBlood(uid) → { current, max } | nil
+--
+--   max is body_mass × 0.075 (real-world blood ratio). current is
+--   the spawn-time-seeded value minus per-tick bleed loss. Both in
+--   litres.
+unitGetBloodFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetBloodFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mPair ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst →
+                        let bm = HM.lookupDefault 70.0 "body_mass"
+                                                 (uiStats inst)
+                        in return $ Just (uiBlood inst, bm * 0.075)
+            case mPair of
+                Nothing → Lua.pushnil >> return 1
+                Just (cur, mx) → do
+                    Lua.newtable
+                    Lua.pushnumber (Lua.Number (realToFrac cur))
+                    Lua.setfield (-2) "current"
+                    Lua.pushnumber (Lua.Number (realToFrac mx))
+                    Lua.setfield (-2) "max"
+                    return 1
+
+-- | unit.getWeaponClass(uid) → string | nil
+--
+--   The active weapon-class string ("dagger", "unarmed", …) the
+--   unit would actually use to swing right now. Resolution chain:
+--   equipped right_hand → equipped left_hand → unit-def's
+--   natural_weapon → "unarmed" fallback. Used by the AI's combat
+--   effectiveness helper to read the relevant skill stat off the
+--   unit's skills map.
+unitGetWeaponClassFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetWeaponClassFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mClass ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                im ← readIORef (itemManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst → case firstEquippedWeapon im
+                                       (uiEquipment inst) of
+                        Just w  → return $ Just (iwWeaponClass w)
+                        Nothing →
+                            case HM.lookup (uiDefName inst) (umDefs um) of
+                                Just d → case udNaturalWeapon d of
+                                    Just nw → return $ Just
+                                                  (nwWeaponClass nw)
+                                    Nothing → return $ Just "unarmed"
+                                Nothing → return $ Just "unarmed"
+            case mClass of
+                Just c  → Lua.pushstring (TE.encodeUtf8 c)
+                                >> return 1
+                Nothing → Lua.pushnil >> return 1
+
+-- | unit.getLastAttacker(uid) → { uid, at } | nil
+--
+--   Reads the runtime-only last-attacker memory written by
+--   Combat.Resolution. Returns nil if no incoming hit has landed
+--   yet on this unit. The AI is responsible for deciding whether
+--   the memory is fresh enough to act on (compare `at` against
+--   `engine.gameTime()`).
+unitGetLastAttackerFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetLastAttackerFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mAtt ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing   → return Nothing
+                    Just inst → case uiLastAttackerUid inst of
+                        Nothing     → return Nothing
+                        Just attRaw → return $ Just
+                                          (attRaw, uiLastAttackerAt inst)
+            case mAtt of
+                Nothing → Lua.pushnil >> return 1
+                Just (attRaw, at) → do
+                    Lua.newtable
+                    Lua.pushinteger (fromIntegral attRaw)
+                    Lua.setfield (-2) "uid"
+                    Lua.pushnumber (Lua.Number (realToFrac at))
+                    Lua.setfield (-2) "at"
+                    return 1
+
+-- | unit.getPain(uid) → number | nil
+--
+--   Pain accumulator derived live from the wound list:
+--     pain = sum(severity × kind_pain_factor)
+--   Used by the AI (future retreat candidate), the unit-info UI,
+--   and the combat hit-roll's pain penalty (computed Haskell-side
+--   in Combat.Resolution; this getter mirrors the same formula
+--   for Lua reads). Unclamped (the resolution code clamps via
+--   painCeiling internally).
+unitGetPainFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetPainFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mPain ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst →
+                        let pain = sum
+                              [ woundSeverity w * kindPainFactor
+                                                   (woundKind w)
+                              | w ← uiWounds inst ]
+                        in return $ Just pain
+            case mPain of
+                Just p  → Lua.pushnumber (Lua.Number (realToFrac p))
+                                >> return 1
+                Nothing → Lua.pushnil >> return 1
+  where
+    -- Mirror Combat.Resolution.kindPainFactor. Kept in lockstep
+    -- manually; if either changes, update both.
+    kindPainFactor ∷ Text → Float
+    kindPainFactor "slash" = 1.0
+    kindPainFactor "stab"  = 1.2
+    kindPainFactor "blunt" = 1.5
+    kindPainFactor _       = 1.0
 
 -- | unit.modifyItemFill(uid, defName, delta) → actual applied delta
 --   (after clamp to [0, capacity]). Adjusts the fill of the FIRST item
@@ -1451,6 +1837,52 @@ unitSetAnimFn env = do
         _ → do
             Lua.pushboolean False
             return 1
+
+-- | unit.setAnimOverride(uid, name) — Lua-driven animation that wins
+--   over the engine's state-driven anim resolution. Use this for combat
+--   swings (one-shot attack anims), posture animations (sit/lie/sleep
+--   for bears), or any visual that doesn't map to a sim (pose, activity)
+--   pair. Survives publishToRender each tick. Pass an empty string OR
+--   call clearAnimOverride to release.
+unitSetAnimOverrideFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitSetAnimOverrideFn env = do
+    idArg   ← Lua.tointeger 1
+    nameArg ← Lua.tostring 2
+    case (idArg, nameArg) of
+        (Just n, Just nameBS) → do
+            let uid  = UnitId (fromIntegral n)
+                name = TE.decodeUtf8 nameBS
+            ok ← Lua.liftIO $
+                atomicModifyIORef' (unitManagerRef env) $ \um →
+                    case HM.lookup uid (umInstances um) of
+                        Nothing → (um, False)
+                        Just inst →
+                            let inst' = inst { uiAnimOverride = name }
+                            in (um { umInstances =
+                                    HM.insert uid inst' (umInstances um) }, True)
+            Lua.pushboolean ok
+            return 1
+        _ → Lua.pushboolean False >> return 1
+
+-- | unit.clearAnimOverride(uid) — releases the override so the engine's
+--   state-driven anim resolution resumes on the next sim tick.
+unitClearAnimOverrideFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitClearAnimOverrideFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            ok ← Lua.liftIO $
+                atomicModifyIORef' (unitManagerRef env) $ \um →
+                    case HM.lookup uid (umInstances um) of
+                        Nothing → (um, False)
+                        Just inst →
+                            let inst' = inst { uiAnimOverride = "" }
+                            in (um { umInstances =
+                                    HM.insert uid inst' (umInstances um) }, True)
+            Lua.pushboolean ok
+            return 1
+        _ → Lua.pushboolean False >> return 1
 
 -- | unit.setFacing(uid, dirStr) — force the unit's facing direction.
 --   `dirStr` is one of "S", "SW", "W", "NW", "N", "NE", "E", "SE"

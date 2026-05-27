@@ -18,6 +18,17 @@ local texScrollBarBottom = nil
 local texScrollTabSet = nil
 local assetsLoaded = false
 
+-- Tab-drag state. Mirrors slider.lua's approach: a single scrollbar
+-- can be dragged at a time. onTabGrab records the initial cursor +
+-- tab Y so onDragMove can preserve the click-to-tab offset (no snap
+-- on grab). ui_manager polls scrollbar.getDraggingId() each frame
+-- and calls scrollbar.onDragMove(mx, my) while a drag is in flight.
+local draggingId        = nil
+local dragStartCursorY  = 0
+local dragStartTabY     = 0
+
+local TAB_CALLBACK = "onScrollTabGrab"
+
 -----------------------------------------------------------
 -- Initialization
 -----------------------------------------------------------
@@ -191,7 +202,13 @@ function scrollbar.new(params)
     
     local tabY = scrollbar.getTabY(sb)
     UI.addToPage(sb.page, sb.tabId, sb.x, tabY)
-    
+    -- Tab is grabbable: clicking it routes through the engine click
+    -- broadcast to TAB_CALLBACK → ui_manager → scrollbar.onTabGrab,
+    -- which sets draggingId. ui_manager's per-frame update calls
+    -- scrollbar.onDragMove until the user releases the mouse.
+    UI.setClickable(sb.tabId, true)
+    UI.setOnClick(sb.tabId, TAB_CALLBACK)
+
     -- Apply z-indices
     UI.setZIndex(sb.upButtonId, zButton)
     UI.setZIndex(sb.trackTopId, zTrack)
@@ -299,6 +316,76 @@ function scrollbar.getScrollOffset(id)
 end
 
 -----------------------------------------------------------
+-- Tab drag (grabbable thumb)
+-----------------------------------------------------------
+
+-- Read the cursor in framebuffer coordinates. engine.getMousePosition
+-- returns window pixels; ui_manager has access to fb size + window
+-- size to convert, but the click handler here doesn't. We approximate
+-- by re-reading the engine's two size queries and scaling — same
+-- conversion ui_manager does in its update loop.
+local function cursorFB()
+    local mx, my = engine.getMousePosition()
+    if not mx or not my then return nil, nil end
+    local fbW, fbH = engine.getFramebufferSize()
+    local ww,  wh  = engine.getWindowSize()
+    if ww and wh and ww > 0 and wh > 0 then
+        mx = mx * (fbW / ww)
+        my = my * (fbH / wh)
+    end
+    return mx, my
+end
+
+-- Called from ui_manager when the tab box is clicked. Records the
+-- initial cursor + tab Y so subsequent onDragMove calls can shift
+-- the tab by the cursor delta (preserving click-relative position).
+function scrollbar.onTabGrab(elemHandle)
+    for id, sb in pairs(scrollbars) do
+        if sb.tabId == elemHandle then
+            local _, my = cursorFB()
+            if not my then return false end
+            draggingId       = id
+            dragStartCursorY = my
+            dragStartTabY    = scrollbar.getTabY(sb)
+            return true
+        end
+    end
+    return false
+end
+
+-- Called every frame while draggingId is set. mx/my are in
+-- framebuffer coordinates (caller scales).
+function scrollbar.onDragMove(mx, my)
+    local sb = scrollbars[draggingId]
+    if not sb then
+        draggingId = nil
+        return
+    end
+    -- Translate cursor delta into a new tab Y, clamp to the track
+    -- bounds, then convert to an integer scrollOffset and apply.
+    local trackStart = sb.y + sb.buttonSize + sb.capHeight
+    local trackEnd   = trackStart + sb.trackInnerHeight - sb.tabHeight
+    local trackRange = math.max(1, trackEnd - trackStart)
+    local newTabY    = dragStartTabY + (my - dragStartCursorY)
+    if newTabY < trackStart then newTabY = trackStart end
+    if newTabY > trackEnd   then newTabY = trackEnd   end
+    local frac      = (newTabY - trackStart) / trackRange
+    local maxOffset = math.max(0, sb.totalItems - sb.visibleItems)
+    local newOffset = math.floor(frac * maxOffset + 0.5)
+    if newOffset ~= sb.scrollOffset then
+        scrollbar.setScrollOffset(draggingId, newOffset)
+    end
+end
+
+function scrollbar.onMouseUp()
+    draggingId = nil
+end
+
+function scrollbar.getDraggingId()
+    return draggingId
+end
+
+-----------------------------------------------------------
 -- Update Content Size
 -----------------------------------------------------------
 
@@ -402,7 +489,9 @@ function scrollbar.findByElementHandle(elemHandle)
 end
 
 function scrollbar.isScrollbarCallback(callbackName)
-    return callbackName == "onScrollUp" or callbackName == "onScrollDown"
+    return callbackName == "onScrollUp"
+        or callbackName == "onScrollDown"
+        or callbackName == TAB_CALLBACK
 end
 
 function scrollbar.setZIndices(id, trackZ, buttonZ, tabZ)

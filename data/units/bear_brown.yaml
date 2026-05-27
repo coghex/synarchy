@@ -3,6 +3,9 @@ units:
     sprite: "assets/textures/units/bear_brown/animations/idle/south/frame_000.png"
     # Bears are wider than humans. Acolyte = 8; bear roughly 2x that.
     base_width: 16
+    # Top sprint speed in tiles/sec. ~2× human max (acolyte 3.0)
+    # — bears outpace fleeing prey.
+    max_speed: 6.0
     # No equipment_class — wildlife doesn't wear gear.
     # No starting_inventory — wildlife has no items.
 
@@ -20,6 +23,15 @@ units:
       metabolism:   { base: 1.5, range: 0.4 }
       # Excellent smell, good hearing, mediocre eyesight — averaged.
       perception:   { base: 1.8, range: 0.6 }
+      # Combat stats. Bears are clumsier than humans on the fine-motor
+      # axis (no opposable thumbs); compensate with raw power +
+      # toughness. Low intelligence → mostly random body-part picking
+      # at attack time. Balance is high (good climbers, swimmers).
+      dexterity:    { base: 0.5, range: 0.3 }
+      agility:      { base: 1.0, range: 0.4 }
+      intelligence: { base: 0.4, range: 0.3 }
+      toughness:    { base: 3.0, range: 1.0 }
+      # (`balance` is a skill, not a stat — see the skills: block.)
 
     body:
       # Brown bear shoulder height on all fours ≈ 1.0–1.5m;
@@ -33,9 +45,68 @@ units:
       bodyfat: { mean: 0.25, range: 0.30 } # 0.10..0.40
 
     skills:
-      # Bears are remarkably agile climbers + swimmers. Keep `balance`
-      # similar to humans so they can navigate uneven terrain credibly.
-      balance: { base: 1.0, range: 0.6 }
+      # Weapon-class skill for natural attacks (claws/fangs).
+      unarmed: { base: 60.0, range: 20.0 }
+      # Bears are remarkably agile climbers + swimmers; balance ~60
+      # slightly above the human baseline.
+      balance: { base: 60.0, range: 30.0 }
+
+    # 8-part quadruped body. Heights anchored to shoulder-height 1.4 m.
+    # Head sits out front, similar to shoulder height; tail is low and
+    # rear-facing. Vitals (head, neck, torso) collapse the bear when
+    # destroyed.
+    body_parts:
+      - { id: head,         parent: neck,  vital: true,
+          area_weight: 0.10, tactical_value: 1.0,
+          max_health_factor: 0.20, bleed_factor: 2.0,
+          height_low: 1.00, height_high: 1.40 }
+      - { id: neck,         parent: torso, vital: true,
+          area_weight: 0.05, tactical_value: 1.0,
+          max_health_factor: 0.15, bleed_factor: 3.0,
+          height_low: 0.95, height_high: 1.10 }
+      - { id: torso,        parent: null,  vital: true,
+          area_weight: 0.40, tactical_value: 0.8,
+          max_health_factor: 0.40, bleed_factor: 2.0,
+          height_low: 0.50, height_high: 1.40 }
+      - { id: l_fore_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.95 }
+      - { id: r_fore_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.95 }
+      - { id: l_hind_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.95 }
+      - { id: r_hind_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.95 }
+      - { id: tail,         parent: torso,
+          area_weight: 0.05, tactical_value: 0.1,
+          max_health_factor: 0.05, bleed_factor: 0.5,
+          height_low: 0.40, height_high: 0.60 }
+
+    # Thick hide blunts slashes most; fangs/blades still poke through
+    # easily; fur + fat reduce blunt force somewhat.
+    natural_resistance:
+      slash: 0.5
+      stab:  0.1
+      blunt: 0.3
+
+    # Claws + fangs as a virtual unarmed weapon. effective_blade_length
+    # treats claws like a short blade for range / damage formulas.
+    # slash_eff high (claws), stab moderate (fangs), blunt moderate
+    # (paw smacks).
+    natural_weapon:
+      weapon_class:           unarmed
+      effective_blade_length: 12.0
+      attack_cooldown:        2.0
+      stab_eff:               0.3
+      slash_eff:              0.8
+      blunt_eff:              0.5
 
     # Per-direction T-pose. Each entry is the first frame of the idle
     # animation in that direction — gives the engine a still sprite to
@@ -66,6 +137,10 @@ units:
       standing-attack-heavy:       attack_heavy
       standing-hit-react:          hit_react
       standing-death:              death
+      # Held on the last frame after UnitKill — death anim has
+      # aLoop=false, so the renderer freezes on the final pose.
+      # Without this entry, dying bears fall back to T-pose.
+      dead-idle:                   death
 
       # Standing-on-hind (alert / look-around posture, NOT a combat
       # stance — bears rise to scan their surroundings, then drop back
@@ -87,19 +162,21 @@ units:
       lying-to-sleeping:           lying_down_to_sleeping
       sleeping-to-lying:           lying_down_to_sleeping # reversed
 
-      # Injured set. Per design, a wounded bear can still lash out —
-      # `injured_combat_*` exists because a dying bear taking out the
-      # acolyte who shot it is a great DF narrative moment.
-      injured-idle:                injured_idle
-      injured-walk:                injured_walk
-      injured-run:                 injured_run
-      injured-eat:                 injured_eat
-      injured-drink:               injured_eat   # reuse, same as healthy
-      injured-combat-idle:         injured_combat_idle
-      injured-attack-quick:        injured_attack_quick
-      injured-attack-heavy:        injured_attack_heavy
-      injured-hit-react:           injured_hit_react
-      injured-death:               injured_death
+      # Injured set. Engine state-driven resolution tries the
+      # `injured-<pose>-<activity>` key first when cumulative wound
+      # severity > 1.0 (see publishToRender), falling back to the
+      # plain `<pose>-<activity>` key. So a bear that's hurting
+      # walks with `injured_walk` automatically.
+      injured-standing-idle:       injured_idle
+      injured-standing-walk:       injured_walk
+      injured-standing-run:        injured_run
+      injured-standing-eat:        injured_eat
+      injured-standing-drink:      injured_eat   # reuse, same as healthy
+      injured-dead-idle:           injured_death
+      # Combat-specific anims (combat_idle, attack_quick/heavy,
+      # hit_react) are picked Lua-side via unit.setAnimOverride and
+      # are not state-keyed. The combatAnimName helper applies the
+      # "injured_" prefix when needed.
 
     animations:
       attack_heavy:

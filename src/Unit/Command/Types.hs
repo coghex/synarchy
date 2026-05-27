@@ -8,8 +8,12 @@ import Unit.Types (UnitId(..))
 import Unit.Sim.Types (Pose(..))
 
 data UnitCommand
-    = UnitSpawn !UnitId !Text !Float !Float !Int
-        -- ^ pre-allocated ID, defName, gridX, gridY, gridZ
+    = UnitSpawn !UnitId !Text !Float !Float !Int !Text
+        -- ^ pre-allocated ID, defName, gridX, gridY, gridZ, factionId.
+        --   factionId is the spawn-time-only faction tag (no def-level
+        --   default); "player" for player-controlled units, "wildlife"
+        --   for everything else. Used by the combat layer for
+        --   hostile/friendly checks.
     | UnitDestroy !UnitId
     | UnitTeleport !UnitId !Float !Float !(Maybe Int)
         -- ^ unitId, gridX, gridY, optional gridZ (Nothing = surface lookup)

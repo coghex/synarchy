@@ -82,7 +82,7 @@ poseDepth Dead      = 4
 --   movement gating. APPEND-ONLY for the same reason as `Pose` and
 --   `Direction` — `Generic Serialize` is positional. New activities go
 --   at the end; replacements bump `currentSaveVersion`.
-data UnitActivity = Idle | Walking | Drinking | Eating | Picking | TransitioningTo !Pose
+data UnitActivity = Idle | Walking | Drinking | Eating | Picking | TransitioningTo !Pose | Running
     deriving (Show, Eq, Generic, Serialize)
 
 data UnitThreadState = UnitThreadState

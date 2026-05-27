@@ -47,6 +47,7 @@ import Engine.Scripting.Lua.API.World
 import Engine.Scripting.Lua.API.WorldQuery
 import Engine.Scripting.Lua.API.Units
 import Engine.Scripting.Lua.API.Buildings
+import Engine.Scripting.Lua.API.Combat
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Equipment
 import Engine.Scripting.Lua.API.Substance
@@ -239,6 +240,8 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "hitTestInRect" (unitHitTestInRectFn env)
   registerLuaFunction "setSelection" (unitSetSelectionFn env)
   registerLuaFunction "setAnim"     (unitSetAnimFn env)
+  registerLuaFunction "setAnimOverride"   (unitSetAnimOverrideFn env)
+  registerLuaFunction "clearAnimOverride" (unitClearAnimOverrideFn env)
   registerLuaFunction "setFacing"   (unitSetFacingFn env)
   registerLuaFunction "setFrozen"   (unitSetFrozenFn env)
   registerLuaFunction "setForceLoop" (unitSetForceLoopFn env)
@@ -261,6 +264,16 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getCarryingWeight"  (unitGetCarryingWeightFn env)
   registerLuaFunction "transitionTo" (unitTransitionToFn env)
   registerLuaFunction "getPose"      (unitGetPoseFn env)
+  registerLuaFunction "getFaction"   (unitGetFactionFn env)
+  registerLuaFunction "exists"       (unitExistsFn env)
+  registerLuaFunction "getAttackRange" (unitGetAttackRangeFn env)
+  registerLuaFunction "getAttackCooldown" (unitGetAttackCooldownFn env)
+  registerLuaFunction "getMaxSpeed"  (unitGetMaxSpeedFn env)
+  registerLuaFunction "getWounds"    (unitGetWoundsFn env)
+  registerLuaFunction "getBlood"     (unitGetBloodFn env)
+  registerLuaFunction "getPain"      (unitGetPainFn env)
+  registerLuaFunction "getLastAttacker" (unitGetLastAttackerFn env)
+  registerLuaFunction "getWeaponClass"  (unitGetWeaponClassFn env)
   registerLuaFunction "modifyItemFill" (unitModifyItemFillFn env)
   registerLuaFunction "addItem"        (unitAddItemFn env)
   registerLuaFunction "getVisibleTiles" (unitGetVisibleTilesFn env)
@@ -419,3 +432,12 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getZTracking" (cameraGetZTrackingFn env)
   registerLuaFunction "setZTracking" (cameraSetZTrackingFn env)
   Lua.setglobal (Lua.Name "camera")
+
+  -- Combat: queue attack commands + drain combat-thread events for
+  -- the combat-log UI. Skeleton phase — `combat.attack` enqueues but
+  -- the thread doesn't resolve yet; `combat.drainEvents` always
+  -- returns empty.
+  Lua.newtable
+  registerLuaFunction "attack"      (combatAttackFn env)
+  registerLuaFunction "drainEvents" (combatDrainEventsFn env)
+  Lua.setglobal (Lua.Name "combat")

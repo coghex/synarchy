@@ -18,6 +18,7 @@ local hud         = require("scripts.hud")
 local label       = require("scripts.ui.label")
 local scale       = require("scripts.ui.scale")
 local boxTextures = require("scripts.ui.box_textures")
+local scrollbar   = require("scripts.ui.scrollbar")
 local stats       = require("scripts.unit_stats")
 
 -- Singleton via package.loaded so ui_manager's click handlers (which
@@ -159,7 +160,7 @@ local DIVIDER_COLOR     = { 0.7, 0.7, 0.7, 1.0 }   -- same grey as tooltip separ
 -- Sub-tabs (Status, Stats, Mental, …) inside the stats section.
 -- Styled to match scripts/ui/tabbar.lua (settings + create-world menus):
 -- 9-patch box, dark text on unselected, white text on selected.
-local SUB_TAB_LIST       = { "Status", "Stats", "Mental", "Skill", "Attributes", "Effects" }
+local SUB_TAB_LIST       = { "Status", "Physical", "Mental", "Skill", "Effects" }
 local SUB_TAB_FONT_SIZE  = 14
 local SUB_TAB_TEXT_PAD   = 10   -- horizontal padding inside each sub-tab around the label
 local SUB_TAB_ROW_H      = 32   -- per-row height — matches settingsMenu.baseSizes.tabHeight
@@ -180,6 +181,9 @@ local CONTENT_DIM_COLOR  = { 0.78, 0.78, 0.78, 1.0 }
 local CONTENT_VAL_COLOR  = { 1.0, 1.0, 1.0, 1.0 }
 local CONTENT_TOP_PAD    = 8
 local ICON_SIZE          = 40
+-- Reserve this many pixels on the right when a scrollbar is needed.
+-- Sized to fit the scrollbar widget (button 24 + gap 8) at uiscale 1.
+local SCROLLBAR_RESERVE  = 32
 
 -----------------------------------------------------------
 -- Cleanup
@@ -210,13 +214,27 @@ local function clearOwned()
 
     for _, e in ipairs(unitInfoV2.statsContentElements) do
         if e.kind == "label" then label.destroy(e.id)
+        elseif e.kind == "scrollbar" then scrollbar.destroy(e.id)
         else                       UI.deleteElement(e.id)
         end
     end
     unitInfoV2.statsContentElements = {}
+    -- Persistent stat-panel elements (survive same-tab rebuilds —
+    -- see rebuildStatsContent — so we tear them down explicitly on
+    -- full clearOwned). Safe to call destroy with nil refs.
+    if unitInfoV2.statsScrollbarId then
+        scrollbar.destroy(unitInfoV2.statsScrollbarId)
+        unitInfoV2.statsScrollbarId = nil
+    end
+    if unitInfoV2.statsBgClickId then
+        UI.deleteElement(unitInfoV2.statsBgClickId)
+        unitInfoV2.statsBgClickId = nil
+    end
     unitInfoV2.statsRefresh = nil
     unitInfoV2.lastContentUid = nil
     unitInfoV2.lastContentTab = nil
+    unitInfoV2.lastContentSig = nil
+    unitInfoV2.statsScrollOffset = 0
 
     for _, e in ipairs(unitInfoV2.equipElements) do
         if e.kind == "label" then label.destroy(e.id)
@@ -613,12 +631,19 @@ end
 -----------------------------------------------------------
 
 local STAT_DEFS = {
+    -- Status (current-state resources + derived feedback)
     stamina      = { icon = "stamina",      name = "Stamina",
         desc = "Drives sustained physical effort. Drops with action, regenerates with rest." },
     hunger       = { icon = "hunger",       name = "Hunger",
         desc = "Need for food. High hunger reduces stamina regen and eventually starves the unit." },
     hydration    = { icon = "hydration",    name = "Hydration",
         desc = "Need for water. Drops faster than hunger; critical in hot climates." },
+    blood        = { icon = "blood",        name = "Blood",
+        desc = "Blood volume in litres. Drained by bleeding wounds; below 30% triggers unconsciousness, ≤0 means death." },
+    pain         = { icon = "pain",         name = "Pain",
+        desc = "Accumulated pain from wounds (severity weighted by attack kind). High pain penalises hit chance and evasion." },
+
+    -- Physical stats (rolled at spawn)
     strength     = { icon = "strength",     name = "Strength",
         desc = "Affects melee damage, carry capacity, and heavy-tool work speed." },
     endurance    = { icon = "endurance",    name = "Endurance",
@@ -626,17 +651,33 @@ local STAT_DEFS = {
     reflexes     = { icon = "reflexes",     name = "Reflexes",
         desc = "Affects dodge, parry, and the reaction window for ranged attacks." },
     constitution = { icon = "constitution", name = "Constitution",
-        desc = "Resistance to injury, illness, and environmental damage." },
+        desc = "Slows bleeding from wounds and accelerates natural healing." },
     metabolism   = { icon = "metabolism",   name = "Metabolism",
         desc = "How quickly the unit burns calories. High metabolism eats more but recovers faster." },
-    perception   = { icon = "perception",   name = "Perception",
-        desc = "Sight range, hearing, and chance to spot hidden things." },
+    toughness    = { icon = "toughness",    name = "Toughness",
+        desc = "Flat damage reduction on all incoming hits. Caps at 50% at toughness 10." },
+    dexterity    = { icon = "dexterity",    name = "Dexterity",
+        desc = "Fine motor control. Drives aim on offense and parry on defense." },
+    agility      = { icon = "agility",      name = "Agility",
+        desc = "Whole-body motion. Drives dodging incoming attacks." },
     height       = { icon = "height",       name = "Height",
         desc = "Affects reach, line of sight, and the cap for skeletal lean mass." },
     weight       = { icon = "weight",       name = "Weight",
         desc = "Total body mass. Heavier units move slower and apply more force in melee." },
+
+    -- Mental stats
+    perception   = { icon = "perception",   name = "Perception",
+        desc = "Sight range, hearing, and chance to spot hidden things. Also helps spot incoming attacks." },
+    intelligence = { icon = "intelligence", name = "Intelligence",
+        desc = "Tactical decision-making. Smarter units pick vital low-resistance targets; dumber ones swing more randomly." },
+
+    -- Skills (weapon classes + balance). All grow with XP.
     balance      = { icon = "balance",      name = "Balance",
-        desc = "Footing on uneven terrain. Reduces falls, slips, and stagger from impacts." },
+        desc = "Footing on uneven terrain. Reduces falls, slips, and stagger from impacts; contributes to dodge." },
+    dagger       = { icon = "dagger",       name = "Dagger",
+        desc = "Skill with daggers and other short blades. Improves hit chance and damage with that weapon class." },
+    unarmed      = { icon = "unarmed",      name = "Unarmed",
+        desc = "Skill at fighting without a weapon — fists, claws, fangs. Used by all natural-weapon creatures (bears) plus unarmed humanoids." },
 }
 
 -- engine.loadTexture caches by path, but we keep a per-key map so each
@@ -688,7 +729,9 @@ local function placeIconStatRow(rect, rowIndex, statKey, valueText,
             { kind = "sprite", id = iconId })
     else
         -- No icon on disk for this stat yet — fall back to the old
-        -- dim text label so the row isn't visually empty.
+        -- dim text label so the row isn't visually empty. Carry the
+        -- same tooltip the icon would have, so hover info works
+        -- before the icon art lands.
         local nameLbl = label.new({
             name     = "unit_info_v2_stat_lbl_" .. rowIndex,
             text     = (def and def.name) or statKey,
@@ -701,6 +744,9 @@ local function placeIconStatRow(rect, rowIndex, statKey, valueText,
         local nameH = label.getElementHandle(nameLbl)
         UI.addToPage(unitInfoV2.page, nameH, rect.x + CONTENT_LEFT_PAD, y)
         UI.setZIndex(nameH, 12)
+        local tt = tooltipOverride or (def and
+            { text = def.name, hint = def.desc })
+        if tt then label.setTooltipRich(nameLbl, tt) end
         table.insert(unitInfoV2.statsContentElements,
             { kind = "label", id = nameLbl })
     end
@@ -933,13 +979,40 @@ local function buildIconStatPanel(rect, uid, rowDefs)
             visibleRows[#visibleRows + 1] = r
         end
     end
+
+    -- Visible window: how many rows fit; clip to that with scroll
+    -- offset preserved across rebuilds. Scrolling is wired through
+    -- panelShapeSig — onScroll mutates statsScrollOffset which is
+    -- part of the signature, so the next rebuildStatsContent tick
+    -- redraws the visible slice.
+    local totalRows = #visibleRows
+    local capacity = math.max(1, math.floor(
+        (rect.h - CONTENT_TOP_PAD) / CONTENT_ROW_H))
+    local needsScroll = totalRows > capacity
+
+    local scrollOffset = unitInfoV2.statsScrollOffset or 0
+    local maxOffset    = math.max(0, totalRows - capacity)
+    if scrollOffset > maxOffset then scrollOffset = maxOffset end
+    if scrollOffset < 0           then scrollOffset = 0         end
+    unitInfoV2.statsScrollOffset = scrollOffset
+
+    -- Carve out scrollbar space on the right so value labels don't
+    -- overlap the scrollbar widget.
+    local rowRect = rect
+    if needsScroll then
+        rowRect = { x = rect.x, y = rect.y,
+                    w = rect.w - SCROLLBAR_RESERVE, h = rect.h }
+    end
+
     local refs = {}
-    for i, r in ipairs(visibleRows) do
+    local visibleCount = math.min(capacity, totalRows - scrollOffset)
+    for i = 1, visibleCount do
+        local r = visibleRows[scrollOffset + i]
         local tt = r.tooltip
         if type(tt) == "function" then tt = tt(uid) end
         local vtt = nil
         if r.valueTooltip then vtt = r.valueTooltip(uid) end
-        local valLbl, y = placeIconStatRow(rect, i - 1, r.key,
+        local valLbl, y = placeIconStatRow(rowRect, i - 1, r.key,
             r.value(uid) or "?", tt, vtt)
         refs[i] = {
             valLbl     = valLbl,
@@ -948,6 +1021,77 @@ local function buildIconStatPanel(rect, uid, rowDefs)
             tooltipFn  = r.valueTooltip,
         }
     end
+
+    -- Scrollbar lifecycle: PERSISTS across same-tab rebuilds so an
+    -- in-flight drag (whose draggingId references the widget) doesn't
+    -- get its target destroyed mid-swing. On scroll-only rebuilds we
+    -- just resize + retarget the existing widget. The scrollbar is
+    -- destroyed when the user changes tab/unit (handled in
+    -- rebuildStatsContent before this builder runs).
+    if needsScroll then
+        local sbButton = 24
+        local sbCap    = 4
+        local sbX      = rect.x + rect.w - SCROLLBAR_RESERVE
+        local sbY      = rect.y + CONTENT_TOP_PAD
+        local trackH   = math.max(24,
+            rect.h - 2 * CONTENT_TOP_PAD - 2 * sbButton - 2 * sbCap)
+        if unitInfoV2.statsScrollbarId then
+            -- Existing widget — just refresh sizing + offset. (No
+            -- onScroll re-fire from setContentSize; setScrollOffset
+            -- does fire it but at the same value, no-op.)
+            scrollbar.setContentSize(unitInfoV2.statsScrollbarId,
+                totalRows, capacity)
+            scrollbar.setScrollOffset(unitInfoV2.statsScrollbarId,
+                scrollOffset)
+        else
+            unitInfoV2.statsScrollbarId = scrollbar.new({
+                name         = "unit_info_v2_stats_sb",
+                page         = unitInfoV2.page,
+                x            = sbX,  y = sbY,
+                buttonSize   = sbButton,
+                trackHeight  = trackH,
+                capHeight    = sbCap,
+                tileSize     = 8,
+                totalItems   = totalRows,
+                visibleItems = capacity,
+                zIndex       = 12,
+                onScroll     = function(offset)
+                    unitInfoV2.statsScrollOffset = offset
+                    -- panelShapeSig folds scrollOffset in so the
+                    -- next update-tick re-runs this builder and
+                    -- the visible window shifts.
+                end,
+            })
+            scrollbar.setScrollOffset(unitInfoV2.statsScrollbarId,
+                scrollOffset)
+        end
+    else
+        -- Panel shrank below capacity — kill the scrollbar.
+        if unitInfoV2.statsScrollbarId then
+            scrollbar.destroy(unitInfoV2.statsScrollbarId)
+            unitInfoV2.statsScrollbarId = nil
+        end
+    end
+
+    -- Clickable transparent background: persists across same-tab
+    -- rebuilds. Without this, wheel events over the panel body
+    -- (between rows / over non-clickable icons) escape to the
+    -- engine's findClickableElementAt → game-scroll → world zoom.
+    -- With it, the hit-test finds the bg and routes via onUIScroll.
+    if not unitInfoV2.statsBgClickId then
+        local bgId = UI.newElement(
+            "unit_info_v2_stats_bg",
+            rect.w, rect.h,
+            unitInfoV2.page)
+        UI.addToPage(unitInfoV2.page, bgId, rect.x, rect.y)
+        UI.setClickable(bgId, true)
+        UI.setOnClick(bgId, "onStatsPanelBgClick")
+        -- Below row icons (z=12); just needs to be findable by hit-
+        -- test, not visible.
+        UI.setZIndex(bgId, 5)
+        unitInfoV2.statsBgClickId = bgId
+    end
+
     return function (newUid)
         if not newUid then return end
         for _, ref in ipairs(refs) do
@@ -955,7 +1099,7 @@ local function buildIconStatPanel(rect, uid, rowDefs)
             local valH = label.getElementHandle(ref.valLbl)
             local valW = select(1, label.getSize(ref.valLbl))
             UI.setPosition(valH,
-                rect.x + rect.w - CONTENT_RIGHT_PAD - valW, ref.y)
+                rowRect.x + rowRect.w - CONTENT_RIGHT_PAD - valW, ref.y)
             -- Keep the value tooltip live so modifier-source changes
             -- (e.g. equipping a buff item) show up without waiting
             -- for a sub-tab swap.
@@ -967,8 +1111,27 @@ local function buildIconStatPanel(rect, uid, rowDefs)
     end
 end
 
+-- Status formatters: blood + pain aren't stats so they bypass
+-- fmtCurMax. Blood is "cur / max L"; pain is the raw accumulator.
+local function fmtBlood(uid)
+    local b = unit.getBlood(uid)
+    if not b then return "?" end
+    return string.format("%.1f / %.1f L", b.current, b.max)
+end
+
+local function fmtPain(uid)
+    local p = unit.getPain(uid)
+    if not p then return "?" end
+    return string.format("%.2f", p)
+end
+
+-- Status panel: vitals most-likely-to-kill at the top, daily-need
+-- resources below. Blood goes first (death-relevant), pain second,
+-- then the existing stamina/hunger/hydration trio.
 local function buildStatusPanel(rect, uid)
     return buildIconStatPanel(rect, uid, {
+        { key = "blood",     value = fmtBlood },
+        { key = "pain",      value = fmtPain },
         { key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end },
         { key = "hunger",    value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end },
         { key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end },
@@ -988,18 +1151,63 @@ local function statRow(key)
     }
 end
 
-local function buildStatsPanel(rect, uid)
+-- Body-composition breakdown for the weight row's hover tooltip:
+-- splits body_mass into lean / fat / other. Defined above
+-- buildPhysicalPanel because that's where it's referenced; Lua
+-- resolves the closure's identifier at function-definition time,
+-- so a definition-after-use leaves the closure binding to a nil
+-- global instead of the local function.
+local function weightHint(uid)
+    local body = unit.getStat(uid, "body_mass")
+    local lean = unit.getStat(uid, "lean_mass")
+    local fat  = unit.getStat(uid, "fat_mass")
+    if not (body and lean and fat) then
+        return "(body composition not yet computed)"
+    end
+    local other = body - lean - fat
+    return string.format(
+        "Lean (muscle):  %.1f kg\n"
+     .. "Fat:            %.1f kg\n"
+     .. "Other (bone, organs, water): %.1f kg",
+        lean, fat, other)
+end
+
+-- Physical panel: stat rows in roughly-importance order, then the
+-- body-attribute rows (height + weight) absorbed from the former
+-- "Attributes" panel. Combat-relevant stats up top; metabolism +
+-- the body measurements get the bottom.
+local function buildPhysicalPanel(rect, uid)
     return buildIconStatPanel(rect, uid, {
         statRow("strength"),
         statRow("endurance"),
         statRow("reflexes"),
         statRow("constitution"),
+        statRow("toughness"),
+        statRow("dexterity"),
+        statRow("agility"),
         statRow("metabolism"),
+        { key = "height", value = function(u)
+            local h = unit.getStat(u, "height")
+            return h and string.format("%.2f m", h) or "?"
+        end },
+        { key   = "weight",
+          value = function(u)
+              local m = unit.getStat(u, "body_mass")
+              return m and string.format("%.1f kg", m) or "?"
+          end,
+          tooltip = function(u)
+              return {
+                  text = STAT_DEFS.weight.name,
+                  hint = STAT_DEFS.weight.desc .. "\n\n" .. weightHint(u),
+              }
+          end,
+        },
     })
 end
 
 local function buildMentalPanel(rect, uid)
     return buildIconStatPanel(rect, uid, {
+        statRow("intelligence"),
         statRow("perception"),
     })
 end
@@ -1034,41 +1242,10 @@ end
 -- The remainder (bones, organs, water, viscera) goes into "Other" so
 -- the four lines add up to body_mass. Recomputed per hover so values
 -- track the unit's current composition.
-local function weightHint(uid)
-    local body = unit.getStat(uid, "body_mass")
-    local lean = unit.getStat(uid, "lean_mass")
-    local fat  = unit.getStat(uid, "fat_mass")
-    if not (body and lean and fat) then
-        return "(body composition not yet computed)"
-    end
-    local other = body - lean - fat
-    return string.format(
-        "Lean (muscle):  %.1f kg\n"
-     .. "Fat:            %.1f kg\n"
-     .. "Other (bone, organs, water): %.1f kg",
-        lean, fat, other)
-end
-
-local function buildAttributesPanel(rect, uid)
-    return buildIconStatPanel(rect, uid, {
-        { key = "height", value = function(u)
-            local h = unit.getStat(u, "height")
-            return h and string.format("%.2f m", h) or "?"
-        end },
-        { key   = "weight",
-          value = function(u)
-              local m = unit.getStat(u, "body_mass")
-              return m and string.format("%.1f kg", m) or "?"
-          end,
-          tooltip = function(u)
-              return {
-                  text = STAT_DEFS.weight.name,
-                  hint = STAT_DEFS.weight.desc .. "\n\n" .. weightHint(u),
-              }
-          end,
-        },
-    })
-end
+-- (buildAttributesPanel was here; height + weight rows moved into
+-- buildPhysicalPanel as part of the 2026-05 panel restructure;
+-- weightHint moved above buildPhysicalPanel so its forward-reference
+-- resolves at function-definition time.)
 
 local function buildEffectsPanel(rect, uid)
     -- Placeholder. unit.getModifiers requires (uid, statName) — there's
@@ -1114,35 +1291,77 @@ local function buildEffectsPanel(rect, uid)
 end
 
 local PANEL_BUILDERS = {
-    Status     = buildStatusPanel,
-    Stats      = buildStatsPanel,
-    Mental     = buildMentalPanel,
-    Skill      = buildSkillPanel,
-    Attributes = buildAttributesPanel,
-    Effects    = buildEffectsPanel,
+    Status   = buildStatusPanel,
+    Physical = buildPhysicalPanel,
+    Mental   = buildMentalPanel,
+    Skill    = buildSkillPanel,
+    Effects  = buildEffectsPanel,
 }
 
 -- Forward-declared above. Clears the current panel's elements and
 -- builds the new one for (activeUid, activeSubTab). Cheap when the
 -- active selection hasn't changed because we cache (uid, subtab) and
 -- only refresh values via the panel's refresh callback.
+-- Per-panel "what's its current shape?" hash. The signature includes
+-- scrollOffset so onScroll-driven changes trigger a rebuild without
+-- the per-tick rebuild storm we'd get if we keyed only on (uid, tab).
+-- For static panels the row set is fixed per (uid, tab); for the
+-- Skill panel we include the skill-name set (NOT values — values get
+-- pushed in-place by statsRefresh).
+local function panelShapeSig(panel, uid)
+    local base
+    if panel == "Skill" then
+        local all = unit.getAllSkills(uid) or {}
+        local names = {}
+        for n, _ in pairs(all) do names[#names + 1] = n end
+        table.sort(names)
+        base = "skill:" .. table.concat(names, "|")
+    elseif panel == "Effects" then
+        -- Phase-3 wiring; the modifiers API is per-stat so we have
+        -- no global enumeration yet. Signature is fixed ("empty")
+        -- so Effects never re-shapes itself. When that API lands,
+        -- sort + concat modifier ids here.
+        base = "effects_v1_empty"
+    else
+        base = "static"
+    end
+    return base .. ":" .. tostring(unitInfoV2.statsScrollOffset or 0)
+end
+
 rebuildStatsContent = function ()
     if not unitInfoV2.statsContentRect then return end
     local uid = unitInfoV2.activeUid
     if not uid then return end
 
-    -- Skill / Effects panels are content-shaped (their row count
-    -- depends on the unit's state), so always rebuild for those.
     local panel = unitInfoV2.activeSubTab
-    local dynamicShape = (panel == "Skill" or panel == "Effects")
-    local sameContext = (not dynamicShape)
-                      and unitInfoV2.lastContentUid == uid
-                      and unitInfoV2.lastContentTab == panel
+    local tabChanged = unitInfoV2.lastContentTab ~= panel
+    local uidChanged = unitInfoV2.lastContentUid ~= uid
+
+    -- Tab / uid change → tear down persistent elements (scrollbar +
+    -- bg click box) so the next build creates a fresh pair sized
+    -- for the new panel. Reset scrollOffset so we start at the top.
+    if tabChanged or uidChanged then
+        if unitInfoV2.statsScrollbarId then
+            scrollbar.destroy(unitInfoV2.statsScrollbarId)
+            unitInfoV2.statsScrollbarId = nil
+        end
+        if unitInfoV2.statsBgClickId then
+            UI.deleteElement(unitInfoV2.statsBgClickId)
+            unitInfoV2.statsBgClickId = nil
+        end
+        unitInfoV2.statsScrollOffset = 0
+    end
+
+    local sig = panelShapeSig(panel, uid)
+    local sameContext = (not tabChanged) and (not uidChanged)
+                      and unitInfoV2.lastContentSig == sig
     if sameContext then return end
 
-    -- Clear current
+    -- Clear ROWS (not scrollbar, not bg box — those persist across
+    -- same-tab rebuilds so an in-flight drag isn't broken).
     for _, e in ipairs(unitInfoV2.statsContentElements) do
         if e.kind == "label" then label.destroy(e.id)
+        elseif e.kind == "scrollbar" then scrollbar.destroy(e.id)
         else                       UI.deleteElement(e.id)
         end
     end
@@ -1154,6 +1373,7 @@ rebuildStatsContent = function ()
     unitInfoV2.statsRefresh = builder(unitInfoV2.statsContentRect, uid)
     unitInfoV2.lastContentUid = uid
     unitInfoV2.lastContentTab = panel
+    unitInfoV2.lastContentSig = sig
 end
 
 local function placePlaceholder(name, x, y, w, h, text, fontSize)
@@ -2658,6 +2878,72 @@ function unitInfoV2.handleScrollRight(elemHandle)
         applyTabPositions()
     end
     return true
+end
+
+-- Routed by uiManager.onScrollUp / onScrollDown. The stats-panel
+-- scrollbar's up/down arrow buttons fire those callbacks when
+-- clicked; we resolve the handle back to our scrollbar id and
+-- forward to the widget's scrollUp/scrollDown helpers (which
+-- update the offset + fire the onScroll callback, which in turn
+-- bumps statsScrollOffset → next rebuild redraws the visible
+-- slice).
+function unitInfoV2.handleScrollCallback(callbackName, elemHandle)
+    local sbId = unitInfoV2.statsScrollbarId
+    if not sbId then return false end
+    local foundId, _ = scrollbar.findByElementHandle(elemHandle)
+    if foundId ~= sbId then return false end
+    if callbackName == "onScrollUp" then
+        scrollbar.scrollUp(sbId)
+        return true
+    elseif callbackName == "onScrollDown" then
+        scrollbar.scrollDown(sbId)
+        return true
+    end
+    return false
+end
+
+-- Mouse wheel over the stats panel or the scrollbar itself moves
+-- the visible window one row per notch. Routed by uiManager.onUIScroll.
+-- elemHandle is whatever was under the cursor at the wheel event;
+-- we accept it if it belongs to our scrollbar or to any element we
+-- currently own in the stats content area.
+function unitInfoV2.onScroll(elemHandle, dx, dy)
+    local sbId = unitInfoV2.statsScrollbarId
+    if not sbId then return false end
+
+    -- Wheel is "ours" if cursor is on the scrollbar, the bg click
+    -- box, or any of the currently-displayed row elements.
+    local isOurs = false
+    if elemHandle == unitInfoV2.statsBgClickId then
+        isOurs = true
+    elseif scrollbar.findByElementHandle(elemHandle) == sbId then
+        isOurs = true
+    else
+        for _, e in ipairs(unitInfoV2.statsContentElements) do
+            if e.kind == "label" then
+                if label.getElementHandle(e.id) == elemHandle then
+                    isOurs = true; break
+                end
+            elseif e.kind ~= "scrollbar" then
+                if e.id == elemHandle then
+                    isOurs = true; break
+                end
+            end
+        end
+    end
+    if not isOurs then return false end
+
+    if     dy > 0 then scrollbar.scrollUp(sbId)
+    elseif dy < 0 then scrollbar.scrollDown(sbId)
+    end
+    return true
+end
+
+-- Bg-box click is a no-op; we register the callback solely so the
+-- element stays in the engine's clickable set, which is what the
+-- wheel routing checks via findClickableElementAt.
+function unitInfoV2.onStatsPanelBgClick(elemHandle)
+    return elemHandle == unitInfoV2.statsBgClickId
 end
 
 -- Clicking a sub-tab (Status / Stats / Mental / …) switches which

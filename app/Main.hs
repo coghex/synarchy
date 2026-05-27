@@ -39,6 +39,7 @@ import World.Plate (isGlacierZone, isBeyondGlacier, defaultPlatesFor)
 import World.Weather.Types (ClimateState, initClimateState)
 import World.Weather.Lookup (lookupWaterTable)
 import Unit.Thread (startUnitThread)
+import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
 import Sim.Command.Types (SimCommand(..))
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
@@ -149,6 +150,7 @@ runGraphical mPort = do
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
   simThreadState   ← startSimThread env'
+  combatThreadState ← startCombatThread env'
 
   videoConfig ← readIORef (videoConfigRef env')
 
@@ -165,6 +167,10 @@ runGraphical mPort = do
         _ ← initializeVulkan window
         mainLoop
 
+        -- Combat first: wound ticks enqueue UnitKill/UnitCollapse onto
+        -- the unit queue, so the producer has to stop before the
+        -- consumer (unit thread) is torn down inside shutdownEngine.
+        liftIO $ shutdownThread combatThreadState
         liftIO $ shutdownThread simThreadState
         shutdownEngine window unitThreadState worldThreadState
                               inputThreadState luaThreadState
@@ -174,6 +180,7 @@ runGraphical mPort = do
   case result of
     Left err → do
         putStrLn $ displayException err
+        shutdownThread combatThreadState
         shutdownThread simThreadState
         shutdownThread inputThreadState
         shutdownThread luaThreadState
@@ -195,12 +202,14 @@ runHeadless mPort = do
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
   simThreadState   ← startSimThread env'
+  combatThreadState ← startCombatThread env'
 
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
         logInfoM CatSystem "Starting engine (headless)..."
         headlessLoop
         logInfoM CatSystem "Headless engine shutting down..."
+        liftIO $ shutdownThread combatThreadState
         liftIO $ shutdownThread simThreadState
         liftIO $ shutdownThread unitThreadState
         liftIO $ shutdownThread worldThreadState
@@ -214,6 +223,7 @@ runHeadless mPort = do
   case result of
     Left err → do
         putStrLn $ displayException err
+        shutdownThread combatThreadState
         shutdownThread simThreadState
         shutdownThread luaThreadState
         shutdownThread worldThreadState
@@ -242,6 +252,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
   worldThreadState ← startWorldThread env'
   unitThreadState  ← startUnitThread env'
   simThreadState   ← startSimThread env'
+  combatThreadState ← startCombatThread env'
 
   let engineAction ∷ EngineM' EngineEnv ()
       engineAction = do
@@ -317,6 +328,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                 [] → hPutStrLn stderr "dump: no world data"
 
         liftIO $ writeIORef (lifecycleRef env') CleaningUp
+        liftIO $ shutdownThread combatThreadState
         liftIO $ shutdownThread simThreadState
         liftIO $ shutdownThread unitThreadState
         liftIO $ shutdownThread worldThreadState
@@ -329,6 +341,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
   case result of
     Left err → do
         putStrLn $ displayException err
+        shutdownThread combatThreadState
         shutdownThread simThreadState
         shutdownThread luaThreadState
         shutdownThread worldThreadState

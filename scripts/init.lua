@@ -16,6 +16,7 @@ local pauseScriptId = nil
 local buildingInfoPanelScriptId = nil
 local popupScriptId = nil
 local eventLogScriptId = nil
+local combatLogScriptId = nil
 
 function game.init(scriptId)
     -- Initialize debug
@@ -110,6 +111,13 @@ function game.init(scriptId)
     -- refresh on new events).
     eventLogScriptId = engine.loadScript("scripts/event_log.lua", 1.0)
 
+    -- Combat log panel: sibling to event_log, surfaced via right-
+    -- click on the HUD log icon. update() drains combat.drainEvents
+    -- every tick, groups into battles, renders rows. 0.1s gives
+    -- combat events sub-second latency in the log without burning
+    -- CPU.
+    combatLogScriptId = engine.loadScript("scripts/combat_log.lua", 0.1)
+
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
 end
@@ -153,10 +161,19 @@ function game.onMouseDown(button, x, y)
     if button == MOUSE_LEFT then
         -- Debug spawn mode: if armed, this click is a spawn, not a
         -- selection. Spawn at the hovered tile and stay armed.
+        --
+        -- Debug-spawned units always get faction "debug" — that
+        -- tag means "player-controlled AND has no friendly-fire
+        -- restrictions". Lets the user spawn two acolytes (or
+        -- acolyte + bear, etc.) and make them fight for testing.
+        -- Production unit sources still pass their canonical
+        -- faction (portal spawns → "player"; world-gen wildlife
+        -- spawns → "wildlife").
         if debugOverlay.armedDef then
             local gx, gy = world.getHoverTile()
             if gx and gy then
-                unit.spawn(debugOverlay.armedDef, gx + 0.5, gy + 0.5)
+                unit.spawn(debugOverlay.armedDef, gx + 0.5, gy + 0.5,
+                           nil, "debug")
             end
             return
         end
@@ -251,6 +268,73 @@ function game.onMouseDown(button, x, y)
                     }, mx, my)
                     return
                 end
+            end
+        end
+        -- Right-click on a unit → Info / Attack context menu.
+        -- Runs before the move-when-selected branch so right-clicking
+        -- a unit doesn't get interpreted as a move-to-tile order.
+        -- "Attack" only appears when at least one player-faction unit
+        -- is selected; it's greyed when every player attacker shares
+        -- the target's faction (no friendly-fire by default — the
+        -- force-attack override lands in a later phase).
+        do
+            local targetUid = unit.hitTestAt(x, y)
+            if targetUid then
+                local fbW, fbH = engine.getFramebufferSize()
+                local ww, wh   = engine.getWindowSize()
+                local mx, my   = x, y
+                if ww and wh and ww > 0 and wh > 0 then
+                    mx = x * (fbW / ww)
+                    my = y * (fbH / wh)
+                end
+                local contextMenu = require("scripts.ui.context_menu")
+                local selectedUids = unit.getSelected() or {}
+                local targetFac    = unit.getFaction(targetUid)
+                local items = {
+                    { label = "Info",
+                      callback = function()
+                          unit.select(targetUid)
+                      end },
+                }
+                -- Filter selection down to player-commandable
+                -- attackers (faction "player" or "debug"), excluding
+                -- the target itself.
+                local attackers = {}
+                for _, uid in ipairs(selectedUids) do
+                    local fac = unit.getFaction(uid)
+                    if uid ~= targetUid
+                       and (fac == "player" or fac == "debug") then
+                        table.insert(attackers, uid)
+                    end
+                end
+                if #attackers > 0 then
+                    -- Friendly check: every attacker shares the
+                    -- target's faction → Attack greyed. Debug-faction
+                    -- attackers bypass this check entirely (the whole
+                    -- point of "debug" is no friendly-fire restriction
+                    -- so the player can stage acolyte-vs-acolyte
+                    -- fights in the debug overlay).
+                    local allFriendly = true
+                    for _, uid in ipairs(attackers) do
+                        local fac = unit.getFaction(uid)
+                        if fac == "debug" or fac ~= targetFac then
+                            allFriendly = false
+                            break
+                        end
+                    end
+                    local unitAi = require("scripts.unit_ai")
+                    table.insert(items, {
+                        label    = "Attack",
+                        enabled  = not allFriendly,
+                        callback = function()
+                            for _, uid in ipairs(attackers) do
+                                unitAi.commandAttack(uid, targetUid)
+                            end
+                        end,
+                    })
+                end
+                contextMenu.show(items, mx, my)
+                return
             end
         end
         -- Right-click is a move order when units are selected.
@@ -359,16 +443,26 @@ function game.onKeyDown(key)
             eventLog.hide()
             return
         end
+        local combatLog = require("scripts.combat_log")
+        if combatLog.isVisible() then
+            combatLog.hide()
+            return
+        end
         -- (fall through to the existing unit-deselect path below)
     end
 
-    -- User-rebindable: toggle the event log panel. Default is L.
-    -- engine.isActionDown reports true when the action's bound
-    -- key is currently down; since this fires during the
-    -- press-transition broadcast, "currently down" coincides with
-    -- "just pressed" for the duration of this handler.
+    -- User-rebindable: toggle the currently-selected log panel
+    -- (event or combat, matching the HUD icon's mode). Default
+    -- bind is L. engine.isActionDown is true while the action's
+    -- key is held; the press-transition broadcast makes "down"
+    -- coincide with "just pressed" for this handler.
     if engine.isActionDown("toggleEventLog") then
-        require("scripts.event_log").toggle()
+        local hud = require("scripts.hud")
+        if hud.logMode == "combat" then
+            require("scripts.combat_log").toggle()
+        else
+            require("scripts.event_log").toggle()
+        end
         return
     end
 
@@ -426,6 +520,9 @@ function game.shutdown()
     end
     if eventLogScriptId then
         engine.killScript(eventLogScriptId)
+    end
+    if combatLogScriptId then
+        engine.killScript(combatLogScriptId)
     end
 end
 

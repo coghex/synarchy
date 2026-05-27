@@ -74,11 +74,13 @@ loadItemYamlFn env backendState = do
                             (iydFood def)
                         weapon = fmap
                             (\w → ItemWeapon
-                                { iwBladeLength   = iywBladeLength w
-                                , iwBaseSharpness = iywBaseSharpness w
-                                , iwStabEff       = iywStabEff w
-                                , iwSlashEff      = iywSlashEff w
-                                , iwBluntEff      = iywBluntEff w
+                                { iwBladeLength    = iywBladeLength w
+                                , iwBaseSharpness  = iywBaseSharpness w
+                                , iwStabEff        = iywStabEff w
+                                , iwSlashEff       = iywSlashEff w
+                                , iwBluntEff       = iywBluntEff w
+                                , iwWeaponClass    = iywWeaponClass w
+                                , iwAttackCooldown = iywAttackCooldown w
                                 })
                             (iydWeapon def)
                         itemDef = ItemDef

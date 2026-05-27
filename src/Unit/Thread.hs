@@ -113,10 +113,39 @@ publishToRender env utsRef = do
                               -- debug anim panel's preview-cycle.
                               | uiFrozen inst → inst
                               | otherwise →
-                                let targetAnim = case HM.lookup (uiDefName inst) defs of
-                                        Just def → resolveStateAnim def
-                                                       (stateKey (usPose ss) (usState ss))
-                                        Nothing  → uiCurrentAnim inst
+                                let -- Lua-driven anim override (combat
+                                    -- swings, posture changes, etc.)
+                                    -- wins over the state-driven map.
+                                    -- Empty string = no override.
+                                    override = uiAnimOverride inst
+                                    -- Cumulative wound severity. The
+                                    -- injured-anim swap fires above the
+                                    -- same threshold the Lua-side
+                                    -- combatAnimName helper uses (1.0).
+                                    -- Computed here to keep the engine
+                                    -- and Lua sides in lockstep.
+                                    woundSev = sum (map woundSeverity
+                                                        (uiWounds inst))
+                                    injured = woundSev > 1.0
+                                    baseKey = stateKey (usPose ss) (usState ss)
+                                    -- Resolve via two-tier lookup: an
+                                    -- injured-prefixed key first if the
+                                    -- unit qualifies, falling back to the
+                                    -- plain state key. The yaml may or
+                                    -- may not have an injured- variant
+                                    -- registered for any given state.
+                                    resolveAnim def =
+                                        let injK = "injured-" <> baseKey
+                                            injR = resolveStateAnim def injK
+                                        in if injured ∧ injR ≠ injK
+                                              then injR
+                                              else resolveStateAnim def baseKey
+                                    targetAnim
+                                      | not (T.null override) = override
+                                      | otherwise =
+                                          case HM.lookup (uiDefName inst) defs of
+                                              Just def → resolveAnim def
+                                              Nothing  → uiCurrentAnim inst
                                     -- Transition assets are shared between
                                     -- forward and reverse: standing-to-crouching
                                     -- plays normally for Standing→Crouching, and
@@ -154,6 +183,7 @@ publishToRender env utsRef = do
 activityLabel ∷ UnitActivity → Text
 activityLabel Idle              = "idle"
 activityLabel Walking           = "walking"
+activityLabel Running           = "running"
 activityLabel Drinking          = "drinking"
 activityLabel Eating            = "eating"
 activityLabel Picking           = "pickup"

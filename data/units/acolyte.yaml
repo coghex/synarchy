@@ -2,10 +2,15 @@ units:
   - name: "acolyte"
     sprite: "assets/textures/units/acolyte/animations/idle/south/frame_000.png"
     base_width: 8
+    # Top sprint speed in tiles/sec. AI candidates derive walk /
+    # commanded / retreat speeds as fractions of this. Stat-based
+    # modulation lives in unit_ai's combat-speed helper.
+    max_speed: 3.0
     equipment_class: "humanoid"
 
     eager_stats: true
     stats:
+      # Core physical
       strength:     { base: 1.0, range: 1.0 }
       endurance:    { base: 1.0, range: 1.0 }
       reflexes:     { base: 1.0, range: 1.0 }
@@ -14,8 +19,15 @@ units:
       # 0.1 → ~95% of units roll in [0.8, 1.2], so individuals differ
       # by up to ±20% in baseline calorie burn at rest.
       metabolism:   { base: 1.0, range: 0.4 }
-      # Mental — display category only; engine treats it as a regular stat.
       perception:   { base: 1.0, range: 0.4 }
+      # Combat stats (Phase 2.1). Mean 1.0 with range 0.4 → sigma 0.1,
+      # 95% of rolls in [0.8, 1.2]. Combat formulas use these directly
+      # in hit/evasion/damage calculations.
+      dexterity:    { base: 1.0, range: 0.4 }   # fine motor: aim, parry
+      agility:      { base: 1.0, range: 0.4 }   # gross motor: dodge
+      intelligence: { base: 1.0, range: 0.6 }   # tactical body-part pick
+      toughness:    { base: 1.0, range: 0.4 }   # flat damage reduction
+      # (`balance` is a skill, not a stat — see the skills: block.)
 
     body:
       height:  { mean: 1.8, range: 1.0 }   # 1.3..2.3 m
@@ -23,7 +35,72 @@ units:
       bodyfat: { mean: 0.2, range: 0.36 }  # 0.02..0.38
 
     skills:
-      balance: { base: 1.0, range: 1.0 }
+      # Weapon-class skills. Skill XP applied on use (Phase 2.2+).
+      # Range 30 → wide initial spread; most rolls fall in [40, 60].
+      dagger:  { base: 50.0, range: 30.0 }
+      unarmed: { base: 30.0, range: 20.0 }
+      # Balance: trained skill (climbing, dodging, footing on uneven
+      # terrain). Read by Combat.Resolution's defender evasion via
+      # uiSkills["balance"], normalised by /50 so a level-50 skill
+      # contributes the same as the previous "stat at 1.0".
+      balance: { base: 50.0, range: 40.0 }
+
+    # 12-part humanoid body. Heights are metres above the foot,
+    # calibrated for a 1.8m default body — taller spawns naturally
+    # have parts higher on the ladder via uiStats["height"] but for
+    # 2.1 the YAML values are used directly. Area weights bias
+    # toward the torso; tactical values guide high-intelligence
+    # attackers to vitals. Vital parts at severity ≥ 1.0 = death.
+    body_parts:
+      - { id: head,    parent: neck,  vital: true,
+          area_weight: 0.08, tactical_value: 1.0,
+          max_health_factor: 0.20, bleed_factor: 2.0,
+          height_low: 1.65, height_high: 1.85 }
+      - { id: neck,    parent: torso, vital: true,
+          area_weight: 0.03, tactical_value: 1.0,
+          max_health_factor: 0.15, bleed_factor: 3.0,
+          height_low: 1.55, height_high: 1.65 }
+      - { id: torso,   parent: null,  vital: true,
+          area_weight: 0.40, tactical_value: 0.8,
+          max_health_factor: 0.40, bleed_factor: 2.0,
+          height_low: 1.00, height_high: 1.55 }
+      - { id: l_arm,   parent: torso,
+          area_weight: 0.07, tactical_value: 0.3,
+          max_health_factor: 0.20, bleed_factor: 1.0,
+          height_low: 0.90, height_high: 1.50 }
+      - { id: r_arm,   parent: torso,
+          area_weight: 0.07, tactical_value: 0.3,
+          max_health_factor: 0.20, bleed_factor: 1.0,
+          height_low: 0.90, height_high: 1.50 }
+      - { id: l_hand,  parent: l_arm,
+          area_weight: 0.03, tactical_value: 0.4,
+          max_health_factor: 0.10, bleed_factor: 1.0,
+          height_low: 0.80, height_high: 1.00 }
+      - { id: r_hand,  parent: r_arm,
+          area_weight: 0.03, tactical_value: 0.4,
+          max_health_factor: 0.10, bleed_factor: 1.0,
+          height_low: 0.80, height_high: 1.00 }
+      - { id: l_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.90 }
+      - { id: r_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.90 }
+      - { id: l_foot,  parent: l_leg,
+          area_weight: 0.04, tactical_value: 0.2,
+          max_health_factor: 0.08, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.10 }
+      - { id: r_foot,  parent: r_leg,
+          area_weight: 0.04, tactical_value: 0.2,
+          max_health_factor: 0.08, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.10 }
+
+    # Acolytes have no innate hide resistance (just skin). Default
+    # block is all-zero, so we omit it here for brevity.
+
+    # No natural_weapon — acolytes fight with equipped weapons.
 
     # Default supplies every acolyte spawns with — full canteen and
     # two rations. building_spawn.lua used to grant these per-portal-
@@ -103,6 +180,19 @@ units:
       crawling-to-crouching: crouching_to_crawling
       crawling-to-collapsed: crawling_to_collapsed
       collapsed-to-crawling: crawling_to_collapsed
+
+      # Injured variants — engine swaps to these when cumulative wound
+      # severity > 1.0 (see publishToRender's injured-key fallback).
+      # Combat anims (combat_idle, attack_quick, attack_heavy,
+      # combat_hit_react) are NOT state-keyed; they're picked Lua-side
+      # via unit.setAnimOverride and combatAnimName handles the
+      # injured prefix there.
+      injured-standing-idle:   injured_idle
+      injured-standing-walk:   injured_walk
+      injured-standing-run:    injured_run
+      injured-standing-drink:  injured_drink
+      injured-standing-pickup: injured_pickup
+      injured-dead-idle:       injured_death
 
     animations:
       attack_heavy_RH_dagger:

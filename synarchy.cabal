@@ -390,6 +390,7 @@ library
                      Building.HitTest
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
+                     Engine.Scripting.Lua.API.Combat
                      Item.Types
                      Item.Roll
                      Engine.Asset.YamlItems
@@ -402,6 +403,10 @@ library
                      Engine.Scripting.Lua.API.Substance
                      Sim.Thread
                      Sim.Command.Types
+                     Combat.Types
+                     Combat.Thread
+                     Combat.Resolution
+                     Combat.Wounds
                      Sim.State.Types
                      Sim.Fluid.Tick
                      Sim.Fluid.Types

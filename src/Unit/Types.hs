@@ -2,6 +2,11 @@
 module Unit.Types
     ( Animation(..)
     , StatModifier(..)
+    , Wound(..)
+    , BodyPart(..)
+    , NaturalWeapon(..)
+    , NaturalResistance(..)
+    , defaultNaturalResistance
     , UnitDef(..)
     , UnitInstance(..)
     , UnitManager(..)
@@ -53,9 +58,101 @@ data StatModifier = StatModifier
       --   so the expiry survives save/load.
     } deriving (Show, Eq, Generic, Serialize)
 
+-- | A single wound record on a unit. Slim by design: every derived
+--   property (bleed rate, heal rate, pain contribution) is computed
+--   live from `woundKind` + `woundSeverity` + body-part metadata, so
+--   the schema doesn't have to expand when those formulas change.
+--
+--   Severity is continuous 0..1; ≥1.0 on a vital part triggers
+--   instant death; wounds with severity below 0.01 are removed by
+--   the wound tick. `woundAt` lets the UI sort newest-first and
+--   show "X seconds ago" labels.
+data Wound = Wound
+    { woundPart     ∷ !Text
+      -- ^ body-part id (matches a `BodyPart.bpId` in the unit-def).
+    , woundKind     ∷ !Text
+      -- ^ "slash" / "stab" / "blunt" — drives bleed_factor, pain
+      --   factor, healing characteristics, and combat-log flavor.
+    , woundSeverity ∷ !Float
+      -- ^ current 0..1; ticks down via natural healing, ticks up
+      --   only when a new hit on the same part is grouped in
+      --   (Phase 3 will fold compatible new wounds into existing
+      --   ones; Phase 2.1 just appends).
+    , woundAt       ∷ !Double
+      -- ^ gameTime (seconds) when inflicted.
+    } deriving (Show, Eq, Generic, Serialize)
+
 -- | Unique identifier for a spawned unit instance.
 newtype UnitId = UnitId { unUnitId ∷ Word32 }
     deriving (Show, Eq, Ord, Generic, Hashable, Serialize)
+
+-- | A targetable body part on a creature. Body parts are declared
+--   per-unit-def (humanoid acolytes ship a 12-part layout, quadruped
+--   bears ship an 8-part layout). All numeric fields feed the
+--   resolution formulas:
+--
+--     area_weight       — chance of a random hit landing here
+--                         (probability ∝ weight among reachable parts).
+--     tactical_value    — intelligence-weighted picker bias toward
+--                         high-value parts (vitals usually 1.0,
+--                         limbs ~0.3). Combined with area_weight via
+--                         the unit's intelligence stat.
+--     max_health_factor — part max_hp = body_mass × this factor.
+--                         A wound of severity 1.0 ≈ a fatal blow to
+--                         the part (head crushed, neck severed, ...).
+--     bleed_factor      — multiplier on the per-wound bleed rate.
+--                         Neck > head > torso > limbs (more major
+--                         vessels near the centre line).
+--     height_low/high   — vertical range of the part (metres above
+--                         the unit's foot). Used by the reach-band
+--                         filter so a low-stance bear's head is only
+--                         reachable by a tall attacker or rearing
+--                         posture.
+--     vital             — destroying a vital part (severity ≥ 1.0)
+--                         is instant death, with the cause string
+--                         formatted as "<wound_kind>_<part_id>".
+data BodyPart = BodyPart
+    { bpId              ∷ !Text
+    , bpParent          ∷ !(Maybe Text)
+      -- ^ Attached part id (so severing an arm later cascades to
+      --   the hand). For 2.1 the parent chain is read but not yet
+      --   acted on; severity is per-part.
+    , bpVital           ∷ !Bool
+    , bpAreaWeight      ∷ !Float
+    , bpTacticalValue   ∷ !Float
+    , bpMaxHealthFactor ∷ !Float
+    , bpBleedFactor     ∷ !Float
+    , bpHeightLow       ∷ !Float    -- ^ metres above foot
+    , bpHeightHigh      ∷ !Float    -- ^ metres above foot
+    } deriving (Show, Eq, Generic)
+
+-- | A creature's innate (non-equipment) weapon — claws, fangs, fists.
+--   Used by units with no equipped weapon, falling back to this
+--   definition for attack range, cooldown, and weapon-class skill
+--   selection. Acolytes don't declare one (they fight equipped);
+--   bears declare an unarmed natural weapon.
+data NaturalWeapon = NaturalWeapon
+    { nwWeaponClass            ∷ !Text   -- ^ matches a skill name on the unit
+    , nwEffectiveBladeLength   ∷ !Float  -- ^ cm; treated as a weapon blade for range/damage
+    , nwAttackCooldown         ∷ !Float  -- ^ seconds between swings
+    , nwStabEff                ∷ !Float  -- ^ 0..1 — same shape as ItemWeapon.iwStabEff
+    , nwSlashEff               ∷ !Float
+    , nwBluntEff               ∷ !Float
+    } deriving (Show, Eq, Generic)
+
+-- | Innate per-attack-kind damage resistance baked into the unit's
+--   hide/skin. Applied multiplicatively in Combat.Resolution before
+--   the flat toughness reduction. 0.0 means "no innate resistance"
+--   (humans); higher values reduce incoming damage of that kind.
+--   Future armor stacks on top with diminishing returns.
+data NaturalResistance = NaturalResistance
+    { nrSlash ∷ !Float
+    , nrStab  ∷ !Float
+    , nrBlunt ∷ !Float
+    } deriving (Show, Eq, Generic)
+
+defaultNaturalResistance ∷ NaturalResistance
+defaultNaturalResistance = NaturalResistance 0.0 0.0 0.0
 
 -- | A unit definition (loaded from YAML, immutable after init).
 --   This is the "template" — one per unit type.
@@ -65,6 +162,11 @@ data UnitDef = UnitDef
     , udDirSprites ∷ !(Map.Map Direction TextureHandle)
       -- ^ directional sprite overrides (may be empty)
     , udBaseWidth  ∷ !Float                           -- ^ ground contact diameter
+    , udMaxSpeed   ∷ !Float
+      -- ^ Per-species maximum movement speed in tiles/sec at a full
+      --   sprint. AI candidates compute commanded / wander / retreat
+      --   speeds as fractions of this. Sim picks Running over Walking
+      --   when current move speed crosses 0.6 × udMaxSpeed.
     , udAnimations ∷ !(HM.HashMap Text Animation)
       -- ^ named animation library (may be empty)
     , udStateAnims ∷ !(HM.HashMap Text Text)
@@ -102,6 +204,22 @@ data UnitDef = UnitDef
     , udStartingAccessories ∷ ![Text]
       -- ^ Item def names to materialise into `uiAccessories` at
       --   spawn — robes, goggles, etc. Order preserved.
+    , udBodyParts ∷ ![BodyPart]
+      -- ^ Body parts targetable by combat. Order is preserved
+      --   (the YAML's order — typically vital → limbs).
+      --   Empty list = no combat targeting yet; resolver bails
+      --   cleanly. Acolyte ships 12-part humanoid, bear 8-part
+      --   quadruped.
+    , udNaturalResistance ∷ !NaturalResistance
+      -- ^ Innate hide/skin resistance per attack kind. Defaults to
+      --   zero everywhere (defaultNaturalResistance) for units that
+      --   don't declare a `natural_resistance:` block in YAML.
+    , udNaturalWeapon ∷ !(Maybe NaturalWeapon)
+      -- ^ Optional innate weapon (claws/fangs/fists). When present,
+      --   combat code uses it whenever no equipped weapon is found.
+      --   Acolytes have Nothing here (they're expected to fight with
+      --   their equipped dagger); bears declare an "unarmed" natural
+      --   weapon.
     } deriving (Show, Eq)
 
 -- | A spawned unit instance in the world.
@@ -167,6 +285,43 @@ data UnitInstance = UnitInstance
       --   stable UI display. Populated at spawn from the def's
       --   `udStartingAccessories`. Mutated by equipment.equipAccessory
       --   / unequipAccessory.
+    , uiFactionId   ∷ !Text
+      -- ^ Faction tag used by hostile/friendly checks in the combat
+      --   layer. Assigned at spawn-time only (no faction field on
+      --   UnitDef): player-spawn paths pass "player"; everything
+      --   else defaults to "wildlife". Same-id => friendly; different
+      --   ids => attackable. Roundtrips through SaveData (v8+).
+    , uiWounds      ∷ ![Wound]
+      -- ^ Newest-first wound list. Mutated by Combat.Resolution on
+      --   hits and by Combat.Wounds during the per-tick heal pass.
+      --   Wounds below severity 0.01 are auto-removed; vital wounds
+      --   ≥1.0 trigger instant death (set in Combat.Resolution).
+    , uiBlood       ∷ !Float
+      -- ^ Current blood volume in litres. Spawn-time seeded to
+      --   body_mass × 0.075 (≈7.5 % real-world ratio). Drained by
+      --   bleeding wounds in the wound tick. Below 30 % of max
+      --   → Collapsed pose; ≤ 0 → Dead pose + exsanguination
+      --   death event. Max is recomputed from body_mass each read
+      --   so wasting/regrowth carries through naturally.
+    , uiLastAttackerUid ∷ !(Maybe Word32)
+      -- ^ Runtime-only (NOT in SaveData). Written by Combat.Resolution
+      --   on each hit landed against this unit. Read by the AI's
+      --   `retaliate` candidate so wildlife / acolytes can react to
+      --   being hit by setting an attack goal. Cleared lazily by the
+      --   AI when the attacker dies, despawns, or `uiLastAttackerAt`
+      --   ages past the retaliate-window threshold.
+    , uiLastAttackerAt  ∷ !Double
+      -- ^ Runtime-only. gameTime of the last incoming hit. Paired
+      --   with `uiLastAttackerUid` for AI retaliation window checks.
+    , uiAnimOverride    ∷ !Text
+      -- ^ Runtime-only Lua-driven animation override. When non-empty,
+      --   `publishToRender` uses this as the unit's current animation
+      --   instead of resolving from `udStateAnims` via the sim
+      --   (pose, activity) state key. Lets the AI play combat /
+      --   posture animations that don't map to a sim activity (attack
+      --   swings, combat-idle stances, bear sit/lie/sleep) without
+      --   getting clobbered every sim tick. Written by
+      --   `unit.setAnimOverride`; cleared by `unit.clearAnimOverride`.
     , uiFrozen      ∷ !Bool
       -- ^ Debug-only freeze flag. When True, `publishToRender` skips
       --   updating uiGridX/Y/Z, uiFacing, uiCurrentAnim, uiAnimStart,

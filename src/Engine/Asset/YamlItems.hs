@@ -73,6 +73,8 @@ data ItemYamlWeapon = ItemYamlWeapon
     , iywStabEff        ∷ !Float
     , iywSlashEff       ∷ !Float
     , iywBluntEff       ∷ !Float
+    , iywWeaponClass    ∷ !Text   -- ^ skill name (dagger/unarmed/…)
+    , iywAttackCooldown ∷ !Float  -- ^ seconds between swings
     } deriving (Show, Eq, Generic)
 
 instance FromJSON ItemYamlWeapon where
@@ -82,6 +84,8 @@ instance FromJSON ItemYamlWeapon where
         ⊛ v .:? "stab_effectiveness"   .!= 0
         ⊛ v .:? "slash_effectiveness"  .!= 0
         ⊛ v .:? "blunt_effectiveness"  .!= 0
+        ⊛ v .:? "weapon_class"         .!= "unarmed"
+        ⊛ v .:? "attack_cooldown"      .!= 1.5
 
 data ItemYamlDef = ItemYamlDef
     { iydName        ∷ !Text

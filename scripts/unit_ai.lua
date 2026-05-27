@@ -43,12 +43,18 @@ local config = {
         thought_interval = 1.0,    -- seconds between decisions
         thought_jitter   = 0.5,    -- ± fraction of interval
         wander_radius    = 5.0,    -- tiles
-        wander_speed     = 1.5,    -- tiles/sec for wander moves
+        -- Movement speed fractions (multiply max_speed from unit yaml
+        -- to get the actual tiles/sec passed to moveTo). Lets one
+        -- species run twice as fast as another at the same activity
+        -- without restating the ratios per def.
+        speed_frac_wander  = 0.5,   -- leisurely
+        speed_frac_command = 0.7,   -- combat / following orders
+        speed_frac_retreat = 1.0,   -- full sprint
         base_wander_utility          = 0.5,
         wander_stamina_weight        = 0.3,
         wander_time_penalty          = 0.1,    -- per second in session
         wander_min_stamina_fraction  = 0.2,
-        command_speed                = 2.0,    -- default speed for player commands
+        command_speed                = 2.0,    -- LEGACY: kept for non-combat consumers
         -- Drinking
         drink_sip_litres        = 0.5,    -- canteen water consumed per sip
         drink_min_thirst        = 0.2,    -- 1 - hydration/max; below this, no drink
@@ -142,6 +148,11 @@ local config = {
         store_walk_speed       = 1.6,
         store_base_utility     = 3.0,
     },
+    -- Species-specific config blocks (bear, future wildlife) are
+    -- registered via unitAi.setConfig from their own AI scripts
+    -- (scripts/bear_ai.lua, etc.). Keep `acolyte` here since the
+    -- universal candidates + acolyte ambient candidates all live
+    -- in this module.
 }
 
 -- 8 compass directions (E, SE, S, SW, W, NW, N, NE). Diagonals are
@@ -293,6 +304,10 @@ local GOALS = {
     },
     notify_allies = {
         description = "Inform every other acolyte where the water is.",
+    },
+    attack = {
+        description = "Engage a specific hostile unit. Set by " ..
+                      "unitAi.commandAttack from a player order.",
     },
 }
 
@@ -834,6 +849,414 @@ local function followCommandExecute(uid, s, params)
     local task = s.commandedTask
     if not task then return end
     unit.moveTo(uid, task.x, task.y, task.speed or params.command_speed)
+end
+
+-----------------------------------------------------------
+-- Action: retreat
+--
+-- Universal "this fight is futile, run" candidate. Outscores
+-- attack_target so a wounded outmatched unit breaks contact.
+--
+-- Triggers when:
+--   1. We're on an attack goal AND
+--   2. We've been hit by our attack target (per uiLastAttackerUid) AND
+--   3. Group combat effectiveness (us + anyone else engaging the same
+--      target) is less than 1/1.5 of the threat's own effectiveness.
+--
+-- Once triggered, sets activeGoal = "retreat" + s.retreatThreatUid;
+-- attack_target then naturally yields (its utility checks activeGoal
+-- == "attack"). The candidate keeps re-executing while in retreat
+-- to re-path away from a chasing threat.
+--
+-- Termination: threat dies, threat despawns, or we're more than
+-- RETREAT_SAFE_DIST chebyshev tiles away. Then we clear the goal
+-- and ambient candidates take back over.
+-----------------------------------------------------------
+local RETREAT_FUTILITY_RATIO = 1.5
+local RETREAT_SAFE_DIST      = 12.0    -- chebyshev tiles
+local RETREAT_TARGET_DIST    = 8.0     -- how far to pick a new retreat tile
+
+local function selfWoundedByTarget(uid, s)
+    if not s.attackTargetUid then return false end
+    local att = unit.getLastAttacker(uid)
+    if not att then return false end
+    return att.uid == s.attackTargetUid
+end
+
+-----------------------------------------------------------
+-- Movement speed helpers
+--
+-- All combat-related movement (attack pursuit, retreat) is paced as
+-- a FRACTION of the unit's per-species max_speed (read from YAML
+-- via unit.getMaxSpeed). Stat-driven modulation lives in the engine
+-- (UnitMoveTo applies an injury/blood multiplier on receipt) so
+-- this helper only handles the species-level scaling.
+-----------------------------------------------------------
+
+local function speedFor(uid, fraction)
+    local maxSpd = unit.getMaxSpeed(uid) or 3.0
+    return maxSpd * (fraction or 1.0)
+end
+
+-----------------------------------------------------------
+-- Combat animation helpers
+--
+-- The engine's publishToRender resolves animation names from a
+-- (pose, activity) state-key lookup, which has no slot for combat
+-- attack swings or weapon-class variants. We bypass that by writing
+-- to uiAnimOverride directly via unit.setAnimOverride; the engine
+-- preserves the override until clearAnimOverride flips it off.
+--
+-- Animation name conventions vary per species:
+--   * acolyte: "<injured_>BASE<_RH_dagger | _unarmed>" — combat
+--              anims carry the weapon-class suffix.
+--   * bear:    "<injured_>BASE" — bears have no weapon variants
+--              because their natural weapon (claws/fangs) is the
+--              only one they ever fight with.
+-- Add to COMBAT_ANIM_SUFFIX when new species ship with their own
+-- combat anim sets.
+-----------------------------------------------------------
+
+local COMBAT_ANIM_SUFFIX = {
+    acolyte = {
+        dagger  = "_RH_dagger",
+        unarmed = "_unarmed",
+    },
+    bear_brown = {
+        unarmed = "",   -- bear anim files have no class suffix
+    },
+}
+
+-- "Injured" for animation purposes = cumulative wound severity > 1.0
+-- (sum across all active wounds). A single bad slash or several
+-- moderate ones flip the unit to the limp/struggling combat anim;
+-- a couple of light scratches don't. Tunable via INJURED_THRESHOLD.
+local INJURED_THRESHOLD = 1.0
+local function isInjured(uid)
+    local wounds = unit.getWounds(uid)
+    if not wounds then return false end
+    local total = 0
+    for _, w in ipairs(wounds) do
+        total = total + (w.severity or 0)
+        if total > INJURED_THRESHOLD then return true end
+    end
+    return false
+end
+
+-- Compose a combat anim name from the base ("attack_quick" /
+-- "attack_heavy" / "combat_idle" / "combat_hit_react") plus the
+-- unit's def-specific weapon-class suffix plus an injured prefix
+-- when the unit is wounded. Returns nil if the species has no
+-- entry in COMBAT_ANIM_SUFFIX (which means we just don't override
+-- and let the engine's state-driven anim play).
+local function combatAnimName(uid, base)
+    local info = unit.getInfo(uid)
+    if not info or not info.defName then return nil end
+    local suffixes = COMBAT_ANIM_SUFFIX[info.defName]
+    if not suffixes then return nil end
+    local class = unit.getWeaponClass(uid) or "unarmed"
+    local suffix = suffixes[class]
+    if not suffix then return nil end
+    local injured = isInjured(uid) and "injured_" or ""
+    return injured .. base .. suffix
+end
+
+-- True iff this unit's threat (per attack goal) significantly
+-- outclasses everyone currently engaging it. Threshold defaults to
+-- 1.5×.
+local function futilityCheck(uid, s)
+    local threatUid = s.attackTargetUid
+    if not threatUid then return false, 0 end
+    if not unit.exists(threatUid) then return false, 0 end
+    if unit.getPose(threatUid) == "dead" then return false, 0 end
+    local threatEff = unitAi.combatEffectiveness(threatUid)
+    local groupEff  = unitAi.groupEffectivenessVs(threatUid)
+    if groupEff <= 0 then return false, 0 end
+    local ratio = threatEff / groupEff
+    return ratio > RETREAT_FUTILITY_RATIO, ratio
+end
+
+local function retreatUtility(uid, s, params)
+    -- Carry-through: as long as the unit is in retreat goal, keep
+    -- the candidate dominant.
+    if isGoalActive(s, "retreat") then return 6.0 end
+    if not isGoalActive(s, "attack") then return -math.huge end
+    if not selfWoundedByTarget(uid, s) then return -math.huge end
+    local futile, ratio = futilityCheck(uid, s)
+    if not futile then return -math.huge end
+    -- Urgency grows with ratio. ratio=1.5 → 5.0; ratio=3.0 → 8.0.
+    return 5.0 + (ratio - RETREAT_FUTILITY_RATIO) * 2.0
+end
+
+local function retreatExecute(uid, s, params)
+    -- First entry into retreat: transfer the threat ref + switch goal.
+    -- Clear any combat-anim override left over from attack_target so
+    -- the engine's state-driven walking anim plays during the flight.
+    if not isGoalActive(s, "retreat") then
+        s.retreatThreatUid = s.attackTargetUid
+        s.attackTargetUid  = nil
+        markGoalAccomplished(s, "attack")
+        setGoal(s, "retreat")
+        unit.clearAnimOverride(uid)
+        engine.logDebug("retreat: " .. tostring(uid)
+            .. " breaks from " .. tostring(s.retreatThreatUid))
+    end
+
+    local threat = s.retreatThreatUid
+    if not threat or not unit.exists(threat)
+       or unit.getPose(threat) == "dead" then
+        -- Threat gone; we're safe.
+        s.retreatThreatUid = nil
+        markGoalAccomplished(s, "retreat")
+        return
+    end
+
+    local me  = unit.getInfo(uid)
+    local you = unit.getInfo(threat)
+    if not me or not you then return end
+
+    local dx = me.gridX - you.gridX
+    local dy = me.gridY - you.gridY
+    local dist = math.max(math.abs(dx), math.abs(dy))
+    if dist > RETREAT_SAFE_DIST then
+        engine.logDebug("retreat: " .. tostring(uid)
+            .. " reached safe distance from " .. tostring(threat))
+        s.retreatThreatUid = nil
+        markGoalAccomplished(s, "retreat")
+        return
+    end
+
+    -- Pick a tile in the direction away from the threat.
+    local mag = math.sqrt(dx * dx + dy * dy)
+    if mag < 0.001 then
+        -- Co-located: pick an arbitrary direction.
+        dx, dy = 1, 0
+        mag = 1
+    end
+    local tx = me.gridX + (dx / mag) * RETREAT_TARGET_DIST
+    local ty = me.gridY + (dy / mag) * RETREAT_TARGET_DIST
+
+    -- Re-issue moveTo only when the unit is idle, OR the destination
+    -- has drifted by > 0.5 tiles (threat moved): same heuristic as
+    -- attack_target's pursuit moves. Avoids stomping usLocalPath.
+    local last = s.retreatLastMoveTo
+    local needRepath = unit.getActivity(uid) == "idle"
+        or not last
+        or math.abs(last.x - tx) > 0.5
+        or math.abs(last.y - ty) > 0.5
+    if needRepath then
+        -- Retreat sprints — full max-speed, per the design spec
+        -- ("a unit who retreats should try to run as fast as they can").
+        unit.moveTo(uid, tx, ty,
+            speedFor(uid, params.speed_frac_retreat or 1.0))
+        s.retreatLastMoveTo = { x = tx, y = ty }
+    end
+end
+
+-----------------------------------------------------------
+-- Action: engage
+--
+-- Universal "should I pick a fight, and with whom?" decision layer.
+-- THREAT_SOURCES is a table of independent threat detectors; each
+-- returns a {uid, score} pair or nil. engage picks the highest-
+-- scoring threat and triggers `commandAttack` — actual fighting
+-- runs through the regular `attack_target` candidate from there.
+--
+-- Phase 2.2 ships with a single source (incoming_hit, replacing
+-- the old standalone "retaliate" candidate). Phase 2.3+ adds:
+--   * hostile_in_sight — visible unit of opposing faction.
+--   * prey_hunger — hungry predator + viable prey visible.
+--   * defend_ally — friendly being attacked nearby.
+-- Each new source is a table entry; the picker stays the same.
+--
+-- Score is the natural utility-comparison number: 1.5 for fresh
+-- incoming-hit retaliation, above commanded-move (1.0) but below
+-- dire-need candidates (thirst / hunger ~10) so a starving bear
+-- still drinks before fighting.
+-----------------------------------------------------------
+local ENGAGE_WINDOW_SEC = 10.0
+
+local THREAT_SOURCES = {
+    -- Recently took damage from someone who is still alive. The
+    -- 10s window resets on each new hit (Combat.Resolution stamps
+    -- uiLastAttackerAt on every wound), so sustained combat keeps
+    -- us engaged; a fled attacker stops being relevant after 10s.
+    {
+        name = "incoming_hit",
+        score = function(uid, s, params)
+            local att = unit.getLastAttacker(uid)
+            if not att then return nil end
+            if engine.gameTime() - (att.at or 0)
+               > ENGAGE_WINDOW_SEC then return nil end
+            if not unit.exists(att.uid) then return nil end
+            if unit.getPose(att.uid) == "dead" then return nil end
+            -- 6.0 preempts non-emergency goal candidates like
+            -- search_for_water (5.0). Dire needs (drinking when
+            -- empty ~10, eating when starving ~10) still beat us,
+            -- which is the intended scale: literally-dying > combat
+            -- > general goals > player-issued moves > ambient.
+            return { uid = att.uid, score = 6.0 }
+        end,
+    },
+    -- Future sources go here, e.g.:
+    -- { name = "hostile_in_sight", score = function(uid, s, params)
+    --       … FOV scan, faction filter, distance-weighted score … end },
+}
+
+-- Shared by utility + execute so they never disagree about which
+-- target won. Returns (uid, score) or (nil, -math.huge).
+local function pickThreat(uid, s, params)
+    local bestUid, bestScore = nil, -math.huge
+    for _, src in ipairs(THREAT_SOURCES) do
+        local t = src.score(uid, s, params)
+        if t and t.score > bestScore then
+            bestUid, bestScore = t.uid, t.score
+        end
+    end
+    return bestUid, bestScore
+end
+
+local function engageUtility(uid, s, params)
+    -- Already on an attack goal: defer to attack_target. Engage
+    -- only fires the *initial* target-selection; mid-fight target
+    -- swaps land in a later slice.
+    if isGoalActive(s, "attack") then return -math.huge end
+    -- Don't re-engage the same threat we're actively fleeing from.
+    -- retreat clears its goal once we're safe; until then we stay
+    -- in flight even if the threat keeps landing hits.
+    if isGoalActive(s, "retreat") then return -math.huge end
+    local _, score = pickThreat(uid, s, params)
+    return score
+end
+
+local function engageExecute(uid, s, params)
+    local target, _ = pickThreat(uid, s, params)
+    if not target then return end
+    -- Reuse commandAttack so the goal + state are set identically
+    -- to a player-issued order. attack_target wins on the next tick.
+    unitAi.commandAttack(uid, target)
+    engine.logDebug("engage: " .. tostring(uid)
+        .. " engages " .. tostring(target))
+end
+
+-----------------------------------------------------------
+-- Action: attack_target
+--
+-- Combat candidate. Set via unitAi.commandAttack(uid, targetUid).
+-- Goal-driven so dire-need candidates (thirst, hunger) preempt
+-- by outscoring this candidate's 1.0.
+--
+-- State carried on `s`:
+--   s.activeGoal       = "attack" (via setGoal)
+--   s.attackTargetUid  = uid of the target
+--   s.attackLastSwingAt = gameTime of last fired swing (cooldown gate)
+--
+-- Each tick, until the target is dead or gone:
+--   * Target missing / dead → clear goal.
+--   * In range AND cooldown elapsed → fire combat.attack, stamp
+--     attackLastSwingAt.
+--   * In range AND on cooldown → stand still and wait.
+--   * Out of range → re-pathfind toward target's CURRENT tile so
+--     moving targets get tracked. tickOne gates re-issuing moveTo
+--     on activity == idle, so we don't wipe usLocalPath while the
+--     unit is mid-walk.
+-----------------------------------------------------------
+local function attackTargetUtility(uid, s, params)
+    if not isGoalActive(s, "attack") then return -math.huge end
+    if not s.attackTargetUid then return -math.huge end
+    return 1.0
+end
+
+-- Helper: pop the attack-target's anim override safely. Used when
+-- the goal terminates (target dead, gone, mid-fight switch) so we
+-- don't leave the unit frozen in a combat-idle stance forever.
+local function clearAttackAnim(uid)
+    unit.clearAnimOverride(uid)
+end
+
+local function attackTargetExecute(uid, s, params)
+    local target = s.attackTargetUid
+    if not target then
+        markGoalAccomplished(s, "attack")
+        clearAttackAnim(uid)
+        return
+    end
+    -- Target existence + alive check. Phase 2 will layer in
+    -- observed-status memory so a unit who hasn't seen the target
+    -- doesn't blindly path toward it.
+    if not unit.exists(target) then
+        engine.logDebug("attack: target " .. tostring(target)
+                        .. " gone, clearing goal")
+        s.attackTargetUid = nil
+        markGoalAccomplished(s, "attack")
+        clearAttackAnim(uid)
+        return
+    end
+    if unit.getPose(target) == "dead" then
+        engine.logDebug("attack: target " .. tostring(target)
+                        .. " is dead, clearing goal")
+        s.attackTargetUid = nil
+        markGoalAccomplished(s, "attack")
+        clearAttackAnim(uid)
+        return
+    end
+
+    local me  = unit.getInfo(uid)
+    local you = unit.getInfo(target)
+    if not me or not you then return end
+
+    local dx = math.abs(me.gridX - you.gridX)
+    local dy = math.abs(me.gridY - you.gridY)
+    local chebyshev = (dx > dy) and dx or dy
+    local range    = unit.getAttackRange(uid) or 1.0
+    local cooldown = unit.getAttackCooldown(uid) or 1.5
+
+    if chebyshev <= range then
+        -- In range. If we were mid-walk, stop so the next AI tick
+        -- sees activity == "idle" and we can settle into the
+        -- cooldown loop. unit.stop is idempotent — fine to spam.
+        if unit.getActivity(uid) == "walking" then
+            unit.stop(uid)
+        end
+        -- Cooldown gate so we don't fire at 10 Hz (the combat
+        -- thread can resolve in microseconds).
+        local now  = engine.gameTime()
+        local last = s.attackLastSwingAt or 0
+        if now - last >= cooldown then
+            -- Alternate the two attack motions for visual variety.
+            -- Quick = small narrow swing; heavy = wide arc.
+            local base = s.attackUseHeavy and "attack_heavy"
+                                            or "attack_quick"
+            s.attackUseHeavy = not s.attackUseHeavy
+            local anim = combatAnimName(uid, base)
+            if anim then unit.setAnimOverride(uid, anim) end
+            combat.attack(uid, target)
+            s.attackLastSwingAt = now
+            engine.logDebug("attack: " .. tostring(uid)
+                .. " swings at " .. tostring(target)
+                .. " (anim=" .. tostring(anim) .. ")")
+        else
+            -- Mid-cooldown — show the combat-idle stance instead
+            -- of falling back to regular idle. setAnimOverride is
+            -- cheap to call every tick; engine treats same-anim
+            -- writes as a no-op for playback timing.
+            local anim = combatAnimName(uid, "combat_idle")
+            if anim then unit.setAnimOverride(uid, anim) end
+        end
+    else
+        -- Out of range — clear the override so the engine's state-
+        -- driven walking anim plays while we close on the target.
+        unit.clearAnimOverride(uid)
+        local last = s.attackLastMoveTo
+        local dxLast = last and math.abs(last.x - you.gridX) or math.huge
+        local dyLast = last and math.abs(last.y - you.gridY) or math.huge
+        if unit.getActivity(uid) == "idle"
+           or dxLast > 0.5 or dyLast > 0.5 then
+            unit.moveTo(uid, you.gridX, you.gridY,
+                        speedFor(uid, params.speed_frac_command or 0.7))
+            s.attackLastMoveTo = { x = you.gridX, y = you.gridY }
+        end
+    end
 end
 
 -----------------------------------------------------------
@@ -1534,6 +1957,12 @@ local function buildNearbyExecute(uid, s, params)
     end
 end
 
+-- Bear-specific candidates live in scripts/bear_ai.lua. Future
+-- wildlife scripts (panda_ai, polar_bear_ai, …) plug in the same
+-- way via unitAi.registerActions / unitAi.setConfig + their own
+-- helpers. See `require("scripts.bear_ai")` at the bottom of this
+-- file for the load-time registration.
+
 -----------------------------------------------------------
 -- Action registry per unit type
 -----------------------------------------------------------
@@ -1545,6 +1974,17 @@ local actions = {
           execute = wanderExecute },
         { name = "follow_command", utility = followCommandUtility,
           execute = followCommandExecute },
+        { name = "retreat",        utility = retreatUtility,
+          execute = retreatExecute,
+          forceExecute = true },
+        { name = "engage",         utility = engageUtility,
+          execute = engageExecute },
+        { name = "attack_target",  utility = attackTargetUtility,
+          execute = attackTargetExecute,
+          -- See unit_ai.tickOne — the attack candidate runs every
+          -- tick so it can stop the unit when entering range,
+          -- swing on cooldown, and re-pathfind when target moves.
+          forceExecute = true },
         { name = "drink_from_canteen", utility = drinkUtility,
           execute = drinkExecute },
         { name = "eat_from_inventory", utility = eatUtility,
@@ -1565,6 +2005,60 @@ local actions = {
           execute = storeMaterialsExecute },
     },
 }
+
+-----------------------------------------------------------
+-- Public registration API (for satellite AI scripts)
+--
+-- A wildlife or species-specific script (bear_ai.lua, future
+-- panda_ai.lua, …) declares its own ambient candidates +
+-- config block, then calls these to wire itself into the
+-- dispatch loop. The universal combat candidates (retreat /
+-- engage / attack_target) are auto-prepended to every
+-- registered ambient list so each species automatically picks
+-- up combat behavior without restating it.
+--
+-- Goal helpers are exposed below so satellite scripts can
+-- read/write the activeGoal layer without poking the state
+-- struct directly.
+-----------------------------------------------------------
+
+local UNIVERSAL_COMBAT_ACTIONS = {
+    { name = "retreat",        utility = retreatUtility,
+      execute = retreatExecute,
+      forceExecute = true },
+    { name = "engage",         utility = engageUtility,
+      execute = engageExecute },
+    { name = "attack_target",  utility = attackTargetUtility,
+      execute = attackTargetExecute,
+      forceExecute = true },
+}
+
+function unitAi.setConfig(defName, cfg)
+    config[defName] = cfg
+end
+
+function unitAi.registerActions(defName, ambientActions)
+    local list = {}
+    for _, a in ipairs(UNIVERSAL_COMBAT_ACTIONS) do
+        table.insert(list, a)
+    end
+    for _, a in ipairs(ambientActions or {}) do
+        table.insert(list, a)
+    end
+    actions[defName] = list
+end
+
+-- Expose goal-layer helpers so satellite scripts can read/write
+-- s.activeGoal through the canonical API.
+unitAi.isGoalActive          = isGoalActive
+unitAi.setGoal               = setGoal
+unitAi.markGoalAccomplished  = markGoalAccomplished
+
+-- Load species satellite scripts. Each one defines its candidates
+-- and calls unitAi.registerActions + unitAi.setConfig to plug into
+-- the dispatch loop. Done at load time so all defs are wired by
+-- the time the first tick runs.
+require("scripts.bear_ai")
 
 -----------------------------------------------------------
 -- FOV-based water memory.
@@ -1681,7 +2175,11 @@ local function tickOne(uid, defName)
         --     NOT want to re-issue moveTo while it's actively walking
         --     because that wipes `usLocalPath` engine-side and the
         --     unit barely makes progress between AI ticks.
-        if switching or activity == "idle" then
+        --   * UNLESS the action sets `forceExecute = true`. Combat's
+        --     attack_target needs this so it can react to entering
+        --     range mid-walk (stop, then swing on the next idle tick)
+        --     instead of marching through the target.
+        if switching or activity == "idle" or bestAction.forceExecute then
             bestAction.execute(uid, s, params)
         end
     end
@@ -1705,6 +2203,108 @@ function unitAi.commandMove(uid, tx, ty, speed)
     }
     -- Force a fresh decision on the next tick rather than waiting
     -- for the unit's natural cadence — feels more responsive.
+    s.nextActionAt = 0
+end
+
+-- | Player-issued attack. Sets the unit's active goal to "attack"
+--   targeting `targetUid`. The attack_target candidate (score 1.0)
+--   pathfinds toward the target each tick; when chebyshev distance
+--   ≤ unit.getAttackRange, it fires `combat.attack` once and marks
+--   the goal accomplished. Dire-need candidates (thirst, hunger,
+--   etc.) outscore 1.0 and preempt — they resume once satisfied.
+-- | Scalar combat-strength heuristic. Higher number = stronger in a
+--   fight. Folds together physical stats, weapon-class skill, blood %,
+--   pain, and a weapon-damage proxy (attack range — longer/sharper
+--   weapons read as higher range). Tunable; treat the absolute value
+--   as opaque and use it for ratios only.
+--
+--   Calibration target (healthy roll):
+--     * Acolyte w/ dagger    ≈ 70
+--     * Bear (natural claws) ≈ 150
+--   Ratio ~2.1 → an acolyte who's taken damage triggers the futility
+--   retreat (threshold 1.5×).
+--
+--   Returns 0 for dead / collapsed units; the retreat check treats a
+--   collapsed friend as not contributing to a group's effectiveness.
+function unitAi.combatEffectiveness(uid)
+    if not unit.exists(uid) then return 0 end
+    local pose = unit.getPose(uid)
+    if pose == "dead" or pose == "collapsed" then return 0 end
+
+    local function s(name, default)
+        return unit.getStat(uid, name) or default
+    end
+    local strength     = s("strength",     1.0)
+    local dexterity    = s("dexterity",    1.0)
+    local agility      = s("agility",      1.0)
+    local reflexes     = s("reflexes",     1.0)
+    -- balance is a skill (0-100), not a stat. Normalise by /50 so
+    -- a level-50 skill contributes the same as the previous
+    -- stat-at-1.0 read. Read via getSkill (rather than getStat,
+    -- which falls back to skills with the raw 0-100 value and
+    -- would 4× the effectiveness number).
+    local balance      = (unit.getSkill(uid, "balance") or 50.0) / 50.0
+    local perception   = s("perception",   1.0)
+    local toughness    = s("toughness",    1.0)
+    local constitution = s("constitution", 1.0)
+
+    -- Weapon-class skill of the *active* weapon. Reading via class
+    -- lets unarmed creatures (bears) score by the right skill.
+    local wepClass = unit.getWeaponClass(uid) or "unarmed"
+    local skill    = unit.getSkill(uid, wepClass) or 0.0
+
+    -- Weapon damage proxy: range stretches with both arm length and
+    -- blade length. Bigger weapons = bigger threats.
+    local range = unit.getAttackRange(uid) or 1.0
+    local weaponFactor = math.max(0.5, range)
+
+    -- Vitals.
+    local blood = unit.getBlood(uid)
+    local bloodFrac = blood
+        and math.max(0.0, blood.current / math.max(0.01, blood.max))
+        or 1.0
+    local pain     = unit.getPain(uid) or 0
+    local painNorm = math.min(1.0, pain / 5.0)
+
+    -- Multiplicative stacking. The mid-values around 1.0 keep the
+    -- numbers in a roughly comparable range across species.
+    local base = 10.0
+    return base
+        * (1 + strength     * 0.3)
+        * (1 + dexterity    * 0.2)
+        * (1 + perception   * 0.1)
+        * (1 + agility      * 0.2)
+        * (1 + reflexes     * 0.15)
+        * (1 + balance      * 0.05)
+        * (1 + toughness    * 0.3)
+        * (1 + constitution * 0.2)
+        * (1 + skill / 100.0 * 0.5)
+        * weaponFactor
+        * bloodFrac
+        * (1 - painNorm * 0.5)
+end
+
+-- | Sum of combat-effectiveness across every unit currently attacking
+--   `threatUid`. Used by the retreat candidate to compare "the squad
+--   that's currently engaging this guy" vs the threat itself, so a
+--   solo acolyte sees a futile fight against a bear while a trio sees
+--   it as winnable.
+function unitAi.groupEffectivenessVs(threatUid)
+    local total = 0
+    for _, uid in ipairs(unit.getAllIds() or {}) do
+        local st = aiState[uid]
+        if st and st.attackTargetUid == threatUid then
+            total = total + unitAi.combatEffectiveness(uid)
+        end
+    end
+    return total
+end
+
+function unitAi.commandAttack(uid, targetUid)
+    if not targetUid then return end
+    local s = ensureState(uid)
+    s.attackTargetUid = targetUid
+    setGoal(s, "attack")
     s.nextActionAt = 0
 end
 
@@ -1770,19 +2370,14 @@ function unitAi.update(dt)
     local ids = unit.getAllIds()
     if not ids or #ids == 0 then return end
 
-    -- Dispatch by defName. Acolytes (and any other utility-AI unit)
-    -- tick through the local `tickOne`; bears have their own
-    -- state-machine module. Future units register here too.
-    local bearAi = require("scripts.bear_ai")
-
+    -- All unit types now use the same utility-AI tickOne. Each def
+    -- needs an entry in `config[defName]` + `actions[defName]`;
+    -- bears + acolytes are registered above. Unknown defs are
+    -- silently skipped by tickOne (params/actList lookup fails).
     for _, uid in ipairs(ids) do
         local info = unit.getInfo(uid)
         if info and info.defName then
-            if info.defName == "bear_brown" then
-                bearAi.tickOne(uid)
-            else
-                tickOne(uid, info.defName)
-            end
+            tickOne(uid, info.defName)
         end
     end
 end

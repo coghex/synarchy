@@ -27,7 +27,7 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
                       , BuildingManager(..))
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..), UnitManager(..)
-                  , StatModifier(..))
+                  , StatModifier(..), Wound(..))
 import Unit.Direction (Direction(..))
 import Unit.Sim.Types (UnitSimState(..), UnitThreadState(..))
 import Item.Types (ItemInstance(..))
@@ -79,7 +79,7 @@ saveMagic = 0x53595241
 --       on RiverSegment in Phase B will. Bumping now so any pre-rework
 --       saves are clearly rejected before Phase B lands.
 currentSaveVersion ∷ Int
-currentSaveVersion = 15
+currentSaveVersion = 17
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects
@@ -288,6 +288,17 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
     , uisAccessories ∷ ![ItemInstance]
       -- ^ v10: items worn off the silhouette (robes, goggles, rings…).
       --   Order preserved.
+    , uisFactionId   ∷ !Text
+      -- ^ v8: spawn-time-only faction tag (no def-level default).
+      --   Used by the combat layer for hostile/friendly checks.
+      --   "player" / "wildlife" / future custom tags.
+    , uisWounds      ∷ ![Wound]
+      -- ^ v17: per-unit wound list. Roundtrips faithfully. Generic
+      --   Serialize over the Wound record below; fields are
+      --   positional, so appending a field to Wound also bumps v.
+    , uisBlood       ∷ !Float
+      -- ^ v17: current blood volume in litres. Spawn-time seeded
+      --   from body_mass; ticked down by Combat.Wounds bleeding.
     } deriving (Show, Serialize, Generic)
 
 toUnitSnapshot ∷ UnitManager → UnitSnapshot
@@ -316,6 +327,9 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
     , uisInventory   = uiInventory ui
     , uisEquipped    = uiEquipment ui
     , uisAccessories = uiAccessories ui
+    , uisFactionId   = uiFactionId ui
+    , uisWounds      = uiWounds ui
+    , uisBlood       = uiBlood ui
     }
 
 -- | Restore a UnitManager from a snapshot. Like buildings: instances
@@ -363,6 +377,16 @@ fromUnitInstanceSnapshot def s = UnitInstance
     , uiInventory   = uisInventory s
     , uiEquipment   = uisEquipped s
     , uiAccessories = uisAccessories s
+    , uiFactionId   = uisFactionId s
+    , uiWounds      = uisWounds s
+    , uiBlood       = uisBlood s
+    -- Runtime-only combat memory — reset on load. A bear that was
+    -- in the middle of a fight gets a clean slate on reload; the
+    -- next incoming hit will re-trigger retaliation.
+    , uiLastAttackerUid = Nothing
+    , uiLastAttackerAt  = 0
+    -- Runtime-only animation override — Lua re-sets if needed.
+    , uiAnimOverride = ""
     -- Runtime-only debug flags — always False on load.
     , uiFrozen      = False
     , uiForceLoop   = False

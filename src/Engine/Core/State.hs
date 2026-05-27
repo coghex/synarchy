@@ -17,6 +17,7 @@ import Engine.Core.Log
 import Engine.Core.Types
 import Engine.Core.Queue as Q
 import Engine.PlayerEvent (PlayerEvent, NotificationCfg)
+import qualified Combat.Types
 import Engine.Scripting.Lua.Types
 import Engine.Event.Types
 import Engine.Graphics.Types
@@ -104,6 +105,14 @@ data EngineEnv = EngineEnv
     --   across runs by design).
   , buildingManagerRef  ∷ IORef BuildingManager
   , buildingQueue       ∷ Q.Queue BuildingCommand
+  , combatQueue         ∷ Q.Queue Combat.Types.CombatCommand
+    -- ^ Lua / AI → combat thread. Issued via `combat.attack` (and
+    --   future combat commands). Drained at the combat thread's tick
+    --   rate (60 Hz) by `Combat.Thread.processAllCommands`.
+  , combatEventsRef     ∷ IORef (Seq Combat.Types.CombatEvent)
+    -- ^ Combat thread → Lua. Resolution produces events; Lua drains
+    --   them via `combat.drainEvents` and pipes into the combat-log
+    --   UI. Runtime only, not persisted to SaveData.
   , buildingGhostRef    ∷ IORef (Maybe BuildingGhost)
     -- ^ Single-slot ghost preview during placement mode. Lua sets and
     --   clears via the build_tool module; the render path picks it up

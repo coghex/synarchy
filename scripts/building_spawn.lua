@@ -153,7 +153,11 @@ local function tickOne(bid, info)
     local walkX  = info.gridX + params.walk_to_offset.x
     local walkY  = info.gridY + params.walk_to_offset.y
 
-    local newUid = unit.spawn(params.unit_type, spawnX, spawnY)
+    -- Units produced by player-built portal buildings are player-
+    -- controlled. Pass faction explicitly so the spawn-time-only
+    -- faction system gets the right tag.
+    local newUid = unit.spawn(params.unit_type, spawnX, spawnY,
+                              nil, "player")
     if not newUid then
         engine.logWarn("BuildingSpawn: unit.spawn failed at "
             .. spawnX .. "," .. spawnY)

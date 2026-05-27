@@ -38,6 +38,7 @@ local testArena = nil
 local pauseMenu = nil
 local popup = nil
 local eventLog = nil
+local combatLog = nil
 
 local hoveredElement = nil
 local hoveredCallback = nil
@@ -72,6 +73,7 @@ function uiManager.init(scriptId)
     loadingScreen = require("scripts.loading_screen")
     popup = require("scripts.popup")
     eventLog = require("scripts.event_log")
+    combatLog = require("scripts.combat_log")
 
     button.init()
     scrollbar.init()
@@ -164,6 +166,7 @@ function uiManager.checkReady()
             pauseMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
             popup.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             eventLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+            combatLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
             local persistedDwell = engine.getTooltipDwellMs()
             local persistedHintDelay = engine.getTooltipHintDelayMs()
             -- engine.loadTexture caches by path, so this returns the
@@ -218,6 +221,7 @@ function uiManager.onFramebufferResize(width, height)
     if loadingScreen then loadingScreen.onFramebufferResize(width, height) end
     if popup then popup.onFramebufferResize(width, height) end
     if eventLog then eventLog.onFramebufferResize(width, height) end
+    if combatLog then combatLog.onFramebufferResize(width, height) end
     if pauseMenu then pauseMenu.onFramebufferResize(width, height) end
     
     if currentMenu == "main" then
@@ -430,6 +434,21 @@ function uiManager.update(dt)
             slider.onDragMove(mx, my)
         end
     end
+
+    -- Scrollbar tab drag — same pattern as the slider: poll the
+    -- module's draggingId each frame and feed it the cursor in
+    -- framebuffer coords. onMouseUp (down below) clears the state.
+    if scrollbar and scrollbar.getDraggingId() then
+        local mx, my = engine.getMousePosition()
+        if mx and my then
+            local ww, wh = engine.getWindowSize()
+            if ww and wh and ww > 0 and wh > 0 then
+                mx = mx * (fbW / ww)
+                my = my * (fbH / wh)
+            end
+            scrollbar.onDragMove(mx, my)
+        end
+    end
     
     -- Hover detection with coordinate scaling
     local mx, my = engine.getMousePosition()
@@ -538,6 +557,7 @@ function uiManager.shutdown()
     if pauseMenu then pauseMenu.shutdown() end
     if popup then popup.shutdown() end
     if eventLog then eventLog.shutdown() end
+    if combatLog then combatLog.shutdown() end
 end
 
 function uiManager.onTextBoxClick(elemHandle)
@@ -562,20 +582,35 @@ function uiManager.onButtonClick(elemHandle)
     return false
 end
 
--- Dispatched by the engine when the HUD event-log toggle sprite is
--- clicked. See hud.lua's EVENT_LOG_CALLBACK wiring.
-function uiManager.onEventLogToggleClick(elemHandle)
-    if hud and hud.onEventLogToggleClick then
-        return hud.onEventLogToggleClick(elemHandle)
-    end
-    return false
-end
-
 -- Dispatched when a row in the event-log panel is clicked. Routes
 -- to event_log.onRowClick which re-pops the popup for that entry.
 function uiManager.onEventLogRowClick(elemHandle)
     if eventLog and eventLog.onRowClick then
         return eventLog.onRowClick(elemHandle)
+    end
+    return false
+end
+
+-- Combat-log panel click routes. Tab clicks (including the pinned
+-- "All" tab) re-render content for the selected battle. The scroll
+-- buttons shift the battle-tab strip one cell at a time.
+function uiManager.onCombatLogTabClick(elemHandle)
+    if combatLog and combatLog.onTabClick then
+        return combatLog.onTabClick(elemHandle)
+    end
+    return false
+end
+
+function uiManager.onCombatLogScrollPrev(elemHandle)
+    if combatLog and combatLog.onScrollPrev then
+        return combatLog.onScrollPrev()
+    end
+    return false
+end
+
+function uiManager.onCombatLogScrollNext(elemHandle)
+    if combatLog and combatLog.onScrollNext then
+        return combatLog.onScrollNext()
     end
     return false
 end
@@ -785,6 +820,9 @@ function uiManager.onMouseUp(button_num, x, y)
     if slider then
         slider.onMouseUp()
     end
+    if scrollbar then
+        scrollbar.onMouseUp()
+    end
     if button then
         button.onMouseUp()
     end
@@ -824,6 +862,13 @@ function uiManager.onScrollUp(elemHandle)
             end
         end
     end
+    -- Unit info v2 has its own stats-panel scrollbar.
+    local uimod = package.loaded["scripts.unit_info_v2"]
+    if uimod and uimod.handleScrollCallback then
+        if uimod.handleScrollCallback("onScrollUp", elemHandle) then
+            return true
+        end
+    end
     return false
 end
 
@@ -851,6 +896,12 @@ function uiManager.onScrollDown(elemHandle)
             if saveBrowser.handleScrollCallback("onScrollDown", elemHandle) then
                 return true
             end
+        end
+    end
+    local uimod = package.loaded["scripts.unit_info_v2"]
+    if uimod and uimod.handleScrollCallback then
+        if uimod.handleScrollCallback("onScrollDown", elemHandle) then
+            return true
         end
     end
     return false
@@ -882,6 +933,28 @@ function uiManager.onSliderKnobClick(elemHandle)
     return false
 end
 
+-- Click on a scrollbar tab → start dragging. The per-frame poll in
+-- update() takes it from here. onMouseUp clears the drag state.
+function uiManager.onScrollTabGrab(elemHandle)
+    handleNonTextBoxClick()
+    if scrollbar then
+        return scrollbar.onTabGrab(elemHandle)
+    end
+    return false
+end
+
+-- Click on the unit-info-v2 stats-panel transparent background. Pure
+-- no-op; we register the click solely to keep the element in the
+-- engine's clickable set so wheel events over the panel body route
+-- through onUIScroll instead of being misread as world zoom.
+function uiManager.onStatsPanelBgClick(elemHandle)
+    local mod = package.loaded["scripts.unit_info_v2"]
+    if mod and mod.onStatsPanelBgClick then
+        return mod.onStatsPanelBgClick(elemHandle)
+    end
+    return false
+end
+
 -----------------------------------------------------------
 -- Mouse Wheel Scroll (UI elements)
 -----------------------------------------------------------
@@ -903,6 +976,13 @@ function uiManager.onUIScroll(elemHandle, dx, dy)
     end
     if saveBrowser and currentMenu == "save_browser" then
         if saveBrowser.onScroll(elemHandle, dx, dy) then
+            return
+        end
+    end
+    -- Unit info v2 stats-panel scrollbar.
+    local uimod = package.loaded["scripts.unit_info_v2"]
+    if uimod and uimod.onScroll then
+        if uimod.onScroll(elemHandle, dx, dy) then
             return
         end
     end
