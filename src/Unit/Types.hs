@@ -233,6 +233,11 @@ data UnitInstance = UnitInstance
     , uiGridX      ∷ !Float
     , uiGridY      ∷ !Float
     , uiGridZ      ∷ !Int
+    -- | Continuous vertical position mirrored from `usRealZ`.
+    --   The renderer uses this for smooth Z transitions (climbing,
+    --   future features); cull / slice math still uses the integer
+    --   uiGridZ. Outside of a climb, uiRealZ == fromIntegral uiGridZ.
+    , uiRealZ      ∷ !Float
     , uiFacing     ∷ !Direction      -- ^ world-space facing (from sim)
     , uiCurrentAnim ∷ !Text          -- ^ resolved anim name; "" = T-pose
     , uiAnimStart   ∷ !Double        -- ^ POSIX seconds when anim began

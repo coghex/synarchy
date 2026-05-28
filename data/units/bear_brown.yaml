@@ -50,6 +50,10 @@ units:
       # Bears are remarkably agile climbers + swimmers; balance ~60
       # slightly above the human baseline.
       balance: { base: 60.0, range: 30.0 }
+      # Climbing: bears are natural climbers — start higher than the
+      # acolyte's 10. Engine adds XP via diminishing-returns curve on
+      # each successful climb (see Unit.Thread.Movement.applyClimbXP).
+      climbing: { base: 40.0, range: 15.0 }
 
     # 8-part quadruped body. Heights anchored to shoulder-height 1.4 m.
     # Head sits out front, similar to shoulder height; tail is low and
@@ -103,7 +107,13 @@ units:
     natural_weapon:
       weapon_class:           unarmed
       effective_blade_length: 12.0
-      attack_cooldown:        2.0
+      # Base recovery for a quick swing by a 1.0-stat, 1.0-strength,
+      # 100%-stamina, no-wound wielder. The Lua cooldown formula scales
+      # this up by weight (the bear's paw, derived as body_mass × 0.04),
+      # stamina, injury, and inverse agility × dexterity — bears come
+      # out at ~1.43 s healthy quick despite the very low 0.9 s base.
+      attack_cooldown:        0.9
+      wielded_from:           r_fore_leg
       stab_eff:               0.3
       slash_eff:              0.8
       blunt_eff:              0.5
@@ -161,6 +171,36 @@ units:
       lying-to-sitting:            sitting_to_lying_down  # reversed
       lying-to-sleeping:           lying_down_to_sleeping
       sleeping-to-lying:           lying_down_to_sleeping # reversed
+
+      # Climbing. Engine triggers Standing → Climbing automatically
+      # when a movement step hits a cliff. At the top, engine
+      # auto-chains Climbing → Crawling → Standing via usPostTransition.
+      # For the bear, "Crawling" is conceptually "lying-on-belly"
+      # (post-pullup, before getting back up to all fours) — we
+      # reuse the lying_down_idle still for the brief crawling-idle
+      # moment and the collapsed_to_standing asset for the recovery.
+      climbing-idle:               climbing
+      climbing-walk:               climbing
+      standing-to-climbing:        climbing       # the long ascent itself
+      climbing-to-crawling:        pullup         # over-the-edge pullup
+      crawling-to-standing:        collapsed_to_standing
+                                                  # reuse the recovery anim
+      crawling-idle:               lying_down_idle
+                                                  # bear "crawling" = lying
+
+      # Falling. Engine triggers Standing → Falling when dz ≥
+      # fallTriggerDz (2). At impact, the engine picks the outcome
+      # from usFallImpact: walk-off, collapse, or kill.
+      falling-idle:                falling        # held mid-air (unreached)
+      standing-to-falling:         falling        # descent loop
+      falling-to-collapsed:        landing        # landing → collapse
+
+      # Collapsed pose. Held by units knocked out from low blood or
+      # a non-lethal fall; lying_down_idle covers the static held
+      # state and collapsed_to_standing plays for recovery (called
+      # by unit_resources' auto-revive path).
+      collapsed-idle:              lying_down_idle
+      collapsed-to-standing:       collapsed_to_standing
 
       # Injured set. Engine state-driven resolution tries the
       # `injured-<pose>-<activity>` key first when cumulative wound
@@ -270,6 +310,118 @@ units:
             - "assets/textures/units/bear_brown/animations/attack_quick/north/frame_002.png"
             - "assets/textures/units/bear_brown/animations/attack_quick/north/frame_003.png"
             - "assets/textures/units/bear_brown/animations/attack_quick/north/frame_004.png"
+
+      climbing:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/bear_brown/animations/climbing/south/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/bear_brown/animations/climbing/south-east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south-east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south-east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south-east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south-east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south-east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south-east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south-east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/climbing/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/bear_brown/animations/climbing/east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/climbing/east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/climbing/east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/climbing/east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/climbing/east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/climbing/east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/climbing/east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/climbing/east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/climbing/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/bear_brown/animations/climbing/north-east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north-east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north-east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north-east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north-east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north-east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north-east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north-east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/bear_brown/animations/climbing/north/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/climbing/north/frame_008.png"
+
+      collapsed_to_standing:
+        fps: 10
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south-east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south-east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south-east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south-east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south-east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south-east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south-east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south-east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north-east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north-east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north-east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north-east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north-east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north-east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north-east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north-east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/collapsed_to_standing/north/frame_008.png"
 
       combat_idle:
         fps: 8
@@ -438,6 +590,42 @@ units:
             - "assets/textures/units/bear_brown/animations/drink/north/frame_006.png"
             - "assets/textures/units/bear_brown/animations/drink/north/frame_007.png"
             - "assets/textures/units/bear_brown/animations/drink/north/frame_008.png"
+
+      falling:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/bear_brown/animations/falling/south/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/falling/south/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/falling/south/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/falling/south/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/falling/south/frame_004.png"
+          south-east:
+            - "assets/textures/units/bear_brown/animations/falling/south-east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/falling/south-east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/falling/south-east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/falling/south-east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/falling/south-east/frame_004.png"
+          east:
+            - "assets/textures/units/bear_brown/animations/falling/east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/falling/east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/falling/east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/falling/east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/falling/east/frame_004.png"
+          north-east:
+            - "assets/textures/units/bear_brown/animations/falling/north-east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/falling/north-east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/falling/north-east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/falling/north-east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/falling/north-east/frame_004.png"
+          north:
+            - "assets/textures/units/bear_brown/animations/falling/north/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/falling/north/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/falling/north/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/falling/north/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/falling/north/frame_004.png"
 
       hit_react:
         fps: 12
@@ -1035,6 +1223,62 @@ units:
             - "assets/textures/units/bear_brown/animations/injured_walk/north/frame_007.png"
             - "assets/textures/units/bear_brown/animations/injured_walk/north/frame_008.png"
 
+      landing:
+        fps: 12
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/bear_brown/animations/landing/south/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/landing/south/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/landing/south/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/landing/south/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/landing/south/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/landing/south/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/landing/south/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/landing/south/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/landing/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/bear_brown/animations/landing/south-east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/landing/south-east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/landing/south-east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/landing/south-east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/landing/south-east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/landing/south-east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/landing/south-east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/landing/south-east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/landing/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/bear_brown/animations/landing/east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/landing/east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/landing/east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/landing/east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/landing/east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/landing/east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/landing/east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/landing/east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/landing/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/bear_brown/animations/landing/north-east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/landing/north-east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/landing/north-east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/landing/north-east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/landing/north-east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/landing/north-east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/landing/north-east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/landing/north-east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/landing/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/bear_brown/animations/landing/north/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/landing/north/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/landing/north/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/landing/north/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/landing/north/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/landing/north/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/landing/north/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/landing/north/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/landing/north/frame_008.png"
+
       lying_down_idle:
         fps: 4
         loop: true
@@ -1146,6 +1390,62 @@ units:
             - "assets/textures/units/bear_brown/animations/lying_down_to_sleeping/north/frame_006.png"
             - "assets/textures/units/bear_brown/animations/lying_down_to_sleeping/north/frame_007.png"
             - "assets/textures/units/bear_brown/animations/lying_down_to_sleeping/north/frame_008.png"
+
+      pullup:
+        fps: 10
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/bear_brown/animations/pullup/south/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/bear_brown/animations/pullup/south-east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south-east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south-east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south-east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south-east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south-east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south-east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south-east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/pullup/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/bear_brown/animations/pullup/east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/pullup/east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/pullup/east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/pullup/east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/pullup/east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/pullup/east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/pullup/east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/pullup/east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/pullup/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/bear_brown/animations/pullup/north-east/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north-east/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north-east/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north-east/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north-east/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north-east/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north-east/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north-east/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/bear_brown/animations/pullup/north/frame_000.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north/frame_001.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north/frame_002.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north/frame_003.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north/frame_004.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north/frame_005.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north/frame_006.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north/frame_007.png"
+            - "assets/textures/units/bear_brown/animations/pullup/north/frame_008.png"
 
       run:
         fps: 12

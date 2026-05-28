@@ -165,6 +165,7 @@ publishToRender env utsRef = do
                                 in inst { uiGridX       = usRealX ss
                                         , uiGridY       = usRealY ss
                                         , uiGridZ       = usGridZ ss
+                                        , uiRealZ       = usRealZ ss
                                         , uiFacing      = usFacing ss
                                         , uiCurrentAnim = targetAnim
                                         , uiAnimStart   = if samePlayback

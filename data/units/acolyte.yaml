@@ -5,7 +5,11 @@ units:
     # Top sprint speed in tiles/sec. AI candidates derive walk /
     # commanded / retreat speeds as fractions of this. Stat-based
     # modulation lives in unit_ai's combat-speed helper.
-    max_speed: 3.0
+    # Calibrated for 1 tile ≈ 1 m, matches real human walk speed.
+    #   wander  = 0.5× → 0.70 t/s
+    #   command = 0.7× → 0.98 t/s
+    #   retreat = 1.0× → 1.40 t/s
+    max_speed: 1.4
     equipment_class: "humanoid"
 
     eager_stats: true
@@ -44,6 +48,10 @@ units:
       # uiSkills["balance"], normalised by /50 so a level-50 skill
       # contributes the same as the previous "stat at 1.0".
       balance: { base: 50.0, range: 40.0 }
+      # Climbing: incremented by the engine on every successful climb
+      # via diminishing-returns curve. Affects slip chance and climb
+      # speed. Acolytes are not professional climbers — start low.
+      climbing: { base: 10.0, range: 10.0 }
 
     # 12-part humanoid body. Heights are metres above the foot,
     # calibrated for a 1.8m default body — taller spawns naturally
@@ -180,6 +188,36 @@ units:
       crawling-to-crouching: crouching_to_crawling
       crawling-to-collapsed: crawling_to_collapsed
       collapsed-to-crawling: crawling_to_collapsed
+
+      # Climbing. Engine triggers Standing → Climbing automatically
+      # when a movement step hits a cliff (Z increases AND the
+      # destination tile has no slope facing back to the source).
+      # The Climbing transition's duration scales with the Z delta
+      # at climbSpeedZ tiles/sec (see Unit.Thread.Movement).
+      # At the top, engine auto-chains Climbing → Crawling → Standing
+      # via usPostTransition, so you get pull-up then stand-up in one
+      # sequence without AI orchestration.
+      climbing-idle:           climb_idle
+      climbing-walk:           climb           # ascent loop
+      standing-to-climbing:    climb           # the long ascent itself
+      climbing-to-crawling:    climb_pullup    # pull-up over the edge
+      # crawling-to-standing (above) provides the final stand-up.
+
+      # Falling. Engine triggers Standing → Falling when a movement
+      # step drops dz ≥ fallTriggerDz (currently 2). The Falling
+      # transition's duration scales with the drop distance at
+      # fallSpeedZ tiles/sec. At impact, the engine reads usFallImpact
+      # (= dz × body_mass/50 / toughness) and picks the outcome:
+      #   * impact ≤ 1.5  → no anim chain, walks off (acolyte dz=1).
+      #   * impact ≤ 5.0  → Falling → Collapsed (landing anim plays
+      #                     as the transition; Lua revives later via
+      #                     the collapsed-to-standing path).
+      #   * impact > 5.0  → snaps to Dead pose, death anim plays.
+      falling-idle:            falling         # held mid-air if ever stable
+      standing-to-falling:     falling         # the descent loop
+      falling-to-collapsed:    landing         # landing → collapse
+      # falling-to-dead isn't needed — lethal falls go straight to
+      # Dead pose, which resolves via dead-idle → death (already wired).
 
       # Injured variants — engine swaps to these when cumulative wound
       # severity > 1.0 (see publishToRender's injured-key fallback).
@@ -1258,6 +1296,42 @@ units:
             - "assets/textures/units/acolyte/animations/drink/north/frame_004.png"
             - "assets/textures/units/acolyte/animations/drink/north/frame_005.png"
 
+      falling:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/falling/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/falling/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/falling/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/falling/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/falling/south/frame_004.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/falling/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/falling/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/falling/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/falling/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/falling/south-east/frame_004.png"
+          east:
+            - "assets/textures/units/acolyte/animations/falling/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/falling/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/falling/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/falling/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/falling/east/frame_004.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/falling/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/falling/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/falling/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/falling/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/falling/north-east/frame_004.png"
+          north:
+            - "assets/textures/units/acolyte/animations/falling/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/falling/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/falling/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/falling/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/falling/north/frame_004.png"
+
       hit_react:
         fps: 12
         loop: false
@@ -2200,6 +2274,62 @@ units:
             - "assets/textures/units/acolyte/animations/injured_walk/north/frame_006.png"
             - "assets/textures/units/acolyte/animations/injured_walk/north/frame_007.png"
             - "assets/textures/units/acolyte/animations/injured_walk/north/frame_008.png"
+
+      landing:
+        fps: 12
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/acolyte/animations/landing/south/frame_000.png"
+            - "assets/textures/units/acolyte/animations/landing/south/frame_001.png"
+            - "assets/textures/units/acolyte/animations/landing/south/frame_002.png"
+            - "assets/textures/units/acolyte/animations/landing/south/frame_003.png"
+            - "assets/textures/units/acolyte/animations/landing/south/frame_004.png"
+            - "assets/textures/units/acolyte/animations/landing/south/frame_005.png"
+            - "assets/textures/units/acolyte/animations/landing/south/frame_006.png"
+            - "assets/textures/units/acolyte/animations/landing/south/frame_007.png"
+            - "assets/textures/units/acolyte/animations/landing/south/frame_008.png"
+          south-east:
+            - "assets/textures/units/acolyte/animations/landing/south-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/landing/south-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/landing/south-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/landing/south-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/landing/south-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/landing/south-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/landing/south-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/landing/south-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/landing/south-east/frame_008.png"
+          east:
+            - "assets/textures/units/acolyte/animations/landing/east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/landing/east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/landing/east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/landing/east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/landing/east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/landing/east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/landing/east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/landing/east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/landing/east/frame_008.png"
+          north-east:
+            - "assets/textures/units/acolyte/animations/landing/north-east/frame_000.png"
+            - "assets/textures/units/acolyte/animations/landing/north-east/frame_001.png"
+            - "assets/textures/units/acolyte/animations/landing/north-east/frame_002.png"
+            - "assets/textures/units/acolyte/animations/landing/north-east/frame_003.png"
+            - "assets/textures/units/acolyte/animations/landing/north-east/frame_004.png"
+            - "assets/textures/units/acolyte/animations/landing/north-east/frame_005.png"
+            - "assets/textures/units/acolyte/animations/landing/north-east/frame_006.png"
+            - "assets/textures/units/acolyte/animations/landing/north-east/frame_007.png"
+            - "assets/textures/units/acolyte/animations/landing/north-east/frame_008.png"
+          north:
+            - "assets/textures/units/acolyte/animations/landing/north/frame_000.png"
+            - "assets/textures/units/acolyte/animations/landing/north/frame_001.png"
+            - "assets/textures/units/acolyte/animations/landing/north/frame_002.png"
+            - "assets/textures/units/acolyte/animations/landing/north/frame_003.png"
+            - "assets/textures/units/acolyte/animations/landing/north/frame_004.png"
+            - "assets/textures/units/acolyte/animations/landing/north/frame_005.png"
+            - "assets/textures/units/acolyte/animations/landing/north/frame_006.png"
+            - "assets/textures/units/acolyte/animations/landing/north/frame_007.png"
+            - "assets/textures/units/acolyte/animations/landing/north/frame_008.png"
 
       pickup:
         fps: 6

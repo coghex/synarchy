@@ -42,6 +42,10 @@ local config = {
     acolyte = {
         thought_interval = 1.0,    -- seconds between decisions
         thought_jitter   = 0.5,    -- ± fraction of interval
+        -- Override when active attack / retreat goal — combat needs
+        -- 10× faster re-evaluation so two units charging each other
+        -- catch the in-range moment instead of walking through it.
+        combat_thought_interval = 0.1,
         wander_radius    = 5.0,    -- tiles
         -- Movement speed fractions (multiply max_speed from unit yaml
         -- to get the actual tiles/sec passed to moveTo). Lets one
@@ -209,8 +213,29 @@ end
 
 -- Schedule the next decision: interval + ±jitter, in seconds.
 local function scheduleNext(s, params)
-    local jitter = (math.random() * 2 - 1) * params.thought_jitter
-    s.nextActionAt = engine.gameTime() + params.thought_interval * (1 + jitter)
+    -- Combat needs a much tighter cadence than ambient AI. At the
+    -- 1.0s default thought_interval, two units charging each other
+    -- at ~2 tiles/sec each close 4 tiles between ticks — easily
+    -- enough to walk straight through the in-range window, overshoot,
+    -- turn around, and oscillate without ever stopping to swing.
+    --
+    -- Active attack / retreat goals get combat_thought_interval
+    -- instead (default 0.1s = 10 Hz). Same scheduling structure,
+    -- just a shorter base. Jitter is suppressed for combat so two
+    -- engaged units don't drift apart in their re-check phases.
+    -- isGoalActive is declared further down, so inline its body
+    -- here (`s.activeGoal == name`) — keeps scheduleNext usable
+    -- by any tick path that fires before the goal helpers exist.
+    local goal = s.activeGoal
+    local interval = params.thought_interval
+    local jitter
+    if goal == "attack" or goal == "retreat" then
+        interval = params.combat_thought_interval or 0.1
+        jitter   = 0
+    else
+        jitter = (math.random() * 2 - 1) * params.thought_jitter
+    end
+    s.nextActionAt = engine.gameTime() + interval * (1 + jitter)
 end
 
 local function distance(ax, ay, bx, by)
@@ -1140,6 +1165,109 @@ local function engageExecute(uid, s, params)
 end
 
 -----------------------------------------------------------
+-- Heavy / quick attack mode + dynamic recovery time.
+--
+-- Two attack modes, picked per swing. Heavy commits the body forward
+-- and applies linear strength; quick is a controlled motion that
+-- applies sqrt(strength). The damage gap between them therefore comes
+-- entirely from the strength stat — a high-str unit gains a lot from
+-- going heavy, a low-str unit gains nothing and never picks it. No
+-- per-mode damage multiplier; the engine's Combat.Resolution makes
+-- the differential stat-driven.
+--
+-- Recovery time (cooldown between swings) is computed live each tick
+-- from:
+--   * base attack_cooldown declared on the weapon / natural_weapon
+--   * mode multiplier (heavy = 1.6× the quick base)
+--   * weight factor: heavy weapons take longer to recover from,
+--     scaled by the wielder's strength
+--   * stamina factor: exhausted units recover slower
+--   * injury factor: wounds on the weapon-arm slow you sharply
+--   * stat factor: agility × dexterity make you faster
+--
+-- All inputs are stats the engine already tracks. No species-specific
+-- knobs — a healthy acolyte and a healthy bear land at similar swings/
+-- second despite very different stat profiles, because each species'
+-- strengths and weaknesses cancel out through the formula.
+-----------------------------------------------------------
+
+-- Heavy mode is worth choosing when stamina is high AND the wielder
+-- can actually deliver more damage (strength > 1.0; at str=1 heavy and
+-- quick deal identical damage, so paying the extra stamina is a loss).
+-- A wound on the weapon arm at severity ≥ 0.5 makes heavy unusable —
+-- you can't put the body in to a swing if the arm holding the weapon
+-- is torn up.
+-- Stamina pct, robust to species that haven't been wired into
+-- unit_resources.lua yet. A unit with no stamina stat at all is
+-- treated as healthy (100%) — combat assumes "stamina works" so
+-- the absence of config doesn't permanently lock the unit into
+-- quick-mode. The unit_resources tick handles the drain regardless.
+local function staminaPct(uid)
+    local s  = unit.getStat(uid, "stamina")
+    local ms = require("scripts.unit_stats").get(uid, "max_stamina")
+    if s and ms and ms > 0 then
+        return math.max(0, math.min(1, s / ms))
+    end
+    return 1.0
+end
+
+local function chooseAttackMode(uid)
+    local pct = staminaPct(uid)
+    if pct < 0.5 then return "quick" end
+
+    local str = unit.getStat(uid, "strength") or 1.0
+    if str <= 1.0 then return "quick" end
+
+    local armPart = unit.getWeaponWieldedFrom(uid)
+    if armPart then
+        local armWound = unit.getWoundSeverityOn(uid, armPart) or 0
+        if armWound >= 0.5 then return "quick" end
+    end
+
+    -- Soft utility curve: heavy preference rises from 0 at 50% stamina
+    -- to 1.0 at 100% stamina. No flicker at any threshold.
+    local heavyPref = (pct - 0.5) / 0.5
+    if heavyPref > 0.5 then return "heavy" end
+    return "quick"
+end
+
+local function computeAttackCooldown(uid, mode)
+    local base = unit.getAttackCooldown(uid) or 1.5
+    local modeMult = (mode == "heavy") and 1.6 or 1.0
+
+    -- Weight factor: only weapons heavier than the reference (1 kg)
+    -- add cost, and the cost scales inversely with strength. A
+    -- powerful wielder isn't slowed by a heavy weapon they can muscle.
+    local weight   = unit.getEquippedWeaponWeight(uid) or 1.0
+    local str      = unit.getStat(uid, "strength") or 1.0
+    local weightF  = 1 + math.max(0, weight - 1.0) / (5 * str)
+
+    -- Stamina factor: 1.0 at full, 1.5 at empty. Exhausted units pay
+    -- 50% longer recoveries. staminaPct returns 1.0 for species
+    -- without resource config, so this is a no-op until the species
+    -- is wired in — the formula still works for combat-only checks.
+    local pct   = staminaPct(uid)
+    local stamF = 1 + (1 - pct) * 0.5
+
+    -- Injury factor: a severity-0.5 wound on the weapon arm doubles
+    -- recovery. Severity-1.0 (vital arm, unit usually dead) triples.
+    local armPart  = unit.getWeaponWieldedFrom(uid)
+    local armWound = armPart
+                     and (unit.getWoundSeverityOn(uid, armPart) or 0)
+                     or 0
+    local injuryF  = 1 + 2 * armWound
+
+    -- Stat factor: agility and dexterity together govern raw motor
+    -- speed. 1/sqrt(agi×dex) puts a 1.0/1.0 unit at the baseline and
+    -- a 2.0/2.0 superhero at half the recovery.
+    local agi = unit.getStat(uid, "agility")   or 1.0
+    local dex = unit.getStat(uid, "dexterity") or 1.0
+    local statF = 1 / math.sqrt(math.max(0.05, agi * dex))
+
+    return base * modeMult * weightF * stamF * injuryF * statF
+end
+
+-----------------------------------------------------------
 -- Action: attack_target
 --
 -- Combat candidate. Set via unitAi.commandAttack(uid, targetUid).
@@ -1150,11 +1278,14 @@ end
 --   s.activeGoal       = "attack" (via setGoal)
 --   s.attackTargetUid  = uid of the target
 --   s.attackLastSwingAt = gameTime of last fired swing (cooldown gate)
+--   s.attackLastMode   = "heavy" | "quick" — for cooldown math, since
+--                        the recovery from the PREVIOUS swing is what
+--                        gates the next one.
 --
 -- Each tick, until the target is dead or gone:
 --   * Target missing / dead → clear goal.
---   * In range AND cooldown elapsed → fire combat.attack, stamp
---     attackLastSwingAt.
+--   * In range AND cooldown elapsed → pick mode, fire combat.attack
+--     with it, stamp attackLastSwingAt + attackLastMode.
 --   * In range AND on cooldown → stand still and wait.
 --   * Out of range → re-pathfind toward target's CURRENT tile so
 --     moving targets get tracked. tickOne gates re-issuing moveTo
@@ -1209,7 +1340,6 @@ local function attackTargetExecute(uid, s, params)
     local dy = math.abs(me.gridY - you.gridY)
     local chebyshev = (dx > dy) and dx or dy
     local range    = unit.getAttackRange(uid) or 1.0
-    local cooldown = unit.getAttackCooldown(uid) or 1.5
 
     if chebyshev <= range then
         -- In range. If we were mid-walk, stop so the next AI tick
@@ -1218,23 +1348,30 @@ local function attackTargetExecute(uid, s, params)
         if unit.getActivity(uid) == "walking" then
             unit.stop(uid)
         end
-        -- Cooldown gate so we don't fire at 10 Hz (the combat
-        -- thread can resolve in microseconds).
+        -- Cooldown gate: recovery from the PREVIOUS swing is what
+        -- governs when the next one can fire. So we read the
+        -- cooldown using last swing's mode, not the upcoming one.
         local now  = engine.gameTime()
         local last = s.attackLastSwingAt or 0
+        local prevMode = s.attackLastMode or "quick"
+        local cooldown = computeAttackCooldown(uid, prevMode)
         if now - last >= cooldown then
-            -- Alternate the two attack motions for visual variety.
-            -- Quick = small narrow swing; heavy = wide arc.
-            local base = s.attackUseHeavy and "attack_heavy"
-                                            or "attack_quick"
-            s.attackUseHeavy = not s.attackUseHeavy
+            -- Pick mode by current stamina + wounds + strength.
+            -- Damage differential comes from the engine's strength
+            -- application (sqrt(str) for quick, str for heavy); we
+            -- just decide which swing to throw.
+            local mode = chooseAttackMode(uid)
+            local base = (mode == "heavy") and "attack_heavy"
+                                             or "attack_quick"
             local anim = combatAnimName(uid, base)
             if anim then unit.setAnimOverride(uid, anim) end
-            combat.attack(uid, target)
+            combat.attack(uid, target, mode)
             s.attackLastSwingAt = now
+            s.attackLastMode    = mode
             engine.logDebug("attack: " .. tostring(uid)
-                .. " swings at " .. tostring(target)
-                .. " (anim=" .. tostring(anim) .. ")")
+                .. " " .. mode .. " at " .. tostring(target)
+                .. " (cd=" .. string.format("%.2f", cooldown)
+                .. "s, anim=" .. tostring(anim) .. ")")
         else
             -- Mid-cooldown — show the combat-idle stance instead
             -- of falling back to regular idle. setAnimOverride is
@@ -1966,45 +2103,11 @@ end
 -----------------------------------------------------------
 -- Action registry per unit type
 -----------------------------------------------------------
-local actions = {
-    acolyte = {
-        { name = "idle",           utility = idleUtility,
-          execute = idleExecute },
-        { name = "wander",         utility = wanderUtility,
-          execute = wanderExecute },
-        { name = "follow_command", utility = followCommandUtility,
-          execute = followCommandExecute },
-        { name = "retreat",        utility = retreatUtility,
-          execute = retreatExecute,
-          forceExecute = true },
-        { name = "engage",         utility = engageUtility,
-          execute = engageExecute },
-        { name = "attack_target",  utility = attackTargetUtility,
-          execute = attackTargetExecute,
-          -- See unit_ai.tickOne — the attack candidate runs every
-          -- tick so it can stop the unit when entering range,
-          -- swing on cooldown, and re-pathfind when target moves.
-          forceExecute = true },
-        { name = "drink_from_canteen", utility = drinkUtility,
-          execute = drinkExecute },
-        { name = "eat_from_inventory", utility = eatUtility,
-          execute = eatExecute },
-        { name = "refill_canteen", utility = refillUtility,
-          execute = refillExecute },
-        { name = "search_for_water", utility = searchUtility,
-          execute = searchExecute },
-        { name = "drink_from_source", utility = drinkFromSourceUtility,
-          execute = drinkFromSourceExecute },
-        { name = "notify_allies", utility = notifyAlliesUtility,
-          execute = notifyAlliesExecute },
-        { name = "build_nearby", utility = buildNearbyUtility,
-          execute = buildNearbyExecute },
-        { name = "deliver_to_build_site", utility = deliverUtility,
-          execute = deliverExecute },
-        { name = "store_materials", utility = storeMaterialsUtility,
-          execute = storeMaterialsExecute },
-    },
-}
+-- Per-species action lists. Populated below via registerActions so
+-- the universal combat candidates (retreat / engage / attack_target)
+-- are prepended uniformly — species lists only declare their ambient
+-- actions.
+local actions = {}
 
 -----------------------------------------------------------
 -- Public registration API (for satellite AI scripts)
@@ -2053,6 +2156,36 @@ end
 unitAi.isGoalActive          = isGoalActive
 unitAi.setGoal               = setGoal
 unitAi.markGoalAccomplished  = markGoalAccomplished
+
+-- Register acolyte's ambient action list. Combat candidates are
+-- prepended by registerActions so the universal-combat invariant
+-- holds for acolytes the same way it does for bears.
+unitAi.registerActions("acolyte", {
+    { name = "idle",           utility = idleUtility,
+      execute = idleExecute },
+    { name = "wander",         utility = wanderUtility,
+      execute = wanderExecute },
+    { name = "follow_command", utility = followCommandUtility,
+      execute = followCommandExecute },
+    { name = "drink_from_canteen", utility = drinkUtility,
+      execute = drinkExecute },
+    { name = "eat_from_inventory", utility = eatUtility,
+      execute = eatExecute },
+    { name = "refill_canteen", utility = refillUtility,
+      execute = refillExecute },
+    { name = "search_for_water", utility = searchUtility,
+      execute = searchExecute },
+    { name = "drink_from_source", utility = drinkFromSourceUtility,
+      execute = drinkFromSourceExecute },
+    { name = "notify_allies", utility = notifyAlliesUtility,
+      execute = notifyAlliesExecute },
+    { name = "build_nearby", utility = buildNearbyUtility,
+      execute = buildNearbyExecute },
+    { name = "deliver_to_build_site", utility = deliverUtility,
+      execute = deliverExecute },
+    { name = "store_materials", utility = storeMaterialsUtility,
+      execute = storeMaterialsExecute },
+})
 
 -- Load species satellite scripts. Each one defines its candidates
 -- and calls unitAi.registerActions + unitAi.setConfig to plug into

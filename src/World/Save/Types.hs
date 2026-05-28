@@ -289,15 +289,15 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
       -- ^ v10: items worn off the silhouette (robes, goggles, rings…).
       --   Order preserved.
     , uisFactionId   ∷ !Text
-      -- ^ v8: spawn-time-only faction tag (no def-level default).
+      -- ^ v16: spawn-time-only faction tag (no def-level default).
       --   Used by the combat layer for hostile/friendly checks.
       --   "player" / "wildlife" / future custom tags.
     , uisWounds      ∷ ![Wound]
-      -- ^ v17: per-unit wound list. Roundtrips faithfully. Generic
+      -- ^ v16: per-unit wound list. Roundtrips faithfully. Generic
       --   Serialize over the Wound record below; fields are
       --   positional, so appending a field to Wound also bumps v.
     , uisBlood       ∷ !Float
-      -- ^ v17: current blood volume in litres. Spawn-time seeded
+      -- ^ v16: current blood volume in litres. Spawn-time seeded
       --   from body_mass; ticked down by Combat.Wounds bleeding.
     } deriving (Show, Serialize, Generic)
 
@@ -364,6 +364,11 @@ fromUnitInstanceSnapshot def s = UnitInstance
     , uiGridX       = uisGridX s
     , uiGridY       = uisGridY s
     , uiGridZ       = uisGridZ s
+    -- uiRealZ is render-only; restore it from the integer Z so loaded
+    -- units stand at the right visual height. Active climbs at save
+    -- time would lose their interpolation progress, but combat/climb
+    -- state is transient by design.
+    , uiRealZ       = fromIntegral (uisGridZ s)
     , uiFacing      = uisFacing s
     , uiCurrentAnim = uisCurrentAnim s
     , uiAnimStart   = uisAnimStart s

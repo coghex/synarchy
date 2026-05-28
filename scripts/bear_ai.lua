@@ -237,6 +237,10 @@ end
 unitAi.setConfig("bear_brown", {
     thought_interval = 1.0,
     thought_jitter   = 0.3,
+    -- Combat re-evaluation cadence. See unit_ai.scheduleNext —
+    -- charging units need sub-second range checks or they walk
+    -- straight through their target.
+    combat_thought_interval = 0.1,
     -- Wander geometry.
     wander_radius = 8.0,
     wander_speed  = 1.0,    -- LEGACY (still used by bearWanderExecute)

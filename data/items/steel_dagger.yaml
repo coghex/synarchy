@@ -30,4 +30,13 @@ items:
       slash_effectiveness: 0.5
       blunt_effectiveness: 0.01
       weapon_class:      dagger  # matches `dagger` skill on the wielder
-      attack_cooldown:    0.6    # fast — daggers swing quickly
+      attack_cooldown:    1.0    # base recovery for a quick swing by a
+                                 # 1.0-stat, 1.0-strength wielder at 100%
+                                 # stamina with no wounds. The Lua
+                                 # cooldown formula scales this by weight,
+                                 # stamina, injury, and agility×dexterity.
+      wielded_from:      r_arm      # which body part the swing originates
+                                    # from — read by the cooldown formula
+                                    # to find weapon-arm wound severity.
+                                    # Must match an `id` from the wielder's
+                                    # body_parts list.

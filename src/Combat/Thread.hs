@@ -117,7 +117,8 @@ processAllCommands env = go
                 go
 
 handleCommand ∷ EngineEnv → CombatCommand → IO ()
-handleCommand env (CombatAttack attacker target) =
+handleCommand env (CombatAttack attacker target mode) =
     -- Full resolution: hit roll → body part → damage → wound →
-    -- death check. Emits "miss" / "hit" / "death" events.
-    resolveAttack env attacker target
+    -- death check + stamina drain. Emits "miss" / "hit" / "death"
+    -- events.
+    resolveAttack env attacker target mode

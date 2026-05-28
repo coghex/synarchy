@@ -198,8 +198,15 @@ tickOneUnit def dt inst
             maxBlood   = bodyMass * 0.075
             unconsCut  = maxBlood * unconsciousFraction
             newWoundsR = reverse newWounds
+            -- Edge-triggered: fire DiedNow only on the tick blood
+            -- crosses zero. Without the `uiBlood inst > 0` guard, a
+            -- unit that died last tick (uiBlood = 0) would re-emit
+            -- DiedNow every tick until the unit thread's UnitKill
+            -- processing snaps uiPose, which is up to one combat tick
+            -- away. Matches the existing UnconsciousNow gating, which
+            -- already checks uiPose ≠ "collapsed" for the same reason.
             outcome
-                | newBlood ≤ 0       = DiedNow worstPart
+                | uiBlood inst > 0, newBlood ≤ 0 = DiedNow worstPart
                 | newBlood < unconsCut, uiPose inst /= "collapsed"
                                      = UnconsciousNow worstPart
                 | otherwise          = NoChange

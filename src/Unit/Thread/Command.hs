@@ -112,6 +112,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                     , uiGridX      = gx
                     , uiGridY      = gy
                     , uiGridZ      = gz
+                    , uiRealZ      = fromIntegral gz
                     , uiFacing     = DirS -- Default facing south
                     , uiCurrentAnim = ""  -- Phase 1: anim triggers wired in Phase 3
                     , uiAnimStart   = 0
@@ -145,6 +146,7 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                     { usRealX     = gx
                     , usRealY     = gy
                     , usGridZ     = gz
+                    , usRealZ     = fromIntegral gz
                     , usTarget    = Nothing
                     , usState     = Idle
                     , usFacing    = DirS
@@ -155,6 +157,15 @@ handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId) = do
                     , usPickupUntil  = Nothing
                     , usTransitionUntil  = Nothing
                     , usTransitionStride = 1
+                    , usPostTransition   = []
+                    , usClimbFromTile    = Nothing
+                    , usClimbToTile      = Nothing
+                    , usClimbStartTime   = Nothing
+                    , usClimbSlipAt      = Nothing
+                    , usFallFromTile     = Nothing
+                    , usFallToTile       = Nothing
+                    , usFallImpact       = Nothing
+                    , usPendingClimbXP   = 0
                     }
             atomicModifyIORef' utsRef $ \uts →
                 (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
@@ -189,6 +200,7 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
                 let ss' = ss { usRealX     = gx
                              , usRealY     = gy
                              , usGridZ     = gz
+                             , usRealZ     = fromIntegral gz
                              , usTarget    = Nothing
                              , usState     = Idle
                              , usLocalPath = []
@@ -207,6 +219,7 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz) = do
                 let inst' = inst { uiGridX = gx
                                  , uiGridY = gy
                                  , uiGridZ = gz
+                                 , uiRealZ = fromIntegral gz
                                  }
                 in (um { umInstances = HM.insert uid inst' insts }, ())
 
@@ -214,9 +227,16 @@ handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed) = do
     -- Apply the injury speed multiplier on receipt so EVERY move
     -- command — commanded, wander, attack-pursuit, retreat — gets
     -- scaled the same way without the AI caller having to know.
-    -- The unit instance carries wounds + blood; we read it here
-    -- separately from the sim-state update to avoid threading
-    -- another IORef through this clause.
+    --
+    -- Note: the umRef read below is NOT atomic with the utsRef
+    -- modify. If the wound subsystem (10 Hz) lands a new wound
+    -- between the two, this move commits with the pre-wound
+    -- multiplier and the unit travels its current path segment at
+    -- the stale speed. The next move command picks up the fresh
+    -- state. Effect is bounded (one segment of slightly-too-fast
+    -- movement, ≲1% per-command hit rate) and not worth merging the
+    -- two refs to close — kept here so the next reader doesn't
+    -- mistake the separation for an oversight.
     um ← readIORef (unitManagerRef env)
     let (effSpeed, isRunning) = case HM.lookup uid (umInstances um) of
             Nothing   → (speed, False)
@@ -302,6 +322,15 @@ handleUnitCommand env utsRef (UnitKill uid) = do
                              , usPickupUntil      = Nothing
                              , usTransitionUntil  = Nothing
                              , usTransitionStride = 1
+                             , usPostTransition   = []
+                             , usClimbFromTile    = Nothing
+                             , usClimbToTile      = Nothing
+                             , usClimbStartTime   = Nothing
+                             , usClimbSlipAt      = Nothing
+                             , usFallFromTile     = Nothing
+                             , usFallToTile       = Nothing
+                             , usFallImpact       = Nothing
+                             , usPendingClimbXP   = 0
                              }
                 in (uts { utsSimStates = HM.insert uid ss' simStates }, ())
 
@@ -535,7 +564,12 @@ injurySpeedMult inst =
         bloodFrac = if maxBlood > 0
                     then max 0 (min 1 (uiBlood inst / maxBlood))
                     else 1
-        legCut   = min 1.0 (legSev   * 0.6)
+        -- legCut multiplier 1.2 (was 0.6): a severity-0.5 leg wound
+        -- cuts speed 60%, sev-0.8 cuts ~96%, sev-1.0 hits the floor.
+        -- Limps are decisively visible — wounded acolytes shuffle.
+        -- torsoCut stays gentler — a torso wound hurts but doesn't
+        -- mechanically prevent leg movement.
+        legCut   = min 1.0 (legSev   * 1.2)
         torsoCut = min 1.0 (torsoSev * 0.3)
         bloodMul = 0.5 + 0.5 * bloodFrac
         raw      = (1 - legCut) * (1 - torsoCut) * bloodMul

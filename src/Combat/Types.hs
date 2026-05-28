@@ -15,6 +15,8 @@
 module Combat.Types
     ( CombatCommand(..)
     , CombatEvent(..)
+    , AttackMode(..)
+    , attackModeText
     , emptyEventQueue
     ) where
 
@@ -23,12 +25,32 @@ import qualified Data.Sequence as Seq
 import qualified Data.HashMap.Strict as HM
 import Data.Word (Word32)
 
+-- | Which swing the attacker is throwing.
+--
+--   Quick uses sqrt(strength) for damage and the full dexterity weight
+--   for aim — a controlled, finesse-leaning motion.
+--
+--   Heavy uses linear strength (puts full body weight in) and half
+--   dexterity weight (committed motion, can't course-correct mid-swing).
+--
+--   No flat damage/hit multipliers — the heavy/quick differential is
+--   entirely a function of how strength and dexterity get applied, so
+--   a high-strength unit naturally benefits more from heavy than a
+--   high-dexterity unit does.
+data AttackMode = Quick | Heavy
+    deriving (Show, Eq)
+
+attackModeText ∷ AttackMode → Text
+attackModeText Quick = "quick"
+attackModeText Heavy = "heavy"
+
 -- | A command issued from Lua / AI / scripts asking the combat sim
 --   to do something. Drained by the combat thread.
 data CombatCommand
-    = CombatAttack !Word32 !Word32
-      -- ^ attacker uid → target uid. The combat thread will resolve
-      --   hit/miss, apply damage, and emit events.
+    = CombatAttack !Word32 !Word32 !AttackMode
+      -- ^ attacker uid → target uid + swing type. The combat thread
+      --   will resolve hit/miss, apply damage + stamina drain, and
+      --   emit events.
     deriving (Show)
 
 -- | One log-worthy thing the combat sim did. Drained by Lua to feed

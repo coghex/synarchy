@@ -58,6 +58,9 @@ module Engine.Scripting.Lua.API.Units
     , unitGetAttackRangeFn
     , unitGetAttackCooldownFn
     , unitGetMaxSpeedFn
+    , unitGetEquippedWeaponWeightFn
+    , unitGetWeaponWieldedFromFn
+    , unitGetWoundSeverityOnFn
     , unitGetWoundsFn
     , unitGetBloodFn
     , unitGetPainFn
@@ -322,12 +325,22 @@ lookupSurfaceZ env gx gy = do
 --   so callers don't have to pass an explicit nil for gz.
 unitSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitSpawnFn env = do
-    nameArg    ← Lua.tostring 1
-    xArg       ← Lua.tonumber 2
-    yArg       ← Lua.tonumber 3
-    zArg       ← Lua.tointeger 4
-    factionArg4 ← Lua.tostring 4   -- when gz is omitted, faction lands here
-    factionArg5 ← Lua.tostring 5   -- when both gz+faction supplied
+    nameArg     ← Lua.tostring 1
+    xArg        ← Lua.tonumber 2
+    yArg        ← Lua.tonumber 3
+    -- Discriminate slot 4 by Lua type, not by coercion. `tointeger`
+    -- succeeds on numeric strings (Lua auto-coerces), so a numeric
+    -- faction tag like "5" would silently land in the z-slot and
+    -- the faction would default to "wildlife". The actual Lua type
+    -- tag is set by the caller and isn't subject to coercion.
+    slot4Ty     ← Lua.ltype 4
+    zArg        ← case slot4Ty of
+        Lua.TypeNumber → Lua.tointeger 4
+        _              → return Nothing
+    factionArg4 ← case slot4Ty of
+        Lua.TypeString → Lua.tostring 4
+        _              → return Nothing
+    factionArg5 ← Lua.tostring 5
 
     case nameArg of
         Nothing → do
@@ -341,16 +354,13 @@ unitSpawnFn env = do
                 gy = case yArg of
                          Just (Lua.Number n) → realToFrac n
                          _                   → 0.0
-                -- Resolve faction: slot 5 wins if present; else slot 4
-                -- (only when it isn't actually the gz integer); else
-                -- "wildlife". `tointeger` returns Just for slot 4 when
-                -- the caller passed a Z, so this avoids confusing a Z
-                -- with a faction.
+                -- Resolve faction: slot 5 wins if present, else slot 4
+                -- (only when it's actually a Lua string), else default.
                 factionId = case factionArg5 of
                     Just fbs → TE.decodeUtf8 fbs
-                    Nothing → case (zArg, factionArg4) of
-                        (Nothing, Just fbs) → TE.decodeUtf8 fbs
-                        _                   → "wildlife"
+                    Nothing → case factionArg4 of
+                        Just fbs → TE.decodeUtf8 fbs
+                        Nothing  → "wildlife"
 
             result ← Lua.liftIO $ do
                 -- Check def exists
@@ -628,6 +638,8 @@ parsePose "standing"  = Just Standing
 parsePose "crouching" = Just Crouching
 parsePose "crawling"  = Just Crawling
 parsePose "collapsed" = Just Collapsed
+parsePose "climbing"  = Just Climbing
+parsePose "falling"   = Just Falling
 parsePose _           = Nothing
 
 -- | unit.getPose(uid) — returns the unit's current pose as a string:
@@ -770,6 +782,90 @@ unitGetMaxSpeedFn env = do
                                 >> return 1
                 Nothing → Lua.pushnil >> return 1
 
+-- | unit.getEquippedWeaponWeight(uid) → float kg | nil
+--
+--   The "weight" of whatever weapon would swing if this unit attacked
+--   right now. For equipped weapons: the item's idWeight. For natural
+--   weapons (bear paws, fists): derived as body_mass × 0.04 — a paw is
+--   ~4% of the animal's mass, the same fraction across species so we
+--   never need a per-creature knob. Returns nil if the unit doesn't
+--   exist.
+unitGetEquippedWeaponWeightFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetEquippedWeaponWeightFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mW ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                im ← readIORef (itemManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst → return $ Just
+                        (resolveWeaponWeight im inst)
+            case mW of
+                Just w  → Lua.pushnumber (Lua.Number (realToFrac w))
+                            >> return 1
+                Nothing → Lua.pushnil >> return 1
+
+-- | unit.getWeaponWieldedFrom(uid) → string body-part id | nil
+--
+--   The body part the swing originates from. Used by the cooldown
+--   formula to look up the wound severity on that part — injured
+--   arms slow you down. For equipped weapons: derived from the slot
+--   ("right_hand" → "right_arm", "left_hand" → "left_arm"). For
+--   natural weapons: a species-default. Stage 4 will add a YAML
+--   override (`wielded_from:` on weapon / natural_weapon blocks) for
+--   creatures whose claws hang off a non-default body part.
+unitGetWeaponWieldedFromFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetWeaponWieldedFromFn env = do
+    idArg ← Lua.tointeger 1
+    case idArg of
+        Nothing → Lua.pushnil >> return 1
+        Just n → do
+            let uid = UnitId (fromIntegral n)
+            mPart ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst → return $ Just
+                        (resolveWieldedFrom (uiEquipment inst)
+                                            (uiDefName inst))
+            case mPart of
+                Just p  → Lua.pushstring (TE.encodeUtf8 p) >> return 1
+                Nothing → Lua.pushnil >> return 1
+
+-- | unit.getWoundSeverityOn(uid, partId) → float | nil
+--
+--   Sum of severity for all current wounds on the given body part.
+--   Used by the AI's attack-mode picker and cooldown formula to gate
+--   heavy attacks when the weapon arm is hurt. Returns 0 (not nil) for
+--   a part with no wounds — only returns nil if the unit itself
+--   doesn't exist.
+unitGetWoundSeverityOnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetWoundSeverityOnFn env = do
+    idArg   ← Lua.tointeger 1
+    partArg ← Lua.tostring 2
+    case (idArg, partArg) of
+        (Just n, Just pbs) → do
+            let uid     = UnitId (fromIntegral n)
+                partId  = TE.decodeUtf8 pbs
+            mTotal ← Lua.liftIO $ do
+                um ← readIORef (unitManagerRef env)
+                case HM.lookup uid (umInstances um) of
+                    Nothing → return Nothing
+                    Just inst →
+                        let s = sum [ woundSeverity w
+                                    | w ← uiWounds inst
+                                    , woundPart w ≡ partId ]
+                        in return (Just s)
+            case mTotal of
+                Just s  → Lua.pushnumber (Lua.Number (realToFrac s))
+                            >> return 1
+                Nothing → Lua.pushnil >> return 1
+        _ → Lua.pushnil >> return 1
+
 -- | Walk slot priority for an equipped weapon's blade length; fall
 --   back to the unit-def's natural_weapon; finally 0.
 resolveBladeLength
@@ -780,6 +876,38 @@ resolveBladeLength im um inst =
         Nothing → case HM.lookup (uiDefName inst) (umDefs um) of
             Just d  → maybe 0.0 nwEffectiveBladeLength (udNaturalWeapon d)
             Nothing → 0.0
+
+-- | Weapon weight for the currently-wielded weapon. Equipped item:
+--   idWeight (kg). Natural weapon: body_mass × 0.04 — a small fraction
+--   of body mass that scales correctly across species (a bear paw at
+--   ~12 kg, a small predator's claw at <1 kg) without per-species
+--   tuning. Returns 0 if no weapon and no body_mass stat exists.
+resolveWeaponWeight ∷ ItemManager → UnitInstance → Float
+resolveWeaponWeight im inst =
+    case firstEquippedItemDef im (uiEquipment inst) of
+        Just d  → idWeight d
+        Nothing →
+            let bodyMass = HM.lookupDefault 0.0 "body_mass" (uiStats inst)
+            in  bodyMass * 0.04
+
+-- | Body part the wielded weapon swings from. Slot-driven for
+--   equipped weapons; species-defaulted for natural weapons. Returns
+--   a body-part id that unit.getWoundSeverityOn can look up — must
+--   match the `id` declared in the unit YAML's body_parts list.
+--
+--   Future: prefer a YAML `wielded_from:` field on the weapon /
+--   natural_weapon block once that's parsed, so creatures whose
+--   claws hang off non-default body parts (tail strikes, head butts)
+--   can declare it in data.
+resolveWieldedFrom
+    ∷ HM.HashMap Text ItemInstance → Text → Text
+resolveWieldedFrom eq defName
+    | HM.member "right_hand" eq = "r_arm"
+    | HM.member "left_hand"  eq = "l_arm"
+    | otherwise                  = case defName of
+        "bear_brown" → "r_fore_leg"
+        "acolyte"    → "r_arm"
+        _            → "head"
 
 -- | Same priority chain for cooldown; default 1.5 s if nothing
 --   useful is found.
@@ -801,6 +929,21 @@ firstEquippedWeapon im eq = go ["right_hand", "left_hand"]
         Nothing → go rest
         Just it → case lookupItemDef (iiDefName it) im of
             Just d | Just w ← idWeapon d → Just w
+            _ → go rest
+
+-- | Same slot priority as firstEquippedWeapon, but returns the full
+--   ItemDef so callers can read non-weapon fields (idWeight, idMaterial).
+--   Only matches slots whose item has a weapon block — i.e. the unit
+--   is actually wielding a weapon, not a torch.
+firstEquippedItemDef
+    ∷ ItemManager → HM.HashMap Text ItemInstance → Maybe ItemDef
+firstEquippedItemDef im eq = go ["right_hand", "left_hand"]
+  where
+    go [] = Nothing
+    go (slot:rest) = case HM.lookup slot eq of
+        Nothing → go rest
+        Just it → case lookupItemDef (iiDefName it) im of
+            Just d | Just _ ← idWeapon d → Just d
             _ → go rest
 
 -- | unit.getWounds(uid) → array of { part, kind, severity, at } | nil
@@ -1663,6 +1806,11 @@ unitGetInfoFn env = do
                     Lua.setfield (-2) "gridY"
                     Lua.pushinteger (fromIntegral (uiGridZ inst))
                     Lua.setfield (-2) "gridZ"
+                    -- Continuous vertical position. Equal to gridZ
+                    -- except during climbs, where it lerps smoothly
+                    -- from start-z to top-z.
+                    Lua.pushnumber (Lua.Number (realToFrac (uiRealZ inst)))
+                    Lua.setfield (-2) "realZ"
                     Lua.pushstring (TE.encodeUtf8 (dirToText (uiFacing inst)))
                     Lua.setfield (-2) "facing"
                     Lua.pushnumber (Lua.Number (realToFrac (uiBaseWidth inst)))

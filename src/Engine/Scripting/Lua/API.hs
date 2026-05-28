@@ -269,6 +269,12 @@ registerLuaAPI lst env backendState = Lua.runWith lst $ do
   registerLuaFunction "getAttackRange" (unitGetAttackRangeFn env)
   registerLuaFunction "getAttackCooldown" (unitGetAttackCooldownFn env)
   registerLuaFunction "getMaxSpeed"  (unitGetMaxSpeedFn env)
+  registerLuaFunction "getEquippedWeaponWeight"
+                                          (unitGetEquippedWeaponWeightFn env)
+  registerLuaFunction "getWeaponWieldedFrom"
+                                          (unitGetWeaponWieldedFromFn env)
+  registerLuaFunction "getWoundSeverityOn"
+                                          (unitGetWoundSeverityOnFn env)
   registerLuaFunction "getWounds"    (unitGetWoundsFn env)
   registerLuaFunction "getBlood"     (unitGetBloodFn env)
   registerLuaFunction "getPain"      (unitGetPainFn env)

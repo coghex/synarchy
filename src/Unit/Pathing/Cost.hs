@@ -31,6 +31,8 @@ module Unit.Pathing.Cost
     ( stepCost
     , lookupTerrainZ
     , lookupFluidType
+    , lookupSlopeAt
+    , isCliffStep
     -- * Tunables (constants for now; future: load from config)
     , climbFactor
     , fallFactor
@@ -43,7 +45,10 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import Data.Bits (testBit)
+import Data.Word (Word8)
 import World.Types (WorldTileData(..), LoadedChunk(..), columnIndex, lookupChunk)
+import World.Chunk.Types (ColumnTiles(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Generate (globalToChunk)
 
@@ -138,6 +143,66 @@ lookupTerrainZ wtd gx gy =
     in case lookupChunk chunkCoord wtd of
         Nothing → Nothing
         Just lc → Just (lcTerrainSurfaceMap lc VU.! columnIndex lx ly)
+
+-- | Read the slope bits at the given (gx, gy, z). Slope bits encode
+--   which cardinal-direction neighbors are exactly 1 z below this
+--   tile and walkable as a ramp: bit 0 = N, bit 1 = E, bit 2 = S,
+--   bit 3 = W. A slope bit of 0 means this tile is a flat top — the
+--   walls dropping away to neighbors are cliffs, not ramps.
+--   Returns Nothing if the chunk is unloaded or z is out of the
+--   column's stored range.
+lookupSlopeAt ∷ WorldTileData → Int → Int → Int → Maybe Word8
+lookupSlopeAt wtd gx gy z =
+    let (chunkCoord, (lx, ly)) = globalToChunk gx gy
+    in case lookupChunk chunkCoord wtd of
+        Nothing → Nothing
+        Just lc → case lcTiles lc V.!? columnIndex lx ly of
+            Nothing  → Nothing
+            Just col →
+                let i = z - ctStartZ col
+                in if i ≥ 0 ∧ i < VU.length (ctSlopes col)
+                   then Just (ctSlopes col VU.! i)
+                   else Nothing
+
+-- | Is the step from src to dst a cliff that needs climbing (vs a
+--   walkable slope)?
+--
+--   Rule:
+--     * dz ≤ 0  → not a climb at all.
+--     * dz ≥ 2  → always a cliff (slopes are only 1z deltas by
+--                 construction; anything taller is vertical rock).
+--     * dz = 1  → walkable ramp iff dst has a slope bit pointing
+--                 back toward src (i.e. dst's slope was rendered as
+--                 tapering down to src). Otherwise it's a cliff.
+--
+--   Diagonal cardinal-direction steps fall through to "cliff" since
+--   slope bits only cover cardinal directions — units can't ramp up
+--   diagonally on a corner, they'd need to climb the corner block.
+isCliffStep
+    ∷ WorldTileData
+    → (Int, Int)    -- src (gx, gy)
+    → (Int, Int)    -- dst (gx, gy)
+    → Int           -- src tile's terrain z
+    → Int           -- dst tile's terrain z
+    → Bool
+isCliffStep wtd (sgx, sgy) (dgx, dgy) srcZ dstZ
+    | dz ≤ 0   = False
+    | dz ≥ 2   = True
+    | otherwise = case lookupSlopeAt wtd dgx dgy dstZ of
+        Nothing     → True              -- no slope info → assume cliff
+        Just slope  →
+            let -- Direction from dst back toward src (where the ramp
+                -- would face if there were one). bit N = src is at
+                -- (dgx, dgy-1), etc.
+                wantsBit
+                    | sgy < dgy = 0   -- src is N of dst → need bit N
+                    | sgy > dgy = 2   -- src is S of dst → need bit S
+                    | sgx > dgx = 1   -- src is E of dst → need bit E
+                    | sgx < dgx = 3   -- src is W of dst → need bit W
+                    | otherwise = -1  -- same tile (shouldn't happen)
+            in wantsBit < 0 ∨ not (testBit slope wantsBit)
+  where
+    dz = dstZ - srcZ
 
 -- | Read the fluid type at a global tile coord, if any.
 --   Returns `Nothing` for tiles in unloaded chunks AND for dry tiles

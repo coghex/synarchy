@@ -25,20 +25,26 @@ import qualified Data.Sequence as Seq
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef')
 import qualified HsLua as Lua
-import Combat.Types (CombatCommand(..), CombatEvent(..))
+import Combat.Types (CombatCommand(..), CombatEvent(..), AttackMode(..))
 import Engine.Core.State (EngineEnv(..))
 import qualified Engine.Core.Queue as Q
 
--- | combat.attack(attackerUid, targetUid) → bool
---   Push an attack command. Returns true on enqueue, false on bad args.
+-- | combat.attack(attackerUid, targetUid [, mode]) → bool
+--
+--   mode is "quick" (default) or "heavy". Unknown strings fall back
+--   to Quick so old call sites that pass two args still work.
 combatAttackFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 combatAttackFn env = do
-    aArg ← Lua.tointeger 1
-    tArg ← Lua.tointeger 2
+    aArg    ← Lua.tointeger 1
+    tArg    ← Lua.tointeger 2
+    modeArg ← Lua.tostring 3
+    let mode = case modeArg of
+            Just bs | TE.decodeUtf8 bs == ("heavy" ∷ Text) → Heavy
+            _                                              → Quick
     case (aArg, tArg) of
         (Just a, Just t) → do
             Lua.liftIO $ Q.writeQueue (combatQueue env) $
-                CombatAttack (fromIntegral a) (fromIntegral t)
+                CombatAttack (fromIntegral a) (fromIntegral t) mode
             Lua.pushboolean True
             return 1
         _ → do

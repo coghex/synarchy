@@ -194,7 +194,10 @@ unitToQuad
     → Maybe SortableQuad
 unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha isSel inst mDef now texSizes =
     let gridZ = uiGridZ inst
-        relativeZ = gridZ - zSlice
+        -- Use the continuous uiRealZ for the visual vertical offset
+        -- so climbs interpolate smoothly. Cull / slice math still
+        -- consults the integer uiGridZ — visibility is per-tile.
+        relativeZf = uiRealZ inst - fromIntegral zSlice
     in if gridZ > zSlice ∨ gridZ < (zSlice - 25)
        then Nothing
        else
@@ -219,7 +222,7 @@ unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha isSel inst mDef now texS
             rawX = (faF - fbF) * tileHalfWidth - tileHalfWidth
             rawY = (faF + fbF) * tileHalfDiamondHeight
 
-            heightOffset = fromIntegral relativeZ * tileSideHeight
+            heightOffset = relativeZf * tileSideHeight
             baseRadius = uiBaseWidth inst * 0.5 / baseTileH * tileHeight
 
             drawX = rawX + (tileWidth - quadW) * 0.5
@@ -229,7 +232,7 @@ unitToQuad lookupSlot defFmSlot facing zSlice tileAlpha isSel inst mDef now texS
             spriteRowSpan = quadH / tileHalfDiamondHeight * 0.5
             sortKey = (faF + fbF)
                     + spriteRowSpan
-                    + fromIntegral relativeZ * 0.001
+                    + relativeZf * 0.001
                     + 0.0006
 
             actualSlot = lookupSlot texHandle

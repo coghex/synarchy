@@ -17,7 +17,7 @@
 --                  + 0.10·reach_factor - 0.001·mass_excess - 0.30·pain
 --   defender_evasion = 0.25·agi + 0.25·refl + 0.15·bal + 0.15·perc
 --                    + 0.10·dex - 0.001·mass_excess - 0.30·pain
---   p_hit = clamp(0.5 + (attacker - defender) × 0.5, 0.05, 0.95)
+--   p_hit = clamp(0.7 + (attacker - defender) × 0.3, 0.05, 0.95)
 --
 -- **Body-part picker** (intelligence-blended weighted random):
 --   intel_factor = clamp(intelligence / 2.0, 0.0, 1.0)
@@ -47,7 +47,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Data.List (foldl')
 import Data.Word (Word32)
 import qualified System.Random as Random
-import Combat.Types (CombatEvent(..))
+import Combat.Types (CombatEvent(..), AttackMode(..), attackModeText)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
@@ -90,8 +90,8 @@ painCeiling = 5.0
 -- | Resolve one attack. No-ops cleanly if either unit is missing,
 --   either side's def isn't registered, or either side is already
 --   dead (the AI shouldn't be issuing swings then but races happen).
-resolveAttack ∷ EngineEnv → Word32 → Word32 → IO ()
-resolveAttack env atkRaw tgtRaw = do
+resolveAttack ∷ EngineEnv → Word32 → Word32 → AttackMode → IO ()
+resolveAttack env atkRaw tgtRaw mode = do
     logger ← readIORef (loggerRef env)
     um ← readIORef (unitManagerRef env)
     im ← readIORef (itemManagerRef env)
@@ -104,20 +104,27 @@ resolveAttack env atkRaw tgtRaw = do
             case (HM.lookup (uiDefName atk) (umDefs um),
                   HM.lookup (uiDefName tgt) (umDefs um)) of
                 (Just adef, Just tdef)
-                    | uiPose atk /= "dead"
-                    , uiPose tgt /= "dead" →
+                    -- The uiPose mirror lags the sim by up to one
+                    -- unit-thread tick (~33 ms), so checking only
+                    -- "uiPose ≠ dead" lets stale CombatAttacks land on
+                    -- a target that's already been declared dead by
+                    -- this thread. isAlreadyDead also consults the
+                    -- wound list, which is updated atomically at the
+                    -- moment of the kill.
+                    | not (isAlreadyDead atk adef)
+                    , not (isAlreadyDead tgt tdef) →
                         runResolution env logger im gt
-                            atkRaw tgtRaw atk adef tgt tdef
+                            atkRaw tgtRaw mode atk adef tgt tdef
                 _ → pure ()
         _ → pure ()
 
 runResolution
     ∷ EngineEnv → LoggerState → ItemManager → Double
-    → Word32 → Word32
+    → Word32 → Word32 → AttackMode
     → UnitInstance → UnitDef
     → UnitInstance → UnitDef
     → IO ()
-runResolution env logger im gt atkRaw tgtRaw atk adef tgt tdef = do
+runResolution env logger im gt atkRaw tgtRaw mode atk adef tgt tdef = do
     let mWeapon  = firstEquippedWeapon im (uiEquipment atk)
         natW     = udNaturalWeapon adef
         bladeCm  = case mWeapon of
@@ -135,7 +142,7 @@ runResolution env logger im gt atkRaw tgtRaw atk adef tgt tdef = do
 
         pAtk = painFor atk
         pTgt = painFor tgt
-        atkSkill = computeAttackerSkill atk mWeapon natW bladeCm pAtk
+        atkSkill = computeAttackerSkill atk mWeapon natW bladeCm pAtk mode
         defEva   = computeDefenderEvasion tgt pTgt
         -- Baseline 0.7 (most melee swings connect somehow); stat gap
         -- shifts ±0.30. Same RNG budget — one roll — but combat
@@ -164,15 +171,16 @@ runResolution env logger im gt atkRaw tgtRaw atk adef tgt tdef = do
 
     case rngOut of
         Left () → do
-            pushEvent env (missEvent gt atkRaw tgtRaw)
+            pushEvent env (missEvent gt atkRaw tgtRaw mode)
             logDebug logger CatThread $
-                "miss: " <> T.pack (show atkRaw) <> " → "
+                "miss (" <> attackModeText mode <> "): "
+                          <> T.pack (show atkRaw) <> " → "
                           <> T.pack (show tgtRaw)
                           <> " (p_hit=" <> T.pack (show pHit) <> ")"
         Right (partId, kind) → do
             let (severity, rawDmg, effDmg) =
                     computeSeverity atk adef tdef mWeapon natW
-                                     tgt partId kind
+                                     tgt partId kind mode
                 w = Wound
                     { woundPart     = partId
                     , woundKind     = kind
@@ -192,7 +200,7 @@ runResolution env logger im gt atkRaw tgtRaw atk adef tgt tdef = do
                                           (umInstances um')
                 in (um' { umInstances = ins }, ())
             pushEvent env (hitEvent gt atkRaw tgtRaw partId kind
-                                     severity rawDmg effDmg)
+                                     severity rawDmg effDmg mode)
 
             -- Vital-part instant-death check.
             let partMeta = HM.lookup partId (bodyPartIndex tdef)
@@ -208,10 +216,17 @@ runResolution env logger im gt atkRaw tgtRaw atk adef tgt tdef = do
                             <> " by " <> cause
                 else
                     logDebug logger CatThread $
-                        "hit: " <> T.pack (show atkRaw)
+                        "hit (" <> attackModeText mode <> "): "
+                            <> T.pack (show atkRaw)
                             <> " → " <> T.pack (show tgtRaw)
                             <> " " <> kind <> "@" <> partId
                             <> " sev=" <> T.pack (show severity)
+
+    -- Drain stamina on EVERY swing (hit or miss). The motion costs
+    -- the same; landing the blow is a separate roll. Cost is a
+    -- fraction of max_stamina so endurance drives absolute capacity
+    -- without changing the per-swing fraction.
+    applyStaminaDrain env atkRaw mode
 
 -- ----- Helpers -----
 
@@ -222,6 +237,20 @@ painFor inst =
                               * kindPainFactor (woundKind w))
               0 (uiWounds inst)
     in clamp 0.0 1.0 (raw / painCeiling)
+
+-- | True if the unit is already dead by combat rules: either the
+--   uiPose mirror has caught up (post UnitKill), or there's a
+--   severity ≥ 1.0 wound on a vital body part (the lethal condition
+--   that fires setDead in runResolution). The wound path closes the
+--   1–3 combat-tick race where the UnitKill command has been queued
+--   but the unit thread hasn't yet snapped usPose → Dead.
+isAlreadyDead ∷ UnitInstance → UnitDef → Bool
+isAlreadyDead inst def =
+    uiPose inst ≡ "dead"
+  ∨ any (\w → woundSeverity w ≥ 1.0
+            ∧ maybe False bpVital
+                (HM.lookup (woundPart w) (bodyPartIndex def)))
+        (uiWounds inst)
 
 statOr ∷ Text → Float → UnitInstance → Float
 statOr name def inst = HM.lookupDefault def name (uiStats inst)
@@ -234,8 +263,8 @@ weightedReachFactor bladeCm = clamp 0.0 1.0 (bladeCm / 100.0)
 
 computeAttackerSkill
     ∷ UnitInstance → Maybe ItemWeapon → Maybe NaturalWeapon
-    → Float → Float → Float
-computeAttackerSkill atk mWeapon natW bladeCm pain =
+    → Float → Float → AttackMode → Float
+computeAttackerSkill atk mWeapon natW bladeCm pain mode =
     let wepClass = case mWeapon of
             Just w  → iwWeaponClass w
             Nothing → maybe "unarmed" nwWeaponClass natW
@@ -247,8 +276,16 @@ computeAttackerSkill atk mWeapon natW bladeCm pain =
         strClip  = min 2.0 (str * 0.5)
         massExc  = max 0.0 (bodyMass - 70.0)
         reach    = weightedReachFactor bladeCm
+        -- Heavy commits the body forward — you can't redirect mid-swing
+        -- the way you can with a quick stab/jab — so the dexterity
+        -- contribution halves. The "control" of the swing degrades
+        -- proportional to your dex; a high-dex unit pays more for
+        -- going heavy than a low-dex unit does (which had less to lose).
+        dexMult = case mode of
+            Quick → 1.0
+            Heavy → 0.5
     in   0.35 * (skill / 100.0)
-       + 0.25 * dex
+       + 0.25 * dex * dexMult
        + 0.10 * perc
        + 0.10 * strClip
        + 0.10 * reach
@@ -336,7 +373,20 @@ pickPartKind rng atk tdef mWeapon natW parts =
             | (pk, randomScore, smartScore) ← pairs ]
         total = sum (map snd scored)
         (r, rng') = Random.uniformR (0.0 ∷ Float, max 0.001 total) rng
-        pick _ [] = ("torso", "blunt")   -- safety fallback
+        -- Safety fallback for `scored == []` (weapon has zero
+        -- effectiveness in every kind) or floating-point drift past
+        -- the final cumulative weight. Pick a part the target
+        -- actually has — literal "torso" was wrong for species that
+        -- declare different body-part ids — and the weapon's best
+        -- kind, defaulting to "blunt" only when nothing is set.
+        fallbackPart = case parts of
+            (p:_) → bpId p
+            []    → "torso"
+        fallbackKind
+            | wepBlunt ≥ wepSlash, wepBlunt ≥ wepStab = "blunt"
+            | wepSlash ≥ wepStab                      = "slash"
+            | otherwise                               = "stab"
+        pick _ [] = (fallbackPart, fallbackKind)
         pick acc ((pk, w) : rest)
             | acc + w ≥ r = pk
             | otherwise   = pick (acc + w) rest
@@ -345,9 +395,9 @@ pickPartKind rng atk tdef mWeapon natW parts =
 computeSeverity
     ∷ UnitInstance → UnitDef → UnitDef
     → Maybe ItemWeapon → Maybe NaturalWeapon
-    → UnitInstance → Text → Text
+    → UnitInstance → Text → Text → AttackMode
     → (Float, Float, Float)
-computeSeverity atk _adef tdef mWeapon natW tgt partId kind =
+computeSeverity atk _adef tdef mWeapon natW tgt partId kind mode =
     let bladeCm = case mWeapon of
             Just w  → iwBladeLength w
             Nothing → maybe 0.0 nwEffectiveBladeLength natW
@@ -357,9 +407,20 @@ computeSeverity atk _adef tdef mWeapon natW tgt partId kind =
             Just w  → iwWeaponClass w
             Nothing → maybe "unarmed" nwWeaponClass natW
         skill = skillOr wepClass 0.0 atk
+        -- Quick = sqrt(str): a controlled, finesse-leaning motion that
+        -- only gets a square-root of raw strength into the swing.
+        -- Heavy = str: full commitment, linear strength application.
+        -- At str=1 the two are equal; at str=3 heavy is ~73% bigger.
+        -- So heavy is strictly worth it for high-strength units (bears,
+        -- ogres, …) and a wash for low-strength ones (acolytes choose
+        -- quick because stamina + recovery still favour it). No
+        -- artificial damage multiplier — the gap is the strength stat.
+        strContribution = case mode of
+            Quick → sqrt str
+            Heavy → str
         rawDamage = (bladeCm / 100.0)
                   * materialHardness
-                  * sqrt str
+                  * strContribution
                   * (1.0 + (skill / 100.0) * 0.3)
         natRes = case kind of
             "slash" → nrSlash (udNaturalResistance tdef)
@@ -380,19 +441,20 @@ computeSeverity atk _adef tdef mWeapon natW tgt partId kind =
 
 -- ----- Event constructors -----
 
-missEvent ∷ Double → Word32 → Word32 → CombatEvent
-missEvent gt atk tgt = CombatEvent
+missEvent ∷ Double → Word32 → Word32 → AttackMode → CombatEvent
+missEvent gt atk tgt mode = CombatEvent
     { ceTs       = gt
     , ceKind     = "miss"
     , ceAttacker = Just atk
     , ceTarget   = Just tgt
-    , cePayload  = HM.empty
+    , cePayload  = HM.fromList
+        [ ("mode", attackModeText mode) ]
     }
 
 hitEvent
     ∷ Double → Word32 → Word32 → Text → Text
-    → Float → Float → Float → CombatEvent
-hitEvent gt atk tgt part kind sev rawDmg effDmg = CombatEvent
+    → Float → Float → Float → AttackMode → CombatEvent
+hitEvent gt atk tgt part kind sev rawDmg effDmg mode = CombatEvent
     { ceTs       = gt
     , ceKind     = "hit"
     , ceAttacker = Just atk
@@ -403,6 +465,7 @@ hitEvent gt atk tgt part kind sev rawDmg effDmg = CombatEvent
         , ("severity", T.pack (show sev))
         , ("raw",      T.pack (show rawDmg))
         , ("eff",      T.pack (show effDmg))
+        , ("mode",     attackModeText mode)
         ]
     }
 
@@ -432,6 +495,44 @@ pushEvent env ev =
 setDead ∷ EngineEnv → Word32 → IO ()
 setDead env tgtRaw =
     Q.writeQueue (unitQueue env) (UnitKill (UnitId tgtRaw))
+
+-- | Stamina cost per swing as a fraction of the attacker's
+--   max_stamina. Heavy costs 5× more than quick — that's the only
+--   hard-coded ratio in the heavy/quick split; everything else
+--   (damage, hit chance, recovery time) is stat-driven.
+staminaCostFraction ∷ AttackMode → Float
+staminaCostFraction Quick = 0.05
+staminaCostFraction Heavy = 0.25
+
+-- | Drain the attacker's stamina by `cost × max_stamina`. Floors at
+--   0 — the collapse / kill thresholds are enforced by unit_resources.lua
+--   (the same tick path that handles walking drain), so we don't fire
+--   UnitCollapse / UnitKill from here.
+--
+--   max_stamina is recomputed live in Lua's unit_stats wrapper as
+--   `endurance × 10`, but the engine doesn't have that derivation —
+--   it only sees what's actually stored in uiStats. We use the live
+--   "endurance" stat to compute the same value so a unit with a fresh
+--   buff or wound to endurance pays the right fraction.
+applyStaminaDrain ∷ EngineEnv → Word32 → AttackMode → IO ()
+applyStaminaDrain env atkRaw mode =
+    atomicModifyIORef' (unitManagerRef env) $ \um →
+        let uid = UnitId atkRaw
+        in case HM.lookup uid (umInstances um) of
+            Nothing → (um, ())
+            Just inst →
+                let stamina   = HM.lookupDefault 0.0 "stamina"
+                                                  (uiStats inst)
+                    endurance = HM.lookupDefault 1.0 "endurance"
+                                                  (uiStats inst)
+                    maxStam   = endurance * 10.0
+                    cost      = staminaCostFraction mode * maxStam
+                    new       = max 0.0 (stamina - cost)
+                    inst'     = inst
+                        { uiStats = HM.insert "stamina" new
+                                              (uiStats inst) }
+                    ins       = HM.insert uid inst' (umInstances um)
+                in (um { umInstances = ins }, ())
 
 firstEquippedWeapon
     ∷ ItemManager → HM.HashMap Text ItemInstance → Maybe ItemWeapon

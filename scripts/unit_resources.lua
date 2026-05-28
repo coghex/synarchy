@@ -152,6 +152,26 @@ local config = {
             surplus_regrowth = true,
         },
     },
+    -- Bears need stamina so combat drain (Combat.Resolution applies
+    -- 5% per quick, 25% per heavy of max_stamina) lands somewhere.
+    -- Without this entry the engine writes "stamina" to uiStats but
+    -- nothing reads or regenerates it. Bears have no hunger/hydration
+    -- yet — wildlife survival is Phase 5 work.
+    bear_brown = {
+        stamina = {
+            max_from               = "max_stamina",
+            drain_walking          = 0.1,
+            regen_factor_walking   = 0.12,
+            regen_factor_idle      = 0.5,
+            regen_factor_collapsed = 0.3,
+            regen_factor_crouching = 0.5,
+            collapse_threshold     = 0.1,
+            revive_threshold       = 0.5,
+            kill_on_zero           = true,
+            -- No organ_failure_check — wildlife doesn't (yet) have
+            -- the body-composition catabolism layer that drives it.
+        },
+    },
 }
 
 -----------------------------------------------------------
@@ -550,6 +570,24 @@ local function checkRevive(uid, defConfig)
     -- before the per-resource loop is stale.
     local pose = unit.getPose(uid)
     if pose ~= "collapsed" then return end
+
+    -- Blood-loss gate. The combat wound subsystem
+    -- (Combat.Wounds.tickOneUnit) collapses a unit when blood drops
+    -- below 30% of max. If we revive purely on stamina/hydration,
+    -- a bleeding unit pops back up, the next 10 Hz wound tick sees
+    -- blood still < 30%, fires UnconsciousNow again, and the pose
+    -- flaps standing↔collapsed at the wound-tick rate. Visually
+    -- the unit flickers between its injured idle anim and the
+    -- collapsed pose (T-pose if no collapsed-idle is registered).
+    --
+    -- Hysteresis: collapse fires at 30%, revive needs ≥ 50%. Since
+    -- blood doesn't passively regen — only wound closure refills
+    -- it indirectly — a bleeding-out unit stays down until the
+    -- wounds heal or first-aid lands.
+    local blood = unit.getBlood(uid)
+    if blood and blood.max > 0 and blood.current / blood.max < 0.5 then
+        return
+    end
 
     for resourceName, params in pairs(defConfig) do
         local rt = params.revive_threshold
