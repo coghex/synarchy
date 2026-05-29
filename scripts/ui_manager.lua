@@ -155,52 +155,64 @@ end
 function uiManager.checkReady()
     if fontsReady and fbW > 0 and fbH > 0 then
         if not initialized then
-            mainMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
-            settingsMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-            createWorldMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-            worldView.init(fbW, fbH)
-            hud.init(boxTexSet, menuFont, fbW, fbH)
-            saveBrowser.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-            loadingScreen.init(boxTexSet, menuFont, titleFont, fbW, fbH)
-            testArena.init(boxTexSet, menuFont, titleFont, fbW, fbH)
-            pauseMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
-            popup.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-            eventLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-            combatLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
-            local persistedDwell = engine.getTooltipDwellMs()
-            local persistedHintDelay = engine.getTooltipHintDelayMs()
-            -- engine.loadTexture caches by path, so this returns the
-            -- same handle that drag_select etc. already use for the
-            -- 1×1 white pixel — letting the separator render in the
-            -- exact colour we tint it, instead of inheriting the box
-            -- centre tile.
-            local whitePixelTex = engine.loadTexture(
-                "assets/textures/hud/utility/white.png")
-            UI.setTooltipStyle({
-                font               = menuFont,
-                fontSize           = 14,
-                textColor          = {1.0, 1.0, 1.0, 1.0},
-                bgColor            = {1.0, 1.0, 1.0, 1.0},
-                padding            = 24,
-                boxTextures        = boxTexSet,
-                boxTileSize        = 32,
-                mouseOffsetX       = 14,
-                mouseOffsetY       = 18,
-                dwellMs            = persistedDwell,
-                hintDelayMs        = persistedHintDelay,
-                spriteGap          = 4,
-                hintFontSize       = 11,
-                hintColor          = {0.7, 0.7, 0.7, 1.0},
-                separatorTexture   = whitePixelTex,
-                separatorColor     = {0.7, 0.7, 0.7, 1.0},
-                separatorThickness = 2,
-            })
-            uiManager.showMenu("main")
+            -- Boot the loading screen first so the user sees a green
+            -- progress bar while startup_loader drains the asset queue.
+            -- The rest of the per-module init runs in finishStartupBoot
+            -- once startup_loader is done.
+            loadingScreen.init(boxTexSet, menuFont, fbW, fbH)
+            local startupLoader = require("scripts.startup_loader")
+            startupLoader.build()
+            loadingScreen.show({mode = "startup", fbW = fbW, fbH = fbH})
             initialized = true
         else
             uiManager.showMenu(currentMenu)
         end
     end
+end
+
+-- Per-module init pass that used to live inline in checkReady.
+-- Called once when startup_loader drains (see uiManager.update).
+function uiManager.finishStartupBoot()
+    mainMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
+    settingsMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    createWorldMenu.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    worldView.init(fbW, fbH)
+    hud.init(boxTexSet, menuFont, fbW, fbH)
+    saveBrowser.init(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    testArena.init(boxTexSet, menuFont, titleFont, fbW, fbH)
+    pauseMenu.init(boxTexSet, btnTexSet, menuFont, titleFont, fbW, fbH)
+    popup.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    eventLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    combatLog.bootstrap(boxTexSet, btnTexSet, menuFont, fbW, fbH)
+    local persistedDwell = engine.getTooltipDwellMs()
+    local persistedHintDelay = engine.getTooltipHintDelayMs()
+    -- engine.loadTexture caches by path, so this returns the
+    -- same handle that drag_select etc. already use for the
+    -- 1×1 white pixel — letting the separator render in the
+    -- exact colour we tint it, instead of inheriting the box
+    -- centre tile.
+    local whitePixelTex = engine.loadTexture(
+        "assets/textures/hud/utility/white.png")
+    UI.setTooltipStyle({
+        font               = menuFont,
+        fontSize           = 14,
+        textColor          = {1.0, 1.0, 1.0, 1.0},
+        bgColor            = {1.0, 1.0, 1.0, 1.0},
+        padding            = 24,
+        boxTextures        = boxTexSet,
+        boxTileSize        = 32,
+        mouseOffsetX       = 14,
+        mouseOffsetY       = 18,
+        dwellMs            = persistedDwell,
+        hintDelayMs        = persistedHintDelay,
+        spriteGap          = 4,
+        hintFontSize       = 11,
+        hintColor          = {0.7, 0.7, 0.7, 1.0},
+        separatorTexture   = whitePixelTex,
+        separatorColor     = {0.7, 0.7, 0.7, 1.0},
+        separatorThickness = 2,
+    })
+    uiManager.showMenu("main")
 end
 
 function uiManager.onFramebufferResize(width, height)
@@ -416,6 +428,16 @@ function uiManager.update(dt)
 
     if loadingScreen then
         loadingScreen.update(dt)
+    end
+
+    -- Startup-loader transition: when the asset queue drains, run the
+    -- deferred per-module init pass and pop the main menu. The
+    -- finishStartupBoot guard prevents re-entry.
+    if loadingScreen and loadingScreen.mode == "startup"
+       and loadingScreen.phase == "done"
+       and not uiManager.startupBootDone then
+        uiManager.startupBootDone = true
+        uiManager.finishStartupBoot()
     end
 
     if testArena then

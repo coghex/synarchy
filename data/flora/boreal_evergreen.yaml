@@ -1,7 +1,7 @@
 flora:
   - name: scots_pine
     type: evergreen_tree
-    texDir: "assets/textures/world/flora/scots_pine"
+    texDir: "assets/textures/flora/scots_pine"
     lifecycle: evergreen
     phases:
       - tag: sprout
@@ -30,7 +30,7 @@ flora:
 
   - name: white_spruce
     type: evergreen_tree
-    texDir: "assets/textures/world/flora/white_spruce"
+    texDir: "assets/textures/flora/white_spruce"
     lifecycle: evergreen
     phases:
       - tag: sprout

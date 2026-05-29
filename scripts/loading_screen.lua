@@ -30,6 +30,7 @@ loadingScreen.showMenuCallback = nil
 
 -- Tracking
 loadingScreen.phase           = "idle"  -- "idle", "loading", "done"
+loadingScreen.mode            = "worldgen"  -- "worldgen" | "startup"
 loadingScreen.statusText      = "Loading..."
 
 -- Texture handles for bar (loaded once)
@@ -124,33 +125,17 @@ function loadingScreen.createUI()
 
     loadingScreen.page = UI.newPage("loading_screen", "modal")
 
-    -- s.barWidth is already scaled, so use it directly for layout
-    local panelWidth  = s.barWidth + s.panelPadX * 2
-    local panelHeight = s.fontSize + s.spacing + s.barHeight
-                      + s.spacing + s.fontSize + s.panelPadY * 2
-    local panelX = math.floor((loadingScreen.fbW - panelWidth) / 2)
-    local panelY = math.floor((loadingScreen.fbH - panelHeight) / 2)
-
-    loadingScreen.panelId = panel.new({
-        name       = "loading_panel",
-        page       = loadingScreen.page,
-        x = panelX, y = panelY,
-        width      = panelWidth,
-        height     = panelHeight,
-        textureSet = loadingScreen.boxTexSet,
-        color      = {1.0, 1.0, 1.0, 1.0},
-        tileSize   = s.tileSize,
-        zIndex     = 1,
-        padding    = {
-            top = s.panelPadY, bottom = s.panelPadY,
-            left = s.panelPadX, right = s.panelPadX,
-        },
-        uiscale = 1.0,  -- panel dimensions already scaled
-    })
-    table.insert(loadingScreen.ownedPanels, loadingScreen.panelId)
-
-    local baseZ  = panel.getZIndex(loadingScreen.panelId)
-    local bounds = panel.getContentBounds(loadingScreen.panelId)
+    -- No background panel — bar + labels are placed directly against
+    -- the page, centered. Layout is the same vertical stack as before:
+    --   [status text]
+    --   [spacing]
+    --   [progress bar]
+    --   [spacing]
+    --   [percent text]
+    local stackHeight = s.fontSize + s.spacing + s.barHeight
+                      + s.spacing + s.fontSize
+    local stackY = math.floor((loadingScreen.fbH - stackHeight) / 2)
+    local baseZ  = 1
 
     -- Status text
     loadingScreen.statusLabelId = label.new({
@@ -164,18 +149,18 @@ function loadingScreen.createUI()
     })
     table.insert(loadingScreen.ownedLabels, loadingScreen.statusLabelId)
 
-    local statusW, _ = label.getSize(loadingScreen.statusLabelId)
-    local statusX = panelX + bounds.x + math.floor((bounds.width - statusW) / 2)
-    local statusY = panelY + bounds.y + s.fontSize
+    -- Status text is left-justified to the bar's left edge so the
+    -- two read as a unit. (Bar is centered horizontally below.)
+    local barLeft = math.floor((loadingScreen.fbW - s.barWidth) / 2)
+    local statusX = barLeft
+    local statusY = stackY
     UI.addToPage(loadingScreen.page,
         label.getElementHandle(loadingScreen.statusLabelId), statusX, statusY)
     UI.setZIndex(label.getElementHandle(loadingScreen.statusLabelId), baseZ + 1)
 
-    -- Progress bar — bar.new scales internally, so pass BASE (unscaled) sizes
-    -- but position using the already-scaled layout coordinates
-    local barScaledW = s.barWidth
-    local barX = panelX + bounds.x + math.floor((bounds.width - barScaledW) / 2)
-    local barY = statusY + s.spacing
+    -- Progress bar
+    local barX = barLeft
+    local barY = statusY + s.fontSize + s.spacing
 
     loadingScreen.barId = bar.new({
         name           = "loading_bar",
@@ -214,7 +199,7 @@ function loadingScreen.createUI()
     table.insert(loadingScreen.ownedLabels, loadingScreen.percentLabelId)
 
     local pctW, _ = label.getSize(loadingScreen.percentLabelId)
-    local pctX = panelX + bounds.x + math.floor((bounds.width - pctW) / 2)
+    local pctX = math.floor((loadingScreen.fbW - pctW) / 2)
     local pctY = barY + s.barHeight + s.spacing
     UI.addToPage(loadingScreen.page,
         label.getElementHandle(loadingScreen.percentLabelId), pctX, pctY)
@@ -229,6 +214,7 @@ end
 
 function loadingScreen.show(params)
     params = params or {}
+    loadingScreen.mode       = params.mode or "worldgen"
     loadingScreen.statusText = params.statusText or "Loading..."
 
     -- Always grab the latest framebuffer size from the caller
@@ -262,6 +248,37 @@ end
 
 function loadingScreen.update(dt)
     if loadingScreen.phase ~= "loading" then return end
+
+    -- Startup mode: drive startup_loader (which owns the asset queue)
+    -- and reflect its progress into the bar / labels. We deliberately
+    -- do NOT fire showMenuCallback here — ui_manager polls our phase
+    -- and runs finishStartupBoot (which inits menus) before pushing
+    -- the main menu.
+    if loadingScreen.mode == "startup" then
+        local startupLoader = require("scripts.startup_loader")
+        startupLoader.tick(dt)
+
+        local progress, statusText = startupLoader.getProgress()
+
+        if loadingScreen.barId then
+            bar.setProgress(loadingScreen.barId, progress)
+            bar.setText(loadingScreen.barId, "")
+        end
+        local pctInt = math.floor(progress * 100)
+        if loadingScreen.percentLabelId then
+            label.setText(loadingScreen.percentLabelId,
+                tostring(pctInt) .. "%")
+        end
+        if loadingScreen.statusLabelId then
+            label.setText(loadingScreen.statusLabelId, statusText)
+        end
+
+        if startupLoader.isDone() then
+            loadingScreen.phase = "done"
+            engine.logInfo("Startup loader complete")
+        end
+        return
+    end
 
     local wphase, current, total = world.getInitProgress()
 

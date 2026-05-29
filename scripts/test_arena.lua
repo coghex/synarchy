@@ -38,21 +38,10 @@ function testArena.init(boxTex, font, titleFont, fbW, fbH)
     testArena.fbW       = fbW
     testArena.fbH       = fbH
 
-    local count = 0
-    -- Load materials from YAML. This populates the engine's
-    -- MaterialRegistry (name + physical props) AND queues texture loads,
-    -- so the info-tool readout shows the actual material name instead
-    -- of the "unknown" default. Mirrors world_view.init for the arena.
-    local materialLoader = require("scripts.material_loader")
-    local matCount = materialLoader.loadAll("data/materials")
-    testArena.materialTextureCount = matCount
-    count = count + matCount
-
-    -- Load vegetation from YAML
-    local vegetationLoader = require("scripts.vegetation_loader")
-    local vegCount = vegetationLoader.loadAll("data/vegetation")
-    testArena.vegetationTextureCount = vegCount
-    count = count + vegCount
+    -- Materials and vegetation YAMLs are loaded by
+    -- scripts/startup_loader.lua during the boot loading screen, so
+    -- this init no longer re-runs them. Re-running them would
+    -- duplicate registry entries (the YAML loaders are not idempotent).
 end
 
 -----------------------------------------------------------

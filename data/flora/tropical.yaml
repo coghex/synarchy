@@ -1,7 +1,7 @@
 flora:
   - name: coconut_palm
     type: evergreen_tree
-    texDir: "assets/textures/world/flora/coconut_palm"
+    texDir: "assets/textures/flora/coconut_palm"
     lifecycle: evergreen
     phases:
       - tag: sprout
@@ -30,7 +30,7 @@ flora:
 
   - name: red_mangrove
     type: evergreen_tree
-    texDir: "assets/textures/world/flora/red_mangrove"
+    texDir: "assets/textures/flora/red_mangrove"
     lifecycle: evergreen
     phases:
       - tag: sprout

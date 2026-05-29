@@ -1,7 +1,7 @@
 flora:
   - name: white_oak
     type: deciduous_tree
-    texDir: "assets/textures/world/flora/white_oak"
+    texDir: "assets/textures/flora/white_oak"
     lifecycle: perennial
     minLife: 10800
     maxLife: 36000
@@ -71,7 +71,7 @@ flora:
 
   - name: paper_birch
     type: deciduous_tree
-    texDir: "assets/textures/world/flora/paper_birch"
+    texDir: "assets/textures/flora/paper_birch"
     lifecycle: perennial
     minLife: 5400
     maxLife: 18000
@@ -141,7 +141,7 @@ flora:
 
   - name: weeping_willow
     type: deciduous_tree
-    texDir: "assets/textures/world/flora/weeping_willow"
+    texDir: "assets/textures/flora/weeping_willow"
     lifecycle: perennial
     minLife: 7200
     maxLife: 21600

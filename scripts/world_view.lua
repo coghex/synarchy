@@ -139,42 +139,16 @@ function worldView.init(width, height)
         count = count + 1
     end
 
-    -- Load materials from YAML
-    local materialLoader = require("scripts.material_loader")
-    local matCount = materialLoader.loadAll("data/materials")
-    worldView.materialTextureCount = matCount
-    count = count + worldView.materialTextureCount
-
-    engine.logInfo("Queued " .. matCount .. " material textures from YAML")
-
-    -- Load vegetation from YAML
-    local vegetationLoader = require("scripts.vegetation_loader")
-    local vegCount = vegetationLoader.loadAll("data/vegetation")
-    worldView.vegetationTextureCount = vegCount
-    count = count + vegCount
-
-    engine.logInfo("Queued " .. vegCount .. " vegetation textures from YAML")
-
-    -- Load flora from YAML (textures are loaded by Haskell,
-    -- species registered into FloraCatalog automatically)
-    local floraLoader = require("scripts.flora_loader")
-    local floraCount = floraLoader.loadAll("data/flora")
-    worldView.floraTextureCount = floraCount
-    count = count + floraCount
-
-    engine.logInfo("Queued " .. floraCount .. " flora textures from YAML")
-
-    -- Load unit definitions from YAML (textures queued for GPU loading)
-    local unitLoader = require("scripts.unit_loader")
-    local unitCount = unitLoader.loadAll("data/units")
-    worldView.unitTextureCount = unitCount
-    count = count + unitCount
-
-    engine.logInfo("Queued " .. unitCount .. " unit textures from YAML")
-
+    -- Material / vegetation / flora / unit YAMLs are loaded earlier by
+    -- scripts/startup_loader.lua during the boot loading screen, so
+    -- this init no longer triggers them. The structural textures
+    -- above are also pre-warmed by startup_loader, so the loadTexture
+    -- calls above are cache-hits — no new onAssetLoaded events fire.
+    -- texturesLoadedCount is therefore pre-satisfied: by the time
+    -- this init runs, the asset queue has already drained.
     worldView.seenHandles = {}
     worldView.texturesNeeded = count
-    worldView.texturesLoadedCount = 0
+    worldView.texturesLoadedCount = count
 
     engine.logInfo("World view initialized, loading " .. count .. " textures")
 end

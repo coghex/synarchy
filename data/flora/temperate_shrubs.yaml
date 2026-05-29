@@ -1,7 +1,7 @@
 flora:
   - name: bracken_fern
     type: deciduous_shrub
-    texDir: "assets/textures/world/flora/bracken_fern"
+    texDir: "assets/textures/flora/bracken_fern"
     lifecycle: perennial
     minLife: 1800
     maxLife: 7200
@@ -71,7 +71,7 @@ flora:
 
   - name: red_raspberry
     type: deciduous_shrub
-    texDir: "assets/textures/world/flora/red_raspberry"
+    texDir: "assets/textures/flora/red_raspberry"
     lifecycle: perennial
     minLife: 1080
     maxLife: 3600

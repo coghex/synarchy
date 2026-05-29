@@ -3,61 +3,61 @@ vegetation:
   - id_start: 37
     name: desert_scrub
     variants:
-      - "assets/textures/world/veg/desert_scrub_1.png"
-      - "assets/textures/world/veg/desert_scrub_2.png"
-      - "assets/textures/world/veg/desert_scrub_3.png"
-      - "assets/textures/world/veg/desert_scrub_4.png"
+      - "assets/textures/vegetation/desert_scrub_1.png"
+      - "assets/textures/vegetation/desert_scrub_2.png"
+      - "assets/textures/vegetation/desert_scrub_3.png"
+      - "assets/textures/vegetation/desert_scrub_4.png"
 
   # Fallen leaves (IDs 49-52)
   - id_start: 49
     name: fallen_leaves
     variants:
-      - "assets/textures/world/veg/fallen_leaves_1.png"
-      - "assets/textures/world/veg/fallen_leaves_2.png"
-      - "assets/textures/world/veg/fallen_leaves_3.png"
-      - "assets/textures/world/veg/fallen_leaves_4.png"
+      - "assets/textures/vegetation/fallen_leaves_1.png"
+      - "assets/textures/vegetation/fallen_leaves_2.png"
+      - "assets/textures/vegetation/fallen_leaves_3.png"
+      - "assets/textures/vegetation/fallen_leaves_4.png"
 
   # Pine needles (IDs 53-56)
   - id_start: 53
     name: pine_needles
     variants:
-      - "assets/textures/world/veg/pine_needles_1.png"
-      - "assets/textures/world/veg/pine_needles_2.png"
-      - "assets/textures/world/veg/pine_needles_3.png"
-      - "assets/textures/world/veg/pine_needles_4.png"
+      - "assets/textures/vegetation/pine_needles_1.png"
+      - "assets/textures/vegetation/pine_needles_2.png"
+      - "assets/textures/vegetation/pine_needles_3.png"
+      - "assets/textures/vegetation/pine_needles_4.png"
 
   # Mushroom patch (IDs 57-60)
   - id_start: 57
     name: mushroom_patch
     variants:
-      - "assets/textures/world/veg/mushroom_patch_1.png"
-      - "assets/textures/world/veg/mushroom_patch_2.png"
-      - "assets/textures/world/veg/mushroom_patch_3.png"
-      - "assets/textures/world/veg/mushroom_patch_4.png"
+      - "assets/textures/vegetation/mushroom_patch_1.png"
+      - "assets/textures/vegetation/mushroom_patch_2.png"
+      - "assets/textures/vegetation/mushroom_patch_3.png"
+      - "assets/textures/vegetation/mushroom_patch_4.png"
 
   # Wildflowers (IDs 61-64)
   - id_start: 61
     name: wildflowers
     variants:
-      - "assets/textures/world/veg/wildflowers_1.png"
-      - "assets/textures/world/veg/wildflowers_2.png"
-      - "assets/textures/world/veg/wildflowers_3.png"
-      - "assets/textures/world/veg/wildflowers_4.png"
+      - "assets/textures/vegetation/wildflowers_1.png"
+      - "assets/textures/vegetation/wildflowers_2.png"
+      - "assets/textures/vegetation/wildflowers_3.png"
+      - "assets/textures/vegetation/wildflowers_4.png"
 
   # Desert sand ground (IDs 69-72)
   - id_start: 69
     name: desert_sand
     variants:
-      - "assets/textures/world/veg/desert_sand_1.png"
-      - "assets/textures/world/veg/desert_sand_2.png"
-      - "assets/textures/world/veg/desert_sand_3.png"
-      - "assets/textures/world/veg/desert_sand_4.png"
+      - "assets/textures/vegetation/desert_sand_1.png"
+      - "assets/textures/vegetation/desert_sand_2.png"
+      - "assets/textures/vegetation/desert_sand_3.png"
+      - "assets/textures/vegetation/desert_sand_4.png"
 
   # Gravel tundra ground (IDs 73-76)
   - id_start: 73
     name: gravel_tundra
     variants:
-      - "assets/textures/world/veg/gravel_tundra_1.png"
-      - "assets/textures/world/veg/gravel_tundra_2.png"
-      - "assets/textures/world/veg/gravel_tundra_3.png"
-      - "assets/textures/world/veg/gravel_tundra_4.png"
+      - "assets/textures/vegetation/gravel_tundra_1.png"
+      - "assets/textures/vegetation/gravel_tundra_2.png"
+      - "assets/textures/vegetation/gravel_tundra_3.png"
+      - "assets/textures/vegetation/gravel_tundra_4.png"

@@ -1,7 +1,7 @@
 flora:
   - name: common_dandelion
     type: perennial_flower
-    texDir: "assets/textures/world/flora/common_dandelion"
+    texDir: "assets/textures/flora/common_dandelion"
     lifecycle: perennial
     minLife: 1080
     maxLife: 2520
@@ -62,7 +62,7 @@ flora:
 
   - name: white_clover
     type: perennial_flower
-    texDir: "assets/textures/world/flora/white_clover"
+    texDir: "assets/textures/flora/white_clover"
     lifecycle: perennial
     minLife: 720
     maxLife: 1800
