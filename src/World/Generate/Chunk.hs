@@ -9,7 +9,7 @@ import UPrelude
 import Data.Bits (shiftR, (.&.))
 import Control.Monad (when, forM_)
 import Control.Monad.ST (runST)
-import Data.STRef (newSTRef, readSTRef, writeSTRef)
+import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
@@ -37,6 +37,9 @@ import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
                              , RiverSegment(..))
 import World.Geology.Timeline.Types (GeoEvent(..), GeoPeriod(..))
 import World.Hydrology.WaterTable (computeWaterTable)
+import World.Fluid.Lake.Types
+    ( WorldLakes(..), LakeChunkEntry(..), lakesInChunk )
+import qualified World.Fluid.Lake.Types as WL
 import World.Fluid.Types (emptyIceMap)
 import World.Vegetation (computeChunkVegetation, vegSnow, vegHash)
 import World.Flora.Placement (computeChunkFlora)
@@ -49,58 +52,176 @@ import World.Generate.Strata
     , buildColumnStrata
     )
 
--- * Fluid composition — water-table-driven (Phase B of river rework)
+-- * Fluid composition — global lake table (Phase 2)
 --
--- For each tile we read the precomputed water-table elevation and place
--- surface fluid where wt ≥ terrain. The type is decided by geometry, not
--- by which subsystem "owns" the tile:
---   * Ocean  if the chunk is ocean-BFS-reachable and the tile sits at
---            or below seaLevel (terrain ≤ seaLevel ∧ wt ≤ seaLevel + 0)
---   * River  if the tile is inside any river-segment channel mask
---   * Lake   otherwise — depression filled by water-table propagation
+-- Per-chunk surface fluid placement now reads the global 'WorldLakes'
+-- table on the timeline. The table is built once at world init by a
+-- tile-resolution priority flood (see "World.Fluid.Lake.Identify");
+-- here each tile is classified as:
 --
--- Lava is computed by the volcanic feature pipeline (unchanged) and
--- layered on top with leftmost-wins, preserving the
--- "lava always overrides other fluids" invariant the user called out.
+--   * Ocean  — terrain ≤ seaLevel in an ocean-BFS-reachable chunk;
+--              surface = seaLevel.
+--   * River  — tile inside a river-segment channel mask. Currently
+--              never fires (rivers off).
+--   * Lake   — any lake's per-chunk bitmask flags this tile AND the
+--              chunk's real terrain is at or below the lake's
+--              uniform 'lkSurface'. Surface = lake's spillway.
+--   * dry    — otherwise.
 --
--- See src/World/Hydrology/DESIGN.md for the architecture.
+-- The 'waterTableMap' arg is no longer used for surface placement;
+-- it stays computed and stored on 'LoadedChunk' so that the
+-- subsurface dig path can still ask "is this buried tile saturated?"
 composeFluidMap ∷ WorldGenParams → ChunkCoord → VU.Vector Int
-                → VU.Vector Int → VU.Vector Int
+                → VU.Vector Int
                 → V.Vector (Maybe FluidCell)
-composeFluidMap params coord terrainMap waterTableMap channelMask =
-    let seed       = wgpSeed params
-        worldSize  = wgpWorldSize params
-        plates     = wgpPlates params
+composeFluidMap params coord terrainMap channelMask =
+    let worldSize  = wgpWorldSize params
         timeline   = wgpGeoTimeline params
         oceanDist  = wgpOceanDist params
         chunkArea  = chunkSize * chunkSize
+        worldLakes = gtWorldLakes timeline
 
-        -- Ocean classification per chunk: a tile classifies as Ocean
-        -- only when its chunk is BFS-reachable from the world-edge
-        -- ocean. Inland depressions below seaLevel (Caspian-style) are
-        -- Lake even though their wt happens to equal seaLevel.
+        -- Chunk-level ocean BFS: is this chunk reachable from a
+        -- world-edge ocean chunk via chunk-resolution flood?
+        --
+        -- Known limitation: the global lake identifier uses a
+        -- TILE-resolution worldOcean BFS, which can flag tiles that
+        -- this chunk-level check disagrees with (a chunk that's
+        -- mostly land but has one sub-sea inlet at its corner). For
+        -- those rare cases the tile renders as dry land rather than
+        -- ocean. Fixing properly needs propagating worldOcean from
+        -- the identifier through to here — left for later.
         chunkIsOceanic =
             oceanDistAt oceanDist
                 (wrapChunkCoordU worldSize coord) ≡ 0
 
-        -- Water-table-driven fluid placement.
+        -- Per-tile lake surface lookup. We pre-fold the chunk's
+        -- 'LakeChunkEntry' vector into a single per-tile lake surface
+        -- (or 'minBound' for no-lake). With at most a handful of
+        -- lakes per chunk (typically 1–2), the fold is cheap.
+        lakeSurfMap ∷ VU.Vector Int
+        lakeSurfMap = VU.create $ do
+            v ← VUM.replicate chunkArea minBound
+            V.forM_ (lakesInChunk worldLakes coord) $ \lce → do
+                let lid  = lceLakeId lce
+                    bm   = lceBitmask lce
+                    surf = WL.lkSurface (wlLakes worldLakes V.! lid)
+                forM_ [0 .. chunkArea - 1] $ \i →
+                    when (bm VU.! i) $ do
+                        cur ← VUM.read v i
+                        -- If multiple lakes claim a tile (shouldn't
+                        -- happen — global flood gives one label per
+                        -- tile — but defensive): take the LOWER
+                        -- surface to keep water within terrain.
+                        when (cur ≡ minBound ∨ surf < cur) $
+                            VUM.write v i surf
+            pure v
+
         waterFluid = V.generate chunkArea $ \idx →
-            let terrZ = terrainMap VU.! idx
-                wtZ   = waterTableMap VU.! idx
-            in if wtZ < terrZ ∨ terrZ ≡ minBound
+            let terrZ   = terrainMap VU.! idx
+                isOcean = terrZ ≤ seaLevel ∧ chunkIsOceanic
+                lkSurf  = lakeSurfMap VU.! idx
+            in if terrZ ≡ minBound
                then Nothing
-               else
-                 let ftype
-                       | terrZ ≤ seaLevel ∧ chunkIsOceanic = Ocean
-                       | channelMask VU.! idx ≠ noChannel  = River
-                       | otherwise                         = Lake
-                 in Just (FluidCell ftype wtZ)
+               else if isOcean
+                    then Just (FluidCell Ocean seaLevel)
+                    else
+                      let cf = channelMask VU.! idx
+                      in if cf ≠ noChannel ∧ cf ≥ terrZ
+                         then Just (FluidCell River cf)
+                         else if lkSurf ≠ minBound ∧ lkSurf ≥ terrZ
+                              then Just (FluidCell Lake lkSurf)
+                              else Nothing
 
-        features = gtFeatures timeline
-        lavaFluid = computeChunkLava features seed plates
-                                     worldSize coord terrainMap
+        -- Lava still disabled (see Phase 1 plan).
+        _ = (gtFeatures timeline, computeChunkLava)
 
-    in lavaFluid `lavaOverrides` waterFluid
+    in waterFluid
+
+-- | Maximum z by which a dry "island column" can peek above its
+--   surrounding lake's surface and still get smoothed down. Larger
+--   than this and we treat it as a legitimate island.
+maxColumnPeek ∷ Int
+maxColumnPeek = 5
+
+-- | Detect and smooth dry "island column" tiles whose terrain pokes
+--   1..'maxColumnPeek' z above a surrounding lake's surface — visual
+--   spikes that fall under the global despike threshold. A tile
+--   qualifies when:
+--
+--     * It currently renders dry ('fluidMap[idx] = Nothing'), and
+--     * Three or four of its cardinal in-chunk neighbors render as
+--       Lake at the same 'fcSurface', and
+--     * The tile's terrain is between @surface + 1@ and @surface +
+--       maxColumnPeek@ inclusive.
+--
+--   When this fires we (1) override 'fluidMap[idx]' to a Lake cell at
+--   that surface so the renderer paints water, and (2) drop the
+--   tile's terrain to @surface − 1@ in the returned terrain map so
+--   the surface map + slope + material lookups all agree.
+smoothIslandColumns
+    ∷ VU.Vector Int               -- ^ raw terrain surface map
+    → V.Vector (Maybe FluidCell)  -- ^ raw fluid map
+    → (VU.Vector Int, V.Vector (Maybe FluidCell))
+smoothIslandColumns terr fluid = runST $ do
+    let area = chunkSize * chunkSize
+    mTerr  ← VU.thaw terr
+    mFluid ← V.thaw fluid
+    let neighborSurf nx ny
+            | nx < 0 ∨ nx ≥ chunkSize
+            ∨ ny < 0 ∨ ny ≥ chunkSize = pure Nothing
+            | otherwise = do
+                c ← MV.read mFluid (ny * chunkSize + nx)
+                pure $ case c of
+                    Just fc | fcType fc ≡ Lake → Just (fcSurface fc)
+                    _                          → Nothing
+        -- Iterate until convergence (in practice 1-2 passes): a tile
+        -- that gets smoothed becomes a Lake neighbor for tiles
+        -- processed earlier in the same pass. Repeating catches
+        -- those.
+        pass = do
+            changedRef ← newSTRef (0 ∷ Int)
+            forM_ [0 .. area - 1] $ \idx → do
+                cur ← MV.read mFluid idx
+                case cur of
+                    Just _  → pure ()
+                    Nothing → do
+                        let lx = idx `mod` chunkSize
+                            ly = idx `div` chunkSize
+                            t  = terr VU.! idx
+                        ms ← sequence
+                                [ neighborSurf (lx - 1) ly
+                                , neighborSurf (lx + 1) ly
+                                , neighborSurf lx       (ly - 1)
+                                , neighborSurf lx       (ly + 1)
+                                ]
+                        let ns = [ s | Just s ← ms ]
+                            countBy z = length (filter (≡ z) ns)
+                            uniques = foldr
+                                (\z acc → if z `elem` acc then acc else z : acc)
+                                [] ns
+                            hits = [ (z, countBy z) | z ← uniques ]
+                            candidate = case filter ((≥ 3) . snd) hits of
+                                ((z, _):_) → Just z
+                                []         → Nothing
+                        case candidate of
+                            Just s
+                              | t > s ∧ t ≤ s + maxColumnPeek → do
+                                  MV.write mFluid idx
+                                           (Just (FluidCell Lake s))
+                                  VUM.write mTerr  idx (s - 1)
+                                  modifySTRef' changedRef (+1)
+                            _ → pure ()
+            readSTRef changedRef
+        loop n
+            | n ≤ 0 = pure ()
+            | otherwise = do
+                changes ← pass
+                if changes > 0 then loop (n - 1) else pure ()
+    loop 8
+    finalTerr  ← VU.unsafeFreeze mTerr
+    finalFluid ← V.unsafeFreeze mFluid
+    pure (finalTerr, finalFluid)
 
 -- | Sentinel for "this tile is not in any channel" in the channel-floor
 --   map. Picked so it's an obviously-impossible elevation and easy to
@@ -378,33 +499,46 @@ generateChunk registry catalog params coord =
             beyondF ← VU.unsafeFreeze beyondM
             pure (gxF, gyF, beyondF)
 
-        -- Terrain surface map (vector)
-        terrainSurfaceMap = VU.generate chunkArea $ \idx →
+        -- Terrain surface map (vector). This is the RAW chunk-gen
+        -- terrain before island-column smoothing; the smoothed
+        -- version is bound below as 'terrainSurfaceMap' and is what
+        -- the rest of the pipeline consumes.
+        rawTerrainSurfaceMap = VU.generate chunkArea $ \idx →
             if coordBeyond VU.! idx
             then minBound
             else lookupElev (idx `mod` chunkSize) (idx `div` chunkSize)
 
-        finalTerrain = terrainSurfaceMap
-
-        -- Channel mask: where any river segment passes through this
-        -- chunk (bordered region for the wt compute, interior region
-        -- for fluid classification). Computed once, sliced for both.
-        eventRivers ∷ [RiverParams]
-        eventRivers = concatMap goP (gtPeriods timeline)
-          where
-            goP p = concatMap goE (gpEvents p)
-            goE (HydroEvent (RiverFeature rp)) = [rp]
-            goE _                              = []
+        -- Channel mask: river pinning is intentionally disabled. We're
+        -- focusing on basin-fill from climate + sink-pin; rivers are
+        -- deferred. Pass an empty rivers list so the bordered mask is
+        -- 'noChannel' everywhere, which leaves the water-table compute
+        -- and the fluid composer's River branch as no-ops. Terrain
+        -- carving from river events still happens earlier in the
+        -- timeline; we just don't render river surface fluid here.
         borderedChannelMask = computeBorderedChannelMask worldSize coord
-                                                         eventRivers
+                                                         []
                                                          finalElevVec
         interiorChannelMask = sliceInteriorMask borderedChannelMask
 
-        -- All fluid placement — water-table-driven plus lava.
+        -- All fluid placement — global lake table + ocean.
         -- Shared with generateZoomTerrain so the two views agree about
         -- which tiles are water.
-        fluidMap = composeFluidMap params coord terrainSurfaceMap
-                                   waterTableMap interiorChannelMask
+        rawFluidMap = composeFluidMap params coord rawTerrainSurfaceMap
+                                      interiorChannelMask
+
+        -- Smooth "island column" artifacts: dry tiles surrounded by
+        -- ≥3 lake-of-same-surface neighbors whose terrain peeks 1-K z
+        -- above that surface. These are usually noise-driven 1-tile
+        -- spikes that fall under the global despike threshold. We
+        -- override their fluid cell to Lake at the neighbors' surface
+        -- and lower their rendered terrain to surface-1 so the
+        -- renderer paints them as ordinary lake tiles. Downstream
+        -- (slope, surface materials, surface vegetation, fluid map
+        -- output) all read the smoothed binding.
+        (terrainSurfaceMap, fluidMap) =
+            smoothIslandColumns rawTerrainSurfaceMap rawFluidMap
+
+        finalTerrain = terrainSurfaceMap
 
         -- Surface map: rivers render flat (water surface hides any
         -- minor terrain protrusions in the carved channel); other
@@ -518,16 +652,34 @@ generateChunk registry catalog params coord =
                         terrainSurfaceMap surfaceMats surfaceSlopes
                         fluidMap (wgpClimateState params) catalog
 
-        -- Inject veg IDs into column tiles
+        -- Inject veg IDs into column tiles AND truncate strata above
+        -- the smoothed surface. The raw column built earlier ran from
+        -- 'exposeFrom' up to the RAW pre-smoothing terrain top; for
+        -- island-column tiles 'smoothIslandColumns' lowered the
+        -- terrain surface to @lake.surface − 1@ but the rock blocks
+        -- at z ∈ (smoothed, raw] are still in 'ctMats'. The main
+        -- rendering loop in 'World.Render.Quads' iterates up to
+        -- @ctStartZ + length(ctMats) − 1@; without truncation those
+        -- rock blocks reappear as a tiny grass cap above the water
+        -- whenever the camera's zSlice rises above the lake surface.
+        -- Setting them to 'matAir' (= MaterialId 0) makes the renderer
+        -- skip them (it short-circuits on @mat ≡ 0@).
         finalTiles = V.imap (\idx col →
-            let vegId = vegIds VU.! idx
-                vegVec = VU.replicate (VU.length (ctMats col)) 0
-                surfZ = terrainSurfaceMap VU.! idx
-                i = surfZ - ctStartZ col
-                vegVec' = if i ≥ 0 ∧ i < VU.length vegVec ∧ vegId > 0
-                          then vegVec VU.// [(i, vegId)]
-                          else vegVec
-            in col { ctVeg = vegVec' }
+            let vegId    = vegIds VU.! idx
+                matsLen  = VU.length (ctMats col)
+                surfZ    = terrainSurfaceMap VU.! idx
+                i        = surfZ - ctStartZ col
+                truncatedMats =
+                    if surfZ ≡ minBound ∨ i < 0 ∨ i ≥ matsLen - 1
+                    then ctMats col
+                    else
+                      let topIdxs = [(j, 0) | j ← [i + 1 .. matsLen - 1]]
+                      in ctMats col VU.// topIdxs
+                vegVec   = VU.replicate matsLen 0
+                vegVec'  = if i ≥ 0 ∧ i < matsLen ∧ vegId > 0
+                           then vegVec VU.// [(i, vegId)]
+                           else vegVec
+            in col { ctMats = truncatedMats, ctVeg = vegVec' }
             ) slopedTiles
 
         -- Ice overlay: computed from climate, altitude, and the global
@@ -537,13 +689,17 @@ generateChunk registry catalog params coord =
                                  worldSize coord (gtIceLevel timeline)
                                  terrainSurfaceMap fluidMap
 
-        -- Water table: climate gives the base depth, oceans + channels
-        -- + sinks pin specific tiles, then flow-direction propagation
-        -- lifts the rest. Computed over the bordered region; only the
-        -- chunk interior is returned. See src/World/Hydrology/DESIGN.md.
-        waterTableMap = computeWaterTable (wgpClimateState params)
-                                          worldSize coord finalElevVec
-                                          borderedChannelMask
+        -- Water table: subsurface saturation baseline from climate
+        -- (Phase 2 simplified). For tiles under a lake surface, we
+        -- bump the wt to the lake's surface so a dig through the bed
+        -- still exposes water.
+        wtBase = computeWaterTable (wgpClimateState params)
+                                   worldSize coord terrainSurfaceMap
+        waterTableMap = VU.imap (\idx wt →
+            case fluidMap V.! idx of
+                Just fc | fcType fc ≡ Lake → max wt (fcSurface fc)
+                _                          → wt
+            ) wtBase
 
     in (finalTiles, surfaceMap, finalTerrain, fluidMap, iceMap, floraData
        , waterTableMap)
@@ -659,20 +815,13 @@ generateZoomTerrain registry params coord =
         -- same tiles where the world view shows them. Water table and
         -- channel mask are recomputed from the zoom path's bordered
         -- terrain so the two views see identical wt (deterministic).
-        zoomEventRivers ∷ [RiverParams]
-        zoomEventRivers = concatMap goP (gtPeriods timeline)
-          where
-            goP p = concatMap goE (gpEvents p)
-            goE (HydroEvent (RiverFeature rp)) = [rp]
-            goE _                              = []
+        -- Same river-skipping rationale as the detail path above.
         zoomBorderedMask = computeBorderedChannelMask worldSize coord
-                                                      zoomEventRivers
+                                                      []
                                                       finalElevVec
         zoomInteriorMask = sliceInteriorMask zoomBorderedMask
-        zoomWaterTable = computeWaterTable (wgpClimateState params)
-                                           worldSize coord finalElevVec
-                                           zoomBorderedMask
         zoomFluid = composeFluidMap params coord interiorElev
-                                    zoomWaterTable zoomInteriorMask
+                                    zoomInteriorMask
 
     in (interiorElev, interiorMat, zoomFluid)
+

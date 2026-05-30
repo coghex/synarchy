@@ -458,6 +458,7 @@ library
                      World.Generate.Constants
                      World.Generate.Coordinates
                      World.Generate.Chunk
+                     World.Generate.InitTerrain
                      World.Generate.Timeline
                      World.Generate.Timeline.Fast
                      World.Generate.Strata
@@ -523,6 +524,8 @@ library
                      World.Fluid.Ice
                      World.Fluid.IceLevel
                      World.Fluid.Lake
+                     World.Fluid.Lake.Types
+                     World.Fluid.Lake.Identify
                      World.Fluid.Lava
                      World.Vegetation
                      World.Weather

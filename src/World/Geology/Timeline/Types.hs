@@ -52,6 +52,7 @@ import qualified Data.Vector.Unboxed as VU
 import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Fluid.Types (IceLevelGrid(..))
+import World.Fluid.Lake.Types (WorldLakes, emptyWorldLakes)
 import World.Hydrology.Types
     ( HydroFeature(..)
     , HydroEvolution(..)
@@ -96,6 +97,11 @@ data GeoTimeline = GeoTimeline
       -- ^ Coarse-resolution ice fill levels, computed by running
       --   fillDepressions on the final elevation grid restricted to
       --   frozen cells. Used at chunk gen for basin/drape ice decision.
+    , gtWorldLakes ∷ !WorldLakes
+      -- ^ Global lake table — every basin identified by world-init
+      --   tile-resolution priority flood, with per-chunk bitmasks of
+      --   the in-lake tiles. Chunk gen reads this for surface fluid
+      --   placement so every chunk agrees on each lake's @surface_z@.
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 emptyTimeline ∷ GeoTimeline
@@ -106,6 +112,7 @@ emptyTimeline = GeoTimeline
     , gtFeatures = []
     , gtRiverExplodedEvents = V.empty
     , gtIceLevel = IceLevelGrid 0 1 VU.empty
+    , gtWorldLakes = emptyWorldLakes
     }
 
 data EventBBox = EventBBox

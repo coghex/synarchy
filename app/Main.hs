@@ -10,8 +10,12 @@ import System.Environment (setEnv, getArgs)
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
 import Data.List (intercalate, isPrefixOf)
 import qualified Data.ByteString.Char8 as BS
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import World.Generate.Types (WorldGenParams(..))
+import World.Geology.Timeline.Types (GeoTimeline(..))
+import World.Fluid.Lake.Types (WorldLakes(..), lkArea)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngine, initializeEngineHeadless
                         , EngineInitResult(..))
@@ -322,6 +326,20 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                                      wgpClimateState mParams
                     td ← readIORef (wsTilesRef ws)
                     let json = dumpTilesJSON layers worldSize climate td cx1 cy1 cx2 cy2
+                    -- Phase 1 sanity print: how many lakes did the
+                    -- global flood produce, how many chunks they
+                    -- touch.
+                    case mParams of
+                        Just p →
+                            let wl = gtWorldLakes (wgpGeoTimeline p)
+                                nL = V.length (wlLakes wl)
+                                nC = HM.size (wlByChunk wl)
+                                totWet = V.sum (V.map lkArea (wlLakes wl))
+                            in hPutStrLn stderr $
+                                "dump: WorldLakes lakes=" ⧺ show nL
+                                ⧺ " chunks_touched=" ⧺ show nC
+                                ⧺ " total_wet_tiles=" ⧺ show totWet
+                        Nothing → pure ()
                     BS.putStr json
                     hFlush stdout
                     hPutStrLn stderr $ "dump: done"

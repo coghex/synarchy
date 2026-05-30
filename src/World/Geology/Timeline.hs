@@ -25,6 +25,15 @@ import World.Geology.Crater (generateCraters)
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
                              , LakeParams(..), GlacierParams(..))
 import World.Fluid.IceLevel (computeIceLevelGrid)
+import World.Fluid.Lake.Identify (identifyWorldLakes)
+import World.Fluid.Lake.Types (emptyWorldLakes)
+import World.Fluid.Ocean (computeOceanMap)
+import World.Generate.InitTerrain (computeChunkInteriorTerrain)
+import World.Generate.Timeline (applyTimelineFast)
+import World.Ocean.Types (OceanMap)
+import qualified Data.Vector.Unboxed.Mutable as VUM
+import Control.Parallel.Strategies (parListChunk, rdeepseq, using)
+import World.Chunk.Types (chunkSize)
 import World.Hydrology.Simulation (simulateHydrology, FlowResult(..)
                                   , ElevGrid(..), buildInitialElevGrid
                                   , updateElevGrid)
@@ -131,7 +140,11 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
         -- spillway (audit #13).
         finalFeatures = updateLakeSpillways worldSize finalGrid (tbsFeatures s2)
 
-        rawTimeline = GeoTimeline
+        -- Pre-lake timeline: everything except gtWorldLakes. We need
+        -- the timeline filled in so 'computeChunkInteriorTerrain' can
+        -- pass it to 'applyTimelineChunk' below to produce the same
+        -- terrain chunk-gen will produce.
+        preLakeTimeline = GeoTimeline
             { gtSeed      = seed
             , gtWorldSize = worldSize
             , gtPeriods   = periods
@@ -139,9 +152,90 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
             , gtRiverExplodedEvents = riverExploded
             , gtIceLevel  = computeIceLevelGrid seed worldSize plates
                                                  (tbsClimateState s2) finalGrid
+            , gtWorldLakes = emptyWorldLakes
+            }
+
+        -- Ocean map: which chunks are ocean-BFS-reachable from the
+        -- world edge. Computed here so the world-terrain pre-compute
+        -- below can run 'applyCoastalErosion' with the same oceanMap
+        -- chunk-gen will later use. Init.hs computes its own copy
+        -- after buildTimeline; that's redundant work but cheap
+        -- (chunk-resolution sampling).
+        applyTL gx gy base =
+            applyTimelineFast preLakeTimeline plates worldSize gx gy
+                              registry base
+        (oceanMap, _) =
+            computeOceanMap seed worldSize plateCount plates applyTL
+
+        -- World-resolution terrain assembled from per-chunk pipeline
+        -- output. Each chunk runs the same plate-base →
+        -- applyTimelineChunk → applyCoastalErosion → despike pipeline
+        -- generateChunk will use at chunk-gen time — so the priority
+        -- flood downstream sees the EXACT terrain the renderer will
+        -- later use. Eliminates the fast-vs-chunk divergence that
+        -- produced grass-topped columns in the middle of lakes.
+        worldTerrain = buildWorldTerrain seed plates worldSize registry
+                                         oceanMap preLakeTimeline
+
+        rawTimeline = preLakeTimeline
+            { gtWorldLakes = identifyWorldLakes worldSize worldTerrain
             }
 
     in (rawTimeline, tbsClimateState s2)
+
+-- | Stitch per-chunk 'computeChunkInteriorTerrain' outputs into a
+--   world-resolution terrain grid indexed
+--   @(gy + half) * worldTiles + (gx + half)@ where
+--   @worldTiles = worldSize * chunkSize@ and @half = worldTiles/2@.
+--   Beyond-glacier tiles end up as 'minBound' because that's what
+--   'computeChunkInteriorTerrain' writes for them.
+--
+--   Per-chunk work is parallelized via @parMap rdeepseq@. The result
+--   feeds the global priority flood; nothing else depends on it.
+buildWorldTerrain
+    ∷ Word64
+    → [TectonicPlate]
+    → Int
+    → MaterialRegistry
+    → OceanMap
+    → GeoTimeline
+    → VU.Vector Int
+buildWorldTerrain seed plates worldSize registry oceanMap timeline =
+    let worldTiles = worldSize * chunkSize
+        halfWorld  = worldTiles `div` 2
+        halfChunks = worldSize `div` 2
+        allCoords  = [ ChunkCoord cx cy
+                     | cx ← [-halfChunks .. halfChunks - 1]
+                     , cy ← [-halfChunks .. halfChunks - 1]
+                     ]
+        runOne coord =
+            ( coord
+            , computeChunkInteriorTerrain seed plates worldSize registry
+                                          oceanMap timeline coord
+            )
+        -- parListChunk batches sparks (64 chunks per spark), and the
+        -- 'using' strategy forces the whole list before the
+        -- consuming 'forM_' so every batch's terrain is materialised
+        -- by the runtime ahead of time. Without this, the sequential
+        -- 'forM_ chunkResults' only fires sparks one at a time and
+        -- parallelism is wasted.
+        chunkResults = map runOne allCoords
+                       `using` parListChunk 64 rdeepseq
+    in VU.create $ do
+        v ← VUM.replicate (worldTiles * worldTiles) minBound
+        forM_ chunkResults $ \(ChunkCoord cx cy, interior) → do
+            let baseGX = cx * chunkSize
+                baseGY = cy * chunkSize
+            forM_ [0 .. chunkSize * chunkSize - 1] $ \i → do
+                let lx     = i `mod` chunkSize
+                    ly     = i `div` chunkSize
+                    gxOff  = baseGX + lx + halfWorld
+                    gyOff  = baseGY + ly + halfWorld
+                    wIdx   = gyOff * worldTiles + gxOff
+                when (gxOff ≥ 0 ∧ gxOff < worldTiles
+                    ∧ gyOff ≥ 0 ∧ gyOff < worldTiles) $
+                    VUM.write v wIdx (interior VU.! i)
+        pure v
 
 isRiverCarveEvtCached ∷ GeoEvent → Bool
 isRiverCarveEvtCached (HydroEvent (RiverFeature _)) = True

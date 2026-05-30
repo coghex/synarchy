@@ -79,7 +79,7 @@ saveMagic = 0x53595241
 --       on RiverSegment in Phase B will. Bumping now so any pre-rework
 --       saves are clearly rejected before Phase B lands.
 currentSaveVersion ∷ Int
-currentSaveVersion = 17
+currentSaveVersion = 18
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects
