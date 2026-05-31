@@ -27,6 +27,8 @@ import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
 import World.Fluid.IceLevel (computeIceLevelGrid)
 import World.Fluid.Lake.Identify (identifyWorldLakes)
 import World.Fluid.Lake.Types (emptyWorldLakes)
+import World.Fluid.River.Identify (identifyWorldRivers)
+import World.Fluid.River.Types (emptyWorldRivers)
 import World.Fluid.Ocean (computeOceanMap)
 import World.Generate.InitTerrain (computeChunkInteriorTerrain)
 import World.Generate.Timeline (applyTimelineFast)
@@ -152,7 +154,8 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
             , gtRiverExplodedEvents = riverExploded
             , gtIceLevel  = computeIceLevelGrid seed worldSize plates
                                                  (tbsClimateState s2) finalGrid
-            , gtWorldLakes = emptyWorldLakes
+            , gtWorldLakes  = emptyWorldLakes
+            , gtWorldRivers = emptyWorldRivers
             }
 
         -- Ocean map: which chunks are ocean-BFS-reachable from the
@@ -177,8 +180,13 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
         worldTerrain = buildWorldTerrain seed plates worldSize registry
                                          oceanMap preLakeTimeline
 
+        finalLakes = identifyWorldLakes worldSize worldTerrain
+
         rawTimeline = preLakeTimeline
-            { gtWorldLakes = identifyWorldLakes worldSize worldTerrain
+            { gtWorldLakes  = finalLakes
+            , gtWorldRivers = identifyWorldRivers worldSize finalLakes
+                                                   worldTerrain
+                                                   (tbsClimateState s2)
             }
 
     in (rawTimeline, tbsClimateState s2)

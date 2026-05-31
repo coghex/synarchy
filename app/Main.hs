@@ -16,6 +16,7 @@ import qualified Data.Vector.Unboxed as VU
 import World.Generate.Types (WorldGenParams(..))
 import World.Geology.Timeline.Types (GeoTimeline(..))
 import World.Fluid.Lake.Types (WorldLakes(..), lkArea)
+import World.Fluid.River.Types (WorldRivers(..), rivFlowRate)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngine, initializeEngineHeadless
                         , EngineInitResult(..))
@@ -330,15 +331,27 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                     -- global flood produce, how many chunks they
                     -- touch.
                     case mParams of
-                        Just p →
+                        Just p → do
                             let wl = gtWorldLakes (wgpGeoTimeline p)
                                 nL = V.length (wlLakes wl)
                                 nC = HM.size (wlByChunk wl)
                                 totWet = V.sum (V.map lkArea (wlLakes wl))
-                            in hPutStrLn stderr $
+                            hPutStrLn stderr $
                                 "dump: WorldLakes lakes=" ⧺ show nL
                                 ⧺ " chunks_touched=" ⧺ show nC
                                 ⧺ " total_wet_tiles=" ⧺ show totWet
+                            let wr = gtWorldRivers (wgpGeoTimeline p)
+                                nR = V.length (wrRivers wr)
+                                nRC = HM.size (wrByChunk wr)
+                                peakFlow = if V.null (wrRivers wr)
+                                           then 0
+                                           else V.maximum
+                                                 (V.map rivFlowRate
+                                                        (wrRivers wr))
+                            hPutStrLn stderr $
+                                "dump: WorldRivers rivers=" ⧺ show nR
+                                ⧺ " chunks_touched=" ⧺ show nRC
+                                ⧺ " peak_flow=" ⧺ show peakFlow
                         Nothing → pure ()
                     BS.putStr json
                     hFlush stdout

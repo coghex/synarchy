@@ -526,6 +526,8 @@ library
                      World.Fluid.Lake
                      World.Fluid.Lake.Types
                      World.Fluid.Lake.Identify
+                     World.Fluid.River.Types
+                     World.Fluid.River.Identify
                      World.Fluid.Lava
                      World.Vegetation
                      World.Weather

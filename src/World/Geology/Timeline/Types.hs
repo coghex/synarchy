@@ -53,6 +53,7 @@ import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Fluid.Types (IceLevelGrid(..))
 import World.Fluid.Lake.Types (WorldLakes, emptyWorldLakes)
+import World.Fluid.River.Types (WorldRivers, emptyWorldRivers)
 import World.Hydrology.Types
     ( HydroFeature(..)
     , HydroEvolution(..)
@@ -102,6 +103,12 @@ data GeoTimeline = GeoTimeline
       --   tile-resolution priority flood, with per-chunk bitmasks of
       --   the in-lake tiles. Chunk gen reads this for surface fluid
       --   placement so every chunk agrees on each lake's @surface_z@.
+    , gtWorldRivers ∷ !WorldRivers
+      -- ^ Global river table — flow-accumulation rivers fed by
+      --   precipitation and lake spillways, with per-chunk bitmasks
+      --   plus per-tile quantised water surface z. Cross-chunk
+      --   consistency is automatic because every chunk reads the
+      --   same global table.
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 emptyTimeline ∷ GeoTimeline
@@ -113,6 +120,7 @@ emptyTimeline = GeoTimeline
     , gtRiverExplodedEvents = V.empty
     , gtIceLevel = IceLevelGrid 0 1 VU.empty
     , gtWorldLakes = emptyWorldLakes
+    , gtWorldRivers = emptyWorldRivers
     }
 
 data EventBBox = EventBBox

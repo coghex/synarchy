@@ -40,6 +40,8 @@ import World.Hydrology.WaterTable (computeWaterTable)
 import World.Fluid.Lake.Types
     ( WorldLakes(..), LakeChunkEntry(..), lakesInChunk )
 import qualified World.Fluid.Lake.Types as WL
+import World.Fluid.River.Types
+    ( WorldRivers, RiverChunkEntry(..), riversInChunk )
 import World.Fluid.Types (emptyIceMap)
 import World.Vegetation (computeChunkVegetation, vegSnow, vegHash)
 import World.Flora.Placement (computeChunkFlora)
@@ -74,12 +76,13 @@ import World.Generate.Strata
 composeFluidMap ∷ WorldGenParams → ChunkCoord → VU.Vector Int
                 → VU.Vector Int
                 → V.Vector (Maybe FluidCell)
-composeFluidMap params coord terrainMap channelMask =
-    let worldSize  = wgpWorldSize params
-        timeline   = wgpGeoTimeline params
-        oceanDist  = wgpOceanDist params
-        chunkArea  = chunkSize * chunkSize
-        worldLakes = gtWorldLakes timeline
+composeFluidMap params coord terrainMap _channelMask =
+    let worldSize   = wgpWorldSize params
+        timeline    = wgpGeoTimeline params
+        oceanDist   = wgpOceanDist params
+        chunkArea   = chunkSize * chunkSize
+        worldLakes  = gtWorldLakes timeline
+        worldRivers = gtWorldRivers timeline
 
         -- Chunk-level ocean BFS: is this chunk reachable from a
         -- world-edge ocean chunk via chunk-resolution flood?
@@ -117,21 +120,42 @@ composeFluidMap params coord terrainMap channelMask =
                             VUM.write v i surf
             pure v
 
+        -- Per-tile river surface lookup. Same shape as 'lakeSurfMap'
+        -- but reads each river entry's per-tile quantised surface z
+        -- instead of a single lake-wide value. Defensive lowest-wins
+        -- merge mirrors the lake path.
+        riverSurfMap ∷ VU.Vector Int
+        riverSurfMap = VU.create $ do
+            v ← VUM.replicate chunkArea minBound
+            V.forM_ (riversInChunk worldRivers coord) $ \rce → do
+                let bm   = rceBitmask rce
+                    surfs = rcePerTileSurfZ rce
+                forM_ [0 .. chunkArea - 1] $ \i →
+                    when (bm VU.! i) $ do
+                        cur ← VUM.read v i
+                        let s = surfs VU.! i
+                        when (cur ≡ minBound ∨ s < cur) $
+                            VUM.write v i s
+            pure v
+
         waterFluid = V.generate chunkArea $ \idx →
             let terrZ   = terrainMap VU.! idx
                 isOcean = terrZ ≤ seaLevel ∧ chunkIsOceanic
-                lkSurf  = lakeSurfMap VU.! idx
+                rvSurf  = riverSurfMap VU.! idx
+                lkSurf  = lakeSurfMap  VU.! idx
             in if terrZ ≡ minBound
                then Nothing
                else if isOcean
                     then Just (FluidCell Ocean seaLevel)
                     else
-                      let cf = channelMask VU.! idx
-                      in if cf ≠ noChannel ∧ cf ≥ terrZ
-                         then Just (FluidCell River cf)
-                         else if lkSurf ≠ minBound ∧ lkSurf ≥ terrZ
-                              then Just (FluidCell Lake lkSurf)
-                              else Nothing
+                      -- River > Lake. By construction river tiles
+                      -- aren't inside any lake, but defensive priority
+                      -- keeps the picture consistent at edges.
+                      if rvSurf ≠ minBound ∧ rvSurf ≥ terrZ
+                      then Just (FluidCell River rvSurf)
+                      else if lkSurf ≠ minBound ∧ lkSurf ≥ terrZ
+                           then Just (FluidCell Lake lkSurf)
+                           else Nothing
 
         -- Lava still disabled (see Phase 1 plan).
         _ = (gtFeatures timeline, computeChunkLava)
