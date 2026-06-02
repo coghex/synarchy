@@ -88,9 +88,10 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     worldGenCfg0 ← readIORef (worldGenConfigRef env)
     let erosionIntensity = wgcErosionIntensity worldGenCfg0
         volcanicActivity = wgcVolcanicActivity worldGenCfg0
-    let (timeline, timelineClimate) = buildTimeline populatedReg seed worldSize placeCount erosionIntensity volcanicActivity
+    let (timeline, timelineClimate, borderedCache) = buildTimeline populatedReg seed worldSize placeCount erosionIntensity volcanicActivity
     _ ← evaluate (force timeline)
     _ ← evaluate (force timelineClimate)
+    _ ← evaluate (force borderedCache)
     registry ← readIORef (materialRegistryRef env)
     let !_ = registry `seq` ()  -- ensure registry is read before logging timeline info
     let plateLines = formatPlatesSummary seed worldSize placeCount registry
@@ -157,7 +158,9 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     _ ← evaluate (force palette)
 
     sendGenLog env "Building zoom cache with per-chunk textures..."
-    let (zoomCache, chunkPixels) = buildZoomCacheWithPixels params registry palette
+    let (zoomCache, chunkPixels) =
+            buildZoomCacheWithPixels params registry palette
+                                     (Just borderedCache)
     _ ← evaluate (force zoomCache)
     _ ← evaluate (force chunkPixels)
     writeIORef (wsZoomCacheRef worldState) zoomCache

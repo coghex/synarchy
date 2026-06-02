@@ -201,7 +201,11 @@ handleWorldLoadSaveCommand env logger pageId saveData = do
     _ ← evaluate (force palette)
 
     sendGenLog env "Building zoom cache with per-chunk textures..."
-    let (zoomCache, chunkPixels) = buildZoomCacheWithPixels params registry palette
+    -- Loaded-save path: 'buildTimeline' didn't run on this code path,
+    -- so we don't have the init-time bordered cache; pass Nothing and
+    -- let generateZoomTerrain recompute the per-chunk pipeline.
+    let (zoomCache, chunkPixels) =
+            buildZoomCacheWithPixels params registry palette Nothing
     _ ← evaluate (force zoomCache)
     _ ← evaluate (force chunkPixels)
     writeIORef (wsZoomCacheRef worldState) zoomCache

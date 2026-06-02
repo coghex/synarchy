@@ -37,6 +37,7 @@ import World.Geology.Timeline.Types (GeoEvent(..))
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..))
 import World.Generate (applyTimelineFast)
 import World.Generate.Chunk (generateZoomTerrain)
+import World.Generate.InitTerrain (BorderedTerrainCache)
 import Data.Bits ((.&.), shiftR, xor)
 import Data.Word (Word64)
 import World.Vegetation (isBarrenMaterial, isWetlandSoil
@@ -182,10 +183,19 @@ buildZoomCache params registry =
 --   For each chunk, computes material and vegetation at every
 --   tile position (16×16) and generates RGBA pixel data using
 --   the color palette.
+--
+--   The 'Maybe BorderedTerrainCache' is the optional init-time
+--   per-chunk pipeline cache. When present (only on fresh world
+--   init, where 'buildTimeline' produced it alongside the timeline),
+--   'generateZoomTerrain' reads the pre-computed bordered terrain
+--   instead of re-running 'applyTimelineChunk' /
+--   'applyCoastalErosion' / 'removeElevationSpikes'. Loaded-save
+--   paths pass 'Nothing' and pay the recompute cost.
 buildZoomCacheWithPixels ∷ WorldGenParams → MaterialRegistry
                          → ZoomColorPalette
+                         → Maybe BorderedTerrainCache
                          → (V.Vector ZoomChunkEntry, V.Vector BS.ByteString)
-buildZoomCacheWithPixels params registry palette =
+buildZoomCacheWithPixels params registry palette mBorderedCache =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
         plates = wgpPlates params
@@ -218,7 +228,7 @@ buildZoomCacheWithPixels params registry palette =
                 -- Use the full detail-world pipeline (bordered region +
                 -- timeline + coastal erosion + fluid) for accurate terrain.
                 (zoomElev, zoomMat, chunkFluidMap) =
-                    generateZoomTerrain registry params coord
+                    generateZoomTerrain registry params mBorderedCache coord
 
                 -- Build tile data from accurate terrain + compute vegetation
                 tileData = [ let gx = baseGX + lx

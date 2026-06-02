@@ -45,15 +45,17 @@ module World.Fluid.River.Identify
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.IntMap.Strict as IM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
-import Control.Monad (when, forM_)
+import Control.Monad (when, forM_, foldM)
 import Control.Monad.ST (ST, runST)
 import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
 import Data.Word (Word8)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Constants (seaLevel)
+import World.Fluid.Lake.Identify (computeWorldEdgeOcean)
 import World.Fluid.Lake.Types
     ( WorldLakes(..), LakeChunkEntry(..), Lake(..) )
 import World.Fluid.River.Types
@@ -81,6 +83,26 @@ riverThreshold = 100
 targetRiverCount ∷ Int → Int
 targetRiverCount worldSize =
     max 5 (worldSize * worldSize `div` 50)
+
+-- | Reference flow level that maps to one tile of perpendicular width.
+--   See 'widthRadiusFromFlow'. With @widthScale = 500@: flow 500 →
+--   radius 0 (1 wide), flow 1000 → radius 1 (3 wide), flow 2000 → 2
+--   (5 wide), flow 4000+ → 3 (7 wide).
+widthScale ∷ Int
+widthScale = 500
+
+-- | Maximum half-width. Caps the widest river at 7 tiles end-to-end
+--   (centre + 3 perpendicular on each side).
+maxWidthRadius ∷ Int
+maxWidthRadius = 3
+
+-- | Per-tile width radius from accumulated flow. Logarithmic ramp so
+--   small rivers stay narrow but big ones still hit the cap.
+widthRadiusFromFlow ∷ Int → Int
+widthRadiusFromFlow f =
+    let ratio = fromIntegral (max 1 f) / fromIntegral widthScale ∷ Float
+    in max 0 (min maxWidthRadius
+                  (floor (logBase 2.0 (max 1.0 ratio)) ∷ Int))
 
 -- | Step size that the deferred waterfall-quantisation path would
 --   use. v1 keeps the surface at @carve + 1@ (see 'computeSurfaceZ'
@@ -167,7 +189,7 @@ identifyWorldRivers worldSize lakes terrain climate =
             precipUnits evapUnits ascOrder
 
     in traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf
-                   dir flow
+                   dir flow ascOrder
 
 -- * Climate → flow units
 --
@@ -192,18 +214,29 @@ computePrecipUnits worldSize climate terrain =
                  c  = lookupLocalClimate climate worldSize gx gy
              in round (lcPrecip c * 20.0 ∷ Float)
 
--- | Evap penalty per tile, in flow units. v1 disables this: per-tile
---   evap was unreliable across climate-region variance — some seeds
---   got blanket evap that wiped out every river, others got none.
---   The river-count balance is now handled by 'riverThreshold' (only
---   real basins cross) and 'minRiverLength' (short chains drop out).
---   Evap will return as a tuned, climate-region-area-normalized loss
---   in a later pass; for v1 every land tile contributes only precip.
+-- | Evap penalty per tile, in flow units. Conservative gradient: most
+--   temperate tiles end up at zero, hot tiles take a small linear
+--   penalty above 25 °C, arid tiles take a small linear penalty below
+--   30 % humidity. Together they produce typical evap of 0–3 units in
+--   land regions. v2 pairs this with the river-chain extension pass
+--   below — if evap drops local flow below threshold, the chain
+--   continues to its terminus at minimum width instead of fragmenting.
 computeEvapUnits ∷ Int → ClimateState → VU.Vector Int → VU.Vector Int
-computeEvapUnits worldSize _climate _terrain =
+computeEvapUnits worldSize climate terrain =
     let worldTiles = worldSize * chunkSize
         nTiles     = worldTiles * worldTiles
-    in VU.replicate nTiles 0
+        half       = worldTiles `div` 2
+    in VU.generate nTiles $ \i →
+        let t = terrain VU.! i
+        in if t ≡ minBound
+           then 0
+           else
+             let gx = (i `mod` worldTiles) - half
+                 gy = (i `div` worldTiles) - half
+                 c  = lookupLocalClimate climate worldSize gx gy
+                 tempPart = max 0.0 ((lcTemp c - 35.0) * 0.1) ∷ Float
+                 humPart  = max 0.0 ((0.2  - lcHumidity c) * 2.0) ∷ Float
+             in max 0 (round (tempPart + humPart))
 
 -- * Lake-id reverse index
 
@@ -520,20 +553,36 @@ traceRivers
     → VU.Vector Int        -- ^ spillwayOf
     → VU.Vector Word8      -- ^ dir
     → VU.Vector Int        -- ^ flow
+    → VU.Vector Int        -- ^ ascending z order
     → WorldRivers
-traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow =
+traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
+            ascOrder =
     let worldTiles = worldSize * chunkSize
         nTiles     = worldTiles * worldTiles
         half       = worldTiles `div` 2
 
-        -- Step 1: identify river-candidate tiles.
-        --   A tile is a river candidate iff flow ≥ threshold,
-        --   it's not in a lake, terrain valid, above sea level.
-        isRiverTile = VU.generate nTiles $ \i →
+        -- Step 1a: primary river tiles (flow crosses the per-tile threshold).
+        isPrimary = VU.generate nTiles $ \i →
             let t   = terrain VU.! i
                 lk  = lakeIdAt VU.! i
                 fl  = flow VU.! i
             in t ≠ minBound ∧ lk < 0 ∧ t > seaLevel ∧ fl ≥ riverThreshold
+
+        -- Step 1b: extend each chain downstream via D4 until it reaches
+        -- a terminus (ocean / lake / sink). Tiles whose own flow has been
+        -- pushed below threshold by arid-stretch evap still count as
+        -- river — at minimum width — so the chain doesn't fragment.
+        isRiverCentre = extendRiverChains worldTiles terrain lakeIdAt
+                                          dir isPrimary ascOrder
+
+        -- Step 1c: variable width. Each centre tile widens perpendicular
+        -- to its D4 dir up to 'widthRadiusFromFlow'. Returns the expanded
+        -- river-tile mask, per-tile width radius, and per-tile water
+        -- surface z (centre tiles use @terrain+1@; widened tiles inherit
+        -- the lowest centre's surface so the water plane stays flat
+        -- across the river's cross-section).
+        (isRiverTile, widthRadius, surfZ) =
+            expandWidth worldTiles terrain dir flow isRiverCentre
 
         -- Step 2: label connected components (4-cardinal via D4 chain).
         --   We walk every river tile and assign it a component id by
@@ -547,29 +596,185 @@ traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow =
         -- worldSize). Length rather than peak flow is the right signal
         -- here — peak flow picks single-tile mouth tiles, length picks
         -- visible chains.
-        (isRiverTileF, compId, nComps) =
+        (isRiverTileF, compIdF, nComps) =
             cullByLength worldSize rawCompId rawNComps isRiverTile
 
-        -- Step 3: per-tile water surface z. v1 sits one z above carve;
-        -- see 'computeSurfaceZ' note.
-        surfZ = computeSurfaceZ worldSize terrain isRiverTileF
-                                compId nComps
+        -- Step 3: coastal breakthrough. Stranded inland mouths within
+        -- 'breakthroughRange' of an ocean tile get a Dijkstra-found
+        -- path carved through the blocking terrain.  Path tiles are
+        -- added to the bitmask with width 0; surface descends to
+        -- @seaLevel + 1@ at the path's end.
+        worldOcean = computeWorldEdgeOcean terrain worldTiles
+        (isRiverTileB, compIdB, widthRadiusB, surfZB) =
+            addBreakthroughs worldTiles isRiverTileF compIdF dir terrain
+                             worldOcean widthRadius surfZ
 
         -- Step 4: build per-component bookkeeping (bbox, sources,
-        -- sinks, peak flow).
+        -- sinks, peak flow). Uses post-breakthrough data so bboxes
+        -- include the carved canyons.
         rivers = buildRivers worldSize terrain lakeIdAt isSpillwayOf
-                             spillwayOf dir flow isRiverTileF compId nComps
+                             spillwayOf dir flow isRiverTileB compIdB nComps
 
-        -- Step 5: per-chunk bitmasks + surface z slices.
-        byChunk = buildRiverChunkIndex worldSize half isRiverTileF compId
-                                       surfZ
+        -- Step 5: per-chunk bitmasks + surface z + width slices.
+        byChunk = buildRiverChunkIndex worldSize half isRiverTileB compIdB
+                                       surfZB widthRadiusB
+
+        -- Step 6: per-tile carve delta. Includes breakthrough path
+        -- tiles, which can have large delta where they cut through
+        -- coastal mountains.
+        carveDelta = computeCarveDelta worldTiles terrain
+                                       isRiverTileB widthRadiusB surfZB
+        carveByChunk = buildCarveDeltaIndex worldSize half isRiverTileB
+                                            carveDelta
 
     in if nComps ≡ 0
        then emptyWorldRivers
        else WorldRivers
-            { wrRivers  = rivers
-            , wrByChunk = byChunk
+            { wrRivers     = rivers
+            , wrByChunk    = byChunk
+            , wrCarveDelta = carveByChunk
             }
+
+-- | Extend each primary-river chain downstream along the D4 dir until
+--   it reaches a terminus (lake / ocean tile / world boundary / sink).
+--   Tiles below threshold are still marked river so an arid stretch
+--   mid-chain doesn't fragment the river — width will end up at
+--   radius 0 for those tiles because flow there is small.
+--
+--   Pass in descending-z order so by the time we visit a tile, any
+--   upstream chain that reaches it has already marked it.
+extendRiverChains
+    ∷ Int                  -- ^ worldTiles
+    → VU.Vector Int        -- ^ terrain
+    → VU.Vector Int        -- ^ lakeIdAt
+    → VU.Vector Word8      -- ^ dir
+    → VU.Vector Bool       -- ^ isPrimary (flow ≥ threshold + land tile)
+    → VU.Vector Int        -- ^ ascending z order
+    → VU.Vector Bool
+extendRiverChains worldTiles terrain lakeIdAt dir isPrimary ascOrder =
+    let nTiles = worldTiles * worldTiles
+        nOrd   = VU.length ascOrder
+    in VU.create $ do
+        isR ← VUM.replicate nTiles False
+        forM_ [0 .. nTiles - 1] $ \i →
+            when (isPrimary VU.! i) (VUM.write isR i True)
+        forM_ [nOrd - 1, nOrd - 2 .. 0] $ \k → do
+            let i = ascOrder VU.! k
+            mine ← VUM.read isR i
+            when mine $
+                case stepDir worldTiles i (dir VU.! i) of
+                    Nothing → pure ()
+                    Just dn → do
+                        let dnT       = terrain  VU.! dn
+                            dnLake    = lakeIdAt VU.! dn ≥ 0
+                            dnOcean   = dnT ≠ minBound ∧ dnT ≤ seaLevel
+                                      ∧ not dnLake
+                            dnBeyond  = dnT ≡ minBound
+                        -- Stop the river at any terminus tile (lake,
+                        -- ocean, void). Otherwise propagate the marker.
+                        when (not dnLake ∧ not dnOcean ∧ not dnBeyond) $
+                            VUM.write isR dn True
+        pure isR
+
+-- | Per-tile width radius (0..maxWidthRadius), expanded perpendicular
+--   to flow direction. Returns the widened river-tile mask, per-tile
+--   width radius (-1 for non-river), and per-tile water surface z.
+--
+--   The surface z at a widened tile is inherited from the centre that
+--   widened it. If multiple centres' wings overlap on a tile, the
+--   minimum (= most-downstream) surface wins so the water plane
+--   stays flat across the cross-section.
+expandWidth
+    ∷ Int                  -- ^ worldTiles
+    → VU.Vector Int        -- ^ terrain
+    → VU.Vector Word8      -- ^ dir
+    → VU.Vector Int        -- ^ flow
+    → VU.Vector Bool       -- ^ isRiverCentre (after extension)
+    → (VU.Vector Bool, VU.Vector Int, VU.Vector Int)
+expandWidth worldTiles terrain dir flow isRiverCentre =
+    let nTiles = worldTiles * worldTiles
+        -- Don't widen into terrain that rises too far above the river's
+        -- water surface. Caps the carve depth a wing tile can demand;
+        -- without this, a river running past a cliff base would try to
+        -- widen INTO the cliff and demand a 100+ z carve to keep the
+        -- water plane flush. 'depthFromRadius r + bankSlack' gives the
+        -- max pre-carve elevation a wing tile can have above the
+        -- centre's surface.
+        bankSlack = 3
+    in runST $ do
+        isR    ← VUM.replicate nTiles False
+        width  ← VUM.replicate nTiles (-1   ∷ Int)
+        surfZ  ← VUM.replicate nTiles minBound
+        let updateTile tIdx r s = do
+                VUM.write isR tIdx True
+                curR ← VUM.read width tIdx
+                when (r > curR) (VUM.write width tIdx r)
+                curS ← VUM.read surfZ tIdx
+                when (curS ≡ minBound ∨ s < curS) (VUM.write surfZ tIdx s)
+            walkWing centreIdx r perpD = do
+                centreS ← VUM.read surfZ centreIdx
+                let maxBank = centreS + depthFromRadius r + bankSlack
+                    -- Also cap downhill — a wing tile far below the
+                    -- centre's surface would create a many-tile water
+                    -- column trying to fill the natural depression
+                    -- (e.g., a river running near a deep valley).
+                    -- Limit to a modest drop so rivers don't pool
+                    -- into adjacent low ground.
+                    minBank = centreS - 6
+                    loop k cur
+                        | k > r = pure ()
+                        | otherwise =
+                            case stepDir worldTiles cur perpD of
+                                Nothing → pure ()
+                                Just nxt → do
+                                    let nT = terrain VU.! nxt
+                                    when (nT ≠ minBound
+                                          ∧ nT ≤ maxBank
+                                          ∧ nT ≥ minBank) $ do
+                                        updateTile nxt r centreS
+                                        loop (k + 1) nxt
+                loop 1 centreIdx
+        forM_ [0 .. nTiles - 1] $ \i → when (isRiverCentre VU.! i) $ do
+            let t    = terrain VU.! i
+                surf = t
+                r    = widthRadiusFromFlow (flow VU.! i)
+            updateTile i r surf
+            when (r > 0) $
+                forM_ (perpDirs (dir VU.! i)) (walkWing i r)
+        isRf   ← VU.unsafeFreeze isR
+        widthF ← VU.unsafeFreeze width
+        surfZf ← VU.unsafeFreeze surfZ
+        pure (isRf, widthF, surfZf)
+
+-- | Carve depth in z for a given width radius. v2 user-approved:
+--   narrow rivers (radius 0/1) carve 1 z; wider rivers carve deeper
+--   so high-flow rivers cut visible canyons.
+depthFromRadius ∷ Int → Int
+depthFromRadius r
+    | r ≥ 3     = 3
+    | r ≥ 2     = 2
+    | otherwise = 1
+
+-- | Tile-radius within which an inland river-mouth will try to
+--   breakthrough-carve a path to the nearest ocean. Inland rivers
+--   farther from any coast stay endorheic.
+breakthroughRange ∷ Int
+breakthroughRange = 40
+
+-- | Maximum cumulative carve cost (sum of uphill z plus 1 per step)
+--   the breakthrough Dijkstra will accept. Beyond this the breakthrough
+--   fails and the river pools at its inland terminus.
+breakthroughMaxCarve ∷ Int
+breakthroughMaxCarve = 50
+
+-- | Cardinal directions perpendicular to a given D4 direction. For
+--   sinks ('dirNone'), expand in all four cardinal directions so a
+--   ponding terminus still picks up width.
+perpDirs ∷ Word8 → [Word8]
+perpDirs d
+    | d ≡ dirNorth ∨ d ≡ dirSouth = [dirEast,  dirWest]
+    | d ≡ dirEast  ∨ d ≡ dirWest  = [dirNorth, dirSouth]
+    | otherwise                   = [dirNorth, dirSouth, dirEast, dirWest]
 
 -- | Keep only the top @targetRiverCount worldSize@ river components
 --   ranked by per-component tile count. Surviving components are
@@ -693,40 +898,6 @@ labelRiverComponents worldTiles isRiverTile dir =
         idsF  ← VU.unsafeFreeze ids
         pure (idsF, n)
 
--- | Per-tile water surface z. v1 sits the surface 1 z above the
---   channel floor: water flows AT terrain height with one tile of
---   depth above. This is the simplest thing that visually works for
---   1-tile-wide rivers — the renderer fills @terrain+1..surface@, so
---   @surface = carve + 1@ means exactly one water tile per river
---   tile and the river contours the landscape smoothly.
---
---   A first draft quantised this to multiples of 'waterfallQuantum'
---   with a per-river noise offset, aiming for flat-stretches +
---   noise-jittered waterfalls. For lakes it would have worked (wide
---   basins fill the column), but a 1-tile-wide river with a surface
---   11 z above carve renders as an isolated water column poking up
---   from dry land — exactly the artifact the user reported. The
---   quantised approach is deferred until rivers have either variable
---   width or terrain-modification carving, both of which would let
---   the column merge into the channel cross-section.
---
---   'compId' and 'nComps' are kept in the signature so the future
---   quantised path doesn't need a wider rewrite.
-computeSurfaceZ
-    ∷ Int                  -- ^ worldSize
-    → VU.Vector Int        -- ^ terrain
-    → VU.Vector Bool       -- ^ isRiverTile
-    → VU.Vector Int        -- ^ compId
-    → Int                  -- ^ nComps
-    → VU.Vector Int
-computeSurfaceZ worldSize terrain isRiverTile _compId _nComps =
-    let worldTiles = worldSize * chunkSize
-        nTiles     = worldTiles * worldTiles
-    in VU.generate nTiles $ \i →
-        if not (isRiverTile VU.! i)
-        then minBound
-        else terrain VU.! i + 1
-
 -- | Build the 'River' vector. For each component compute bbox, peak
 --   flow, source-lake (if its start tile is a spillway), sink-lake
 --   (if a downstream tile of the chain enters a lake).
@@ -794,6 +965,251 @@ buildRivers worldSize terrain lakeIdAt isSpillwayOf _spillwayOf dir flow
                 , rivBBoxMaxY   = bMaxYF VU.! cid
                 }
 
+-- * Coastal breakthrough
+
+-- | Walk every river tile with @dir = dirNone@ (a true sink, no
+--   downhill neighbour) that's above sea level. These are the stranded
+--   inland mouths the breakthrough pass tries to extend to ocean.
+findStrandedMouths
+    ∷ Int                  -- ^ nTiles
+    → VU.Vector Bool       -- ^ isRiverTile
+    → VU.Vector Word8      -- ^ dir
+    → VU.Vector Int        -- ^ terrain
+    → [Int]
+findStrandedMouths nTiles isRiverTile dir terrain =
+    [ i | i ← [0 .. nTiles - 1]
+        , isRiverTile VU.! i
+        , dir VU.! i ≡ dirNone
+        , terrain VU.! i > seaLevel
+        ]
+
+-- | Dijkstra from a stranded mouth to the nearest tile in 'worldOcean'.
+--   Edge cost is @max 0 (next_z − current_z) + 1@ — uphill is the bulk
+--   of the cost, plus a small per-step term so flat extensions don't
+--   meander.  Stops when total cost exceeds 'breakthroughMaxCarve' or
+--   when distance from start exceeds 'breakthroughRange'.
+--
+--   Returns @Just (path, totalCost)@ on success — path is from start
+--   to ocean tile inclusive.
+dijkstraBreakthrough
+    ∷ Int                  -- ^ worldTiles
+    → Int                  -- ^ start tile idx
+    → VU.Vector Int        -- ^ terrain
+    → VU.Vector Bool       -- ^ worldOcean
+    → Maybe ([Int], Int)
+dijkstraBreakthrough worldTiles startIdx terrain worldOcean = runST $ do
+    let nTiles = worldTiles * worldTiles
+    bestCost ← VUM.replicate nTiles (maxBound ∷ Int)
+    parent   ← VUM.replicate nTiles (-1       ∷ Int)
+    dist     ← VUM.replicate nTiles (maxBound ∷ Int)
+    VUM.write bestCost startIdx 0
+    VUM.write dist     startIdx 0
+    foundRef ← newSTRef Nothing
+    let neighbours i =
+            let bx = i `mod` worldTiles
+                by = i `div` worldTiles
+                east = if bx < worldTiles - 1
+                       then i + 1
+                       else i + 1 - worldTiles
+                west = if bx > 0
+                       then i - 1
+                       else i - 1 + worldTiles
+                north = if by > 0
+                        then Just (i - worldTiles) else Nothing
+                south = if by < worldTiles - 1
+                        then Just (i + worldTiles) else Nothing
+            in [Just east, Just west, north, south]
+        loop pq
+            | IM.null pq = pure ()
+            | otherwise = do
+                let ((c, (i, rest)), pqAfter) = case IM.findMin pq of
+                        (ck, vs) → case vs of
+                            (v:rs) → ((ck, (v, rs)), IM.delete ck pq)
+                            []     → ((ck, (-1, [])), IM.delete ck pq)
+                    pq1 = if null rest
+                          then pqAfter
+                          else IM.insert c rest pqAfter
+                if i < 0 then loop pq1
+                else do
+                  bc ← VUM.read bestCost i
+                  if c > bc
+                    then loop pq1
+                    else do
+                      done ← readSTRef foundRef
+                      case done of
+                        Just _ → pure ()
+                        Nothing →
+                          if worldOcean VU.! i
+                            then writeSTRef foundRef (Just (i, c))
+                            else do
+                              d ← VUM.read dist i
+                              if d ≥ breakthroughRange
+                                then loop pq1
+                                else do
+                                  pq2 ← expandNeighbours i d c pq1
+                                  loop pq2
+        expandNeighbours i d c pq =
+            foldM (tryStep i d c) pq (neighbours i)
+        tryStep i d c pq mn =
+            case mn of
+                Nothing → pure pq
+                Just nIdx → do
+                    let nT = terrain VU.! nIdx
+                    if nT ≡ minBound
+                       then pure pq
+                       else do
+                         let edgeCost = max 0 (nT - terrain VU.! i) + 1
+                             newCost  = c + edgeCost
+                         if newCost > breakthroughMaxCarve
+                            then pure pq
+                            else do
+                              bcN ← VUM.read bestCost nIdx
+                              if newCost < bcN
+                                then do
+                                    VUM.write bestCost nIdx newCost
+                                    VUM.write parent   nIdx i
+                                    VUM.write dist     nIdx (d + 1)
+                                    pure (IM.insertWith (++) newCost
+                                              [nIdx] pq)
+                                else pure pq
+    loop (IM.singleton 0 [startIdx])
+    fr ← readSTRef foundRef
+    case fr of
+        Nothing → pure Nothing
+        Just (endIdx, c) → do
+            let rebuild cur acc = do
+                    p ← VUM.read parent cur
+                    if p < 0 then pure (cur : acc)
+                    else rebuild p (cur : acc)
+            path ← rebuild endIdx []
+            pure (Just (path, c))
+
+-- | For each stranded inland mouth, run the breakthrough Dijkstra and
+--   if it returns a path within the cost cap, mark every tile on the
+--   path as river with width 0 and a monotonically descending surface
+--   z (last step ends at @seaLevel + 1@).  Updates the compId for
+--   path tiles so they get attached to the originating river in the
+--   per-chunk index.
+addBreakthroughs
+    ∷ Int                  -- ^ worldTiles
+    → VU.Vector Bool       -- ^ isRiverTile (post-cull)
+    → VU.Vector Int        -- ^ compId
+    → VU.Vector Word8      -- ^ dir
+    → VU.Vector Int        -- ^ terrain
+    → VU.Vector Bool       -- ^ worldOcean
+    → VU.Vector Int        -- ^ widthRadius
+    → VU.Vector Int        -- ^ surfZ
+    → (VU.Vector Bool, VU.Vector Int, VU.Vector Int, VU.Vector Int)
+addBreakthroughs worldTiles isRiverTile compId dir terrain worldOcean
+                 widthRadius surfZ =
+    let nTiles = worldTiles * worldTiles
+        mouths = findStrandedMouths nTiles isRiverTile dir terrain
+    in runST $ do
+        isRM   ← VU.thaw isRiverTile
+        compM  ← VU.thaw compId
+        widthM ← VU.thaw widthRadius
+        surfM  ← VU.thaw surfZ
+        forM_ mouths $ \m → do
+            let mSurf = surfZ VU.! m
+                mCid  = compId VU.! m
+            when (mCid ≥ 0) $
+                case dijkstraBreakthrough worldTiles m terrain worldOcean of
+                    Nothing       → pure ()
+                    Just (path, _) → do
+                        -- Walk the path past the start (path[0] is the
+                        -- mouth, already a river tile). Surface tracks
+                        -- the natural terrain so a descending stretch
+                        -- doesn't leave a many-z water column behind;
+                        -- uphill stretches still descend at least 1 z
+                        -- per step so the river never flows uphill.
+                        -- Floor at @seaLevel + 1@ so the river hands
+                        -- off cleanly to ocean at the path's end.
+                        let walk prevSurf [] = pure ()
+                            walk prevSurf (p : rest) = do
+                                let preCarve = terrain VU.! p
+                                    target =
+                                        max (seaLevel + 1)
+                                            (min (prevSurf - 1) preCarve)
+                                VUM.write isRM   p True
+                                curW ← VUM.read widthM p
+                                when (curW < 0) (VUM.write widthM p 0)
+                                VUM.write compM  p mCid
+                                VUM.write surfM  p target
+                                walk target rest
+                        walk mSurf (drop 1 path)
+        isRf   ← VU.unsafeFreeze isRM
+        compF  ← VU.unsafeFreeze compM
+        widthF ← VU.unsafeFreeze widthM
+        surfF  ← VU.unsafeFreeze surfM
+        pure (isRf, compF, widthF, surfF)
+
+-- | Per-tile carve delta in z. Water surface is the centre's pre-carve
+--   elevation; post-carve terrain at a river tile is
+--   @min(preCarve, surface − depthFromRadius)@. The delta lowers the
+--   terrain enough to ensure water visible at every river tile and
+--   keep the cross-section flat under the same water plane.
+--
+--   For tiles whose pre-carve terrain is already below the channel
+--   floor (downhill banks), delta = 0; the natural depression fills
+--   with water.
+computeCarveDelta
+    ∷ Int                  -- ^ worldTiles
+    → VU.Vector Int        -- ^ terrain
+    → VU.Vector Bool       -- ^ isRiverTile
+    → VU.Vector Int        -- ^ widthRadius
+    → VU.Vector Int        -- ^ surfaceZ
+    → VU.Vector Int
+computeCarveDelta worldTiles terrain isRiverTile widthRadius surfZ =
+    let nTiles = worldTiles * worldTiles
+    in VU.generate nTiles $ \i →
+        if not (isRiverTile VU.! i)
+        then 0
+        else
+          let preCarve = terrain VU.! i
+              surf     = surfZ   VU.! i
+              r        = max 0 (widthRadius VU.! i)
+              depth    = depthFromRadius r
+          in max 0 (preCarve - surf + depth)
+
+-- | Bucket the per-tile carve delta into per-chunk vectors so chunk
+--   gen can look up its slice in O(1). Only chunks that touch a river
+--   appear in the output map.
+buildCarveDeltaIndex
+    ∷ Int                  -- ^ worldSize
+    → Int                  -- ^ half
+    → VU.Vector Bool       -- ^ isRiverTile
+    → VU.Vector Int        -- ^ per-tile carve delta
+    → HM.HashMap ChunkCoord (VU.Vector Int)
+buildCarveDeltaIndex worldSize half isRiverTile carveDelta =
+    let worldTiles = worldSize * chunkSize
+        nTiles     = worldTiles * worldTiles
+        chunkArea  = chunkSize * chunkSize
+        -- Pass 1: bucket non-zero deltas by chunk.
+        step acc i
+            | not (isRiverTile VU.! i) = acc
+            | otherwise =
+                let d = carveDelta VU.! i
+                in if d ≤ 0 then acc
+                   else
+                     let gx = (i `mod` worldTiles) - half
+                         gy = (i `div` worldTiles) - half
+                         cx = gx `div` chunkSize
+                         cy = gy `div` chunkSize
+                         lx = ((gx `mod` chunkSize) + chunkSize) `mod` chunkSize
+                         ly = ((gy `mod` chunkSize) + chunkSize) `mod` chunkSize
+                         li = ly * chunkSize + lx
+                     in HM.insertWith (++) (ChunkCoord cx cy)
+                                      [(li, d)] acc
+        accum ∷ HM.HashMap ChunkCoord [(Int, Int)]
+        accum = foldl' step HM.empty [0 .. nTiles - 1]
+        -- Pass 2: freeze each chunk's tile list into a chunkArea-long
+        -- delta vector (zero for tiles without carving).
+        freezeChunk tiles = VU.create $ do
+            v ← VUM.replicate chunkArea (0 ∷ Int)
+            forM_ tiles $ \(li, d) → VUM.write v li d
+            pure v
+    in HM.map freezeChunk accum
+
 -- | Build the per-chunk index: one 'RiverChunkEntry' per (chunk, river)
 --   pair that overlaps. Both the bitmask and the per-tile surface z are
 --   chunkArea-long.
@@ -803,12 +1219,13 @@ buildRiverChunkIndex
     → VU.Vector Bool       -- ^ isRiverTile
     → VU.Vector Int        -- ^ compId
     → VU.Vector Int        -- ^ surfZ
+    → VU.Vector Int        -- ^ widthRadius
     → HM.HashMap ChunkCoord (V.Vector RiverChunkEntry)
-buildRiverChunkIndex worldSize half isRiverTile compId surfZ =
+buildRiverChunkIndex worldSize half isRiverTile compId surfZ widthRadius =
     let worldTiles = worldSize * chunkSize
         nTiles     = worldTiles * worldTiles
         chunkArea  = chunkSize * chunkSize
-        -- Pass 1: bucket tiles into (chunk, riverId) → [(localIdx, surfZ)].
+        -- Pass 1: bucket tiles into (chunk, riverId) → [(localIdx, surfZ, width)].
         step acc i
             | not (isRiverTile VU.! i) = acc
             | otherwise =
@@ -821,27 +1238,32 @@ buildRiverChunkIndex worldSize half isRiverTile compId surfZ =
                     li     = ly * chunkSize + lx
                     rid    = compId VU.! i
                     z      = surfZ VU.! i
+                    w      = max 0 (widthRadius VU.! i)
                 in HM.insertWith (++) (ChunkCoord cx cy, rid)
-                                 [(li, z)] acc
-        accumKey ∷ HM.HashMap (ChunkCoord, Int) [(Int, Int)]
+                                 [(li, z, w)] acc
+        accumKey ∷ HM.HashMap (ChunkCoord, Int) [(Int, Int, Int)]
         accumKey = foldl' step HM.empty [0 .. nTiles - 1]
-        -- Pass 2: per key, freeze into bitmask + per-tile surface.
+        -- Pass 2: per key, freeze into bitmask + per-tile surface + width.
         perKey ∷ HM.HashMap (ChunkCoord, Int) RiverChunkEntry
         perKey = HM.mapWithKey
             (\(_, rid) tiles →
-                let (bm, surfs) = runST $ do
+                let (bm, surfs, widths) = runST $ do
                         b ← VUM.replicate chunkArea False
                         s ← VUM.replicate chunkArea minBound
-                        forM_ tiles $ \(li, z) → do
+                        w ← VUM.replicate chunkArea (0 ∷ Word8)
+                        forM_ tiles $ \(li, z, wr) → do
                             VUM.write b li True
                             VUM.write s li z
+                            VUM.write w li (fromIntegral wr)
                         bF ← VU.unsafeFreeze b
                         sF ← VU.unsafeFreeze s
-                        pure (bF, sF)
+                        wF ← VU.unsafeFreeze w
+                        pure (bF, sF, wF)
                 in RiverChunkEntry
-                    { rceRiverId      = rid
-                    , rceBitmask      = bm
-                    , rcePerTileSurfZ = surfs
+                    { rceRiverId       = rid
+                    , rceBitmask       = bm
+                    , rcePerTileSurfZ  = surfs
+                    , rceWidthRadius   = widths
                     })
             accumKey
         -- Pass 3: regroup by chunk.

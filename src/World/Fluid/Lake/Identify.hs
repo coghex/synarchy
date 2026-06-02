@@ -29,6 +29,7 @@
 --   address (noise spikes that the timeline despike misses).
 module World.Fluid.Lake.Identify
     ( identifyWorldLakes
+    , computeWorldEdgeOcean
     ) where
 
 import UPrelude
@@ -42,6 +43,9 @@ import Control.Monad.ST (runST)
 import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Constants (seaLevel)
+import qualified Data.HashSet as HS
+import World.Fluid.Internal (wrapChunkCoordU)
+import World.Ocean.Types (OceanMap)
 import World.Fluid.Lake.Types
     ( Lake(..), WorldLakes(..), LakeChunkEntry(..), emptyWorldLakes )
 
@@ -57,6 +61,25 @@ import World.Fluid.Lake.Types
 minBasinTiles ∷ Int
 minBasinTiles = 1
 
+-- | Tile-distance from open ocean within which a sub-sea basin gets
+--   its surface clamped to 'seaLevel'. Catches a coastal basin that
+--   would otherwise render as a lake perched above the adjacent sea
+--   when only a thin land bar separates the two. Tuned wide enough
+--   to cross the chunk-level oceanic region that surrounds the
+--   tile-level world-edge ocean BFS — many "rendered as ocean" tiles
+--   aren't in the world-edge BFS because the BFS only walks sub-sea
+--   tiles, so a wider dilation lets the coastal-lake detection find
+--   basins separated from BFS-ocean by several land tiles.
+coastalProximity ∷ Int
+coastalProximity = 25
+
+-- | Chunk-level proximity used as a fallback when the tile dilation
+--   can't bridge the land between a lake and ocean. A lake whose
+--   chunk is within this many cardinal hops of an oceanic chunk is
+--   treated as coastal.
+coastalChunkRadius ∷ Int
+coastalChunkRadius = 3
+
 -- * Entry point
 
 -- | Run the full lake identification pipeline. Allocates ~50 MB peak
@@ -69,9 +92,10 @@ minBasinTiles = 1
 --   @gy_off * worldTiles + gx_off@ with @gx_off = gx + halfWorld@.
 identifyWorldLakes
     ∷ Int                              -- ^ worldSize (chunks per side)
+    → OceanMap                         -- ^ chunk-level ocean classifier
     → VU.Vector Int                    -- ^ world terrain (worldTiles^2)
     → WorldLakes
-identifyWorldLakes worldSize terrain =
+identifyWorldLakes worldSize oceanMap terrain =
     let worldTiles = worldSize * chunkSize
         -- Which tiles are world-edge connected open ocean? Computed
         -- by BFS from world-boundary cells with @terrain ≤ seaLevel@,
@@ -89,7 +113,27 @@ identifyWorldLakes worldSize terrain =
         nLabels    = if VU.null labels
                      then 0
                      else 1 + VU.maximum (VU.cons (-1) labels)
+        -- Tiles within 'coastalProximity' of any open-ocean tile.
+        -- A sub-sea basin that lives inside this mask gets its
+        -- surface clamped to sea level — visually it'd be a sub-sea
+        -- bay, not a perched inland lake stepped above the sea.
+        -- Seed mask for "near rendered ocean": world-edge BFS ocean
+        -- plus any sub-sea tile inside an oceanic chunk. The latter
+        -- catches enclaves that 'computeWorldEdgeOcean' missed because
+        -- they're not BFS-connected to a world-edge sub-sea tile but
+        -- still render as ocean via the chunk-level check.
+        renderedOceanMask = computeRenderedOceanSeed worldSize oceanMap
+                                                     terrain worldOcean
+        coastalMask = nearOceanMask coastalProximity worldTiles
+                                    renderedOceanMask terrain
+        -- Dilate the oceanic-chunk set out by 'coastalChunkRadius' so a
+        -- lake whose chunk sits a couple chunks inland from any
+        -- oceanic chunk still registers as coastal. Without this, the
+        -- per-tile dilation alone can miss seeds whose tile-BFS path
+        -- bumps into a beyond-glacier wall or a narrow land bridge.
+        nearOceanicChunks = dilateChunkSet coastalChunkRadius oceanMap
         rawLakes   = buildLakes nLabels terrain filled labels worldTiles
+                                coastalMask nearOceanicChunks
         kept       = V.filter
                        (\lw → lkArea (lkLake lw) ≥ minBasinTiles) rawLakes
         -- Renumber: old label → new lake id (-1 = dropped).
@@ -103,11 +147,14 @@ identifyWorldLakes worldSize terrain =
         -- it).
         finalLakes = V.map dropOldId kept
         byChunk    = buildChunkIndex worldTiles idMap labels
+        carveByChunk = buildLakeCarveIndex worldTiles terrain finalLakes
+                                           byChunk
     in if V.null finalLakes
        then emptyWorldLakes
        else WorldLakes
-            { wlLakes   = finalLakes
-            , wlByChunk = byChunk
+            { wlLakes      = finalLakes
+            , wlByChunk    = byChunk
+            , wlCarveDelta = carveByChunk
             }
 
 -- | Lake record extended with its raw label id (only used during
@@ -265,9 +312,12 @@ buildLakes
     → VU.Vector Int      -- ^ filled
     → VU.Vector Int      -- ^ labels (-1 = no basin)
     → Int                -- ^ worldTiles
+    → VU.Vector Bool     -- ^ coastalMask
+    → OceanMap           -- ^ chunk-level oceanic set
     → V.Vector LakeWithId
-buildLakes nLabels terrain filled labels worldTiles = runST $ do
+buildLakes nLabels terrain filled labels worldTiles coastalMask oceanMap = runST $ do
     let half = worldTiles `div` 2
+        worldSize = worldTiles `div` chunkSize
     floorsM ← VUM.replicate nLabels (maxBound ∷ Int)
     surfsM  ← VUM.replicate nLabels (minBound ∷ Int)
     areasM  ← VUM.replicate nLabels (0       ∷ Int)
@@ -275,11 +325,23 @@ buildLakes nLabels terrain filled labels worldTiles = runST $ do
     byminM  ← VUM.replicate nLabels (maxBound ∷ Int)
     bxmaxM  ← VUM.replicate nLabels (minBound ∷ Int)
     bymaxM  ← VUM.replicate nLabels (minBound ∷ Int)
+    coastalM ← VUM.replicate nLabels False
     VU.iforM_ labels $ \idx lbl → when (lbl ≥ 0) $ do
         let e  = terrain VU.! idx
             f  = filled  VU.! idx
             gx = (idx `mod` worldTiles) - half
             gy = (idx `div` worldTiles) - half
+            cx = gx `div` chunkSize
+            cy = gy `div` chunkSize
+            -- Coastal via the dilated tile mask:
+            inMask = coastalMask VU.! idx
+            -- Coastal via the dilated chunk set. Wrap the chunk coord
+            -- through the u-axis torus so the lookup matches the
+            -- canonical key 'computeOceanMap' uses (chunks at the wrap
+            -- edge live at their wrapped coord).
+            chunkNearOcean =
+                HS.member (wrapChunkCoordU worldSize (ChunkCoord cx cy))
+                          oceanMap
         VUM.modify floorsM (min e) lbl
         VUM.modify surfsM  (max f) lbl
         VUM.modify areasM  (+ 1)   lbl
@@ -287,6 +349,7 @@ buildLakes nLabels terrain filled labels worldTiles = runST $ do
         VUM.modify byminM  (min gy) lbl
         VUM.modify bxmaxM  (max gx) lbl
         VUM.modify bymaxM  (max gy) lbl
+        when (inMask ∨ chunkNearOcean) (VUM.write coastalM lbl True)
     floors ← VU.freeze floorsM
     surfs  ← VU.freeze surfsM
     areas  ← VU.freeze areasM
@@ -294,12 +357,25 @@ buildLakes nLabels terrain filled labels worldTiles = runST $ do
     bymins ← VU.freeze byminM
     bxmaxs ← VU.freeze bxmaxM
     bymaxs ← VU.freeze bymaxM
+    coastal ← VU.freeze coastalM
     pure $ V.generate nLabels $ \i →
-        LakeWithId
+        let rawSurf  = surfs  VU.! i
+            rawFloor = floors VU.! i
+            -- Coastal basin: clamp surface to sea level so it
+            -- renders flush with the adjacent open ocean instead of as
+            -- a perched inland lake stepped above it. The floor
+            -- restriction has been dropped — for above-sea coastal
+            -- basins the chunk-gen pipeline carves the basin tiles
+            -- down to sub-sea via 'wlCarveDelta' so the water plane
+            -- still finds tiles to render at @seaLevel@.
+            adjSurf
+              | coastal VU.! i ∧ rawSurf > seaLevel = seaLevel
+              | otherwise                            = rawSurf
+        in LakeWithId
             { lkOldId = i
             , lkLake  = Lake
-                { lkSurface  = surfs  VU.! i
-                , lkFloor    = floors VU.! i
+                { lkSurface  = adjSurf
+                , lkFloor    = rawFloor
                 , lkArea     = areas  VU.! i
                 , lkBBoxMinX = bxmins VU.! i
                 , lkBBoxMinY = bymins VU.! i
@@ -365,6 +441,150 @@ computeWorldEdgeOcean terrain worldTiles = runST $ do
 --
 --   The size filter ('minBasinTiles') runs in 'identifyWorldLakes';
 --   the bitmask build is here.
+
+-- | Dilate a set of chunks outward by @r@ cardinal hops. Used to
+--   build a "near-oceanic" chunk set as a fallback for the tile-level
+--   coastal dilation.
+dilateChunkSet ∷ Int → HS.HashSet ChunkCoord → HS.HashSet ChunkCoord
+dilateChunkSet 0 s = s
+dilateChunkSet r s =
+    let s' = HS.foldl' (\acc (ChunkCoord cx cy) →
+                acc `HS.union` HS.fromList
+                    [ ChunkCoord (cx - 1) cy
+                    , ChunkCoord (cx + 1) cy
+                    , ChunkCoord cx (cy - 1)
+                    , ChunkCoord cx (cy + 1)
+                    ])
+                s s
+    in dilateChunkSet (r - 1) s'
+
+-- | Combine the world-edge ocean BFS with the chunk-level oceanic
+--   classifier. A tile is included iff it's in either source — so a
+--   sub-sea tile that's BFS-isolated but lives in an oceanic chunk
+--   (where chunk-gen will render it as Ocean) still counts as ocean
+--   for the coastal-lake detection. Catches "renders as ocean" tiles
+--   that the pure tile-level BFS misses.
+computeRenderedOceanSeed
+    ∷ Int                  -- ^ worldSize
+    → OceanMap
+    → VU.Vector Int        -- ^ terrain
+    → VU.Vector Bool       -- ^ worldOcean (BFS result)
+    → VU.Vector Bool
+computeRenderedOceanSeed worldSize oceanMap terrain worldOcean =
+    let worldTiles = worldSize * chunkSize
+        nTiles     = worldTiles * worldTiles
+        half       = worldTiles `div` 2
+    in VU.generate nTiles $ \i →
+        if worldOcean VU.! i
+        then True
+        else
+          let t = terrain VU.! i
+          in if t ≡ minBound ∨ t > seaLevel
+             then False
+             else
+               let gx = (i `mod` worldTiles) - half
+                   gy = (i `div` worldTiles) - half
+                   cx = gx `div` chunkSize
+                   cy = gy `div` chunkSize
+                   worldSize = worldTiles `div` chunkSize
+               in HS.member (wrapChunkCoordU worldSize (ChunkCoord cx cy))
+                            oceanMap
+
+-- | Dilate the world-edge ocean mask outward by @maxDist@ tiles
+--   (4-cardinal). Returns a mask of every land tile that's within
+--   @maxDist@ steps of some open-ocean tile. Used by 'buildLakes' to
+--   detect coastal basins whose surface should be clamped to
+--   'seaLevel'.
+nearOceanMask
+    ∷ Int                  -- ^ maxDist
+    → Int                  -- ^ worldTiles
+    → VU.Vector Bool       -- ^ worldOcean
+    → VU.Vector Int        -- ^ terrain
+    → VU.Vector Bool
+nearOceanMask maxDist worldTiles worldOcean terrain = runST $ do
+    let nTiles = worldTiles * worldTiles
+    near ← VUM.replicate nTiles False
+    let seeds = [ i | i ← [0 .. nTiles - 1], worldOcean VU.! i ]
+    forM_ seeds (\i → VUM.write near i True)
+    frontierRef ← newSTRef seeds
+    let expand 0 = pure ()
+        expand d = do
+            frontier ← readSTRef frontierRef
+            nextRef  ← newSTRef ([] ∷ [Int])
+            forM_ frontier $ \i → do
+                let bx = i `mod` worldTiles
+                    by = i `div` worldTiles
+                    -- E/W wrap as an x-torus so coastlines at the
+                    -- world edge still get dilated into. Without
+                    -- this, lakes at the rightmost / leftmost columns
+                    -- may not register as coastal when the wrapped
+                    -- neighbour is ocean.
+                    east = if bx < worldTiles - 1
+                           then i + 1
+                           else i + 1 - worldTiles
+                    west = if bx > 0
+                           then i - 1
+                           else i - 1 + worldTiles
+                    tryN ok nIdx = when ok $ do
+                        let nT = terrain VU.! nIdx
+                        cur ← VUM.read near nIdx
+                        when (nT ≠ minBound ∧ not cur) $ do
+                            VUM.write near nIdx True
+                            modifySTRef' nextRef (nIdx :)
+                tryN True                  west
+                tryN True                  east
+                tryN (by > 0)              (i - worldTiles)
+                tryN (by < worldTiles - 1) (i + worldTiles)
+            next ← readSTRef nextRef
+            writeSTRef frontierRef next
+            expand (d - 1)
+    expand maxDist
+    VU.unsafeFreeze near
+
+-- | For each chunk holding tiles of a clamped lake (lkSurface ≤
+--   seaLevel), build a per-tile carve delta vector that pulls each
+--   above-sea-level lake tile down to @seaLevel − 1@. Without this,
+--   a coastal basin with floor above sea level would clamp its
+--   surface but render no water — composeFluidMap would see
+--   @lkSurf < terrZ@ on every tile and skip them. The carve makes
+--   the basin floor sub-sea so the clamped surface fills correctly.
+--
+--   Chunks with no clamped-lake tiles are absent from the output.
+buildLakeCarveIndex
+    ∷ Int                  -- ^ worldTiles
+    → VU.Vector Int        -- ^ world terrain (pre-carve)
+    → V.Vector Lake        -- ^ finalLakes (post-clamp surface values)
+    → HM.HashMap ChunkCoord (V.Vector LakeChunkEntry)
+    → HM.HashMap ChunkCoord (VU.Vector Int)
+buildLakeCarveIndex worldTiles terrain finalLakes lakesByChunk =
+    let half       = worldTiles `div` 2
+        chunkArea  = chunkSize * chunkSize
+        processChunk (ChunkCoord cx cy) entries = runST $ do
+            v ← VUM.replicate chunkArea (0 ∷ Int)
+            V.forM_ entries $ \entry → do
+                let lid  = lceLakeId entry
+                    bm   = lceBitmask entry
+                    lake = finalLakes V.! lid
+                when (lkSurface lake ≤ seaLevel) $
+                    forM_ [0 .. chunkArea - 1] $ \li → when (bm VU.! li) $ do
+                        let lx    = li `mod` chunkSize
+                            ly    = li `div` chunkSize
+                            gx    = cx * chunkSize + lx
+                            gy    = cy * chunkSize + ly
+                            gxOff = gx + half
+                            gyOff = gy + half
+                        when (gxOff ≥ 0 ∧ gxOff < worldTiles
+                              ∧ gyOff ≥ 0 ∧ gyOff < worldTiles) $ do
+                            let idx = gyOff * worldTiles + gxOff
+                                t   = terrain VU.! idx
+                                d   = max 0 (t - (seaLevel - 1))
+                            cur ← VUM.read v li
+                            when (d > cur) (VUM.write v li d)
+            VU.unsafeFreeze v
+        result = HM.mapWithKey processChunk lakesByChunk
+        -- Drop chunks where every tile delta ended up at zero (a chunk
+        -- with only non-clamped lakes).
+    in HM.filter (\dv → VU.any (> 0) dv) result
 
 -- | For every chunk that overlaps a kept lake, build a bitmask of
 --   which chunk-local tiles belong to that lake. Chunks with no

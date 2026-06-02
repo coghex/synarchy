@@ -206,19 +206,23 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
   where
     borderSize = chunkSize + 2 * chunkBorder
 
+    {-# INLINE toIndex #-}
     toIndex lx ly =
         let bx = lx + chunkBorder
             by = ly + chunkBorder
         in by * borderSize + bx
 
+    {-# INLINE fromIndex #-}
     fromIndex idx =
         let (by, bx) = idx `divMod` borderSize
         in (bx - chunkBorder, by - chunkBorder)
 
+    {-# INLINE inBorder #-}
     inBorder lx ly =
         lx ≥ negate chunkBorder ∧ lx < chunkSize + chunkBorder ∧
         ly ≥ negate chunkBorder ∧ ly < chunkSize + chunkBorder
 
+    {-# INLINE lookupElev #-}
     lookupElev vec lx ly fallback =
         if inBorder lx ly
         then vec VU.! toIndex lx ly
@@ -280,6 +284,18 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                     matF  ← VU.unsafeFreeze matM
                     pure (elevF, matF)
 
+            -- Cache the regional-erosion table lookups per period.
+            -- Inside applyTimelineChunk's bordered region (24 tiles per
+            -- side), all tiles fall inside the same 2×2 climate-region
+            -- cell — so the 4 HashMap lookups can be done once per
+            -- chunk-period instead of once per tile (formerly the
+            -- 'findWithDefault' hotspot at ~7% of total time).  We
+            -- precompute the four corner ErosionParams here and lerp
+            -- per-tile below.
+            erosionFB    = gpErosion period
+            regMap       = gpRegionalErosion period
+            periodDur    = gpDuration period
+            wsScaleC     = wsScale wsc
             (finalElev, finalMat) = runST $ do
                 elevM ← VUM.new borderArea
                 matM  ← VUM.new borderArea
@@ -291,24 +307,40 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                             VUM.write elevM idx elev
                             VUM.write matM  idx mat
                         else do
-                            let (lx, ly) = fromIndex idx
-                                neighbors =
-                                    ( lookupElev postElev lx (ly - 1) elev
-                                    , lookupElev postElev lx (ly + 1) elev
-                                    , lookupElev postElev (lx + 1) ly elev
-                                    , lookupElev postElev (lx - 1) ly elev
-                                    )
+                            let bx = idx `mod` borderSize
+                                by = idx `div` borderSize
+                                -- Direct neighbour reads avoid the
+                                -- per-call lookupElev/inBorder/toIndex
+                                -- overhead (formerly ~21% of total
+                                -- time). Tiles at the border edge of
+                                -- the bordered region use 'elev'
+                                -- itself as the fallback.
+                                nN = if by > 0
+                                     then postElev VU.! (idx - borderSize)
+                                     else elev
+                                nS = if by < borderSize - 1
+                                     then postElev VU.! (idx + borderSize)
+                                     else elev
+                                nE = if bx < borderSize - 1
+                                     then postElev VU.! (idx + 1)
+                                     else elev
+                                nW = if bx > 0
+                                     then postElev VU.! (idx - 1)
+                                     else elev
+                                neighbors = (nN, nS, nE, nW)
+                                lx = bx - chunkBorder
+                                ly = by - chunkBorder
                                 gx = cMinGX + lx + chunkBorder
                                 gy = cMinGY + ly + chunkBorder
                                 regionalParams = lookupRegionalErosion
-                                    (gpErosion period) (gpRegionalErosion period)
-                                    worldSize gx gy
-                                hardness = mpHardness (getMaterialProps registry mat)
+                                    erosionFB regMap worldSize gx gy
+                                hardness = mpHardness
+                                    (getMaterialProps registry mat)
                                 erosionMod = applyErosion
                                     regionalParams
                                     worldSize
-                                    (gpDuration period)
-                                    (wsScale wsc)
+                                    periodDur
+                                    wsScaleC
                                     (unMaterialId mat)
                                     hardness
                                     elev

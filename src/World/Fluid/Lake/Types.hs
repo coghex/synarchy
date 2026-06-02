@@ -108,11 +108,17 @@ unpackBitmask bytes =
 
 -- | Global lake table for a world.
 data WorldLakes = WorldLakes
-    { wlLakes   ∷ !(V.Vector Lake)
+    { wlLakes      ∷ !(V.Vector Lake)
       -- ^ All lakes in the world, indexed by 'LakeId'.
-    , wlByChunk ∷ !(HM.HashMap ChunkCoord (V.Vector LakeChunkEntry))
+    , wlByChunk    ∷ !(HM.HashMap ChunkCoord (V.Vector LakeChunkEntry))
       -- ^ Per-chunk: lakes overlapping the chunk + their bitmasks.
       --   Chunks with no lakes are absent from the map.
+    , wlCarveDelta ∷ !(HM.HashMap ChunkCoord (VU.Vector Int))
+      -- ^ Per-chunk per-tile carve depth for coastal lakes that have
+      --   been clamped to 'seaLevel'. Lowers the basin floor down to
+      --   sub-sea so the clamped surface actually finds tiles to fill.
+      --   Same shape and intent as 'wrCarveDelta' on 'WorldRivers';
+      --   chunk gen combines the two via max per tile.
     } deriving (Show, Eq, Generic, NFData)
 
 instance Serialize WorldLakes where
@@ -122,17 +128,24 @@ instance Serialize WorldLakes where
             [ (cc, V.toList es)
             | (cc, es) ← HM.toList (wlByChunk wl)
             ]
+        Serialize.put
+            [ (cc, VU.toList dv)
+            | (cc, dv) ← HM.toList (wlCarveDelta wl)
+            ]
     get = do
-        lks ← Serialize.get
+        lks   ← Serialize.get
         rawBy ← Serialize.get ∷ Serialize.Get [(ChunkCoord, [LakeChunkEntry])]
+        rawCv ← Serialize.get ∷ Serialize.Get [(ChunkCoord, [Int])]
         pure WorldLakes
-            { wlLakes   = V.fromList lks
-            , wlByChunk = HM.fromList
+            { wlLakes      = V.fromList lks
+            , wlByChunk    = HM.fromList
                 [ (cc, V.fromList es) | (cc, es) ← rawBy ]
+            , wlCarveDelta = HM.fromList
+                [ (cc, VU.fromList dv) | (cc, dv) ← rawCv ]
             }
 
 emptyWorldLakes ∷ WorldLakes
-emptyWorldLakes = WorldLakes V.empty HM.empty
+emptyWorldLakes = WorldLakes V.empty HM.empty HM.empty
 
 -- | All lake entries for a chunk. Empty vector if the chunk has none.
 lakesInChunk ∷ WorldLakes → ChunkCoord → V.Vector LakeChunkEntry

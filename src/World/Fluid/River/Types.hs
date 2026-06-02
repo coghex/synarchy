@@ -73,6 +73,11 @@ data RiverChunkEntry = RiverChunkEntry
     { rceRiverId      ∷ !RiverId
     , rceBitmask      ∷ !(VU.Vector Bool)
     , rcePerTileSurfZ ∷ !(VU.Vector Int)
+    , rceWidthRadius  ∷ !(VU.Vector Word8)
+      -- ^ Per-tile width radius (0..maxWidthRadius). 0 for the centre
+      --   of a 1-tile-wide river. Widened tiles inherit the centre's
+      --   radius; the value also describes how the carving pass
+      --   should treat the tile (deeper carve for wider rivers).
     } deriving (Show, Eq, Generic, NFData)
 
 -- | Bit-packed bitmask form (32 bytes for the 256-tile bitmask, same
@@ -85,14 +90,17 @@ instance Serialize RiverChunkEntry where
         Serialize.put (rceRiverId e)
         Serialize.put (packBitmask (rceBitmask e))
         Serialize.put (VU.toList (rcePerTileSurfZ e))
+        Serialize.put (VU.toList (rceWidthRadius e))
     get = do
-        i      ← Serialize.get
-        bytes  ← Serialize.get ∷ Serialize.Get [Word8]
-        surfsL ← Serialize.get ∷ Serialize.Get [Int]
+        i       ← Serialize.get
+        bytes   ← Serialize.get ∷ Serialize.Get [Word8]
+        surfsL  ← Serialize.get ∷ Serialize.Get [Int]
+        widthsL ← Serialize.get ∷ Serialize.Get [Word8]
         pure RiverChunkEntry
             { rceRiverId      = i
             , rceBitmask      = unpackBitmask bytes
             , rcePerTileSurfZ = VU.fromList surfsL
+            , rceWidthRadius  = VU.fromList widthsL
             }
 
 -- | Pack a 256-element @VU.Vector Bool@ into 32 'Word8's. Bit @i@
@@ -120,11 +128,18 @@ unpackBitmask bytes =
 
 -- | Global river table for a world.
 data WorldRivers = WorldRivers
-    { wrRivers  ∷ !(V.Vector River)
+    { wrRivers     ∷ !(V.Vector River)
       -- ^ All rivers, indexed by 'RiverId'.
-    , wrByChunk ∷ !(HM.HashMap ChunkCoord (V.Vector RiverChunkEntry))
+    , wrByChunk    ∷ !(HM.HashMap ChunkCoord (V.Vector RiverChunkEntry))
       -- ^ Per-chunk: rivers overlapping the chunk + their bitmasks
       --   and per-tile surface z. Chunks with no rivers are absent.
+    , wrCarveDelta ∷ !(HM.HashMap ChunkCoord (VU.Vector Int))
+      -- ^ Per-chunk per-tile carve depth (chunk-local indexing, length
+      --   @chunkSize * chunkSize@). Non-zero on river-bitmask tiles —
+      --   chunk gen subtracts this from the post-despike terrain
+      --   before composing the fluid map, so river water surfaces sit
+      --   flush with surrounding un-carved land. Chunks with no
+      --   carving are absent.
     } deriving (Show, Eq, Generic, NFData)
 
 instance Serialize WorldRivers where
@@ -134,17 +149,24 @@ instance Serialize WorldRivers where
             [ (cc, V.toList es)
             | (cc, es) ← HM.toList (wrByChunk wr)
             ]
+        Serialize.put
+            [ (cc, VU.toList dv)
+            | (cc, dv) ← HM.toList (wrCarveDelta wr)
+            ]
     get = do
         rvs   ← Serialize.get
         rawBy ← Serialize.get ∷ Serialize.Get [(ChunkCoord, [RiverChunkEntry])]
+        rawCv ← Serialize.get ∷ Serialize.Get [(ChunkCoord, [Int])]
         pure WorldRivers
-            { wrRivers  = V.fromList rvs
-            , wrByChunk = HM.fromList
+            { wrRivers     = V.fromList rvs
+            , wrByChunk    = HM.fromList
                 [ (cc, V.fromList es) | (cc, es) ← rawBy ]
+            , wrCarveDelta = HM.fromList
+                [ (cc, VU.fromList dv) | (cc, dv) ← rawCv ]
             }
 
 emptyWorldRivers ∷ WorldRivers
-emptyWorldRivers = WorldRivers V.empty HM.empty
+emptyWorldRivers = WorldRivers V.empty HM.empty HM.empty
 
 -- | All river entries for a chunk. Empty vector if none.
 riversInChunk ∷ WorldRivers → ChunkCoord → V.Vector RiverChunkEntry

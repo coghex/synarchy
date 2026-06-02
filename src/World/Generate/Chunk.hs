@@ -41,12 +41,13 @@ import World.Fluid.Lake.Types
     ( WorldLakes(..), LakeChunkEntry(..), lakesInChunk )
 import qualified World.Fluid.Lake.Types as WL
 import World.Fluid.River.Types
-    ( WorldRivers, RiverChunkEntry(..), riversInChunk )
+    ( WorldRivers(..), RiverChunkEntry(..), riversInChunk )
 import World.Fluid.Types (emptyIceMap)
 import World.Vegetation (computeChunkVegetation, vegSnow, vegHash)
 import World.Flora.Placement (computeChunkFlora)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
+import World.Generate.InitTerrain (BorderedTerrainCache)
 import World.Generate.Timeline (applyTimelineChunk, removeElevationSpikes)
 import World.Geology.Coastal (applyCoastalErosion)
 import World.Generate.Strata
@@ -480,8 +481,42 @@ generateChunk registry catalog params coord =
         -- the u-v isometric axes that end up 1 tile wide in xy) where
         -- coastal erosion lowered the cardinal neighbors but the spike
         -- itself was outside the coastal range.
-        (finalElevVec, _) = removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
+        (despikedElev, _) = removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
                                                   (postCoastElev, finalMatVec)
+
+        -- River and lake carves applied to the ENTIRE bordered region
+        -- (not just the interior). The carve delta for each tile lives
+        -- in the chunk that owns that tile — for border tiles this
+        -- might be a neighbouring chunk. Per-tile lookup combines the
+        -- river and lake deltas via @max@: rivers carve channels;
+        -- coastal lakes whose surface has been clamped to sea level
+        -- carve their basin floor sub-sea so water actually fills.
+        -- Reading post-carve elevations everywhere keeps strata,
+        -- slope, and column construction consistent with what the
+        -- owning chunk actually renders.
+        carveAt gx gy =
+            let cx = gx `div` chunkSize
+                cy = gy `div` chunkSize
+                ilx = ((gx `mod` chunkSize) + chunkSize) `mod` chunkSize
+                ily = ((gy `mod` chunkSize) + chunkSize) `mod` chunkSize
+                li  = ily * chunkSize + ilx
+                dr  = case HM.lookup (ChunkCoord cx cy)
+                                     (wrCarveDelta (gtWorldRivers timeline)) of
+                        Just dv → dv VU.! li
+                        Nothing → 0
+                dl  = case HM.lookup (ChunkCoord cx cy)
+                                     (wlCarveDelta (gtWorldLakes timeline)) of
+                        Just dv → dv VU.! li
+                        Nothing → 0
+            in max dr dl
+        finalElevVec = VU.generate borderArea $ \idx →
+            let z = despikedElev VU.! idx
+            in if z ≡ minBound
+               then z
+               else
+                 let (lx, ly) = fromIndex idx
+                     (gx, gy) = chunkToGlobal coord lx ly
+                 in z - carveAt gx gy
 
         lookupFinal lx ly =
             if inBorder lx ly
@@ -526,7 +561,9 @@ generateChunk registry catalog params coord =
         -- Terrain surface map (vector). This is the RAW chunk-gen
         -- terrain before island-column smoothing; the smoothed
         -- version is bound below as 'terrainSurfaceMap' and is what
-        -- the rest of the pipeline consumes.
+        -- the rest of the pipeline consumes. River carve is already
+        -- baked into 'finalElevVec' above, so 'lookupElev' returns
+        -- the post-carve elevation directly.
         rawTerrainSurfaceMap = VU.generate chunkArea $ \idx →
             if coordBeyond VU.! idx
             then minBound
@@ -748,9 +785,11 @@ generateExposedColumn lx ly surfaceZ exposeFrom lookupMat =
 --   those itself.
 --
 --   Returns (elevation, materialId, fluidMap) for the 16×16 interior.
-generateZoomTerrain ∷ MaterialRegistry → WorldGenParams → ChunkCoord
-  → (VU.Vector Int, VU.Vector Word8, V.Vector (Maybe FluidCell))
-generateZoomTerrain registry params coord =
+generateZoomTerrain ∷ MaterialRegistry → WorldGenParams
+                    → Maybe BorderedTerrainCache
+                    → ChunkCoord
+                    → (VU.Vector Int, VU.Vector Word8, V.Vector (Maybe FluidCell))
+generateZoomTerrain registry params mBorderedCache coord =
     let seed      = wgpSeed params
         worldSize = wgpWorldSize params
         timeline  = wgpGeoTimeline params
@@ -774,47 +813,79 @@ generateZoomTerrain registry params coord =
                 by = ly + chunkBorder
             in by * borderSize + bx
 
-        -- Base elevation + material (bordered region, same as generateChunk)
-        -- Beyond-glacier tiles use matGlacier + high elevation so the
-        -- timeline preserves them and coastal erosion doesn't treat the
-        -- world boundary as a coastline.
-        (baseElevVec, baseMatVec) = runST $ do
-            elevM ← VUM.new borderArea
-            matM  ← VUM.new borderArea
-            forM_ [0 .. borderArea - 1] $ \idx → do
-                let (lx, ly) = fromIndex idx
-                    (gx, gy) = chunkToGlobal coord lx ly
-                    (gx', gy') = wrapGlobalU worldSize gx gy
-                if isBeyondGlacier worldSize gx' gy'
-                    then do
-                        VUM.write elevM idx (seaLevel + 100)
-                        VUM.write matM  idx matGlacier
-                    else do
-                        let (elev, mat) =
-                                elevationAtGlobal seed plates worldSize gx' gy'
-                        VUM.write elevM idx elev
-                        VUM.write matM  idx mat
-            elevF ← VU.unsafeFreeze elevM
-            matF  ← VU.unsafeFreeze matM
-            pure (elevF, matF)
+        -- Either read the bordered pipeline output from the init-time
+        -- cache (set by 'buildTimeline' on a fresh world) or
+        -- recompute it from scratch (the loaded-save path).
+        --
+        -- 'computePipelineFromScratch' must NOT be evaluated when the
+        -- cache hits — but the module has @LANGUAGE Strict@, so a
+        -- top-level @let@ binding would run regardless of whether the
+        -- @case@ below selects it. Wrapping the recompute in a
+        -- function arg makes its evaluation entry-on-call, so the
+        -- cache-hit path skips it entirely (saving ~50% of zoom-cache
+        -- build time at init).
+        (despikedElev, finalMatVec) = case mBorderedCache of
+            Just cache | Just cached ← HM.lookup coord cache → cached
+            _ → computePipelineFromScratch ()
 
-        -- Full timeline with neighborhood-aware erosion (same as detail)
-        (timelineElevVec, timelineMatVec) =
-            applyTimelineChunk timeline worldSize registry wsc coord
-                (baseElevVec, baseMatVec)
+        computePipelineFromScratch () =
+            let (baseElevVec, baseMatVec) = runST $ do
+                    elevM ← VUM.new borderArea
+                    matM  ← VUM.new borderArea
+                    forM_ [0 .. borderArea - 1] $ \idx → do
+                        let (lx, ly) = fromIndex idx
+                            (gx, gy) = chunkToGlobal coord lx ly
+                            (gx', gy') = wrapGlobalU worldSize gx gy
+                        if isBeyondGlacier worldSize gx' gy'
+                            then do
+                                VUM.write elevM idx (seaLevel + 100)
+                                VUM.write matM  idx matGlacier
+                            else do
+                                let (elev, mat) =
+                                        elevationAtGlobal seed plates worldSize gx' gy'
+                                VUM.write elevM idx elev
+                                VUM.write matM  idx mat
+                    elevF ← VU.unsafeFreeze elevM
+                    matF  ← VU.unsafeFreeze matM
+                    pure (elevF, matF)
+                (timelineElevVec, timelineMatVec) =
+                    applyTimelineChunk timeline worldSize registry wsc coord
+                        (baseElevVec, baseMatVec)
+                (postCoastElev, finalMat') =
+                    applyCoastalErosion seed worldSize plates registry timeline
+                        oceanMap coord (timelineElevVec, timelineMatVec)
+                (despikedElev', _) =
+                    removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
+                                          (postCoastElev, finalMat')
+            in (despikedElev', finalMat')
 
-        -- Coastal erosion with contour smoothing (same as detail)
-        (postCoastElev, finalMatVec) =
-            applyCoastalErosion seed worldSize plates registry timeline
-                oceanMap coord (timelineElevVec, timelineMatVec)
+        -- River + lake carves baked into the bordered region: see the
+        -- matching block in 'generateChunk' for the rationale.
+        carveAt gx gy =
+            let cx = gx `div` chunkSize
+                cy = gy `div` chunkSize
+                ilx = ((gx `mod` chunkSize) + chunkSize) `mod` chunkSize
+                ily = ((gy `mod` chunkSize) + chunkSize) `mod` chunkSize
+                li  = ily * chunkSize + ilx
+                dr  = case HM.lookup (ChunkCoord cx cy)
+                                     (wrCarveDelta (gtWorldRivers timeline)) of
+                        Just dv → dv VU.! li
+                        Nothing → 0
+                dl  = case HM.lookup (ChunkCoord cx cy)
+                                     (wlCarveDelta (gtWorldLakes timeline)) of
+                        Just dv → dv VU.! li
+                        Nothing → 0
+            in max dr dl
+        finalElevVec = VU.generate borderArea $ \idx →
+            let z = despikedElev VU.! idx
+            in if z ≡ minBound
+               then z
+               else
+                 let (lx, ly) = fromIndex idx
+                     (gx, gy) = chunkToGlobal coord lx ly
+                 in z - carveAt gx gy
 
-        -- Despike: same as detail world, so single-tile elevation
-        -- outliers don't differ between the two views.
-        (finalElevVec, _) =
-            removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
-                                  (postCoastElev, finalMatVec)
-
-        -- Extract interior 16×16 from bordered region
+        -- Extract interior 16×16 from bordered region; carve already baked.
         chunkArea = chunkSize * chunkSize
         interiorElev = VU.generate chunkArea $ \idx →
             let lx = idx `mod` chunkSize
@@ -844,8 +915,24 @@ generateZoomTerrain registry params coord =
                                                       []
                                                       finalElevVec
         zoomInteriorMask = sliceInteriorMask zoomBorderedMask
-        zoomFluid = composeFluidMap params coord interiorElev
-                                    zoomInteriorMask
+        rawZoomFluid = composeFluidMap params coord interiorElev
+                                       zoomInteriorMask
 
-    in (interiorElev, interiorMat, zoomFluid)
+        -- Apply the same island-column smoother the detail path runs,
+        -- otherwise dry tiles surrounded by lake render as land in
+        -- the zoom map but as smoothed lake in the world view. The
+        -- smoother both updates the fluid map (extra lake cells) and
+        -- lowers the terrain at the smoothed tiles — return both so
+        -- the zoom view matches.
+        (smoothedElev, zoomFluid) =
+            smoothIslandColumns interiorElev rawZoomFluid
+
+        -- Match the detail world's surface map: river tiles report the
+        -- (flat) water-surface z, not the carved channel-floor z, so
+        -- the zoom map paints river tiles at the right elevation. For
+        -- other tiles the surface is @max(terrain, fluid.surface)@,
+        -- which is what 'mkSurfaceMap' computes.
+        zoomSurface = mkSurfaceMap smoothedElev zoomFluid
+
+    in (zoomSurface, interiorMat, zoomFluid)
 

@@ -30,7 +30,9 @@ import World.Fluid.Lake.Types (emptyWorldLakes)
 import World.Fluid.River.Identify (identifyWorldRivers)
 import World.Fluid.River.Types (emptyWorldRivers)
 import World.Fluid.Ocean (computeOceanMap)
-import World.Generate.InitTerrain (computeChunkInteriorTerrain)
+import World.Generate.InitTerrain
+    (BorderedTerrainCache, borderedToInterior
+    , computeChunkBorderedPipeline)
 import World.Generate.Timeline (applyTimelineFast)
 import World.Ocean.Types (OceanMap)
 import qualified Data.Vector.Unboxed.Mutable as VUM
@@ -57,7 +59,7 @@ import World.Weather.Generate (updateClimateFromGrid, oceanRegionsFromGrid)
 -- * Top Level
 
 buildTimeline ∷ MaterialRegistry → Word64 → Int → Int → Float → Float
-              → (GeoTimeline, ClimateState)
+              → (GeoTimeline, ClimateState, BorderedTerrainCache)
 buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivity =
     let plates = generatePlates seed worldSize plateCount
         gs0 = initGeoState seed worldSize plates
@@ -170,17 +172,19 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
         (oceanMap, _) =
             computeOceanMap seed worldSize plateCount plates applyTL
 
-        -- World-resolution terrain assembled from per-chunk pipeline
-        -- output. Each chunk runs the same plate-base →
-        -- applyTimelineChunk → applyCoastalErosion → despike pipeline
-        -- generateChunk will use at chunk-gen time — so the priority
-        -- flood downstream sees the EXACT terrain the renderer will
-        -- later use. Eliminates the fast-vs-chunk divergence that
-        -- produced grass-topped columns in the middle of lakes.
-        worldTerrain = buildWorldTerrain seed plates worldSize registry
-                                         oceanMap preLakeTimeline
+        -- Per-chunk bordered pipeline cache, built once and shared:
+        -- buildWorldTerrain slices the interior of each entry to feed
+        -- the global priority flood; the zoom-cache build later reads
+        -- the same entries via 'wgpBorderedCache' instead of
+        -- re-running applyTimelineChunk / applyCoastalErosion /
+        -- removeElevationSpikes. Saves ~50% of the per-chunk pipeline
+        -- work at init time.
+        borderedCache = buildBorderedCache seed plates worldSize registry
+                                           oceanMap preLakeTimeline
 
-        finalLakes = identifyWorldLakes worldSize worldTerrain
+        worldTerrain = stitchWorldTerrain worldSize borderedCache
+
+        finalLakes = identifyWorldLakes worldSize oceanMap worldTerrain
 
         rawTimeline = preLakeTimeline
             { gtWorldLakes  = finalLakes
@@ -189,51 +193,58 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
                                                    (tbsClimateState s2)
             }
 
-    in (rawTimeline, tbsClimateState s2)
+    in (rawTimeline, tbsClimateState s2, borderedCache)
 
--- | Stitch per-chunk 'computeChunkInteriorTerrain' outputs into a
---   world-resolution terrain grid indexed
---   @(gy + half) * worldTiles + (gx + half)@ where
---   @worldTiles = worldSize * chunkSize@ and @half = worldTiles/2@.
---   Beyond-glacier tiles end up as 'minBound' because that's what
---   'computeChunkInteriorTerrain' writes for them.
+-- | Build the per-chunk bordered-pipeline cache. Runs the full
+--   plate-base → applyTimelineChunk → applyCoastalErosion → despike
+--   pipeline once per chunk and stashes the bordered (elev, mat)
+--   result in a HashMap indexed by chunk coord.
 --
---   Per-chunk work is parallelized via @parMap rdeepseq@. The result
---   feeds the global priority flood; nothing else depends on it.
-buildWorldTerrain
+--   Per-chunk work is parallelized via @parListChunk 64 rdeepseq@
+--   (forcing each chunk's vectors to NF inside its spark so they
+--   land already-evaluated when the consumer reads them).
+buildBorderedCache
     ∷ Word64
     → [TectonicPlate]
     → Int
     → MaterialRegistry
     → OceanMap
     → GeoTimeline
-    → VU.Vector Int
-buildWorldTerrain seed plates worldSize registry oceanMap timeline =
-    let worldTiles = worldSize * chunkSize
-        halfWorld  = worldTiles `div` 2
-        halfChunks = worldSize `div` 2
+    → BorderedTerrainCache
+buildBorderedCache seed plates worldSize registry oceanMap timeline =
+    let halfChunks = worldSize `div` 2
         allCoords  = [ ChunkCoord cx cy
                      | cx ← [-halfChunks .. halfChunks - 1]
                      , cy ← [-halfChunks .. halfChunks - 1]
                      ]
         runOne coord =
             ( coord
-            , computeChunkInteriorTerrain seed plates worldSize registry
-                                          oceanMap timeline coord
+            , computeChunkBorderedPipeline seed plates worldSize
+                                            registry oceanMap timeline
+                                            coord
             )
-        -- parListChunk batches sparks (64 chunks per spark), and the
-        -- 'using' strategy forces the whole list before the
-        -- consuming 'forM_' so every batch's terrain is materialised
-        -- by the runtime ahead of time. Without this, the sequential
-        -- 'forM_ chunkResults' only fires sparks one at a time and
-        -- parallelism is wasted.
         chunkResults = map runOne allCoords
                        `using` parListChunk 64 rdeepseq
+    in HM.fromList chunkResults
+
+-- | Stitch per-chunk bordered cache entries into a world-resolution
+--   terrain grid indexed @(gy + half) * worldTiles + (gx + half)@.
+--   Beyond-glacier tiles get 'minBound'.  Result feeds the global
+--   priority flood in 'identifyWorldLakes' / 'identifyWorldRivers';
+--   nothing else needs it.
+stitchWorldTerrain
+    ∷ Int                  -- ^ worldSize
+    → BorderedTerrainCache
+    → VU.Vector Int
+stitchWorldTerrain worldSize cache =
+    let worldTiles = worldSize * chunkSize
+        halfWorld  = worldTiles `div` 2
     in VU.create $ do
         v ← VUM.replicate (worldTiles * worldTiles) minBound
-        forM_ chunkResults $ \(ChunkCoord cx cy, interior) → do
-            let baseGX = cx * chunkSize
-                baseGY = cy * chunkSize
+        forM_ (HM.toList cache) $ \(coord@(ChunkCoord cx cy), (bElev, _)) → do
+            let baseGX   = cx * chunkSize
+                baseGY   = cy * chunkSize
+                interior = borderedToInterior worldSize coord bElev
             forM_ [0 .. chunkSize * chunkSize - 1] $ \i → do
                 let lx     = i `mod` chunkSize
                     ly     = i `div` chunkSize
