@@ -157,7 +157,7 @@ loadScriptFn env backendState lst = do
                             Map.insert sid script
                         
                         when (isValidRef modRef) $
-                            void $ callModuleFunction lst modRef "init" []
+                            void $ callModuleFunction backendState modRef "init" []
                         
                         logDebug logger CatLua $ "Lua script initialized with ID " 
                                        <> T.pack (show sid)
@@ -186,7 +186,7 @@ killScriptFn env backendState lst = do
             case Map.lookup (fromIntegral sid) scriptsMap of
                 Just script → do
                     when (isValidRef (scriptModuleRef script)) $ do
-                        _ ← callModuleFunction lst (scriptModuleRef script) "shutdown" []
+                        _ ← callModuleFunction backendState (scriptModuleRef script) "shutdown" []
                         Lua.runWith lst $ Lua.unref Lua.registryindex (scriptModuleRef script)
                     atomically $ modifyTVar (lbsScripts backendState) $
                         Map.delete (fromIntegral sid)

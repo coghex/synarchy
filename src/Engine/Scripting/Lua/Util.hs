@@ -28,5 +28,4 @@ broadcastToModules ls funcName args = do
     scriptsMap ← readTVarIO (lbsScripts ls)
     forM_ (Map.elems scriptsMap) $ \script →
         when (isValidRef (scriptModuleRef script)) $ do
-            _ ← callModuleFunction (lbsLuaState ls) (scriptModuleRef script) funcName args
-            return ()
+            callModuleFunction ls (scriptModuleRef script) funcName args

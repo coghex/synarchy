@@ -8,7 +8,8 @@ import UPrelude
 import qualified Data.Text as T
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (SomeException, catch)
+import Control.Exception (SomeException, catch, finally)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
@@ -28,11 +29,12 @@ startWorldThread ∷ EngineEnv → IO ThreadState
 startWorldThread env = do
     logger ← readIORef (loggerRef env)
     stateRef ← newIORef ThreadRunning
+    doneVar ← newEmptyMVar
     threadId ← catch
         (do
             logInfo logger CatWorld "Starting world thread..."
             lastTimeRef ← getPOSIXTime ⌦ newIORef . realToFrac
-            tid ← forkIO $ worldLoop env stateRef lastTimeRef
+            tid ← forkIO $ worldLoop env stateRef lastTimeRef `finally` putMVar doneVar ()
             logInfo logger CatWorld "World thread started"
             return tid
         )
@@ -40,7 +42,7 @@ startWorldThread env = do
             logError logger CatWorld $ "Failed starting world thread: " <> T.pack (show e)
             error "World thread start failure."
         )
-    return $ ThreadState stateRef threadId
+    return $ ThreadState stateRef threadId doneVar
 
 -- * World Loop
 

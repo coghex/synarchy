@@ -9,7 +9,8 @@ import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef'
                   , modifyIORef')
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (SomeException, catch)
+import Control.Exception (SomeException, catch, finally)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
@@ -31,13 +32,14 @@ startUnitThread ∷ EngineEnv → IO ThreadState
 startUnitThread env = do
     logger ← readIORef (loggerRef env)
     stateRef ← newIORef ThreadRunning
+    doneVar ← newEmptyMVar
     threadId ← catch
         (do
             logInfo logger CatThread "Starting unit thread..."
             lastTimeRef ← getPOSIXTime ⌦ newIORef . realToFrac
             -- utsRef now lives on EngineEnv (Phase 4 of save/load v2) so
             -- the world thread can read+write sim state at save/load.
-            tid ← forkIO $ unitLoop env stateRef lastTimeRef (utsRef env)
+            tid ← forkIO $ unitLoop env stateRef lastTimeRef (utsRef env) `finally` putMVar doneVar ()
             logInfo logger CatThread "Unit thread started"
             return tid
         )
@@ -46,7 +48,7 @@ startUnitThread env = do
                 <> T.pack (show e)
             error "Unit thread start failure."
         )
-    return $ ThreadState stateRef threadId
+    return $ ThreadState stateRef threadId doneVar
 
 unitLoop ∷ EngineEnv → IORef ThreadControl → IORef Double
          → IORef UnitThreadState → IO ()

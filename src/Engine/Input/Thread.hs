@@ -6,7 +6,8 @@ import qualified Data.Map as Map
 import qualified Data.Text as T
 import qualified Graphics.UI.GLFW as GLFW
 import Control.Concurrent (threadDelay, ThreadId, killThread, forkIO)
-import Control.Exception (SomeException, catch)
+import Control.Exception (SomeException, catch, finally)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Data.IORef (IORef, newIORef, writeIORef, readIORef, atomicModifyIORef')
 import Data.Time.Clock (getCurrentTime, diffUTCTime)
 import Engine.Core.Log (logDebug, logError, logWarn, logInfo, LogCategory(..))
@@ -31,10 +32,11 @@ startInputThread env = do
     let logRef        = loggerRef env
     logger ← readIORef logRef
     stateRef ← newIORef ThreadRunning
+    doneVar ← newEmptyMVar
     threadId ← catch 
         (do
             logInfo logger CatInput "Starting input thread..."
-            tid ← forkIO $ runInputLoop env stateRef
+            tid ← forkIO $ runInputLoop env stateRef `finally` putMVar doneVar ()
             return tid
         ) 
         (\(e ∷ SomeException) → do
@@ -43,7 +45,7 @@ startInputThread env = do
               "startInputThread:" $ T.pack (show e)
             error "Input thread start failure."
         )
-    return $ ThreadState stateRef threadId
+    return $ ThreadState stateRef threadId doneVar
 
 runInputLoop ∷ EngineEnv → IORef ThreadControl → IO ()
 runInputLoop env stateRef = do

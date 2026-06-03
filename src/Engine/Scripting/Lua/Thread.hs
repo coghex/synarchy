@@ -21,7 +21,7 @@ import Engine.Scripting.Lua.Script (callModuleFunction)
 import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules)
 import Engine.Scripting.Lua.DebugServer (DebugCommand(..), startDebugServer, pollDebugCommand)
 import Engine.Asset.Types (AssetPool)
-import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..))
+import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..), LoggerState)
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Types (EngineConfig(..))
@@ -38,11 +38,11 @@ import Data.List (find, sortBy)
 import qualified Data.Text.Read as T
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay, forkIO)
-import Control.Concurrent.MVar (putMVar, tryPutMVar)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, tryPutMVar)
 import Control.Concurrent.STM.TQueue (TQueue)
 import Control.Concurrent.STM (atomically, modifyTVar, readTVarIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
-import Control.Exception (SomeException, catch)
+import Control.Exception (SomeException, catch, finally)
 import Control.Monad (forM_, when)
 import Control.Monad.Logger (LogLevel(..), toLogStr, defaultLoc)
 import Data.Time.Clock (getCurrentTime, utctDayTime)
@@ -54,13 +54,14 @@ startLuaThread env = do
         objIdRef  = nextObjectIdRef env
         inputSRef = inputStateRef env
     stateRef ← newIORef ThreadRunning
-    threadId ← catch 
+    doneVar ← newEmptyMVar
+    threadId ← catch
         (do
             logger ← readIORef (loggerRef env)
             logInfo logger CatLua "Starting Lua scripting thread..."
             let lteq = luaToEngineQueue env
                 etlq = luaQueue env
-            backendState ← createLuaBackendState lteq etlq apRef objIdRef inputSRef
+            backendState ← createLuaBackendState lteq etlq apRef objIdRef inputSRef (loggerRef env)
             registerLuaAPI (lbsLuaState backendState) env backendState
             logDebug logger CatLua "Lua API registered."
             setupShellSandbox (lbsLuaState backendState)
@@ -104,7 +105,7 @@ startLuaThread env = do
                     
                     when (isValidRef modRef) $ do
                         logDebug logger CatLua "Calling init() on Lua module"
-                        _ ← callModuleFunction (lbsLuaState backendState) modRef "init" 
+                        _ ← callModuleFunction backendState modRef "init" 
                             [ScriptNumber (fromIntegral initScriptId)]
                         return ()
                     
@@ -122,7 +123,7 @@ startLuaThread env = do
             let port = ecDebugPort (engineConfig env)
             debugQueue ← startDebugServer port
             logInfo logger CatLua $ "Debug server listening on port " <> T.pack (show port)
-            tid ← forkIO $ runLuaLoop env backendState stateRef debugQueue
+            tid ← forkIO $ runLuaLoop env backendState stateRef debugQueue `finally` putMVar doneVar ()
             return tid
         ) 
         (\(e ∷ SomeException) → do
@@ -131,12 +132,12 @@ startLuaThread env = do
             Q.writeQueue (eventQueue env) (EventError "LuaThread" (T.pack (show e)))
             error "Lua thread failed to start."
         )
-    return $ ThreadState stateRef threadId
+    return $ ThreadState stateRef threadId doneVar
 
 createLuaBackendState ∷ Q.Queue LuaToEngineMsg → Q.Queue LuaMsg
                       → IORef AssetPool → IORef Word32
-                      → IORef InputState → IO LuaBackendState
-createLuaBackendState ltem etlm apRef objIdRef inputSRef = do
+                      → IORef InputState → IORef LoggerState → IO LuaBackendState
+createLuaBackendState ltem etlm apRef objIdRef inputSRef loggerR = do
   lState ← Lua.newstate
   _ ← Lua.runWith lState $ Lua.openlibs
   scriptsVar ← newTVarIO Map.empty
@@ -149,6 +150,7 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef = do
     , lbsAssetPool    = apRef
     , lbsNextObjectId = objIdRef
     , lbsInputState   = inputSRef
+    , lbsLoggerRef    = loggerR
     }
 
 runLuaLoop ∷ EngineEnv → LuaBackendState → IORef ThreadControl
@@ -194,7 +196,7 @@ runLuaLoop env ls stateRef debugQueue = do
                         when (not (scriptPaused script) ∧ currentSecs' ≥ scriptNextTick script) $ do
                           when (isValidRef (scriptModuleRef script)) $ do
                             let dt = scriptTickRate script
-                            _ ← callModuleFunction (lbsLuaState ls) (scriptModuleRef script) "update" [ScriptNumber dt]
+                            _ ← callModuleFunction ls (scriptModuleRef script) "update" [ScriptNumber dt]
                             return ()
                           atomically $ modifyTVar (lbsScripts ls) $
                             Map.adjust (\s → s { scriptNextTick = scriptNextTick s + scriptTickRate s }) sid
@@ -470,7 +472,7 @@ processLuaMsg env ls stateRef msg = case msg of
     case mDebugScript of
       Just debugScript → do
         when (isValidRef (scriptModuleRef debugScript)) $ do
-          _ ← callModuleFunction (lbsLuaState ls)
+          _ ← callModuleFunction ls
                                  (scriptModuleRef debugScript) "toggle" []
           return ()
       Nothing → 
@@ -484,7 +486,7 @@ processLuaMsg env ls stateRef msg = case msg of
     case mDebugScript of
       Just debugScript → do
         when (isValidRef (scriptModuleRef debugScript)) $ do
-          _ ← callModuleFunction (lbsLuaState ls)
+          _ ← callModuleFunction ls
                                  (scriptModuleRef debugScript) "show" []
           return ()
       Nothing → 
@@ -498,7 +500,7 @@ processLuaMsg env ls stateRef msg = case msg of
     case mDebugScript of
       Just debugScript → do
         when (isValidRef (scriptModuleRef debugScript)) $ do
-          _ ← callModuleFunction (lbsLuaState ls)
+          _ ← callModuleFunction ls
                                  (scriptModuleRef debugScript) "hide" []
           return ()
       Nothing → 

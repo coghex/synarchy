@@ -8,16 +8,22 @@ module Engine.Core.Resource
   ) where
 
 import UPrelude
+import Control.Exception (finally)
 import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.State (MonadState)
 import Control.Monad.Except (MonadError)
 import Engine.Core.Monad (EngineM(..), EngineM')
 
--- | Allocate a resource; the cleanup action runs when the continuation exits
+-- | Allocate a resource; the cleanup runs when the continuation exits —
+--   on normal completion OR a (native IO) exception, via 'finally', so a
+--   throw in the continuation can no longer leak the resource. Cleanup
+--   runs exactly once and is masked against async exceptions. The
+--   success path is unchanged (run continuation, then cleanup, return
+--   the continuation's result).
 allocResource ∷ (α → EngineM' ε ()) → EngineM ε σ α → EngineM ε σ α
 allocResource free alloc = EngineM $ \e c → unEngineM alloc e $ \case
   Left ex → c (Left ex)
-  Right a → c (Right a) ⌦ \r → r ⚟ unEngineM (free a) e pure
+  Right a → c (Right a) `finally` unEngineM (free a) e pure
 {-# INLINE allocResource #-}
 -- | Like 'allocResource' but returns the cleanup action for manual control
 allocResource' ∷ (α → EngineM' ε ()) → EngineM ε σ α

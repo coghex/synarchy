@@ -22,7 +22,8 @@ import UPrelude
 import qualified Data.Text as T
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (SomeException, catch)
+import Control.Exception (SomeException, catch, finally)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Control.Monad (when)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..))
@@ -46,10 +47,11 @@ startCombatThread ∷ EngineEnv → IO ThreadState
 startCombatThread env = do
     logger ← readIORef (loggerRef env)
     stateRef ← newIORef ThreadRunning
+    doneVar ← newEmptyMVar
     threadId ← catch
         (do
             logInfo logger CatThread "Starting combat thread..."
-            tid ← forkIO $ combatLoop env stateRef 0
+            tid ← forkIO $ combatLoop env stateRef 0 `finally` putMVar doneVar ()
             logInfo logger CatThread "Combat thread started"
             return tid
         )
@@ -58,7 +60,7 @@ startCombatThread env = do
                 <> T.pack (show e)
             error "Combat thread start failure."
         )
-    return $ ThreadState stateRef threadId
+    return $ ThreadState stateRef threadId doneVar
 
 -- | Counter modulo `woundsTickEvery` so we only run the wound
 --   subsystem at ~10 Hz instead of the 60 Hz command-drain rate.

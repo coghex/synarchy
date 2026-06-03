@@ -12,8 +12,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef')
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.MVar (MVar, putMVar)
-import Control.Exception (SomeException, catch)
+import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar)
+import Control.Exception (SomeException, catch, finally)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Log (logInfo, logDebug, logError, logWarn, LogCategory(..)
@@ -33,11 +33,12 @@ startSimThread ∷ EngineEnv → IO ThreadState
 startSimThread env = do
     logger ← readIORef (loggerRef env)
     stateRef ← newIORef ThreadRunning
+    doneVar ← newEmptyMVar
     threadId ← catch
         (do
             logInfo logger CatWorld "Starting simulation thread..."
             simStateRef ← newIORef emptySimState
-            tid ← forkIO $ simLoop env stateRef simStateRef
+            tid ← forkIO $ simLoop env stateRef simStateRef `finally` putMVar doneVar ()
             logInfo logger CatWorld "Simulation thread started"
             return tid
         )
@@ -45,7 +46,7 @@ startSimThread env = do
             logError logger CatWorld $ "Failed starting sim thread: " <> T.pack (show e)
             error "Sim thread start failure."
         )
-    return $ ThreadState stateRef threadId
+    return $ ThreadState stateRef threadId doneVar
 
 simLoop ∷ EngineEnv → IORef ThreadControl → IORef SimState → IO ()
 simLoop env stateRef simStateRef = do

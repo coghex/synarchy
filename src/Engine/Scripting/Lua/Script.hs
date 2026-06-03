@@ -6,6 +6,9 @@ module Engine.Scripting.Lua.Script
 
 import UPrelude
 import Engine.Scripting.Types (ScriptValue(..))
+import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Core.Log (logWarn, LogCategory(..))
+import Data.IORef (readIORef)
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -28,20 +31,37 @@ loadScriptAsModule lst path = Lua.runWith lst $ do
         _ → return Nothing
 
 -- | Call a function on a module table
-callModuleFunction ∷ Lua.State → Lua.Reference → T.Text → [ScriptValue] → IO Lua.Status
-callModuleFunction lst modRef funcName args = Lua.runWith lst $ do
-    _ ← Lua.getref Lua.registryindex modRef ∷ Lua.LuaE Lua.Exception Lua.Type
-    _ ← Lua.getfield (-1) (Lua.Name $ TE.encodeUtf8 funcName)
-    isFunc ← Lua.isfunction (-1)
-    if isFunc
-        then do
-            forM_ args pushScriptValue
-            Lua.call (fromIntegral $ length args) 0
-            Lua.pop 1
-            return Lua.OK
-        else do
-            Lua.pop 2
-            return Lua.OK
+-- | Call a module function under 'pcall' so a Lua error in a callback
+--   does NOT throw a Haskell 'Lua.Exception' (which would propagate to
+--   the Lua-thread crash handler and shut the whole engine down). Errors
+--   are logged (they carry file:line) and the offending callback is
+--   skipped; the engine keeps running.
+callModuleFunction ∷ LuaBackendState → Lua.Reference → T.Text → [ScriptValue] → IO ()
+callModuleFunction ls modRef funcName args = do
+    mErr ← Lua.runWith (lbsLuaState ls) $ do
+        _ ← Lua.getref Lua.registryindex modRef ∷ Lua.LuaE Lua.Exception Lua.Type
+        _ ← Lua.getfield (-1) (Lua.Name $ TE.encodeUtf8 funcName)
+        isFunc ← Lua.isfunction (-1)
+        if isFunc
+            then do
+                forM_ args pushScriptValue
+                status ← Lua.pcall (fromIntegral $ length args) 0 Nothing
+                case status of
+                    Lua.OK → do
+                        Lua.pop 1                      -- pop module table
+                        return Nothing
+                    _ → do
+                        err ← Lua.tostring (-1)
+                        Lua.pop 2                      -- error object + module table
+                        return (Just (maybe "unknown error" TE.decodeUtf8 err))
+            else do
+                Lua.pop 2
+                return Nothing
+    case mErr of
+        Nothing  → pure ()
+        Just msg → do
+            logger ← readIORef (lbsLoggerRef ls)
+            logWarn logger CatLua $ "Lua error in " <> funcName <> "(): " <> msg
 
 -- | Call a global Lua function
 callLuaFunction ∷ T.Text → [ScriptValue] → Lua.LuaE Lua.Exception Lua.Status
@@ -50,8 +70,8 @@ callLuaFunction funcName args = do
   _ ← Lua.getglobal name
   forM_ args pushScriptValue
   let numArgs = fromIntegral (length args)
-  Lua.call numArgs Lua.multret
-  return Lua.OK
+  -- pcall so a Lua error returns a non-OK Status instead of throwing.
+  Lua.pcall numArgs Lua.multret Nothing
 
 -- | Push one 'ScriptValue' onto the Lua stack. 'ScriptTable' pushes
 --   a real Lua table built from the key/value list — without this,

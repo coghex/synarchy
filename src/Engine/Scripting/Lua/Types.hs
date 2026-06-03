@@ -14,6 +14,7 @@ import Engine.Graphics.Config (WindowMode(..), TextureFilter(..))
 import UI.Types (ElementHandle(..))
 import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
+import Engine.Core.Log (LoggerState)
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 
@@ -39,6 +40,10 @@ data LuaBackendState = LuaBackendState
   , lbsAssetPool    ∷ IORef AssetPool
   , lbsNextObjectId ∷ IORef Word32
   , lbsInputState   ∷ IORef InputState
+  , lbsLoggerRef    ∷ IORef LoggerState
+    -- ^ Engine logger, so 'callModuleFunction' can log Lua callback
+    --   errors (now caught via pcall) without threading a logger
+    --   through every broadcast call site.
   }
 
 data LuaLogLevel = LuaLogDebug
