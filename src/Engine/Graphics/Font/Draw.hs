@@ -229,6 +229,9 @@ createFontPipeline device renderPass swapExtent uniformLayout sampleCount = do
           , rasterizationState = Just $ SomeStruct rasterizer
           , multisampleState = Just $ SomeStruct multisampling
           , colorBlendState = Just $ SomeStruct colorBlending
+          , dynamicState = Just $ (zero ∷ PipelineDynamicStateCreateInfo)
+              { dynamicStates = V.fromList [ DYNAMIC_STATE_VIEWPORT
+                                           , DYNAMIC_STATE_SCISSOR ] }
           , layout = pipelineLayout
           , renderPass = renderPass
           , subpass = 0
@@ -417,6 +420,9 @@ createFontUIPipeline device renderPass swapExtent uniformLayout fontTexLayout sa
           , rasterizationState = Just $ SomeStruct rasterizer
           , multisampleState = Just $ SomeStruct multisampling
           , colorBlendState = Just $ SomeStruct colorBlending
+          , dynamicState = Just $ (zero ∷ PipelineDynamicStateCreateInfo)
+              { dynamicStates = V.fromList [ DYNAMIC_STATE_VIEWPORT
+                                           , DYNAMIC_STATE_SCISSOR ] }
           , layout = pipelineLayout
           , renderPass = renderPass
           , subpass = 0

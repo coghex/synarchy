@@ -29,12 +29,13 @@ import Vulkan.Core10.CommandBufferBuilding (ClearValue(..), ClearColorValue(..))
 import Vulkan.Zero
 
 -- | Record scene command buffer with sprite and text batches
-recordSceneCommandBuffer ∷ CommandBuffer → Word64 → SceneDynamicBuffer 
+recordSceneCommandBuffer ∷ CommandBuffer → Word64 → Int → SceneDynamicBuffer
                          → Map.Map LayerId (V.Vector RenderItem)
                          → EngineM ε σ ()
-recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
+recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBatches = do
     logDebugSM CatRender "Recording command buffer"
-      [("frame", T.pack $ show frameIdx)
+      [("image", T.pack $ show imageIndex)
+      ,("frame_in_flight", T.pack $ show frameInFlight)
       ,("layer_count", T.pack $ show $ Map.size layeredBatches)]
     
     state ← gets graphicsState
@@ -45,10 +46,10 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
                       (vulkanRenderPass state)
     framebuffer ← maybe (logAndThrowM CatVulkan (ExGraphics FramebufferError)
                                      "Framebuffer not initialized")
-                       (\fbs → if frameIdx < fromIntegral (V.length fbs)
-                              then pure (fbs V.! fromIntegral frameIdx)
+                       (\fbs → if imageIndex < fromIntegral (V.length fbs)
+                              then pure (fbs V.! fromIntegral imageIndex)
                               else logAndThrowM CatVulkan (ExGraphics FramebufferError)
-                                                       "Frame index out of bounds")
+                                                       "Image index out of bounds")
                        (framebuffers state)
     swapchainExtent ← maybe (logAndThrowM CatVulkan (ExGraphics SwapchainError)
                                          "Swapchain info not initialized")
@@ -63,6 +64,19 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
                     pure
                     (vulkanPDevice state)
 
+    -- Select THIS frame-in-flight's uniform descriptor set. Each set is
+    -- wired to its own per-frame UBO (Init.createUniformBuffersForFrames);
+    -- binding set 0 unconditionally was the frames-in-flight bug: odd
+    -- frames rendered the previous frame's UBO and raced its CPU write.
+    descManager ← maybe (logAndThrowM CatVulkan (ExGraphics DescriptorError)
+                                      "No descriptor manager")
+                        pure
+                        (descriptorState state)
+    uniformSet ← if frameInFlight < V.length (dmActiveSets descManager)
+        then pure (dmActiveSets descManager V.! frameInFlight)
+        else logAndThrowM CatVulkan (ExGraphics DescriptorError)
+                          "frameInFlight out of descriptor-set bounds"
+
     -- Collect all text batches across layers for a single upload pass.
     -- Layers are walked in ascending order so the global index stays aligned.
     let allTextBatches = V.concatMap
@@ -70,15 +84,19 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
             (V.fromList $ Map.toAscList layeredBatches)
         totalGlyphs = V.sum $ V.map (fromIntegral . V.length . trbInstances) allTextBatches
 
+    let mTib0 = case textInstanceBuffers state V.!? frameInFlight of
+                    Just m  → m
+                    Nothing → Nothing
     tib ← if totalGlyphs > 0
         then do
-            tib0 ← ensureTextInstanceBuffer device pDevice totalGlyphs
-                                            (textInstanceBuffer state)
+            tib0 ← ensureTextInstanceBuffer device pDevice totalGlyphs mTib0
             (tib1, _) ← uploadTextInstances device tib0 allTextBatches
             modify $ \s → s { graphicsState = (graphicsState s)
-                                { textInstanceBuffer = Just tib1 } }
+                                { textInstanceBuffers =
+                                    textInstanceBuffers (graphicsState s)
+                                        V.// [(frameInFlight, Just tib1)] } }
             pure tib1
-        else pure $ case textInstanceBuffer state of
+        else pure $ case mTib0 of
                Just t  → t
                Nothing → TextInstanceBuffer zero zero 0 0
 
@@ -124,12 +142,12 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
                                     layeredBatches
     
     forM_ (Map.toAscList worldLayers) $ \(_, items) →
-        renderLayerItems cmdBuf state viewport scissor dynamicBuffer 
+        renderLayerItems cmdBuf state viewport scissor uniformSet dynamicBuffer
                          items vertexOffsetRef device pDevice False
                          tib drawInfos batchIdxRef
 
     forM_ (Map.toAscList uiLayers) $ \(_, items) →
-        renderLayerItems cmdBuf state viewport scissor dynamicBuffer 
+        renderLayerItems cmdBuf state viewport scissor uniformSet dynamicBuffer
                          items vertexOffsetRef device pDevice True
                          tib drawInfos batchIdxRef
 
@@ -139,22 +157,22 @@ recordSceneCommandBuffer cmdBuf frameIdx dynamicBuffer layeredBatches = do
 
 -- | Render items in a single layer
 renderLayerItems ∷ CommandBuffer → GraphicsState → Viewport → Rect2D
-                 → SceneDynamicBuffer → V.Vector RenderItem
+                 → DescriptorSet → SceneDynamicBuffer → V.Vector RenderItem
                  → IORef Word32 → Device → PhysicalDevice → Bool
                  → TextInstanceBuffer
                  → V.Vector (Word32, Word32)
                  → IORef Int
                  → EngineM ε σ ()
-renderLayerItems cmdBuf state viewport scissor dynamicBuffer items 
+renderLayerItems cmdBuf state viewport scissor uniformSet dynamicBuffer items
                  vertexOffsetRef device pDevice isUI
                  tib drawInfos batchIdxRef = do
     let spriteBatches = V.mapMaybe (\case SpriteItem b → Just b; _ → Nothing) items
     
     if isUI
-        then renderSpritesBindlessUI cmdBuf state viewport scissor 
-                                     dynamicBuffer spriteBatches vertexOffsetRef
-        else renderSpritesBindless cmdBuf state viewport scissor 
-                                   dynamicBuffer spriteBatches vertexOffsetRef
+        then renderSpritesBindlessUI cmdBuf state viewport scissor
+                                     uniformSet dynamicBuffer spriteBatches vertexOffsetRef
+        else renderSpritesBindless cmdBuf state viewport scissor
+                                   uniformSet dynamicBuffer spriteBatches vertexOffsetRef
     
     let textItems = V.mapMaybe (\case TextItem trb → Just trb; _ → Nothing) items 
     unless (V.null textItems) $ do
@@ -177,5 +195,5 @@ renderLayerItems cmdBuf state viewport scissor dynamicBuffer items
                 liftIO $ writeIORef batchIdxRef (startIdx + n)
 
                 renderTextBatches cmdBuf device pDevice quadBuffer layout
-                                  state tib slicedInfos
+                                  uniformSet tib slicedInfos
             _ → pure ()

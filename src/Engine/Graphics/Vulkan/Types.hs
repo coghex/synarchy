@@ -17,6 +17,10 @@ data VulkanLayers = VulkanLayers
   , vlOptional ∷ V.Vector String  -- ^ Optional layers
   }
 
+-- | LEGACY: unused by the render loop. Per-frame sync lives in
+--   'FrameResources'; per-IMAGE render-finished semaphores live in
+--   GraphicsState.renderFinishedSems. Type kept only because
+--   Engine.Graphics.Types.vsSyncObjects still references it.
 data SyncObjects = SyncObjects
   { imageAvailableSemaphores ∷ V.Vector Semaphore
   , renderFinishedSemaphores ∷ V.Vector Semaphore
@@ -41,7 +45,6 @@ data FrameResources = FrameResources
     { frCommandPool     ∷ CommandPool
     , frCommandBuffer   ∷ V.Vector CommandBuffer
     , frImageAvailable  ∷ Semaphore
-    , frRenderFinished  ∷ Semaphore
     , frInFlight        ∷ Fence
     } deriving (Show)
 

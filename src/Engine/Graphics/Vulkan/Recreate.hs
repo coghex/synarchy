@@ -26,6 +26,7 @@ import Engine.Graphics.Vulkan.Types.Cleanup
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.MSAA
+import Engine.Graphics.Vulkan.Sync (createRenderFinishedSemaphores)
 import Engine.Graphics.Font.Draw
 import Vulkan.Core10
 import Vulkan.Extensions.VK_KHR_surface (SurfaceKHR)
@@ -132,6 +133,10 @@ recreateAllResources pDevice device queues surface window = do
     modify $ \s → s { graphicsState = (graphicsState s) {
         framebuffers = Just framebuffers
     }}
+
+    -- Per-IMAGE render-finished semaphores: the old set was destroyed by
+    -- runAllCleanups above; create a fresh set sized to the new image count.
+    _ ← createRenderFinishedSemaphores device (V.length framebuffers)
     
     (bindlessPipe, bindlessPipeLayout) ←
         createBindlessPipeline device renderPass newExtent uniformLayout bindlessLayout sampleCount

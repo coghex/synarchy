@@ -41,7 +41,7 @@ import Engine.Graphics.Vulkan.Pipeline.Bindless (createBindlessPipeline
                                                 , createBindlessUIPipeline)
 import Engine.Graphics.Vulkan.MSAA (createMSAAColorImage)
 import Engine.Graphics.Vulkan.Swapchain
-import Engine.Graphics.Vulkan.Sync (createSyncObjects)
+import Engine.Graphics.Vulkan.Sync (createRenderFinishedSemaphores)
 import Engine.Graphics.Vulkan.Texture
 import Engine.Graphics.Vulkan.Texture.System
 import Engine.Graphics.Vulkan.Texture.Types
@@ -112,10 +112,6 @@ initializeVulkan window = do
   logDebugSM CatVulkan "MSAA configuration"
     [("requested", T.pack $ show msaaInt)
     ,("actual_samples", T.pack $ show sampleCount)]
-  
-  syncObjects ← createSyncObjects device defaultGraphicsConfig
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                      syncObjects = Just syncObjects } }
   
   let numFrames = gcMaxFrames defaultGraphicsConfig
   frameRes ← V.generateM (fromIntegral numFrames) $ \_ →
@@ -244,7 +240,10 @@ initializeVulkan window = do
   logDebugM CatGraphics "Framebuffers created successfully"
   modify $ \s → s { graphicsState = (graphicsState s) {
                       framebuffers = Just framebuffers } }
-  
+
+  -- Per-IMAGE render-finished semaphores (present waits on these)
+  _ ← createRenderFinishedSemaphores device (V.length framebuffers)
+
   logDebugM CatInit "Vulkan initialization complete"
   pure cmdPool
 

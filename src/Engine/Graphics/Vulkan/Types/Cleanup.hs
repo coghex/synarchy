@@ -15,6 +15,7 @@ data Cleanup = Cleanup
   , cleanupBindlessUI   ∷ IO ()
   , cleanupBindless     ∷ IO ()
   , cleanupFramebuffers ∷ IO ()
+  , cleanupRenderFinishedSems ∷ IO ()
   , cleanupMSAAImage    ∷ IO ()
   , cleanupImageViews   ∷ IO ()
   , cleanupRenderPass   ∷ IO ()
@@ -29,6 +30,7 @@ emptyCleanup = Cleanup
   , cleanupBindlessUI   = pure ()
   , cleanupBindless     = pure ()
   , cleanupFramebuffers = pure ()
+  , cleanupRenderFinishedSems = pure ()
   , cleanupMSAAImage    = pure ()
   , cleanupImageViews   = pure ()
   , cleanupRenderPass   = pure ()
@@ -43,6 +45,7 @@ runAllCleanups Cleanup{..} = do
   cleanupBindlessUI
   cleanupBindless
   cleanupFramebuffers
+  cleanupRenderFinishedSems
   cleanupMSAAImage
   cleanupImageViews
   cleanupRenderPass

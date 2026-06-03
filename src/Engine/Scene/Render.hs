@@ -101,11 +101,14 @@ getCurrentRenderBatches = do
 --   Reuses the cached buffer from GraphicsState when it's big enough.
 --   When a new buffer must be allocated, the old one is destroyed first.
 --   Uses createVulkanBufferManual because we manage the lifetime ourselves.
-ensureDynamicVertexBuffer ∷ Word64 → EngineM ε σ SceneDynamicBuffer
-ensureDynamicVertexBuffer requiredVertices = do
+ensureDynamicVertexBuffer ∷ Int → Word64 → EngineM ε σ SceneDynamicBuffer
+ensureDynamicVertexBuffer frameIdx requiredVertices = do
     state ← gets graphicsState
 
-    case dynamicVertexBuffer state of
+    let mExisting = case dynamicVertexBuffers state V.!? frameIdx of
+                        Just m  → m
+                        Nothing → Nothing
+    case mExisting of
         Just existing | sdbCapacity existing ≥ requiredVertices → do
             logDebugSM CatRender "Reusing existing dynamic vertex buffer"
                 [("capacity", T.pack $ show $ sdbCapacity existing)
@@ -155,12 +158,14 @@ ensureDynamicVertexBuffer requiredVertices = do
                     }
 
             modify $ \s → s { graphicsState = (graphicsState s) {
-                dynamicVertexBuffer = Just newBuf } }
+                dynamicVertexBuffers =
+                    dynamicVertexBuffers (graphicsState s)
+                        V.// [(frameIdx, Just newBuf)] } }
 
             pure newBuf
 
-uploadBatchesToBuffer ∷ V.Vector RenderBatch → SceneDynamicBuffer → EngineM ε σ SceneDynamicBuffer
-uploadBatchesToBuffer batches dynamicBuffer = do
+uploadBatchesToBuffer ∷ Int → V.Vector RenderBatch → SceneDynamicBuffer → EngineM ε σ SceneDynamicBuffer
+uploadBatchesToBuffer frameIdx batches dynamicBuffer = do
     state ← gets graphicsState
     device ← case vulkanDevice state of
         Nothing → logAndThrowM CatGraphics (ExGraphics VulkanDeviceLost)
@@ -180,7 +185,7 @@ uploadBatchesToBuffer batches dynamicBuffer = do
     finalBuffer ← if totalVertices > sdbCapacity dynamicBuffer
         then do
             logDebugM CatScene "Buffer too small, resizing..."
-            ensureDynamicVertexBuffer totalVertices
+            ensureDynamicVertexBuffer frameIdx totalVertices
         else pure dynamicBuffer
 
     let totalSize = totalVertices * (fromIntegral vertexTotalSize)
@@ -206,7 +211,9 @@ uploadBatchesToBuffer batches dynamicBuffer = do
     let result = finalBuffer { sdbUsed = totalVertices }
 
     modify $ \s → s { graphicsState = (graphicsState s) {
-        dynamicVertexBuffer = Just result } }
+        dynamicVertexBuffers =
+            dynamicVertexBuffers (graphicsState s)
+                V.// [(frameIdx, Just result)] } }
 
     pure result
 

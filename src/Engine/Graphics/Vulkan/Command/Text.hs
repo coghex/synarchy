@@ -16,11 +16,10 @@ import Foreign.Ptr (castPtr)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logDebugSM, logWarnM)
 import Engine.Core.Monad
-import Engine.Core.State (EngineEnv(..), GraphicsState(..))
+import Engine.Core.State (EngineEnv(..))
 import Engine.Graphics.Font.Data (FontCache(..), FontAtlas(..), GlyphInstance, fcFonts)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Vulkan.Types
-import Engine.Graphics.Vulkan.Types.Descriptor (DescriptorManager(..))
 import Engine.Scene.Types (TextBatch(..), TextRenderBatch(..), TextInstanceBuffer(..))
 import Vulkan.Core10
 import Vulkan.Zero
@@ -107,11 +106,11 @@ uploadTextInstances device tib batches = do
 -- | Render text batches using the shared instance buffer.
 --   Each batch draws with a firstInstance offset into the single buffer.
 renderTextBatches ∷ CommandBuffer → Device → PhysicalDevice
-                  → Buffer → PipelineLayout → GraphicsState
+                  → Buffer → PipelineLayout → DescriptorSet
                   → TextInstanceBuffer
                   → V.Vector (TextRenderBatch, (Word32, Word32))
                   → EngineM ε σ ()
-renderTextBatches cmdBuf device pDevice quadBuffer layout state tib batchesWithOffsets = do
+renderTextBatches cmdBuf device pDevice quadBuffer layout uniformSet tib batchesWithOffsets = do
     env ← ask
     cache ← liftIO $ readIORef (fontCacheRef env)
 
@@ -125,21 +124,16 @@ renderTextBatches cmdBuf device pDevice quadBuffer layout state tib batchesWithO
                     case faDescriptorSet atlas of
                         Nothing →
                             logWarnM CatFont "Font atlas has no descriptor set"
-                        Just descSet →
-                            case descriptorState state of
-                                Just manager → do
-                                    cmdBindVertexBuffers cmdBuf 0
-                                        (V.fromList [quadBuffer, tibBuffer tib])
-                                        (V.fromList [0, 0])
+                        Just descSet → do
+                            cmdBindVertexBuffers cmdBuf 0
+                                (V.fromList [quadBuffer, tibBuffer tib])
+                                (V.fromList [0, 0])
 
-                                    let !uniformSet = V.head (dmActiveSets manager)
-                                    cmdBindDescriptorSets cmdBuf
-                                        PIPELINE_BIND_POINT_GRAPHICS
-                                        layout
-                                        0
-                                        (V.fromList [uniformSet, descSet])
-                                        V.empty
+                            cmdBindDescriptorSets cmdBuf
+                                PIPELINE_BIND_POINT_GRAPHICS
+                                layout
+                                0
+                                (V.fromList [uniformSet, descSet])
+                                V.empty
 
-                                    cmdDraw cmdBuf 6 instanceCount 0 firstInstance
-                                Nothing →
-                                    logWarnM CatFont "font render has no descriptor manager"
+                            cmdDraw cmdBuf 6 instanceCount 0 firstInstance

@@ -226,10 +226,12 @@ data GraphicsState = GraphicsState
   , frameResources     ∷ V.Vector FrameResources
   , currentFrame       ∷ Word32
   , framebuffers       ∷ Maybe (V.Vector Vk.Framebuffer)
+  , renderFinishedSems ∷ V.Vector Vk.Semaphore
+    -- ^ One per swapchain IMAGE — vkQueuePresentKHR must wait on a
+    --   per-image semaphore (image count ≠ frames in flight).
+    --   (Re)created with the swapchain; destroyed via vulkanCleanup.
   , swapchainInfo      ∷ Maybe SwapchainInfo
-  , msaaColorImage     ∷ Maybe (Vk.Image, Vk.DeviceMemory, Vk.ImageView)
-  , syncObjects        ∷ Maybe SyncObjects
-  , vertexBuffer       ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
+  , msaaColorImage     ∷ Maybe (Vk.Image, Vk.DeviceMemory, Vk.ImageView)  , vertexBuffer       ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))
   -- textureSystem + defaultFaceMapSlot moved to EngineEnv
   -- (textureSystemRef / defaultFaceMapSlotRef): worker threads read
@@ -244,8 +246,12 @@ data GraphicsState = GraphicsState
   , pendingInstanceBuffers ∷ V.Vector (Vk.Buffer, Vk.DeviceMemory)
   , cleanupStatus          ∷ CleanupStatus
   , vulkanCleanup          ∷ Cleanup
-  , dynamicVertexBuffer    ∷ Maybe SceneDynamicBuffer
-  , textInstanceBuffer     ∷ Maybe TextInstanceBuffer
+  , dynamicVertexBuffers   ∷ V.Vector (Maybe SceneDynamicBuffer)
+    -- ^ One per frame in flight. The frame slot's fence-wait guarantees
+    --   the GPU finished with the slot's buffer before the CPU rewrites
+    --   or grows (destroys + reallocates) it.
+  , textInstanceBuffers    ∷ V.Vector (Maybe TextInstanceBuffer)
+    -- ^ Per frame in flight, same discipline as dynamicVertexBuffers.
   }
 
 -- | Cached windowed-mode geometry so we can restore position\/size after fullscreen

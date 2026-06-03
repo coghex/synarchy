@@ -6,6 +6,7 @@ module Engine.Loop.Shutdown
 import UPrelude
 import Control.Exception (displayException)
 import Data.IORef (writeIORef, readIORef)
+import qualified Data.Vector as V
 import System.Exit (exitFailure)
 import Engine.Core.Log (shutdownLogger, LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
@@ -46,14 +47,14 @@ shutdownEngine (Window win) unitThreadState worldThreadState
     -- Destroy cached text instance buffer
     case device of
         Just dev → do
-            case textInstanceBuffer state of
+            V.forM_ (textInstanceBuffers state) $ \case
                 Just tib → liftIO $ do
                     destroyBuffer dev (tibBuffer tib) Nothing
                     freeMemory dev (tibMemory tib) Nothing
                 Nothing → pure ()
-            
-            -- Destroy cached dynamic vertex buffer
-            case dynamicVertexBuffer state of
+
+            -- Destroy cached dynamic vertex buffers (one per frame in flight)
+            V.forM_ (dynamicVertexBuffers state) $ \case
                 Just sdb → liftIO $ do
                     destroyBuffer dev (sdbBuffer sdb) Nothing
                     freeMemory dev (sdbMemory sdb) Nothing

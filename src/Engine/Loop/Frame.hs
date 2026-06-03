@@ -92,10 +92,6 @@ drawFrame = do
             logInfoM CatGraphics "Swapchain out of date on acquire, recreating..."
             recreateSwapchain window
         
-        Left SUBOPTIMAL_KHR → do
-            logInfoM CatGraphics "Swapchain suboptimal on acquire, recreating..."
-            recreateSwapchain window
-        
         Left err → logAndThrowM CatGraphics
           (ExGraphics SwapchainError) $ T.pack $
             "Failed to acquire swapchain image: " ⧺ show err
@@ -166,9 +162,9 @@ drawFrame = do
 
             dynamicBuffer ← if totalVertices > 0
                 then do
-                    buffer ← ensureDynamicVertexBuffer totalVertices
-                    uploadBatchesToBuffer batches buffer
-                else ensureDynamicVertexBuffer 6
+                    buffer ← ensureDynamicVertexBuffer (fromIntegral frameIdx) totalVertices
+                    uploadBatchesToBuffer (fromIntegral frameIdx) batches buffer
+                else ensureDynamicVertexBuffer (fromIntegral frameIdx) 6
             
             -- Validate resources
             state'' ← gets graphicsState
@@ -177,17 +173,25 @@ drawFrame = do
             -- Record command buffer
             cmdBuffer ← getCommandBuffer resources
             liftIO $ resetCommandBuffer cmdBuffer zero
-            recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex) 
+            recordSceneCommandBuffer cmdBuffer (fromIntegral imageIndex)
+                                     (fromIntegral frameIdx)
                                      dynamicBuffer layeredBatches
             
-            -- Submit
+            -- Submit + present both use the per-IMAGE render-finished
+            -- semaphore (the image count can differ from frames in flight,
+            -- so it can't live in the per-frame FrameResources).
             queues ← getQueues state''
-            submitFrame cmdBuffer resources queues
-            
+            let rfSems = renderFinishedSems state''
+            renderFinishedSem ← if fromIntegral imageIndex < V.length rfSems
+                then pure (rfSems V.! fromIntegral imageIndex)
+                else logAndThrowM CatGraphics (ExGraphics SwapchainError)
+                       "imageIndex out of renderFinished semaphore bounds"
+            submitFrame cmdBuffer resources queues renderFinishedSem
+
             -- Present - get fresh swapchain from state
             currentState ← gets graphicsState
             currentSwapchain ← getSwapchain currentState
-            presentResult ← presentFrameWithResult resources queues currentSwapchain imageIndex
+            presentResult ← presentFrameWithResult renderFinishedSem queues currentSwapchain imageIndex
             
             case presentResult of
                 Left ERROR_OUT_OF_DATE_KHR → do
@@ -254,24 +258,24 @@ updateUniformBufferForFrame win frameIdx camera = do
             T.pack "No device or uniform buffer"
 
 -- | Submit frame to GPU
-submitFrame ∷ CommandBuffer → FrameResources → DevQueues → EngineM ε σ ()
-submitFrame cmdBuffer resources queues = do
+submitFrame ∷ CommandBuffer → FrameResources → DevQueues → Semaphore → EngineM ε σ ()
+submitFrame cmdBuffer resources queues renderFinishedSem = do
     let waitStages = V.singleton PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-        submitInfo = zero 
+        submitInfo = zero
             { waitSemaphores = V.singleton $ frImageAvailable resources
             , waitDstStageMask = waitStages
             , commandBuffers = V.singleton $ commandBufferHandle cmdBuffer
-            , signalSemaphores = V.singleton $ frRenderFinished resources
+            , signalSemaphores = V.singleton renderFinishedSem
             }
     liftIO $ queueSubmit (graphicsQueue queues) 
                (V.singleton $ SomeStruct submitInfo) (frInFlight resources)
 
 -- | Present frame and return result for handling
-presentFrameWithResult ∷ FrameResources → DevQueues → SwapchainKHR → Word32 
+presentFrameWithResult ∷ Semaphore → DevQueues → SwapchainKHR → Word32
                        → EngineM ε σ (Either Result ())
-presentFrameWithResult resources queues swapchain imageIndex = do
+presentFrameWithResult renderFinishedSem queues swapchain imageIndex = do
     let presentInfo = zero
-            { waitSemaphores = V.singleton $ frRenderFinished resources
+            { waitSemaphores = V.singleton renderFinishedSem
             , swapchains = V.singleton swapchain
             , imageIndices = V.singleton imageIndex
             }
@@ -289,6 +293,10 @@ acquireNextImageKHRSafe device swapchain timeout semaphore fence = do
     (result, imageIndex) ← acquireNextImageKHR device swapchain timeout semaphore fence
     case result of
         SUCCESS               → pure $ Right imageIndex
-        SUBOPTIMAL_KHR        → pure $ Left SUBOPTIMAL_KHR
+        -- The image WAS acquired and the semaphore signaled — we must
+        -- proceed and consume it (bailing out would reuse a still-
+        -- signaled semaphore on the next acquire). The present-side
+        -- SUBOPTIMAL result triggers the actual recreation.
+        SUBOPTIMAL_KHR        → pure $ Right imageIndex
         ERROR_OUT_OF_DATE_KHR → pure $ Left ERROR_OUT_OF_DATE_KHR
         err                   → pure $ Left err

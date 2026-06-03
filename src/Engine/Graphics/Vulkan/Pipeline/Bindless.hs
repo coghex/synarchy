@@ -173,6 +173,13 @@ createBindlessPipelineWithShader device renderPass swapExtent uniformLayout text
         , rasterizationState = Just $ SomeStruct rasterizer
         , multisampleState   = Just $ SomeStruct multisampling
         , colorBlendState    = Just $ SomeStruct colorBlending
+        -- Viewport/scissor are issued per-frame via cmdSetViewport /
+        -- cmdSetScissor; without declaring them dynamic those commands
+        -- are a spec violation (the baked static state only happened to
+        -- match because pipelines were recreated on every resize).
+        , dynamicState       = Just $ (zero ∷ PipelineDynamicStateCreateInfo)
+            { dynamicStates = V.fromList [ DYNAMIC_STATE_VIEWPORT
+                                         , DYNAMIC_STATE_SCISSOR ] }
         , layout             = pipelineLayout
         , renderPass         = renderPass
         , subpass            = 0

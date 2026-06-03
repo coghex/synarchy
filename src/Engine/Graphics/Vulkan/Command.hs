@@ -164,7 +164,7 @@ createFrameResources device queues = do
     let allocInfo = zero
           { commandPool = cmdPool
           , level = COMMAND_BUFFER_LEVEL_PRIMARY
-          , commandBufferCount = 2
+          , commandBufferCount = 1
           }
     
     cmdBuffers ← allocResource (freeCommandBuffers device cmdPool) $
@@ -172,10 +172,7 @@ createFrameResources device queues = do
     
     imageAvailable ← allocResource (\s → destroySemaphore device s Nothing) $
         createSemaphore device zero Nothing
-    
-    renderFinished ← allocResource (\s → destroySemaphore device s Nothing) $
-        createSemaphore device zero Nothing
-    
+
     inFlight ← allocResource (\f → destroyFence device f Nothing) $
         createFence device (zero { flags = FENCE_CREATE_SIGNALED_BIT }) Nothing
     
@@ -183,7 +180,6 @@ createFrameResources device queues = do
         { frCommandPool    = cmdPool
         , frCommandBuffer  = cmdBuffers
         , frImageAvailable = imageAvailable
-        , frRenderFinished = renderFinished
         , frInFlight       = inFlight
         }
 
