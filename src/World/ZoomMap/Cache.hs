@@ -29,7 +29,7 @@ import qualified Data.Vector.Unboxed as VU
 import World.Fluids (isOceanChunk, hasAnyOceanFluid)
 import World.Fluid.River (hasAnyRiverQuick)
 import World.Fluid.Lake (hasAnyLakeQuick)
-import World.Fluid.Lava (hasAnyLavaQuick)
+import World.Fluid.Lava (chunkHasLavaQuick)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..), IceMap)
 import World.Fluid.IceLevel (lookupIceLevel)
 import World.Fluid.Internal (FluidMap, wrapChunkCoordU)
@@ -111,7 +111,7 @@ buildZoomCache params registry =
                           in s `div` length samples
 
                 coord = ChunkCoord ccx ccy
-                chunkLava = hasAnyLavaQuick features seed plates worldSize coord avgElev
+                chunkLava = chunkHasLavaQuick (wgpVolcanoCtx params) coord avgElev
                 chunkOcean = isOceanChunk oceanMap coord
                           ∨ hasAnyOceanFluid worldSize oceanMap coord
                 eventRivers = concatMap extractEventRivers' (gtPeriods timeline)
@@ -360,7 +360,7 @@ buildZoomCacheWithPixels params registry palette mBorderedCache =
                 avgElev = if null allMats then 0
                           else let s = sum (map fst allMats)
                                in s `div` length allMats
-                chunkLava = hasAnyLavaQuick features seed plates worldSize coord avgElev
+                chunkLava = chunkHasLavaQuick (wgpVolcanoCtx params) coord avgElev
                 eventRivers = concatMap extractEventRivers' (gtPeriods timeline)
                 chunkRiver = hasAnyRiverQuick eventRivers worldSize coord
                 chunkLake  = hasAnyLakeQuick features worldSize coord
@@ -595,15 +595,31 @@ generateChunkPixels palette hasLava worldSize fluidMap iceMap oceanFlags tileVec
                             Just fc | fcType fc ≢ Ocean →
                                 let blend = 0.7 ∷ Float
                                     (lr, lg, lb, la) = baseColor
+                                    -- River + lake blend toward water blue;
+                                    -- lava blends toward the lava palette
+                                    -- color so volcanic chunks are visible
+                                    -- on the zoom map as red-orange instead
+                                    -- of looking like another lake.
+                                    (tr, tg, tb) = case fcType fc of
+                                        Lava → defaultLavaColor3
+                                        _    → waterBlue3
                                 in ( round (fromIntegral lr * (1.0 - blend)
-                                          + 50.0 * blend ∷ Float)
+                                          + fromIntegral tr * blend ∷ Float)
                                    , round (fromIntegral lg * (1.0 - blend)
-                                          + 90.0 * blend ∷ Float)
+                                          + fromIntegral tg * blend ∷ Float)
                                    , round (fromIntegral lb * (1.0 - blend)
-                                          + 170.0 * blend ∷ Float)
+                                          + fromIntegral tb * blend ∷ Float)
                                    , la )
                             _ → baseColor
                 in BB.word8 r <> BB.word8 g <> BB.word8 b <> BB.word8 a
+
+-- | Blend target for river / lake tiles: deep water blue.
+waterBlue3 ∷ (Word8, Word8, Word8)
+waterBlue3 = (50, 90, 170)
+
+-- | Blend target for lava tiles: 'defaultLavaColor' minus the alpha.
+defaultLavaColor3 ∷ (Word8, Word8, Word8)
+defaultLavaColor3 = let (r, g, b, _) = defaultLavaColor in (r, g, b)
 
 -- | Determine the color for a single non-ocean tile.
 --   Ocean rendering is handled by the per-tile oceanFlags flood fill

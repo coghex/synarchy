@@ -8,6 +8,7 @@ module World.Generate.Timeline
 
 import UPrelude
 import Control.Monad.ST (runST)
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
@@ -19,7 +20,10 @@ import World.Geology.Types (GeoModification(..))
 import World.Geology.Event (applyGeoEvent)
 import World.Geology.Timeline.Types (GeoEvent(..))
 import World.Hydrology.Types (HydroFeature(..))
-import World.Geology.Erosion (applyErosion, lookupRegionalErosion)
+import World.Geology.Erosion
+    (applyErosion, applyErosionLerp4, lookupRegionalErosion
+    , erosionCornerLookup)
+import World.Weather.Lookup (RegionGridCoords(..), regionGridCoords)
 import World.Scale (WorldScale(..), computeWorldScale)
 import World.Constants (seaLevel)
 import World.Generate.Constants (chunkBorder)
@@ -237,8 +241,15 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
     -- case) pre-wrap gy uniquely identifies the row; tileInBBoxWrapped
     -- still does the final per-tile correctness check.
     applyOnePeriod cMinGX cMinGY cMaxGX cMaxGY (elevVec, matVec) period =
-        let relevantTagged = V.toList $ V.filter (\(_, bb) →
-                bboxOverlapsChunk worldSize bb cMinGX cMinGY cMaxGX cMaxGY
+        let -- Drop river-carve events here — 'applyRiverCarvePass'
+        -- re-applies the same set on top of the eroded result at
+        -- the end of 'applyTimelineChunk', so carving them per-
+        -- period is wasted work (target-based carve is idempotent
+        -- and the final pass is what the player sees).  Saves the
+        -- per-tile 'carveFromSegment' work in the hot loop.
+            relevantTagged = V.toList $ V.filter (\(evt, bb) →
+                not (isRiverCarveEvent evt)
+                ∧ bboxOverlapsChunk worldSize bb cMinGX cMinGY cMaxGX cMaxGY
                 ) (gpExplodedEvents period)
 
             borderArea = borderSize * borderSize
@@ -285,17 +296,30 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                     pure (elevF, matF)
 
             -- Cache the regional-erosion table lookups per period.
-            -- Inside applyTimelineChunk's bordered region (24 tiles per
-            -- side), all tiles fall inside the same 2×2 climate-region
-            -- cell — so the 4 HashMap lookups can be done once per
-            -- chunk-period instead of once per tile (formerly the
-            -- 'findWithDefault' hotspot at ~7% of total time).  We
-            -- precompute the four corner ErosionParams here and lerp
-            -- per-tile below.
+            -- Inside applyTimelineChunk's bordered region (24 tiles
+            -- per side), all tiles fall inside the same 2×2 climate-
+            -- region cell — so the 4 HashMap lookups can be done
+            -- once per chunk-period instead of once per tile
+            -- (formerly the 'findWithDefault' + record-construction
+            -- hotspot at 55% of total init time).  We precompute the
+            -- four corner ErosionParams here and lerp per-tile below.
+            --
+            -- For the rare chunk that straddles a region boundary
+            -- (so some tile's @ru0@ ≠ the chunk-centre's), the per-
+            -- tile path falls back to 'lookupRegionalErosion' so the
+            -- correctness boundary stays exactly where it used to.
             erosionFB    = gpErosion period
             regMap       = gpRegionalErosion period
+            regMapEmpty  = HM.null regMap
             periodDur    = gpDuration period
             wsScaleC     = wsScale wsc
+            ChunkCoord _ccx _ccy = coord
+            centreGX     = cMinGX + chunkSize `div` 2
+            centreGY     = cMinGY + chunkSize `div` 2
+            RegionGridCoords ru0C ru1C rv0C rv1C _ _ =
+                regionGridCoords chunkSize worldSize centreGX centreGY
+            (ep00C, ep10C, ep01C, ep11C) =
+                erosionCornerLookup erosionFB regMap ru0C ru1C rv0C rv1C
             (finalElev, finalMat) = runST $ do
                 elevM ← VUM.new borderArea
                 matM  ← VUM.new borderArea
@@ -332,19 +356,45 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
                                 ly = by - chunkBorder
                                 gx = cMinGX + lx + chunkBorder
                                 gy = cMinGY + ly + chunkBorder
-                                regionalParams = lookupRegionalErosion
-                                    erosionFB regMap worldSize gx gy
                                 hardness = mpHardness
                                     (getMaterialProps registry mat)
-                                erosionMod = applyErosion
-                                    regionalParams
-                                    worldSize
-                                    periodDur
-                                    wsScaleC
-                                    (unMaterialId mat)
-                                    hardness
-                                    elev
-                                    neighbors
+                                -- Fast path: when this tile lands in
+                                -- the same region cell as the chunk
+                                -- centre (the common case), call the
+                                -- scalar variant 'applyErosionLerp4'
+                                -- with the 4 cached corner EPs — it
+                                -- inlines just the 5 \"hot\" Float
+                                -- lerps the erosion math actually
+                                -- consumes, and defers the 4 sediment-
+                                -- only lerps into a closure that only
+                                -- fires if a material override is
+                                -- needed.  Avoids the per-tile
+                                -- ErosionParams record allocation that
+                                -- 'lerpErosionParams' used to do.
+                                erosionMod
+                                  | regMapEmpty =
+                                      applyErosion erosionFB worldSize
+                                          periodDur wsScaleC
+                                          (unMaterialId mat) hardness
+                                          elev neighbors
+                                  | otherwise =
+                                      let RegionGridCoords ru0 _ rv0 _ tu tv =
+                                              regionGridCoords chunkSize
+                                                  worldSize gx gy
+                                      in if ru0 ≡ ru0C ∧ rv0 ≡ rv0C
+                                         then applyErosionLerp4
+                                                  ep00C ep10C ep01C ep11C
+                                                  tu tv
+                                                  worldSize periodDur
+                                                  wsScaleC (unMaterialId mat)
+                                                  hardness elev neighbors
+                                         else applyErosion
+                                                  (lookupRegionalErosion
+                                                      erosionFB regMap
+                                                      worldSize gx gy)
+                                                  worldSize periodDur
+                                                  wsScaleC (unMaterialId mat)
+                                                  hardness elev neighbors
                             VUM.write elevM idx (elev + gmElevDelta erosionMod)
                             VUM.write matM  idx (case gmMaterialOverride erosionMod of
                                 Just m  → MaterialId m

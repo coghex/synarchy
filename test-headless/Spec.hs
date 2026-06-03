@@ -11,6 +11,7 @@ import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
 import qualified Test.Headless.Unit.Anim as AnimTest
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
+import qualified Test.Headless.Magma.Shape as MagmaShape
 
 main ∷ IO ()
 main = hspec $ do
@@ -23,3 +24,4 @@ main = hspec $ do
     describe "Unit.Anim" AnimTest.spec
     describe "Unit.Stats" StatsTest.spec
     describe "World.Save.Sanitize" SaveSanitize.spec
+    describe "World.Magma.Shape" MagmaShape.spec

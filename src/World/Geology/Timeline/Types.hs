@@ -37,7 +37,6 @@ module World.Geology.Timeline.Types
     , defaultErosionParams
     , VolcanicActivity(..)
     , PersistentFeature(..)
-    , LavaFlow(..)
     , explodeRiverEvent
     ) where
 
@@ -156,7 +155,6 @@ data GeoEvent
     = CraterEvent !CraterParams
     | VolcanicEvent !FeatureShape
     | VolcanicModify !GeoFeatureId !FeatureEvolution
-    | EruptionEvent !GeoFeatureId !LavaFlow
     | LandslideEvent !LandslideParams
     | GlaciationEvent !GlacierParams
     | FloodEvent !FloodParams
@@ -222,10 +220,6 @@ eventBBox (VolcanicModify _fid evo) ws =                           -- was _ws
                 FlankCollapse { feDebrisRadius = dr } → max (feRadius evo) dr
                 _                                     → feRadius evo
     in EventBBox (cx - r) (cy - r) (cx + r) (cy + r)
-eventBBox (EruptionEvent _ flow) ws =                              -- was _ws
-    let (sx, sy) = wrapCoordU ws (lfSourceX flow) (lfSourceY flow) -- ADDED
-        r = lfRadius flow
-    in EventBBox (sx - r) (sy - r) (sx + r) (sy + r)
 eventBBox (LandslideEvent ls) ws =                                 -- was _ws
     let GeoCoord cx0 cy0 = lsCenter ls
         (cx, cy) = wrapCoordU ws cx0 cy0                          -- ADDED
@@ -670,13 +664,3 @@ data PersistentFeature = PersistentFeature
     , pfParentId      ∷ !(Maybe GeoFeatureId)
     } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)
 
-data LavaFlow = LavaFlow
-    { lfSourceX   ∷ !Int
-    , lfSourceY   ∷ !Int
-    , lfRadius    ∷ !Int
-    , lfElevation ∷ !Int
-    , lfVolume    ∷ !Int
-    , lfMaterial  ∷ !Word8
-    , lfViscosity  ∷ !Int
-    , lfCenterElev ∷ !Int
-    } deriving (Show, Eq, Generic, Serialize, Hashable, NFData)

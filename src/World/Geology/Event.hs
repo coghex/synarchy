@@ -29,8 +29,6 @@ applyGeoEvent (VolcanicEvent _) _ _ _ _ _ =
     noModification
 applyGeoEvent (VolcanicModify _fid evolution) worldSize gx gy baseElev hardness =
     applyEvolution evolution worldSize gx gy baseElev hardness
-applyGeoEvent (EruptionEvent _fid flow) worldSize gx gy baseElev hardness =
-    applyLavaFlow flow worldSize gx gy baseElev hardness
 applyGeoEvent (HydroEvent feature) worldSize gx gy baseElev _ =
     applyHydroFeature feature worldSize gx gy baseElev
 applyGeoEvent (HydroModify _fid evolution) worldSize gx gy baseElev _ =
@@ -44,42 +42,6 @@ applyGeoEvent (RiverDeltaEvent rdp) worldSize gx gy baseElev _ =
 applyGeoEvent (LandslideEvent _)    _ _ _ _ _ = noModification
 applyGeoEvent (GlaciationEvent _)   _ _ _ _ _ = noModification
 applyGeoEvent (FloodEvent _)        _ _ _ _ _ = noModification
-
--- * Lava Flow Application
-
--- | Apply a lava flow to a single column.
---   Lava flows radially from the source, losing elevation
---   with distance based on viscosity. If the lava surface
---   at this column is above the current terrain, material
---   is deposited to fill the gap.
---
---   viscosity=1: runny basalt, loses 1 tile of height per tile distance
---   viscosity=2: moderate, loses 2 per tile
---   viscosity=3: viscous obsidian, loses 3 per tile (piles up near source)
---
---   The flow only deposits material where the lava surface
---   is above the existing terrain — it fills valleys and
---   pools in depressions rather than coating hilltops.
-applyLavaFlow ∷ LavaFlow → Int → Int → Int → Int → Float → GeoModification
-applyLavaFlow flow worldSize gx gy baseElev hardness =
-    let sx = lfSourceX flow
-        sy = lfSourceY flow
-        (dxi, dyi) = wrappedDeltaUV worldSize gx gy sx sy
-        dx = fromIntegral dxi ∷ Float
-        dy = fromIntegral dyi ∷ Float
-        maxR = fromIntegral (lfRadius flow) ∷ Float
-        dist = perturbDist sx sy dx dy maxR baseElev (lfCenterElev flow) hardness
-
-    in if dist > maxR
-       then noModification
-       else
-       let visc = fromIntegral (lfViscosity flow) ∷ Float
-           lavaSurface = lfElevation flow - round (dist * visc)
-           deposit = lavaSurface - baseElev
-
-       in if deposit ≤ 0
-          then noModification
-          else GeoModification deposit (Just (lfMaterial flow)) deposit
 
 -- * Feature Evolution Application
 

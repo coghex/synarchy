@@ -78,8 +78,13 @@ saveMagic = 0x53595241
 --       doesn't round-trip via saves, but other shape/field deletions
 --       on RiverSegment in Phase B will. Bumping now so any pre-rework
 --       saves are clearly rejected before Phase B lands.
+--   v22 removes the EruptionEvent constructor + LavaFlow record from
+--       GeoEvent / Timeline.Types as part of the lava-v1 phase-3
+--       cleanup. Lava placement is now driven by the pure-function
+--       Magma system; per-period eruption rolls are gone. Constructor
+--       tag shift makes the schema incompatible with v21.
 currentSaveVersion ∷ Int
-currentSaveVersion = 21
+currentSaveVersion = 22
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects

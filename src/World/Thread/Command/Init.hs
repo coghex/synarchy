@@ -136,9 +136,11 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
         <> T.pack (show (HM.size (fcSpecies floraCat))) <> " species, "
         <> T.pack (show (HM.size (fcWorldGen floraCat))) <> " worldgen entries"
 
-    -- Use world gen config (already read for erosion intensity)
+    -- Use world gen config (already read for erosion intensity).
+    -- 'withVolcanoCtx' populates the Magma context now that
+    -- gtFeatures is final, so chunk-gen sees a built spatial index.
     let baseParams = applyConfigToParams worldGenCfg0
-        params = baseParams
+        params = withVolcanoCtx $ baseParams
             { wgpSeed        = seed
             , wgpWorldSize   = worldSize
             , wgpPlateCount  = placeCount
@@ -148,7 +150,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , wgpOceanDist   = oceanDist
             , wgpClimateState = climateState'
             }
-    
+
     writeIORef (wsGenParamsRef worldState) (Just params)
     
     -- Step 4: Zoom cache + texture atlas
@@ -196,7 +198,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
     
     catalog ← readIORef (floraCatalogRef env)
     let centerCoord = ChunkCoord 0 0
-        (ct, cs, cterrain, cf, cice, cflora, cwt) = generateChunk registry catalog params centerCoord
+        (ct, cs, cterrain, cf, cice, cflora, cwt, cmagma) = generateChunk registry catalog params centerCoord
         seededSurf = VU.imap (\idx surfZ →
             case cf V.! idx of
                 Just fc → max surfZ (fcSurface fc)
@@ -212,6 +214,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
             , lcFlora      = cflora
             , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
             , lcWaterTableMap = cwt
+            , lcMagma      = cmagma
             }
 
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
@@ -307,6 +310,7 @@ handleWorldInitArenaCommand env logger pageId = do
             , lcFlora             = flatFlora
             , lcSideDeco          = VU.replicate (chunkSize * chunkSize) 0
             , lcWaterTableMap    = VU.replicate (chunkSize * chunkSize) (arenaZ - 2)
+            , lcMagma             = Nothing
             }
 
         allChunks = [ mkChunk cx cy

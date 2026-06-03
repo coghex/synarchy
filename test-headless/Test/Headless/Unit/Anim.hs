@@ -17,6 +17,7 @@ mkDef stateAnims = UnitDef
     , udTexture       = TextureHandle 0
     , udDirSprites    = Map.empty
     , udBaseWidth     = 0
+    , udMaxSpeed      = 1.0
     , udAnimations    = HM.empty
     , udStateAnims    = stateAnims
     , udEagerStats    = False
@@ -27,6 +28,9 @@ mkDef stateAnims = UnitDef
     , udEquipmentClass = Nothing
     , udStartingEquipment = HM.empty
     , udStartingAccessories = []
+    , udBodyParts          = []
+    , udNaturalResistance  = defaultNaturalResistance
+    , udNaturalWeapon      = Nothing
     }
 
 spec ∷ Spec

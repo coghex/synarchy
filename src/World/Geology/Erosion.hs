@@ -1,8 +1,11 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Erosion
     ( applyErosion
+    , applyErosionLerp4
     , erosionSediment
     , lookupRegionalErosion
+    , lerpErosionParams
+    , erosionCornerLookup
     ) where
 
 import UPrelude
@@ -43,6 +46,7 @@ import World.Weather.Lookup (RegionGridCoords(..), regionGridCoords)
 --     - Arid climate: gentle wind-smoothed plateaus
 --     - Cold climate: jagged peaks from thermal shattering
 --     - Warm/wet:     rounded limestone karst from chemical
+{-# INLINE applyErosion #-}
 applyErosion ∷ ErosionParams
              → Int       -- ^ worldSize
              → Int       -- ^ period duration (millions of years)
@@ -53,7 +57,69 @@ applyErosion ∷ ErosionParams
              → (Int, Int, Int, Int)
                          -- ^ neighbor post-event elevations (N, S, E, W)
              → GeoModification
-applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, nE, nW) = if hardness ≥ 1.0
+applyErosion params worldSize duration worldScale matId hardness elev nbrs =
+    applyErosionScalar
+        (epIntensity params) (epHydraulic params) (epThermal params)
+        (epWind params) (epChemical params) (epIsLastAge params)
+        (\isDep → erosionSediment params matId elev isDep)
+        worldSize duration worldScale matId hardness elev nbrs
+
+-- | Fast variant for the chunk-loop in 'World.Generate.Timeline.applyTimelineChunk':
+--   takes the 4 climate-region-corner 'ErosionParams' plus the bilinear
+--   interpolation factors @(tu, tv)@.  Lerps just the 5 \"hot\" Floats
+--   that the erosion math actually consumes; defers the 4 sediment-only
+--   Floats (temperature, precipitation, humidity, snow) into a closure
+--   that 'erosionSedimentLerp4' lerps only if the result is actually
+--   used (most tile-periods don't trigger a material override).
+{-# INLINE applyErosionLerp4 #-}
+applyErosionLerp4
+    ∷ ErosionParams → ErosionParams → ErosionParams → ErosionParams
+    → Float → Float                       -- ^ tu, tv
+    → Int       -- ^ worldSize
+    → Int       -- ^ period duration (millions of years)
+    → Float     -- ^ world scale factor (worldSize / 512)
+    → Word8     -- ^ surface material ID at this tile
+    → Float     -- ^ material hardness (0.0-1.0)
+    → Int       -- ^ this tile's post-event elevation
+    → (Int, Int, Int, Int)
+                -- ^ neighbor post-event elevations (N, S, E, W)
+    → GeoModification
+applyErosionLerp4 ep00 ep10 ep01 ep11 tu tv
+                  worldSize duration worldScale matId hardness elev nbrs =
+    let lerpHot f =
+            let v0 = f ep00 + tu * (f ep10 - f ep00)
+                v1 = f ep01 + tu * (f ep11 - f ep01)
+            in v0 + tv * (v1 - v0)
+    in applyErosionScalar
+        (lerpHot epIntensity) (lerpHot epHydraulic) (lerpHot epThermal)
+        (lerpHot epWind) (lerpHot epChemical) (epIsLastAge ep00)
+        (\isDep → erosionSedimentLerp4
+            ep00 ep10 ep01 ep11 tu tv matId elev isDep)
+        worldSize duration worldScale matId hardness elev nbrs
+
+-- | The actual erosion computation, parameterised on scalar climate
+--   values + a sediment-callback. 'applyErosion' and 'applyErosionLerp4'
+--   are thin wrappers that supply these.  NOT inlined — the body is
+--   big and we want one copy of the work code.
+applyErosionScalar
+    ∷ Float      -- ^ intensity
+    → Float      -- ^ hydraulic
+    → Float      -- ^ thermal
+    → Float      -- ^ wind
+    → Float      -- ^ chemical
+    → Bool       -- ^ isLastAge
+    → (Bool → Word8)  -- ^ sediment callback (isDeposition → material)
+    → Int        -- ^ worldSize
+    → Int        -- ^ period duration (millions of years)
+    → Float      -- ^ world scale factor
+    → Word8      -- ^ surface material ID
+    → Float      -- ^ material hardness
+    → Int        -- ^ tile elevation
+    → (Int, Int, Int, Int) -- ^ neighbor elevations
+    → GeoModification
+applyErosionScalar intensity hydraulic thermal wind chemical isLastAge
+                   sedimentFn _worldSize duration worldScale _matId hardness elev
+                   (nN, nS, nE, nW) = if hardness ≥ 1.0
        then noModification  -- indestructible (glacier, mantle)
        else
        let -- Average of 4 cardinal neighbors
@@ -80,7 +146,7 @@ applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, 
            hydraulicSlopeBoost = 0.4 + 0.6 * slopeNorm
                -- even flat terrain erodes a little (sheet wash),
                -- but steep terrain erodes 2.5× faster
-           hydraulicRate = epHydraulic params
+           hydraulicRate = hydraulic
                          * erodability
                          * hydraulicSlopeBoost
 
@@ -93,7 +159,7 @@ applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, 
            ---------------------------------------------------------
            windSlopeBoost = 0.8 + 0.2 * slopeNorm
                -- almost flat response, slight boost on ridges
-           windRate = epWind params
+           windRate = wind
                     * erodability
                     * windSlopeBoost
 
@@ -106,7 +172,7 @@ applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, 
            ---------------------------------------------------------
            thermalSlopeBoost = slopeNorm * slopeNorm
                -- squared: only bites on steep terrain
-           thermalRate = epThermal params
+           thermalRate = thermal
                        * erodability
                        * thermalSlopeBoost
 
@@ -118,11 +184,11 @@ applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, 
            --   the material's base value). Not slope-dependent.
            --   epChemical is high when CO2 is high (acidic rain).
            ---------------------------------------------------------
-           chemicalErodability = min 1.0 (erodability + epChemical params * 0.3)
+           chemicalErodability = min 1.0 (erodability + chemical * 0.3)
                -- chemical weathering softens rock beyond base hardness
                -- e.g. limestone (hardness 0.4, erodability 0.6) at
                -- epChemical 0.5: effective erodability = 0.6 + 0.15 = 0.75
-           chemicalRate = epChemical params
+           chemicalRate = chemical
                         * chemicalErodability
                         * 0.5  -- intrinsically slower than hydraulic
 
@@ -135,7 +201,7 @@ applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, 
            linearRate = (hydraulicRate + windRate + thermalRate + chemicalRate)
                       * durationScale
                       * scaleFactor
-                      * epIntensity params
+                      * intensity
 
            -- Saturating curve: K*(1 - exp(-r/K)).
            --   • Short periods (Ages, r << K): clampedRate ≈ linearRate.
@@ -158,50 +224,50 @@ applyErosion params _worldSize duration worldScale matId hardness elev (nN, nS, 
            -- instead of discrete thresholds (avoids visible contour lines).
            -- Steep slopes (>0.8) get no soil; flat terrain gets full depth.
            soilDepth
-               | not (epIsLastAge params) = 0
-               | slopeNorm > 0.8          = 0
-               | otherwise                = max 1 (round
+               | not isLastAge   = 0
+               | slopeNorm > 0.8 = 0
+               | otherwise       = max 1 (round
                    (4.0 * erodability * (1.0 - slopeNorm) ∷ Float))
 
            -- Strata thickness bonus: longer ages deposit thicker layers.
            -- A 15-MY age adds 5 bonus tiles, a 1-MY age adds 0.
            -- This only applies to non-last-age periods (geological rock strata).
            durationBonus
-               | epIsLastAge params = 0
-               | otherwise          = max 0 (truncateTowardZero
-                                        (fromIntegral duration / 3.0 ∷ Float))
+               | isLastAge = 0
+               | otherwise = max 0 (truncateTowardZero
+                                 (fromIntegral duration / 3.0 ∷ Float))
 
        in if delta ≡ 0
-          then if epIsLastAge params ∧ soilDepth > 0
+          then if isLastAge ∧ soilDepth > 0
                then GeoModification
                    { gmElevDelta        = 0
-                   , gmMaterialOverride = Just (erosionSediment params matId elev False)
+                   , gmMaterialOverride = Just (sedimentFn False)
                    , gmIntrusionDepth   = soilDepth
                    }
-               else if epIsLastAge params
+               else if isLastAge
                then GeoModification
                    { gmElevDelta        = 0
-                   , gmMaterialOverride = Just (erosionSediment params matId elev False)
+                   , gmMaterialOverride = Just (sedimentFn False)
                    , gmIntrusionDepth   = 0
                    }
                else noModification
           else if delta < 0
-               then if epIsLastAge params ∧ soilDepth > 0
+               then if isLastAge ∧ soilDepth > 0
                     then GeoModification
                         { gmElevDelta        = delta
-                        , gmMaterialOverride = Just (erosionSediment params matId elev False)
+                        , gmMaterialOverride = Just (sedimentFn False)
                         , gmIntrusionDepth   = soilDepth
                         }
                     else GeoModification
                         { gmElevDelta        = delta
-                        , gmMaterialOverride = Just (erosionSediment params matId elev False)
+                        , gmMaterialOverride = Just (sedimentFn False)
                         , gmIntrusionDepth   = durationBonus  -- ← erosion strata thickness
                         }
                -- Deposition: tile is lower than neighbors, receive sediment
                else GeoModification
                    { gmElevDelta        = delta
-                   , gmMaterialOverride = Just (erosionSediment params matId elev True)
-                   , gmIntrusionDepth   = if epIsLastAge params
+                   , gmMaterialOverride = Just (sedimentFn True)
+                   , gmIntrusionDepth   = if isLastAge
                                           then max delta soilDepth
                                           else delta + durationBonus  -- ← deposition strata thickness
                    }
@@ -226,16 +292,54 @@ truncateTowardZero x
 --   becoming vanishingly rare. Reverted; soil classification is back
 --   to climate-only. The `mpDrainage` field on `MaterialProps` is
 --   still present and parsed from YAML for future use.
+{-# INLINE erosionSediment #-}
 erosionSediment ∷ ErosionParams → Word8 → Int → Bool → Word8
 erosionSediment params matId elev isDeposition =
-    let temp  = epTemperature params
-        precip = epPrecipitation params
-        humid = epHumidity params
-        snow  = epSnowFraction params
-        seed  = epSeed params
-        lastAge = epIsLastAge params
+    erosionSedimentScalar
+        (epTemperature params) (epPrecipitation params)
+        (epHumidity params) (epSnowFraction params)
+        (epSeed params) (epIsLastAge params)
+        matId elev isDeposition
 
-        -- Hash for local variation (cheap: xor + shift).
+-- | Fast variant for the chunk-loop in 'World.Generate.Timeline.applyTimelineChunk':
+--   takes the 4 climate-region-corner 'ErosionParams' plus @(tu, tv)@.
+--   Lerps only the 4 sediment Float fields (temperature, precipitation,
+--   humidity, snow) inline.  Seed + isLastAge are picked from @ep00@
+--   (they aren't lerped — same convention as 'lerpErosionParams').
+--   The callback in 'applyErosionLerp4' invokes this only on tile-periods
+--   that actually need a material override, so most tile-periods skip
+--   these 4 lerps entirely.
+{-# INLINE erosionSedimentLerp4 #-}
+erosionSedimentLerp4
+    ∷ ErosionParams → ErosionParams → ErosionParams → ErosionParams
+    → Float → Float → Word8 → Int → Bool → Word8
+erosionSedimentLerp4 ep00 ep10 ep01 ep11 tu tv matId elev isDeposition =
+    let lerpC f =
+            let v0 = f ep00 + tu * (f ep10 - f ep00)
+                v1 = f ep01 + tu * (f ep11 - f ep01)
+            in v0 + tv * (v1 - v0)
+    in erosionSedimentScalar
+        (lerpC epTemperature) (lerpC epPrecipitation)
+        (lerpC epHumidity) (lerpC epSnowFraction)
+        (epSeed ep00) (epIsLastAge ep00)
+        matId elev isDeposition
+
+-- | The actual sediment computation, parameterised on scalar climate
+--   values.  'erosionSediment' and 'erosionSedimentLerp4' are thin
+--   wrappers.  NOT inlined — one shared copy of the work code.
+erosionSedimentScalar
+    ∷ Float       -- ^ temperature
+    → Float       -- ^ precipitation
+    → Float       -- ^ humidity
+    → Float       -- ^ snow fraction
+    → Word64      -- ^ seed
+    → Bool        -- ^ isLastAge
+    → Word8       -- ^ source material ID
+    → Int         -- ^ tile elevation
+    → Bool        -- ^ isDeposition
+    → Word8
+erosionSedimentScalar temp precip humid snow seed lastAge matId elev _isDeposition =
+    let -- Hash for local variation (cheap: xor + shift).
         bucket = elev `div` 8
         bucketFrac = fromIntegral (elev `mod` 8) / 8.0 ∷ Float
         hashBucket b = fromIntegral (seed `xor` fromIntegral matId
@@ -425,29 +529,55 @@ lookupRegionalErosion fallback regMap worldSize gx gy =
     then fallback
     else let RegionGridCoords ru0 ru1 rv0 rv1 tu tv =
                  regionGridCoords 16 worldSize gx gy
+             (ep00, ep10, ep01, ep11) =
+                 erosionCornerLookup fallback regMap ru0 ru1 rv0 rv1
+         in lerpErosionParams ep00 ep10 ep01 ep11 tu tv
 
-             lookupEP ru rv =
-                 HM.lookupDefault fallback (ClimateCoord ru rv) regMap
+-- | Probe the regional-erosion HashMap for the 4 cells at
+--   @(ru0,rv0), (ru1,rv0), (ru0,rv1), (ru1,rv1)@. Pulled out so the
+--   per-chunk caller in 'World.Generate.Timeline.applyTimelineChunk'
+--   can do the 4 probes ONCE for the whole chunk-period and then
+--   just call 'lerpErosionParams' per tile — replaces the per-tile
+--   HashMap lookup chain that used to be 55% of init time.
+{-# INLINE erosionCornerLookup #-}
+erosionCornerLookup
+    ∷ ErosionParams                            -- ^ fallback
+    → HM.HashMap ClimateCoord ErosionParams
+    → Int → Int → Int → Int                    -- ^ ru0 ru1 rv0 rv1
+    → (ErosionParams, ErosionParams, ErosionParams, ErosionParams)
+erosionCornerLookup fallback regMap ru0 ru1 rv0 rv1 =
+    let lookupEP ru rv = HM.lookupDefault fallback (ClimateCoord ru rv) regMap
+    in ( lookupEP ru0 rv0
+       , lookupEP ru1 rv0
+       , lookupEP ru0 rv1
+       , lookupEP ru1 rv1
+       )
 
-             ep00 = lookupEP ru0 rv0
-             ep10 = lookupEP ru1 rv0
-             ep01 = lookupEP ru0 rv1
-             ep11 = lookupEP ru1 rv1
-
-             lerpF a b t = a + t * (b - a)
-             lerpField f = lerpF (lerpF (f ep00) (f ep10) tu)
-                                 (lerpF (f ep01) (f ep11) tu) tv
-
-         in ErosionParams
-            { epIntensity     = lerpField epIntensity
-            , epHydraulic     = lerpField epHydraulic
-            , epThermal       = lerpField epThermal
-            , epWind          = lerpField epWind
-            , epChemical      = lerpField epChemical
-            , epSeed          = epSeed ep00
-            , epTemperature   = lerpField epTemperature
-            , epPrecipitation = lerpField epPrecipitation
-            , epHumidity      = lerpField epHumidity
-            , epSnowFraction  = lerpField epSnowFraction
-            , epIsLastAge     = epIsLastAge ep00
-            }
+-- | Bilinear interpolation across 4 corner 'ErosionParams' records,
+--   using @(tu, tv) ∈ [0, 1]^2@ as the weights inside the 2×2 cell.
+{-# INLINE lerpErosionParams #-}
+lerpErosionParams
+    ∷ ErosionParams                            -- ^ ep00 (low-u, low-v)
+    → ErosionParams                            -- ^ ep10 (high-u, low-v)
+    → ErosionParams                            -- ^ ep01 (low-u, high-v)
+    → ErosionParams                            -- ^ ep11 (high-u, high-v)
+    → Float                                    -- ^ tu
+    → Float                                    -- ^ tv
+    → ErosionParams
+lerpErosionParams ep00 ep10 ep01 ep11 tu tv =
+    let lerpF a b t = a + t * (b - a)
+        lerpField f = lerpF (lerpF (f ep00) (f ep10) tu)
+                            (lerpF (f ep01) (f ep11) tu) tv
+    in ErosionParams
+        { epIntensity     = lerpField epIntensity
+        , epHydraulic     = lerpField epHydraulic
+        , epThermal       = lerpField epThermal
+        , epWind          = lerpField epWind
+        , epChemical      = lerpField epChemical
+        , epSeed          = epSeed ep00
+        , epTemperature   = lerpField epTemperature
+        , epPrecipitation = lerpField epPrecipitation
+        , epHumidity      = lerpField epHumidity
+        , epSnowFraction  = lerpField epSnowFraction
+        , epIsLastAge     = epIsLastAge ep00
+        }

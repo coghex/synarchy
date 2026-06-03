@@ -92,7 +92,7 @@ updateChunkLoading env logger = do
                                 let !newChunks = if isArena
                                         then map generateFlatChunk batch
                                         else parMap rdeepseq (\coord →
-                                            let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap) = generateChunk registry catalog params coord
+                                            let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap, magma) = generateChunk registry catalog params coord
                                             in LoadedChunk
                                                 { lcCoord      = coord
                                                 , lcTiles      = chunkTiles
@@ -103,6 +103,7 @@ updateChunkLoading env logger = do
                                                 , lcFlora      = flora
                                                 , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
                                                 , lcWaterTableMap = wtMap
+                                                , lcMagma      = magma
                                                 }) batch
                                 -- Replay player edits onto the fresh chunks
                                 -- before inserting. Chunks evicted earlier
@@ -165,7 +166,7 @@ drainInitQueues env logger = do
                             seed  = wgpSeed params
 
                         let newChunks = parMap rdeepseq (\coord →
-                                let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap) = generateChunk registry catalog params coord
+                                let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap, magma) = generateChunk registry catalog params coord
                                 in LoadedChunk
                                     { lcCoord      = coord
                                     , lcTiles      = chunkTiles
@@ -176,6 +177,7 @@ drainInitQueues env logger = do
                                     , lcFlora      = flora
                                     , lcSideDeco   = VU.replicate (chunkSize * chunkSize) 0
                                     , lcWaterTableMap = wtMap
+                                    , lcMagma      = magma
                                     }) batch
 
                         -- Replay player edits onto the fresh chunks

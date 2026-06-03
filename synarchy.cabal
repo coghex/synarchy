@@ -144,6 +144,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Anim
                    Test.Headless.Unit.Stats
                    Test.Headless.World.Save.Sanitize
+                   Test.Headless.Magma.Shape
     default-extensions: DefaultSignatures
                      , DuplicateRecordFields
                      , MagicHash
@@ -529,6 +530,13 @@ library
                      World.Fluid.River.Types
                      World.Fluid.River.Identify
                      World.Fluid.Lava
+                     World.Magma.Overlay
+                     World.Magma.Types
+                     World.Magma.Field
+                     World.Magma.Shape
+                     World.Magma.Kit
+                     World.Magma.Lookup
+                     World.Magma.Init
                      World.Vegetation
                      World.Weather
                      World.Weather.Types

@@ -21,6 +21,7 @@ import qualified Data.Vector as V
 import World.Material (MaterialId(..))
 import World.Fluid.Types (FluidCell(..), IceMap, emptyIceMap)
 import World.Flora.Types (FloraChunkData(..), emptyFloraChunkData)
+import World.Magma.Overlay (MagmaOverlay)
 
 data ChunkCoord = ChunkCoord !Int !Int
     deriving (Show, Eq, Ord, Generic, Serialize)
@@ -80,6 +81,11 @@ data LoadedChunk = LoadedChunk
       --   water; subsurface query for digging: position (lx, ly, z) is
       --   wet iff z ≤ lcWaterTableMap[ly*chunkSize+lx]. Computed by
       --   World.Hydrology.WaterTable, see DESIGN.md in that folder.
+    , lcMagma      ∷ !(Maybe MagmaOverlay)
+      -- ^ Sparse lava overlay produced by 'discoverChunkLava' at chunk
+      --   gen. Nothing in nearly every chunk; when present, the
+      --   overlay's moSurface map drives lava placement in
+      --   composeFluidMap (highest priority above water + ice).
     } deriving (Show, Eq)
 -- Removed: lcModified :: Bool. The world's edit log
 -- (WorldState.wsEditsRef) is now the source of truth for "this chunk
@@ -87,7 +93,7 @@ data LoadedChunk = LoadedChunk
 -- via replay on regeneration.
 
 instance NFData LoadedChunk where
-    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco wtMap) =
+    rnf (LoadedChunk coord tiles surfMap terrainMap fluidMap iceMap flora sideDeco wtMap magma) =
         rnf coord `seq` rnf tiles `seq` rnf surfMap `seq`
         rnf terrainMap `seq` rnf fluidMap `seq` rnf iceMap `seq`
-        rnf flora `seq` rnf sideDeco `seq` rnf wtMap
+        rnf flora `seq` rnf sideDeco `seq` rnf wtMap `seq` rnf magma

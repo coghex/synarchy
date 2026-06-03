@@ -46,7 +46,7 @@ import World.Geology.Timeline.Helpers
     , isGlacierFeature, isActiveRiver, getRiverParamsFromPf
     , evolveGlacierCapped, updateLakeSpillways )
 import World.Geology.Timeline.Volcanism
-    ( applyPeriodVolcanism, applyVolcanicEvolution, generateEruption )
+    ( applyPeriodVolcanism, applyVolcanicEvolution )
 import World.Geology.Timeline.River
     ( reconcileHydrology, mergeConvergingRivers )
 import World.Constants (seaLevel)
@@ -440,14 +440,12 @@ buildAge seed worldSize plates ageIdx tbs0 elevGrid =
                          (map CraterEvent craters)
             else []
 
+        -- Per-age eruption events are no longer emitted (Magma overlay
+        -- handles lava placement directly). The CO2 spike below still
+        -- uses the same hash-based "would this volcano erupt this age?"
+        -- roll, so climate dynamics keep the eruption-driven pulse
+        -- without the now-obsolete GeoEvent path.
         eruptSeed = ageSeed `xor` 0x1A7A
-        eruptions = catMaybes
-            [ generateEruption (tbsVolcanicActivity tbs) eruptSeed worldSize ageIdx plates pf
-            | pf ← tbsFeatures tbs
-            , case eruptionProfile (pfFeature pf) of
-                Just ep → epTimelineScale ep ≡ Age
-                Nothing → False
-            ]
 
         -- === CO2 SPIKE FROM ERUPTIONS ===
         -- Each eruption bumps CO2. Super volcanoes bump it a lot.
@@ -511,7 +509,7 @@ buildAge seed worldSize plates ageIdx tbs0 elevGrid =
             , pfActivity pf ≡ FActive
             ]
 
-        allEvents = meteorites <> eruptions <> hydroEvents
+        allEvents = meteorites <> hydroEvents
                  <> newGlacierEvents <> glacierEvolveEvents
                  <> activeGlacierRecarve
 

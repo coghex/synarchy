@@ -3,18 +3,11 @@
 module World.Geology.Timeline.Volcanism
     ( applyPeriodVolcanism
     , applyVolcanicEvolution
-    , generateEruption
     ) where
 import UPrelude
-import Data.Bits (xor)
-import Data.List (foldl')
-import Data.Word (Word64)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
-import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
-import World.Plate (TectonicPlate, elevationAtGlobal)
-import World.Geology.Types
 import World.Geology.Hash
 import World.Geology.Generate
     ( generateShieldVolcano
@@ -27,7 +20,7 @@ import World.Geology.Generate
 import World.Geology.Evolution (evolveOneFeature)
 import World.Hydrology.Simulation (ElevGrid(..), updateElevGrid)
 import World.Geology.Timeline.Helpers
-    ( mkGeoPeriod, featureCenter, isSuperVolcano )
+    ( mkGeoPeriod, isSuperVolcano )
 
 -- * Period-level volcanism
 
@@ -120,7 +113,7 @@ forceOneSuperVolcano seed worldSize plates periodIdx tbs =
 applyVolcanicEvolution ∷ Word64 → Int → [TectonicPlate]
                        → TimelineBuildState → ElevGrid
                        → (TimelineBuildState, ElevGrid)
-applyVolcanicEvolution seed worldSize plates tbs grid =
+applyVolcanicEvolution seed worldSize _plates tbs grid =
     let periodIdx = tbsPeriodIdx tbs
         evolSeed = seed `xor` 0xEF01F100
         currentDate = gdMillionYears (gsDate (tbsGeoState tbs))
@@ -133,25 +126,14 @@ applyVolcanicEvolution seed worldSize plates tbs grid =
                 Just pf → evolveOneFeature evolSeed periodIdx (evts, st) pf
             ) ([], tbs) featureIds
 
-        eruptSeed = seed `xor` 0x5E7A
-        periodEruptions = catMaybes
-            [ generateEruption (tbsVolcanicActivity tbs1) eruptSeed worldSize periodIdx plates pf
-            | pf ← tbsFeatures tbs1
-            , case eruptionProfile (pfFeature pf) of
-                Just ep → epTimelineScale ep ≡ Period
-                Nothing → False
-            ]
-
-        allEvents = events <> periodEruptions
-
         period = mkGeoPeriod worldSize
             "Volcanic Evolution"
             Period 30 currentDate
-            allEvents
+            events
             (ErosionParams 0.5 0.5 0.4 0.2 0.3 (seed + 5000)
                            200.0 0.0 0.0 0.0 False)
             HM.empty
-    in if null allEvents then (tbs1, grid)
+    in if null events then (tbs1, grid)
        else let -- Advance gsDate to match the period's gpDuration
                 -- (audit #5: keep geological clock and erosion-time
                 -- in sync).
@@ -160,48 +142,3 @@ applyVolcanicEvolution seed worldSize plates tbs grid =
                 tbs2 = addPeriod period (tbs1 { tbsGeoState = gs' })
                 grid' = updateElevGrid worldSize grid period
             in (tbs2, grid')
-
-generateEruption ∷ Float → Word64 → Int → Int → [TectonicPlate]
-                 → PersistentFeature → Maybe GeoEvent
-generateEruption volcanicActivity seed worldSize ageIdx plates pf =
-    case pfActivity pf of
-        FActive → case eruptionProfile (pfFeature pf) of
-            Nothing → Nothing
-            Just profile →
-                let GeoFeatureId fidInt = pfId pf
-                    h1 = hashGeo seed fidInt (700 + ageIdx)
-                    roll = hashToFloatGeo h1
-                    scaledChance = min 1.0 (epEruptChance profile * volcanicActivity)
-                in if roll < scaledChance
-                   then Just (buildEruptionEvent seed worldSize ageIdx plates pf profile)
-                   else Nothing
-        _ → Nothing
-
-buildEruptionEvent ∷ Word64 → Int → Int → [TectonicPlate]
-                   → PersistentFeature → EruptionProfile → GeoEvent
-buildEruptionEvent seed worldSize ageIdx plates pf profile =
-    let GeoFeatureId fidInt = pfId pf
-        h2 = hashGeo seed fidInt (710 + ageIdx)
-        h3 = hashGeo seed fidInt (711 + ageIdx)
-
-        radius = hashToRangeGeo h2 (epMinRadius profile) (epMaxRadius profile)
-        volume = hashToRangeGeo h3 (epMinVolume profile) (epMaxVolume profile)
-
-        (sx, sy) = featureCenter (pfFeature pf)
-
-        (srcElev, _) = elevationAtGlobal seed plates worldSize sx sy
-
-        eruptionBoost = pfEruptionCount pf * 5
-        lavaElev = srcElev + eruptionBoost + volume `div` 4
-
-        flow = LavaFlow
-            { lfSourceX    = sx
-            , lfSourceY    = sy
-            , lfRadius     = radius
-            , lfElevation  = lavaElev
-            , lfVolume     = volume
-            , lfMaterial   = epMaterial profile
-            , lfViscosity  = epViscosity profile
-            , lfCenterElev = srcElev
-            }
-    in EruptionEvent (pfId pf) flow

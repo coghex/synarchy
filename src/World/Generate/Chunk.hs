@@ -17,7 +17,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import World.Types
 import World.Material (MaterialId(..), matGlacier, getMaterialProps
-                      , MaterialProps(..), matAir, MaterialRegistry(..))
+                      , MaterialProps(..), matAir, matBasalt
+                      , MaterialRegistry(..))
 import World.Plate (TectonicPlate(..), generatePlates
                    , elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Geology (applyGeoEvent, GeoModification(..))
@@ -31,8 +32,9 @@ import World.Fluid.Internal (emptyFluidMap, lavaOverrides
                             , wrapChunkCoordU, wrappedDeltaUVFluid)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Fluid.River (riverNearChunk)
-import World.Fluid.Lava (computeChunkLava)
 import World.Fluid.Ice (computeChunkIce)
+import World.Magma.Types (MagmaOverlay(..))
+import World.Magma.Init (discoverChunkLava)
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
                              , RiverSegment(..))
 import World.Geology.Timeline.Types (GeoEvent(..), GeoPeriod(..))
@@ -76,8 +78,9 @@ import World.Generate.Strata
 -- subsurface dig path can still ask "is this buried tile saturated?"
 composeFluidMap ∷ WorldGenParams → ChunkCoord → VU.Vector Int
                 → VU.Vector Int
+                → Maybe MagmaOverlay
                 → V.Vector (Maybe FluidCell)
-composeFluidMap params coord terrainMap _channelMask =
+composeFluidMap params coord terrainMap _channelMask mMagma =
     let worldSize   = wgpWorldSize params
         timeline    = wgpGeoTimeline params
         oceanDist   = wgpOceanDist params
@@ -95,9 +98,7 @@ composeFluidMap params coord terrainMap _channelMask =
         -- those rare cases the tile renders as dry land rather than
         -- ocean. Fixing properly needs propagating worldOcean from
         -- the identifier through to here — left for later.
-        chunkIsOceanic =
-            oceanDistAt oceanDist
-                (wrapChunkCoordU worldSize coord) ≡ 0
+        chunkIsOceanic = chunkOrNeighborOceanic params coord
 
         -- Per-tile lake surface lookup. We pre-fold the chunk's
         -- 'LakeChunkEntry' vector into a single per-tile lake surface
@@ -158,10 +159,206 @@ composeFluidMap params coord terrainMap _channelMask =
                            then Just (FluidCell Lake lkSurf)
                            else Nothing
 
-        -- Lava still disabled (see Phase 1 plan).
-        _ = (gtFeatures timeline, computeChunkLava)
+        -- Lava: highest priority. Tiles with a chamber/chute breaking
+        -- the surface (per 'discoverChunkLava') overwrite whatever
+        -- water/ice would otherwise have rendered.
+        withLava = case mMagma of
+            Nothing → waterFluid
+            Just mo →
+                overlayLava coord (moSurface mo) waterFluid
 
-    in waterFluid
+    in withLava
+
+-- | Stamp lava tiles from a 'MagmaOverlay' onto an existing fluid map.
+--   Lava overrides any pre-existing cell (water, river, lake). Out-of-
+--   chunk entries in the overlay are skipped defensively.
+overlayLava ∷ ChunkCoord
+            → HM.HashMap (Int, Int) FluidCell
+            → V.Vector (Maybe FluidCell)
+            → V.Vector (Maybe FluidCell)
+overlayLava coord surf fluid
+    | HM.null surf = fluid
+    | otherwise = runST $ do
+        mv ← V.thaw fluid
+        let ChunkCoord cx cy = coord
+            baseGX = cx * chunkSize
+            baseGY = cy * chunkSize
+        forM_ (HM.toList surf) $ \((gx, gy), cell) → do
+            let lx = gx - baseGX
+                ly = gy - baseGY
+            when (lx ≥ 0 ∧ lx < chunkSize ∧ ly ≥ 0 ∧ ly < chunkSize) $
+                MV.write mv (ly * chunkSize + lx) (Just cell)
+        V.freeze mv
+
+-- | Raise the per-tile terrain surface where 'discoverChunkLava'
+--   marked a basalt cap. The cap value is the target terrain Z; we
+--   take 'max' with the original terrain so the cap can only RAISE,
+--   never lower (defensive — under normal conditions the cap is
+--   always above original surface since the chamber breaches it).
+--   Tiles not in the cap map are left unchanged.
+applyBasaltCaps ∷ ChunkCoord → Maybe MagmaOverlay
+                → VU.Vector Int → VU.Vector Int
+applyBasaltCaps _ Nothing terrain = terrain
+applyBasaltCaps coord (Just mo) terrain
+    | HM.null (moBasaltCap mo) = terrain
+    | otherwise = runST $ do
+        mv ← VU.thaw terrain
+        let ChunkCoord cx cy = coord
+            baseGX = cx * chunkSize
+            baseGY = cy * chunkSize
+        forM_ (HM.toList (moBasaltCap mo)) $ \((gx, gy), capZ) → do
+            let lx = gx - baseGX
+                ly = gy - baseGY
+            when (lx ≥ 0 ∧ lx < chunkSize ∧ ly ≥ 0 ∧ ly < chunkSize) $ do
+                let idx = ly * chunkSize + lx
+                cur ← VUM.read mv idx
+                when (capZ > cur) (VUM.write mv idx capZ)
+        VU.freeze mv
+
+-- | Mark the lava tiles that lie on a chunk boundary with any
+--   non-lava water (Ocean / Lake / River). Within-chunk neighbours
+--   read the local fluid map (which already reflects the lava
+--   overlay, so lava-vs-lava adjacencies don't trigger a shell);
+--   cross-chunk neighbours fall through to 'isWaterAtGlobal' which
+--   queries the global lake / river / ocean tables directly. This
+--   matters because chunk-gen doesn't have the neighbour chunks'
+--   fluid maps available — we'd otherwise miss every lava-water
+--   boundary that happens to fall on a chunk edge.
+lavaShellMask ∷ WorldGenParams → ChunkCoord
+              → V.Vector (Maybe FluidCell)
+              → VU.Vector Bool
+lavaShellMask params coord fluid =
+    VU.generate (chunkSize * chunkSize) isShell
+  where
+    ChunkCoord cx cy = coord
+    baseGX = cx * chunkSize
+    baseGY = cy * chunkSize
+    isShell idx = case fluid V.! idx of
+        Just fc | fcType fc ≡ Lava →
+            let lx = idx `mod` chunkSize
+                ly = idx `div` chunkSize
+            in adjWater lx (ly - 1)
+               ∨ adjWater lx (ly + 1)
+               ∨ adjWater (lx - 1) ly
+               ∨ adjWater (lx + 1) ly
+        _ → False
+    -- Within-chunk: read local fluid (authoritative, sees overlay).
+    -- Cross-chunk: query the global fluid tables for the tile.
+    adjWater nx ny
+        | nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize =
+            case fluid V.! (ny * chunkSize + nx) of
+                Just fc → fcType fc ≢ Lava
+                Nothing → False
+        | otherwise =
+            isWaterAtGlobal params (baseGX + nx) (baseGY + ny)
+
+-- | "This chunk OR any 4-cardinal neighbour is oceanic per the
+--   chunk-level BFS." Loosens the strict @oceanDistAt … ≡ 0@ test
+--   so coastal chunks the BFS happens to miss (commonly: chunks
+--   near volcanic activity that raises local terrain enough to
+--   fail the BFS predicate) still get their sub-sea tiles
+--   classified as ocean. Without this, those chunks render as
+--   visible square gaps in the surrounding ocean.
+--
+--   Per-tile sub-sea check still gates the actual ocean fill, so
+--   relaxing the chunk-level test never adds ocean above sea level.
+chunkOrNeighborOceanic ∷ WorldGenParams → ChunkCoord → Bool
+chunkOrNeighborOceanic params coord =
+    let worldSize = wgpWorldSize params
+        oceanDist = wgpOceanDist params
+        check cc =
+            oceanDistAt oceanDist (wrapChunkCoordU worldSize cc) ≡ 0
+        ChunkCoord cx cy = coord
+    in check coord
+       ∨ check (ChunkCoord (cx + 1) cy)
+       ∨ check (ChunkCoord (cx - 1) cy)
+       ∨ check (ChunkCoord cx (cy + 1))
+       ∨ check (ChunkCoord cx (cy - 1))
+
+-- | True iff @(gx, gy)@ is a water tile (Ocean / Lake / River)
+--   according to the global fluid tables. Used by 'lavaShellMask'
+--   for cross-chunk neighbour queries where we don't have the
+--   neighbour chunk's final fluid map.
+--
+--   The lake/river checks are precise — they read the per-chunk
+--   bitmasks the same way 'composeFluidMap' does, then compare each
+--   table's surface elevation against an approximate terrain z
+--   sampled via 'elevationAtGlobal' (raw plate elevation,
+--   pre-erosion). The ocean check uses 'chunkOrNeighborOceanic' so
+--   coastal chunks misclassified by the chunk-level BFS still
+--   report their sub-sea tiles as ocean.
+--
+--   Approximation impact: erosion can shift the post-init terrain a
+--   few tiles up or down vs. 'elevationAtGlobal', which can
+--   occasionally over- or under-classify edge tiles as water. The
+--   visible effect is a cosmetic 1-tile shell mismatch at the
+--   affected chunk-border tiles — never a missing or extra fluid
+--   region.
+isWaterAtGlobal ∷ WorldGenParams → Int → Int → Bool
+isWaterAtGlobal params gx gy =
+    let worldSize  = wgpWorldSize params
+        timeline   = wgpGeoTimeline params
+        lakes      = gtWorldLakes timeline
+        rivers     = gtWorldRivers timeline
+        seed       = wgpSeed params
+        plates     = wgpPlates params
+        floorDivCS a =
+            let (q, r) = a `divMod` chunkSize
+            in if r < 0 then q - 1 else q
+        cx = floorDivCS gx
+        cy = floorDivCS gy
+        lx = gx - cx * chunkSize  -- always in [0, chunkSize)
+        ly = gy - cy * chunkSize
+        idx = ly * chunkSize + lx
+        cc = wrapChunkCoordU worldSize (ChunkCoord cx cy)
+        baseElev =
+            fst (elevationAtGlobal seed plates worldSize gx gy)
+        chunkIsOcean = chunkOrNeighborOceanic params (ChunkCoord cx cy)
+        isOcean = chunkIsOcean ∧ baseElev ≤ seaLevel
+        -- Lake hit: any lake's bitmask bit set AND surface ≥ terrain.
+        isLake = V.any
+            (\lce →
+                let bm = WL.lceBitmask lce
+                    s  = WL.lkSurface
+                            (wlLakes lakes V.! WL.lceLakeId lce)
+                in bm VU.! idx ∧ s ≥ baseElev)
+            (lakesInChunk lakes cc)
+        -- River hit: any river's bitmask bit set AND per-tile
+        -- quantised surface ≥ terrain.
+        isRiver = V.any
+            (\rce →
+                let bm = rceBitmask rce
+                    s  = rcePerTileSurfZ rce VU.! idx
+                in bm VU.! idx ∧ s ≥ baseElev)
+            (riversInChunk rivers cc)
+    in isOcean ∨ isLake ∨ isRiver
+
+-- | Apply the shell mask: drop the lava cell at every shell tile so
+--   the renderer paints bare basalt terrain there. Interior lava
+--   stays — the chamber's surface lake is preserved, only the
+--   contact edge becomes solid rock.
+--
+--   Safety net: if a shell tile sits at or below 'seaLevel' in an
+--   oceanic chunk, restore an Ocean cell after clearing the lava.
+--   Without this, a chamber that emits lava below sea level (which
+--   the per-tile cap logic in 'discoverChunkLava' tries to prevent
+--   but can't always — see the @shapeTopAtXY@ note) would leave a
+--   bare-terrain tile under the sea after the shell strips its
+--   lava: visible as a chunk-edge hole through the ocean surface.
+applyLavaShell ∷ VU.Vector Bool → VU.Vector Int → Bool
+               → V.Vector (Maybe FluidCell)
+               → V.Vector (Maybe FluidCell)
+applyLavaShell shell terrain isOceanic fluid
+    | VU.all not shell = fluid
+    | otherwise = V.imap clear fluid
+  where
+    clear idx cell
+        | shell VU.! idx =
+            let terrZ = terrain VU.! idx
+            in if isOceanic ∧ terrZ ≤ seaLevel ∧ terrZ ≠ minBound
+               then Just (FluidCell Ocean seaLevel)
+               else Nothing
+        | otherwise = cell
 
 -- | Maximum z by which a dry "island column" can peek above its
 --   surrounding lake's surface and still get smoothed down. Larger
@@ -402,7 +599,7 @@ mkSurfaceMap terrain fluid =
 generateChunk ∷ MaterialRegistry → FloraCatalog → WorldGenParams
   → ChunkCoord → (Chunk, VU.Vector Int, VU.Vector Int
                  , V.Vector (Maybe FluidCell), IceMap, FloraChunkData
-                 , VU.Vector Int)
+                 , VU.Vector Int, Maybe MagmaOverlay)
 generateChunk registry catalog params coord =
     let seed = wgpSeed params
         worldSize = wgpWorldSize params
@@ -581,11 +778,45 @@ generateChunk registry catalog params coord =
                                                          finalElevVec
         interiorChannelMask = sliceInteriorMask borderedChannelMask
 
-        -- All fluid placement — global lake table + ocean.
+        -- Same per-chunk ocean test that 'composeFluidMap' uses
+        -- internally — lifted here so 'discoverChunkLava' can suppress
+        -- under-water lava emergence in favour of a basalt cap.
+        --
+        -- Uses 'chunkOrNeighborOceanic' (relaxed test) so coastal
+        -- chunks that the strict chunk-level BFS misclassifies still
+        -- get caps + the shell safety net restores their ocean.
+        chunkIsOceanicHere = chunkOrNeighborOceanic params coord
+
+        -- Pure-function lava overlay: which surface tiles in this
+        -- chunk have a chamber or chute breaking through? Per-tile
+        -- decision: above water → lava cell in @moSurface@; under the
+        -- ocean → basalt cap entry in @moBasaltCap@ (terrain raised
+        -- + matBasalt at top so the ocean fills above instead of a
+        -- black gap punched through the sea surface).
+        magmaOverlay = discoverChunkLava (wgpVolcanoCtx params) coord
+                                          chunkIsOceanicHere
+                                          rawTerrainSurfaceMap
+
+        -- Patch terrain to raise capped tiles BEFORE composeFluidMap
+        -- so the ocean classification + smoother see the new (sealed)
+        -- terrain. Above-cap tiles stay at their original z.
+        cappedTerrainMap = applyBasaltCaps coord magmaOverlay
+                                            rawTerrainSurfaceMap
+
+        -- All fluid placement — global lake table + ocean + lava.
         -- Shared with generateZoomTerrain so the two views agree about
-        -- which tiles are water.
-        rawFluidMap = composeFluidMap params coord rawTerrainSurfaceMap
-                                      interiorChannelMask
+        -- which tiles are water (and lava).
+        rawFluidMap = composeFluidMap params coord cappedTerrainMap
+                                      interiorChannelMask magmaOverlay
+
+        -- Lava-water boundary shell: any lava tile 4-cardinally
+        -- adjacent to a water tile (Ocean/Lake/River) gets cleared
+        -- and the column-build below stamps matBasalt on top, so
+        -- lava and water never sit edge-to-edge. Interior lava is
+        -- preserved — only the contact rim becomes solid rock.
+        lavaShell = lavaShellMask params coord rawFluidMap
+        shellFluidMap = applyLavaShell lavaShell cappedTerrainMap
+                                        chunkIsOceanicHere rawFluidMap
 
         -- Smooth "island column" artifacts: dry tiles surrounded by
         -- ≥3 lake-of-same-surface neighbors whose terrain peeks 1-K z
@@ -597,7 +828,7 @@ generateChunk registry catalog params coord =
         -- (slope, surface materials, surface vegetation, fluid map
         -- output) all read the smoothed binding.
         (terrainSurfaceMap, fluidMap) =
-            smoothIslandColumns rawTerrainSurfaceMap rawFluidMap
+            smoothIslandColumns cappedTerrainMap shellFluidMap
 
         finalTerrain = terrainSurfaceMap
 
@@ -622,16 +853,32 @@ generateChunk registry catalog params coord =
                     ly = idx `div` chunkSize
                     gx' = coordGX VU.! idx
                     gy' = coordGY VU.! idx
-                    (surfZ, surfMat) = lookupFinal lx ly
+                    (rawSurfZ, rawSurfMat) = lookupFinal lx ly
                     base = lookupBase lx ly
+                    -- Basalt-cap lookup: if 'discoverChunkLava'
+                    -- decided this tile should seal a sub-ocean
+                    -- chamber, 'capTopZ' is the raised terrain z and
+                    -- the column extends with matBasalt above the
+                    -- original strata.
+                    capTopZ = case magmaOverlay of
+                        Just mo → HM.lookupDefault rawSurfZ (gx', gy')
+                                                    (moBasaltCap mo)
+                        Nothing → rawSurfZ
+                    capRaise = max 0 (capTopZ - rawSurfZ)
+                    surfZ = rawSurfZ + capRaise
+                    isShellTile = lavaShell VU.! idx
+                    surfMat
+                        | capRaise > 0 = matBasalt
+                        | isShellTile  = matBasalt
+                        | otherwise    = rawSurfMat
                     -- Post-coastal neighbor elevations for determining how
                     -- far down to expose strata (cliff face visibility).
-                    finalN = lookupElevOr lx (ly - 1) surfZ
-                    finalS = lookupElevOr lx (ly + 1) surfZ
-                    finalE = lookupElevOr (lx + 1) ly surfZ
-                    finalW = lookupElevOr (lx - 1) ly surfZ
+                    finalN = lookupElevOr lx (ly - 1) rawSurfZ
+                    finalS = lookupElevOr lx (ly + 1) rawSurfZ
+                    finalE = lookupElevOr (lx + 1) ly rawSurfZ
+                    finalW = lookupElevOr (lx - 1) ly rawSurfZ
                     neighborMinZ = min finalN (min finalS (min finalE finalW))
-                    exposeFromRaw = min surfZ neighborMinZ
+                    exposeFromRaw = min rawSurfZ neighborMinZ
                     exposeFrom = exposeFromRaw
                     -- Clamp neighbor elevations for the strata cache.
                     -- Coastal erosion can lower neighbors 30+ tiles below
@@ -639,27 +886,72 @@ generateChunk registry catalog params coord =
                     -- erosion at each geological period — extreme drops
                     -- cause over-erosion that produces air tiles in the
                     -- strata, which render as black voids. Clamping to
-                    -- surfZ-20 limits the erosion to realistic levels.
+                    -- rawSurfZ-20 limits the erosion to realistic levels.
                     -- This doesn't change ctStartZ or strata range.
-                    clampN n = max (surfZ - 20) n
+                    clampN n = max (rawSurfZ - 20) n
                     cache = buildStrataCache timeline worldSize wsc
                                              gx' gy' registry base
                                              (clampN finalN, clampN finalS
                                              , clampN finalE, clampN finalW)
-                    mats = buildColumnStrata cache base exposeFrom surfZ
+                    -- Strata built using the ORIGINAL (un-capped) surface
+                    -- so the cache's per-period erosion math stays valid.
+                    -- The cap is then appended as a pure basalt extension.
+                    mats = buildColumnStrata cache base exposeFrom rawSurfZ
                     -- Correct the surface material to match the authoritative
                     -- timeline path. buildStrataCache uses final neighbor
                     -- elevations as an approximation, which can cause its
-                    -- accumulated elevation to diverge from surfZ by ±1-2
-                    -- tiles. This means the strata material at surfZ may be
+                    -- accumulated elevation to diverge from rawSurfZ by ±1-2
+                    -- tiles. This means the strata material at rawSurfZ may be
                     -- from the wrong layer, creating a checkerboard pattern
                     -- in surface materials and vegetation.
-                    surfIdx = surfZ - exposeFrom
-                    correctedMats =
-                        if surfIdx ≥ 0 ∧ surfIdx < VU.length mats
-                        then mats VU.// [(surfIdx, surfMat)]
+                    rawSurfIdx = rawSurfZ - exposeFrom
+                    matsAtRaw =
+                        if rawSurfIdx ≥ 0 ∧ rawSurfIdx < VU.length mats
+                        then mats VU.// [(rawSurfIdx, rawSurfMat)]
                         else mats
-                    matIds = VU.map unMaterialId correctedMats
+                    -- For capped tiles, extend the column with matBasalt
+                    -- from rawSurfZ+1 up to capTopZ — the rim of the
+                    -- seamount that seals the chamber under the ocean.
+                    capTiles = VU.replicate capRaise (unMaterialId matBasalt)
+                    finalMats = VU.map unMaterialId matsAtRaw VU.++ capTiles
+                    -- Stamp the top with surfMat (matBasalt when capped,
+                    -- original surfMat otherwise) so the surface layer
+                    -- agrees with everything downstream.
+                    finalSurfIdx = surfZ - exposeFrom
+                    matsWithSurfTop =
+                        if finalSurfIdx ≥ 0 ∧ finalSurfIdx < VU.length finalMats
+                        then finalMats VU.// [(finalSurfIdx, unMaterialId surfMat)]
+                        else finalMats
+                    -- Solidify the visible cliff face for any lava /
+                    -- shell / cap tile: override the column's strata
+                    -- from sea level up to surfZ with matBasalt. The
+                    -- strata cache can produce air voids near the
+                    -- top when this tile sits next to a much deeper
+                    -- sea-floor neighbour (over-erosion past the
+                    -- 20-tile clamp), which renders as a black gap
+                    -- along the cliff face. Above-sea tiles next to
+                    -- lava + capped seamounts always face this risk;
+                    -- forcing basalt for those columns above sea
+                    -- level matches the user-visible expectation
+                    -- (volcanic cliffs are solid basalt rock).
+                    isLavaTile = case rawFluidMap V.! idx of
+                        Just fc → fcType fc ≡ Lava
+                        _       → False
+                    solidify = capRaise > 0 ∨ isShellTile ∨ isLavaTile
+                    matIds
+                      | not solidify = matsWithSurfTop
+                      | otherwise =
+                          let lo = max exposeFrom seaLevel
+                              hi = surfZ
+                              updates =
+                                  [ (z - exposeFrom, unMaterialId matBasalt)
+                                  | z ← [lo .. hi]
+                                  , let i = z - exposeFrom
+                                  , i ≥ 0 ∧ i < VU.length matsWithSurfTop
+                                  ]
+                          in if null updates
+                             then matsWithSurfTop
+                             else matsWithSurfTop VU.// updates
                 in ColumnTiles
                     { ctStartZ = exposeFrom
                     , ctMats   = matIds
@@ -763,7 +1055,7 @@ generateChunk registry catalog params coord =
             ) wtBase
 
     in (finalTiles, surfaceMap, finalTerrain, fluidMap, iceMap, floraData
-       , waterTableMap)
+       , waterTableMap, magmaOverlay)
 
 -- | Generate only the exposed tiles for a column.
 --   Skips air tiles (MaterialId 0) to create caves and overhangs.
@@ -915,8 +1207,28 @@ generateZoomTerrain registry params mBorderedCache coord =
                                                       []
                                                       finalElevVec
         zoomInteriorMask = sliceInteriorMask zoomBorderedMask
-        rawZoomFluid = composeFluidMap params coord interiorElev
-                                       zoomInteriorMask
+
+        -- Mirror the detail path's ocean test + cap pipeline so the
+        -- zoom map agrees with the world view on which sub-ocean
+        -- chambers become basalt seamounts (no lava) vs. above-water
+        -- vents (lava emerges).
+        zoomChunkIsOceanic = chunkOrNeighborOceanic params coord
+        zoomMagma = discoverChunkLava (wgpVolcanoCtx params) coord
+                                       zoomChunkIsOceanic
+                                       interiorElev
+        cappedZoomElev = applyBasaltCaps coord zoomMagma interiorElev
+        rawZoomFluid = composeFluidMap params coord cappedZoomElev
+                                       zoomInteriorMask zoomMagma
+
+        -- Mirror the detail path's lava-water boundary shell so the
+        -- zoom map agrees: any lava tile adjacent to water becomes
+        -- bare terrain (the zoom map's per-tile colour blend then
+        -- picks the material colour, which is basalt's dark grey,
+        -- so the contact rim shows as a thin dark border between
+        -- lava and water).
+        zoomLavaShell = lavaShellMask params coord rawZoomFluid
+        shellZoomFluid = applyLavaShell zoomLavaShell cappedZoomElev
+                                         zoomChunkIsOceanic rawZoomFluid
 
         -- Apply the same island-column smoother the detail path runs,
         -- otherwise dry tiles surrounded by lake render as land in
@@ -925,7 +1237,7 @@ generateZoomTerrain registry params mBorderedCache coord =
         -- lowers the terrain at the smoothed tiles — return both so
         -- the zoom view matches.
         (smoothedElev, zoomFluid) =
-            smoothIslandColumns interiorElev rawZoomFluid
+            smoothIslandColumns cappedZoomElev shellZoomFluid
 
         -- Match the detail world's surface map: river tiles report the
         -- (flat) water-surface z, not the carved channel-floor z, so

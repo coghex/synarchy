@@ -770,22 +770,6 @@ applyGeoEventSimple (CraterEvent params) ws gx gy _e =
             else if dist < r
                  then GeoModification (cpRimHeight params) Nothing 0
                  else noModification
-applyGeoEventSimple (EruptionEvent _ flow) ws gx gy e =
-    let sx = lfSourceX flow
-        sy = lfSourceY flow
-        (dxi, dyi) = wrappedDeltaUV ws gx gy sx sy
-        dx = fromIntegral dxi ∷ Float
-        dy = fromIntegral dyi ∷ Float
-        dist = sqrt (dx * dx + dy * dy)
-        maxR = fromIntegral (lfRadius flow) ∷ Float
-    in if dist > maxR
-       then noModification
-       else let visc = fromIntegral (lfViscosity flow) ∷ Float
-                lavaSurface = fromIntegral (lfElevation flow) - dist * visc
-                deposit = round lavaSurface - e
-            in if deposit > 0
-               then GeoModification deposit Nothing 0
-               else noModification
 applyGeoEventSimple (VolcanicEvent feature) ws gx gy _e =
     applyVolcanicSimple feature ws gx gy
 applyGeoEventSimple _ _ _ _ _ = noModification

@@ -2,6 +2,7 @@
 module World.Generate.Types
     ( WorldGenParams(..)
     , defaultWorldGenParams
+    , withVolcanoCtx
     ) where
 
 import UPrelude hiding (get)
@@ -25,9 +26,17 @@ import World.Ocean.Types (OceanMap, OceanDistMap)
 import World.Flora.Types (FloraCatalog, emptyFloraCatalog)
 import World.Weather.Types (ClimateParams, ClimateState
                            , defaultClimateParams, initClimateState)
+import World.Magma.Types (VolcanoCtx, emptyVolcanoCtx)
+import World.Magma.Init (buildVolcanoCtx)
 
 -- | Pure, serializable world generation parameters.
 --   Same params + same ChunkCoord = same Chunk, always.
+--
+--   @wgpVolcanoCtx@ is the only transient field — it is derived from
+--   @wgpSeed + wgpWorldSize + gtFeatures wgpGeoTimeline@ and so is
+--   skipped by the manual 'Serialize' instance below to keep the save
+--   schema stable (see the lava v1 plan: VolcanoCtx is rebuilt at
+--   load via 'buildVolcanoCtx' from already-persisted fields).
 data WorldGenParams = WorldGenParams
     { wgpSeed       ∷ !Word64
     , wgpWorldSize  ∷ !Int     -- ^ World size in chunks (e.g. 64 → 64×64 chunks)
@@ -43,7 +52,65 @@ data WorldGenParams = WorldGenParams
     , wgpClimateState ∷ !ClimateState     -- ^ Initial climate state
     , wgpErosionIntensity ∷ !Float        -- ^ Global erosion intensity multiplier
     , wgpVolcanicActivity ∷ !Float        -- ^ Volcanic activity multiplier (scales counts + eruption chance)
-    } deriving (Show, Eq, Generic, Serialize, NFData)
+    , wgpVolcanoCtx ∷ !VolcanoCtx
+      -- ^ Pure-function lava system context. Transient: NOT serialized;
+      --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
+    } deriving (Show, Eq, Generic, NFData)
+
+-- | Manual Serialize: every field except @wgpVolcanoCtx@. Field order
+--   matches the data declaration so the byte layout is identical to
+--   the pre-Magma Generic-derived encoding — existing saves load
+--   unchanged.
+instance Serialize WorldGenParams where
+    put p = do
+        put (wgpSeed p)
+        put (wgpWorldSize p)
+        put (wgpPlateCount p)
+        put (wgpPlates p)
+        put (wgpCalender p)
+        put (wgpSunConfig p)
+        put (wgpMoonConfig p)
+        put (wgpGeoTimeline p)
+        put (wgpOceanMap p)
+        put (wgpOceanDist p)
+        put (wgpClimateParams p)
+        put (wgpClimateState p)
+        put (wgpErosionIntensity p)
+        put (wgpVolcanicActivity p)
+    get = do
+        seed       ← get
+        ws         ← get
+        plateCount ← get
+        plates     ← get
+        cal        ← get
+        sun        ← get
+        moon       ← get
+        timeline   ← get
+        oceanMap   ← get
+        oceanDist  ← get
+        climateP   ← get
+        climateS   ← get
+        erosion    ← get
+        volcanic   ← get
+        let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
+        pure WorldGenParams
+            { wgpSeed             = seed
+            , wgpWorldSize        = ws
+            , wgpPlateCount       = plateCount
+            , wgpPlates           = plates
+            , wgpCalender         = cal
+            , wgpSunConfig        = sun
+            , wgpMoonConfig       = moon
+            , wgpGeoTimeline      = timeline
+            , wgpOceanMap         = oceanMap
+            , wgpOceanDist        = oceanDist
+            , wgpClimateParams    = climateP
+            , wgpClimateState     = climateS
+            , wgpErosionIntensity = erosion
+            , wgpVolcanicActivity = volcanic
+            , wgpVolcanoCtx       = vc
+            }
+
 instance (Serialize a, Eq a, Hashable a)
     ⇒ Serialize (HS.HashSet a) where
     put = put . HS.toList
@@ -65,4 +132,16 @@ defaultWorldGenParams = WorldGenParams
     , wgpClimateState = initClimateState 128
     , wgpErosionIntensity = 0.7
     , wgpVolcanicActivity = 1.0
+    , wgpVolcanoCtx = emptyVolcanoCtx
+    }
+
+-- | Refresh @wgpVolcanoCtx@ from the params' seed / worldSize /
+--   plates / timeline. Called after the geological timeline is
+--   finalised at world init so chunk-gen sees a populated context.
+withVolcanoCtx ∷ WorldGenParams → WorldGenParams
+withVolcanoCtx p = p
+    { wgpVolcanoCtx = buildVolcanoCtx (wgpSeed p)
+                                       (wgpWorldSize p)
+                                       (wgpPlates p)
+                                       (gtFeatures (wgpGeoTimeline p))
     }
