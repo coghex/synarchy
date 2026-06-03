@@ -7,6 +7,7 @@ import Control.Concurrent (threadDelay)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Data.Char (toLower)
 import System.Environment (setEnv, getArgs)
+import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
 import Data.List (intercalate, isPrefixOf)
 import qualified Data.ByteString.Char8 as BS
@@ -187,9 +188,15 @@ runGraphical mPort = do
         putStrLn $ displayException err
         shutdownThread combatThreadState
         shutdownThread simThreadState
+        shutdownThread unitThreadState
         shutdownThread inputThreadState
-        shutdownThread luaThreadState
         shutdownThread worldThreadState
+        shutdownThread luaThreadState
+        -- Flush buffered log lines — the error context is exactly
+        -- what we must not lose — then exit with a failure code.
+        logger ← readIORef (loggerRef env')
+        shutdownLogger logger
+        exitFailure
     Right _ → pure ()
 
 -- | Run engine in headless mode (no window, no GPU)
@@ -230,8 +237,14 @@ runHeadless mPort = do
         putStrLn $ displayException err
         shutdownThread combatThreadState
         shutdownThread simThreadState
-        shutdownThread luaThreadState
+        shutdownThread unitThreadState
         shutdownThread worldThreadState
+        shutdownThread luaThreadState
+        -- Flush buffered log lines — the error context is exactly
+        -- what we must not lose — then exit with a failure code.
+        logger ← readIORef (loggerRef env')
+        shutdownLogger logger
+        exitFailure
     Right _ → pure ()
 
 -- | Run engine in dump mode: generate world, load chunks, dump tile
@@ -374,8 +387,14 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
         putStrLn $ displayException err
         shutdownThread combatThreadState
         shutdownThread simThreadState
-        shutdownThread luaThreadState
+        shutdownThread unitThreadState
         shutdownThread worldThreadState
+        shutdownThread luaThreadState
+        -- Flush buffered log lines — the error context is exactly
+        -- what we must not lose — then exit with a failure code.
+        logger ← readIORef (loggerRef env')
+        shutdownLogger logger
+        exitFailure
     Right _ → pure ()
 
 -- | Poll until world generation is done

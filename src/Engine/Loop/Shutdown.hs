@@ -4,10 +4,8 @@ module Engine.Loop.Shutdown
   ) where
 
 import UPrelude
-import Control.Exception (displayException)
 import Data.IORef (writeIORef, readIORef)
 import qualified Data.Vector as V
-import System.Exit (exitFailure)
 import Engine.Core.Log (shutdownLogger, LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Core.Monad
@@ -92,9 +90,11 @@ shutdownEngine (Window win) unitThreadState worldThreadState
     
     logDebugM CatSystem "Engine shutdown complete"
 
--- | Check engine status for continuation
+-- | Final continuation for 'runEngineM': pass the result through
+--   unchanged. Error handling (thread shutdown, logger flush, failure
+--   exit code) lives in each main's @Left@ branch — exiting here,
+--   inside the CPS continuation, would make those branches
+--   unreachable (they were dead code while this called exitFailure,
+--   which also lost any buffered log lines on engine errors).
 checkStatus ∷ Either EngineException () → IO (Either EngineException ())
-checkStatus (Right ()) = pure (Right ())
-checkStatus (Left err) = do
-    putStrLn $ displayException err
-    exitFailure
+checkStatus = pure

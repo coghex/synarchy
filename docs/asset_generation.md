@@ -113,14 +113,26 @@ cost confirmation). Existing acolyte (48×48, group of ~13 states) and bear_brow
 states) live in the PixelLab account — `list_characters` / `get_character` show rotation and
 per-frame URLs (backblaze), downloadable with plain curl.
 
-Recipe for a new unit:
-1. `create_character` (humanoid, or quadruped with template bear/cat/dog/horse/lion).
-   Size: 48 for humanoids, larger for big animals (bear used 92).
-2. Probe: animate `idle` + `walk` (template mode), download, slot into the engine tree, check in
-   game before committing to the full activity matrix.
-3. States for non-animatable poses (collapsed, sleeping, equipped variants), then animate those.
-4. Download frames per direction (`0.png` → `frame_000.png`), keep the 5 stored directions
-   (all 8 for asymmetric), write `data/units/<name>.yaml` (copy bear_brown/acolyte).
+Recipe for a new unit (validated with gray_wolf, 2026-06):
+1. `create_character` (humanoid, or quadruped with template bear/cat/dog/horse/lion — **v3 mode
+   rejects quadrupeds**, use standard). `size` is the character; the canvas comes out ~40% larger
+   (64px wolf → 92×92 canvas, same as the bear). Dog-template animations: bark, fast-walk, idle,
+   running-4/6/8-frames, sneaking, walk-4/6/8-frames.
+2. Probe: animate `idle`/`walk`/`run` (template mode), slot in, check in game before committing
+   to the full matrix.
+3. **Queue discipline**: each `animate_character` spawns 8 direction-jobs against the 10-job cap,
+   and a batch drains in ~10–12 min — animations queue strictly one at a time. A bear-scale
+   matrix (~30 anims) is a multi-hour babysat loop.
+4. **Download**: `GET /v2/characters/{id}/zip` (bearer auth) — blocks with a JSON
+   "still being generated" body until every animation is done, then returns a zip already in
+   engine layout (`<Name>/animations/<anim-id>/<direction>/frame_NNN.png` + `rotations/` +
+   `metadata.json` mapping ids→names/frame-lists). Copy the 5 stored directions per activity
+   (all 8 for asymmetric), generate the yaml `animations:` block with a script, validate every
+   referenced path exists.
+5. `data/units/<name>.yaml` is auto-discovered (`startup_loader.lua` `addYamlDir("data/units")`).
+   Rendering/spawning needs nothing else; *behavior* needs Lua wiring (a `<species>_ai.lua`
+   config, `unit_resources.lua` species block, `unit_ai.lua` COMBAT_ANIM_SUFFIX entry) — engine/
+   Lua territory, check with the user first.
 
 ## Gotchas index
 

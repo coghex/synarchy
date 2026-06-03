@@ -26,7 +26,7 @@ import Control.Exception (SomeException, catch, finally)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar)
 import Control.Monad (when)
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Log (logInfo, logDebug, logError, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Combat.Types (CombatCommand(..))
@@ -101,7 +101,13 @@ combatLoop env stateRef tick = do
                 logger ← readIORef (loggerRef env)
                 logError logger CatThread $ "Combat thread crashed: "
                     <> T.pack (show e)
-                combatLoop env stateRef tick
+                -- Fail-stop, like every other worker thread (world,
+                -- unit, input). Re-entering the loop here skipped the
+                -- threadDelay, so a persistent fault tight-looped at
+                -- 100% CPU flooding the log — and a combat thread
+                -- that silently retries forever is corrupted gameplay
+                -- with no signal anyway.
+                writeIORef (lifecycleRef env) CleaningUp
               )
 
 -- | Drain the command queue and dispatch each command. Skeleton phase:

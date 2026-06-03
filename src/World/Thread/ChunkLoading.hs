@@ -161,9 +161,18 @@ drainInitQueues env logger = do
                 case mParams of
                     Nothing → return ()
                     Just params → do
-                        let batch = take maxChunksPerTick remaining
-                            rest  = drop maxChunksPerTick remaining
-                            seed  = wgpSeed params
+                        -- Atomically claim this tick's batch. The Lua
+                        -- thread appends to this queue concurrently
+                        -- (world.loadChunksInRegion → atomicModifyIORef'
+                        -- in API/WorldQuery.hs); the previous
+                        -- read…generate…write-rest pattern could erase
+                        -- an append that landed in between (lost
+                        -- update — those chunks would silently never
+                        -- generate). This thread is the only consumer,
+                        -- so the claimed batch is exclusively ours.
+                        batch ← atomicModifyIORef' (wsInitQueueRef worldState) $ \q →
+                            (drop maxChunksPerTick q, take maxChunksPerTick q)
+                        let seed = wgpSeed params
 
                         let newChunks = parMap rdeepseq (\coord →
                                 let (chunkTiles, surfMap, tMap, fluidMap, iceMap, flora, wtMap, magma) = generateChunk registry catalog params coord
@@ -211,12 +220,15 @@ drainInitQueues env logger = do
                         writeIORef (wsZoomQuadCacheRef worldState) Nothing
                         writeIORef (wsBgQuadCacheRef worldState) Nothing
 
+                        -- Progress reads the queue AFTER the batch was
+                        -- claimed, so appends that landed while we were
+                        -- generating are counted (and keep the phase in
+                        -- LoadPhase2) instead of being overwritten.
+                        rest ← readIORef (wsInitQueueRef worldState)
                         when (null rest) $
                             logDebug logger CatWorld $
                                 "Initial chunk loading complete for: "
                                 <> unWorldPageId pageId
-
-                        writeIORef (wsInitQueueRef worldState) rest
 
                         -- Update phase 2 progress
                         let totalChunks = (2 * chunkLoadRadius + 1) * (2 * chunkLoadRadius + 1)

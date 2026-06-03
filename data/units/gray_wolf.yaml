@@ -1,0 +1,247 @@
+units:
+  - name: "gray_wolf"
+    sprite: "assets/textures/units/gray_wolf/animations/idle/south/frame_000.png"
+    # Wolves are between acolyte (8) and bear (16) in footprint.
+    base_width: 12
+    # Top sprint ~58 km/h, a touch above the bear's burst — wolves are
+    # built for the chase.
+    max_speed: 6.5
+    # No equipment_class / starting_inventory — wildlife.
+
+    eager_stats: true
+    stats:
+      # ~40 kg canine: bite is fearsome but body strength just above
+      # human baseline.
+      strength:     { base: 1.2, range: 0.5 }
+      # Legendary pursuit endurance — wolves trot for hours.
+      endurance:    { base: 2.5, range: 0.8 }
+      reflexes:     { base: 1.6, range: 0.5 }
+      constitution: { base: 1.3, range: 0.5 }
+      metabolism:   { base: 1.2, range: 0.4 }
+      # Smell + hearing are exceptional; night vision good.
+      perception:   { base: 2.2, range: 0.6 }
+      # No hands → low fine motor; very agile body; pack hunters are
+      # smart for animals (deliberate body-part targeting at times).
+      dexterity:    { base: 0.5, range: 0.3 }
+      agility:      { base: 1.6, range: 0.5 }
+      intelligence: { base: 0.8, range: 0.4 }
+      toughness:    { base: 1.0, range: 0.4 }
+
+    body:
+      # Shoulder height 0.6–1.0 m on all fours.
+      height:  { mean: 0.8, range: 0.4 }
+      # 30–50 kg vs human ~70 — bulk below 1.
+      bulk:    { mean: 0.6, range: 0.3 }
+      bodyfat: { mean: 0.15, range: 0.20 }
+
+    skills:
+      # Natural attacks (fangs).
+      unarmed: { base: 55.0, range: 20.0 }
+      balance: { base: 55.0, range: 25.0 }
+      # Wolves don't climb.
+      climbing: { base: 5.0, range: 5.0 }
+
+    # 8-part quadruped body anchored to 0.8 m shoulder height.
+    body_parts:
+      - { id: head,         parent: neck,  vital: true,
+          area_weight: 0.10, tactical_value: 1.0,
+          max_health_factor: 0.20, bleed_factor: 2.0,
+          height_low: 0.55, height_high: 0.85 }
+      - { id: neck,         parent: torso, vital: true,
+          area_weight: 0.05, tactical_value: 1.0,
+          max_health_factor: 0.15, bleed_factor: 3.0,
+          height_low: 0.50, height_high: 0.65 }
+      - { id: torso,        parent: null,  vital: true,
+          area_weight: 0.40, tactical_value: 0.8,
+          max_health_factor: 0.40, bleed_factor: 2.0,
+          height_low: 0.30, height_high: 0.80 }
+      - { id: l_fore_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.55 }
+      - { id: r_fore_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.55 }
+      - { id: l_hind_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.55 }
+      - { id: r_hind_leg,   parent: torso,
+          area_weight: 0.10, tactical_value: 0.3,
+          max_health_factor: 0.25, bleed_factor: 1.0,
+          height_low: 0.00, height_high: 0.55 }
+      - { id: tail,         parent: torso,
+          area_weight: 0.05, tactical_value: 0.1,
+          max_health_factor: 0.05, bleed_factor: 0.5,
+          height_low: 0.30, height_high: 0.55 }
+
+    # Fur turns some slash/blunt; little protection against stabs.
+    natural_resistance:
+      slash: 0.3
+      stab:  0.05
+      blunt: 0.2
+
+    # Fangs — wolves attack with the bite, wielded from the head
+    # (unlike the bear's paw swipe).
+    natural_weapon:
+      weapon_class:           unarmed
+      effective_blade_length: 8.0
+      attack_cooldown:        0.7
+      wielded_from:           head
+      stab_eff:               0.8
+      slash_eff:              0.4
+      blunt_eff:              0.2
+
+    # Per-direction T-pose stills (idle frame 0). SW/W/NW mirrored.
+    directional_sprites:
+      south:      "assets/textures/units/gray_wolf/animations/idle/south/frame_000.png"
+      south-east: "assets/textures/units/gray_wolf/animations/idle/south-east/frame_000.png"
+      east:       "assets/textures/units/gray_wolf/animations/idle/east/frame_000.png"
+      north-east: "assets/textures/units/gray_wolf/animations/idle/north-east/frame_000.png"
+      north:      "assets/textures/units/gray_wolf/animations/idle/north/frame_000.png"
+
+    # PROBE SET — idle/walk/run only. Pending (parallel bear_brown):
+    # drink/eat, combat_idle, attack_quick/heavy, hit_react, death,
+    # rest poses + transitions, falling/landing, injured_* mirrors.
+    state_animations:
+      standing-idle:               idle
+      standing-walk:               walk
+      standing-run:                run
+      # Placeholder until a death anim exists — without an entry,
+      # killed wolves T-pose (see bear_brown dead-idle note).
+      dead-idle:                   idle
+
+    animations:
+      idle:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/idle/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/idle/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/idle/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/idle/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/idle/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/idle/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/idle/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/idle/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/idle/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/idle/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/idle/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/idle/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/idle/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/idle/north/frame_007.png"
+
+      walk:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/walk/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/walk/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/walk/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/walk/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/walk/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/walk/south/frame_005.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/walk/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/walk/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/walk/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/walk/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/walk/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/walk/south-east/frame_005.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/walk/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/walk/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/walk/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/walk/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/walk/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/walk/east/frame_005.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/walk/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/walk/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/walk/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/walk/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/walk/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/walk/north-east/frame_005.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/walk/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/walk/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/walk/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/walk/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/walk/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/walk/north/frame_005.png"
+
+      run:
+        fps: 12
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/run/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/run/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/run/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/run/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/run/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/run/south/frame_005.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/run/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/run/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/run/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/run/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/run/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/run/south-east/frame_005.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/run/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/run/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/run/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/run/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/run/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/run/east/frame_005.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/run/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/run/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/run/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/run/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/run/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/run/north-east/frame_005.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/run/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/run/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/run/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/run/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/run/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/run/north/frame_005.png"
