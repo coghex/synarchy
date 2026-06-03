@@ -29,10 +29,13 @@ renderSpritesBindlessUI cmdBuf state viewport scissor dynamicBuffer spriteBatche
         Nothing → logAndThrowM CatVulkan (ExGraphics PipelineError)
                                "Bindless UI pipeline not available"
     
-    bindless ← case textureSystem state of
-        Just b → pure b
-        _ → logAndThrowM CatVulkan (ExGraphics DescriptorError)
-                         "Bindless texture system not available"
+    bindless ← do
+        env ← ask
+        mts ← liftIO $ readIORef (textureSystemRef env)
+        case mts of
+            Just b → pure b
+            _ → logAndThrowM CatVulkan (ExGraphics DescriptorError)
+                             "Bindless texture system not available"
     
     descManager ← maybe (logAndThrowM CatVulkan (ExGraphics DescriptorError)
                                    "No descriptor state") 
@@ -74,10 +77,13 @@ renderSpritesBindless cmdBuf state viewport scissor dynamicBuffer spriteBatches 
         Nothing → logAndThrowM CatVulkan (ExGraphics PipelineError)
                                "Bindless pipeline not available"
     
-    bindless ← case textureSystem state of
-        Just b → pure b
-        _ → logAndThrowM CatVulkan (ExGraphics DescriptorError)
-                         "Bindless texture system not available"
+    bindless ← do
+        env ← ask
+        mts ← liftIO $ readIORef (textureSystemRef env)
+        case mts of
+            Just b → pure b
+            _ → logAndThrowM CatVulkan (ExGraphics DescriptorError)
+                             "Bindless texture system not available"
     
     descManager ← maybe (logAndThrowM CatVulkan (ExGraphics DescriptorError)
                                    "No descriptor state") 

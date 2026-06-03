@@ -144,7 +144,7 @@ splitOn d (c:cs)
 runGraphical ∷ Maybe Int → IO ()
 runGraphical mPort = do
   -- Initialize engine
-  EngineInitResult env envVar stateVar ← initializeEngine
+  EngineInitResult env ← initializeEngine
 
   let env' = case mPort of
         Just p  → env { engineConfig = (engineConfig env) { ecDebugPort = p } }
@@ -181,7 +181,7 @@ runGraphical mPort = do
                               inputThreadState luaThreadState
         logDebugM CatSystem "Engine shutdown complete."
 
-  result ← runEngineM engineAction envVar stateVar checkStatus
+  result ← runEngineM engineAction env' checkStatus
   case result of
     Left err → do
         putStrLn $ displayException err
@@ -197,7 +197,7 @@ runGraphical mPort = do
 --   Useful for automated testing, CI, and scripted world generation.
 runHeadless ∷ Maybe Int → IO ()
 runHeadless mPort = do
-  EngineInitResult env envVar stateVar ← initializeEngineHeadless
+  EngineInitResult env ← initializeEngineHeadless
 
   let env' = case mPort of
         Just p  → env { engineConfig = (engineConfig env) { ecDebugPort = p } }
@@ -224,7 +224,7 @@ runHeadless mPort = do
         liftIO $ writeIORef (lifecycleRef env') EngineStopped
         logDebugM CatSystem "Headless engine shutdown complete."
 
-  result ← runEngineM engineAction envVar stateVar checkStatus
+  result ← runEngineM engineAction env' checkStatus
   case result of
     Left err → do
         putStrLn $ displayException err
@@ -245,7 +245,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                    ⧺ show cy1 ⧺ "," ⧺ show cx2 ⧺ ","
                    ⧺ show cy2 ⧺ ")"
 
-  EngineInitResult env envVar stateVar ← initializeEngineHeadless
+  EngineInitResult env ← initializeEngineHeadless
 
   let env' = env { engineConfig = (engineConfig env) { ecDebugPort = 0 } }
 
@@ -368,7 +368,7 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
         liftIO $ shutdownLogger logger
         liftIO $ writeIORef (lifecycleRef env') EngineStopped
 
-  result ← runEngineM engineAction envVar stateVar checkStatus
+  result ← runEngineM engineAction env' checkStatus
   case result of
     Left err → do
         putStrLn $ displayException err

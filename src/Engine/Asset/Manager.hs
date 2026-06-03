@@ -184,28 +184,20 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
       -- Get the existing atlas to find its bindless slot
       let existingAtlas = (apTextureAtlases pool) Map.! existingId
       
-      -- Register the NEW handle in bindless system pointing to the SAME slot
-      -- Use atomic modify to avoid race conditions
-      modify $ \s → 
-        case textureSystem (graphicsState s) of
-          Just bindless →
-            case Map.lookup (taTextureHandle existingAtlas) (btsHandleMap bindless) of
-              Just existingBindlessHandle →
-                let newBindless = bindless { 
-                      btsHandleMap = Map.insert texHandle existingBindlessHandle (btsHandleMap bindless)
-                    }
-                in s { graphicsState = (graphicsState s) { textureSystem = Just newBindless } }
-              Nothing → s
-          Nothing → s
-      
-      currentState ← gets graphicsState
+      -- Register the NEW handle in the bindless system, pointing it at
+      -- the same slot as the cached atlas. textureSystemRef is the
+      -- single source of truth (no graphicsState mirror).
       env ← ask
-      liftIO $ writeIORef (textureSystemRef env) (textureSystem currentState)
-      case textureSystem currentState of
-        Just bs →
-          case Map.lookup texHandle (btsHandleMap bs) of
-            Just _ → logDebugM CatAsset $ "New handle " <> T.pack (show texHandle) 
-                        <> " successfully mapped to existing bindless slot"
+      mBindless ← liftIO $ readIORef (textureSystemRef env)
+      case mBindless of
+        Just bindless →
+          case Map.lookup (taTextureHandle existingAtlas) (btsHandleMap bindless) of
+            Just existingBindlessHandle → do
+              let newBindless = bindless
+                    { btsHandleMap = Map.insert texHandle existingBindlessHandle (btsHandleMap bindless) }
+              liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
+              logDebugM CatAsset $ "New handle " <> T.pack (show texHandle)
+                          <> " successfully mapped to existing bindless slot"
             Nothing → logWarnM CatAsset $ "Failed to duplicate handle " <> T.pack (show texHandle)
         Nothing → logWarnM CatAsset "No bindless system available, skipping handle mapping"
       
@@ -257,13 +249,12 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
         createTextureSampler' device pDevice vkFilter
 
       -- Register with bindless system using the provided handle
-      bindlessSlot ← case textureSystem (graphicsState state) of
+      -- textureSystemRef is the single source of truth.
+      mBindless ← liftIO $ readIORef (textureSystemRef env)
+      bindlessSlot ← case mBindless of
         Just bindless → do
           logDebugM CatAsset "Registering texture with bindless system"
           (mbHandle, newBindless) ← registerTexture device texHandle imageView sampler bindless
-          modify $ \s → s { graphicsState = (graphicsState s) {
-            textureSystem = Just newBindless
-            } }
           liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
           case mbHandle of
             Just bHandle → do

@@ -162,9 +162,8 @@ initializeVulkan window = do
                                    (graphicsQueue queues) texSystemConfig
   (defaultFaceMap, texSystemWithFaceMap) ← createDefaultFaceMap
       physicalDevice device cmdPool (graphicsQueue queues) texSystem
-  modify $ \s → s { graphicsState = (graphicsState s) {
-                        textureSystem = Just texSystemWithFaceMap
-                      , defaultFaceMapSlot = dfmSlot defaultFaceMap } }
+  -- textureSystem + defaultFaceMapSlot live solely in EngineEnv now
+  -- (single source of truth, readable by worker threads).
   liftIO $ writeIORef (textureSystemRef env) (Just texSystemWithFaceMap)
   liftIO $ writeIORef (defaultFaceMapSlotRef env) (dfmSlot defaultFaceMap)
   

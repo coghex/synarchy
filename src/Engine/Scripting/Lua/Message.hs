@@ -99,7 +99,8 @@ handleLuaMessage msg = do
             env ← ask
             liftIO $ writeIORef (textureFilterRef env) tf
             gs ← gets graphicsState
-            case (vulkanDevice gs, vulkanPDevice gs, textureSystem gs) of
+            mBindless ← liftIO $ readIORef (textureSystemRef env)
+            case (vulkanDevice gs, vulkanPDevice gs, mBindless) of
                 (Just dev, Just pdev, Just bindless) → do
                     let vkFilter = textureFilterToVulkan tf
                     newSampler ← createTextureSampler dev pdev vkFilter
@@ -317,7 +318,8 @@ handleSetTextureFilter tf = do
     env ← ask
     liftIO $ writeIORef (textureFilterRef env) tf
     state ← gets graphicsState
-    case (vulkanDevice state, vulkanPDevice state, textureSystem state) of
+    mBindless ← liftIO $ readIORef (textureSystemRef env)
+    case (vulkanDevice state, vulkanPDevice state, mBindless) of
         (Just dev, Just pdev, Just bindless) → do
             logInfoM CatTexture $ "Texture filter set to: " 
                 <> textureFilterToText tf
@@ -442,11 +444,12 @@ handleWorldPreview = do
                 <> T.pack (show w) <> "×" <> T.pack (show h)
 
             gs ← gets graphicsState
+            mBindless ← liftIO $ readIORef (textureSystemRef env)
             case ( vulkanDevice gs
                  , vulkanPDevice gs
                  , vulkanCmdPool gs
                  , deviceQueues gs
-                 , textureSystem gs ) of
+                 , mBindless ) of
                 (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless) → do
                     poolRef ← asks assetPoolRef
                     pool ← liftIO $ readIORef poolRef
@@ -489,8 +492,7 @@ handleWorldPreview = do
 
                     (_, newBindless) ← registerTexture dev texHandle
                         imageView sampler bindless
-                    modify $ \s → s { graphicsState = (graphicsState s) {
-                        textureSystem = Just newBindless } }
+                    liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
 
                     let (TextureHandle h) = texHandle
                     liftIO $ Q.writeQueue (luaQueue env)
@@ -517,11 +519,12 @@ handleZoomAtlasUpload = do
                 <> T.pack (show w) <> "×" <> T.pack (show h)
 
             gs ← gets graphicsState
+            mBindless ← liftIO $ readIORef (textureSystemRef env)
             case ( vulkanDevice gs
                  , vulkanPDevice gs
                  , vulkanCmdPool gs
                  , deviceQueues gs
-                 , textureSystem gs ) of
+                 , mBindless ) of
                 (Just dev, Just pdev, Just cmdPool, Just queues, Just bindless) → do
                     poolRef ← asks assetPoolRef
                     pool ← liftIO $ readIORef poolRef
@@ -565,8 +568,6 @@ handleZoomAtlasUpload = do
 
                     (_, newBindless) ← registerTexture dev texHandle
                         imageView sampler bindless
-                    modify $ \s → s { graphicsState = (graphicsState s) {
-                        textureSystem = Just newBindless } }
                     liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
 
                     let chunksPerRow = w `div` zoomTileSize

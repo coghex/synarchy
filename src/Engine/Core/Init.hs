@@ -44,10 +44,7 @@ import World.Material (emptyMaterialRegistry)
 import World.Generate.Config (loadWorldGenConfig)
 
 data EngineInitResult = EngineInitResult
-  { eirEnv      ∷ EngineEnv
-  , eirEnvVar   ∷ Var EngineEnv
-  , eirStateVar ∷ Var EngineState
-  }
+  { eirEnv ∷ EngineEnv }
 
 -- | Allocate every 'IORef', queue, and subsystem, then bundle into 'EngineEnv'
 initializeEngine ∷ IO EngineInitResult
@@ -129,8 +126,10 @@ initializeEngine = do
   notificationCfgRef ← newIORef notificationCfg0
   eventStoreRef ← newTVarIO Seq.empty
   popupQueueRef ← newTVarIO Seq.empty
+  engineStateRef ← newIORef defaultEngineState
   let env = EngineEnv
         { engineConfig       = defaultEngineConfig
+        , engineStateRef     = engineStateRef
         , videoConfigRef     = videoConfigRef
         , windowSizeRef      = windowSizeRef
         , windowStateRef     = windowStateRef
@@ -189,11 +188,8 @@ initializeEngine = do
         , notificationOrder  = notificationOrder
         , popupQueueRef      = popupQueueRef
         }
-  
-  envVar   ← atomically $ newVar env
-  stateVar ← atomically $ newVar defaultEngineState
 
-  pure $ EngineInitResult env envVar stateVar
+  pure $ EngineInitResult env
 
 -- | Like 'initializeEngine' but sets 'ecHeadless' — no window or GPU
 initializeEngineHeadless ∷ IO EngineInitResult
@@ -201,5 +197,4 @@ initializeEngineHeadless = do
   result ← initializeEngine
   let env = eirEnv result
       headlessEnv = env { engineConfig = (engineConfig env) { ecHeadless = True } }
-  envVar ← atomically $ newVar headlessEnv
-  pure $ result { eirEnv = headlessEnv, eirEnvVar = envVar }
+  pure $ result { eirEnv = headlessEnv }

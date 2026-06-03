@@ -28,7 +28,7 @@ withHeadlessEngine ∷ (EngineEnv → IO α) → IO α
 withHeadlessEngine action = bracket setup teardown (\(env, _) → action env)
   where
     setup = do
-        EngineInitResult env _ _ ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadless
         -- Set zoom low enough for chunk loading (needs < zoomFadeEnd + 0.5 = 2.1)
         modifyIORef' (cameraRef env) $ \cam → cam { camZoom = 0.5 }
         writeIORef (lifecycleRef env) EngineRunning

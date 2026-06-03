@@ -2,26 +2,12 @@
 module Engine.Input.Event where
 
 import UPrelude
-import qualified Data.Map as Map
-import qualified Data.Text as T
-import Data.IORef (writeIORef, readIORef)
-import qualified Graphics.UI.GLFW as GLFW
-import Engine.Core.Monad (MonadIO(liftIO), EngineM)
-import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logDebugM, logInfoM, logWarnM, logDebugSM, logInfoSM)
-import Engine.Input.Thread
-import Engine.Core.Types
-import Engine.Core.State
-import Engine.Core.Queue as Q
-import Engine.Core.Var (atomically)
-import Engine.Core.Error.Exception
-import Engine.Graphics.Camera ( Camera2D(..) )
-import Engine.Input.Types
+import Engine.Core.Monad (EngineM)
 
+-- | Vestigial no-op. Input state is consumed directly from
+--   'inputStateRef' (EngineEnv) by the camera loop and the Lua input
+--   API; 'EngineState' no longer caches a copy (audit 2026-06 Tier-1:
+--   no cross-thread field is duplicated into EngineState). Kept as a
+--   no-op so the main-loop call site doesn't need to change.
 handleInputEvents ∷ EngineM ε σ ()
-handleInputEvents = do
-    env ← ask
-    sharedInput ← liftIO $ readIORef (inputStateRef env)
-    let pressedKeys = Map.filter keyPressed (inpKeyStates sharedInput)
-        keyCount = Map.size pressedKeys
-    modify $ \s → s { inputState = sharedInput }
+handleInputEvents = pure ()

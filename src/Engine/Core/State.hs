@@ -55,6 +55,12 @@ import Sim.Command.Types (SimCommand)
 
 data EngineEnv = EngineEnv
   { engineConfig        ∷ EngineConfig
+  , engineStateRef      ∷ IORef EngineState
+    -- ^ Main-thread-private mutable engine state (timing / graphics /
+    --   scene / asset config). Lives here so 'EngineM' can carry it via
+    --   the immutable env instead of a second CPS parameter. Only the
+    --   main render thread reads or writes it (see the EngineState
+    --   invariant below), so a plain 'IORef' (no STM) is correct.
   , videoConfigRef      ∷ IORef VideoConfig
   , windowSizeRef       ∷ IORef (Int, Int)
   , windowStateRef      ∷ IORef WindowState
@@ -175,9 +181,14 @@ data EngineEnv = EngineEnv
     --   notifications panel.
   } deriving (Eq)
 
+-- | Main-thread-private engine state, threaded through 'EngineM'.
+--   INVARIANT (audit 2026-06, Tier-1 decision): only the main render
+--   thread reads or writes this — worker threads run in plain IO and
+--   cannot reach it. Any state that must cross the thread boundary
+--   lives in 'EngineEnv' as an 'IORef' instead; never duplicate a
+--   field across the two (that was the textureSystem/inputState bug).
 data EngineState = EngineState
   { timingState      ∷ TimingState
-  , inputState       ∷ InputState
   , graphicsState    ∷ GraphicsState
   , assetConfig      ∷ AssetConfig
   , sceneManager     ∷ SceneManager
@@ -220,8 +231,9 @@ data GraphicsState = GraphicsState
   , syncObjects        ∷ Maybe SyncObjects
   , vertexBuffer       ∷ Maybe (Vk.Buffer, Vk.DeviceMemory)
   , uniformBuffers     ∷ Maybe (V.Vector (Vk.Buffer, Vk.DeviceMemory))
-  , textureSystem      ∷ Maybe BindlessTextureSystem
-  , defaultFaceMapSlot ∷ Word32
+  -- textureSystem + defaultFaceMapSlot moved to EngineEnv
+  -- (textureSystemRef / defaultFaceMapSlotRef): worker threads read
+  -- them, so per the EngineState invariant above they live in EngineEnv.
   , bindlessPipeline   ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , bindlessUIPipeline ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)
   , fontPipeline       ∷ Maybe (Vk.Pipeline, Vk.PipelineLayout)

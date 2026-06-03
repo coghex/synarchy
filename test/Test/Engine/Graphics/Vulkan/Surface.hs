@@ -15,6 +15,7 @@ import Engine.Core.State
 import Engine.Core.Defaults
 import Engine.Core.Monad
 import Engine.Core.Var
+import Data.IORef (newIORef)
 import Engine.Graphics.Base
 import Control.Concurrent (threadDelay)
 import Control.Monad (when)
@@ -75,8 +76,8 @@ spec env state = do
     where
         runEngineTest ∷ ∀ ε α. EngineEnv → EngineState → EngineM ε EngineState α → IO α
         runEngineTest env state action = do
-            stateVar ← atomically $ newVar state
-            envVar ← atomically $ newVar env
+            stateRef ← newIORef state
+            let env' = env { engineStateRef = stateRef }
             mvar ← atomically $ newVar Nothing
             
             let cont result = case result of
@@ -85,7 +86,7 @@ spec env state = do
                         pure state
                     Left err → error $ "Engine error: " ⧺ show err
             
-            _ ← unEngineM action envVar stateVar cont
+            _ ← unEngineM action env' cont
             result ← atomically $ readVar mvar
             case result of
                 Just v → pure v

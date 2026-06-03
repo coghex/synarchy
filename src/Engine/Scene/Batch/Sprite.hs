@@ -10,6 +10,7 @@ import qualified Data.Vector as V
 import qualified Data.Map as Map
 import qualified Data.Text as T
 import Data.Maybe (mapMaybe)
+import Data.IORef (readIORef)
 import Engine.Scene.Base (ObjectId, NodeType(..), LayerId)
 import Engine.Scene.Types.Node (SceneNode(..), WorldTransform(..))
 import Engine.Scene.Types.Graph (SceneGraph(..))
@@ -21,15 +22,16 @@ import Engine.Graphics.Camera (Camera2D)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (getTextureSlotIndex)
 import Engine.Core.Monad
-import Engine.Core.State (EngineState(..), GraphicsState(..))
+import Engine.Core.State (EngineEnv(..), EngineState(..), GraphicsState(..))
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logDebugSM)
 
 collectSpriteBatches ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
 collectSpriteBatches graph camera viewWidth viewHeight = do
-    gs ← gets graphicsState
-    let texSystem = textureSystem gs
-        fmSlot = fromIntegral (defaultFaceMapSlot gs) ∷ Float
+    env ← ask
+    texSystem ← liftIO $ readIORef (textureSystemRef env)
+    fmSlotW   ← liftIO $ readIORef (defaultFaceMapSlotRef env)
+    let fmSlot = fromIntegral fmSlotW ∷ Float
         allNodes = Map.elems (sgNodes graph)
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject ∧ nodeVisible n) allNodes
         visibleSprites = filter (isNodeVisible camera viewWidth viewHeight) spriteNodes
@@ -44,9 +46,10 @@ collectSpriteBatches graph camera viewWidth viewHeight = do
 
 collectVisibleObjects ∷ SceneGraph → Camera2D → Float → Float → EngineM ε σ (V.Vector DrawableObject)
 collectVisibleObjects graph camera viewWidth viewHeight = do
-    gs ← gets graphicsState
-    let texSystem = textureSystem gs
-        fmSlot = fromIntegral (defaultFaceMapSlot gs) ∷ Float
+    env ← ask
+    texSystem ← liftIO $ readIORef (textureSystemRef env)
+    fmSlotW   ← liftIO $ readIORef (defaultFaceMapSlotRef env)
+    let fmSlot = fromIntegral fmSlotW ∷ Float
         allNodes = Map.elems (sgNodes graph)
         spriteNodes = filter (\n → nodeType n ≡ SpriteObject ∧ nodeVisible n) allNodes
         visibleNodes = filter (\n → isUILayer (nodeLayer n) ∨ isNodeVisible camera viewWidth viewHeight n) spriteNodes

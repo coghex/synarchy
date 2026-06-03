@@ -16,13 +16,14 @@ import Engine.Core.State
 import Engine.Core.Defaults
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.Var (atomically, readVar)
+import Data.IORef (readIORef)
 import Engine.Graphics.Config (defaultVideoConfig)
 
 -- | Initialize an engine state for testing via the standard headless path.
 initTestState ∷ IO (EngineEnv, EngineState)
 initTestState = do
-    EngineInitResult env _ stateVar ← initializeEngineHeadless
-    st ← atomically $ readVar stateVar
+    EngineInitResult env ← initializeEngineHeadless
+    st ← readIORef (engineStateRef env)
     pure (env, st)
 
 main ∷ IO ()

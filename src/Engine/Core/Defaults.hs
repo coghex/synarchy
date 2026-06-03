@@ -68,7 +68,6 @@ defaultEngineState = EngineState
     , lastFrameTime    = 0.0
     , targetFPS        = 60.0
     }
-  , inputState       = defaultInputState
   , graphicsState    = GraphicsState
     { glfwWindow             = Nothing
     , vulkanInstance         = Nothing
@@ -90,8 +89,6 @@ defaultEngineState = EngineState
     , syncObjects            = Nothing
     , vertexBuffer           = Nothing
     , uniformBuffers         = Nothing
-    , textureSystem          = Nothing
-    , defaultFaceMapSlot     = 0
     , bindlessPipeline       = Nothing
     , bindlessUIPipeline     = Nothing
     , fontPipeline           = Nothing

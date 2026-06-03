@@ -92,9 +92,8 @@ renderUIPages = do
     env ← ask
     mgr ← liftIO $ readIORef (uiManagerRef env)
     
-    gs ← gets graphicsState
-    let maybeBindless = textureSystem gs
-    
+    maybeBindless ← liftIO $ readIORef (textureSystemRef env)
+
     case maybeBindless of
         Nothing → do
             logWarnM CatUI "No bindless texture system available for UI rendering"

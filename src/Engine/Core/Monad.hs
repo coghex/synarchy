@@ -1,79 +1,77 @@
-module Engine.Core.Monad 
+module Engine.Core.Monad
   ( EngineM(..)
   , EngineM'
   , runEngineM
   , MonadIO(..)
   , MonadError(..)
-  , getEngineVars
   ) where
 
 import UPrelude
 import Control.Monad.IO.Class (MonadIO(..))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.Reader.Class (MonadReader(..))
-import Control.Monad.State.Class (MonadState(..), gets)
+import Control.Monad.State.Class (MonadState(..))
+import Data.IORef (readIORef, writeIORef)
 import Engine.Core.Error.Exception (EngineException(..))
 import Engine.Core.State
-import Engine.Core.Var 
 
--- | CPS monad with Reader ('EngineEnv'), State ('EngineState'), IO, and error
---   handling. Type params: ε = environment tag, σ = continuation result, α = value.
+-- | CPS monad with Reader ('EngineEnv'), State ('EngineState'), IO, and
+--   error handling. Type params: ε = environment tag, σ = continuation
+--   result, α = value.
+--
+--   The env is an immutable value — its IORef\/queue handles never
+--   change — so 'ask' returns it directly with no STM. 'EngineState'
+--   lives behind 'engineStateRef' inside the env; only the main thread
+--   runs this monad, so the IORef-backed state needs no synchronisation.
 newtype EngineM ε σ α = EngineM
-  { unEngineM ∷ Var EngineEnv 
-              → Var EngineState 
-              → (Either EngineException α → IO σ) 
-              → IO σ 
+  { unEngineM ∷ EngineEnv
+              → (Either EngineException α → IO σ)
+              → IO σ
   }
 
 -- | Specialised alias: continuation returns @Either EngineException α@
 type EngineM' ε α = EngineM ε (Either EngineException α) α
 
-runEngineM ∷ EngineM ε σ α 
-         → Var EngineEnv 
-         → Var EngineState 
-         → (Either EngineException α → IO σ) 
+runEngineM ∷ EngineM ε σ α
+         → EngineEnv
+         → (Either EngineException α → IO σ)
          → IO σ
-runEngineM action env st cont = unEngineM action env st cont
+runEngineM action env cont = unEngineM action env cont
 
 instance Functor (EngineM ε σ) where
-  fmap f m = EngineM $ \e s c → unEngineM m e s (c ∘ fmap f)
+  fmap f m = EngineM $ \e c → unEngineM m e (c ∘ fmap f)
 
 instance Applicative (EngineM ε σ) where
-  pure x = EngineM $ \_ _ → ($ Right x)
-  mf <*> mx = EngineM $ \e s c → unEngineM mf e s 
-    $ \g → unEngineM mx e s (c ∘ (g <*>))
+  pure x = EngineM $ \_ → ($ Right x)
+  mf <*> mx = EngineM $ \e c → unEngineM mf e
+    $ \g → unEngineM mx e (c ∘ (g <*>))
 
 instance Monad (EngineM ε σ) where
   return = pure
-  mx >>= k = EngineM $ \e s c → unEngineM mx e s $ \case
-    Right x → unEngineM (k x) e s c
+  mx >>= k = EngineM $ \e c → unEngineM mx e $ \case
+    Right x → unEngineM (k x) e c
     Left ex → c (Left ex)
 
 instance MonadIO (EngineM ε σ) where
-  liftIO m = EngineM $ \_ _ c → m ⌦ (c ∘ Right)
+  liftIO m = EngineM $ \_ c → m ⌦ (c ∘ Right)
 
 instance MonadError EngineException (EngineM ε σ) where
-  throwError e = EngineM $ \_ _ c → c (Left e)
-  catchError action handler = EngineM $ \e s c → 
-    unEngineM action e s $ \case
-      Left err → unEngineM (handler err) e s c
+  throwError e = EngineM $ \_ c → c (Left e)
+  catchError action handler = EngineM $ \e c →
+    unEngineM action e $ \case
+      Left err → unEngineM (handler err) e c
       Right r  → c (Right r)
 
 instance MonadReader EngineEnv (EngineM ε σ) where
-  ask = EngineM $ \e _ c →
-    atomically (readVar e) ⌦ \env → c (Right env)
-  local f action = EngineM $ \e s c → do
-    old ← atomically (readVar e)
-    atomically (writeVar e (f old))
-    unEngineM action e s $ \result → do
-      atomically (writeVar e old)
-      c result
+  ask = EngineM $ \e c → c (Right e)
+  -- Pure Reader-local: run the sub-computation under @f e@; the
+  -- original @e@ is unaffected for everything outside this call, so
+  -- it is automatically restored and exception-safe (unlike the old
+  -- TVar-mutating version). Currently unused but now correct.
+  local f action = EngineM $ \e c → unEngineM action (f e) c
 
 instance MonadState EngineState (EngineM ε σ) where
-  get = EngineM $ \_ s c →
-    atomically (readVar s) ⌦ \st → c (Right st)
-  put newSt = EngineM $ \_ s c →
-    atomically (writeVar s newSt) ⌦ \_ → c (Right ())
-
-getEngineVars ∷ EngineM ε σ (Var EngineEnv, Var EngineState)
-getEngineVars = EngineM $ \e s c → c (Right (e, s))
+  get = EngineM $ \e c →
+    readIORef (engineStateRef e) ⌦ \st → c (Right st)
+  put newSt = EngineM $ \e c →
+    writeIORef (engineStateRef e) newSt ⌦ \_ → c (Right ())

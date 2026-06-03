@@ -80,7 +80,7 @@ recreateAllResources pDevice device queues surface window = do
     
     -- Descriptor manager and texture system survive recreation
     descManager ← getDescriptorManagerOrFail state
-    texSystem ← getTextureSystemOrFail state
+    texSystem ← getTextureSystemOrFail
     fontDescLayout ← getFontDescriptorLayoutOrFail state
     
     let uniformLayout = dmUniformLayout descManager
@@ -190,11 +190,14 @@ getDescriptorManagerOrFail state = case descriptorState state of
     Nothing → logAndThrowM CatDescriptor (ExGraphics DescriptorError)
                  "No descriptor manager"
 
-getTextureSystemOrFail ∷ GraphicsState → EngineM ε σ BindlessTextureSystem
-getTextureSystemOrFail state = case textureSystem state of
-    Just ts → pure ts
-    Nothing → logAndThrowM CatTexture (ExGraphics TextureLoadFailed)
-                 "No texture system"
+getTextureSystemOrFail ∷ EngineM ε σ BindlessTextureSystem
+getTextureSystemOrFail = do
+    env ← ask
+    mts ← liftIO $ readIORef (textureSystemRef env)
+    case mts of
+        Just ts → pure ts
+        Nothing → logAndThrowM CatTexture (ExGraphics TextureLoadFailed)
+                     "No texture system"
 
 getFontDescriptorLayoutOrFail ∷ GraphicsState → EngineM ε σ DescriptorSetLayout
 getFontDescriptorLayoutOrFail state = case fontDescriptorLayout state of
