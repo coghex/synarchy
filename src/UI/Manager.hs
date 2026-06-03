@@ -246,19 +246,36 @@ addElementToPage pageHandle elemHandle x y mgr =
     in modifyPage pageHandle mgr' $ \page →
             page { upRootElements = upRootElements page ⧺ [elemHandle] }
 
-addChildElement ∷ ElementHandle → ElementHandle → Float → Float 
+addChildElement ∷ ElementHandle → ElementHandle → Float → Float
                 → UIPageManager → UIPageManager
 addChildElement parentHandle childHandle x y mgr =
     case Map.lookup parentHandle (upmElements mgr) of
         Nothing → mgr
-        Just parent →
-            let mgr' = modifyElement childHandle mgr $ \child →
-                    child { uePosition = (x, y)
-                          , uePage     = uePage parent
-                          , ueParent   = Just parentHandle 
-                          }
-            in modifyElement parentHandle mgr' $ \p →
-                    p { ueChildren = ueChildren p ⧺ [childHandle] }
+        Just parent
+            -- Refuse to create a parent cycle (child already an
+            -- ancestor of the parent, or child ≡ parent). A cycle
+            -- would hang every parent-chain walk (absolute position,
+            -- accumulated z-index, tree recursion) on the render and
+            -- input threads forever. This is the only site that sets
+            -- a Just parent, so the check here keeps the forest
+            -- acyclic globally.
+            | wouldCycle → mgr
+            | otherwise →
+                let mgr' = modifyElement childHandle mgr $ \child →
+                        child { uePosition = (x, y)
+                              , uePage     = uePage parent
+                              , ueParent   = Just parentHandle
+                              }
+                in modifyElement parentHandle mgr' $ \p →
+                        p { ueChildren = ueChildren p ⧺ [childHandle] }
+  where
+    wouldCycle = walkUp (64 ∷ Int) parentHandle
+    walkUp depth h
+        | depth ≤ 0 = True          -- pathological depth: refuse too
+        | h ≡ childHandle = True
+        | otherwise = case Map.lookup h (upmElements mgr) ⌦ ueParent of
+            Just p  → walkUp (depth - 1) p
+            Nothing → False
 
 removeElement ∷ ElementHandle → UIPageManager → UIPageManager
 removeElement handle mgr =
@@ -383,19 +400,24 @@ setSpriteColor handle color = modifyElement handle `flip` \elem →
 -- * Queries
 
 getElementAbsolutePosition ∷ ElementHandle → UIPageManager → Maybe (Float, Float)
-getElementAbsolutePosition handle mgr = 
+getElementAbsolutePosition handle mgr =
     case Map.lookup handle (upmElements mgr) of
         Nothing → Nothing
-        Just elem → Just $ computeAbsolutePos elem
+        Just elem → Just $ computeAbsolutePos (0 ∷ Int) elem
   where
-    computeAbsolutePos element =
+    -- Depth cap: belt-and-suspenders against parent cycles (which
+    -- addChildElement refuses to create) — this runs on the render
+    -- and input threads, where an unbounded walk would freeze the
+    -- engine.
+    computeAbsolutePos depth element =
         let (ex, ey) = uePosition element
             (px, py) = case ueParent element of
+                _ | depth ≥ 64 → (0, 0)
                 Nothing → (0, 0)
-                Just parentHandle → 
+                Just parentHandle →
                     case Map.lookup parentHandle (upmElements mgr) of
                         Nothing → (0, 0)
-                        Just parent → computeAbsolutePos parent
+                        Just parent → computeAbsolutePos (depth + 1) parent
         in (px + ex, py + ey)
 
 getPageElements ∷ PageHandle → UIPageManager → [UIElement]
@@ -428,69 +450,61 @@ isPointInElement (px, py) element mgr =
             in px ≥ ex ∧ px ≤ (ex + w) &&
                py ≥ ey ∧ py ≤ (ey + h)
 
-findClickableElementAt ∷ (Float, Float) → UIPageManager → Maybe (ElementHandle, Text)
-findClickableElementAt pos mgr =
-    let visiblePages = Set.toList (upmVisiblePages mgr)
-        -- Get all ROOT elements from visible pages
-        allRootHandles = concatMap (\ph → 
-            case Map.lookup ph (upmPages mgr) of
-                Just page → upRootElements page
-                Nothing → []
-            ) visiblePages
-        
-        -- Find all clickable elements in the tree that contain the point
-        clickableElements = concatMap (findClickableInTree pos) allRootHandles
-        
-        -- Sort by layer and ACCUMULATED zIndex (highest first)
-        sorted = sortOn (\eh → 
-            case Map.lookup eh (upmElements mgr) of
-                Just elem → 
-                    let page = Map.lookup (uePage elem) (upmPages mgr)
-                        pageLayerVal = case page of
-                            Just p → fromEnum (upLayer p) * 1000000
-                            Nothing → 0
-                        pageZVal = case page of
-                            Just p → upZIndex p * 1000
-                            Nothing → 0
-                        elemZVal = accumulatedZIndex eh
-                        totalVal = pageLayerVal + pageZVal + elemZVal
-                    in negate totalVal  -- Negate for descending sort (highest first)
-                Nothing → 0
-            ) clickableElements
-    in case sorted of
-        (eh:_) → case Map.lookup eh (upmElements mgr) of
-            Just elem → case ueOnClick elem of
-                Just cb → Just (eh, cb)
-                Nothing → Nothing
-            Nothing → Nothing
-        [] → Nothing
+-- | Walk every visible element in paint order, yielding the elements
+--   that contain the point together with their paint key (page band +
+--   accumulated element zIndex — exactly the key 'UI.Render' draws
+--   with, see 'uiLayerBand'). All hit-test queries below share this
+--   walk, so the element you SEE on top is the element the cursor
+--   interacts with. Deliberately does NOT clip children to parent
+--   bounds — the renderer doesn't either (dropdown option lists
+--   extend past their display box). An invisible element prunes its
+--   whole subtree, matching the renderer.
+hitsAtPointBy ∷ (UIPage → Bool) → (UIElement → Bool) → (Float, Float)
+              → UIPageManager → [(ElementHandle, Int)]
+hitsAtPointBy pageOk elemOk pos mgr =
+    concatMap perPage (filter pageOk (getVisiblePages mgr))
   where
-    -- Compute the accumulated z-index by walking up the parent chain
-    accumulatedZIndex ∷ ElementHandle → Int
-    accumulatedZIndex handle =
-        case Map.lookup handle (upmElements mgr) of
-            Nothing → 0
-            Just elem →
-                let parentZ = case ueParent elem of
-                        Nothing → 0
-                        Just parentHandle → accumulatedZIndex parentHandle
-                in parentZ + ueZIndex elem
+    perPage page =
+        let band = uiLayerBand (upLayer page) (upZIndex page)
+        in concatMap (go band) (upRootElements page)
+    go base h = case Map.lookup h (upmElements mgr) of
+        Nothing → []
+        Just el
+            | not (ueVisible el) → []
+            | otherwise →
+                let key  = base + ueZIndex el
+                    self = if elemOk el ∧ isPointInElement pos el mgr
+                           then [(h, key)]
+                           else []
+                    kids = sortOn (childZIndex mgr) (ueChildren el)
+                in self ⧺ concatMap (go key) kids
 
-    -- Find all clickable elements in the tree that contain the point
-    findClickableInTree ∷ (Float, Float) → ElementHandle → [ElementHandle]
-    findClickableInTree point handle =
-        case Map.lookup handle (upmElements mgr) of
-            Nothing → []
-            Just elem →
-                let thisClickable = 
-                        if ueClickable elem ∧ 
-                           ueVisible elem ∧ 
-                           isJust (ueOnClick elem) &&
-                           isPointInElement point elem mgr
-                        then [handle]
-                        else []
-                    childClickables = concatMap (findClickableInTree point) (ueChildren elem)
-                in thisClickable ⧺ childClickables
+childZIndex ∷ UIPageManager → ElementHandle → Int
+childZIndex mgr h = maybe 0 ueZIndex (Map.lookup h (upmElements mgr))
+
+-- | The topmost hit: highest paint key wins; at equal keys the
+--   later-painted element wins (a later sibling paints over an
+--   earlier one), which the fold's @≥@-replacement encodes since
+--   'hitsAtPointBy' yields hits in paint order.
+topHitBy ∷ (UIPage → Bool) → (UIElement → Bool) → (Float, Float)
+         → UIPageManager → Maybe ElementHandle
+topHitBy pageOk elemOk pos mgr =
+    fst ⊚ foldl' step Nothing (hitsAtPointBy pageOk elemOk pos mgr)
+  where
+    step acc (h, k) = case acc of
+        Just (_, k') | k' > k → acc
+        _                     → Just (h, k)
+
+findClickableElementAt ∷ (Float, Float) → UIPageManager → Maybe (ElementHandle, Text)
+findClickableElementAt pos mgr = do
+    h  ← topHitBy (const True) clickOk pos mgr
+    el ← Map.lookup h (upmElements mgr)
+    cb ← ueOnClick el
+    pure (h, cb)
+  where
+    -- Elements WITHOUT a click callback don't block clicks: the click
+    -- falls through to the topmost element that has one.
+    clickOk el = ueClickable el ∧ isJust (ueOnClick el)
 
 -- | Find the nearest ancestor (or self) that has an onClick callback
 findClickableAncestor ∷ ElementHandle → UIPageManager → Maybe (ElementHandle, Text)
@@ -504,48 +518,10 @@ findClickableAncestor handle mgr = go handle
                 Just parentHandle → go parentHandle
                 Nothing → Nothing
 
--- | Find the topmost visible element at a point (deepest child wins)
+-- | Find the topmost visible element at a point (paint order: page
+--   band + accumulated zIndex, later-painted wins ties).
 findElementAt ∷ (Float, Float) → UIPageManager → Maybe ElementHandle
-findElementAt pos mgr =
-    let visiblePages = Set.toList (upmVisiblePages mgr)
-        allRootHandles = concatMap (\ph →
-            case Map.lookup ph (upmPages mgr) of
-                Just page → upRootElements page
-                Nothing → []
-            ) visiblePages
-        -- Sort roots by z-index descending so higher z roots are checked first
-        sortedRoots = sortOn (\h →
-            case Map.lookup h (upmElements mgr) of
-                Just e  → negate (ueZIndex e)
-                Nothing → 0
-            ) allRootHandles
-        -- Find first hit (highest z root, then deepest child within)
-        hitElements = concatMap (findInTree pos) sortedRoots
-    in listToMaybe hitElements
-  where
-    findInTree ∷ (Float, Float) → ElementHandle → [ElementHandle]
-    findInTree point handle =
-        case Map.lookup handle (upmElements mgr) of
-            Nothing → []
-            Just elem
-                | not (ueVisible elem) → []
-                | otherwise →
-                    let (w, h) = ueSize elem
-                        hasSize = w > 0 ∧ h > 0
-                        inBounds = hasSize ∧ isPointInElement point elem mgr
-                        -- Only recurse into children if point is within parent bounds
-                        -- (or parent has no bounds, like a container)
-                        shouldRecurse = inBounds ∨ not hasSize
-                        sortedChildren = if shouldRecurse
-                            then sortOn (\ch →
-                                    case Map.lookup ch (upmElements mgr) of
-                                        Just c  → negate (ueZIndex c)
-                                        Nothing → 0
-                                    ) (ueChildren elem)
-                            else []
-                        childHits = concatMap (findInTree point) sortedChildren
-                        thisHit = if inBounds then [handle] else []
-                    in childHits ⧺ thisHit
+findElementAt = findElementAtExcept Set.empty
 
 -- | Like 'findElementAt', but skips elements that belong to any page
 --   in the given ignore set. Used by the tooltip subsystem to avoid
@@ -554,42 +530,11 @@ findElementAt pos mgr =
 findElementAtExcept ∷ Set.Set PageHandle → (Float, Float) → UIPageManager
                     → Maybe ElementHandle
 findElementAtExcept ignored pos mgr =
-    let visiblePages = filter (`Set.notMember` ignored)
-                              (Set.toList (upmVisiblePages mgr))
-        allRootHandles = concatMap (\ph →
-            case Map.lookup ph (upmPages mgr) of
-                Just page → upRootElements page
-                Nothing → []
-            ) visiblePages
-        sortedRoots = sortOn (\h →
-            case Map.lookup h (upmElements mgr) of
-                Just e  → negate (ueZIndex e)
-                Nothing → 0
-            ) allRootHandles
-        hitElements = concatMap (findInTree pos) sortedRoots
-    in listToMaybe hitElements
+    topHitBy pageOk sized pos mgr
   where
-    findInTree ∷ (Float, Float) → ElementHandle → [ElementHandle]
-    findInTree point handle =
-        case Map.lookup handle (upmElements mgr) of
-            Nothing → []
-            Just elem
-                | not (ueVisible elem) → []
-                | otherwise →
-                    let (w, h) = ueSize elem
-                        hasSize = w > 0 ∧ h > 0
-                        inBounds = hasSize ∧ isPointInElement point elem mgr
-                        shouldRecurse = inBounds ∨ not hasSize
-                        sortedChildren = if shouldRecurse
-                            then sortOn (\ch →
-                                    case Map.lookup ch (upmElements mgr) of
-                                        Just c  → negate (ueZIndex c)
-                                        Nothing → 0
-                                    ) (ueChildren elem)
-                            else []
-                        childHits = concatMap (findInTree point) sortedChildren
-                        thisHit = if inBounds then [handle] else []
-                    in childHits ⧺ thisHit
+    pageOk p = upHandle p `Set.notMember` ignored
+    -- Zero-size elements (pure containers) are not hover targets.
+    sized el = let (w, h) = ueSize el in w > 0 ∧ h > 0
 
 setElementTooltip ∷ ElementHandle → TooltipContent → UIPageManager → UIPageManager
 setElementTooltip handle content = modifyElement handle `flip`
@@ -626,63 +571,13 @@ removeFromPage pageHandle elemHandle mgr =
 
 -- | Like findClickableElementAt but looks at ueOnRightClick instead.
 findRightClickableElementAt ∷ (Float, Float) → UIPageManager → Maybe (ElementHandle, Text)
-findRightClickableElementAt pos mgr =
-    let visiblePages = Set.toList (upmVisiblePages mgr)
-        allRootHandles = concatMap (\ph → 
-            case Map.lookup ph (upmPages mgr) of
-                Just page → upRootElements page
-                Nothing → []
-            ) visiblePages
-        
-        clickableElements = concatMap (findRightClickInTree pos) allRootHandles
-        
-        sorted = sortOn (\eh → 
-            case Map.lookup eh (upmElements mgr) of
-                Just elem → 
-                    let page = Map.lookup (uePage elem) (upmPages mgr)
-                        pageLayerVal = case page of
-                            Just p → fromEnum (upLayer p) * 1000000
-                            Nothing → 0
-                        pageZVal = case page of
-                            Just p → upZIndex p * 1000
-                            Nothing → 0
-                        elemZVal = accumulatedZIndex eh
-                        totalVal = pageLayerVal + pageZVal + elemZVal
-                    in negate totalVal
-                Nothing → 0
-            ) clickableElements
-    in case sorted of
-        (eh:_) → case Map.lookup eh (upmElements mgr) of
-            Just elem → case ueOnRightClick elem of
-                Just cb → Just (eh, cb)
-                Nothing → Nothing
-            Nothing → Nothing
-        [] → Nothing
+findRightClickableElementAt pos mgr = do
+    h  ← topHitBy (const True) clickOk pos mgr
+    el ← Map.lookup h (upmElements mgr)
+    cb ← ueOnRightClick el
+    pure (h, cb)
   where
-    accumulatedZIndex ∷ ElementHandle → Int
-    accumulatedZIndex handle =
-        case Map.lookup handle (upmElements mgr) of
-            Nothing → 0
-            Just elem →
-                let parentZ = case ueParent elem of
-                        Nothing → 0
-                        Just parentHandle → accumulatedZIndex parentHandle
-                in parentZ + ueZIndex elem
-
-    findRightClickInTree ∷ (Float, Float) → ElementHandle → [ElementHandle]
-    findRightClickInTree point handle =
-        case Map.lookup handle (upmElements mgr) of
-            Nothing → []
-            Just elem →
-                let thisClickable = 
-                        if ueClickable elem ∧ 
-                           ueVisible elem ∧ 
-                           isJust (ueOnRightClick elem) &&
-                           isPointInElement point elem mgr
-                        then [handle]
-                        else []
-                    childClickables = concatMap (findRightClickInTree point) (ueChildren elem)
-                in thisClickable ⧺ childClickables
+    clickOk el = ueClickable el ∧ isJust (ueOnRightClick el)
 
 -- * Text Buffer Operations
 

@@ -118,18 +118,21 @@ Recipe for a new unit (validated with gray_wolf, 2026-06):
    rejects quadrupeds**, use standard). `size` is the character; the canvas comes out ~40% larger
    (64px wolf → 92×92 canvas, same as the bear). Dog-template animations: bark, fast-walk, idle,
    running-4/6/8-frames, sneaking, walk-4/6/8-frames.
-2. Probe: animate `idle`/`walk`/`run` (template mode), slot in, check in game before committing
+2. **MANDATORY STOP: after the base 8-direction character generates, present the rotations to
+   the user and wait for explicit sign-off before generating anything else** (no states, no
+   animations, no batches). This is a standing user requirement, not a suggestion.
+3. Probe: animate `idle`/`walk`/`run` (template mode), slot in, check in game before committing
    to the full matrix.
-3. **Queue discipline**: each `animate_character` spawns 8 direction-jobs against the 10-job cap,
+4. **Queue discipline**: each `animate_character` spawns 8 direction-jobs against the 10-job cap,
    and a batch drains in ~10–12 min — animations queue strictly one at a time. A bear-scale
    matrix (~30 anims) is a multi-hour babysat loop.
-4. **Download**: `GET /v2/characters/{id}/zip` (bearer auth) — blocks with a JSON
+5. **Download**: `GET /v2/characters/{id}/zip` (bearer auth) — blocks with a JSON
    "still being generated" body until every animation is done, then returns a zip already in
    engine layout (`<Name>/animations/<anim-id>/<direction>/frame_NNN.png` + `rotations/` +
    `metadata.json` mapping ids→names/frame-lists). Copy the 5 stored directions per activity
    (all 8 for asymmetric), generate the yaml `animations:` block with a script, validate every
    referenced path exists.
-5. `data/units/<name>.yaml` is auto-discovered (`startup_loader.lua` `addYamlDir("data/units")`).
+6. `data/units/<name>.yaml` is auto-discovered (`startup_loader.lua` `addYamlDir("data/units")`).
    Rendering/spawning needs nothing else; *behavior* needs Lua wiring (a `<species>_ai.lua`
    config, `unit_resources.lua` species block, `unit_ai.lua` COMBAT_ANIM_SUFFIX entry) — engine/
    Lua territory, check with the user first.

@@ -666,7 +666,10 @@ function cargoInventoryPanel.shutdown()
 end
 
 -- Esc closes the popup. Returns true if consumed.
-function cargoInventoryPanel.onKeyDown(key)
+-- Named handle* (not on*) deliberately: this module is engine-loaded,
+-- so an on*-named function would also fire directly on every engine
+-- broadcast — double-firing on top of init.lua's ordered forward.
+function cargoInventoryPanel.handleKeyDown(key)
     if key == "Escape" and cargoInventoryPanel.state.open then
         cargoInventoryPanel.closeIfOpen()
         return true

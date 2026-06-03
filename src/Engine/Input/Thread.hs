@@ -220,7 +220,11 @@ processInput env inpSt event = case event of
             uiMgr ← readIORef (uiManagerRef env)
             let mousePos = (mouseX, mouseY)
 
-            case btn of
+            -- Minimized window: winW/winH are 0, so the scale
+            -- division above yields NaN/Infinity coords. Drop the
+            -- click rather than feed NaN into hit-tests and Lua
+            -- camera math.
+            when (winW > 0 ∧ winH > 0) $ case btn of
               -- Middle button: toggle tooltip lock when a tooltip is up.
               -- Falls through to a normal mouse-down event when nothing
               -- is shown, so other middle-click behavior (panning, etc.)
@@ -308,7 +312,8 @@ processInput env inpSt event = case event of
                 mouseY = realToFrac rawY * scaleY
             
             uiMgr ← readIORef (uiManagerRef env)
-            case findClickableElementAt (mouseX, mouseY) uiMgr of
+            -- Same minimized-window guard as the click path above.
+            when (winW > 0 ∧ winH > 0) $ case findClickableElementAt (mouseX, mouseY) uiMgr of
                 Just (elemHandle, _callback) → do
                     logDebug logger CatInput $ "Scroll on UI element: " <> T.pack (show elemHandle)
                     Q.writeQueue (luaQueue env) (LuaUIScrollEvent elemHandle x y)

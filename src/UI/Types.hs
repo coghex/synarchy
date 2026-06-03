@@ -6,6 +6,7 @@ module UI.Types
   , BoxTextureHandle(..)
     -- * Layers
   , UILayer(..)
+  , uiLayerBand
   , TextBuffer(..)
   , emptyBuffer
     -- * Page
@@ -47,12 +48,31 @@ newtype ElementHandle = ElementHandle { unElementHandle ∷ Word32 }
 
 -- | UI layers (rendered bottom to top)
 data UILayer
-  = LayerHUD
+  = LayerHUD      -- ^ in-world hud (tile cursor, selections)
+  | LayerOverlay  -- ^ hud chrome over the world view (toolbar, panels)
   | LayerMenu
   | LayerModal
   | LayerTooltip
   | LayerDebug
   deriving (Eq, Ord, Enum, Bounded, Show)
+
+-- | Paint-order band for a page — the SINGLE source of truth for UI
+--   stacking. The renderer ('UI.Render.uiLayerToLayerId') draws at
+--   @band + accumulated element zIndex@; hit-testing ('UI.Manager')
+--   reproduces the same key, so the element you SEE on top is the
+--   element the cursor interacts with. Bands are spaced so one
+--   element's accumulated zIndex cannot climb into the next band
+--   (popups use up to ~1003; HUD text/cursor children use 1-2 — the
+--   old bases were 1 apart, which let HUD elements paint over menu
+--   pages).
+uiLayerBand ∷ UILayer → Int → Int
+uiLayerBand layer pageZ = case layer of
+    LayerHUD     → 0
+    LayerOverlay → 5000
+    LayerMenu    → 10000
+    LayerModal   → 20000 + pageZ
+    LayerTooltip → 100000 + pageZ
+    LayerDebug   → 200000 + pageZ
 
 -- | A UI page
 data UIPage = UIPage

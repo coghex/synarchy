@@ -119,54 +119,68 @@ loadScriptFn env backendState lst = do
             logger ← Lua.liftIO $ readIORef (loggerRef env)
             scriptId ← Lua.liftIO $ do
                 let pathStr = TE.decodeUtf8 pathBS
-                
-                logDebug logger CatLua $ "Loading Lua script: " <> pathStr
-                
-                sid ← atomicModifyIORef' (lbsNextScriptId backendState)
-                    (\n → (n + 1, n))
-                
-                status ← Lua.runWith lst $ Lua.dofileTrace (Just $ T.unpack pathStr)
-                case status of
-                    Lua.OK → do
-                        let dropDir (('/'):xs) = T.pack xs
-                            dropDir (x:xs    ) = dropDir xs
-                            dropDir _          = ""
-                        logDebug logger CatLua $ "loaded: "
-                                              <> (dropDir (T.unpack (pathStr)))
-                        logDebug logger CatLua $ " with ID " <> T.pack (show sid)
-                        modRef ← Lua.runWith lst $ do
-                            isTable ← Lua.istable (-1)
-                            if isTable
-                                then Lua.ref Lua.registryindex
-                                else do
-                                    Lua.pop 1
-                                    return (Lua.Reference (fromIntegral Lua.refnil))
-                        
-                        currentTime ← getCurrentTime
-                        let currentSecs = realToFrac $ utctDayTime currentTime
-                            script = LuaScript
-                                { scriptId        = sid
-                                , scriptPath      = T.unpack pathStr
-                                , scriptTickRate  = realToFrac rate
-                                , scriptNextTick  = currentSecs + realToFrac rate
-                                , scriptModuleRef = modRef
-                                , scriptPaused    = False
-                                }
-                        
-                        atomically $ modifyTVar (lbsScripts backendState) $
-                            Map.insert sid script
-                        
-                        when (isValidRef modRef) $
-                            void $ callModuleFunction backendState modRef "init" []
-                        
-                        logDebug logger CatLua $ "Lua script initialized with ID " 
-                                       <> T.pack (show sid)
-                        
-                        return (Just sid)
-                    e → do
-                        logWarn logger CatLua $ "Failed to load Lua script: " <> pathStr
-                                       <> ". Error code: " <> T.pack (show e)
-                        return Nothing
+
+                -- Dedup by path: loading the same script twice would
+                -- create a second tickable instance (update/broadcast
+                -- handlers firing twice) and leak the first registry
+                -- ref. Return the existing ID instead — deliberately
+                -- NOT reload semantics; killScript first to reload.
+                existing ← readTVarIO (lbsScripts backendState)
+                case [ s | s ← Map.elems existing
+                         , scriptPath s ≡ T.unpack pathStr ] of
+                  (dup:_) → do
+                    logDebug logger CatLua $
+                        "loadScript: already loaded, reusing ID "
+                        <> T.pack (show (scriptId dup)) <> ": " <> pathStr
+                    return (Just (scriptId dup))
+                  [] → do
+                    logDebug logger CatLua $ "Loading Lua script: " <> pathStr
+
+                    sid ← atomicModifyIORef' (lbsNextScriptId backendState)
+                        (\n → (n + 1, n))
+
+                    status ← Lua.runWith lst $ Lua.dofileTrace (Just $ T.unpack pathStr)
+                    case status of
+                        Lua.OK → do
+                            let dropDir (('/'):xs) = T.pack xs
+                                dropDir (x:xs    ) = dropDir xs
+                                dropDir _          = ""
+                            logDebug logger CatLua $ "loaded: "
+                                                  <> (dropDir (T.unpack (pathStr)))
+                            logDebug logger CatLua $ " with ID " <> T.pack (show sid)
+                            modRef ← Lua.runWith lst $ do
+                                isTable ← Lua.istable (-1)
+                                if isTable
+                                    then Lua.ref Lua.registryindex
+                                    else do
+                                        Lua.pop 1
+                                        return (Lua.Reference (fromIntegral Lua.refnil))
+
+                            currentTime ← getCurrentTime
+                            let currentSecs = realToFrac $ utctDayTime currentTime
+                                script = LuaScript
+                                    { scriptId        = sid
+                                    , scriptPath      = T.unpack pathStr
+                                    , scriptTickRate  = realToFrac rate
+                                    , scriptNextTick  = currentSecs + realToFrac rate
+                                    , scriptModuleRef = modRef
+                                    , scriptPaused    = False
+                                    }
+
+                            atomically $ modifyTVar (lbsScripts backendState) $
+                                Map.insert sid script
+
+                            when (isValidRef modRef) $
+                                void $ callModuleFunction backendState modRef "init" []
+
+                            logDebug logger CatLua $ "Lua script initialized with ID "
+                                           <> T.pack (show sid)
+
+                            return (Just sid)
+                        e → do
+                            logWarn logger CatLua $ "Failed to load Lua script: " <> pathStr
+                                           <> ". Error code: " <> T.pack (show e)
+                            return Nothing
             
             case scriptId of
                 Just sid → Lua.pushinteger (Lua.Integer $ fromIntegral sid)

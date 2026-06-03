@@ -38,6 +38,15 @@ shutdownEngine (Window win) unitThreadState worldThreadState
     logDebugM CatSystem "Waiting for Vulkan device idle..."
     forM_ device $ \dev → liftIO $ deviceWaitIdle dev
 
+    -- Destroy the last transient-texture generations (zoom atlas /
+    -- world preview). These use explicit cleanups instead of
+    -- exit-time allocResource (they're replaced per world init/load,
+    -- see Engine.Scripting.Lua.Message), so the final generation is
+    -- ours to free — after the waitIdle above, before the device goes.
+    logDebugM CatSystem "Destroying transient textures..."
+    forM_ (previewTexture state)   $ \tt → liftIO (ttCleanup tt)
+    forM_ (zoomAtlasTexture state) $ \tt → liftIO (ttCleanup tt)
+
     -- run manual cleanup actions
     logDebugM CatSystem "Running Vulkan cleanup actions..."
     liftIO $ runAllCleanups (vulkanCleanup state)

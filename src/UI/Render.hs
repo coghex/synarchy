@@ -34,18 +34,15 @@ unLayerId (LayerId i) = fromIntegral i
 
 -- | Convert UI layer to render LayerId
 --
---   The element renderer adds @ueZIndex@ on top of the page's layer
---   value, so layers must be spaced far enough apart that one layer's
---   highest element can't outrank the next layer's base. The popup
---   subsystem (LayerModal) uses element zIndex up to ~1003 — so the
---   tooltip and debug layers sit well above that.
+--   The element renderer adds @ueZIndex@ on top of the page's band,
+--   so bands must be spaced far enough apart that one layer's highest
+--   element can't outrank the next layer's base. The band values live
+--   in 'UI.Types.uiLayerBand' — shared with hit-testing in
+--   "UI.Manager" so clicks/hover resolve to exactly what's painted
+--   on top.
 uiLayerToLayerId ∷ UILayer → Int → LayerId
-uiLayerToLayerId layer zIndex = LayerId $ fromIntegral $ case layer of
-    LayerHUD     → uiLayerBase + 0
-    LayerMenu    → uiLayerBase + 1
-    LayerModal   → uiLayerBase + 10 + zIndex
-    LayerTooltip → uiLayerBase + 100000 + zIndex
-    LayerDebug   → uiLayerBase + 200000 + zIndex
+uiLayerToLayerId layer zIndex = LayerId $ fromIntegral $
+    uiLayerBase + uiLayerBand layer zIndex
 
 -- | Look up the bindless slot index for a texture handle
 lookupTextureSlot ∷ BindlessTextureSystem → TextureHandle → Float

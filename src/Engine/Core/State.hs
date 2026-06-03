@@ -210,6 +210,17 @@ data TimingState = TimingState
   , targetFPS        ∷ Double
   }
 
+-- | A replaceable GPU texture upload (zoom atlas / world preview).
+--   Re-uploaded on every world init/load; the previous generation is
+--   destroyed when superseded (Engine.Scripting.Lua.Message) and the
+--   last one at engine shutdown. 'ttCleanup' destroys view, image,
+--   memory, and sampler (explicit — these deliberately do NOT go
+--   through allocResource, which would defer destruction to exit).
+data TransientTexture = TransientTexture
+  { ttHandle  ∷ TextureHandle
+  , ttCleanup ∷ IO ()
+  }
+
 data GraphicsState = GraphicsState
   { glfwWindow         ∷ Maybe Window
   , vulkanInstance     ∷ Maybe Vk.Instance
@@ -252,6 +263,10 @@ data GraphicsState = GraphicsState
     --   or grows (destroys + reallocates) it.
   , textInstanceBuffers    ∷ V.Vector (Maybe TextInstanceBuffer)
     -- ^ Per frame in flight, same discipline as dynamicVertexBuffers.
+  , previewTexture         ∷ Maybe TransientTexture
+    -- ^ Current world-preview upload; replaced per world init/load.
+  , zoomAtlasTexture       ∷ Maybe TransientTexture
+    -- ^ Current zoom-atlas upload; replaced per world init/load.
   }
 
 -- | Cached windowed-mode geometry so we can restore position\/size after fullscreen

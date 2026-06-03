@@ -101,6 +101,8 @@ defaultEngineState = EngineState
     , vulkanCleanup          = emptyCleanup
     , dynamicVertexBuffers   = V.replicate (gcMaxFrames defaultGraphicsConfig) Nothing
     , textInstanceBuffers    = V.replicate (gcMaxFrames defaultGraphicsConfig) Nothing
+    , previewTexture         = Nothing
+    , zoomAtlasTexture       = Nothing
     }
   , assetConfig      = AssetConfig 100 100 True True
   , sceneManager     = createSceneManager

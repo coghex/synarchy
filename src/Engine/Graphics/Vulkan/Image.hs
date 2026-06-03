@@ -2,6 +2,7 @@ module Engine.Graphics.Vulkan.Image
   ( createVulkanImage
   , createVulkanImage'
   , createVulkanImageView
+  , createVulkanImageView'
   , destroyVulkanImage
   , destroyVulkanImageView
   , createTextureImage
@@ -110,8 +111,31 @@ createVulkanImageView ∷ Device
                      → Format
                      → ImageAspectFlags
                      → EngineM ε σ ImageView
-createVulkanImageView device (VulkanImage image _) format aspectFlags = 
+createVulkanImageView device (VulkanImage image _) format aspectFlags =
   allocResource (\view → destroyImageView device view Nothing) $
+    createImageView device zero
+      { image = image
+      , viewType = IMAGE_VIEW_TYPE_2D
+      , format = format
+      , subresourceRange = zero
+          { aspectMask = aspectFlags
+          , baseMipLevel = 0
+          , levelCount = 1
+          , baseArrayLayer = 0
+          , layerCount = 1
+          }
+      } Nothing
+
+-- | Like 'createVulkanImageView' but returns an explicit cleanup
+--   action — for replaceable textures whose lifetime is shorter than
+--   the program (allocResource would defer destruction to exit).
+createVulkanImageView' ∷ Device
+                       → VulkanImage
+                       → Format
+                       → ImageAspectFlags
+                       → EngineM ε σ (ImageView, IO ())
+createVulkanImageView' device (VulkanImage image _) format aspectFlags =
+  allocResource'IO (\view → liftIO $ destroyImageView device view Nothing) $
     createImageView device zero
       { image = image
       , viewType = IMAGE_VIEW_TYPE_2D

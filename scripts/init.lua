@@ -154,7 +154,7 @@ function game.onMouseDown(button, x, y)
     -- mode, so the placement click doesn't fall through into unit
     -- selection / tile-cursor.
     local buildTool = require("scripts.build_tool")
-    if buildTool.onMouseDown(button, x, y) then
+    if buildTool.handleMouseDown(button, x, y) then
         return
     end
 
@@ -428,7 +428,7 @@ function game.onKeyDown(key)
 
         -- Cargo inventory popup is next-most-transient.
         local cargoPanel = require("scripts.cargo_inventory_panel")
-        if cargoPanel.onKeyDown(key) then return end
+        if cargoPanel.handleKeyDown(key) then return end
 
         local popup = require("scripts.popup")
         local shift = engine.isKeyDown("LeftShift")
@@ -469,7 +469,7 @@ function game.onKeyDown(key)
     -- Build tool's Esc cancels placement before the default Esc
     -- handler clears unit selection.
     local buildTool = require("scripts.build_tool")
-    if buildTool.onKeyDown(key) then
+    if buildTool.handleKeyDown(key) then
         return
     end
     -- ESC clears any active unit selection.

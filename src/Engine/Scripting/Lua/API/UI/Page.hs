@@ -71,6 +71,10 @@ uiHidePageFn env = do
 parseLayer ∷ Text → UILayer
 parseLayer t = case T.toLower t of
     "hud"     → LayerHUD
+    -- "overlay" previously fell through to LayerMenu, so the HUD
+    -- chrome shared a band with real menus and stacking between them
+    -- was accidental (decided by element zIndexes + page order).
+    "overlay" → LayerOverlay
     "menu"    → LayerMenu
     "modal"   → LayerModal
     "tooltip" → LayerTooltip

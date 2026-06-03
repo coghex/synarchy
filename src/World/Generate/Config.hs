@@ -119,36 +119,41 @@ defaultClimateYaml = ClimateYaml
 
 -- FromJSON instances
 
+-- NOTE: optional fields must use (.:?) with (.!=). With (.:), a
+-- single missing key fails the WHOLE parse and loadWorldGenConfig
+-- silently falls back to ALL defaults — every present setting in the
+-- file gets discarded. See [[gotcha_aeson_optional_fields]].
+
 instance FromJSON CalendarYaml where
     parseJSON (Yaml.Object v) = CalendarYaml
-        <$> v .: "days_per_month"   .!= cyDaysPerMonth defaultCalendarYaml
-        <*> v .: "months_per_year"  .!= cyMonthsPerYear defaultCalendarYaml
-        <*> v .: "hours_per_day"    .!= cyHoursPerDay defaultCalendarYaml
-        <*> v .: "minutes_per_hour" .!= cyMinutesPerHour defaultCalendarYaml
+        <$> v .:? "days_per_month"   .!= cyDaysPerMonth defaultCalendarYaml
+        <*> v .:? "months_per_year"  .!= cyMonthsPerYear defaultCalendarYaml
+        <*> v .:? "hours_per_day"    .!= cyHoursPerDay defaultCalendarYaml
+        <*> v .:? "minutes_per_hour" .!= cyMinutesPerHour defaultCalendarYaml
     parseJSON _ = fail "Expected an object for calendar"
 
 instance FromJSON SunYaml where
     parseJSON (Yaml.Object v) = SunYaml
-        <$> v .: "tilt_angle" .!= syTiltAngle defaultSunYaml
-        <*> v .: "day_length" .!= syDayLength defaultSunYaml
+        <$> v .:? "tilt_angle" .!= syTiltAngle defaultSunYaml
+        <*> v .:? "day_length" .!= syDayLength defaultSunYaml
     parseJSON _ = fail "Expected an object for sun"
 
 instance FromJSON MoonYaml where
     parseJSON (Yaml.Object v) = MoonYaml
-        <$> v .: "cycle_days"   .!= myCycleDays defaultMoonYaml
-        <*> v .: "phase_offset" .!= myPhaseOffset defaultMoonYaml
+        <$> v .:? "cycle_days"   .!= myCycleDays defaultMoonYaml
+        <*> v .:? "phase_offset" .!= myPhaseOffset defaultMoonYaml
     parseJSON _ = fail "Expected an object for moon"
 
 instance FromJSON ClimateYaml where
     parseJSON (Yaml.Object v) = ClimateYaml
-        <$> v .: "iterations"       .!= clIterations defaultClimateYaml
-        <*> v .: "coriolis_scale"   .!= clCoriolisScale defaultClimateYaml
-        <*> v .: "wind_drag"        .!= clWindDrag defaultClimateYaml
-        <*> v .: "thermal_inertia"  .!= clThermalInertia defaultClimateYaml
-        <*> v .: "orographic_scale" .!= clOrographicScale defaultClimateYaml
-        <*> v .: "evap_scale"       .!= clEvapScale defaultClimateYaml
-        <*> v .: "albedo_feedback"  .!= clAlbedoFeedback defaultClimateYaml
-        <*> v .: "thc_threshold"    .!= clThcThreshold defaultClimateYaml
+        <$> v .:? "iterations"       .!= clIterations defaultClimateYaml
+        <*> v .:? "coriolis_scale"   .!= clCoriolisScale defaultClimateYaml
+        <*> v .:? "wind_drag"        .!= clWindDrag defaultClimateYaml
+        <*> v .:? "thermal_inertia"  .!= clThermalInertia defaultClimateYaml
+        <*> v .:? "orographic_scale" .!= clOrographicScale defaultClimateYaml
+        <*> v .:? "evap_scale"       .!= clEvapScale defaultClimateYaml
+        <*> v .:? "albedo_feedback"  .!= clAlbedoFeedback defaultClimateYaml
+        <*> v .:? "thc_threshold"    .!= clThcThreshold defaultClimateYaml
     parseJSON _ = fail "Expected an object for climate"
 
 instance FromJSON WorldGenConfig where
@@ -156,14 +161,14 @@ instance FromJSON WorldGenConfig where
         wgObj ← v .: "world_gen"
         WorldGenConfig
             <$> wgObj .:? "seed"
-            <*> wgObj .: "world_size"  .!= wgcWorldSize defaultWorldGenConfig
-            <*> wgObj .: "plate_count" .!= wgcPlateCount defaultWorldGenConfig
-            <*> wgObj .: "calendar"    .!= wgcCalendar defaultWorldGenConfig
-            <*> wgObj .: "sun"         .!= wgcSun defaultWorldGenConfig
-            <*> wgObj .: "moon"        .!= wgcMoon defaultWorldGenConfig
-            <*> wgObj .: "climate"     .!= wgcClimate defaultWorldGenConfig
-            <*> wgObj .: "erosion_intensity" .!= wgcErosionIntensity defaultWorldGenConfig
-            <*> wgObj .: "volcanic_activity" .!= wgcVolcanicActivity defaultWorldGenConfig
+            <*> wgObj .:? "world_size"  .!= wgcWorldSize defaultWorldGenConfig
+            <*> wgObj .:? "plate_count" .!= wgcPlateCount defaultWorldGenConfig
+            <*> wgObj .:? "calendar"    .!= wgcCalendar defaultWorldGenConfig
+            <*> wgObj .:? "sun"         .!= wgcSun defaultWorldGenConfig
+            <*> wgObj .:? "moon"        .!= wgcMoon defaultWorldGenConfig
+            <*> wgObj .:? "climate"     .!= wgcClimate defaultWorldGenConfig
+            <*> wgObj .:? "erosion_intensity" .!= wgcErosionIntensity defaultWorldGenConfig
+            <*> wgObj .:? "volcanic_activity" .!= wgcVolcanicActivity defaultWorldGenConfig
     parseJSON _ = fail "Expected an object for world_gen"
 
 -- ToJSON instances

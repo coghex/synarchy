@@ -497,8 +497,14 @@ end
 -----------------------------------------------------------
 -- Mouse hooks. Called from init.lua's onMouseDown.
 -- Return true if we consumed the click.
+--
+-- Named handle* (not on*) deliberately: this module is engine-loaded
+-- (loadScript), so an on*-named function would ALSO be fired directly
+-- by every engine broadcast — double-firing on top of init.lua's
+-- ordered forward. handle* keeps it forward-only (same convention as
+-- debug.lua's tryClaimClick).
 -----------------------------------------------------------
-function buildTool.onMouseDown(button, x, y)
+function buildTool.handleMouseDown(button, x, y)
     if buildTool.state.mode ~= "placement" then return false end
 
     if button == MOUSE_LEFT then
@@ -532,7 +538,8 @@ function buildTool.onMouseDown(button, x, y)
     return false
 end
 
-function buildTool.onKeyDown(key)
+-- Same handle*-not-on* rationale as handleMouseDown above.
+function buildTool.handleKeyDown(key)
     if key == "Escape" and buildTool.state.mode ~= "off" then
         buildTool.hidePicker()
         buildTool.exitPlacement()

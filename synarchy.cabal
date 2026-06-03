@@ -573,6 +573,7 @@ library
                  , base-unicode-symbols
                  , bytestring
                  , containers
+                 , exceptions
                  , filepath
                  , directory
                  , hashable

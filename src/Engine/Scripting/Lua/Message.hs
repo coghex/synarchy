@@ -26,15 +26,17 @@ import Engine.Graphics.Config (WindowMode(..), VideoConfig(..), TextureFilter(..
                               , textureFilterToText, textureFilterToVulkan)
 import Engine.Graphics.Font.Load (loadSDFFont)
 import Engine.Graphics.Types (DevQueues(..))
-import Engine.Graphics.Vulkan.Image (createVulkanImage, createVulkanImageView
+import Engine.Graphics.Vulkan.Image (createVulkanImage', createVulkanImageView'
                                     , copyBufferToImage, VulkanImage(..))
 import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
 import Engine.Graphics.Vulkan.Command (runCommandsOnce)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Graphics.Vulkan.Recreate (recreateSwapchain)
-import Engine.Graphics.Vulkan.Texture (createTextureSampler, transitionImageLayout
+import Engine.Graphics.Vulkan.Texture (createTextureSampler, createTextureSampler'
+                                      , transitionImageLayout
                                       , ImageLayoutTransition(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (rewriteAllSamplers, registerTexture)
+import Engine.Graphics.Vulkan.Texture.Bindless (rewriteAllSamplers, registerTexture
+                                               , unregisterTexture)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Scene.Base
@@ -433,6 +435,26 @@ handleSetVisible objId visible =
 handleDestroy ∷ ObjectId → EngineM ε σ ()
 handleDestroy objId = void $ deleteSceneNode objId
 
+-- | Dispose a superseded transient texture (zoom atlas / world
+--   preview): free its bindless slot and destroy its GPU objects.
+--   The old image may still be sampled by in-flight frames
+--   (UPDATE_AFTER_BIND descriptor writes race with pending
+--   execution), so wait for the device to idle first — callers run
+--   once per world init/load, where the stall is invisible.
+--   unregisterTexture points the slot at the undefined texture and
+--   recycles it.
+disposeTransientTexture ∷ Device → TransientTexture → EngineM ε σ ()
+disposeTransientTexture dev old = do
+    env ← ask
+    liftIO $ deviceWaitIdle dev
+    mSys ← liftIO $ readIORef (textureSystemRef env)
+    case mSys of
+        Just sys → do
+            sys' ← unregisterTexture dev (ttHandle old) sys
+            liftIO $ writeIORef (textureSystemRef env) (Just sys')
+        Nothing → pure ()
+    liftIO $ ttCleanup old
+
 handleWorldPreview ∷ EngineM ε σ ()
 handleWorldPreview = do
     env ← ask
@@ -460,7 +482,10 @@ handleWorldPreview = do
                         bufSize = fromIntegral (BS.length rgbaData)
                         queue  = graphicsQueue queues
 
-                    image ← createVulkanImage dev pdev
+                    -- Prime variants: explicit cleanups, NOT exit-time
+                    -- allocResource — this texture is replaced on every
+                    -- world init/load and must be destroyable then.
+                    (image, cleanImage) ← createVulkanImage' dev pdev
                         (width, height)
                         FORMAT_R8G8B8A8_UNORM
                         IMAGE_TILING_OPTIMAL
@@ -485,14 +510,24 @@ handleWorldPreview = do
                             transitionImageLayout image FORMAT_R8G8B8A8_UNORM
                                 TransDst_ShaderRO 1 cmdBuf
 
-                    imageView ← createVulkanImageView dev image
+                    (imageView, cleanView) ← createVulkanImageView' dev image
                         FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 
-                    sampler ← createTextureSampler dev pdev FILTER_NEAREST
+                    (sampler, cleanSampler) ← createTextureSampler' dev pdev FILTER_NEAREST
 
                     (_, newBindless) ← registerTexture dev texHandle
                         imageView sampler bindless
                     liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
+
+                    -- Dispose the previous preview generation (slot
+                    -- recycled, GPU objects destroyed) and record this
+                    -- one. View before image: the view references it.
+                    forM_ (previewTexture gs) (disposeTransientTexture dev)
+                    let cleanupAll = cleanView >> cleanImage >> cleanSampler
+                    modify $ \st → st { graphicsState =
+                        (graphicsState st)
+                            { previewTexture =
+                                Just (TransientTexture texHandle cleanupAll) } }
 
                     let (TextureHandle h) = texHandle
                     liftIO $ Q.writeQueue (luaQueue env)
@@ -535,7 +570,10 @@ handleZoomAtlasUpload = do
                         bufSize = fromIntegral (BS.length rgbaData)
                         queue  = graphicsQueue queues
 
-                    image ← createVulkanImage dev pdev
+                    -- Prime variants: explicit cleanups, NOT exit-time
+                    -- allocResource — this texture is replaced on every
+                    -- world init/load and must be destroyable then.
+                    (image, cleanImage) ← createVulkanImage' dev pdev
                         (width, height)
                         FORMAT_R8G8B8A8_UNORM
                         IMAGE_TILING_OPTIMAL
@@ -561,14 +599,24 @@ handleZoomAtlasUpload = do
                                 TransDst_ShaderRO 1 cmdBuf
 
                     -- Create image view and sampler (LINEAR for smooth zoom)
-                    imageView ← createVulkanImageView dev image
+                    (imageView, cleanView) ← createVulkanImageView' dev image
                         FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 
-                    sampler ← createTextureSampler dev pdev FILTER_LINEAR
+                    (sampler, cleanSampler) ← createTextureSampler' dev pdev FILTER_LINEAR
 
                     (_, newBindless) ← registerTexture dev texHandle
                         imageView sampler bindless
                     liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
+
+                    -- Dispose the previous atlas generation (slot
+                    -- recycled, GPU objects destroyed) and record this
+                    -- one. View before image: the view references it.
+                    forM_ (zoomAtlasTexture gs) (disposeTransientTexture dev)
+                    let cleanupAll = cleanView >> cleanImage >> cleanSampler
+                    modify $ \st → st { graphicsState =
+                        (graphicsState st)
+                            { zoomAtlasTexture =
+                                Just (TransientTexture texHandle cleanupAll) } }
 
                     let chunksPerRow = w `div` zoomTileSize
                         atlasInfo = ZoomAtlasInfo
