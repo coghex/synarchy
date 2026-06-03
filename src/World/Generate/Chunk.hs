@@ -963,13 +963,24 @@ generateChunk registry catalog params coord =
                                          fluidMap rawChunk noNeighborLookup
 
         -- Extract surface material and slope for vegetation computation
-        surfaceMats = VU.generate chunkArea $ \idx →
+        surfaceMatsRaw = VU.generate chunkArea $ \idx →
             let col = slopedTiles V.! idx
                 surfZ = terrainSurfaceMap VU.! idx
                 i = surfZ - ctStartZ col
             in if i ≥ 0 ∧ i < VU.length (ctMats col)
                then ctMats col VU.! i
                else 0
+
+        -- Corrected surface materials (see 'demoteWetland'): vegetation
+        -- and flora read these, so swamp species follow the demoted
+        -- soils automatically.
+        surfaceMats = VU.imap (\idx m →
+            case demoteWetland m of
+                Just demoted
+                  | not (wetlandKeep terrainSurfaceMap waterTableMap idx)
+                  → demoted
+                _ → m
+            ) surfaceMatsRaw
 
         surfaceSlopes = VU.generate chunkArea $ \idx →
             let col = slopedTiles V.! idx
@@ -1025,11 +1036,28 @@ generateChunk registry catalog params coord =
                     else
                       let topIdxs = [(j, 0) | j ← [i + 1 .. matsLen - 1]]
                       in ctMats col VU.// topIdxs
+                -- Wetland demotion (see surfaceMats above): rewrite the
+                -- contiguous wetland veneer at the surface so the
+                -- rendered column matches the corrected surface material
+                -- that vegetation/flora already saw.
+                demotedMats =
+                    if i < 0 ∨ i ≥ VU.length truncatedMats
+                    then truncatedMats
+                    else
+                      let orig = truncatedMats VU.! i
+                      in case demoteWetland orig of
+                          Just demoted
+                            | not (wetlandKeep terrainSurfaceMap waterTableMap idx) →
+                              let go j | j ≥ 0 ∧ truncatedMats VU.! j ≡ orig = go (j - 1)
+                                       | otherwise = j + 1
+                                  runStart = go i
+                              in truncatedMats VU.// [ (j, demoted) | j ← [runStart .. i] ]
+                          _ → truncatedMats
                 vegVec   = VU.replicate matsLen 0
                 vegVec'  = if i ≥ 0 ∧ i < matsLen ∧ vegId > 0
                            then vegVec VU.// [(i, vegId)]
                            else vegVec
-            in col { ctMats = truncatedMats, ctVeg = vegVec' }
+            in col { ctMats = demotedMats, ctVeg = vegVec' }
             ) slopedTiles
 
         -- Ice overlay: computed from climate, altitude, and the global
@@ -1064,6 +1092,45 @@ generateExposedColumn lx ly surfaceZ exposeFrom lookupMat =
     , let mat = lookupMat z
     , mat ≠ matAir
     ]
+
+-- | Wetland-soil reality check (demotion only). The climate classifier
+--   ('soilFromClimate') paints muck/peat wherever the climate is
+--   hot/wet, with no physical context — its slope input is curvature
+--   (uniform hillsides read as flat) and the water table doesn't exist
+--   yet at classification time. Gate after generation instead, where
+--   the final terrain and water table are ground truth: a wetland soil
+--   survives only where 'wetlandKeep' holds; otherwise it demotes to
+--   the classifier's own next rung. Same post-classification pattern
+--   as the Coastal beach demotion (peat/muck → sand). Used by both the
+--   detail path ('generateChunk') and the zoom path
+--   ('generateZoomTerrain') so the two views agree.
+demoteWetland ∷ Word8 → Maybe Word8
+demoteWetland 62 = Just 57   -- peat       → clay loam
+demoteWetland 63 = Just 58   -- mucky peat → silty clay
+demoteWetland 64 = Just 50   -- muck       → clay
+demoteWetland _  = Nothing
+
+-- | Keep a wetland soil only on a near-flat tile (in-chunk max
+--   4-neighbour |Δterrain| ≤ 2 — lenient at chunk borders, matching
+--   the in-chunk-only neighbour convention of computeChunkSlopes at
+--   gen time) whose groundwater reaches the surface (wt ≥ terrain−1;
+--   away from open water the wt map is cap-bound below terrain, so in
+--   practice this keeps riparian and lakeside ground).
+wetlandKeep ∷ VU.Vector Int → VU.Vector Int → Int → Bool
+wetlandKeep terrain wt idx =
+    let tz = terrain VU.! idx
+        lx = idx `mod` chunkSize
+        ly = idx `div` chunkSize
+        nbrD dlx dly =
+            let lx' = lx + dlx
+                ly' = ly + dly
+            in if lx' < 0 ∨ lx' ≥ chunkSize ∨ ly' < 0 ∨ ly' ≥ chunkSize
+               then 0
+               else abs (tz - terrain VU.! (ly' * chunkSize + lx'))
+        flat = max (max (nbrD 1 0) (nbrD (-1) 0))
+               (max (nbrD 0 1) (nbrD 0 (-1))) ≤ 2
+        wet  = wt VU.! idx ≥ tz - 1
+    in flat ∧ wet
 
 
 -- * Zoom-Optimized Terrain Generation
@@ -1242,5 +1309,24 @@ generateZoomTerrain registry params mBorderedCache coord =
         -- which is what 'mkSurfaceMap' computes.
         zoomSurface = mkSurfaceMap smoothedElev zoomFluid
 
-    in (zoomSurface, interiorMat, zoomFluid)
+        -- Mirror the detail path's wetland-soil demotion (see
+        -- 'demoteWetland') so the zoom map shows clay where the world
+        -- view demoted dry/sloped wetland soils. Same wt construction
+        -- as generateChunk: climate baseline + lake-surface bump.
+        zoomWtBase = computeWaterTable (wgpClimateState params)
+                                       worldSize coord smoothedElev
+        zoomWt = VU.imap (\idx wt →
+            case zoomFluid V.! idx of
+                Just fc | fcType fc ≡ Lake → max wt (fcSurface fc)
+                _                          → wt
+            ) zoomWtBase
+        zoomMat = VU.imap (\idx m →
+            case demoteWetland m of
+                Just demoted
+                  | not (wetlandKeep smoothedElev zoomWt idx)
+                  → demoted
+                _ → m
+            ) interiorMat
+
+    in (zoomSurface, zoomMat, zoomFluid)
 

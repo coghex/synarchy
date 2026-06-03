@@ -32,9 +32,11 @@
 --        rivers survive arid stretches because they carry enough
 --        flow that local evap can't drop them below.
 --     7. Trace: walk D4-connected river tiles into Rivers (one River
---        per connected component). Quantise per-tile surface z with
---        a per-tile noise jitter so waterfall step boundaries don't
---        align in patterns across the world. Surface z is enforced
+--        per connected component). Per-tile surface z starts at the
+--        tile's terrain and is clamped so no downstream step exceeds
+--        'waterfallQuantum'; where terrain drops faster (cliffs) the
+--        carve pass deepens the channel into a stepped gorge instead
+--        of rendering a vertical water wall. Surface z is
 --        monotonically non-increasing downstream.
 --     8. Per-chunk bitmasks + per-tile surface z, indexed by
 --        chunk coord for chunk-gen lookup.
@@ -104,10 +106,12 @@ widthRadiusFromFlow f =
     in max 0 (min maxWidthRadius
                   (floor (logBase 2.0 (max 1.0 ratio)) ∷ Int))
 
--- | Step size that the deferred waterfall-quantisation path would
---   use. v1 keeps the surface at @carve + 1@ (see 'computeSurfaceZ'
---   for the rationale); this constant is retained as documentation
---   of the intended quantum for the future quantised path.
+-- | Maximum water-surface drop between a river tile and its
+--   downstream neighbour. Reaches with slope ≤ this follow terrain
+--   exactly (no extra carving, identical to unclamped behaviour);
+--   steeper drops (cliffs) are absorbed by carving a stepped gorge so
+--   the water never renders as one tall vertical sheet. Applied by
+--   'clampCentreSurfaces'.
 waterfallQuantum ∷ Int
 waterfallQuantum = 12
 
@@ -575,14 +579,22 @@ traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
         isRiverCentre = extendRiverChains worldTiles terrain lakeIdAt
                                           dir isPrimary ascOrder
 
+        -- Step 1c-pre: waterfall clamp. Bound each downstream surface
+        -- step at 'waterfallQuantum' BEFORE widening so wings inherit
+        -- the clamped plane. Fixes the adjacent water-wall artifact
+        -- (e.g. 79z vertical sheets at coastal scarps).
+        centreSurf = clampCentreSurfaces worldTiles terrain dir
+                                         isRiverCentre ascOrder
+
         -- Step 1c: variable width. Each centre tile widens perpendicular
         -- to its D4 dir up to 'widthRadiusFromFlow'. Returns the expanded
         -- river-tile mask, per-tile width radius, and per-tile water
-        -- surface z (centre tiles use @terrain+1@; widened tiles inherit
-        -- the lowest centre's surface so the water plane stays flat
-        -- across the river's cross-section).
+        -- surface z (centre tiles use the waterfall-clamped surface from
+        -- 'clampCentreSurfaces'; widened tiles inherit the lowest
+        -- centre's surface so the water plane stays flat across the
+        -- river's cross-section).
         (isRiverTile, widthRadius, surfZ) =
-            expandWidth worldTiles terrain dir flow isRiverCentre
+            expandWidth worldTiles terrain dir flow isRiverCentre centreSurf
 
         -- Step 2: label connected components (4-cardinal via D4 chain).
         --   We walk every river tile and assign it a component id by
@@ -609,6 +621,15 @@ traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
             addBreakthroughs worldTiles isRiverTileF compIdF dir terrain
                              worldOcean widthRadius surfZ
 
+        -- Step 3.5: lateral waterfall clamp. The chain clamp (1c-pre)
+        -- bounds steps along flow edges only; meander necks and
+        -- parallel reaches can still put two non-flow-linked river
+        -- tiles side by side with a bigger gap. Relax to the maximal
+        -- surface field with |Δ| ≤ 'waterfallQuantum' across EVERY
+        -- adjacent river-tile pair (wings + breakthrough paths
+        -- included). The carve pass below absorbs any lowering.
+        surfZL = clampLateralSurfaces worldTiles isRiverTileB surfZB
+
         -- Step 4: build per-component bookkeeping (bbox, sources,
         -- sinks, peak flow). Uses post-breakthrough data so bboxes
         -- include the carved canyons.
@@ -617,13 +638,13 @@ traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
 
         -- Step 5: per-chunk bitmasks + surface z + width slices.
         byChunk = buildRiverChunkIndex worldSize half isRiverTileB compIdB
-                                       surfZB widthRadiusB
+                                       surfZL widthRadiusB
 
         -- Step 6: per-tile carve delta. Includes breakthrough path
         -- tiles, which can have large delta where they cut through
         -- coastal mountains.
         carveDelta = computeCarveDelta worldTiles terrain
-                                       isRiverTileB widthRadiusB surfZB
+                                       isRiverTileB widthRadiusB surfZL
         carveByChunk = buildCarveDeltaIndex worldSize half isRiverTileB
                                             carveDelta
 
@@ -676,6 +697,98 @@ extendRiverChains worldTiles terrain lakeIdAt dir isPrimary ascOrder =
                             VUM.write isR dn True
         pure isR
 
+-- | Waterfall clamp: per-centre water surface, computed in ascending
+--   terrain order so each tile's downstream neighbour is finalised
+--   first ('computeDescentDirs' only ever picks a strictly lower
+--   neighbour, so a downstream tile always sits in an earlier bucket
+--   of the ascending sort):
+--
+--       surf[u] = min(terrain[u], surf[downstream u] + waterfallQuantum)
+--
+--   Monotonicity (non-increasing downstream) falls out automatically:
+--   terrain[u] > terrain[dn] ≥ surf[dn], so surf[u] ≥ surf[dn], and
+--   the min bounds every downstream step at 'waterfallQuantum'. Where
+--   terrain drops faster than the quantum (cliffs), the clamped
+--   surface dips below local terrain and 'computeCarveDelta' deepens
+--   the channel — the river cuts a stepped gorge through the scarp
+--   instead of rendering one tall water wall. On reaches with slope
+--   ≤ quantum the min picks terrain and behaviour is unchanged.
+--
+--   Non-centre tiles hold minBound.
+clampCentreSurfaces
+    ∷ Int                  -- ^ worldTiles
+    → VU.Vector Int        -- ^ terrain
+    → VU.Vector Word8      -- ^ dir
+    → VU.Vector Bool       -- ^ isRiverCentre (after extension)
+    → VU.Vector Int        -- ^ ascending z order
+    → VU.Vector Int
+clampCentreSurfaces worldTiles terrain dir isRiverCentre ascOrder =
+    let nTiles = worldTiles * worldTiles
+        nOrd   = VU.length ascOrder
+    in VU.create $ do
+        surf ← VUM.replicate nTiles (minBound ∷ Int)
+        forM_ [0 .. nOrd - 1] $ \k → do
+            let i = ascOrder VU.! k
+            when (isRiverCentre VU.! i) $ do
+                let t = terrain VU.! i
+                s ← case stepDir worldTiles i (dir VU.! i) of
+                    Nothing → pure t
+                    Just dn → do
+                        dnS ← VUM.read surf dn
+                        -- dn not a river centre (lake/ocean terminus):
+                        -- the chain ends here at its own terrain. The
+                        -- strict-descent property guarantees a centre
+                        -- dn is already finalised.
+                        pure $ if dnS ≡ minBound
+                               then t
+                               else min t (dnS + waterfallQuantum)
+                VUM.write surf i s
+        pure surf
+
+-- | Lateral waterfall clamp: relax the surface field until EVERY pair
+--   of 4-adjacent river tiles differs by at most 'waterfallQuantum'.
+--   The chain clamp only constrains flow edges; this pass also covers
+--   meander necks, parallel reaches, wing-tile adjacencies and
+--   breakthrough paths. Worklist relaxation: lowering a tile can only
+--   force its neighbours lower, surfaces are bounded below, so the
+--   fixpoint (the q-Lipschitz lower envelope of the input surfaces
+--   over the river adjacency graph) is reached in finite steps —
+--   in practice one or two visits per affected tile.
+clampLateralSurfaces
+    ∷ Int                  -- ^ worldTiles
+    → VU.Vector Bool       -- ^ isRiverTile (post-breakthrough)
+    → VU.Vector Int        -- ^ surface z (post-breakthrough)
+    → VU.Vector Int
+clampLateralSurfaces worldTiles isRiverTile surfZ0 =
+    let nTiles = VU.length surfZ0
+        seeds  = [ i | i ← [0 .. nTiles - 1], isRiverTile VU.! i ]
+    in VU.create $ do
+        surf ← VU.thaw surfZ0
+        queueRef ← newSTRef seeds
+        let push i = modifySTRef' queueRef (i:)
+            relaxNeighbour sI d i =
+                case stepDir worldTiles i d of
+                    Nothing → pure ()
+                    Just n → when (isRiverTile VU.! n) $ do
+                        sN ← VUM.read surf n
+                        when (sN > sI + waterfallQuantum) $ do
+                            VUM.write surf n (sI + waterfallQuantum)
+                            push n
+            loop = do
+                q ← readSTRef queueRef
+                case q of
+                    [] → pure ()
+                    (i:rest) → do
+                        writeSTRef queueRef rest
+                        sI ← VUM.read surf i
+                        relaxNeighbour sI dirNorth i
+                        relaxNeighbour sI dirEast  i
+                        relaxNeighbour sI dirSouth i
+                        relaxNeighbour sI dirWest  i
+                        loop
+        loop
+        pure surf
+
 -- | Per-tile width radius (0..maxWidthRadius), expanded perpendicular
 --   to flow direction. Returns the widened river-tile mask, per-tile
 --   width radius (-1 for non-river), and per-tile water surface z.
@@ -690,8 +803,9 @@ expandWidth
     → VU.Vector Word8      -- ^ dir
     → VU.Vector Int        -- ^ flow
     → VU.Vector Bool       -- ^ isRiverCentre (after extension)
+    → VU.Vector Int        -- ^ waterfall-clamped per-centre surface z
     → (VU.Vector Bool, VU.Vector Int, VU.Vector Int)
-expandWidth worldTiles terrain dir flow isRiverCentre =
+expandWidth worldTiles terrain dir flow isRiverCentre centreSurf =
     let nTiles = worldTiles * worldTiles
         -- Don't widen into terrain that rises too far above the river's
         -- water surface. Caps the carve depth a wing tile can demand;
@@ -735,8 +849,7 @@ expandWidth worldTiles terrain dir flow isRiverCentre =
                                         loop (k + 1) nxt
                 loop 1 centreIdx
         forM_ [0 .. nTiles - 1] $ \i → when (isRiverCentre VU.! i) $ do
-            let t    = terrain VU.! i
-                surf = t
+            let surf = centreSurf VU.! i
                 r    = widthRadiusFromFlow (flow VU.! i)
             updateTile i r surf
             when (r > 0) $

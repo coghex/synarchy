@@ -208,3 +208,73 @@ flora:
       maxSlope: 2
       density: 0.15
       footprint: 16
+
+  - name: sugar_maple
+    type: deciduous_tree
+    texDir: "assets/textures/flora/sugar_maple"
+    lifecycle: perennial
+    minLife: 9000
+    maxLife: 28800
+    deathChance: 0.02
+    phases:
+      - tag: sprout
+        texture: "sprout.png"
+        age: 0
+      - tag: matured
+        texture: "matured.png"
+        age: 720
+      - tag: dead
+        texture: "dead.png"
+        age: 28800
+    annualCycle:
+      - tag: dormant
+        startDay: 0
+        texture: "matured_dormant.png"
+      - tag: budding
+        startDay: 60
+        texture: "matured_budding.png"
+      - tag: flowering
+        startDay: 120
+        texture: "matured_flowering.png"
+      - tag: senescing
+        startDay: 270
+        texture: "matured_senescing.png"
+    cycleOverrides:
+      - phase: sprout
+        cycle: dormant
+        texture: "sprout_dormant.png"
+      - phase: sprout
+        cycle: budding
+        texture: "sprout_budding.png"
+      - phase: sprout
+        cycle: senescing
+        texture: "sprout_senescing.png"
+      - phase: dead
+        cycle: dormant
+        texture: "dead.png"
+      - phase: dead
+        cycle: budding
+        texture: "dead.png"
+      - phase: dead
+        cycle: flowering
+        texture: "dead.png"
+      - phase: dead
+        cycle: senescing
+        texture: "dead.png"
+    worldGen:
+      category: tree
+      minTemp: -2
+      maxTemp: 28
+      idealTemp: 14
+      minPrecip: 0.5
+      maxPrecip: 1.0
+      idealPrecip: 0.7
+      minAlt: 0
+      maxAlt: 700
+      idealAlt: 200
+      minHumidity: 0.4
+      maxHumidity: 0.9
+      idealHumidity: 0.6
+      maxSlope: 3
+      density: 0.25
+      footprint: 16
