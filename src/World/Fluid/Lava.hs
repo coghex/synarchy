@@ -32,12 +32,12 @@ hasAnyLavaQuick = isJust . lcMagma
 --   reach but the average dips below it; for a chunk-level color
 --   indicator that's fine.
 --
---   Note: passes @isOceanic = False@ so the overlay's @moSurface@
---   field captures every chamber breach — we use this purely to ask
---   \"is there ANY chamber/chute touching this chunk's surface?\". The
---   actual cap-vs-lava decision is made later by the per-tile chunk
---   gen pipeline.
+--   The overlay's @moSurface@ and @moBasaltCap@ together capture
+--   every chamber breach (sub-sea breaches land in the cap map);
+--   'isJust' fires when either is non-empty, so this remains a
+--   faithful \"any chamber/chute touches this chunk's surface\"
+--   indicator.
 chunkHasLavaQuick ∷ VolcanoCtx → ChunkCoord → Int → Bool
 chunkHasLavaQuick ctx coord avgElev =
-    isJust $ discoverChunkLava ctx coord False
+    isJust $ discoverChunkLava ctx coord
                 (VU.replicate (chunkSize * chunkSize) avgElev)

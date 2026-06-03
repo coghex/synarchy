@@ -125,11 +125,13 @@ spec = do
             inside ell 5 0 0 `shouldBe` True
 
     describe "IrregularChamber" $ do
-        -- Spherical chamber with mild perturbation. With a base
-        -- radius of 20 and amplitude 2, every point within radius 17
-        -- (well below r-amp = 18) must be inside and every point
-        -- beyond radius 23 (well above r+amp = 22) must be outside.
-        let irr = IrregularChamber 0 0 0 20.0 2.0 0.1 0xDEADBEEF
+        -- Saucer-shaped chamber with mild normalised perturbation
+        -- (amp=0.1 → ±10 % wobble at the rim). 20-tile xy radius,
+        -- 5-tile z radius — so points well inside the unit ellipsoid
+        -- pass; points well outside any axis fail; the asymmetric
+        -- shape catches the bug where IrregularChamber used a single
+        -- 3-D radius and behaved like a sphere.
+        let irr = IrregularChamber 0 0 0 20.0 20.0 5.0 0.1 0.1 0xDEADBEEF
         it "centre is inside" $
             inside irr 0 0 0 `shouldBe` True
         it "well inside (r=10) is inside" $
@@ -139,9 +141,11 @@ spec = do
         it "well inside on the y axis is inside" $
             inside irr 0 10 0 `shouldBe` True
         it "well inside on the z axis is inside" $
-            inside irr 0 0 10 `shouldBe` True
+            inside irr 0 0 3 `shouldBe` True
         it "well outside on the y axis is outside" $
             outside irr 0 40 0 `shouldBe` True
+        it "outside on the z axis beyond the saucer height" $
+            outside irr 0 0 10 `shouldBe` True
 
     describe "shapeZBottom / shapeZTop" $ do
         it "Cylindrical bounds match constructor args" $ do
@@ -152,7 +156,8 @@ spec = do
             let e = EllipsoidChamber 0 0 100 5.0 5.0 7.0
             shapeZBottom e `shouldBe` 93   -- 100 - ceiling 7
             shapeZTop    e `shouldBe` 107  -- 100 + ceiling 7
-        it "IrregularChamber bounds account for r + amp" $ do
-            let i = IrregularChamber 0 0 50 10.0 3.0 0.1 1
-            shapeZBottom i `shouldBe` 37   -- 50 - ceiling 13
-            shapeZTop    i `shouldBe` 63   -- 50 + ceiling 13
+        it "IrregularChamber bounds account for rz*(1+amp)" $ do
+            -- rz=10, amp=0.3 → ceiling(10*1.3) = 13.
+            let i = IrregularChamber 0 0 50 10.0 10.0 10.0 0.3 0.1 1
+            shapeZBottom i `shouldBe` 37   -- 50 - 13
+            shapeZTop    i `shouldBe` 63   -- 50 + 13

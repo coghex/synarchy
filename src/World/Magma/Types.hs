@@ -96,8 +96,16 @@ data LavaShape
         { lsX            ∷ !Int
         , lsY            ∷ !Int
         , lsZ            ∷ !Int
-        , lsBaseRadius   ∷ !Float
+        , lsRX           ∷ !Float
+        , lsRY           ∷ !Float
+        , lsRZ           ∷ !Float
         , lsPerturbAmp   ∷ !Float
+          -- ^ Perturbation amplitude in NORMALISED units (a fraction
+          --   of the unit radius); 0.2 ≈ ±20 % wobble at the chamber
+          --   edge. Was previously absolute tiles relative to a single
+          --   3-D radius — saucer-shaped chambers need normalised
+          --   perturbation so the relative wobble looks the same on
+          --   the wide top + bottom and the narrow rim.
         , lsPerturbFreq  ∷ !Float
         , lsSeed         ∷ !Word64
         }

@@ -779,22 +779,19 @@ generateChunk registry catalog params coord =
         interiorChannelMask = sliceInteriorMask borderedChannelMask
 
         -- Same per-chunk ocean test that 'composeFluidMap' uses
-        -- internally — lifted here so 'discoverChunkLava' can suppress
-        -- under-water lava emergence in favour of a basalt cap.
-        --
-        -- Uses 'chunkOrNeighborOceanic' (relaxed test) so coastal
-        -- chunks that the strict chunk-level BFS misclassifies still
-        -- get caps + the shell safety net restores their ocean.
+        -- internally — lifted here so we know whether the ocean
+        -- column will sit above any cap the magma overlay leaves
+        -- (used below for the lava-shell safety net only).
         chunkIsOceanicHere = chunkOrNeighborOceanic params coord
 
         -- Pure-function lava overlay: which surface tiles in this
         -- chunk have a chamber or chute breaking through? Per-tile
-        -- decision: above water → lava cell in @moSurface@; under the
-        -- ocean → basalt cap entry in @moBasaltCap@ (terrain raised
-        -- + matBasalt at top so the ocean fills above instead of a
-        -- black gap punched through the sea surface).
+        -- decision: above water → lava cell in @moSurface@; sub-sea
+        -- → basalt cap entry in @moBasaltCap@ (terrain raised +
+        -- matBasalt at top so the ocean fills above instead of a
+        -- black gap, or the cap stays exposed as a basalt outcrop
+        -- in inland sub-sea pockets).
         magmaOverlay = discoverChunkLava (wgpVolcanoCtx params) coord
-                                          chunkIsOceanicHere
                                           rawTerrainSurfaceMap
 
         -- Patch terrain to raise capped tiles BEFORE composeFluidMap
@@ -1214,7 +1211,6 @@ generateZoomTerrain registry params mBorderedCache coord =
         -- vents (lava emerges).
         zoomChunkIsOceanic = chunkOrNeighborOceanic params coord
         zoomMagma = discoverChunkLava (wgpVolcanoCtx params) coord
-                                       zoomChunkIsOceanic
                                        interiorElev
         cappedZoomElev = applyBasaltCaps coord zoomMagma interiorElev
         rawZoomFluid = composeFluidMap params coord cappedZoomElev

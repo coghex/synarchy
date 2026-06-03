@@ -257,7 +257,7 @@ If river width data isn't already exposed on `RiverSegment`, surface it before P
 
 #### Smoke test at end of Phase E
 - w64/w32 seed 42 fluid counts IDENTICAL to end-of-Phase-D state. River cross-section flatness unchanged (max-jump 7/18).
-- Build clean in both `cabal build lib:synarchy` and `cabal build -f dev synarchy-test-headless`.
+- Build clean: `cabal build all`. (Don't switch to `-f dev` to verify — full rebuild, ~5 min cost; see CLAUDE.md build commands section.)
 
 ## 7. Risks & mitigations
 

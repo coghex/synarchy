@@ -183,8 +183,10 @@ shapeBBox worldSize shape = case shape of
     EllipsoidChamber x y _ rx ry _ →
         EventBBox (x - ceiling rx) (y - ceiling ry)
                   (x + ceiling rx) (y + ceiling ry)
-    IrregularChamber x y _ r amp _ _ →
-        squareAt x y (max 1 (ceiling (r + amp)))
+    IrregularChamber x y _ rx ry _ amp _ _ →
+        let padX = max 1 (ceiling (rx * (1.0 + amp)))
+            padY = max 1 (ceiling (ry * (1.0 + amp)))
+        in EventBBox (x - padX) (y - padY) (x + padX) (y + padY)
 
 squareAt ∷ Int → Int → Int → EventBBox
 squareAt x y r = EventBBox (x - r) (y - r) (x + r) (y + r)
@@ -280,28 +282,27 @@ bboxChunkRange (EventBBox xlo ylo xhi yhi) =
 --
 --   Per-tile decision when a breach is detected:
 --
---   * If the chunk is oceanic AND this tile's surface is at or
---     below 'seaLevel': ALWAYS cap, no matter how high the chamber
---     reaches elsewhere. Without this rule, wide chambers + fissures
---     emit lava across many sub-sea tiles (lava-river-through-ocean
---     and chunk-boundary fluid holes the user reported in
---     2026-06-02). Interior sub-sea lava tiles never have a water
---     neighbour for the shell to convert, so they have to be caught
---     here, before the lava cell is even emitted.
+--   * Surface @≤ seaLevel@ → ALWAYS cap. The cap mechanism raises
+--     the terrain to @min (seaLevel-1) (localTop+1)@ and stamps
+--     basalt on top. For oceanic chunks the ocean then fills above
+--     the cap; for inland chunks the result is an inert basalt
+--     outcrop at sea level (no water). We don't gate on the
+--     chunk-level ocean BFS here because that BFS pre-dates the
+--     timeline's terrain edits — a chamber whose breach geometry
+--     extends into a chunk that the BFS classified as inland (but
+--     whose post-event terrain dropped below sea level) would
+--     otherwise emit bare sub-sea lava with no water column above.
+--     Capping unconditionally is the safe default; the shell + ocean
+--     fill paths below still respect 'isOceanic' for what fluid (if
+--     any) fills above the cap.
 --
---     Cap height is @min (seaLevel - 1) (localTop + 1)@ — seal the
---     chamber where possible, otherwise pin to one tile below sea
---     so the ocean column always has at least one tile of water.
---
---   * Otherwise (above-water tile OR non-oceanic chunk): emit a
---     regular lava cell. Volcano peaks emerging above water keep
---     their visible vents; inland volcanoes are unchanged.
+--   * Above-water tile → emit a regular lava cell. Volcano peaks
+--     and inland calderas keep their visible vents.
 discoverChunkLava ∷ VolcanoCtx
                   → ChunkCoord
-                  → Bool           -- ^ chunk is in an oceanic region
                   → VU.Vector Int  -- ^ per-tile surface elevation
                   → Maybe MagmaOverlay
-discoverChunkLava ctx coord isOceanic surfaceMap =
+discoverChunkLava ctx coord surfaceMap =
     let ChunkCoord cx cy = coord
         chunkGX = cx * chunkSize
         chunkGY = cy * chunkSize
@@ -324,10 +325,10 @@ discoverChunkLava ctx coord isOceanic surfaceMap =
                 ss →
                     let localTop = maximum
                             (map (shapeTopAtXY ws gx gy surfZ) ss)
-                        underOcean = isOceanic ∧ surfZ ≤ seaLevel
+                        subSea = surfZ ≤ seaLevel
                         capZ = min (seaLevel - 1) (localTop + 1)
                         (surf, caps) = acc
-                    in if underOcean
+                    in if subSea
                        then (surf, HM.insert (gx, gy) capZ caps)
                        else (HM.insert (gx, gy)
                                        (FluidCell Lava surfZ)

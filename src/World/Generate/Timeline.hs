@@ -241,15 +241,18 @@ applyTimelineChunk timeline worldSize registry wsc coord (baseElevVec, baseMatVe
     -- case) pre-wrap gy uniquely identifies the row; tileInBBoxWrapped
     -- still does the final per-tile correctness check.
     applyOnePeriod cMinGX cMinGY cMaxGX cMaxGY (elevVec, matVec) period =
-        let -- Drop river-carve events here — 'applyRiverCarvePass'
-        -- re-applies the same set on top of the eroded result at
-        -- the end of 'applyTimelineChunk', so carving them per-
-        -- period is wasted work (target-based carve is idempotent
-        -- and the final pass is what the player sees).  Saves the
-        -- per-tile 'carveFromSegment' work in the hot loop.
-            relevantTagged = V.toList $ V.filter (\(evt, bb) →
-                not (isRiverCarveEvent evt)
-                ∧ bboxOverlapsChunk worldSize bb cMinGX cMinGY cMaxGX cMaxGY
+        let -- River-carve events fire per-period (along with
+        -- everything else). Carving channels each period — instead
+        -- of deferring all carving to the end — is the intended
+        -- design: later periods' erosion sees the existing channel
+        -- and shapes its banks, and rivers can shift / dry up
+        -- across geological history so the per-period record
+        -- matters. 'applyRiverCarvePass' at the end of
+        -- 'applyTimelineChunk' then re-asserts the final channel
+        -- floors against the last period's erosion deposition;
+        -- 'smoothCliffs' cleans up any remaining sharp edges.
+            relevantTagged = V.toList $ V.filter (\(_, bb) →
+                bboxOverlapsChunk worldSize bb cMinGX cMinGY cMaxGX cMaxGY
                 ) (gpExplodedEvents period)
 
             borderArea = borderSize * borderSize

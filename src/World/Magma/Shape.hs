@@ -72,16 +72,24 @@ pointInShape worldSize gx gy z shape = case shape of
             dzN = fromIntegral (z - zc) / rz
         in dxN*dxN + dyN*dyN + dzN*dzN ≤ 1.0
 
-    IrregularChamber x y zc r amp freq seedW →
+    IrregularChamber x y zc rx ry rz amp freq seedW →
         let (dx, dy) = wrappedDeltaUV worldSize gx gy x y
             dz = z - zc
-            d2 = fromIntegral (dx*dx + dy*dy + dz*dz) ∷ Float
+            -- Test against the unit ellipsoid in normalised space:
+            -- (dx/rx)² + (dy/ry)² + (dz/rz)² ≤ effNorm². The
+            -- directional perturbation rides the unit radius so a
+            -- flat saucer wobbles by the same relative amount on its
+            -- broad top and on its narrow rim.
+            dxN = fromIntegral dx / rx
+            dyN = fromIntegral dy / ry
+            dzN = fromIntegral dz / rz
+            normD2 = dxN*dxN + dyN*dyN + dzN*dzN
             theta = atan2 (fromIntegral dy) (fromIntegral dx) ∷ Float
             phi   = atan2 (fromIntegral dz)
                           (sqrt (fromIntegral (dx*dx + dy*dy)))
             perturb = directionalPerturb seedW theta phi freq
-            effR = r + amp * perturb
-        in d2 ≤ effR * effR
+            effNorm = 1.0 + amp * perturb
+        in normD2 ≤ effNorm * effNorm
 
 -- | Hash-derived directional perturbation in [-1, 1] for the
 --   irregular chamber. Cheap, deterministic, smooth-ish — not Perlin,
@@ -103,7 +111,8 @@ shapeZBottom shape = case shape of
     Perturbed        _ _ zb _ _ _ _ _   → zb
     Slot             _ _ _ _ zb _ _     → zb
     EllipsoidChamber _ _ zc _ _ rz      → zc - ceiling rz
-    IrregularChamber _ _ zc r amp _ _   → zc - ceiling (r + amp)
+    IrregularChamber _ _ zc _ _ rz amp _ _ →
+        zc - ceiling (rz * (1.0 + amp))
 
 -- | Highest @z@ a shape can possibly cover.
 shapeZTop ∷ LavaShape → Int
@@ -113,4 +122,5 @@ shapeZTop shape = case shape of
     Perturbed        _ _ _ zt _ _ _ _   → zt
     Slot             _ _ _ _ _ zt _     → zt
     EllipsoidChamber _ _ zc _ _ rz      → zc + ceiling rz
-    IrregularChamber _ _ zc r amp _ _   → zc + ceiling (r + amp)
+    IrregularChamber _ _ zc _ _ rz amp _ _ →
+        zc + ceiling (rz * (1.0 + amp))

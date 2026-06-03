@@ -100,14 +100,20 @@ superKit seed mZ p =
     let GeoCoord cx cy = svCenter p
         floorZ = svCenterElev p - svFloorDepth p
         chMidZ = floorZ - hashRange (seed `xor` 11) 80 120
+        -- Saucer-shaped chamber: wide in xy, shallow in z. The
+        -- IrregularChamber's normalised perturbation gives the rim a
+        -- non-uniform shape so surface breaches don't look like
+        -- perfect circles.
         chR    = max 30.0 (fromIntegral (svCalderaRadius p) * 1.5)
         chH    = hashRange (seed `xor` 12) 40 60
+        chHalf = max 1.0 (fromIntegral chH / 2.0)
         chTopZ = chMidZ + chH `div` 2
         chBotZ = chMidZ - chH `div` 2
         hasSurfaceChute = (seed `xor` 13) `mod` 2 ≡ 0
         surfaceChute =
             [ Cylindrical cx cy chTopZ floorZ 2.0 | hasSurfaceChute ]
-    in [ IrregularChamber cx cy chMidZ chR (chR * 0.2) 0.05 (seed `xor` 0xC1) ]
+    in [ IrregularChamber cx cy chMidZ chR chR chHalf 0.2 0.05
+                          (seed `xor` 0xC1) ]
        ⧺ surfaceChute
        ⧺ [ Cylindrical cx cy mZ chBotZ 2.0 ]
 
@@ -133,7 +139,12 @@ hydrothermalKit ∷ Word64 → Int → HydrothermalParams → [LavaShape]
 hydrothermalKit seed mZ p =
     let GeoCoord cx cy = htCenter p
         zTop = htCenterElev p + htChimneyHeight p
-        phaseHash = fromIntegral (seed `xor` 0x7F00) ∷ Float
+        -- Mask to 32 bits before the Float cast so the divisor 2^32
+        -- yields a unit interval; without the mask, seeds beyond
+        -- 2^32 produced phases far outside [0, 2π). sin/cos wrap
+        -- regardless, but this keeps the intent legible.
+        phaseHash = fromIntegral ((seed `xor` 0x7F00) ⌃ 0xFFFFFFFF)
+                  ∷ Float
         phase = (phaseHash / 4294967296.0) * 2.0 * 3.14159265
     in [ Perturbed cx cy mZ zTop 2.0 3.0 0.1 phase ]
 
