@@ -417,7 +417,14 @@ end
 function randbox.getFocusedId()
     for id, rb in pairs(randboxes) do
         if rb.focused then
-            return id
+            if rb.boxId and UI.hasFocus(rb.boxId) then
+                return id
+            else
+                -- Stale mirror: engine-side focus moved on. Repair
+                -- instead of routing keys here (unfocus only clears
+                -- the engine focus if this box still holds it).
+                randbox.unfocus(id)
+            end
         end
     end
     return nil

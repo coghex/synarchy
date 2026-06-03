@@ -20,10 +20,11 @@ import Engine.Input.Callback
 import Engine.Scripting.Lua.Types
 import Engine.Graphics.Window.Types (Window(..))
 import qualified Engine.Core.Queue as Q
-import UI.Manager (findClickableElementAt, findRightClickableElementAt)
+import UI.Manager (findClickableElementAt, findRightClickableElementAt
+                  , validateFocus)
 import UI.Tooltip (isTooltipLocked, isTooltipVisible, isPointInLockedTooltip
                   , clearTooltipLock, toggleTooltipLock)
-import UI.Types (ElementHandle(..), UIPageManager(..), upmGlobalFocus)
+import UI.Types (ElementHandle(..))
 import UI.Focus (FocusManager, getInputMode, InputMode(..), clearFocus
                 , FocusId(..), fmCurrentFocus)
 
@@ -93,10 +94,13 @@ processInput env inpSt event = case event of
         -- Focus is cleared asynchronously by Lua callbacks:
         --   Shell:   LuaFocusLost → shell.onFocusLost → engine.releaseFocus()
         --   Textbox: LuaUIEscape  → uiManager.onUIEscape → UI.clearFocus()
+        -- The UI focus is read through validateFocus, which clears a
+        -- focus pointing at a dead/hidden element instead of letting
+        -- it capture the keyboard (all keys would route to UI-text
+        -- mode below and be dropped by the Lua dispatcher).
         focusMgr ← readIORef (focusManagerRef env)
-        uiMgr ← readIORef (uiManagerRef env)
+        uiFocus ← atomicModifyIORef' (uiManagerRef env) validateFocus
         let shellMode = getInputMode focusMgr
-            uiFocus = upmGlobalFocus uiMgr
             key = fromGLFWKey glfwKey
         case (shellMode, uiFocus) of
           (TextInputMode (FocusId fid),_) → do
@@ -186,8 +190,8 @@ processInput env inpSt event = case event of
     InputCharEvent c → do
         when (c ≠ '`') $ do
           focusMgr ← readIORef (focusManagerRef env)
-          uiMgr ← readIORef (uiManagerRef env)
-          case (fmCurrentFocus focusMgr, upmGlobalFocus uiMgr) of
+          uiFocus ← atomicModifyIORef' (uiManagerRef env) validateFocus
+          case (fmCurrentFocus focusMgr, uiFocus) of
             (Just (FocusId fid), _) →
               Q.writeQueue (luaQueue env) (LuaCharInput fid c)
             (Nothing, Just _elemHandle) →

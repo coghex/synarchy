@@ -438,7 +438,17 @@ end
 function dropdown.getFocusedId()
     for id, dd in pairs(dropdowns) do
         if dd.focused then
-            return id
+            if dd.displayBoxId and UI.hasFocus(dd.displayBoxId) then
+                return id
+            else
+                -- Stale mirror: the engine-side focus moved on without
+                -- this module hearing about it. Repair instead of
+                -- routing keystrokes into a widget the engine no
+                -- longer considers focused. (unfocus only calls
+                -- UI.clearFocus when this box still holds the engine
+                -- focus, so it can't clobber the real owner.)
+                dropdown.unfocus(id)
+            end
         end
     end
     return nil

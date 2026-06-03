@@ -24,6 +24,7 @@ module UI.Manager
   , getElementFocus
   , getPageFocus
   , clearPageFocus
+  , validateFocus
     -- * Text Buffer Operations
   , enableTextInput
   , getTextBuffer
@@ -117,6 +118,16 @@ hidePage handle mgr =
         Just page →
             mgr { upmPages = Map.insert handle (page { upVisible = False }) (upmPages mgr)
                 , upmVisiblePages = Set.delete handle (upmVisiblePages mgr)
+                -- Keyboard focus must not survive on a hidden page —
+                -- the input thread routes ALL keys to UI-text mode
+                -- while upmGlobalFocus is set, so a focused element on
+                -- a hidden page would capture the keyboard. The page's
+                -- own upFocusedElement memory is intentionally kept.
+                , upmGlobalFocus =
+                    case upmGlobalFocus mgr of
+                        Just fh | Just el ← Map.lookup fh (upmElements mgr)
+                                , uePage el ≡ handle → Nothing
+                        other → other
                 }
 
 getPage ∷ PageHandle → UIPageManager → Maybe UIPage
@@ -201,9 +212,15 @@ deleteElementTree handle mgr =
             let mgrWithoutChildren = foldr deleteElementTree mgr (ueChildren element)
             in mgrWithoutChildren
                 { upmElements = Map.delete handle (upmElements mgrWithoutChildren)
-                , upmHovered = if upmHovered mgrWithoutChildren ≡ Just handle 
-                               then Nothing 
+                , upmHovered = if upmHovered mgrWithoutChildren ≡ Just handle
+                               then Nothing
                                else upmHovered mgrWithoutChildren
+                -- Same hygiene as upmHovered: a deleted element must
+                -- not keep the global focus, or the input thread keeps
+                -- routing the whole keyboard to a dead handle.
+                , upmGlobalFocus = if upmGlobalFocus mgrWithoutChildren ≡ Just handle
+                                   then Nothing
+                                   else upmGlobalFocus mgrWithoutChildren
                 }
 
 removeElementReference ∷ ElementHandle → UIElement → UIPageManager → UIPageManager
@@ -247,7 +264,13 @@ removeElement ∷ ElementHandle → UIPageManager → UIPageManager
 removeElement handle mgr =
     case Map.lookup handle (upmElements mgr) of
         Nothing → mgr
-        Just element → removeElementReference handle element mgr
+        Just element →
+            let mgr' = removeElementReference handle element mgr
+            -- A detached element is unreachable for rendering and
+            -- hit-testing; it must not keep the keyboard either.
+            in if upmGlobalFocus mgr' ≡ Just handle
+               then mgr' { upmGlobalFocus = Nothing }
+               else mgr'
 
 -- * Focus Operations
 
@@ -269,6 +292,25 @@ clearElementFocus mgr = mgr { upmGlobalFocus = Nothing }
 -- | Get currently focused element globally
 getElementFocus ∷ UIPageManager → Maybe ElementHandle
 getElementFocus = upmGlobalFocus
+
+-- | Validate the global focus against the live element tree: the
+--   focused element must still exist, be visible, and belong to a
+--   visible page — otherwise clear it (repair) and report no focus.
+--   The input thread routes through this (atomicModifyIORef') as a
+--   belt-and-suspenders guard: the destroy/hide paths above maintain
+--   the invariant, but a ghost focus would otherwise capture the
+--   entire keyboard (all keys route to UI-text mode and are dropped).
+validateFocus ∷ UIPageManager → (UIPageManager, Maybe ElementHandle)
+validateFocus mgr = case upmGlobalFocus mgr of
+    Nothing → (mgr, Nothing)
+    Just h →
+        let valid = case Map.lookup h (upmElements mgr) of
+                Nothing → False
+                Just el → ueVisible el
+                        ∧ Set.member (uePage el) (upmVisiblePages mgr)
+        in if valid
+           then (mgr, Just h)
+           else (mgr { upmGlobalFocus = Nothing }, Nothing)
 
 -- | Get a page's remembered focused element
 getPageFocus ∷ PageHandle → UIPageManager → Maybe ElementHandle
@@ -573,10 +615,14 @@ setElementOnRightClick handle callbackName = modifyElement handle `flip`
 -- remains valid for potential re-use or deferred GC.
 removeFromPage ∷ PageHandle → ElementHandle → UIPageManager → UIPageManager
 removeFromPage pageHandle elemHandle mgr =
-    let mgr' = modifyPage pageHandle mgr $ \page →
+    let mgr'  = modifyPage pageHandle mgr $ \page →
             page { upRootElements = filter (/= elemHandle) (upRootElements page) }
-    in modifyElement elemHandle mgr' $ \elem →
+        mgr'' = modifyElement elemHandle mgr' $ \elem →
             elem { ueParent = Nothing }
+    -- Same focus hygiene as removeElement: detached ⇒ no keyboard.
+    in if upmGlobalFocus mgr'' ≡ Just elemHandle
+       then mgr'' { upmGlobalFocus = Nothing }
+       else mgr''
 
 -- | Like findClickableElementAt but looks at ueOnRightClick instead.
 findRightClickableElementAt ∷ (Float, Float) → UIPageManager → Maybe (ElementHandle, Text)

@@ -55,6 +55,13 @@ local function handleNonTextBoxClick()
     if randbox then
         randbox.unfocusAll()
     end
+    -- Dropdowns keep their own focused flag; missing them here left
+    -- dd.focused == true after the engine-side focus moved on, and the
+    -- input dispatch below routes by dd.focused first — so keystrokes
+    -- meant for a later-focused textbox landed in the stale dropdown.
+    if dropdown then
+        dropdown.unfocusAll()
+    end
 end
 
 function uiManager.init(scriptId)
@@ -583,6 +590,10 @@ function uiManager.shutdown()
 end
 
 function uiManager.onTextBoxClick(elemHandle)
+    -- Clear the other widget families (textbox.focus handles its own
+    -- family) so their focused flags can't go stale and steal keys.
+    if dropdown then dropdown.unfocusAll() end
+    if randbox then randbox.unfocusAll() end
     if textbox then
         textbox.handleClickByElement(elemHandle)
     end
@@ -1041,7 +1052,12 @@ end
 -----------------------------------------------------------
 
 function uiManager.onDropdownDisplayClick(elemHandle)
-    handleNonTextBoxClick()
+    -- Clear the OTHER widget families only — the dropdown module
+    -- manages focus within its own family, and a blanket
+    -- dropdown.unfocusAll() here would reset the typed filter text
+    -- when clicking the display box of an already-focused dropdown.
+    if textbox then textbox.unfocusAll() end
+    if randbox then randbox.unfocusAll() end
     if dropdown then
         return dropdown.handleCallback("onDropdownDisplayClick", elemHandle)
     end
@@ -1177,6 +1193,11 @@ function uiManager.onUIEscape()
             end
         end
     end
+
+    -- Ghost-focus recovery: no widget claimed this escape, so any
+    -- engine-side focus that survived to here is unowned — clear it,
+    -- otherwise the keyboard stays captured in UI-text mode.
+    UI.clearFocus()
 
     -- Menu-level escape handling
     if currentMenu == "main" then
