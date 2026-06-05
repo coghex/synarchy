@@ -101,16 +101,57 @@ units:
       north-east: "assets/textures/units/gray_wolf/animations/idle/north-east/frame_000.png"
       north:      "assets/textures/units/gray_wolf/animations/idle/north/frame_000.png"
 
-    # PROBE SET — idle/walk/run only. Pending (parallel bear_brown):
-    # drink/eat, combat_idle, attack_quick/heavy, hit_react, death,
-    # rest poses + transitions, falling/landing, injured_* mirrors.
+    # Full state→animation map, paralleling bear_brown minus the
+    # climbing and stand-on-hind chains (wolves do neither). The
+    # engine auto-falls back to the plain key when an injured- key
+    # is absent, and to the directional still when no key matches.
     state_animations:
       standing-idle:               idle
       standing-walk:               walk
       standing-run:                run
-      # Placeholder until a death anim exists — without an entry,
-      # killed wolves T-pose (see bear_brown dead-idle note).
-      dead-idle:                   idle
+      standing-drink:              drink
+      standing-eat:                drink   # one anim covers both, bear convention
+      standing-combat-idle:        combat_idle
+      standing-attack-quick:       attack_quick
+      standing-attack-heavy:       attack_heavy
+      standing-hit-react:          hit_react
+      standing-death:              death
+      # Hold last death frame after UnitKill (loop=false) — without
+      # this, dead wolves T-pose.
+      dead-idle:                   death
+
+      # Resting poses + transitions (reverse plays forward backward).
+      sitting-idle:                sitting_idle
+      lying-idle:                  lying_down_idle
+      sleeping-idle:               sleeping_idle
+      standing-to-sitting:         standing_to_sitting
+      sitting-to-standing:         standing_to_sitting    # reversed
+      sitting-to-lying:            sitting_to_lying_down
+      lying-to-sitting:            sitting_to_lying_down  # reversed
+      lying-to-sleeping:           lying_down_to_sleeping
+      sleeping-to-lying:           lying_down_to_sleeping # reversed
+
+      # Falling chain. No climbing chain — wolves can't climb
+      # (climbing skill ~5); cliff steps will show stills, acceptable.
+      falling-idle:                falling
+      standing-to-falling:         falling
+      falling-to-collapsed:        landing
+
+      # Collapse + recovery; "crawling" = lying for quadrupeds
+      # (bear convention).
+      collapsed-idle:              lying_down_idle
+      collapsed-to-standing:       collapsed_to_standing
+      crawling-idle:               lying_down_idle
+      crawling-to-standing:        collapsed_to_standing
+
+      # Injured set — engine tries injured-<pose>-<activity> first
+      # when wound severity > 1.0, falls back to plain keys.
+      injured-standing-idle:       injured_idle
+      injured-standing-walk:       injured_walk
+      injured-standing-run:        injured_run
+      injured-standing-eat:        injured_eat
+      injured-standing-drink:      injured_eat
+      injured-dead-idle:           injured_death
 
     animations:
       idle:
@@ -245,3 +286,1158 @@ units:
             - "assets/textures/units/gray_wolf/animations/run/north/frame_003.png"
             - "assets/textures/units/gray_wolf/animations/run/north/frame_004.png"
             - "assets/textures/units/gray_wolf/animations/run/north/frame_005.png"
+
+      attack_quick:
+        fps: 10
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/attack_quick/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/attack_quick/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/attack_quick/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/attack_quick/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/attack_quick/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/attack_quick/north/frame_003.png"
+
+      attack_heavy:
+        fps: 12
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/attack_heavy/north/frame_007.png"
+
+      combat_idle:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/combat_idle/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/combat_idle/north/frame_007.png"
+
+      hit_react:
+        fps: 12
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/hit_react/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/hit_react/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/hit_react/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/hit_react/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/hit_react/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/hit_react/north/frame_003.png"
+
+      death:
+        fps: 8
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/death/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/death/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/death/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/death/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/death/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/death/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/death/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/death/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/death/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/death/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/death/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/death/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/death/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/death/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/death/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/death/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/death/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/death/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/death/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/death/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/death/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/death/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/death/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/death/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/death/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/death/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/death/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/death/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/death/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/death/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/death/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/death/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/death/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/death/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/death/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/death/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/death/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/death/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/death/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/death/north/frame_007.png"
+
+      drink:
+        fps: 6
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/drink/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/drink/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/drink/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/drink/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/drink/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/drink/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/drink/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/drink/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/drink/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/drink/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/drink/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/drink/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/drink/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/drink/north/frame_007.png"
+
+      roar:
+        fps: 8
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/roar/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/roar/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/roar/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/roar/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/roar/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/roar/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/roar/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/roar/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/roar/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/roar/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/roar/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/roar/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/roar/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/roar/north/frame_007.png"
+
+      falling:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/falling/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/falling/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/falling/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/falling/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/falling/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/falling/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/falling/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/falling/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/falling/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/falling/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/falling/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/falling/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/falling/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/falling/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/falling/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/falling/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/falling/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/falling/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/falling/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/falling/north/frame_003.png"
+
+      landing:
+        fps: 12
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/landing/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/landing/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/landing/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/landing/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/landing/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/landing/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/landing/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/landing/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/landing/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/landing/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/landing/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/landing/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/landing/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/landing/north/frame_007.png"
+
+      collapsed_to_standing:
+        fps: 10
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/collapsed_to_standing/north/frame_007.png"
+
+      standing_to_sitting:
+        fps: 8
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/standing_to_sitting/north/frame_007.png"
+
+      sitting_idle:
+        fps: 4
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_idle/north/frame_007.png"
+
+      sitting_to_lying_down:
+        fps: 8
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sitting_to_lying_down/north/frame_007.png"
+
+      lying_down_idle:
+        fps: 4
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_idle/north/frame_007.png"
+
+      lying_down_to_sleeping:
+        fps: 6
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/lying_down_to_sleeping/north/frame_007.png"
+
+      sleeping_idle:
+        fps: 2
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/sleeping_idle/north/frame_007.png"
+
+      injured_idle:
+        fps: 4
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/injured_idle/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_idle/north/frame_007.png"
+
+      injured_walk:
+        fps: 5
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south/frame_005.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/south-east/frame_005.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/injured_walk/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/east/frame_005.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north-east/frame_005.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_walk/north/frame_005.png"
+
+      injured_run:
+        fps: 8
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/injured_run/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/south/frame_005.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/injured_run/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/south-east/frame_005.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/injured_run/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/east/frame_005.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/injured_run/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/north-east/frame_005.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/injured_run/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_run/north/frame_005.png"
+
+      injured_combat_idle:
+        fps: 6
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_combat_idle/north/frame_007.png"
+
+      injured_attack_quick:
+        fps: 8
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_quick/north/frame_003.png"
+
+      injured_attack_heavy:
+        fps: 10
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_attack_heavy/north/frame_007.png"
+
+      injured_hit_react:
+        fps: 10
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/south/frame_003.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/south-east/frame_003.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/east/frame_003.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/north-east/frame_003.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_hit_react/north/frame_003.png"
+
+      injured_eat:
+        fps: 5
+        loop: true
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/injured_eat/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_eat/north/frame_007.png"
+
+      injured_death:
+        fps: 6
+        loop: false
+        flip: true
+        frames:
+          south:
+            - "assets/textures/units/gray_wolf/animations/injured_death/south/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south/frame_007.png"
+          south-east:
+            - "assets/textures/units/gray_wolf/animations/injured_death/south-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/south-east/frame_007.png"
+          east:
+            - "assets/textures/units/gray_wolf/animations/injured_death/east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/east/frame_007.png"
+          north-east:
+            - "assets/textures/units/gray_wolf/animations/injured_death/north-east/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north-east/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north-east/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north-east/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north-east/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north-east/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north-east/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north-east/frame_007.png"
+          north:
+            - "assets/textures/units/gray_wolf/animations/injured_death/north/frame_000.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north/frame_001.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north/frame_002.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north/frame_003.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north/frame_004.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north/frame_005.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north/frame_006.png"
+            - "assets/textures/units/gray_wolf/animations/injured_death/north/frame_007.png"

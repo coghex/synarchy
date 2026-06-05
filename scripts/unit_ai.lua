@@ -2192,6 +2192,7 @@ unitAi.registerActions("acolyte", {
 -- the dispatch loop. Done at load time so all defs are wired by
 -- the time the first tick runs.
 require("scripts.bear_ai")
+require("scripts.gray_wolf_ai")
 
 -----------------------------------------------------------
 -- FOV-based water memory.

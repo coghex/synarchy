@@ -146,3 +146,12 @@ Recipe for a new unit (validated with gray_wolf, 2026-06):
 - `init_image` ≠ style transfer (locks color); `color_image` broken; build JSON via file.
 - "No dirt/soil" prompt clause for anything grounded; shape-not-species prompts on tiny canvases.
 - macOS `base64` has no `-w`; use `base64 < f | tr -d '\n'` or python.
+- Animation direction-jobs can **silently vanish** (one of 200 did) — audit per activity×direction
+  after a matrix run and re-queue gaps.
+- The raw API **partially queues** animations: it takes as many direction-jobs as slots allow and
+  returns which `directions` it accepted — a queue-feeder loop must track per-direction state
+  (see the runner pattern: poll, post missing dirs, subtract accepted, repeat).
+- Backblaze frame URLs in the character JSON return 401/403 — always download via
+  `GET /v2/characters/{id}/zip` instead.
+- v3 sometimes returns frame_count+1 frames; take the first N.
+- A 25-animation matrix (200 direction-jobs) takes ~2 h with a continuous queue-feeder.
