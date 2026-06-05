@@ -29,6 +29,8 @@ import qualified Data.Vector.Unboxed as VU
 import World.Fluids (isOceanChunk, hasAnyOceanFluid)
 import World.Fluid.River (hasAnyRiverQuick)
 import World.Fluid.Lake (hasAnyLakeQuick)
+import World.Fluid.Lake.Types (wlByChunk)
+import qualified Data.HashMap.Strict as HM
 import World.Fluid.Lava (chunkHasLavaQuick)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..), IceMap)
 import World.Fluid.IceLevel (lookupIceLevel)
@@ -112,6 +114,11 @@ buildZoomCache params registry =
 
                 coord = ChunkCoord ccx ccy
                 chunkLava = chunkHasLavaQuick (wgpVolcanoCtx params) coord avgElev
+                          -- Pool lava can spread into chunks with no
+                          -- breach of their own — the global pool
+                          -- table is authoritative for those.
+                          ∨ HM.member coord
+                              (wlByChunk (gtWorldLavaPools timeline))
                 chunkOcean = isOceanChunk oceanMap coord
                           ∨ hasAnyOceanFluid worldSize oceanMap coord
                 eventRivers = concatMap extractEventRivers' (gtPeriods timeline)
@@ -361,6 +368,11 @@ buildZoomCacheWithPixels params registry palette mBorderedCache =
                           else let s = sum (map fst allMats)
                                in s `div` length allMats
                 chunkLava = chunkHasLavaQuick (wgpVolcanoCtx params) coord avgElev
+                          -- Pool lava can spread into chunks with no
+                          -- breach of their own — the global pool
+                          -- table is authoritative for those.
+                          ∨ HM.member coord
+                              (wlByChunk (gtWorldLavaPools timeline))
                 eventRivers = concatMap extractEventRivers' (gtPeriods timeline)
                 chunkRiver = hasAnyRiverQuick eventRivers worldSize coord
                 chunkLake  = hasAnyLakeQuick features worldSize coord

@@ -5,6 +5,8 @@ import Test.Hspec
 import qualified Test.Headless.WorldGen as WorldGen
 import qualified Test.Headless.WorldGen.Geology as Geology
 import qualified Test.Headless.WorldGen.Parity as Parity
+import qualified Test.Headless.WorldGen.Flatness as Flatness
+import qualified Test.Headless.WorldGen.Exposure as Exposure
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
 import qualified Test.Headless.Unit.Render.PickFrame as PickFrame
@@ -18,6 +20,8 @@ main = hspec $ do
     describe "World Generation" WorldGen.spec
     describe "Geology" Geology.spec
     describe "Chunk/Fast Parity" Parity.spec
+    describe "Biome Flatness" Flatness.spec
+    describe "Column Exposure" Exposure.spec
     describe "Unit.Pathing.Cost" PathingCost.spec
     describe "Unit.Pathing.AStar" PathingAStar.spec
     describe "Unit.Render.pickFrame" PickFrame.spec

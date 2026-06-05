@@ -280,7 +280,10 @@ bboxChunkRange (EventBBox xlo ylo xhi yhi) =
 --   discovered (the common case — most chunks have no nearby
 --   sources).
 --
---   Per-tile decision when a breach is detected:
+--   Since the pool rework ('World.Magma.Pool'), this function emits
+--   only BASALT CAPS — surface lava comes from the global
+--   'gtWorldLavaPools' table read in @composeFluidMap@. Per-tile
+--   decision when a breach is detected:
 --
 --   * Surface @≤ seaLevel@ → ALWAYS cap. The cap mechanism raises
 --     the terrain to @min (seaLevel-1) (localTop+1)@ and stamps
@@ -296,13 +299,22 @@ bboxChunkRange (EventBBox xlo ylo xhi yhi) =
 --     fill paths below still respect 'isOceanic' for what fluid (if
 --     any) fills above the cap.
 --
---   * Above-water tile → emit a regular lava cell. Volcano peaks
---     and inland calderas keep their visible vents.
+--   * Surface below a LAKE or RIVER water surface (@waterSurfMap@,
+--     from the global tables) → cap at
+--     @min (waterSurf-1) (localTop+1)@ so the water column stays
+--     intact above sealed basalt. This is the user-decided
+--     lava-vs-lake rule (2026-06-05): water wins below its surface,
+--     contact lines turn to basalt.
+--
+--   * Dry above-water breach → nothing here; the pool table places
+--     the visible lava.
 discoverChunkLava ∷ VolcanoCtx
                   → ChunkCoord
                   → VU.Vector Int  -- ^ per-tile surface elevation
+                  → VU.Vector Int  -- ^ per-tile lake/river water
+                                   --   surface ('minBound' = none)
                   → Maybe MagmaOverlay
-discoverChunkLava ctx coord surfaceMap =
+discoverChunkLava ctx coord surfaceMap waterSurfMap =
     let ChunkCoord cx cy = coord
         chunkGX = cx * chunkSize
         chunkGY = cy * chunkSize
@@ -313,6 +325,7 @@ discoverChunkLava ctx coord surfaceMap =
                 gx  = chunkGX + lx
                 gy  = chunkGY + ly
                 surfZ = surfaceMap VU.! idx
+                wSurf = waterSurfMap VU.! idx
                 breachingShapes =
                     [ s
                     | i ← candidates
@@ -325,27 +338,29 @@ discoverChunkLava ctx coord surfaceMap =
                 ss →
                     let localTop = maximum
                             (map (shapeTopAtXY ws gx gy surfZ) ss)
-                        subSea = surfZ ≤ seaLevel
-                        capZ = min (seaLevel - 1) (localTop + 1)
-                        (surf, caps) = acc
-                    in if subSea
-                       then (surf, HM.insert (gx, gy) capZ caps)
-                       else (HM.insert (gx, gy)
-                                       (FluidCell Lava surfZ)
-                                       surf
-                            , caps)
-        (lavaMap, capMap) =
+                        subSea  = surfZ ≤ seaLevel
+                        subLake = wSurf ≠ minBound ∧ surfZ < wSurf
+                        capLimit
+                            | subSea ∧ subLake =
+                                min (seaLevel - 1) (wSurf - 1)
+                            | subSea    = seaLevel - 1
+                            | otherwise = wSurf - 1
+                        capZ = min capLimit (localTop + 1)
+                    in if subSea ∨ subLake
+                       then HM.insert (gx, gy) capZ acc
+                       else acc
+        capMap =
             if null candidates
-            then (HM.empty, HM.empty)
-            else foldr (flip addTile) (HM.empty, HM.empty)
+            then HM.empty
+            else foldr (flip addTile) HM.empty
                        [ (lx, ly)
                        | ly ← [0 .. chunkSize - 1]
                        , lx ← [0 .. chunkSize - 1]
                        ]
-    in if HM.null lavaMap ∧ HM.null capMap
+    in if HM.null capMap
        then Nothing
        else Just MagmaOverlay
-            { moSurface   = lavaMap
+            { moSurface   = HM.empty
             , moBasaltCap = capMap
             , moRevealed  = HM.empty
             }

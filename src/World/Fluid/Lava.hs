@@ -32,12 +32,16 @@ hasAnyLavaQuick = isJust . lcMagma
 --   reach but the average dips below it; for a chunk-level color
 --   indicator that's fine.
 --
---   The overlay's @moSurface@ and @moBasaltCap@ together capture
---   every chamber breach (sub-sea breaches land in the cap map);
---   'isJust' fires when either is non-empty, so this remains a
---   faithful \"any chamber/chute touches this chunk's surface\"
---   indicator.
+--   Since the pool rework, 'discoverChunkLava' emits only basalt
+--   caps (underwater breaches); visible surface lava lives in the
+--   global 'gtWorldLavaPools' table, which the zoom-cache caller
+--   ORs in separately. This predicate therefore flags cap chunks
+--   (sub-sea/sub-lake seamounts). The synthetic water map is all
+--   'minBound' — at chunk-colour resolution the lake/river cap
+--   distinction doesn't matter, sub-sea capping still fires off
+--   @avgElev ≤ seaLevel@.
 chunkHasLavaQuick ∷ VolcanoCtx → ChunkCoord → Int → Bool
 chunkHasLavaQuick ctx coord avgElev =
     isJust $ discoverChunkLava ctx coord
                 (VU.replicate (chunkSize * chunkSize) avgElev)
+                (VU.replicate (chunkSize * chunkSize) minBound)

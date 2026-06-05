@@ -727,6 +727,80 @@ def check_surface_inconsistent(grid: dict[tuple[int, int], dict[str, Any]],
             ))
 
 
+WETLAND_MATS = {62, 63, 64}      # peat, mucky peat, muck
+DESERT_MATS = {55: "sand", 67: "salt_flat"}
+
+
+def _max_same_chunk_nbr_delta(grid: dict[tuple[int, int], dict[str, Any]],
+                              x: int, y: int, tz: int) -> int:
+    """Max |Δterrain| to same-chunk 4-neighbours (cross-chunk skipped,
+    matching the in-chunk-only convention of the wetland post-pass)."""
+    worst = 0
+    for nx, ny in neighbors4(x, y):
+        if crosses_chunk_boundary(x, y, nx, ny):
+            continue
+        n = grid.get((nx, ny))
+        if n is None or n.get("beyondGlacier"):
+            continue
+        nz = n["terrainZ"]
+        if nz <= INT64_MIN + 1:
+            continue
+        worst = max(worst, abs(tz - nz))
+    return worst
+
+
+def check_wetland_on_slope(grid: dict[tuple[int, int], dict[str, Any]],
+                           issues: list[Issue]) -> None:
+    """BUG: wetland soil (peat 62 / mucky peat 63 / muck 64) on a slope.
+
+    The wetland post-pass (`Generate/Chunk.hs::wetlandKeep`) guarantees
+    wetland soils survive only on near-flat tiles (in-chunk 4-neighbour
+    max |Δterrain| ≤ 2). Any occurrence means the post-pass broke.
+
+    Only the slope half of the gate is checkable here — the dump has no
+    water-table layer, so the wet half (wt ≥ terrain−1) is covered by
+    the hspec test (Test.Headless.WorldGen.Flatness), which reads
+    lcWaterTableMap directly.
+    """
+    for (x, y), t in grid.items():
+        if t.get("matId") not in WETLAND_MATS:
+            continue
+        if t.get("beyondGlacier") or t["terrainZ"] <= INT64_MIN + 1:
+            continue
+        worst = _max_same_chunk_nbr_delta(grid, x, y, t["terrainZ"])
+        if worst > 2:
+            issues.append(Issue(
+                "WETLAND_ON_SLOPE", x, y,
+                f"matId={t['matId']} maxNbrDelta={worst}",
+            ))
+
+
+def check_desert_soil_on_slope(grid: dict[tuple[int, int], dict[str, Any]],
+                               issues: list[Issue]) -> None:
+    """QUALITY: sand (55) / salt flat (67) on a slope.
+
+    Unlike wetland soils, these have no physical post-pass gate yet —
+    `soilFromClimate` places them purely by climate. In practice they
+    land on plateau-snapped lowlands, so on-slope occurrences are rare
+    (measured 0.1% of sand tiles at w64 seed 42, 2026-06-05). Tracked
+    as a quality score: drift upward means desert/evaporite soils are
+    bleeding onto mountainsides. Salt flats especially are basin-floor
+    evaporites and should essentially never tilt.
+    """
+    for (x, y), t in grid.items():
+        name = DESERT_MATS.get(t.get("matId"))
+        if name is None:
+            continue
+        if t.get("beyondGlacier") or t["terrainZ"] <= INT64_MIN + 1:
+            continue
+        worst = _max_same_chunk_nbr_delta(grid, x, y, t["terrainZ"])
+        if worst > 2:
+            issues.append(Issue(
+                "DESERT_SOIL_ON_SLOPE", x, y,
+                f"{name} maxNbrDelta={worst}",
+            ))
+
+
 # ----- Audit driver --------------------------------------------------------
 
 ALL_CHECKS = {
@@ -750,6 +824,8 @@ ALL_CHECKS = {
     "ISOLATED_FLUID": check_isolated_fluid,
     "MINBOUND_LEAK": check_minbound_leak,
     "SURFACE_INCONSISTENT": check_surface_inconsistent,
+    "WETLAND_ON_SLOPE": check_wetland_on_slope,
+    "DESERT_SOIL_ON_SLOPE": check_desert_soil_on_slope,
 }
 
 # ----- Severity classification --------------------------------------------
@@ -774,6 +850,7 @@ BUG_CATEGORIES = {
     "TERRAIN_PIT",          # Same
     "MINBOUND_LEAK",        # Int64 sentinel outside beyondGlacier zone
     "SURFACE_INCONSISTENT", # surfaceZ doesn't match the documented rule
+    "WETLAND_ON_SLOPE",     # wetland post-pass gate violated (slope half)
 }
 
 # Quality categories — tracked as scores against thresholds, not bugs.
@@ -800,6 +877,7 @@ QUALITY_CATEGORIES = {
     "FLOATING_WATER",        # water-vs-dry side gap, often legitimate cliff
     "MULTI_ISLAND",          # small dry cluster in a water body
     "FLAT_ISOLATED_WATER",   # small puddle on flat terrain
+    "DESERT_SOIL_ON_SLOPE",  # sand/salt-flat off the plateau — ungated, rare
 }
 
 # Quality thresholds — per-seed max occurrence count, calibrated against
@@ -814,6 +892,7 @@ QUALITY_CATEGORIES = {
 QUALITY_THRESHOLDS = {
     # Low-variance categories — should stay near zero.
     "DRY_BELOW_SEA":         50,  # after ocean-connected BFS, expect ~0
+    "DESERT_SOIL_ON_SLOPE": 250,  # observed max 150 (seed 123 w128); 1.5× policy
     "FLAT_ISOLATED_WATER":   50,  # observed max 15
     "FLOATING_WATER":       150,  # observed max 52
     "ISOLATED_FLUID":        50,  # observed max 9

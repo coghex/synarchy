@@ -26,6 +26,8 @@ import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
                              , LakeParams(..), GlacierParams(..))
 import World.Fluid.IceLevel (computeIceLevelGrid)
 import World.Fluid.Lake.Identify (identifyWorldLakes)
+import World.Magma.Init (buildVolcanoCtx)
+import World.Magma.Pool (identifyLavaPools)
 import World.Fluid.Lake.Types (emptyWorldLakes)
 import World.Fluid.River.Identify (identifyWorldRivers)
 import World.Fluid.River.Types (emptyWorldRivers)
@@ -158,6 +160,7 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
                                                  (tbsClimateState s2) finalGrid
             , gtWorldLakes  = emptyWorldLakes
             , gtWorldRivers = emptyWorldRivers
+            , gtWorldLavaPools = emptyWorldLakes
             }
 
         -- Ocean map: which chunks are ocean-BFS-reachable from the
@@ -186,11 +189,22 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
 
         finalLakes = identifyWorldLakes worldSize oceanMap worldTerrain
 
+        finalRivers = identifyWorldRivers worldSize finalLakes
+                                          worldTerrain
+                                          (tbsClimateState s2)
+
+        -- Lava pools: same stitched terrain, lakes + rivers as water
+        -- barriers. The ctx here is a throwaway built only for pool
+        -- identification — Init.hs builds the persistent one for
+        -- chunk gen from the same inputs (deterministic, identical).
+        poolCtx = buildVolcanoCtx seed worldSize plates finalFeatures
+        lavaPools = identifyLavaPools worldSize poolCtx finalLakes
+                                      finalRivers worldTerrain
+
         rawTimeline = preLakeTimeline
             { gtWorldLakes  = finalLakes
-            , gtWorldRivers = identifyWorldRivers worldSize finalLakes
-                                                   worldTerrain
-                                                   (tbsClimateState s2)
+            , gtWorldRivers = finalRivers
+            , gtWorldLavaPools = lavaPools
             }
 
     in (rawTimeline, tbsClimateState s2, borderedCache)

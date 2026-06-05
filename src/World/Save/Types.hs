@@ -83,8 +83,12 @@ saveMagic = 0x53595241
 --       cleanup. Lava placement is now driven by the pure-function
 --       Magma system; per-period eruption rolls are gone. Constructor
 --       tag shift makes the schema incompatible with v21.
+--   v23 adds 'gtWorldLavaPools' (WorldLakes-shaped lava pool table)
+--       to GeoTimeline — surface lava placed with pooling semantics
+--       instead of the per-tile film. Positional Generic Serialize
+--       gains a trailing field, incompatible with v22.
 currentSaveVersion ∷ Int
-currentSaveVersion = 22
+currentSaveVersion = 23
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects

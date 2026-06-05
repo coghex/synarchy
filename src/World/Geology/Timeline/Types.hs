@@ -108,6 +108,14 @@ data GeoTimeline = GeoTimeline
       --   plus per-tile quantised water surface z. Cross-chunk
       --   consistency is automatic because every chunk reads the
       --   same global table.
+    , gtWorldLavaPools ∷ !WorldLakes
+      -- ^ Global lava-pool table — surface lava pooled in
+      --   depressions ('World.Magma.Pool.identifyLavaPools'),
+      --   reusing the lake table shape (bitmask + uniform surface).
+      --   Chunk gen places Lava where a pool bitmask is set and the
+      --   pool surface covers the tile's terrain, with priority over
+      --   water. Appended last — 'Generic Serialize' is positional;
+      --   keep field order stable (save schema).
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 emptyTimeline ∷ GeoTimeline
@@ -120,6 +128,7 @@ emptyTimeline = GeoTimeline
     , gtIceLevel = IceLevelGrid 0 1 VU.empty
     , gtWorldLakes = emptyWorldLakes
     , gtWorldRivers = emptyWorldRivers
+    , gtWorldLavaPools = emptyWorldLakes
     }
 
 data EventBBox = EventBBox

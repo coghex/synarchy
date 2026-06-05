@@ -27,7 +27,7 @@ from world_audit import (  # type: ignore
 
 def tile(x: int, y: int, terrainZ: int = 1,
          fluidType: str | None = None, fluidSurf: int | None = None,
-         matId: int = 64,
+         matId: int = 56,  # loam — neutral; 62-64 trip WETLAND_ON_SLOPE
          glacierZone: bool = False, beyondGlacier: bool = False) -> dict[str, Any]:
     if fluidType is None:
         surfaceZ = terrainZ
@@ -368,6 +368,7 @@ def test_severity_classification() -> None:
         "MID_RIVER_CLIFF", "FLOATING_WATER", "MULTI_ISLAND",
         "FLAT_ISOLATED_WATER", "ISOLATED_FLUID",
         "MINBOUND_LEAK", "SURFACE_INCONSISTENT",
+        "WETLAND_ON_SLOPE", "DESERT_SOIL_ON_SLOPE",
     }
     classified = BUG_CATEGORIES | QUALITY_CATEGORIES
     missing = every_cat - classified
@@ -392,6 +393,64 @@ def test_severity_classification() -> None:
     expect(severity_of("RIVER_UNDER_TERRAIN") == "QUALITY",
            "RIVER_UNDER_TERRAIN should be QUALITY severity (underground "
            "water is legitimate)")
+
+
+def test_wetland_on_slope() -> None:
+    """Wetland soil with a same-chunk neighbour delta > 2 is a BUG;
+    flat wetland and cross-chunk deltas are not."""
+    print("test_wetland_on_slope")
+    # Flat wetland: clean. Coords 1..5 stay inside chunk 0.
+    tiles = [tile(x, y, terrainZ=10, matId=64)
+             for y in range(1, 6) for x in range(1, 6)]
+    r = audit_dump(make_tiles(tiles)).to_dict()
+    expect(count_category(r, "WETLAND_ON_SLOPE") == 0,
+           f"flat wetland should be clean, got "
+           f"{count_category(r, 'WETLAND_ON_SLOPE')}")
+
+    # Raise the centre tile (non-wetland) by 5: its 4 wetland
+    # neighbours each see delta 5 > 2.
+    spiked = make_tiles(tiles + [tile(3, 3, terrainZ=15, matId=56)])
+    r = audit_dump(spiked).to_dict()
+    expect(count_category(r, "WETLAND_ON_SLOPE") == 4,
+           f"4 wetland neighbours of the spike should flag, got "
+           f"{count_category(r, 'WETLAND_ON_SLOPE')}")
+
+    # Cross-chunk leniency: wetland at x=15 (chunk 0) next to a +5
+    # cliff at x=16 (chunk 1) must NOT flag — the post-pass gate is
+    # in-chunk only.
+    border = make_tiles([
+        tile(15, 3, terrainZ=10, matId=64),
+        tile(16, 3, terrainZ=15, matId=56),
+        tile(14, 3, terrainZ=10, matId=56),
+        tile(15, 2, terrainZ=10, matId=56),
+        tile(15, 4, terrainZ=10, matId=56),
+    ])
+    r = audit_dump(border).to_dict()
+    expect(count_category(r, "WETLAND_ON_SLOPE") == 0,
+           f"cross-chunk delta should be skipped, got "
+           f"{count_category(r, 'WETLAND_ON_SLOPE')}")
+
+
+def test_desert_soil_on_slope() -> None:
+    """Sand / salt flat on a same-chunk slope is a QUALITY issue."""
+    print("test_desert_soil_on_slope")
+    # Flat sand: clean.
+    tiles = [tile(x, y, terrainZ=10, matId=55)
+             for y in range(1, 6) for x in range(1, 6)]
+    r = audit_dump(make_tiles(tiles)).to_dict()
+    expect(count_category(r, "DESERT_SOIL_ON_SLOPE") == 0,
+           f"flat sand should be clean, got "
+           f"{count_category(r, 'DESERT_SOIL_ON_SLOPE')}")
+
+    # Spike beside sand and a salt flat: both neighbours flag.
+    spiked = make_tiles(tiles + [
+        tile(3, 3, terrainZ=15, matId=56),
+        tile(2, 3, terrainZ=10, matId=67),  # salt flat next to spike
+    ])
+    r = audit_dump(spiked).to_dict()
+    expect(count_category(r, "DESERT_SOIL_ON_SLOPE") == 4,
+           f"3 sand + 1 salt-flat neighbours should flag, got "
+           f"{count_category(r, 'DESERT_SOIL_ON_SLOPE')}")
 
 
 def test_clean_grid() -> None:
@@ -457,6 +516,8 @@ def main() -> int:
         test_dry_below_sea_inland_basin,
         test_dry_below_sea_ocean_connected,
         test_severity_classification,
+        test_wetland_on_slope,
+        test_desert_soil_on_slope,
     ]
 
     for t in tests:

@@ -80,7 +80,7 @@ composeFluidMap ∷ WorldGenParams → ChunkCoord → VU.Vector Int
                 → VU.Vector Int
                 → Maybe MagmaOverlay
                 → V.Vector (Maybe FluidCell)
-composeFluidMap params coord terrainMap _channelMask mMagma =
+composeFluidMap params coord terrainMap _channelMask _mMagma =
     let worldSize   = wgpWorldSize params
         timeline    = wgpGeoTimeline params
         oceanDist   = wgpOceanDist params
@@ -140,13 +140,41 @@ composeFluidMap params coord terrainMap _channelMask mMagma =
                             VUM.write v i s
             pure v
 
+        -- Per-tile lava-pool surface, same shape as 'lakeSurfMap'.
+        -- Pools come from the global 'gtWorldLavaPools' table
+        -- ('World.Magma.Pool.identifyLavaPools') — flat lava lakes
+        -- pooled in depressions at the breach cluster's lowest
+        -- opening. Highest fluid priority: lava beats water.
+        lavaSurfMap ∷ VU.Vector Int
+        lavaSurfMap = VU.create $ do
+            v ← VUM.replicate chunkArea minBound
+            V.forM_ (lakesInChunk (gtWorldLavaPools timeline) coord) $ \lce → do
+                let lid  = lceLakeId lce
+                    bm   = lceBitmask lce
+                    surf = WL.lkSurface
+                        (wlLakes (gtWorldLavaPools timeline) V.! lid)
+                forM_ [0 .. chunkArea - 1] $ \i →
+                    when (bm VU.! i) $ do
+                        cur ← VUM.read v i
+                        when (cur ≡ minBound ∨ surf < cur) $
+                            VUM.write v i surf
+            pure v
+
         waterFluid = V.generate chunkArea $ \idx →
             let terrZ   = terrainMap VU.! idx
                 isOcean = terrZ ≤ seaLevel ∧ chunkIsOceanic
                 rvSurf  = riverSurfMap VU.! idx
                 lkSurf  = lakeSurfMap  VU.! idx
+                lvSurf  = lavaSurfMap  VU.! idx
             in if terrZ ≡ minBound
                then Nothing
+               -- Lava: highest priority. Pool tiles (global table)
+               -- beat every water class; the pool identifier never
+               -- floods into water, so a conflict here means a
+               -- shoreline tile both tables claim — lava wins and
+               -- the shell mask downstream turns the rim to basalt.
+               else if lvSurf ≠ minBound ∧ lvSurf ≥ terrZ
+                    then Just (FluidCell Lava lvSurf)
                else if isOcean
                     then Just (FluidCell Ocean seaLevel)
                     else
@@ -159,36 +187,43 @@ composeFluidMap params coord terrainMap _channelMask mMagma =
                            then Just (FluidCell Lake lkSurf)
                            else Nothing
 
-        -- Lava: highest priority. Tiles with a chamber/chute breaking
-        -- the surface (per 'discoverChunkLava') overwrite whatever
-        -- water/ice would otherwise have rendered.
-        withLava = case mMagma of
-            Nothing → waterFluid
-            Just mo →
-                overlayLava coord (moSurface mo) waterFluid
+    -- Surface lava now comes from the pool table above; the magma
+    -- overlay's moSurface is no longer populated (caps only), so no
+    -- per-chunk overlay pass remains.
+    in waterFluid
 
-    in withLava
-
--- | Stamp lava tiles from a 'MagmaOverlay' onto an existing fluid map.
---   Lava overrides any pre-existing cell (water, river, lake). Out-of-
---   chunk entries in the overlay are skipped defensively.
-overlayLava ∷ ChunkCoord
-            → HM.HashMap (Int, Int) FluidCell
-            → V.Vector (Maybe FluidCell)
-            → V.Vector (Maybe FluidCell)
-overlayLava coord surf fluid
-    | HM.null surf = fluid
-    | otherwise = runST $ do
-        mv ← V.thaw fluid
-        let ChunkCoord cx cy = coord
-            baseGX = cx * chunkSize
-            baseGY = cy * chunkSize
-        forM_ (HM.toList surf) $ \((gx, gy), cell) → do
-            let lx = gx - baseGX
-                ly = gy - baseGY
-            when (lx ≥ 0 ∧ lx < chunkSize ∧ ly ≥ 0 ∧ ly < chunkSize) $
-                MV.write mv (ly * chunkSize + lx) (Just cell)
-        V.freeze mv
+-- | Per-tile water surface from the global lake + river tables,
+--   independent of terrain ('minBound' = no water claims the tile;
+--   lower-wins merge mirrors 'composeFluidMap'). Used by
+--   'discoverChunkLava' for the water-body-aware basalt-cap rule:
+--   a chamber breaching below a LAKE or RIVER surface gets capped
+--   the same way sub-sea breaches always have, instead of emitting
+--   lava into the water column.
+chunkWaterSurfMap ∷ WorldGenParams → ChunkCoord → VU.Vector Int
+chunkWaterSurfMap params coord = VU.create $ do
+    let timeline   = wgpGeoTimeline params
+        worldLakes = gtWorldLakes timeline
+        chunkArea  = chunkSize * chunkSize
+    v ← VUM.replicate chunkArea minBound
+    V.forM_ (lakesInChunk worldLakes coord) $ \lce → do
+        let surf = WL.lkSurface
+                (wlLakes worldLakes V.! lceLakeId lce)
+            bm = lceBitmask lce
+        forM_ [0 .. chunkArea - 1] $ \i →
+            when (bm VU.! i) $ do
+                cur ← VUM.read v i
+                when (cur ≡ minBound ∨ surf < cur) $
+                    VUM.write v i surf
+    V.forM_ (riversInChunk (gtWorldRivers timeline) coord) $ \rce → do
+        let bm    = rceBitmask rce
+            surfs = rcePerTileSurfZ rce
+        forM_ [0 .. chunkArea - 1] $ \i →
+            when (bm VU.! i) $ do
+                cur ← VUM.read v i
+                let s = surfs VU.! i
+                when (cur ≡ minBound ∨ s < cur) $
+                    VUM.write v i s
+    pure v
 
 -- | Raise the per-tile terrain surface where 'discoverChunkLava'
 --   marked a basalt cap. The cap value is the target terrain Z; we
@@ -237,10 +272,14 @@ lavaShellMask params coord fluid =
         Just fc | fcType fc ≡ Lava →
             let lx = idx `mod` chunkSize
                 ly = idx `div` chunkSize
-            in adjWater lx (ly - 1)
-               ∨ adjWater lx (ly + 1)
-               ∨ adjWater (lx - 1) ly
-               ∨ adjWater (lx + 1) ly
+            -- All 8 neighbours: a diagonal-only contact still puts
+            -- lava and water corner-to-corner on screen (the user's
+            -- "single lava tile on top of a column of water"), so
+            -- diagonals rim to basalt too.
+            in or [ adjWater (lx + dx) (ly + dy)
+                  | dx ← [-1, 0, 1], dy ← [-1, 0, 1]
+                  , (dx, dy) ≠ (0, 0)
+                  ]
         _ → False
     -- Within-chunk: read local fluid (authoritative, sees overlay).
     -- Cross-chunk: query the global fluid tables for the tile.
@@ -793,6 +832,7 @@ generateChunk registry catalog params coord =
         -- in inland sub-sea pockets).
         magmaOverlay = discoverChunkLava (wgpVolcanoCtx params) coord
                                           rawTerrainSurfaceMap
+                                          (chunkWaterSurfMap params coord)
 
         -- Patch terrain to raise capped tiles BEFORE composeFluidMap
         -- so the ocean classification + smoother see the new (sealed)
@@ -1279,6 +1319,7 @@ generateZoomTerrain registry params mBorderedCache coord =
         zoomChunkIsOceanic = chunkOrNeighborOceanic params coord
         zoomMagma = discoverChunkLava (wgpVolcanoCtx params) coord
                                        interiorElev
+                                       (chunkWaterSurfMap params coord)
         cappedZoomElev = applyBasaltCaps coord zoomMagma interiorElev
         rawZoomFluid = composeFluidMap params coord cappedZoomElev
                                        zoomInteriorMask zoomMagma

@@ -1,0 +1,299 @@
+{-# LANGUAGE Strict, UnicodeSyntax #-}
+
+-- | Lava pools — surface lava placed with fluid semantics.
+--
+--   v1 placed a per-tile lava film at terrain z wherever a chamber or
+--   chute crossed the surface, which draped staircases of lava down
+--   volcano flanks (each tile at its own elevation). This module
+--   replaces the film with pooling: lava exits a breach cluster at
+--   its LOWEST opening (pressure equalises inside the chute) and
+--   floods the connected region of terrain at or below that level —
+--   a flat lava lake in the local depression.
+--
+--   Computed once at timeline build on the same stitched world
+--   terrain the lake identifier uses, and stored as a 'WorldLakes'-
+--   shaped table ('gtWorldLavaPools') so chunk gen reads pools
+--   exactly like lakes: bitmask bit set ∧ pool surface ≥ terrain.
+--   Cross-chunk agreement is automatic, same as lakes.
+--
+--   Water interaction (user decision 2026-06-05): water tiles are
+--   flood BARRIERS — a pool stops at the shoreline and the chunk-gen
+--   shell mask ('lavaShellMask', 8-neighbour) turns the contact rim
+--   to basalt. Breach tiles under water (sea, lake, river) don't
+--   join clusters at all — they take the basalt-cap path in
+--   'discoverChunkLava'.
+module World.Magma.Pool
+    ( identifyLavaPools
+    , maxPoolArea
+    ) where
+
+import UPrelude
+import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
+import World.Chunk.Types (ChunkCoord(..), chunkSize)
+import World.Constants (seaLevel)
+import World.Fluid.Internal (wrapChunkCoordU)
+import World.Fluid.Lake.Types
+    ( Lake(..), WorldLakes(..), LakeChunkEntry(..), emptyWorldLakes
+    , lakesInChunk )
+import World.Fluid.River.Types (WorldRivers, riversInChunk
+    , RiverChunkEntry(..))
+import World.Geology.Timeline.Types (EventBBox(..))
+import World.Magma.Types (VolcanoCtx(..), MagmaSource(..))
+import World.Magma.Shape (pointInShape)
+
+-- | Safety cap on a single pool's footprint. Real pools are crater
+--   floors and saddle ponds (tens to a few hundred tiles). On dead-
+--   flat ground the basin grow has no saddle to stop at, so this cap
+--   is the effective bound there — 1024 = a 32×32 lava field.
+maxPoolArea ∷ Int
+maxPoolArea = 1024
+
+-- | How deep a pool may stand above the basin floor it drains to.
+--   Bounds the fill so a flank breach doesn't fill an entire valley
+--   to its rim — lava cools as it spreads; without a volume model a
+--   fixed head above the landing floor is the v1 stand-in.
+lavaPoolDepth ∷ Int
+lavaPoolDepth = 4
+
+-- | Max steepest-descent steps from a breach to its landing point.
+--   Lava that would run further than this just pools where the walk
+--   stops (cooling, again).
+maxDescentSteps ∷ Int
+maxDescentSteps = 96
+
+-- | Identify all lava pools. Inputs mirror 'identifyWorldLakes':
+--   the stitched world terrain grid (indexed
+--   @(gy+half)*worldTiles + (gx+half)@, 'minBound' beyond glacier)
+--   plus the already-built lake and river tables (water barriers).
+identifyLavaPools
+    ∷ Int               -- ^ worldSize (chunks per side)
+    → VolcanoCtx
+    → WorldLakes        -- ^ water barrier: lakes
+    → WorldRivers       -- ^ water barrier: rivers
+    → VU.Vector Int     -- ^ world terrain (worldTiles²)
+    → WorldLakes        -- ^ pool table (reusing the lake shape)
+identifyLavaPools worldSize ctx lakes rivers terrain
+    | V.null (vcSources ctx) = emptyWorldLakes
+    | otherwise =
+        let pools = concatMap poolsForSource
+                              (V.toList (vcSources ctx))
+            -- Merge pools sharing tiles (two sources breaching the
+            -- same basin): keep distinct pools; compose-time merge
+            -- in 'composeFluidMap' resolves overlaps lowest-wins.
+            lakesV = V.fromList (map poolToLake pools)
+            byChunk = buildChunkIndex pools
+        in if null pools
+           then emptyWorldLakes
+           else WorldLakes
+                { wlLakes      = lakesV
+                , wlByChunk    = byChunk
+                , wlCarveDelta = HM.empty
+                }
+  where
+    worldTiles = worldSize * chunkSize
+    halfWorld  = worldTiles `div` 2
+
+    terrainAt ∷ Int → Int → Int
+    terrainAt gx gy =
+        let gxo = gx + halfWorld
+            gyo = gy + halfWorld
+        in if gxo < 0 ∨ gxo ≥ worldTiles ∨ gyo < 0 ∨ gyo ≥ worldTiles
+           then minBound
+           else terrain VU.! (gyo * worldTiles + gxo)
+
+    -- Water barrier: rendered ocean proxy (sub-sea terrain), or a
+    -- lake/river whose table surface covers this tile's terrain.
+    -- Mirrors the per-tile classification in 'composeFluidMap'.
+    isWater ∷ Int → Int → Bool
+    isWater gx gy =
+        let tz = terrainAt gx gy
+        in tz ≡ minBound
+           ∨ tz ≤ seaLevel
+           ∨ lakeAt gx gy tz
+           ∨ riverAt gx gy tz
+
+    chunkOf ∷ Int → Int → (ChunkCoord, Int)
+    chunkOf gx gy =
+        let fd a = let (q, r) = a `divMod` chunkSize
+                   in if r < 0 then q - 1 else q
+            cx = fd gx
+            cy = fd gy
+            lx = gx - cx * chunkSize
+            ly = gy - cy * chunkSize
+        in ( wrapChunkCoordU worldSize (ChunkCoord cx cy)
+           , ly * chunkSize + lx )
+
+    lakeAt gx gy tz =
+        let (cc, i) = chunkOf gx gy
+        in V.any (\lce → lceBitmask lce VU.! i
+                       ∧ lkSurface (wlLakes lakes
+                                    V.! lceLakeId lce) ≥ tz)
+                 (lakesInChunk lakes cc)
+
+    riverAt gx gy tz =
+        let (cc, i) = chunkOf gx gy
+        in V.any (\rce → rceBitmask rce VU.! i
+                       ∧ rcePerTileSurfZ rce VU.! i ≥ tz)
+                 (riversInChunk rivers cc)
+
+    -- All pools spawned by one source: breach scan over its bbox,
+    -- 8-connected clustering, then a flood per cluster from its
+    -- lowest opening.
+    poolsForSource src =
+        let shapes = msShapes src
+            bb = msBBox src
+            breaches = HS.fromList
+                [ (gx, gy)
+                | (gx, gy) ← bboxTiles bb
+                , let tz = terrainAt gx gy
+                , tz ≠ minBound
+                , not (isWater gx gy)
+                , any (pointInShape worldSize gx gy tz) shapes
+                ]
+        in [ pool
+           | cluster ← clusters8 breaches
+           , Just pool ← [floodPool cluster]
+           ]
+
+    bboxTiles (EventBBox xlo ylo xhi yhi) =
+        [ (gx, gy) | gy ← [ylo .. yhi], gx ← [xlo .. xhi] ]
+
+    -- 8-connected components of the breach set.
+    clusters8 ∷ HS.HashSet (Int, Int) → [[(Int, Int)]]
+    clusters8 s0 = go s0
+      where
+        go s = case take 1 (HS.toList s) of
+            []      → []
+            (t : _) →
+                let comp = grow (HS.singleton t) [t]
+                in HS.toList comp : go (HS.difference s comp)
+              where
+                grow acc [] = acc
+                grow acc (p@(px, py) : rest) =
+                    let nbrs = [ q
+                               | dx ← [-1, 0, 1], dy ← [-1, 0, 1]
+                               , (dx, dy) ≠ (0, 0)
+                               , let q = (px + dx, py + dy)
+                               , HS.member q s
+                               , not (HS.member q acc)
+                               ]
+                    in grow (foldr HS.insert acc nbrs) (nbrs ⧺ rest)
+
+    -- Pour semantics: lava exits the cluster at its lowest breach,
+    -- runs steepest-descent to a landing point (local minimum, water
+    -- shoreline, or the step cap), then basin-fills FROM THE FLOOR
+    -- UP — level = floor + 'lavaPoolDepth', clamped below the
+    -- basin's spill saddle so the pool can never sheet downhill out
+    -- of the depression (the bug in the first cut of this module:
+    -- a sub-level-set flood at breach z covered every connected
+    -- lower tile, producing 2000-tile lava plateaus standing high
+    -- over open slopes).
+    floodPool ∷ [(Int, Int)] → Maybe (Int, [(Int, Int)])
+    floodPool [] = Nothing
+    floodPool cluster =
+        let breachZ = minimum [ terrainAt gx gy | (gx, gy) ← cluster ]
+            exit = case [ p | p@(gx, gy) ← cluster
+                            , terrainAt gx gy ≡ breachZ ] of
+                (p : _) → p
+                []      → minimum cluster  -- unreachable; breachZ ∈ cluster
+            m = descend 0 exit
+            mz = uncurry terrainAt m
+            -- Priority-grow the basin of @m@ lowest-boundary-first.
+            -- When growth pops a tile LOWER than the running level,
+            -- we've crossed the spill saddle — stop there. Water
+            -- tiles drain the basin the same way (barrier + spill).
+            targetLevel = min (mz + lavaPoolDepth)
+                              (breachZ + lavaPoolDepth)
+            (level, region) = grow targetLevel mz
+                                   (HS.singleton m)
+                                   [(mz, m)] []
+            tiles = [ p | p ← region
+                        , uncurry terrainAt p ≤ level ]
+        in if null tiles
+           then Nothing
+           else Just (level, tiles)
+      where
+        descend n p@(px, py)
+            | n ≥ maxDescentSteps = p
+            | otherwise =
+                let tz = terrainAt px py
+                    downs = [ (tzq, q)
+                            | (dx, dy) ← [(1,0),(-1,0),(0,1),(0,-1)]
+                            , let q = (px + dx, py + dy)
+                            , let tzq = uncurry terrainAt q
+                            , tzq ≠ minBound
+                            , tzq < tz
+                            ]
+                in case downs of
+                    [] → p
+                    _  → let (_, q) = minimum downs
+                         in if uncurry isWater q
+                            -- Stop on the shore tile, not in water.
+                            then p
+                            else descend (n + 1) q
+
+        -- Sorted-list priority queue: pools are small (≤ maxPoolArea)
+        -- so O(n) insertion is fine.
+        grow targetLevel curLevel visited frontier acc =
+            case popMin frontier of
+                Nothing → (curLevel, acc)
+                Just ((tz, p), rest)
+                    | length acc ≥ maxPoolArea → (curLevel, acc)
+                    -- Crossing a saddle: the next-lowest boundary
+                    -- tile is below the level we've already had to
+                    -- rise to — lava would drain over it. Stop; the
+                    -- pool stands at the level reached so far.
+                    | tz < curLevel → (curLevel, acc)
+                    | tz > targetLevel → (targetLevel, acc)
+                    | uncurry isWater p → (min curLevel tz, acc)
+                    | otherwise →
+                        let nbrs = [ (uncurry terrainAt q, q)
+                                   | (dx, dy) ← [(1,0),(-1,0),(0,1),(0,-1)]
+                                   , let q = (fst p + dx, snd p + dy)
+                                   , not (HS.member q visited)
+                                   , uncurry terrainAt q ≠ minBound
+                                   ]
+                            visited' = foldr (HS.insert . snd) visited nbrs
+                        in grow targetLevel (max curLevel tz)
+                                visited' (foldr insertQ rest nbrs)
+                                (p : acc)
+
+        popMin [] = Nothing
+        popMin (x : xs) = Just (x, xs)
+
+        insertQ x [] = [x]
+        insertQ x@(k, _) ys@(y@(k', _) : rest)
+            | k ≤ k'    = x : ys
+            | otherwise = y : insertQ x rest
+
+    poolToLake (zFill, tiles) =
+        let xs = map fst tiles
+            ys = map snd tiles
+        in Lake
+            { lkSurface  = zFill
+            , lkFloor    = minimum
+                [ terrainAt gx gy | (gx, gy) ← tiles ]
+            , lkArea     = length tiles
+            , lkBBoxMinX = minimum xs
+            , lkBBoxMinY = minimum ys
+            , lkBBoxMaxX = maximum xs
+            , lkBBoxMaxY = maximum ys
+            }
+
+    -- Per-chunk bitmask entries, mirroring the lake table's layout.
+    buildChunkIndex pools = HM.fromListWith (V.++)
+        [ (cc, V.singleton (LakeChunkEntry pid bm))
+        | (pid, (_, tiles)) ← zip [0 ..] pools
+        , (cc, bm) ← HM.toList (chunkMasks tiles)
+        ]
+
+    chunkMasks tiles = HM.fromListWith orMask
+        [ (cc, VU.generate (chunkSize * chunkSize) (≡ i))
+        | (gx, gy) ← tiles
+        , let (cc, i) = chunkOf gx gy
+        ]
+      where
+        orMask = VU.zipWith (∨)

@@ -7,12 +7,13 @@ module Test.Headless.Harness
   , getWorldGenParams
   , moveCamera
   , waitForChunksAt
+  , queueChunks
   ) where
 
 import UPrelude
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
-import Data.IORef (readIORef, writeIORef, modifyIORef')
+import Data.IORef (readIORef, writeIORef, modifyIORef', atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
@@ -104,3 +105,12 @@ waitForChunksAt ws coord timeoutSecs = go 0
               else do
                   threadDelay 50000
                   go (n + 1)
+
+-- | Queue chunk coords for generation by the world thread (the same
+--   path Lua's @world.loadChunksInRegion@ uses). Pair with
+--   'waitForChunksAt' on the last coord to block until generated.
+queueChunks ∷ WorldState → [ChunkCoord] → IO ()
+queueChunks ws coords = do
+    td ← readIORef (wsTilesRef ws)
+    let needed = filter (\c → not (HM.member c (wtdChunks td))) coords
+    atomicModifyIORef' (wsInitQueueRef ws) $ \q → (q ⧺ needed, ())

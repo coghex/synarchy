@@ -80,6 +80,16 @@ coastalProximity = 25
 coastalChunkRadius ∷ Int
 coastalChunkRadius = 3
 
+-- | A coastal basin is sea-level-clamped only when its FLOOR is at
+--   or below @seaLevel + clampFloorTolerance@. The coastal tests
+--   above are deliberately wide (chunk-dilated geography) — without
+--   this gate they reach perched mountain pockets inside "coastal"
+--   chunks and the clamp + carve digs them into 1-tile wells with
+--   sea-level water at the bottom. Tolerance 2 keeps beach pans a
+--   tile or two above sea rendering flush with the adjacent ocean.
+clampFloorTolerance ∷ Int
+clampFloorTolerance = 2
+
 -- * Entry point
 
 -- | Run the full lake identification pipeline. Allocates ~50 MB peak
@@ -362,15 +372,30 @@ buildLakes nLabels terrain filled labels worldTiles coastalMask oceanMap = runST
         let rawSurf  = surfs  VU.! i
             rawFloor = floors VU.! i
             -- Coastal basin: clamp surface to sea level so it
-            -- renders flush with the adjacent open ocean instead of as
-            -- a perched inland lake stepped above it. The floor
-            -- restriction has been dropped — for above-sea coastal
-            -- basins the chunk-gen pipeline carves the basin tiles
-            -- down to sub-sea via 'wlCarveDelta' so the water plane
-            -- still finds tiles to render at @seaLevel@.
+            -- renders flush with the adjacent open ocean instead of
+            -- as a perched inland lake stepped above it. For
+            -- above-sea floors the chunk-gen pipeline carves the
+            -- basin tiles down to sub-sea via 'wlCarveDelta' so the
+            -- water plane still finds tiles to render at @seaLevel@.
+            --
+            -- The clamp is gated on the basin FLOOR sitting at or
+            -- barely above sea level ('clampFloorTolerance'). The
+            -- coastal test alone is chunk-dilated geography — it
+            -- reaches 3 chunks inland and through dry sub-sea
+            -- basins, so without the floor gate a 1-tile mountain
+            -- pocket at z 35 inside a "coastal" chunk would clamp
+            -- 36→0 and then carve 35→−1: the infamous 1-tile wells
+            -- with 30z walls and a film of sea-level water at the
+            -- bottom (TERRAIN_PIT in world_audit, fixed 2026-06-05).
+            -- Beach pans a tile or two above sea still clamp and
+            -- render flush — the intent of dropping the original
+            -- floor restriction — but perched basins keep their rim
+            -- surface and render as ordinary ponds.
             adjSurf
-              | coastal VU.! i ∧ rawSurf > seaLevel = seaLevel
-              | otherwise                            = rawSurf
+              | coastal VU.! i
+              ∧ rawSurf > seaLevel
+              ∧ rawFloor ≤ seaLevel + clampFloorTolerance = seaLevel
+              | otherwise                                  = rawSurf
         in LakeWithId
             { lkOldId = i
             , lkLake  = Lake
