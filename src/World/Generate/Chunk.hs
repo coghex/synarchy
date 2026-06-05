@@ -745,7 +745,7 @@ generateChunk registry catalog params coord =
                         Just dv → dv VU.! li
                         Nothing → 0
             in max dr dl
-        finalElevVec = VU.generate borderArea $ \idx →
+        carvedElevVec = VU.generate borderArea $ \idx →
             let z = despikedElev VU.! idx
             in if z ≡ minBound
                then z
@@ -753,6 +753,21 @@ generateChunk registry catalog params coord =
                  let (lx, ly) = fromIndex idx
                      (gx, gy) = chunkToGlobal coord lx ly
                  in z - carveAt gx gy
+
+        -- Second despike, post-carve. The pass above ran BEFORE the
+        -- global river/lake carve deltas were subtracted — a natural
+        -- cliff-edge tile beside a deeply carved channel is not a
+        -- spike pre-carve (its high neighbour hides it) but becomes
+        -- a 100z+ pillar once the neighbour is carved away (seed 7
+        -- w128 @(-96,159): 6→132→177 natural, 177 carved to 29 ⇒
+        -- 132 left standing — TERRAIN_SPIKE). Re-running the same
+        -- bordered despike on the carved elevations collapses these;
+        -- it only fires on 1-tile pillars >12 above ALL cardinal
+        -- neighbours, so untouched natural terrain is unaffected.
+        -- Mirrored in 'generateZoomTerrain' (chunk/fast parity).
+        (finalElevVec, _) =
+            removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
+                                  (carvedElevVec, finalMatVec)
 
         lookupFinal lx ly =
             if inBorder lx ly
@@ -1272,7 +1287,7 @@ generateZoomTerrain registry params mBorderedCache coord =
                         Just dv → dv VU.! li
                         Nothing → 0
             in max dr dl
-        finalElevVec = VU.generate borderArea $ \idx →
+        carvedElevVec = VU.generate borderArea $ \idx →
             let z = despikedElev VU.! idx
             in if z ≡ minBound
                then z
@@ -1280,6 +1295,13 @@ generateZoomTerrain registry params mBorderedCache coord =
                  let (lx, ly) = fromIndex idx
                      (gx, gy) = chunkToGlobal coord lx ly
                  in z - carveAt gx gy
+
+        -- Second despike post-carve — mirrors 'generateChunk' (see
+        -- the comment there); required here too so the zoom map and
+        -- the detail chunks agree (chunk/fast parity).
+        (finalElevVec, _) =
+            removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
+                                  (carvedElevVec, finalMatVec)
 
         -- Extract interior 16×16 from bordered region; carve already baked.
         chunkArea = chunkSize * chunkSize
