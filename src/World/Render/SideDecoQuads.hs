@@ -13,7 +13,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..), mkVe
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
-import World.Material (matOcean, unMaterialId)
+import World.Material (matOcean, matLava, unMaterialId)
 import World.Generate (chunkToGlobal)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
                   , worldLayer, applyFacing)
@@ -70,7 +70,7 @@ waterSideFaceQuads lookupSlot lookupFmSlot textures facing coord
     , z ≤ zSlice
     , let (gx, gy) = chunkToGlobal coord lx ly
     , sq ← maybeToList (waterSideQuad lookupSlot lookupFmSlot textures facing
-                            gx gy z isLeftFace
+                            (fcType fc) gx gy z isLeftFace
                             zSlice effDepth tileAlpha xOffset vb)
     ]
 
@@ -84,11 +84,12 @@ neighborDirs facing lx ly = case facing of
     FaceNorth → [(lx, ly - 1, True),  (lx - 1, ly, False)]
     FaceWest  → [(lx - 1, ly, True),  (lx, ly + 1, False)]
 
--- | Create a single water side-face quad at a given z-level.
+-- | Create a single fluid side-face quad at a given z-level.
 waterSideQuad ∷ (TextureHandle → Int)
               → (TextureHandle → Float)
               → WorldTextures
               → CameraFacing
+              → FluidType       -- ^ owning fluid (texture choice)
               → Int → Int       -- ^ global x, y
               → Int             -- ^ z-level of this side face
               → Bool            -- ^ True = left face, False = right face
@@ -96,7 +97,7 @@ waterSideQuad ∷ (TextureHandle → Int)
               → Float → Float   -- ^ tileAlpha, xOffset
               → ViewBounds
               → Maybe SortableQuad
-waterSideQuad lookupSlot lookupFmSlot textures facing gx gy z isLeft
+waterSideQuad lookupSlot lookupFmSlot textures facing ftype gx gy z isLeft
               zSlice effDepth tileAlpha xOffset vb =
     let (rawX, rawY) = gridToScreen facing gx gy
         (fa, fb) = applyFacing facing gx gy
@@ -119,8 +120,14 @@ waterSideQuad lookupSlot lookupFmSlot textures facing gx gy z isLeft
                     + fromIntegral relativeZ * 0.001
                     + 0.00005
 
-            -- All water uses the same material texture (matOcean)
-            texHandle = case HM.lookup (unMaterialId matOcean)
+            -- Texture by fluid type: lava side faces are lava, every
+            -- water class shares the ocean texture. (Pre-2026-06-06
+            -- lava sides rendered as water — bright blue cliffs under
+            -- floating pool rims.)
+            sideMat = case ftype of
+                Lava → matLava
+                _    → matOcean
+            texHandle = case HM.lookup (unMaterialId sideMat)
                                        (wtTileTextures textures) of
                             Nothing → wtNoTexture textures
                             Just h  → h

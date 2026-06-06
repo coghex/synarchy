@@ -34,12 +34,11 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Constants (seaLevel)
-import World.Fluid.Internal (wrapChunkCoordU)
 import World.Fluid.Lake.Types
     ( Lake(..), WorldLakes(..), LakeChunkEntry(..), emptyWorldLakes
     , lakesInChunk )
 import World.Fluid.River.Types (WorldRivers, riversInChunk
-    , RiverChunkEntry(..))
+    , RiverChunkEntry(..), wrCarveDelta)
 import World.Geology.Timeline.Types (EventBBox(..))
 import World.Magma.Types (VolcanoCtx(..), MagmaSource(..))
 import World.Magma.Shape (pointInShape)
@@ -63,6 +62,16 @@ lavaPoolDepth = 4
 --   stops (cooling, again).
 maxDescentSteps ∷ Int
 maxDescentSteps = 96
+
+-- | Outer rim radius (tiles, Euclidean from the landing point) and
+--   its per-tile hash jitter. π·18² ≈ 'maxPoolArea', so the radius
+--   and area caps agree; the jitter roughens the rim by ±3 tiles
+--   wherever the radius (rather than a saddle) is what stops growth.
+maxPoolRadius ∷ Int
+maxPoolRadius = 18
+
+rimJitter ∷ Int
+rimJitter = 3
 
 -- | Identify all lava pools. Inputs mirror 'identifyWorldLakes':
 --   the stitched world terrain grid (indexed
@@ -96,13 +105,35 @@ identifyLavaPools worldSize ctx lakes rivers terrain
     worldTiles = worldSize * chunkSize
     halfWorld  = worldTiles `div` 2
 
+    -- CARVE-AWARE terrain: the stitched grid is pre-carve, but chunk
+    -- gen renders @terrain − carveAt@ (river channels, clamped-lake
+    -- basins). Pools identified on the raw grid float over carved
+    -- gorges — observed as 19z-deep lava sheets burying rivers (seed
+    -- 1840733254 w64 plates 10 @(-21..-10, 49)). Subtracting the
+    -- same deltas compose subtracts keeps pools, barriers, and the
+    -- rendered world in one reality.
     terrainAt ∷ Int → Int → Int
     terrainAt gx gy =
         let gxo = gx + halfWorld
             gyo = gy + halfWorld
         in if gxo < 0 ∨ gxo ≥ worldTiles ∨ gyo < 0 ∨ gyo ≥ worldTiles
            then minBound
-           else terrain VU.! (gyo * worldTiles + gxo)
+           else
+             let z = terrain VU.! (gyo * worldTiles + gxo)
+             in if z ≡ minBound then z else z - carveDeltaAt gx gy
+
+    -- Mirror of 'World.Generate.Chunk.carveAt' over the same global
+    -- tables (max of river + lake delta per tile).
+    carveDeltaAt ∷ Int → Int → Int
+    carveDeltaAt gx gy =
+        let (cc, li) = chunkOf gx gy
+            dr = case HM.lookup cc (wrCarveDelta rivers) of
+                Just dv → dv VU.! li
+                Nothing → 0
+            dl = case HM.lookup cc (wlCarveDelta lakes) of
+                Just dv → dv VU.! li
+                Nothing → 0
+        in max dr dl
 
     -- Water barrier: rendered ocean proxy (sub-sea terrain), or a
     -- lake/river whose table surface covers this tile's terrain.
@@ -115,6 +146,10 @@ identifyLavaPools worldSize ctx lakes rivers terrain
            ∨ lakeAt gx gy tz
            ∨ riverAt gx gy tz
 
+    -- RAW chunk coords (no u-wrap) — the lake/river/carve tables and
+    -- composeFluidMap's per-chunk lookups all key by the chunk's raw
+    -- coord ('buildChunkIndex' convention); wrapping here would file
+    -- pool entries under keys the reader never asks for.
     chunkOf ∷ Int → Int → (ChunkCoord, Int)
     chunkOf gx gy =
         let fd a = let (q, r) = a `divMod` chunkSize
@@ -123,7 +158,7 @@ identifyLavaPools worldSize ctx lakes rivers terrain
             cy = fd gy
             lx = gx - cx * chunkSize
             ly = gy - cy * chunkSize
-        in ( wrapChunkCoordU worldSize (ChunkCoord cx cy)
+        in ( ChunkCoord cx cy
            , ly * chunkSize + lx )
 
     lakeAt gx gy tz =
@@ -207,9 +242,9 @@ identifyLavaPools worldSize ctx lakes rivers terrain
             -- tiles drain the basin the same way (barrier + spill).
             targetLevel = min (mz + lavaPoolDepth)
                               (breachZ + lavaPoolDepth)
-            (level, region) = grow targetLevel mz
+            (level, region) = grow m targetLevel mz
                                    (HS.singleton m)
-                                   [(mz, m)] []
+                                   [(mz, m)] 0 []
             tiles = [ p | p ← region
                         , uncurry terrainAt p ≤ level ]
         in if null tiles
@@ -237,11 +272,26 @@ identifyLavaPools worldSize ctx lakes rivers terrain
 
         -- Sorted-list priority queue: pools are small (≤ maxPoolArea)
         -- so O(n) insertion is fine.
-        grow targetLevel curLevel visited frontier acc =
+        --
+        -- Tie order is LOAD-BEARING: equal-elevation tiles must queue
+        -- FIFO ('insertQ' appends AFTER equal keys). With ties going
+        -- to the FRONT the queue degenerates into a stack on flat
+        -- terrain — depth-first growth that marches along whichever
+        -- neighbour lands at the head, producing perfectly straight
+        -- 1-tile-wide "lava rivers" along the +x axis (seed 7 w128:
+        -- a 15×1 pool; seed 42: 38×1). Plateau-snapped terrain made
+        -- flats ubiquitous, so this is the common case, not the edge
+        -- case. FIFO ties = breadth-first = compact pools.
+        --
+        -- The jittered radius bound ('withinRim') keeps the rim
+        -- organic when growth is radius-limited (large flats): a
+        -- hash-perturbed Euclidean disc instead of a clean BFS
+        -- diamond.
+        grow m targetLevel curLevel visited frontier n acc =
             case popMin frontier of
                 Nothing → (curLevel, acc)
                 Just ((tz, p), rest)
-                    | length acc ≥ maxPoolArea → (curLevel, acc)
+                    | n ≥ maxPoolArea → (curLevel, acc)
                     -- Crossing a saddle: the next-lowest boundary
                     -- tile is below the level we've already had to
                     -- rise to — lava would drain over it. Stop; the
@@ -255,19 +305,39 @@ identifyLavaPools worldSize ctx lakes rivers terrain
                                    , let q = (fst p + dx, snd p + dy)
                                    , not (HS.member q visited)
                                    , uncurry terrainAt q ≠ minBound
+                                   , withinRim m q
                                    ]
                             visited' = foldr (HS.insert . snd) visited nbrs
-                        in grow targetLevel (max curLevel tz)
+                        in grow m targetLevel (max curLevel tz)
                                 visited' (foldr insertQ rest nbrs)
-                                (p : acc)
+                                (n + 1) (p : acc)
 
         popMin [] = Nothing
         popMin (x : xs) = Just (x, xs)
 
         insertQ x [] = [x]
         insertQ x@(k, _) ys@(y@(k', _) : rest)
-            | k ≤ k'    = x : ys
+            | k < k'    = x : ys
             | otherwise = y : insertQ x rest
+
+        -- Inside the pool's outer rim: Euclidean distance from the
+        -- landing point, with a per-tile hash jitter of ±'rimJitter'
+        -- tiles so the radius-limited edge reads as a natural pool
+        -- margin rather than geometry.
+        withinRim (mx, my) (qx, qy) =
+            let dx = qx - mx
+                dy = qy - my
+                h  = tileHash qx qy
+                r  = maxPoolRadius + (h `mod` (2 * rimJitter + 1))
+                                   - rimJitter
+            in dx * dx + dy * dy ≤ r * r
+
+        tileHash qx qy =
+            let z = fromIntegral qx * 0x9E3779B97F4A7C15
+                    `xor` fromIntegral qy * 0xC2B2AE3D27D4EB4F
+                    `xor` vcSeed ctx
+                z' = (z `xor` (z `shiftR` 31)) * 0xFF51AFD7ED558CCD
+            in fromIntegral ((z' `shiftR` 33) `mod` 0x7FFFFFFF) ∷ Int
 
     poolToLake (zFill, tiles) =
         let xs = map fst tiles

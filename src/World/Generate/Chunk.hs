@@ -250,19 +250,26 @@ applyBasaltCaps coord (Just mo) terrain
                 when (capZ > cur) (VUM.write mv idx capZ)
         VU.freeze mv
 
--- | Mark the lava tiles that lie on a chunk boundary with any
---   non-lava water (Ocean / Lake / River). Within-chunk neighbours
---   read the local fluid map (which already reflects the lava
---   overlay, so lava-vs-lava adjacencies don't trigger a shell);
---   cross-chunk neighbours fall through to 'isWaterAtGlobal' which
---   queries the global lake / river / ocean tables directly. This
---   matters because chunk-gen doesn't have the neighbour chunks'
---   fluid maps available — we'd otherwise miss every lava-water
---   boundary that happens to fall on a chunk edge.
+-- | Mark the OUTERMOST lava tiles — any lava tile 8-adjacent to a
+--   non-lava tile (water OR dry land). These become the basalt crust
+--   rim ('applyLavaShell' + the column build's @matBasalt@ stamp):
+--   pools read as natural volcanic features with a solidified edge
+--   instead of liquid lava standing in a sharp cliff against grass
+--   (user decision 2026-06-06; previously the shell fired only on
+--   water contact and dry rims showed bare floating lava edges).
+--
+--   Within-chunk neighbours read the local fluid map (which already
+--   reflects pool placement, so lava-vs-lava stays liquid);
+--   cross-chunk neighbours check the global pool table at exact
+--   bordered terrain (@terrAt@ — the shell only looks 1 tile out,
+--   well inside the 4-tile border).
 lavaShellMask ∷ WorldGenParams → ChunkCoord
+              → (Int → Int → Maybe Int)
+              -- ^ bordered terrain lookup (chunk-local coords; Just
+              --   only within the bordered region)
               → V.Vector (Maybe FluidCell)
               → VU.Vector Bool
-lavaShellMask params coord fluid =
+lavaShellMask params coord terrAt fluid =
     VU.generate (chunkSize * chunkSize) isShell
   where
     ChunkCoord cx cy = coord
@@ -272,24 +279,50 @@ lavaShellMask params coord fluid =
         Just fc | fcType fc ≡ Lava →
             let lx = idx `mod` chunkSize
                 ly = idx `div` chunkSize
-            -- All 8 neighbours: a diagonal-only contact still puts
-            -- lava and water corner-to-corner on screen (the user's
-            -- "single lava tile on top of a column of water"), so
-            -- diagonals rim to basalt too.
-            in or [ adjWater (lx + dx) (ly + dy)
+            in or [ adjNonLava (lx + dx) (ly + dy)
                   | dx ← [-1, 0, 1], dy ← [-1, 0, 1]
                   , (dx, dy) ≠ (0, 0)
                   ]
         _ → False
-    -- Within-chunk: read local fluid (authoritative, sees overlay).
-    -- Cross-chunk: query the global fluid tables for the tile.
-    adjWater nx ny
+    -- Within-chunk: read local fluid (authoritative, sees pools).
+    -- Cross-chunk: the global pool table tells us whether the
+    -- neighbour is lava; anything else (dry, water, cap) rims.
+    adjNonLava nx ny
         | nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize =
             case fluid V.! (ny * chunkSize + nx) of
                 Just fc → fcType fc ≢ Lava
-                Nothing → False
+                Nothing → True
         | otherwise =
-            isWaterAtGlobal params (baseGX + nx) (baseGY + ny)
+            not (isLavaAtGlobal params (baseGX + nx) (baseGY + ny)
+                                 (terrAt nx ny))
+
+-- | True iff the global pool table places lava at @(gx, gy)@:
+--   a pool bitmask covers the tile and the pool surface is at or
+--   above the tile's terrain. Mirrors the placement rule in
+--   'composeFluidMap'. @mExactTerr@ should be the bordered carved
+--   terrain when available.
+isLavaAtGlobal ∷ WorldGenParams → Int → Int → Maybe Int → Bool
+isLavaAtGlobal params gx gy mExactTerr =
+    let timeline = wgpGeoTimeline params
+        pools    = gtWorldLavaPools timeline
+        floorDivCS a =
+            let (q, r) = a `divMod` chunkSize
+            in if r < 0 then q - 1 else q
+        cx = floorDivCS gx
+        cy = floorDivCS gy
+        lx = gx - cx * chunkSize
+        ly = gy - cy * chunkSize
+        idx = ly * chunkSize + lx
+        tz = case mExactTerr of
+            Just z | z ≠ minBound → z
+            _ → fst (elevationAtGlobal (wgpSeed params)
+                                       (wgpPlates params)
+                                       (wgpWorldSize params) gx gy)
+    in V.any
+        (\lce → WL.lceBitmask lce VU.! idx
+              ∧ WL.lkSurface
+                  (wlLakes pools V.! WL.lceLakeId lce) ≥ tz)
+        (lakesInChunk pools (ChunkCoord cx cy))
 
 -- | "This chunk OR any 4-cardinal neighbour is oceanic per the
 --   chunk-level BFS." Loosens the strict @oceanDistAt … ≡ 0@ test
@@ -319,22 +352,17 @@ chunkOrNeighborOceanic params coord =
 --   for cross-chunk neighbour queries where we don't have the
 --   neighbour chunk's final fluid map.
 --
---   The lake/river checks are precise — they read the per-chunk
---   bitmasks the same way 'composeFluidMap' does, then compare each
---   table's surface elevation against an approximate terrain z
---   sampled via 'elevationAtGlobal' (raw plate elevation,
---   pre-erosion). The ocean check uses 'chunkOrNeighborOceanic' so
---   coastal chunks misclassified by the chunk-level BFS still
---   report their sub-sea tiles as ocean.
---
---   Approximation impact: erosion can shift the post-init terrain a
---   few tiles up or down vs. 'elevationAtGlobal', which can
---   occasionally over- or under-classify edge tiles as water. The
---   visible effect is a cosmetic 1-tile shell mismatch at the
---   affected chunk-border tiles — never a missing or extra fluid
---   region.
-isWaterAtGlobal ∷ WorldGenParams → Int → Int → Bool
-isWaterAtGlobal params gx gy =
+--   The lake/river checks read the per-chunk bitmasks the same way
+--   'composeFluidMap' does, comparing each table's surface against
+--   the tile's terrain. When the caller supplies @mExactTerr@ (the
+--   bordered region's carved terrain — 'lavaShellMask' always can,
+--   its queries are 1 tile out) the comparison is exact; otherwise
+--   it falls back to 'elevationAtGlobal' (raw plate elevation,
+--   pre-erosion), which can disagree with final terrain by a few z
+--   at eroded/carved tiles and cause a cosmetic 1-tile shell
+--   mismatch.
+isWaterAtGlobal ∷ WorldGenParams → Int → Int → Maybe Int → Bool
+isWaterAtGlobal params gx gy mExactTerr =
     let worldSize  = wgpWorldSize params
         timeline   = wgpGeoTimeline params
         lakes      = gtWorldLakes timeline
@@ -350,8 +378,13 @@ isWaterAtGlobal params gx gy =
         ly = gy - cy * chunkSize
         idx = ly * chunkSize + lx
         cc = wrapChunkCoordU worldSize (ChunkCoord cx cy)
-        baseElev =
-            fst (elevationAtGlobal seed plates worldSize gx gy)
+        -- Exact carved terrain when the caller has it (bordered
+        -- region lookups); raw plate elevation as the fallback —
+        -- the approximation can disagree with final terrain by a
+        -- few z at eroded/carved tiles.
+        baseElev = case mExactTerr of
+            Just tz | tz ≠ minBound → tz
+            _ → fst (elevationAtGlobal seed plates worldSize gx gy)
         chunkIsOcean = chunkOrNeighborOceanic params (ChunkCoord cx cy)
         isOcean = chunkIsOcean ∧ baseElev ≤ seaLevel
         -- Lake hit: any lake's bitmask bit set AND surface ≥ terrain.
@@ -866,7 +899,11 @@ generateChunk registry catalog params coord =
         -- and the column-build below stamps matBasalt on top, so
         -- lava and water never sit edge-to-edge. Interior lava is
         -- preserved — only the contact rim becomes solid rock.
-        lavaShell = lavaShellMask params coord rawFluidMap
+        lavaShell = lavaShellMask params coord
+                        (\lx ly → if inBorder lx ly
+                                  then Just (finalElevVec VU.! toIndex lx ly)
+                                  else Nothing)
+                        rawFluidMap
         shellFluidMap = applyLavaShell lavaShell cappedTerrainMap
                                         chunkIsOceanicHere rawFluidMap
 
@@ -1352,7 +1389,11 @@ generateZoomTerrain registry params mBorderedCache coord =
         -- picks the material colour, which is basalt's dark grey,
         -- so the contact rim shows as a thin dark border between
         -- lava and water).
-        zoomLavaShell = lavaShellMask params coord rawZoomFluid
+        zoomLavaShell = lavaShellMask params coord
+                            (\lx ly → if inBorder lx ly
+                                      then Just (finalElevVec VU.! toIndex lx ly)
+                                      else Nothing)
+                            rawZoomFluid
         shellZoomFluid = applyLavaShell zoomLavaShell cappedZoomElev
                                          zoomChunkIsOceanic rawZoomFluid
 
