@@ -296,15 +296,12 @@ lavaShellMask params coord terrAt fluid =
             not (isLavaAtGlobal params (baseGX + nx) (baseGY + ny)
                                  (terrAt nx ny))
 
--- | True iff the global pool table places lava at @(gx, gy)@:
---   a pool bitmask covers the tile and the pool surface is at or
---   above the tile's terrain. Mirrors the placement rule in
---   'composeFluidMap'. @mExactTerr@ should be the bordered carved
---   terrain when available.
-isLavaAtGlobal ∷ WorldGenParams → Int → Int → Maybe Int → Bool
-isLavaAtGlobal params gx gy mExactTerr =
-    let timeline = wgpGeoTimeline params
-        pools    = gtWorldLavaPools timeline
+-- | Pool surface at @(gx, gy)@ from the global pool table, when a
+--   pool bitmask covers the tile (lowest-wins like 'composeFluidMap').
+--   'Nothing' = no pool claims the tile.
+poolSurfAtGlobal ∷ WorldGenParams → Int → Int → Maybe Int
+poolSurfAtGlobal params gx gy =
+    let pools = gtWorldLavaPools (wgpGeoTimeline params)
         floorDivCS a =
             let (q, r) = a `divMod` chunkSize
             in if r < 0 then q - 1 else q
@@ -313,16 +310,81 @@ isLavaAtGlobal params gx gy mExactTerr =
         lx = gx - cx * chunkSize
         ly = gy - cy * chunkSize
         idx = ly * chunkSize + lx
-        tz = case mExactTerr of
+        surfs = [ WL.lkSurface (wlLakes pools V.! WL.lceLakeId lce)
+                | lce ← V.toList
+                    (lakesInChunk pools (ChunkCoord cx cy))
+                , WL.lceBitmask lce VU.! idx
+                ]
+    in case surfs of
+        [] → Nothing
+        ss → Just (minimum ss)
+
+-- | True iff the global pool table places lava at @(gx, gy)@:
+--   a pool bitmask covers the tile and the pool surface is at or
+--   above the tile's terrain. Mirrors the placement rule in
+--   'composeFluidMap'. @mExactTerr@ should be the bordered carved
+--   terrain when available.
+isLavaAtGlobal ∷ WorldGenParams → Int → Int → Maybe Int → Bool
+isLavaAtGlobal params gx gy mExactTerr =
+    let tz = case mExactTerr of
             Just z | z ≠ minBound → z
             _ → fst (elevationAtGlobal (wgpSeed params)
                                        (wgpPlates params)
                                        (wgpWorldSize params) gx gy)
-    in V.any
-        (\lce → WL.lceBitmask lce VU.! idx
-              ∧ WL.lkSurface
-                  (wlLakes pools V.! WL.lceLakeId lce) ≥ tz)
-        (lakesInChunk pools (ChunkCoord cx cy))
+    in maybe False (≥ tz) (poolSurfAtGlobal params gx gy)
+
+-- | Merge containment-rim caps into a chunk's magma overlay (max
+--   wins where a chamber cap and a rim cap both claim a tile).
+mergeRimCaps ∷ Maybe MagmaOverlay → HM.HashMap (Int, Int) Int
+             → Maybe MagmaOverlay
+mergeRimCaps mo rim
+    | HM.null rim = mo
+    | otherwise = Just $ case mo of
+        Nothing → MagmaOverlay
+            { moSurface   = HM.empty
+            , moBasaltCap = rim
+            , moRevealed  = HM.empty
+            }
+        Just o → o { moBasaltCap =
+                        HM.unionWith max (moBasaltCap o) rim }
+
+-- | Containment-rim caps: the OUTERMOST pool tiles (pool-covered,
+--   with any 8-neighbour not pool-covered) become basalt-cap entries
+--   at the POOL SURFACE elevation. 'applyBasaltCaps' then raises
+--   their terrain to lava level with a basalt column; compose puts a
+--   zero-depth lava film on top (pool surface ≡ raised terrain) and
+--   'lavaShellMask' strips it — leaving a basalt wall FLUSH with the
+--   lava surface. Without this the rim sat at the original (lower)
+--   terrain and the pool's liquid edge towered over it with exposed
+--   lava side faces (user report 2026-06-06: "this terrain needs to
+--   contain the lava, at the same elev").
+--
+--   @terrAt@ is the bordered carved-terrain lookup (chunk-local
+--   coords) so cross-chunk neighbours resolve exactly.
+poolRimCaps ∷ WorldGenParams → ChunkCoord
+            → (Int → Int → Maybe Int)
+            → HM.HashMap (Int, Int) Int
+poolRimCaps params coord terrAt = HM.fromList
+    [ ((gx, gy), surf)
+    | ly ← [0 .. chunkSize - 1]
+    , lx ← [0 .. chunkSize - 1]
+    , let gx = baseGX + lx
+          gy = baseGY + ly
+          mTz = terrAt lx ly
+    , Just tz ← [mTz]
+    , tz ≠ minBound
+    , Just surf ← [poolSurfAtGlobal params gx gy]
+    , surf ≥ tz                      -- pool actually places lava here
+    , any (\(dx, dy) →
+            not (isLavaAtGlobal params (gx + dx) (gy + dy)
+                                 (terrAt (lx + dx) (ly + dy))))
+          [ (dx, dy) | dx ← [-1, 0, 1], dy ← [-1, 0, 1]
+                     , (dx, dy) ≠ (0, 0) ]
+    ]
+  where
+    ChunkCoord cx cy = coord
+    baseGX = cx * chunkSize
+    baseGY = cy * chunkSize
 
 -- | "This chunk OR any 4-cardinal neighbour is oceanic per the
 --   chunk-level BFS." Loosens the strict @oceanDistAt … ≡ 0@ test
@@ -878,9 +940,17 @@ generateChunk registry catalog params coord =
         -- matBasalt at top so the ocean fills above instead of a
         -- black gap, or the cap stays exposed as a basalt outcrop
         -- in inland sub-sea pockets).
-        magmaOverlay = discoverChunkLava (wgpVolcanoCtx params) coord
+        magmaOverlayBase = discoverChunkLava (wgpVolcanoCtx params) coord
                                           rawTerrainSurfaceMap
                                           (chunkWaterSurfMap params coord)
+
+        -- Containment rim: outermost pool tiles raised to the pool
+        -- surface as basalt caps (see 'poolRimCaps').
+        rimCaps = poolRimCaps params coord
+                      (\lx ly → if inBorder lx ly
+                                then Just (finalElevVec VU.! toIndex lx ly)
+                                else Nothing)
+        magmaOverlay = mergeRimCaps magmaOverlayBase rimCaps
 
         -- Patch terrain to raise capped tiles BEFORE composeFluidMap
         -- so the ocean classification + smoother see the new (sealed)
@@ -1236,7 +1306,10 @@ wetlandKeep terrain wt idx =
 generateZoomTerrain ∷ MaterialRegistry → WorldGenParams
                     → Maybe BorderedTerrainCache
                     → ChunkCoord
-                    → (VU.Vector Int, VU.Vector Word8, V.Vector (Maybe FluidCell))
+                    → ( VU.Vector Int                -- surface (mkSurfaceMap)
+                      , VU.Vector Word8              -- surface materials
+                      , VU.Vector Word8              -- vegetation IDs
+                      , V.Vector (Maybe FluidCell) ) -- fluid
 generateZoomTerrain registry params mBorderedCache coord =
     let seed      = wgpSeed params
         worldSize = wgpWorldSize params
@@ -1376,9 +1449,15 @@ generateZoomTerrain registry params mBorderedCache coord =
         -- chambers become basalt seamounts (no lava) vs. above-water
         -- vents (lava emerges).
         zoomChunkIsOceanic = chunkOrNeighborOceanic params coord
-        zoomMagma = discoverChunkLava (wgpVolcanoCtx params) coord
+        zoomMagmaBase = discoverChunkLava (wgpVolcanoCtx params) coord
                                        interiorElev
                                        (chunkWaterSurfMap params coord)
+        -- Containment rim, mirroring the detail path (parity).
+        zoomRimCaps = poolRimCaps params coord
+                          (\lx ly → if inBorder lx ly
+                                    then Just (finalElevVec VU.! toIndex lx ly)
+                                    else Nothing)
+        zoomMagma = mergeRimCaps zoomMagmaBase zoomRimCaps
         cappedZoomElev = applyBasaltCaps coord zoomMagma interiorElev
         rawZoomFluid = composeFluidMap params coord cappedZoomElev
                                        zoomInteriorMask zoomMagma
@@ -1432,5 +1511,23 @@ generateZoomTerrain registry params mBorderedCache coord =
                 _ → m
             ) interiorMat
 
-    in (zoomSurface, zoomMat, zoomFluid)
+        -- Vegetation via the SAME per-tile function the detail world
+        -- uses ('computeChunkVegetation': deep fluid → none, shallow
+        -- lake/river → marsh, else biome selection). The zoom cache
+        -- previously rolled its own veg with a chunk-level ocean gate
+        -- (elev ≤ seaLevel ∧ chunkOcean ⇒ no veg), which stripped
+        -- vegetation from entire DRY below-sea-level chunks near
+        -- coasts — they rendered as solid bare-material diamonds
+        -- (clay = brown) with hard chunk-boundary edges while the
+        -- world view grew grass there (user repro: seed 1840733254
+        -- chunk (9,-2)). Slopes are passed as zero — the zoom map is
+        -- 1px/tile, the slope-only moss/ivy variants don't read at
+        -- that scale, and computing real slopes needs the column
+        -- strata the zoom path deliberately skips.
+        zoomVeg = computeChunkVegetation seed worldSize coord
+                      smoothedElev zoomMat
+                      (VU.replicate (chunkSize * chunkSize) 0)
+                      zoomFluid (wgpClimateState params)
+
+    in (zoomSurface, zoomMat, zoomVeg, zoomFluid)
 

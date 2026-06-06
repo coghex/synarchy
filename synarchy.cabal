@@ -140,6 +140,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.Parity
                    Test.Headless.WorldGen.Flatness
                    Test.Headless.WorldGen.Exposure
+                   Test.Headless.WorldGen.ZoomParity
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Render.PickFrame
