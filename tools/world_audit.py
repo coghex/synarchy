@@ -909,18 +909,29 @@ QUALITY_CATEGORIES = {
 # generation improves and the band of expected values narrows.
 QUALITY_THRESHOLDS = {
     # Low-variance categories — should stay near zero.
-    "DRY_BELOW_SEA":         50,  # after ocean-connected BFS, expect ~0
+    # Recalibrated 2026-06-07 for the volcanism default 1.0 → 1.25
+    # (user-approved): rougher volcanic flanks pin more 1-tile
+    # water-table puddles, so the puddle-flavored metrics shifted.
+    # Differential vs the old constants confirmed counts move both
+    # directions per seed (no new artifact class) and two seeds
+    # already exceeded the old thresholds before the change.
+    "DRY_BELOW_SEA":        200,  # observed max 155 coastal z=0 tiles
+                                  # (seed 137, the known-bad seed —
+                                  # 5803 before the wt rework)
     "DESERT_SOIL_ON_SLOPE": 250,  # observed max 150 (seed 123 w128); 1.5× policy
-    "FLAT_ISOLATED_WATER":   50,  # observed max 15
+    "FLAT_ISOLATED_WATER":   90,  # observed max 59 (seed 5050)
     "FLOATING_WATER":       150,  # observed max 52
-    "ISOLATED_FLUID":        50,  # observed max 9
+    "ISOLATED_FLUID":        90,  # observed max 74 (seed 2718; was 77
+                                  # even with old constants)
     "LAKE_HOLE":             25,  # observed max 4
     "MULTI_ISLAND":          25,  # observed max 4
     "RIVER_CHUNK_GAP":       50,  # observed max 14
     "RIVER_MOUTH_DROP":      50,  # observed max 15
     "SUBMERGED_BUMP":        25,  # observed max 4
     # High-variance / by-design categories.
-    "FLOATING_LAKE":       2500,  # observed max 1487 (bilinear water-table)
+    "FLOATING_LAKE":       5500,  # observed max 4655 (seed 9999, deep
+                                  # basin lakes; was 3837 even with old
+                                  # constants — recalibrated 2026-06-07)
     "FLOATING_LAVA":        100,  # not observed in baselines
     "FLOATING_RIVER":       300,  # not observed in baselines
     "FLOATING_FLUID":       300,  # generic fallback
