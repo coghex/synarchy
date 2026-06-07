@@ -173,6 +173,62 @@ def test_terrain_pit() -> None:
            f"TERRAIN_PIT count: {count_category(result, 'TERRAIN_PIT')}, expected 1")
 
 
+def test_terrain_pit_submerged() -> None:
+    print("test_terrain_pit_submerged")
+    # A deep hole under a lake whose surface covers the lowest
+    # neighbour: the water plane renders flat over it — concealed,
+    # not an artifact. The despike pass only lowers, never raises,
+    # so these are legitimate worldgen output.
+    tiles = flat_grid(5, 5, -2, -2, terrainZ=100, fluidType=None)
+    tiles = make_tiles(tiles)
+    for i, t in enumerate(tiles):
+        if t["x"] == 0 and t["y"] == 0:
+            tiles[i] = tile(0, 0, terrainZ=1, fluidType="lake", fluidSurf=100)
+            break
+    result = audit_dump(tiles).to_dict()
+    expect(count_category(result, "TERRAIN_PIT") == 0,
+           f"submerged pit: TERRAIN_PIT count "
+           f"{count_category(result, 'TERRAIN_PIT')}, expected 0 (concealed)")
+    # But a pit whose fluid does NOT reach the lowest neighbour is
+    # still a visible wall — must flag.
+    for i, t in enumerate(tiles):
+        if t["x"] == 0 and t["y"] == 0:
+            tiles[i] = tile(0, 0, terrainZ=1, fluidType="lake", fluidSurf=3)
+            break
+    result = audit_dump(tiles).to_dict()
+    expect(count_category(result, "TERRAIN_PIT") == 1,
+           f"shallow-puddle pit: TERRAIN_PIT count "
+           f"{count_category(result, 'TERRAIN_PIT')}, expected 1 (visible)")
+
+
+def test_terrain_spike_submerged() -> None:
+    print("test_terrain_spike_submerged")
+    # An ocean seamount: spike fully under its own fluid surface
+    # renders as flat water — concealed. (Real case: basalt seamount
+    # from an underwater vent, seed 4 w64.)
+    tiles = flat_grid(5, 5, -2, -2, terrainZ=-50, fluidType="ocean",
+                      fluidSurf=0)
+    tiles = make_tiles(tiles)
+    for i, t in enumerate(tiles):
+        if t["x"] == 0 and t["y"] == 0:
+            tiles[i] = tile(0, 0, terrainZ=-20, fluidType="ocean", fluidSurf=0)
+            break
+    result = audit_dump(tiles).to_dict()
+    expect(count_category(result, "TERRAIN_SPIKE") == 0,
+           f"submerged spike: TERRAIN_SPIKE count "
+           f"{count_category(result, 'TERRAIN_SPIKE')}, expected 0 (concealed)")
+    # A dry spike poking above the surrounding water is an island /
+    # pillar — still flags.
+    for i, t in enumerate(tiles):
+        if t["x"] == 0 and t["y"] == 0:
+            tiles[i] = tile(0, 0, terrainZ=5, fluidType=None)
+            break
+    result = audit_dump(tiles).to_dict()
+    expect(count_category(result, "TERRAIN_SPIKE") == 1,
+           f"emergent spike: TERRAIN_SPIKE count "
+           f"{count_category(result, 'TERRAIN_SPIKE')}, expected 1 (visible)")
+
+
 def test_river_chunk_gap() -> None:
     print("test_river_chunk_gap")
     # River at x=15 (chunk edge), dry at x=16 (next chunk), terrain low
@@ -505,6 +561,8 @@ def main() -> int:
         test_floating_fluid,
         test_terrain_spike,
         test_terrain_pit,
+        test_terrain_pit_submerged,
+        test_terrain_spike_submerged,
         test_river_chunk_gap,
         test_river_mouth_drop,
         test_island_1tile,

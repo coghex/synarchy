@@ -19,7 +19,11 @@ world_gen:
     phase_offset: 0.0     # Starting phase offset (0.0-1.0)
 
   erosion_intensity: 0.7  # Global erosion strength multiplier (0.0-2.0)
-  volcanic_activity: 1.0  # Volcanic activity multiplier (0.0-3.0)
+
+  # --- Volcanism levers ---
+  volcanic_activity: 1.25 # Volcano count + eruption-chance multiplier (0.0-3.0)
+  lava_pool_depth: 6      # Max lava head above a pool's landing floor, tiles (1-12)
+  lava_pool_radius: 22    # Max pool footprint radius, tiles (8-48); area cap = pi*r^2
 
   climate:
     iterations: 50        # Relaxation iterations per era

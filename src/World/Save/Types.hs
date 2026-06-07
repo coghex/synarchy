@@ -87,8 +87,10 @@ saveMagic = 0x53595241
 --       to GeoTimeline — surface lava placed with pooling semantics
 --       instead of the per-tile film. Positional Generic Serialize
 --       gains a trailing field, incompatible with v22.
+--   v24 adds 'wgpLavaPoolDepth' / 'wgpLavaPoolRadius' (volcanism
+--       config levers) to WorldGenParams' manual Serialize.
 currentSaveVersion ∷ Int
-currentSaveVersion = 23
+currentSaveVersion = 24
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects

@@ -52,6 +52,8 @@ data WorldGenParams = WorldGenParams
     , wgpClimateState ∷ !ClimateState     -- ^ Initial climate state
     , wgpErosionIntensity ∷ !Float        -- ^ Global erosion intensity multiplier
     , wgpVolcanicActivity ∷ !Float        -- ^ Volcanic activity multiplier (scales counts + eruption chance)
+    , wgpLavaPoolDepth ∷ !Int             -- ^ Max lava head above a pool's landing floor (tiles)
+    , wgpLavaPoolRadius ∷ !Int            -- ^ Max pool footprint radius (tiles)
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
@@ -77,6 +79,8 @@ instance Serialize WorldGenParams where
         put (wgpClimateState p)
         put (wgpErosionIntensity p)
         put (wgpVolcanicActivity p)
+        put (wgpLavaPoolDepth p)
+        put (wgpLavaPoolRadius p)
     get = do
         seed       ← get
         ws         ← get
@@ -92,6 +96,8 @@ instance Serialize WorldGenParams where
         climateS   ← get
         erosion    ← get
         volcanic   ← get
+        poolDepth  ← get
+        poolRadius ← get
         let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
         pure WorldGenParams
             { wgpSeed             = seed
@@ -108,6 +114,8 @@ instance Serialize WorldGenParams where
             , wgpClimateState     = climateS
             , wgpErosionIntensity = erosion
             , wgpVolcanicActivity = volcanic
+            , wgpLavaPoolDepth    = poolDepth
+            , wgpLavaPoolRadius   = poolRadius
             , wgpVolcanoCtx       = vc
             }
 
@@ -131,7 +139,9 @@ defaultWorldGenParams = WorldGenParams
     , wgpClimateParams = defaultClimateParams
     , wgpClimateState = initClimateState 128
     , wgpErosionIntensity = 0.7
-    , wgpVolcanicActivity = 1.0
+    , wgpVolcanicActivity = 1.25
+    , wgpLavaPoolDepth = 6
+    , wgpLavaPoolRadius = 22
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 

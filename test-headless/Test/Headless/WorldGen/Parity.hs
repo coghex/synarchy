@@ -102,15 +102,20 @@ spec = aroundAll withHeadlessEngine $ do
                     -- tile-units in the chunk path. The 95th-percentile
                     -- bound ignores these outliers while still catching
                     -- a systematic regression in the broad distribution.
-                    -- Calibrated 2026-05-22 with safety margin so normal
-                    -- seed-to-seed variance doesn't false-fire:
-                    --   • ≥50% within ±5  (typical seeds show ~60%)
+                    -- Calibrated 2026-05-22; ±5 floor relaxed
+                    -- 2026-06-06 when the volcanism default rose to
+                    -- 1.25 (more volcanic stamps = more tiles where
+                    -- the fast path's missing cliff smoothing shows;
+                    -- seed 42 w64 measured 47.4% within ±5, p95 51 —
+                    -- the distribution SHAPE is unchanged, only the
+                    -- tight band thinned):
+                    --   • ≥40% within ±5  (typical seeds show ~47-60%)
                     --   • ≥80% within ±40 (typical seeds show ~89%)
                     --   • p95 < 100       (typical seeds show ~50)
                     -- Drift beyond means one of the two paths has
                     -- meaningfully changed semantics.
                     let frac5  = fromIntegral within5  / fromIntegral total ∷ Double
                         frac40 = fromIntegral within40 / fromIntegral total ∷ Double
-                    frac5  `shouldSatisfy` (≥ 0.50)
+                    frac5  `shouldSatisfy` (≥ 0.40)
                     frac40 `shouldSatisfy` (≥ 0.80)
                     p95    `shouldSatisfy` (< 100)

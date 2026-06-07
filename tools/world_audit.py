@@ -245,11 +245,29 @@ def check_terrain_spikes_pits(grid: dict[tuple[int, int], dict[str, Any]],
         if tile.get("beyondGlacier") or terr <= INT64_MIN + 1:
             continue
         if terr > max(nbr_terr) + SPIKE_THRESHOLD:
+            # Submerged spikes are concealed the same way submerged
+            # pits are (below): when the tile's own fluid surface is
+            # at or above its terrain top, the water plane renders
+            # flat over the protrusion — an ocean seamount, not a
+            # visible render artifact. (First seen: basalt seamount
+            # from an underwater vent, seed 4 w64 full-world scan.)
+            fsurf = tile.get("fluidSurf")
+            if fsurf is not None and fsurf >= terr:
+                continue
             issues.append(Issue(
                 "TERRAIN_SPIKE", x, y,
                 f"terrainZ={terr} maxNbr={max(nbr_terr)} delta=+{terr - max(nbr_terr)}",
             ))
         if min(nbr_terr) > terr + SPIKE_THRESHOLD:
+            # Submerged pits are concealed: when fluid covers the
+            # hole up to (or above) the lowest neighbour, the water
+            # plane renders flat over it — a sinkhole under a lake,
+            # not a visible render artifact. The despike pass only
+            # fixes SPIKES (it lowers, never raises), so deep
+            # water-filled pockets are legitimate worldgen output.
+            fsurf = tile.get("fluidSurf")
+            if fsurf is not None and fsurf >= min(nbr_terr):
+                continue
             issues.append(Issue(
                 "TERRAIN_PIT", x, y,
                 f"terrainZ={terr} minNbr={min(nbr_terr)} delta=-{min(nbr_terr) - terr}",

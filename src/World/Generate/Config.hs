@@ -40,6 +40,10 @@ data WorldGenConfig = WorldGenConfig
     , wgcClimate    ∷ !ClimateYaml
     , wgcErosionIntensity ∷ !Float
     , wgcVolcanicActivity ∷ !Float
+    , wgcLavaPoolDepth    ∷ !Int
+      -- ^ Max lava head above a pool's landing floor (tiles).
+    , wgcLavaPoolRadius   ∷ !Int
+      -- ^ Max pool footprint radius (tiles); area cap = ⌈π·r²⌉.
     } deriving (Show, Eq)
 
 data CalendarYaml = CalendarYaml
@@ -82,7 +86,12 @@ defaultWorldGenConfig = WorldGenConfig
     , wgcMoon       = defaultMoonYaml
     , wgcClimate    = defaultClimateYaml
     , wgcErosionIntensity = 0.7
-    , wgcVolcanicActivity = 1.0
+    -- Volcanism levers. Defaults tuned 2026-06-06 (user request:
+    -- "a little higher than it is now"): activity 1.0 → 1.25,
+    -- pool depth 4 → 6, pool radius 18 → 22.
+    , wgcVolcanicActivity = 1.25
+    , wgcLavaPoolDepth    = 6
+    , wgcLavaPoolRadius   = 22
     }
 
 defaultCalendarYaml ∷ CalendarYaml
@@ -169,6 +178,8 @@ instance FromJSON WorldGenConfig where
             <*> wgObj .:? "climate"     .!= wgcClimate defaultWorldGenConfig
             <*> wgObj .:? "erosion_intensity" .!= wgcErosionIntensity defaultWorldGenConfig
             <*> wgObj .:? "volcanic_activity" .!= wgcVolcanicActivity defaultWorldGenConfig
+            <*> wgObj .:? "lava_pool_depth" .!= wgcLavaPoolDepth defaultWorldGenConfig
+            <*> wgObj .:? "lava_pool_radius" .!= wgcLavaPoolRadius defaultWorldGenConfig
     parseJSON _ = fail "Expected an object for world_gen"
 
 -- ToJSON instances
@@ -217,6 +228,8 @@ instance ToJSON WorldGenConfig where
             , "climate"     .= wgcClimate cfg
             , "erosion_intensity" .= wgcErosionIntensity cfg
             , "volcanic_activity" .= wgcVolcanicActivity cfg
+            , "lava_pool_depth" .= wgcLavaPoolDepth cfg
+            , "lava_pool_radius" .= wgcLavaPoolRadius cfg
             ]
         ]
 
@@ -269,6 +282,8 @@ paramsToConfig p = WorldGenConfig
         }
     , wgcErosionIntensity = wgpErosionIntensity p
     , wgcVolcanicActivity = wgpVolcanicActivity p
+    , wgcLavaPoolDepth    = wgpLavaPoolDepth p
+    , wgcLavaPoolRadius   = wgpLavaPoolRadius p
     }
 
 -- | Apply a YAML config to the default WorldGenParams.
@@ -309,4 +324,6 @@ applyConfigToParams cfg = defaultWorldGenParams
     , wgpClimateState = initClimateState (wgcWorldSize cfg)
     , wgpErosionIntensity = wgcErosionIntensity cfg
     , wgpVolcanicActivity = wgcVolcanicActivity cfg
+    , wgpLavaPoolDepth    = wgcLavaPoolDepth cfg
+    , wgpLavaPoolRadius   = wgcLavaPoolRadius cfg
     }

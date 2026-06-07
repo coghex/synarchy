@@ -61,8 +61,11 @@ import World.Weather.Generate (updateClimateFromGrid, oceanRegionsFromGrid)
 -- * Top Level
 
 buildTimeline ∷ MaterialRegistry → Word64 → Int → Int → Float → Float
+              → Int    -- ^ lava pool depth lever (config)
+              → Int    -- ^ lava pool radius lever (config)
               → (GeoTimeline, ClimateState, BorderedTerrainCache)
-buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivity =
+buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivity
+              lavaPoolDepth lavaPoolRadius =
     let plates = generatePlates seed worldSize plateCount
         gs0 = initGeoState seed worldSize plates
 
@@ -198,7 +201,9 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
         -- identification — Init.hs builds the persistent one for
         -- chunk gen from the same inputs (deterministic, identical).
         poolCtx = buildVolcanoCtx seed worldSize plates finalFeatures
-        lavaPools = identifyLavaPools worldSize poolCtx finalLakes
+        lavaPools = identifyLavaPools worldSize
+                                      lavaPoolDepth lavaPoolRadius
+                                      poolCtx finalLakes
                                       finalRivers worldTerrain
 
         rawTimeline = preLakeTimeline

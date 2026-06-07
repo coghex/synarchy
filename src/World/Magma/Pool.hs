@@ -24,7 +24,8 @@
 --   'discoverChunkLava'.
 module World.Magma.Pool
     ( identifyLavaPools
-    , maxPoolArea
+    , defaultLavaPoolDepth
+    , defaultLavaPoolRadius
     ) where
 
 import UPrelude
@@ -43,19 +44,24 @@ import World.Geology.Timeline.Types (EventBBox(..))
 import World.Magma.Types (VolcanoCtx(..), MagmaSource(..))
 import World.Magma.Shape (pointInShape)
 
--- | Safety cap on a single pool's footprint. Real pools are crater
---   floors and saddle ponds (tens to a few hundred tiles). On dead-
---   flat ground the basin grow has no saddle to stop at, so this cap
---   is the effective bound there — 1024 = a 32×32 lava field.
-maxPoolArea ∷ Int
-maxPoolArea = 1024
+-- | Default pool depth and radius — the config-exposed levers
+--   ('wgcLavaPoolDepth' / 'wgcLavaPoolRadius' in
+--   "World.Generate.Config"). 'identifyLavaPools' takes explicit
+--   values; these defaults exist for callers without a config.
+--
+--   Depth: how deep a pool may stand above the basin floor it
+--   drains to — bounds the fill so a flank breach doesn't fill an
+--   entire valley to its rim (lava cools; a fixed head above the
+--   landing floor is the v1 stand-in for a volume model).
+defaultLavaPoolDepth ∷ Int
+defaultLavaPoolDepth = 4
 
--- | How deep a pool may stand above the basin floor it drains to.
---   Bounds the fill so a flank breach doesn't fill an entire valley
---   to its rim — lava cools as it spreads; without a volume model a
---   fixed head above the landing floor is the v1 stand-in.
-lavaPoolDepth ∷ Int
-lavaPoolDepth = 4
+-- | Default outer rim radius (tiles, Euclidean from the landing
+--   point). On dead-flat ground the basin grow has no saddle to
+--   stop at, so the radius is the effective bound there. The area
+--   cap derives as ⌈π·r²⌉.
+defaultLavaPoolRadius ∷ Int
+defaultLavaPoolRadius = 18
 
 -- | Max steepest-descent steps from a breach to its landing point.
 --   Lava that would run further than this just pools where the walk
@@ -63,13 +69,9 @@ lavaPoolDepth = 4
 maxDescentSteps ∷ Int
 maxDescentSteps = 96
 
--- | Outer rim radius (tiles, Euclidean from the landing point) and
---   its per-tile hash jitter. π·18² ≈ 'maxPoolArea', so the radius
---   and area caps agree; the jitter roughens the rim by ±3 tiles
---   wherever the radius (rather than a saddle) is what stops growth.
-maxPoolRadius ∷ Int
-maxPoolRadius = 18
-
+-- | Per-tile hash jitter on the rim radius — roughens the rim by
+--   ±3 tiles wherever the radius (rather than a saddle) is what
+--   stops growth.
 rimJitter ∷ Int
 rimJitter = 3
 
@@ -77,14 +79,21 @@ rimJitter = 3
 --   the stitched world terrain grid (indexed
 --   @(gy+half)*worldTiles + (gx+half)@, 'minBound' beyond glacier)
 --   plus the already-built lake and river tables (water barriers).
+--
+--   @poolDepth@ / @poolRadius@ are the config levers
+--   (@lava_pool_depth@ / @lava_pool_radius@ in world-gen config):
+--   depth = max head above the landing-point floor, radius = max
+--   Euclidean footprint (area cap derives as ⌈π·r²⌉).
 identifyLavaPools
     ∷ Int               -- ^ worldSize (chunks per side)
+    → Int               -- ^ pool depth lever
+    → Int               -- ^ pool radius lever
     → VolcanoCtx
     → WorldLakes        -- ^ water barrier: lakes
     → WorldRivers       -- ^ water barrier: rivers
     → VU.Vector Int     -- ^ world terrain (worldTiles²)
     → WorldLakes        -- ^ pool table (reusing the lake shape)
-identifyLavaPools worldSize ctx lakes rivers terrain
+identifyLavaPools worldSize poolDepth poolRadius ctx lakes rivers terrain
     | V.null (vcSources ctx) = emptyWorldLakes
     | otherwise =
         let pools = concatMap poolsForSource
@@ -104,6 +113,12 @@ identifyLavaPools worldSize ctx lakes rivers terrain
   where
     worldTiles = worldSize * chunkSize
     halfWorld  = worldTiles `div` 2
+
+    -- Area cap derived from the radius lever: ⌈π·r²⌉, so the two
+    -- caps always agree.
+    poolArea ∷ Int
+    poolArea = ceiling (pi * fromIntegral (poolRadius * poolRadius)
+                        ∷ Double)
 
     -- CARVE-AWARE terrain: the stitched grid is pre-carve, but chunk
     -- gen renders @terrain − carveAt@ (river channels, clamped-lake
@@ -220,7 +235,7 @@ identifyLavaPools worldSize ctx lakes rivers terrain
     -- Pour semantics: lava exits the cluster at its lowest breach,
     -- runs steepest-descent to a landing point (local minimum, water
     -- shoreline, or the step cap), then basin-fills FROM THE FLOOR
-    -- UP — level = floor + 'lavaPoolDepth', clamped below the
+    -- UP — level = floor + the pool-depth lever, clamped below the
     -- basin's spill saddle so the pool can never sheet downhill out
     -- of the depression (the bug in the first cut of this module:
     -- a sub-level-set flood at breach z covered every connected
@@ -240,8 +255,8 @@ identifyLavaPools worldSize ctx lakes rivers terrain
             -- When growth pops a tile LOWER than the running level,
             -- we've crossed the spill saddle — stop there. Water
             -- tiles drain the basin the same way (barrier + spill).
-            targetLevel = min (mz + lavaPoolDepth)
-                              (breachZ + lavaPoolDepth)
+            targetLevel = min (mz + poolDepth)
+                              (breachZ + poolDepth)
             (level, region) = grow m targetLevel mz
                                    (HS.singleton m)
                                    [(mz, m)] 0 []
@@ -270,7 +285,7 @@ identifyLavaPools worldSize ctx lakes rivers terrain
                             then p
                             else descend (n + 1) q
 
-        -- Sorted-list priority queue: pools are small (≤ maxPoolArea)
+        -- Sorted-list priority queue: pools are small (≤ poolArea)
         -- so O(n) insertion is fine.
         --
         -- Tie order is LOAD-BEARING: equal-elevation tiles must queue
@@ -291,7 +306,7 @@ identifyLavaPools worldSize ctx lakes rivers terrain
             case popMin frontier of
                 Nothing → (curLevel, acc)
                 Just ((tz, p), rest)
-                    | n ≥ maxPoolArea → (curLevel, acc)
+                    | n ≥ poolArea → (curLevel, acc)
                     -- Crossing a saddle: the next-lowest boundary
                     -- tile is below the level we've already had to
                     -- rise to — lava would drain over it. Stop; the
@@ -328,7 +343,7 @@ identifyLavaPools worldSize ctx lakes rivers terrain
             let dx = qx - mx
                 dy = qy - my
                 h  = tileHash qx qy
-                r  = maxPoolRadius + (h `mod` (2 * rimJitter + 1))
+                r  = poolRadius + (h `mod` (2 * rimJitter + 1))
                                    - rimJitter
             in dx * dx + dy * dy ≤ r * r
 
