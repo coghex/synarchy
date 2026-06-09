@@ -24,6 +24,7 @@ import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..), LoggerState)
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import World.State.Types (wmWorlds, wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
 import Engine.Core.Types (EngineConfig(..))
 import Engine.Event.Types (Event(..))
 import Engine.Input.Types (InputState, keyToText)
@@ -121,7 +122,7 @@ startLuaThread env = do
                         <> " - " <> errMsg
             
             let port = ecDebugPort (engineConfig env)
-            debugQueue ← startDebugServer port
+            debugQueue ← startDebugServer port (debugBuiltin env)
             logInfo logger CatLua $ "Debug server listening on port " <> T.pack (show port)
             tid ← forkIO $ runLuaLoop env backendState stateRef debugQueue `finally` putMVar doneVar ()
             return tid
@@ -230,6 +231,100 @@ processDebugCommands lst debugQueue = do
             result ← executeDebugLua lst cmdText
             putMVar responseMVar result
             processDebugCommands lst debugQueue
+
+-- | Debug-console BUILT-INS, run on the per-connection client thread
+--   (see 'startDebugServer') so they never block the single Lua thread.
+--
+--   'world.waitForInit' / 'world.waitForChunks' only poll world-state
+--   IORefs — no Lua state — so handling them here means: (a) the Lua
+--   thread stays free (a second connection can poll progress mid-wait,
+--   ticks keep running); (b) there's no debug-server response cap on the
+--   wait (the old 30 s 'takeMVar' timeout used to make 'waitForInit(300)'
+--   over netcat spuriously report a timeout on any world taking >30 s to
+--   generate). Returns 'Nothing' for anything it doesn't recognise, so
+--   the command falls through to the Lua thread unchanged.
+debugBuiltin ∷ EngineEnv → Text → IO (Maybe Text)
+debugBuiltin env cmd =
+    let t0 = T.strip cmd
+        t1 = maybe t0 T.strip (T.stripPrefix "return " t0)
+        t2 = T.strip (fromMaybe t1 (T.stripSuffix ";" t1))
+    in case matchCall "world.waitForInit" t2 of
+        Just arg → Just <$> runWaitForInit env (fromMaybe 600 arg)
+        Nothing  → case matchCall "world.waitForChunks" t2 of
+            Just arg → Just <$> runWaitForChunks env (fromMaybe 120 arg)
+            Nothing  → return Nothing
+
+-- | Match @<fn>(<int?>)@ exactly. @Just Nothing@ = no/empty arg (use the
+--   caller's default); @Just (Just n)@ = explicit timeout; @Nothing@ =
+--   not this call, or a non-integer arg → fall through to Lua.
+matchCall ∷ Text → Text → Maybe (Maybe Int)
+matchCall fn t = case T.stripPrefix fn t of
+    Nothing → Nothing
+    Just rest →
+        let r = T.strip rest
+        in if not (T.null r) ∧ T.head r ≡ '(' ∧ T.last r ≡ ')'
+           then let inner = T.strip (T.init (T.drop 1 r))
+                in if T.null inner
+                   then Just Nothing
+                   else case T.decimal inner of
+                          Right (n, rm) | T.null (T.strip rm) → Just (Just n)
+                          _                                   → Nothing
+           else Nothing
+
+-- | Poll the active world's load phase until done (or timeout), then
+--   return the same tab-joined progress 'world.getInitProgress' yields.
+runWaitForInit ∷ EngineEnv → Int → IO Text
+runWaitForInit env timeoutSec = loop (timeoutSec * 4) ⌦ \_ → fmtInitProgress env
+  where
+    loop ∷ Int → IO ()
+    loop 0 = return ()
+    loop n = do
+        mgr ← readIORef (worldManagerRef env)
+        case wmWorlds mgr of
+            ((_, ws):_) → do
+                phase ← readIORef (wsLoadPhaseRef ws)
+                case phase of
+                    LoadDone → return ()
+                    _        → threadDelay 250000 ≫ loop (n - 1)
+            [] → threadDelay 250000 ≫ loop (n - 1)
+
+-- | Poll the active world's init queue until empty (or timeout); return
+--   the remaining chunk count (matches 'world.waitForChunks').
+runWaitForChunks ∷ EngineEnv → Int → IO Text
+runWaitForChunks env timeoutSec = T.pack ∘ show ⊚ loop (timeoutSec * 4)
+  where
+    remaining ∷ IO Int
+    remaining = do
+        mgr ← readIORef (worldManagerRef env)
+        case wmWorlds mgr of
+            ((_, ws):_) → length ⊚ readIORef (wsInitQueueRef ws)
+            []          → return 0
+    loop ∷ Int → IO Int
+    loop 0 = remaining
+    loop n = do
+        r ← remaining
+        if r ≡ 0 then return 0 else threadDelay 250000 ≫ loop (n - 1)
+
+-- | Format the active world's load phase as the four tab-separated
+--   values 'world.getInitProgress' returns: phase, current, total, stage.
+fmtInitProgress ∷ EngineEnv → IO Text
+fmtInitProgress env = do
+    mgr ← readIORef (worldManagerRef env)
+    case wmWorlds mgr of
+        ((_, ws):_) → do
+            phase ← readIORef (wsLoadPhaseRef ws)
+            return $ case phase of
+                LoadIdle           → fmt 0 0 0 "idle"
+                LoadPhase1 c t     → fmt 1 c t "setup"
+                LoadPhase2 rm t    → fmt 2 (t - rm) t "chunks"
+                LoadDone           → fmt 3 1 1 "done"
+        [] → return (fmt 0 0 0 "idle")
+  where
+    -- Match 'world.getInitProgress' over the console exactly: the stage
+    -- string is rendered quoted by 'luaValueToText', so quote it here.
+    fmt ∷ Int → Int → Int → Text → Text
+    fmt a b c s = T.intercalate "\t" [tshow a, tshow b, tshow c, "\"" <> s <> "\""]
+    tshow = T.pack ∘ show
 
 -- | Execute a Lua string and return the result as text.
 --   Uses loadstring to compile, then pcall to run safely.

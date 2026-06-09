@@ -27,17 +27,26 @@ data DebugCommand = DebugCommand
 
 -- | Start the debug TCP server on the given port.
 --   Returns a TQueue that the Lua thread polls for commands.
-startDebugServer ∷ Int → IO (TQueue DebugCommand)
-startDebugServer port = do
+--
+--   @builtin@ is consulted on the per-connection client thread BEFORE a
+--   command is marshaled to the Lua thread: if it returns @Just resp@
+--   the command is handled here (off the Lua thread) and @resp@ is sent
+--   back; @Nothing@ falls through to the Lua thread as before. This is
+--   how long-blocking ops ('world.waitForInit'/'waitForChunks') avoid
+--   monopolising the single Lua thread — they only poll world-state
+--   refs, so the client thread can run them while the Lua thread keeps
+--   serving other connections.
+startDebugServer ∷ Int → (Text → IO (Maybe Text)) → IO (TQueue DebugCommand)
+startDebugServer port builtin = do
     cmdQueue ← atomically newTQueue
-    _ ← forkIO $ runServer port cmdQueue
+    _ ← forkIO $ runServer port cmdQueue builtin
     return cmdQueue
 
 pollDebugCommand ∷ TQueue DebugCommand → IO (Maybe DebugCommand)
 pollDebugCommand = atomically . tryReadTQueue
 
-runServer ∷ Int → TQueue DebugCommand → IO ()
-runServer port cmdQueue = do
+runServer ∷ Int → TQueue DebugCommand → (Text → IO (Maybe Text)) → IO ()
+runServer port cmdQueue builtin = do
     let hints = defaultHints
             { addrFlags = [AI_PASSIVE]
             , addrSocketType = Stream
@@ -57,33 +66,35 @@ runServer port cmdQueue = do
         let readyHandle = if port ≡ 0 then stderr else stdout
         hPutStrLn readyHandle ("READY port=" <> show port)
         hFlush readyHandle
-        acceptLoop sock cmdQueue
+        acceptLoop sock cmdQueue builtin
 
-acceptLoop ∷ Socket → TQueue DebugCommand → IO ()
-acceptLoop sock cmdQueue = do
+acceptLoop ∷ Socket → TQueue DebugCommand → (Text → IO (Maybe Text)) → IO ()
+acceptLoop sock cmdQueue builtin = do
     (conn, _) ← accept sock
-    _ ← forkIO $ handleClient conn cmdQueue
-    acceptLoop sock cmdQueue
+    _ ← forkIO $ handleClient conn cmdQueue builtin
+    acceptLoop sock cmdQueue builtin
 
-handleClient ∷ Socket → TQueue DebugCommand → IO ()
-handleClient conn cmdQueue =
+handleClient ∷ Socket → TQueue DebugCommand → (Text → IO (Maybe Text)) → IO ()
+handleClient conn cmdQueue builtin =
     (do sendAll conn "synarchy debug console\n> "
-        clientLoop conn cmdQueue BS.empty
+        clientLoop conn cmdQueue builtin BS.empty
     ) `finally` close conn
 
-clientLoop ∷ Socket → TQueue DebugCommand → BS.ByteString → IO ()
-clientLoop conn cmdQueue leftover = do
+clientLoop ∷ Socket → TQueue DebugCommand → (Text → IO (Maybe Text))
+          → BS.ByteString → IO ()
+clientLoop conn cmdQueue builtin leftover = do
     chunk ← recv conn 4096
     if BS.null chunk
         then return ()  -- client disconnected
         else do
             let buf = leftover <> chunk
-            processLines conn cmdQueue buf
+            processLines conn cmdQueue builtin buf
 
-processLines ∷ Socket → TQueue DebugCommand → BS.ByteString → IO ()
-processLines conn cmdQueue buf =
+processLines ∷ Socket → TQueue DebugCommand → (Text → IO (Maybe Text))
+            → BS.ByteString → IO ()
+processLines conn cmdQueue builtin buf =
     case BS8.elemIndex '\n' buf of
-        Nothing → clientLoop conn cmdQueue buf  -- no complete line yet
+        Nothing → clientLoop conn cmdQueue builtin buf  -- no complete line yet
         Just idx →
             let (line, rest) = BS.splitAt idx buf
                 remaining = BS.drop 1 rest  -- skip the \n
@@ -91,21 +102,28 @@ processLines conn cmdQueue buf =
             in if T.null cmdText
                then do
                    sendAll conn "> "
-                   processLines conn cmdQueue remaining
+                   processLines conn cmdQueue builtin remaining
                else do
-                   responseMVar ← newEmptyMVar
-                   atomically $ writeTQueue cmdQueue (DebugCommand cmdText responseMVar)
-                   -- Wait for Lua thread to process and respond.
-                   -- Timeout guards against deadlock: if the Lua thread
-                   -- crashes after dequeuing the command but before filling
-                   -- the MVar, an unbounded takeMVar would block forever
-                   -- (the crash handler only drains the TQueue, not
-                   -- already-dequeued commands).
-                   mResult ← timeout 30000000 (takeMVar responseMVar)
-                   let result = fromMaybe
-                         "ERROR: command timed out (Lua thread may have crashed)"
-                         mResult
-                       resultBytes = TE.encodeUtf8 result
-                   sendAll conn resultBytes
+                   -- Built-ins (long-blocking waits) run HERE, on the
+                   -- client thread, so they never freeze the Lua thread.
+                   mBuiltin ← builtin cmdText
+                   result ← case mBuiltin of
+                       Just r  → return r
+                       Nothing → do
+                           responseMVar ← newEmptyMVar
+                           atomically $ writeTQueue cmdQueue
+                                          (DebugCommand cmdText responseMVar)
+                           -- Wait for Lua thread to process and respond.
+                           -- Timeout guards against deadlock: if the Lua
+                           -- thread crashes after dequeuing the command
+                           -- but before filling the MVar, an unbounded
+                           -- takeMVar would block forever (the crash
+                           -- handler only drains the TQueue, not
+                           -- already-dequeued commands).
+                           mResult ← timeout 30000000 (takeMVar responseMVar)
+                           return $ fromMaybe
+                             "ERROR: command timed out (Lua thread may have crashed)"
+                             mResult
+                   sendAll conn (TE.encodeUtf8 result)
                    sendAll conn "\n> "
-                   processLines conn cmdQueue remaining
+                   processLines conn cmdQueue builtin remaining
