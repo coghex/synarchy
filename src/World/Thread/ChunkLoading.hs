@@ -11,7 +11,8 @@ import qualified Data.HashMap.Strict as HM
 import Data.List (partition, sortOn)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Parallel.Strategies (parMap, rdeepseq)
-import Control.DeepSeq (NFData)
+import Control.DeepSeq (NFData, rnf)
+import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
@@ -27,7 +28,7 @@ import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Geology.Timeline.Types (GeoTimeline(..), emptyTimeline)
 import World.Grid (zoomFadeEnd)
-import World.Slope (recomputeNeighborSlopes, patchEdgeStrata)
+import World.Slope (recomputeNeighborSlopes, patchEdgeStrata, chunkNeighbors)
 import World.SideFace.Compute (computeChunkSideDecos)
 import World.Thread.Helpers (unWorldPageId)
 import World.Generate.Types (WorldGenParams(..))
@@ -207,6 +208,26 @@ drainInitQueues env logger = do
                                 td2b  = patchEdgeStrata coords td''
                                 td'''' = computeSideDecos seed coords td2b
                             in (td'''', ())
+
+                        -- Force this batch's chunks (plus the neighbours the
+                        -- slope / edge-strata / side-deco passes rebuilt) to
+                        -- NF on the world thread, so LoadDone means "fully
+                        -- evaluated" rather than "queued as thunks". Without
+                        -- this the first reader (render or query thread)
+                        -- collapses the lazy tower in one latency spike, and
+                        -- the post-process passes run serially off the render
+                        -- thread. The 'parMap rdeepseq' above already sparked
+                        -- the raw generation in parallel, so this mostly
+                        -- collects those results; cost is bounded to the
+                        -- affected chunks (batch + 4-neighbours), not the
+                        -- whole map.
+                        forcedTd ← readIORef (wsTilesRef worldState)
+                        let batchCoords = map lcCoord newChunks'
+                            affected = HS.toList $ HS.fromList $
+                                batchCoords ⧺ concatMap chunkNeighbors batchCoords
+                            toForce = [ lc | c ← affected
+                                           , Just lc ← [lookupChunk c forcedTd] ]
+                        _ ← evaluate (rnf toForce)
 
                         -- Notify sim thread of loaded chunks (post-replay)
                         forM_ newChunks' $ \lc →

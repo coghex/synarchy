@@ -321,6 +321,10 @@ handleWorldInitArenaCommand env logger pageId = do
     atomicModifyIORef' (wsTilesRef worldState) $ \_ →
         (WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }, ())
 
+    -- Force the arena chunks to NF so the LoadDone below is honest (same
+    -- contract as the progressive loader). Tiny 5×5 arena, negligible cost.
+    _ ← evaluate (force allChunks)
+
     -- Minimal WorldGenParams so the render pipeline doesn't bail on Nothing
     let arenaParams = defaultWorldGenParams
             { wgpSeed      = 0
