@@ -401,16 +401,19 @@ cleanupResources ∷ Vk.Device → GraphicsState → EngineM' ε ()
 cleanupResources device state = do
     poolRef ← asks assetPoolRef
     pool ← liftIO $ readIORef poolRef
+    -- The device is already fully idle here ('cleanupAssetManager' waits
+    -- on both queues + the device before calling us), and 'taCleanup'
+    -- only destroys image/view/memory — no GPU submission — so the device
+    -- stays idle through the loop. No per-texture idle needed (that was N
+    -- full CPU↔GPU stalls for N atlases). One trailing barrier below.
     forM_ (Map.elems $ apTextureAtlases pool) $ \atlas → do
         logDebugSM CatAsset "Cleaning up texture"
           [("name", taName atlas)
           ,("path", taPath atlas)
           ,("asset_id", T.pack $ show $ taId atlas)]
         case taStatus atlas of
-            AssetLoaded → do
-                liftIO $ Vk.deviceWaitIdle device
-                (liftIO $ maybe (pure ()) id (taCleanup atlas))
-            _ → pure ()
+            AssetLoaded → liftIO $ maybe (pure ()) id (taCleanup atlas)
+            _           → pure ()
 
     liftIO $ writeIORef (apNextAssetId pool) 0
     liftIO $ atomicModifyIORef' poolRef $ \poolRef' →
