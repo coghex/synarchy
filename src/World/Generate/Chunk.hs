@@ -51,7 +51,8 @@ import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 import World.Generate.InitTerrain (BorderedTerrainCache)
 import World.Generate.Timeline (applyTimelineChunk, removeElevationSpikes)
-import World.Geology.Coastal (applyCoastalErosion)
+import World.Geology.Coastal (applyCoastalTable)
+import World.Fluid.Seabed (applySeabedTable)
 import World.Generate.Strata
     ( buildStrataCache
     , buildColumnStrata
@@ -66,8 +67,9 @@ import World.Generate.Strata
 --
 --   * Ocean  — terrain ≤ seaLevel in an ocean-BFS-reachable chunk;
 --              surface = seaLevel.
---   * River  — tile inside a river-segment channel mask. Currently
---              never fires (rivers off).
+--   * River  — tile flagged by a 'RiverChunkEntry' bitmask in the
+--              global 'WorldRivers' table; surface = the entry's
+--              per-tile quantised surface z.
 --   * Lake   — any lake's per-chunk bitmask flags this tile AND the
 --              chunk's real terrain is at or below the lake's
 --              uniform 'lkSurface'. Surface = lake's spillway.
@@ -799,11 +801,15 @@ generateChunk registry catalog params coord =
             applyTimelineChunk timeline worldSize registry wsc coord
                 (baseElevVec, baseMatVec)
 
-        -- Post-timeline coastal erosion: lower coastal terrain,
-        -- deposit sand/gravel/wetland materials based on plate tectonics
-        -- and river mouth proximity
+        -- Post-timeline coastal erosion: apply the GLOBAL coastal
+        -- table (computed once at world init on the stitched terrain,
+        -- 'identifyCoastalErosion') — lowered coastal terrain +
+        -- sand/gravel/wetland material rewrites. Border tiles read
+        -- their owning chunk's entry, so adjacent chunks always agree
+        -- on the coastline (the old per-window pass diverged up to
+        -- ~18z at seams).
         (postCoastElev, finalMatVec) =
-            applyCoastalErosion seed worldSize plates registry timeline oceanMap coord
+            applyCoastalTable (gtCoastal timeline) coord
                 (timelineElevVec, timelineMatVec)
 
         -- Despike: remove single-tile elevation outliers that survived
@@ -814,6 +820,18 @@ generateChunk registry catalog params coord =
         -- itself was outside the coastal range.
         (despikedElev, _) = removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
                                                   (postCoastElev, finalMatVec)
+
+        -- Seabed pass: ocean-floor relief + materials + bedrock
+        -- outcrops (global 'gtSeabed' table, computed once at init).
+        -- Applied here — after the first despike, before the river
+        -- carve — so the rest of the pipeline (carve, strata, slope,
+        -- columns) sees the seabed terrain and materials. Supersedes
+        -- the old flat seaLevel−1 lake carve (whose deltas are now
+        -- empty). 'seabedMatVec' is the coastal material with seabed
+        -- surface materials layered on; used for the column build.
+        (seabedElev, seabedMatVec) =
+            applySeabedTable (gtSeabed timeline) coord
+                (despikedElev, finalMatVec)
 
         -- River and lake carves applied to the ENTIRE bordered region
         -- (not just the interior). The carve delta for each tile lives
@@ -841,7 +859,7 @@ generateChunk registry catalog params coord =
                         Nothing → 0
             in max dr dl
         carvedElevVec = VU.generate borderArea $ \idx →
-            let z = despikedElev VU.! idx
+            let z = seabedElev VU.! idx
             in if z ≡ minBound
                then z
                else
@@ -862,12 +880,12 @@ generateChunk registry catalog params coord =
         -- Mirrored in 'generateZoomTerrain' (chunk/fast parity).
         (finalElevVec, _) =
             removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
-                                  (carvedElevVec, finalMatVec)
+                                  (carvedElevVec, seabedMatVec)
 
         lookupFinal lx ly =
             if inBorder lx ly
             then ( finalElevVec VU.! toIndex lx ly
-                 , finalMatVec  VU.! toIndex lx ly
+                 , seabedMatVec VU.! toIndex lx ly
                  )
             else (0, MaterialId 1)
 
@@ -1136,10 +1154,18 @@ generateChunk registry catalog params coord =
         -- Corrected surface materials (see 'demoteWetland'): vegetation
         -- and flora read these, so swamp species follow the demoted
         -- soils automatically.
+        --
+        -- Cross-border elevations for the wetland flat test come from
+        -- the bordered post-carve vector, so the gate sees the same
+        -- neighbours the renderer does.
+        wetOutElev olx oly =
+            if inBorder olx oly
+            then Just (finalElevVec VU.! toIndex olx oly)
+            else Nothing
         surfaceMats = VU.imap (\idx m →
             case demoteWetland m of
                 Just demoted
-                  | not (wetlandKeep terrainSurfaceMap waterTableMap idx)
+                  | not (wetlandKeep wetOutElev terrainSurfaceMap waterTableMap idx)
                   → demoted
                 _ → m
             ) surfaceMatsRaw
@@ -1209,7 +1235,7 @@ generateChunk registry catalog params coord =
                       let orig = truncatedMats VU.! i
                       in case demoteWetland orig of
                           Just demoted
-                            | not (wetlandKeep terrainSurfaceMap waterTableMap idx) →
+                            | not (wetlandKeep wetOutElev terrainSurfaceMap waterTableMap idx) →
                               let go j | j ≥ 0 ∧ truncatedMats VU.! j ≡ orig = go (j - 1)
                                        | otherwise = j + 1
                                   runStart = go i
@@ -1230,16 +1256,11 @@ generateChunk registry catalog params coord =
                                  terrainSurfaceMap fluidMap
 
         -- Water table: subsurface saturation baseline from climate
-        -- (Phase 2 simplified). For tiles under a lake surface, we
-        -- bump the wt to the lake's surface so a dig through the bed
-        -- still exposes water.
+        -- (Phase 2 simplified), made fluid-aware by 'applyFluidWt' —
+        -- under-bed bump (lake/river/ocean) + fresh-water shore halo.
         wtBase = computeWaterTable (wgpClimateState params)
                                    worldSize coord terrainSurfaceMap
-        waterTableMap = VU.imap (\idx wt →
-            case fluidMap V.! idx of
-                Just fc | fcType fc ≡ Lake → max wt (fcSurface fc)
-                _                          → wt
-            ) wtBase
+        waterTableMap = applyFluidWt fluidMap wtBase
 
     in (finalTiles, surfaceMap, finalTerrain, fluidMap, iceMap, floraData
        , waterTableMap, magmaOverlay)
@@ -1272,14 +1293,23 @@ demoteWetland 63 = Just 58   -- mucky peat → silty clay
 demoteWetland 64 = Just 50   -- muck       → clay
 demoteWetland _  = Nothing
 
--- | Keep a wetland soil only on a near-flat tile (in-chunk max
---   4-neighbour |Δterrain| ≤ 2 — lenient at chunk borders, matching
---   the in-chunk-only neighbour convention of computeChunkSlopes at
---   gen time) whose groundwater reaches the surface (wt ≥ terrain−1;
---   away from open water the wt map is cap-bound below terrain, so in
---   practice this keeps riparian and lakeside ground).
-wetlandKeep ∷ VU.Vector Int → VU.Vector Int → Int → Bool
-wetlandKeep terrain wt idx =
+-- | Keep a wetland soil only on a near-flat tile (max 4-neighbour
+--   |Δterrain| ≤ 2) whose groundwater reaches the surface
+--   (wt ≥ terrain−1; the climate baseline tops out at terrain−2, so
+--   only tiles inside 'applyFluidWt's under-fluid bump or fresh-water
+--   halo can pass — i.e. this keeps riparian and lakeside ground).
+--
+--   @outElev@ supplies elevations for neighbours OUTSIDE the chunk
+--   interior (chunk-local coords; both call paths pass their bordered
+--   post-carve vector). The flat test used to be in-chunk-lenient,
+--   which was invisible while no dry wetland could pass the wet test;
+--   once the halo restored shore wetlands, border tiles whose
+--   cross-border neighbour sat 3+ lower slipped through as
+--   wetland-on-cliff (audit WETLAND_ON_SLOPE, 29 hits seed 42 w64 —
+--   all at lx/ly ∈ {0,15}).
+wetlandKeep ∷ (Int → Int → Maybe Int) → VU.Vector Int → VU.Vector Int
+            → Int → Bool
+wetlandKeep outElev terrain wt idx =
     let tz = terrain VU.! idx
         lx = idx `mod` chunkSize
         ly = idx `div` chunkSize
@@ -1287,12 +1317,74 @@ wetlandKeep terrain wt idx =
             let lx' = lx + dlx
                 ly' = ly + dly
             in if lx' < 0 ∨ lx' ≥ chunkSize ∨ ly' < 0 ∨ ly' ≥ chunkSize
-               then 0
+               then case outElev lx' ly' of
+                      Just z | z ≠ minBound → abs (tz - z)
+                      _                     → 0
                else abs (tz - terrain VU.! (ly' * chunkSize + lx'))
         flat = max (max (nbrD 1 0) (nbrD (-1) 0))
                (max (nbrD 0 1) (nbrD 0 (-1))) ≤ 2
         wet  = wt VU.! idx ≥ tz - 1
-    in flat ∧ wet
+    -- Sub-sea tiles are seabed, not land: the ocean-floor pass
+    -- ('World.Fluid.Seabed') places muck on the deep floor by design,
+    -- so the wetland demotion (a dry-hillside concern) must leave it
+    -- alone — otherwise deep seabed muck (64) gets demoted to clay
+    -- (50) on every steep stretch of sea floor.
+    in tz ≤ seaLevel ∨ (flat ∧ wet)
+
+-- | Fluid-aware water table: lift the climate baseline where surface
+--   water dictates the local groundwater level.
+--
+--   1. UNDER-FLUID BUMP — tiles under any water body (lake, river,
+--      ocean) get @wt ≥ fluid surface@, so a dig through the bed
+--      exposes water. Lava pools get no bump.
+--   2. FRESH-WATER HALO — dry tiles within 'wtHaloRadius' (Chebyshev)
+--      of a lake or river tile get @wt = surface + 1 − distance@:
+--      riparian groundwater that decays away from the shore. This is
+--      what lets 'wetlandKeep' pass on dry land at all — the climate
+--      baseline is at best @terrain − 2@ against a @terrain − 1@ wet
+--      test, so without the halo wetland soils survive only
+--      underwater. Fresh water only: ocean shores keep their beaches
+--      (the Coastal pass demotes wetland soils to sand there) and
+--      stay out of the wetland gate.
+--
+--   In-chunk only — fluid just across a chunk border doesn't halo in,
+--   the same leniency convention 'wetlandKeep' uses for its flat
+--   test. 'minBound' sentinel (beyond-glacier) passes through.
+--   Shared by 'generateChunk' and 'generateZoomTerrain' so the two
+--   views demote identically.
+applyFluidWt ∷ V.Vector (Maybe FluidCell) → VU.Vector Int → VU.Vector Int
+applyFluidWt fluid wtBase = VU.generate (chunkSize * chunkSize) $ \idx →
+    let wt0 = wtBase VU.! idx
+    in if wt0 ≡ minBound
+       then wt0
+       else case fluid V.! idx of
+            Just fc | fcType fc ≠ Lava → max wt0 (fcSurface fc)
+                    | otherwise        → wt0
+            Nothing → case haloSurfs idx of
+                        [] → wt0
+                        ss → max wt0 (maximum ss)
+  where
+    haloSurfs idx =
+        let lx = idx `mod` chunkSize
+            ly = idx `div` chunkSize
+        in [ fcSurface fc + 1 - d
+           | dy ← [-wtHaloRadius .. wtHaloRadius]
+           , dx ← [-wtHaloRadius .. wtHaloRadius]
+           , let d = max (abs dx) (abs dy)
+           , d > 0
+           , let lx' = lx + dx
+                 ly' = ly + dy
+           , lx' ≥ 0, lx' < chunkSize, ly' ≥ 0, ly' < chunkSize
+           , Just fc ← [fluid V.! (ly' * chunkSize + lx')]
+           , fcType fc ≡ Lake ∨ fcType fc ≡ River
+           ]
+
+-- | How far the fresh-water groundwater halo reaches from a lake or
+--   river tile (Chebyshev tiles). With the @surface + 1 − d@ decay, a
+--   flat bank one z above the water passes the wet test at distance
+--   1, and at-water-level flats pass out to distance 2.
+wtHaloRadius ∷ Int
+wtHaloRadius = 3
 
 
 -- * Zoom-Optimized Terrain Generation
@@ -1345,9 +1437,15 @@ generateZoomTerrain registry params mBorderedCache coord =
         -- function arg makes its evaluation entry-on-call, so the
         -- cache-hit path skips it entirely (saving ~50% of zoom-cache
         -- build time at init).
-        (despikedElev, finalMatVec) = case mBorderedCache of
+        (cacheElev, cacheMat) = case mBorderedCache of
             Just cache | Just cached ← HM.lookup coord cache → cached
             _ → computePipelineFromScratch ()
+
+        -- Seabed pass on top of the cached (post-coastal+despike)
+        -- bordered terrain — mirrors 'generateChunk' so the zoom map
+        -- and detail world show the same ocean floor + materials.
+        (despikedElev, finalMatVec) =
+            applySeabedTable (gtSeabed timeline) coord (cacheElev, cacheMat)
 
         computePipelineFromScratch () =
             let (baseElevVec, baseMatVec) = runST $ do
@@ -1373,8 +1471,8 @@ generateZoomTerrain registry params mBorderedCache coord =
                     applyTimelineChunk timeline worldSize registry wsc coord
                         (baseElevVec, baseMatVec)
                 (postCoastElev, finalMat') =
-                    applyCoastalErosion seed worldSize plates registry timeline
-                        oceanMap coord (timelineElevVec, timelineMatVec)
+                    applyCoastalTable (gtCoastal timeline) coord
+                        (timelineElevVec, timelineMatVec)
                 (despikedElev', _) =
                     removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
                                           (postCoastElev, finalMat')
@@ -1495,18 +1593,18 @@ generateZoomTerrain registry params mBorderedCache coord =
         -- Mirror the detail path's wetland-soil demotion (see
         -- 'demoteWetland') so the zoom map shows clay where the world
         -- view demoted dry/sloped wetland soils. Same wt construction
-        -- as generateChunk: climate baseline + lake-surface bump.
+        -- as generateChunk: climate baseline + fluid-aware bump/halo.
         zoomWtBase = computeWaterTable (wgpClimateState params)
                                        worldSize coord smoothedElev
-        zoomWt = VU.imap (\idx wt →
-            case zoomFluid V.! idx of
-                Just fc | fcType fc ≡ Lake → max wt (fcSurface fc)
-                _                          → wt
-            ) zoomWtBase
+        zoomWt = applyFluidWt zoomFluid zoomWtBase
+        zoomOutElev olx oly =
+            if inBorder olx oly
+            then Just (finalElevVec VU.! toIndex olx oly)
+            else Nothing
         zoomMat = VU.imap (\idx m →
             case demoteWetland m of
                 Just demoted
-                  | not (wetlandKeep smoothedElev zoomWt idx)
+                  | not (wetlandKeep zoomOutElev smoothedElev zoomWt idx)
                   → demoted
                 _ → m
             ) interiorMat

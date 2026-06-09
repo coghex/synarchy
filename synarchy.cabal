@@ -141,6 +141,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.Flatness
                    Test.Headless.WorldGen.Exposure
                    Test.Headless.WorldGen.ZoomParity
+                   Test.Headless.WorldGen.BorderProbe
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Render.PickFrame
@@ -483,6 +484,9 @@ library
                      World.Geology.Timeline.River
                      World.Geology.Timeline.RiverTrace
                      World.Geology.Coastal
+                     World.Geology.Coastal.Types
+                     World.Fluid.Seabed
+                     World.Fluid.Seabed.Types
                      World.Geology.Erosion
                      World.Geology.Event
                      World.Hydrology.Types

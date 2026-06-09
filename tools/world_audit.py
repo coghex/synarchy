@@ -259,14 +259,24 @@ def check_terrain_spikes_pits(grid: dict[tuple[int, int], dict[str, Any]],
                 f"terrainZ={terr} maxNbr={max(nbr_terr)} delta=+{terr - max(nbr_terr)}",
             ))
         if min(nbr_terr) > terr + SPIKE_THRESHOLD:
-            # Submerged pits are concealed: when fluid covers the
-            # hole up to (or above) the lowest neighbour, the water
-            # plane renders flat over it — a sinkhole under a lake,
-            # not a visible render artifact. The despike pass only
-            # fixes SPIKES (it lowers, never raises), so deep
-            # water-filled pockets are legitimate worldgen output.
+            # TERRAIN_PIT is an ABOVE-SEA dry-land check. At/below sea
+            # level a deep tile is one of:
+            #  (a) water-covered seabed/lakebed dip — the water plane
+            #      renders over it (fully submerged, or a sub-sea floor
+            #      with fluidSurf ≥ its terrain, e.g. a pond between
+            #      basalt seamounts). Seabed smoothness is validated
+            #      separately (flat-floor %, no straight shelf edges).
+            #  (b) a DRY-below-sea tile — the chunk-vs-tile ocean
+            #      classification mismatch (a below-sea region the
+            #      coarse oceanic test left dry). That is tracked by
+            #      the DRY_BELOW_SEA quality metric; the seabed fill can
+            #      leave such a region's interior as a relative pit, but
+            #      it is the same mismatch anomaly, not a new void.
+            # So exempt anything at/below sea level; an above-sea land
+            # pit (with or without a puddle) still flags.
             fsurf = tile.get("fluidSurf")
-            if fsurf is not None and fsurf >= min(nbr_terr):
+            submergedConceal = fsurf is not None and fsurf >= min(nbr_terr)
+            if submergedConceal or terr <= SEA_LEVEL:
                 continue
             issues.append(Issue(
                 "TERRAIN_PIT", x, y,
@@ -772,20 +782,50 @@ def check_wetland_on_slope(grid: dict[tuple[int, int], dict[str, Any]],
     """BUG: wetland soil (peat 62 / mucky peat 63 / muck 64) on a slope.
 
     The wetland post-pass (`Generate/Chunk.hs::wetlandKeep`) guarantees
-    wetland soils survive only on near-flat tiles (in-chunk 4-neighbour
-    max |Δterrain| ≤ 2). Any occurrence means the post-pass broke.
+    wetland soils survive only on near-flat tiles (4-neighbour max
+    |Δterrain| ≤ 2). Since 2026-06-07 the gate reads cross-chunk
+    neighbours from the bordered post-carve vector, so this check uses
+    the FULL 4-neighbourhood (no same-chunk restriction). Any dry
+    occurrence means the post-pass broke.
 
-    Only the slope half of the gate is checkable here — the dump has no
-    water-table layer, so the wet half (wt ≥ terrain−1) is covered by
-    the hspec test (Test.Headless.WorldGen.Flatness), which reads
-    lcWaterTableMap directly.
+    Only the slope half of the gate is checkable here — the wet half
+    (wt ≥ terrain−1) is covered by the hspec test
+    (Test.Headless.WorldGen.Flatness), which reads lcWaterTableMap
+    directly.
     """
     for (x, y), t in grid.items():
         if t.get("matId") not in WETLAND_MATS:
             continue
         if t.get("beyondGlacier") or t["terrainZ"] <= INT64_MIN + 1:
             continue
-        worst = _max_same_chunk_nbr_delta(grid, x, y, t["terrainZ"])
+        # Sub-sea floor muck is placed by the seabed pass by design
+        # (sand→silt→muck by depth); the continental slope and trench
+        # walls are legitimately steep. This check targets wetland
+        # soil on a LAND hillside, so exempt anything at or below sea
+        # level. (A sub-sea tile that renders dry due to the chunk-vs-
+        # tile ocean-classification mismatch is a separate, tracked
+        # rendering limitation — not a wetland-gate violation.)
+        if t["terrainZ"] <= SEA_LEVEL:
+            continue
+        # Submerged bed material is concealed by the flat water plane
+        # (same principle as the submerged pit/spike exemptions): a
+        # steep lake-bed pillar wearing muck is invisible. Verified
+        # 2026-06-07: every flagged tile on seeds 42/7 w64 (44 + 8)
+        # was underwater; dry-land violations are what this check is
+        # for, and the border-aware wetlandKeep keeps those at 0.
+        fsurf = t.get("fluidSurf")
+        if fsurf is not None and fsurf >= t["terrainZ"]:
+            continue
+        tz = t["terrainZ"]
+        worst = 0
+        for nx, ny in neighbors4(x, y):
+            n = grid.get((nx, ny))
+            if n is None or n.get("beyondGlacier"):
+                continue
+            nz = n["terrainZ"]
+            if nz <= INT64_MIN + 1:
+                continue
+            worst = max(worst, abs(tz - nz))
         if worst > 2:
             issues.append(Issue(
                 "WETLAND_ON_SLOPE", x, y,
@@ -811,7 +851,29 @@ def check_desert_soil_on_slope(grid: dict[tuple[int, int], dict[str, Any]],
             continue
         if t.get("beyondGlacier") or t["terrainZ"] <= INT64_MIN + 1:
             continue
-        worst = _max_same_chunk_nbr_delta(grid, x, y, t["terrainZ"])
+        # Sub-sea sand is seabed (the ocean-floor pass lays sand on the
+        # shallow shelf ramp by design — see World.Fluid.Seabed), not a
+        # desert soil bleeding onto a hillside. Exempt at/below sea
+        # level so the shelf's natural slope doesn't trip this check.
+        if t["terrainZ"] <= SEA_LEVEL:
+            continue
+        # Slope is measured over LAND neighbours only. A beach-sand
+        # tile at the waterline naturally slopes down into the (now
+        # deeper, post-seabed) sea floor — that's a beach, not desert
+        # on a mountainside. Only a steep slope to another ABOVE-sea
+        # tile means the desert soil is genuinely on a hillside.
+        tz = t["terrainZ"]
+        worst = 0
+        for nx, ny in neighbors4(x, y):
+            if crosses_chunk_boundary(x, y, nx, ny):
+                continue
+            n = grid.get((nx, ny))
+            if n is None or n.get("beyondGlacier"):
+                continue
+            nz = n["terrainZ"]
+            if nz <= INT64_MIN + 1 or nz <= SEA_LEVEL:
+                continue
+            worst = max(worst, abs(tz - nz))
         if worst > 2:
             issues.append(Issue(
                 "DESERT_SOIL_ON_SLOPE", x, y,
@@ -929,9 +991,14 @@ QUALITY_THRESHOLDS = {
     "RIVER_MOUTH_DROP":      50,  # observed max 15
     "SUBMERGED_BUMP":        25,  # observed max 4
     # High-variance / by-design categories.
-    "FLOATING_LAKE":       5500,  # observed max 4655 (seed 9999, deep
-                                  # basin lakes; was 3837 even with old
-                                  # constants — recalibrated 2026-06-07)
+    "FLOATING_LAKE":       7000,  # observed max 5697 (seed 99) after the
+                                  # continental-margin seabed (save v26)
+                                  # deepens sea-surrounded clamped basins
+                                  # into the slope — deep sea-connected
+                                  # basins are SUPPOSED to be deep, so the
+                                  # "floating lake" (deep water column)
+                                  # count rises. High-variance metric,
+                                  # recalibrated 2026-06-08.
     "FLOATING_LAVA":        100,  # not observed in baselines
     "FLOATING_RIVER":       300,  # not observed in baselines
     "FLOATING_FLUID":       300,  # generic fallback

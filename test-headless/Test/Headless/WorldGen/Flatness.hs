@@ -70,6 +70,11 @@ wetlandViolations lc =
           tz = terrain VU.! idx
           wt = lcWaterTableMap lc VU.! idx
           d  = maxNbrDelta terrain idx
+    -- Sub-sea tiles are seabed, not land: the ocean-floor pass places
+    -- muck on the deep floor by design (it's steep and wet), so the
+    -- flat∧wet land gate doesn't apply (mirrors wetlandKeep's
+    -- @tz ≤ seaLevel@ exemption).
+    , tz > seaLevel
     , d > 2 ∨ wt < tz - 1
     ]
 

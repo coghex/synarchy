@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict, UnicodeSyntax #-}
 module World.Geology.Coastal
-    ( applyCoastalErosion
+    ( identifyCoastalErosion
+    , applyCoastalTable
     -- * Zoom map coastal support
     , CoastType(..)
     , classifyCoast
@@ -21,6 +22,8 @@ import UPrelude
 import Control.Monad (when, forM_)
 import Control.Monad.ST (runST)
 import Data.Bits (xor, shiftR, (.&.))
+import Data.Word (Word8)
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import World.Types
@@ -28,7 +31,7 @@ import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..)
                       , MaterialRegistry(..), matGlacier)
 import World.Plate (TectonicPlate(..), twoNearestPlates
                    , BoundaryType(..), classifyBoundary, wrapGlobalU)
-import World.Fluid.Ocean (hasAnyOceanFluid)
+import World.Geology.Coastal.Types (CoastalTable(..))
 import World.Geology.Hash (wrappedDeltaUV)
 import World.Constants (seaLevel)
 import World.Chunk.Types (chunkSize)
@@ -194,85 +197,96 @@ deltaMaterial dist roll
 
 -- * Coastal Erosion Pass
 
--- | Maximum coastal influence distance. Must be strictly less than
---   chunkBorder so that adjacent chunks' bordered regions overlap
---   at ALL ocean tiles within this distance of the chunk boundary.
---   chunkBorder - maxCoastalDist tiles of margin prevents BFS seams.
+-- | Maximum coastal influence distance (tiles from the smoothed
+--   shoreline that erosion reaches). Since the move to the global
+--   pass ('identifyCoastalErosion', save v25) this is a pure look
+--   knob — there is no window-margin constraint anymore. (The old
+--   per-chunk windowed pass documented "must be < chunkBorder", an
+--   invariant its own 12-pass contour smoother silently broke: the
+--   total information horizon — preDist 14 + 12 diffusion passes +
+--   BFS 10 — exceeded the 14-tile shared border, so adjacent windows
+--   computed coastlines disagreeing by up to ~18z, rendered as
+--   cliffs at chunk seams.)
 maxCoastalDist ∷ Int
 maxCoastalDist = 10
 
-applyCoastalErosion ∷ Word64 → Int → [TectonicPlate] → MaterialRegistry
-                    → GeoTimeline → OceanMap → ChunkCoord
-                    → (VU.Vector Int, VU.Vector MaterialId)
-                    → (VU.Vector Int, VU.Vector MaterialId)
-applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elevVec, matVec) =
-    -- Run coastal processing when the ocean map says we're near ocean,
-    -- OR the bordered elevation has both land and ocean terrain (catches
-    -- bays and inlets the ocean map BFS missed). Pure ocean chunks
-    -- (no tiles > seaLevel+10) are excluded — their BFS produces dist=0
-    -- everywhere so no erosion fires anyway.
-    if not (hasAnyOceanFluid worldSize oceanMap coord)
-       ∧ not (VU.any (≤ seaLevel) elevVec ∧ VU.any (> seaLevel + 10) elevVec)
-    then (elevVec, matVec)
-    else
-    let borderSize = chunkSize + 2 * chunkBorder
-        borderArea = borderSize * borderSize
+-- | Global coastal pass. Runs ONCE at world init on the stitched
+--   pre-coastal terrain (per-chunk timeline windows are
+--   window-position-independent, so the stitch is the unambiguous
+--   pre-coastal world), and records the result as per-chunk deltas.
+--   Chunk gen applies the table ('applyCoastalTable') instead of
+--   re-running a windowed pass — every chunk reads the same
+--   coastline answer, eliminating the seam-cliff divergence class.
+--
+--   Identical math to the old per-chunk pass — preDist BFS, 12-pass
+--   contour smoothing, dist BFS, per-tile erosion (plate
+--   classification, river-mouth proximity, hash rolls, shoreline
+--   noise), 10-pass beach smoothing — just on the world grid, where
+--   there are no window edges. Per-tile hash/plate coords are
+--   canonical, which also fixes the old hairline seam at the wrap
+--   meridian (windows crossing the wrap hashed unwrapped coords).
+--
+--   Grid convention: @(gy + half) * worldTiles + (gx + half)@ with
+--   'minBound' on beyond-glacier tiles (the 'stitchWorldTerrain'
+--   shape). The sentinel is substituted with @seaLevel + 100@
+--   internally — the exact value the old window pipeline used for
+--   beyond-glacier tiles — so every helper behaves identically.
+identifyCoastalErosion
+    ∷ Word64
+    → Int                    -- ^ worldSize (chunks per side)
+    → [TectonicPlate]
+    → MaterialRegistry
+    → [(Int, Int)]           -- ^ river mouths (global coords)
+    → VU.Vector Int          -- ^ stitched pre-coastal elevations
+    → VU.Vector MaterialId   -- ^ stitched pre-coastal materials
+    → CoastalTable
+identifyCoastalErosion seed worldSize plates registry allMouths
+                       globalElev globalMat =
+    let worldTiles = worldSize * chunkSize
+        halfWorld  = worldTiles `div` 2
+        halfChunks = worldSize `div` 2
+        chunkArea  = chunkSize * chunkSize
+        chunkCoords = [ ChunkCoord ccx ccy
+                      | ccx ← [-halfChunks .. halfChunks - 1]
+                      , ccy ← [-halfChunks .. halfChunks - 1]
+                      ]
+        worldIdx gx gy = (gy + halfWorld) * worldTiles + (gx + halfWorld)
 
-        fromIndex idx =
-            let (by, bx) = idx `divMod` borderSize
-            in (bx - chunkBorder, by - chunkBorder)
+        -- Sentinel substitution: beyond-glacier tiles take the same
+        -- high-land value the window pipeline gave them, so they are
+        -- never BFS seeds, never smoothed (elevation-band check), and
+        -- never poison a neighbour average.
+        elevG = VU.map (\e → if e ≡ minBound then seaLevel + 100 else e)
+                       globalElev
 
-        -- Pre-filter river mouths to those near this chunk.
-        -- Typical: 300+ mouths → 0-3 nearby. Saves ~30K distance
-        -- calculations per coastal chunk.
-        allMouths = concatMap extractMouths (gtPeriods timeline)
-        extractMouths period =
-            [ (mx, my)
-            | HydroEvent (RiverFeature rp) ← gpEvents period
-            , let GeoCoord mx my = rpMouthRegion rp
-            ]
-        nearbyMouths = filterNearbyMouths worldSize coord allMouths
+        preDistField = buildDistField chunkBorder worldTiles elevG
 
-        ChunkCoord cx cy = coord
+        -- Multi-pass contour smoothing near sea level, hardness-aware
+        -- (soft rock coasts become smooth, hard rock retains rugged
+        -- headlands). Same constants as ever; preDistField now only
+        -- bounds the visual band, not a seam-safety margin.
+        smoothedContour = smoothCoastalContour 12 worldTiles globalMat
+                              registry preDistField elevG
 
-        -- Pre-distance field from un-smoothed elevation, used to
-        -- spatially bound the contour smoothing. Extends to
-        -- chunkBorder tiles so the smoothing zone stays within
-        -- the bordered region overlap between adjacent chunks.
-        preDistField = buildDistField chunkBorder borderSize elevVec
-
-        -- Multi-pass contour smoothing near sea level. Replaces the
-        -- old single-pass outlier removal with a proper smoothing pass
-        -- that pulls the sea-level isoline toward a cleaner curve.
-        -- Hardness-aware: soft rock coasts become smooth, hard rock
-        -- retains rugged headlands and outcrops.
-        -- Spatially bounded by preDistField to prevent chunk seams.
-        smoothedContour = smoothCoastalContour 12 borderSize matVec
-                              registry preDistField elevVec
-
-        distField = buildDistField maxCoastalDist borderSize smoothedContour
+        distField = buildDistField maxCoastalDist worldTiles smoothedContour
 
         (passElev, passMat) = runST $ do
-            elevM ← VUM.new borderArea
-            matM  ← VUM.new borderArea
-            forM_ [0 .. borderArea - 1] $ \idx → do
-                -- Start from the contour-smoothed elevation so the
-                -- erosion pass is consistent with the distance field.
-                -- Tiles far from seaLevel are untouched by smoothing,
-                -- so non-coastal tiles retain their original values.
-                VUM.write elevM idx (smoothedContour VU.! idx)
-                VUM.write matM  idx (matVec  VU.! idx)
-
-            forM_ [0 .. borderArea - 1] $ \idx → do
-                let dist = distField VU.! idx
-                    (lx, ly) = fromIndex idx
-                -- Process ALL tiles in the border area, not just interior.
-                -- Border tiles must be eroded identically by both chunks
-                -- that share them, so the smoothing pass sees consistent
-                -- values and doesn't create seams at chunk boundaries.
+            -- Start from the contour-smoothed elevation so the
+            -- erosion pass is consistent with the distance field.
+            elevM ← VU.thaw smoothedContour
+            matM  ← VU.thaw globalMat
+            forM_ chunkCoords $ \coord@(ChunkCoord cx cy) → do
+              let -- Pre-filter river mouths per chunk — same perf
+                  -- trick the windowed pass used (300+ mouths → 0-3).
+                  nearbyMouths = filterNearbyMouths worldSize coord allMouths
+              forM_ [0 .. chunkArea - 1] $ \i → do
+                let lx = i `mod` chunkSize
+                    ly = i `div` chunkSize
+                    idx = worldIdx (cx * chunkSize + lx) (cy * chunkSize + ly)
+                    dist = distField VU.! idx
                 when (dist > 0 ∧ dist ≤ maxCoastalDist) $ do
                     let elev = smoothedContour VU.! idx
-                        mat  = matVec  VU.! idx
+                        mat  = globalMat VU.! idx
                     -- Never erode glacier boundary tiles — they mark the
                     -- impassable world edge and must not be replaced with
                     -- coastal materials.
@@ -345,9 +359,85 @@ applyCoastalErosion seed worldSize plates registry timeline oceanMap coord (elev
             matF  ← VU.unsafeFreeze matM
             pure (elevF, matF)
 
-        smoothedElev = smoothCoast 10 borderSize distField passElev
+        smoothedElev = smoothCoast 10 worldTiles distField passElev
 
-    in (smoothedElev, passMat)
+        -- Sparse per-chunk tables: delta vs the (sanitised) input
+        -- grid; chunks the pass never touched are absent.
+        chunkEntries =
+            [ (coord, deltas, mats)
+            | coord@(ChunkCoord cx cy) ← chunkCoords
+            , let deltas = VU.generate chunkArea $ \i →
+                    let lx = i `mod` chunkSize
+                        ly = i `div` chunkSize
+                        idx = worldIdx (cx * chunkSize + lx)
+                                       (cy * chunkSize + ly)
+                    in smoothedElev VU.! idx - elevG VU.! idx
+                  mats = VU.generate chunkArea $ \i →
+                    let lx = i `mod` chunkSize
+                        ly = i `div` chunkSize
+                        idx = worldIdx (cx * chunkSize + lx)
+                                       (cy * chunkSize + ly)
+                        newM = passMat VU.! idx
+                    in if newM ≡ globalMat VU.! idx
+                       then 0 ∷ Word8
+                       else unMaterialId newM
+            , VU.any (≠ 0) deltas ∨ VU.any (≠ 0) mats
+            ]
+
+    in CoastalTable
+        { coElevDelta   = HM.fromList
+            [ (cc, dv) | (cc, dv, _) ← chunkEntries, VU.any (≠ 0) dv ]
+        , coMatOverride = HM.fromList
+            [ (cc, mv) | (cc, _, mv) ← chunkEntries, VU.any (≠ 0) mv ]
+        }
+
+-- | Apply the global coastal table to one chunk's BORDERED
+--   pre-coastal vectors (timeline-stage output). Border tiles map to
+--   their owning chunk's table entry — the same cross-chunk lookup
+--   convention as the river/lake 'carveAt' — so every chunk sees the
+--   identical coastline regardless of which window asks.
+applyCoastalTable
+    ∷ CoastalTable
+    → ChunkCoord
+    → (VU.Vector Int, VU.Vector MaterialId)
+    → (VU.Vector Int, VU.Vector MaterialId)
+applyCoastalTable table coord (elevVec, matVec) =
+    let borderSize = chunkSize + 2 * chunkBorder
+        borderArea = borderSize * borderSize
+        fromIndex idx =
+            let (by, bx) = idx `divMod` borderSize
+            in (bx - chunkBorder, by - chunkBorder)
+        lookupTile gx gy =
+            let cx = gx `div` chunkSize
+                cy = gy `div` chunkSize
+                ilx = ((gx `mod` chunkSize) + chunkSize) `mod` chunkSize
+                ily = ((gy `mod` chunkSize) + chunkSize) `mod` chunkSize
+                li  = ily * chunkSize + ilx
+                d   = case HM.lookup (ChunkCoord cx cy) (coElevDelta table) of
+                        Just dv → dv VU.! li
+                        Nothing → 0
+                m   = case HM.lookup (ChunkCoord cx cy) (coMatOverride table) of
+                        Just mv → mv VU.! li
+                        Nothing → 0
+            in (d, m)
+        elev' = VU.generate borderArea $ \idx →
+            let z = elevVec VU.! idx
+            in if z ≡ minBound
+               then z
+               else
+                 let (lx, ly) = fromIndex idx
+                     (gx, gy) = chunkToGlobal coord lx ly
+                     (d, _)   = lookupTile gx gy
+                 in z + d
+        mat' = VU.generate borderArea $ \idx →
+            let m0 = matVec VU.! idx
+                (lx, ly) = fromIndex idx
+                (gx, gy) = chunkToGlobal coord lx ly
+                (_, mo)  = lookupTile gx gy
+            in if mo ≡ 0 ∨ m0 ≡ matGlacier
+               then m0
+               else MaterialId mo
+    in (elev', mat')
 
 -- * Distance Field
 

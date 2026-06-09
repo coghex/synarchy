@@ -35,10 +35,15 @@ module World.Generate.Timeline.Fast
 
 import UPrelude
 import Data.Word (Word64)
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import World.Types
+import World.Chunk.Types (ChunkCoord(..), chunkSize)
+import World.Geology.Coastal.Types (CoastalTable(..))
+import World.Fluid.Seabed.Types (SeabedTable(..))
 import World.Material (MaterialId(..), MaterialRegistry(..)
-                      , getMaterialProps, MaterialProps(..))
+                      , getMaterialProps, MaterialProps(..), matGlacier)
 import World.Plate (wrapGlobalU, TectonicPlate, elevationAtGlobal)
 import World.Geology.Types (GeoModification(..))
 import World.Geology.Event (applyGeoEvent)
@@ -90,9 +95,43 @@ applyTimelineFast ∷ GeoTimeline → [TectonicPlate] → Int → Int → Int
                   → MaterialRegistry
                   → (Int, MaterialId) → (Int, MaterialId)
 applyTimelineFast timeline plates worldSize gx gy registry base =
-    applyTimelineFastFrom (gtSeed timeline) plates worldSize gx gy registry
-                          (gtPeriods timeline) (gtRiverExplodedEvents timeline)
-                          base
+    let (e, m) = applyTimelineFastFrom (gtSeed timeline) plates worldSize
+                     gx gy registry
+                     (gtPeriods timeline) (gtRiverExplodedEvents timeline)
+                     base
+        -- Coastal: the global table (save v25) makes this a per-tile
+        -- lookup the fast path can afford — the old windowed pass was
+        -- why it skipped coastal entirely (a ~20z chunk-vs-fast
+        -- divergence in coastal zones). An empty table (e.g. the
+        -- init-time ocean-map probe, which runs before the table is
+        -- built) is a no-op.
+        cx = gx `div` chunkSize
+        cy = gy `div` chunkSize
+        li = ((gy `mod` chunkSize) + chunkSize) `mod` chunkSize
+                 * chunkSize
+           + ((gx `mod` chunkSize) + chunkSize) `mod` chunkSize
+        d  = case HM.lookup (ChunkCoord cx cy)
+                            (coElevDelta (gtCoastal timeline)) of
+               Just dv → dv VU.! li
+               Nothing → 0
+        m' = case HM.lookup (ChunkCoord cx cy)
+                            (coMatOverride (gtCoastal timeline)) of
+               Just mv | mv VU.! li ≠ 0 ∧ m ≠ matGlacier
+                       → MaterialId (mv VU.! li)
+               _       → m
+        -- Seabed: same guarded per-tile lookup (save v26). Applied
+        -- on top of coastal. Empty table (ocean-map probe at init,
+        -- which runs before the seabed table exists) is a no-op.
+        sd = case HM.lookup (ChunkCoord cx cy)
+                            (sbElevDelta (gtSeabed timeline)) of
+               Just dv → dv VU.! li
+               Nothing → 0
+        m'' = case HM.lookup (ChunkCoord cx cy)
+                             (sbMatOverride (gtSeabed timeline)) of
+                Just mv | mv VU.! li ≠ 0 ∧ m' ≠ matGlacier
+                        → MaterialId (mv VU.! li)
+                _       → m'
+    in if e ≡ minBound then (e, m) else (e + d + sd, m'')
 
 -- | Lower-level form taking the periods + river-exploded vector directly.
 --   This is what `Geology.Timeline.compactRiverEvents` calls with a

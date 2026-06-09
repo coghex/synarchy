@@ -452,8 +452,9 @@ def test_severity_classification() -> None:
 
 
 def test_wetland_on_slope() -> None:
-    """Wetland soil with a same-chunk neighbour delta > 2 is a BUG;
-    flat wetland and cross-chunk deltas are not."""
+    """Wetland soil with ANY 4-neighbour delta > 2 is a BUG (the gate
+    is border-aware since 2026-06-07, so cross-chunk counts too);
+    flat wetland and submerged bed material are not."""
     print("test_wetland_on_slope")
     # Flat wetland: clean. Coords 1..5 stay inside chunk 0.
     tiles = [tile(x, y, terrainZ=10, matId=64)
@@ -471,9 +472,9 @@ def test_wetland_on_slope() -> None:
            f"4 wetland neighbours of the spike should flag, got "
            f"{count_category(r, 'WETLAND_ON_SLOPE')}")
 
-    # Cross-chunk leniency: wetland at x=15 (chunk 0) next to a +5
-    # cliff at x=16 (chunk 1) must NOT flag — the post-pass gate is
-    # in-chunk only.
+    # Cross-chunk delta now FLAGS: wetland at x=15 (chunk 0) next to
+    # a +5 cliff at x=16 (chunk 1) — wetlandKeep reads the bordered
+    # post-carve vector, so border tiles are gated like interior ones.
     border = make_tiles([
         tile(15, 3, terrainZ=10, matId=64),
         tile(16, 3, terrainZ=15, matId=56),
@@ -482,8 +483,20 @@ def test_wetland_on_slope() -> None:
         tile(15, 4, terrainZ=10, matId=56),
     ])
     r = audit_dump(border).to_dict()
+    expect(count_category(r, "WETLAND_ON_SLOPE") == 1,
+           f"cross-chunk delta should flag (border-aware gate), got "
+           f"{count_category(r, 'WETLAND_ON_SLOPE')}")
+
+    # Submerged bed material is concealed by the water plane — a
+    # steep lake-bed pillar wearing muck must NOT flag.
+    sub = make_tiles(
+        [tile(x, y, terrainZ=1, matId=50, fluidType="lake", fluidSurf=12)
+         for y in range(1, 6) for x in range(1, 6)]
+        + [tile(3, 3, terrainZ=10, matId=64, fluidType="lake",
+                fluidSurf=12)])
+    r = audit_dump(sub).to_dict()
     expect(count_category(r, "WETLAND_ON_SLOPE") == 0,
-           f"cross-chunk delta should be skipped, got "
+           f"submerged steep wetland should be exempt, got "
            f"{count_category(r, 'WETLAND_ON_SLOPE')}")
 
 

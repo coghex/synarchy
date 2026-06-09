@@ -90,7 +90,7 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
         volcanicActivity = wgcVolcanicActivity worldGenCfg0
         lavaPoolDepth    = wgcLavaPoolDepth worldGenCfg0
         lavaPoolRadius   = wgcLavaPoolRadius worldGenCfg0
-    let (timeline, timelineClimate, borderedCache) = buildTimeline populatedReg seed worldSize placeCount erosionIntensity volcanicActivity lavaPoolDepth lavaPoolRadius
+    let (timeline, timelineClimate, borderedCache, oceanMap, oceanDist) = buildTimeline populatedReg seed worldSize placeCount erosionIntensity volcanicActivity lavaPoolDepth lavaPoolRadius
     _ ← evaluate (force timeline)
     _ ← evaluate (force timelineClimate)
     _ ← evaluate (force borderedCache)
@@ -101,18 +101,13 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
         logInfo logger CatWorld line
         sendGenLog env line
 
-    -- Step 2: Ocean map
+    -- Step 2: Ocean map — reuse the map buildTimeline already
+    -- computed (and that the lake/seabed passes used), so every
+    -- consumer shares ONE chunk-level ocean classification.
     writeIORef phaseRef (LoadPhase1 2 totalSteps)
-    sendGenLog env "Computing ocean map..."
     let plates = generatePlates seed worldSize placeCount
     _ ← evaluate (force plates)
-    let applyTL gx gy base = applyTimelineFast timeline plates worldSize gx gy
-                               registry base
-        (oceanMap, oceanDist) = computeOceanMap seed worldSize placeCount plates applyTL
-    _ ← evaluate (force oceanMap)
-    _ ← evaluate (force oceanDist)
-
-    sendGenLog env $ "Ocean flood fill complete: "
+    sendGenLog env $ "Ocean flood fill: "
         <> T.pack (show (HS.size oceanMap)) <> " ocean chunks"
 
     -- Step 3: Climate — refine the timeline's co-evolved climate

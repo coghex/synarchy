@@ -89,8 +89,16 @@ saveMagic = 0x53595241
 --       gains a trailing field, incompatible with v22.
 --   v24 adds 'wgpLavaPoolDepth' / 'wgpLavaPoolRadius' (volcanism
 --       config levers) to WorldGenParams' manual Serialize.
+--   v25 adds 'gtCoastal' (global coastal-erosion table) to
+--       GeoTimeline — coastal erosion moved from the per-chunk
+--       windowed pass to a world-init global pass on the stitched
+--       terrain (cross-window coastline divergence / seam-cliff fix).
+--   v26 adds 'gtSeabed' (global seabed table) to GeoTimeline —
+--       ocean-floor relief (depth-from-shore ramp + noise replacing
+--       the flat seaLevel−1 basin carve) + seabed materials + bedrock
+--       outcrops.
 currentSaveVersion ∷ Int
-currentSaveVersion = 24
+currentSaveVersion = 26
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects

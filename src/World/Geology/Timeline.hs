@@ -15,7 +15,8 @@ import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Types
 import World.Plate (generatePlates, TectonicPlate, wrapGlobalU
                    , elevationAtGlobal)
-import World.Material (MaterialRegistry)
+import World.Material (MaterialRegistry, MaterialId, matGlacier)
+import World.Generate.Constants (chunkBorder)
 import World.Hydrology.Types (RiverSegment(..))
 import World.Fluid.River (fixupSegmentContinuity)
 import World.Generate.Timeline.Fast (applyTimelineFastFrom)
@@ -26,17 +27,21 @@ import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
                              , LakeParams(..), GlacierParams(..))
 import World.Fluid.IceLevel (computeIceLevelGrid)
 import World.Fluid.Lake.Identify (identifyWorldLakes)
+import World.Fluid.Seabed (identifySeabed)
+import World.Fluid.Seabed.Types (emptySeabedTable)
 import World.Magma.Init (buildVolcanoCtx)
 import World.Magma.Pool (identifyLavaPools)
-import World.Fluid.Lake.Types (emptyWorldLakes)
+import World.Fluid.Lake.Types (emptyWorldLakes, WorldLakes(..))
 import World.Fluid.River.Identify (identifyWorldRivers)
 import World.Fluid.River.Types (emptyWorldRivers)
 import World.Fluid.Ocean (computeOceanMap)
 import World.Generate.InitTerrain
     (BorderedTerrainCache, borderedToInterior
-    , computeChunkBorderedPipeline)
+    , computeChunkTimelinePipeline, finishBorderedPipeline)
+import World.Geology.Coastal (identifyCoastalErosion)
+import World.Geology.Coastal.Types (CoastalTable, emptyCoastalTable)
 import World.Generate.Timeline (applyTimelineFast)
-import World.Ocean.Types (OceanMap)
+import World.Ocean.Types (OceanMap, OceanDistMap)
 import qualified Data.Vector.Unboxed.Mutable as VUM
 import Control.Parallel.Strategies (parListChunk, rdeepseq, using)
 import World.Chunk.Types (chunkSize)
@@ -63,7 +68,13 @@ import World.Weather.Generate (updateClimateFromGrid, oceanRegionsFromGrid)
 buildTimeline ∷ MaterialRegistry → Word64 → Int → Int → Float → Float
               → Int    -- ^ lava pool depth lever (config)
               → Int    -- ^ lava pool radius lever (config)
-              → (GeoTimeline, ClimateState, BorderedTerrainCache)
+              → ( GeoTimeline, ClimateState, BorderedTerrainCache
+                , OceanMap, OceanDistMap )
+                -- ^ Ocean map + distances are returned (not recomputed
+                --   by Init) so the seabed mask and chunk-gen ocean
+                --   classification share ONE map — otherwise they
+                --   disagree and the deep floor keeps clay instead of
+                --   seabed muck.
 buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivity
               lavaPoolDepth lavaPoolRadius =
     let plates = generatePlates seed worldSize plateCount
@@ -164,37 +175,74 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
             , gtWorldLakes  = emptyWorldLakes
             , gtWorldRivers = emptyWorldRivers
             , gtWorldLavaPools = emptyWorldLakes
+            , gtCoastal = emptyCoastalTable
+            , gtSeabed = emptySeabedTable
             }
 
         -- Ocean map: which chunks are ocean-BFS-reachable from the
-        -- world edge. Computed here so the world-terrain pre-compute
-        -- below can run 'applyCoastalErosion' with the same oceanMap
-        -- chunk-gen will later use. Init.hs computes its own copy
-        -- after buildTimeline; that's redundant work but cheap
-        -- (chunk-resolution sampling).
+        -- world edge. Used by the lake identifier below; Init.hs
+        -- computes its own copy after buildTimeline — redundant work
+        -- but cheap (chunk-resolution sampling).
         applyTL gx gy base =
             applyTimelineFast preLakeTimeline plates worldSize gx gy
                               registry base
-        (oceanMap, _) =
+        (oceanMap, oceanDist) =
             computeOceanMap seed worldSize plateCount plates applyTL
 
-        -- Per-chunk bordered pipeline cache, built once and shared:
-        -- buildWorldTerrain slices the interior of each entry to feed
-        -- the global priority flood; the zoom-cache build later reads
-        -- the same entries via 'wgpBorderedCache' instead of
-        -- re-running applyTimelineChunk / applyCoastalErosion /
-        -- removeElevationSpikes. Saves ~50% of the per-chunk pipeline
-        -- work at init time.
-        borderedCache = buildBorderedCache seed plates worldSize registry
-                                           oceanMap preLakeTimeline
+        -- Stage 1: per-chunk TIMELINE windows (plate-base →
+        -- applyTimelineChunk), the expensive part, parallelized.
+        -- Their per-tile values are window-position-independent, so
+        -- stitching their interiors gives the unambiguous global
+        -- pre-coastal terrain.
+        timelineCache = buildTimelineStageCache seed plates worldSize
+                                                registry preLakeTimeline
+
+        (preCoastElev, preCoastMat) =
+            stitchWorldGrids worldSize timelineCache
+
+        -- Global coastal pass (save v25): smoothing + erosion run
+        -- ONCE on the stitched grid — no window edges, so adjacent
+        -- chunks can never disagree about the coastline (the old
+        -- per-window pass manufactured seam cliffs up to ~18z).
+        coastMouths =
+            [ (mx, my)
+            | p ← periods
+            , HydroEvent (RiverFeature rp) ← gpEvents p
+            , let GeoCoord mx my = rpMouthRegion rp
+            ]
+        coastalTable = identifyCoastalErosion seed worldSize plates
+                                              registry coastMouths
+                                              preCoastElev preCoastMat
+
+        -- Stage 2: apply the table + despike per chunk — cheap.
+        -- The result has the exact shape the old single-stage cache
+        -- had; buildWorldTerrain slices interiors for the global
+        -- priority flood and the zoom-cache build reads the entries
+        -- via 'wgpBorderedCache'.
+        borderedCache = finishBorderedCache coastalTable timelineCache
 
         worldTerrain = stitchWorldTerrain worldSize borderedCache
 
-        finalLakes = identifyWorldLakes worldSize oceanMap worldTerrain
+        finalLakes0 = identifyWorldLakes worldSize oceanMap worldTerrain
+
+        -- The seabed pass (below) supersedes the flat seaLevel−1
+        -- floor carve for sub-sea basins, so drop the lake table's
+        -- carve deltas — seabed covers every clamped-lake tile and
+        -- carves it to the ramp instead (which is still ≤ seaLevel−1,
+        -- so the surface fills). Keeps the two mechanisms from
+        -- double-carving.
+        finalLakes = finalLakes0 { wlCarveDelta = HM.empty }
 
         finalRivers = identifyWorldRivers worldSize finalLakes
                                           worldTerrain
                                           (tbsClimateState s2)
+
+        -- Global seabed pass (save v26): continental-margin relief
+        -- (shelf + slope profile blended with the natural floor),
+        -- materials, and bedrock outcrops — replacing the dead-flat
+        -- seaLevel−1 plains.
+        seabedTable = identifySeabed seed worldSize oceanDist
+                                     finalLakes0 worldTerrain
 
         -- Lava pools: same stitched terrain, lakes + rivers as water
         -- barriers. The ctx here is a throwaway built only for pool
@@ -210,9 +258,11 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
             { gtWorldLakes  = finalLakes
             , gtWorldRivers = finalRivers
             , gtWorldLavaPools = lavaPools
+            , gtCoastal = coastalTable
+            , gtSeabed = seabedTable
             }
 
-    in (rawTimeline, tbsClimateState s2, borderedCache)
+    in (rawTimeline, tbsClimateState s2, borderedCache, oceanMap, oceanDist)
 
 -- | Build the per-chunk bordered-pipeline cache. Runs the full
 --   plate-base → applyTimelineChunk → applyCoastalErosion → despike
@@ -222,15 +272,14 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
 --   Per-chunk work is parallelized via @parListChunk 64 rdeepseq@
 --   (forcing each chunk's vectors to NF inside its spark so they
 --   land already-evaluated when the consumer reads them).
-buildBorderedCache
+buildTimelineStageCache
     ∷ Word64
     → [TectonicPlate]
     → Int
     → MaterialRegistry
-    → OceanMap
     → GeoTimeline
     → BorderedTerrainCache
-buildBorderedCache seed plates worldSize registry oceanMap timeline =
+buildTimelineStageCache seed plates worldSize registry timeline =
     let halfChunks = worldSize `div` 2
         allCoords  = [ ChunkCoord cx cy
                      | cx ← [-halfChunks .. halfChunks - 1]
@@ -238,13 +287,57 @@ buildBorderedCache seed plates worldSize registry oceanMap timeline =
                      ]
         runOne coord =
             ( coord
-            , computeChunkBorderedPipeline seed plates worldSize
-                                            registry oceanMap timeline
-                                            coord
+            , computeChunkTimelinePipeline seed plates worldSize
+                                            registry timeline coord
             )
         chunkResults = map runOne allCoords
                        `using` parListChunk 64 rdeepseq
     in HM.fromList chunkResults
+
+-- | Stage 2 over the whole cache: apply the global coastal table +
+--   despike per chunk. Cheap relative to stage 1 (table lookups +
+--   one despike pass) but still parallelized — w256 has 65k chunks.
+finishBorderedCache
+    ∷ CoastalTable
+    → BorderedTerrainCache
+    → BorderedTerrainCache
+finishBorderedCache coastal timelineCache =
+    let finished = [ (coord, finishBorderedPipeline coastal coord entry)
+                   | (coord, entry) ← HM.toList timelineCache
+                   ] `using` parListChunk 64 rdeepseq
+    in HM.fromList finished
+
+-- | Stitch per-chunk TIMELINE-stage entries into world-resolution
+--   elevation + material grids, indexed
+--   @(gy + half) * worldTiles + (gx + half)@. Beyond-glacier tiles
+--   get 'minBound' / 'matGlacier'. This is the global pre-coastal
+--   world that 'identifyCoastalErosion' runs against.
+stitchWorldGrids
+    ∷ Int                  -- ^ worldSize
+    → BorderedTerrainCache
+    → (VU.Vector Int, VU.Vector MaterialId)
+stitchWorldGrids worldSize cache =
+    let worldTiles = worldSize * chunkSize
+        halfWorld  = worldTiles `div` 2
+        borderSize = chunkSize + 2 * chunkBorder
+        toBIdx lx ly = (ly + chunkBorder) * borderSize + (lx + chunkBorder)
+        elevG = stitchWorldTerrain worldSize cache
+        matG = VU.create $ do
+            v ← VUM.replicate (worldTiles * worldTiles) matGlacier
+            forM_ (HM.toList cache) $ \(ChunkCoord cx cy, (_, bMat)) → do
+                let baseGX = cx * chunkSize
+                    baseGY = cy * chunkSize
+                forM_ [0 .. chunkSize * chunkSize - 1] $ \i → do
+                    let lx     = i `mod` chunkSize
+                        ly     = i `div` chunkSize
+                        gxOff  = baseGX + lx + halfWorld
+                        gyOff  = baseGY + ly + halfWorld
+                        wIdx   = gyOff * worldTiles + gxOff
+                    when (gxOff ≥ 0 ∧ gxOff < worldTiles
+                        ∧ gyOff ≥ 0 ∧ gyOff < worldTiles) $
+                        VUM.write v wIdx (bMat VU.! toBIdx lx ly)
+            pure v
+    in (elevG, matG)
 
 -- | Stitch per-chunk bordered cache entries into a world-resolution
 --   terrain grid indexed @(gy + half) * worldTiles + (gx + half)@.

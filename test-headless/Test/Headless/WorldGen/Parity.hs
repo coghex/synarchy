@@ -102,20 +102,22 @@ spec = aroundAll withHeadlessEngine $ do
                     -- tile-units in the chunk path. The 95th-percentile
                     -- bound ignores these outliers while still catching
                     -- a systematic regression in the broad distribution.
-                    -- Calibrated 2026-05-22; ±5 floor relaxed
-                    -- 2026-06-06 when the volcanism default rose to
-                    -- 1.25 (more volcanic stamps = more tiles where
-                    -- the fast path's missing cliff smoothing shows;
-                    -- seed 42 w64 measured 47.4% within ±5, p95 51 —
-                    -- the distribution SHAPE is unchanged, only the
-                    -- tight band thinned):
-                    --   • ≥40% within ±5  (typical seeds show ~47-60%)
-                    --   • ≥80% within ±40 (typical seeds show ~89%)
-                    --   • p95 < 100       (typical seeds show ~50)
+                    -- Calibrated 2026-05-22; relaxed to 0.40 on
+                    -- 2026-06-06 for the volcanism default bump; then
+                    -- RE-TIGHTENED 2026-06-07 when the fast path
+                    -- gained the global coastal table (save v25). The
+                    -- old windowed coastal pass was too expensive for
+                    -- the fast path, so it skipped coastal entirely —
+                    -- a ~20z systematic divergence in coastal zones.
+                    -- With the per-tile table lookup, seed 42 w64
+                    -- measures 73% within ±5, p95 = 34:
+                    --   • ≥55% within ±5  (measured 73%)
+                    --   • ≥85% within ±40 (measured 98%)
+                    --   • p95 < 80        (measured 34)
                     -- Drift beyond means one of the two paths has
                     -- meaningfully changed semantics.
                     let frac5  = fromIntegral within5  / fromIntegral total ∷ Double
                         frac40 = fromIntegral within40 / fromIntegral total ∷ Double
-                    frac5  `shouldSatisfy` (≥ 0.40)
-                    frac40 `shouldSatisfy` (≥ 0.80)
-                    p95    `shouldSatisfy` (< 100)
+                    frac5  `shouldSatisfy` (≥ 0.55)
+                    frac40 `shouldSatisfy` (≥ 0.85)
+                    p95    `shouldSatisfy` (< 80)

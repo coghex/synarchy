@@ -13,9 +13,10 @@
 --   Wet climates push the saturated horizon up close to the surface;
 --   arid climates push it far below. No priority flood, no per-tile
 --   spillway propagation — the global table handles surface placement,
---   and 'World.Generate.Chunk' bumps the wt up to the lake surface
---   under lake beds after the fluid map is known, so a dig through a
---   lake floor still exposes water.
+--   and 'World.Generate.Chunk.applyFluidWt' lifts this baseline once
+--   the fluid map is known: under-fluid bump (dig through a lake /
+--   river bed or the ocean floor exposes water) plus a fresh-water
+--   shore halo (riparian groundwater; feeds the wetland-soil gate).
 module World.Hydrology.WaterTable
     ( computeWaterTable
     , depthFromClimate

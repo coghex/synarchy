@@ -52,6 +52,8 @@ import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Fluid.Types (IceLevelGrid(..))
 import World.Fluid.Lake.Types (WorldLakes, emptyWorldLakes)
+import World.Fluid.Seabed.Types (SeabedTable, emptySeabedTable)
+import World.Geology.Coastal.Types (CoastalTable, emptyCoastalTable)
 import World.Fluid.River.Types (WorldRivers, emptyWorldRivers)
 import World.Hydrology.Types
     ( HydroFeature(..)
@@ -114,8 +116,21 @@ data GeoTimeline = GeoTimeline
       --   reusing the lake table shape (bitmask + uniform surface).
       --   Chunk gen places Lava where a pool bitmask is set and the
       --   pool surface covers the tile's terrain, with priority over
-      --   water. Appended last — 'Generic Serialize' is positional;
-      --   keep field order stable (save schema).
+      --   water. 'Generic Serialize' is positional; keep field
+      --   order stable (save schema).
+    , gtCoastal ∷ !CoastalTable
+      -- ^ Global coastal-erosion table — per-chunk elevation deltas
+      --   + material overrides computed once at init on the stitched
+      --   pre-coastal terrain ('identifyCoastalErosion'). Chunk gen
+      --   applies this instead of running the windowed coastal pass,
+      --   so adjacent chunks always agree on the coastline (save v25).
+    , gtSeabed ∷ !SeabedTable
+      -- ^ Global seabed table — ocean-floor relief (depth-from-shore
+      --   ramp + gentle noise replacing the flat seaLevel−1 basin
+      --   carve), seabed materials (sand→silt→muck by depth), and
+      --   bedrock outcrops ('World.Fluid.Seabed.identifySeabed').
+      --   Applied at chunk gen like 'gtCoastal'. Appended last
+      --   (positional schema; save v26).
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 emptyTimeline ∷ GeoTimeline
@@ -129,6 +144,8 @@ emptyTimeline = GeoTimeline
     , gtWorldLakes = emptyWorldLakes
     , gtWorldRivers = emptyWorldRivers
     , gtWorldLavaPools = emptyWorldLakes
+    , gtCoastal = emptyCoastalTable
+    , gtSeabed = emptySeabedTable
     }
 
 data EventBBox = EventBBox

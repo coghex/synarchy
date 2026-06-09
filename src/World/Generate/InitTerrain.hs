@@ -11,8 +11,18 @@
 --   'World.Generate.Chunk' transitively depends on 'World.Geology', so
 --   keeping the function here lets both 'Timeline' and 'Chunk' import
 --   it without going through each other.
+--
+--   Since save v25 the pipeline is two-stage: the TIMELINE stage
+--   (plate-base → 'applyTimelineChunk') is window-position-independent
+--   per tile, so 'buildTimeline' stitches one global pre-coastal grid
+--   from it, runs 'identifyCoastalErosion' ONCE on that grid, and the
+--   FINISH stage just applies the resulting table + despike.  The old
+--   per-window 'applyCoastalErosion' computed different coastlines in
+--   adjacent windows (information horizon ≈ 36 tiles vs a 14-tile
+--   shared border), manufacturing seam cliffs.
 module World.Generate.InitTerrain
-    ( computeChunkInteriorTerrain
+    ( computeChunkTimelinePipeline
+    , finishBorderedPipeline
     , computeChunkBorderedPipeline
     , BorderedTerrainCache
     , borderedToInterior
@@ -29,16 +39,16 @@ import World.Constants (seaLevel)
 import World.Generate.Constants (chunkBorder)
 import World.Generate.Coordinates (chunkToGlobal)
 import World.Generate.Timeline (applyTimelineChunk, removeElevationSpikes)
-import World.Geology.Coastal (applyCoastalErosion)
+import World.Geology.Coastal (applyCoastalTable)
+import World.Geology.Coastal.Types (CoastalTable)
 import World.Geology.Timeline.Types (GeoTimeline)
 import World.Material (MaterialId, MaterialRegistry, matGlacier)
-import World.Ocean.Types (OceanMap)
 import World.Plate
     (TectonicPlate, elevationAtGlobal, isBeyondGlacier, wrapGlobalU)
 import World.Scale (computeWorldScale)
 
 -- | Per-chunk cached output of the init-time bordered pipeline
---   (plate-base → 'applyTimelineChunk' → 'applyCoastalErosion' →
+--   (plate-base → 'applyTimelineChunk' → coastal table →
 --   'removeElevationSpikes'). Both 'buildWorldTerrain' and
 --   'generateZoomTerrain' want this; computing it once and looking up
 --   per chunk saves ~50% of the per-chunk pipeline work during init.
@@ -48,53 +58,20 @@ import World.Scale (computeWorldScale)
 type BorderedTerrainCache =
     HM.HashMap ChunkCoord (VU.Vector Int, VU.Vector MaterialId)
 
--- | Compute the 16×16 interior terrain for one chunk using the SAME
---   pipeline 'World.Generate.Chunk.generateChunk' runs (plate-base →
---   'applyTimelineChunk' → 'applyCoastalErosion' → 'removeElevationSpikes')
---   minus the downstream-only work (materials, strata, fluid,
---   vegetation). Output is indexed @ly * chunkSize + lx@; beyond-
---   glacier tiles get 'minBound'.
---
---   The 'World.Geology.Timeline.buildTimeline' caller stitches one
---   of these per chunk into a world-resolution terrain grid that
---   'World.Fluid.Lake.Identify' runs the priority flood against —
---   so basin bitmasks match what the chunk renderer will produce,
---   eliminating the fast-vs-chunk divergence that produced grass-
---   topped columns in the middle of lakes.
-computeChunkInteriorTerrain
+-- | Stage 1: plate-base → 'applyTimelineChunk' for one chunk's
+--   bordered region. Per-tile output is window-position-independent
+--   (verified by the BorderProbe), so 'buildTimeline' can stitch
+--   these interiors into the unambiguous global pre-coastal terrain
+--   that 'identifyCoastalErosion' runs against.
+computeChunkTimelinePipeline
     ∷ Word64
     → [TectonicPlate]
     → Int                  -- ^ worldSize
     → MaterialRegistry
-    → OceanMap
-    → GeoTimeline
-    → ChunkCoord
-    → VU.Vector Int
-computeChunkInteriorTerrain seed plates worldSize registry oceanMap
-                            timeline coord =
-    let (borderedElev, _) =
-            computeChunkBorderedPipeline seed plates worldSize registry
-                                          oceanMap timeline coord
-    in borderedToInterior worldSize coord borderedElev
-
--- | The bordered version of the init pipeline. Runs the same four
---   passes as 'computeChunkInteriorTerrain' but returns the full
---   @(chunkSize + 2*chunkBorder)^2@ tile region — both elevation and
---   the post-coastal material vectors.  Consumers that only need the
---   16×16 interior can call 'borderedToInterior'; the zoom-cache
---   build wants the bordered region directly so its strata-cache
---   neighbour reads stay consistent with the detail world.
-computeChunkBorderedPipeline
-    ∷ Word64
-    → [TectonicPlate]
-    → Int                  -- ^ worldSize
-    → MaterialRegistry
-    → OceanMap
     → GeoTimeline
     → ChunkCoord
     → (VU.Vector Int, VU.Vector MaterialId)
-computeChunkBorderedPipeline seed plates worldSize registry oceanMap
-                             timeline coord =
+computeChunkTimelinePipeline seed plates worldSize registry timeline coord =
     let wsc        = computeWorldScale worldSize
         borderSize = chunkSize + 2 * chunkBorder
         borderArea = borderSize * borderSize
@@ -122,19 +99,42 @@ computeChunkBorderedPipeline seed plates worldSize registry oceanMap
             matF  ← VU.unsafeFreeze matM
             pure (elevF, matF)
 
-        (timelineElev, timelineMat) =
-            applyTimelineChunk timeline worldSize registry wsc coord
-                (baseElev, baseMat)
+    in applyTimelineChunk timeline worldSize registry wsc coord
+           (baseElev, baseMat)
 
+-- | Stage 2: apply the global coastal table, then despike. Cheap
+--   (table lookups) — the expensive smoothing/BFS work happened once
+--   globally in 'identifyCoastalErosion'.
+finishBorderedPipeline
+    ∷ CoastalTable
+    → ChunkCoord
+    → (VU.Vector Int, VU.Vector MaterialId)
+    → (VU.Vector Int, VU.Vector MaterialId)
+finishBorderedPipeline coastal coord (timelineElev, timelineMat) =
+    let borderSize = chunkSize + 2 * chunkBorder
         (postCoastElev, finalMat) =
-            applyCoastalErosion seed worldSize plates registry timeline
-                                oceanMap coord
-                (timelineElev, timelineMat)
-
+            applyCoastalTable coastal coord (timelineElev, timelineMat)
         (finalElev, _) = removeElevationSpikes 12 4 borderSize
                                                (postCoastElev, finalMat)
-
     in (finalElev, finalMat)
+
+-- | Both stages for a single chunk — for one-shot callers that don't
+--   hold a timeline-stage cache. ('World.Generate.Chunk' inlines the
+--   same sequence; keep them in sync.)
+computeChunkBorderedPipeline
+    ∷ Word64
+    → [TectonicPlate]
+    → Int                  -- ^ worldSize
+    → MaterialRegistry
+    → CoastalTable
+    → GeoTimeline
+    → ChunkCoord
+    → (VU.Vector Int, VU.Vector MaterialId)
+computeChunkBorderedPipeline seed plates worldSize registry coastal
+                             timeline coord =
+    finishBorderedPipeline coastal coord
+        (computeChunkTimelinePipeline seed plates worldSize registry
+                                      timeline coord)
 
 -- | Slice a bordered elevation vector down to the @chunkSize^2@
 --   interior used by 'buildWorldTerrain' for the global priority

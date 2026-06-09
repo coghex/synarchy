@@ -18,6 +18,8 @@ module World.Plate
     , wrapGlobalX
     , wrapGlobalU
     , worldWidthTiles
+      -- * noise
+    , wrappedValueNoise2D
     ) where
 
 import UPrelude
