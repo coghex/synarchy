@@ -35,7 +35,7 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Map as Map
-import Data.List (find, sortBy)
+import Data.List (find, sortBy, sort)
 import qualified Data.Text.Read as T
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay, forkIO)
@@ -404,14 +404,19 @@ luaValueToText depth idx
 --   otherwise emit {...}.
 luaTableToJson ∷ Int → Lua.StackIndex → Lua.LuaE Lua.Exception Text
 luaTableToJson depth idx = do
-    -- First pass: check if it's an array (consecutive integer keys 1..n)
+    -- First pass: check if it's an array (keys are EXACTLY the
+    -- consecutive run 1..n). A purely positive-integer-keyed but sparse
+    -- table (e.g. {[1]=a,[5]=b}) is an object — emitting it as an array
+    -- would silently drop the gaps and renumber the survivors.
     let absIdx = if idx < 0 then idx - 1 else idx
     Lua.pushnil  -- first key
     pairs ← collectTablePairs (depth + 1) absIdx []
-    let isArray = not (null pairs)
-                ∧ all (\(k, _) → case T.decimal k of
-                        Right (n, rest) → T.null rest ∧ n > (0 ∷ Int)
-                        _ → False) pairs
+    let parsedKeys = traverse (\(k, _) → case T.decimal k of
+                        Right (n, rest) | T.null rest → Just (n ∷ Int)
+                        _                             → Nothing) pairs
+        isArray = case parsedKeys of
+            Just ks@(_:_) → sort ks ≡ [1 .. length ks]
+            _             → False
     if isArray
         then do
             -- Sort by integer key and emit as array
