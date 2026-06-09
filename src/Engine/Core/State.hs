@@ -29,6 +29,7 @@ import Engine.Graphics.Vulkan.Types.Cleanup
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Texture.Types
+import Engine.Graphics.Vulkan.Sampler.Types (SamplerCache)
 import Engine.Graphics.Window.Types
 import Engine.Graphics.Camera
 import Engine.Graphics.Font.Data
@@ -93,6 +94,13 @@ data EngineEnv = EngineEnv
   , zoomAtlasDataRef    ∷ IORef (Maybe (Int, Int, BS.ByteString))  -- ^ Pending zoom atlas pixel data for GPU upload
   , worldQuadsRef       ∷ IORef (V.Vector SortableQuad)
   , textureSystemRef    ∷ IORef (Maybe BindlessTextureSystem)
+  , samplerCacheRef     ∷ IORef SamplerCache
+    -- ^ Deduplicated, refcounted Vulkan samplers keyed by 'SamplerKind'.
+    --   The engine needs only a handful of distinct sampler configs
+    --   (texture nearest/linear + font), so every sampler is acquired
+    --   from this cache rather than minted per atlas/font. At most one
+    --   'VkSampler' per kind is alive at a time. Destroyed wholesale at
+    --   shutdown via 'destroySamplerCache'.
   , textureSizeRef      ∷ IORef (HM.HashMap TextureHandle (Int, Int))
   , defaultFaceMapSlotRef  ∷ IORef Word32
   , floraCatalogRef     ∷ IORef FloraCatalog
@@ -213,9 +221,10 @@ data TimingState = TimingState
 -- | A replaceable GPU texture upload (zoom atlas / world preview).
 --   Re-uploaded on every world init/load; the previous generation is
 --   destroyed when superseded (Engine.Scripting.Lua.Message) and the
---   last one at engine shutdown. 'ttCleanup' destroys view, image,
---   memory, and sampler (explicit — these deliberately do NOT go
---   through allocResource, which would defer destruction to exit).
+--   last one at engine shutdown. 'ttCleanup' destroys view, image, and
+--   memory (explicit — these deliberately do NOT go through
+--   allocResource, which would defer destruction to exit) and releases
+--   the texture's shared sampler reference back to the sampler cache.
 data TransientTexture = TransientTexture
   { ttHandle  ∷ TextureHandle
   , ttCleanup ∷ IO ()

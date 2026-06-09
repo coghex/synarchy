@@ -22,6 +22,7 @@ import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
                        , LogLevel(..), LogCategory(..))
 import Engine.Core.State
+import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
 import Engine.Core.Types
 import Engine.Core.Var
 import qualified Engine.Core.Queue as Q
@@ -93,6 +94,7 @@ initializeEngine = do
   zoomAtlasDataRef ← newIORef Nothing
   worldQuadsRef ← newIORef (V.empty)
   textureSystemRef ← newIORef Nothing
+  samplerCacheRef ← newIORef emptySamplerCache
   texSizeRef ← newIORef HM.empty
   defaultFaceMapSlotRef ← newIORef 0
   floraCatRef ← newIORef emptyFloraCatalog
@@ -162,6 +164,7 @@ initializeEngine = do
         , zoomAtlasDataRef   = zoomAtlasDataRef
         , worldQuadsRef      = worldQuadsRef
         , textureSystemRef   = textureSystemRef
+        , samplerCacheRef    = samplerCacheRef
         , textureSizeRef     = texSizeRef
         , defaultFaceMapSlotRef = defaultFaceMapSlotRef
         , floraCatalogRef    = floraCatRef

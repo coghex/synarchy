@@ -14,6 +14,7 @@ import Engine.Core.Thread (ThreadState, shutdownThread)
 import Engine.Core.Error.Exception (EngineException(..))
 import Engine.Graphics.Window.Types (Window(..))
 import Engine.Graphics.Vulkan.Types.Cleanup (runAllCleanups)
+import Engine.Graphics.Vulkan.Sampler.Cache (destroySamplerCache)
 import qualified Engine.Graphics.Window.GLFW as GLFW
 import Engine.Input.Callback (clearGLFWCallbacks)
 import Engine.Scene.Types (createBatchManager, SceneManager(..)
@@ -50,6 +51,14 @@ shutdownEngine (Window win) unitThreadState worldThreadState
     -- run manual cleanup actions
     logDebugM CatSystem "Running Vulkan cleanup actions..."
     liftIO $ runAllCleanups (vulkanCleanup state)
+
+    -- Destroy every cached sampler (texture + font). Device is already
+    -- idle (waitIdle above); this frees the handful of shared VkSamplers
+    -- the refcounted cache kept alive.
+    logDebugM CatSystem "Destroying sampler cache..."
+    cacheEnv ← ask
+    forM_ device $ \dev →
+      liftIO $ destroySamplerCache dev (samplerCacheRef cacheEnv)
 
     -- Destroy cached text instance buffer
     case device of

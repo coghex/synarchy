@@ -10,18 +10,23 @@ module Engine.Graphics.Vulkan.Texture.Bindless
   , destroyBindlessTextureSystem
     -- * Texture Management
   , registerTexture
+  , registerPinnedTexture
   , unregisterTexture
-  , rewriteAllSamplers
+  , setTextureFilter
   , getTextureSlotIndex
   ) where
 
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
+import Data.IORef (readIORef)
 import Engine.Core.Monad
 import Engine.Core.Resource
 import Engine.Core.Error.Exception
+import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Graphics.Config (textureFilterToVulkan)
+import Engine.Graphics.Vulkan.Sampler.Cache
 import Engine.Graphics.Vulkan.Texture.Slot
 import Engine.Graphics.Vulkan.Texture.Handle
 import Engine.Graphics.Vulkan.Texture.Undefined (createUndefinedTexture)
@@ -59,9 +64,17 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
 
   let slotAllocator = createSlotAllocator (bcMaxTextures config)
 
+  -- Acquire the single shared texture sampler matching the current
+  -- global filter. Every atlas slot (and the undefined fallback) points
+  -- at this one sampler; a filter toggle swaps it via 'setTextureFilter'.
+  env ← ask
+  filterMode ← liftIO $ readIORef (textureFilterRef env)
+  let texKind = textureSamplerKind (textureFilterToVulkan filterMode)
+  sharedSampler ← liftIO $ acquireSampler dev (samplerCacheRef env) texKind
+
   -- MoltenVK requires all argument buffer slots to be initialized
-  initializeAllSlots dev descriptorSet config 
-    (utImageView undefinedTex) (utSampler undefinedTex)
+  initializeAllSlots dev descriptorSet config
+    (utImageView undefinedTex) sharedSampler
   pure $ BindlessTextureSystem
     { btsConfig           = config
     , btsDescriptorPool   = descriptorPool
@@ -71,6 +84,9 @@ createBindlessTextureSystem pdev dev cmdPool cmdQueue config = do
     , btsUndefinedTexture = undefinedTex
     , btsHandleMap        = Map.empty
     , btsImageViews       = Map.empty
+    , btsTextureSampler   = sharedSampler
+    , btsTextureKind      = texKind
+    , btsPinned           = Map.empty
     }
 
 -- | Initialize all descriptor slots with the undefined texture
@@ -187,14 +203,37 @@ writeDescriptorSlot dev descSet config slotIndex imageView sampler = do
 
   updateDescriptorSets dev (V.singleton $ SomeStruct write) V.empty
 
--- | Register a texture in the bindless system
+-- | Register a texture in the bindless system. The atlas/global path:
+--   the slot follows the global filter and is repainted by
+--   'setTextureFilter' on a toggle. Callers pass 'btsTextureSampler'.
 registerTexture ∷ Device
                 → TextureHandle
                 → ImageView
                 → Sampler
                 → BindlessTextureSystem
                 → EngineM ε σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
-registerTexture dev texHandle imageView sampler system = do
+registerTexture = registerTextureImpl False
+
+-- | Register a texture pinned to a SPECIFIC sampler that must survive a
+--   global filter toggle (world preview → NEAREST, zoom atlas → LINEAR).
+--   'setTextureFilter' rewrites this slot to its pinned sampler instead
+--   of the new global one, so it keeps its intended look.
+registerPinnedTexture ∷ Device
+                      → TextureHandle
+                      → ImageView
+                      → Sampler
+                      → BindlessTextureSystem
+                      → EngineM ε σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
+registerPinnedTexture = registerTextureImpl True
+
+registerTextureImpl ∷ Bool          -- ^ pin this slot's sampler?
+                    → Device
+                    → TextureHandle
+                    → ImageView
+                    → Sampler
+                    → BindlessTextureSystem
+                    → EngineM ε σ (Maybe BindlessTextureHandle, BindlessTextureSystem)
+registerTextureImpl pinned dev texHandle imageView sampler system = do
   case Map.lookup texHandle (btsHandleMap system) of
     Just existingHandle → pure (Just existingHandle, system)
     Nothing → do
@@ -207,10 +246,14 @@ registerTexture dev texHandle imageView sampler system = do
           let bindlessHandle = toBindlessHandle slot texHandle
               newHandleMap = Map.insert texHandle bindlessHandle (btsHandleMap system)
               newImageViews = Map.insert texHandle imageView (btsImageViews system)
+              newPinned
+                | pinned    = Map.insert texHandle sampler (btsPinned system)
+                | otherwise = btsPinned system
               newSystem = system
                 { btsSlotAllocator = newAllocator
                 , btsHandleMap = newHandleMap
                 , btsImageViews = newImageViews
+                , btsPinned = newPinned
                 }
 
           pure (Just bindlessHandle, newSystem)
@@ -227,36 +270,57 @@ unregisterTexture dev texHandle system = do
       let slot = bthSlot bindlessHandle
           
       writeDescriptorSlot dev (btsDescriptorSet system) (btsConfig system)
-        (tsIndex slot) 
+        (tsIndex slot)
         (utImageView $ btsUndefinedTexture system)
-        (utSampler $ btsUndefinedTexture system)
+        (btsTextureSampler system)
 
       let newAllocator = freeSlot slot (btsSlotAllocator system)
           newHandleMap = Map.delete texHandle (btsHandleMap system)
           newImageViews = Map.delete texHandle (btsImageViews system)
+          newPinned = Map.delete texHandle (btsPinned system)
 
       pure $ system
         { btsSlotAllocator = newAllocator
         , btsHandleMap = newHandleMap
         , btsImageViews = newImageViews
+        , btsPinned = newPinned
         }
 
--- | Rewrite all texture slots with a new sampler.
--- The images stay the same, only the sampler changes.
--- This is safe to call at any time thanks to UPDATE_AFTER_BIND.
-rewriteAllSamplers ∷ Device
-                   → Sampler       -- ^ The new sampler
-                   → BindlessTextureSystem
-                   → EngineM ε σ ()
-rewriteAllSamplers dev newSampler system = do
-    let descSet = btsDescriptorSet system
+-- | Switch the shared texture sampler to match a new global filter.
+--   Acquires the new kind from the cache, repaints EVERY slot (the
+--   unallocated ones with the undefined view, the allocated ones with
+--   their real view) to the new sampler, then releases the old kind —
+--   so by the time the old 'VkSampler' can be destroyed no slot still
+--   references it. Safe to call live thanks to UPDATE_AFTER_BIND; the
+--   refcounted cache means the new sampler is shared, not duplicated.
+setTextureFilter ∷ Device
+                 → Filter                  -- ^ The new global filter
+                 → BindlessTextureSystem
+                 → EngineM ε σ BindlessTextureSystem
+setTextureFilter dev flt system = do
+    env ← ask
+    let ref     = samplerCacheRef env
+        descSet = btsDescriptorSet system
         config  = btsConfig system
+        oldKind = btsTextureKind system
+        newKind = textureSamplerKind flt
+    newSampler ← liftIO $ acquireSampler dev ref newKind
+    -- Repaint all slots first: unallocated → undefined view + new global
+    -- sampler. Then each allocated slot → its real view, using the new
+    -- global sampler UNLESS the handle is pinned (preview/zoom), in which
+    -- case it keeps its own sampler so its look is unaffected.
+    initializeAllSlots dev descSet config
+      (utImageView $ btsUndefinedTexture system) newSampler
     forM_ (Map.toList $ btsHandleMap system) $ \(texHandle, bindlessHandle) → do
         let slotIdx = tsIndex (bthSlot bindlessHandle)
+            slotSampler = Map.findWithDefault newSampler texHandle (btsPinned system)
         case Map.lookup texHandle (btsImageViews system) of
             Just imageView →
-                writeDescriptorSlot dev descSet config slotIdx imageView newSampler
+                writeDescriptorSlot dev descSet config slotIdx imageView slotSampler
             Nothing → pure ()  -- shouldn't happen
+    -- Now no slot references the old sampler — safe to release.
+    liftIO $ releaseSampler dev ref oldKind
+    pure system { btsTextureSampler = newSampler, btsTextureKind = newKind }
 
 -- | Get the slot index for a texture handle
 getTextureSlotIndex ∷ TextureHandle → BindlessTextureSystem → Word32
@@ -265,8 +329,12 @@ getTextureSlotIndex texHandle system =
     Just bindlessHandle → fromBindlessHandle bindlessHandle
     Nothing → 0
 
--- | Clean up the bindless texture system
+-- | Clean up the bindless texture system. The shared sampler is
+--   released back to the cache (destroyed only if this held the last
+--   reference); descriptor pool + layout are destroyed directly.
 destroyBindlessTextureSystem ∷ Device → BindlessTextureSystem → EngineM ε σ ()
 destroyBindlessTextureSystem dev system = do
+  env ← ask
+  liftIO $ releaseSampler dev (samplerCacheRef env) (btsTextureKind system)
   destroyDescriptorPool dev (btsDescriptorPool system) Nothing
   destroyDescriptorSetLayout dev (btsDescriptorLayout system) Nothing

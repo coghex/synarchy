@@ -12,10 +12,12 @@ import Foreign.ForeignPtr (withForeignPtr)
 import Foreign.Marshal.Array (copyArray)
 import Engine.Core.Monad
 import Engine.Core.Resource
+import Engine.Core.State (EngineEnv(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Vulkan.Image
 import Engine.Graphics.Vulkan.Buffer
 import Engine.Graphics.Vulkan.Command
+import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler, SamplerKind(..))
 import Engine.Graphics.Vulkan.Texture (transitionImageLayout, ImageLayoutTransition(..))
 import Engine.Graphics.Vulkan.Texture.Bindless (registerTexture)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
@@ -86,25 +88,10 @@ createDefaultFaceMap pdev dev cmdPool cmdQueue bindless = do
   imageView ← createVulkanImageView dev image
     FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 
-  let samplerInfo = zero
-        { magFilter    = FILTER_NEAREST
-        , minFilter    = FILTER_NEAREST
-        , addressModeU = SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-        , addressModeV = SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-        , addressModeW = SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-        , anisotropyEnable = False
-        , maxAnisotropy    = 1
-        , borderColor      = BORDER_COLOR_INT_OPAQUE_BLACK
-        , unnormalizedCoordinates = False
-        , compareEnable = False
-        , compareOp     = COMPARE_OP_ALWAYS
-        , mipmapMode    = SAMPLER_MIPMAP_MODE_NEAREST
-        , mipLodBias    = 0
-        , minLod        = 0
-        , maxLod        = 0
-        }
-  sampler ← allocResource (\s → destroySampler dev s Nothing) $
-    createSampler dev samplerInfo Nothing
+  -- The 1×1 face map is sampler-agnostic (single pixel), so it shares
+  -- the cached NEAREST sampler rather than minting its own.
+  env ← ask
+  sampler ← liftIO $ acquireSampler dev (samplerCacheRef env) SamplerTextureNearest
 
   -- High handle value to avoid collisions with normal texture handles
   let faceMapTexHandle = TextureHandle 999999

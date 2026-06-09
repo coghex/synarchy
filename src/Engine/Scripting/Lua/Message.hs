@@ -32,10 +32,11 @@ import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
 import Engine.Graphics.Vulkan.Command (runCommandsOnce)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import Engine.Graphics.Vulkan.Recreate (recreateSwapchain)
-import Engine.Graphics.Vulkan.Texture (createTextureSampler, createTextureSampler'
-                                      , transitionImageLayout
+import Engine.Graphics.Vulkan.Texture (transitionImageLayout
                                       , ImageLayoutTransition(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (rewriteAllSamplers, registerTexture
+import Engine.Graphics.Vulkan.Sampler.Cache ( acquireSampler, releaseSampler
+                                            , SamplerKind(..))
+import Engine.Graphics.Vulkan.Texture.Bindless (setTextureFilter, registerPinnedTexture
                                                , unregisterTexture)
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
 import Engine.Graphics.Window.Types (Window(..))
@@ -102,11 +103,10 @@ handleLuaMessage msg = do
             liftIO $ writeIORef (textureFilterRef env) tf
             gs ← gets graphicsState
             mBindless ← liftIO $ readIORef (textureSystemRef env)
-            case (vulkanDevice gs, vulkanPDevice gs, mBindless) of
-                (Just dev, Just pdev, Just bindless) → do
-                    let vkFilter = textureFilterToVulkan tf
-                    newSampler ← createTextureSampler dev pdev vkFilter
-                    rewriteAllSamplers dev newSampler bindless
+            case (vulkanDevice gs, mBindless) of
+                (Just dev, Just bindless) → do
+                    newBindless ← setTextureFilter dev (textureFilterToVulkan tf) bindless
+                    liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
                     logInfoM CatTexture "All texture samplers updated live"
                 _ → pure ()
 
@@ -523,9 +523,15 @@ handleWorldPreview = do
                     (imageView, cleanView) ← createVulkanImageView' dev image
                         FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 
-                    (sampler, cleanSampler) ← createTextureSampler' dev pdev FILTER_NEAREST
+                    -- Preview registers with NEAREST (shares the cached
+                    -- nearest sampler). A live filter toggle repaints all
+                    -- slots to the global sampler until the next regen —
+                    -- same as the pre-cache behaviour.
+                    let cacheRef = samplerCacheRef env
+                    sampler ← liftIO $ acquireSampler dev cacheRef SamplerTextureNearest
+                    let cleanSampler = releaseSampler dev cacheRef SamplerTextureNearest
 
-                    (_, newBindless) ← registerTexture dev texHandle
+                    (_, newBindless) ← registerPinnedTexture dev texHandle
                         imageView sampler bindless
                     liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
 
@@ -612,9 +618,15 @@ handleZoomAtlasUpload = do
                     (imageView, cleanView) ← createVulkanImageView' dev image
                         FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 
-                    (sampler, cleanSampler) ← createTextureSampler' dev pdev FILTER_LINEAR
+                    -- Zoom atlas registers with LINEAR for smooth scaling
+                    -- (shares the cached linear sampler). A live filter
+                    -- toggle repaints all slots to the global sampler
+                    -- until the next regen — same as pre-cache behaviour.
+                    let cacheRef = samplerCacheRef env
+                    sampler ← liftIO $ acquireSampler dev cacheRef SamplerTextureLinear
+                    let cleanSampler = releaseSampler dev cacheRef SamplerTextureLinear
 
-                    (_, newBindless) ← registerTexture dev texHandle
+                    (_, newBindless) ← registerPinnedTexture dev texHandle
                         imageView sampler bindless
                     liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
 

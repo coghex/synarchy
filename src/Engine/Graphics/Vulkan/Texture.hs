@@ -1,8 +1,6 @@
 module Engine.Graphics.Vulkan.Texture
   ( createTextureImageView
   , createTextureImageView'
-  , createTextureSampler
-  , createTextureSampler'
   , transitionImageLayout
   , ImageLayoutTransition(..)
   , module Engine.Graphics.Vulkan.Types.Texture
@@ -239,58 +237,3 @@ transitionImageLayout (VulkanImage image _) format transition
   
   cmdPipelineBarrier cmdBuf srcStage dstStage zero
     V.empty V.empty (V.singleton $ SomeStruct barrier)
-
-createTextureSampler ∷ Device → PhysicalDevice → Filter → EngineM ε σ Sampler
-createTextureSampler dev pdev filterMode = do
-  props ← getPhysicalDeviceProperties pdev
-  let addrMode = case filterMode of
-        FILTER_LINEAR → SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-        _             → SAMPLER_ADDRESS_MODE_REPEAT
-      samplerInfo = zero
-        { magFilter = filterMode
-        , minFilter = filterMode
-        , addressModeU = addrMode
-        , addressModeV = addrMode
-        , addressModeW = addrMode
-        , anisotropyEnable = False
-        , maxAnisotropy = 1
-        , borderColor = BORDER_COLOR_INT_OPAQUE_BLACK
-        , unnormalizedCoordinates = False
-        , compareEnable = False
-        , compareOp = COMPARE_OP_ALWAYS
-        , mipmapMode = SAMPLER_MIPMAP_MODE_NEAREST
-        , mipLodBias = 0
-        , minLod = 0
-        , maxLod = 0
-        }
-  
-  allocResource (\s → destroySampler dev s Nothing) $
-    createSampler dev samplerInfo Nothing
-
-createTextureSampler' ∷ Device → PhysicalDevice → Filter → EngineM ε σ (Sampler, IO ())
-createTextureSampler' dev pdev filterMode = do
-  logDebugM CatTexture "Creating texture sampler"
-  props ← getPhysicalDeviceProperties pdev
-  let addrMode = case filterMode of
-        FILTER_LINEAR → SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-        _             → SAMPLER_ADDRESS_MODE_REPEAT
-      samplerInfo = zero
-        { magFilter = filterMode
-        , minFilter = filterMode
-        , addressModeU = addrMode
-        , addressModeV = addrMode
-        , addressModeW = addrMode
-        , anisotropyEnable = False
-        , maxAnisotropy = 1
-        , borderColor = BORDER_COLOR_INT_OPAQUE_BLACK
-        , unnormalizedCoordinates = False
-        , compareEnable = False
-        , compareOp = COMPARE_OP_ALWAYS
-        , mipmapMode = SAMPLER_MIPMAP_MODE_NEAREST
-        , mipLodBias = 0
-        , minLod = 0
-        , maxLod = 0
-        }
-  
-  allocResource'IO (\s → destroySampler dev s Nothing) $
-    createSampler dev samplerInfo Nothing

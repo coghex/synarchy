@@ -89,35 +89,9 @@ createUndefinedTexture pdev dev cmdPool cmdQueue = do
   imageView ← createVulkanImageView dev image
     FORMAT_R8G8B8A8_UNORM IMAGE_ASPECT_COLOR_BIT
 
-  sampler ← createUndefinedTextureSampler dev
-
+  -- No sampler: unallocated slots are written with the bindless
+  -- system's shared 'btsTextureSampler'.
   pure $ UndefinedTexture
     { utImage     = image
     , utImageView = imageView
-    , utSampler   = sampler
     }
-
--- | Create a sampler specifically for the undefined texture
--- Uses nearest filtering to keep the checkerboard crisp
-createUndefinedTextureSampler ∷ Device → EngineM ε σ Sampler
-createUndefinedTextureSampler dev = do
-  let samplerInfo = zero
-        { magFilter = FILTER_NEAREST
-        , minFilter = FILTER_NEAREST
-        , addressModeU = SAMPLER_ADDRESS_MODE_REPEAT
-        , addressModeV = SAMPLER_ADDRESS_MODE_REPEAT
-        , addressModeW = SAMPLER_ADDRESS_MODE_REPEAT
-        , anisotropyEnable = False
-        , maxAnisotropy = 1
-        , borderColor = BORDER_COLOR_INT_OPAQUE_BLACK
-        , unnormalizedCoordinates = False
-        , compareEnable = False
-        , compareOp = COMPARE_OP_ALWAYS
-        , mipmapMode = SAMPLER_MIPMAP_MODE_NEAREST
-        , mipLodBias = 0
-        , minLod = 0
-        , maxLod = 0
-        }
-
-  allocResource (\s → destroySampler dev s Nothing) $
-    createSampler dev samplerInfo Nothing

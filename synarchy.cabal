@@ -265,7 +265,8 @@ library
                      Engine.Graphics.Vulkan.Pipeline
                      Engine.Graphics.Vulkan.Pipeline.Bindless
                      Engine.Graphics.Vulkan.Recreate
-                     Engine.Graphics.Vulkan.Sampler
+                     Engine.Graphics.Vulkan.Sampler.Types
+                     Engine.Graphics.Vulkan.Sampler.Cache
                      Engine.Graphics.Vulkan.Shader
                      Engine.Graphics.Vulkan.ShaderCode
                      Engine.Graphics.Vulkan.Swapchain

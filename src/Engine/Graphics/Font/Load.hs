@@ -20,7 +20,8 @@ import Engine.Graphics.Types
 import Engine.Graphics.Vulkan.Buffer (createVulkanBuffer)
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Vulkan.Image (createVulkanImage, VulkanImage(..), createVulkanImageView)
-import Engine.Graphics.Vulkan.Texture (createTextureSampler, TexturePoolState(..))
+import Engine.Graphics.Vulkan.Texture (TexturePoolState(..))
+import Engine.Graphics.Vulkan.Sampler.Cache (acquireSampler, SamplerKind(..))
 import Engine.Graphics.Vulkan.Types.Texture
 import Vulkan.Core10
 import Vulkan.Zero
@@ -437,7 +438,10 @@ createFontTextureGrayscale device pDevice cmdPool queue width height pixels font
     
     imageView ← createVulkanImageView device image FORMAT_R8_UNORM IMAGE_ASPECT_COLOR_BIT
     
-    sampler ← createFontTextureSampler device
+    -- Every font atlas shares one cached linear/clamp/mip-linear
+    -- sampler instead of minting its own.
+    cacheRef ← asks samplerCacheRef
+    sampler ← liftIO $ acquireSampler device cacheRef SamplerFont
     state ← get
     fontPool ← case fontDescriptorPool (graphicsState state) of
         Nothing → logAndThrowM CatFont (ExGraphics DescriptorError)
@@ -547,25 +551,3 @@ runCommandsOnce device cmdPool queue action = do
     
     freeCommandBuffers device cmdPool cmdBuffers
 
-createFontTextureSampler ∷ Device → EngineM ε σ Sampler
-createFontTextureSampler device = do
-    let samplerInfo = zero
-          { magFilter = FILTER_LINEAR
-          , minFilter = FILTER_LINEAR
-          , mipmapMode = SAMPLER_MIPMAP_MODE_LINEAR
-          , addressModeU = SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-          , addressModeV = SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-          , addressModeW = SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-          , mipLodBias = 0.0
-          , anisotropyEnable = False
-          , maxAnisotropy = 1.0
-          , compareEnable = False
-          , compareOp = COMPARE_OP_ALWAYS
-          , minLod = 0.0
-          , maxLod = 0.0
-          , borderColor = BORDER_COLOR_INT_OPAQUE_BLACK
-          , unnormalizedCoordinates = False
-          }
-    
-    allocResource (\s → destroySampler device s Nothing) $
-        createSampler device samplerInfo Nothing

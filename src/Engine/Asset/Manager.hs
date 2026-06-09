@@ -49,7 +49,6 @@ import Engine.Asset.Base
 import Engine.Asset.Types
 import Engine.Asset.Handle
 import Engine.Graphics.Types
-import Engine.Graphics.Config (textureFilterToVulkan)
 import Engine.Graphics.Vulkan.Base
 import Engine.Graphics.Vulkan.Descriptor
 import Engine.Graphics.Vulkan.Image (VulkanImage(..))
@@ -243,18 +242,16 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
         createTextureImageView' pDevice device cmdPool cmdQueue path
         
       env ← ask
-      filterMode ← liftIO $ readIORef (textureFilterRef env)
-      let vkFilter = textureFilterToVulkan filterMode
-      (sampler, samplerCleanup) ←
-        createTextureSampler' device pDevice vkFilter
-
       -- Register with bindless system using the provided handle
-      -- textureSystemRef is the single source of truth.
+      -- textureSystemRef is the single source of truth. The atlas does
+      -- not own a sampler — it shares the bindless system's single
+      -- texture sampler (governed by the global filter).
       mBindless ← liftIO $ readIORef (textureSystemRef env)
       bindlessSlot ← case mBindless of
         Just bindless → do
           logDebugM CatAsset "Registering texture with bindless system"
-          (mbHandle, newBindless) ← registerTexture device texHandle imageView sampler bindless
+          (mbHandle, newBindless) ←
+            registerTexture device texHandle imageView (btsTextureSampler bindless) bindless
           liftIO $ writeIORef (textureSystemRef env) (Just newBindless)
           case mbHandle of
             Just bHandle → do
@@ -281,14 +278,11 @@ loadTextureAtlasWithHandle texHandle name path arrayName = do
             , taInfo = Just $ TextureInfo
                 { tiImage = image
                 , tiView = imageView
-                , tiSampler = sampler
                 , tiMemory = imageMemory
                 , tiLayout = Vk.IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                 }
             , taRefCount = 1
-            , taCleanup = Just $ do
-                samplerCleanup
-                imageCleanup
+            , taCleanup = Just imageCleanup
             , taBindlessSlot = bindlessSlot
             , taTextureHandle = texHandle
             }
