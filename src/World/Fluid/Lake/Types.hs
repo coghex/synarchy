@@ -16,6 +16,8 @@ module World.Fluid.Lake.Types
     , LakeChunkEntry(..)
     , emptyWorldLakes
     , lakesInChunk
+    , packBitmask
+    , unpackBitmask
     ) where
 
 import UPrelude

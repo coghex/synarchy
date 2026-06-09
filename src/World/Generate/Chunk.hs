@@ -53,6 +53,7 @@ import World.Generate.InitTerrain (BorderedTerrainCache)
 import World.Generate.Timeline (applyTimelineChunk, removeElevationSpikes)
 import World.Geology.Coastal (applyCoastalTable)
 import World.Fluid.Seabed (applySeabedTable)
+import World.Fluid.OceanMask (oceanBitInChunk)
 import World.Generate.Strata
     ( buildStrataCache
     , buildColumnStrata
@@ -93,14 +94,12 @@ composeFluidMap params coord terrainMap _channelMask _mMagma =
         -- Chunk-level ocean BFS: is this chunk reachable from a
         -- world-edge ocean chunk via chunk-resolution flood?
         --
-        -- Known limitation: the global lake identifier uses a
-        -- TILE-resolution worldOcean BFS, which can flag tiles that
-        -- this chunk-level check disagrees with (a chunk that's
-        -- mostly land but has one sub-sea inlet at its corner). For
-        -- those rare cases the tile renders as dry land rather than
-        -- ocean. Fixing properly needs propagating worldOcean from
-        -- the identifier through to here — left for later.
+        -- The coarse chunk-flood. ORed below with the tile-resolution
+        -- 'gtWorldOcean' mask (the fix for whole chunks rendering dry
+        -- inside an edge-connected sea, where this chunk-flood couldn't
+        -- propagate through a chunk-scale sill).
         chunkIsOceanic = chunkOrNeighborOceanic params coord
+        worldOceanBit  = oceanBitInChunk (gtWorldOcean timeline) coord
 
         -- Per-tile lake surface lookup. We pre-fold the chunk's
         -- 'LakeChunkEntry' vector into a single per-tile lake surface
@@ -164,7 +163,15 @@ composeFluidMap params coord terrainMap _channelMask _mMagma =
 
         waterFluid = V.generate chunkArea $ \idx →
             let terrZ   = terrainMap VU.! idx
-                isOcean = terrZ ≤ seaLevel ∧ chunkIsOceanic
+                -- Ocean = the coarse chunk-flood OR the tile-resolution
+                -- edge-connected ocean ('gtWorldOcean'). The OR is the
+                -- fix for whole chunks rendering dry inside a sea: the
+                -- chunk-flood ('chunkIsOceanic') can't propagate through
+                -- a chunk-scale sill, so sub-sea tiles it missed used to
+                -- render dry at a chunk boundary; the tile mask catches
+                -- them. Only ADDS ocean tiles (union) — no regression.
+                isOcean = terrZ ≤ seaLevel
+                          ∧ (chunkIsOceanic ∨ worldOceanBit idx)
                 rvSurf  = riverSurfMap VU.! idx
                 lkSurf  = lakeSurfMap  VU.! idx
                 lvSurf  = lavaSurfMap  VU.! idx

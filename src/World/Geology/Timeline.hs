@@ -26,9 +26,10 @@ import World.Geology.Crater (generateCraters)
 import World.Hydrology.Types (HydroFeature(..), RiverParams(..)
                              , LakeParams(..), GlacierParams(..))
 import World.Fluid.IceLevel (computeIceLevelGrid)
-import World.Fluid.Lake.Identify (identifyWorldLakes)
+import World.Fluid.Lake.Identify (identifyWorldLakes, computeRenderedOcean)
 import World.Fluid.Seabed (identifySeabed)
 import World.Fluid.Seabed.Types (emptySeabedTable)
+import World.Fluid.OceanMask (buildWorldOceanMask, emptyWorldOceanMask)
 import World.Magma.Init (buildVolcanoCtx)
 import World.Magma.Pool (identifyLavaPools)
 import World.Fluid.Lake.Types (emptyWorldLakes, WorldLakes(..))
@@ -177,6 +178,7 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
             , gtWorldLavaPools = emptyWorldLakes
             , gtCoastal = emptyCoastalTable
             , gtSeabed = emptySeabedTable
+            , gtWorldOcean = emptyWorldOceanMask
             }
 
         -- Ocean map: which chunks are ocean-BFS-reachable from the
@@ -244,6 +246,16 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
         seabedTable = identifySeabed seed worldSize oceanDist
                                      finalLakes0 worldTerrain
 
+        -- Tile-resolution rendered ocean (save v27): every sub-sea tile
+        -- in a component that renders as ocean anywhere (edge-connected
+        -- OR an enclosed inland sea with an oceanic-chunk core).
+        -- Propagated to composeFluidMap so sub-sea tiles the coarse
+        -- chunk-flood missed still render ocean (the
+        -- sea-stops-at-a-chunk-boundary fix).
+        worldOceanMask = buildWorldOceanMask worldSize
+                             (computeRenderedOcean worldSize oceanMap
+                                                   worldTerrain)
+
         -- Lava pools: same stitched terrain, lakes + rivers as water
         -- barriers. The ctx here is a throwaway built only for pool
         -- identification — Init.hs builds the persistent one for
@@ -260,6 +272,7 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
             , gtWorldLavaPools = lavaPools
             , gtCoastal = coastalTable
             , gtSeabed = seabedTable
+            , gtWorldOcean = worldOceanMask
             }
 
     in (rawTimeline, tbsClimateState s2, borderedCache, oceanMap, oceanDist)

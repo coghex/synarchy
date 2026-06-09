@@ -53,6 +53,7 @@ import World.Base (GeoCoord(..), GeoFeatureId(..))
 import World.Fluid.Types (IceLevelGrid(..))
 import World.Fluid.Lake.Types (WorldLakes, emptyWorldLakes)
 import World.Fluid.Seabed.Types (SeabedTable, emptySeabedTable)
+import World.Fluid.OceanMask (WorldOceanMask, emptyWorldOceanMask)
 import World.Geology.Coastal.Types (CoastalTable, emptyCoastalTable)
 import World.Fluid.River.Types (WorldRivers, emptyWorldRivers)
 import World.Hydrology.Types
@@ -129,8 +130,14 @@ data GeoTimeline = GeoTimeline
       --   ramp + gentle noise replacing the flat seaLevel−1 basin
       --   carve), seabed materials (sand→silt→muck by depth), and
       --   bedrock outcrops ('World.Fluid.Seabed.identifySeabed').
-      --   Applied at chunk gen like 'gtCoastal'. Appended last
-      --   (positional schema; save v26).
+      --   Applied at chunk gen like 'gtCoastal' (save v26).
+    , gtWorldOcean ∷ !WorldOceanMask
+      -- ^ Tile-resolution edge-connected ocean, per-chunk bitmask.
+      --   'composeFluidMap' ORs this into its chunk-level ocean test
+      --   so sub-sea tiles the coarse chunk-flood missed still render
+      --   ocean (fixes whole chunks rendering dry inside a sea — the
+      --   sea-stops-at-a-chunk-boundary bug). Appended last
+      --   (positional schema; save v27).
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 emptyTimeline ∷ GeoTimeline
@@ -146,6 +153,7 @@ emptyTimeline = GeoTimeline
     , gtWorldLavaPools = emptyWorldLakes
     , gtCoastal = emptyCoastalTable
     , gtSeabed = emptySeabedTable
+    , gtWorldOcean = emptyWorldOceanMask
     }
 
 data EventBBox = EventBBox

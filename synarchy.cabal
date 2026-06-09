@@ -487,6 +487,7 @@ library
                      World.Geology.Coastal.Types
                      World.Fluid.Seabed
                      World.Fluid.Seabed.Types
+                     World.Fluid.OceanMask
                      World.Geology.Erosion
                      World.Geology.Event
                      World.Hydrology.Types

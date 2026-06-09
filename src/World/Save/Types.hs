@@ -97,8 +97,12 @@ saveMagic = 0x53595241
 --       ocean-floor relief (depth-from-shore ramp + noise replacing
 --       the flat seaLevel−1 basin carve) + seabed materials + bedrock
 --       outcrops.
+--   v27 adds 'gtWorldOcean' (tile-resolution edge-connected ocean
+--       bitmask) to GeoTimeline — composeFluidMap ORs it into the
+--       chunk-level ocean test so sub-sea tiles the coarse chunk-flood
+--       missed render ocean (sea-stops-at-chunk-boundary fix).
 currentSaveVersion ∷ Int
-currentSaveVersion = 26
+currentSaveVersion = 27
 
 -- | File prefix: magic + version. Decoded before the SaveData body.
 --   Old (v1) saves have no header — magic check fails, loader rejects

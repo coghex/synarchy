@@ -30,6 +30,7 @@
 module World.Fluid.Lake.Identify
     ( identifyWorldLakes
     , computeWorldEdgeOcean
+    , computeRenderedOcean
     ) where
 
 import UPrelude
@@ -437,6 +438,60 @@ computeWorldEdgeOcean terrain worldTiles = runST $ do
             onEdge = bx ≡ 0 ∨ bx ≡ worldTiles - 1
                    ∨ by ≡ 0 ∨ by ≡ worldTiles - 1
         when (onEdge ∧ isSubSea idx) $ do
+            VUM.write flag idx True
+            modifySTRef' queue (idx :)
+    let bfs = do
+            q ← readSTRef queue
+            case q of
+                []       → pure ()
+                (i : rs) → do
+                    writeSTRef queue rs
+                    let bx = i `mod` worldTiles
+                        by = i `div` worldTiles
+                        tryN ok nIdx
+                            | not ok = pure ()
+                            | otherwise = do
+                                f ← VUM.read flag nIdx
+                                when (not f ∧ isSubSea nIdx) $ do
+                                    VUM.write flag nIdx True
+                                    modifySTRef' queue (nIdx :)
+                    tryN (bx > 0)              (i - 1)
+                    tryN (bx < worldTiles - 1) (i + 1)
+                    tryN (by > 0)              (i - worldTiles)
+                    tryN (by < worldTiles - 1) (i + worldTiles)
+                    bfs
+    bfs
+    VU.freeze flag
+
+-- | Tile-resolution "rendered ocean": every sub-sea tile in a
+--   connected sub-sea component that renders as ocean ANYWHERE. Floods
+--   (4-connected, through sub-sea) from two seed sets — world-edge
+--   sub-sea tiles AND sub-sea tiles in oceanic chunks (oceanMap) — so
+--   it fills not just the edge-connected open ocean but also enclosed
+--   inland seas whose core the coarse chunk-flood rendered ocean.
+--   'composeFluidMap' ORs this in, so a whole chunk the chunk-flood
+--   couldn't reach no longer renders dry inside a sea. A truly-dry
+--   inland basin (no oceanic chunk in its component) is not flooded
+--   and stays a lake / dry, as before.
+computeRenderedOcean ∷ Int → OceanMap → VU.Vector Int → VU.Vector Bool
+computeRenderedOcean worldSize oceanMap terrain = runST $ do
+    let worldTiles = worldSize * chunkSize
+        nTiles = worldTiles * worldTiles
+        half   = worldTiles `div` 2
+        isSubSea i = let t = terrain VU.! i in t ≠ minBound ∧ t ≤ seaLevel
+        chunkOf i =
+            let gx = (i `mod` worldTiles) - half
+                gy = (i `div` worldTiles) - half
+            in wrapChunkCoordU worldSize
+                   (ChunkCoord (gx `div` chunkSize) (gy `div` chunkSize))
+    flag  ← VUM.replicate nTiles False
+    queue ← newSTRef ([] ∷ [Int])
+    forM_ [0 .. nTiles - 1] $ \idx → when (isSubSea idx) $ do
+        let bx = idx `mod` worldTiles
+            by = idx `div` worldTiles
+            onEdge = bx ≡ 0 ∨ bx ≡ worldTiles - 1
+                   ∨ by ≡ 0 ∨ by ≡ worldTiles - 1
+        when (onEdge ∨ HS.member (chunkOf idx) oceanMap) $ do
             VUM.write flag idx True
             modifySTRef' queue (idx :)
     let bfs = do
