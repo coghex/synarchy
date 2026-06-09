@@ -20,7 +20,7 @@ import World.Fluid.Lake.Types (WorldLakes(..), lkArea)
 import World.Fluid.River.Types (WorldRivers(..), rivFlowRate)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngine, initializeEngineHeadless
-                        , EngineInitResult(..))
+                        , initializeEngineHeadlessWith, EngineInitResult(..))
 import Engine.Core.Defaults (defaultWindowConfig)
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..)
@@ -258,13 +258,12 @@ runDump layers seed worldSize plateCount (cx1, cy1, cx2, cy2) = do
                    ⧺ show cy1 ⧺ "," ⧺ show cx2 ⧺ ","
                    ⧺ show cy2 ⧺ ")"
 
-  EngineInitResult env ← initializeEngineHeadless
+  -- Logger is born writing to stderr (not redirected after the fact),
+  -- so init-time logging (e.g. loadNotificationCfg) can't pollute the
+  -- JSON on stdout.
+  EngineInitResult env ← initializeEngineHeadlessWith (LogToHandle stderr)
 
   let env' = env { engineConfig = (engineConfig env) { ecDebugPort = 0 } }
-
-  -- Redirect logger to stderr so stdout stays clean JSON
-  atomicModifyIORef' (loggerRef env') $ \ls →
-      (ls { lsBackend = LogToHandle stderr }, ())
 
   luaThreadState   ← startLuaThread env'
   worldThreadState ← startWorldThread env'

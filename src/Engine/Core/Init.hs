@@ -1,7 +1,9 @@
 {-# LANGUAGE CPP #-}
 module Engine.Core.Init
   ( initializeEngine
+  , initializeEngineWith
   , initializeEngineHeadless
+  , initializeEngineHeadlessWith
   , EngineInitResult(..)
   ) where
 
@@ -20,7 +22,8 @@ import Engine.Asset.YamlNotifications (loadNotificationCfg)
 import Engine.Asset.YamlTextures
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
-                       , LogLevel(..), LogCategory(..))
+                       , LogLevel(..), LogCategory(..), LogBackend(..))
+import System.IO (stdout)
 import Engine.Core.State
 import Engine.Graphics.Vulkan.Sampler.Types (emptySamplerCache)
 import Engine.Core.Types
@@ -47,9 +50,19 @@ import World.Generate.Config (loadWorldGenConfig)
 data EngineInitResult = EngineInitResult
   { eirEnv ∷ EngineEnv }
 
--- | Allocate every 'IORef', queue, and subsystem, then bundle into 'EngineEnv'
+-- | Allocate every 'IORef', queue, and subsystem, then bundle into
+--   'EngineEnv'. Logs to stdout (the graphical default).
 initializeEngine ∷ IO EngineInitResult
-initializeEngine = do
+initializeEngine = initializeEngineWith (LogToHandle stdout)
+
+-- | As 'initializeEngine' but with an explicit log backend. Dump mode
+--   passes 'stderr' here so the logger is born writing to stderr —
+--   init-time logging (e.g. 'loadNotificationCfg') can never reach
+--   stdout, which dump mode reserves for clean JSON. Redirecting the
+--   backend after init returns would be too late (the line is already
+--   emitted).
+initializeEngineWith ∷ LogBackend → IO EngineInitResult
+initializeEngineWith logBackend = do
   eventQueue ← Q.newQueue
   inputQueue ← Q.newQueue
   worldQueue ← Q.newQueue
@@ -60,7 +73,8 @@ initializeEngine = do
   lifecycleRef ← newIORef EngineStarting
   fpsRef ← newIORef 0.0
  
-  logger ← initLogger defaultLogConfig { lcMinLevel = LevelDebug }
+  logger ← initLogger defaultLogConfig { lcMinLevel = LevelDebug
+                                       , lcBackend = logBackend }
   loggerRef ← newIORef logger
   
   assetPool ← defaultAssetPool
@@ -194,10 +208,17 @@ initializeEngine = do
 
   pure $ EngineInitResult env
 
--- | Like 'initializeEngine' but sets 'ecHeadless' — no window or GPU
+-- | Like 'initializeEngine' but sets 'ecHeadless' — no window or GPU.
+--   Logs to stdout (the shell redirects it to a file in the --headless
+--   workflow).
 initializeEngineHeadless ∷ IO EngineInitResult
-initializeEngineHeadless = do
-  result ← initializeEngine
+initializeEngineHeadless = initializeEngineHeadlessWith (LogToHandle stdout)
+
+-- | As 'initializeEngineHeadless' but with an explicit log backend.
+--   Dump mode passes 'stderr' so stdout stays clean JSON.
+initializeEngineHeadlessWith ∷ LogBackend → IO EngineInitResult
+initializeEngineHeadlessWith logBackend = do
+  result ← initializeEngineWith logBackend
   let env = eirEnv result
       headlessEnv = env { engineConfig = (engineConfig env) { ecHeadless = True } }
   pure $ result { eirEnv = headlessEnv }

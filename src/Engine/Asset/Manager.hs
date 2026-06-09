@@ -57,7 +57,7 @@ import Engine.Graphics.Vulkan.Types.Texture
 import Engine.Graphics.Vulkan.Types
 import Engine.Graphics.Vulkan.ShaderCode
 import Engine.Graphics.Vulkan.Texture.Types (BindlessTextureSystem(..))
-import Engine.Graphics.Vulkan.Texture.Bindless (registerTexture)
+import Engine.Graphics.Vulkan.Texture.Bindless (registerTexture, unregisterTexture)
 import Engine.Graphics.Vulkan.Texture.Slot (TextureSlot(..))
 import Engine.Graphics.Vulkan.Texture.Handle (BindlessTextureHandle(..))
 import qualified Vulkan.Core10 as Vk
@@ -319,27 +319,46 @@ unloadAsset aid = do
     Just atlas → do
       let refCount = taRefCount atlas - 1
       if refCount ≤ 0 then do
+          -- Free GPU resources safely, mirroring 'disposeTransientTexture':
+          -- idle the device (the atlas may still be sampled by an in-flight
+          -- frame), unregister the bindless slot (repoints it at the
+          -- undefined texture AND frees the slot for reuse), THEN destroy
+          -- the image/view/memory — so no descriptor still references the
+          -- imageView when it is destroyed. Skipping either step risks a
+          -- use-after-free / a dangling descriptor + leaked slot.
+          env ← ask
+          gs  ← gets graphicsState
+          forM_ (vulkanDevice gs) $ \dev → do
+            liftIO $ Vk.deviceWaitIdle dev
+            mSys ← liftIO $ readIORef (textureSystemRef env)
+            forM_ mSys $ \sys → do
+              sys' ← unregisterTexture dev (taTextureHandle atlas) sys
+              liftIO $ writeIORef (textureSystemRef env) (Just sys')
           liftIO $ maybe (pure ()) id (taCleanup atlas)
           liftIO $ atomicModifyIORef' poolRef $ \p → (p
             { apTextureAtlases = Map.delete aid (apTextureAtlases p)
             , apAssetPaths = Map.filter (/= aid) (apAssetPaths p)
             }, ())
-      else 
+      else
           liftIO $ atomicModifyIORef' poolRef $ \p → (p
             { apTextureAtlases = Map.adjust (\a → a { taRefCount = refCount }) aid (apTextureAtlases p)
             }, ())
       pure ()
-      
+
     Nothing →
       case Map.lookup aid (apShaders pool) of
         Just program → do
           let newRefCount = spRefCount program - 1
           if newRefCount ≤ 0 then do
+                -- Pipeline/modules may still be referenced by an in-flight
+                -- frame — idle before destroying them.
+                gs ← gets graphicsState
+                forM_ (vulkanDevice gs) $ \dev → liftIO $ Vk.deviceWaitIdle dev
                 liftIO $ maybe (pure ()) id (spCleanup program)
                 liftIO $ atomicModifyIORef' poolRef $ \p → (p
                   { apShaders = Map.delete aid (apShaders p)
                   }, ())
-            else 
+            else
                 liftIO $ atomicModifyIORef' poolRef $ \p → (p
                   { apShaders = Map.adjust (\pr → pr { spRefCount = newRefCount }) aid (apShaders p)
                   }, ())
