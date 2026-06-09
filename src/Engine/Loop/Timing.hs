@@ -26,9 +26,24 @@ updateFrameTiming = do
   env ← ask
   videoConfig ← liftIO $ readIORef (videoConfigRef env)
   
-  -- Determine target frame time
+  -- Determine target frame time.
+  --
+  -- VSync ON: do NOT software-cap here. The swapchain is in FIFO present
+  -- mode (see Swapchain.chooseSwapPresentMode) — vkQueuePresentKHR / the
+  -- next acquire block until the display's vertical blank, so the loop is
+  -- already paced to the real refresh rate by the GPU/driver/compositor.
+  -- FIFO is the one present mode the Vulkan spec guarantees on every
+  -- implementation (incl. MoltenVK/Metal on Apple SoC, where it maps to
+  -- Metal's display-synced presentation), so this is fully cross-platform
+  -- and auto-adapts to 60 / 120 ProMotion / 144 Hz with no refresh-rate
+  -- query. A CPU threadDelay on top would only mis-cap it (the old
+  -- hardcoded 60 throttled high-refresh displays).
+  --
+  -- VSync OFF: MAILBOX/IMMEDIATE do NOT block, so a software cap
+  -- (vcFrameLimit) is the legitimate way to bound an otherwise-unlimited
+  -- frame rate. Nothing = run unlimited.
   let mbTargetFps = if vcVSync videoConfig
-                      then Just 60
+                      then Nothing
                       else vcFrameLimit videoConfig
   
   case mbTargetFps of
