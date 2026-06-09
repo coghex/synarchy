@@ -134,7 +134,6 @@ data EngineEnv = EngineEnv
     --   sprite at the hovered tile.
   , worldGenConfigRef   ∷ IORef WorldGenConfig
   , simQueue           ∷ Q.Queue SimCommand
-  , frameCounterRef    ∷ IORef Word64  -- ^ Monotonic frame counter for animations
   , enginePausedRef    ∷ IORef Bool
     -- ^ Global pause flag. When True, threads that advance simulated
     --   state (unit movement, sim ticks) skip their work. Rendering,

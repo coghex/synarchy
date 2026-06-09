@@ -4,7 +4,7 @@ module Engine.Loop.Timing
   ) where
 
 import UPrelude
-import Data.IORef (readIORef, writeIORef, modifyIORef')
+import Data.IORef (readIORef, writeIORef)
 import Control.Concurrent (threadDelay)
 import Control.Monad (when)
 import Control.Monad.State (get, put)
@@ -78,9 +78,6 @@ updateFrameTiming = do
       [("fps", T.pack $ printf "%.1f" fps)
       ,("avg_frame_ms", T.pack $ printf "%.2f" avgFrameTime)]
   
-  -- Increment monotonic frame counter for animations
-  liftIO $ modifyIORef' (frameCounterRef env) (+ 1)
-
   -- Update timing state (single write)
   put $! state { timingState = timing
     { currentTime = actualNow

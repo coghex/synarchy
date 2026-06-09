@@ -125,7 +125,6 @@ initializeEngineWith logBackend = do
   worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
   worldGenConfigRef ← newIORef worldGenConfig
 
-  frameCounterRef ← newIORef (0 ∷ Word64)
   enginePausedRef ← newIORef False
   gameTimeRef     ← newIORef (0 ∷ Double)
   itemManagerRef  ← newIORef emptyItemManager
@@ -194,7 +193,6 @@ initializeEngineWith logBackend = do
         , buildingGhostRef   = buildingGhostRef
         , worldGenConfigRef  = worldGenConfigRef
         , simQueue          = simQueue
-        , frameCounterRef   = frameCounterRef
         , enginePausedRef   = enginePausedRef
         , gameTimeRef       = gameTimeRef
         , itemManagerRef    = itemManagerRef
