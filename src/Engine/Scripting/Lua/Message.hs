@@ -172,6 +172,16 @@ handleLuaMessage msg = do
             logDebugM CatLua $ "Destroying object " <> T.pack (show objId)
             handleDestroy objId
 
+        -- The remaining 'LuaToEngineMsg' constructors (logging, focus,
+        -- sprite-scale, etc.) are consumed by the Lua thread's own
+        -- 'processLuaMsg' on a different queue, never this engine queue.
+        -- If one ever arrives here it's a routing bug — log it rather
+        -- than crash (this case used to be a partial match).
+        other →
+            logWarnM CatLua $
+                "handleLuaMessage: unexpected message on engine queue: "
+                <> T.pack (show other)
+
 handleSetResolution ∷ Int → Int → EngineM ε σ ()
 handleSetResolution w h = do
     state ← gets graphicsState

@@ -337,6 +337,11 @@ processInput env inpSt event = case event of
             logDebug logger CatInput $ "Window focus event: focused=" <> T.pack (show focused)
           WindowMinimize minimized →
             logDebug logger CatInput $ "Window minimize event: minimized=" <> T.pack (show minimized)
+          -- Currently never emitted (the GLFW close request is polled
+          -- via shouldClose in the main loop, not routed as an input
+          -- event); handled here so the match stays total if it is.
+          WindowClose →
+            logDebug logger CatInput "Window close event"
         return $ updateWindowState inpSt winEv
 
 -- * State update helpers

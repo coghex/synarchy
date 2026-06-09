@@ -212,6 +212,8 @@ keyToText KeyF9 = "F9"
 keyToText KeyF10 = "F10"
 keyToText KeyF11 = "F11"
 keyToText KeyF12 = "F12"
+keyToText KeyHome = "Home"
+keyToText KeyEnd = "End"
 keyToText KeyUnknown = "Unknown"
 
 textToKey ∷ Text → Maybe Key

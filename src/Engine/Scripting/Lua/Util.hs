@@ -18,6 +18,7 @@ import Control.Monad (forM_, when)
 
 isValidRef ∷ Lua.Reference → Bool
 isValidRef (Lua.Reference n) = n ≠ fromIntegral Lua.refnil
+isValidRef Lua.RefNil        = False
 
 -- | Broadcast a callback to all loaded Lua modules.
 --   Thread safety: only called from the Lua thread (via processLuaMsg

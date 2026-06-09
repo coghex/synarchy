@@ -89,6 +89,7 @@ test-suite synarchy-test-graphical
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wincomplete-patterns
                        -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
@@ -106,6 +107,7 @@ test-suite synarchy-test-graphical
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wincomplete-patterns
                        -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
@@ -184,6 +186,7 @@ test-suite synarchy-test-headless
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wincomplete-patterns
                        -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
@@ -199,6 +202,7 @@ test-suite synarchy-test-headless
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wincomplete-patterns
                        -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"
@@ -632,6 +636,7 @@ library
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wincomplete-patterns
                        -Wno-ambiguous-fields
                        -threaded
                        -haddock
@@ -647,6 +652,7 @@ library
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wincomplete-patterns
                        -Wno-ambiguous-fields
                        -threaded
                        -haddock
@@ -740,6 +746,7 @@ executable synarchy
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wincomplete-patterns
                        -threaded
                        -rtsopts
                        "-with-rtsopts=-N -A128M"
@@ -751,6 +758,7 @@ executable synarchy
                        -Wcompat
                        -Wincomplete-record-updates
                        -Wincomplete-uni-patterns
+                       -Wincomplete-patterns
                        -Wno-ambiguous-fields
                        -threaded
                        "-with-rtsopts=-N -A128M"

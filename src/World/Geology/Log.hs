@@ -305,6 +305,10 @@ formatFeatureEvent (VolcanicShape (HydrothermalVent p)) =
     in "Hydrothermal Vent r=" <> T.pack (show (htRadius p))
        <> " chimneyH=" <> T.pack (show (htChimneyHeight p))
        <> " (" <> T.pack (show cx) <> ", " <> T.pack (show cy) <> ")"
+-- Hydro features are logged via "World.Hydrology.Log"; this volcanic
+-- formatter only ever sees 'VolcanicShape' (from 'VolcanicEvent'). The
+-- catch-all keeps the match total without a crash if that ever changes.
+formatFeatureEvent (HydroShape _) = "Hydro feature"
 
 -- | Format an evolution event.
 formatEvolution ∷ FeatureEvolution → Text
