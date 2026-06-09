@@ -69,6 +69,7 @@ import World.Weather.Generate (updateClimateFromGrid, oceanRegionsFromGrid)
 buildTimeline ∷ MaterialRegistry → Word64 → Int → Int → Float → Float
               → Int    -- ^ lava pool depth lever (config)
               → Int    -- ^ lava pool radius lever (config)
+              → Int    -- ^ waterfall quantum lever (config)
               → ( GeoTimeline, ClimateState, BorderedTerrainCache
                 , OceanMap, OceanDistMap )
                 -- ^ Ocean map + distances are returned (not recomputed
@@ -77,7 +78,7 @@ buildTimeline ∷ MaterialRegistry → Word64 → Int → Int → Float → Floa
                 --   disagree and the deep floor keeps clay instead of
                 --   seabed muck.
 buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivity
-              lavaPoolDepth lavaPoolRadius =
+              lavaPoolDepth lavaPoolRadius waterfallQuantum =
     let plates = generatePlates seed worldSize plateCount
         gs0 = initGeoState seed worldSize plates
 
@@ -238,6 +239,7 @@ buildTimeline registry seed worldSize plateCount erosionIntensity volcanicActivi
         finalRivers = identifyWorldRivers worldSize finalLakes
                                           worldTerrain
                                           (tbsClimateState s2)
+                                          waterfallQuantum
 
         -- Global seabed pass (save v26): continental-margin relief
         -- (shelf + slope profile blended with the natural floor),

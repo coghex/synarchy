@@ -13,6 +13,7 @@ local advancedTab = {}
 advancedTab.plateCountTextBoxId = nil
 advancedTab.erosionIntensityTextBoxId = nil
 advancedTab.volcanicActivityTextBoxId = nil
+advancedTab.waterfallQuantumTextBoxId = nil
 
 -----------------------------------------------------------
 -- Create all rows
@@ -156,6 +157,43 @@ function advancedTab.create(params)
     }))
     table.insert(elements, { type = "textbox", id = advancedTab.volcanicActivityTextBoxId })
 
+    rowIndex = rowIndex + 1
+
+    ---------------------------------------------------------
+    -- Row 4: Waterfall Step (textbox NUMBER)
+    ---------------------------------------------------------
+    local waterfallLabelId = params.trackLabel(label.new({
+        name     = "waterfall_quantum_label",
+        text     = "Waterfall Step",
+        font     = font,
+        fontSize = base.fontSize,
+        color    = {1.0, 1.0, 1.0, 1.0},
+        page     = page,
+        uiscale  = uiscale,
+        tooltip  = "Tallest single water drop (in tiles) before a river carves a stepped gorge. Lower values give terraced cascades; higher values allow taller single waterfalls.",
+    }))
+    local waterfallLabelHandle = label.getElementHandle(waterfallLabelId)
+    UI.addToPage(page, waterfallLabelHandle,
+                 cx, rowY(rowIndex) + s.fontSize)
+    UI.setZIndex(waterfallLabelHandle, zContent)
+    table.insert(elements, { type = "label", handle = waterfallLabelHandle })
+
+    advancedTab.waterfallQuantumTextBoxId = params.trackTextBox(textbox.new({
+        name     = "waterfall_quantum_input",
+        width    = base.textboxWidth,
+        height   = base.textboxHeight,
+        page     = page,
+        x        = cx + cw - tbW,
+        y        = rowY(rowIndex),
+        uiscale  = uiscale,
+        font     = font,
+        fontSize = 24,
+        default  = pending.waterfallQuantum,
+        textType = textbox.Type.NUMBER,
+        zIndex   = zWidgets,
+    }))
+    table.insert(elements, { type = "textbox", id = advancedTab.waterfallQuantumTextBoxId })
+
     return elements
 end
 
@@ -173,6 +211,9 @@ function advancedTab.getWidgetValues()
     end
     if advancedTab.volcanicActivityTextBoxId then
         vals.volcanicActivity = textbox.getValue(advancedTab.volcanicActivityTextBoxId)
+    end
+    if advancedTab.waterfallQuantumTextBoxId then
+        vals.waterfallQuantum = textbox.getValue(advancedTab.waterfallQuantumTextBoxId)
     end
     return vals
 end

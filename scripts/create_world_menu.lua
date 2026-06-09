@@ -135,6 +135,7 @@ function createWorldMenu.loadDefaults()
         createWorldMenu.pending.plateCount = fmtInt(defaults.plate_count, 10)
         createWorldMenu.pending.erosionIntensity = fmtFloat(defaults.erosion_intensity, 0.7)
         createWorldMenu.pending.volcanicActivity = fmtFloat(defaults.volcanic_activity, 1.0)
+        createWorldMenu.pending.waterfallQuantum = fmtInt(defaults.waterfall_quantum, 12)
         -- Calendar
         if defaults.calendar then
             local c = defaults.calendar

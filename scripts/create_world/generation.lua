@@ -33,6 +33,9 @@ function generation.start(menu, logPanel)
     if advVals.volcanicActivity then
         menu.pending.volcanicActivity = advVals.volcanicActivity
     end
+    if advVals.waterfallQuantum then
+        menu.pending.waterfallQuantum = advVals.waterfallQuantum
+    end
 
     local genVals = generalTab.getWidgetValues()
     for k, v in pairs(genVals) do menu.pending[k] = v end
@@ -64,6 +67,7 @@ function generation.start(menu, logPanel)
         plate_count = plateNum,
         erosion_intensity = tonumber(p.erosionIntensity) or 0.7,
         volcanic_activity = tonumber(p.volcanicActivity) or 1.0,
+        waterfall_quantum = math.max(1, math.floor(tonumber(p.waterfallQuantum) or 12)),
         calendar = {
             days_per_month   = tonumber(p.daysPerMonth) or 30,
             months_per_year  = tonumber(p.monthsPerYear) or 12,

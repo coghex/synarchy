@@ -106,14 +106,13 @@ widthRadiusFromFlow f =
     in max 0 (min maxWidthRadius
                   (floor (logBase 2.0 (max 1.0 ratio)) ∷ Int))
 
--- | Maximum water-surface drop between a river tile and its
---   downstream neighbour. Reaches with slope ≤ this follow terrain
---   exactly (no extra carving, identical to unclamped behaviour);
---   steeper drops (cliffs) are absorbed by carving a stepped gorge so
---   the water never renders as one tall vertical sheet. Applied by
---   'clampCentreSurfaces'.
-waterfallQuantum ∷ Int
-waterfallQuantum = 12
+-- NOTE: the maximum water-surface drop between adjacent river tiles
+-- (the "waterfall quantum") is no longer a module constant — it is a
+-- worldgen tunable threaded in from 'WorldGenConfig'
+-- (@wgcWaterfallQuantum@, exposed in the create-world advanced tab) via
+-- 'identifyWorldRivers'. Reaches with slope ≤ the quantum follow terrain
+-- exactly; steeper drops (cliffs) are absorbed by carving a stepped
+-- gorge so water never renders as one tall vertical sheet. Default 12.
 
 -- * Direction codes
 --
@@ -163,9 +162,13 @@ identifyWorldRivers
     → WorldLakes
     → VU.Vector Int        -- ^ world terrain (worldTiles²)
     → ClimateState
+    → Int                  -- ^ waterfall quantum (max surface drop / step)
     → WorldRivers
-identifyWorldRivers worldSize lakes terrain climate =
-    let worldTiles = worldSize * chunkSize
+identifyWorldRivers worldSize lakes terrain climate waterfallQuantum0 =
+    let -- Guard: a non-positive quantum would flatten / break the
+        -- stepped-gorge clamp, so floor it at 1 regardless of config source.
+        waterfallQuantum = max 1 waterfallQuantum0
+        worldTiles = worldSize * chunkSize
         nTiles    = worldTiles * worldTiles
 
         -- Per-tile climate units.
@@ -193,7 +196,7 @@ identifyWorldRivers worldSize lakes terrain climate =
             precipUnits evapUnits ascOrder
 
     in traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf
-                   dir flow ascOrder
+                   dir flow ascOrder waterfallQuantum
 
 -- * Climate → flow units
 --
@@ -558,9 +561,10 @@ traceRivers
     → VU.Vector Word8      -- ^ dir
     → VU.Vector Int        -- ^ flow
     → VU.Vector Int        -- ^ ascending z order
+    → Int                  -- ^ waterfall quantum (max surface drop / step)
     → WorldRivers
 traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
-            ascOrder =
+            ascOrder waterfallQuantum =
     let worldTiles = worldSize * chunkSize
         nTiles     = worldTiles * worldTiles
         half       = worldTiles `div` 2
@@ -584,7 +588,7 @@ traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
         -- the clamped plane. Fixes the adjacent water-wall artifact
         -- (e.g. 79z vertical sheets at coastal scarps).
         centreSurf = clampCentreSurfaces worldTiles terrain dir
-                                         isRiverCentre ascOrder
+                                         isRiverCentre ascOrder waterfallQuantum
 
         -- Step 1c: variable width. Each centre tile widens perpendicular
         -- to its D4 dir up to 'widthRadiusFromFlow'. Returns the expanded
@@ -628,7 +632,7 @@ traceRivers worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
         -- surface field with |Δ| ≤ 'waterfallQuantum' across EVERY
         -- adjacent river-tile pair (wings + breakthrough paths
         -- included). The carve pass below absorbs any lowering.
-        surfZL = clampLateralSurfaces worldTiles isRiverTileB surfZB
+        surfZL = clampLateralSurfaces worldTiles isRiverTileB surfZB waterfallQuantum
 
         -- Step 4: build per-component bookkeeping (bbox, sources,
         -- sinks, peak flow). Uses post-breakthrough data so bboxes
@@ -721,8 +725,9 @@ clampCentreSurfaces
     → VU.Vector Word8      -- ^ dir
     → VU.Vector Bool       -- ^ isRiverCentre (after extension)
     → VU.Vector Int        -- ^ ascending z order
+    → Int                  -- ^ waterfall quantum (max downstream step)
     → VU.Vector Int
-clampCentreSurfaces worldTiles terrain dir isRiverCentre ascOrder =
+clampCentreSurfaces worldTiles terrain dir isRiverCentre ascOrder waterfallQuantum =
     let nTiles = worldTiles * worldTiles
         nOrd   = VU.length ascOrder
     in VU.create $ do
@@ -758,8 +763,9 @@ clampLateralSurfaces
     ∷ Int                  -- ^ worldTiles
     → VU.Vector Bool       -- ^ isRiverTile (post-breakthrough)
     → VU.Vector Int        -- ^ surface z (post-breakthrough)
+    → Int                  -- ^ waterfall quantum (max lateral step)
     → VU.Vector Int
-clampLateralSurfaces worldTiles isRiverTile surfZ0 =
+clampLateralSurfaces worldTiles isRiverTile surfZ0 waterfallQuantum =
     let nTiles = VU.length surfZ0
         seeds  = [ i | i ← [0 .. nTiles - 1], isRiverTile VU.! i ]
     in VU.create $ do

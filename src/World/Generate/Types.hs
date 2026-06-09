@@ -54,6 +54,7 @@ data WorldGenParams = WorldGenParams
     , wgpVolcanicActivity ∷ !Float        -- ^ Volcanic activity multiplier (scales counts + eruption chance)
     , wgpLavaPoolDepth ∷ !Int             -- ^ Max lava head above a pool's landing floor (tiles)
     , wgpLavaPoolRadius ∷ !Int            -- ^ Max pool footprint radius (tiles)
+    , wgpWaterfallQuantum ∷ !Int          -- ^ Max water-surface drop between adjacent river tiles before a stepped gorge is carved
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
@@ -81,6 +82,7 @@ instance Serialize WorldGenParams where
         put (wgpVolcanicActivity p)
         put (wgpLavaPoolDepth p)
         put (wgpLavaPoolRadius p)
+        put (wgpWaterfallQuantum p)
     get = do
         seed       ← get
         ws         ← get
@@ -98,6 +100,7 @@ instance Serialize WorldGenParams where
         volcanic   ← get
         poolDepth  ← get
         poolRadius ← get
+        waterfallQ ← get
         let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
         pure WorldGenParams
             { wgpSeed             = seed
@@ -116,6 +119,7 @@ instance Serialize WorldGenParams where
             , wgpVolcanicActivity = volcanic
             , wgpLavaPoolDepth    = poolDepth
             , wgpLavaPoolRadius   = poolRadius
+            , wgpWaterfallQuantum = waterfallQ
             , wgpVolcanoCtx       = vc
             }
 
@@ -142,6 +146,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpVolcanicActivity = 1.25
     , wgpLavaPoolDepth = 6
     , wgpLavaPoolRadius = 22
+    , wgpWaterfallQuantum = 12
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 

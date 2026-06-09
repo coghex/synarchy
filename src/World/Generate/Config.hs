@@ -44,6 +44,11 @@ data WorldGenConfig = WorldGenConfig
       -- ^ Max lava head above a pool's landing floor (tiles).
     , wgcLavaPoolRadius   ∷ !Int
       -- ^ Max pool footprint radius (tiles); area cap = ⌈π·r²⌉.
+    , wgcWaterfallQuantum ∷ !Int
+      -- ^ Max water-surface drop between adjacent river tiles before a
+      --   stepped gorge is carved (tiles). Lower = more terraced
+      --   cascades; higher = taller single waterfalls. Exposed in the
+      --   create-world advanced tab.
     } deriving (Show, Eq)
 
 data CalendarYaml = CalendarYaml
@@ -92,6 +97,7 @@ defaultWorldGenConfig = WorldGenConfig
     , wgcVolcanicActivity = 1.25
     , wgcLavaPoolDepth    = 6
     , wgcLavaPoolRadius   = 22
+    , wgcWaterfallQuantum = 12
     }
 
 defaultCalendarYaml ∷ CalendarYaml
@@ -180,6 +186,7 @@ instance FromJSON WorldGenConfig where
             <*> wgObj .:? "volcanic_activity" .!= wgcVolcanicActivity defaultWorldGenConfig
             <*> wgObj .:? "lava_pool_depth" .!= wgcLavaPoolDepth defaultWorldGenConfig
             <*> wgObj .:? "lava_pool_radius" .!= wgcLavaPoolRadius defaultWorldGenConfig
+            <*> wgObj .:? "waterfall_quantum" .!= wgcWaterfallQuantum defaultWorldGenConfig
     parseJSON _ = fail "Expected an object for world_gen"
 
 -- ToJSON instances
@@ -230,6 +237,7 @@ instance ToJSON WorldGenConfig where
             , "volcanic_activity" .= wgcVolcanicActivity cfg
             , "lava_pool_depth" .= wgcLavaPoolDepth cfg
             , "lava_pool_radius" .= wgcLavaPoolRadius cfg
+            , "waterfall_quantum" .= wgcWaterfallQuantum cfg
             ]
         ]
 
@@ -284,6 +292,7 @@ paramsToConfig p = WorldGenConfig
     , wgcVolcanicActivity = wgpVolcanicActivity p
     , wgcLavaPoolDepth    = wgpLavaPoolDepth p
     , wgcLavaPoolRadius   = wgpLavaPoolRadius p
+    , wgcWaterfallQuantum = wgpWaterfallQuantum p
     }
 
 -- | Apply a YAML config to the default WorldGenParams.
@@ -326,4 +335,5 @@ applyConfigToParams cfg = defaultWorldGenParams
     , wgpVolcanicActivity = wgcVolcanicActivity cfg
     , wgpLavaPoolDepth    = wgcLavaPoolDepth cfg
     , wgpLavaPoolRadius   = wgcLavaPoolRadius cfg
+    , wgpWaterfallQuantum = wgcWaterfallQuantum cfg
     }

@@ -90,7 +90,8 @@ handleWorldInitCommand env logger pageId seed worldSize placeCount = do
         volcanicActivity = wgcVolcanicActivity worldGenCfg0
         lavaPoolDepth    = wgcLavaPoolDepth worldGenCfg0
         lavaPoolRadius   = wgcLavaPoolRadius worldGenCfg0
-    let (timeline, timelineClimate, borderedCache, oceanMap, oceanDist) = buildTimeline populatedReg seed worldSize placeCount erosionIntensity volcanicActivity lavaPoolDepth lavaPoolRadius
+        waterfallQuantum = wgcWaterfallQuantum worldGenCfg0
+    let (timeline, timelineClimate, borderedCache, oceanMap, oceanDist) = buildTimeline populatedReg seed worldSize placeCount erosionIntensity volcanicActivity lavaPoolDepth lavaPoolRadius waterfallQuantum
     _ ← evaluate (force timeline)
     _ ← evaluate (force timelineClimate)
     _ ← evaluate (force borderedCache)
